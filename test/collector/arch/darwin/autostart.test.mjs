@@ -14,6 +14,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, plistXml, plistPath, userUnit, directStartEnv, AGENT_LABEL, PLIST_FILE } from '../../../../src/collector/arch/darwin/autostart.mjs'
+import { daemonLogPaths } from '../../../../src/collector/arch/daemon-logs.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, SOCKET_PREFIX, SOCKET_SUFFIX } from '../../../../src/collector/arch/darwin/control-path.mjs'
 import * as offDarwin from '../../../../src/off/darwin.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
@@ -99,8 +100,10 @@ const call = (socketPath, headers = {}, p = '/status') => new Promise((resolve, 
 })
 
 test('W26 a request without the token is refused and never reaches a route; a wrong one too; the right one is answered — the token is checked first, on the unix socket as on the pipe', async () => {
-  const dir = tmpDir('as-'); const t = tmpDir('as-tmp-')
-  const { path: socketPath, token } = controlEndpoint({ dir, tmp: t })
+  const dir = tmpDir('as-')
+  // the socket goes directly under the user's tmp directory — the product's own shape (4.9 §7), and the only one that fits darwin's 104-byte sun_path:
+  // a deeper test-only nest leaks the guard's asight-run-<run> level into the path, macOS bind() silently truncates the name, and the server's chmod misses (ENOENT)
+  const { path: socketPath, token } = controlEndpoint({ dir })
   const reached = []
   const srv = await startControlServer({ socketPath, token, routes: { 'GET /status': async () => { reached.push('status'); return { ok: 1 } }, 'POST /off': async () => { reached.push('off'); return {} } } })
   try {
@@ -132,8 +135,9 @@ test('W26 the unix socket the daemon serves is 0600 where the mode is real (darw
 })
 
 test('W26 a second server on a live endpoint is refused, and the first one is not harmed', async () => {
-  const dir = tmpDir('as-'); const t = tmpDir('as-tmp-')
-  const { path: socketPath, token } = controlEndpoint({ dir, tmp: t })
+  const dir = tmpDir('as-')
+  // directly under the user's tmp directory like the product's own daemon (see the token test above: darwin's sun_path is 104 bytes)
+  const { path: socketPath, token } = controlEndpoint({ dir })
   const a = await startControlServer({ socketPath, token, routes: { 'GET /status': async () => ({ who: 'a' }) } })
   try {
     await assert.rejects(startControlServer({ socketPath, token, routes: {} }), /another collector daemon/)
@@ -272,7 +276,10 @@ test('W24 userUnit gives the shape turnOn and install consume: the plist\'s path
   assert.equal(u.path, path.join(o.home, 'Library', 'LaunchAgents', PLIST_FILE))
   assert.deepEqual(u.links, [], 'a LaunchAgent has no wants/ link — the file in LaunchAgents is the whole registration')
   assert.equal(u.name, 'com.asight.collector')
-  assert.equal(u.text({}), plist(), 'the text is the plist; an empty daemon env is no EnvironmentVariables key')
+  const sinks = daemonLogPaths(o.home)
+  assert.equal(u.text({}), plistXml({ node: NODE, asight: SCRIPT, logs: sinks }), 'the text is the plist; an empty daemon env is no EnvironmentVariables key')
+  assert.match(u.text({}), new RegExp('<key>StandardOutPath</key>\n  <string>' + sinks.out.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'), 'D46: the daemon console is the log file under ~/.asight/collector/logs')
+  assert.match(u.text({}), new RegExp('<key>StandardErrorPath</key>\n  <string>' + sinks.err.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'))
   assert.notEqual(u.text({ NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' }), plist(), 'the daemon env install offers is carried (unlike the win32 task, 4.8 §7)')
   for (const verb of ['enable', 'start', 'reload', 'disable', 'remove']) assert.equal(typeof u[verb], 'function', verb)
   assert.deepEqual(u.reload(), { code: 0, out: '', err: '' }, 'a rewritten plist is replaced by the next enable (bootout + bootstrap), so there is nothing to reload')
@@ -282,7 +289,7 @@ test('W24 enable bootstraps the job into the user\'s GUI session domain (gui/<ui
   const run = fakeTools()
   const u = installed(userUnit({ ...withHome(), run, uid: 501 }))
   assert.deepEqual(u.enable({ now: true }), { code: 0, out: '', err: '' })
-  assert.deepEqual(run.calls, [['launchctl', 'bootout', 'gui/501', 'com.asight.collector'], ['launchctl', 'bootstrap', 'gui/501', u.path]])
+  assert.deepEqual(run.calls, [['launchctl', 'bootout', 'gui/501/com.asight.collector'], ['launchctl', 'bootstrap', 'gui/501', u.path]])
   assert.deepEqual(u.enable(), { code: 0, out: '', err: '' }, 'now is the default')
   assert.equal(run.calls.filter((c) => c[1] === 'bootstrap').length, 2)
   // a bootout that answers "no such job" (a fresh install) is not a failure: the bootstrap below is the answer
@@ -357,12 +364,12 @@ test('W24 disable (a no-argument off) and remove (an uninstall) are the same und
   const present = fakeTools({ 'launchctl print': { status: 0, stdout: 'com.asight.collector = {"state": "running", "pid": 4242}' } })
   const u = installed(userUnit({ ...withHome(), run: present, uid: 501 }))
   assert.deepEqual(u.disable(), { code: 0, out: '', err: '', agent: 'booted-out', plist: 'removed' })
-  assert.deepEqual(present.calls, [['launchctl', 'print', 'gui/501', 'com.asight.collector'], ['launchctl', 'bootout', 'gui/501', 'com.asight.collector']])
+  assert.deepEqual(present.calls, [['launchctl', 'print', 'gui/501/com.asight.collector'], ['launchctl', 'bootout', 'gui/501/com.asight.collector']])
   assert.ok(!fs.existsSync(u.path), 'the plist is gone: the next login has nothing to load')
   const again = fakeTools({ 'launchctl print': { status: 0, stdout: '' } })
   const u2 = installed(userUnit({ ...withHome(), run: again, uid: 501 }))
   assert.deepEqual(u2.remove(), { code: 0, out: '', err: '', agent: 'booted-out', plist: 'removed' }, 'remove makes the same calls as disable')
-  assert.deepEqual(again.calls, [['launchctl', 'print', 'gui/501', 'com.asight.collector'], ['launchctl', 'bootout', 'gui/501', 'com.asight.collector']])
+  assert.deepEqual(again.calls, [['launchctl', 'print', 'gui/501/com.asight.collector'], ['launchctl', 'bootout', 'gui/501/com.asight.collector']])
 })
 
 test('W24 an agent that is not loaded is already as asked, not an error — and the plist still leaves, or the next login would load it; a print that did not run is a failure for the launchd half, never "absent", and the file still goes (a separate part of the undo)', () => {

@@ -1,14 +1,15 @@
-// netfacts.mjs (arch/win32) — Windows's part of the network facts (RFC 4.8 §10.1; 1.6 §9.7's `archFacts`): everything the proxy-mode topology needs that only this platform can read,
-// all of it read-only. `status`, `doctor` and `on`'s adopt reach it through src/netenv/facts.mjs (gatherNetFacts's `archFacts` = loadArch('win32').netFacts); what the daemon's /status
-// reply already says (the desired state, the engine's port, the forms the kernel read back on, each agent's trust, the negatives) is taken from `ctx.status`, and what it does not say —
-// the kernel's pid, each group's port, whether an entry still holds asight's value, each group's upstream — is read where the daemon reads it: the collector dir's own files
-// (`forwarder.lock`, `ingress.json`, the install manifest) and the resident helper's read verbs. There is no second daemon API, and nothing here writes anything.
+// netfacts.mjs (arch/win32) — Windows's part of the network facts (RFC 4.8 §10.1, as D47's twin rewrote the platform's routing half; 1.6 §9.7's `archFacts`): everything the
+// proxy-mode topology needs that only this platform can read, all of it read-only. `status`, `doctor` and `on`'s adopt reach it through src/netenv/facts.mjs (gatherNetFacts's
+// `archFacts` = loadArch('win32').netFacts); what the daemon's /status reply already says (the desired state, the engine's port, the doors the plan has on, each agent's trust, the
+// negatives) is taken from `ctx.status`, and what it does not say — each group's port, whether an entry still holds asight's value, each group's upstream — is read where the daemon
+// reads it: the collector dir's own files (`ingress.json`, the install manifest) and the resident helper's read verbs. There is no second daemon API, and nothing here writes anything.
 //
-//   · the kernel: `forwarder.lock` gives its pid (up: that pid is in the helper's process snapshot), `ingress.json` each group's port; each group's upstream is re-planned with
-//     planRoutes (the same pure read the daemon re-runs when the system proxy moves — the kernel holds what it last computed), its forms read back on come from the reply's `links`;
+//   · the engine's doors: `ingress.json` gives each group's port, the reply's `links` the doors the daemon holds on (the ENGINE is the only local proxy — the kernel, its lock and its
+//     reinstall lines are gone); each group's upstream is re-planned with planRoutes (the same pure read the daemon re-runs when the system proxy moves — the door dials what it last
+//     computed), the agents still connected to a port are the helper's established rows to it;
 //   · the forms: one per the harness file's own data (groupsOf), each with the proxy the agent would use without asight (priorOf over the entry files and the manifest's prior_value,
 //     the login environment, and「不知道 · env-unreadable」when the only place it is set is a variable of the terminal that started the agent — Windows reads no other process's
-//     environment, 4.8 §10.1), the OS proxy a follower reads, the entry edge ({ where, asight: true, opt_in } — intact while the file still holds the kernel's address, the same
+//     environment, 4.8 §10.1), the OS proxy a follower reads, the entry edge ({ where, asight: true, opt_in } — intact while the file still holds the door's address, the same
 //     read-back `entries.check` is), the opt-in state (planOptIns' rows over the manifest) and, for a host-tree form, the host set of 4.8 §3.5 (hostSetOf over the extension's own
 //     settings — read-only); plus `entryPlace` (where the group's proxy entry lives, filled in: the doctor's commands that name the place read it, 4.8 §10.4) and `route` (what the
 //     group's own plan says of it — the `why`/`detail` of a `not-routed`, the doctor's `code` for a refused protocol, `form-unsupported`: the doctor's rows split by them, 4.8 §10.4);
@@ -28,7 +29,6 @@ import { groupsOf, planRoutes, priorOf, hostSetOf, proxyRecordsOf } from './rout
 import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, readHkcuEnv } from './upstream.mjs'
 import { planOptIns } from './optin.mjs'
-import { reinstallCommands, loadPin } from './forwarder.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { readStateFile } from '../../../off/state.mjs'
@@ -132,8 +132,6 @@ export async function gatherWin32Facts(ctx, deps = {}) {
   if (!manifest) { try { manifest = readManifest(dir, fs) } catch { manifest = null } }
   let ing = null
   try { const v = JSON.parse(fs.readFileSync(path.join(dir, 'ingress.json'), 'utf8')); if (v && typeof v === 'object') ing = v } catch (e) { if (e && e.code !== 'ENOENT') fail('ingress', 'unparseable', `ingress.json: ${(e && e.code) || 'error'}`) }
-  let lock = null
-  try { const v = JSON.parse(fs.readFileSync(path.join(dir, 'forwarder.lock'), 'utf8')); if (v && typeof v === 'object' && Number.isInteger(v.pid)) lock = v } catch (e) { if (e && e.code !== 'ENOENT') fail('forwarder', 'unparseable', `forwarder.lock: ${(e && e.code) || 'error'}`) }
 
   // ---- the resident helper: injected, or started here for the read verbs and closed again ----------------------------------------------------------------
   const own = !D.helper
@@ -195,7 +193,7 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const allForms = groups.flatMap((x) => x.forms)
     const reply = status.daemon && status.daemon.reply
     const linksKnown = !!(reply && Array.isArray(reply.links))
-    const liveForms = new Set((linksKnown ? reply.links : []).map((l) => l && l.name).filter(Boolean))
+    const liveGroups = new Set((linksKnown ? reply.links : []).map((l) => l && l.name).filter(Boolean)) // the reply's `links` are the DOOR GROUPS the daemon holds on (the shared door core's status, D47): a group's forms are on as one
     // the host set the daemon's plan last applied to a host-tree form (4.8 §3.5, W69): the reply's `applied_hosts` (the wiring's win32 bag, relayed by /status) — what `status` compares
     // its own fresh `hostSetOf` read with, to say when the kernel's set is old. A daemon that did not answer, or one without the bag, leaves nothing to compare: no vacuous line.
     const appliedSetOf = (id) => { const a = reply && reply.applied_hosts && typeof reply.applied_hosts === 'object' ? reply.applied_hosts[id] : null; return a && Array.isArray(a.hosts) ? [...a.hosts] : null }
@@ -211,8 +209,7 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const matchOf = (r) => matchForm(allForms, { exe: r.exe, cmdline: r.cmdline, cmdlineState: r.cmdlineState }, { home })
     let extraHosts = {}
     try { extraHosts = (readStateFile(stateFile(home), { fs }).state || {}).harnesses || {} } catch { /* nothing installed: no extra hosts */ }
-    const controllerPort = lock && typeof lock.endpoint === 'string' ? Number((/:(\d+)$/.exec(lock.endpoint) || [])[1]) : null
-    const ownPorts = [...new Set([ing && ing.enginePort, controllerPort, ...Object.values((ing && ing.groupPorts) || {})].filter(Number.isInteger))]
+    const ownPorts = [...new Set([ing && ing.enginePort, ...Object.values((ing && ing.groupPorts) || {})].filter(Number.isInteger))]
     const plan = planRoutes({
       netenv: { systemProxy: sysForPlan, hkcuEnv, ownPorts },
       groups, desired, optIns: [...optIns], manifest, ctx: winCtx,
@@ -284,7 +281,7 @@ export async function gatherWin32Facts(ctx, deps = {}) {
       }
     }
 
-    // ---- the kernel's own state: which forms are on (the reply's read-back, else the plan), each group's upstream, the agents still connected to its port ---------------------
+    // ---- the doors' own state: which groups are on (the reply's links — the doors the daemon holds), each group's upstream, the agents still connected to its port -------------
     const estA = await call('tcp-table', { states: ['established'] })
     const estRows = estA && Array.isArray(estA.rows) ? estA.rows : []
     const clientsOf = (port) => [...new Set(estRows.filter((r) => r && r.pid && Number.isInteger(r.remotePort) && r.remotePort === port && (r.remoteAddr === '127.0.0.1' || r.remoteAddr === '::1')).map((r) => r.pid))].sort((a, b) => a - b)
@@ -296,19 +293,17 @@ export async function gatherWin32Facts(ctx, deps = {}) {
       const up = r ? r.upstream : null
       for (const f of x.forms) fwForms[f.id] = {
         h: x.harness, port,
-        state: linksKnown ? (liveForms.has(f.id) ? 'on' : 'forward-only') : (r && r.on ? 'on' : 'forward-only'),
+        state: linksKnown ? (liveGroups.has(x.g) ? 'on' : 'forward-only') : (r && r.on ? 'on' : 'forward-only'),
         upstream: !up ? null : up.kind === 'direct' ? 'DIRECT' : `${up.kind}://${up.host}:${up.port}`,
         source: up ? up.source : null, clients: clientsOf(port),
       }
     }
-    const forwarder = { pid: lock ? lock.pid : null, up: !lock ? false : psRows ? psByPid.has(lock.pid) : null, forms: fwForms }
+    // `forwarder` is the facts' name for asight's local proxy hop (the topology's own shape, 4.8 §10.1): since D47's twin that hop is the ENGINE's door
+    // itself — pid the daemon's (F.daemon below names it too), up whether the daemon answered — not a second process. There is no lock, no reinstall line.
+    const forwarder = { pid: (status.daemon && Number.isInteger(status.daemon.pid)) ? status.daemon.pid : null, up: !!(reply || linksKnown), forms: fwForms }
 
     const listeners = (listenRows || []).map((r) => ({ addr: r.localAddr, port: r.localPort, pid: r.pid, exe: (psByPid.get(r.pid) || {}).exe ?? null }))
-    // ---- the kernel's manual alternative (4.8 §10.4 · D44): forwarder.mjs's own literal, computed here on the arch side from THIS build's pin — the doctor prints it, nothing runs it. The
-    // facts carry it because src/netenv reads no arch module (1.6 §9.7 / 4.8 W39's rule 6); an architecture the pin has no archive for carries null (said, not guessed).
-    let reinstall = null
-    try { const a = (loadPin().assets || {})[process.arch]; if (a && a.name) reinstall = reinstallCommands(a) } catch { reinstall = null }
-    return { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy: sysFact, tun, ...(vpn ? { vpn } : {}), reinstall, unknowns }
+    return { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy: sysFact, tun, ...(vpn ? { vpn } : {}), unknowns }
   } finally {
     if (own && helper) await helper.close()
   }

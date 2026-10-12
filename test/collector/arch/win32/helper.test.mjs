@@ -11,8 +11,8 @@ import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_KIND_NAMES, REG_READ_ALLOW, POLICY_KEY_PATTERN, POLICY_NAME_PATTERN, declaredRegAllow, policyAllowOf, regKindsOf, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
 import { readSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
-import { CMDLINE_STATES, PS_TIMEOUT_MS, createProcWatcher, elevationOf, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
-import { ownerOf } from '../../../../src/collector/arch/win32/socktable.mjs'
+import { CMDLINE_STATES, PS_TIMEOUT_MS, elevationOf, factsOfPid, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
+import { ownerOfSocket } from '../../../../src/collector/arch/win32/socktable.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
@@ -641,156 +641,21 @@ function psHelper(snapshots, { delayMs = 0 } = {}) {
 function collect(w) { const ev = []; for (const n of ['exec', 'exit', 'facts-update', 'facts-error', 'poll-error']) w.on(n, (x) => ev.push([n, x])); return ev }
 const brief = (ev) => ev.map(([n, x]) => [n, x.pid])
 
-test('W2 a new pid is an exec, a vanished one an exit; the first snapshot is the baseline and says nothing', async () => {
-  const w = createProcWatcher({ helper: psHelper([[row(10), row(11)], [row(11), row(12)], [row(11), row(12)]]) })
-  const ev = collect(w)
-  await w.poll()
-  assert.deepEqual(ev, [], 'what was already running is scan()\'s, not an exec')
-  await w.poll()
-  assert.deepEqual(brief(ev), [['exit', 10], ['exec', 12]])
-  assert.deepEqual(ev[0][1], { pid: 10, startedAt: 1010 })
-  const facts = ev[1][1]
-  assert.deepEqual({ ...facts }, {
-    os: 'win32', pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', argv: ['C:\\apps\\p12.exe', '--x'], cmdline: '"C:\\apps\\p12.exe" --x', env: null, envRead: false, cwd: null,
-    startedAt: 1012, startTicks: '1012', sessionId: 2, integrity: 'medium', tokenDenied: false, elevated: false, elevationInferred: false, source: 'exec', cmdlineState: 'ok',
-  })
-  assert.equal(facts.envError, 'env-unreadable', 'another process\'s environment is never read on Windows (4.8 §10.1): null with the reason, not an empty one')
-  assert.equal(facts.envRead, false, 'and it says so (envRead: false): the tracker treats env null as the OS\'s rule, not a failure to read (4.8 §5.4, Task 8(v))')
-  await w.poll()
-  assert.equal(ev.length, 2, 'an unchanged snapshot is silent')
-})
 
-test('W2 the same pid with another start time is an exit and then an exec (pid reuse), also when the program is the same', async () => {
-  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10, { startedAt: 5000 })], [row(10, { startedAt: 6000, exe: 'C:\\other\\o.exe' })]]) })
-  const ev = collect(w)
-  await w.poll()
-  await w.poll()
-  assert.deepEqual(ev.map(([n, x]) => [n, x.pid, x.startedAt]), [['exit', 10, 1010], ['exec', 10, 5000]])
-  await w.poll()
-  assert.deepEqual(ev.slice(2).map(([n, x]) => [n, x.pid, x.startedAt]), [['exit', 10, 5000], ['exec', 10, 6000]])
-})
 
-test('W2 a start time that cannot be read falls back to the image path to tell a reused pid', async () => {
-  const w = createProcWatcher({ helper: psHelper([[row(10, { startedAt: null })], [row(10, { startedAt: null })], [row(10, { startedAt: null, exe: 'C:\\other\\o.exe' })]]) })
-  const ev = collect(w)
-  await w.poll(); await w.poll()
-  assert.deepEqual(ev, [])
-  await w.poll()
-  assert.deepEqual(brief(ev), [['exit', 10], ['exec', 10]])
-  assert.equal(ev[1][1].startTicks, null, 'no start time: no marker identity either')
-})
 
-test('W2 scan() lists the live processes as facts (source scan), announces nothing, and never moves what the diff knows', async () => {
-  const h = psHelper([[row(10), row(11)], [row(11), row(12)], [row(11), row(12)]])
-  const w = createProcWatcher({ helper: h })
-  const ev = collect(w)
-  const first = await w.scan() // the baseline is taken first (snapshot 0, silent), then the scan's own snapshot (1)
-  assert.deepEqual(first.map((f) => [f.pid, f.source]), [[11, 'scan'], [12, 'scan']])
-  assert.deepEqual(ev, [], 'a scan announces nothing')
-  await w.poll() // snapshot 2 = snapshot 1: scan() did not move the diff, so pid 10 is gone and pid 12 is new to it (pid 12 was also in the scan: a duplicate, never a gap)
-  assert.deepEqual(brief(ev), [['exit', 10], ['exec', 12]])
-  assert.deepEqual(h.calls.map((c) => c.args), [{}, {}, {}], 'this session only (the helper default)')
-  const all = createProcWatcher({ helper: h, all: true })
-  await all.scan()
-  assert.deepEqual(h.calls.at(-1).args, { all: true })
-})
 
-test('W2 a process created between scan() and start() is an exec, not swallowed by the baseline: scan-then-start and start-then-scan are both safe', async () => {
-  // The daemon scans at startup and at every `on`, and starts the watcher once. A baseline poll taken AFTER the scan would take the process
-  // created in between into the baseline silently: in no scan, in no exec. scan() takes the baseline itself when none exists yet, so the order does not matter.
-  const snaps = () => [[row(10)], [row(10), row(11)], [row(10), row(11)], [row(10), row(11), row(12)]]
-  for (const order of ['scan then start', 'start then scan', 'start, not awaited, then scan']) {
-    const w = createProcWatcher({ helper: psHelper(snaps()), intervalMs: 5, timers: { setInterval: () => 'T', clearInterval() {} } })
-    const ev = collect(w)
-    let facts
-    if (order === 'scan then start') { facts = await w.scan(); await w.start() } else if (order === 'start then scan') { await w.start(); facts = await w.scan() } else { w.start(); facts = await w.scan() }
-    assert.ok(facts.some((f) => f.pid === 10), order)
-    await w.poll(); await w.poll()
-    const execs = ev.filter(([n]) => n === 'exec').map(([, x]) => x.pid)
-    assert.ok(execs.includes(11) || facts.some((f) => f.pid === 11), `${order}: pid 11 is in the scan or announced`)
-    assert.ok(execs.includes(12), `${order}: pid 12, created last, is announced`)
-    w.stop()
-  }
-  // the gap, exactly: scan sees [10], the baseline would have seen [10, 11]
-  const w = createProcWatcher({ helper: psHelper([[10], [10, 11], [10, 11]].map((l) => l.map((p) => row(p)))) })
-  const ev = collect(w)
-  await w.scan()
-  await w.start()
-  await until(() => w.stats().polls >= 2)
-  assert.deepEqual(brief(ev), [['exec', 11]], 'pid 11 appeared after the scan began its snapshot: it must be announced')
-})
 
-test('W2 start() returns the baseline poll\'s promise, and a second start() the same one', async () => {
-  const w = createProcWatcher({ helper: psHelper([[row(10)]]), timers: { setInterval: () => 'T', clearInterval() {} } })
-  const first = w.start()
-  assert.ok(first && typeof first.then === 'function')
-  assert.equal(await first, true)
-  assert.equal(w.stats().polls, 1, 'the baseline was taken when the promise settled')
-  assert.equal(w.start(), first, 'a second start() does not poll again')
-})
 
 // ---------- W2: a command line that is not there yet is told, not lost (4.8 §1 `ps`) ----------
 
 /** A ps row whose command line the helper has no answer for (yet). */
 const noCmd = (pid, state, extra = {}) => row(pid, { cmdline: null, cmdlineState: state, ...extra })
 
-test('W2 an exec whose command line is not known yet says so (cmdlineState), and the command line arriving later is a facts-update; nothing is lost to "first sight"', async () => {
-  // forms recognised by command line (node.exe + dsh, W3) would otherwise be missed for good: `exec` is told once, at first sight.
-  const w = createProcWatcher({ helper: psHelper([
-    [row(10)], // the baseline
-    [row(10), noCmd(11, 'pending')], // pid 11 is new; CIM has not given its command line yet
-    [row(10), noCmd(11, 'cim-backoff')], // CIM failed: not asked again for 30 s. Not known, still
-    [row(10), row(11, { cmdline: '"C:\\node\\node.exe" "C:\\npm\\@deepseek-ai\\dsh\\bin.js"' })], // it arrives
-    [row(10), row(11, { cmdline: '"C:\\node\\node.exe" "C:\\npm\\@deepseek-ai\\dsh\\bin.js"' })],
-  ]) })
-  const ev = collect(w)
-  await w.poll()
-  await w.poll()
-  assert.deepEqual(brief(ev), [['exec', 11]])
-  assert.deepEqual([ev[0][1].cmdline, ev[0][1].argv, ev[0][1].cmdlineState, ev[0][1].source], [null, [], 'pending', 'exec'], 'no command line is told as "not yet", not as "none"')
-  await w.poll()
-  assert.equal(ev.length, 1, 'still not known: nothing to add')
-  await w.poll()
-  assert.deepEqual(brief(ev), [['exec', 11], ['facts-update', 11]])
-  const up = ev[1][1]
-  assert.deepEqual([up.cmdline, up.argv, up.cmdlineState, up.source], ['"C:\\node\\node.exe" "C:\\npm\\@deepseek-ai\\dsh\\bin.js"', ['C:\\node\\node.exe', 'C:\\npm\\@deepseek-ai\\dsh\\bin.js'], 'ok', 'update'])
-  assert.deepEqual([up.pid, up.exe, up.startedAt, up.elevated], [11, 'C:\\apps\\p11.exe', 1011, false], 'the same facts, the command line filled in')
-  await w.poll()
-  assert.equal(ev.length, 2, 'told once')
-})
 
-test('W2 a command line that CIM gave up on (empty three times) is a facts-update too: "no command line, ever" is not "not yet"', async () => {
-  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10), noCmd(11, 'pending')], [row(10), noCmd(11, 'pending')], [row(10), noCmd(11, 'empty')], [row(10), noCmd(11, 'empty')]]) })
-  const ev = collect(w)
-  for (let i = 0; i < 5; i++) await w.poll()
-  assert.deepEqual(ev.map(([n, x]) => [n, x.pid, x.cmdlineState, x.cmdline]), [['exec', 11, 'pending', null], ['facts-update', 11, 'empty', null]])
-})
 
-test('W2 a final state at first sight (ok, empty, not-asked) never gets an update', async () => {
-  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10), row(11), noCmd(12, 'empty'), noCmd(13, 'not-asked')], [row(10), row(11), noCmd(12, 'empty'), noCmd(13, 'not-asked')]]) })
-  const ev = collect(w)
-  await w.poll(); await w.poll(); await w.poll()
-  assert.deepEqual(ev.map(([n, x]) => [n, x.pid, x.cmdlineState]), [['exec', 11, 'ok'], ['exec', 12, 'empty'], ['exec', 13, 'not-asked']])
-})
 
-test('W2 a process in the baseline whose command line was pending is updated too (a scan told the consumer it was pending); one that exits first, or is replaced under the same pid, is not', async () => {
-  const w = createProcWatcher({ helper: psHelper([
-    [noCmd(10, 'pending'), noCmd(11, 'pending'), noCmd(12, 'pending')], // baseline: silent
-    [noCmd(10, 'pending'), row(12), row(11, { cmdline: null, cmdlineState: 'pending', startedAt: 9999 })], // 10 still pending; 12 arrives; 11 was replaced under the same pid (pending)
-    [row(10), row(11, { startedAt: 9999 })], // 10 arrives; 12 exited; 11's new life arrives
-  ]) })
-  const ev = collect(w)
-  await w.poll(); await w.poll(); await w.poll()
-  assert.deepEqual(ev.map(([n, x]) => [n, x.pid]), [['exit', 11], ['exec', 11], ['facts-update', 12], ['exit', 12], ['facts-update', 10], ['facts-update', 11]])
-  assert.deepEqual(ev.filter(([n]) => n === 'facts-update').map(([, x]) => x.startedAt), [1012, 1010, 9999], 'the update of pid 11 is its second life, not the first')
-})
 
-test('W2 a helper that does not say cmdlineState: a command line is "ok", none is "empty" (final: no update will come); the facts of a scan carry the state', async () => {
-  const w = createProcWatcher({ helper: psHelper([[row(10), row(11, { cmdline: null }), noCmd(12, 'pending')]]) })
-  const facts = await w.scan()
-  assert.deepEqual(facts.map((f) => [f.pid, f.cmdlineState]), [[10, 'ok'], [11, 'empty'], [12, 'pending']])
-  assert.deepEqual(facts.map((f) => f.source), ['scan', 'scan', 'scan'])
-})
 
 test('W2 helper.ps1 gives each ps row a cmdlineState from exactly the set the watcher knows, and the C# writes it', () => {
   const states = [...PS.matchAll(/\$state\[\$p\.Pid\]\s*=\s*'([a-z-]+)'/g)].map((m) => m[1])
@@ -810,160 +675,16 @@ test('W2 elevation: integrity High or above is elevated; a token that cannot be 
   assert.deepEqual(elevationOf({ integrity: null, tokenDenied: false, exe: 'C:\\a.exe' }), { elevated: null, inferred: false })
 })
 
-test('W2 a fixture process with tokenDenied and a readable image comes out of scan() elevated and inferred', async () => {
-  const w = createProcWatcher({ helper: psHelper([[row(20, { integrity: null, tokenDenied: true }), row(21, { integrity: 'high' })]]) })
-  const [a, b] = await w.scan()
-  assert.deepEqual([a.elevated, a.elevationInferred, a.tokenDenied], [true, true, true])
-  assert.deepEqual([b.elevated, b.elevationInferred], [true, false])
-})
 
-test('W2 a process whose image cannot be read is never an exec: one facts-error with what is still readable, listed in unreadable()', async () => {
-  const bad = row(30, { exe: null, name: 'svc.exe', cmdline: 'svc.exe --serve' })
-  const w = createProcWatcher({ helper: psHelper([[row(10), bad], [row(10), bad], [row(10)]]) })
-  const ev = collect(w)
-  await w.poll()
-  await w.poll()
-  assert.deepEqual(ev.map(([n]) => n), ['facts-error'], 'told once, not on every snapshot')
-  assert.deepEqual(ev[0][1], { os: 'win32', pid: 30, comm: 'svc.exe', argv: ['svc.exe', '--serve'], code: null, reason: ev[0][1].reason })
-  assert.match(ev[0][1].reason, /svc\.exe.*image path.*never judged/)
-  assert.deepEqual(w.unreadable(), [{ pid: 30, comm: 'svc.exe', errno: null, argv: ['svc.exe', '--serve'] }])
-  assert.deepEqual((await w.scan()).map((f) => f.pid), [10], 'scan() lists the readable ones only; this snapshot no longer has pid 30')
-  assert.deepEqual(w.unreadable(), [], 'gone again')
-})
 
-test('W2 a helper that fails is one poll-error per run of failures, never a throw; after a good poll it tells again', async () => {
-  const down = Object.assign(new Error('helper is down: killed'), { code: 'helper-down' })
-  const w = createProcWatcher({ helper: psHelper([[row(10)], down, down, [row(10)], down]) })
-  const ev = collect(w)
-  assert.equal(await w.poll(), true)
-  await w.poll(); await w.poll()
-  assert.deepEqual(ev.map(([n, x]) => [n, x.code, x.cause]), [['poll-error', 'helper-error', 'helper-down']], 'the code is the closed set\'s helper-error; what the client said is the cause')
-  await w.poll(); await w.poll()
-  assert.equal(ev.length, 2)
-  assert.match(ev[1][1].reason, /down/)
-})
 
-test('W2 a listener that throws loses nothing: the rest of the poll is announced, and the throw is one poll-error with the event and the pid', async () => {
-  const w = createProcWatcher({ helper: psHelper([[row(1)], [row(1), row(2), row(3), row(4)], [row(1), row(2), row(3), row(4)]]) })
-  const seen = []
-  w.on('exec', (f) => { seen.push(f.pid); if (f.pid === 2) throw new Error('listener bug') })
-  const errs = []
-  w.on('poll-error', (x) => errs.push(x))
-  await w.poll()
-  assert.equal(await w.poll(), true, 'a poll whose listener threw still ran')
-  assert.deepEqual(seen, [2, 3, 4], 'pids 3 and 4 were not lost to the throw on pid 2')
-  assert.deepEqual(errs.map((e) => [e.code, e.cause, e.event, e.pid]), [['helper-error', 'listener-threw', 'exec', 2]])
-  assert.match(errs[0].reason, /exec.*listener bug/)
-  await w.poll()
-  assert.deepEqual(seen, [2, 3, 4], 'the event that threw is told once: it is not announced again every poll')
-  assert.equal(errs.length, 1)
-  assert.equal(w.stats().listenerErrors, 1)
-})
 
-test('W2 a throwing exit, facts-error or poll-error listener is survived the same way, and a poll-error listener that throws cannot loop', async () => {
-  const bad = row(30, { exe: null, name: 'svc.exe' })
-  const w = createProcWatcher({ helper: psHelper([[row(1), row(2)], [row(3), bad], [row(3), bad]]) })
-  const ev = []
-  w.on('exit', (x) => { ev.push(['exit', x.pid]); throw new Error('exit listener bug') })
-  w.on('facts-error', (x) => { ev.push(['facts-error', x.pid]); throw new Error('facts-error listener bug') })
-  w.on('exec', (x) => ev.push(['exec', x.pid]))
-  const errs = []
-  w.on('poll-error', (x) => { errs.push(x.cause + ':' + x.event); throw new Error('poll-error listener bug') })
-  await w.poll()
-  await w.poll()
-  assert.deepEqual(ev.map(([n, pid]) => `${n}:${pid}`).sort(), ['exec:3', 'exit:1', 'exit:2', 'facts-error:30'], 'every announcement was made')
-  assert.deepEqual([...errs].sort(), ['listener-threw:exit', 'listener-threw:exit', 'listener-threw:facts-error'])
-})
 
-test('W2 a malformed row in the helper\'s answer is skipped and told once per run; the rest of the snapshot is used', async () => {
-  const w = createProcWatcher({ helper: psHelper([[row(10)], [row(10), null, 'x', { name: 'no pid' }, { pid: '12' }, row(11)], [row(10), null, row(11)], [row(10), row(11)], [row(10), row(11), 7]]) })
-  const ev = collect(w)
-  await w.poll()
-  assert.equal(await w.poll(), true, 'a null in the list is not an exception')
-  assert.deepEqual(brief(ev), [['poll-error', undefined], ['exec', 11]], 'told while the answer is read, then the diff: pid 11 was not lost to the rows around it')
-  assert.deepEqual([ev[0][1].code, ev[0][1].cause, ev[0][1].count], ['helper-error', 'malformed-rows', 4])
-  await w.poll()
-  assert.equal(ev.length, 2, 'the next malformed snapshot is the same run: not told again')
-  await w.poll() // a clean one ends the run
-  await w.poll()
-  assert.deepEqual(ev.slice(2).map(([n, x]) => [n, x.cause, x.count]), [['poll-error', 'malformed-rows', 1]])
-  assert.deepEqual((await w.scan()).map((f) => f.pid), [10, 11], 'scan() skips them too')
-})
 
-test('W2 start() and the interval never leave an unhandled rejection, whatever a listener or the helper\'s answer does', async () => {
-  const unhandled = []
-  const on = (e) => unhandled.push(e)
-  process.on('unhandledRejection', on)
-  try {
-    let tick
-    const w = createProcWatcher({ helper: psHelper([[row(1)], [row(1), null, row(2)], [row(1), null, row(2), row(3)]]), intervalMs: 5, timers: { setInterval: (fn) => { tick = fn; return 'T' }, clearInterval() {} } })
-    w.on('exec', () => { throw new Error('listener bug') })
-    w.on('poll-error', () => { throw new Error('and this one') })
-    w.start()
-    await until(() => w.stats().polls === 1)
-    tick()
-    await until(() => w.stats().polls === 2) // a tick while the previous poll is in flight is skipped: wait for each
-    tick()
-    await until(() => w.stats().polls === 3)
-    await new Promise((r) => setTimeout(r, 30)) // an unhandled rejection is reported after the microtasks drain
-    assert.deepEqual(unhandled, [])
-  } finally { process.off('unhandledRejection', on) }
-})
 
-test('W2 ps gets a generous timeout for the poll and the scan (10 s, psTimeoutMs to change it): the first ps after start reads every command line through CIM', async () => {
-  assert.equal(PS_TIMEOUT_MS, 10000)
-  const h = psHelper([[row(10)]])
-  const w = createProcWatcher({ helper: h })
-  await w.poll(); await w.scan()
-  assert.deepEqual(h.calls.map((c) => c.opts), [{ timeoutMs: 10000 }, { timeoutMs: 10000 }], 'not the 2 s default of a verb that reads a table')
-  const h2 = psHelper([[row(10)]])
-  const w2 = createProcWatcher({ helper: h2, psTimeoutMs: 1234 })
-  await w2.poll(); await w2.scan()
-  assert.deepEqual(h2.calls.map((c) => c.opts), [{ timeoutMs: 1234 }, { timeoutMs: 1234 }])
-})
 
-test('W2 a new ps is not sent while a timed-out one is still being worked on: no backlog behind a slow helper', async (t) => {
-  const log = path.join(tmpDir('asight-helper-'), 'in.log')
-  const h = started(t, { log, verbs: { ps: { delayMs: 500, data: { sessionId: 2, procs: [row(10)] } } } })
-  await h.ready
-  const psSent = () => lines(log).filter((l) => l.verb === 'ps').length
-  const w = createProcWatcher({ helper: h, psTimeoutMs: 30 })
-  const ev = collect(w)
-  await w.poll()
-  assert.deepEqual(ev.map(([n, x]) => [n, x.cause]), [['poll-error', 'helper-timeout']], 'told once')
-  assert.equal(await w.poll(), false, 'the helper is still on the first one: nothing is queued behind it')
-  assert.equal(psSent(), 1)
-  assert.equal(w.stats().deferred, 1)
-  await until(() => h.abandoned('ps') === 0)
-  assert.equal(await w.poll(), true, 'free again: the next poll goes out')
-  assert.equal(psSent(), 2)
-  assert.equal(ev.length, 1, 'the run of failures is still the one that was told')
-})
 
-test('W2 start() polls at once and on the interval; a poll still in flight is not started twice; stop() clears the timer', async () => {
-  const h = psHelper([[row(10)], [row(10), row(11)]], { delayMs: 30 })
-  let tick; let cleared = 0
-  const w = createProcWatcher({ helper: h, intervalMs: 77, timers: { setInterval: (fn, ms) => { tick = { fn, ms }; return 'T' }, clearInterval: (t) => { if (t === 'T') cleared++ } } })
-  const ev = collect(w)
-  w.start()
-  assert.equal(tick.ms, 77)
-  tick.fn() // a tick while the first poll is still in flight: skipped
-  await until(() => w.stats().polls === 1)
-  assert.equal(h.calls.length, 1)
-  tick.fn()
-  await until(() => ev.length)
-  assert.deepEqual(brief(ev), [['exec', 11]])
-  w.stop()
-  assert.equal(cleared, 1)
-})
 
-test('W2 through the real client and the fake helper: a ps answer becomes facts', async (t) => {
-  const h = started(t, { verbs: { ps: { seq: [{ sessionId: 2, procs: [row(10)] }, { sessionId: 2, procs: [row(10), row(11)] }] } } })
-  const w = createProcWatcher({ helper: h })
-  const ev = collect(w)
-  await w.poll(); await w.poll()
-  assert.deepEqual(brief(ev), [['exec', 11]])
-})
 
 test('W2 a command line is split the way CommandLineToArgvW does (the documented cases), and a missing one is no arguments', () => {
   // the documented argument rules, after a program name (the first token has rules of its own, below)
@@ -985,10 +706,11 @@ test('W2 a command line is split the way CommandLineToArgvW does (the documented
   for (const none of ['   ', '', null, undefined, 7]) assert.deepEqual(splitCommandLine(none), [], String(none))
 })
 
-// ---------- W4: which of the form's processes holds the connection to the hop (4.8 §5.3) ----------
+// ---------- W4: who owns the accepted socket's peer end — the targeted 4-tuple question (4.8 §5.3, D47's twin) ----------
 
-const trow = (pid, remotePort, extra = {}) => ({ pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort: 50000 + pid, remoteAddr: '127.0.0.1', remotePort, ...extra })
-/** An in-process helper whose tcp-table answers the given rows as they are (no filtering: ownerOf must not rely on the helper's). */
+/** A row of the helper's tcp-table answer: the AGENT's own socket would carry the peer as its local end. */
+const trow = (pid, localPort, extra = {}) => ({ pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort, remoteAddr: '127.0.0.1', remotePort: 17991, ...extra })
+/** An in-process helper whose tcp-table answers the given rows as they are (it is trusted to filter, the ask says what it wants: the client filters again here). */
 function tableHelper(rows, { error = null, delayMs = 0 } = {}) {
   return {
     calls: [],
@@ -1000,83 +722,57 @@ function tableHelper(rows, { error = null, delayMs = 0 } = {}) {
     },
   }
 }
-const HOP = { port: 7897 }
+const PEER = { address: '127.0.0.1', port: 5010 }
 
-test('W4 exactly one of the form\'s processes holds a connection to the hop (any state): its pid, from the socket table', async () => {
-  const h = tableHelper([trow(10, 7897), trow(11, 443), trow(11, 8080)])
-  const r = await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })
+test('W4 the row whose local end is the peer answers its pid, from the socket table', async () => {
+  const h = tableHelper([trow(10, 5010), trow(11, 5011)])
+  const r = await ownerOfSocket({ helper: h, peer: PEER })
   assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 10, source: 'socket-table' })
   assert.equal(typeof r.ms, 'number')
-  assert.deepEqual(h.calls.map((c) => [c.verb, c.args.pids, c.args.remotePort]), [['tcp-table', undefined, 7897]], 'the helper is asked for every holder of the port, not for the candidates\' rows: a process the caller has not seen shows only in the whole answer')
+  assert.deepEqual(h.calls.map((c) => [c.verb, c.args]), [['tcp-table', { localPort: 5010, states: ['established'] }]], 'one targeted question: the table filtered to the peer\'s local port and established rows')
 })
 
-test('W4 two processes of the form hold one: null, never a guess', async () => {
-  const r = await ownerOf({ helper: tableHelper([trow(10, 7897), trow(11, 7897)]), hop: HOP, candidates: [10, 11] })
-  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
-  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 443)]), hop: HOP, candidates: [10, 11] })).pid, null, 'none holds one')
+test('W4 two rows of that local end (a wrapped pid mid-query): null, never a guess', async () => {
+  assert.equal((await ownerOfSocket({ helper: tableHelper([trow(10, 5010), trow(11, 5010)]), peer: PEER })).pid, null)
+  assert.equal((await ownerOfSocket({ helper: tableHelper([trow(10, 5011)]), peer: PEER })).pid, null, 'no row of that local end: the socket is gone')
 })
 
-test('W4 a long-lived connection opened before `on` counts like any other, and nothing is ever "claimed": the same table gives the same answer every time', async () => {
-  const old = trow(10, 7897, { state: 'close-wait', localPort: 40000 }) // older than the switch, half closed: any state, any age
-  const h = tableHelper([old])
-  for (let i = 0; i < 3; i++) assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })).pid, 10)
-  // a second process opens a connection later: now it is ambiguous, however old the first one is
-  assert.equal((await ownerOf({ helper: tableHelper([old, trow(11, 7897)]), hop: HOP, candidates: [10, 11] })).pid, null)
+test('W4 the engine\'s own accepted socket and ownerless rows are not holders: pid exclusion and pid 0 (TIME_WAIT)', async () => {
+  assert.equal((await ownerOfSocket({ helper: tableHelper([trow(process.pid, 5010)]), peer: PEER })).pid, null, 'the engine\'s pid is excluded (belt and braces: its accepted socket shows the peer as its REMOTE end and does not match the local-end filter anyway)')
+  assert.equal((await ownerOfSocket({ helper: tableHelper([trow(0, 5010, { state: 'time-wait' }), trow(11, 5010)]), peer: PEER })).pid, 11, 'a TIME_WAIT row has no owner; it is the end of some earlier connection')
 })
 
-test('W4 one candidate is the answer when it holds the connection and nobody else does (single-process); a pid listed twice is one candidate; no candidate, no answer and no table read', async () => {
-  const h = tableHelper([trow(10, 7897)])
-  const r = await ownerOf({ helper: h, hop: HOP, candidates: [10] })
-  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 10, source: 'single-process' })
-  assert.equal(h.calls.length, 1, 'one table read: the process is the form\'s only one the caller knows, not necessarily the only one there is')
-  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 10] })).source, 'single-process', 'a pid listed twice is one candidate')
-  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 443)]), hop: HOP, candidates: [10] })).pid, null, 'the one candidate holds nothing to the hop: nothing says the connection is its')
-  const none = tableHelper([trow(10, 7897)])
-  assert.equal((await ownerOf({ helper: none, hop: HOP, candidates: [] })).pid, null)
-  assert.equal(none.calls.length, 0, 'no candidate: no table read')
+test('W4 the client filters the answer again: rows of other ports or addresses are ignored, whatever the helper did', async () => {
+  const rows = [trow(999, 9999), trow(10, 5010, { localAddr: '10.1.2.3' }), trow(11, 5010, { localPort: 5011 }), trow(12, 5010)]
+  assert.equal((await ownerOfSocket({ helper: tableHelper(rows), peer: PEER })).pid, 12)
 })
 
-test('W4 a holder the caller has no row for is a process nobody has seen, and it may own the connection: null, however many known processes hold one (the 2 s the process table lags)', async () => {
-  // a second terminal starts while the first runs: both are claude.exe, only 10 is known, and the first connection of the new one comes within a second
-  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 7897), trow(99, 7897)]), hop: HOP, candidates: [10, 11] })).pid, null, 'two known processes, one holding an old tunnel, an unseen one connecting: not 10')
-  assert.equal((await ownerOf({ helper: tableHelper([trow(99, 7897)]), hop: HOP, candidates: [10] })).pid, null, 'one known process, an unseen one connecting: not "the only process"')
-  assert.equal((await ownerOf({ helper: tableHelper([trow(10, 7897), trow(99, 7897)]), hop: HOP, candidates: [10] })).pid, null, 'the known one holds a connection too: still not it')
-  // `known` says which processes the caller can account for: a known process that is not a candidate is another form's, and cannot be this form's connection
-  const r = await ownerOf({ helper: tableHelper([trow(12, 7897), trow(11, 7897)]), hop: HOP, candidates: [10, 11], known: [10, 11, 12] })
-  assert.deepEqual({ pid: r.pid, source: r.source }, { pid: 11, source: 'socket-table' }, 'pid 12 is the VS Code form\'s, known: it shares the group\'s port and holds a connection, and is not the cli\'s')
-  assert.equal((await ownerOf({ helper: tableHelper([trow(12, 7897), trow(99, 7897), trow(11, 7897)]), hop: HOP, candidates: [10, 11], known: [10, 11, 12] })).pid, null, 'a holder outside `known` is unseen')
-  // a TIME_WAIT row has no owner (Windows reports pid 0): the end of some earlier connection, not a process that is connecting now
-  assert.equal((await ownerOf({ helper: tableHelper([trow(11, 7897), trow(0, 7897, { state: 'time-wait' })]), hop: HOP, candidates: [10, 11] })).pid, 11)
-  assert.equal((await ownerOf({ helper: tableHelper([trow(11, 7897), trow(99, 7897, { remoteAddr: '10.1.2.3' })]), hop: { port: 7897, address: '127.0.0.1' }, candidates: [10, 11] })).pid, 11, 'with the address named, a row to another host is not a holder')
-})
-
-test('W4 the answer does not depend on the helper having filtered: rows of other ports are ignored here too', async () => {
-  const rows = [trow(999, 9999), trow(10, 9999), trow(11, 7897, { remoteAddr: '10.1.2.3' }), trow(12, 7897)]
-  assert.equal((await ownerOf({ helper: tableHelper(rows), hop: HOP, candidates: [10, 11, 12] })).pid, null, 'pid 11 also holds a row to that port, on another host: still ambiguous')
-  assert.equal((await ownerOf({ helper: tableHelper(rows), hop: { port: 7897, address: '127.0.0.1' }, candidates: [10, 11, 12] })).pid, 12, 'a hop that names its address narrows the rows')
+test('W4 a peer that is not an IPv4 literal is answered null at once, with no table read', async () => {
+  const h = tableHelper([trow(10, 5010)])
+  assert.equal((await ownerOfSocket({ helper: h, peer: { address: '::1', port: 5010 } })).ms, 0)
+  assert.equal(h.calls.length, 0, 'the doors bind 127.0.0.1 only: an IPv6 peer cannot be one of the agents\' sockets')
 })
 
 test('W4 a table that answers after 250 ms is null with ms >= 250, and not a failure', async () => {
   const failures = []
-  const r = await ownerOf({ helper: tableHelper([trow(10, 7897)], { delayMs: 1500 }), hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
+  const r = await ownerOfSocket({ helper: tableHelper([trow(10, 5010)], { delayMs: 1500 }), peer: PEER, onFailure: (f) => failures.push(f) })
   assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
   assert.ok(r.ms >= 250, `ms ${r.ms}`)
   assert.ok(r.ms < 1200, `it did not wait for the late answer: ${r.ms}`)
   assert.deepEqual(failures, [])
-  // the budget is a parameter, and the helper's own timeout is the same budget
-  const h = tableHelper([trow(10, 7897)])
-  await ownerOf({ helper: h, hop: HOP, candidates: [10, 11], budgetMs: 80 })
+  const h = tableHelper([trow(10, 5010)])
+  await ownerOfSocket({ helper: h, peer: PEER, budgetMs: 80 })
   assert.equal(h.calls[0].opts.timeoutMs, 80)
   const slow = Object.assign(new Error('helper tcp-table timed out after 80 ms'), { code: 'helper-timeout' })
-  const t = await ownerOf({ helper: tableHelper([], { error: slow }), hop: HOP, candidates: [10, 11], budgetMs: 80, onFailure: (f) => failures.push(f) })
+  const t = await ownerOfSocket({ helper: tableHelper([], { error: slow }), peer: PEER, budgetMs: 80, onFailure: (f) => failures.push(f) })
   assert.ok(t.pid === null && t.ms >= 80)
-  assert.deepEqual(failures, [], 'a helper-side timeout is over budget too')
+  assert.deepEqual(failures, [], 'a helper-side timeout is over budget too: slow, not unavailable')
 })
 
 test('W4 a table that cannot be read is null and one socktable-unavailable (a record the closed set knows)', async () => {
   for (const error of [Object.assign(new Error('native-unavailable: Add-Type blocked'), { code: 'helper-verb-error' }), Object.assign(new Error('helper is down: killed'), { code: 'helper-down' })]) {
     const failures = []
-    const r = await ownerOf({ helper: tableHelper([], { error }), hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
+    const r = await ownerOfSocket({ helper: tableHelper([], { error }), peer: PEER, onFailure: (f) => failures.push(f) })
     assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
     assert.equal(failures.length, 1)
     assert.deepEqual([failures[0].event, failures[0].where, failures[0].code], ['failure', 'helper', 'socktable-unavailable'])
@@ -1084,34 +780,51 @@ test('W4 a table that cannot be read is null and one socktable-unavailable (a re
     assert.deepEqual(checkRecord(failures[0]), [])
   }
   const failures = []
-  await ownerOf({ helper: { call: async () => ({ nonsense: true }) }, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })
+  await ownerOfSocket({ helper: { call: async () => ({ nonsense: true }) }, peer: PEER, onFailure: (f) => failures.push(f) })
   assert.equal(failures.length, 1, 'an answer with no rows is an unreadable table, not an empty one')
 })
 
 test('W4 a lookup in flight when the helper is closed is null and NOT a failure: an operator\'s stop (off, stop) is not an unreadable table', async (t) => {
   const failures = []
-  const h = started(t, { verbs: { 'tcp-table': { delayMs: 300, data: { rows: [trow(10, 7897)] } } } })
+  const h = started(t, { verbs: { 'tcp-table': { delayMs: 300, data: { rows: [trow(10, 5010)] } } } })
   await h.ready
-  const asked = ownerOf({ helper: h, hop: HOP, candidates: [10, 11], budgetMs: 2000, onFailure: (f) => failures.push(f) })
+  const asked = ownerOfSocket({ helper: h, peer: PEER, budgetMs: 2000, onFailure: (f) => failures.push(f) })
   await new Promise((r) => setTimeout(r, 20))
   await h.close()
   const r = await asked
   assert.deepEqual({ pid: r.pid, source: r.source }, { pid: null, source: null })
   assert.deepEqual(failures, [], 'helper-closed is the daemon stopping its own helper')
-  // the helper being closed before the question is asked is the same
-  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })).pid, null)
+  assert.equal((await ownerOfSocket({ helper: h, peer: PEER, onFailure: (f) => failures.push(f) })).pid, null)
   assert.deepEqual(failures, [])
-  // while a helper that DIED under the question is still a failure (W4's unreadable case, above)
 })
 
-test('W4 through the real client and the fake helper: the verb answers the rows of the hop, the rest is the same; a failing verb is the failure record', async (t) => {
-  const rows = [trow(10, 7897), trow(11, 443), trow(12, 7897, { family: 6, localAddr: '::1', remoteAddr: '::1' })]
+test('W4 through the real client and the fake helper: the verb answers the rows of the peer\'s local port, the rest is the same; a failing verb is the failure record', async (t) => {
+  const rows = [trow(10, 5010), trow(11, 5011), trow(12, 5010, { family: 6, localAddr: '::1' })]
   const h = started(t, { verbs: { 'tcp-table': { data: { rows } } } })
-  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11], known: [10, 11, 12] })).pid, 10)
-  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 12] })).pid, null)
-  assert.equal((await ownerOf({ helper: h, hop: HOP, candidates: [10, 11] })).pid, null, 'pid 12 holds a row to the hop and nobody has seen it')
+  assert.equal((await ownerOfSocket({ helper: h, peer: PEER })).pid, 10, 'the ::1 row does not hold the 127.0.0.1 peer')
   const bad = started(t, { verbs: { 'tcp-table': { error: 'GetExtendedTcpTable af=23 rc=50' } } })
   const failures = []
-  assert.equal((await ownerOf({ helper: bad, hop: HOP, candidates: [10, 11], onFailure: (f) => failures.push(f) })).pid, null)
+  assert.equal((await ownerOfSocket({ helper: bad, peer: PEER, onFailure: (f) => failures.push(f) })).pid, null)
   assert.match(failures[0].reason, /rc=50/)
+})
+
+// ---------- W2: the targeted facts question of one pid (4.8 §5.3, D47's twin) ----------
+
+test('W2 factsOfPid: the pid\'s row of the helper\'s ps answer, as ProcFacts with source accept; a pid nobody lists is null, not an error', async () => {
+  const h = tableHelper([]) // shape only; a ps helper of its own below
+  const psHelper = (procs) => ({ calls: [], async call(verb, args, opts) { this.calls.push({ verb, args, opts }); return { sessionId: 2, procs } } })
+  const row = { pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', cmdline: '"C:\\apps\\p12.exe" --x', startedAt: 1012, sessionId: 2, integrity: 'medium', tokenDenied: false }
+  const good = psHelper([row, { ...row, pid: 13 }])
+  const facts = await factsOfPid(12, { helper: good })
+  assert.deepEqual({ ...facts }, {
+    os: 'win32', pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', argv: ['C:\\apps\\p12.exe', '--x'], cmdline: '"C:\\apps\\p12.exe" --x', env: null, envRead: false, cwd: null,
+    startedAt: 1012, startTicks: '1012', sessionId: 2, integrity: 'medium', tokenDenied: false, elevated: false, elevationInferred: false, source: 'accept', cmdlineState: 'ok',
+  })
+  assert.equal(facts.envError, 'env-unreadable')
+  assert.deepEqual(good.calls.map((c) => [c.verb, c.args]), [['ps', {}]], 'one targeted ask: the session snapshot, the row picked here')
+  assert.equal((await factsOfPid(99, { helper: psHelper([row]) })), null, 'the process is gone between the accept and the ask: the honest answer')
+  assert.equal((await factsOfPid(12, { helper: { call: async () => { throw Object.assign(new Error('helper is down: killed'), { code: 'helper-down' }) } } })), null, 'a helper that is down: no facts, the fail-safe answer, never a throw into the lookup')
+  await assert.rejects(() => factsOfPid('12', { helper: good }), /needs the pid/)
+  await assert.rejects(() => factsOfPid(12, {}), /needs the helper/)
+  assert.ok(h, 'unused')
 })

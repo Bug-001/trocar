@@ -45,16 +45,16 @@ thinking / tool_use / tool_result), so you see *which* part grew and when.
 
 ## Install
 
-From source (Node ≥ 20):
+From source (Node ≥ 20). The package is private — there is no global `asight` on your PATH, so run
+it through the repo (or `npx --no-install asight …`):
 
 ```sh
-git clone <this repo> && cd asight && npm install
-asight on
+git clone <this repo> && cd <the repo> && npm install
+node bin/asight.mjs on          # or: npx --no-install asight on
 ```
 
-The first `asight on` lists the files it will touch and the kernel it will download (mihomo, version
-and sha256 pinned in the repo), and starts after you confirm. Then: `asight status` to see state,
-`asight off` to take every trace of asight off your agents' path.
+The first `asight on` lists the files it will touch and starts after you confirm. Then: `asight status`
+to see state, `asight off` to take every trace of asight off your agents' path.
 
 From a Release: not published yet.
 
@@ -165,31 +165,34 @@ recorded call by call), OpenCode, DeepSeek `dsh`, Kimi Code, Hermes and Z-Code. 
 eBPF helper steers only the connections of agent processes you run to a loopback engine, which decrypts
 only for agents that trust the collector CA. Everything else, including other users, goes direct. On
 Windows (RFC 4.8) the same harnesses are captured in proxy mode — Kimi Code only through its opt-in shims.
-`asight on` prints its plan first: the kernel it will run (`asight-forwarder.exe`, mihomo with the
-version and both sha256s pinned in the repo — downloaded by that first `on` when missing, from the
-pinned official release page; it listens on loopback only — no TUN, never the system proxy, nothing
-written into your VPN), one row per agent group with the upstream the kernel will dial for it, Codex's
-WebSocket, Smart App Control, and the autostart task; then it writes the proxy and trust entries in the
+`asight on` prints its plan first — one row per agent group with its upstream, Codex's WebSocket, and
+the autostart task; then it writes the proxy and trust entries in the
 agents' own config files (your prior values recorded, `off` restores them). The forms that reach further
 are opt-in, each named with what it touches — `asight on <harness> --opt-in <form>`: Claude Desktop's
 user-level certificate store, the Kimi / OpenCode PATH shims, the Kimi VS Code extension capture, the
 OpenCode and Z-Code desktop launchers and app settings (the machine-level ones run in the administrator
 step asight shows, never with a password field of its own). `asight off` runs the same undo as on Linux:
-the supervisor, daemon and kernel stopped, every entry and opt-in item taken out — and, as the plan says
-up front, an agent started while it was on still passes through the kernel (forwarded untouched) until
-you restart it. On macOS (RFC 4.9) the same harnesses are captured in proxy mode, with darwin's own
-shape: `asight on` prints its plan first — the kernel it will run (`asight-forwarder`, mihomo pinned
-the same way and downloaded by that first `on` when missing; loopback only, no TUN, never the system
-proxy, nothing written into your VPN), one row per agent group with its upstream, Codex's WebSocket, the Gatekeeper
-precheck, and the autostart LaunchAgent (`com.asight.collector` in `~/Library/LaunchAgents`, `RunAtLoad`
-+ `KeepAlive` — logout stops it; no linger on macOS); then it writes the proxy and trust entries in the
+the supervisor and daemon stopped, every entry and opt-in item taken out — and, as the plan says
+up front, an agent started while it was on still passes through its group's door (forwarded untouched) until
+you restart it. On Windows and macOS (RFC 4.8 / 4.9, D47 and its win32 twin) the proxy is the collector's
+own engine — one loopback door per agent group, loopback only, no TUN, never the system proxy, nothing
+written into your VPN; nothing is downloaded and there is no second kernel at all (`asight on`'s first
+write is the CA, as on Linux), and the connection's identity is read from the socket at accept time
+(a targeted owner lookup per connection) rather than from a process scan.
+`asight on` prints its plan first — one row per agent group with its upstream (the engine dials it
+for each connection; loopback only, no TUN, never the system proxy, nothing written into your VPN),
+Codex's WebSocket, and the autostart LaunchAgent (`com.asight.collector` in `~/Library/LaunchAgents`,
+`RunAtLoad` + `KeepAlive` — logout stops it; no linger on macOS); then it writes the proxy and trust
+entries in the
 agents' own config files (your prior values recorded, `off` restores them; the first install's combined
 bundles carry the keychain-administered roots, so an enterprise proxy's upstream still verifies on day
 one). The forms that reach further are opt-in, each named with what it touches — `asight on <harness>
 --opt-in <form>`: Kimi / OpenCode's launch shims and their one marked PATH line in the zsh rc files
 (reference-counted: `off kimi-code` does not break opencode), and Claude Desktop's certificate in the
 login keychain (`security add-trusted-cert` in the user domain — the OS's own authorization dialog
-carries the consent; found and removed by its SHA-256 fingerprint, never the common name). `asight off`
+carries the consent; found and removed by its SHA-256 fingerprint, never the common name). If the
+engine dies, launchd pulls the daemon (and with it the doors) back up; an agent's own retry carries it
+over the gap — there is no second fallback layer. `asight off`
 runs the same undo: the LaunchAgent booted out before the daemon is stopped (launchd's `KeepAlive`
 really does pull a killed daemon back), every entry and opt-in item taken out. The old capture's own
 commands (`desktop`, `monitor`, `capture`, `mitm`) are gone — see *The old capture is retired* below.
@@ -240,7 +243,8 @@ turn's end); `asight off --now` cuts them at once. The one byte of its own that 
 
 Capture failures are never silent: a refused or failed install step, a file `off` could not undo, a
 helper or engine error, a failed heartbeat or attach, an envelope that could not be written, an agent
-judged untrusted, an unusable CA, connections the kernel let go direct, links lost behind the daemon's
+judged untrusted, an unusable CA, connections the proxy let go direct (forwarded only), links lost
+behind the daemon's
 back — each leaves a line with its reason and a closed code in `~/.asight/collector/flows/`, and
 `asight status` prints the recent ones, also when the daemon is not running (it then judges
 the daemon from its lock: not running, or stuck). One exception: an install refused before it wrote

@@ -9,11 +9,12 @@ export async function loadArch(platform = process.platform) {
     return { os: 'linux', install, unit, netFacts: linuxNetFacts, osRootsFile: '/etc/ssl/certs/ca-certificates.crt', createRedirector: ({ env = process.env } = {}) => createLinuxRedirector({ makeClient: () => createRedirectorClient({ env }) }) }
   }
   if (platform === 'win32') {
-    // 4.8 §1: no machine-wide helper (install: null — the per-user one is a PowerShell process, not a root service); the autostart unit is
-    // the scheduled-task module (Task 9(a)); the OS roots are read (not a file: windowsRoots, 4.8 §6.2), so osRootsFile stays away; netFacts
-    // is this platform's part of the network facts (1.6 §9.7, 4.8 §10.1, Task 10): status / doctor / on's adopt reach it through
+    // 4.9 §1 (D47's twin, carried): no machine-wide helper (install: null — the per-user one is a PowerShell process, not a root service); no kernel to download, verify or
+    // place either — the ENGINE is the only local proxy (its per-group doors), so `on` has no prepare / ensureKernel arms at all (the darwin twin's own rule; the pin, the
+    // download and the forwarder went with the kernel). The autostart unit is the scheduled-task module (Task 9(a)); the OS roots are read (not a file: windowsRoots, 4.8 §6.2),
+    // so osRootsFile stays away; netFacts is this platform's part of the network facts (1.6 §9.7, 4.8 §10.1, Task 10): status / doctor / on's adopt reach it through
     // src/netenv/facts.mjs, and it reads the collector dir's files and the resident helper — no second daemon API. createRedirector is the whole Windows collector (wiring.mjs): it needs the collector dir and the daemon's sinks, so only
-    // daemon.mjs calls it (loadParts makes no redirector on win32); prepare is the read-only hook `asight on` calls before it writes (W27 ⑥, W74);
+    // daemon.mjs calls it (loadParts makes no redirector on win32);
     // routing is the proxy-mode routing object 1.6 §9.5's `on` consumes (Task 8(c)): a FACTORY runOnCli builds with its own shell's environment.
     // optIn is 4.8 §2.4's half the CLI and the daemon reach (1.6 §1.7): `forms` (what --opt-in may name), `plan` (the rows of the plan's 「要你点名的」
     // section), `apply` (one named item, ledgered) and `check` (W68: the read-only re-check that the entries are still the ones used — status folds its
@@ -21,7 +22,7 @@ export async function loadArch(platform = process.platform) {
     // itself). `record` is what the daemon's 5 s check does with the findings (once per occurrence, only §9.7's netenv failure codes) — on the arch object
     // so the daemon, the one file allowed to wire arch in, stays platform-neutral about it. netFacts (Task 10(a)) is this platform's half of the network
     // facts: topology rows, doctor findings, the §11 plan and the drift checks all draw from it through src/netenv/facts.mjs.
-    const [{ createWin32Collector, prepare, ensureKernel, win32Routing }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf, applyOptIn, checkEntries, recordEntryFindings }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
+    const [{ createWin32Collector, win32Routing }, unit, { controlEndpoint }, { windowsRoots }, { planOptIns, optinFormsOf, applyOptIn, checkEntries, recordEntryFindings }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('./win32/roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
     const { groupsOf } = await import('./win32/route-plan.mjs')
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
@@ -30,8 +31,6 @@ export async function loadArch(platform = process.platform) {
       refuseElevated: unit.refuseElevated, nodePreflight: unit.nodePreflight, runSupervisor: unit.runSupervisor,
       osRoots: ({ helper = null } = {}) => windowsRoots({ helper }),
       createRedirector: (opts = {}) => createWin32Collector(opts),
-      prepare,
-      ensureKernel, // D44: the kernel's download+verify+place — the FIRST write-phase step of a real `on` (after the confirmation, before any agent file is touched); Linux's driver mode needs no kernel and has none
       routing: win32Routing,
       netFacts: gatherWin32Facts,
       optIn: {
@@ -44,14 +43,15 @@ export async function loadArch(platform = process.platform) {
     }
   }
   if (platform === 'darwin') {
-    // 4.9 §1: no machine-wide helper either (install: null — nothing on darwin needs privilege: ps / lsof / scutil / security are plain CLIs, run on demand); the autostart unit is
-    // the launchd module (§4); the OS roots are read (darwinRoots: the keychain-administered anchors + bundled + SystemRootCertificates, 4.9 §6.2), so osRootsFile stays away;
-    // netFacts is darwinNetFacts (1.6 §9.7's archFacts). createRedirector is the whole darwin collector (wiring.mjs) — built lazy (4.9 §1 接线): the daemon's construction (with
-    // dir and the sinks) builds everything and starts nothing, loadParts' {env}-only one gets the shell; prepare is the read-only hook `asight on` calls before it writes.
+    // 4.9 §1 (as D47 rewrote it): no machine-wide helper either (install: null — nothing on darwin needs privilege: ps / lsof / scutil / security are plain CLIs, run on demand);
+    // no kernel to download or verify either — the ENGINE is the only local proxy (its per-group doors), so `on` has no prepare / ensureKernel arms at all (the win32 twin keeps
+    // its own). The autostart unit is the launchd module (§4); the OS roots are read (darwinRoots: the keychain-administered anchors + bundled + SystemRootCertificates, 4.9 §6.2),
+    // so osRootsFile stays away; netFacts is darwinNetFacts (1.6 §9.7's archFacts). createRedirector is the whole darwin collector (wiring.mjs) — built lazy (4.9 §1 接线): the
+    // daemon's construction (with dir and the sinks) builds everything and starts nothing, loadParts' {env}-only one gets the shell.
     // optIn is 4.9 §2.4's half the CLI and status reach (1.6 §1.7; the flip checklist ④, the win32 twin's shape): `forms` (what --opt-in may name), `plan` (the rows of the plan's
     // 「要你点名的」 section) and `apply` (one named item, ledgered with scope). The check half (the read-only re-check that the entries are still the ones used, W68) is the
     // status-side work of MA4's row — not this arm; the daemon's own opt-in check is guarded by the hook's absence and checks nothing.
-    const [{ createDarwinCollector, prepare, ensureKernel }, unit, { controlEndpoint }, { darwinRoots }, { darwinNetFacts }, { planOptIns, optinFormsOf, applyOptIn }] = await Promise.all([import('./darwin/wiring.mjs'), import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('./darwin/roots.mjs'), import('./darwin/netfacts.mjs'), import('./darwin/optin.mjs')])
+    const [{ createDarwinCollector }, unit, { controlEndpoint }, { darwinRoots }, { darwinNetFacts }, { planOptIns, optinFormsOf, applyOptIn }] = await Promise.all([import('./darwin/wiring.mjs'), import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('./darwin/roots.mjs'), import('./darwin/netfacts.mjs'), import('./darwin/optin.mjs')])
     const { groupsOf } = await import('./darwin/route-plan.mjs')
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
@@ -61,8 +61,6 @@ export async function loadArch(platform = process.platform) {
       osRoots: () => darwinRoots(),
       netFacts: darwinNetFacts,
       createRedirector: (opts = {}) => createDarwinCollector(opts),
-      prepare,
-      ensureKernel, // D44's darwin half (4.9 §8): the same first write-phase step as win32's
       optIn: {
         forms: ({ harnesses: h, ids = null } = {}) => optinFormsOf(of(h, ids)),
         plan: ({ harnesses: h, ids = null, optIn = [], manifest = null } = {}) => planOptIns({ groups: of(h, ids), optIns: optIn, manifest }),

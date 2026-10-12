@@ -44,7 +44,7 @@ test('doctor reports the collector: a running-but-untrusted agent with its reaso
     const { status, out } = doctor(home, cleanSource(home))
     assert.equal(status, 0, `doctor still exits 0 when the capture is clean:\n${out}`)
     assert.match(out, /按进程采集器/, 'the collector has its own section')
-    assert.match(out, /untrusted pid 4242 claude-code .*: no asight trust entry is in effect for this process/, `the running-but-untrusted agent and why:\n${out}`)
+    assert.match(out, /var-missing no asight trust entry is in effect for this process/, `the running-but-untrusted agent and why — the digest brief names code and reason; the pid rows are --failures / --json:\n${out}`)
     assert.match(out, /notes of the last install/)
     assert.match(out, /\[cert-not-merged\] codex: .*corp\.pem: block 1 \(PRIVATE KEY\) is not carried over/, `the block that was not merged: its type and its file:\n${out}`)
     assert.ok(!out.includes('U0VDUkVULUtFWQ'), 'never the key itself')
@@ -56,7 +56,7 @@ test('doctor with nothing installed says the collector is not installed, and doe
   try {
     const { status, out } = doctor(home, cleanSource(home))
     assert.equal(status, 0, out)
-    assert.match(out, /按进程采集器[\s\S]*not installed/, out)
+    assert.match(out, /按进程采集器[\s\S]*采集健康 – 没装/, out)
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 

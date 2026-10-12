@@ -1,11 +1,11 @@
-// findings-win32.mjs (src/netenv) — the Windows half of `doctor`'s catalogue (RFC 4.8 §10.4): the commands of 1.6 §9.6's codes on Windows, one entry per code row of the §10.4 table, every value filled
-// from the facts (a value that could not be read says 「不知道 · <原因>」, never a `<…>` placeholder). `src/netenv/findings.mjs` picks an entry from here first on win32; a field an entry leaves out
-// falls back to the cross-platform catalogue's, and an entry for a code the cross-platform catalogue does not have (`form-unsupported`, `fallback-active`, `form-path-unknown`, `engine-port-taken`,
-// `forwarder-start-failed`, `forwarder-binary-missing`, `forwarder-digest-mismatch`, `socktable-unavailable`) defines every field itself. `not-routed` splits by the `why` the group's plan gave
-// (`system-proxy-pac` · `system-proxy-unreadable` · `upstream-unparseable`, whose `credentials-in-system-proxy` detail says WinINET takes no login from that value); `upstream-protocol` has no row of
-// its own — it is the `proxy-unsupported` row. Nothing here runs anything (R8) and nothing here changes a system setting: the Smart App Control branch of `forwarder-start-failed` gives the three
-// choices and no command that touches the setting (W74). `Get-NetTCPConnection` never appears — a restricted token is refused it (4.8 E6) — the port check is always `netstat -ano -p TCP | findstr
-// ":<port>"`. A JSON edit is a `gui` step worded as 记事本 (a PowerShell one-liner would reorder the user's JSON); the kernel's manual alternative is forwarder.mjs's own literal (carried by the facts, computed on the Windows side), an instruction with no download address.
+// findings-win32.mjs (src/netenv) — the Windows half of `doctor`'s catalogue (RFC 4.8 §10.4, the kernel-era rows retired with the kernel — D47's twin: the forwarder-* family and the fallback verdict
+// have no producer on any arch now, and the engine's per-group doors are the only local proxy): the commands of 1.6 §9.6's codes on Windows, one entry per code row of the §10.4 table, every value
+// filled from the facts (a value that could not be read says 「不知道 · <原因>」, never a `<…>` placeholder). `src/netenv/findings.mjs` picks an entry from here first on win32; a field an entry leaves
+// out falls back to the cross-platform catalogue's, and an entry for a code the cross-platform catalogue does not have (`form-unsupported`, `form-path-unknown`, `engine-port-taken`,
+// `socktable-unavailable`) defines every field itself. `not-routed` splits by the `why` the group's plan gave (`system-proxy-pac` · `system-proxy-unreadable` · `upstream-unparseable`, whose
+// `credentials-in-system-proxy` detail says WinINET takes no login from that value); `upstream-protocol` has no row of its own — it is the `proxy-unsupported` row. Nothing here runs anything (R8)
+// and nothing here changes a system setting (W74). `Get-NetTCPConnection` never appears — a restricted token is refused it (4.8 E6) — the port check is always `netstat -ano -p TCP | findstr
+// ":<port>"`. A JSON edit is a `gui` step worded as 记事本 (a PowerShell one-liner would reorder the user's JSON).
 
 const asight = (c, run) => ({ run, shell: c.sh })
 const ps = (run) => ({ run, shell: 'powershell' })
@@ -38,14 +38,6 @@ function setProxyText(h, place, value) {
   if (place.kind === 'shim') return `${place.command} 的代理入口是 asight 的 shim(${place.command}.cmd 设 HTTPS_PROXY):没有你可以改的自己的代理项`
   if (place.kind === 'launcher') return '这个形态的代理入口是 asight 的启动器:没有你可以改的自己的代理项(不经它启动的连接 asight 不在路径上)'
   return `把 ${h} 的代理设成 ${value}`
-}
-
-/** The kernel's MANUAL ALTERNATIVE (4.8 §8 ⑤ · §10.4; D44): forwarder.mjs's own literal, carried by the facts (`reinstall`, computed on the Windows side from THIS build's pin — src/netenv
- *  reads no arch module, 4.8 W39's rule 6). It is an instruction, not a command: putting the pinned archive into the cache directory by hand, or fixing the network — a `gui` step, and asight never
- *  runs it. The pin has no archive for this machine's architecture → the facts carry null: said, not guessed. */
-const reinstallSteps = (c) => {
-  const line = c.F && c.F.reinstall
-  return line ? [gui(line)] : [gui('这台机器的架构在钉死的清单里没有:手动放置帮不上,把这一行报给 asight')]
 }
 
 /** The catalogue (4.8 §10.4, one entry per code row). Commands only, unless the Windows row says its own thing about what or why. */
@@ -102,13 +94,6 @@ export const FINDINGS_WIN32 = {
     commands: () => [gui('把它报给 asight(附 asight status 印出的那一行)')],
     verify: () => '—',
   },
-  'fallback-active': {
-    cls: 'failure', asightFirst: true,
-    what: () => '引擎不在,内核把 agent 的连接只转发到上游(回退)',
-    why: () => '引擎死了或没起来;内核自己活着,连接不断但不再被采集',
-    commands: (c) => [asight(c, 'asight on'), netstat(c.enginePort)],
-    verify: () => 'asight status:那一形态不再报',
-  },
   'elevated-agent': {
     commands: (c) => [gui(`关掉它,不用「以管理员身份运行」重新打开 ${c.h}`), ps('whoami /groups | findstr /i "Mandatory"')],
     verify: (c) => `asight status ${c.h}`,
@@ -130,7 +115,7 @@ export const FINDINGS_WIN32 = {
   },
   'forwarder-down': {
     commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`), gui(`马上要用:上一步之后重启 ${c.h},它就不经 asight 了`)],
-    verify: () => 'asight status:内核「在跑」',
+    verify: () => 'asight status:引擎「在跑」',
   },
   'form-unsupported': {
     cls: 'failure', asightFirst: false,
@@ -145,46 +130,13 @@ export const FINDINGS_WIN32 = {
     commands: (c) => [gui('把它改成 http://host:port 或 socks5://host:port 的写法'), gui(setProxyText(c.h, c.fm && c.fm.entryPlace, c.vpnProxy || unknownValue('你的代理地址', 'absent'))), asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)],
     verify: (c) => `asight status ${c.h}:那一支「在路径上 · 是」`,
   },
-  'forwarder-start-failed': {
-    cls: 'failure', asightFirst: false,
-    what: () => 'asight 的内核起不来',
-    why: (c) => (c.reason === 'smart-app-control' ? 'Smart App Control 开着,它拦未签名的 asight-forwarder.exe;asight 不改这个系统安全设置,也不替你选'
-      : c.reason === 'port-taken' ? `内核的端口被占了${Number.isInteger(c.port) ? `(:${c.port})` : ''}`
-      : `内核起不来(${c.reason || '原因读不到'})`),
-    commands: (c) => (c.reason === 'smart-app-control'
-      ? [gui('你的选择:这台机器不用代理模式;或自己决定关掉它(关掉后一般不能再开,先看微软的说明);或等 asight 的内核有签名的版本')]
-      : c.reason === 'port-taken' ? [netstat(c.port), asight(c, 'asight off'), asight(c, 'asight on')]
-      : [asight(c, 'asight doctor')]),
-    verify: () => 'asight on 退出 0',
-  },
-  'forwarder-binary-missing': {
-    cls: 'failure', asightFirst: false,
-    what: () => 'asight 的内核没装上,所以没有拉起它',
-    why: (c) => `内核不在运行位,缓存里也没有(${c.reason || 'file-missing'});on 会自己下载(D44),asight 不替你跑手动步骤`,
-    commands: (c) => [...reinstallSteps(c), asight(c, 'asight on')],
-    verify: () => 'asight on 退出 0',
-  },
-  'forwarder-digest-mismatch': {
-    cls: 'failure', asightFirst: false,
-    what: () => 'asight 的内核与钉死的 sha256 不符,所以没有拉起它',
-    why: (c) => `在位的那份(${c.of || '运行位的'})的摘要不是 pin 的那个;on 会重新下载钉死的版本(D44),asight 不替你跑手动步骤`,
-    commands: (c) => [...reinstallSteps(c), asight(c, 'asight on')],
-    verify: () => 'asight on 退出 0',
-  },
-  'forwarder-download-failed': {
-    cls: 'failure', asightFirst: false,
-    what: () => 'asight 的内核下载不成,所以 on 没有开始',
-    why: (c) => `内核缺失时 on 从 pin 钉死的官方发布页下载(curl),这一步失败了(${c.reason || '原因读不到'});失败发生在写任何 agent 文件之前`,
-    commands: (c) => [...reinstallSteps(c), asight(c, 'asight on')],
-    verify: () => 'asight on 退出 0',
-  },
   'system-proxy-pac': { commands: () => [ps(GET_PAC)], verify: () => '—' },
   'other-redirector': { commands: () => [ps('netsh winsock show catalog')], verify: () => '—' },
   'socktable-unavailable': {
     cls: 'failure', asightFirst: false,
-    what: () => '连接属主的套接字表读不到,按形态判信任',
-    why: () => 'asight 宁可不知道也不猜属主;同形态的新进程要等旧进程退出才分得开',
-    commands: () => [gui('无需操作:按形态判信任,同形态的新进程要等旧进程退出后分开')],
+    what: () => '连接属主的套接字表读不到,这条连接不经采集只转发',
+    why: () => 'asight 宁可不知道也不猜属主;属主读不到的连接被旁路(splice),不采也不断',
+    commands: () => [gui('无需操作:这条连接只转发不采集;新的连接会再问一次')],
     verify: () => '—',
   },
   'cause-unknown': {

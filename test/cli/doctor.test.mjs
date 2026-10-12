@@ -182,14 +182,13 @@ test('the collector section is `asight status` for the same harnesses (the daemo
   const before = s.sys.exec.calls.length
   const r = await doctor(s, ['--source', src], { deps: { request: asDaemon(reply({ agents })), netenv: async () => CLASH() } })
   assert.equal(r.exit, 0, `status would say 1 here (an agent is not captured); doctor's exit is the capture's:\n${r.text}`)
-  assert.match(r.out, /按进程采集器[\s\S]*claude-code\s+没有: config-after-start/)
-  assert.match(r.out, /pid 4388\s+没有: config-after-start — [^\n]*重启后才会被采集/)
-  assert.match(r.out, /本机网络环境: Clash Verge\(规则模式/, 'the VPN software, from the same probe as status')
+  assert.match(r.out, /按进程采集器[\s\S]*没采\s+claude-code\([^)]*重启后才会被采集\)/, 'the embedded status is the digest: the verdict row with its reason')
+  assert.match(r.out, /路径\s+Clash Verge\(规则模式/, 'the VPN software, from the same probe as status')
   assert.match(r.out, /✓ asight-off\(不依赖源码的撤销副本\):/, 'on wrote the standalone copy and it is the version this asight writes')
   assert.deepEqual(ranBesides(s, before), [], 'doctor ran no OS tool but the reads of the network facts: it reads, and it asks the daemon over its socket (R8)')
   // a probe that fails is 不知道 with the reason, and still not an exit code
   const f = await doctor(s, ['--source', src], { deps: { netenv: async () => { throw new Error('boom: probe') } } })
-  assert.match(f.out, /本机网络环境: 不知道\(boom: probe\)/); assert.equal(f.exit, 0)
+  assert.match(f.out, /路径\s+不知道\(boom: probe\)/); assert.equal(f.exit, 0)
   // names restrict the harness table, as in status
   const one = await doctor(s, ['--source', src, 'claude'], { deps: { request: asDaemon(reply()) } })
   const table = one.out.split('按进程采集器')[1].split('\n').filter((l) => /^ {4}\w/.test(l)).join('\n')
@@ -204,7 +203,7 @@ test('a stale standalone copy is a ⚠ line with its reason, and an install that
   assert.match(r.out, /⚠ asight-off\(不依赖源码的撤销副本\)不是当前版本/); assert.equal(r.exit, 0)
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   r = await doctor(n, ['--source', nsrc])
-  assert.match(r.out, /按进程采集器[\s\S]*not installed/)
+  assert.match(r.out, /按进程采集器[\s\S]*采集健康 – 没装/, 'the digest says nothing is installed')
   assert.match(r.out, /⚠ asight-off[^\n]*is not there/)
   assert.equal(r.exit, 0)
 })
@@ -274,4 +273,42 @@ test('--json: one document that validates, the verdict and its reasons, the file
   v = io.json(); assert.equal(r.exit, 3); assert.deepEqual([v.ok, v.verdict], [false, 'undetermined'])
   assert.match(v.undetermined_why.join(' '), /没有核到任何记录/)
   assert.deepEqual(validateReceipt(v), [])
+})
+
+
+// the codex WebSocket cert hint (measured on a Windows test machine): on win32, doctor says — for codex, when the named cert-store opt-in is not recorded — that capturing Codex's WebSocket needs it. Never an install, and nothing to say on other platforms or once the item is in the ledger.
+const CODEX_WS_HINT = 'Windows 上采 Codex 的 WebSocket 需要点名装证书: asight on codex --opt-in cert-store-current-user(会弹 Windows 自己的确认框,不弹不装)'
+const manifestWith = (entries) => { const dir = (h) => path.join(h, '.asight', 'collector'); return (h) => { const d = dir(h); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'install-manifest.json'), JSON.stringify({ version: 2, entries, files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [], complete: true })) } }
+test('the codex WebSocket cert hint on win32: said for codex when the cert-store opt-in is not recorded, silent once it is, silent on other platforms', async () => {
+  const noRecord = plain(); manifestWith([])(noRecord.home)
+  let r = await doctor(noRecord, ['codex'], { platform: 'win32' })
+  assert.ok(r.out.includes(CODEX_WS_HINT), `the hint is there: ${r.out}`)
+  r = await doctor(noRecord, [], { platform: 'win32' }) // no harness named: every harness is the question
+  assert.ok(r.out.includes(CODEX_WS_HINT), 'and when nothing is named')
+  r = await doctor(noRecord, ['claude-code'], { platform: 'win32' })
+  assert.ok(!r.out.includes(CODEX_WS_HINT), 'not for another harness alone')
+  r = await doctor(noRecord, ['codex'], { platform: 'darwin' })
+  assert.ok(!r.out.includes(CODEX_WS_HINT), 'not on another platform')
+  const done = plain(); manifestWith([{ kind: 'optin-cert-user', harness: 'claude-code', form: 'claude-code.desktop', item: 'cert-store-current-user', scope: 'user', path: 'claude-code.desktop:cert-store-current-user', installed_at: '2026-10-12T00:00:00Z' }])(done.home)
+  r = await doctor(done, ['codex'], { platform: 'win32' })
+  assert.ok(!r.out.includes(CODEX_WS_HINT), 'the item in the ledger: the hint has done its job and goes')
+})
+
+// the Claude Desktop steering hint (4.9 §6.4): on darwin, doctor says — for claude-code, when the named desktop-launcher
+// opt-in is not recorded — that capturing Desktop needs the launcher, with the needs_restart honesty riding in the line. Never an install, and nothing
+// to say on other platforms or once the item is in the ledger (the codex hint's darwin twin).
+const DESKTOP_HINT = 'macOS 上采 Claude Desktop 需要点名建启动器: asight on claude-code --opt-in claude-code.desktop(写 ~/.asight/collector/bin/claude-desktop-asight;只有经它启动的 Desktop 才被引流,已在跑的 Desktop 不受影响——先退出再用它启动)'
+test('the Claude Desktop steering hint on darwin: said for claude-code when the desktop-launcher opt-in is not recorded, silent once it is, silent on other platforms', async () => {
+  const noRecord = plain(); manifestWith([])(noRecord.home)
+  let r = await doctor(noRecord, ['claude-code'], { platform: 'darwin' })
+  assert.ok(r.out.includes(DESKTOP_HINT), `the hint is there: ${r.out}`)
+  r = await doctor(noRecord, [], { platform: 'darwin' })
+  assert.ok(r.out.includes(DESKTOP_HINT), 'and when nothing is named')
+  r = await doctor(noRecord, ['codex'], { platform: 'darwin' })
+  assert.ok(!r.out.includes(DESKTOP_HINT), 'not for another harness alone')
+  r = await doctor(noRecord, ['claude-code'], { platform: 'win32' })
+  assert.ok(!r.out.includes(DESKTOP_HINT), 'not on another platform')
+  const done = plain(); manifestWith([{ kind: 'optin-desktop-launcher', harness: 'claude-code', form: 'claude-code.desktop', item: 'desktop-launcher', scope: 'user', path: '/x/bin/claude-desktop-asight', confirmed: true, installed_at: '2026-10-12T00:00:00Z' }])(done.home)
+  r = await doctor(done, ['claude-code'], { platform: 'darwin' })
+  assert.ok(!r.out.includes(DESKTOP_HINT), 'the item in the ledger: the hint has done its job and goes')
 })

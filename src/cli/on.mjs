@@ -13,6 +13,8 @@ import { resolveHarnesses } from './harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { formatOnReceipt, formatPlan, formatWinPlan } from './receipt.mjs'
+import { colors, noColor } from './color.mjs'
+import { DESKTOP_LAUNCHER_HINT } from './words.mjs'
 import { probeNetenv } from '../netenv/index.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -59,6 +61,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   if (!named.ok) { io.err(`asight on: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5); warnings and the plan go to stderr
+  const c = json ? noColor() : colors(io) // --json never colours (D46); a non-TTY or NO_COLOR run colours nothing anywhere
   if ((deps.getuid || processUid)() === 0) { io.err('asight on: 用你自己的账号跑,不要用 root / sudo(D36;只有 `sudo asight setup-helper` 要 root)'); return EXIT.incomplete }
   try {
     const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env })
@@ -124,24 +127,26 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const netenv = await probeNetenv({ home, platform, env, deps })
     const adoption = await prepareAdoption({ home, env, platform, deps, parts, netenv, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once asight is on
     const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32, Task 8(c)); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
-    // The arch's read-only preflight (4.8 §8 ⑥, W27 ⑥, W74; Windows: the kernel line and the Smart App Control line), run BEFORE turnOn so a refusal
-    // stops `on` before its first write — a settled precondition with nothing to roll back. The Linux arch has no `prepare` and nothing here changes.
-    // The refusal's event and receipt are on's to write; with no collector directory yet (nothing installed) the receipt is the record (4.6 §记录).
+    // The arch's read-only preflight (4.8 §8 ⑥, W27 ⑥, W74; historically the Windows kernel line and the Smart App Control line), run BEFORE turnOn so a
+    // refusal stops `on` before its first write — a settled precondition with nothing to roll back. No arch carries one since the engines became the
+    // proxies (D47 and its win32 twin: darwin never had one, win32's went with the kernel — wiring.mjs exports neither `prepare` nor `ensureKernel`);
+    // the seam stays because a future arch's settled precondition belongs exactly here, and with no collector directory yet (nothing installed) the
+    // receipt is the record (4.6 §记录).
     const archPrepare = parts.arch && typeof parts.arch.prepare === 'function' ? parts.arch.prepare : null
     const prep = archPrepare ? await archPrepare({ env, home }) : null
-    // D44: the same arch's ensureKernel hook, run by turnOn as the FIRST write-phase action — after the confirmation, before any agent file — so a failed
-    // download leaves zero agent files written (the plan above already showed the download line; a dry run returns before turnOn reaches the hook). An arch
-    // without one (Linux's driver mode, or the kernel already ensured and nothing to do) hands no hook and nothing changes.
-    const ensureKernelHook = parts.arch && typeof parts.arch.ensureKernel === 'function' ? parts.arch.ensureKernel : null
-    const afterConfirm = ensureKernelHook ? () => ensureKernelHook({ home, env }) : null
-    // the plan of 4.8 §11: Windows draws its own (the kernel line, one row per entry group with the upstream, the named opt-in items, Smart App Control, the drain note) — fed by the same
-    // `on`'s facts (adoption) and the arch hook's answer (prep). The Linux plan and the hook's own notes stay as they are.
+    const afterConfirm = null // D44's kernel-ensure hook retired with the kernel: no arch's first write-phase step downloads anything now (the engine IS the proxy, and its first write is the CA)
+    // the plan of 4.8 §11: Windows draws its own (one row per entry group with the upstream, the named opt-in items, the drain note) — fed by the same
+    // `on`'s facts (adoption). The Linux plan and the hook's own notes stay as they are.
     const winPlan = parts.os === 'win32'
     const planText = (raw) => {
-      const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })) : []
+      const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })).filter((x) => /\s→\s/.test(x.chain) || false) : [] // D46: the degenerate one-hop chain says nothing and is not printed
+      // the Claude Desktop steering hint (measured on a macOS test machine): Desktop's Chromium network service ignores every proxy env var, so the
+      // door that works is the NAMED desktop-launcher item — said exactly while claude-code is a target on darwin and the item is not in the
+      // ledger (an optIn row with state 'done'); nothing is ever installed by a hint (the win plan's codex twin, formatWinPlan's own line)
+      const desktopHint = platform === 'darwin' && (raw.targets || []).includes('claude-code') && !(raw.optIn || []).some((x) => x && x.item === 'desktop-launcher' && x.state === 'done')
       return winPlan
-        ? formatWinPlan(raw, { home, autostart, netenv, env, adoption: adoption && !adoption.error ? adoption : null, prep })
-        : [formatPlan({ ...raw, adopted }, { home, autostart, netenv }), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
+        ? formatWinPlan(raw, { home, autostart, netenv, env, adoption: adoption && !adoption.error ? adoption : null, prep, colors: c })
+        : [formatPlan({ ...raw, adopted }, { home, autostart, netenv, platform, colors: c }), ...(desktopHint ? ['', DESKTOP_LAUNCHER_HINT] : []), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
     }
     if (prep && prep.refuse) {
       const rf = prep.refuse
@@ -149,7 +154,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       if (!flags.has('--dry-run')) {
         const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [line] }
         const cdir = path.join(home, '.asight', 'collector')
-        try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'forwarder', code: rf.code, ...(rf.of ? { of: rf.of } : {}), reason: line }) } catch { /* the receipt is the record then (R11) */ }
+        try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'routing', code: rf.code, ...(rf.of ? { of: rf.of } : {}), reason: line }) } catch { /* the receipt is the record then (R11) */ }
         if (json) io.out(JSON.stringify(receipt, null, 2))
         else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
         return EXIT.incomplete
@@ -172,7 +177,9 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
     receipt.netenv = netenv.error ? { error: netenv.error } : netenv.result
-    if (prep && prep.notes && prep.notes.length) receipt.notes.push(...prep.notes) // the preflight's lines ride along (the plan showed them above)
+    // the preflight's lines ride along (the plan showed them above). No arch carries a preflight today (the kernel line went with the kernel, D47's twin);
+    // a future one that does keeps this append as its own.
+    if (prep && prep.notes && prep.notes.length) receipt.notes.push(...prep.notes)
     if (prep && prep.blocked) { receipt.blocked = prep.blocked; receipt.notes.push(`${prep.blocked} (a real asight on stops there)`) }
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
     else if (adoption && receipt.harnesses && receipt.harnesses.length && receipt.ok !== false && !receipt.dry_run && !receipt.planned && !receipt.declined) {
@@ -185,8 +192,12 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     } else if (adoption && receipt.dry_run) receipt.adopted = Object.fromEntries(Object.entries(adoption.chains(receipt.harnesses || [])).filter(([h]) => (receipt.harnesses || []).includes(h)).map(([h, t]) => [h, { chain: chainText(t), dry_run: true }]))
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.planned) for (const n of receipt.notes) io.err(n) // the plan was printed; what is left to say is why nothing was done (R6)
-    else if (winPlan && receipt.dry_run && plan) io.out(`${planText(plan)}\n\n${formatOnReceipt(receipt, { tense: 'future', home })}`) // a Windows dry run prints the §11 plan as well: it is what a user reads before deciding (turnOn's onPlan does not run for one)
-    else io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home }))
+    else if (winPlan && receipt.dry_run && plan) io.out(`${planText(plan)}\n\n${formatOnReceipt(receipt, { tense: 'future', home, platform, colors: c })}`) // a Windows dry run prints the §11 plan as well: it is what a user reads before deciding (turnOn's onPlan does not run for one)
+    else {
+      // D46: the harnesses THIS run newly wired (their one-time 说明 notes print; a harness wired before keeps its notes in doctor and --json — the receipt object is untouched, R5/R11)
+      const fresh = plan ? new Set((plan.targets || []).filter((id) => !(plan.installed || []).includes(id))) : null
+      io.out(formatOnReceipt(receipt, { tense: receipt.dry_run ? 'future' : 'past', home, platform, fresh, colors: c }))
+    }
     return exit
   } catch (e) {
     const message = String((e && e.message) || e)

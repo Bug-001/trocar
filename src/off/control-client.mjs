@@ -38,6 +38,24 @@ export function controlEndpointOf({ dir, fs = nodeFs } = {}) {
   return { path: o.path, token: o.token }
 }
 
+/** The daemon's endpoint for THIS platform, resolved the one way every caller resolves it (the 2026-10-11 incident's seam: three call sites each
+ *  carried their own platform fallback, and the one nobody re-audited — turnOn's probe — kept the Linux path and made every `asight on` on a real
+ *  Mac / Windows a false start-failed). darwin / win32 find the daemon through `control.json` in the collector `dir` (4.8 §7, 4.9 §7: random
+ *  socket / pipe name plus the token every request carries); Linux derives `$XDG_RUNTIME_DIR/asight/collector.sock`. → `{ socketPath, request, why? }`:
+ *  `request` is controlRequest wrapped with the token on the platforms that use one; a `why` names what is missing when there is no endpoint. Never
+ *  throws — reading control.json is best-effort; the caller decides what a missing endpoint means. */
+export function controlEndpointFor({ platform = process.platform, dir, env = process.env, fs = nodeFs } = {}) {
+  if (platform === 'win32' || platform === 'darwin') {
+    const ep = controlEndpointOf({ dir, fs })
+    if (ep == null) return { socketPath: null, request: controlRequest, why: `${CONTROL_FILE} names no daemon here (none was ever started)` }
+    if (ep.error) return { socketPath: null, request: controlRequest, why: ep.error }
+    return { socketPath: ep.path, request: ep.token ? ((o) => controlRequest({ ...o, token: ep.token })) : controlRequest }
+  }
+  let socketPath = null, why = null
+  try { socketPath = controlSocketPath({ env }) } catch (e) { why = String((e && e.message) || e) }
+  return { socketPath, request: controlRequest, why: socketPath ? null : why }
+}
+
 /** One request → the parsed JSON reply. A non-2xx reply rejects with `status`; a socket that is absent / refuses has `code` ENOENT / ECONNREFUSED;
  *  no answer within `timeoutMs` rejects with code ETIMEDOUT. `token`: the secret a token-guarded endpoint (a Windows pipe) expects in
  *  CONTROL_TOKEN_HEADER; null (the Linux unix socket) sends none. A Windows pipe path reaches Node's http through the same `socketPath`. */

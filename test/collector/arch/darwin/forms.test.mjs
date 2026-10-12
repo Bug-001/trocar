@@ -68,6 +68,34 @@ test('matchForm: a path-unknown answer from a redirected home has no user name i
   assert.equal(matchForm(FORMS, { exe: '/Volumes/profiles/alice/scoop/shims/agent', cmdline: null }).kind, 'path-unknown', 'without a home it still answers, with the /Users shape masked only')
 })
 
+test('matchForm: a form whose image is a LIST (Claude Desktop\'s process family, 4.9 §2.3 · §6.4) is each of its names exactly — no prefix, no fuzz: a family member at a shape nobody measured is path-unknown for it, an image nobody lists is none, and a name that merely starts like one is not it', () => {
+  const F = [
+    { id: 'd.main', match: { image: ['Claude', 'Claude Helper', 'Claude Helper (Renderer)', 'Claude Helper (GPU)'], path: [raw`\/Claude\.app\/Contents\/MacOS\/Claude`, raw`\/Claude\.app\/Contents\/Frameworks\/Claude Helper[^/]*\.app\/Contents\/MacOS\/Claude Helper`], reportUnknownPath: true } },
+  ]
+  const helper = '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper'
+  assert.deepEqual(matchForm(F, { exe: '/Applications/Claude.app/Contents/MacOS/Claude', cmdline: null }), { kind: 'form', id: 'd.main' }, 'the main binary')
+  assert.deepEqual(matchForm(F, { exe: helper, cmdline: `${helper} --type=utility --utility-sub-type=network.mojom.NetworkService` }), { kind: 'form', id: 'd.main' }, 'the utility Helper that owns the model sockets (measured on a macOS test machine)')
+  const renderer = '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)'
+  assert.deepEqual(matchForm(F, { exe: renderer, cmdline: `${renderer} --type=renderer` }).kind, 'form', 'a parenthesised family member is its own exact name')
+  const r = matchForm(F, { exe: '/opt/elsewhere/Claude Helper', cmdline: null })
+  assert.deepEqual([r.kind, r.forms, r.shape], ['path-unknown', ['d.main'], '/opt/elsewhere/Claude Helper'], 'a family image at an unmeasured shape is the form\'s path-unknown')
+  assert.equal(matchForm(F, { exe: '/Applications/Other.app/Contents/MacOS/Claude Helper (Plugin)', cmdline: null }).kind, 'none', 'an image nobody lists is no agent')
+  assert.equal(matchForm(F, { exe: '/Applications/Claude Helperish', cmdline: null }).kind, 'none', 'no prefix match: the name is exact')
+})
+
+test('matchForm: a PATH-ONLY form (image null, 4.9 §2.3) matches by its paths alone — the native installer\'s version-named FILE (versions/2.1.296 is the executable, its basename is the version) can never pass an image gate — and it never reports a path-unknown (it has no image to be told by)', () => {
+  const F = [
+    { id: 'cc.native', match: { image: null, path: [raw`\/claude\/versions\/[^/]*`] } },
+    { id: 'cc.cli', match: { image: 'claude', path: [raw`\/\.local\/bin\/claude`], reportUnknownPath: true } },
+  ]
+  assert.deepEqual(matchForm(F, { exe: '/Users/u/.local/share/claude/versions/2.1.296', cmdline: 'claude -p hi' }), { kind: 'form', id: 'cc.native' }, 'the version-named file is the native form (lsof\'s txt record gives exactly this path)')
+  assert.deepEqual(matchForm(F, { exe: '/Users/u/.local/share/claude/versions/2.1.289/claude' }), { kind: 'form', id: 'cc.native' }, 'the directory-per-version shape meets the same pattern')
+  assert.deepEqual(matchForm(F, { exe: '/Users/u/.local/bin/claude' }), { kind: 'form', id: 'cc.cli' }, 'the gated form still answers its own image')
+  const r = matchForm(F, { exe: '/opt/tools/claude' })
+  assert.deepEqual([r.kind, r.forms], ['path-unknown', ['cc.cli']], 'the unknown path is the IMAGE-GATED form\'s to report: a path-only form contributes no path-unknown (every process would be one)')
+  assert.equal(matchForm(F, { exe: '/opt/other/versions/2.9.9' }).kind, 'none', 'a version-named file outside the claude versions tree is nobody\'s: the paths are the form\'s alone, and they do not reach there')
+})
+
 test('formPathShape: only the user directory is masked', () => {
   assert.equal(formPathShape('/Users/Bob Smith/Library/x/y'), '/Users/<user>/Library/x/y')
   assert.equal(formPathShape('/Applications/Some App/x/y'), '/Applications/Some App/x/y')

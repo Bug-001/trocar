@@ -223,7 +223,7 @@ function proxyTopology(F, h, hf) {
       && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : fm.entry && fm.entry.intact === true))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
-    if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`还有 ${fwf.clients.length} 个 agent 连着 asight 的内核,重启它们之后 asight 就完全退出`)
+    if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`还有 ${fwf.clients.length} 个 agent 连着 asight 的门,重启它们之后 asight 就完全退出`)
     if (fm.optIn && fm.optIn.state === 'needed' && fm.optIn.enable) notes.push(`要采它: ${fm.optIn.enable}`)
     if (fm.reason === 'form-path-unknown') notes.push(`这个安装方式的路径 asight 还不认识(${(fm.unknownPaths || []).join('; ') || 'path shape not read'});把它报给 asight`)
     if (fm.hosts && wired) {
@@ -246,7 +246,7 @@ function proxyTopology(F, h, hf) {
       g.edge(a, off.ids[0], off.first.via, { evidence: off.first.evidence, inferred: off.first.inferred })
       if (wired) {
         const forwardOnly = F.desired[h] === 'off' || vd.reason === 'elevated-agent' || !vd.engine && vd.on
-        const f = g.node({ kind: 'asight-forwarder', name: 'asight 自带内核', pid: F.forwarder.pid, addr: '127.0.0.1', port: fwf.port, asight: true, mode: vd.reason === 'forwarder-down' ? 'down' : forwardOnly ? 'forward-only' : 'on' })
+        const f = g.node({ kind: 'asight-forwarder', name: 'asight 本地代理', pid: F.forwarder.pid, addr: '127.0.0.1', port: fwf.port, asight: true, mode: vd.reason === 'forwarder-down' ? 'down' : forwardOnly ? 'forward-only' : 'on' })
         g.edge(a, f, 'proxy-http', { asight: true, ...(fm.entry ? { entry: { where: fm.entry.where, opt_in: fm.entry.opt_in === true } } : {}) })
         if (vd.reason === 'forwarder-down') path = [a, f]
         else {

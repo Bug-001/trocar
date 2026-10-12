@@ -12,6 +12,7 @@ import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { loadArch } from '../../../../src/collector/arch/index.mjs'
 import { planOptIns, optinFormsOf, applyOptIn, rcLineOf, OPTIN_ITEMS } from '../../../../src/collector/arch/darwin/optin.mjs'
 import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
+import { createDarwinRedirector } from '../../../../src/collector/arch/darwin/redirector.mjs'
 import { DARWIN_UNDO_BY_KIND, undoDarwinOptIns, rcLineOf as rcLineOfOff } from '../../../../src/off/darwin-optin.mjs'
 import { KNOWN_KINDS } from '../../../../src/off/manifest.mjs'
 import { readManifest, saveManifest, newManifest } from '../../../../src/off/manifest.mjs'
@@ -26,20 +27,21 @@ const GROUP_PORT = 17992
 const LISTENER_TOKEN = 'b'.repeat(32)
 const KERNEL_URL = `http://kimi-code.cli:${LISTENER_TOKEN}@127.0.0.1:${GROUP_PORT}`
 
-// the catalog over the real harness data: the three items 4.9 §2.3's table declares, one row per (form, item), with the command a user types
-test('the catalog: the darwin harness data\'s three opt-in items surface as plan rows, one per form, with scope and command', () => {
+// the catalog over the real harness data: the four items 4.9 §2.3's table declares, one row per (form, item), with the command a user types
+test('the catalog: the darwin harness data\'s opt-in items surface as plan rows, one per form, with scope and command', () => {
   const rows = planOptIns({ groups: groupsOf(descs), optIns: ['kimi-code.cli'] })
   const of = (form, item) => rows.find((r) => r.form === form && r.item === item)
-  assert.ok(rows.length >= 3, `the three declared items: ${rows.map((r) => `${r.form}/${r.item}`).join(', ')}`)
+  assert.ok(rows.length >= 4, `the four declared items: ${rows.map((r) => `${r.form}/${r.item}`).join(', ')}`)
   for (const r of rows) {
     assert.equal(r.scope, 'user', `${r.form}/${r.item}: every darwin item of v1 is user-level (4.9 §2.4)`)
     assert.equal(r.admin, false)
     assert.ok(OPTIN_ITEMS[r.item] && r.kinds.length === 1 && r.impact && r.impact.length > 20, `${r.form}/${r.item}: the row says what it is`)
     assert.equal(r.command, `asight on ${r.harness} --opt-in ${r.form}`)
   }
-  assert.deepEqual([of('kimi-code.cli', 'user-path-shim').chosen, of('opencode.cli', 'user-path-shim').chosen, of('claude-code.desktop', 'keychain-login').chosen], [true, false, false], 'the named form is chosen')
+  assert.deepEqual([of('kimi-code.cli', 'user-path-shim').chosen, of('opencode.cli', 'user-path-shim').chosen, of('claude-code.desktop', 'keychain-login').chosen, of('claude-code.desktop', 'desktop-launcher').chosen], [true, false, false, false], 'the named form is chosen (both of its items)')
   assert.equal(of('kimi-code.cli', 'user-path-shim').kinds[0], 'optin-rc-path')
   assert.equal(of('claude-code.desktop', 'keychain-login').kinds[0], 'optin-keychain-cert')
+  assert.equal(of('claude-code.desktop', 'desktop-launcher').kinds[0], 'optin-desktop-launcher')
   // a ledger entry makes an item done, never re-offered as needed
   const m = newManifest(new Date())
   m.entries.push({ kind: 'optin-rc-path', harness: 'kimi-code', form: 'kimi-code.cli', item: 'user-path-shim', scope: 'user', path: '/x', confirmed: true })
@@ -52,14 +54,16 @@ test('the catalog: the darwin harness data\'s three opt-in items surface as plan
 })
 
 // one sandbox the apply runs in: the native kimi binary, two of the four zsh rc files (.zshrc holds the Kimi installer's own PATH line,
-// .zshenv does not — the two anchors), the collector's ingress.json and CA, and the login keychain file the CC-Desktop item needs
+// .zshenv does not — the two anchors), the collector's ingress.json and CA, the login keychain file the CC-Desktop item needs, and the
+// Claude Desktop bundle binary under ~/Applications the launcher item execs (the /Applications root is not a sandbox's to make)
+const DESKTOP_PORT = GROUP_PORT + 2
 function world({ commands = ['kimi'] } = {}) {
   const home = tmpDir('asight-darwin-optin-')
   const dir = path.join(home, '.asight', 'collector')
   fs.mkdirSync(path.join(dir, 'ca'), { recursive: true })
   const ca = createCa({ commonName: 'optin test CA' })
   fs.writeFileSync(path.join(dir, 'ca', 'asight-ca.pem'), ca.certPem)
-  fs.writeFileSync(path.join(dir, 'ingress.json'), JSON.stringify({ enginePort: 17990, groupPorts: { 'kimi-code.cli': GROUP_PORT, 'opencode.cli': GROUP_PORT + 1 }, ingressToken: 'a'.repeat(32), listenerToken: LISTENER_TOKEN }))
+  fs.writeFileSync(path.join(dir, 'ingress.json'), JSON.stringify({ enginePort: 17990, groupPorts: { 'kimi-code.cli': GROUP_PORT, 'opencode.cli': GROUP_PORT + 1, 'claude-code.desktop': DESKTOP_PORT }, ingressToken: 'a'.repeat(32), listenerToken: LISTENER_TOKEN }))
   fs.mkdirSync(path.join(home, '.kimi-code', 'bin'), { recursive: true })
   fs.writeFileSync(path.join(home, '.kimi-code', 'bin', 'kimi'), '#!/bin/sh\nexec the-real-kimi "$@"\n', { mode: 0o755 })
   fs.mkdirSync(path.join(home, '.opencode', 'bin'), { recursive: true })
@@ -68,6 +72,8 @@ function world({ commands = ['kimi'] } = {}) {
   fs.writeFileSync(path.join(home, '.zshenv'), 'export EDITOR=vim\n')
   fs.mkdirSync(path.join(home, 'Library', 'Keychains'), { recursive: true })
   fs.writeFileSync(path.join(home, 'Library', 'Keychains', 'login.keychain-db'), '')
+  fs.mkdirSync(path.join(home, 'Applications', 'Claude.app', 'Contents', 'MacOS'), { recursive: true })
+  fs.writeFileSync(path.join(home, 'Applications', 'Claude.app', 'Contents', 'MacOS', 'Claude'), '#!/bin/sh\nexec the-real-claude-desktop "$@"\n', { mode: 0o755 })
   const manifest = newManifest(new Date())
   const wrote = { notes: [], failures: [], states: [] }
   const apply = async (harness, form, item, deps = {}) => {
@@ -77,7 +83,8 @@ function world({ commands = ['kimi'] } = {}) {
       now: () => new Date('2026-10-11T00:00:00Z'),
       save: () => saveManifest(dir, manifest, fs),
       note: (rec) => wrote.notes.push(rec), failure: (rec) => wrote.failures.push(rec), state: (rec) => wrote.states.push(rec),
-      deps,
+      // the sandbox's own ~/Applications is the whole world (a test cannot unmake the dev machine's real /Applications/Claude.app)
+      deps: { desktopBins: (h) => [path.join(h, 'Applications', 'Claude.app', 'Contents', 'MacOS', 'Claude')], ...deps },
     })
     return { out, entry: manifest.entries.at(-1) }
   }
@@ -156,18 +163,19 @@ test('the rc-path apply refuses what it must, writing nothing: no native binary'
 // the keychain item's recording runner: `security` argv in, what the tool would print out. Stateful the way the keychain is: after
 // remove-trusted-cert the dump no longer holds ours (the re-check is honest), before it does. `removeSaw` captures what the temp file
 // held at the moment of the call (the undo's finally deletes it right after).
-function securityRunner({ caPem, otherPem = '', addExit = 0, addErr = '', removeExit = 0, deleteExit = 0, readBackHas = true } = {}) {
+function securityRunner({ caPem, otherPem = '', addExit = 0, addErr = '', removeExit = 0, deleteExit = 0, readBackHas = true, halfFailed = false } = {}) {
   const calls = []
   let removeSaw = null
   let trusted = true
+  let present = true
   const run = (file, args) => {
     calls.push([file, ...args])
     if (file !== 'security') return { status: 127, stdout: '', stderr: `no such tool ${file}` }
     const a = args.join(' ')
     if (a.startsWith('add-trusted-cert')) return { status: addExit, stdout: '', stderr: addErr }
-    if (a.startsWith('find-certificate')) return { status: 0, stdout: (trusted && readBackHas ? caPem : '') + otherPem, stderr: '' }
-    if (a.startsWith('remove-trusted-cert')) { trusted = false; try { removeSaw = fs.readFileSync(args[1], 'utf8') } catch { removeSaw = null } return { status: removeExit, stdout: '', stderr: '' } }
-    if (a.startsWith('delete-certificate')) return { status: deleteExit, stdout: '', stderr: '' }
+    if (a.startsWith('find-certificate')) return { status: 0, stdout: (present && (trusted || halfFailed) && readBackHas ? caPem : '') + otherPem, stderr: '' }
+    if (a.startsWith('remove-trusted-cert')) { trusted = false; try { removeSaw = fs.readFileSync(args[1], 'utf8') } catch { removeSaw = null } return { status: halfFailed ? 44 : removeExit, stdout: '', stderr: halfFailed ? 'SecTrustSettingsRemoveTrustSettings: The specified item could not be found in the keychain.' : '' } }
+    if (a.startsWith('delete-certificate')) { present = false; return { status: deleteExit, stdout: '', stderr: '' } }
     return { status: 1, stdout: '', stderr: `unexpected security call: ${a}` }
   }
   return { run, calls, removeSaw: () => removeSaw }
@@ -238,6 +246,95 @@ test('the keychain undo: by fingerprint out and back — remove-trusted-cert car
   const again = securityRunner({ caPem: '' })
   const u2 = await undoDarwinOptIns({ manifest: w.manifest, ids: ['claude-code'], exec: again.run, env: { HOME: w.home }, fs, home: w.home })
   assert.equal(u2.results[0].result, 'absent')
+})
+
+// the half-failed apply, undone (found live with the desktop launcher): a dialog declined mid-way leaves the certificate
+// IMPORTED but its trust never set — remove-trusted-cert then has nothing to remove while the block itself is still in the keychain. The undo
+// must not stop there: the certificate is deleted anyway, and the read-back is the verdict.
+test('the keychain undo: a half-failed apply (certificate imported, trust never set) is still undone — delete-certificate takes the block, the read-back decides', async () => {
+  const w = world()
+  const r = securityRunner({ caPem: w.ca.certPem, halfFailed: true })
+  const { out } = await w.apply('claude-code', 'claude-code.desktop', 'keychain-login', { run: r.run })
+  assert.equal(out.state, 'done', 'the apply\'s read-back cannot tell trust from import — it found the fingerprint it wrote')
+  const undoRun = securityRunner({ caPem: w.ca.certPem, halfFailed: true })
+  const u = await undoDarwinOptIns({ manifest: w.manifest, ids: ['claude-code'], exec: undoRun.run, env: { HOME: w.home }, fs, home: w.home })
+  assert.deepEqual([u.results[0].kind, u.results[0].result], ['optin-keychain-cert', 'undone'], JSON.stringify(u))
+  assert.match(u.results[0].reason || '', /trust setting was not there to remove/, 'the half-failure is said, not swallowed')
+  assert.ok(undoRun.calls.some((c) => c[1] === 'delete-certificate'), 'the certificate block itself was deleted')
+  assert.ok(!fs.existsSync(path.join(w.home, '.asight', 'collector', 'optin-tmp-cert.pem')), 'the temp file went with the finally')
+})
+
+// the desktop-launcher item (4.9 §6.4, 2026-10-12): the plan row carries the needs_restart honesty verbatim, the apply writes the stub that
+// execs the real bundle binary with Chromium's switches at the credential-less listener, the undo takes the file away — and the kernel config
+// the wiring would build carries that listener with no users, loopback only
+test('the desktop-launcher plan row: the honest needs_restart line is in the impact the plan prints (only instances started through it)', () => {
+  const row = planOptIns({ groups: groupsOf([byName('claude-code')]) }).find((r) => r.item === 'desktop-launcher')
+  assert.ok(row, 'the item is declared on the claude-code.desktop group')
+  assert.match(row.impact, /ONLY Desktop instances started through it; a Desktop that is already running is untouched/, 'the agent-daemon honesty, verbatim (4.9 §6.4)')
+  assert.match(row.impact, /no password.*loopback-only bind.*judging every process/, 'the no-auth listener\'s three-legged authorization is said')
+  assert.match(row.impact, /claude-desktop-asight/, 'the launcher\'s path is named')
+  assert.equal(row.form, 'claude-code.desktop')
+})
+
+test('the desktop-launcher apply: a stub that execs the real bundle binary with Chromium\'s --proxy-server (a BARE address) and the bypass list; the ledger and the note carry the honesty', async () => {
+  const w = world()
+  const { out, entry } = await w.apply('claude-code', 'claude-code.desktop', 'desktop-launcher')
+  assert.deepEqual([out.state, out.reason], ['done', undefined], JSON.stringify(out))
+  const launcher = path.join(w.dir, 'bin', 'claude-desktop-asight')
+  const text = fs.readFileSync(launcher, 'utf8')
+  const app = path.join(w.home, 'Applications', 'Claude.app', 'Contents', 'MacOS', 'Claude')
+  assert.match(text, new RegExp(`exec '${app}' --proxy-server='http://127\\.0\\.0\\.1:${DESKTOP_PORT}' --proxy-bypass-list='127\\.0\\.0\\.1,localhost,<-loopback>' "\\$@"`), 'exec the real binary, switch first, bypass beside it, the user\'s args through')
+  assert.ok(!text.includes(LISTENER_TOKEN), 'NO credentials in the URL (Chromium ignores them; the group\'s listener carries none, 4.9 §6.4)')
+  assert.ok(fs.statSync(launcher).mode & 0o111, 'executable')
+  assert.deepEqual([entry.kind, entry.scope, entry.form, entry.item, entry.confirmed], ['optin-desktop-launcher', 'user', 'claude-code.desktop', 'desktop-launcher', true])
+  assert.deepEqual(entry.values, { launcher, appBinary: app, proxy: `http://127.0.0.1:${DESKTOP_PORT}`, bypass: '127.0.0.1,localhost,<-loopback>' })
+  assert.ok(w.wrote.states.some((s) => s.event === 'optin-applied' && s.item === 'desktop-launcher'))
+  const note = w.wrote.notes.find((n) => n.item === 'desktop-launcher' && n.outcome === 'ok')
+  assert.match(note.reason, /already running is untouched/, 'the receipt note says the honesty too')
+  assert.ok(KNOWN_KINDS.includes('optin-desktop-launcher'), 'the manifest reader knows the kind (the undo\'s gate)')
+  // nothing of the user\'s moved: the item writes one file, in asight\'s own directory
+  assert.equal(fs.readFileSync(path.join(w.home, '.zshrc'), 'utf8'), 'export PATH="$HOME/.kimi-code/bin:$PATH"\nalias ll=ls\n')
+})
+
+test('the desktop-launcher apply refuses what it must, writing nothing: no Claude.app anywhere', async () => {
+  const w = world()
+  fs.rmSync(path.join(w.home, 'Applications', 'Claude.app'), { recursive: true, force: true })
+  const a = await w.apply('claude-code', 'claude-code.desktop', 'desktop-launcher')
+  assert.deepEqual([a.out.state, a.entry], ['failed', undefined], JSON.stringify(a.out))
+  assert.match(a.out.reason, /Claude Desktop is not installed/)
+  assert.ok(!fs.existsSync(path.join(w.dir, 'bin')), 'no launcher was written')
+  assert.ok(w.wrote.failures.some((f) => f.code === 'optin-failed' && f.item === 'desktop-launcher'), 'the refusal is recorded, not silent (D38)')
+})
+
+test('the desktop-launcher undo: the launcher goes, the bin directory with it when empty — and a second undo says absent, never fails', async () => {
+  const w = world()
+  const { out } = await w.apply('claude-code', 'claude-code.desktop', 'desktop-launcher')
+  assert.equal(out.state, 'done')
+  const u = await undoDarwinOptIns({ manifest: w.manifest, ids: ['claude-code'], fs, home: w.home })
+  assert.deepEqual([u.results[0].kind, u.results[0].result, u.results[0].form, u.results[0].item], ['optin-desktop-launcher', 'undone', 'claude-code.desktop', 'desktop-launcher'], JSON.stringify(u))
+  assert.ok(!fs.existsSync(path.join(w.dir, 'bin', 'claude-desktop-asight')), 'the launcher is gone (L3)')
+  assert.ok(!fs.existsSync(path.join(w.dir, 'bin')), 'the bin directory went with it (nothing else was in it)')
+  const u2 = await undoDarwinOptIns({ manifest: w.manifest, ids: ['claude-code'], fs, home: w.home })
+  assert.equal(u2.results[0].result, 'absent', 'already gone: said, not guessed')
+})
+
+// the no-auth DOOR of the group the launcher points at (L4\'s unit half, as D47 rewrote it): over the REAL harness data, the engine\'s door of
+// the desktop group takes NO credentials (the desktop-launcher item\'s address is bare — its authorization is the naming, the loopback bind and
+// the engine\'s per-process judgment), while the credentialed group beside it carries the listener token (4.8 §3.2\'s auth:false arm is what
+// 4.9 §6.4\'s decision rides; the kernel config that carried it is retired with the kernel)
+test('the doors the engine is asked for: the desktop group\'s door takes no credentials; the settings group\'s carries the listener token', async () => {
+  const groups = groupsOf([byName('claude-code')])
+  const routes = Object.fromEntries(groups.map((x) => [x.g, { on: true, upstream: { kind: 'direct' } }]))
+  const ports = { 'claude-code.settings': GROUP_PORT, 'claude-code.desktop': DESKTOP_PORT }
+  const opened = []
+  const doors = { open: async (list) => { opened.push(list.map(({ id, port, auth, token }) => ({ id, port, auth, token: token ?? null }))); return list.map((x) => ({ [x.id]: x.port })) }, close: async () => {} }
+  const entries = { write: async (l) => l.map((x) => ({ g: x.g, ok: true })), undo: async () => [], check: async () => [] }
+  const r = createDarwinRedirector({ groups, home: '/Users/u', routes: () => routes, ingress: () => ({ enginePort: 17990, groupPorts: ports, ingressToken: 'a'.repeat(32), listenerToken: LISTENER_TOKEN }), doors, entries, gate: () => ({ ok: true }) })
+  await r.attach()
+  assert.deepEqual(opened, [[
+    { id: 'claude-code.settings', port: GROUP_PORT, auth: true, token: LISTENER_TOKEN },
+    { id: 'claude-code.desktop', port: DESKTOP_PORT, auth: false, token: null },
+  ]], 'one loopback door per group (engine.listen binds 127.0.0.1): the desktop door takes NO credentials — the launcher\'s address is bare — and the settings door\'s password is the listener token the entries hold')
 })
 
 // the inline-copy contract: the arch side's line and the off side's are one text, and every kind the apply can produce has an undo

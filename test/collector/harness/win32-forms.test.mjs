@@ -6,7 +6,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { matchForm, entryGate } from '../../../src/collector/arch/win32/forms.mjs'
-import { processRulesOf } from '../../../src/netenv/mihomo/rules.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
 const raw = String.raw
@@ -265,10 +264,9 @@ test('W23: a form that needs naming has an opt-in item and no automatic entry; C
   for (const w of Object.values(WIN)) {
     for (const g of w.groups.filter((x) => !(x.optIn && x.optIn.length))) {
       const own = w.forms.filter((f) => f.g === g.g && f.processRules)
-      const rules = processRulesOf({ pathPatterns: own.flatMap((f) => f.match.path || []), names: own.filter((f) => f.nameRule).map((f) => f.match.image) })
+      const rules = [...own.flatMap((f) => f.match.path || []), ...own.filter((f) => f.nameRule).map((f) => f.match.image)]
       for (const exe of IMAGES) for (const r of rules) {
-        const [type, payload] = r.split(/,(.*)/s)
-        const hit = type === 'PROCESS-NAME' ? payload.toLowerCase() === path.win32.basename(exe).toLowerCase() : new RegExp(payload, 'i').test(exe)
+        const hit = r.includes('\\') || r.includes('/') ? new RegExp(r, 'i').test(exe) : r.toLowerCase() === path.win32.basename(exe).toLowerCase()
         assert.ok(!hit, `${g.g}: ${r} must not reach ${exe}`)
       }
     }

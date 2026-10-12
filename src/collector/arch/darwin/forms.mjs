@@ -16,6 +16,12 @@
 const re = (pattern) => new RegExp(pattern, 'i')
 const baseName = (p) => String(p).split('/').pop()
 const hits = (patterns, text) => patterns.some((p) => re(p).test(text))
+/** The image names a form answers to: one string, or a LIST of them (4.9 §2.3's darwin increment, §6.4: Claude Desktop is one form of a process family — the
+ *  main binary `Claude` and the Chromium Helpers `Claude Helper` / `Claude Helper (Renderer)` / `Claude Helper (GPU)` under Frameworks/, the utility one owning
+ *  the model sockets). Each name is matched exactly, case-blind like every image; a list introduces no prefix and no fuzz. `image: null` is the PATH-ONLY shape
+ *  (4.9 §2.3): a form whose paths are its alone — the native installer's version-named binary (`~/.local/share/claude/versions/2.1.296`, a FILE whose basename is
+ *  the version) can never pass an image gate, and the Linux signatures already match it by path regex alone. */
+export const imagesOf = (f) => (f.match.image == null ? [] : Array.isArray(f.match.image) ? f.match.image : [f.match.image])
 
 /** The path of a process with the user's directory masked, for `form-path-unknown`: `/Users/<user>/…`; the rest is kept so the shape shows.
  *  `home` is the user's home directory (`$HOME`, the daemon's `ctx.home`): the home's own name is masked wherever the home is (a redirected one outside
@@ -36,15 +42,17 @@ export function formPathShape(exe, { home = null } = {}) {
  *    { kind:'form', id }                     the first form (in the order the data lists them) whose image, path and command line all hold
  *    { kind:'path-unknown', forms:[id], shape }  the image is one only an agent has, but the path is none of the known install shapes (`form-path-unknown`)
  *    { kind:'none' }                         not an agent (a `node` without the dsh command line, any other program)
- *  A form whose image is a shared one (`node`, `python3`, `Code Helper`) never gives `path-unknown`: most processes of that image are not agents.
+ *  A form whose image is a shared one (`node`, `python3`, `Code Helper`) never gives `path-unknown`: most processes of that image are not agents. A PATH-ONLY form
+ *  (`image: null`) never gives `path-unknown` either — it has no image to be told by, its paths are its alone; the gated forms are tried in the data's order first.
  *  `ps` gives the command line in the same shot as the image, so unlike Windows there is nothing to wait for: a form with `match.cmdline` either has it
  *  or there is none (`matchForm` never answers `pending`; a `cmdlineState` field a caller still passes is not read). `home` (optional): the user's home
  *  directory, so the `shape` of a `path-unknown` has no user name in it wherever the home is (see formPathShape). */
 export function matchForm(forms, proc, { home = null } = {}) {
   const exe = proc && typeof proc.exe === 'string' ? proc.exe : ''
   const image = baseName(exe).toLowerCase().replace(/\.exe$/, '') // MA4's first measured fact (on a macOS test machine): npm's claude-code ships `bin/claude.exe` on macOS too — the file name carries a vestigial .exe, the form's image does not; a path pattern that names the binary without the suffix still hits it (the patterns are unanchored)
-  const same = exe === '' ? [] : forms.filter((f) => f.match && f.match.image.toLowerCase() === image)
-  for (const f of same) {
+  const gated = exe === '' ? [] : forms.filter((f) => f.match && f.match.image != null && imagesOf(f).some((n) => n.toLowerCase() === image))
+  const open = exe === '' ? [] : forms.filter((f) => f.match && f.match.image == null) // the path-only shapes: no image gate, the paths are theirs alone
+  for (const f of [...gated, ...open]) {
     const m = f.match
     if (m.path && !hits(m.path, exe)) continue
     if (m.cmdline) {
@@ -53,7 +61,7 @@ export function matchForm(forms, proc, { home = null } = {}) {
     }
     return { kind: 'form', id: f.id }
   }
-  const only = same.filter((f) => f.match.reportUnknownPath)
+  const only = gated.filter((f) => f.match.reportUnknownPath)
   if (only.length) return { kind: 'path-unknown', forms: only.map((f) => f.id), shape: formPathShape(exe, { home }) }
   return { kind: 'none' }
 }

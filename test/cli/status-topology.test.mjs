@@ -24,16 +24,14 @@ const status = async (s, argv = [], deps = {}) => {
   return { ...r, text: r.io.stdoutText(), json: () => r.io.json() }
 }
 
-test('V43: the 「各 harness 的路」 block follows the table, starts with the mode, and has a line per harness with the chain and the verdict', async () => {
+test('V43: the digest draws a per-harness line under 路径 for every harness whose path is known — the chain and the verdict as the topology draws them (the mode rides the [eBPF] label; the block header with the probe age lives in the detail view)', async () => {
   const s = await installedViaCli(ENGINE)
   const lines = (await status(s)).text.split('\n')
-  const head = lines.findIndex((l) => l.startsWith('各 harness 的路('))
-  assert.match(lines[head], /^各 harness 的路\(驱动模式\(eBPF\) · 新连接 · \d+ 秒前探测 · 细节: asight status <harness>\)$/)
-  const table = lines.slice(0, head).filter((l) => /^ {2}\S+\s+正在被采集/.test(l)).map((l) => l.trim().split(/\s+/)[0])
-  const drawn = lines.slice(head + 1).filter((l) => /^ {2}\S/.test(l)).map((l) => l.trim().split(/\s+/)[0])
-  assert.deepEqual(drawn.slice(0, table.length), table, 'the harnesses of the table are the ones drawn, in its order, right after the header')
+  const head = lines.findIndex((l) => l.startsWith('路径    '))
+  assert.ok(head >= 1, 'the 路径 row is there, below the verdict rows')
+  const drawn = lines.slice(head + 1).filter((l) => /^ {2}\S/.test(l) && l.includes(' → '))
+  assert.deepEqual(drawn.map((l) => l.trim().split(/\s+/)[0]), ['claude-code', 'codex', 'hermes', 'opencode', 'deepseek-dsh', 'kimi-code', 'z-code'], 'every harness with a known path is drawn, in the digest\'s order, right after 路径')
   assert.match(lines[head + 1], /^ {2}claude-code\s+claude-code → \[eBPF\] asight 引擎 :47123 → api\.anthropic\.com:443\(直连\)\s+在路径上 · 是$/)
-  assert.ok(lines.slice(0, head).some((l) => l.startsWith('守护进程')), 'and the table comes first')
 })
 
 test('V43: `--json` carries `topology` — one HarnessTopology per harness in the table, each valid, with the verdict the table gave; the receipt validates and stdout is the one document', async () => {

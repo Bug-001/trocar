@@ -1,0 +1,11 @@
+#!/bin/sh
+# asight collector: the named launcher for Claude Desktop on macOS (RFC 4.9 §6.4 · §2.4, written by the desktop-launcher
+# opt-in item of `asight on claude-code --opt-in claude-code.desktop`). The door this carries is the one the 2026-10-12 lab
+# verdict measured: Desktop's model traffic lives in the Chromium network service, which ignores HTTPS_PROXY /
+# NODE_EXTRA_CA_CERTS and reads only these switches — the system proxy is never touched (D43⑥). The listener address
+# carries no password: using it is authorized by your naming of the item, by its loopback-only bind, and by the engine
+# judging every process before decrypting anything (a process it does not recognize is only forwarded).
+# The launcher steers ONLY Desktop instances started through it; a Desktop that is already running is untouched — quit
+# it first. Decryption additionally needs the keychain-login item (asight's CA in your login keychain); without it this
+# forwards and captures nothing. `asight off claude-code` removes this file.
+exec '__ASIGHT_REAL_BINARY__' --proxy-server='__ASIGHT_PROXY__' --proxy-bypass-list='__ASIGHT_PROXY_BYPASS__' "$@"

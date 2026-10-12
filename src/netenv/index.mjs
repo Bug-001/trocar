@@ -62,8 +62,9 @@ export async function probeNetenv({ home, platform, env, proxies = null, deps = 
   }
 }
 
-const PRODUCT = { 'clash-verge': 'Clash Verge', mihomo: 'mihomo' }
-const MODE = { rule: '规则模式', global: '全局模式', direct: '直连模式', tun: 'TUN 模式', 'system-proxy': '系统代理模式', unknown: '模式不知道' }
+/** The display words of a product and a mode (the digest's 「路径」 line of `status` reuses them, D46). */
+export const PRODUCT_TEXT = { 'clash-verge': 'Clash Verge', mihomo: 'mihomo' }
+export const MODE_TEXT = { rule: '规则模式', global: '全局模式', direct: '直连模式', tun: 'TUN 模式', 'system-proxy': '系统代理模式', unknown: '模式不知道' }
 /** The line(s) about the VPN / proxy software (§6; `status` and `on` print them). `n` = what probeNetenv returns (`{ result }` / `{ error }`) or the same unwrapped (the receipt's `netenv`: a result, or `{ error }`):
  *  what could not be read is 不知道 with the reason, never 「无」. `ids`: the harnesses to say anything about. */
 export function netenvText(n, { ids = null, platform = 'linux' } = {}) {
@@ -75,7 +76,7 @@ export function netenvText(n, { ids = null, platform = 'linux' } = {}) {
     const via = Object.entries(p.via || {}).filter(([h]) => !ids || ids.includes(h))
     const group = (v) => via.filter(([, x]) => x === v).map(([h]) => h)
     const says = [group(true).length ? `${group(true).join('、')} 的流量经过它` : null, group(false).length ? `${group(false).join('、')} 不经过它` : null, group('unknown').length ? `${group('unknown').join('、')}: 是否经过它不知道` : null, platform === 'linux' ? 'asight 没有改它' : null].filter(Boolean)
-    return [`本机网络环境: ${PRODUCT[p.product] || p.product}(${[MODE[p.mode] || p.mode, ...flags, ...(p.live ? [] : ['没问到它的控制接口'])].join(',')})${says.length ? `;${says.join(';')}` : ''}`, ...(p.reason ? [`  说明: ${p.reason}`] : [])]
+    return [`本机网络环境: ${PRODUCT_TEXT[p.product] || p.product}(${[MODE_TEXT[p.mode] || p.mode, ...flags, ...(p.live ? [] : ['没问到它的控制接口'])].join(',')})${says.length ? `;${says.join(';')}` : ''}`, ...(p.reason ? [`  说明: ${p.reason}`] : [])]
   })
 }
 

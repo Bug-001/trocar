@@ -465,12 +465,12 @@ for (const c0 of CASES) for (const shape of SHAPES) {
   })
 }
 
-test('W19 proxy entry: Claude Desktop on macOS has no measured door — the group holds the honest marker, not an entry, and its trust is the login-keychain opt-in', () => {
+test('W19 proxy entry: Claude Desktop\'s measured door is the named launcher (4.9 §6.4, 2026-10-12) — no automatic entry is written, and its trust is the login-keychain opt-in', () => {
   const b = box()
   const desktop = only('claude-code')[0].darwin.groups.find((g) => g.g === 'claude-code.desktop')
-  assert.equal(desktop.proxyEntry.kind, 'unmeasured', 'kind:"unmeasured" is not one of the kinds anything writes (4.9 §6.4)')
-  assert.deepEqual(proxyEntries(desktop, ctxOf(b), INGRESS), [], 'no file is written for a door that is not known yet: naming the group installs the CA, not a route')
-  assert.deepEqual(desktop.optIn.map((o) => o.item), ['keychain-login'], 'the login-keychain item is the user\'s to name, never automatic')
+  assert.equal(desktop.proxyEntry.kind, 'launcher', 'the door the lab verdict measured: a named launcher carrying Chromium\'s --proxy-server (env is dead to Desktop\'s Chromium network service)')
+  assert.deepEqual(proxyEntries(desktop, ctxOf(b), INGRESS), [], 'a launcher is not one of the kinds anything writes automatically: naming the ROUTING item writes the launcher, naming the keychain one installs the CA')
+  assert.deepEqual(desktop.optIn.map((o) => o.item), ['keychain-login', 'desktop-launcher'], 'the login-keychain item and the launcher item are the user\'s to name, never automatic')
 })
 
 test('W19 proxy entry: Claude Code and Z-Code write the proxy key beside the trust key in one file, and off takes them out in the opposite order to the original bytes', () => {
@@ -625,4 +625,68 @@ test('W19 + W23: all seven harnesses installed together — only the automatic f
   for (const f of owned) assert.equal(b.snapshot().get(f), before.get(f), `${path.relative(b.home, f)} is untouched`)
   await uninstall(b, all)
   assert.deepEqual([...b.snapshot()], [...before])
+})
+
+// ── the desktop family's trust door (4.9 §6.4, 2026-10-12): the login keychain item, never the settings env ──
+import { createTrustChecker } from '../../../src/collector/core/trust/confirm.mjs'
+
+test('the desktop family\'s trust is the keychain item and never the settings env (4.9 §6.4): unkeyed = untrusted even when the CLI form\'s settings CA sits in the file; keyed = trusted once the Helper started after installed_at, config-after-start before it; the cli/vscode forms keep the settings door as it was', () => {
+  const d = ALL.find((x) => x.name === 'claude-code')
+  const layersOf = d.darwin.layers // osLayers prefers it (wiring.mjs): the darwin twin's own layers, form-aware
+  const b = box('Desktop User')
+  const caFile = path.join(b.dir, 'ca', 'asight-ca.pem')
+  fs.mkdirSync(path.dirname(caFile), { recursive: true })
+  fs.writeFileSync(caFile, CA.certPem)
+  b.put('.claude/settings.json', `${JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: caFile } }, null, 2)}\n`) // the CLI form on: the env door is open — for the CLI, not for Desktop (§6.4 measured env dead for the Chromium network service)
+  const checker = createTrustChecker({ caCertPem: CA.certPem, readFile: (f) => fs.readFileSync(f, 'utf8'), stat: fs.statSync })
+  const helper = '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper'
+  const cli = `${b.home}/.local/share/claude/versions/2.1.289/claude`
+  const START = Date.now() + 60_000 // every file on disk predates the process (mtime < start: no layer is stale by age)
+  const ctxOf = (argv, keychain) => ({
+    os: 'darwin', environ: new Map(), env: new Map(), home: b.home, cwd: '/', argv, startedAt: START,
+    readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } },
+    readTextOrError: (f) => { try { return { text: fs.readFileSync(f, 'utf8'), error: null } } catch (e) { return { text: null, error: e.code === 'ENOENT' ? null : { code: e.code, message: e.message } } } },
+    mtimeOf: (f) => { try { return fs.statSync(f).mtimeMs } catch { return null } },
+    listDir: (dir) => { try { return fs.readdirSync(dir) } catch { return [] } }, unparsable: () => {},
+    ...(keychain ? { keychain } : {}), caFile, // what the wiring injects (osLayers): the keychain door + this build's CA file
+  })
+  const verdict = (argv, keychain, startedAt = START) => checker.check(d.trust, { environ: new Map(), layers: layersOf(ctxOf(argv, keychain)), cwd: '/', startedAt, argv })
+
+  // 1. no keychain item: no layer at all — the settings env door is not the desktop's to walk through (borrowing it would decrypt without the keychain CA and break Desktop's TLS)
+  const bare = layersOf(ctxOf([helper, '--type=utility'], null))
+  assert.deepEqual(bare, [], 'the desktop family gets no settings layer')
+  let t = verdict([helper, '--type=utility'], null)
+  assert.equal(t.trusted, false)
+  assert.equal(t.reason, 'var-missing', 'the keychain item is the only door: without it the Helper is untrusted and the engine only forwards (§6.4: 「没装 keychain CA 时…一律不解密」)')
+
+  // 2. the keychain item, installed before the Helper's life: one synthetic layer, trusted through it
+  const since = START - 3_600_000
+  const withKey = layersOf(ctxOf([helper, '--type=utility'], { since, fp256: 'AB:CD' }))
+  assert.equal(withKey.length, 1, 'exactly the keychain layer')
+  assert.equal(withKey[0].mode, 'override', 'not a fill layer: the tracker\'s env-unreadable arm (darwin always reads no env) cannot demote it')
+  assert.equal(withKey[0].live, false)
+  assert.equal(withKey[0].since, since)
+  assert.equal(withKey[0].vars.NODE_EXTRA_CA_CERTS, caFile)
+  t = verdict([helper, '--type=utility'], { since, fp256: 'AB:CD' })
+  assert.equal(t.trusted, true)
+  assert.match(String(t.via), /keychain/, 'trusted via the keychain layer')
+  assert.equal(t.file, caFile)
+
+  // 3. the same item installed AFTER the Helper started: config-after-start, never trusted by default (the Helper respawns at app start, so quitting and relaunching through the launcher is the fix — needs_restart's own words)
+  t = verdict([helper, '--type=utility'], { since: START + 3_600_000 })
+  assert.equal(t.trusted, false)
+  assert.equal(t.reason, 'config-after-start')
+
+  // 4. the main binary is the same door (it owns no model sockets, but the form is one form)
+  t = verdict(['/Applications/Claude.app/Contents/MacOS/Claude', '--proxy-server=http://127.0.0.1:18284'], { since, fp256: 'AB:CD' })
+  assert.equal(t.trusted, true)
+
+  // 5. the cli form keeps the settings door, keychain or no keychain: the base layers still read ~/.claude/settings.json
+  const cliLayers = layersOf(ctxOf([cli, '-p', 'hi'], null))
+  assert.ok(cliLayers.some((l) => l.vars && l.vars.NODE_EXTRA_CA_CERTS === caFile), 'the CLI\'s settings layer is the base one')
+  t = verdict([cli, '-p', 'hi'], null)
+  assert.equal(t.trusted, true)
+  assert.match(String(t.via), /settings/, 'trusted via the settings env, exactly as before the desktop door existed')
+  t = verdict([cli, '-p', 'hi'], { since, fp256: 'AB:CD' })
+  assert.equal(t.trusted, true, 'a keyed machine changes nothing for the CLI form')
 })

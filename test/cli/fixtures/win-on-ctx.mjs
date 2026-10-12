@@ -72,6 +72,8 @@ export function winWorld({ internet = { ProxyEnable: { kind: 'REG_DWORD', value:
   const envFile = path.join(home, '.codex', '.env')
   put('.asight/collector/forwarder.lock', `${JSON.stringify({ pid: KERNEL_ROW.pid, startedAt: KERNEL_ROW.startedAt, endpoint: 'tcp:127.0.0.1:19001', config: path.join(dir, 'forwarder', 'config.json') })}\n`)
   put('.asight/collector/ingress.json', `${JSON.stringify({ enginePort: 17990, groupPorts: GROUP_PORTS, ingressToken: 'a'.repeat(32), listenerToken: LISTENER_TOKEN })}\n`)
+  // a win32 machine finds the daemon through control.json (4.8 §7) — the fake daemon's endpoint record, the same thing a real win32 daemon writes at its first start and install.mjs's per-poll controlEndpointFor resolves
+  put('.asight/collector/control.json', `${JSON.stringify({ path: '\\\\.\\pipe\\asight-0123456789abcdef', token: 'f'.repeat(64) })}\n`)
   const helper = helperOf({ internet, loginEnv })
   const winCtx = () => ({ os: 'win32', home, env: new Map(), running: [], readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } },
     readTextOrError: (f) => { try { return { text: fs.readFileSync(f, 'utf8'), error: null } } catch (e) { return { text: null, error: { code: e.code } } } },

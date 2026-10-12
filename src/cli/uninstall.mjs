@@ -13,6 +13,7 @@ import { offWorld, desiredOff, switchRoutingOff, undoSide, harnessIdsOf, flowWri
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readManifest, saveManifest, manifestPath } from '../off/manifest.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
+import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
 import { standalonePath, backupDir, opLockFile, asightHome } from '../off/paths.mjs'
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -22,7 +23,7 @@ import { execTool } from '../off/exec.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
-import { refuseElevatedByWhoami } from '../off/win32.mjs'
+import { refuseElevatedByWhoami, disableScheduledTask } from '../off/win32.mjs'
 
 const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -117,7 +118,18 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     for (const f of routing.failures) failed.push(f)
     let drained = null
     if (routing.confirmed && routing.how === 'daemon-reply') drained = await waitForDrain(w, routing.relayed, deps.drainMs ?? DRAIN_MS, routing.socket) // the socket that answered: w.socketPath is null with XDG_RUNTIME_DIR unset
-    receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs })
+    // the platform's own way out: darwin boots the LaunchAgent out and removes the plist (the same arm `off` uses, 4.9 §4 flip checklist ①),
+    // Windows' task is DELETED here by the uninstall itself (the registration survives any manifest, so claiming it without asking schtasks left
+    // the task registered at every login while the receipt said otherwise; the Run value stays a ledger entry), Linux disables the systemd unit
+    if (w.platform === 'win32') {
+      const t = disableScheduledTask({ uninstall: true, run: w.exec, env })
+      receipt.autostart = { disabled: t.ok, removed: [], ...(t.ok ? {} : { error: t.reason || `the task is ${t.task}` }) }
+    }
+    else if (w.platform === 'darwin') {
+      const u = undoAutostart({ home, exec: w.exec, env, fs })
+      receipt.autostart = { disabled: u.code === 0, removed: u.plist === 'removed' ? [plistFilePath(home)] : [], ...(u.code !== 0 ? { error: u.err || `the LaunchAgent was ${u.agent} and the plist ${u.plist}` } : {}) }
+    }
+    else receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs })
     receipt.removed.push(...(receipt.autostart.removed || []))
     if (!receipt.autostart.note || receipt.autostart.error) put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'}${receipt.autostart.error ? ` (${receipt.autostart.error})` : ''}` }) // nothing to say when there was no unit
     if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); failed.push({ code: 'unit-not-disabled', reason: receipt.autostart.error }) }
@@ -172,8 +184,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
         try {
           if (removeOwnedFile(file, fs).result === 'removed') {
             receipt.removed.push(file.path)
-            const r = execTool('systemctl', ['--user', 'daemon-reload'], { run: w.exec, env })
-            if (r.code !== 0) receipt.notes.push(`systemctl --user daemon-reload failed (${r.err || `exit ${r.code}`}); run it once systemd --user runs`)
+            // systemd is told the unit file is gone; darwin's launchd scans ~/Library/LaunchAgents at login and needs no reload
+            if (w.platform !== 'win32' && w.platform !== 'darwin') {
+              const r = execTool('systemctl', ['--user', 'daemon-reload'], { run: w.exec, env })
+              if (r.code !== 0) receipt.notes.push(`systemctl --user daemon-reload failed (${r.err || `exit ${r.code}`}); run it once systemd --user runs`)
+            }
           }
         } catch (err) {
           unitLeft = true; receipt.left.push({ path: file.path, result: 'error', reason: `${file.path} could not be removed: ${errText(err)}` }); failed.push({ code: 'entry-not-undone', path: file.path, reason: `${file.path} could not be removed: ${errText(err)}` })
@@ -190,14 +205,22 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       if (!m) rm(path.join(w.dir, 'ca'))
       const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
       // `netenv.json` is what `status`, `doctor` and `on` last read of the VPN software, for the board: asight's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)
+      // `logs/` is the daemon's own console (D46): asight's own file, removed with the rest of it — by its manifest entries (role 'daemon-log'), so the receipt names the files; the directory follows when empty (or whole, when there is no manifest to name them)
+      for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'daemon-log') : []) rm(f.path)
+      if (!m || m.unsupported) rm(path.join(w.dir, 'logs'))
+      removeEmptyDirs([path.join(w.dir, 'logs')], fs)
       for (const p of [path.join(w.dir, 'run'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home)]) if (p) rm(p)
       removeEmptyDirs([path.dirname(standalonePath(home))], fs)
     }
     for (const n of noted) if (!receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
-    // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind
+    // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind. `--purge-data` is "nothing of the captures stays", so the
+    // collector's own machine goes with it: the kernel's copy (kernel/) and its verified-archive cache (kernel-archive/), the kernel's config and home with the controller
+    // secret and tokens (forwarder/), and the two endpoint files (control.json: the daemon's control endpoint; ingress.json: the ingress ports and tokens) — a plain uninstall
+    // keeps them (a kernel may still be draining; the next on reuses the cache), the purge leaves the collector directory empty of everything asight can rebuild nothing of.
     if (purgeData) {
       for (const n of (() => { try { return fs.readdirSync(w.dir) } catch { return [] } })()) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(w.dir, n))
-      for (const sub of ['flows', 'audit', 'replays']) rm(path.join(w.dir, sub))
+      for (const sub of ['flows', 'audit', 'replays', 'kernel', 'kernel-archive', 'forwarder']) rm(path.join(w.dir, sub))
+      for (const f of ['control.json', 'ingress.json']) rm(path.join(w.dir, f))
     }
     // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is said in the output, never dropped, and never stops the uninstall
     for (const f of failed) put({ event: 'failure', ...f })

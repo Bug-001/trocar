@@ -26,12 +26,12 @@ import { readManifest, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
 import { undoHarnesses } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
-import { controlRequest, controlSocketPath, controlEndpointOf } from './control-client.mjs'
+import { controlRequest, controlSocketPath, controlEndpointFor } from './control-client.mjs'
 import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { plistFilePath, AGENT_LABEL, agentState, undoAutostart } from './darwin.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
-import { kernelForwardOnly, refuseElevatedByWhoami } from './win32.mjs'
+import { refuseElevatedByWhoami, disableScheduledTask } from './win32.mjs'
 import { undoOptIns } from './win32-optin.mjs'
 import { undoDarwinOptIns } from './darwin-optin.mjs'
 import { runEventWriter } from './events.mjs'
@@ -49,20 +49,19 @@ const errMessage = (e) => String((e && e.message) || e)
 export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {} } = {}) {
   const dir = collectorDir(home)
   const platform = deps.platform || process.platform
-  // Windows finds the daemon's control endpoint in <collector>\control.json — the pipe name AND the token every request must carry
-  // (4.8 §7 控制面); darwin's daemon writes the same control.json (a random socket under $TMPDIR plus the token, 4.9 §7 — the mac flip
-  // missed adding it here, so every `off`/`status` on a real mac was a 401); Linux keeps the $XDG_RUNTIME_DIR unix socket, which the
-  // file modes keep to the operator. An off on win32/darwin with no control.json (or one that names no endpoint) has no socket path of
-  // its own: daemonState still asks the one the daemon's lock names, unauthenticated — a POST /off that 401s is then the control-error
-  // the receipt shows, not a silent miss.
-  const endpoint = (platform === 'win32' || platform === 'darwin') && deps.socketPath === undefined ? controlEndpointOf({ dir, fs: deps.fs || nodeFs }) : null
+  // The daemon's endpoint, resolved the one way every caller resolves it (controlEndpointFor): Windows finds it in <collector>\control.json —
+  // the pipe name AND the token every request must carry (4.8 §7 控制面); darwin's daemon writes the same control.json (a random socket under
+  // $TMPDIR plus the token, 4.9 §7); Linux keeps the $XDG_RUNTIME_DIR unix socket, which the file modes keep to the operator. An off on
+  // win32/darwin with no control.json (or one that names no endpoint) has no socket path of its own: daemonState still asks the one the
+  // daemon's lock names, unauthenticated — a POST /off that 401s is then the control-error the receipt shows, not a silent miss.
+  const endpoint = deps.socketPath === undefined ? controlEndpointFor({ platform, dir, env, fs: deps.fs || nodeFs }) : null
   const w = {
     home, env, dir, fs: deps.fs || nodeFs, exec: deps.exec || null, platform,
-    request: deps.request || (endpoint && endpoint.token ? ((o) => controlRequest({ ...o, token: endpoint.token })) : controlRequest),
+    request: deps.request || (endpoint && endpoint.request) || controlRequest,
     clock: deps.now || (() => new Date()), ms: deps.ms || Date.now, sleep: deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     alive: deps.alive || pidAlive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
     lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps, standalone: deps.standalone === true, // the single-file asight-off passes `standalone`: it words what it cannot do as "run asight off" (R3, V35)
-    socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.path) || (() => { try { return controlSocketPath({ env }) } catch { return null } })(),
+    socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || (() => { try { return controlSocketPath({ env }) } catch { return null } })(),
   }
   const once = (fn) => { let p; return () => p || (p = Promise.resolve().then(fn)) } // the process table is read once per run
   w.procs = once(deps.procs || (() => listProcs({ exec: w.exec, platform, env })))
@@ -434,20 +433,21 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       if (u.pending.length) outcome = 'partial'
       else if (u.left.length || u.mode === 'unsupported') outcome = 'left'
       if (u.mode !== 'marker') for (const id of ids || []) if (!installed.includes(id)) receipt.skipped.push({ what: id, reason: `${id} 没有 asight 的入口(没装过,或早已撤掉)` })
-      // Windows (4.8 §4.2): a daemon that did not answer leaves the kernel preferring its dead engine — it is made forward-only (or
-      // stopped) before the entries go, so a new connection runs direct even before its entry is undone. A daemon that answered
-      // manages its own kernel on the way out; this is only the daemon-less half.
-      if ((deps.platform || process.platform) === 'win32' && routing.how !== 'daemon-reply') {
-        const k = await (w.deps.kernelForwardOnly || ((o) => kernelForwardOnly(o)))({ dir: w.dir, fs: w.fs, run: w.exec, env })
-        put({ kind: 'kernel', state: k.done, reason: `the kernel ${k.done === 'forward-only' ? 'made forward-only (its listeners stay, everything runs direct)' : k.done === 'stopped' ? 'stopped' : k.done === 'none' ? 'is not on record' : 'could not be dealt with'}${k.reason ? ` (${k.reason})` : ''}${Number.isInteger(k.kernel_pid) ? `; pid ${k.kernel_pid}` : ''}` })
-        if (k.done === 'failed') { receipt.problems.push(`the kernel could not be taken off the routing path (${k.reason}); agents may still be steered through it until it is stopped`); put({ event: 'failure', code: 'kernel-not-off', reason: k.reason }) }
-      }
-      // 5 · no names: the autostart goes too (the daemon was asked to exit once drained in step 3). Windows has no unit to disable
-      // here: the task and the Run value are manifest entries, undone with the rest in step 4 (undoScheduledTask / undoRunKey). darwin's
-      // LaunchAgent is undone through the launchd arm (the flip checklist ①, 4.9 §4): the agent booted out FIRST (KeepAlive does not pull
+      // (The Windows kernel arm that stood here — a daemon that did not answer left the kernel preferring its dead engine, so the standalone off made it
+      // forward-only or stopped it through its controller — went with the kernel itself, D47's win32 twin: the engine's doors die with the daemon, nothing
+      // outlives them to be steered, and uninstall's purge list still cleans kernel-era residue: kernel\, kernel-archive\, forwarder\.)
+      // 5 · no names: the autostart goes too (the daemon was asked to exit once drained in step 3). Windows' task is disabled HERE, by the off itself — the
+      // registration survives any manifest (an on whose ledger is gone, a task registered from asight's file by hand), so claiming "disabled" without asking
+      // schtasks left the task enabled at every login while the receipt said otherwise; the Run value stays a manifest entry and goes with the rest in step 4
+      // (undoRunKey). darwin's LaunchAgent is undone through the launchd arm (the flip checklist ①, 4.9 §4): the agent booted out FIRST (KeepAlive does not pull
       // the daemon back), then the plist out of ~/Library/LaunchAgents (launchd scans it at every login: a file left there undoes the off).
       if (ids === null) {
-        if ((deps.platform || process.platform) === 'win32') receipt.autostart = { disabled: true, removed: [], note: 'the task and the Run value are ledger entries, undone with the rest (4.8 §4.2)' }
+        if ((deps.platform || process.platform) === 'win32') {
+          const t = disableScheduledTask({ run: w.exec, env })
+          receipt.autostart = { disabled: t.ok, removed: [], ...(t.ok ? { note: 'the task is disabled now; the Run value is a ledger entry, undone with the rest (4.8 §4.2)' } : { error: t.reason || `the task is ${t.task}` }) }
+          put({ kind: 'autostart', disabled: t.ok, reason: `autostart ${t.ok ? 'disabled' : 'NOT disabled'} (schtasks: the task is ${t.task})${t.reason ? ` (${t.reason})` : ''}` })
+          if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
+        }
         else if ((deps.platform || process.platform) === 'darwin') {
           const u = undoAutostart({ home, exec: w.exec, env, fs: w.fs })
           receipt.autostart = { disabled: u.code === 0, removed: u.plist === 'removed' ? [plistFilePath(home)] : [], ...(u.code !== 0 ? { error: u.err || `the LaunchAgent was ${u.agent} and the plist ${u.plist}` } : {}) }

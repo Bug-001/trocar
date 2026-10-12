@@ -34,6 +34,7 @@ async function world({ proxy = 'http://user-proxy.example:3128' } = {}) {
   await installCollector({ home, env: { HOME: home, USERPROFILE: home }, osName: 'win32', harnesses: [CC], freePort: async () => 47011, roots: ROOTS })
   const dir = path.join(home, '.asight', 'collector')
   fs.writeFileSync(path.join(dir, 'ingress.json'), JSON.stringify({ enginePort: 18900, groupPorts: { 'claude-code.settings': PORT }, ingressToken: '0123456789abcdef0123456789abcdef', listenerToken: TOKEN }))
+  fs.writeFileSync(path.join(dir, 'control.json'), `${JSON.stringify({ path: '\\\\.\\pipe\\asight-0123456789abcdef', token: 'f'.repeat(64) })}\n`) // the started daemon's endpoint record (4.8 §7) — install.mjs's per-poll controlEndpointFor finds the daemon through it
   const ctx = { os: 'win32', home, env: new Map([['HOME', home], ['USERPROFILE', home]]), running: [], readTextOrError, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, collectorDir: dir }
   const daemonWriter = createProxyEntries({ dir, home, groups: GROUPS, ctx, ingress: () => ({ groupPorts: { 'claude-code.settings': PORT }, listenerToken: TOKEN }), manifest: () => readManifest(dir), fs })
   const settings = path.join(home, '.claude', 'settings.json')

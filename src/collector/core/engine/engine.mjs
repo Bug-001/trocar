@@ -153,16 +153,22 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     return ingress
   }
 
-  // listen({port, hosts, ingress: {port}|null}) → {port, ingressPort}
+  // listen({port, hosts, ingress: {port}|null, groups}) → {port, ingressPort?, groupPorts?}
   //   port    the transparent listener (0 → the OS picks); skipped when the redirector has no `lookup` (Windows: no transparent rewrite)
   //   ingress the proxy ingress's own port, on the same hosts (4.8 §5.1); needs the redirector's lookupIngress and createEngine's ingressToken
+  //   groups  the engine's own per-group proxy doors (D47, 4.9 §3): [{ id, port, auth, token }] — one loopback listener per entry group, answered
+  //           by the same proxy ingress with that group's credentials (`token`; `auth:false` = the door takes none, the desktop-launcher shape).
+  //           Binding is idempotent per group id (a door already bound is answered with its port, not bound again), so `attach()` may re-ask;
+  //           closeGroups(ids) is the other half — a door the plan no longer carries stops accepting and is forgotten.
   // The first host binds first, then the rest reuse the resolved port, so 127.0.0.1 and ::1 share one.
-  async function listen({ port = 0, hosts = ['127.0.0.1'], ingress: ing = null } = {}) {
+  const boundGroups = new Map() // group id → { port, servers }: the doors this engine already listens on
+  async function listen({ port = 0, hosts = ['127.0.0.1'], ingress: ing = null, groups = null } = {}) {
     const transparent = typeof redirector.lookup === 'function'
-    if (!transparent && !ing) throw new TypeError('listen: this redirector has no lookup and no ingress was asked for: nothing to listen on')
-    const door = ing ? ingressDoor() : null
-    const bind = (handler, wanted, label) => new Promise((resolve, reject) => {
-      let boundPort = wanted
+    const wanted = (groups || []).filter((g) => g && typeof g.id === 'string' && g.id !== '')
+    if (!transparent && !ing && wanted.length === 0) throw new TypeError('listen: this redirector has no lookup and no ingress was asked for: nothing to listen on')
+    const door = ing || wanted.length ? ingressDoor() : null
+    const bind = (handler, wantedPort, label, sink = null) => new Promise((resolve, reject) => {
+      let boundPort = wantedPort
       let i = 0
       const bindNext = () => {
         if (i >= hosts.length) { resolve(boundPort); return }
@@ -173,14 +179,45 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
           srv.removeListener('error', reject)
           // after listen (e.g. EMFILE on accept): recorded and reported, never an uncaught exception
           srv.on('error', (e) => { failure({ code: (e && e.code) || 'engine-error', reason: `the engine's ${label}listener on ${host}: ${String((e && e.message) || e)}` }); onError(e) })
-          boundPort = srv.address().port; servers.push(srv); bindNext()
+          boundPort = srv.address().port; servers.push(srv); if (sink) sink.push(srv); bindNext()
         })
       }
       bindNext()
     })
     const out = { port: transparent ? await bind(onConnection, port, '') : null }
-    if (door) out.ingressPort = await bind(door.connection, ing.port ?? 0, 'ingress ')
+    if (door && ing) out.ingressPort = await bind(door.connection, ing.port ?? 0, 'ingress ')
+    if (door && wanted.length) {
+      out.groupPorts = {}
+      for (const g of wanted) {
+        const held = boundGroups.get(g.id)
+        if (held) { out.groupPorts[g.id] = held.port; continue }
+        if (!Number.isInteger(g.port) || g.port < 1 || g.port > 65535) throw new TypeError(`listen: the door of group ${JSON.stringify(g.id)} needs a TCP port, got ${typeof g.port === 'number' ? g.port : typeof g.port}`)
+        const serversOfDoor = []
+        const p = await bind((s) => door.connection(s, { user: g.id, token: g.token ?? null, open: g.auth === false }), g.port, `group ${g.id} door `, serversOfDoor)
+        boundGroups.set(g.id, { port: p, servers: serversOfDoor })
+        out.groupPorts[g.id] = p
+      }
+    }
     return out
+  }
+
+  // closeGroups(ids) → the ids closed (D47): each door stops ACCEPTING at once and is forgotten (a later listen binds it again); the
+  // connections already accepted are not killed — they drain as ever, and the daemon's `off` drain (below) closes them where the engine
+  // sees a boundary. A door nobody asked for is nobody's error.
+  function closeGroups(ids) {
+    const closed = []
+    for (const id of ids || []) {
+      const held = boundGroups.get(id)
+      if (!held) continue
+      boundGroups.delete(id)
+      closed.push(id)
+      for (const srv of held.servers) {
+        const at = servers.indexOf(srv)
+        if (at >= 0) servers.splice(at, 1)
+        srv.close(() => {}) // a second close (engine.close below) is a no-op callback, never an 'error' event
+      }
+    }
+    return closed
   }
 
   async function close() {
@@ -230,5 +267,5 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
 
   // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits; forgetNegKey(k) when the last process of a
   // form with no pid to key by has (4.8 §5.5).
-  return { listen, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: (pid) => neg.forgetPid(pid), forgetNegKey: (k) => neg.forgetKey(k) }
+  return { listen, closeGroups, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: (pid) => neg.forgetPid(pid), forgetNegKey: (k) => neg.forgetKey(k) }
 }

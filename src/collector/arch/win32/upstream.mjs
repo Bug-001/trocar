@@ -6,7 +6,9 @@
 //   2. else, for a group that follows the system proxy and with the system proxy on: its `ProxyServer`, with `ProxyOverride` as the bypass table; a PAC is not followed (`not-routed`);
 //   3. else direct (a TUN or another layer-3 VPN carries it as it did).
 // What the agent reached directly before asight (the system proxy's `ProxyOverride`, the agent's own `NO_PROXY`) is the group's bypass table, so it still is.
-import { bypassRuleOf, upstreamOf } from '../../../netenv/mihomo/rules.mjs'
+import { bypassHit, bypassRuleOf, upstreamOf } from '../../core/upstream-shape.mjs'
+
+export { bypassHit } // the one matcher (core/upstream-shape.mjs, shared with the door core and the darwin twin since the kernel config generator died with the kernel): re-exported here so the rule and its tests keep one home
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
 
@@ -81,28 +83,6 @@ export function translateBypass(text, style) {
     if (!ok) untranslated++
   }
   return { bypass: rows, untranslated }
-}
-
-/**
- * bypassHit(bypass, host) → boolean: does the CONNECT target `host` (a name or an address literal, no port) hit one of the group's bypass rows? The one matcher the redirector uses to give `{kind:'direct'}` (4.8 §5.2),
- * and the one the kernel's rule text (`bypassRuleOf`) says the same as (test: a table, both ways). `<local>` is a name without a dot; a suffix is the name and its subdomains on a dot boundary; a range holds only IPv4 literals.
- */
-export function bypassHit(bypass, host) {
-  if (!Array.isArray(bypass) || bypass.length === 0 || typeof host !== 'string') return false
-  const h = normHost(host)
-  if (h === '') return false
-  const ip = ipv4Of(h)
-  for (const row of bypass) {
-    if (row.kind === 'local') { if (ip === null && !h.includes('.') && !h.includes(':')) return true }
-    else if (row.kind === 'domain') { if (h === row.value) return true }
-    else if (row.kind === 'domain-suffix') { if (h === row.value || h.endsWith(`.${row.value}`)) return true }
-    else if (row.kind === 'ip-cidr' && ip !== null) {
-      const [net, bits] = row.value.split('/')
-      const mask = Number(bits) === 0 ? 0 : (0xffffffff << (32 - Number(bits))) >>> 0
-      if (((ip & mask) >>> 0) === ((ipv4Of(net) & mask) >>> 0)) return true
-    }
-  }
-  return false
 }
 
 // ---- reading a proxy address (4.8 §2.2: the protocols) ---------------------------------------------------------------------------------------------------

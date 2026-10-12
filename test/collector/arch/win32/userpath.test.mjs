@@ -10,7 +10,6 @@ import {
   sacOf, sacBlocksShims, SAC_KEY, readShortcutTarget, shortcutPlaces,
 } from '../../../../src/collector/arch/win32/userpath.mjs'
 import { MACHINE_PATH_KEY } from '../../../../src/collector/arch/win32/elevate.mjs'
-import { sacBlocks as forwarderSacBlocks } from '../../../../src/collector/arch/win32/forwarder.mjs'
 
 /** reg.exe / powershell as a recording fake over one fake registry: `reg` is { hive-key: { NAME: { kind, value } } }, `powershell` answers the
  *  fixed reads (the broadcast, the shortcut read) and counts the broadcasts. reg.exe's real output shape is spelled out below — the same shape
@@ -132,7 +131,7 @@ test('resolveCommand follows Windows\' order — the machine PATH first, then th
   assert.deepEqual(PATH_EXTS, ['.com', '.exe', '.bat', '.cmd'])
 })
 
-test('sacOf reads the one value reg.exe-style (0 off, 1 on, 2 evaluation, none = off) and blames only the two states forwarder.mjs blames', () => {
+test('sacOf reads the one value reg.exe-style (0 off, 1 on, 2 evaluation, none = off) and the shim gate blames only the two states', () => {
   assert.equal(sacOf({ run: fakeWin({ reg: { sac: 0 } }).run, env: ENV }), 'off')
   assert.equal(sacOf({ run: fakeWin({ reg: { sac: 1 } }).run, env: ENV }), 'on')
   assert.equal(sacOf({ run: fakeWin({ reg: { sac: 2 } }).run, env: ENV }), 'evaluation')
@@ -141,7 +140,7 @@ test('sacOf reads the one value reg.exe-style (0 off, 1 on, 2 evaluation, none =
   weird.state[SAC_KEY].VerifiedAndReputablePolicyState = { kind: 'REG_SZ', value: 'yes' }
   assert.deepEqual(sacOf({ run: weird.run, env: ENV }), { unknown: { reason: 'unparseable', detail: 'the answer held no such DWORD' } })
   assert.deepEqual(sacOf({ run: () => ({ status: null, stdout: '', stderr: '' }), env: ENV }), { unknown: { reason: 'denied', detail: 'reg query exited none' } })
-  for (const s of ['off', 'on', 'evaluation', { unknown: { reason: 'denied' } }]) assert.equal(sacBlocksShims(s), forwarderSacBlocks(s), `the same two states as the kernel's sacBlocks, and never an unknown one (${JSON.stringify(s)})`)
+  for (const s of ['off', 'on', 'evaluation', { unknown: { reason: 'denied' } }]) assert.equal(sacBlocksShims(s), s === 'on' || s === 'evaluation', `the same two states and never an unknown one (${JSON.stringify(s)})`)
 })
 
 test('readShortcutTarget: the one fixed read-only line, the target is the answer (an empty one is real), a failure is an error', () => {

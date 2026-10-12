@@ -6,7 +6,7 @@
 // its own inline copy of the same three commands, and test/off/win32-optin.test.mjs holds the two copies to the same bytes. `resolveCommand`
 // follows Windows' own order — the machine PATH first, then the user PATH (§6.3「机器 PATH 在前」) — reading both from the registry, not from
 // this process's environment (the daemon's is not the install shell's). `sacOf` reads Smart App Control's one value the same way the helper's
-// `reg-read` does (forwarder.mjs's sacState); the CLI apply has no helper, so it asks reg.exe. `readShortcutTarget` reads a .lnk's target
+// `reg-read` does (the same dword the helper's allow-list names); the CLI apply has no helper, so it asks reg.exe. `readShortcutTarget` reads a .lnk's target
 // through the one fixed read-only PowerShell line. Everything runs through execTool's injected `run`: no spawn of its own, no registry write
 // outside `HKCU\Environment\Path`, no file write at all.
 import path from 'node:path'
@@ -98,7 +98,7 @@ export function resolveCommand(name, { run = null, env = process.env, exists = (
   return null
 }
 
-/** Smart App Control's one value (§6.3), read the way forwarder.mjs's helper-based `sacState` does but through reg.exe — the CLI's opt-in
+/** Smart App Control's one value (§6.3), read through reg.exe — the CLI's opt-in
  *  apply has no helper. `HKLM\…\CI\Policy\VerifiedAndReputablePolicyState`: 0 off, 1 on, 2 evaluation; no key or value = off (the system has
  *  no such policy); anything else, or a read that did not run, is `{ unknown: { reason } }`, never a guess. asight never writes this key. */
 export const SAC_KEY = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy'
@@ -112,7 +112,7 @@ export function sacOf({ run = null, env = process.env } = {}) {
   const n = parseInt(m[1], 16)
   return n === 0 ? 'off' : n === 1 ? 'on' : n === 2 ? 'evaluation' : { unknown: { reason: 'unparseable', detail: `0x${n.toString(16)}` } }
 }
-/** Is the unsigned shim at risk? The same two states forwarder.mjs's `sacBlocks` blames; an unknown one never is (it says 「不知道」, not 「不行」). */
+/** Is the unsigned shim at risk? The two states that blame it; an unknown one never is (it says 「不知道」, not 「不行」). */
 export const sacBlocksShims = (state) => state === 'on' || state === 'evaluation'
 
 /** A .lnk's target, read through the one fixed read-only PowerShell line (the COM object WScript.Shell). → `{ target }` (an empty target is a

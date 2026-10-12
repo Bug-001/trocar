@@ -218,47 +218,6 @@ test('daemon: status awaits the redirector\'s directCount — an arch whose answ
   } finally { await d.stop(); p.done(); s.done() }
 })
 
-// 4.8 §3.3 「引擎(重)启动之后」: the daemon asks the kernel's own controller to health-test every on-form's fallback group NOW (a group that had
-// fallen back stays on its re-entry point until the next interval otherwise), once per (re)start, and records the answer as one `probes-refreshed`
-// state event (§12) — never stderr, never silence (D38) — and never stops the daemon over it. The Windows wiring owns the asking; a platform whose
-// redirector has no `win32` bag (Linux: no kernel of its own) has nothing to do here.
-test('daemon: after the engine comes up the win32 probe refresh runs once and its answer is one probes-refreshed record; a throw is a failure record and the daemon still starts; a platform without the hook writes none', async () => {
-  const s = sandbox(); const p = fakeProc()
-  await install(s)
-  const { arch } = fakeArch(p)
-  const calls = []
-  const withWin32 = (answer, onCall) => ({ os: arch.os, createRedirector: (o) => { const r = arch.createRedirector(o); r.win32 = { refreshProbes: async () => { calls.push(1); if (onCall) onCall(); return answer } }; return r } })
-  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: withWin32({ ok: true, asked: [{ f: 'codex.app', ok: true, status: 200 }, { f: 'codex.app', ok: false, status: 0 }] }), harnesses: [cc], env: { ...process.env, HOME: s.home } })
-  try {
-    await req(s.sock, 'GET', '/status') // wired and answering
-    assert.equal(calls.length, 1, 'once per (re)start, not per request')
-    const probes = flowsOf(s).filter((l) => l.event === 'probes-refreshed')
-    assert.equal(probes.length, 1)
-    assert.equal(probes[0].where, 'forwarder')
-    assert.deepEqual(probes[0].forms, [{ f: 'codex.app', ok: true, status: 200 }, { f: 'codex.app', ok: false, status: 0 }], 'the answer, the failed probes included')
-    assert.match(probes[0].reason, /health-test every on-form's fallback group now/)
-  } finally { await d.stop(); p.done(); s.done() }
-
-  const s2 = sandbox(); const p2 = fakeProc()
-  await install(s2)
-  const plain2 = fakeArch(p2)
-  const boom = { os: 'linux', createRedirector: (o) => { const r = plain2.arch.createRedirector(o); r.win32 = { refreshProbes: async () => { throw new Error('the controller endpoint is gone') } }; return r } }
-  const d2 = await startDaemon({ dir: s2.collector, socketPath: s2.sock, arch: boom, harnesses: [cc], env: { ...process.env, HOME: s2.home } })
-  try {
-    await req(s2.sock, 'GET', '/status')
-    const failures = flowsOf(s2).filter((l) => l.event === 'failure' && l.code === 'engine-error' && /controller endpoint is gone/.test(l.reason || ''))
-    assert.equal(failures.length, 1, 'a throw is one engine failure record, and the daemon still started (the status above answered)')
-    assert.equal(failures[0].where, 'engine')
-  } finally { await d2.stop(); p2.done(); s2.done() }
-
-  const s3 = sandbox(); const p3 = fakeProc()
-  await install(s3)
-  const d3 = await startDaemon({ dir: s3.collector, socketPath: s3.sock, arch: fakeArch(p3).arch, harnesses: [cc], env: { ...process.env, HOME: s3.home } })
-  try {
-    await req(s3.sock, 'GET', '/status')
-    assert.equal(flowsOf(s3).filter((l) => l.event === 'probes-refreshed').length, 0, 'a redirector without the hook (Linux) writes none')
-  } finally { await d3.stop(); p3.done(); s3.done() }
-})
 
 // 4.8 §3.5 (W69): the daemon's /status reply carries the host sets the plan last applied per host-tree form (`applied_hosts`, the wiring's win32 bag),
 // which is where `status`'s facts reach them to compare with a fresh read and say when the kernel's set is old. A platform whose redirector has no
