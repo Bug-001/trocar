@@ -753,7 +753,7 @@ test('daemon: OS roots the reader dropped as unparsable, or a roots source that 
   const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRoots }, harnesses: [rep], bundleMs: 30 })
   try {
     const before = asked
-    await until(() => asked >= before + 3) // three rebuilds with nothing left out
+    await until(() => asked >= before + 4) // three whole rebuilds with nothing left out (a round reads, then writes; the 4th read means the 3rd round wrote)
     assert.deepEqual(said(), [], 'nothing left out: no failure')
     answer = { pem: root.certPem, dropped: 2, tried: ['getCACertificates: not available (Node ≥ 22.15 has it)'] }
     const u = await until(() => said().find((x) => x.code === 'system-roots-unparsable'))

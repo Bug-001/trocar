@@ -65,7 +65,7 @@ export function rootsLeftOut(roots, files) {
   const out = []
   const n = roots.dropped || 0
   const where = `the combined bundles ${files.join(', ')}`
-  if (n > 0) out.push({ code: CODE.systemRootsUnparsable, files, dropped: n, reason: `${n} certificate${n === 1 ? '' : 's'} in the OS roots could not be parsed and ${n === 1 ? 'is' : 'are'} not in ${where} (one broken certificate makes Codex refuse a whole bundle)` })
+  if (n > 0) out.push({ code: CODE.systemRootsUnparsable, files, dropped: n, reason: `${n} certificate${n === 1 ? '' : 's'} in the OS roots could not be parsed and ${n === 1 ? 'is' : 'are'} not in ${where} (one broken certificate makes a rustls client refuse a whole bundle)` })
   if (roots.partial) out.push({ code: CODE.systemRootsPartial, files, reason: `${where} lack the OS roots of a source that could not be read (${roots.partial}); a CA only that source holds (a corporate proxy's, say) is not in them, and an agent whose entry points at one may not reach a relay that signs with it` })
   return out
 }
