@@ -6,6 +6,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRegistry, matchPattern, validateDescriptor, livenessOf } from '../../../src/collector/core/registry.mjs'
 import { reviveSignature, matchHarness } from '../../../src/off/signature.mjs'
+import fs from 'node:fs'
+import path from 'node:path'
+import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
+import { readAgentList } from '../../../src/off/identity.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 const trust = { chain: [{ var: 'X_CA', semantic: 'append' }] }
 const alpha = {
@@ -115,4 +120,26 @@ test('livenessOf: the compiled name list as JSON under `identity` (off matches t
   assert.equal('signature' in l, false, 'the older key is not written')
   const withMine = { alpha: JSON.parse(JSON.stringify(livenessOf(alpha, { agentList: [{ harness: 'alpha', name: 'alpha-nightly' }] }))) }
   assert.equal(matchHarness(withMine, facts({ exe: '/x/alpha-nightly', argv: ['alpha-nightly'] })), 'alpha', 'a name agents.json adds is in the snapshot')
+})
+
+test('R6 a user name that does not normalize to itself is that item\'s problem, never a throw: the registry and off\'s liveness still build, the good item applies', async () => {
+  const ALL = await loadHarnesses()
+  const home = tmpDir('asight-agents-')
+  fs.mkdirSync(path.join(home, '.asight'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.asight', 'agents.json'), JSON.stringify({ version: 1, agents: [
+    { harness: 'codex', name: 'x.exe.exe' }, { harness: 'codex', name: 'foo (deleted) (deleted)' }, { harness: 'codex', name: 'foo .exe' },
+    { harness: 'claude-code', name: 'claude-nightly' },
+  ] }))
+  const list = readAgentList({ home })
+  assert.deepEqual(list.problems.map((p) => [p.index, p.code]), [[0, 'name-not-normalized'], [1, 'name-not-normalized'], [2, 'name-not-normalized']])
+  assert.deepEqual(list.entries.map((e) => e.name), ['claude-nightly'])
+  const reg = createRegistry(ALL, { agentList: list.entries })
+  assert.equal(reg.match({ os: 'darwin', exe: '/Users/u/bin/claude-nightly', argv: ['claude-nightly'] }).agent, 'claude-code')
+  // the compiler's own guard: the raw items reaching the registry anyway (a reader that misses one) drop alone, the rest compile
+  const raw = [{ harness: 'codex', name: 'x.exe' }, { harness: 'codex', name: 'foo ' }, { harness: 'claude-code', name: 'claude-nightly' }]
+  const reg2 = createRegistry(ALL, { agentList: raw })
+  assert.equal(reg2.match({ os: 'darwin', exe: '/Users/u/bin/claude-nightly', argv: ['claude-nightly'] }).agent, 'claude-code')
+  reg2.replaceAgentList(raw) // the 5 s swap does not throw either
+  const codex = ALL.find((d) => d.name === 'codex')
+  assert.doesNotThrow(() => livenessOf(codex, { agentList: raw }))
 })

@@ -61,9 +61,13 @@ export function livenessOf(d, { agentList = [] } = {}) {
 
 // The presets with the user's entries merged in (mergeAgentList), for the registered harnesses only. An `ignore` that drops a name also drops it
 // from the exclude items that named it (an item left naming nothing could never hold: a helper is excluded only under one of its harness's names).
+// A user's item the compiler refuses is dropped here, alone: readAgentList reports it as that item's problem (agent-list-invalid), and one bad item must
+// never stop the registry — the daemon's start, `on`'s liveness, the 5 s swap — for the presets and the good items (4.6 R6, D38).
+const compiles = (h, e) => { try { compileIdentity({ harness: h, names: [e.args == null ? { name: e.name } : { name: e.name, args: e.args }] }); return true } catch { return false } }
+
 function compileAll(byName, entries) {
   const presets = Object.fromEntries([...byName.values()].map((d) => [d.name, d.processes]))
-  const merged = mergeAgentList(presets, (entries || []).filter((e) => byName.has(e.harness)))
+  const merged = mergeAgentList(presets, (entries || []).filter((e) => byName.has(e.harness) && (e.ignore || compiles(e.harness, e))))
   const out = new Map()
   for (const [h, m] of Object.entries(merged)) {
     if (!byName.has(h)) continue

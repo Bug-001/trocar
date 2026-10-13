@@ -125,7 +125,8 @@ export function compileIdentity({ harness = '?', names = [], exclude = [], longL
 export const agentListPath = (home) => path.join(asightHome(home), 'agents.json')
 
 /** The user's list (D51③) → { path, state: 'absent'|'ok'|'unreadable'|'unparsable', entries: [{ index, harness, name, args?, ignore? }],
- *  problems: [{ index, code, detail }] }. A bad item does not apply, the others do; a whole-file problem has index null. */
+ *  problems: [{ index, code, detail }] }. A bad item does not apply, the others do; a whole-file problem has index null. Every entry it returns compiles
+ *  (compileIdentity): a name the compiler would refuse is a problem here. */
 export function readAgentList({ home, fs = nodeFs } = {}) {
   const file = agentListPath(home)
   const fail = (state, code, detail) => ({ path: file, state, entries: [], problems: [{ index: null, code, detail }] })
@@ -149,6 +150,9 @@ export function readAgentList({ home, fs = nodeFs } = {}) {
     if (/[\\/]/.test(a.name)) return bad('name-has-separator', `name ${JSON.stringify(a.name)} is a path; write only the program name (${JSON.stringify(normalizeName(a.name))})`)
     const name = normalizeName(a.name)
     if (!name) return bad('name-empty', `name ${JSON.stringify(a.name)} leaves no program name`)
+    // the compiler (compileIdentity) takes only a name that normalizes to itself; one that does not (`x.exe.exe` → `x.exe`, `foo .exe` → `foo `) is
+    // this item's problem here, never a throw at registry build that stops the daemon and `on` for the whole list
+    if (normalizeName(name) !== name) return bad('name-not-normalized', `name ${JSON.stringify(a.name)} does not settle on one program name (${JSON.stringify(name)} → ${JSON.stringify(normalizeName(name))}); write the plain program name`)
     if (a.args != null) {
       if (typeof a.args !== 'string' || a.args === '') return bad('args-not-regex', 'args must be a regular expression source (a non-empty string)')
       if (a.args.length > IDENT_ARGS_MAX) return bad('args-too-long', `args is ${a.args.length} characters; the limit is ${IDENT_ARGS_MAX}`)
