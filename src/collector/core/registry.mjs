@@ -42,15 +42,17 @@ export function validateDescriptor(d) {
 }
 
 /** What `off` needs to judge, from the install manifest alone, which live process may hold what asight wrote for this harness (4.6 撤销顺序
- *  第 2 / 5 步; manifest `liveness.<harness>`): `identity`, the harness's name list compiled — its presets with the user's `agentList` items for it
- *  merged in (the same on every OS, D51) — as JSON; whether the harness re-reads its entry while running; and until when a running one still trusts
+ *  第 2 / 5 步; manifest `liveness.<harness>`): `identity`, the harness's name list compiled — its presets with the user's `agentList` additions for it
+ *  merged in (its `ignore` items not applied) (the same on every OS, D51) — as JSON; whether the harness re-reads its entry while running; and until when a running one still trusts
  *  asight after `off` — the data form of `trust.afterUninstall` ('restart' when it declares none, and when it is a function of the process, which a
  *  manifest cannot hold: Hermes). With `trust.untilEnviron` (Kimi), only a process whose environment names that variable at a file of asight's is
  *  reported at all. */
 export function livenessOf(d, { agentList = [] } = {}) {
   const t = d.trust || {}
   return {
-    identity: serializeSignature(compileAll(new Map([[d.name, d]]), agentList).get(d.name)),
+    // `ignore` items are not applied: they stop capture, not trust — the entry is per harness, so an ignored name still loads its bundle and must
+    // stay a holder for `off` (D50; off's withAgentList adds only the additions too)
+    identity: serializeSignature(compileAll(new Map([[d.name, d]]), (agentList || []).filter((e) => !e.ignore)).get(d.name)),
     rereads: !!t.rereadsEntry,
     until: typeof t.afterUninstall === 'string' ? t.afterUninstall : 'restart',
     ...(typeof t.untilEnviron === 'string' ? { until_environ: t.untilEnviron } : {}),

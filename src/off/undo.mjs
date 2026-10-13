@@ -30,7 +30,7 @@ import { undoRunKey, undoScheduledTask } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, asightHome } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
-import { matchHarness, hasIdentity, withAgentList } from './signature.mjs'
+import { harnessesOf, hasIdentity, withAgentList } from './signature.mjs'
 import { readAgentList } from './identity.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
 
@@ -190,7 +190,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       const byPid = new Map(t.list.map((p) => [p.pid, p])), from = since.get(harness)
       return t.list.filter((p) => {
         if (!pick(p) || (p.startedAt != null && from != null && p.startedAt < from)) return false // older than the file: it cannot hold it
-        for (let a = p, seen = new Set(); a && !seen.has(a.pid) && seen.size < 64; a = byPid.get(a.ppid)) { seen.add(a.pid); if (matchHarness(judged, a) === harness) return true }
+        for (let a = p, seen = new Set(); a && !seen.has(a.pid) && seen.size < 64; a = byPid.get(a.ppid)) { seen.add(a.pid); if (harnessesOf(judged, a).includes(harness)) return true }
         return false
       }).map((p) => p.pid)
     }
@@ -206,7 +206,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       if (unsigned(f.harness).length) return { why: unsignedWhy(judged, f.harness) }
       const pids = t.list.filter((p) => {
         const env = processEnv(p)
-        return (byHarness && matchHarness(judged, p) === f.harness && mayHaveRead(p, judged[f.harness], since.get(f.harness))) || (!!env && [...env.values()].some((v) => typeof v === 'string' && v.includes(f.path)))
+        return (byHarness && harnessesOf(judged, p).includes(f.harness) && mayHaveRead(p, judged[f.harness], since.get(f.harness))) || (!!env && [...env.values()].some((v) => typeof v === 'string' && v.includes(f.path)))
       }).map((p) => p.pid)
       if (!byHarness) pids.push(...hiddenEnv(f.harness).filter((pid) => !pids.includes(pid)))
       const unknown = byHarness || pids.length ? [] : unknownEnv(f.harness)
@@ -314,9 +314,8 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     const t = await table()
     out.procs_error = t.error
     if (!t.error) out.trust_unknown = [...touched].filter((h) => unsignedOf(judged, t.list, h, since.get(h)).length).map((h) => ({ harness: h, why: unsignedWhy(judged, h) })) // nothing tells its processes apart: not "none of them"
-    for (const p of t.list) {
-      const h = matchHarness(judged, p)
-      const l = h && touched.has(h) ? judged[h] : null
+    for (const p of t.list) for (const h of harnessesOf(judged, p)) { // a process two harnesses claim may trust each one's file (D50: one more, never one less)
+      const l = touched.has(h) ? judged[h] : null
       if (!l || !mayHaveRead(p, l, since.get(h))) continue
       // it never read asight's file — told by its environment, where the OS shows one (on macOS and Windows a process that may have read it is listed)
       if (l.until_environ && p.envRead !== false) { const v = (processEnv(p) || new Map()).get(l.until_environ); if (!(typeof v === 'string' && v.startsWith(dir + path.sep))) continue }

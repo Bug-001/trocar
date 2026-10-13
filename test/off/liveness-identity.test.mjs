@@ -219,3 +219,32 @@ for (const osName of Object.keys(CLAUDE)) {
     assert.deepEqual([fs.existsSync(extra), r.left], [true, []], 'kept, nothing left undone (exit 0)')
   })
 }
+
+// ── a name two harnesses claim, and an ignored preset name: both still holders (D50: one more holder, never one less) ─────────────────────
+const OPENCODE = HARNESSES.find((d) => d.name === 'opencode')
+test('a codex that two harnesses claim (agents.json put "codex" under opencode after on, or the union kept a name moved between harnesses) still holds combined-codex.pem: kept without the CA, its pid named', async () => {
+  for (const how of ['agents.json after on', 'the union kept a moved name']) {
+    const s = await codexBox('darwin')
+    await s.install()
+    const m = readManifest(s.dir)
+    m.liveness.opencode = json(livenessOf(OPENCODE, how === 'agents.json after on' ? {} : { agentList: [{ harness: 'opencode', name: 'codex' }] }))
+    saveManifest(s.dir, m)
+    if (how === 'agents.json after on') s.agents([{ harness: 'opencode', name: 'codex' }])
+    const caFp = s.caFp()
+    const r = await offWith(s, 'darwin', OS.darwin.table(OS.darwin.codex, new Date(Date.now() + 60_000)))
+    assert.deepEqual([r.kept_bundles.map((k) => [path.basename(k.path), k.pids, !!k.unjudged]), r.left, r.still_trusting.filter((p) => p.harness === 'codex').map((p) => p.pid)], [[['combined-codex.pem', [4242], false]], [], [4242]], `${how}: a process of codex and of opencode is a holder of codex's bundle`)
+    const left = certBlocks(fs.readFileSync(s.bundle, 'utf8'))
+    assert.ok(left.length > 0 && !left.some((c) => c.fp === caFp), `${how}: the same bundle, without the asight CA`)
+  }
+})
+
+test('ignoring codex\'s only preset name before on stops capture, not trust: the identity still names codex, so off keeps the bundle a running codex holds; an empty `match` is "not known"', async () => {
+  const s = await codexBox('darwin')
+  s.agents([{ harness: 'codex', name: 'codex', ignore: true }])
+  await s.install()
+  const l = readManifest(s.dir).liveness.codex
+  assert.ok(l.identity.match.length > 0 && hasIdentity(l), 'ignore is not applied to the liveness identity')
+  const r = await offWith(s, 'darwin', OS.darwin.table(OS.darwin.codex, new Date(Date.now() + 60_000)))
+  assert.deepEqual([r.kept_bundles.map((k) => [path.basename(k.path), k.pids, !!k.unjudged]), r.left], [[['combined-codex.pem', [4242], false]], []], 'the running codex holds it')
+  assert.equal(hasIdentity({ identity: { match: [], exclude: [] }, rereads: true, until: 'restart' }), false, 'a record whose match is empty tells no process apart: D50② not known, never "nobody holds it"')
+})

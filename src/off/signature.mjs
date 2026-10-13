@@ -99,7 +99,7 @@ function signatureOf(l) {
 
 /** Does this liveness record (`liveness.<harness>`) carry patterns (`identity`, or the older `signature`)? A record with neither tells no process
  *  apart, so `off` reads it as "not known", never as "no process of it" (4.6 「判活快照」, D50②). */
-export const hasIdentity = (l) => signatureOf(l) !== null
+export const hasIdentity = (l) => { const sig = signatureOf(l); return sig !== null && Array.isArray(sig.match) && sig.match.length > 0 } // an empty `match` tells no process apart either
 
 /** The manifest's `liveness` with the user's agents.json of NOW (readAgentList's result) added to each record that has patterns: a name put on the
  *  list after `on` is a process of that harness too, so it may hold what asight wrote (4.6 「判活快照」). Only additions — an `ignore` item never
@@ -126,11 +126,20 @@ export function withAgentList(liveness, list) {
  *  `match` holds and whose `exclude` does not; none, or two that both claim it, is null (a process is never folded into a known identity on a
  *  guess, 0.1 §5). A harness whose record has no patterns (a manifest from before the snapshot) never matches — the caller asks hasIdentity first. */
 export function matchHarness(liveness, facts) {
+  const hit = harnessesOf(liveness, facts)
+  return hit.length === 1 ? hit[0] : null
+}
+
+/** Every harness whose record in `liveness` claims this process (`match` holds, `exclude` does not), in the record order. For judging who may
+ *  HOLD a file (`off` steps 2, 3, 5) a process two harnesses claim is a process of each — a name on two lists (agents.json added after `on`, or a
+ *  name moved between harnesses and kept by the union) must add a holder, never take one away (D50: a bundle is not deleted under a running agent).
+ *  matchHarness, which needs one answer, says null for such a process. */
+export function harnessesOf(liveness, facts) {
   const view = identityView(facts)
   const hit = []
   for (const [id, l] of Object.entries(liveness || {})) {
     const sig = signatureOf(l)
     if (sig && anyPattern(sig.match, view) && !anyPattern(sig.exclude, view)) hit.push(id)
   }
-  return hit.length === 1 ? hit[0] : null
+  return hit
 }
