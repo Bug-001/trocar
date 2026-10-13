@@ -7,6 +7,8 @@ node_modules/
 # committed so `git clone` shows a working board instead of an empty one. Regenerate:
 #   node samples/gen-demo-capture.mjs
 !samples/demo-session.ndjson
+# ...and the old capture's envelope shapes for the board's label tests: synthetic too (a test's own upstream, made-up prompts)
+!test/fixtures/old-capture-resp-shapes.ndjson
 
 # brainstorming visual-companion mockups — local scratch
 .superpowers/
