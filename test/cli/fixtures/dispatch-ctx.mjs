@@ -29,7 +29,7 @@ export function sandbox({ platform = 'linux', status = {} } = {}) {
     }
     return sys.daemon.request(q)
   }
-  const parts = { os: 'none', osRootsFile: null, harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { unit: { userUnit } } }
+  const parts = { os: 'none', harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { unit: { userUnit } } }
   const deps = (over = {}) => ({
     parts, exec: sys.exec.run, request, socketPath: SOCK, helperState: () => ({ ok: true }), linger: () => true, lingerRead: () => ({ state: true }),
     netenv: async () => NO_VPN, roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: tick, user: 'alice', procs: async () => [],

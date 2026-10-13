@@ -6,7 +6,6 @@
 // A platform without a collector is refused by loadArch's own error.
 // Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error / not in a terminal without --yes (nothing touched).
 import os from 'node:os'
-import tls from 'node:tls'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { resolveHarnesses } from './harness-names.mjs'
@@ -175,16 +174,11 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       // a dry run prints the plan and exits 0; the stop a real run would meet is in the receipt (R6, V7)
       prep.blocked = line
     }
-    // The OS roots of an arch that READS them instead of naming one file (the flip checklist ②, 4.9 §4 末 — daemon.mjs's daily rebuild has its arm already): without this the
-    // FIRST install's combined bundles are composed with an empty `osText`, and a replace-semantics entry (Codex's SSL_CERT_FILE) silently cuts the agent off its relay until the
-    // next daily rebuild. The arm is any arch with `osRoots` set and `osRootsFile` unset: every real one — Linux (the first OS PEM bundle this machine has, tls/roots.mjs),
-    // darwin (the keychain-administered anchors ∪ Node's bundled ∪ Apple's SystemRootCertificates, 4.9 §6.2), win32 (its stores, 4.8 §6.2). A read that fails entirely stops the on
-    // before one file of the agents' is touched (D38: a bundle quietly missing the enterprise roots is the bug this wiring exists to close); an answer with no OS root in it
-    // (`missing`, Linux with no bundle) goes on and is said per bundle in the plan, the receipt and flows/ (planTrust); `deps.roots` overrides it, as ever.
-    const archOsRoots = !deps.roots && !parts.osRootsFile && parts.arch && typeof parts.arch.osRoots === 'function' ? await parts.arch.osRoots() : null
+    // The combined bundles' OS roots are the arch's (the flip checklist ②, 4.9 §4 末): the plan asks it through the one resolver (tls/roots.mjs bundleRoots), so the FIRST
+    // install's bundles carry them — not only the daemon's next rebuild — and a read that fails stops the on before one file of the agents' is touched (D38); `deps.roots` overrides them.
     let { receipt, exit, plan } = await install.turnOn({
-      home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, osRootsFile: parts.osRootsFile || null,
-      roots: deps.roots || (archOsRoots ? { node: [...tls.rootCertificates], osText: archOsRoots.pem, missing: archOsRoots.missing || null } : null), unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
+      home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null,
+      roots: deps.roots || null, unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
       optIn, optInHooks, afterConfirm,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (p) => say(planText(p)),

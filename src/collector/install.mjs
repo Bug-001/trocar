@@ -6,13 +6,12 @@
 // `asight uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
 import fs from 'node:fs'
 import net from 'node:net'
-import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
 import { loadOrCreateCa, caPaths, readCa } from './core/tls/ca-store.mjs'
 import { checkCa } from './core/tls/ca.mjs'
-import { osBundleRoots } from './core/tls/roots.mjs'
+import { bundleRoots } from './core/tls/roots.mjs'
 import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
@@ -83,13 +82,6 @@ async function recorded(dir, where, fn) {
   }
 }
 
-// The roots a combined bundle starts from (4.6 「合并包」): Node's own, and the OS bundle the arch names — read by the same resolver as the Linux
-// arch's (tls/roots.mjs osBundleRoots), so a file with no certificate in it is `missing` and said per bundle (planTrust), never an empty osText alone (D38).
-export function readRoots(osRootsFile, { nodeRoots = tls.rootCertificates } = {}) {
-  const got = osRootsFile ? osBundleRoots({ files: [osRootsFile] }) : { pem: '', missing: null }
-  return { node: [...nodeRoots], osText: got.pem, missing: got.missing }
-}
-
 // 4.6 §引擎 5: the engine checks an upstream with Node's roots + NODE_EXTRA_CA_CERTS of the daemon's own environment. A
 // daemon the autostart unit starts has no login shell's exports, so the unit carries this shell's value — an absolute
 // path outside asight's home only; anything else is said, never dropped silently (review 3 #1, D38).
@@ -135,8 +127,10 @@ const stop = (message) => Object.assign(new Error(message), { stopsRun: true })
  *  manifest): a file that is not JSON, a dangling link, a plugin file already there, a manifest this build cannot read, a CA that cannot be used.
  *  → { first, newPaths, steps, targets, skipped, restart, changed, created, unchanged, manifest, ca, files, owned, entries, unit?, watch, notes,
  *      records, events, _ } — the first fields are what is printed and receipted (`files` / `owned` / `entries` / `unit` only what would be written);
- *  `_` is what the writing needs (the manifest as read, the draft, the roots). `ids`: the harness code ids named, or null for every one found. */
-export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), osRootsFile = null, roots = null, unit = null, fs = nodeFs, now = () => new Date() } = {}) {
+ *  `_` is what the writing needs (the manifest as read, the draft, the roots). `ids`: the harness code ids named, or null for every one found.
+ *  The combined bundles' roots are `roots` when given (a test's, an embedder's), else the arch's (tls/roots.mjs bundleRoots: `missing` is said per
+ *  bundle by planTrust; a read that fails throws here, before anything is written). */
+export async function planOn({ home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan = async () => [], match = () => ({ agent: null }), arch = null, roots = null, unit = null, fs = nodeFs, now = () => new Date() } = {}) {
   const dir = collectorHome(path.join(home, '.asight'))
   let prior
   try { prior = readManifest(dir, fs) } catch (e) { // not written over: it is the only list of what asight changed; `off` has the way back by asight's own marks (R3)
@@ -159,7 +153,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     os: osName, home, env: envMap, running: facts.filter((f) => match(f).agent === d.name).map((f) => f.env || new Map()),
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir, collectorDir: dir, caPem: ca.pem,
   })
-  const R = roots || readRoots(osRootsFile)
+  const R = roots || await bundleRoots(arch)
   const draft = planTrust({ descriptors: descs, ctxFor, caCertPem: null, collectorDir: dir, roots: R })
   const daemon = unit ? daemonEnv(env, dir) : null
   if (daemon && daemon.note) draft.notes.push(daemon.note)
@@ -372,9 +366,10 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *    ids        harness code ids, or null for every one found   confirm(plan) → true | false | null (null: nobody can be asked)   onPlan(plan): print it
  *    unit       the autostart unit (arch/linux/unit.mjs userUnit), or null (`--no-unit`)   autostart  false: `start` it, never `enable` (`--no-autostart`)
  *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
+ *    arch       the arch, asked for the combined bundles' OS roots (planOn)   roots  overrides them
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, osRootsFile = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, afterConfirm = null, dryRun = false, networkEdited = null, optIn = [], optInHooks = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, afterConfirm = null, dryRun = false, networkEdited = null, optIn = [], optInHooks = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
@@ -398,7 +393,7 @@ export async function turnOn(opts = {}) {
     return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' }
   } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
-    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, osRootsFile, roots, unit, fs, now })
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit, fs, now })
     // the opt-in rows (1.6 §1.7, 4.8 §2.4): the arch that has opt-in items computes them from the same descriptors and manifest; `plan.optIn` is what
     // the plan prints (every applicable row of the target forms, chosen or not — the section says what each implies and the exact command) and what
     // `status --json`'s opt_in is later built from. An arch with no optIn hook and an empty optIn list writes no key at all.

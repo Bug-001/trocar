@@ -36,7 +36,7 @@ async function onWith(disk) {
   const exit = await runOnCli(['--yes', 'codex'], {
     io, home, platform: 'linux', env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run') },
     deps: {
-      parts: { os: 'linux', osRootsFile: null, harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch },
+      parts: { os: 'linux', harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch },
       request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true,
       netenv: async () => ({ at: '2026-10-13T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),
       freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
@@ -83,7 +83,7 @@ test('Linux on: an OS bundle that is there but cannot be read stops the on befor
   const exit = await runOnCli(['--yes', 'codex'], {
     io, home, platform: 'linux', env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run') },
     deps: {
-      parts: { os: 'linux', osRootsFile: null, harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch: { osRoots: (o = {}) => linux.osRoots({ ...o, read }) } },
+      parts: { os: 'linux', harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch: { osRoots: (o = {}) => linux.osRoots({ ...o, read }) } },
       request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true,
       netenv: async () => ({ at: '2026-10-13T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),
       freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,

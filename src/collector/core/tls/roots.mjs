@@ -1,5 +1,5 @@
-// roots.mjs — the trust set the engine verifies upstreams against (RFC 4.6 §引擎 5: 按系统根证书校验), and the OS roots a combined bundle
-// starts from where the OS keeps them in one PEM file (4.6 「合并包」: the Linux arch's osRoots).
+// roots.mjs — the trust set the engine verifies upstreams against (RFC 4.6 §引擎 5: 按系统根证书校验), and the roots a combined bundle
+// starts from (4.6 「合并包」: bundleRoots, the one resolver of them; osBundleRoots, the Linux arch's osRoots).
 // The engine's set is the union of three, none overriding another, read once: the OS store (corporate and TLS-inspection CAs live there),
 // Node's bundled roots, and this process's NODE_EXTRA_CA_CERTS. The OS store comes from tls.getCACertificates('system') where Node has it
 // (≥ 22.15) plus the first OS PEM bundle that holds a certificate (Node's own system read can come back empty on Linux; Node 20 has only the
@@ -37,6 +37,16 @@ export function osBundleRoots({ files = SYSTEM_BUNDLES, read = readText } = {}) 
   const b = osBundle({ files, read })
   if (b.failed.length) throw Object.assign(new Error(`the OS trust bundle cannot be read (${b.failed.map((f) => `${f.file}: ${msg(f.error)}`).join('; ')})`), { code: b.failed[0].error && b.failed[0].error.code })
   return { pem: b.text, file: b.file, missing: b.file ? null : `no OS trust bundle holds a certificate (looked at ${files.join(', ')})` }
+}
+
+/** bundleRoots(arch, {nodeRoots}) → {node, osText, missing}: the roots every combined bundle starts from (4.6 「合并包」) — Node's own and what
+ *  `arch.osRoots()` answers, read each time it is asked (Linux: osBundleRoots above; darwin: darwinRoots, 4.9 §6.2; win32: windowsRoots, 4.8 §6.2).
+ *  The one resolver of them (the platform-seam rule): the install's plan (install.mjs planOn — `on`, `collector install`) and the daemon's rebuild both
+ *  ask it, and no caller keeps a fallback of its own. An arch without osRoots (a test's) gives Node's roots alone, nothing said missing. A read
+ *  that fails throws: `on` stops before a file is written, the daemon keeps the previous bundles (D38). */
+export async function bundleRoots(arch, { nodeRoots = tls.rootCertificates } = {}) {
+  const got = arch && typeof arch.osRoots === 'function' ? await arch.osRoots() : null
+  return { node: [...nodeRoots], osText: (got && got.pem) || '', missing: (got && got.missing) || null }
 }
 
 /** nodeRoots({api, env, read, errors}) → PEM[]: Node's bundled roots plus NODE_EXTRA_CA_CERTS of this

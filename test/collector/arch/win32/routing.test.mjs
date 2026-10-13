@@ -100,7 +100,7 @@ test('the on wiring (V46 b / V47 b, the real entries half): `asight on` takes th
   const w = await world()
   const daemon = fakeDaemon({ onOn: async () => { await w.writeEntry() } })
   const io = fakeIo({ tty: false })
-  const parts = { os: 'win32', osRootsFile: null, harnesses: [CC], scan: async () => [], match: () => ({ agent: null }), arch: { routing: win32Routing } }
+  const parts = { os: 'win32', harnesses: [CC], scan: async () => [], match: () => ({ agent: null }), arch: { routing: win32Routing } }
   const ctx = onCtx(w.home, io, { deps: { parts, request: daemon.request, netFactsDeps: async () => ({ harnesses: [CC], archFacts: () => ({ routing: 'proxy' }) }) } })
   assert.equal(await runOnCli(['--yes', '--json'], ctx), 0, io.text())
   const doc = io.json()

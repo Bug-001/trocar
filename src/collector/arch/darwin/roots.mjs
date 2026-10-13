@@ -12,7 +12,7 @@
 //   The `security` call goes through the injected exec like every other tool call (execTool: a test injects the runner, and under npm test a forgotten one is refused — the ESANDBOX refusal is
 //   re-thrown here, never caught as "the tool failed"). Every certificate goes through `new X509Certificate()` first: one that does not parse is dropped and COUNTED (`dropped`), because Codex
 //   reads the bundle with rustls and a single broken block makes it refuse the whole file and connect to nothing [T0, W20]; a duplicate is kept once. `pem` is what the install hands the combined
-//   bundle as the OS roots (`readRoots` / `composeBundle`, core/trust — composeBundle dedupes against Node's own roots again, so 'bundled' sitting here too costs nothing); `fingerprint` is a
+//   bundle as the OS roots (core/tls/roots.mjs `bundleRoots` → `composeBundle`, core/trust — composeBundle dedupes against Node's own roots again, so 'bundled' sitting here too costs nothing); `fingerprint` is a
 //   hash of the SET of certificates, so the daily comparison knows the roots changed whatever their order. `source` is an array naming the sources that contributed, in a fixed order
 //   (['node-bundled', 'node-system', 'security'], in whole or in part: a union has no single winner, which is why it is not win32's one string); `tried` says why a source failed while the others
 //   still gave a set (D38: a bundle quietly missing a third of the roots is not fine). No usable source at all is a RootsUnavailableError with the reasons (D38: unreadable is 「unknown」 and says

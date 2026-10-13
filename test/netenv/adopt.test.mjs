@@ -23,7 +23,7 @@ const USER_PROXY = 'http://dave:hunter2@proxy.corp:8080'
 const ENGINE = { status: { engine: { port: 47123 } } }
 const FACTS = { netFactsDeps: async () => ({ harnesses: descs, archFacts: linuxNetFacts }) }
 /** `on` told it runs on Linux (the dispatch fixture says `none`), so the manifest keeps each harness's process signature and `status` can tell which process is Claude's. */
-const LINUX = { parts: { os: 'linux', osRootsFile: null, harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { unit: { userUnit } } } }
+const LINUX = { parts: { os: 'linux', harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { unit: { userUnit } } } }
 const settingsOf = (s) => path.join(s.home, '.claude', 'settings.json')
 const netenvOf = (s) => path.join(s.home, '.asight', 'netenv.json')
 const seedProxy = (s, value = USER_PROXY) => fs.writeFileSync(settingsOf(s), `${JSON.stringify({ model: 'x', env: { HTTPS_PROXY: value } }, null, 2)}\n`)

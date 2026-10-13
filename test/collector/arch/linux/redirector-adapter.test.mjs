@@ -75,7 +75,7 @@ test('arch: the wired platforms answer; another is a clear error', async () => {
   const linux = await loadArch('linux')
   const fedora = '/etc/pki/tls/certs/ca-bundle.crt', pem = createCa({ commonName: 'a Fedora root' }).certPem
   const read = (f) => { if (f === fedora) return pem; throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' }) }
-  assert.deepEqual([linux.osRootsFile, linux.osRoots({ read }).file], [undefined, fedora], 'the OS roots combined bundles start from are read, the first OS bundle this machine has (4.6 合并包)')
+  assert.equal(linux.osRoots({ read }).file, fedora, 'the OS roots combined bundles start from are read, the first OS bundle this machine has (4.6 合并包)')
   assert.equal((await loadArch('darwin')).os, 'darwin', '4.9: darwin is wired too (proxy mode, the shape of 4.8\'s win32)')
   await assert.rejects(loadArch('freebsd'), /freebsd is not supported yet/)
 })
