@@ -260,7 +260,7 @@ function netenvOf({ home, fs }) {
 /**
  * captureHealth({home}) → the /api/capture-health payload (RFC 4.4): `installed`,
  * `summary` (the top bar's state, the worst of the collector's and the old capture's), `collector`, `legacy`, `raw`,
- * `netenv` (the VPN / proxy software, 1.6 §6), `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
+ * `netenv` (asight's own netenv.json: the adopted records and the topology, 1.6 §6), `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
  * directory) cannot be read at all — never an empty answer.
  */
 export function captureHealth({ home = asightHome(), now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {

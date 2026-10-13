@@ -61,7 +61,7 @@ function startSettingOf({ proc, current, adopted, startedAt, keys }) {
 
 /**
  * Linux's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of `ss` and `ip`: spawnSync-shaped; execTool refuses a real
- * one under npm test), `procRoot`. → { routing: 'driver', listeners, procs: { <h>: [proc] }, tun, unknowns }.
+ * one under npm test), `procRoot`. → { routing: 'driver', listeners, procs: { <h>: [proc] }, unknowns }.
  */
 export async function linuxNetFacts(ctx, deps = {}) {
   const { status, settings = {}, adopted = null, env = process.env, harnesses = [] } = ctx

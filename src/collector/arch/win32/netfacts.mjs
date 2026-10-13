@@ -110,8 +110,8 @@ function settingOf({ harness, group, proxy, ctx, manifest, hkcuEnv, shellSetting
 }
 
 /**
- * Windows's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, harnesses, settings, netenv, env, home, adopted, deps }); `deps` (over `ctx.deps`): `helper`
- * (the resident helper's client — one is started and closed here when none is given), `adapter` (the Verge adapter's `facts()`, or null when there is none to read), `fs`, `spawn`.
+ * Windows's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, harnesses, settings, env, home, adopted, deps }); `deps` (over `ctx.deps`): `helper`
+ * (the resident helper's client — one is started and closed here when none is given), `readSystemProxy`, `readHkcuEnv`, `fs`, `spawn`.
  * → { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy, unknowns }.
  */
 export async function gatherWin32Facts(ctx, deps = {}) {
