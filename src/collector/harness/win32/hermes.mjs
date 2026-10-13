@@ -12,7 +12,7 @@ import { expandHome, parseDotenv } from '../../core/config-read.mjs'
 import { CODE } from '../../core/codes.mjs'
 import { isOwnPath, argAfter, dotenvLayer } from '../_common.mjs'
 import { localAppData } from './_paths.mjs'
-import { OLD_RELEASE, LAST_CA_BUNDLE_RELEASE, oldRelease } from '../hermes.mjs'
+import { OLD_RELEASE, LAST_CA_BUNDLE_RELEASE, oldRelease, DOORS_SHUT } from '../hermes.mjs'
 
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what the block sets over the launch env and the user's lines
 const FALSEY = /^(false|0|no|off)$/i
@@ -104,6 +104,12 @@ function layers(ctx) {
   return out.filter(Boolean)
 }
 
+// D51④: the lab measured the live Windows client rejecting every door asight writes there, so until the user settles that item no
+// Hermes process is decrypted — recognised, judged, `status` names win-doors-rejected, the agent is forwarded intact. One last override layer shuts
+// the CA variables and names the reason (the base refine turns it into the verdict whatever the files above it say); the file layers stay for when
+// a trust door opens again.
+const DOORS_REJECTED = { name: 'Windows Hermes trust entries (rejected by the client)', mode: 'override', vars: { SSL_CERT_FILE: '', HERMES_CA_BUNDLE: '', 'hermes:ssl_ca_cert': '', [DOORS_SHUT]: 'win-doors-rejected' }, live: true }
+
 export default {
   groups: [{
     g: 'hermes.cli',
@@ -118,7 +124,7 @@ export default {
     { id: 'hermes.desktop', g: null, supported: { reason: 'not-measured' } },
   ],
   inject,
-  layers,
+  layers: (ctx) => [...layers(ctx), DOORS_REJECTED],
   proxy: {
     env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'],
     files: [{ path: '%LOCALAPPDATA%\\hermes\\.env', key: 'HTTPS_PROXY', format: 'dotenv' }],

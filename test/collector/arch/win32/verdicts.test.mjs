@@ -142,15 +142,17 @@ test('W76 a process started after its harness\'s Windows trust entry is judged t
   }
 })
 
-test('W76 Hermes is judged on its Windows files (%LOCALAPPDATA%\\hermes, desc.win32.layers): trusted after its .env block, config-after-start before it', async () => {
+test('W76 Hermes on Windows is recognised and never decrypted (D51④): the lab measured its live client rejecting every door asight writes there, so even after its .env block it is win-doors-rejected', async () => {
   const b = await sandbox('hermes', [['AppData/Local/hermes/config.yaml']])
-  const { redirector, settle } = rigged({ descriptors: [b.d], box: b })
+  const { redirector, tracker, settle } = rigged({ descriptors: [b.d], box: b })
   assert.equal(typeof b.d.win32.layers, 'function', 'the Windows data carries its own layers: the Linux ones read ~/.hermes, which is not where Windows Hermes keeps its .env')
   redirector.emit('exec', facts(20, IMG.hermesPy, { cmdline: HERMES_CMD, startedAt: b.t0 + 5000 }))
   redirector.emit('exec', facts(21, IMG.hermesPy, { cmdline: HERMES_CMD, startedAt: b.t0 - 5000 }))
   await settle()
-  assert.deepEqual([redirector.verdictOf(20).decrypt, redirector.verdictOf(20).agent], [true, 'hermes'])
-  assert.equal(redirector.verdictOf(21).decrypt, false)
+  for (const pid of [20, 21]) {
+    assert.deepEqual(redirector.verdictOf(pid), { decrypt: false, agent: 'hermes' }, `pid ${pid}: a row is pushed, recognised as Hermes, not decrypted`)
+    assert.equal(tracker.describe(pid).reason, 'win-doors-rejected', `pid ${pid}: the reason names the rejected doors, not config-after-start or a silent "not an agent"`)
+  }
 })
 
 test('W76 Kimi has no automatic Windows trust entry (its shim is an opt-in item, Task 14): the process is judged and stays untrusted — fail-safe, never a broken connection', async () => {

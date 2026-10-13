@@ -46,6 +46,7 @@ export const TRUST_REASONS = Object.freeze([
   // a harness's own
   'settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
   'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override', 'chromium-child',
+  'route-without-ca', 'win-doors-rejected', // hermes: darwin's active route has no asight ssl_ca_cert; win32's doors rejected
 ])
 
 /** Codes asight names itself, by part (the grouping is documentation; the set is flat). */

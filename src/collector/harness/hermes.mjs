@@ -32,6 +32,9 @@ export const LAST_CA_BUNDLE_RELEASE = 'v2026.9.24'
 const releaseDay = (tag) => { const m = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(tag)); return m ? Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) : null }
 const CUTOFF = releaseDay(LAST_CA_BUNDLE_RELEASE)
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what asight's block sets over the launch env and the user's lines
+/** Pseudo-variable an OS file's layers set when that OS's trust doors cannot grant: its value is the `agent-untrusted` reason (darwin
+ *  `route-without-ca`, win32 `win-doors-rejected`); refine names it in place of the generic var-missing (D51④). */
+export const DOORS_SHUT = 'hermes:doors-shut'
 
 // The root of the Hermes data dirs (HERMES_HOME may name a profile under it) and the active home of this process.
 function hermesRoot(env, home) {
@@ -39,7 +42,7 @@ function hermesRoot(env, home) {
   if (!h) return path.join(home, '.hermes')
   return path.basename(path.dirname(h)) === 'profiles' ? path.dirname(path.dirname(h)) : h
 }
-function hermesHome(ctx) {
+export function hermesHome(ctx) {
   const envHome = expandHome(ctx.environ.get('HERMES_HOME') || '', ctx.home)
   const root = hermesRoot(ctx.environ, ctx.home)
   const at = (name) => (name === 'default' ? root : path.join(root, 'profiles', name))
@@ -164,6 +167,9 @@ export default {
       { name: 'routes with their own ssl_ca_cert', when: 'hermes:ssl_ca_cert', chain: [{ var: 'hermes:ssl_ca_cert', semantic: 'replace', list: true }] },
     ],
     disable: ['hermes:ssl_verify'],
+    // an OS whose doors cannot grant (DOORS_SHUT above): win32's always wins (the doors are measured rejected, whatever a stale file would say);
+    // darwin's only replaces var-missing (an asight route line written after start stays config-after-start)
+    refine: (r, env) => { const shut = env.get(DOORS_SHUT) || ''; return shut === 'win-doors-rejected' || (shut && r.reason === 'var-missing') ? shut : null },
     rereadsEntry: true, // the CLI on /reload and a gateway that does not multiplex read .env again while running
     // uninstall step 5: Linux main reads the bundle again at each new TLS context; a release build (or one without a
     // readable stamp) and macOS are not shown to, so they are reported as trusting until restart
@@ -177,6 +183,8 @@ export default {
       shadowed: 'HERMES_CA_BUNDLE names a bundle without the asight CA, and this Hermes may be a release build that reads it first',
       'replace-without-ca': 'a provider ssl_ca_cert in config.yaml names a bundle without the asight CA; that route trusts only that file',
       'verify-disabled': 'a provider in config.yaml sets ssl_verify: false',
+      'route-without-ca': 'macOS Hermes trusts only the ssl_ca_cert of the route it uses; the route in use (or the built-in provider) has no ssl_ca_cert line written by asight, so it is forwarded without capture',
+      'win-doors-rejected': 'on Windows Hermes refused every trust entry asight can write (measured on a Windows test machine), so it is forwarded without capture until that is settled',
     },
   },
 }
