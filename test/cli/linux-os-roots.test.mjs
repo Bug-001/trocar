@@ -68,6 +68,8 @@ test('Linux on: a block of the OS bundle that does not parse is not in the combi
   assert.equal(rec.length, 1, `one record: ${JSON.stringify(r.flows.map((f) => [f.event, f.code]))}`)
   assert.deepEqual([rec[0].event, rec[0].where, rec[0].kind, rec[0].dropped, rec[0].files], ['install-note', 'install', 'note', 1, [r.bundle]])
   assert.match(r.text, /1 certificate in the OS roots could not be parsed and is not in the combined bundles/, 'the receipt says it too')
+  const doctorNotes = formatInstallNotes(captureHealth({ home: path.join(r.home, '.asight') })) // what `doctor` prints of the last install
+  assert.ok(doctorNotes.some((l) => l.includes('[system-roots-unparsable]') && l.includes(r.bundle)), doctorNotes.join('\n'))
   assert.deepEqual(r.flows.filter((f) => f.code === 'system-roots-unavailable'), [], 'the OS roots are there: not said missing')
 })
 
