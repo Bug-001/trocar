@@ -58,3 +58,7 @@ test('help: the first screen says on, off and status and that they drive the per
   assert.match(helpText('raw'), /asight raw export[\s\S]*asight raw journal[\s\S]*asight raw seal[\s\S]*asight raw verify[\s\S]*asight raw compare/, 'raw says all of it')
   assert.throws(() => helpText('nope'), /nope/)
 })
+
+test('D49: no help text promises a 本机网络环境 line — status and doctor look at no VPN software, status prints the data path of each agent', () => {
+  for (const cmd of [undefined, 'status', 'on', 'doctor']) assert.ok(!/本机网络环境/.test(helpText(cmd)), String(cmd))
+})

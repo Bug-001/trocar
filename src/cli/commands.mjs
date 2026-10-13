@@ -39,7 +39,7 @@ export const COMMANDS = Object.freeze([
     notes: ['不带名字:全部 harness,并让守护进程排空后退出、停用自启', '--now  不等在途连接,立即切断', '--yes  只在清单丢失、按标记撤销时用', '--remove-ca  照收,没有作用:off 不动旧采集留在机器上的东西(按 README 手动清理)'] },
   { name: 'status', section: 'common', mutates: false, run: via('./status.mjs', 'runStatusCli'),
     usage: 'asight status [harness…] [--json] [--failures]',
-    summary: '每个 agent 有没有被采集、为什么;守护进程、助手、仍经 asight 的连接、最近 24 h 的失败、本机网络环境。',
+    summary: '每个 agent 有没有被采集、为什么;守护进程、助手、仍经 asight 的连接、最近 24 h 的失败、每个 agent 的数据路径。',
     notes: ['退出码:0 都在被采集 · 1 有的没有 · 3 读不到、无法判定', '不带名字是一屏摘要(失败只印条数与最新一条);点名 harness 看它的明细;--failures 印完整失败墙'] },
   { name: 'uninstall', section: 'common', mutates: true, run: via('./uninstall.mjs', 'runUninstallCli'),
     usage: 'asight uninstall [--purge-data] [--dry-run] [--yes] [--json]',
