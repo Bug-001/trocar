@@ -115,6 +115,11 @@ const TABLE_MAX_BUFFER = 64 * 1024 * 1024
 // `ps` prints dates in the user's language: under LC_ALL=zh_CN.UTF-8 or ja_JP.UTF-8 the five words of `lstart` are no longer "Wed Oct  7 04:27:00 2026" and every row
 // failed to parse — no error, just an empty table, which `off` read as "nobody is alive" (audit rule-b 2). The C locale gives the same words on every machine.
 const psEnv = (env = process.env) => ({ ...env, LC_ALL: 'C' })
+/** The environment `lsof` runs in, here and in the collector's targeted ask (arch/darwin/procinfo.mjs realExeOf): under the C locale lsof prints every
+ *  byte outside ASCII as `\xNN`, so a path under `测 试/` came back as `\xe6\xb5\x8b \xe8\xaf\x95/` — not the file (measured on macOS with the real
+ *  lsof 4.91, 2026-10-14; guard test/collector/arch/darwin/identity-real.test.mjs). `UTF-8` is the ctype-only locale: the names print as they are, every
+ *  other category stays C. */
+export const lsofEnv = (env = process.env) => ({ ...env, LC_ALL: 'UTF-8' })
 
 /** {start_time, boot_id} of a live process where there is no /proc (macOS): `ps -o lstart= -p <pid>` in the C locale, the blanks collapsed ("Wed Oct 7 04:27:00 2026");
  *  null when `ps` does not know the pid. No boot id: the start time of a pid that is reused after a reboot differs all the same. `exec` is the injected runner (execTool). */
@@ -162,7 +167,7 @@ const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\
 // between the two (its `ps` word is kept). An lsof that did not finish (code null: killed by its timeout, more output than TABLE_MAX_BUFFER, or never
 // started — what it printed is cut short) or that names no process while `ps` listed some cannot be read: the table is not known (4.6 「判活快照」).
 function exesOfLsof({ uid, exec, env, rows }) {
-  const r = execTool('lsof', [...(uid != null ? ['-a', '-u', String(uid)] : []), '-d', 'txt', '-Fpn'], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER })
+  const r = execTool('lsof', [...(uid != null ? ['-a', '-u', String(uid)] : []), '-d', 'txt', '-Fpn'], { run: exec, env: lsofEnv(env), maxBuffer: TABLE_MAX_BUFFER })
   if (r.code === null) throw new Error(`lsof did not finish (${r.err || 'no reason given'}), so the executables of the ${rows} process(es) ps listed are not known, nor which agents are alive`)
   const exes = new Map()
   let pid = null, txt = false

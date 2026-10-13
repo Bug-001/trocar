@@ -103,12 +103,12 @@ const tools = (psOut) => (file) => ({ status: 0, stdout: file === 'lsof' ? LSOF_
 
 test('listProcs on macOS runs ps in the C locale: the runner is handed LC_ALL=C over whatever the user\'s own environment says, and a ps that honours the locale gives the table it would give in English', async () => {
   const seen = []
-  const exec = (file, args, opts) => { seen.push(opts.env); return tools(opts.env.LC_ALL === 'C' ? PS_C : PS_ZH)(file) } // a ps that localizes unless told not to
+  const exec = (file, args, opts) => { seen.push([file, opts.env.LC_ALL]); return tools(opts.env.LC_ALL === 'C' ? PS_C : PS_ZH)(file) } // a ps that localizes unless told not to
   for (const loc of ['zh_CN.UTF-8', 'ja_JP.UTF-8', 'C', undefined]) {
     const got = await listProcs({ uid: 501, platform: 'darwin', exec, env: { ...process.env, LC_ALL: loc, LANG: loc, LC_TIME: loc } })
     assert.deepEqual(got.map((f) => [f.pid, f.startedAt]), [[501, new Date(2026, 9, 7, 4, 27, 0).getTime()], [502, new Date(2026, 9, 7, 5, 0, 0).getTime()]], `LC_ALL=${loc}`)
   }
-  assert.ok(seen.every((e) => e.LC_ALL === 'C'), 'every run was in the C locale')
+  assert.ok(seen.every(([f, l]) => (f === 'ps' ? l === 'C' : l === 'UTF-8')), `ps in the C locale, lsof in UTF-8 (lsofEnv: a non-ASCII path, not \\xNN): ${JSON.stringify(seen)}`)
 })
 
 test('listProcs on macOS: a ps whose lines cannot be read is an error that says so — never an empty table, which would read as "nobody is alive" — while a table with a few odd lines among readable ones is read as far as it goes', async () => {

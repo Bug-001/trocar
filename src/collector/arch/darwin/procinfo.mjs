@@ -28,8 +28,10 @@
 // column name asks `ps` for no header line; the command column is LAST so this kernel's `ps` does not cap the line at 128 columns and cut
 // the command line mid-word (measured). Everything that touches the machine is injected: `exec` (the runner, spawnSync-shaped —
 // execTool's `run`; a test injects one and nothing real runs), `env` (LC_ALL=C is added here: `ps` prints dates in the user's language,
-// and under LC_ALL=zh_CN.UTF-8 the five words of lstart are no longer "Mon Oct  8 17:00:00 2026").
+// and under LC_ALL=zh_CN.UTF-8 the five words of lstart are no longer "Mon Oct  8 17:00:00 2026"; `lsof` runs in the UTF-8 ctype
+// locale instead, src/off/proc.mjs lsofEnv: under C it prints a non-ASCII path as `\xNN` escapes).
 import { execTool } from '../../../off/exec.mjs'
+import { lsofEnv } from '../../../off/proc.mjs'
 
 /** How long one targeted ask waits: a single-pid read is a small question on any machine — a `ps`/`lsof` that exceeds it is killed by
  *  execTool's timeout and the answer is null (fail-safe: no facts, no form, the connection is spliced untracked), never a guess. */
@@ -51,7 +53,7 @@ const argvOf = (cmdline) => (typeof cmdline === 'string' && cmdline.trim() !== '
  *  timeout, or answered no txt record that is a path (the process can be gone between the accept and this ask: that is not an error —
  *  the caller keeps ps's word, and a word that matches no pattern is the fail-safe answer, never a wrong one). */
 export function realExeOf(pid, { exec = null, env = process.env, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
-  const r = execTool('lsof', ['-p', String(pid), '-Fn'], { run: exec, env: psEnv(env), timeoutMs: psTimeoutMs })
+  const r = execTool('lsof', ['-p', String(pid), '-Fn'], { run: exec, env: lsofEnv(env), timeoutMs: psTimeoutMs })
   if (r.code !== 0) return null
   let wantName = false
   for (const line of String(r.out).split('\n')) {
