@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { runStatus, asDaemon, reply, claudeProc } from './fixtures/status-ctx.mjs'
-import { validateReceipt, validateIdentity } from '../../src/cli/schema.mjs'
+import { validateReceipt } from '../../src/cli/schema.mjs'
 import { foldFlows } from '../../src/health/flows.mjs'
 
 const writeList = (home, doc) => fs.writeFileSync(path.join(home, '.asight', 'agents.json'), JSON.stringify(doc))
@@ -22,7 +22,8 @@ const unknownEvent = (name, pid, o = {}) => ({ event: 'process-unknown', where: 
 async function identityOf(s, deps = {}) {
   const r = await runStatus(s, ['--json'], deps)
   const j = JSON.parse(r.text)
-  assert.deepEqual(validateReceipt(j), [], r.text)
+  assert.deepEqual(validateReceipt(j), [], r.text) // V9: validateReceipt checks every harnesses[].identity against its shape
+  assert.deepEqual(validateReceipt({ ...j, harnesses: [{ ...j.harnesses[0], identity: { ...j.harnesses[0].identity, unknown: [{ name: 'x' }] } }] }).filter((x) => /identity/.test(x)).length, 1, 'and a broken identity block is a problem')
   return { j, by: Object.fromEntries(j.harnesses.map((h) => [h.harness, h.identity])), r }
 }
 
@@ -35,7 +36,6 @@ test('V65 status --json: the identity block — a good custom item (source custo
     const { j, by } = await identityOf(s, deps)
     const cc = by['claude-code']
     assert.ok(cc, `${label}: claude-code has an identity block`)
-    assert.deepEqual(validateIdentity(cc), [], `${label}: ${JSON.stringify(cc)}`)
     assert.deepEqual([cc.file.path, cc.file.state], [path.join(s.home, '.asight', 'agents.json'), 'ok'], label)
     assert.deepEqual(cc.file.problems.map((p) => [p.index, p.code]), [[1, 'wide-name-needs-args']], `${label}: the bad item is a problem with its index`)
     assert.deepEqual(cc.names.find((n) => n.name === 'claude-nightly'), { name: 'claude-nightly', source: 'custom' }, label)

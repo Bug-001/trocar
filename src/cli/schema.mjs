@@ -76,11 +76,11 @@ export function validateReceipt(r) {
 }
 
 // ── the name list of `status --json` (RFC 1.6 §9.7, D51③⑤): `harnesses[].identity` ──────────────────────────────────────────────────────────────────────────
-export const AGENT_LIST_STATES = Object.freeze(['absent', 'ok', 'unreadable', 'unparsable'])
-export const NAME_SOURCES = Object.freeze(['preset', 'custom'])
+const AGENT_LIST_STATES = Object.freeze(['absent', 'ok', 'unreadable', 'unparsable'])
+const NAME_SOURCES = Object.freeze(['preset', 'custom'])
 /** Problems with one harness's `identity` block (`[]` = valid): { file: { path, state, problems: [{ index, code, detail }] }, names / ignored: [{ name, args?, source }],
  *  unknown: [{ name, wide, pid, door }] } — the closed sets above, a problem's index an item number or null (the whole file), an unknown's name null only when the door could not read it. */
-export function validateIdentity(x) {
+function validateIdentity(x) {
   if (!isObject(x)) return ['identity: not an object']
   const bad = []
   const f = x.file
