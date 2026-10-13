@@ -129,17 +129,18 @@ export function resolveLogin(ref, { groups = [], ctx, manifest = null, hkcuEnv =
 /** The part of an upstream answer that says where it dials, with no `hint` and no table: what the daemon compares with the group's previous one, and what `status` draws. No credentials: `auth_ref` says where they live. */
 const dialOf = (a) => (a.kind ? Object.fromEntries(['kind', 'host', 'port', 'credentialed', 'auth_ref', 'source'].filter((k) => a[k] !== undefined).map((k) => [k, a[k]])) : null)
 
-/** What the running processes say about the forms: `procs` is `[{ pid, match, elevated }]`, `match` the answer of `matchForm` for that process. An elevated process of a known form is a fact about that form (the kernel cannot tell it
- *  from another process of the same user and only forwards it, 4.8 §10.2 row h); a process of an image only an agent has, at a path nobody measured, could be any form of that image, so each of them carries its path shape (already
- *  masked of the user's name by `matchForm`). A form whose command line is not known yet (`pending`) and a process that is no agent are nothing yet. `elevated` that is not `true` (null: not readable) is not counted. */
-function observe(procs) {
+/** What the running processes say about the forms: `procs` is the door's `[{ pid, agent, names, door, elevated }]` (core/engine/door-redirector.mjs procs()).
+ *  An elevated process is a fact about the forms of the door group it came through, when that group is its own harness's (4.8 §10.2 row h: the door
+ *  cannot tell it from another process of the same user and only forwards it); an agent at another harness's door says nothing about that door's forms.
+ *  `elevated` that is not `true` (null: not readable) is not counted. The name list decides who a process is (D51), so no path shape is reported here. */
+function observe(procs, groups) {
   const seen = new Map()
   const at = (id) => { if (!seen.has(id)) seen.set(id, { elevated: new Set(), unknown: new Set() }); return seen.get(id) }
+  const byG = new Map((groups || []).map((x) => [x.g, x]))
   for (const p of procs || []) {
-    const m = p && p.match
-    if (!m) continue
-    if (m.kind === 'form' && p.elevated === true && Number.isInteger(p.pid)) at(m.id).elevated.add(p.pid)
-    else if (m.kind === 'path-unknown') for (const id of m.forms || []) at(id).unknown.add(m.shape)
+    const x = p && byG.get(p.door)
+    if (!x || x.harness !== p.agent || p.elevated !== true || !Number.isInteger(p.pid)) continue
+    for (const f of x.forms) at(f.id).elevated.add(p.pid)
   }
   return seen
 }
@@ -150,7 +151,7 @@ function observe(procs) {
  *             upstream on one is a loop; REQUIRED, a plan that cannot see a loop is not a plan). Not 4.7's `netenv.json`: that does not copy `ProxyOverride`, and the bypass table is made of it.
  *   groups    `groupsOf(descriptors)` · desired  `state.json` v2's `harnesses` (`{ <harness>: { desired: 'on' | 'off' } }`, or the string): a harness not in it is off
  *   optIns    the groups or forms the user named (`--opt-in`) and asight has the record of · manifest the install manifest (`priorOf`) · ctx where the files are (`priorOf`)
- *   procs     what is running, `[{ pid, match, elevated }]` (`observe`)
+ *   procs     what the doors met, `[{ pid, agent, names, door, elevated }]` (`observe`)
  *   last      the plan before, `{ [group id]: that group's result }` (planRoutes' own return value will do): what a system proxy that became a PAC or unreadable leaves a follower on (4.8 OPEN 17). Only a group whose result then
  *             had `on: true` has an upstream to stay on: the `answer` of a group that was off or not routed is what it would have dialled, not what it did, and `asight on` after the user moved to a PAC must not connect it to a hop they no longer use
  * A group's result: `{ g, harness, entry, on, reason, code?, why?, detail?, protocol?, upstream, bypass, untranslated, envUnreadable, egressDiffers?, hint?, unknown?, forms, answer }`
@@ -171,7 +172,7 @@ export function planRoutes({ netenv, groups, desired = null, optIns = [], manife
   if (!ctx) throw new TypeError('planRoutes needs the ctx that says where the files are')
   const named = new Set(optIns || [])
   const wanted = (h) => { const d = desired && desired[h]; return (typeof d === 'string' ? d : d && d.desired) === 'on' }
-  const seen = observe(procs)
+  const seen = observe(procs, groups)
   const stayOn = (g) => { // the answer a group that WAS connected is left on; a group that was off or not routed has none, whoever passes `last`
     const prev = last && last[g]
     if (prev == null) return null

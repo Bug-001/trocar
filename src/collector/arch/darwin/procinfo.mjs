@@ -94,7 +94,7 @@ export function factsOfPid(pid, { exec = null, env = process.env, psTimeoutMs = 
   if (real != null) row.exe = real // lsof's txt record is THE executable; ps's word is the fallback
   const { elevated, inferred } = elevationOf(row)
   const facts = {
-    os: 'darwin', pid: row.pid, ppid: row.ppid, name: row.name, exe: row.exe, argv, cmdline,
+    os: 'darwin', pid: row.pid, ppid: row.ppid, uid: Number.isInteger(row.uid) ? row.uid : null, name: row.name, exe: row.exe, argv, cmdline,
     env: null, envRead: false, cwd: null, startedAt, startTicks: startedAt != null ? String(startedAt) : null,
     sessionId: null, integrity: null, tokenDenied: false, elevated, elevationInferred: inferred, source: 'accept', cmdlineState: row.cmdlineState,
   }
