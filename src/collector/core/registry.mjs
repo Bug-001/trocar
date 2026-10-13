@@ -42,17 +42,15 @@ export function validateDescriptor(d) {
 }
 
 /** What `off` needs to judge, from the install manifest alone, which live process may hold what asight wrote for this harness (4.6 撤销顺序
- *  第 2 / 5 步; manifest `liveness.<harness>`): the signature as JSON — `osSignature(d)` when the arch still has one (macOS and Windows fold
- *  their form tables, arch/<os>/forms.mjs formSignature, until the snapshot key becomes the name list everywhere), else the compiled preset
- *  name list (the same on every OS); null, which `off` reads as "not known", never as "no process" (4.6 「判活快照」) —, whether the harness
- *  re-reads its entry while running, and until when a running one still trusts asight after `off` — the data form of `trust.afterUninstall`
- *  ('restart' when it declares none, and when it is a function of the process, which a manifest cannot hold: Hermes). With `trust.untilEnviron`
- *  (Kimi), only a process whose environment names that variable at a file of asight's is reported at all. */
-export function livenessOf(d, osName, osSignature = null) {
+ *  第 2 / 5 步; manifest `liveness.<harness>`): `identity`, the harness's name list compiled — its presets with the user's `agentList` items for it
+ *  merged in (the same on every OS, D51) — as JSON; whether the harness re-reads its entry while running; and until when a running one still trusts
+ *  asight after `off` — the data form of `trust.afterUninstall` ('restart' when it declares none, and when it is a function of the process, which a
+ *  manifest cannot hold: Hermes). With `trust.untilEnviron` (Kimi), only a process whose environment names that variable at a file of asight's is
+ *  reported at all. */
+export function livenessOf(d, { agentList = [] } = {}) {
   const t = d.trust || {}
-  const sig = typeof osSignature === 'function' ? osSignature(d) : d.processes ? compileOf(d) : null
   return {
-    signature: sig ? serializeSignature(sig) : null,
+    identity: serializeSignature(compileAll(new Map([[d.name, d]]), agentList).get(d.name)),
     rereads: !!t.rereadsEntry,
     until: typeof t.afterUninstall === 'string' ? t.afterUninstall : 'restart',
     ...(typeof t.untilEnviron === 'string' ? { until_environ: t.untilEnviron } : {}),

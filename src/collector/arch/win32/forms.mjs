@@ -54,28 +54,6 @@ export function matchForm(forms, proc, { home = null } = {}) {
   return { kind: 'none' }
 }
 
-const esc = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
-const anyOf = (patterns) => patterns.map((p) => `(?:${p})`).join('|')
-
-/** The forms of ONE harness as the process signature `off` judges by (4.6 「判活快照」: `on` writes it into the manifest's `liveness.<harness>.signature`,
- *  src/off/signature.mjs reads it with no collector code): `{ match: [pattern per form] } | null` (no form with a `match`), each pattern over the facts `exe` and
- *  `cmdline` holding exactly when `matchForm` answers that form — the image is the basename after the last `\` or `/`, case-blind; the path patterns are looked
- *  ahead for anywhere in it; `cmdline` hits one of the form's command-line patterns (no command line: no match — `off` asks the whole table once, there is no
- *  `pending` to wait for). The subset the patterns are written in (no anchors, no lookaround, no back-reference — §2.3) is what lets them sit inside one RegExp
- *  unchanged. `matchForm`'s "first form in the data's order" is not needed: no two harnesses' forms claim one process (test/collector/harness/win32-forms.test.mjs).
- *  A `path-unknown` or `pending` answer is no form, so the signature does not claim that process either: `off` judges what the collector would capture. */
-export function formSignature(forms) {
-  const match = []
-  for (const f of forms) {
-    const m = f.match
-    if (!m) continue
-    if (typeof m.image !== 'string' || m.image === '') throw new Error(`form ${f.id}: a match with no image cannot be a liveness signature (matchForm gates every Windows form by its image)`)
-    const ahead = m.path ? `(?=[\\s\\S]*(?:${anyOf(m.path)}))` : ''
-    match.push({ exe: new RegExp(`^${ahead}(?:[\\s\\S]*[\\\\/])?${esc(m.image)}$`, 'i'), ...(m.cmdline ? { cmdline: new RegExp(anyOf(m.cmdline), 'i') } : {}) })
-  }
-  return match.length ? { match } : null
-}
-
 /** May this group's proxy entry be written now (4.8 §2.4, §3)? `optedIn`: the user named the group's form (`--opt-in`); `upstreamCredentialed`: the
  *  upstream asight would use needs a user name and password. → { ok:true } | { ok:false, reason:'opt-in-needed' | 'form-unsupported' }.
  *  An entry that takes no credentials (Claude Desktop's policy value is an address only) opens a port any process on the machine can use, so its upstream

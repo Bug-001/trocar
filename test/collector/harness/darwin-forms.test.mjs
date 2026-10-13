@@ -7,8 +7,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
-import { matchForm, entryGate, imagesOf, formSignature } from '../../../src/collector/arch/darwin/forms.mjs'
-import { serializeSignature, matchHarness } from '../../../src/off/signature.mjs'
+import { matchForm, entryGate, imagesOf } from '../../../src/collector/arch/darwin/forms.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
 const raw = String.raw
@@ -449,26 +448,3 @@ test('no darwin group is an app-setting or a policy entry, and the TWO launchers
   }
 })
 
-// 4.6 「判活快照」: `on` folds each harness's forms into the signature `off` judges by (formSignature, kept in the manifest as JSON), so off and the collector tell the
-// processes apart by one table. For every install shape above — and the same shape in capitals (the forms are case-blind), and with the vestigial `.exe` npm's
-// claude-code ships on macOS (MA4, 2026-10-09) — it names the harness the table says, as matchForm does; for the shapes no form knows, none.
-test('4.6 判活快照: the signature folded from the forms, read back from JSON, names each install shape\'s harness — the one matchForm names — and none for an unknown shape', () => {
-  const liveness = Object.fromEntries(Object.entries(MAC).map(([h, w]) => [h, { signature: JSON.parse(JSON.stringify(serializeSignature(formSignature(w.forms)))) }]))
-  const forms = formsOf().filter((f) => f.match)
-  const owner = (exe, cmdline) => { const m = matchForm(forms, { exe, cmdline }); return m.kind === 'form' ? Object.keys(MAC).find((h) => MAC[h].forms.some((f) => f.id === m.id)) : null }
-  let shapes = 0
-  for (const [h, e] of Object.entries(EXPECT)) {
-    for (const row of Object.values(e.forms)) for (const yes of row.yes || []) {
-      const shape = typeof yes === 'string' ? { exe: yes, cmdline: null } : { cmdline: null, ...yes }
-      for (const { exe, cmdline } of [shape, { exe: shape.exe.toUpperCase(), cmdline: shape.cmdline && shape.cmdline.toUpperCase() }, { ...shape, exe: `${shape.exe}.exe` }]) {
-        assert.deepEqual([matchHarness(liveness, { exe, cmdline }), owner(exe, cmdline)], [h, h], exe)
-        shapes++
-      }
-    }
-    for (const unk of e.unknown || []) {
-      const { exe, cmdline = null } = typeof unk === 'string' ? { exe: unk } : unk
-      assert.equal(matchHarness(liveness, { exe, cmdline }), null, exe)
-    }
-  }
-  assert.ok(shapes > 0, 'the table has shapes to hold the signature to')
-})

@@ -832,7 +832,7 @@ test('install writes manifest version 2: every item has kind and undo_by_hand, a
     fs.writeFileSync(settingsOf(b), before, { mode: 0o640 })
     await installCollector(base(b))
     const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file itself: readManifest would fill in what is missing
-    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, { ...m.liveness['claude-code'], signature: !!m.liveness['claude-code'].signature }], [2, [], [], { signature: true, rereads: true, until: 'restart' }], 'liveness: the name list is snapshotted on every OS, osName none too (D51)')
+    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, { ...m.liveness['claude-code'], identity: !!m.liveness['claude-code'].identity }], [2, [], [], { identity: true, rereads: true, until: 'restart' }], 'liveness: the name list is snapshotted on every OS, osName none too (D51)')
     for (const it of [...m.entries, ...m.files]) { assert.ok(it.kind && it.undo_by_hand && it.undo_by_hand.length > 10, JSON.stringify(it)) }
     assert.deepEqual(m.files.map((f) => f.kind), ['owned-file', 'owned-file'], 'the CA files install pushes with a role only get their kind when saved')
     const e = m.entries[0]
@@ -918,7 +918,7 @@ test('install records liveness per harness it changed anything for: its signatur
     const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file as written: what `off` reads
     assert.deepEqual(Object.keys(m.liveness), ['rep'], 'a harness install changed nothing for has no liveness: nothing of it to judge')
     assert.deepEqual([m.liveness.rep.rereads, m.liveness.rep.until, m.liveness.rep.until_environ], [true, 'next-connection', 'SSL_CERT_FILE'])
-    const sig = reviveSignature(m.liveness.rep.signature)
+    const sig = reviveSignature(m.liveness.rep.identity)
     const { compileIdentity } = await import('../../src/off/identity.mjs')
     assert.deepEqual(sig, compileIdentity({ harness: 'rep', ...rep.processes }), 'the compiled name list survives the manifest')
     assert.equal(matchHarness(m.liveness, { exe: '/x/rep', argv: ['rep'], env: null }), 'rep')
@@ -926,13 +926,13 @@ test('install records liveness per harness it changed anything for: its signatur
   } finally { b.done() }
 })
 
-test('liveness of a harness with no data form of afterUninstall snapshots restart; its signature is the name list, the same on every OS (D51: no OS without one)', async () => {
+test('liveness of a harness with no data form of afterUninstall snapshots restart; its identity is the name list, the same on every OS (D51: no OS without one)', async () => {
   const b = box()
   try {
     const fn = { ...cc, trust: { ...cc.trust, rereadsEntry: false, afterUninstall: () => 'next-handshake' } }
     await installCollector(base(b, { harnesses: [fn] })) // osName 'none': the preset list holds there too
     const l = readManifest(b.dir).liveness['claude-code']
-    assert.deepEqual([l.rereads, l.until, l.signature !== null], [false, 'restart', true])
+    assert.deepEqual([l.rereads, l.until, !!l.identity], [false, 'restart', true])
   } finally { b.done() }
 })
 

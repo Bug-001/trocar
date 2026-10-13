@@ -11,7 +11,7 @@
 //      file keeps it; and, only for `uninstall` (`dropCa`), asight-ca.pem — `off` never removes the CA, the next `on` uses it again
 //   4  rc lines and patch rows (each loading line before the file it loads), then the plugins and the shim
 //   5  the live processes that may still trust asight (reported, never restarted)
-// Liveness is judged from the manifest alone — `manifest.liveness.<harness>` (signature, rereads, until, until_environ) and the `installed_at` of
+// Liveness is judged from the manifest — `manifest.liveness.<harness>` (identity, rereads, until, until_environ), plus the names agents.json holds now — and the `installed_at` of
 // the harness's items — plus the process table `procs()` reads, never from the daemon (stopped by now) or the entries (undone by now), so `asight
 // off` and `asight-off` give the same answer (1.6 R3). A process table that cannot be read is not "nobody is alive": what depends on it is kept and
 // reported unjudged — and so is a harness whose snapshot has no signature (none recorded, or null: the asight that wrote it had none for its OS).
@@ -30,7 +30,8 @@ import { undoRunKey, undoScheduledTask } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, asightHome } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
-import { matchHarness, hasSignature } from './signature.mjs'
+import { matchHarness, hasIdentity, withAgentList } from './signature.mjs'
+import { readAgentList } from './identity.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
 
 const UNDO_LEFT = new Set(['left-unparsable', 'left-link', 'left-text', 'error']) // an entry that could not be undone stays in the manifest
@@ -55,10 +56,10 @@ const mayHaveRead = (p, l, since) => !!(l && l.rereads) || p.startedAt == null |
 // A harness whose snapshot has no signature (no record: an older asight; null: none for its OS) cannot tell its processes from the others, so any live
 // process that may have read its entry may be one of them (a record that is missing says nothing of re-reading either: alive is enough). → their pids;
 // none means nobody can hold what asight wrote for it, signature or not (4.6 「判活快照」).
-const unsignedOf = (liveness, list, h, since) => (hasSignature(liveness[h]) ? [] : list.filter((p) => mayHaveRead(p, liveness[h] || { rereads: true }, since)).map((p) => p.pid))
+const unsignedOf = (liveness, list, h, since) => (hasIdentity(liveness[h]) ? [] : list.filter((p) => mayHaveRead(p, liveness[h] || { rereads: true }, since)).map((p) => p.pid))
 // why such a harness cannot be judged, said the same way for its files (step 2 / 3) and for who still trusts asight (step 5)
 const unsignedWhy = (liveness, h) => (liveness[h]
-  ? `the install manifest has no process signature for ${h} (the asight that wrote it had none for this OS; "asight on" records it, then run this again)`
+  ? `the install manifest has no process identity for ${h} (the asight that wrote it had none for this OS; "asight on" records it, then run this again)`
   : `the install manifest has no liveness record for ${h} (written by an older asight; "asight on" adds it, then run this again)`)
 
 /** Undoes the entries (see the header) → `{ results, kept_bundles, removed, still_trusting, trust_unknown, left, residue, changed, procs_error, manifest }` (`trust_unknown`:
@@ -93,6 +94,10 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   if (manifest.unsupported) throw new Error(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; nothing was changed`)
   const inScope = (h) => typeof h === 'string' && (ids == null || ids.includes(h))
   const liveness = manifest.liveness && typeof manifest.liveness === 'object' ? manifest.liveness : (manifest.liveness = {})
+  // judged by the manifest's records plus the names the user's agents.json holds NOW (one put there after `on` is a process of that harness too);
+  // a list that cannot be read only adds nothing, and is said. `liveness` itself (what is saved) is not changed by it
+  const { liveness: judged, note: listNote } = withAgentList(liveness, home ? readAgentList({ home, fs }) : null)
+  if (listNote && Object.keys(liveness).length) out.notes.push(listNote)
   if (!Array.isArray(manifest.kept_backups)) manifest.kept_backups = []
 
   // what the judgement needs, taken before any entry leaves the manifest
@@ -179,13 +184,13 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       const file = (manifest.files.find((f) => f.role === 'ca-cert') || {}).path || path.join(dir, 'ca', 'asight-ca.pem')
       try { const b = certBlocks(fs.readFileSync(file, 'utf8')); return b.length ? { fp: b[0].fp, error: null } : { fp: null, error: `${file} holds no certificate` } } catch (e) { return { fp: null, error: errText(e) } }
     })()
-    const unsigned = (harness) => unsignedOf(liveness, t.list, harness, since.get(harness))
+    const unsigned = (harness) => unsignedOf(judged, t.list, harness, since.get(harness))
     // the live processes `pick` keeps that are of `harness` or descend from one of it (so they may have inherited a path), started after its first install time
     const kin = (harness, pick) => {
       const byPid = new Map(t.list.map((p) => [p.pid, p])), from = since.get(harness)
       return t.list.filter((p) => {
         if (!pick(p) || (p.startedAt != null && from != null && p.startedAt < from)) return false // older than the file: it cannot hold it
-        for (let a = p, seen = new Set(); a && !seen.has(a.pid) && seen.size < 64; a = byPid.get(a.ppid)) { seen.add(a.pid); if (matchHarness(liveness, a) === harness) return true }
+        for (let a = p, seen = new Set(); a && !seen.has(a.pid) && seen.size < 64; a = byPid.get(a.ppid)) { seen.add(a.pid); if (matchHarness(judged, a) === harness) return true }
         return false
       }).map((p) => p.pid)
     }
@@ -198,10 +203,10 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     // variable, never by an entry that re-reads), or any whose environ names it (a child that inherited it). `why`: cannot be told.
     const holders = (f, byHarness) => {
       if (t.error) return { why: t.error }
-      if (unsigned(f.harness).length) return { why: unsignedWhy(liveness, f.harness) }
+      if (unsigned(f.harness).length) return { why: unsignedWhy(judged, f.harness) }
       const pids = t.list.filter((p) => {
         const env = processEnv(p)
-        return (byHarness && matchHarness(liveness, p) === f.harness && mayHaveRead(p, liveness[f.harness], since.get(f.harness))) || (!!env && [...env.values()].some((v) => typeof v === 'string' && v.includes(f.path)))
+        return (byHarness && matchHarness(judged, p) === f.harness && mayHaveRead(p, judged[f.harness], since.get(f.harness))) || (!!env && [...env.values()].some((v) => typeof v === 'string' && v.includes(f.path)))
       }).map((p) => p.pid)
       if (!byHarness) pids.push(...hiddenEnv(f.harness).filter((pid) => !pids.includes(pid)))
       const unknown = byHarness || pids.length ? [] : unknownEnv(f.harness)
@@ -308,10 +313,10 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   if (touched.size) {
     const t = await table()
     out.procs_error = t.error
-    if (!t.error) out.trust_unknown = [...touched].filter((h) => unsignedOf(liveness, t.list, h, since.get(h)).length).map((h) => ({ harness: h, why: unsignedWhy(liveness, h) })) // nothing tells its processes apart: not "none of them"
+    if (!t.error) out.trust_unknown = [...touched].filter((h) => unsignedOf(judged, t.list, h, since.get(h)).length).map((h) => ({ harness: h, why: unsignedWhy(judged, h) })) // nothing tells its processes apart: not "none of them"
     for (const p of t.list) {
-      const h = matchHarness(liveness, p)
-      const l = h && touched.has(h) ? liveness[h] : null
+      const h = matchHarness(judged, p)
+      const l = h && touched.has(h) ? judged[h] : null
       if (!l || !mayHaveRead(p, l, since.get(h))) continue
       // it never read asight's file — told by its environment, where the OS shows one (on macOS and Windows a process that may have read it is listed)
       if (l.until_environ && p.envRead !== false) { const v = (processEnv(p) || new Map()).get(l.until_environ); if (!(typeof v === 'string' && v.startsWith(dir + path.sep))) continue }

@@ -105,12 +105,14 @@ test('registry: rejects malformed descriptors', () => {
   assert.throws(() => createRegistry([alpha, alpha]), /twice/)
 })
 
-test('livenessOf: the compiled name list as JSON (off matches the same processes from the manifest alone); an arch signature still wins while it exists', () => {
-  const l = livenessOf(alpha, 'linux')
+test('livenessOf: the compiled name list as JSON under `identity` (off matches the same processes from the manifest alone), the same on every OS, with the user\'s items merged in', () => {
+  const l = livenessOf(alpha)
   assert.deepEqual([l.rereads, l.until], [false, 'restart'])
   const live = { alpha: JSON.parse(JSON.stringify(l)) }
   assert.equal(matchHarness(live, facts({ exe: '/x/alpha', argv: ['alpha'] })), 'alpha')
   assert.equal(matchHarness(live, facts({ exe: '/x/alpha', argv: ['rg'] })), null, 'its exclude survives')
-  assert.ok(reviveSignature(l.signature).match.length > 0)
-  assert.equal(livenessOf(alpha, 'darwin', () => ({ match: [{ exe: /x/ }] })).signature.match[0].exe.re, 'x')
+  assert.ok(reviveSignature(l.identity).match.length > 0)
+  assert.equal('signature' in l, false, 'the older key is not written')
+  const withMine = { alpha: JSON.parse(JSON.stringify(livenessOf(alpha, { agentList: [{ harness: 'alpha', name: 'alpha-nightly' }] }))) }
+  assert.equal(matchHarness(withMine, facts({ exe: '/x/alpha-nightly', argv: ['alpha-nightly'] })), 'alpha', 'a name agents.json adds is in the snapshot')
 })

@@ -151,8 +151,8 @@ test('kimi after uninstall, as data: untilEnviron names the variable the shim se
   const { livenessOf } = await import('../../../src/collector/core/registry.mjs')
   assert.equal(kimi.trust.untilEnviron, 'NODE_EXTRA_CA_CERTS')
   assert.ok(kimi.trust.chain.some((e) => e.var === kimi.trust.untilEnviron), 'untilEnviron is one of the chain\'s doors (the marker entry, 2026-10-12, sits first — dsh\'s ordering)')
-  assert.deepEqual(livenessOf(kimi, 'linux').until_environ, 'NODE_EXTRA_CA_CERTS')
-  assert.deepEqual([livenessOf(kimi, 'linux').until, livenessOf(kimi, 'linux').rereads], ['restart', false])
+  assert.deepEqual(livenessOf(kimi).until_environ, 'NODE_EXTRA_CA_CERTS')
+  assert.deepEqual([livenessOf(kimi).until, livenessOf(kimi).rereads], ['restart', false])
 })
 
 test('kimi-code on an OS that cannot read the environment (macOS, the 2026-10-12 macOS test-machine gap): the shim\'s per-pid launch marker is the trust door; a stale marker is not', async () => {

@@ -261,7 +261,7 @@ test('a process table that cannot be read is not "nobody is alive": the bundle i
   const none = await u.run({ manifest: n, procs: async () => [proc(92, '/x/older', { startedAt: t0 - 60000 }), proc(93, '/x/older', { startedAt: t0 - 1 })] }) // no record: whether aa re-reads is not known either, so alive is enough
   assert.deepEqual([none.kept_bundles.map((k) => k.unjudged), none.left.length], [[true], 1], 'with no record, an older process may still be an aa that re-reads its entry')
   const v = await setup((b) => [repH(b, 'aa')])
-  const q = readManifest(v.b.dir); q.liveness.aa.signature = null // a record with no signature: whether aa re-reads IS known (it does not)
+  const q = readManifest(v.b.dir); delete q.liveness.aa.identity // a record with no identity (nor an older signature): whether aa re-reads IS known (it does not)
   const older = await v.run({ manifest: q, procs: async () => [proc(94, '/x/older', { startedAt: t0 - 60000 })] })
   assert.deepEqual([older.kept_bundles, older.left, older.trust_unknown, fs.existsSync(v.b.ca('combined-aa.pem'))], [[], [], [], false], 'no process that may have read the entry: nobody holds the bundle, signature or not')
 })

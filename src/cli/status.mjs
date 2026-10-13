@@ -16,7 +16,7 @@ import { readManifest } from '../off/manifest.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlSocketPath, controlEndpointFor } from '../off/control-client.mjs'
 import { listProcs, procIdentity, pidAlive } from '../off/proc.mjs'
-import { matchHarness } from '../off/signature.mjs'
+import { matchHarness, withAgentList } from '../off/signature.mjs'
 import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
@@ -114,11 +114,12 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   try { table = await (deps.procs ? deps.procs() : listProcs({ exec: deps.exec || null, platform, env })) } catch (e) { rethrowSandbox(e); tableError = errText(e) }
   const matchError = !reply && !m ? (f.manifest.error || 'there is no install manifest to match the processes with') : tableError
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
-  const matched = table && m ? table.map((p) => ({ p, h: matchHarness(m.liveness, p) })) : [] // which harness each process of the table is, by the manifest's signatures
+  const list = readAgentList({ home, fs }) // the name list (D51③⑤, 1.6 §9.7): read here, daemon or not
+  const judged = m ? withAgentList(m.liveness, list).liveness : null // the manifest's identities plus the names agents.json holds now (as `off` judges)
+  const matched = table && m ? table.map((p) => ({ p, h: matchHarness(judged, p) })) : [] // which harness each process of the table is
   f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
-  // the name list (D51③⑤, 1.6 §9.7): read here, daemon or not — the presets of the descriptors with the user's agents.json merged in
-  const list = readAgentList({ home, fs })
+  // the presets of the descriptors with the user's agents.json merged in
   let merged = null
   try { merged = mergedNames(await descriptorsOf({ platform, env, deps }), list) } catch (e) { rethrowSandbox(e); f.identity_error = `the harness descriptors could not be loaded (${errMessage(e)})` }
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
