@@ -11,6 +11,7 @@ import * as procinfo from '../../src/collector/arch/linux/procinfo.mjs'
 import * as health from '../../src/health/read.mjs'
 import { fakeProc } from '../collector/arch/linux/fixtures/fake-proc.mjs'
 import { takeRefusals } from '../helpers/no-real-os.mjs'
+import { darwinTools } from './fixtures/darwin-tools.mjs'
 
 test('listProcs on a /proc tree: this uid\'s processes with pid, start time, exe, argv and a lazy environment; other users\' and non-process entries are not in it', async () => {
   const p = fakeProc()
@@ -38,17 +39,35 @@ test('listProcs fails loudly when the table cannot be read, and on a platform it
   await assert.rejects(listProcs({ uid: 1000, platform: 'freebsd' }), /freebsd/)
 })
 
-test('listProcs on macOS reads `ps` through the injected runner: pid, parent, uid, start time and the command line; its environment is unknown', async () => {
-  const ps = ['  501     1   501 Wed Oct  7 04:27:00 2026 /Applications/Claude.app/Contents/MacOS/claude --flag x', '  777     1     0 Tue Oct  6 01:02:03 2026 /usr/sbin/mDNSResponder', '  502   501   501 Wed Oct  7 05:00:00 2026 /usr/local/bin/codex app-server', ''].join('\n')
-  const calls = []
-  const exec = (file, args) => { calls.push([file, ...args]); return { status: 0, stdout: ps, stderr: '' } }
-  const got = await listProcs({ uid: 501, platform: 'darwin', exec })
-  assert.deepEqual(calls, [['ps', '-Axo', 'pid=,ppid=,uid=,lstart=,command=']])
-  assert.deepEqual(got.map((f) => [f.pid, f.ppid, f.uid]), [[501, 1, 501], [502, 501, 501]])
-  assert.deepEqual(got.map((f) => [f.pid, f.exe, f.argv]), [[501, '/Applications/Claude.app/Contents/MacOS/claude', ['/Applications/Claude.app/Contents/MacOS/claude', '--flag', 'x']], [502, '/usr/local/bin/codex', ['/usr/local/bin/codex', 'app-server']]])
-  assert.equal(got[0].startedAt, new Date(2026, 9, 7, 4, 27, 0).getTime(), 'lstart is local time')
-  assert.equal(got[0].env(), null)
+test('listProcs on macOS: `ps` for the table and the command line, then one `lsof` for every process\'s real executable; its environment is not readable there (envRead false)', async () => {
+  const at = new Date(2026, 9, 7, 4, 27, 0)
+  const helper = '/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper'
+  const t = darwinTools([
+    { pid: 501, at, exe: '/Applications/Claude.app/Contents/MacOS/claude', cmdline: '/Applications/Claude.app/Contents/MacOS/claude --flag x' },
+    { pid: 777, uid: 0, at, exe: '/usr/sbin/mDNSResponder' },
+    { pid: 502, ppid: 501, at, exe: '/Users/u/.local/share/codex/bin/codex', cmdline: 'codex app-server' }, // started through PATH: ps has the bare word
+    { pid: 503, at, exe: helper, cmdline: `${helper} --type=utility zcode-cli` }, // a space in the path: ps's first word is cut there
+  ])
+  const got = await listProcs({ uid: 501, platform: 'darwin', exec: t.run })
+  assert.deepEqual(t.calls.map((c) => c[0]), ['ps', 'lsof'], 'two questions for the whole table, whatever its size')
+  assert.deepEqual(t.calls[1].slice(1), ['-a', '-u', '501', '-d', 'txt', '-Fpn'], 'lsof is asked about this user\'s processes only')
+  assert.deepEqual(got.map((f) => [f.pid, f.ppid, f.uid]), [[501, 1, 501], [502, 501, 501], [503, 1, 501]])
+  assert.deepEqual(got.map((f) => f.exe), ['/Applications/Claude.app/Contents/MacOS/claude', '/Users/u/.local/share/codex/bin/codex', helper], 'the executable is lsof\'s, not the word ps repeats')
+  assert.deepEqual(got.map((f) => [f.argv[0], f.cmdline]), [['/Applications/Claude.app/Contents/MacOS/claude', '/Applications/Claude.app/Contents/MacOS/claude --flag x'], ['codex', 'codex app-server'], ['/Applications/ZCode.app/Contents/Frameworks/ZCode', `${helper} --type=utility zcode-cli`]])
+  assert.equal(got[0].startedAt, at.getTime(), 'lstart is local time')
+  assert.deepEqual([got[0].env(), got[0].envRead], [null, false], 'another process\'s environment is never readable on macOS: not a failed read')
   await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'ps: nope' }) }), /ps.*nope/)
+})
+
+test('listProcs on macOS: an lsof that names no process while ps listed some is a table that cannot be read — never one whose executables are ps\'s words (a word no form path meets would read as "nobody holds it")', async () => {
+  const t = darwinTools([{ pid: 501, at: new Date(), exe: '/x/codex' }], { lsof: false })
+  await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: t.run }), /lsof named no process \(exit 1\).*1 process\(es\).*not known/)
+  const gone = darwinTools([{ pid: 501, at: new Date(), exe: '/x/codex' }, { pid: 502, at: new Date(), exe: '/x/zcode' }])
+  const onlyFirst = (file, args) => (file === 'lsof' ? { status: 0, stdout: 'p501\nftxt\nn/x/real-codex\n', stderr: '' } : gone.run(file, args))
+  assert.deepEqual((await listProcs({ uid: 501, platform: 'darwin', exec: onlyFirst })).map((f) => [f.pid, f.exe]), [[501, '/x/real-codex'], [502, '/x/zcode']], 'a process lsof does not name ended between the two questions: ps\'s word stays')
+  const none = darwinTools([{ pid: 1, uid: 0, at: new Date(), exe: '/sbin/launchd' }])
+  assert.deepEqual(await listProcs({ uid: 501, platform: 'darwin', exec: none.run }), [])
+  assert.deepEqual(none.calls.map((c) => c[0]), ['ps'], 'a table with no process of this user asks lsof nothing (it would name none, which is not a failure)')
 })
 
 test('listProcs on macOS without an injected runner does not run a real ps under npm test (0.1 §3)', async () => {
@@ -72,10 +91,12 @@ test('the /proc readers the daemon uses are the same functions the arch re-expor
 const PS_C = ['  501     1   501 Wed Oct  7 04:27:00 2026 /Applications/Claude.app/Contents/MacOS/claude --flag x', '  502   501   501 Wed Oct  7 05:00:00 2026 /usr/local/bin/codex app-server', ''].join('\n')
 const PS_ZH = ['  501     1   501 三 10月  7 04:27:00 2026 /Applications/Claude.app/Contents/MacOS/claude --flag x', '  502   501   501 三 10月  7 05:00:00 2026 /usr/local/bin/codex app-server', ''].join('\n')
 const PS_JA = PS_ZH.replace(/三 10月/g, '水 10月')
+const LSOF_C = 'p501\nftxt\nn/Applications/Claude.app/Contents/MacOS/claude\np502\nftxt\nn/usr/local/bin/codex\n'
+const tools = (psOut) => (file) => ({ status: 0, stdout: file === 'lsof' ? LSOF_C : psOut, stderr: '' }) // ps prints `psOut`, lsof names 501 and 502
 
 test('listProcs on macOS runs ps in the C locale: the runner is handed LC_ALL=C over whatever the user\'s own environment says, and a ps that honours the locale gives the table it would give in English', async () => {
   const seen = []
-  const exec = (file, args, opts) => { seen.push(opts.env); return { status: 0, stdout: opts.env.LC_ALL === 'C' ? PS_C : PS_ZH, stderr: '' } } // a ps that localizes unless told not to
+  const exec = (file, args, opts) => { seen.push(opts.env); return tools(opts.env.LC_ALL === 'C' ? PS_C : PS_ZH)(file) } // a ps that localizes unless told not to
   for (const loc of ['zh_CN.UTF-8', 'ja_JP.UTF-8', 'C', undefined]) {
     const got = await listProcs({ uid: 501, platform: 'darwin', exec, env: { ...process.env, LC_ALL: loc, LANG: loc, LC_TIME: loc } })
     assert.deepEqual(got.map((f) => [f.pid, f.startedAt]), [[501, new Date(2026, 9, 7, 4, 27, 0).getTime()], [502, new Date(2026, 9, 7, 5, 0, 0).getTime()]], `LC_ALL=${loc}`)
@@ -85,12 +106,12 @@ test('listProcs on macOS runs ps in the C locale: the runner is handed LC_ALL=C 
 
 test('listProcs on macOS: a ps whose lines cannot be read is an error that says so — never an empty table, which would read as "nobody is alive" — while a table with a few odd lines among readable ones is read as far as it goes', async () => {
   for (const out of [PS_ZH, PS_JA]) {
-    await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: () => ({ status: 0, stdout: out, stderr: '' }) }), /ps printed 2 line\(s\) and none could be read \(the first: .*10月.*\), so which agents are alive is not known/)
+    await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: tools(out) }), /ps printed 2 line\(s\) and none could be read \(the first: .*10月.*\), so which agents are alive is not known/)
   }
-  const mixed = await listProcs({ uid: 501, platform: 'darwin', exec: () => ({ status: 0, stdout: `${PS_C}  503     1   501 三 10月  7 06:00:00 2026 /x/odd\n`, stderr: '' }) })
+  const mixed = await listProcs({ uid: 501, platform: 'darwin', exec: tools(`${PS_C}  503     1   501 三 10月  7 06:00:00 2026 /x/odd\n`) })
   assert.deepEqual(mixed.map((f) => f.pid), [501, 502], 'the lines that parse are used')
-  assert.deepEqual(await listProcs({ uid: 501, platform: 'darwin', exec: () => ({ status: 0, stdout: '\n', stderr: '' }) }), [], 'a ps that printed nothing at all is an empty table: there were no rows to misread')
-  const other = await listProcs({ uid: 999, platform: 'darwin', exec: () => ({ status: 0, stdout: PS_C, stderr: '' }) })
+  assert.deepEqual(await listProcs({ uid: 501, platform: 'darwin', exec: tools('\n') }), [], 'a ps that printed nothing at all is an empty table: there were no rows to misread')
+  const other = await listProcs({ uid: 999, platform: 'darwin', exec: tools(PS_C) })
   assert.deepEqual(other, [], 'rows that parse but belong to another user are a table with no row of this user\'s, not a failure')
 })
 

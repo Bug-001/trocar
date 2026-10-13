@@ -145,10 +145,28 @@ function procsOfLinux({ uid, root }) {
 }
 
 // `ps -Axo pid=,ppid=,uid=,lstart=,command=`: lstart is five words ("Wed Oct  7 04:27:00 2026", local time), the command line joined by spaces — its
-// argument boundaries are lost, so argv is that line split on whitespace (a path with a space in it splits), and the environment of another
-// process cannot be read here at all (null: unknown). Run in the C locale (psEnv). A table with lines in it of which not one parses is an error, not an empty table:
-// it would read as "nobody is alive" (D38; the same failure as a localized `ps`, whatever else changes the format).
+// argument boundaries are lost, so argv is that line split on whitespace (a path with a space in it splits; `cmdline` keeps the line as it came), and the
+// environment of another process cannot be read on macOS at all (`env` null, `envRead: false`: the OS's rule, not a failed read — 4.6 「判活快照」).
+// Run in the C locale (psEnv). A table with lines in it of which not one parses is an error, not an empty table: it would read as "nobody is alive" (D38;
+// the same failure as a localized `ps`, whatever else changes the format).
 const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(\S.*)$/
+// The executable of each process is not in that line: `ps` repeats the command as invoked — a bare word for an agent started through PATH, a path cut at its
+// first space under `ZCode Helper.app` — and the macOS form tables (src/collector/harness/darwin/) are measured against the real one, the first `txt` record
+// of `lsof` (the collector's own source, arch/darwin/procinfo.mjs realExeOf). One `lsof … -d txt -Fpn` answers it for every process of the user: `p<pid>`,
+// then `f<fd>` / `n<name>` pairs; the first txt name that is a path is the executable. It runs AFTER `ps`, so a row it does not name is a process that ended
+// between the two (its `ps` word is kept). An lsof that names no process while `ps` listed some cannot be read: the table is not known (4.6 「判活快照」).
+function exesOfLsof({ uid, exec, env, rows }) {
+  const r = execTool('lsof', [...(uid != null ? ['-a', '-u', String(uid)] : []), '-d', 'txt', '-Fpn'], { run: exec, env: psEnv(env) })
+  const exes = new Map()
+  let pid = null, txt = false
+  for (const line of String(r.out || '').split('\n')) {
+    if (line[0] === 'p') { pid = Number(line.slice(1)); txt = false; if (Number.isInteger(pid) && !exes.has(pid)) exes.set(pid, null) }
+    else if (line[0] === 'f') txt = line === 'ftxt'
+    else if (line[0] === 'n' && txt && pid != null && exes.get(pid) == null && line[1] === '/') exes.set(pid, line.slice(1))
+  }
+  if (exes.size === 0 && rows > 0) throw new Error(`lsof ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `named no process (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`}, so the executables of the ${rows} process(es) ps listed are not known, nor which agents are alive`)
+  return exes
+}
 function procsOfPs({ uid, exec, env }) {
   const r = execTool('ps', ['-Axo', 'pid=,ppid=,uid=,lstart=,command='], { run: exec, env: psEnv(env) })
   if (r.code !== 0) throw new Error(`ps failed (${r.code === null ? r.err : `exit ${r.code}: ${r.err}`}), so which agents are alive is not known`)
@@ -161,16 +179,22 @@ function procsOfPs({ uid, exec, env }) {
     if (!m) continue
     parsed++
     if (uid != null && Number(m[3]) !== uid) continue
-    const argv = m[5].trim().split(/\s+/)
+    const cmdline = m[5].trim()
+    const argv = cmdline.split(/\s+/)
     const at = new Date(m[4].replace(/\s+/g, ' ')).getTime()
-    out.push({ pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), startedAt: Number.isFinite(at) ? at : null, exe: argv[0], argv, env: () => null })
+    out.push({ pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), startedAt: Number.isFinite(at) ? at : null, exe: argv[0], argv, cmdline, env: () => null, envRead: false })
   }
   if (rows > 0 && parsed === 0) throw new Error(`ps printed ${rows} line(s) and none could be read (the first: ${JSON.stringify(r.out.split('\n').find((l) => l.trim()).slice(0, 80))}), so which agents are alive is not known`)
+  if (!out.length) return out // nobody of this user: nothing for lsof to name
+  const exes = exesOfLsof({ uid, exec, env, rows: out.length })
+  for (const p of out) if (exes.get(p.pid)) p.exe = exes.get(p.pid)
   return out
 }
 
-/** The live processes of one user: `[{ pid, ppid, uid, startedAt: ms | null, exe, argv, env: () => Map | null }]` — `env` is read when asked for.
- *  `uid` null lists everyone's. Linux reads `root` (/proc); macOS runs `ps` and Windows one fixed Get-CimInstance question, both through `exec`
+/** The live processes of one user: `[{ pid, ppid, uid, startedAt: ms | null, exe, argv, env: () => Map | null }]` — `env` is read when asked for; macOS and
+ *  Windows rows add `cmdline` (the command line as it came, or null) and `envRead: false` (no other process's environment is readable there: `env` is null by the
+ *  OS's rule, not because a read failed). `uid` null lists everyone's. Linux reads `root` (/proc); macOS runs `ps` then `lsof` (the executables), Windows one
+ *  fixed Get-CimInstance question, all through `exec`
  *  (a spawnSync-like runner a test injects; execTool refuses a real one under npm test). Another platform, or a table that cannot be read, rejects. */
 export async function listProcs({ uid = typeof process.getuid === 'function' ? process.getuid() : null, root = '/proc', platform = process.platform, exec = null, env = process.env } = {}) {
   if (platform === 'linux') return procsOfLinux({ uid, root })
@@ -181,8 +205,9 @@ export async function listProcs({ uid = typeof process.getuid === 'function' ? p
 
 // The one fixed question of the whole process table on Windows (4.8 §7): one Get-CimInstance over Win32_Process, every field this file's
 // row shape wants, as JSON — one question for the whole machine, not one per process. Windows has no uid (null: the row says whose it is
-// not), the command line comes joined by spaces (argv is it split on whitespace, its argument boundaries lost — the same as macOS's `ps`),
-// and another process's environment cannot be read at all (null). A question that died, or an answer that is not JSON, is an error, never
+// not), the command line comes joined by spaces (argv is it split on whitespace, its argument boundaries lost — the same as macOS's `ps`; `cmdline`
+// is the line as it came, what the form tables' command-line patterns read), and another process's environment cannot be read at all (`env` null,
+// `envRead: false`: the OS's rule, 4.8 §10.1). A question that died, or an answer that is not JSON, is an error, never
 // an empty table: an empty one would say "nobody holds the bundle" and delete it (D38, the rule of the other two readers).
 const WIN_TABLE_SCRIPT = 'Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = $_.ProcessId; pp = $_.ParentProcessId; n = $_.Name; x = $_.ExecutablePath; s = $(try { [DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { $null }); c = $_.CommandLine } } | ConvertTo-Json -Compress'
 function procsOfWin({ exec, env }) {
@@ -196,7 +221,8 @@ function procsOfWin({ exec, env }) {
   for (const row of Array.isArray(rows) ? rows : [rows]) { // one process on the machine: PowerShell's JSON is an object, not a list
     if (row === null || typeof row !== 'object' || !Number.isFinite(row.p)) continue
     const name = typeof row.n === 'string' && row.n !== '' ? row.n : null
-    out.push({ pid: Number(row.p), ppid: Number.isFinite(row.pp) ? Number(row.pp) : null, uid: null, startedAt: Number.isFinite(row.s) ? Number(row.s) : null, exe: typeof row.x === 'string' && row.x !== '' ? row.x : name, argv: (typeof row.c === 'string' && row.c !== '' ? row.c : name || '').split(/\s+/).filter((s) => s !== ''), env: () => null })
+    const cmdline = typeof row.c === 'string' && row.c !== '' ? row.c : null
+    out.push({ pid: Number(row.p), ppid: Number.isFinite(row.pp) ? Number(row.pp) : null, uid: null, startedAt: Number.isFinite(row.s) ? Number(row.s) : null, exe: typeof row.x === 'string' && row.x !== '' ? row.x : name, argv: (cmdline || name || '').split(/\s+/).filter((s) => s !== ''), cmdline, env: () => null, envRead: false })
   }
   return out
 }
