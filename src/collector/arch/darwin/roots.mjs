@@ -10,13 +10,14 @@
 //
 // darwinRoots({ tls, exec, timeoutMs }) → { pem, fingerprint, source, dropped, tried }
 //   The `security` call goes through the injected exec like every other tool call (execTool: a test injects the runner, and under npm test a forgotten one is refused — the ESANDBOX refusal is
-//   re-thrown here, never caught as "the tool failed"). Every certificate goes through `new X509Certificate()` first: one that does not parse is dropped and COUNTED (`dropped`), because Codex
+//   re-thrown here, never caught as "the tool failed"). Every certificate goes through `new X509Certificate()` first: one that does not parse is dropped and COUNTED (`dropped`, said by `on` and the daemon through bundleRoots), because Codex
 //   reads the bundle with rustls and a single broken block makes it refuse the whole file and connect to nothing [T0, W20]; a duplicate is kept once. `pem` is what the install hands the combined
 //   bundle as the OS roots (core/tls/roots.mjs `bundleRoots` → `composeBundle`, core/trust — composeBundle dedupes against Node's own roots again, so 'bundled' sitting here too costs nothing); `fingerprint` is a
 //   hash of the SET of certificates, so the daily comparison knows the roots changed whatever their order. `source` is an array naming the sources that contributed, in a fixed order
-//   (['node-bundled', 'node-system', 'security'], in whole or in part: a union has no single winner, which is why it is not win32's one string); `tried` says why a source failed while the others
-//   still gave a set (D38: a bundle quietly missing a third of the roots is not fine). No usable source at all is a RootsUnavailableError with the reasons (D38: unreadable is 「unknown」 and says
-//   why), never an empty set.
+//   (['node-bundled', 'node-system', 'security'], in whole or in part: a union has no single winner, which is why it is not win32's one string); `tried` says why a source's READ failed while the
+//   others still gave a set (D38: a bundle quietly missing a third of the roots is not fine; core/tls/roots.mjs bundleRoots passes it on as `partial`, and `on` and the daemon say it). A source that
+//   answers with no certificate did not fail — a Mac with no root added to its keychain has no local anchor, and saying so at every rebuild would be a false alarm on every clean Mac — so it is
+//   not in `tried`. No usable source at all is a RootsUnavailableError with every source's reason, empty or failed (D38: unreadable is 「unknown」 and says why), never an empty set.
 import crypto from 'node:crypto'
 import nodeTls from 'node:tls'
 import { execTool } from '../../../off/exec.mjs'
@@ -53,36 +54,32 @@ export class RootsUnavailableError extends Error {
 }
 
 export async function darwinRoots({ tls = nodeTls, exec = null, timeoutMs = SECURITY_TIMEOUT_MS } = {}) {
-  const tried = []
+  const reasons = [] // every source that gave nothing, and why, in source order: a RootsUnavailableError's
+  const tried = [] // the ones whose read FAILED: the answer's `tried`
+  const fail = (why) => { reasons.push(why); tried.push(why) }
   const byFp = new Map()
   const source = []
   let dropped = 0
   const merge = (pems, name) => { // one source in: what parses joins the union, what does not is counted, and a source with nothing usable says why
     const got = parsed(pems)
     dropped += got.dropped
-    if (!got.byFp.size) { tried.push(`${name}: no certificate`); return }
+    if (!got.byFp.size) { reasons.push(`${name}: no certificate`); return } // an empty answer, not a failed read
     source.push(name)
     for (const [fp, pem] of got.byFp) if (!byFp.has(fp)) byFp.set(fp, pem) // a duplicate keeps its first place
   }
   if (typeof tls.getCACertificates === 'function') {
     for (const key of ['bundled', 'system']) { // 'bundled' first: Node's text is the steadier one for a certificate both sources hold
-      try { merge(tls.getCACertificates(key), `node-${key}`) } catch (e) { tried.push(`node-${key}: ${e.code || e.message}`) }
+      try { merge(tls.getCACertificates(key), `node-${key}`) } catch (e) { fail(`node-${key}: ${e.code || e.message}`) }
     }
-  } else tried.push('getCACertificates: not available (Node ≥ 22.15 has it)') // a Node 20 daemon still gets the standard set from the security export, but the keychain's local anchors — the enterprise roots — are only in 'system': the reason says so
+  } else fail('getCACertificates: not available (Node ≥ 22.15 has it)') // a Node 20 daemon still gets the standard set from the security export, but the keychain's local anchors — the enterprise roots — are only in 'system': the reason says so
   try {
     const r = execTool('security', ['find-certificate', '-a', '-p', SYSTEM_ROOTS_KEYCHAIN], { run: exec, timeoutMs })
     if (r.code === 0) merge(r.out.match(PEM_BLOCK) || [], 'security')
-    else tried.push(`security: ${r.err || `exit ${r.code}`}`)
+    else fail(`security: ${r.err || `exit ${r.code}`}`)
   } catch (e) {
     if (e && e.code === 'ESANDBOX') throw e // exec.mjs: the sandbox refusal must reach the test, not pass as a failed source
-    tried.push(`security: ${e.code || e.message}`)
+    fail(`security: ${e.code || e.message}`)
   }
-  if (!byFp.size) throw new RootsUnavailableError(tried)
+  if (!byFp.size) throw new RootsUnavailableError(reasons)
   return outcome(byFp, dropped, source, tried)
-}
-
-/** The line the receipt and `status` carry when some certificates were dropped (4.8 §6.2); null when none were. */
-export function droppedNote(roots) {
-  const n = roots && roots.dropped
-  return n > 0 ? `${n} certificate${n === 1 ? '' : 's'} in the macOS roots could not be parsed and ${n === 1 ? 'is' : 'are'} not in the combined bundles (one broken certificate makes Codex refuse the whole bundle)` : null
 }

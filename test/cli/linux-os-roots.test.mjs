@@ -55,7 +55,20 @@ test('Linux on: only the Fedora bundle exists → the combined bundle carries it
   assert.equal(r.exit, 0, r.text)
   assert.ok(r.held.includes(fpOf(FEDORA.certPem)), 'the CA installed system-wide is in combined-codex.pem')
   assert.ok(r.held.includes(fpOf(tls.rootCertificates[0])), 'with Node\'s roots')
-  assert.deepEqual(r.flows.filter((f) => f.code === 'system-roots-unavailable'), [], 'no missing-roots record')
+  assert.deepEqual(r.flows.filter((f) => /^system-roots-/.test(f.code)), [], 'no missing-roots record, nothing left out')
+})
+
+test('Linux on: a block of the OS bundle that does not parse is not in the combined bundle, and that is said once in the receipt and in flows/ (4.8 §6.2 / W20, D38)', async () => {
+  const BROKEN = '-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n'
+  const r = await onWith({ [FEDORA_BUNDLE]: `${FEDORA.certPem}${BROKEN}` })
+  assert.equal(r.exit, 0, r.text)
+  assert.ok(r.held.includes(fpOf(FEDORA.certPem)), 'the certificates that parse are in it')
+  assert.ok(!fs.readFileSync(r.bundle, 'utf8').includes('bm90IGEg'), 'the broken block is not: one would make Codex (rustls) refuse the whole file')
+  const rec = r.flows.filter((f) => f.code === 'system-roots-unparsable')
+  assert.equal(rec.length, 1, `one record: ${JSON.stringify(r.flows.map((f) => [f.event, f.code]))}`)
+  assert.deepEqual([rec[0].event, rec[0].where, rec[0].kind, rec[0].dropped, rec[0].files], ['install-note', 'install', 'note', 1, [r.bundle]])
+  assert.match(r.text, /1 certificate in the OS roots could not be parsed and is not in the combined bundles/, 'the receipt says it too')
+  assert.deepEqual(r.flows.filter((f) => f.code === 'system-roots-unavailable'), [], 'the OS roots are there: not said missing')
 })
 
 test('Linux on: no OS bundle on the machine → the bundle has Node\'s roots and the asight CA only, and that is said in the receipt and in flows/ (D38)', async () => {
