@@ -14,7 +14,7 @@
 // SSL_CERT_FILE is a dead arm for it. So `layers` judges by the route Hermes really reads: the
 // entry model.provider names (providers map / custom_providers list), else the model block's inline route; trusted only when that block holds the
 // ssl_ca_cert line asight wrote (its sentinel) and the file holds the CA. A built-in provider, a route without the line, or the user's own
-// ssl_ca_cert is route-without-ca. What `on` writes is unchanged (the .env block stays for the proxy and for other stacks).
+// ssl_ca_cert (alone, or after asight's line: YAML keeps the last key) is route-without-ca. What `on` writes is unchanged (the .env block stays for the proxy and for other stacks).
 // hermes.desktop was not installable in any lab (the Windows one could not install it either): listed, not recognised, so `status` says 「unknown · not measured」 and does not leave it
 // out. The managed .env note stays for a HERMES_MANAGED_DIR (the variable applies on macOS too); whether Hermes defaults to /etc/hermes there is unmeasured, so without the variable
 // there is nothing to read. Nothing here execs anything: readText / listDir arrive in the ctx.
@@ -137,7 +137,9 @@ function layers(ctx) {
   const text = ctx.readText(file)
   const lines = text == null ? [] : text.split('\n').map((l) => l.replace(/\r$/, ''))
   const route = activeRoute(lines)
-  const line = route && route.keys.find(([k, , j]) => k === 'ssl_ca_cert' && lines[j].includes(SENTINEL))
+  // YAML keeps the last of duplicate keys (PyYAML safe_load): the route's effective ssl_ca_cert is its last one, and only asight's line there trusts
+  const last = route && route.keys.filter(([k]) => k === 'ssl_ca_cert').at(-1)
+  const line = last && lines[last[2]].includes(SENTINEL) ? last : null
   const out = [...base.layers(ctx), { name: `${file} (the route in use: macOS Hermes reads no other CA)`, file, mode: 'override', vars: { SSL_CERT_FILE: '', HERMES_CA_BUNDLE: '', 'hermes:ssl_ca_cert': '', [DOORS_SHUT]: 'route-without-ca' }, live: true }]
   if (line) out.push({ name: `${file} route ${route.name}: ssl_ca_cert (asight)`, file, mode: 'override', vars: { SSL_CERT_FILE: expandHome(scalar(line[1]), ctx.home), [DOORS_SHUT]: '' }, live: false, mtimeMs: ctx.mtimeOf(file) })
   return out

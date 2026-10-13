@@ -124,3 +124,13 @@ test('.env SSL_CERT_FILE with the asight bundle and no route line is route-witho
   b.put('.hermes/.env', `SSL_CERT_FILE=${b.bundle}\n`)
   assert.deepEqual(await verdict(b), UNTRUSTED)
 })
+
+test('asight\'s line followed by a later user ssl_ca_cert in the same route is route-without-ca (YAML keeps the last key; that file lacks the CA)', async () => {
+  const b = box()
+  const corp = b.put('corp/corp.pem', 'not the asight CA\n')
+  const file = withAsightLines(b, PROVIDERS())
+  const text = fs.readFileSync(file, 'utf8').replace('    api_mode: chat_completions\n', `    api_mode: chat_completions\n    ssl_ca_cert: ${corp}\n`)
+  b.put('.hermes/config.yaml', text)
+  assert.match(text, /asight collector[^\n]*\n(?:.*\n)*?    ssl_ca_cert: .*corp\.pem/, 'asight\'s line sits above the user\'s')
+  assert.deepEqual(await verdict(b), UNTRUSTED)
+})
