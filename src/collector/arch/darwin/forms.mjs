@@ -1,70 +1,8 @@
-// forms.mjs — which macOS form a process is, and whether a group's proxy entry may be written (RFC 4.9 §2.3 · §2.4; the mechanism and its reasons are 4.8 §2.3 · §2.4, acceptance W3, W23).
+// forms.mjs — whether a macOS group's proxy entry may be written, and what it holds (RFC 4.9 §2.4; the mechanism and its reasons are 4.8 §2.4 · §3, acceptance W23).
 //
-// This is the darwin port of `arch/win32/forms.mjs` — the same exports, the same shape — with only the two deltas 4.9 §1 names for this row. (1) `formPathShape` gets
-// the darwin branch: `/` is the only separator (a backslash in a darwin path is a letter of a file name), the profile shape masked without a `home` is `/Users/<name>`,
-// and case still does not matter (APFS is case-insensitive by default, the reason 4.9 §1 gives for keeping case-blind norms). (2) There is no `cmdlineState` to wait on:
-// `ps` gives the whole command line in the same shot as the image (4.9 §1's procinfo row — one ask, no CIM, no back-off), so the Windows two-step (image first, command
-// line later, `pending` in between) collapses to one: a form that needs the command line either has it or there is none, and `matchForm` never answers `pending`.
-//
-// The per-harness data (src/collector/harness/darwin/<h>.mjs) says what each form looks like: an image name, path patterns, a command-line pattern.
-// This file reads that data and knows no harness (arch/ never imports harness/ — the daemon hands the forms in). Pure functions, no OS call.
-//
-// A pattern is a string in the subset that JavaScript and mihomo's .NET regexp2 read the same way, and it is tested the way mihomo tests a process
-// rule: ignoring case, unanchored (4.8 §2.3). A form with `match.path` needs the image path to hit one of them; with `match.cmdline` it needs the
-// command line to.
-
-const re = (pattern) => new RegExp(pattern, 'i')
-const baseName = (p) => String(p).split('/').pop()
-const hits = (patterns, text) => patterns.some((p) => re(p).test(text))
-/** The image names a form answers to: one string, or a LIST of them (4.9 §2.3's darwin increment, §6.4: Claude Desktop is one form of a process family — the
- *  main binary `Claude` and the Chromium Helpers `Claude Helper` / `Claude Helper (Renderer)` / `Claude Helper (GPU)` under Frameworks/, the utility one owning
- *  the model sockets). Each name is matched exactly, case-blind like every image; a list introduces no prefix and no fuzz. `image: null` is the PATH-ONLY shape
- *  (4.9 §2.3): a form whose paths are its alone — the native installer's version-named binary (`~/.local/share/claude/versions/2.1.296`, a FILE whose basename is
- *  the version) can never pass an image gate, and the Linux signatures already match it by path regex alone. */
-export const imagesOf = (f) => (f.match.image == null ? [] : Array.isArray(f.match.image) ? f.match.image : [f.match.image])
-
-/** The path of a process with the user's directory masked, for `form-path-unknown`: `/Users/<user>/…`; the rest is kept so the shape shows.
- *  `home` is the user's home directory (`$HOME`, the daemon's `ctx.home`): the home's own name is masked wherever the home is (a redirected one outside
- *  `/Users`), in any case. Without it, or for a path under some other home, only the `/Users/<name>` shape is masked. */
-export function formPathShape(exe, { home = null } = {}) {
-  const p = String(exe)
-  const h = home ? String(home).replace(/\/+$/, '') : ''
-  const last = h.split('/').pop()
-  if (last && h.includes('/')) { // the filesystem root has no user name to mask
-    const part = (c) => c.replace(/[.*+?^${}()|[\]]/g, '\\$&') // every character is itself; '/' is no special character to a RegExp
-    const at = new RegExp(`^${[...h].map(part).join('')}(?=/|$)`, 'i').exec(p)
-    if (at) return p.slice(0, at[0].length - last.length) + '<user>' + p.slice(at[0].length)
-  }
-  return p.replace(/^(\/Users\/)[^/]+/i, '$1<user>')
-}
-
-/** matchForm(forms, { exe, cmdline }) → one of
- *    { kind:'form', id }                     the first form (in the order the data lists them) whose image, path and command line all hold
- *    { kind:'path-unknown', forms:[id], shape }  the image is one only an agent has, but the path is none of the known install shapes (`form-path-unknown`)
- *    { kind:'none' }                         not an agent (a `node` without the dsh command line, any other program)
- *  A form whose image is a shared one (`node`, `python3`, `Code Helper`) never gives `path-unknown`: most processes of that image are not agents. A PATH-ONLY form
- *  (`image: null`) never gives `path-unknown` either — it has no image to be told by, its paths are its alone; the gated forms are tried in the data's order first.
- *  `ps` gives the command line in the same shot as the image, so unlike Windows there is nothing to wait for: a form with `match.cmdline` either has it
- *  or there is none (`matchForm` never answers `pending`; a `cmdlineState` field a caller still passes is not read). `home` (optional): the user's home
- *  directory, so the `shape` of a `path-unknown` has no user name in it wherever the home is (see formPathShape). */
-export function matchForm(forms, proc, { home = null } = {}) {
-  const exe = proc && typeof proc.exe === 'string' ? proc.exe : ''
-  const image = baseName(exe).toLowerCase().replace(/\.exe$/, '') // MA4's first measured fact (on a macOS test machine): npm's claude-code ships `bin/claude.exe` on macOS too — the file name carries a vestigial .exe, the form's image does not; a path pattern that names the binary without the suffix still hits it (the patterns are unanchored)
-  const gated = exe === '' ? [] : forms.filter((f) => f.match && f.match.image != null && imagesOf(f).some((n) => n.toLowerCase() === image))
-  const open = exe === '' ? [] : forms.filter((f) => f.match && f.match.image == null) // the path-only shapes: no image gate, the paths are theirs alone
-  for (const f of [...gated, ...open]) {
-    const m = f.match
-    if (m.path && !hits(m.path, exe)) continue
-    if (m.cmdline) {
-      if (proc.cmdline == null) continue // ps has no command line for this process: this form cannot be told
-      if (!hits(m.cmdline, proc.cmdline)) continue
-    }
-    return { kind: 'form', id: f.id }
-  }
-  const only = gated.filter((f) => f.match.reportUnknownPath)
-  if (only.length) return { kind: 'path-unknown', forms: only.map((f) => f.id), shape: formPathShape(exe, { home }) }
-  return { kind: 'none' }
-}
+// This is the darwin port of `arch/win32/forms.mjs` — the same exports, the same shape. A form is the unit of an entry group, an opt-in item and a matrix
+// row; which harness a process is, is the name list's (D51: the base descriptors' `processes`, judged by core/registry.mjs), not a form's.
+// This file knows no harness (arch/ never imports harness/ — the daemon hands the groups in). Pure functions, no OS call.
 
 /** May this group's proxy entry be written now (4.8 §2.4, §3)? `optedIn`: the user named the group's form (`--opt-in`); `upstreamCredentialed`: the
  *  upstream asight would use needs a user name and password. → { ok:true } | { ok:false, reason:'opt-in-needed' | 'form-unsupported' }.
