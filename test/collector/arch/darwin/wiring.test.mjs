@@ -290,18 +290,18 @@ test('osLayers hands the layers ctx the keychain door (4.9 §6.4): open only for
     listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, unparsable: () => {},
   })
   const cc = r.redirector.darwin.osLayers.darwin(one('claude-code'))
-  assert.deepEqual(cc(ctx([helper, '--type=utility'])), [], 'no keychain entry: the desktop family gets no layer — the engine only forwards')
+  assert.deepEqual(cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService'])), [], 'no keychain entry: the network service gets no layer — the engine only forwards')
   assert.ok(cc(ctx([cli, '-p', 'hi'])).some((l) => l.vars && l.vars.NODE_EXTRA_CA_CERTS === caFile), 'the cli form reads the settings file through the base layers all along')
 
   const m = readManifest(r.dir)
   m.entries.push({ kind: 'optin-keychain-cert', harness: 'codex', form: 'codex.app', item: 'keychain-login', scope: 'user', path: `login-keychain:${fp256}`, installed_at: new Date().toISOString(), values: { fp256, certFile: caFile } })
   saveManifest(r.dir, m) // another harness's entry, and unconfirmed (the dialog was never answered)
-  assert.deepEqual(cc(ctx([helper, '--type=utility'])), [], 'an entry of another harness — unconfirmed at that — opens nothing')
+  assert.deepEqual(cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService'])), [], 'an entry of another harness — unconfirmed at that — opens nothing')
 
   const t0 = Date.now()
   m.entries.push({ kind: 'optin-keychain-cert', harness: 'claude-code', form: 'claude-code.desktop', item: 'keychain-login', scope: 'user', path: `login-keychain:${fp256}`, installed_at: new Date(t0).toISOString(), confirmed: true, values: { fp256, certFile: caFile } })
   saveManifest(r.dir, m)
-  const door = cc(ctx([helper, '--type=utility']))
+  const door = cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService']))
   assert.equal(door.length, 1, 'exactly the keychain layer')
   assert.equal(door[0].vars.NODE_EXTRA_CA_CERTS, caFile)
   assert.equal(door[0].since, t0, 'config-after-start is judged against the item\'s installed_at')
@@ -310,7 +310,7 @@ test('osLayers hands the layers ctx the keychain door (4.9 §6.4): open only for
   m.entries = m.entries.filter((e) => !(e.kind === 'optin-keychain-cert' && e.harness === 'claude-code'))
   m.entries.push({ kind: 'optin-keychain-cert', harness: 'claude-code', form: 'claude-code.desktop', item: 'keychain-login', scope: 'user', path: 'login-keychain:AA:BB:CC:DD', installed_at: new Date(t0).toISOString(), confirmed: true, values: { fp256: 'AA:BB:CC:DD', certFile: caFile } })
   saveManifest(r.dir, m)
-  assert.deepEqual(cc(ctx([helper, '--type=utility'])), [], 'a fingerprint of a CA this build no longer holds: the keychain trusts a certificate asight cannot decrypt with — the door stays shut')
+  assert.deepEqual(cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService'])), [], 'a fingerprint of a CA this build no longer holds: the keychain trusts a certificate asight cannot decrypt with — the door stays shut')
 
   const codex = r.redirector.darwin.osLayers.darwin(one('codex'))
   assert.deepEqual(codex(ctx(['/opt/homebrew/bin/codex'])), [null], 'the wrapper is a no-op for a harness with no darwin layers of its own (its base layers ran as ever and answered their absent-files [null] — the tracker filters it; the door\'s keys were simply ignored)')

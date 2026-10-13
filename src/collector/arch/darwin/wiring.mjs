@@ -187,13 +187,13 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   const innerDetach = redirector.detach
   redirector.detach = async (...a) => { await replan(); return innerDetach(...a) }
 
-  // ---- the login-keychain door a desktop form's trust runs on (4.9 §6.4's trust arm, 2026-10-12) -------------------------------------------------------
-  // The keychain item is the desktop family's ONE trust door (the env doors are dead for it, §6.4's measured verdict); the tracker judges by layers, so the door
-  // reaches it as two ctx keys the osLayers wrapper below injects: `caFile` (this build's CA — what the engine would decrypt with) and `keychain`
-  // ({ since, fp256 } | null — the manifest's confirmed optin-keychain-cert entry of THAT harness, read live so an `on` that lands the item after the daemon
-  // started opens the door without a restart, and only while the entry's fingerprint is the CA this build actually holds: a certificate asight no longer has
-  // the private key of would be a door to broken handshakes, so it stays shut). darwin/claude-code.mjs's layers turn the open door into the family's one
-  // synthetic layer; a harness with no such item sees null and its layers never know the keys were there.
+  // ---- the login-keychain door Claude Desktop's network service is trusted by (4.9 §6.4's trust arm, D51④) ---------------------------------------
+  // The keychain item is the network service's ONE trust door (the env doors are dead for it, §6.4's measured verdict); the tracker judges by layers, so
+  // the door reaches it as two ctx keys the osLayers wrapper below injects: `caFile` (this build's CA — what the engine would decrypt with) and
+  // `desktopDoor` ({ since, name } | null — the manifest's confirmed optin-keychain-cert entry of THAT harness, read live so an `on` that lands the item
+  // after the daemon started opens the door without a restart, and only while the entry's fingerprint is the CA this build actually holds: a certificate
+  // asight no longer has the private key of would be a door to broken handshakes, so it stays shut). The base claude-code layers turn the open door into
+  // the network service's one synthetic layer (core/trust/chromium.mjs's role); a harness with no such item sees null.
   const caFileOf = () => (dir ? path.join(dir, 'ca', 'asight-ca.pem') : null)
   const keychainDoorOf = (d) => {
     const caFile = caFileOf()
@@ -205,7 +205,7 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
       if (!e || e.kind !== 'optin-keychain-cert' || e.harness !== d.name || e.confirmed !== true) continue
       const since = Date.parse(e.installed_at)
       if (!Number.isFinite(since) || (e.values || {}).fp256 !== fp) continue
-      if (!door || since > door.since) door = { since, fp256: fp } // a re-install supersedes: config-after-start is judged against the newest install
+      if (!door || since > door.since) door = { since, name: `login keychain (asight's CA trusted, ${fp.slice(0, 23)}…)` } // a re-install supersedes: config-after-start is judged against the newest install
     }
     return door
   }
@@ -216,11 +216,9 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
     netenv: () => ({ systemProxy, ownPorts: ownPorts() }),
     appliedHosts: () => Object.fromEntries(appliedHosts),
     // a harness with macOS layers of its own declares them; the rest read the same files as on Linux. The wrapper hands every one of them the desktop door's
-    // two ctx keys (4.9 §6.4's trust arm, 2026-10-12): `keychain` — the manifest's CONFIRMED optin-keychain-cert entry of THIS harness, live-read (an item that
-    // lands after the daemon started opens without a restart), and only while that entry's fingerprint is this build's CA (an entry of a certificate asight no
-    // longer holds would trust a CA it cannot decrypt with) — and `caFile`, this build's collector CA. Only darwin/claude-code.mjs's layers read them; for every
+    // two ctx keys (above): `desktopDoor` (keychainDoorOf) and `caFile`. Only the claude-code layers read them, for a network-service process; for every
     // other descriptor the spread is an additive no-op.
-    osLayers: { darwin: (d) => { const own = (d.darwin && d.darwin.layers) || d.layers; return (ctx2) => own({ ...ctx2, keychain: keychainDoorOf(d), caFile: caFileOf() }) } },
+    osLayers: { darwin: (d) => { const own = (d.darwin && d.darwin.layers) || d.layers; return (ctx2) => own({ ...ctx2, desktopDoor: keychainDoorOf(d), caFile: caFileOf() }) } },
     markerToleranceMs: MARKER_TOLERANCE_MS, // the darwin plugin twins write performance.timeOrigin (sub-millisecond) against ps's second-granular lstart (startTicks): the tracker gets the same fixed tolerance the win line's markers are compared with (confirm.mjs; review F4)
     close: () => { if (netenvWatcher) netenvWatcher.stop() },
   }

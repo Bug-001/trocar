@@ -10,8 +10,8 @@
 //   claude-code.desktop                    the /Applications/Claude.app shell and its Chromium process family (the main binary plus the Helpers under
 //                                         Contents/Frameworks/): to be captured but default-off, opened by naming it. Its trust door is the
 //                                         login keychain (§2.4's user-level item; §6.4: one `security add-trusted-cert` in the user domain, the system asks you
-//                                         to confirm, removed again by fingerprint) — and the TRACKER judges the family by that door alone (the form-aware
-//                                         `layers` below; the settings env door stays the cli/vscode forms' own); its proxy door is MEASURED (§6.4, 2026-10-12,
+//                                         to confirm, removed again by fingerprint) — and the TRACKER judges the network service by that door alone (the base
+//                                         layers' Chromium roles, D51④; the settings env door stays the cli/vscode forms' own); its proxy door is MEASURED (§6.4, 2026-10-12,
 //                                         measured): the model traffic lives in the Chromium network service
 //                                         (`Claude Helper --type=utility`), every proxy env var is ignored, and the one door that works is the desktop-launcher
 //                                         opt-in item — a named launcher starting the real app with Chromium's --proxy-server at the group's credential-less
@@ -27,43 +27,6 @@ import linux from '../claude-code.mjs'
 
 const raw = String.raw
 const settingsFile = (ctx) => path.join(ctx.env.get('CLAUDE_CONFIG_DIR') || path.join(ctx.home, '.claude'), 'settings.json')
-
-// The desktop form's process family, in one list: the main bundle binary and the Chromium Helpers under Contents/Frameworks/ (the bare `Claude Helper` —
-// the --type=utility network service that owns every model socket, measured on macOS — with the (Renderer) and (GPU) variants beside it,
-// conservatively). Unanchored, so /Applications and ~/Applications both meet them; these same patterns are the kernel's PROCESS-PATH-REGEX rules (the
-// decrypt half's per-process arm) and the shape the form-aware layers below tell the family by.
-const DESKTOP_FAMILY = [
-  raw`\/Claude\.app\/Contents\/MacOS\/Claude`,
-  raw`\/Claude\.app\/Contents\/Frameworks\/Claude Helper\.app\/Contents\/MacOS\/Claude Helper`,
-  raw`\/Claude\.app\/Contents\/Frameworks\/Claude Helper \(Renderer\)\.app\/Contents\/MacOS\/Claude Helper \(Renderer\)`,
-  raw`\/Claude\.app\/Contents\/Frameworks\/Claude Helper \(GPU\)\.app\/Contents\/MacOS\/Claude Helper \(GPU\)`,
-]
-// Is this command line one of the family's own? `ps` joins the command line with spaces and the tracker re-splits it on white space, so a path with spaces in
-// it ("Claude Helper.app", "MacOS/Claude Helper") arrives split across argv — argv[0] alone cannot carry the shape. The argv[0] the process really has is the
-// cmdline's first k space-separated tokens for SOME k, and such a candidate is a family binary when a pattern matches its END — the patterns are unanchored
-// fragments that begin with their own slash (they meet /Applications/Claude.app and ~/Applications/Claude.app alike, exactly as the form's rules do), so an
-// end match is at a path-segment boundary by construction — and the candidate is an absolute path (argv[0] of these processes always is: launchd, the
-// launcher's exec and Chromium's own spawns all use absolute paths). A family path that merely appears in an argument of some other program therefore never
-// qualifies (its candidate does not start with a slash), nor does a join that runs past the binary into its flags (it no longer ends where the pattern ends);
-// a relativized launch falls the fail-safe way — routed by the kernel's rules, trusted by no door, forwarded only.
-const isFamilyCmdline = (cmdline) => {
-  if (cmdline === '') return false
-  const tokens = cmdline.split(/\s+/)
-  for (let k = 1; k <= tokens.length; k++) {
-    const candidate = tokens.slice(0, k).join(' ')
-    if (candidate[0] !== '/') continue
-    for (const p of DESKTOP_FAMILY) if (new RegExp(`(?:${p})$`, 'i').test(candidate)) return true
-  }
-  return false
-}
-
-// d.darwin.layers (osLayers prefers it, wiring.mjs): form-aware — see the `layers:` row's comment below for the door's semantics.
-function darwinLayers(ctx) {
-  const cmdline = (ctx.argv || []).join(' ')
-  if (!isFamilyCmdline(cmdline)) return linux.layers(ctx)
-  if (!ctx.keychain || !ctx.caFile) return []
-  return [{ name: `login keychain (asight's CA trusted, ${String(ctx.keychain.fp256).slice(0, 23)}…)`, mode: 'override', vars: { NODE_EXTRA_CA_CERTS: ctx.caFile }, live: false, since: ctx.keychain.since }]
-}
 
 export default {
   groups: [
@@ -108,19 +71,17 @@ export default {
     // (and ~/Applications/…: the patterns are not anchored) AND the Chromium Helpers under Contents/Frameworks/ — `Claude Helper` (the --type=utility network
     // service that owns every model socket), with (Renderer) and (GPU) beside it, conservatively, so the family's processes never fall out of the form (a
     // Helper CONNECT that the kernel's MATCH→upstream took was the untracked splice of the 2026-10-12 phase-2 run). Image names are exact, one by one.
-    { id: 'claude-code.desktop', g: 'claude-code.desktop', match: { image: ['Claude', 'Claude Helper', 'Claude Helper (Renderer)', 'Claude Helper (GPU)'], path: DESKTOP_FAMILY, reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    { id: 'claude-code.desktop', g: 'claude-code.desktop', match: { image: ['Claude', 'Claude Helper', 'Claude Helper (Renderer)', 'Claude Helper (GPU)'], path: [
+      raw`\/Claude\.app\/Contents\/MacOS\/Claude`,
+      raw`\/Claude\.app\/Contents\/Frameworks\/Claude Helper\.app\/Contents\/MacOS\/Claude Helper`,
+      raw`\/Claude\.app\/Contents\/Frameworks\/Claude Helper \(Renderer\)\.app\/Contents\/MacOS\/Claude Helper \(Renderer\)`,
+      raw`\/Claude\.app\/Contents\/Frameworks\/Claude Helper \(GPU\)\.app\/Contents\/MacOS\/Claude Helper \(GPU\)`,
+    ], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
   ],
   inject: (ctx) => linux.inject(ctx),
-  // The desktop family's trust door (4.9 §6.4's trust arm): a family process — told by its command line STARTING with one of the family paths (the joined
-  // line: `ps` loses argv's boundaries to the spaces in "Claude Helper.app", so argv[0] alone cannot carry the shape) — gets ONE layer, the login-keychain
-  // item as the wiring reports it (ctx.keychain: the manifest's confirmed optin-keychain-cert entry, live-read; ctx.caFile: this build's CA), and never the
-  // settings layers: every env door is dead for Desktop (§6.4's measured verdict), and borrowing the CLI form's settings CA would decrypt without the
-  // keychain — breaking the very TLS it decrypted. The layer points the chain's NODE_EXTRA_CA_CERTS at the CA file (evaluate() reads it back and finds the
-  // fingerprint), `live:false` + `since` = the item's installed_at carry the config-after-start rule (the Helper respawns at app start, and the item
-  // predates the shim relaunch — 2026-10-12), and `mode:'override'` is solid to the tracker's env-unreadable arm (darwin never reads another process's
-  // env). Without the item: no layer, var-missing, the engine only forwards — exactly the impact text's promise. The cli and vscode forms keep the base
-  // layers (the settings env door) byte for byte.
-  layers: darwinLayers,
+  // Trust: no darwin layers of their own. The base layers split the Desktop family by Chromium role (D51④, core/trust/chromium.mjs): the network
+  // service (`Claude Helper --type=utility …NetworkService`) is judged by the login-keychain item alone (the wiring's `desktopDoor`), every other
+  // Chromium child is chromium-child, and a process with no --type= (the CLI, the Desktop-bundled CC, the main binary) by the settings env.
   proxy: {
     env: ['HTTPS_PROXY', 'HTTP_PROXY'],
     files: [{ path: '~/.claude/settings.json', key: 'env.HTTPS_PROXY', format: 'json' }],

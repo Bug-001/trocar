@@ -20,7 +20,7 @@ import path from 'node:path'
 import { parseJsonc, hostOf } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { urlHostsDeep, dotenvLayer, isOwnPath } from './_common.mjs'
-import { NETWORK_SERVICE_ARG } from './claude-code.mjs'
+import { NETWORK_SERVICE_ARG } from '../core/trust/chromium.mjs'
 
 const ZCJS = '/glm/zcode\\.cjs' // the bundle, as an `args` pattern over the arguments (D51)
 

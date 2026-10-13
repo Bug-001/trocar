@@ -15,6 +15,7 @@
 import path from 'node:path'
 import { parseJsonc } from '../core/config-read.mjs'
 import { envHosts, argAfter, isOwnPath } from './_common.mjs'
+import { chromiumRole, NETWORK_SERVICE_ARG } from '../core/trust/chromium.mjs'
 
 const BASE_URL_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL', 'ANTHROPIC_FOUNDRY_BASE_URL', 'ANTHROPIC_BEDROCK_MANTLE_BASE_URL']
 const HOST_MANAGED_DROPS = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'NO_PROXY', 'no_proxy', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED'])
@@ -35,7 +36,23 @@ function envBlock(ctx, file) {
   return { vars }
 }
 
+// The layers by Chromium role (D51④, plan §2.5): Claude Desktop's network service owns the model sockets and reads no settings env (4.9 §6.4's
+// measured verdict; win F9) — its one door is the desktop trust item the arch injects as `ctx.desktopDoor` ({ since, name }: darwin's confirmed
+// login-keychain item, win32's confirmed CurrentUser\Root item, either only while its fingerprint is this build's CA). That door becomes ONE synthetic
+// layer pointing NODE_EXTRA_CA_CERTS at `ctx.caFile` (evaluate() reads it back), `live:false` + `since` = the item's installed_at (config-after-start),
+// `mode:'override'` (solid to the tracker's env-unreadable arm). Another Chromium child gets no layer (refined to chromium-child). A process with no
+// --type= — the CLI, the Desktop-bundled CC (mac F1), Desktop's own main process — keeps the settings layers.
 function layers(ctx) {
+  const role = chromiumRole(ctx.argv)
+  if (role === 'child') return []
+  if (role === 'network-service') {
+    const door = ctx.desktopDoor
+    return door && ctx.caFile ? [{ name: door.name || 'desktop trust item', mode: 'override', vars: { NODE_EXTRA_CA_CERTS: ctx.caFile }, live: false, since: door.since }] : []
+  }
+  return settingsLayers(ctx)
+}
+
+function settingsLayers(ctx) {
   const cfgDir = ctx.environ.get('CLAUDE_CONFIG_DIR')
   const userDir = cfgDir || path.join(ctx.home, '.claude')
   const managed = MANAGED_DIR[ctx.os]
@@ -113,10 +130,6 @@ function inject(ctx) {
   }
 }
 
-/** The Chromium network-service process's arguments (an `args` pattern over `rest`): the Electron hosts' (Claude Desktop, Z-Code Desktop on
- *  win32) utility process that owns the sockets. T6 moves it to core/trust/chromium.mjs. */
-export const NETWORK_SERVICE_ARG = '(^| )--utility-sub-type=network\\.mojom\\.NetworkService( |$)'
-
 // Which processes are Claude Code (D51 preset, every OS; RFC 4.6 「按 harness」): the CLI by any install (native versions/<v>, npm, the editor
 // extensions' native binary, the Desktop-bundled copy, Desktop's own main process), and Desktop's Chromium network service. Its helpers `rg` and
 // `apply-seccomp` run under its exe with their own argv[0].
@@ -158,7 +171,9 @@ export default {
     // uninstall step 5 only (the tracker still judges a running CC at start): a CC from before install uses a value
     // added to its settings on new connections (lab ④), so after uninstall it may still trust asight until it restarts
     rereadsEntry: true,
+    refine: (r, _env, { argv } = {}) => (r.reason === 'var-missing' && chromiumRole(argv) === 'child' ? 'chromium-child' : null),
     hints: {
+      'chromium-child': 'a Claude Desktop Chromium process other than the network service (a renderer, the GPU process, another utility): it owns no model sockets and is never decrypted',
       'settings-ignored-managed-by-host': 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST makes Claude Code ignore NODE_EXTRA_CA_CERTS from settings files',
       'settings-ignored-restricted': 'restricted mode ignores settings env',
       'settings-ignored-setting-sources': '--setting-sources excludes the scope that holds the CA',

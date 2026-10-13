@@ -8,11 +8,28 @@
 // ZCode.exe is no shared image, but two forms use it, so there is no PROCESS-NAME rule (it would hand the other form's connections to this one's listener).
 import path from 'node:path'
 import linux, { CLI_CMDLINE } from '../z-code.mjs'
+import { parseJsonc } from '../../core/config-read.mjs'
+import { chromiumRole } from '../../core/trust/chromium.mjs'
 
 const raw = String.raw
 const inject = (ctx) => linux.inject(ctx)
 const IMAGE_PATH = raw`\\Programs\\ZCode\\ZCode\.exe`
 const desktopSetting = (ctx) => path.join(ctx.env.get('ZCODE_DESKTOP_HOME_DIR') || ctx.home, '.zcode', 'v2', 'setting.json')
+
+// The desktop's Chromium network service (`ZCode.exe --type=utility …NetworkService`, D51④, plan §2.5) owns its sockets and trusts what the app's
+// own setting names: one synthetic layer, opened only by the wiring's `desktopDoor` (the confirmed optin-zcode item) AND v2/setting.json's
+// httpProxyCaCertPath — evaluate() reads that file back and finds asight's CA in it, or the verdict is untrusted; without either, no layer
+// (var-missing). `since` = the item's installed_at (config-after-start). The app-server (no Chromium role) keeps the base caCertFile layers.
+function layers(ctx) {
+  const role = chromiumRole(ctx.argv)
+  if (role === null) return linux.layers(ctx)
+  if (role !== 'network-service' || !ctx.desktopDoor) return []
+  const file = desktopSetting(ctx)
+  const text = ctx.readText(file)
+  const ca = text == null ? null : ((parseJsonc(text).data || {}).httpProxyCaCertPath)
+  if (typeof ca !== 'string' || !ca.trim()) return []
+  return [{ name: `desktop setting httpProxyCaCertPath (${file})`, file, mode: 'override', vars: { ZCODE_AGENT_CA_CERT: ca.trim() }, live: false, since: ctx.desktopDoor.since }]
+}
 
 export default {
   groups: [
@@ -42,6 +59,7 @@ export default {
     { id: 'z-code.desktop', g: 'z-code.desktop', match: { image: 'ZCode.exe', path: [IMAGE_PATH], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
   ],
   inject,
+  layers,
   proxy: {
     env: ['ZCODE_HTTP_PROXY'],
     files: [{ path: '%USERPROFILE%\\.zcode\\cli\\config.json', key: 'network.httpProxy', format: 'json' }],
