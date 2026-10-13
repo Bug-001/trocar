@@ -36,8 +36,9 @@ test('V65 status --json: the identity block — a good custom item (source custo
     const { j, by } = await identityOf(s, deps)
     const cc = by['claude-code']
     assert.ok(cc, `${label}: claude-code has an identity block`)
-    assert.deepEqual([cc.file.path, cc.file.state], [path.join(s.home, '.asight', 'agents.json'), 'ok'], label)
-    assert.deepEqual(cc.file.problems.map((p) => [p.index, p.code]), [[1, 'wide-name-needs-args']], `${label}: the bad item is a problem with its index`)
+    assert.deepEqual([j.agent_list.path, j.agent_list.state], [path.join(s.home, '.asight', 'agents.json'), 'ok'], label)
+    assert.deepEqual(j.agent_list.problems.map((p) => [p.index, p.code]), [[1, 'wide-name-needs-args']], `${label}: the bad item is a problem with its index`)
+    assert.ok(!('file' in cc), `${label}: the file is said once, not per harness`)
     assert.deepEqual(cc.names.find((n) => n.name === 'claude-nightly'), { name: 'claude-nightly', source: 'custom' }, label)
     assert.deepEqual(cc.names.find((n) => n.name === 'claude'), { name: 'claude', source: 'preset' }, label)
     assert.ok(!cc.names.some((n) => n.name === 'node'), `${label}: the bad item does not apply`)
@@ -57,16 +58,16 @@ test('V65 status --json: the identity block — a good custom item (source custo
 test('V65 a name the user has since put on the list is no longer said to be on no list; a broken file is said with its state; no file is state absent and no problems', async () => {
   const s = await installedHome()
   writeFlows(s.home, [{ event: 'daemon-start', pid: 1 }, unknownEvent('claude-canary', 7002)])
-  let { by } = await identityOf(s)
-  assert.deepEqual([by['claude-code'].file.state, by['claude-code'].file.problems], ['absent', []])
+  let { by, j } = await identityOf(s)
+  assert.deepEqual([j.agent_list.state, j.agent_list.problems], ['absent', []])
   assert.deepEqual(by['claude-code'].unknown.map((u) => u.name), ['claude-canary'])
   writeList(s.home, { version: 1, agents: [{ harness: 'claude-code', name: 'claude-canary' }] })
   ;({ by } = await identityOf(s))
   assert.deepEqual(by['claude-code'].unknown, [], 'on the list now: the condition no longer names it')
   fs.writeFileSync(path.join(s.home, '.asight', 'agents.json'), '{ not json')
-  ;({ by } = await identityOf(s))
-  assert.equal(by['claude-code'].file.state, 'unparsable')
-  assert.deepEqual(by['claude-code'].file.problems.map((p) => [p.index, p.code]), [[null, 'unparsable']])
+  ;({ j } = await identityOf(s))
+  assert.equal(j.agent_list.state, 'unparsable')
+  assert.deepEqual(j.agent_list.problems.map((p) => [p.index, p.code]), [[null, 'unparsable']])
 })
 
 test('fold: process-unknown is a per-(harness, name) fact of this daemon life — not a condition (no ⚠), and a daemon restart clears it', () => {
@@ -77,4 +78,24 @@ test('fold: process-unknown is a per-(harness, name) fact of this daemon life �
   assert.deepEqual(f.unknown_procs.map((u) => [u.harness, u.name, u.pid, u.door, u.wide]), [['claude-code', 'claude-canary', 7002, 'claude-code.settings', false]])
   const g = foldFlows([...recs, { ts: at(0), event: 'daemon-start', pid: 2 }], { now: Date.parse('2026-10-14T12:00:00Z') })
   assert.deepEqual(g.unknown_procs, [], 'a new daemon life starts with none')
+})
+
+test('1.6 §9.7: status reads agents.json itself — with no harness installed or named, a broken file is still said (human view and --json agent_list)', async () => {
+  const { tmpDir } = await import('../helpers/tmp.mjs')
+  const { fakeIo } = await import('./fixtures/on-ctx.mjs')
+  const { runStatusCli } = await import('../../src/cli/status.mjs')
+  const { down, SOCK } = await import('./fixtures/status-ctx.mjs')
+  const home = tmpDir('asight-list-only-')
+  fs.mkdirSync(path.join(home, '.asight'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.asight', 'agents.json'), '{ not json')
+  const parts = { os: 'darwin', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: () => [] } } }
+  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
+  const human = fakeIo()
+  await runStatusCli([], { io: human, home, platform: 'darwin', env: { HOME: home }, deps })
+  assert.match(human.stdoutText(), /名单文件 .*agents\.json: unparsable/)
+  const io = fakeIo()
+  await runStatusCli(['--json'], { io, home, platform: 'darwin', env: { HOME: home }, deps })
+  const j = JSON.parse(io.stdoutText())
+  assert.deepEqual(validateReceipt(j), [])
+  assert.deepEqual([j.agent_list.state, j.agent_list.problems.map((p) => p.code)], ['unparsable', ['unparsable']])
 })

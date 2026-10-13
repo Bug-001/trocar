@@ -70,6 +70,7 @@ export function validateReceipt(r) {
   }
   if ('log' in r && !(r.log === null || isString(r.log))) bad.push('log: neither a path nor null')
   if ('linger' in r && !(r.linger === true || r.linger === false || r.linger === 'unknown')) bad.push('linger: not true, false or "unknown"')
+  if ('agent_list' in r) bad.push(...validateAgentList(r.agent_list))
   if (Array.isArray(r.harnesses)) r.harnesses.forEach((h, i) => { if (isObject(h) && h.identity !== undefined) bad.push(...validateIdentity(h.identity).map((x) => `harnesses[${i}].${x}`)) })
   checkHarnessIds(r, '', bad, new WeakSet())
   return bad
@@ -78,21 +79,25 @@ export function validateReceipt(r) {
 // ── the name list of `status --json` (RFC 1.6 §9.7, D51③⑤): `harnesses[].identity` ──────────────────────────────────────────────────────────────────────────
 const AGENT_LIST_STATES = Object.freeze(['absent', 'ok', 'unreadable', 'unparsable'])
 const NAME_SOURCES = Object.freeze(['preset', 'custom'])
-/** Problems with one harness's `identity` block (`[]` = valid): { file: { path, state, problems: [{ index, code, detail }] }, names / ignored: [{ name, args?, source }],
- *  unknown: [{ name, wide, named, pid, door }] } — the closed sets above, a problem's index an item number or null (the whole file), an unknown's name null only when the door could not read it. */
+/** Problems with `agent_list` (the user's agents.json, once per receipt): { path, state, problems: [{ index, code, detail }] } — a problem's index an item number
+ *  or null (the whole file). */
+function validateAgentList(f) {
+  if (!isObject(f)) return ['agent_list: not an object']
+  const bad = []
+  if (!isId(f.path)) bad.push('agent_list.path: empty')
+  if (!AGENT_LIST_STATES.includes(f.state)) bad.push(`agent_list.state: ${JSON.stringify(f.state)} is not one of ${AGENT_LIST_STATES.join(' ')}`)
+  if (!Array.isArray(f.problems)) bad.push('agent_list.problems: not a list')
+  else listOf(f, 'problems', bad, (p, at) => {
+    if (!isObject(p) || !(p.index === null || isCount(p.index)) || !isId(p.code) || !isId(p.detail)) bad.push(`agent_list.${at}: needs index (an item number or null), code and detail`)
+  })
+  return bad
+}
+
+/** Problems with one harness's `identity` block (`[]` = valid): { names / ignored: [{ name, args?, entry?, source }], unknown: [{ name, wide, named, pid, door }] } —
+ *  the closed sets above, an unknown's name null only when the door could not read it. */
 function validateIdentity(x) {
   if (!isObject(x)) return ['identity: not an object']
   const bad = []
-  const f = x.file
-  if (!isObject(f)) bad.push('identity.file: not an object')
-  else {
-    if (!isId(f.path)) bad.push('identity.file.path: empty')
-    if (!AGENT_LIST_STATES.includes(f.state)) bad.push(`identity.file.state: ${JSON.stringify(f.state)} is not one of ${AGENT_LIST_STATES.join(' ')}`)
-    listOf(f, 'problems', bad, (p, at) => {
-      if (!isObject(p) || !(p.index === null || isCount(p.index)) || !isId(p.code) || !isId(p.detail)) bad.push(`identity.file.${at}: needs index (an item number or null), code and detail`)
-    })
-    if (!Array.isArray(f.problems)) bad.push('identity.file.problems: not a list')
-  }
   for (const key of ['names', 'ignored']) {
     if (!Array.isArray(x[key])) { bad.push(`identity.${key}: not a list`); continue }
     x[key].forEach((n, i) => {

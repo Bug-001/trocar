@@ -172,7 +172,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     if (F.routing === 'driver' && drifts.some((d) => d.code === 'proxy-changed')) add('proxy-changed')
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
-    const listPath = F.identity && F.identity[h] ? F.identity[h].file.path : null
+    const listPath = F.agentList ? F.agentList.path : null
     for (const u of (F.identity && F.identity[h] && F.identity[h].unknown) || []) found.set(`process-unknown\u0000${u.name}`, make('process-unknown', { ...base, u, listPath }))
     if (named && F.desired[h] === 'on' && hf.installed !== false && ![...found.values()].some((f) => f.class !== 'hint')) add('cause-unknown') // a failure or an expected finding already says why; only hints (about the data) leave it open
     out.push(...[...found.values()].sort((a, b) => BY_CLASS[a.class] - BY_CLASS[b.class]))
@@ -181,7 +181,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     const host = { F, h: null, hf: null, t: null, user, sh, platform: F.platform }
     if (F.linger === false) out.push(make('linger-off', host))
     if (F.otherRedirector === true) out.push(make('other-redirector', host))
-    const file = F.identity ? (Object.values(F.identity)[0] || {}).file : null
+    const file = F.agentList
     if (file && file.problems.length) out.push(make('agent-list-invalid', { ...host, file }))
   }
   return out

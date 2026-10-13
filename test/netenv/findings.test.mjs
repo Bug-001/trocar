@@ -26,7 +26,7 @@ const viaProxy = (value = 'http://127.0.0.1:7890') => ({ setting: proxyOf(value)
 
 // status's name list per harness (1.6 §9.7 `identity`), the shape the facts carry it in
 const LIST = '/home/alice/.asight/agents.json'
-function idOf(h, { unknown = [], problems = [], state = 'ok' } = {}) { return { [h]: { file: { path: LIST, state, problems }, names: [{ name: 'claude', source: 'preset' }], ignored: [], unknown } } }
+function idOf(h, { unknown = [] } = {}) { return { [h]: { names: [{ name: 'claude', source: 'preset' }], ignored: [], unknown } } }
 
 // one injected fact set per code: { codes: exactly what it must give, h, facts }. The rows of §9.3 serve for the codes they illustrate; the others are built here.
 const SETS = {
@@ -59,7 +59,7 @@ const SETS = {
   'inferred-behaviour': { h: 'hermes', facts: row(21).facts, codes: row(21).findings }, // hermes on Linux: inferred from the Windows measurements (claude-code's proxy path is measured there: V54)
   'cause-unknown': { h: 'claude-code', facts: facts('claude-code'), names: ['claude-code'], codes: ['cause-unknown'] },
   'process-unknown': { h: 'claude-code', facts: facts('claude-code', { identity: idOf('claude-code', { unknown: [{ name: 'claude-canary', wide: false, pid: 7002, door: 'claude-code.settings' }] }) }), codes: ['process-unknown'] },
-  'agent-list-invalid': { h: null, facts: facts('claude-code', { identity: idOf('claude-code', { problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'agents[1]: node is an interpreter name; add "args"' }] }) }), codes: ['agent-list-invalid'] },
+  'agent-list-invalid': { h: null, facts: facts('claude-code', { agentList: { path: LIST, state: 'ok', problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'agents[1]: node is an interpreter name; add "args"' }] } }), codes: ['agent-list-invalid'] },
 }
 // D51③⑤ (1.6 §9.6): the name list's two findings — a state event of the door and a failure code of the harness part, both in health/codes.mjs's closed sets
 const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
@@ -327,7 +327,7 @@ test('V49 end to end, with the real descriptors: a proxy that came from the invo
 test('V66 process-unknown: its line, written into agents.json, makes the registry claim the same process for that harness; a WIDE name gets no such line; agent-list-invalid has its code, the file and the item', async () => {
   const home = tmpDir('asight-v66-')
   const list = path.join(home, '.asight', 'agents.json')
-  const F = facts('claude-code', { identity: { 'claude-code': { ...idOf('claude-code')['claude-code'], file: { path: list, state: 'absent', problems: [] }, unknown: [{ name: 'claude-canary', wide: false, pid: 7002, door: 'claude-code.settings' }, { name: 'python', wide: true, pid: 7003, door: 'claude-code.settings' }] } } })
+  const F = facts('claude-code', { agentList: { path: list, state: 'absent', problems: [] }, identity: { 'claude-code': { ...idOf('claude-code')['claude-code'], unknown: [{ name: 'claude-canary', wide: false, pid: 7002, door: 'claude-code.settings' }, { name: 'python', wide: true, pid: 7003, door: 'claude-code.settings' }] } } })
   const found = findingsOf(F).filter((x) => x.code === 'process-unknown')
   assert.equal(found.length, 2, 'one finding per name')
   for (const f of found) { assert.equal(f.class, 'hint'); assert.deepEqual(validateFinding(f), [], f.what); assert.equal(f.verify, 'asight status claude-code:该 pid 带上命中的名字') }
@@ -352,7 +352,7 @@ test('V66 process-unknown: its line, written into agents.json, makes the registr
 })
 
 test('V66 process-unknown `named` (a preset name whose args missed, e.g. the Z Code GUI main): no bare {harness, name} line — it would claim every process of that name — and it does not say "not on the list"', () => {
-  const F = facts('z-code', { identity: { 'z-code': { ...idOf('z-code')['z-code'], file: { path: '/h/.asight/agents.json', state: 'absent', problems: [] }, unknown: [{ name: 'zcode', wide: false, named: true, pid: 7004, door: 'z-code.desktop' }] } } })
+  const F = facts('z-code', { agentList: { path: '/h/.asight/agents.json', state: 'absent', problems: [] }, identity: { 'z-code': { ...idOf('z-code')['z-code'], unknown: [{ name: 'zcode', wide: false, named: true, pid: 7004, door: 'z-code.desktop' }] } } })
   const [f] = findingsOf(F).filter((x) => x.code === 'process-unknown')
   assert.ok(f)
   assert.deepEqual(validateFinding(f), [], f.what)
