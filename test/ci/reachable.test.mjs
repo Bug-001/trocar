@@ -24,13 +24,8 @@ const SOURCE = /\.(mjs|cjs|js)$/
 const ENTRIES = ['bin/asight.mjs', 'src/off/main.mjs']
 
 /** Modules that are not reached yet. The list only shrinks: adding one needs a reason in the PR (0.1 §6); a listed module that
- *  became reachable fails below, so it gets removed here. A listed path that does not exist is skipped. */
+ *  became reachable or no longer exists fails below, so it gets removed here. */
 export const UNREACHED = Object.freeze({
-  'src/capture/steer-watch.mjs': 'retired old capture, deleted by PR #58',
-  'src/capture/reverse-proxy.mjs': 'retired old capture, deleted by PR #58',
-  'src/capture/response-tee.mjs': 'retired old capture, deleted by PR #58',
-  'src/capture/capture-agents.mjs': 'retired old capture, deleted by PR #58',
-  'src/capture/relay-tee.mjs': 'retired old capture, deleted by PR #58',
   'src/collector/core/redirector.mjs': 'the Redirector contract (4.6:333) plus createStaticRedirector, which only tests use',
   'src/collector/core/engine/codes.mjs': 'regrouping of src/health/codes.mjs that only tests use',
   'src/query/index.mjs': 'spec 3.5:44 names runNamed as the server\'s only entry, but src/server.mjs does not use it',
@@ -89,8 +84,9 @@ test('self-check: the analysis reports an orphan and follows via(), directory UR
 
 test('every src module is reachable from bin/asight.mjs or src/off/main.mjs, except the shrink-only list', () => {
   const left = unreachable(REPO)
-  const listed = Object.keys(UNREACHED).filter((p) => fs.existsSync(path.join(REPO, p)))
-  const nowReached = listed.filter((p) => !left.includes(p))
+  const gone = Object.keys(UNREACHED).filter((p) => !fs.existsSync(path.join(REPO, p)))
+  assert.deepEqual(gone, [], `deleted, so remove from UNREACHED: ${gone.join(', ')}`)
+  const nowReached = Object.keys(UNREACHED).filter((p) => !left.includes(p))
   assert.deepEqual(nowReached, [], `reachable now, so remove from UNREACHED (the list only shrinks): ${nowReached.join(', ')}`)
   const extra = left.filter((p) => !(p in UNREACHED))
   assert.deepEqual(extra, [], `no entry reaches ${extra.join(', ')}: delete the module, or wire it in; if the scan missed an edge, teach unreachable() that edge (adding to UNREACHED needs a reason in the PR, 0.1 §6)`)

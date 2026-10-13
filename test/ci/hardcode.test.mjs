@@ -68,7 +68,6 @@ test('2 · the overfit check catches the audit\'s M3 pattern and passes the ship
 // The test files that still pin counts, with how many: this list may only shrink (fix a file → lower or delete its row).
 const COUNT_PINS = {
   'test/cache/cache-events.test.mjs': 1,
-  'test/capture/non-llm-verbatim.test.mjs': 2,
   'test/collector/arch/win32/helper.test.mjs': 1,
   'test/collector/core/socks.test.mjs': 1,
   'test/collector/core/tls-ca.test.mjs': 1,
@@ -83,10 +82,10 @@ const COUNT_PINS = {
 }
 export const countPins = (t) => (t.match(/\.length,\s*\d{2,}\s*\)|\.(?:size|length)\)?\s*,\s*\d{2,}\s*[,)]/g) || []).length
 
-/** `now` = files with pins today, `listed` = the allowance. A listed file that no longer exists is not stale (its PR deleted it). */
+/** `now` = files with pins today, `listed` = the allowance. A listed file that no longer exists is stale too: delete its row. */
 export function comparePins(now, listed, exists) {
   const grew = Object.entries(now).filter(([f, n]) => n > (listed[f] || 0)).map(([f, n]) => `${f}: ${n} (allowed ${listed[f] || 0})`)
-  const stale = Object.entries(listed).filter(([f, n]) => exists(f) && (now[f] || 0) < n).map(([f, n]) => `${f}: ${now[f] || 0} now, listed ${n}`)
+  const stale = Object.entries(listed).filter(([f, n]) => !exists(f) || (now[f] || 0) < n).map(([f, n]) => exists(f) ? `${f}: ${now[f] || 0} now, listed ${n}` : `${f}: no such file, listed ${n}`)
   return { grew, stale }
 }
 
@@ -97,10 +96,11 @@ test('3 · no new count pins in tests; a file that dropped its pins leaves the l
   assert.deepEqual(stale, [], 'lower or delete the row so the list keeps shrinking')
 })
 
-test('3 · the pin comparison: a deleted file is not stale, fewer pins is stale, more pins is grown (it can go red)', () => {
-  const listed = { 'a.mjs': 2, 'gone.mjs': 1 }
+test('3 · the pin comparison: fewer pins or a deleted file is stale, more pins is grown (it can go red)', () => {
+  const listed = { 'a.mjs': 2 }
   const exists = (f) => f !== 'gone.mjs'
   assert.deepEqual(comparePins({ 'a.mjs': 2 }, listed, exists), { grew: [], stale: [] })
+  assert.deepEqual(comparePins({ 'a.mjs': 2 }, { ...listed, 'gone.mjs': 1 }, exists).stale, ['gone.mjs: no such file, listed 1'])
   assert.deepEqual(comparePins({ 'a.mjs': 1 }, listed, exists).stale, ['a.mjs: 1 now, listed 2'])
   assert.deepEqual(comparePins({}, listed, exists).stale, ['a.mjs: 0 now, listed 2'])
   assert.deepEqual(comparePins({ 'a.mjs': 3, 'b.mjs': 1 }, listed, exists).grew, ['a.mjs: 3 (allowed 2)', 'b.mjs: 1 (allowed 0)'])
@@ -122,9 +122,11 @@ export function testOnlyExports() {
   return out
 }
 // The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
-const TEST_ONLY_EXPORTS_CEILING = 345
+// It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
+const TEST_ONLY_EXPORTS_CEILING = 333
 
-test('4 · exports only tests use do not grow', () => {
+test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
   const n = testOnlyExports().length
   assert.ok(n <= TEST_ONLY_EXPORTS_CEILING, `${n} src exports are used by tests only (ceiling ${TEST_ONLY_EXPORTS_CEILING}): test through the public entry instead`)
+  assert.equal(n, TEST_ONLY_EXPORTS_CEILING, `only ${n} test-only exports now: lower TEST_ONLY_EXPORTS_CEILING to ${n}`)
 })
