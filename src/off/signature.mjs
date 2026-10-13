@@ -1,9 +1,9 @@
 // signature.mjs (src/off) — match a running process against the process signatures of a harness, with the signatures as JSON (RFC 4.6
 // §身份与信任, §安装清单与卸载「撤销顺序」第 2 / 5 步, 1.6 R3). A harness descriptor declares its signatures as DATA (patterns over the facts
-// of a process: exe, argv, env …); `install` copies the one for this OS into the manifest (`liveness.<harness>.signature`), and `off` — which
+// of a process: exe, argv, env, and the derived names / name0 / rest …); `install` copies the one for this OS into the manifest (`liveness.<harness>.signature`), and `off` — which
 // runs without any descriptor, and in the standalone `asight-off` without the repo — judges which live process belongs to which harness
 // from that copy alone. So the matching function lives here, and src/collector/core/registry.mjs imports it: the daemon and `off` cannot
-// disagree about what a pattern means. Imports nothing.
+// disagree about what a pattern means.
 //
 // Pattern = { [factPath]: RegExp | RegExp[] | { [key]: string | RegExp } }; every entry must hold.
 //   factPath is a dotted path into the facts ('exe', 'argv', 'argv.0', 'env', …).
@@ -11,6 +11,9 @@
 //   RegExp[] vs array   → every RegExp matches some element
 //   object   vs Map/obj → every key present and equal (string) or matching (RegExp)
 // Put cheap paths (exe, argv) before 'env' in a pattern: env may be a lazy read of the process.
+// The derived facts `names` / `name0` / `rest` (src/off/identity.mjs, D51) are read through identityView, so a signature compiled from a name list
+// (compileIdentity) and an older one over exe / argv match with the same code. Imports only src/off/identity.mjs.
+import { processNames, name0, argRest } from './identity.mjs'
 
 export function factAt(facts, p) {
   let cur = facts
@@ -67,6 +70,20 @@ function patternView(facts) {
   return view
 }
 
+/** The facts as a pattern reads them, plus the derived identity facts as lazy getters: `names` (processNames), `name0`, `rest` (argRest). None of
+ *  them reads `env`, so a lazy env stays unread until a pattern asks for it. */
+export function identityView(facts) {
+  const view = Object.create(patternView(facts))
+  const lazy = (key, of) => {
+    let v, done = false
+    Object.defineProperty(view, key, { get() { if (!done) { v = of(facts); done = true } return v } })
+  }
+  lazy('names', processNames)
+  lazy('name0', name0)
+  lazy('rest', argRest)
+  return view
+}
+
 const revived = new WeakMap() // reviving builds RegExps; a table of hundreds of processes asks about the same few signatures
 function signatureOf(l) {
   if (!l || !l.signature || typeof l.signature !== 'object') return null
@@ -82,7 +99,7 @@ export const hasSignature = (l) => signatureOf(l) !== null
  *  `match` holds and whose `exclude` does not; none, or two that both claim it, is null (a process is never folded into a known identity on a
  *  guess, 0.1 §5). A harness whose snapshot has no signature (another OS, a manifest from before the snapshot) never matches — the caller asks hasSignature first. */
 export function matchHarness(liveness, facts) {
-  const view = patternView(facts)
+  const view = identityView(facts)
   const hit = []
   for (const [id, l] of Object.entries(liveness || {})) {
     const sig = signatureOf(l)
