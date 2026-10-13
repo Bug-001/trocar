@@ -69,6 +69,13 @@ test('kimi-code: the shim-set NODE_EXTRA_CA_CERTS trusts; without it the reason 
     assert.equal(why({}).reason, 'shim-not-on-path', 'no shim was installed (install said why)')
     s.put('.asight/collector/bin/kimi', '#!/bin/sh\n')
     assert.equal(why({}).reason, 'kimi-not-via-shim')
+    // the win twin: the shim is kimi.cmd there (arch/win32's opt-in item) — the reason must not mislabel a door
+    // that is really there (measured live on a Windows test machine, 2026-10-13: flows rows said shim-not-on-path while the
+    // session PATH resolved the shim first)
+    fs.rmSync(path.join(dir, 'bin', 'kimi'))
+    assert.equal(why({}).reason, 'shim-not-on-path', 'both shim names gone: back to no-shim-installed')
+    s.put('.asight/collector/bin/kimi.cmd', '@echo off\r\n')
+    assert.equal(why({}).reason, 'kimi-not-via-shim', 'the .cmd shim alone is the door on Windows')
     assert.equal(why({ NODE_EXTRA_CA_CERTS: s.put('corp.pem', OTHER.certPem) }).reason, 'kimi-not-via-shim', "the user's own CA file: started without the shim, not 'ca-not-in-file'")
     assert.equal(why({}, { exe: '/usr/bin/node', argv: ['node', '/usr/local/bin/kimi'] }).reason, 'kimi-npm-no-shim')
     fs.rmSync(extra)

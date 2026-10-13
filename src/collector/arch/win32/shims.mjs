@@ -9,11 +9,11 @@ import fs from 'node:fs'
 
 export const SHIM_SOURCES = new URL('./shims/', import.meta.url)
 
-const CMD_SLOTS = Object.freeze({ proxy: '__ASIGHT_PROXY__', caFile: '__ASIGHT_CA_FILE__', realBinary: '__ASIGHT_REAL_BINARY__' })
-export function renderCmdTemplate(name, { proxy = null, caFile = null, realBinary = null } = {}) {
+const CMD_SLOTS = Object.freeze({ proxy: '__ASIGHT_PROXY__', caFile: '__ASIGHT_CA_FILE__', realBinary: '__ASIGHT_REAL_BINARY__', markerDir: '__ASIGHT_MARKER_DIR__' })
+export function renderCmdTemplate(name, { proxy = null, caFile = null, realBinary = null, markerDir = null } = {}) {
   const src = fs.readFileSync(new URL(name, SHIM_SOURCES), 'utf8')
   let out = src
-  const values = { proxy, caFile, realBinary }
+  const values = { proxy, caFile, realBinary, markerDir }
   for (const [k, slot] of Object.entries(CMD_SLOTS)) {
     if (values[k] == null) continue
     const v = String(values[k])
@@ -27,4 +27,10 @@ export function renderCmdTemplate(name, { proxy = null, caFile = null, realBinar
   const crlf = out.replace(/\r?\n/g, '\r\n')
   if (!/^[\x20-\x7e\r\n\t]*$/.test(crlf)) throw new Error(`cmd template ${name}: the output is not plain ASCII`)
   return crlf
+}
+
+/** The per-pid launch-marker writer the kimi shim starts beside the real run (`kimi-marker.ps1` beside this file —
+ *  a static, parameterised script: no slots, so it ships verbatim). The opt-in item writes it next to the shim. */
+export function markerScript() {
+  return fs.readFileSync(new URL('kimi-marker.ps1', SHIM_SOURCES), 'utf8')
 }

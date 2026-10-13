@@ -11,6 +11,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { applyOptIn, planOptIns, optinFormsOf, OPTIN_NEVER } from '../../../../src/collector/arch/win32/optin.mjs'
 import { GROUPS, POLICY_KEY, rig, nativeKimi, realCmd, writeShortcut, sha1Thumb } from './fixtures/optin-world.mjs'
+import { markerScript as markerSource } from '../../../../src/collector/arch/win32/shims.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
 test('W64 the PATH item: through its fixed .ps1 and read back — the shim file with the proxy and the CA, the directory first on the user PATH, ledgered with scope, prior and undo_by_hand (W21: one broadcast, zero setx, the type kept)', async () => {
@@ -26,6 +27,11 @@ test('W64 the PATH item: through its fixed .ps1 and read back — the shim file 
   assert.match(shim, new RegExp(`if not defined HTTPS_PROXY set "HTTPS_PROXY=http://kimi-code\\.cli:${r.ingress.listenerToken}@127\\.0\\.0\\.1:${port}"`), 'the proxy is this form\'s kernel listener, with credentials (§6.3)')
   assert.match(shim, new RegExp(`set "NODE_EXTRA_CA_CERTS=.*asight-ca\\.pem"`), 'the CA file Node reads (the extra-kimi.pem rule: the extra bundle when there is one, else the collector CA)')
   assert.ok(shim.includes(`"${path.win32.join(npmDir, 'kimi.cmd')}" %*`), 'the real binary forwards the arguments')
+  // the per-pid launch marker's writer (the win twin of the mac shim's door: a Windows process's env is never readable, 4.8 §10.1)
+  const markerDir = path.win32.join(r.dir, 'run', 'trust')
+  const markerDirRe = markerDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  assert.match(shim, new RegExp(`start "" /b powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0kimi-marker\.ps1" -MarkerDir "${markerDirRe}"`), 'the shim starts the marker writer beside the real run, best-effort, pointing at the tracker\'s marker dir')
+  assert.equal(r.wfs.readFileSync(path.win32.join(binDir, 'kimi-marker.ps1'), 'utf8'), markerSource(), 'the marker writer ships beside the shim, verbatim')
   assert.equal(r.w.state['HKCU\\Environment'].Path.value, `${binDir};${npmDir}`, 'the directory is first, the rest keeps its order')
   assert.equal(r.w.state['HKCU\\Environment'].Path.kind, 'REG_EXPAND_SZ', 'the type is kept')
   assert.equal(r.w.broadcasts.length, 1, 'ONE WM_SETTINGCHANGE')
@@ -38,6 +44,7 @@ test('W64 the PATH item: through its fixed .ps1 and read back — the shim file 
   assert.deepEqual(e.prior_value, { kind: 'REG_EXPAND_SZ', value: npmDir }, 'the prior is what the ledger records')
   assert.match(e.undo_by_hand, /asight off kimi-code/, 'the undo is the agent\'s switch (V64)')
   assert.deepEqual([e.values.command, e.values.binDir], ['kimi', binDir])
+  assert.equal(e.values.markerScript, path.win32.join(binDir, 'kimi-marker.ps1'), 'the ledger names the marker writer, so off takes it out with the shim')
   assert.deepEqual(r.events, [{ event: 'optin-applied', where: 'optin', form: 'kimi-code.cli', item: 'user-path-shim', scope: 'user' }])
   assert.ok(r.notes.some((n) => n.outcome === 'ok'))
 })

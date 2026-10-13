@@ -143,6 +143,8 @@ export const UNDO_BY_KIND = {
     if (!v.command || !v.binDir) return { ok: false, result: 'failed', reason: `${entry.path}: the entry holds no shim to undo` }
     const shim = path.win32.join(v.binDir, `${v.command}.cmd`)
     try { fs.rmSync(shim, { force: true }) } catch (e) { return { ok: false, result: 'failed', reason: `the shim ${shim} could not be removed (${(e && e.code) || e})` } }
+    // the kimi shim's marker writer (a file the apply put beside the shim; an older entry may not name one)
+    if (v.markerScript) { try { fs.rmSync(v.markerScript, { force: true }) } catch { /* already gone: the shim directory dies below anyway */ } }
     const others = (manifest && Array.isArray(manifest.entries) ? manifest.entries : [])
       .filter((e) => e && e !== entry && e.kind === 'optin-user-path' && e.values && e.values.command && e.values.binDir)
       .map((e) => path.win32.join(e.values.binDir, `${e.values.command}.cmd`))
