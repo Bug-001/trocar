@@ -15,10 +15,9 @@
 //     group's own plan says of it — the `why`/`detail` of a `not-routed`, the doctor's `code` for a refused protocol, `form-unsupported`: the doctor's rows split by them, 4.8 §10.4);
 //   · the processes: the helper's `ps` matched with `matchForm` (the same rule the daemon routes by), each with the elevated verdict of `elevationOf` (integrity ≥ High, or a token
 //     that will not open while the image path reads — the latter marked inferred);
-//   · the listeners: the helper's `tcp-table` LISTEN rows with their owner pid named by the snapshot; TUN: `net-if` + `route` (the interface the default route takes);
-//   · the VPN: the 4.7 probe (detect) over the same reads and the Verge adapter's own facts() — product, mode, port, TUN, never a rule, a secret or a node (D43).
+//   · the listeners: the helper's `tcp-table` LISTEN rows with their owner pid named by the snapshot;
 //
-// Everything is injected through `deps` for a test (`helper` — one is started and closed here when none is given; `adapter` — the Verge adapter's facts(), null when there is none;
+// Everything is injected through `deps` for a test (`helper` — one is started and closed here when none is given;
 // `fs`, `spawn`); every read that fails becomes an `unknowns` entry with its reason (R11), the routing stays 'proxy'. The value a prior may hold never leaves this file unredacted.
 import nodeFs from 'node:fs'
 import path from 'node:path'
@@ -27,15 +26,12 @@ import { elevationOf, splitCommandLine } from './procinfo.mjs'
 import { matchForm } from './forms.mjs'
 import { groupsOf, planRoutes, priorOf, hostSetOf, proxyRecordsOf } from './route-plan.mjs'
 import { createProxyEntries } from './entries.mjs'
-import { readSystemProxy, readHkcuEnv } from './upstream.mjs'
+import { readSystemProxy, readHkcuEnv, proxyAddress } from './upstream.mjs'
 import { planOptIns } from './optin.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { readStateFile } from '../../../off/state.mjs'
 import { stateFile, collectorDir } from '../../../off/paths.mjs'
-import { detect, proxyAddress } from '../../../netenv/probe.mjs'
-import { PRODUCTS_WIN32 } from '../../../netenv/products-win32.mjs'
-import { createVergeAdapter, vergeHomeOf } from '../../../netenv/adapters/clash-verge-rev.mjs'
 import { redactProxyUrl, parseProxyUrl, settingSha } from '../../../netenv/redact.mjs'
 
 const base = (p) => String(p).split(/[\\/]/).pop()
@@ -116,7 +112,7 @@ function settingOf({ harness, group, proxy, ctx, manifest, hkcuEnv, shellSetting
 /**
  * Windows's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, harnesses, settings, netenv, env, home, adopted, deps }); `deps` (over `ctx.deps`): `helper`
  * (the resident helper's client — one is started and closed here when none is given), `adapter` (the Verge adapter's `facts()`, or null when there is none to read), `fs`, `spawn`.
- * → { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy, tun, vpn, unknowns }.
+ * → { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy, unknowns }.
  */
 export async function gatherWin32Facts(ctx, deps = {}) {
   const { status, harnesses = [], settings = {}, env = process.env, home = env.USERPROFILE || null } = ctx
@@ -150,11 +146,6 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const tblA = await call('tcp-table', { states: ['listen'] })
     const listenRows = tblA && Array.isArray(tblA.rows) ? tblA.rows.filter((r) => r && Number.isInteger(r.localPort) && Number.isInteger(r.pid)) : null
     if (!listenRows) fail('listeners', tblA && tblA.$failed ? 'denied' : 'unparseable', `the helper's socket table: ${(tblA && tblA.$failed) || 'no rows'}`)
-    const ifA = await call('net-if')
-    const ifRows = ifA && Array.isArray(ifA.interfaces) ? ifA.interfaces : null
-    const routeA = await call('route')
-    const defaultIface = routeA && routeA.iface && typeof routeA.iface.name === 'string' ? routeA.iface.name : null
-    if (!ifRows) fail('tun', ifA && ifA.$failed ? 'denied' : 'unparseable', `the helper's interface list: ${(ifA && ifA.$failed) || 'no rows'}`)
     const sp = await (D.readSystemProxy || readSystemProxy)({ helper })
     const hkcuEnv = await (D.readHkcuEnv || readHkcuEnv)({ helper })
     const [sysFact, sysForPlan] = (() => {
@@ -162,31 +153,6 @@ export async function gatherWin32Facts(ctx, deps = {}) {
       const addr = sp.autoConfigUrl ? null : proxyAddress(sp.server)
       return [{ value: sp.enable === true && addr ? `http://${addr.host}:${addr.port}` : null, pac: !!sp.autoConfigUrl }, sp]
     })()
-
-    // ---- the VPN / proxy software (4.7's probe over the same reads; the Verge adapter's own facts when there is one) ------------------------------------------------------
-    let verge = null
-    if ('adapter' in D) verge = D.adapter
-    else if (helper) {
-      try {
-        const vh = vergeHomeOf({ env, coreCmdlines: (psRows || []).map((r) => r.cmdline).filter((x) => typeof x === 'string') })
-        if (vh) verge = await createVergeAdapter({ home: vh, fs, helper, env, ...(D.listPipes ? { listPipes: D.listPipes } : {}) }).facts()
-      } catch { verge = null }
-    }
-    const focusPorts = [...new Set(Object.values(settings).map((s) => s && s.port).filter(Number.isInteger))]
-    const probed = detect({
-      ...(psRows ? { procs: { ok: true, rows: psRows } } : { procs: { ok: false, reason: 'denied' } }),
-      ...(listenRows ? { listeners: { ok: true, rows: listenRows } } : { listeners: { ok: false, reason: 'denied' } }),
-      systemProxy: sysForPlan || { ok: false, reason: 'denied' },
-      ...(ifRows ? { interfaces: { ok: true, rows: ifRows, ...(defaultIface ? { defaultIface } : {}) } } : {}),
-      focusPorts, ...(verge ? { verge } : {}),
-    }, { products: D.products || PRODUCTS_WIN32 })
-    const product = (probed.products || [])[0] || null
-    const vpn = product ? { product: product.id, version: product.version ?? null, pid: null, port: product.mixedPort ?? null, mode: product.mode ?? 'unknown', tun: product.tun === true ? true : product.tun === false ? false : null } : null
-    let tun = vpn ? vpn.tun : null
-    if (tun === null && ifRows) {
-      const hit = ifRows.find((i) => i.name === defaultIface && i.up === true)
-      tun = hit ? PRODUCTS_WIN32.some((p) => p.tunAdapters.some((n) => [hit.name, hit.description].some((x) => String(x ?? '').toLowerCase() === n.toLowerCase()))) : false
-    }
 
     // ---- the groups, their plan and their forms (the same pure reads the daemon re-runs) --------------------------------------------------------------------------------------------------------
     const groups = groupsOf(harnesses)
@@ -303,7 +269,7 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const forwarder = { pid: (status.daemon && Number.isInteger(status.daemon.pid)) ? status.daemon.pid : null, up: !!(reply || linksKnown), forms: fwForms }
 
     const listeners = (listenRows || []).map((r) => ({ addr: r.localAddr, port: r.localPort, pid: r.pid, exe: (psByPid.get(r.pid) || {}).exe ?? null }))
-    return { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy: sysFact, tun, ...(vpn ? { vpn } : {}), unknowns }
+    return { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy: sysFact, unknowns }
   } finally {
     if (own && helper) await helper.close()
   }

@@ -208,8 +208,7 @@ test('the proxy of the machine, through the real facts path over the helper\'s r
     ],
     internet: { ProxyEnable: { kind: 'REG_DWORD', value: 1 }, ProxyServer: { kind: 'REG_SZ', value: '127.0.0.1:7897' } },
   })
-  const adapter = { fields: {}, running: true, runtime: { version: '2.5.7', mode: 'rule', mixedPort: 7897, tun: false }, controller: {} }
-  const f = await gatherNetFacts({ platform: 'win32', home, env: {}, harnesses: all, status: statusOf(['claude-code']), netenv: { result: { products: [], unknown: [] } }, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper, adapter } })
+  const f = await gatherNetFacts({ platform: 'win32', home, env: {}, harnesses: all, status: statusOf(['claude-code']), netenv: { result: { products: [], unknown: [] } }, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper } })
   const detail = renderDetail(buildTopology(f)['claude-code'], { now: NOW }).join('\n')
   assert.ok(detail.includes('若你的 VPN / 代理按进程分流,它看到的来源是 asight,不是 claude-code'), 'the one line')
 })
@@ -288,7 +287,7 @@ test('a helper that cannot be started, and one that answers nothing: every read 
   const broken = { call: async () => { throw Object.assign(new Error('helper-down'), { code: 'helper-down' }) }, close: async () => {} }
   const f = await gather(home, { helper: broken, ids: ['codex'] })
   assert.equal(f.routing, 'proxy')
-  assert.ok(f.unknowns.length >= 3, `the processes, the listeners and the interfaces are each said: ${JSON.stringify(f.unknowns)}`)
+  assert.ok(f.unknowns.length >= 2, `the processes and the listeners are each said: ${JSON.stringify(f.unknowns)}`)
   for (const u of f.unknowns) assert.ok(['denied', 'timeout', 'absent', 'unparseable'].includes(u.reason), `${JSON.stringify(u)}: a reason of the closed set`)
   assert.deepEqual(f.listeners, [])
   assert.equal(f.forwarder.up, true, 'the local proxy hop is the engine\'s door: up = the daemon answered (the helper being down does not make the daemon gone)')
@@ -458,7 +457,7 @@ test('W36 not-routed by why, through the REAL facts path: a PAC, a registry the 
   const pacHelper = helperOf({ procs: [KERNEL_ROW, verge], listen: [{ pid: 11800, state: 'listen', localAddr: '127.0.0.1', localPort: 7897, remoteAddr: '0.0.0.0', remotePort: 0 }],
     internet: { ProxyEnable: { kind: 'REG_DWORD', value: 1 }, AutoConfigURL: { kind: 'REG_SZ', value: 'http://pad.example/proxy.pac' } } })
   const pacFacts = await gatherNetFacts({ platform: 'win32', home: pacHome, env: {}, harnesses: all, status: statusOf(['codex']), netenv: { result: { products: [], unknown: [] } }, archFacts: gatherWin32Facts, adopted: null, now: () => NOW,
-    deps: { helper: pacHelper, adapter: { fields: {}, running: true, runtime: { version: '2.5.7', mode: 'rule', mixedPort: 7897, tun: false }, controller: {} } } })
+    deps: { helper: pacHelper } })
   const fm = pacFacts.harnesses.codex.forms.find((x) => x.id === 'codex.app')
   assert.deepEqual(fm.route, { reason: 'not-routed', code: 'not-routed', why: 'system-proxy-pac' }, 'the group\'s plan, on the form (the doctor rows read it)')
   assert.equal(pacFacts.reinstall, null, 'no reinstall line any more: the kernel is gone and nothing of asight downloads (D47\'s twin)')

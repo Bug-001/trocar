@@ -315,3 +315,13 @@ export function watchSystemProxy({ helper, everyMs = 5000, initial = null, read 
     last: () => last,
   }
 }
+
+// "127.0.0.1:7897", or "http=127.0.0.1:7897;https=127.0.0.1:7897;socks=127.0.0.1:7898": the address of the http(s) entry, else the first one (how a ProxyServer value is read for the
+// system-proxy hop of the topology, 4.8 §2.2 / §10.1; moved here from the deleted netenv/probe.mjs, D49)
+export function proxyAddress(server) {
+  if (typeof server !== 'string' || server.trim() === '') return null
+  const parts = server.split(';').map((x) => x.trim()).filter(Boolean)
+  const pick = parts.find((x) => /^https?=/i.test(x)) ?? parts[0]
+  const m = /^(?:[a-z]+=)?(?:[a-z]+:\/\/)?(\[[^\]]+\]|[^:\s/]+):(\d{1,5})\/?$/i.exec(pick)
+  return m && Number(m[2]) >= 1 && Number(m[2]) <= 65535 ? { host: m[1], port: Number(m[2]) } : null
+}
