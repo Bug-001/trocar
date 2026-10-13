@@ -2,7 +2,7 @@
 // The redirector's verdict table is filled by `watch(pid, { decrypt, agent })`, and the one that pushes is the tracker. The Windows twin's two blockers are gone the same way here: the daemon builds
 // one registry from the name lists (`createRegistry(descriptors)`, D51: one rule for which harness on every OS — the darwin harness files carry no identity data), and `procinfo`
 // facts carry `envRead: false` so `env: null` is the OS's rule (no privileged read of another process's environment on macOS either, 4.9 §5.4) and not a failure to read, so the tracker judges by the
-// entry files. The layers the tracker judges by are the descriptor's own (`d.layers`, the Linux ones — the darwin files carry no `layers` of their own, for only Windows moved a root, 4.9 §2.3), the
+// entry files. The layers the tracker judges by are `d.darwin.layers` where a darwin file has them (Hermes: the route it reads, D51④) and the descriptor's own (`d.layers`) otherwise, the
 // plugin marker is compared with the same fixed tolerance (`MARKER_TOLERANCE_MS`), and the tracker listens to `facts-update` as well (a form told by its command line is judged again when it arrives —
 // no not-yet state exists on darwin today, so nothing fires it; the shape is the contract and this file drives the event by hand). Still fail-safe: a pid nobody pushed a verdict for is untrusted.
 import test from 'node:test'
@@ -132,15 +132,24 @@ test('W76 a process started after its harness\'s trust entry is judged trusted a
   }
 })
 
-test('W76 Hermes is judged on its macOS files (~/.hermes, the descriptor\'s own Linux layers — 4.9 §2.3: only Windows moved the root, so the darwin data carries no layers of its own): trusted after its .env block, config-after-start before it', async () => {
-  const b = await sandbox('hermes', [['.hermes/config.yaml']])
+const HERMES_ROUTE = ['model:', '  provider: lab', '  default: lab-model', 'providers:', '  lab:', '    base_url: https://relay.asight.test/v1', '    api_mode: chat_completions', ''].join('\n')
+
+test('W76 Hermes is judged on its macOS files (~/.hermes) by the route it reads (D51④, the darwin layers trust only asight\'s ssl_ca_cert line on the active route): trusted after `on` wrote that line, config-after-start before it; a built-in provider stays untrusted', async () => {
+  const b = await sandbox('hermes', [['.hermes/config.yaml', HERMES_ROUTE]])
+  assert.match(fs.readFileSync(path.join(b.home, '.hermes', 'config.yaml'), 'utf8'), /ssl_ca_cert: .*asight collector/, 'on wrote asight\'s line into the lab route')
   const { procWatcher, redirector, settle } = rigged({ descriptors: [b.d], box: b })
-  assert.equal(b.d.darwin.layers, undefined, 'the darwin data carries no layers of its own: the Linux ones read ~/.hermes, which is where macOS Hermes keeps it (4.9 §2.3)')
   procWatcher.emit('exec', facts(20, IMG.hermesPy, { cmdline: HERMES_CMD, startedAt: b.t0 + 5000 }))
   procWatcher.emit('exec', facts(21, IMG.hermesPy, { cmdline: HERMES_CMD, startedAt: b.t0 - 5000 }))
   await settle()
   assert.deepEqual([redirector.verdictOf(20).decrypt, redirector.verdictOf(20).agent], [true, 'hermes'])
   assert.equal(redirector.verdictOf(21).decrypt, false)
+
+  const builtin = await sandbox('hermes', [['.hermes/config.yaml', 'model:\n  provider: openrouter\n  default: m\n']])
+  const r2 = rigged({ descriptors: [builtin.d], box: builtin })
+  r2.procWatcher.emit('exec', facts(22, IMG.hermesPy, { cmdline: HERMES_CMD, startedAt: builtin.t0 + 5000 }))
+  await r2.settle()
+  assert.deepEqual(r2.redirector.verdictOf(22), { decrypt: false, agent: 'hermes' }, 'the .env block alone trusts nothing on macOS')
+  assert.equal(r2.tracker.describe(22).reason, 'route-without-ca')
 })
 
 test('W76 Kimi has no automatic darwin trust entry (its shim and rc PATH line are one opt-in item, 4.9 §2.3): the process is judged and stays untrusted — fail-safe, never a broken connection', async () => {
