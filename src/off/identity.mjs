@@ -122,7 +122,7 @@ export function compileIdentity({ harness = '?', names = [], exclude = [], longL
 }
 
 /** ~/.asight/agents.json */
-export const agentListPath = (home) => path.join(asightHome(home), 'agents.json')
+const agentListPath = (home) => path.join(asightHome(home), 'agents.json')
 
 /** The user's list (D51③) → { path, state: 'absent'|'ok'|'unreadable'|'unparsable', entries: [{ index, harness, name, args?, ignore? }],
  *  problems: [{ index, code, detail }] }. A bad item does not apply, the others do; a whole-file problem has index null. */
