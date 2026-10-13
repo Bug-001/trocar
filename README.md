@@ -233,6 +233,45 @@ asight off                    # every trace of it is off your agents' path (off 
 asight serve                  # the captures appear on the board
 ```
 
+#### Which processes are captured: the name list (D51)
+
+asight decides which processes are agents **by executable name**, the same way on Linux, macOS and Windows, not by
+install path: a `claude` is Claude Code wherever it is installed (native, npm, Homebrew, an editor extension, the copy
+inside Claude Desktop). The name comes from the real executable and from `argv[0]`, lower-cased, without `.exe`
+or a version number (`…/claude/versions/2.1.296` is `claude`). An interpreter (`node`, `python`, `bun`, …) only
+counts together with its script's arguments — `node …/dsh` is dsh, a `node` MCP server is not. Each agent's
+helper processes (its sandbox, updater or plugin host) are listed as exclusions. Being on the list only makes a
+process a candidate: its connections are decrypted only when it also trusts the collector CA.
+
+The presets ship with asight, in each harness's descriptor (`processes` in `src/collector/harness/<harness>.mjs`).
+To add a name, or to stop capturing one, write `~/.asight/agents.json`:
+
+```json
+{ "version": 1,
+  "agents": [
+    { "harness": "claude-code", "name": "claude-nightly" },
+    { "harness": "deepseek-dsh", "name": "node", "args": "my-fork/bin\\.js" },
+    { "harness": "codex", "name": "codex", "ignore": true } ] }
+```
+
+`harness` is one of the seven ids; `name` is a bare executable name (no path); `args` is a regular expression
+tested against the arguments, and an interpreter name must have one. `ignore: true` removes that harness's preset
+items with this name (with `args`, only the item with exactly that pattern). The daemon picks up a changed file
+within seconds, without a restart. A broken item is skipped and the rest are used; a broken file is ignored as a
+whole. Either way asight records `agent-list-invalid` with the item and the reason. `on` and `off` never write
+this file. `off` adds your names to the list it uses to judge which agents are still running.
+
+`asight status <harness>` shows the names in effect (preset or yours), the presets you ignored, the problems in
+`agents.json`, and the processes that came through that agent's entry but are on no list (those connections are
+forwarded, not captured). The command line is never recorded, only the name. For each such process,
+`asight doctor` prints the exact line to add to `agents.json`; for an interpreter it says the item needs `args`.
+`asight status --json` carries the same data under each harness's `identity`.
+
+When a process asight decrypted refuses the collector's certificate anyway, asight writes a critical
+`trust-rejected` record: the harness, the entry group, the process name and pid, the host, the client's alert
+and the trust entry asight believed was in effect. It goes to the daemon's log too, and `asight status` prints it first
+(「‼ 严重」, `critical` in `--json`).
+
 A relay or proxy with a private CA keeps working: `on` carries the CA you already gave Claude Code
 into `extra-cc.pem` (the other agents' CAs into their bundles), and the daemon verifies upstreams with
 Node's store plus `NODE_EXTRA_CA_CERTS`: the Linux unit and the macOS plist carry the value of the shell you install
