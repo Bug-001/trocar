@@ -74,11 +74,11 @@ test('bundleRoots is the collector\'s one resolver of the combined bundles\' roo
   const code = (t) => t.replace(/\/\/.*$/gm, '').replace(/^\s*\/?\*.*$/gm, '') // comments may name the hook; only code is judged
   const all = fs.readdirSync(src, { recursive: true }).map((f) => path.join(src, f)).filter((f) => f.endsWith('.mjs')).map((f) => ({ f, t: code(fs.readFileSync(f, 'utf8')) }))
   // `.osRoots` / `['osRoots']` / `{ osRoots }` read the hook; a reader called outside its table reads OS roots beside it; osRootsFile is the old file arm
-  const second = ({ f, t }) => (f !== home && /\.osRoots\b|\[\s*['"]osRoots['"]\s*\]|\bosRoots\s*[,}]|osRootsFile/.test(t)) || (f !== readers && /\b(osBundleRoots|darwinRoots|windowsRoots)\s*\(/.test(t))
+  const second = ({ f, t }) => (f !== home && /\.osRoots\b|\[\s*['"]osRoots['"]\s*\]|\bosRoots\s*[,}]|osRootsFile/.test(t)) || (f !== readers && /\b(osBundleRoots|darwinRoots|windowsRoots)\b/.test(t)) // a reader named at all — called, imported or handed on by reference — outside its table
   assert.deepEqual(all.filter(second).map(({ f }) => path.relative(src, f)), [], 'a second reader of the OS roots, or a file arm beside them, is a second resolver')
   const askers = all.filter(({ f, t }) => f !== readers && /\bosRootsFor\s*\(/.test(t))
   assert.deepEqual(askers.map(({ f }) => path.relative(src, f)).sort(), [path.join('collector', 'arch', 'index.mjs'), path.join('off', 'orchestrate.mjs')], 'the table is asked by the arches and by off\'s rebuild, no one else')
-  assert.deepEqual([...askers.find(({ f }) => f.endsWith('index.mjs')).t.matchAll(/osRootsFor\('([a-z0-9]+)'\)/g)].map((m) => m[1]), ['linux', 'win32', 'darwin'], 'each arch asks for its own platform, once')
+  assert.deepEqual([...askers.find(({ f }) => f.endsWith('index.mjs')).t.matchAll(/osRootsFor\('([a-z0-9]+)'\)/g)].map((m) => m[1]).sort(), ['darwin', 'linux', 'win32'], 'each arch asks for its own platform, once')
 })
 
 test('nodeRoots: without the API, Node\'s bundled roots plus this process\'s NODE_EXTRA_CA_CERTS', () => {

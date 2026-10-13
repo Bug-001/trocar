@@ -203,9 +203,14 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       if (!s.removed) return { ok: true } // already without it (an earlier run kept it so)
       try { writeDurable(f.path, s.text, 0o600, fs); Object.assign(f, { sha256: sha256(Buffer.from(s.text)), without_ca: true }); return { ok: true } } catch (e) { return { holds: errText(e) } }
     }
-    const rebuild = (f, keep) => { // gone while a live process may use it: an agent whose entry named it has no network without it (4.6 撤销顺序 第 2 步)
+    // `roots` may be a function: `off` reads this platform's OS roots only for a bundle it rebuilds, once (the darwin read runs `security`, os-roots.mjs).
+    // Asked outside rebuild's try: what it throws (only a sandboxed test's ESANDBOX, orchestrate.mjs rebuildRoots) is not a bundle that could not be rebuilt.
+    let rootsRead = null
+    const rootsNow = () => (typeof roots === 'function' ? (rootsRead || (rootsRead = Promise.resolve(roots()))) : Promise.resolve(roots))
+    const rebuild = async (f, keep) => { // gone while a live process may use it: an agent whose entry named it has no network without it (4.6 撤销顺序 第 2 步)
+      const roots = await rootsNow()
       try {
-        if (!roots || typeof roots === 'function') throw new Error('no trusted roots were given to rebuild it from')
+        if (!roots) throw new Error('no trusted roots were given to rebuild it from')
         const userCerts = [], unread = []
         for (const src of f.sources || []) { try { userCerts.push(...certsOf(src, fs.readFileSync(src)).certs) } catch (e) { unread.push({ file: src, errno: errText(e) }) } } // moved or gone: not carried over, and said
         const c = composeBundle({ nodeRoots: roots.node, osRootsText: roots.osText, userCerts, caPem: null })
@@ -234,7 +239,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       }
       return viaLeft(f)
     }
-    const one = (f, byHarness) => {
+    const one = async (f, byHarness) => {
       const away = outside(f)
       if (away) { fail(f, away); return }
       const h = holders(f, byHarness)
@@ -260,13 +265,11 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
         out.kept_bundles.push({ ...keep, holds_ca: true, error: why })
         fail(f, `${f.path} still holds the asight CA: it could not be rewritten without it (${why}), and ${used}; it is kept as it is — fix the file, then run it again`)
       } else if (!byHarness) without(manifest.files, f) // an extra file that is gone only warns where it is named: nothing to keep
-      else if (h.pids || entry.length) rebuild(f, keep)
+      else if (h.pids || entry.length) await rebuild(f, keep)
       else { out.kept_bundles.push(keep); fail(f, `${f.path} is gone, and whether a running process uses it is not known (${h.why}), so it was not rebuilt`) }
     }
-    // `roots` may be a function: `off` reads this platform's OS roots only when one of these bundles is gone (a read that can run `security`, os-roots.mjs)
-    if (typeof roots === 'function') roots = bundles.some((f) => !fs.existsSync(f.path)) ? await roots() : null
-    for (const f of bundles) one(f, true)
-    for (const f of extras) one(f, false)
+    for (const f of bundles) await one(f, true)
+    for (const f of extras) await one(f, false)
   }
   if (dropCa) for (const f of manifest.files.filter((x) => x.role === 'ca-cert' && known(x))) { const away = outside(f); if (away) { fail(f, away); continue }; try { rm(f.path); without(manifest.files, f) } catch (e) { fail(f, `${f.path} could not be removed (${errText(e)})`) } } // uninstall only (4.6 第 3 步)
 

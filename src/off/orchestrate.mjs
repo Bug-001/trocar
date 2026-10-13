@@ -197,7 +197,7 @@ const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 
 const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
 // The roots a gone bundle is rebuilt from (4.6 撤销顺序 第 2 步): Node's and this platform's OS roots, read by the reader the collector composes the bundles with
 // (os-roots.mjs osRootsFor — darwin: Node's set, the keychain's anchors and Apple's export, never /etc/ssl/cert.pem, 4.9 §6.2; win32: the system store, with no helper
-// here, 4.8 §6.2; Linux: the first OS PEM bundle of the one list). undo.mjs asks only when a bundle is gone. None read → `missing`, a source that could not be read →
+// here, 4.8 §6.2; Linux: the first OS PEM bundle of the one list). undo.mjs asks only for a bundle it rebuilds, once. None read → `missing`, a source that could not be read →
 // `partial`, certificates that do not parse → `dropped`: the rebuilt bundle's note says each (D38), in the shape of the collector's bundleRoots. The sandbox's refusal
 // of a real tool (ESANDBOX) is a test's missing injection, not a missing root: it is thrown.
 const rebuildRoots = async (w) => {
