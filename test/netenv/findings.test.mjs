@@ -350,3 +350,14 @@ test('V66 process-unknown: its line, written into agents.json, makes the registr
   assert.match(bad.commands[0].run, /第 2 项\(agents\[1\]\):wide-name-needs-args/)
   assert.deepEqual(validateFinding(bad), [])
 })
+
+test('V66 process-unknown `named` (a preset name whose args missed, e.g. the Z Code GUI main): no bare {harness, name} line — it would claim every process of that name — and it does not say "not on the list"', () => {
+  const F = facts('z-code', { identity: { 'z-code': { ...idOf('z-code')['z-code'], file: { path: '/h/.asight/agents.json', state: 'absent', problems: [] }, unknown: [{ name: 'zcode', wide: false, named: true, pid: 7004, door: 'z-code.desktop' }] } } })
+  const [f] = findingsOf(F).filter((x) => x.code === 'process-unknown')
+  assert.ok(f)
+  assert.deepEqual(validateFinding(f), [], f.what)
+  assert.ok(!/\{"harness"/.test(f.commands[0].run), f.commands[0].run)
+  assert.match(f.commands[0].run, /"args"/)
+  assert.match(f.what, /名字在名单上、但参数没对上/)
+  assert.doesNotMatch(f.what, /不在名单上/)
+})

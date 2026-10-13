@@ -96,9 +96,11 @@ export const FINDINGS = {
   'inferred-behaviour': { cls: 'hint', asightFirst: false, what: (c) => `${c.h} 在本平台的代理行为是按别的平台实测推断的`, why: () => '本平台还没测', commands: () => [], verify: () => '—' },
   // the name list (D51③⑤, 4.6 §识别进程): a process on no list used the harness's door (only forwarded), and agents.json's own problems. Not a WIDE name: the line to add, every value filled in;
   // an interpreter name needs args (its script), and asight does not keep command lines, so that line cannot be written (§9.6: no <…> left, an unknown value is said)
-  'process-unknown': { cls: 'hint', asightFirst: false, what: (c) => `名为 ${c.u.name ?? '(名字不知道)'} 的进程(pid ${c.u.pid ?? '不知道'})用了 ${c.h} 的入口,不在名单上,只转发`,
-    why: () => 'asight 按进程名认 agent(D51);这个名字不在预设里,也不在你的 agents.json 里',
+  // `named`: the name is listed, but only with args patterns its arguments missed; a bare line would claim every process of that name and undo them — none is given, like a WIDE name
+  'process-unknown': { cls: 'hint', asightFirst: false, what: (c) => `名为 ${c.u.name ?? '(名字不知道)'} 的进程(pid ${c.u.pid ?? '不知道'})用了 ${c.h} 的入口,${c.u.named ? '名字在名单上、但参数没对上任何一项' : '不在名单上'},只转发`,
+    why: (c) => (c.u.named ? 'asight 按进程名认 agent(D51);这个名字在名单上只带 args(参数模式),这个进程的参数一项都没对上' : 'asight 按进程名认 agent(D51);这个名字不在预设里,也不在你的 agents.json 里'),
     commands: (c) => [gui(c.u.name == null ? unknownValue('它的名字', '入口读不到这个进程的名字') : c.u.wide ? `解释器名要带 args(它的脚本名);asight 不记命令行,脚本名不知道:${c.u.name} 这一项要你自己在 ${c.listPath} 的 agents 里写,带上 "args"`
+      : c.u.named ? `${c.u.name} 在名单上只带 args;不带 args 的整行会认领所有叫 ${c.u.name} 的进程,所以不给整行;asight 不记命令行,参数不知道:要采它,在 ${c.listPath} 的 agents 里自己写这一项,带上 "args"`
       : `把 ${JSON.stringify({ harness: c.h, name: c.u.name })} 加进 ${c.listPath} 的 agents(文件不在就新建为 {"version":1,"agents":[…]}),不用重启`)], verify: (c) => `asight status ${c.h}:该 pid 带上命中的名字` },
   'agent-list-invalid': { cls: 'failure', asightFirst: false, what: (c) => `${c.file.path} ${{ unreadable: '读不出', unparsable: '解析不了或版本不对' }[c.file.state] || '有坏项'}`, why: (c) => (c.file.state === 'ok' ? '坏项不生效,其余照用' : '整个文件不生效,只用预设的名字'),
     commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `改好 ${c.file.path}` : `改好或删掉 ${c.file.path} 的第 ${p.index + 1} 项(agents[${p.index}])`}:${p.code} — ${p.detail};不用重启`)), verify: () => 'asight status:不再列' },

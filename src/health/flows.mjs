@@ -176,7 +176,7 @@ const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r
  *   conditions               what still holds since the last daemon-start (with no daemon-start read: over all records
  *                            read, `partial:true`) — untrusted agents, negative-cache pairs, a dead helper, a wrong
  *                            helper protocol, desired ≠ actual, an unusable CA, an unreadable retention.json, a broken agents.json; each {kind, failure:true, since, …}
- *   unknown_procs            process-unknown since the last daemon-start, one per (harness, name), the newest pid: {harness, name, wide, pid, door, since}
+ *   unknown_procs            process-unknown since the last daemon-start, one per (harness, name), the newest pid: {harness, name, wide, named, pid, door, since}
  *                            — expected (the process is only forwarded), so not a condition; a daemon restart clears them (D51⑥)
  *   groups                   failures of the last 24 h by groupKey: {key, count, first_ts, last_ts, last}
  *   expected                 {not_captured: count} of the last 24 h
@@ -231,7 +231,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     // D51③: ~/.asight/agents.json cannot be read or parsed, or holds bad items (the good ones and the presets apply meanwhile): a condition until agent-list-ok
     else if (r.event === 'failure' && r.code === 'agent-list-invalid') agentList = { kind: 'agent-list', ...pick(r), since: r.ts }
     else if (r.event === 'agent-list-ok') agentList = null
-    else if (r.event === 'process-unknown' && typeof r.harness === 'string' && (typeof r.name === 'string' || r.name === null)) unknownProcs.set(`${r.harness}\u0000${r.name}`, { harness: r.harness, name: r.name, wide: r.wide === true, pid: Number.isInteger(r.pid) ? r.pid : null, door: typeof r.door === 'string' ? r.door : null, since: r.ts })
+    else if (r.event === 'process-unknown' && typeof r.harness === 'string' && (typeof r.name === 'string' || r.name === null)) unknownProcs.set(`${r.harness}\u0000${r.name}`, { harness: r.harness, name: r.name, wide: r.wide === true, named: r.named === true, pid: Number.isInteger(r.pid) ? r.pid : null, door: typeof r.door === 'string' ? r.door : null, since: r.ts })
   }
   out.unknown_procs = [...unknownProcs.values()]
   out.conditions = [...[ca, degraded, version, mismatch, retention, agentList].filter(Boolean), ...untrusted.values(), ...neg.values()].map((c) => ({ ...c, failure: true }))

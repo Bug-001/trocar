@@ -55,7 +55,7 @@ function loginOf(g, up, authOf) {
  *   ingress   `() → loadIngressConfig's result` (`{ enginePort, groupPorts, ingressToken, listenerToken }`)
  *   authOf    `(auth_ref) → { username, password } | null`: the login a reference names
  *   onFailure the failure sink (the daemon's recorder): a record shaped `{ event: 'failure', where, code, reason }`
- *   onEvent   the state-event sink (the same recorder): `{ event: 'process-unknown', where: 'engine', harness, door, name, wide, pid, reason }` — a process
+ *   onEvent   the state-event sink (the same recorder): `{ event: 'process-unknown', where: 'engine', harness, door, name, wide, named, pid, reason }` — a process
  *             on no name list used a door; one per (door group, name) in this redirector's life, never its command line (it may hold a key)
  *   doors     `{ open(list), close(ids) }` — the engine's door half, LATE-BOUND by the wiring's `bindDoors` (the daemon owns the engine and calls it after
  *             both exist): `open([{ id, port, auth, token? }])` binds one loopback listener per group (idempotent per id, engine.mjs), `close(ids)` stops
@@ -164,14 +164,19 @@ export function createDoorRedirector({ groups, ownerOf = null, factsOf = null, r
     }
   }
 
-  /** process-unknown (4.6 §记录, a state event, expected): a process on no name list used the door — once per (door group, name) in this life, with its
-   *  first name and whether that name is one of the wide ones (an interpreter: the user's entry would need an args pattern). Never its command line. */
-  function said(door, facts, pid) {
+  /** process-unknown (4.6 §记录, a state event, expected): a process no item of the name list claims used the door — once per (door group, name) in this
+   *  life, with its first name, whether that name is one of the wide ones (an interpreter: the user's entry would need an args pattern), and `named`:
+   *  the name IS on a list, but only on items with an `args` pattern its arguments missed (`args-mismatch`: the Z Code GUI main without zcode.cjs, a
+   *  non-network `claude helper`) — a bare `{harness, name}` line would claim every process of that name and undo that pattern, so doctor gives none.
+   *  Never its command line. */
+  function said(door, facts, pid, named) {
     const name = processNames(facts)[0] ?? null
     const key = `${door.g}\0${name}`
     if (unknownSaid.has(key)) return
     unknownSaid.add(key)
-    try { onEvent({ event: 'process-unknown', where: 'engine', harness: door.harness, door: door.g, name, wide: name != null && WIDE.has(name), pid, reason: `${name ?? 'a process'} (pid ${pid}) used the ${door.g} door but is on no name list: its connections are forwarded, not captured; add it to ~/.asight/agents.json to capture it` }) } catch { /* the sink's own failure is the sink's */ }
+    try { onEvent({ event: 'process-unknown', where: 'engine', harness: door.harness, door: door.g, name, wide: name != null && WIDE.has(name), named, pid, reason: named
+      ? `${name ?? 'a process'} (pid ${pid}) used the ${door.g} door; its name is listed only with an args pattern its arguments do not match: its connections are forwarded, not captured; to capture it, add an item with "args" to ~/.asight/agents.json`
+      : `${name ?? 'a process'} (pid ${pid}) used the ${door.g} door but is on no name list: its connections are forwarded, not captured; add it to ~/.asight/agents.json to capture it` }) } catch { /* the sink's own failure is the sink's */ }
   }
 
   const entryOf = (g) => ({ g, harness: byGroup.get(g).harness, entry: ((routes() || {})[g] || {}).entry ?? null })
@@ -254,7 +259,7 @@ export function createDoorRedirector({ groups, ownerOf = null, factsOf = null, r
         const m = identify(facts) || {}
         if (m.reason === 'match' && m.agent) agent = m.agent
         else if (UNMATCHED[m.reason]) return spliced(UNMATCHED[m.reason], { exe }) // pending is not cached anywhere: the next connection asks again (W78)
-        else { said(door, facts, pid); return spliced('not-an-agent', { exe }) }
+        else { said(door, facts, pid, m.reason === 'args-mismatch'); return spliced('not-an-agent', { exe }) }
       }
       if (!isOn(agent)) return spliced('harness-off', { agent, exe })
       const v = await verdictOf(pid, hosted ? { ...facts, hostAgent: agent } : facts)

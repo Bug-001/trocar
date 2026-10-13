@@ -79,7 +79,7 @@ export function validateReceipt(r) {
 const AGENT_LIST_STATES = Object.freeze(['absent', 'ok', 'unreadable', 'unparsable'])
 const NAME_SOURCES = Object.freeze(['preset', 'custom'])
 /** Problems with one harness's `identity` block (`[]` = valid): { file: { path, state, problems: [{ index, code, detail }] }, names / ignored: [{ name, args?, source }],
- *  unknown: [{ name, wide, pid, door }] } — the closed sets above, a problem's index an item number or null (the whole file), an unknown's name null only when the door could not read it. */
+ *  unknown: [{ name, wide, named, pid, door }] } — the closed sets above, a problem's index an item number or null (the whole file), an unknown's name null only when the door could not read it. */
 function validateIdentity(x) {
   if (!isObject(x)) return ['identity: not an object']
   const bad = []
@@ -101,7 +101,7 @@ function validateIdentity(x) {
   }
   if (!Array.isArray(x.unknown)) bad.push('identity.unknown: not a list')
   else x.unknown.forEach((u, i) => {
-    if (!isObject(u) || !(u.name === null || isId(u.name)) || typeof u.wide !== 'boolean' || !(u.pid === null || Number.isInteger(u.pid)) || !(u.door === null || isId(u.door))) bad.push(`identity.unknown[${i}]: needs name, wide, pid and door`)
+    if (!isObject(u) || !(u.name === null || isId(u.name)) || typeof u.wide !== 'boolean' || typeof u.named !== 'boolean' || !(u.pid === null || Number.isInteger(u.pid)) || !(u.door === null || isId(u.door))) bad.push(`identity.unknown[${i}]: needs name, wide, named, pid and door`)
   })
   return bad
 }

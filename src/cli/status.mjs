@@ -209,7 +209,7 @@ function identityBlocks({ ids, list, merged, health }) {
   for (const id of ids) {
     const m = merged[id] || { names: [], ignored: [] }
     const plain = new Set(m.names.filter((n) => n.args == null).map((n) => n.name))
-    out[id] = { file, names: m.names.map(nameView), ignored: m.ignored.map(nameView), unknown: seen.filter((u) => u.harness === id && !plain.has(u.name)).map((u) => ({ name: u.name, wide: u.wide, pid: u.pid, door: u.door })) }
+    out[id] = { file, names: m.names.map(nameView), ignored: m.ignored.map(nameView), unknown: seen.filter((u) => u.harness === id && !plain.has(u.name)).map((u) => ({ name: u.name, wide: u.wide, named: u.named === true, pid: u.pid, door: u.door })) }
   }
   return out
 }
@@ -293,7 +293,7 @@ export function renderStatus(f, { home = null, detail = [], now = null, colors: 
 // the name list of one harness (1.6 §9.7): the names in effect with their source, the ignored presets, the processes on no list that used its door
 const SOURCE_TEXT = { preset: '预设', custom: '自定' }
 const nameText = (n) => `${n.name}(${SOURCE_TEXT[n.source] || n.source}${n.args ? `, args ${n.args}` : ''})`
-const unknownText = (u) => `${u.name ?? '不知道名字'}(pid ${u.pid ?? '不知道'})`
+const unknownText = (u) => `${u.name ?? '不知道名字'}(pid ${u.pid ?? '不知道'}${u.named ? ';名字在名单上、参数没对上' : ''})`
 function identityLines(f, id) {
   if (!f.identity) return f.identity_error ? [`      名单: 不知道(${f.identity_error})`] : []
   const x = f.identity[id]

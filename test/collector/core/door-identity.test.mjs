@@ -134,6 +134,20 @@ test('a renamed binary on no list: three connections are `not-an-agent`, and ONE
   assert.deepEqual([d.events[2].name, d.events[2].wide], ['node', true], 'an interpreter is said as wide: the user\'s entry needs an args pattern')
 })
 
+test('a preset name whose args miss (the Z Code GUI main ZCode.exe without zcode.cjs) is `not-an-agent`; its process-unknown says `named`, so doctor gives no bare line that would claim every zcode', async () => {
+  const exe = `${W}\\AppData\\Local\\Programs\\ZCode\\ZCode.exe`
+  const d = door('win32', { store: new Map([[61, win32Facts(winRow(61, exe, `"${exe}"`))]]) })
+  const m = await d.ask(61, 'z-code.desktop', target('open.bigmodel.cn'))
+  assert.deepEqual([m.decrypt, m.skip], [false, { not_captured: 'untracked', reason: 'not-an-agent' }], 'forwarded, never decrypted')
+  assert.deepEqual(d.execs, [], 'never told to the tracker')
+  assert.deepEqual(d.events.map((e) => [e.event, e.name, e.wide, e.named]), [['process-unknown', 'zcode', false, true]])
+  assert.deepEqual(checkRecord(d.events[0]), [])
+  const renamed = darwinFacts(62, { exe: '/Users/u/bin/claude-nightly', cmdline: 'claude-nightly' })
+  d.store.set(62, renamed)
+  await d.ask(62, 'claude-code.settings')
+  assert.equal(d.events[1].named, false, 'a name on no list is not `named`')
+})
+
 test('a harness\'s own helper (kimi __plugin_run_node, win32 and darwin facts) is `agent-helper`: forwarded, no process-unknown', async () => {
   const exe = `${W}\\.kimi-code\\bin\\kimi.exe`
   const d = door('win32', { store: new Map([[61, win32Facts(winRow(61, exe, `"${exe}" __plugin_run_node C:\\x\\plugin.js`))]]) })
