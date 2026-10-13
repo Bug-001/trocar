@@ -3,8 +3,8 @@
 // engine's per-group doors (the ONE proxy on this machine — the mihomo kernel is retired from the capture path, its download, its controller, its config
 // and its lock gone with it), the resident read-only helper that answers the targeted identity questions (the TCP owner table for the socket's owner, the
 // `ps` snapshot for that pid's facts) and the registry reads the netenv needs, ingress.json's ports and tokens, the proxy entries' writer, the route plan
-// and its refresh (the registry system-proxy watcher: a change re-plans, and a plan that moved brings the doors and the entries to it), the host sets, and
-// the tracker's OS rule (`osMatch` — one rule for which form, the same matchForm the doors' lookups route by). It names no harness: the daemon hands the
+// and its refresh (the registry system-proxy watcher: a change re-plans, and a plan that moved brings the doors and the entries to it), and the host sets
+// (which harness a process is, the registry judges by name, D51). It names no harness: the daemon hands the
 // descriptors in; everything is injected, so a test runs it against a fake helper and a sandbox %USERPROFILE%.
 //
 // THE LAZY RULE, carried from the darwin twin: construction touches nothing that reads or changes the machine beyond what its arguments already hold. The
@@ -46,8 +46,8 @@ const movedRoute = (a, b) => !a || !b || a.on !== b.on || JSON.stringify(a.upstr
 
 /**
  * createWin32Collector({ env, dir, home, harnesses, failure, event, manifest, desired, optIns, deps }) → the Redirector (4.9 §1), carrying a `win32` bag of
- *   what only the daemon reaches: `{ helper, bindDoors, ingress, replan, groups, netenv, appliedHosts, osMatch, osLayers, markerToleranceMs, close }` (the darwin bag's shape;
- *   osMatch is the registry's second key, 4.8 §5.4). Everything is injected through `deps` for a test.
+ *   what only the daemon reaches: `{ helper, bindDoors, ingress, replan, groups, netenv, appliedHosts, osLayers, markerToleranceMs, close }` (the darwin bag's shape).
+ *   Everything is injected through `deps` for a test.
  *   failure (where, error, extra)  the daemon's failure recorder · event (record)  its event writer (netenv-change, the helper's own records)
  *   manifest  () → the manifest as it is NOW (the daemon re-reads it; null reads it here) · desired  () → state.json's `harnesses` (`{ <id>: { desired, extra_hosts } }`)
  *   optIns    () → the groups or forms the user named and asight has the record of; the default (null) DERIVES them from the manifest's `optin-*` entries
@@ -59,7 +59,6 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
   const fs = deps.fs || nodeFs
   const groups = groupsOf(harnesses)
   const forms = groups.flatMap((x) => x.forms)
-  const harnessOfForm = new Map(groups.flatMap((x) => x.forms.map((f) => [f.id, x.harness])))
   const ctx = { // the daemon's own ctx (4.8 §2.2): its env is not the install shell's, and priorOf reads the manifest's records by harness and entry, not by files(ctx)
     os: 'win32', home, env: new Map(Object.entries(env || {}).filter(([, v]) => typeof v === 'string')), running: [],
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } },
@@ -186,7 +185,6 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
     helper, ingress, replan, groups,
     netenv: () => ({ systemProxy, hkcuEnv, ownPorts: ownPorts() }),
     appliedHosts: () => Object.fromEntries(appliedHosts),
-    osMatch: { win32: (f) => { const m = matchForm(forms, f, { home }); return m.kind === 'form' ? harnessOfForm.get(m.id) ?? null : null } }, // one rule for which form (4.8 §5.4): the registry judges by the same matchForm the doors' lookups route by
     osLayers: { win32: (d) => (d.win32 && d.win32.layers) || d.layers }, // Hermes declares its own Windows layers; the rest read the same files as on Linux
     markerToleranceMs: MARKER_TOLERANCE_MS, // the Windows plugin twins (dsh, OpenCode) write Math.round(performance.timeOrigin) against the process table's own ms-epoch startedAt (procinfo.mjs): the byte-exact 0 default (daemon.mjs's `|| 0`) read every one of them `marker-stale` → untrusted → spliced, traffic relayed with no llm_call (measured live on a Windows test machine; darwin's bag has carried the same confirm.mjs tolerance since review F4 — the win line simply never wired it)
     close: () => { if (netenvWatcher) netenvWatcher.stop() }, // the helper and the watcher stop with the redirector's own close()

@@ -63,8 +63,8 @@ function loginOf(g, up, authOf) {
  *   hostsOf   `(form) → [host] | null` (default: null): the APPLIED host set of a host-tree form (route-plan.mjs hostSetOf — the plan's last answer). A form that
  *             declares `hosts` lives in a host process tree (an editor carrying many extensions): its door reaches the engine ONLY for the targets on that set,
  *             every other connection of the program is forwarded, untracked — the arm the kernel's per-host rules used to hold (4.8 §3), moved into the door.
- *   matchForm the arch's own `(forms, { exe, cmdline }, { home }) → { kind: 'form', id } | { kind: 'none' } | …` (its forms.mjs) — one rule for which form,
- *             the same one the registry's osMatch judges by (4.8 §5.4). Required: the core knows no OS's forms.
+ *   matchForm the arch's own `(forms, { exe, cmdline }, { home }) → { kind: 'form', id } | { kind: 'none' } | …` (its forms.mjs) — which form a door's
+ *             process is (the tracker then judges it by the D51 name list; the door takes registry.match in T7). Required: the core knows no OS's forms.
  *   directCount the arch's own `async (pid) → { count, error }` — how many of the process's established connections do not go to a group's door on loopback,
  *             what `status` shows as "still going direct". `{ count: null, error }` when it cannot be told — unknown, never 0 (D-17).
  *   companion `{ ready: async () => { pid?, proto?, build? }, close: async () => {}, proto } | null` — the arch's resident read-only helper (win32's), whose
@@ -105,7 +105,7 @@ export function createDoorRedirector({ groups, home = null, ownerOf = null, fact
   }
 
   /** The tracker's verdict of a pid, announced and waited for: a life the verdict table does not hold (never met, or the pid wrapped into a new life — another
-   *  start time) is told as 'exec' (the daemon's tracker judges — registry osMatch, the trust layers — and answers through `watch(pid, …)`); this lookup waits
+   *  start time) is told as 'exec' (the daemon's tracker judges — the registry's name list, the trust layers — and answers through `watch(pid, …)`); this lookup waits
    *  up to verdictWaitMs. A verdict that never comes is a TOMBSTONE ({ decrypt: false }): one wait per life, never one per connection — and a later `watch()`
    *  (the tracker judged it after all, a harness came on) overwrites it as ever. */
   function verdictOf(pid, facts) {

@@ -3,8 +3,7 @@
 // this machine — the mihomo kernel is retired from the capture path, its download, its controller and its config gone with it), the targeted
 // identity questions (lsof for the socket's owner, ps + lsof for that pid's facts), ingress.json's ports and tokens, the proxy entries'
 // writer, the route plan and its refresh (the scutil system-proxy watcher: a change re-plans, and a plan that moved brings the doors and the
-// entries to it), the host sets, the tracker's OS rule (`osMatch` — one rule for which form, the same matchForm the doors' lookups route by)
-// and the keychain trust door of the desktop family. There is NO resident helper (4.9 §1): ps, lsof and scutil are plain CLIs, run on demand
+// entries to it), the host sets and the keychain trust door of the desktop family. There is NO resident helper (4.9 §1): ps, lsof and scutil are plain CLIs, run on demand
 // through execTool. Nothing here names a harness: the daemon hands the descriptors in.
 //
 // THE LAZY RULE: construction touches nothing that reads or changes the machine beyond what its arguments already hold. Two constructions exist —
@@ -12,8 +11,7 @@
 //     entries writer made — and nothing STARTED: no door, no scutil read. redirector.start() (the daemon's) adds this wiring's netenv half —
 //     the first scutil read, the first plan, the 5 s watcher; the doors themselves come with the first attach (the switch's `on`), and the
 //     daemon binds them to the engine the moment both exist (`bindDoors`, below).
-//   · loadParts' ({ env } alone, no dir — daemon.mjs builds one for on / status / install): the shell — the groups it was handed (none:
-//     osMatch answers null), and attach() refusing with its own TypeError. A read-only command must not find ingress.json created by reading it.
+//   · loadParts' ({ env } alone, no dir — daemon.mjs builds one for on / status / install): the shell — the groups it was handed, and attach() refusing with its own TypeError. A read-only command must not find ingress.json created by reading it.
 // Everything is injected through `deps` for a test, the win32 wiring's list: `exec · ownerOf · factsOf · loadIngress · entries · isFree ·
 // random · now · timers · readSystemProxy · watchSystemProxy · systemProxy · fs`.
 import os from 'node:os'
@@ -46,8 +44,8 @@ const movedRoute = (a, b) => !a || !b || a.on !== b.on || JSON.stringify(a.upstr
 
 /**
  * createDarwinCollector({ env, dir, home, harnesses, failure, event, manifest, desired, optIns, deps }) → the Redirector (4.9 §1), carrying a `darwin` bag of what only the daemon
- *   reaches: `{ bindDoors, ingress, replan, groups, netenv, appliedHosts, osMatch, osLayers, markerToleranceMs, close }` (the win32 bag's shape; osMatch is the registry's
- *   second key, 4.8 §5.4; markerToleranceMs is the plugin marker's fixed tolerance — the daemon hands it to the tracker, confirm.mjs's value). Everything is injected through `deps`
+ *   reaches: `{ bindDoors, ingress, replan, groups, netenv, appliedHosts, osLayers, markerToleranceMs, close }` (the win32 bag's shape;
+ *   markerToleranceMs is the plugin marker's fixed tolerance — the daemon hands it to the tracker, confirm.mjs's value). Everything is injected through `deps`
  *   for a test. `dir` absent = the lazy shell (the header's LAZY RULE).
  *   failure (where, error, extra)  the daemon's failure recorder · event (record)  its event writer (netenv-change, the watcher's own records)
  *   manifest  () → the manifest as it is NOW (the daemon re-reads it; null reads it here) · desired  () → state.json's `harnesses` (`{ <id>: { desired, extra_hosts } }`)
@@ -58,7 +56,6 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   const fs = deps.fs || nodeFs
   const groups = groupsOf(harnesses)
   const forms = groups.flatMap((x) => x.forms)
-  const harnessOfForm = new Map(groups.flatMap((x) => x.forms.map((f) => [f.id, x.harness])))
   const ctx = { // the daemon's own ctx (4.8 §2.2's, darwin's half): its env is not the install shell's, and priorOf reads the manifest's records by harness and entry, not by files(ctx)
     os: 'darwin', home, env: new Map(Object.entries(env || {}).filter(([, v]) => typeof v === 'string')), running: [],
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } },
@@ -218,7 +215,6 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
     ingress, replan, groups,
     netenv: () => ({ systemProxy, ownPorts: ownPorts() }),
     appliedHosts: () => Object.fromEntries(appliedHosts),
-    osMatch: { darwin: (f) => { const m = matchForm(forms, f, { home }); return m.kind === 'form' ? harnessOfForm.get(m.id) ?? null : null } }, // one rule for which form (4.8 §5.4, carried by 4.9 §5.4): the registry judges by the same matchForm the doors' lookups route by
     // a harness with macOS layers of its own declares them; the rest read the same files as on Linux. The wrapper hands every one of them the desktop door's
     // two ctx keys (4.9 §6.4's trust arm, 2026-10-12): `keychain` — the manifest's CONFIRMED optin-keychain-cert entry of THIS harness, live-read (an item that
     // lands after the daemon started opens without a restart), and only while that entry's fingerprint is this build's CA (an entry of a certificate asight no

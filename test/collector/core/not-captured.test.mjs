@@ -113,7 +113,7 @@ test('not_captured: a host the harness declares not via the trust path is not-tr
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-nc-')); const pem = path.join(dir, 'asight.pem'); fs.writeFileSync(pem, asightCa.certPem)
   try {
     const redirector = Object.assign(new EventEmitter(), { watch: async () => {}, unwatch: async () => {}, scan: async () => [] })
-    const gamma = { name: 'gamma', runtime: 'node', hosts: ['api.gamma.test'], signatures: { linux: { match: [{ exe: /\/gamma$/ }] } }, trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] },
+    const gamma = { name: 'gamma', runtime: 'node', hosts: ['api.gamma.test'], processes: { names: [{ name: 'gamma' }] }, trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] },
       bypass: () => [{ host: 'upstream.test', reason: 'ws-path' }] }
     const tracker = createTracker({ redirector, registry: createRegistry([gamma]), trust: createTrustChecker({ caCertPem: asightCa.certPem }), home: dir, onError: (e) => { throw e }, alive: () => false })
     tracker.start()

@@ -40,12 +40,12 @@ const IMG = {
   zcode: '/Applications/ZCode.app/Contents/MacOS/ZCode',
   syslogd: '/usr/libexec/syslogd',
 }
-const DSH_CMD = '/usr/local/bin/node /Users/u/.npm-global/lib/node_modules/@deepseek-ai/dsh/bin/dsh.js'
+const DSH_CMD = '/usr/local/bin/node /Users/u/.npm-global/lib/node_modules/@deepseek-ai/dsh/lib/bin.js'
 const HERMES_CMD = `${IMG.hermesPy} -I -c "import hermes_bootstrap; import hermes_cli.main"`
 const ZCODE_CMD = '/Applications/ZCode.app/Contents/MacOS/ZCode /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs app-server --stdio'
 
 /** What the darwin procinfo gives, with `envRead: false` — "this OS never reads another process's environment", so `env: null` is the rule here and not a failure to read (the tracker judges by the entry files instead). */
-const facts = (pid, exe, extra = {}) => ({ os: 'darwin', pid, ppid: 1, name: exe.split('/').pop(), exe, argv: [], cmdline: exe, env: null, envRead: false, cwd: null, startedAt: 1700000000000 + pid, startTicks: String(1700000000000 + pid), cmdlineState: 'ok', elevated: false, elevationInferred: false, source: 'exec', ...extra })
+const facts = (pid, exe, extra = {}) => ({ os: 'darwin', pid, ppid: 1, name: exe.split('/').pop(), exe, argv: (extra.cmdline ?? exe).split(/\s+/), cmdline: exe, env: null, envRead: false, cwd: null, startedAt: 1700000000000 + pid, startTicks: String(1700000000000 + pid), cmdlineState: 'ok', elevated: false, elevationInferred: false, source: 'exec', ...extra })
 
 const ALL = await loadHarnesses()
 const one = (name) => ALL.find((d) => d.name === name)
@@ -53,10 +53,9 @@ const GROUPS = groupsOf(ALL)
 const FORMS = GROUPS.flatMap((g) => g.forms)
 const HARNESS_OF_FORM = new Map(GROUPS.flatMap((g) => g.forms.map((f) => [f.id, g.harness])))
 
-/** The registry as the daemon wires it (8(c)): `matchForm` over the same form data the redirector routes by, handed to the registry — the tracker and the redirector share one rule for which form a process is. */
+/** The registry as the daemon wires it: the D51 name lists, the same on every OS (no osMatch: the registry needs no redirector). */
 function darwinRegistry(descriptors = ALL) {
-  const darwin = (f) => { const m = matchForm(FORMS, f, { home: HOME }); return m.kind === 'form' ? HARNESS_OF_FORM.get(m.id) : null }
-  return createRegistry(descriptors, { osMatch: { darwin } })
+  return createRegistry(descriptors)
 }
 
 /** A sandbox $HOME with one harness's trust entries really installed (`on`'s own writer), the manifest, the CA and its paths. */

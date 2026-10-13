@@ -372,7 +372,7 @@ async function plugHarness(b) {
   const { lineComment } = await import('../../src/off/text-edit.mjs')
   const dir = path.join(b.home, '.asight', 'collector')
   return {
-    name: 'plug', runtime: 'node', signatures: { linux: { match: [{ exe: /plug$/ }] } }, hosts: [], trust: { chain: [{ var: 'asight:marker', semantic: 'append' }] },
+    name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'asight:marker', semantic: 'append' }] },
     inject: (ctx) => ({
       owned: [
         { path: path.join(ctx.home, '.config', 'plug', 'plugins', 'asight-ca.js'), role: 'plugin', data: '// asight collector: trust plugin\n', mode: 0o644 },
@@ -441,7 +441,7 @@ test('an entry uninstall cannot undo stays in the manifest; install refuses unti
 
 // A synthetic replace-semantics harness: a dotenv block naming its combined bundle (Codex / Hermes shape).
 const repHarness = (dir, extra = {}) => ({
-  name: 'rep', runtime: 'rust', signatures: { none: { match: [{ exe: /\/rep$/ }] } }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], ...extra },
+  name: 'rep', runtime: 'rust', processes: { names: [{ name: 'rep' }] }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], ...extra },
   inject: (ctx) => ({
     entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep', '.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }],
     files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }],
@@ -668,9 +668,9 @@ test('uninstall step 5: only a process that may have read the entry is reported 
   const b = box()
   try {
     // plugin-only harness: its install time is its owned file's; a harness whose afterUninstall is a function of the process
-    const plug = { name: 'plug', runtime: 'node', signatures: { none: { match: [{ exe: /\/plug$/ }] } }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
+    const plug = { name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
       inject: (ctx) => ({ owned: [{ path: path.join(ctx.home, '.plug', 'plugins', 'asight-ca.js'), role: 'plugin', data: '// asight collector: trust plugin\n', mode: 0o644 }] }) }
-    const picky = { ...repHarness(b.dir), name: 'picky', signatures: { none: { match: [{ exe: /\/picky$/ }] } },
+    const picky = { ...repHarness(b.dir), name: 'picky', processes: { names: [{ name: 'picky' }] },
       inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.picky', '.env'), vars: { SSL_CERT_FILE: path.join(b.dir, 'ca', 'combined-picky.pem') }, semantic: 'replace' }], files: [{ path: path.join(b.dir, 'ca', 'combined-picky.pem'), bundle: true, certsFrom: [] }] }),
       trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], afterUninstall: 'next-connection', untilEnviron: 'VIA' } }
     fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
@@ -911,15 +911,16 @@ test('install records liveness per harness it changed anything for: its signatur
   const b = box()
   try {
     const { reviveSignature, matchHarness } = await import('../../src/off/signature.mjs')
-    const rep = { ...repHarness(b.dir, { rereadsEntry: true, afterUninstall: 'next-connection', untilEnviron: 'SSL_CERT_FILE' }), signatures: { none: { match: [{ exe: /\/rep$/ }], exclude: [{ argv: [/^--helper$/] }] } } }
-    const quiet = { name: 'quiet', runtime: 'node', signatures: { none: { match: [{ exe: /quiet$/ }] } }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] }, inject: () => ({}) } // injects nothing
+    const rep = { ...repHarness(b.dir, { rereadsEntry: true, afterUninstall: 'next-connection', untilEnviron: 'SSL_CERT_FILE' }), processes: { names: [{ name: 'rep' }], exclude: [{ name: 'rep', args: '(^| )--helper( |$)' }] } }
+    const quiet = { name: 'quiet', runtime: 'node', processes: { names: [{ name: 'quiet' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] }, inject: () => ({}) } // injects nothing
     fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
     await installCollector(base(b, { harnesses: [rep, quiet], roots: { node: [], osText: '' } }))
     const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file as written: what `off` reads
     assert.deepEqual(Object.keys(m.liveness), ['rep'], 'a harness install changed nothing for has no liveness: nothing of it to judge')
     assert.deepEqual([m.liveness.rep.rereads, m.liveness.rep.until, m.liveness.rep.until_environ], [true, 'next-connection', 'SSL_CERT_FILE'])
     const sig = reviveSignature(m.liveness.rep.signature)
-    assert.deepEqual(sig, rep.signatures.none, 'the signature survives the manifest')
+    const { compileIdentity } = await import('../../src/off/identity.mjs')
+    assert.deepEqual(sig, compileIdentity({ harness: 'rep', ...rep.processes }), 'the compiled name list survives the manifest')
     assert.equal(matchHarness(m.liveness, { exe: '/x/rep', argv: ['rep'], env: null }), 'rep')
     assert.equal(matchHarness(m.liveness, { exe: '/x/rep', argv: ['rep', '--helper'], env: null }), null, 'and so does its exclude')
   } finally { b.done() }

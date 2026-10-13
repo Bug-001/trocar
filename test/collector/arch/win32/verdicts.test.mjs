@@ -20,6 +20,7 @@ import { matchForm } from '../../../../src/collector/arch/win32/forms.mjs'
 import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { createRegistry } from '../../../../src/collector/core/registry.mjs'
+import { splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
 import { createTracker } from '../../../../src/collector/core/tracker.mjs'
 import { createTrustChecker, MARKER_TOLERANCE_MS } from '../../../../src/collector/core/trust/confirm.mjs'
 import { createEngine } from '../../../../src/collector/core/engine/engine.mjs'
@@ -46,11 +47,13 @@ const IMG = {
   zcode: String.raw`C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe`,
   svchost: String.raw`C:\Windows\System32\svchost.exe`,
 }
-const DSH_CMD = String.raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\bin\dsh.js`
+const DSH_CMD = String.raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\lib\bin.js`
+const HERMES_CMD = String.raw`"C:\Users\u\AppData\Local\hermes\tools\python-3.12.6\python.exe" -I -c "import hermes_bootstrap; import hermes_cli.main"`
+const ZCODE_NET_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" --type=utility --utility-sub-type=network.mojom.NetworkService`
 const ZCODE_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" C:\Users\u\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs app-server --stdio`
 
 /** What the Windows procinfo gives, with the field Task 8(v) added: `envRead: false` says "this OS never reads another process's environment", so `env: null` is the rule here and not a failure to read. */
-const facts = (pid, exe, extra = {}) => ({ os: 'win32', pid, ppid: 1, name: exe.split('\\').pop(), exe, argv: [], cmdline: `"${exe}"`, env: null, envRead: false, cwd: null, startedAt: 1700000000000 + pid, startTicks: String(1700000000000 + pid), cmdlineState: 'ok', elevated: false, source: 'exec', ...extra })
+const facts = (pid, exe, extra = {}) => ({ os: 'win32', pid, ppid: 1, name: exe.split('\\').pop(), exe, argv: splitCommandLine(extra.cmdline === undefined ? `"${exe}"` : extra.cmdline), cmdline: `"${exe}"`, env: null, envRead: false, cwd: null, startedAt: 1700000000000 + pid, startTicks: String(1700000000000 + pid), cmdlineState: 'ok', elevated: false, source: 'exec', ...extra })
 
 const ALL = await loadHarnesses()
 const one = (name) => ALL.find((d) => d.name === name)
@@ -58,10 +61,9 @@ const GROUPS = groupsOf(ALL)
 const FORMS = GROUPS.flatMap((g) => g.forms)
 const HARNESS_OF_FORM = new Map(GROUPS.flatMap((g) => g.forms.map((f) => [f.id, g.harness])))
 
-/** The registry as the daemon wires it (8(c)): `matchForm` over the same form data the redirector routes by, handed to the registry — the tracker and the redirector share one rule for which form a process is. */
+/** The registry as the daemon wires it: the D51 name lists, the same on every OS (no osMatch: the registry needs no redirector). */
 function winRegistry(descriptors = ALL) {
-  const win = (f) => { const m = matchForm(FORMS, f, { home: HOME }); return m.kind === 'form' ? HARNESS_OF_FORM.get(m.id) : null }
-  return createRegistry(descriptors, { osMatch: { win32: win } })
+  return createRegistry(descriptors)
 }
 
 /** A sandbox %USERPROFILE% with one harness's trust entries really installed (`on`'s own writer), the manifest, the CA and its paths. */
@@ -100,10 +102,10 @@ test('W76 the registry the tracker judges by finds the same harness as matchForm
   const rows = [
     [IMG.ccCli, {}, 'claude-code'], [IMG.ccVscode, {}, 'claude-code'], [IMG.ccDesktop, {}, 'claude-code'],
     [IMG.codexNpm, {}, 'codex'], [IMG.codexApp, {}, 'codex'],
-    [IMG.hermesPy, {}, 'hermes'], [IMG.kimi, {}, 'kimi-code'],
+    [IMG.hermesPy, { cmdline: HERMES_CMD }, 'hermes'], [IMG.kimi, {}, 'kimi-code'],
     [IMG.node, { cmdline: DSH_CMD }, 'deepseek-dsh'], [IMG.dshDesktop, {}, 'deepseek-dsh'],
     [IMG.opencode, {}, 'opencode'], [IMG.opencodeDesk, {}, 'opencode'],
-    [IMG.zcode, { cmdline: ZCODE_CMD }, 'z-code'], [IMG.zcode, {}, 'z-code'],
+    [IMG.zcode, { cmdline: ZCODE_CMD }, 'z-code'], [IMG.zcode, { cmdline: ZCODE_NET_CMD }, 'z-code'],
   ]
   for (const [exe, extra, harness] of rows) {
     const f = facts(10, exe, extra)
@@ -113,6 +115,7 @@ test('W76 the registry the tracker judges by finds the same harness as matchForm
     assert.deepEqual(registry.match(f), { agent: harness, descriptor: one(harness), reason: 'match' }, `${exe}: the registry finds ${harness}, as the redirector's form ${form.id} says`)
   }
   assert.equal(registry.match(facts(11, IMG.svchost)).agent, null, 'a process of no form is no agent')
+  assert.deepEqual([registry.match(facts(13, IMG.zcode)).agent, registry.match(facts(14, IMG.hermesPy)).agent], [null, null], 'the Z-Code GUI itself (no zcode.cjs, no network-service args) and a bare python are no agent: a name alone is not enough for them (4.6 按 harness 名单, 4.8 W3)')
   const pending = registry.match(facts(12, IMG.node, { cmdline: null, argv: [], cmdlineState: 'pending' }))
   assert.equal(pending.agent, null, 'a command line not known yet judges nothing: the facts-update re-judges it (below)')
   // no copy of the patterns as `signatures.win32`: the form data is the one rule, and the win32 files carry no signatures
@@ -149,8 +152,8 @@ test('W76 Hermes is judged on its Windows files (%LOCALAPPDATA%\\hermes, desc.wi
   const b = await sandbox('hermes', [['AppData/Local/hermes/config.yaml']])
   const { redirector, settle } = rigged({ descriptors: [b.d], box: b })
   assert.equal(typeof b.d.win32.layers, 'function', 'the Windows data carries its own layers: the Linux ones read ~/.hermes, which is not where Windows Hermes keeps its .env')
-  redirector.emit('exec', facts(20, IMG.hermesPy, { startedAt: b.t0 + 5000 }))
-  redirector.emit('exec', facts(21, IMG.hermesPy, { startedAt: b.t0 - 5000 }))
+  redirector.emit('exec', facts(20, IMG.hermesPy, { cmdline: HERMES_CMD, startedAt: b.t0 + 5000 }))
+  redirector.emit('exec', facts(21, IMG.hermesPy, { cmdline: HERMES_CMD, startedAt: b.t0 - 5000 }))
   await settle()
   assert.deepEqual([redirector.verdictOf(20).decrypt, redirector.verdictOf(20).agent], [true, 'hermes'])
   assert.equal(redirector.verdictOf(21).decrypt, false)

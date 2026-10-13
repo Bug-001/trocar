@@ -1,6 +1,6 @@
 // test/collector/arch/win32/wiring.test.mjs — the daemon's Windows half (RFC 4.8 §1 接线 · §2.2 · §3.5; W39 W71; plan Task 8(c)).
 // createWin32Collector is what loadArch('win32') hands the daemon: the helper, watcher, ingress config, kernel, entries writer and route plan in one Redirector,
-// plus the win32 bag the daemon reaches (osMatch, replan, carried, the applied host sets). Everything is injected: a fake helper, kernel and process watcher.
+// plus the win32 bag the daemon reaches (replan, carried, the applied host sets). Everything is injected: a fake helper, kernel and process watcher.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'

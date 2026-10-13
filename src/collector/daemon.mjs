@@ -38,15 +38,14 @@ export { loadArch } // the CLI reaches arch only through this file (layering rul
 export async function loadParts({ arch = null, harnesses = null, env = process.env } = {}) {
   const A = arch || (await loadArch())
   const list = harnesses || (await loadHarnesses())
-  // 4.8 §5.4 / 4.9 §5.4 osMatch: a platform whose process facts are not the /proc set needs the registry's second key. The darwin collector carries it in its bag and its LAZY
-  // construction (4.9 §1 接线) makes building one here safe: with { env, harnesses } only, it is the shell — the descriptors' forms for osMatch, a watcher `scan` can use, no
+  // The darwin collector's LAZY construction (4.9 §1 接线) makes building one here safe: with { env, harnesses } only, it is the shell — a watcher `scan` can use, no
   // ingress.json created, nothing started. Linux ignores the extra argument; the win32 collector's construction is the win line's own open seam (it wants the dir), so on win32
   // NO redirector is built here at all (arch/index.mjs's win32 arm says the same: loadParts makes no redirector on win32) and this parts view answers an empty process table —
   // the CLI's `on` plan and `status` read paths work without a collector dir; the daemon itself builds the real one with the dir. Measured on a Windows test machine: without
   // this, `asight on --yes` on Windows died at once with createWin32Collector's "needs the collector dir (~/.asight/collector)".
-  const redirector = A.os === 'win32' ? null : await A.createRedirector({ env, harnesses: list }) // the await is the point: darwin's collector is async (4.9 §1), and without it `redirector` here is a Promise — osMatch dead-ends to null and `scan()` throws TypeError (review F1, reproduced on the real call before this line); Linux's and win32's sync returns pass through the await untouched
-  const osMatch = redirector && typeof redirector.darwin === 'object' && redirector.darwin && redirector.darwin.osMatch ? redirector.darwin.osMatch : null
-  const registry = createRegistry(list, { osMatch })
+  const redirector = A.os === 'win32' ? null : await A.createRedirector({ env, harnesses: list }) // the await is the point: darwin's collector is async (4.9 §1), and without it `redirector` here is a Promise — `scan()` throws TypeError (review F1, reproduced on the real call before this line); Linux's and win32's sync returns pass through the await untouched
+  // the registry judges by name on every OS (D51): it needs no redirector
+  const registry = createRegistry(list)
   // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `asight on` says so (1.6 §1.1), it never enables it (R8)
   return { arch: A, os: A.os, harnesses: list, registry, scan: () => (redirector ? redirector.scan() : []), match: (f) => registry.match(f), linger: () => (redirector && typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (redirector && typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
 }
@@ -195,7 +194,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     let engine = null // created after the tracker; the tracker's onGone reaches it at call time
     const event = (e) => failure.write({ ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) })
 
-    let { registry, arch: A, harnesses: harnessList } = await loadParts({ arch: A0 ?? arch, harnesses, env })
+    const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch: A0 ?? arch, harnesses, env })
     // 4.9 §1 wiring: the darwin collector needs the collector dir and this daemon's sinks, so it is built here with them (started below; the kernel itself
     // comes with the first attach, 4.8 §4.1) — `desired` reads state.json as it is NOW: the switch changes it while this daemon runs. The win32 collector needs
     // exactly the same shape (createWin32Collector({ env, dir, home, harnesses, failure, event, manifest, desired }) — wiring.mjs), so it joins this arm: with
@@ -206,10 +205,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       ? await A.createRedirector({ env, dir, home: netHome, harnesses: harnessList, failure, event, manifest: () => readManifest(P.dir), desired: () => { const st = readState(P.state, () => {}, {}); return st.harnesses || {} } })
       : A.createRedirector({ env })
     const bag = redirector && ((typeof redirector.darwin === 'object' && redirector.darwin) || (typeof redirector.win32 === 'object' && redirector.win32) || null) // the arch bag (darwin's or win32's wiring): what only the daemon reaches
-    // win32's registry second key (4.8 §5.4 osMatch): loadParts' parts view has NO redirector on win32, so the registry it returned was built without one
-    // and matched NOTHING — every agent flow read `untracked` and was spliced, capture stayed empty (measured on a Windows test machine: the live claude's facts matched
-    // {kind:'form', id:'claude-code.cli'} the moment the registry was handed the bag's osMatch). Darwin needs no rebuild: its loadParts shell carries osMatch.
-    if (A.os === 'win32' && bag && bag.osMatch) registry = createRegistry(harnessList, { osMatch: bag.osMatch })
     // D38: one `agent-untrusted` per pid and reason (code = the resolver's reason, reason = what to do about it); a pid
     // recorded so gets `agent-trusted` once it is trusted and `agent-exit` when it exits, so the condition can clear.
     const recordedUntrusted = new Map() // pid → the reason code last recorded

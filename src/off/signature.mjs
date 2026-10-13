@@ -15,7 +15,7 @@
 // (compileIdentity) and an older one over exe / argv match with the same code. Imports only src/off/identity.mjs.
 import { processNames, name0, argRest } from './identity.mjs'
 
-export function factAt(facts, p) {
+function factAt(facts, p) {
   let cur = facts
   for (const k of p.split('.')) {
     if (cur == null) return undefined

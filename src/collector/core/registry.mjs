@@ -13,7 +13,7 @@
 //   no-match       the name is on no list
 //   ambiguous      two harnesses claim it (`candidates`)
 // Exclude items may read `env`, which may be a lazy read of the process: it is reached only once a name of that harness hit.
-import { factAt, holds, matchPattern, identityView, serializeSignature } from '../../off/signature.mjs'
+import { holds, matchPattern, identityView, serializeSignature } from '../../off/signature.mjs'
 import { compileIdentity, mergeAgentList } from '../../off/identity.mjs'
 import { UNTIL_TEXT } from './codes.mjs'
 
@@ -30,14 +30,9 @@ export function validateDescriptor(d) {
   const where = `harness descriptor ${JSON.stringify(d && d.name)}`
   if (!d || typeof d.name !== 'string' || !NAME_RE.test(d.name)) throw new Error(`${where}: name must be kebab-case`)
   if (!RUNTIMES.has(d.runtime)) throw new Error(`${where}: runtime must be one of ${[...RUNTIMES].join(', ')}`)
-  if (d.signatures) { legacyCheck(where, d); return validateRest(where, d) } // transitional (T4): a made-up test descriptor of the old shape
   const p = d.processes
   if (!p || typeof p !== 'object' || !Array.isArray(p.names) || p.names.length === 0) throw new Error(`${where}: processes.names must be a non-empty array of { name, args? }`)
   compileOf(d) // throws on a wide name without args, a stateful RegExp, an exclude item naming no name of this harness
-  return validateRest(where, d)
-}
-
-function validateRest(where, d) {
   if (!Array.isArray(d.hosts)) throw new Error(`${where}: hosts must be an array`)
   if (!d.trust || !Array.isArray(d.trust.chain) || d.trust.chain.length === 0) throw new Error(`${where}: trust.chain must be a non-empty array`)
   const au = d.trust.afterUninstall
@@ -55,7 +50,7 @@ function validateRest(where, d) {
  *  (Kimi), only a process whose environment names that variable at a file of asight's is reported at all. */
 export function livenessOf(d, osName, osSignature = null) {
   const t = d.trust || {}
-  const sig = typeof osSignature === 'function' ? osSignature(d) : d.signatures ? d.signatures[osName] : d.processes ? compileOf(d) : null
+  const sig = typeof osSignature === 'function' ? osSignature(d) : d.processes ? compileOf(d) : null
   return {
     signature: sig ? serializeSignature(sig) : null,
     rereads: !!t.rereadsEntry,
@@ -83,7 +78,7 @@ function compileAll(byName, entries) {
   return out
 }
 
-function createNameRegistry(descriptors, { agentList = [] } = {}) {
+export function createRegistry(descriptors, { agentList = [] } = {}) {
   const byName = new Map()
   for (const d of descriptors) {
     validateDescriptor(d)
@@ -139,68 +134,4 @@ function createNameRegistry(descriptors, { agentList = [] } = {}) {
   const isLongLived = (d, facts) => { const sig = lists.get(d.name); return !!sig && anyOf(sig.longLived, identityView(facts)) }
 
   return { match, couldMatch, isLongLived, replaceAgentList, get: (name) => byName.get(name) || null, names: () => [...byName.keys()] }
-}
-
-// ── transitional (D51 T4): descriptors of the old shape (`signatures.<os>`, made-up test descriptors only — the seven presets are names) and the
-// `osMatch` seam the darwin / win32 wiring still hands in. The next commit migrates both and deletes this section. ──
-function legacyCheck(where, d) {
-  const oses = d.signatures && typeof d.signatures === 'object' ? Object.keys(d.signatures) : []
-  if (oses.length === 0) throw new Error(`${where}: signatures needs at least one OS key`)
-  for (const os of oses) {
-    const s = d.signatures[os]
-    if (!s || !Array.isArray(s.match) || s.match.length === 0) throw new Error(`${where}: signatures.${os}.match must be a non-empty array`)
-    for (const p of [...s.match, ...(s.exclude || []), ...(s.longLived || [])]) {
-      if (!p || typeof p !== 'object' || Object.keys(p).length === 0) throw new Error(`${where} signatures.${os}: every pattern needs at least one fact path`)
-      for (const v of Object.values(p)) for (const re of [v, ...(Array.isArray(v) ? v : [])]) if (re instanceof RegExp && (re.global || re.sticky)) throw new Error(`${where} signatures.${os}: /g and /y RegExps are stateful; drop the flag`)
-    }
-  }
-}
-
-export function createRegistry(descriptors, { agentList = [], osMatch = null } = {}) {
-  const all = new Map()
-  for (const d of descriptors) { validateDescriptor(d); if (all.has(d.name)) throw new Error(`harness descriptor ${d.name} registered twice`); all.set(d.name, d) }
-  const old = [...all.values()].filter((d) => d.signatures)
-  const named = createNameRegistry([...all.values()].filter((d) => !d.signatures), { agentList })
-  const oldMatch = (facts) => {
-    const candidates = []
-    let excluded = false
-    for (const d of old) {
-      const sig = d.signatures[facts.os]
-      if (!sig || !anyOf(sig.match, facts)) continue
-      if (anyOf(sig.exclude, facts)) { excluded = true; continue }
-      candidates.push(d)
-    }
-    if (candidates.length === 1) return { agent: candidates[0].name, descriptor: candidates[0], reason: 'match' }
-    if (candidates.length > 1) return { agent: null, descriptor: null, reason: 'ambiguous', candidates: candidates.map((d) => d.name) }
-    return { agent: null, descriptor: null, reason: excluded ? 'excluded' : 'no-match' }
-  }
-  function match(facts) {
-    const byFn = osMatch && typeof osMatch[facts.os] === 'function' ? osMatch[facts.os] : null
-    if (byFn) {
-      const agent = byFn(facts)
-      if (agent == null) return { agent: null, descriptor: null, reason: 'no-match' }
-      const d = all.get(agent)
-      if (!d) throw new Error(`the ${facts.os} matcher named ${JSON.stringify(agent)}, which is no registered harness; nothing was judged`)
-      return { agent, descriptor: d, reason: 'match' }
-    }
-    if (old.length === 0) return named.match(facts)
-    const a = named.match(facts), b = oldMatch(facts)
-    if (a.agent && b.agent) return { agent: null, descriptor: null, reason: 'ambiguous', candidates: [a.agent, b.agent] }
-    return b.agent || (a.reason === 'no-match' && b.reason !== 'no-match') ? b : a
-  }
-  const readable = (pattern, facts) => {
-    let known = 0
-    for (const [p, want] of Object.entries(pattern)) {
-      if (p.split('.')[0] === 'exe' || p.split('.')[0] === 'env') continue
-      if (!holds(want, factAt(facts, p))) return false
-      known++
-    }
-    return known > 0
-  }
-  const couldMatch = (facts) => [...named.couldMatch(facts), ...old.filter((d) => {
-    const sig = d.signatures[facts.os]
-    return sig && sig.match.some((p) => readable(p, facts)) && !(sig.exclude || []).some((p) => readable(p, facts))
-  }).map((d) => d.name)]
-  const isLongLived = (d, facts) => (d.signatures ? anyOf(d.signatures[facts.os] && d.signatures[facts.os].longLived, facts) : named.isLongLived(d, facts))
-  return { match, couldMatch, isLongLived, replaceAgentList: named.replaceAgentList, get: (name) => all.get(name) || null, names: () => [...all.keys()] }
 }

@@ -619,7 +619,7 @@ test('the darwin redirector has every call the daemon, the tracker and the switc
   const called = new Set(sources.flatMap((code) => [...code.matchAll(/\bredirector\.([A-Za-z]+)/g)].map((m) => m[1])))
   const guarded = (name) => sources.some((code) => code.includes(`typeof redirector.${name}`))
   // what darwin does not have, and why: the daemon opens no transparent listener there either (4.9 §0: proxy mode only), so the engine never calls `lookup`; `darwin` is not a method
-  // at all but the bag the WIRING adds after construction (osMatch, replan, the doors' binding — 4.9 §1 接线), which daemon.mjs loadParts reads behind a truthiness guard.
+  // at all but the bag the WIRING adds after construction (replan, the doors' binding — 4.9 §1 接线), which daemon.mjs loadParts reads behind a truthiness guard.
   const NOT_ON_DARWIN = {
     lookup: 'darwin has no transparent rewrite (4.9 §0: proxy mode is the only mode on macOS): the daemon opens no transparent listener there',
     darwin: 'the bag the wiring (arch/darwin/wiring.mjs) hangs on the built redirector after construction — createDarwinRedirector itself gives none, and loadParts reads it behind `redirector.darwin &&`',

@@ -1,6 +1,6 @@
 // test/collector/arch/darwin/wiring.test.mjs — the daemon's macOS half (RFC 4.9 §1 接线 · §2.2 · §5, as D47 wrote it; the case list is 4.8 §1's W39 W71, plan Task 8(c), with the lazy rule's own case).
 // createDarwinCollector is what loadArch('darwin') hands the daemon: the ingress config, the entries writer and the route plan in one Redirector, plus the darwin bag the daemon
-// reaches (bindDoors, osMatch, replan, carried, the applied host sets). There is no kernel any more (D47: the engine's doors are the only proxy) and no process watcher (the scan
+// reaches (bindDoors, replan, carried, the applied host sets). There is no kernel any more (D47: the engine's doors are the only proxy) and no process watcher (the scan
 // is deleted; identity is the door's own targeted questions). Everything is injected: a fake scutil and a doors recorder — no real ps, lsof or scutil runs.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -113,15 +113,14 @@ test('W39 loadArch("darwin") returns the darwin arch on any OS, with the pieces 
 
 
 
-test('the lazy rule: a construction without the dir (loadParts\' { env } one) builds the shell and touches nothing — no ingress.json anywhere, scan works, attach refuses, osMatch judges', async () => {
+test('the lazy rule: a construction without the dir (loadParts\' { env } one) builds the shell and touches nothing — no ingress.json anywhere, scan works, attach refuses; the bag carries no osMatch (the registry judges by name, D51)', async () => {
   const home = tmpDir('asight-wiring-shell-')
   const box = fakeScutil()
   const redirector = await createDarwinCollector({ env: { HOME: home }, harnesses: ALL, deps: { exec: box.exec } })
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written into the home of a read-only command')
   assert.equal(typeof redirector.scan, 'function')
   await assert.rejects(redirector.attach(), /attach needs the doors and the entries/, 'the shell cannot attach: there is no entries writer to attach with')
-  assert.equal(redirector.darwin.osMatch.darwin({ exe: '/Users/x/.local/bin/claude', cmdline: '/Users/x/.local/bin/claude' }), 'claude-code', 'the forms of the descriptors it was handed are judged (the registry\'s second key)')
-  assert.equal(redirector.darwin.osMatch.darwin({ exe: '/usr/bin/curl', cmdline: 'curl https://example.com' }), null, 'a non-agent process is no harness\'s')
+  assert.equal('osMatch' in redirector.darwin, false, 'no second rule for which harness a process is')
 })
 
 test('the wiring plans from the daemon\'s own ctx and serves a door\'s lookup with capture:"proxy" and the group\'s upstream (the door names its group — D47; no identity questions are wired here, so no pid)', async () => {
@@ -257,13 +256,13 @@ test('W71 the watcher stops with the collector: close() stops it (no timer left)
 
 // ---------- the two seams the close-out review found dead (F1, F2) — these tests run them through the REAL callers ----------
 
-test('review F1: the daemon\'s own loadParts on darwin lands the shell whole — osMatch alive through the registry, not a Promise behind the guard (the pre-fix line awaited nothing)', { skip: process.platform !== 'darwin' }, async () => {
+test('review F1: the daemon\'s own loadParts on darwin lands the shell whole — a scan-able shell and a registry that judges darwin facts, not a Promise behind the guard (the pre-fix line awaited nothing)', { skip: process.platform !== 'darwin' }, async () => {
   const { loadParts } = await import('../../../../src/collector/daemon.mjs')
   const parts = await loadParts({ env: { HOME: '/Users/x' }, harnesses: ALL })
   assert.equal(parts.os, 'darwin')
-  assert.equal(parts.match({ os: 'darwin', pid: 10, exe: '/Users/x/.local/bin/claude', cmdline: '/Users/x/.local/bin/claude' }).agent, 'claude-code',
-    'the registry judged darwin facts through osMatch: with the Promise, redirector.darwin read undefined, osMatch fell to null and this answer was null — nothing on macOS matched anything')
-  assert.equal(parts.match({ os: 'darwin', pid: 11, exe: '/usr/bin/curl', cmdline: 'curl https://example.com' }).agent, null, 'and a non-agent still matches nothing')
+  assert.equal(typeof parts.scan, 'function')
+  assert.equal(parts.match({ os: 'darwin', pid: 10, exe: '/Users/x/.local/bin/claude', argv: ['/Users/x/.local/bin/claude'], cmdline: '/Users/x/.local/bin/claude' }).agent, 'claude-code', 'the registry judges darwin facts (by name, D51)')
+  assert.equal(parts.match({ os: 'darwin', pid: 11, exe: '/usr/bin/curl', argv: ['curl', 'https://example.com'], cmdline: 'curl https://example.com' }).agent, null, 'and a non-agent still matches nothing')
 })
 
 test('review F2 (as D47 left it): there is no kernel to claim any more — start() reads the network and plans, and a KeepAlive-restarted daemon\'s doors bind or fail with EADDRINUSE said (the engine\'s own listen), never an adopted stranger', async () => {
