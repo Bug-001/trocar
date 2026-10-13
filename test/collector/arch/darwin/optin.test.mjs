@@ -51,6 +51,12 @@ test('the catalog: the darwin harness data\'s opt-in items surface as plan rows,
   assert.deepEqual(darwin.optIn.forms({ harnesses: descs }).sort(), ['claude-code.desktop', 'deepseek-dsh.desktop', 'kimi-code.cli', 'opencode.cli'])
   const viaArch = darwin.optIn.plan({ harnesses: descs, optIn: [] })
   assert.equal(viaArch.length, rows.length)
+  // the item side of the same seam: an ITEM id the plan prints maps back to its form(s) — what `--opt-in` accepts besides form ids (kimi-gap
+  // 第 2 条's sibling gap: the hint printed item ids the flag rejected)
+  const items = darwin.optIn.itemForms({ harnesses: descs })
+  assert.ok(items.length >= 3, `the darwin items are listed: ${items.map((x) => x.item).join(', ')}`)
+  for (const x of items) assert.ok(x.forms.length >= 1 && x.forms.every((f) => typeof f === 'string'), `${x.item} carries its forms`)
+  assert.deepEqual(items.filter((x) => x.forms.length > 1).map((x) => x.item).sort(), ['desktop-launcher', 'user-path-shim'], 'two items are shared — the launcher (Claude Desktop and dsh.desktop) and the rc-line shim (kimi and opencode) — the CLI makes the user name the form for those')
 })
 
 // one sandbox the apply runs in: the native kimi binary, two of the four zsh rc files (.zshrc holds the Kimi installer's own PATH line,

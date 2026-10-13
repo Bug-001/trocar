@@ -405,13 +405,18 @@ export async function turnOn(opts = {}) {
       plan.optIn = await optInHooks.plan({ ids, harnesses, optIn, manifest: plan._.prior, env })
     }
     const optInTodo = (plan.optIn || []).filter((r) => r.chosen && r.applicable && r.state === 'needed')
+    // the harnesses behind the chosen rows are ON with this run too (the kimi-gap ledger's 第 2 条, closed): the rows land their manifest entries only
+    // later in the run, so plan.targets — read from the PRIOR manifest — cannot know them, and a single `on --opt-in x` used to steer without capturing
+    // (desired off → the daemon's tracker parks every verdict) until a second bare `on` came. plan.targets stays the printed list; this union is the
+    // desired state's truth. A row whose apply later fails leaves the same resumable shape a failed file write does (the receipt says so, the next on finishes it).
+    const optInTargets = [...new Set(optInTodo.map((r) => r.harness).filter(Boolean))]
     // the copy of the undo side that needs no source tree (R3) is one more file asight writes: listed in the plan and the dry run when it is missing or not what src/off generates now
     const standaloneCheck = checkStandalone({ home, version: OFF_VERSION, fs })
     if (!standaloneCheck.ok) { plan.created = [...plan.created, standaloneCheck.path]; plan.standalone = standaloneCheck.path }
     // A version 1 file (what `collector on|off` wrote before D39) is read for the harnesses installed before and the ones this run turns on, the same set
     // the guard below reads it for — and is written back as version 2 here, before the first guard: the guard must never see a file the daemon's reader
     // and this one read differently (1.6 §1.5, R12)
-    const known = [...new Set([...plan.installed, ...plan.targets])]
+    const known = [...new Set([...plan.installed, ...plan.targets, ...optInTargets])]
     const readState = () => readStateFile(stateF, { fs, installed: known, now: now() })
     const stateRead = (() => { try { return { ...readState(), error: null } } catch (e) { return { state: emptyState(), from: null, error: e } } })()
     const need = plan.targets.filter((id) => !(stateRead.state.harnesses[id] && stateRead.state.harnesses[id].desired === 'on'))
@@ -472,9 +477,10 @@ export async function turnOn(opts = {}) {
       else m.files.push(item)
       saveManifest(dir, m, fs)
     }
-    // the desired state goes first (R9, R12): an `off` that lands meanwhile writes the same file, and every write below reads it again
+    // the desired state goes first (R9, R12): an `off` that lands meanwhile writes the same file, and every write below reads it again. The opt-in
+    // targets ride the same write (kimi-gap 第 2 条): desired on from the naming, the entries land later in this same run
     const locked = (() => { try { return readState() } catch { return stateRead } })()
-    const needNow = plan.targets.filter((id) => !(locked.state.harnesses[id] && locked.state.harnesses[id].desired === 'on'))
+    const needNow = [...new Set([...plan.targets, ...optInTargets])].filter((id) => !(locked.state.harnesses[id] && locked.state.harnesses[id].desired === 'on'))
     if (needNow.length) writeStateAtomic(stateF, setDesired(locked.state, needNow, 'on', now()), { fs })
     else if (stateWrite) writeStateAtomic(stateF, locked.state, { fs }) // version 1 → 2, nothing turned on: "on since" stays where it was
     // the undo that needs no source tree is in place before the first thing it undoes (R3): written on every `on`, nothing when it already is what src/off generates. A copy that
@@ -486,7 +492,7 @@ export async function turnOn(opts = {}) {
     const guard = () => {
       let st
       try { st = readState().state } catch (e) { throw stop(`${stateF} cannot be read (${String((e && e.message) || e)}), so it is not known whether an off was asked; stopped (1.6 R12)`) }
-      const off = plan.targets.filter((id) => !(st.harnesses[id] && st.harnesses[id].desired === 'on'))
+      const off = [...new Set([...plan.targets, ...optInTargets])].filter((id) => !(st.harnesses[id] && st.harnesses[id].desired === 'on'))
       if (off.length) throw stop(`${off.join(', ')} was turned off while this on ran (${stateF}); stopped, the off wins (1.6 R12). What was written is a resumable install: asight on finishes it`)
     }
     const notes = r.notes

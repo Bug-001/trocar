@@ -86,6 +86,17 @@ const optinEntriesOf = (manifest, harness) => (manifest && Array.isArray(manifes
 /** → every form id that has opt-in items in `groups` (the `--opt-in` usage error lists them; naming anything else is a usage error). */
 export const optinFormsOf = (groups) => [...new Set(planOptIns({ groups }).map((r) => r.form))]
 
+/** → [{ item, forms }] — the ITEM ids the plan's「要你点名的」section prints, each with every form that carries it (the win32 twin's twin): the CLI
+ *  expands an item id named on `--opt-in` back to its form — one carrier expands, several are the user's to choose (cli/on.mjs's rule, 1.6 §1.7). */
+export const optinItemForms = (groups) => {
+  const byItem = new Map()
+  for (const r of planOptIns({ groups })) {
+    if (!byItem.has(r.item)) byItem.set(r.item, new Set())
+    byItem.get(r.item).add(r.form)
+  }
+  return [...byItem.entries()].map(([item, forms]) => ({ item, forms: [...forms] }))
+}
+
 // ── the doing of a named item ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // applyOptIn({ row, manifest, dir, home, env, fs, now, save, note, failure, state, deps }) → { state: 'done' | 'failed', reason? } — the
 // win32 twin's contract, one driver (below): refuse / error → nothing written; the part is ledgered BEFORE its write (a crash past it is

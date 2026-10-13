@@ -17,8 +17,9 @@ import { fakeIo, onCtx, seedClaude, snapshot, fakeSystem, ROOTS } from './fixtur
 const SOCK = '/x/collector.sock'
 
 /** A fake opt-in half of an arch: two user-level items on one form (V56's injected shape) and one machine-level item on another. `out` is what
- *  `apply` answers for each row; the rows are recomputed per call so `chosen` follows the command line the way the real planOptIns does. */
-function fakeOptIn(out = { state: 'done' }) {
+ *  `apply` answers for each row; the rows are recomputed per call so `chosen` follows the command line the way the real planOptIns does.
+ *  `extraItems` adds made-up item→forms rows to the itemForms answer (the ambiguity case needs one item several forms share). */
+function fakeOptIn(out = { state: 'done' }, extraItems = []) {
   const applied = []
   const rows = (optIn) => [
     { form: 'x.two-items', harness: 'x', item: 'shim-dir', kinds: ['optin-user-path'], scope: 'user', admin: false, impact: '本用户所有程序看到的 PATH 顺序变了', command: 'asight on x --opt-in x.two-items', chosen: optIn.includes('x.two-items'), applicable: true, state: 'needed' },
@@ -29,6 +30,7 @@ function fakeOptIn(out = { state: 'done' }) {
     applied,
     hooks: {
       forms: () => ['x.two-items', 'x.machine-item'],
+      itemForms: () => { const rs = rows([]); return [...new Set(rs.map((r) => r.item))].map((item) => ({ item, forms: [...new Set(rs.filter((r) => r.item === item).map((r) => r.form))] })).concat(extraItems) },
       plan: ({ optIn = [] }) => rows(optIn),
       apply: async ({ row }) => { applied.push(`${row.form}:${row.item}`); return { ...out, ...(out.elevated_command ? { elevated_command: out.elevated_command } : {}) } },
     },
@@ -250,4 +252,28 @@ test('validateOptIn rejects the shapes §9.4 does not allow (the check can fail:
   assert.match(validateOptIn({ nobody: [row({})] }).join('\n'), /not a harness id/)
   assert.match(validateOptIn({ 'kimi-code': 'nope' }).join('\n'), /not a list/)
   assert.deepEqual(OPTIN_STATES, ['needed', 'done', 'broken', 'pending-admin', 'needs-admin', 'unknown'], 'the §9.4 state closed set')
+})
+
+test('an ITEM id the plan prints names its form: one carrier expands to it, one several forms share is the user\'s to disambiguate', async () => {
+  const home = tmpDir('asight-optin-item-'); seedClaude(home)
+  const f = fakeOptIn()
+  const io = fakeIo({ tty: false })
+  assert.equal(await runOnCli(['--opt-in', 'shim-dir', '--yes'], onCtx(home, io, { deps: { optIn: f.hooks } })), 0, io.text())
+  assert.ok(f.applied.includes('x.two-items:shim-dir') && f.applied.includes('x.two-items:shortcuts'), `the item named its form, and the form's items went together (1.6 §1.7): ${f.applied.join(', ')}`)
+  assert.ok(!f.applied.some((a) => a.startsWith('x.machine-item:')), 'the other form is untouched')
+  const shared = fakeOptIn(undefined, [{ item: 'everywhere', forms: ['x.two-items', 'x.machine-item'] }])
+  const two = fakeIo({ tty: false })
+  assert.equal(await runOnCli(['--opt-in', 'everywhere', '--yes'], onCtx(home, two, { deps: { optIn: shared.hooks } })), 2)
+  assert.match(two.text(), /everywhere 是多个形态共有的点名项\(x\.two-items, x\.machine-item\)/)
+  assert.deepEqual(shared.applied, [], 'an ambiguous item applies nothing')
+})
+
+test('a named opt-in turns its harness ON in the same run — the desired state flips with the naming (kimi-gap 第 2 条)', async () => {
+  const home = tmpDir('asight-optin-desired-'); seedClaude(home)
+  const f = fakeOptIn()
+  const io = fakeIo({ tty: false })
+  assert.equal(await runOnCli(['--opt-in', 'x.two-items', '--yes'], onCtx(home, io, { deps: { optIn: f.hooks } })), 0, io.text())
+  const st = JSON.parse(fs.readFileSync(path.join(home, '.asight', 'collector', 'state.json'), 'utf8'))
+  assert.equal(st.harnesses.x && st.harnesses.x.desired, 'on', 'x is desired-on after ONE on — no second bare on needed before the tracker will judge it')
+  assert.equal(st.harnesses['claude-code'] && st.harnesses['claude-code'].desired, 'on', 'the installed target is on as ever')
 })
