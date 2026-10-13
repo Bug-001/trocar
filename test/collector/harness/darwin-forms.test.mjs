@@ -1,145 +1,50 @@
-// test/collector/harness/darwin-forms.test.mjs — the macOS forms of the harnesses (RFC 4.9 §2.3 · §2.4; the case list, the group table and the kernel-facing checks inherit 4.8 §2.3 · §2.4 · §3.5,
-// acceptance W3, W23). Table-driven from 4.9 §2.3 and the install shapes the darwin data files carry (user directory made up; claude-code and codex are lab-measured by the 4.9 smoke,
-// 2026-10-09, the other five are inferred from the Linux/Windows labs until MA4 turns their cells into facts). The mechanics of matching live in src/collector/arch/darwin/forms.mjs, exercised on made-up inputs by the arch tests;
-// here the REAL data is. The darwin port of test/collector/harness/win32-forms.test.mjs.
+// test/collector/harness/darwin-forms.test.mjs — the macOS forms of the harnesses (RFC 4.9 §2.3 · §2.4; the group table and the entry gate inherit 4.8 §2.3 · §2.4, acceptance W23).
+// A form is the unit of an entry group, an opt-in item and a matrix row; which process is a harness is the name list's (D51), tested on the presets in
+// test/collector/core/. Here the REAL darwin data is: groups, forms, entries, the proxy export. The darwin port of test/collector/harness/win32-forms.test.mjs.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
-import { matchForm, entryGate, imagesOf } from '../../../src/collector/arch/darwin/forms.mjs'
+import { entryGate } from '../../../src/collector/arch/darwin/forms.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
-const raw = String.raw
-const U = '/Users/u'
 const ALL = await loadHarnesses()
 const MAC = Object.fromEntries(ALL.filter((d) => d.darwin).map((d) => [d.name, d.darwin]))
 const formsOf = () => Object.values(MAC).flatMap((w) => w.forms)
 const groupsOf = () => Object.values(MAC).flatMap((w) => w.groups)
 
-// ── what 4.9 §2.3 says each harness has: its groups (form lists) and per form the paths that ARE it ──
-// `yes`: install shapes the darwin data's patterns carry (inferred from the Linux and Windows labs — nobody has measured a cell on macOS yet, MA4); `unknown`: the same image at a shape no pattern
-// carries, or without the command line that tells it (form-path-unknown)
+// ── what 4.9 §2.3 says each harness has: its groups (form lists) and its forms — whether the user must name one, and which are listed unmeasured. Which PROCESS is a
+// harness is the name list's (D51, the base descriptors' `processes`; test/collector/core/identity-presets.test.mjs), never a form's ──
 const EXPECT = {
   'claude-code': {
     groups: { 'claude-code.settings': ['claude-code.native', 'claude-code.cli', 'claude-code.vscode'], 'claude-code.desktop': ['claude-code.desktop'] },
-    forms: {
-      // the native installer's version-named FILE (versions/2.1.296 is the executable, its basename is the version) is the
-      // PATH-ONLY form claude-code.native — no image gate can name it; the shapes that end in /claude stay the cli form's
-      'claude-code.native': { nameRule: false, yes: [`${U}/.local/share/claude/versions/2.1.296`, `${U}/.local/share/claude/versions/2.1.289/claude`] },
-      'claude-code.cli': { nameRule: false, yes: [`${U}/.local/bin/claude`, `${U}/.nvm/versions/node/v22.20.0/lib/node_modules/@anthropic-ai/claude-code/bin/claude`] },
-      'claude-code.vscode': { nameRule: false, yes: [`${U}/.vscode/extensions/anthropic.claude-code-2.1.292-darwin-arm64/resources/native-binary/claude`] },
-      // the Helper family is the measured owner of the model sockets (`Claude Helper --type=utility`, the Chromium network service — §6.4):
-      // the form's paths cover the whole family conservatively (bare Helper + Renderer + GPU under Frameworks/), image names exactly, one by one
-      'claude-code.desktop': { nameRule: false, yes: ['/Applications/Claude.app/Contents/MacOS/Claude', `${U}/Applications/Claude.app/Contents/MacOS/Claude`, '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper', `${U}/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper`, '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)', '/Applications/Claude.app/Contents/Frameworks/Claude Helper (GPU).app/Contents/MacOS/Claude Helper (GPU)'], optIn: true },
-    },
-    unknown: ['/opt/tools/claude', '/opt/tools/Claude Helper'],
+    forms: { 'claude-code.native': {}, 'claude-code.cli': {}, 'claude-code.vscode': {}, 'claude-code.desktop': { optIn: true } },
   },
   'codex': {
     groups: { 'codex.env': ['codex.cli', 'codex.vscode'] },
-    forms: {
-      'codex.cli': { nameRule: false, yes: [`${U}/.nvm/versions/node/v22.20.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex`, '/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-x64/vendor/x86_64-apple-darwin/bin/codex', `${U}/.codex/packages/app-server-daemon/releases/0.0.1234-abcd/bin/codex`] },
-      // the extension's own binary, measured on macOS (openai.chatgpt 26.1002.51308-darwin-aarch64): it reads the same $CODEX_HOME the cli form does, so it joins the one entry group
-      'codex.vscode': { nameRule: false, yes: [`${U}/.vscode/extensions/openai.chatgpt-26.1002.51308-darwin-aarch64/bin/macos-aarch64/codex`] },
-      'codex.app': { nameRule: false, yes: [], unmeasured: true }, // the desktop app's codex (4.6 OPEN ①)
-    },
-    unknown: ['/opt/tools/codex'],
+    forms: { 'codex.cli': {}, 'codex.vscode': {}, 'codex.app': { unmeasured: true } }, // the desktop app's codex (4.6 OPEN ①)
   },
   'opencode': {
     groups: { 'opencode.cli': ['opencode.cli', 'opencode.desktop'] },
-    forms: {
-      // opencode and OpenCode are one image name to the matcher (paths compare ignoring case on darwin too): the path alone tells the curl install's binary
-      'opencode.cli': { nameRule: false, optIn: true, yes: [`${U}/.opencode/bin/opencode`] },
-      // the desktop app (OpenCode.app 2.0.25, measured on macOS): it spawns its OWN bundled core —
-      // ~/Library/Application Support/ai.opencode.desktop/cli/<ver>/opencode-cli serve --service — a REAL-Library path ($HOME does not move it), the image
-      // `opencode-cli` (the CLI form's `opencode` gate never saw it: the desktop's whole turn was spliced untracked); the core inherits the launch env (the
-      // door's HTTPS_PROXY steered it live) and shares the CLI's group — the plugin marker is what darwin judges it by (its env is unreadable)
-      'opencode.desktop': { nameRule: false, optIn: true, yes: [
-        { exe: `${U}/Library/Application Support/ai.opencode.desktop/cli/2.0.25/opencode-cli`, cmdline: `${U}/Library/Application Support/ai.opencode.desktop/cli/2.0.25/opencode-cli serve --service` },
-      ] },
-    },
-    unknown: ['/opt/tools/opencode'],
+    forms: { 'opencode.cli': { optIn: true }, 'opencode.desktop': { optIn: true } },
   },
   'deepseek-dsh': {
     groups: { 'deepseek-dsh.env': ['deepseek-dsh.cli'], 'deepseek-dsh.desktop': ['deepseek-dsh.desktop'] },
-    forms: {
-      // the agent is node with dsh's entry script in its command line (…/@deepseek-ai/dsh/lib/bin.js, or …/bin/dsh — the global npm symlink); there is no macOS desktop form (4.9 §2.3's row names none)
-      'deepseek-dsh.cli': { nameRule: false, yes: [{ exe: '/usr/local/bin/node', cmdline: `/usr/local/bin/node ${U}/.nvm/versions/node/v22.20.0/lib/node_modules/@deepseek-ai/dsh/lib/bin.js` }, { exe: `${U}/.nvm/versions/node/v22.20.0/bin/node`, cmdline: `${U}/.nvm/versions/node/v22.20.0/bin/node ${U}/.nvm/versions/node/v22.20.0/bin/dsh` }] },
-      // the desktop app (dmg 0.2.0-rc.2, measured on macOS): the bundle's main binary and its Chromium Helper family — the
-      // network utility Helper owns the sockets; ~/.dsh/.env is READ but a launcher key in it is fatal to the core and a proxy key in it is
-      // ignored by the network service, so the door is the LAUNCHER (Chromium's --proxy-server), not the CLI's shared .env group
-      'deepseek-dsh.desktop': { nameRule: false, optIn: true, yes: [
-        '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness', `${U}/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness`,
-        '/Applications/DeepSeek Harness.app/Contents/Frameworks/DeepSeek Harness Helper.app/Contents/MacOS/DeepSeek Harness Helper',
-        '/Applications/DeepSeek Harness.app/Contents/Frameworks/DeepSeek Harness Helper (Renderer).app/Contents/MacOS/DeepSeek Harness Helper (Renderer)',
-      ] },
-    },
-    unknown: [],
+    forms: { 'deepseek-dsh.cli': {}, 'deepseek-dsh.desktop': { optIn: true } },
   },
   'hermes': {
     groups: { 'hermes.cli': ['hermes.cli'] },
-    forms: {
-      // python3 is every Python of the machine: the agent is the launcher's private CPython with the Hermes bootstrap on its command line (no install path, no PROCESS-NAME).
-      // The exe the facts carry is lsof's real binary, not the launcher's own word: the exec's `bin/python3` is a symlink the resolver turns into the version-named
-      // `python3.14` (the 0.21.5+9145 install: `bin/python3 -> python3.14`) — without that spelling in the form's image list every capture-path
-      // connection was `not-a-process-of-form` and spliced untracked (a gap closed here)
-      'hermes.cli': { nameRule: false, yes: [
-        { exe: `${U}/.hermes/tools/python-3.12.4/bin/python3`, cmdline: `${U}/.hermes/tools/python-3.12.4/bin/python3 -I -c 'import hermes_bootstrap; import hermes_cli.main as m; m.run()'` },
-        { exe: `${U}/.hermes/tools/python-3.12.4/bin/python3`, cmdline: `${U}/.hermes/tools/python-3.12.4/bin/python3 -I -c 'import hermes_bootstrap; import acp_adapter.entry'` },
-        { exe: `${U}/.hermes/tools/python-3.12.4/bin/python3`, cmdline: `${U}/.hermes/tools/python-3.12.4/bin/python3 -I -m tui_gateway.entry` },
-        { exe: `${U}/.hermes/tools/python-3.12.4/bin/python3`, cmdline: `${U}/.hermes/tools/python-3.12.4/bin/python3 -m tui_gateway.slash_worker` },
-        { exe: `${U}/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3.14`, cmdline: `${U}/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3.14 -I -c 'import hermes_bootstrap; import hermes_cli.main as m; m.run()'` },
-        { exe: `${U}/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3.14`, cmdline: `${U}/.hermes/tools/python-3.14.7+20260901-darwin-arm64/bin/python3.14 -I -m tui_gateway.entry` },
-      ] },
-      'hermes.desktop': { nameRule: false, yes: [], unmeasured: true },
-    },
-    unknown: [],
+    forms: { 'hermes.cli': {}, 'hermes.desktop': { unmeasured: true } },
   },
   'kimi-code': {
     groups: { 'kimi-code.cli': ['kimi-code.cli'] },
-    forms: {
-      'kimi-code.cli': { nameRule: true, optIn: true, yes: [`${U}/.kimi-code/bin/kimi`] },
-      'kimi-code.vscode': { nameRule: false, yes: [], unmeasured: true }, // the VS Code extension (4.6 OPEN ⑦'s darwin half)
-    },
-    unknown: ['/opt/tools/kimi'],
+    forms: { 'kimi-code.cli': { optIn: true }, 'kimi-code.vscode': { unmeasured: true } }, // the VS Code extension (4.6 OPEN ⑦'s darwin half)
   },
   'z-code': {
     groups: { 'z-code.cli': ['z-code.cli', 'z-code.desktop'] },
-    forms: {
-      'z-code.cli': { nameRule: false, yes: [{ exe: '/Applications/ZCode.app/Contents/MacOS/ZCode', cmdline: '/Applications/ZCode.app/Contents/MacOS/ZCode /Applications/ZCode.app/Contents/Resources/app/resources/glm/zcode.cjs app-server --stdio' }] },
-      // the desktop app (ZCode 3.14.4, measured on macOS): its agent turns are served by an
-      // app-server that rewrites its command line to the CLI's own `zcode-cli` title but runs as the Electron HELPER binary — lsof's txt record, the
-      // exe the door's facts carry — under Frameworks/ZCode Helper.app; a THIRD image the CLI form's `ZCode` gate never sees (the seam: every door
-      // connection of the desktop's turn was spliced untracked, decrypted 0). Same group: the same ~/.zcode/cli/config.json trust door judged it live
-      // (steering measured the same day: only ZCODE_HTTP_PROXY reached the desktop, the config-file proxy key steered nothing of it)
-      'z-code.desktop': { nameRule: false, yes: [
-        { exe: '/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper', cmdline: 'zcode-cli' },
-        { exe: `${U}/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper`, cmdline: `${U}/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper /Applications/ZCode.app/Contents/Resources/app/resources/glm/zcode.cjs app-server --stdio` },
-      ] },
-    },
-    unknown: ['/Applications/ZCode.app/Contents/MacOS/ZCode', { exe: '/usr/local/bin/zcode', cmdline: 'zcode /Applications/ZCode.app/Contents/Resources/app/resources/glm/zcode.cjs app-server --stdio' }],
+    forms: { 'z-code.cli': {}, 'z-code.desktop': {} },
   },
-}
-
-// ── the pattern subset (4.8 §2.3, read through 4.9 §2.3): what JavaScript and mihomo's .NET regexp2 read the same way. On darwin `/` is the only separator, so the any-but-the-separator class is
-// [^/]* and a bare `/` is a letter of the subset (a darwin pattern may escape the slash or leave it bare — both are the same regex; the win32 twin's [^\\]* is the Windows shape of the same rule) ──
-export function lintPattern(p) {
-  const bad = []
-  let depth = 0
-  for (let i = 0; i < p.length;) {
-    const rest = p.slice(i)
-    if (rest.startsWith(raw`[^/]*`)) { i += 5; continue }
-    if (rest.startsWith('.*')) { i += 2; continue }
-    if (p[i] === '\\') { if (i + 1 < p.length && /[^A-Za-z0-9]/.test(p[i + 1])) { i += 2; continue } bad.push(`${rest.slice(0, 2)}: an escape is for punctuation only`); i += 2; continue }
-    if (p[i] === '(') { if (p[i + 1] === '?') bad.push('(?: no flags, lookbehind or named groups'); depth++; i++; continue }
-    if (p[i] === ')') { if (--depth < 0) bad.push('unbalanced )'); i++; continue }
-    if (p[i] === '|') { i++; continue }
-    if (/[A-Za-z0-9 _@~/-]/.test(p[i])) { i++; continue }
-    bad.push(`${p[i]}: not in the subset`)
-    i++
-  }
-  if (depth !== 0) bad.push('unbalanced (')
-  return bad
 }
 
 test('all seven harnesses have macOS data, and the table above covers every one of them', () => {
@@ -147,11 +52,6 @@ test('all seven harnesses have macOS data, and the table above covers every one 
   assert.deepEqual(Object.keys(MAC).sort(), seven)
   assert.deepEqual(Object.keys(EXPECT).sort(), seven)
   assert.equal(formsOf().length, 17, 'the 17 forms the darwin data carries (claude-code.native is the version-named file\'s path-only shape; dsh\'s desktop is the dmg app, measured 2026-10-12; the five unmeasured ones are listed so status says unknown · not measured)')
-})
-
-test('the pattern lint accepts the subset and rejects what JavaScript and .NET read differently, so the real data passing it means something', () => {
-  for (const ok of [raw`\/bin\/claude`, raw`\/Claude_[^/]*\/app`, raw`\/a(b|c)\/.*x`, `@scope\/tool`, '/ZCode\\.app/Contents']) assert.deepEqual(lintPattern(ok), [], ok)
-  for (const bad of ['(?i)claude', '^claude', 'claude$', raw`(?<=\/)x`, '(?<n>x)', raw`\d+`, raw`\bclaude`, 'a+', '[abc]', 'a{2}', raw`\/x(`, 'x)', 'a?']) assert.notDeepEqual(lintPattern(bad), [], bad)
 })
 
 test('loadHarnesses attaches darwin/<name>.mjs as desc.darwin, skips the darwin directory and its helpers, and leaves a harness without macOS data as it was', async () => {
@@ -173,7 +73,7 @@ test('loadHarnesses attaches darwin/<name>.mjs as desc.darwin, skips the darwin 
   assert.deepEqual((await loadHarnesses(new URL(`file://${none}/`))).map((d) => d.name), ['only'], 'no darwin directory at all')
 })
 
-test('every darwin data file has the shape the later tasks read: groups, forms, trust injection, the proxy export; ids, patterns and the group table are consistent', () => {
+test('every darwin data file has the shape the later tasks read: groups, forms, trust injection, the proxy export; ids and the group table are consistent', () => {
   assert.ok(Object.keys(MAC).length > 0)
   for (const [h, w] of Object.entries(MAC)) {
     assert.equal(typeof w.inject, 'function', `${h}: inject(ctx) gives the trust entries`)
@@ -201,20 +101,11 @@ test('every darwin data file has the shape the later tasks read: groups, forms, 
       assert.ok(!ids.has(f.id), `${f.id} once`)
       ids.add(f.id)
       assert.ok(f.id.startsWith(`${h}.`), f.id)
-      assert.equal(typeof f.nameRule, 'boolean')
-      assert.equal(typeof f.processRules, 'boolean')
-      if (f.supported !== true) { // a form nobody could install: listed so status says "unknown · not measured", with nothing to match and no group (4.8 §2.3, §6.4; the darwin rows 4.6 OPEN ① ② ⑥ ⑦)
-        assert.deepEqual([f.supported, f.g, f.match, f.processRules], [{ reason: 'not-measured' }, null, null, false], f.id)
+      if (f.supported !== true) { // a form nobody could install: listed so status says "unknown · not measured", with no group (4.8 §2.3, §6.4; the darwin rows 4.6 OPEN ① ② ⑥ ⑦)
+        assert.deepEqual([f.supported, f.g], [{ reason: 'not-measured' }, null], f.id)
         continue
       }
       assert.ok(gids.has(f.g), `${f.id}: its group ${f.g} exists`)
-      if (f.match.image == null) { assert.ok(Array.isArray(f.match.path) && f.match.path.length > 0, `${f.id}: a path-only form (4.9 §2.3) declares its paths — they are its alone, and no image gate can name a version-named file`); continue }
-      for (const n of Array.isArray(f.match.image) ? f.match.image : [f.match.image]) assert.match(n, /^[^/]+$/, `${f.id}: a file name — the image on darwin is the first word of the command line as invoked, no separator in it${Array.isArray(f.match.image) ? ' (a family form names each member exactly — 4.9 §2.3)' : ''}`)
-      for (const p of [...(f.match.path || []), ...(f.match.cmdline || [])]) {
-        assert.deepEqual(lintPattern(p), [], `${f.id}: ${p}`)
-        assert.doesNotThrow(() => new RegExp(p, 'i'))
-      }
-      assert.ok(f.match.path || f.match.cmdline, `${f.id}: an image alone says nothing (it would match any program of that name)`)
     }
     const proxy = w.proxy
     assert.deepEqual(Object.keys(proxy).sort(), ['branches', 'env', 'files', 'measured', 'restart', 'schemes', 'systemProxy', 'unsupported'], `${h}: the proxy export has the 1.6 §9.7 fields`)
@@ -225,112 +116,40 @@ test('every darwin data file has the shape the later tasks read: groups, forms, 
   }
 })
 
-test('the group table: the one shared group holds its forms, the env groups of codex and dsh hold their measured forms (an unmeasured form has no group), and a group has at most one form without a process rule', () => {
+test('the group table: the one shared group holds its forms, the env groups of codex and dsh hold their measured forms (an unmeasured form has no group)', () => {
   const shared = { 'claude-code.settings': ['claude-code.native', 'claude-code.cli', 'claude-code.vscode'], 'codex.env': ['codex.cli', 'codex.vscode'], 'deepseek-dsh.env': ['deepseek-dsh.cli'], 'deepseek-dsh.desktop': ['deepseek-dsh.desktop'], 'z-code.cli': ['z-code.cli', 'z-code.desktop'], 'opencode.cli': ['opencode.cli', 'opencode.desktop'] }
   for (const [h, w] of Object.entries(MAC)) {
     for (const g of w.groups) {
       const members = w.forms.filter((f) => f.g === g.g).map((f) => f.id)
       assert.deepEqual(members, shared[g.g] || [g.g], `${g.g}: its forms`)
       assert.ok(members.length >= 1)
-      assert.ok(w.forms.filter((f) => f.g === g.g && !f.processRules).length <= 1, `${g.g}: only one form with no process rule (the engine judges it by pid, 4.8 §3.5)`)
     }
     assert.deepEqual(Object.fromEntries(w.groups.map((g) => [g.g, w.forms.filter((f) => f.g === g.g).map((f) => f.id)])), EXPECT[h].groups, `${h}: the table of 4.9 §2.3`)
   }
 })
 
-test('W3: every install shape the darwin data carries is its form, the same image elsewhere — or without the command line that tells it — is form-path-unknown, and no form claims another form\'s path', () => {
-  const formsAll = formsOf()
-  const forms = formsAll.filter((f) => f.match)
+test('the forms of 4.9 §2.3: each harness lists exactly these, an unmeasured one says so, and a form needs naming exactly when its group has an opt-in item', () => {
   for (const [h, e] of Object.entries(EXPECT)) {
     assert.deepEqual(MAC[h].forms.map((f) => f.id).sort(), Object.keys(e.forms).sort(), `${h}: the forms of 4.9 §2.3`)
     for (const [id, row] of Object.entries(e.forms)) {
-      const f = formsAll.find((x) => x.id === id)
-      assert.equal(f.nameRule, row.nameRule, `${id}: nameRule`)
+      const f = MAC[h].forms.find((x) => x.id === id)
       if (row.unmeasured) { assert.equal(f.supported.reason, 'not-measured', id); continue }
       assert.equal(!!(MAC[h].groups.find((g) => g.g === f.g).optIn || []).length, !!row.optIn, `${id}: whether the user must name it`)
-      for (const yes of row.yes) {
-        const { exe, cmdline = null } = typeof yes === 'string' ? { exe: yes } : yes
-        assert.deepEqual(matchForm(forms, { exe, cmdline }), { kind: 'form', id }, `${id}: ${exe}`)
-        const hit = (x) => x.match.path.some((p) => new RegExp(p, 'i').test(exe)) && (!x.match.cmdline || (cmdline != null && x.match.cmdline.some((p) => new RegExp(p, 'i').test(cmdline))))
-        const hits = forms.filter((x) => x.match && x.match.path && hit(x))
-        assert.deepEqual(hits.filter((x) => !MAC[h].forms.includes(x)).map((x) => x.id), [], `${exe}: no other harness's form claims it`)
-        const wider = f.match.cmdline ? MAC[h].forms.filter((x, i) => i > MAC[h].forms.indexOf(f) && x.match && !x.match.cmdline && hit(x)).map((x) => x.id) : [id] // a form that needs the command line comes before the wider one it would be taken for
-        assert.deepEqual(hits.filter((x) => !x.match.cmdline).map((x) => x.id), wider, `${exe}: among the forms that need no command line, only the form itself (or the wider one after it) hits`)
-      }
-    }
-    for (const unk of e.unknown || []) {
-      const { exe, cmdline = null } = typeof unk === 'string' ? { exe: unk } : unk
-      const r = matchForm(forms, { exe, cmdline })
-      assert.equal(r.kind, 'path-unknown', exe)
-      assert.deepEqual(r.forms.sort(), forms.filter((x) => x.match && x.match.reportUnknownPath && imagesOf(x).some((n) => n.toLowerCase() === path.posix.basename(exe).toLowerCase())).map((x) => x.id).sort())
     }
   }
 })
 
-test('W3: no darwin form is told by the shared editor image (`Code` / `Code Helper`, 4.9 §2.3) — the Kimi extension that owns it on Windows is not measured on macOS; node and python3 are never told by their name, and each is an agent only with the right command line', () => {
-  const forms = formsOf().filter((f) => f.match)
-  assert.deepEqual(forms.filter((f) => /^code( helper)?$/i.test(f.match.image)).map((f) => f.id), [], 'the shared editor image belongs to no form: the Kimi extension is not measured on macOS (4.6 OPEN ⑦)')
-  // `image` may be a list (one form, several binary names — Hermes's private CPython answers lsof as the version-named python3.14): the shared-interpreter check reads every name
-  const sharedInterpreter = (f) => imagesOf(f).some((n) => /^(node|python3(\.\d+)?)$/i.test(n))
-  for (const f of forms.filter(sharedInterpreter)) {
-    assert.equal(f.nameRule, false, `${f.id}: a PROCESS-NAME rule on ${imagesOf(f).join('/')} would hand every program of that name to this form`)
-    assert.equal(!!f.match.reportUnknownPath, false, `${f.id}: most of ${imagesOf(f).join('/')} are no agent, so an odd path is not reported`)
-  }
-  for (const f of forms.filter(sharedInterpreter)) assert.ok(f.match.cmdline && !f.match.path, `${f.id}: ${imagesOf(f).join('/')} is told by the command line, not by where it is`)
-  const exe = '/usr/local/bin/node'
-  assert.deepEqual(matchForm(forms, { exe, cmdline: 'node build.js' }), { kind: 'none' })
-  assert.deepEqual(matchForm(forms, { exe, cmdline: null }), { kind: 'none' })
-  for (const exe2 of ['/usr/bin/python3', '/Applications/Visual Studio Code.app/Contents/MacOS/Electron', '/Applications/Visual Studio Code.app/Contents/Resources/app/Code Helper.app/Contents/MacOS/Code Helper']) assert.deepEqual(matchForm(forms, { exe: exe2, cmdline: null }), { kind: 'none' }, exe2)
+test('no darwin form carries a host set (the Kimi extension that has one on Windows — the editor it lives in — is not measured on macOS, 4.6 OPEN ⑦)', () => {
+  assert.deepEqual(formsOf().filter((f) => f.hosts).map((f) => f.id), [], 'a host tree is only the editor Kimi lives in on Windows (4.8 §3.5); on macOS no measured form has one')
 })
 
-test('W3: only the dsh CLI and the Hermes CLI have no process rule in the kernel (node and python3 are every program of that interpreter: the engine judges them by pid on their ports, 4.8 §3.5 — the Hermes row is 4.9 §2.3\'s own, a command-line form has no PROCESS-PATH-REGEX); every other supported form has one', () => {
-  assert.deepEqual(formsOf().filter((f) => f.supported === true && !f.processRules).map((f) => f.id), ['deepseek-dsh.cli', 'hermes.cli'])
-})
-
-test('W3: no darwin form carries a host set (the Kimi extension that has one on Windows — the editor it lives in — is not measured on macOS, 4.6 OPEN ⑦); the ZCode form matches the whole bundle path wherever the bundle is, not only some of its processes', () => {
-  const forms = formsOf()
-  assert.deepEqual(forms.filter((f) => f.hosts).map((f) => f.id), [], 'a host tree is only the editor Kimi lives in on Windows (4.8 §3.5); on macOS no measured form has one')
-  for (const f of forms.filter((x) => x.match && /^zcode$/i.test(x.match.image))) {
-    for (const p of f.match.path) for (const app of ['/Applications/ZCode.app/Contents/MacOS/ZCode', `${U}/Applications/ZCode.app/Contents/MacOS/ZCode`]) assert.ok(new RegExp(p, 'i').test(app), `${f.id}: ${p} meets ${app} — any ZCode of the bundle, not only some of its processes`)
-  }
-})
-
-test('W23: a form that needs naming has an opt-in item and no automatic entry; the Claude Desktop shell takes no credentialed upstream (no door is measured that could carry one, so it must not sit on one); the process rules of the automatic groups reach neither the Claude Desktop shell nor any Visual Studio Code process', () => {
+test('W23: a form that needs naming has an opt-in item and no automatic entry; the Claude Desktop shell takes no credentialed upstream (no door is measured that could carry one, so it must not sit on one)', () => {
   const desktop = groupsOf().find((g) => g.g === 'claude-code.desktop')
   assert.deepEqual(entryGate(desktop), { ok: false, reason: 'opt-in-needed' })
   assert.deepEqual(entryGate(desktop, { optedIn: true }), { ok: true })
   assert.deepEqual(entryGate(desktop, { optedIn: true, upstreamCredentialed: true }), { ok: false, reason: 'form-unsupported' }, 'no measured door could carry the listener\'s credentials, and a port without credentials is open to every process of the machine (4.8 §3.2 · 4.9 §6.4)')
   assert.equal(desktop.auth, false)
   for (const g of groupsOf().filter((x) => !(x.optIn && x.optIn.length))) assert.deepEqual(entryGate(g), { ok: true }, g.g)
-  const IMAGES = ['/Applications/Claude.app/Contents/MacOS/Claude', `${U}/Applications/Claude.app/Contents/MacOS/Claude`, '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper', '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)', '/Applications/Visual Studio Code.app/Contents/MacOS/Electron', '/Applications/Visual Studio Code.app/Contents/Resources/app/Code Helper.app/Contents/MacOS/Code Helper']
-  for (const w of Object.values(MAC)) {
-    for (const g of w.groups.filter((x) => !(x.optIn && x.optIn.length))) {
-      const own = w.forms.filter((f) => f.g === g.g && f.processRules)
-      const rules = [...own.flatMap((f) => f.match.path || []), ...own.filter((f) => f.nameRule).map((f) => f.match.image)]
-      for (const exe of IMAGES) for (const r of rules) {
-        const hit = r.includes('/') ? new RegExp(r, 'i').test(exe) : r.toLowerCase() === path.posix.basename(exe).toLowerCase()
-        assert.ok(!hit, `${g.g}: ${r} must not reach ${exe}`)
-      }
-    }
-  }
-})
-
-test('W3/§6.4: the desktop form\'s OWN kernel process rules meet the Chromium Helper family — the measured owner of the model sockets (`Claude Helper --type=utility`: the Helper fell to MATCH→upstream and the owningPid candidates never held it → untracked splice) — and stay inside Claude.app', () => {
-  const f = MAC['claude-code'].forms.find((x) => x.id === 'claude-code.desktop')
-  const rules = [...(f.match.path || []), ...(f.nameRule ? [].concat(f.match.image) : [])]
-  const payload = (r) => r
-  const family = [
-    '/Applications/Claude.app/Contents/MacOS/Claude',
-    `${U}/Applications/Claude.app/Contents/MacOS/Claude`,
-    '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper',
-    `${U}/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper`,
-    '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)',
-    '/Applications/Claude.app/Contents/Frameworks/Claude Helper (GPU).app/Contents/MacOS/Claude Helper (GPU)',
-  ]
-  for (const exe of family) assert.ok(rules.some((r) => r.includes('/') && new RegExp(r, 'i').test(exe)), `${exe}: a path pattern of claude-code.desktop meets it (matchForm claims it at the door, the decrypt half\'s per-process arm)`)
-  for (const elsewhere of ['/opt/tools/Claude Helper', '/Applications/Other.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper']) {
-    assert.ok(!rules.some((r) => new RegExp(payload(r), 'i').test(elsewhere)), `${elsewhere}: a Helper of another app is not Claude Desktop`)
-  }
 })
 
 // ── the data Tasks 6b, 8 and 10 read, pinned to 4.9 §2.3 (the darwin rows of the 「跟随系统代理」 and entry columns), §2.4 (the opt-in items) and to the CLI plan's proxy table (T13, 1.6 §9.7) ──
