@@ -89,7 +89,7 @@ export function fakeDaemon({ up = true, agents = [], actual = 'on', onOn = null,
 
 /** The second argument of runOnCli, for a sandbox HOME. `deps` overrides what a test wants to see. */
 export function onCtx(home, io, { exec = recordingExec(), daemon = fakeDaemon(), harnesses = [cc], deps = {}, env = {} } = {}) {
-  const parts = { os: 'none', osRootsFile: null, harnesses, scan: async () => [], match: () => ({ agent: null }), arch: { unit } }
+  const parts = { os: 'none', harnesses, scan: async () => [], match: () => ({ agent: null }), arch: { unit } }
   return {
     io, home, platform: 'linux',
     env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run'), ...env },

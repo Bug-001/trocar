@@ -1,8 +1,8 @@
 // test/cli/darwin-on.test.mjs — the install half of the OS roots on darwin (the flip checklist ② of 4.9 §4 末): the arch reads its roots (darwinRoots: the keychain-administered
-// anchors ∪ Node's bundled ∪ Apple's SystemRootCertificates, 4.9 §6.2) instead of naming one file, and the daemon's daily rebuild already consumes that arm (daemon.mjs) — but
-// `on`'s install path passed only `osRootsFile` (null on darwin), so the FIRST install's combined bundles were composed with an empty `osText`: no keychain anchor in them, and a
-// replace-semantics entry (Codex's SSL_CERT_FILE) would silently cut the agent off its relay until the next daily rebuild. This file pins the seam the flip connects: runOnCli asks
-// `parts.arch.osRoots` and hands the answer to the install as its roots. Nothing here reads a real keychain — the arch hook is a fake over a generated certificate; HOME is a temp dir.
+// anchors ∪ Node's bundled ∪ Apple's SystemRootCertificates, 4.9 §6.2). `on`'s install path once read a named OS file only (none on darwin), so the FIRST install's combined
+// bundles were composed with an empty `osText`: no keychain anchor in them, and a replace-semantics entry (Codex's SSL_CERT_FILE) would silently cut the agent off its relay until
+// the next daily rebuild. This file pins the seam: runOnCli hands `parts.arch` to the install, whose plan asks its `osRoots` through the one resolver (core/tls/roots.mjs
+// bundleRoots, which the daemon's rebuild asks too). Nothing here reads a real keychain — the arch hook is a fake over a generated certificate; HOME is a temp dir.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -34,7 +34,7 @@ function darwinWorld({ osRoots, harness = codex, optInHooks = null } = {}) {
     // no prepare / ensureKernel: the real darwin arch exports neither (D47 — the engine is the only proxy; wiring.test.mjs pins their absence)
     ...(optInHooks ? { optIn: optInHooks } : {}),
   }
-  const parts = { os: 'darwin', osRootsFile: null, harnesses: [harness], scan: async () => [], match: () => ({ agent: null }), arch }
+  const parts = { os: 'darwin', harnesses: [harness], scan: async () => [], match: () => ({ agent: null }), arch }
   const run = async (argv, { platform = 'linux', deps: extraDeps = {} } = {}) => {
     const io = fakeIo()
     const exit = await runOnCli(argv, {
@@ -59,7 +59,7 @@ test('the flip ② (4.9 §4): `on` on the darwin arch asks parts.arch.osRoots an
   const w = darwinWorld()
   const r = await w.run(['--yes', 'codex'])
   assert.equal(r.exit, 0, r.text)
-  assert.equal(w.asked.length, 1, 'the arch hook was asked exactly once (the install seam, cli/on.mjs)')
+  assert.equal(w.asked.length, 1, 'the arch hook was asked exactly once (the install\'s plan, through bundleRoots)')
   const m = path.join(w.home, '.codex', '.env')
   const named = /^SSL_CERT_FILE=(.+)$/m.exec(fs.readFileSync(m, 'utf8'))
   assert.ok(named, `the trust entry was written: ${fs.readFileSync(m, 'utf8')}`)
@@ -79,51 +79,19 @@ test('the flip ② (4.9 §4): an arch whose roots cannot be read is said and sto
   assert.match(r.text, /root certificates could not be read/, 'the reason reaches the receipt')
   assert.equal(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'), before, 'the user\'s file is as it was')
   assert.ok(!fs.existsSync(path.join(w.home, '.asight', 'collector', 'ca')), 'no bundle was written on a guess')
+  const flowsDir = path.join(w.home, '.asight', 'collector', 'flows') // the collector dir is there (control.json): the failed install is recorded where status finds it (D38)
+  const flows = fs.readdirSync(flowsDir).flatMap((n) => fs.readFileSync(path.join(flowsDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+  assert.ok(flows.some((f) => f.event === 'failure' && f.where === 'install' && /root certificates could not be read/.test(f.reason)), JSON.stringify(flows))
 })
 
-// the arm is for the arches whose roots are read, not one file: Linux (osRootsFile) and a test's own `roots` are untouched by it
-test('the flip ② (4.9 §4): an arch that names a file (Linux) is not asked for osRoots, and deps.roots still overrides everything', async () => {
-  const home = tmpDir('asight-darwin-on-')
-  fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
-  fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\n')
-  const osFile = path.join(home, 'os-roots.pem')
-  fs.writeFileSync(osFile, FAKE_OS.certPem)
-  const asked = []
-  const run = async (parts, deps = {}) => {
-    const io = fakeIo()
-    const exit = await runOnCli(['--yes', 'codex'], {
-      io, home, platform: 'linux', env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run') },
-      deps: {
-        parts, request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true,
-        netenv: async () => ({ at: '2026-10-11T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),
-        freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs, ...deps,
-      },
-    })
-    return { exit, io, text: io.text() }
-  }
-  const arch = { osRoots: async () => { asked.push(1); return { pem: 'should not be asked' } } }
-  let r = await run({ os: 'linux', osRootsFile: osFile, harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch })
+// `deps.roots` overrides the arch's roots (the seam a test or an embedder overrides with): the arch is not asked, and the bundle carries what was given
+test('the flip ② (4.9 §4): deps.roots overrides the arch\'s OS roots — the arch is not asked', async () => {
+  const w = darwinWorld({ osRoots: async () => ({ pem: 'should not be asked' }) })
+  const r = await w.run(['--yes', 'codex'], { deps: { roots: { node: [], osText: FAKE_OS.certPem } } })
   assert.equal(r.exit, 0, r.text)
-  assert.deepEqual(asked, [], 'the file-naming arch reads the file, the hook is not asked')
-  const named = /^SSL_CERT_FILE=(.+)$/m.exec(fs.readFileSync(path.join(home, '.codex', '.env'), 'utf8'))
-  assert.ok(certBlocks(fs.readFileSync(named[1].trim(), 'utf8')).some((b) => b.fp === certBlocks(FAKE_OS.certPem)[0].fp), 'the file\'s roots are in the bundle, as before')
-  // a second world: deps.roots given → the arch hook is not asked either (the seam a test or an embedder overrides with)
-  const home2 = tmpDir('asight-darwin-on-')
-  fs.mkdirSync(path.join(home2, '.codex'), { recursive: true })
-  fs.writeFileSync(path.join(home2, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\n')
-  const io = fakeIo()
-  const exit = await runOnCli(['--yes', 'codex'], {
-    io, home: home2, platform: 'linux', env: { HOME: home2, XDG_RUNTIME_DIR: path.join(home2, 'run') },
-    deps: {
-      parts: { os: 'darwin', osRootsFile: null, harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch },
-      request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true,
-      netenv: async () => ({ at: '2026-10-11T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),
-      freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
-      roots: { node: [], osText: FAKE_OS.certPem },
-    },
-  })
-  assert.equal(exit, 0, io.text())
-  assert.deepEqual(asked, [], 'deps.roots given: the arch hook is not asked (the same override the win tests use)')
+  assert.deepEqual(w.asked, [], 'deps.roots given: the arch hook is not asked (the same override the win tests use)')
+  const named = /^SSL_CERT_FILE=(.+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))
+  assert.ok(certBlocks(fs.readFileSync(named[1].trim(), 'utf8')).some((b) => b.fp === certBlocks(FAKE_OS.certPem)[0].fp), 'the given roots are in the bundle')
 })
 
 // the flip (4.9 §4 末 · Part 2, 1.6 §4 / §2) settled into the only path there is (D39⑥ executed 2026-10-11: the legacy-on dispatch went with the old capture):

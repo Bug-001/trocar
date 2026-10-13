@@ -60,7 +60,7 @@ test('V7: a first on outside a terminal without --yes prints the plan, writes no
 test('the arch prepare hook — its lines print with the plan and ride in the receipt; a refusal exits 1 before any write with one failure event; a dry run says blocked; a throw is the outer catch', async () => {
   const withPrepare = (answer) => {
     const calls = []
-    const parts = { os: 'none', osRootsFile: null, harnesses: [cc], scan: async () => [], match: () => ({ agent: null }), arch: { unit, prepare: async (a) => { calls.push(a); return answer } } }
+    const parts = { os: 'none', harnesses: [cc], scan: async () => [], match: () => ({ agent: null }), arch: { unit, prepare: async (a) => { calls.push(a); return answer } } }
     return { calls, ctx: (home, io, extra = {}) => onCtx(home, io, { ...extra, deps: { ...extra.deps, parts } }) }
   }
   // the notes (the kernel line, the Smart App Control line) print with the plan of a real on and ride in its receipt
@@ -116,7 +116,7 @@ test('the arch prepare hook — its lines print with the plan and ride in the re
   // a hook that throws is the outer catch's: exit 1, the message, no event of it
   const home3 = tmpDir('asight-w27c-'); seedClaude(home3)
   const io6 = fakeIo({ tty: false })
-  const boomParts = { os: 'none', osRootsFile: null, harnesses: [cc], scan: async () => [], match: () => ({ agent: null }), arch: { unit, prepare: async () => { throw new Error('the helper cannot be started') } } }
+  const boomParts = { os: 'none', harnesses: [cc], scan: async () => [], match: () => ({ agent: null }), arch: { unit, prepare: async () => { throw new Error('the helper cannot be started') } } }
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home3, io6, { exec: ex, daemon, deps: { parts: boomParts } })), 1)
   assert.match(io6.json().notes.join('\n'), /the helper cannot be started/)
 })

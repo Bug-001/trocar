@@ -16,7 +16,7 @@ import { fakeIo, fakeDaemon, snapshot, onCtx } from '../../../cli/fixtures/on-ct
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
 /** The parts of a win32 arch carrying only the entry gates asked — everything else on would ask for stays absent, so a path past the refusal fails loudly. */
-const partsWith = (arch) => ({ os: 'win32', osRootsFile: null, harnesses: [{ name: 'claude-code' }], scan: async () => [], match: () => ({ agent: null }), arch })
+const partsWith = (arch) => ({ os: 'win32', harnesses: [{ name: 'claude-code' }], scan: async () => [], match: () => ({ agent: null }), arch })
 const injectInstall = (reached) => ({ turnOn: async (o) => { reached.push(o.ids); return { receipt: { ...newReceipt('on'), ok: true, harnesses: o.ids, notes: [] }, exit: 0 } } })
 
 test('W25 (command level): on refuses an elevated token before its first write — the receipt, one failure record where flows exist, exit 1, the HOME otherwise byte for byte, turnOn never asked', async () => {

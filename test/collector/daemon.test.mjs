@@ -17,6 +17,7 @@ import { installCollector } from '../../src/collector/install.mjs'
 import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
 import { controlRequest } from '../../src/collector/core/control.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
+import { osBundleRoots } from '../../src/collector/core/tls/roots.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
@@ -29,6 +30,7 @@ import { createServer } from '../../src/server.mjs'
 import { serveSource } from '../../src/paths.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
+import { failureBrief } from '../../src/cli/words.mjs'
 import { writeNetenv } from '../../src/netenv/index.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
 import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
@@ -39,6 +41,9 @@ const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', impo
 const UID = process.getuid()
 const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 const CODEX_EXE = '/home/u/.local/bin/codex'
+// an arch's osRoots over one PEM file: the Linux arch's own resolver (osBundleRoots) with its list cut to that file — the shape every real arch gives
+// its OS roots in, asked through the one resolver (core/tls/roots.mjs bundleRoots), never a test-only arm (the platform-seam rule)
+const fileRoots = (file) => () => osBundleRoots({ files: [file] })
 function fakeArch(p, extraEnv = {}, clientOpts = {}) {
   const clients = []
   const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0, ...clientOpts }); clients.push(c); return c }
@@ -666,21 +671,67 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
   const dir = s.collector
   const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) }
-  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, osRootsFile: osRoots })
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on')) // the daemon rebuilds the bundles of the harnesses whose desired state is on only (4.6 「合并包」, D39)
   const bundle = path.join(dir, 'ca', 'combined-rep.pem')
   const before = fs.readFileSync(bundle, 'utf8')
   const { arch } = fakeArch(p)
-  let d = await startDaemon({ dir, socketPath: s.sock, arch: { ...arch, osRootsFile: osRoots }, harnesses: [rep] })
+  let d = await startDaemon({ dir, socketPath: s.sock, arch: { ...arch, osRoots: fileRoots(osRoots) }, harnesses: [rep] })
   await d.stop()
   assert.equal(fs.readFileSync(bundle, 'utf8'), before, 'same roots: the bundle is left as it is')
   const newRoot = createCa({ commonName: 'a new OS root' }); fs.writeFileSync(osRoots, newRoot.certPem) // the distro updated its roots
-  d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRootsFile: osRoots }, harnesses: [rep] })
+  d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRoots: fileRoots(osRoots) }, harnesses: [rep] })
   try {
     const now = fs.readFileSync(bundle, 'utf8')
     for (const c of [newRoot.certPem, corp.certPem, fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8')]) assert.ok(now.includes(c.trim()), 'the new root, the user\'s CA and the asight CA')
     assert.ok(now.includes(tls.rootCertificates[0].trim()), 'Node\'s roots stay first')
     assert.ok(flowsOf(s).some((f) => f.event === 'bundles-rebuilt' && f.code === 'roots-changed' && f.reason.includes('combined-rep.pem')), 'the rebuild is recorded')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 4.6 「合并包」, D38: the Linux arch's OS roots are the first OS PEM bundle of SYSTEM_BUNDLES this machine has, read on every rebuild — not the Debian path alone
+// (Fedora / RHEL / openSUSE have no /etc/ssl/certs/ca-certificates.crt). A machine with none gets bundles with Node's roots only, and that is a failure record that
+// status (and the board, the same reader) shows; Fedora's bundle, once there, is in the next rebuild. Judged by the bundle on disk and the records, through the real arch.
+test('daemon: the Linux arch\'s OS roots — none on the machine is a bundle failure status shows; Fedora\'s bundle, once there, is in the rebuilt bundle (4.6 「合并包」, D38)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const { loadArch } = await import('../../src/collector/arch/index.mjs')
+  const { SYSTEM_BUNDLES } = await import('../../src/collector/core/tls/roots.mjs')
+  const linux = await loadArch('linux')
+  const disk = new Map(), denied = new Set() // this machine's /etc as the arch reads it: empty = no OS bundle at all
+  const read = (f) => {
+    if (denied.has(f)) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' })
+    if (disk.has(f)) return disk.get(f); throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' })
+  }
+  const osRoots = () => linux.osRoots({ read })
+  const dir = s.collector
+  const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
+  const first = osRoots()
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, roots: { node: [...tls.rootCertificates], osText: first.pem, missing: first.missing } })
+  writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
+  const bundle = path.join(dir, 'ca', 'combined-rep.pem')
+  const fedora = createCa({ commonName: 'corp CA in the Fedora system bundle' })
+  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRoots }, harnesses: [rep], bundleMs: 30 })
+  try {
+    const f = await until(() => flowsOf(s).find((x) => x.event === 'failure' && x.where === 'bundle' && x.code === 'system-roots-unavailable'))
+    assert.deepEqual(f.files, [bundle], 'the bundle that carries no OS root')
+    for (const b of SYSTEM_BUNDLES) assert.ok(f.reason.includes(b), `the reason names every path looked at: ${b}`)
+    const st = await req(s.sock, 'GET', '/status')
+    const g = st.health.collector.failures.find((x) => x.last.where === 'bundle' && x.last.code === 'system-roots-unavailable')
+    assert.ok(g, 'status (the board\'s reader) shows it')
+    assert.match(failureBrief(g), /^合并包里没有系统根证书\(/, 'in the words status prints')
+    assert.ok(!fs.readFileSync(bundle, 'utf8').includes(fedora.certPem.trim()))
+    disk.set('/etc/pki/tls/certs/ca-bundle.crt', fedora.certPem) // the machine is a Fedora one after all (or ca-certificates got installed): the next rebuild reads it
+    await until(() => fs.readFileSync(bundle, 'utf8').includes(fedora.certPem.trim()))
+    assert.ok(fs.readFileSync(bundle, 'utf8').includes(tls.rootCertificates[0].trim()), 'Node\'s roots stay in it')
+    assert.ok(flowsOf(s).some((x) => x.event === 'bundles-rebuilt' && x.code === 'roots-changed' && x.reason.includes('combined-rep.pem')), 'the rebuild is recorded')
+    // a bundle that is there but cannot be read: the rebuild stops, the bundles keep the roots they have (not rebuilt without them), and that is a failure
+    const kept = fs.readFileSync(bundle, 'utf8')
+    denied.add(SYSTEM_BUNDLES[0])
+    const eacces = await until(() => flowsOf(s).find((x) => x.event === 'failure' && x.where === 'bundle' && x.code === 'EACCES'))
+    assert.match(eacces.reason, /the OS trust bundle cannot be read .*EACCES.*; they keep their previous roots/)
+    await new Promise((r) => setTimeout(r, 100)) // a few more rounds at 30 ms
+    assert.equal(fs.readFileSync(bundle, 'utf8'), kept, 'the bundle is as it was')
   } finally { await d.stop(); p.done(); s.done() }
 })
 
@@ -699,12 +750,12 @@ test('daemon: the daily bundle rebuild never writes the asight CA back into a bu
   const repOf = (name) => ({ name, runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: new RegExp(`/${name}$`) }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${name}.env`), vars: { SSL_CERT_FILE: path.join(dir, 'ca', `combined-${name}.pem`) }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', `combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) })
   const list = [repOf('stay'), repOf('gone'), repOf('idle')]
-  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: list, freePort: async () => 0, osRootsFile: osRoots })
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: list, freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['stay', 'gone'], 'on')) // idle was never turned on
   const bundle = (n) => path.join(dir, 'ca', `combined-${n}.pem`)
   const idleBefore = fs.readFileSync(bundle('idle'), 'utf8')
   const { arch } = fakeArch(p)
-  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...arch, osRootsFile: osRoots }, harnesses: list, bundleMs: 30 })
+  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...arch, osRoots: fileRoots(osRoots) }, harnesses: list, bundleMs: 30 })
   try {
     // `asight off gone`, while the daemon runs: its entry out, its bundle removed (nobody holds it), the manifest saved
     const off = await undoHarnesses({ dir, home: s.home, manifest: readManifest(dir), ids: ['gone'], procs: async () => [], roots: { node: tlsMod.rootCertificates, osText: '' } })
@@ -730,12 +781,12 @@ test('daemon: the bundle rebuild runs under the op lock (1.6 R12) — while anot
   const dir = s.collector
   const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [], role: 'bundle' }] }) }
-  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, osRootsFile: osRoots })
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
   const bundle = path.join(dir, 'ca', 'combined-rep.pem'), lock = path.join(dir, 'op.lock')
   fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, start_time: null, boot_id: null }) + '\n') // another command is running: this process stands in for it
   const root1 = createCa({ commonName: 'an OS root' }); fs.writeFileSync(osRoots, root1.certPem)
-  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRootsFile: osRoots }, harnesses: [rep], bundleMs: 30 })
+  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRoots: fileRoots(osRoots) }, harnesses: [rep], bundleMs: 30 })
   try {
     await new Promise((r) => setTimeout(r, 250)) // several rounds at 30 ms
     assert.ok(!fs.readFileSync(bundle, 'utf8').includes(root1.certPem.trim()), 'nothing was rewritten while the lock was held')

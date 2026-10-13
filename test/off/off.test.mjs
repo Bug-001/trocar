@@ -13,7 +13,7 @@ import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { undoSide, offWorld, runOff } from '../../src/off/orchestrate.mjs'
 import { formatOffReceipt } from '../../src/off/receipt.mjs'
-import { certBlocks } from '../../src/off/pem.mjs'
+import { certBlocks, SYSTEM_BUNDLES } from '../../src/off/pem.mjs'
 import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sevenHomes, USER_CA } from './fixtures/seven-homes.mjs'
@@ -699,4 +699,20 @@ test('semantics 2: whatever throws while the entries are undone costs no receipt
   assert.deepEqual(r.receipt.changed.map((c) => c.path), [settings], 'and the receipt says so: it lists what was written')
   assert.match(r.receipt.problems.join('\n'), /undoing the entries stopped: EIO: i\/o error/)
   assert.deepEqual([r.receipt.routing.confirmed, flowEvents(t.dir).at(-1).kind, flowEvents(t.dir).at(-1).outcome], [true, 'result', 'failed'])
+})
+
+// 4.6 撤销顺序 第 2 步 with the one list of OS bundles (pem.mjs SYSTEM_BUNDLES, the collector's too — off once had three of its six paths): a gone bundle a live
+// codex may use is rebuilt from Node's roots and the first OS bundle this machine has. None here: the bundle is still made (no bundle, no network), and its note
+// says it carries Node's roots only (D38), never a bundle quietly without the OS roots.
+test('off: a gone bundle rebuilt on a machine with no OS bundle says it carries Node\'s roots only (4.6 撤销顺序 第 2 步, D38)', async () => {
+  const s = await installedHome({ names: ['codex'] })
+  const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
+  fs.rmSync(bundle)
+  const noEtc = { ...fs, readFileSync: (f, ...a) => { if (SYSTEM_BUNDLES.includes(f)) throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' }); return fs.readFileSync(f, ...a) } }
+  const { receipt } = await s.off({ deps: { alive: () => false, roots: undefined, fs: noEtc, procs: async () => [proc(4242, '/home/u/.local/bin/codex', ['codex'])] } })
+  assert.deepEqual(receipt.kept_bundles.map((k) => [path.basename(k.path), k.rebuilt, k.os_roots_missing]), [['combined-codex.pem', true, 'no OS trust bundle holds a certificate']])
+  assert.ok(certBlocks(fs.readFileSync(bundle, 'utf8')).length > 0, 'rebuilt: Node\'s roots are in it')
+  const said = flowEvents(s.dir).filter((e) => e.path === bundle && /rebuilt without the asight CA/.test(e.reason))
+  assert.equal(said.length, 1, JSON.stringify(flowEvents(s.dir).map((e) => e.reason)))
+  assert.match(said[0].reason, /with Node's roots only \(no OS trust bundle holds a certificate\)/)
 })

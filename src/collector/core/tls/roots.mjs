@@ -1,20 +1,16 @@
-// roots.mjs — the trust set the engine verifies upstreams against (RFC 4.6 §引擎 5: 按系统根证书校验).
-// The union of three, none overriding another, read once: the OS store (corporate and TLS-inspection
-// CAs live there), Node's bundled roots, and this process's NODE_EXTRA_CA_CERTS. The OS store comes from
-// tls.getCACertificates('system') where Node has it (≥ 22.15) plus the first OS PEM bundle that exists
-// (Node's own system read can come back empty on Linux; Node 20 has only the file). No process.platform
-// branch (4.6 §结构): the bundle paths are data, and a path that does not exist is skipped.
+// roots.mjs — the trust set the engine verifies upstreams against (RFC 4.6 §引擎 5: 按系统根证书校验), and the roots a combined bundle
+// starts from (4.6 「合并包」: bundleRoots, the one resolver of them; osBundleRoots, the Linux arch's osRoots).
+// The engine's set is the union of three, none overriding another, read once: the OS store (corporate and TLS-inspection CAs live there),
+// Node's bundled roots, and this process's NODE_EXTRA_CA_CERTS. The OS store comes from tls.getCACertificates('system') where Node has it
+// (≥ 22.15) plus the first OS PEM bundle that holds a certificate (Node's own system read can come back empty on Linux; Node 20 has only the
+// file). No process.platform branch (4.6 §结构): the bundle paths are data (SYSTEM_BUNDLES, kept in src/off/pem.mjs so `off` reads the same
+// list, R3), and a path that does not exist is skipped.
 import fs from 'node:fs'
 import tls from 'node:tls'
+import { SYSTEM_BUNDLES, osBundle } from '../../../off/pem.mjs'
 
-export const SYSTEM_BUNDLES = [
-  '/etc/ssl/certs/ca-certificates.crt',                // Debian, Ubuntu, Arch, Alpine, NixOS
-  '/etc/pki/tls/certs/ca-bundle.crt',                  // Fedora, RHEL, CentOS
-  '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem', // RHEL 7+
-  '/etc/ssl/ca-bundle.pem',                            // openSUSE
-  '/etc/pki/tls/cacert.pem',                           // OpenELEC
-  '/etc/ssl/cert.pem',                                 // macOS, BSD (not the keychain's added roots)
-]
+export { SYSTEM_BUNDLES }
+
 const PEM = /-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g
 const pems = (text) => (String(text).match(PEM) || []).map((p) => p.replace(/\r\n/g, '\n'))
 const readText = (f) => fs.readFileSync(f, 'utf8')
@@ -26,15 +22,31 @@ export function systemRoots({ api = tls.getCACertificates, files = SYSTEM_BUNDLE
   if (typeof api === 'function') {
     try { const c = api('system'); if (c.length) { certs.push(...c); sources.push('node:system') } } catch (e) { errors.push(`node:system: ${msg(e)}`) }
   }
-  for (const f of files) {
-    let c
-    try { c = pems(read(f)) } catch (e) {
-      if (!(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR'))) errors.push(`${f}: ${msg(e)}`) // there but unreadable: say so (D38)
-      continue                                                                                   // not on this OS
-    }
-    if (c.length) { certs.push(...c); sources.push(f); break }
-  }
+  const b = osBundle({ files, read })
+  for (const f of b.failed) errors.push(`${f.file}: ${msg(f.error)}`) // there but unreadable: say so (D38)
+  if (b.file) { certs.push(...pems(b.text)); sources.push(b.file) }
   return { certs, sources, errors }
+}
+
+/** osBundleRoots({files, read}) → {pem, file, missing}: the OS roots of a combined bundle on an arch whose OS store is one PEM file — the first
+ *  of `files` that holds a certificate (4.6 「合并包」; Linux: Debian's, Fedora's, openSUSE's, … whichever this machine has). None → pem '' and
+ *  `missing` says so, naming every path looked at: the bundles then carry Node's roots only, and a CA installed system-wide (a corporate
+ *  proxy's) is not in them — the caller records that (D38), never an empty answer alone. A bundle that is there but cannot be read throws
+ *  (with its errno as `code`): the caller keeps what it had and says why (`on` stops; the daemon keeps the previous bundles). */
+export function osBundleRoots({ files = SYSTEM_BUNDLES, read = readText } = {}) {
+  const b = osBundle({ files, read })
+  if (b.failed.length) throw Object.assign(new Error(`the OS trust bundle cannot be read (${b.failed.map((f) => `${f.file}: ${msg(f.error)}`).join('; ')})`), { code: b.failed[0].error && b.failed[0].error.code })
+  return { pem: b.text, file: b.file, missing: b.file ? null : `no OS trust bundle holds a certificate (looked at ${files.join(', ')})` }
+}
+
+/** bundleRoots(arch, {nodeRoots}) → {node, osText, missing}: the roots every combined bundle starts from (4.6 「合并包」) — Node's own and what
+ *  `arch.osRoots()` answers, read each time it is asked (Linux: osBundleRoots above; darwin: darwinRoots, 4.9 §6.2; win32: windowsRoots, 4.8 §6.2).
+ *  The one resolver of them in the collector (the platform-seam rule): the install's plan (install.mjs planOn — `on`, `collector install`) and the daemon's
+ *  rebuild both ask it, and no caller keeps a fallback of its own. (`off` rebuilds a gone bundle without collector code, R3: src/off/orchestrate.mjs.) An arch without osRoots (a test's) gives Node's roots alone, nothing said missing. A read
+ *  that fails throws: `on` stops before a file is written, the daemon keeps the previous bundles (D38). */
+export async function bundleRoots(arch, { nodeRoots = tls.rootCertificates } = {}) {
+  const got = arch && typeof arch.osRoots === 'function' ? await arch.osRoots() : null
+  return { node: [...nodeRoots], osText: (got && got.pem) || '', missing: (got && got.missing) || null }
 }
 
 /** nodeRoots({api, env, read, errors}) → PEM[]: Node's bundled roots plus NODE_EXTRA_CA_CERTS of this

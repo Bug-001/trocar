@@ -51,6 +51,7 @@ export const CODE = Object.freeze({
   unitNotEnabled: 'unit-not-enabled', // the autostart unit is written but the OS service manager refused to enable it
   unitNotDisabled: 'unit-not-disabled', // uninstall: systemd refused to disable the unit, or its wants link could not be removed
   unitEnvNotCarried: 'unit-env-not-carried', // the install shell's NODE_EXTRA_CA_CERTS could not be given to the autostart unit
+  systemRootsUnavailable: 'system-roots-unavailable', // a combined bundle was composed with no OS root: no OS trust bundle on this machine holds a certificate (the engine's own record has the same name)
   describeError: 'describe-error', // the daemon could not describe a process to the engine (the engine's own record has the same name)
 })
 

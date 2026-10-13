@@ -136,7 +136,7 @@ test('on (darwin, first install): control.json appears only when the unit starts
 test('loadParts (win32): the CLI parts view builds no redirector on win32 — the construction wants the collector dir, so on/status answer an empty process table instead of dying (a Windows test machine, 2026-10-11: `asight on --yes` exited at once)', async () => {
   const { loadParts } = await import('../../src/collector/daemon.mjs')
   let called = 0
-  const win32Arch = { os: 'win32', osRootsFile: null, createRedirector: () => { called++; throw new TypeError('createWin32Collector needs the collector dir (~/.asight/collector)') } }
+  const win32Arch = { os: 'win32', createRedirector: () => { called++; throw new TypeError('createWin32Collector needs the collector dir (~/.asight/collector)') } }
   const parts = await loadParts({ arch: win32Arch, harnesses: [] })
   assert.equal(called, 0, 'no redirector is constructed on win32 (arch/index.mjs win32 arm: loadParts makes no redirector there)')
   assert.deepEqual(await parts.scan(), [], 'the process table is empty, not a throw')
@@ -144,7 +144,7 @@ test('loadParts (win32): the CLI parts view builds no redirector on win32 — th
   assert.deepEqual(parts.lingerRead(), { state: null, error: 'this platform has no reader of the linger state' })
   // the control: another os still builds its redirector and the parts view uses it
   let used = 0
-  const linuxArch = { os: 'linux', osRootsFile: '/os/roots.pem', createRedirector: async () => { used++; return { scan: () => [{ pid: 1 }], linger: () => false, lingerRead: () => ({ state: false }) } } }
+  const linuxArch = { os: 'linux', createRedirector: async () => { used++; return { scan: () => [{ pid: 1 }], linger: () => false, lingerRead: () => ({ state: false }) } } }
   const p2 = await loadParts({ arch: linuxArch, harnesses: [] })
   assert.equal(used, 1, 'linux still hands its redirector the parts view')
   assert.deepEqual(await p2.scan(), [{ pid: 1 }])

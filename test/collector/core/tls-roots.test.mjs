@@ -4,7 +4,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import tls from 'node:tls'
-import { systemRoots, nodeRoots, createUpstreamTrust, SYSTEM_BUNDLES } from '../../../src/collector/core/tls/roots.mjs'
+import { fileURLToPath } from 'node:url'
+import { systemRoots, nodeRoots, createUpstreamTrust, osBundleRoots, bundleRoots, SYSTEM_BUNDLES } from '../../../src/collector/core/tls/roots.mjs'
+import { SYSTEM_BUNDLES as OFF_BUNDLES } from '../../../src/off/pem.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
@@ -28,6 +30,48 @@ test('systemRoots: Node\'s system store and the first existing OS bundle togethe
   const denied = systemRoots({ api: null, read: (f) => { if (f === SYSTEM_BUNDLES[0]) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return f === '/etc/pki/tls/certs/ca-bundle.crt' ? b.certPem : missing() } })
   assert.deepEqual([denied.sources, denied.errors], [['/etc/pki/tls/certs/ca-bundle.crt'], [`${SYSTEM_BUNDLES[0]}: EACCES: permission denied`]], 'a bundle that exists but cannot be read is reported')
   assert.ok(SYSTEM_BUNDLES.includes('/etc/ssl/certs/ca-certificates.crt') && SYSTEM_BUNDLES.includes('/etc/pki/tls/certs/ca-bundle.crt'))
+})
+
+// 4.6 「合并包」: on Linux the combined bundles start from the first OS bundle this machine has (the Linux arch's osRoots), not the Debian path alone —
+// Fedora / RHEL / openSUSE have none there, and the bundles then dropped the OS roots and every CA installed system-wide with them. None is said (D38).
+test('osBundleRoots: the first of SYSTEM_BUNDLES that holds a certificate; none is `missing`, naming every path looked at; one there but unreadable throws with its errno', () => {
+  const only = (files) => (f) => { if (f in files) return files[f]; throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' }) }
+  assert.deepEqual(osBundleRoots({ read: only({ '/etc/pki/tls/certs/ca-bundle.crt': b.certPem }) }), { pem: b.certPem, file: '/etc/pki/tls/certs/ca-bundle.crt', missing: null }, 'Fedora / RHEL: only its path exists')
+  assert.equal(osBundleRoots({ read: only({ '/etc/ssl/certs/ca-certificates.crt': '', '/etc/ssl/ca-bundle.pem': b.certPem }) }).file, '/etc/ssl/ca-bundle.pem', 'a path that holds no certificate is passed over (openSUSE)')
+  const none = osBundleRoots({ read: only({}) })
+  assert.deepEqual([none.pem, none.file], ['', null], 'none: Node\'s roots are all a bundle gets')
+  for (const f of SYSTEM_BUNDLES) assert.ok(none.missing.includes(f), `the reason names ${f}`)
+  assert.throws(() => osBundleRoots({ read: (f) => { throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }) } }),
+    (e) => e.code === 'EACCES' && e.message.includes(SYSTEM_BUNDLES[0]), 'there but unreadable: thrown, the caller keeps what it had and says why')
+})
+
+test('SYSTEM_BUNDLES is one list: the collector\'s is the one `off` reads (src/off/pem.mjs), and no path of it is a string literal anywhere else in src/', () => {
+  assert.equal(SYSTEM_BUNDLES, OFF_BUNDLES)
+  const src = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src')
+  const home = path.join(src, 'off', 'pem.mjs')
+  const files = fs.readdirSync(src, { recursive: true }).map((f) => path.join(src, f)).filter((f) => f.endsWith('.mjs') && f !== home)
+  const esc = (t) => t.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+  // a quoted string is a copy of the fact; a comment's `backticked` mention of a path is prose
+  const hits = files.flatMap((f) => { const t = fs.readFileSync(f, 'utf8'); return SYSTEM_BUNDLES.filter((p) => new RegExp(`['"]${esc(p)}['"]`).test(t)).map((p) => `${path.relative(src, f)}: ${p}`) })
+  assert.deepEqual(hits, [], 'a second copy of the list drifts from the first (the Linux arch named Debian\'s path alone; off had three of six)')
+})
+
+// the platform-seam rule: the combined bundles' roots have one resolver. A caller with an arm of its own (a named file read beside the arch's osRoots, a
+// fallback) is the drift this closes — on.mjs, install.mjs and the daemon once each chose between `osRootsFile` and `osRoots()`, an arm only test arches took.
+test('bundleRoots is the collector\'s one resolver of the combined bundles\' roots: the arch\'s osRoots or Node\'s alone; no other code in src/ asks osRoots, and no file arm is left', async () => {
+  assert.deepEqual(await bundleRoots({ osRoots: async () => ({ pem: b.certPem, file: '/f' }) }, { nodeRoots: [x.certPem] }), { node: [x.certPem], osText: b.certPem, missing: null })
+  assert.deepEqual(await bundleRoots({ osRoots: () => ({ pem: '', missing: 'none here' }) }, { nodeRoots: [] }), { node: [], osText: '', missing: 'none here' }, '`missing` reaches the callers (planTrust\'s note, the daemon\'s failure)')
+  assert.deepEqual(await bundleRoots(null, { nodeRoots: [x.certPem] }), { node: [x.certPem], osText: '', missing: null }, 'no osRoots: Node\'s roots alone')
+  await assert.rejects(bundleRoots({ osRoots: async () => { throw new Error('the OS trust bundle cannot be read (EACCES)') } }), /cannot be read/, 'a read that fails throws: `on` stops, the daemon keeps its bundles')
+  const src = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src')
+  const home = path.join(src, 'collector', 'core', 'tls', 'roots.mjs')
+  const code = (t) => t.replace(/\/\/.*$/gm, '').replace(/^\s*\/?\*.*$/gm, '') // comments may name the hook; only code is judged
+  const files = fs.readdirSync(src, { recursive: true }).map((f) => path.join(src, f)).filter((f) => f.endsWith('.mjs') && f !== home)
+  const linuxArch = path.join(src, 'collector', 'arch', 'index.mjs') // the Linux arch's osRoots is osBundleRoots
+  // `.osRoots` / `['osRoots']` / `{ osRoots }` read the hook; osBundleRoots called anywhere but the Linux arch reads an OS file beside it; osRootsFile is the old file arm
+  const second = (f, t) => /\.osRoots\b|\[\s*['"]osRoots['"]\s*\]|\bosRoots\s*[,}]|osRootsFile/.test(t) || (f !== linuxArch && /\bosBundleRoots\s*\(/.test(t))
+  const hits = files.filter((f) => second(f, code(fs.readFileSync(f, 'utf8')))).map((f) => path.relative(src, f))
+  assert.deepEqual(hits, [], 'a second reader of the OS roots, or a file arm beside them, is a second resolver')
 })
 
 test('nodeRoots: without the API, Node\'s bundled roots plus this process\'s NODE_EXTRA_CA_CERTS', () => {

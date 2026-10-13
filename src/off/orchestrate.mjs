@@ -38,11 +38,11 @@ import { runEventWriter } from './events.mjs'
 import { confirm } from './io.mjs'
 import { describeEntry } from './journal.mjs'
 import { orphanBackups } from './backup.mjs'
+import { osBundle } from './pem.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from './names.mjs'
 
 export const OFF_LOCK_WAIT_MS = 10_000 // 1.6 R12: the lock is waited for at most this long
 const OFF_ASK_MS = 5000 // a daemon that does not answer this fast is stuck (1.6 §1.4 第 2 步)
-const OS_ROOT_FILES = ['/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt', '/etc/ssl/cert.pem']
 const errMessage = (e) => String((e && e.message) || e)
 
 /** The world one run of `off` / `uninstall` sees, every part of it replaceable by `deps`. */
@@ -195,7 +195,13 @@ const MARKER_TEXT = { block: '去掉 asight 哨兵块', line: '去掉 asight 加
 const SKIP_REASON = { 'already-restored': '早已是安装前的样子', missing: '文件已不在,没有 asight 的东西了', 'left-user-value': '这个键现在是你自己设的值,没动', 'already-removed': 'asight 的文字已不在这个文件里' }
 const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 'left-user-value': 'left-user-value' } // the results that are in the closed set of codes (src/health/codes.mjs)
 const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
-const defaultRoots = (fs) => { let osText = ''; for (const f of OS_ROOT_FILES) { try { osText = fs.readFileSync(f, 'utf8'); break } catch { /* next */ } } return { node: [...nodeTls.rootCertificates], osText } }
+// The roots a gone bundle is rebuilt from (4.6 撤销顺序 第 2 步): Node's and the first OS PEM bundle of the one list (pem.mjs SYSTEM_BUNDLES, the collector's
+// too). None that holds a certificate, or one that is there and unreadable → `missing`, which the rebuilt bundle's note says (D38).
+const defaultRoots = (fs) => {
+  const b = osBundle({ read: (f) => fs.readFileSync(f, 'utf8') })
+  const missing = b.file ? null : `no OS trust bundle holds a certificate${b.failed.length ? ` (${b.failed.map((x) => `${x.file}: ${errMessage(x.error)}`).join('; ')})` : ''}`
+  return { node: [...nodeTls.rootCertificates], osText: b.text, missing }
+}
 
 /** Step 4: the entries, by the manifest or by asight's own marks. `dropCa`: only `uninstall` removes asight-ca.pem. → one object of what was undone and what was left
  *  (`changed`, `removed`, `skipped`, `left`, `kept_bundles`, `still_trusting`, `residue`, `kept_backups`, `dropped_backups`, `pending`, `orphan_backups`, `problems`,
@@ -265,7 +271,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       const entry = k.entry_left ? `${k.entry_left.join(', ')}, which could not be undone, still points at it` : null // an agent's next start reads the bundle through it
       const again = `run it again once ${k.pids.length ? 'they exit' : 'that is fixed'}`
       note(k.rebuilt ? 'harness-note' : 'bundle-kept', { harness: k.harness, path: k.path }, k.rebuilt
-        ? `${k.path} was gone while ${[...(k.pids.length ? [`a running process may use it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [entry] : [])].join(' and ')}; it was rebuilt without the asight CA${k.lost_fps ? `, but without ${k.lost_fps.length} user CA(s) its source files no longer hold` : ''}; ${again}`
+        ? `${k.path} was gone while ${[...(k.pids.length ? [`a running process may use it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [entry] : [])].join(' and ')}; it was rebuilt without the asight CA${k.lost_fps ? `, but without ${k.lost_fps.length} user CA(s) its source files no longer hold` : ''}${k.os_roots_missing ? `, with Node's roots only (${k.os_roots_missing})` : ''}; ${again}`
         : `${k.path} is kept, without the asight CA, ${[...(k.pids.length ? [`for running processes that may have loaded it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [`because ${entry}`] : [])].join(' and ')}; ${again}`)
     }
     for (const c of out.changed) { note('harness-note', { harness: c.harness, path: c.path }, `${c.path}, asight's ${c.role}, had been changed since install; it was removed all the same`); u.notes.push(`${c.path}, asight's ${c.role}, had been changed since asight wrote it; it was removed all the same`) }

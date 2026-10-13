@@ -6,7 +6,6 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import tls from 'node:tls'
 import { asightHome, collectorHome } from '../paths.mjs'
 import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
@@ -21,6 +20,7 @@ import { readCa } from './core/tls/ca-store.mjs'
 import { tryOpLock } from '../off/lock.mjs'
 import { loadCa, checkCa } from './core/tls/ca.mjs'
 import { createLeafIssuer } from './core/tls/leaf.mjs'
+import { bundleRoots } from './core/tls/roots.mjs'
 import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, createFailureRecorder } from './core/events.mjs'
@@ -48,7 +48,7 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
   const osMatch = redirector && typeof redirector.darwin === 'object' && redirector.darwin && redirector.darwin.osMatch ? redirector.darwin.osMatch : null
   const registry = createRegistry(list, { osMatch })
   // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `asight on` says so (1.6 §1.1), it never enables it (R8)
-  return { arch: A, os: A.os, osRootsFile: A.osRootsFile || null, harnesses: list, registry, scan: () => (redirector ? redirector.scan() : []), match: (f) => registry.match(f), linger: () => (redirector && typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (redirector && typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
+  return { arch: A, os: A.os, harnesses: list, registry, scan: () => (redirector ? redirector.scan() : []), match: (f) => registry.match(f), linger: () => (redirector && typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (redirector && typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
 }
 
 /** What `asight status` and `doctor` need to draw the network topology (1.6 §9.7): the harness descriptors and this platform's part of the facts. The CLI reaches arch and harness only through this file (layering rule 5);
@@ -255,7 +255,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     // The read-modify-write of the manifest and the bundles is done under the op lock (1.6 R12): `on`, `off` and `uninstall` change the same files. A lock another
     // command holds means this round waits for it (it ends in seconds, and the roots are read again then); a rebuild after the command is done sees what it left.
     let bundleRetry = null, bundleBusy = 0
-    const refreshBundles = async () => { // async: darwin's roots are read, not one file (A.osRoots below)
+    const refreshBundles = async () => { // async: the arch's OS roots are read (bundleRoots below)
       clearTimeout(bundleRetry)
       const report = { rebuilt: [], failed: [], lost: [] }
       let held = null
@@ -271,10 +271,14 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
           const installedIds = [...new Set([...(fresh.entries || []), ...(fresh.files || [])].map((x) => x.harness).filter(Boolean))]
           const st = readState(P.state, () => {}, { installed: installedIds }) // a state file that cannot be read reads as every harness off, and the switch records that (switch.mjs): nothing to rebuild then
           const on = new Set(Object.entries(st.harnesses).filter(([, h]) => h.desired === 'on').map(([id]) => id))
-          let osText = ''
-          if (A.osRootsFile) { try { osText = fs.readFileSync(A.osRootsFile, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e } }
-          else if (A.osRoots) { osText = (await A.osRoots()).pem } // the arm is NOT darwin's: it is any arch whose OS roots are not one file (osRoots set, osRootsFile unset) — today only darwin (4.9 §6.2, review F3), whose union is keychain-administered anchors ∪ Node's bundled ∪ Apple's SystemRootCertificates; another arch reaching here gets the same service for free. Without this arm the combined bundles carry no enterprise root and a replace-semantics entry (Codex's SSL_CERT_FILE) silently cuts the agent off its relay. A read that fails entirely reaches the catch below: the bundles keep their previous roots and the failure is said (D38)
-          rewriteBundles({ dir: P.dir, manifest: fresh, nodeRoots: tls.rootCertificates, osRootsText: osText, caPem: ca.certPem, report, only: on })
+          // The roots, through the one resolver the install's plan asks too (tls/roots.mjs bundleRoots: the arch's osRoots, 4.6 「合并包」). Without the OS roots the
+          // combined bundles carry no enterprise root and a replace-semantics entry (Codex's SSL_CERT_FILE) silently cuts the agent off its relay. A read that fails
+          // entirely reaches the catch below: the bundles keep their previous roots and the failure is said (D38). An answer with no OS root in it (`missing`: no OS
+          // bundle on this machine holds a certificate) is used — Node's roots are all there is — and said.
+          const got = await bundleRoots(A)
+          rewriteBundles({ dir: P.dir, manifest: fresh, nodeRoots: got.node, osRootsText: got.osText, caPem: ca.certPem, report, only: on })
+          const bare = got.missing ? fresh.files.filter((f) => f.role === 'bundle' && on.has(f.harness) && !f.without_ca).map((f) => f.path) : []
+          if (bare.length) failure.event({ where: 'bundle', code: CODE.systemRootsUnavailable, files: bare, reason: `the combined bundles ${bare.join(', ')} carry Node's roots only: ${got.missing}; a CA installed system-wide (a corporate proxy's) is not in them, and an agent whose entry points at one may not reach a relay that signs with it` })
         }
       } catch (e) { failure('bundle', Object.assign(new Error(`rebuilding the combined bundles failed: ${errText(e)}; they keep their previous roots`), { code: e && e.code })) } finally { if (held && held.lock) held.lock.release() }
       const changed = report.rebuilt.filter((r) => r.why === 'roots-changed').map((r) => r.path)

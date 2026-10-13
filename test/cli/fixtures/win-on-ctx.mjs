@@ -79,7 +79,7 @@ export function winWorld({ internet = { ProxyEnable: { kind: 'REG_DWORD', value:
     readTextOrError: (f) => { try { return { text: fs.readFileSync(f, 'utf8'), error: null } } catch (e) { return { text: null, error: { code: e.code } } } },
     listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, collectorDir: dir, caPem: null })
   const writeEntry = (g) => createProxyEntries({ dir, home, groups, ctx: winCtx(), ingress: () => JSON.parse(fs.readFileSync(path.join(dir, 'ingress.json'), 'utf8')), manifest: () => readManifest(dir, fs), fs }).write([{ g, harness: (groups.find((x) => x.g === g) || {}).harness, entry: 'auto' }])
-  const parts = { os: 'win32', osRootsFile: null, harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { ...arch, prepare: async () => prep, ensureKernel } }
+  const parts = { os: 'win32', harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { ...arch, prepare: async () => prep, ensureKernel } }
   const deps = (over = {}) => ({
     parts, request: async (q) => { // the fake daemon: /on does the daemon's half (the real writer, the groups this world routes), the rest answers like a daemon at rest
       if (q.method === 'POST' && q.path === '/on') {
