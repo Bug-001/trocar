@@ -20,6 +20,7 @@ export const EVENT = Object.freeze({
 // Generic trust reasons (core/trust/confirm.mjs, core/tracker.mjs) with the one line status and flows/ say about them.
 export const TRUST_REASON = Object.freeze({
   'var-missing': 'no asight trust entry is in effect for this process',
+  'chromium-child': 'a desktop app\'s Chromium process other than the network service (a renderer, the GPU process, another utility): it owns no model sockets and is never decrypted',
   'env-frozen': 'this long-lived process started before the trust entry existed; restart it once',
   'config-after-start': 'the trust entry was written after this process started; restart it once',
   'start-time-unknown': 'the start time of this process could not be read, so it is not known whether it started after the trust entry; restart it once',

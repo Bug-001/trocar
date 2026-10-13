@@ -61,6 +61,7 @@ export const SEEDS = [
   l('/home/u/.opencode/bin/opencode', ['opencode', 'x'], null, 'test/collector/harness/opencode.test.mjs:20 (BUN_BE_BUN self-exec)', new Map([['BUN_BE_BUN', '1']])),
   w(`${W}\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe`, ['run', 'hi'], 'opencode', `${WF} (opencode.cli)`),
   w(`${W}\\AppData\\Local\\Programs\\OpenCode\\resources\\opencode-cli.exe`, ['serve'], 'opencode', `${P} win PS-F6 (the desktop's core)`),
+  w(`${W}\\AppData\\Local\\Programs\\@opencodedesktop\\OpenCode.exe`, [], 'opencode', 'desktop · win: OpenCode.exe is the name opencode, the same item as the CLI; the old opencode.desktop form matched it'),
   // ── deepseek-dsh ──
   d('/usr/local/bin/node', [`${U}/.nvm/versions/node/v22.20.0/lib/node_modules/@deepseek-ai/dsh/lib/bin.js`], 'deepseek-dsh', `${DF} (deepseek-dsh.cli)`),
   d('/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness', [], 'deepseek-dsh', `${S46} (deepseek harness: the desktop main process)`),

@@ -42,10 +42,10 @@ export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'eve
 export const TRUST_REASONS = Object.freeze([
   'var-missing', 'env-frozen', 'config-after-start', 'start-time-unknown', 'file-unreadable', 'ca-not-in-file', 'replace-without-ca', 'shadowed',
   'verify-disabled', 'marker-stale', 'marker-pending', 'no-marker', 'ca-unusable', 'environ-unreadable', 'config-unreadable',
-  'settings-unparsable', 'settings-unreadable',
+  'settings-unparsable', 'settings-unreadable', 'chromium-child',
   // a harness's own
   'settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
-  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override', 'chromium-child',
+  'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override',
   'route-without-ca', 'win-doors-rejected', // hermes: darwin's active route has no asight ssl_ca_cert; win32's doors rejected
 ])
 

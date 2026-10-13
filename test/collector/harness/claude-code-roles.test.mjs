@@ -80,6 +80,21 @@ test('another Chromium child is chromium-child, never trusted (darwin with a cus
   }
 })
 
+test('a Chromium child is chromium-child whichever harness the name list says it is (one core rule): OpenCode Desktop and DeepSeek Harness children too', async () => {
+  const b = box()
+  const procs = [
+    win(String.raw`C:\Users\u\AppData\Local\Programs\@opencodedesktop\OpenCode.exe`),
+    win(String.raw`C:\Users\u\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe`),
+    { os: 'darwin', exe: '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness', argv: ['/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness'], argvSplit: true },
+  ]
+  for (const p of procs) {
+    for (const a of CHILDREN) {
+      const v = await verdict(b, { ...p, argv: [...p.argv, ...a.split(' ')] })
+      assert.deepEqual([v.trusted, v.reason, v.decrypt], [false, 'chromium-child', false], `${p.exe} ${a} (${v.agent})`)
+    }
+  }
+})
+
 test('the Desktop-bundled Claude Code (no --type=) is judged by the settings layer, door or no door (mac F1)', async () => {
   const spaced = path.join(tmpDir('asight-roles-'), 'Desktop User') // a home with a space in it: ps splits the exe across argv
   fs.mkdirSync(spaced)

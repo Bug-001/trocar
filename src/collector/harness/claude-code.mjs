@@ -40,12 +40,10 @@ function envBlock(ctx, file) {
 // measured verdict; win F9) — its one door is the desktop trust item the arch injects as `ctx.desktopDoor` ({ since, name }: darwin's confirmed
 // login-keychain item, win32's confirmed CurrentUser\Root item, either only while its fingerprint is this build's CA). That door becomes ONE synthetic
 // layer pointing NODE_EXTRA_CA_CERTS at `ctx.caFile` (evaluate() reads it back), `live:false` + `since` = the item's installed_at (config-after-start),
-// `mode:'override'` (solid to the tracker's env-unreadable arm). Another Chromium child gets no layer (refined to chromium-child). A process with no
+// `mode:'override'` (solid to the tracker's env-unreadable arm). Another Chromium child is never trusted (core/trust/confirm.mjs: chromium-child). A process with no
 // --type= — the CLI, the Desktop-bundled CC (mac F1), Desktop's own main process — keeps the settings layers.
 function layers(ctx) {
-  const role = chromiumRole(ctx.argv)
-  if (role === 'child') return []
-  if (role === 'network-service') {
+  if (chromiumRole(ctx.argv) === 'network-service') {
     const door = ctx.desktopDoor
     return door && ctx.caFile ? [{ name: door.name || 'desktop trust item', mode: 'override', vars: { NODE_EXTRA_CA_CERTS: ctx.caFile }, live: false, since: door.since }] : []
   }
@@ -171,9 +169,7 @@ export default {
     // uninstall step 5 only (the tracker still judges a running CC at start): a CC from before install uses a value
     // added to its settings on new connections (lab ④), so after uninstall it may still trust asight until it restarts
     rereadsEntry: true,
-    refine: (r, _env, { argv } = {}) => (r.reason === 'var-missing' && chromiumRole(argv) === 'child' ? 'chromium-child' : null),
     hints: {
-      'chromium-child': 'a Claude Desktop Chromium process other than the network service (a renderer, the GPU process, another utility): it owns no model sockets and is never decrypted',
       'settings-ignored-managed-by-host': 'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST makes Claude Code ignore NODE_EXTRA_CA_CERTS from settings files',
       'settings-ignored-restricted': 'restricted mode ignores settings env',
       'settings-ignored-setting-sources': '--setting-sources excludes the scope that holds the CA',

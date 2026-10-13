@@ -19,9 +19,8 @@ const desktopSetting = (ctx) => path.join(ctx.env.get('ZCODE_DESKTOP_HOME_DIR') 
 // httpProxyCaCertPath — evaluate() reads that file back and finds asight's CA in it, or the verdict is untrusted; without either, no layer
 // (var-missing). `since` = the item's installed_at (config-after-start). The app-server (no Chromium role) keeps the base caCertFile layers.
 function layers(ctx) {
-  const role = chromiumRole(ctx.argv)
-  if (role === null) return linux.layers(ctx)
-  if (role !== 'network-service' || !ctx.desktopDoor) return []
+  if (chromiumRole(ctx.argv) !== 'network-service') return linux.layers(ctx) // another Chromium child is never trusted anyway (core/trust/confirm.mjs)
+  if (!ctx.desktopDoor) return []
   const file = desktopSetting(ctx)
   const text = ctx.readText(file)
   const ca = text == null ? null : ((parseJsonc(text).data || {}).httpProxyCaCertPath)
