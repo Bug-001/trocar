@@ -159,7 +159,7 @@ test('what doctor runs, with the VPN probe left real: one read-only OS query (`p
   const r = await doctor(s, ['--source', src], { deps: { netenv: undefined, knownSocks: [] } })
   assert.equal(r.exit, 0, r.text)
   assert.deepEqual(ranBesides(s, before), ['ps -axww -o command='])
-  assert.deepEqual(s.sys.exec.calls.slice(before).filter((c) => NET_READ.test(c)), ['ss -ltnpH', 'ip -j route get 1.1.1.1'], 'and the two reads of the network facts, which only read')
+  assert.deepEqual(s.sys.exec.calls.slice(before).filter((c) => NET_READ.test(c)), ['ss -ltnpH'], 'and the one read of the network facts, which only reads')
 })
 
 test('dependencies: found on PATH, or MISSING with the one line that installs it — looked up in the files, no `which`', async () => {

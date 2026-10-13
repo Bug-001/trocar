@@ -2,8 +2,7 @@
 // call linuxNetFacts through src/netenv/facts.mjs (gatherNetFacts's `archFacts`); the daemon's `/status` and the process table are already read by `status`, so they come in as `status`:
 //   · the processes of each harness, with the watch table's verdict for each (watched with decrypt / without / absent), what proxy each was started with (the proxy keys of its environment THAT ITS HARNESS READS, `proxy.env`, and which of the harness's API hosts its
 //     NO_PROXY covers: nothing else of it is kept) and when;
-//   · the listeners on this machine (`ss -ltnpH`: a proxy's port names a product or a process of this user; another user's listener has no owner to read: `owner-unreadable`);
-//   · whether the way out of the machine is a TUN device (`ip -j route get` for a public address, then `ip -j -d link show dev`: no packet is sent, nothing is resolved — the CLI never goes online).
+//   · the listeners on this machine (`ss -ltnpH`: a proxy's port names a process of this user; another user's listener has no owner to read: `owner-unreadable`);
 // Routing is `driver` (the eBPF redirector). The system proxy (gsettings / kioslaverc) is not read: no harness is known to follow it on Linux (`proxy.measured.linux` is `inferred`). Imports no harness: the
 // descriptors arrive in `ctx.harnesses` (their `proxy.env` names the keys of a process's environment that count) and their data in `settings` and in `status`.
 import { execTool } from '../../../off/exec.mjs'
@@ -93,16 +92,5 @@ export async function linuxNetFacts(ctx, deps = {}) {
   const ss = run('ss', ['-ltnpH'])
   if (ss.code === 0) listeners = parseSs(ss.out).map((l) => (l.pid ? { addr: l.addr, port: l.port, pid: l.pid, exe: readExe(l.pid, { root }) || l.comm } : { addr: l.addr, port: l.port, unknown: { reason: 'owner-unreadable', detail: 'ss lists no process for it: it is another user\'s, or ss was not allowed to see it' } }))
   else unknowns.push({ fact: 'listeners', reason: REASON(ss), detail: `ss -ltnpH: ${ss.err || `exit ${ss.code}`}` })
-  let tun = null
-  const route = run('ip', ['-j', 'route', 'get', '1.1.1.1'])
-  if (route.code === 0) {
-    let dev = null
-    try { dev = (JSON.parse(route.out)[0] || {}).dev || null } catch { /* said below */ }
-    if (dev) {
-      const link = run('ip', ['-j', '-d', 'link', 'show', 'dev', dev])
-      if (link.code === 0) { try { const l = JSON.parse(link.out)[0] || {}; tun = (l.linkinfo && l.linkinfo.info_kind) === 'tun' } catch { unknowns.push({ fact: 'tun', reason: 'unparseable', detail: 'ip -j -d link show did not print JSON' }) } }
-      else unknowns.push({ fact: 'tun', reason: REASON(link), detail: `ip link show dev ${dev}: ${link.err || `exit ${link.code}`}` })
-    } else unknowns.push({ fact: 'tun', reason: 'unparseable', detail: 'ip -j route get printed no device' })
-  } else unknowns.push({ fact: 'tun', reason: REASON(route), detail: `ip route get: ${route.err || `exit ${route.code}`}` })
-  return { routing: 'driver', listeners, procs, tun, unknowns }
+  return { routing: 'driver', listeners, procs, unknowns }
 }

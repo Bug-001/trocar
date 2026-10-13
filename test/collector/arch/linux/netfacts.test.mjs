@@ -1,5 +1,5 @@
 // test/collector/arch/linux/netfacts.test.mjs — Linux's part of the network facts (RFC 1.6 §9.7, 4.6 「eBPF 模式下的网络拓扑」): the processes of each harness with the watch table's verdict and the proxy each was started with,
-// the listeners on the machine and whether the way out is a TUN device. Everything is injected: a synthetic /proc, a fake `ss` / `ip` runner, a sandbox HOME; nothing reads the machine and nothing is spawned.
+// the listeners on the machine Everything is injected: a synthetic /proc, a fake `ss` / `ip` runner, a sandbox HOME; nothing reads the machine and nothing is spawned.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { linuxNetFacts, parseSs, processName, versionOf } from '../../../../src/collector/arch/linux/netfacts.mjs'
@@ -23,8 +23,7 @@ const runner = (table, calls = []) => (file, args) => {
   const r = table[[file, ...args].join(' ')] ?? { status: null, stdout: '', stderr: '', error: new Error(`spawnSync ${file} ENOENT`) }
   return { status: 0, stdout: '', stderr: '', ...r }
 }
-const ROUTE = JSON.stringify([{ dst: '1.1.1.1', dev: 'eth0' }])
-const TABLE = { 'ss -ltnpH': { stdout: SS }, 'ip -j route get 1.1.1.1': { stdout: ROUTE }, 'ip -j -d link show dev eth0': { stdout: JSON.stringify([{ ifname: 'eth0', linkinfo: {} }]) } }
+const TABLE = { 'ss -ltnpH': { stdout: SS } }
 const row = (pid, over = {}) => ({ pid, trusted: true, reason: null, negative: false, startedAt: Date.parse('2026-10-07T09:30:00Z'), ...over })
 const statusOf = (rows, reply = { agents: [{ pid: 4121, decrypt: true }] }, matched = []) => ({ daemon: { state: 'running', reply }, harnesses: [{ id: 'claude-code', procs: rows }], matched })
 const current = (value = null, over = {}) => ({ value, scheme: null, host: null, port: null, source: [], sha256: value ? settingSha(value) : null, changedAt: null, ...over })
@@ -48,7 +47,7 @@ test('processName / versionOf: the program (and its sub-command), a runtime name
   assert.equal(versionOf('/usr/bin/mihomo'), null)
 })
 
-test('linuxNetFacts: routing is driver; the listeners are named by their owner (the exe under /proc, else the name ss gave), another user\'s has no owner and says so; TUN is read from the link of the default route', async () => {
+test('linuxNetFacts: routing is driver; the listeners are named by their owner (the exe under /proc, else the name ss gave), another user\'s has no owner and says so; no TUN / route fact (D49)', async () => {
   const p = fakeProc(), calls = []
   try {
     p.add(777, { exe: '/usr/bin/mihomo', argv: ['mihomo'] })
@@ -57,26 +56,21 @@ test('linuxNetFacts: routing is driver; the listeners are named by their owner (
     assert.deepEqual(f.listeners, [
       { addr: '127.0.0.1', port: 7890, pid: 777, exe: '/usr/bin/mihomo' }, { addr: '::1', port: 9090, pid: 777, exe: '/usr/bin/mihomo' },
       { addr: '0.0.0.0', port: 22, unknown: { reason: 'owner-unreadable', detail: "ss lists no process for it: it is another user's, or ss was not allowed to see it" } }])
-    assert.equal(f.tun, false)
+    assert.ok(!('tun' in f), 'D49: no TUN fact')
     assert.deepEqual(f.unknowns, [])
-    assert.deepEqual(calls, ['ss -ltnpH', 'ip -j route get 1.1.1.1', 'ip -j -d link show dev eth0'], 'only these three reads, and the route lookup names no host: nothing is resolved, nothing goes out')
-    const tun = await linuxNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ ...TABLE, 'ip -j route get 1.1.1.1': { stdout: JSON.stringify([{ dev: 'Meta' }]) }, 'ip -j -d link show dev Meta': { stdout: JSON.stringify([{ linkinfo: { info_kind: 'tun' } }]) } }), procRoot: p.root })
-    assert.equal(tun.tun, true)
+    assert.deepEqual(calls, ['ss -ltnpH'], 'only this one read: no route lookup, nothing is resolved, nothing goes out')
   } finally { p.done() }
 })
 
-test('linuxNetFacts: a tool that is not there, is refused or prints what it should not leaves the fact unknown with the reason (never an empty list, never "no TUN")', async () => {
+test('linuxNetFacts: a tool that is not there, is refused or prints what it should not leaves the fact unknown with the reason (never an empty list)', async () => {
   const f = await linuxNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({}), procRoot: '/nonexistent' })
   assert.deepEqual(f.listeners, [])
-  assert.equal(f.tun, null)
-  assert.deepEqual(f.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'absent'], ['tun', 'absent']])
+  assert.deepEqual(f.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'absent']])
   const refused = await linuxNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ 'ss -ltnpH': { status: 1, stderr: 'permission denied' } }), procRoot: '/x' })
   assert.deepEqual([refused.unknowns[0].fact, refused.unknowns[0].reason, refused.unknowns[0].detail], ['listeners', 'denied', 'ss -ltnpH: permission denied'])
   assert.match(f.unknowns[0].detail, /^ss -ltnpH: /)
-  const timed = await linuxNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ 'ss -ltnpH': { status: null, stderr: 'spawnSync ss ETIMEDOUT' }, 'ip -j route get 1.1.1.1': { stdout: 'not json' } }), procRoot: '/x' })
-  assert.deepEqual(timed.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'timeout'], ['tun', 'unparseable']])
-  const nodev = await linuxNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ ...TABLE, 'ip -j -d link show dev eth0': { stdout: 'x' } }), procRoot: '/x' })
-  assert.deepEqual(nodev.unknowns.map((u) => [u.fact, u.reason]), [['tun', 'unparseable']])
+  const timed = await linuxNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ 'ss -ltnpH': { status: null, stderr: 'spawnSync ss ETIMEDOUT' } }), procRoot: '/x' })
+  assert.deepEqual(timed.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'timeout']])
 })
 
 test('linuxNetFacts: a process carries the watch table\'s verdict (decrypt / no-decrypt / absent / unknown when the daemon did not answer), its name, version and start time', async () => {
