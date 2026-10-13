@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// BUG 3 (audit 2026-07-19) — the board and the D26 opt-in control plane.
+// BUG 3 — the board and the D26 opt-in control plane.
 //
 // REPORTED AS: "the board polls /control/status every cycle even without --control, producing a 404
 // per poll". MEASURED: that half is NOT true — /control/status is fetched exactly ONCE, from a boot

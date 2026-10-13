@@ -50,7 +50,7 @@ test('MONITOR_LABEL is distinct from the demo com.atrace.serve', () => {
   assert.equal(MONITOR_LABEL, 'com.asight.monitor');
 });
 
-// RFC 1.6 §4: ExitTimeOut is how long launchd waits between SIGTERM and SIGKILL; only an agent that asks for one gets the key.
+// ExitTimeOut is how long launchd waits between SIGTERM and SIGKILL; only an agent that asks for one gets the key.
 test('macOS plist: ExitTimeOut is written when asked for (the MITM drains for 10 s on SIGTERM) and absent otherwise', () => {
   const fs = fakeFs();
   const inst = getAutostartInstaller('darwin', { home: '/Users/x', run: () => ({ status: 0 }), fs });

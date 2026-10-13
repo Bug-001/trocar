@@ -1,5 +1,5 @@
 // controller.test.mjs — the mihomo controller client (src/netenv/mihomo/controller.mjs; RFC 4.7 §3.4; acceptance N9, the controller half). The allow-list is checked before a byte is sent:
-// a refused request throws ControllerRefused and the transport is never called. What a real mihomo answers to each allowed request is W57's (test/netenv/mihomo-contract.test.mjs); the
+// a refused request throws ControllerRefused and the transport is never called. What a real mihomo answers to each allowed request is N9's real-core half (test/netenv/mihomo-adapter-contract.test.mjs); the
 // adapter's use of the client is test/netenv/verge-adapter.test.mjs.
 import test from 'node:test'
 import assert from 'node:assert/strict'

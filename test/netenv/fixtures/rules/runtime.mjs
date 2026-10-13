@@ -1,4 +1,4 @@
-// Runtime files in the shape Clash Verge writes them (serde_yaml: block style, lists at the key's own indent), as stand-ins for the user's VPN (4.7 §3.2, 4.8 W57): the nodes and groups, a
+// Runtime files in the shape Clash Verge writes them (serde_yaml: block style, lists at the key's own indent), as stand-ins for the user's VPN (4.7 §3.2, N9): the nodes and groups, a
 // rule provider of the user's, the user's rules. Every value is made up (documentation addresses, a placeholder password): the reader and its tests never see a real one.
 
 /** A Verge runtime file with the user's own things in it: what verge-world.mjs (the sandbox Verge) puts in `clash-verge.yaml` and what the read-only adapter reads its few fields from. */
@@ -64,7 +64,7 @@ rules:
 `
 
 /**
- * A runtime file the real core can load on a Mac loopback run (the W57 read test): serde_yaml's block style as above, but the nodes are `http` outbounds at the discard port (nothing is
+ * A runtime file the real core can load on a Mac loopback run (the N9 read test): serde_yaml's block style as above, but the nodes are `http` outbounds at the discard port (nothing is
  * dialled: select groups run no health check), the controller is the test's own, and there is no tun, no dns and no geodata download. It holds nothing of the user's.
  */
 export const loopbackRuntimeText = ({ mixed, controller, secret }) => `mixed-port: ${mixed}

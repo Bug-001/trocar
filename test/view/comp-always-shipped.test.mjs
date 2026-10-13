@@ -96,7 +96,7 @@ test('a comp is never all-zero for a call that had blocks', fixtureGate(), () =>
 // THE OPENAI/CODEX PATH GETS THE SAME CONTRACT — one endpoint MUST NOT emit two block shapes.
 //
 // assembleSession dispatches OpenAI-shaped sessions to assembleOpenai(), a separate branch that has
-// already been caught skipping withRefs()/slimRec() . Baking `comp` in the CC
+// already been caught skipping withRefs()/slimRec(). Baking `comp` in the CC
 // path alone would leave every Codex session's timeline hatched exactly as before, and no CC fixture
 // can notice — a mutation removing `comp` from assembleOpenai left this file green until this test
 // existed. Synthetic rather than fixture-based on purpose: the only real OpenCode capture lives under

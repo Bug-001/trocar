@@ -116,9 +116,9 @@ test('off macOS, remove is a reserved no-op that touches nothing (there is no la
   assert.deepEqual(a._calls, [], 'remove must not call the installer at all off macOS');
 });
 
-// RFC 1.6 §4: `asight off` unloads the MITM so launchd sends it SIGTERM; the MITM drains its open connections for up to 10 s. launchd kills a job ExitTimeOut seconds after SIGTERM, so the MITM's
+// `asight off` unloads the MITM so launchd sends it SIGTERM; the MITM drains its open connections for up to 10 s. launchd kills a job ExitTimeOut seconds after SIGTERM, so the MITM's
 // plist asks for 15 — the drain and a margin. The primer is a one-shot and the monitor is not drained: they ask for nothing.
-test('1.6 §4: the MITM LaunchAgent carries ExitTimeOut 15 (the 10 s drain and a margin); the primer does not', () => {
+test('the MITM LaunchAgent carries ExitTimeOut 15 (the 10 s drain and a margin); the primer does not', () => {
   const a = fakeAutostart();
   installCaptureAgents(opts(a));
   assert.equal(a._agents.get(MITM_LABEL).exitTimeOut, 15);

@@ -14,7 +14,7 @@ import { osStubs } from '../helpers/os-stubs.mjs';
 // ③ 凭据没漏. Every secret header in every record MUST read `<redacted>`. It is the only hard failure
 // in the tool, which makes it the only check a user is entitled to trust without reading its output.
 //
-// It could not fail (audit 2026-07-20, confirmed by three independent verifiers). Two defects stacked:
+// It could not fail (confirmed by three independent verifiers). Two defects stacked:
 //
 //   1. D27 made `serveSource()` return an ARRAY of capture roots (the new home plus the legacy one).
 //      bin/asight.mjs still did `fs.statSync(source)` on it, which throws ERR_INVALID_ARG_TYPE, which

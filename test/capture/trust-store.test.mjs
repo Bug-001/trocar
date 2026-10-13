@@ -7,7 +7,7 @@ import {
 import { monitoringStatus } from '../../src/capture/control.mjs'
 
 // A recording runner: captures (file,args) and returns an injectable canned result,
-// so the whole unit is exercised WITHOUT mutating any real trust store (RFC 4.1 §验收5).
+// so the whole unit is exercised WITHOUT mutating any real trust store.
 function recorder(result = { status: 0, stdout: '', stderr: '' }) {
   const calls = []
   const run = (file, args) => { calls.push({ file, args }); return typeof result === 'function' ? result(file, args) : result }

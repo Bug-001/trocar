@@ -6,7 +6,7 @@ import { buildResolver } from '../../src/query/source.mjs';
 import { composeTextRef, mintRawRef } from '../../src/etl/orchestrator.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
 
-// ── BUG 2 (audit 2026-07-19) — the raw-bytes index was keyed on a BARE record id ────────
+// ── BUG 2 — the raw-bytes index was keyed on a BARE record id ────────
 // A DIRECTORY source indexes every *.ndjson into one `recordId → {file,offset,length}` map.
 // Record ids are only unique WITHIN a capture file (each harness mints req_00001…), so two
 // files in the same directory collide and the last-indexed one silently wins. The "回源

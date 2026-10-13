@@ -4,7 +4,7 @@
 //       HTTPS_PROXY for the process tree it launches, a block in the agent's own .env) is not this scan's business — it never reaches past the launched tree;
 //   (c) no code elevates ITSELF or feeds a password to an elevator: no exec call runs sudo / runas / pkexec / gksudo. The named exception is elevate.mjs (4.8 §2.4, plan Task 14: the machine-level
 //       opt-in's UAC launch lives there and nowhere else); it does not exist yet, and when it does, `runas` in ITS calls is allowed and everything else here still is not.
-// The old capture is exempt by the shared pinned list (fixtures/old-capture.mjs: its login-env plist is booked by 1.6 §4 and §6). The reading side needs no allowlist for the exec scan — reads go
+// The old capture is exempt by the shared pinned list (fixtures/old-capture.mjs). The reading side needs no allowlist for the exec scan — reads go
 // through the helper's read verbs (`reg-read`) and doctor's TEXT (findings.mjs), neither of which is an exec call; upstream.mjs's mentions of the registry names are data it hands the helper, not
 // args of a tool. Planted counter-examples turn each half red.
 import test from 'node:test'

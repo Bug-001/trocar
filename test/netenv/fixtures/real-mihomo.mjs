@@ -1,4 +1,4 @@
-// real-mihomo.mjs — a REAL mihomo for the contract tests (W57): test/netenv/mihomo-contract.test.mjs (the engine, the probe, the generators' text) and mihomo-adapter-contract.test.mjs (the controller client
+// real-mihomo.mjs — a REAL mihomo for the contract test (4.7 N9): test/netenv/mihomo-adapter-contract.test.mjs (the controller client
 // and the Verge adapter). Runs when ASIGHT_MIHOMO_BIN points at a mihomo binary; otherwise the tests skip with the reason below. Dev Mac: the Verge-bundled
 // `/Applications/Clash Verge.app/Contents/MacOS/verge-mihomo`, read-only (never Verge's data directory, never the running Verge, never the system proxy). The run: a scratch home (tmpDir, or the one the caller
 // made), loopback ports chosen free at start, no tun, no dns section, no geodata download (the config points the geox URLs at the discard port), a clean environment (no proxy variables: the machine running the test has
@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
 export const BIN = process.env.ASIGHT_MIHOMO_BIN
-export const gate = BIN ? {} : { skip: 'set ASIGHT_MIHOMO_BIN to a mihomo binary to run the real-mihomo contract (4.8 W57); a Verge-bundled verge-mihomo may be used read-only' }
+export const gate = BIN ? {} : { skip: 'set ASIGHT_MIHOMO_BIN to a mihomo binary to run the real-mihomo contract (4.7 N9); a Verge-bundled verge-mihomo may be used read-only' }
 
 export const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)) }) })
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))

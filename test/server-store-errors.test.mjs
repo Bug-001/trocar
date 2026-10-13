@@ -8,7 +8,7 @@ import { createServer } from '../src/server.mjs';
 import { ccLlmRecord } from './fixtures/cc-record.mjs';
 import { tmpDir } from './helpers/tmp.mjs';
 
-// BROKEN MUST NOT LOOK LIKE EMPTY (audit 2026-07-19).
+// BROKEN MUST NOT LOOK LIKE EMPTY.
 // asight's whole value is that what it shows IS what went over the wire. The worst outcome is a
 // board that renders a calm empty state while the store or the source is actually unreadable: the
 // user concludes "nothing was captured" when the truth is "asight is broken". A genuinely-absent

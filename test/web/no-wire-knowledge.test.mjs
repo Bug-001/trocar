@@ -1,5 +1,4 @@
-// test/web/no-wire-knowledge.test.mjs — the automatic proxy for 3.1 #3 (gate G14: the literal 「前端主干 git
-// diff = 0」 cannot hold once the labels of invariant 4 are drawn). The browser reads canonical, server-baked
+// test/web/no-wire-knowledge.test.mjs — the check for 3.1 #3 (gate G14). The browser reads canonical, server-baked
 // fields only; a provider wire name in index.html means a provider branch leaked into the front end.
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -1,12 +1,12 @@
-// test/off/clash.test.mjs — src/off/clash.mjs is the ONE undo of asight's Clash route (RFC 1.6 §4: `asight off` and `asight desktop off` run the same code). What src/capture/desktop-steer.mjs
-// exports under the old names is that code, not a copy of it; the pure transforms take asight's route out and leave every other byte (D28, D29).
+// test/off/clash.test.mjs — src/off/clash.mjs is the ONE undo of asight's Clash route (`asight desktop off` runs it). What src/capture/desktop-steer.mjs
+// exports under the old names is that code, not a copy of it; the pure transforms take asight's route out and leave every other byte .
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as clash from '../../src/off/clash.mjs'
 import { makeClash } from '../../src/off/clash.mjs'
 import * as steer from '../../src/capture/desktop-steer.mjs'
 
-test('1.6 §4: desktop-steer re-exports the strip transforms of src/off/clash.mjs — the same functions and names, not a second copy', () => {
+test('desktop-steer re-exports the strip transforms of src/off/clash.mjs — the same functions and names, not a second copy', () => {
   for (const name of ['stripBlock', 'stripRuntime', 'stripMergeLegacy', 'PROXY_NAME', 'DESKTOP_RULE']) assert.equal(steer[name], clash[name], `${name} is src/off/clash.mjs's`)
   assert.equal(clash.PROXY_NAME, 'atrace-mitm', 'a legacy name (the proxy Clash lists), not to be renamed')
 })
@@ -19,7 +19,7 @@ test('stripBlock takes the sentinel block out of Script.js (the // form) and of 
   assert.equal(clash.stripBlock('function main(c) { return c; }\n'), 'function main(c) { return c; }\n', 'no block: the bytes are not touched')
 })
 
-test('1.6 §4: the socket discovery, the payload reload and the probes are src/off/clash.mjs\'s too, and desktop-steer says so', () => {
+test('the socket discovery, the payload reload and the probes are src/off/clash.mjs\'s too, and desktop-steer says so', () => {
   for (const name of ['knownMihomoSocks', 'mihomoSockCandidates', 'discoverMihomoSock', 'mihomoPayloadReload', 'REACTIVATE_HINT']) assert.equal(steer[name], clash[name], `${name} is src/off/clash.mjs's`)
   for (const name of ['probeVersion', 'probeProxy']) assert.equal(typeof clash[name], 'function', `${name} is exported from src/off/clash.mjs (module-private in desktop-steer before)`)
 })
@@ -39,7 +39,7 @@ test('makeClash finds the core through the injected runner of `ps` (never a real
   assert.equal(calls.length, 1, 'a pinned socket needs no ps')
 })
 
-test('stripMergeLegacy takes out asight\'s own items of prepend-proxies / prepend-rules and NOTHING the user wrote (D28): a Merge.yaml with none of them comes back byte for byte, a mixed list keeps the user\'s items and its header', () => {
+test('stripMergeLegacy takes out asight\'s own items of prepend-proxies / prepend-rules and NOTHING the user wrote: a Merge.yaml with none of them comes back byte for byte, a mixed list keeps the user\'s items and its header', () => {
   const strip = clash.stripMergeLegacy
   const user = 'profile:\n  store-selected: true\nprepend-rules:\n  - DOMAIN,corp.example.com,DIRECT\n  - DOMAIN-SUFFIX,intranet.example,DIRECT\nprepend-proxies:\n  - {name: my-jump, type: ss, server: 1.2.3.4, port: 1}\n  - name: other\n    type: http\n    plugin-opts: {name: atrace-mitm}\n'
   assert.equal(strip(user), user, 'the user\'s own lists are not asight\'s: not one byte moves (a nested `name: atrace-mitm` of another proxy is not the proxy\'s name)')

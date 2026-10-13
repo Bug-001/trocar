@@ -127,7 +127,7 @@ test('R3: undoByHand says, in one sentence, how to take each kind of item out wi
   for (const kind of KNOWN_KINDS.filter((k) => k.startsWith('legacy-'))) assert.ok(undoByHand({ kind, path: '/p' }).includes('/p'), kind)
 })
 
-// 1.6 §4: the old capture's ledger ~/.asight/legacy-manifest.json is the same format in a file of its own (not in ~/.asight/collector/, so the board does not think the new collector is installed).
+// The old capture's ledger ~/.asight/legacy-manifest.json is the same format in a file of its own (not in ~/.asight/collector/, so the board does not think the new collector is installed).
 test('the ledger of the old capture is a manifest in a file of its own: written 0600, its directory made 0700, read back, with kind and undo_by_hand filled in; a version it does not know is refused, never rewritten', () => {
   const dir = tmpDir('asight-ledger-')
   const file = path.join(dir, '.asight', 'legacy-manifest.json')

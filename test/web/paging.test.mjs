@@ -7,7 +7,7 @@ import { readRecords } from '../../src/etl/ingest.mjs';
 import { sessionView, pageView, forWire } from '../../src/view/board.mjs';
 import { buildResolver } from '../../src/query/source.mjs';
 
-// BUG 1 (audit 2026-07-19) — THE SERVER IMPLEMENTS CURSOR PAGING; THE BROWSER NEVER CALLED IT.
+// BUG 1 — THE SERVER IMPLEMENTS CURSOR PAGING; THE BROWSER NEVER CALLED IT.
 //
 // `pageView` (src/view/board.mjs) and the cursor/limit query handling (src/server.mjs) are fully
 // implemented and tested, but `grep -n 'limit=' src/web/index.html` returned NOTHING — the board

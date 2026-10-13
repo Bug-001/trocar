@@ -1,5 +1,5 @@
 // fake-core.mjs — a stand-in for the controller of the user's proxy core, as mihomo v1.19.32 answers the two reads asight makes of it (RFC 4.7 §2 · §3.4; plan Task 6), on a loopback socket, so the Verge adapter is
-// exercised with a real HTTP round trip and no mihomo. D43: asight writes nothing into the user's VPN, so this core answers reads only. What it says is held to the real core by W57
+// exercised with a real HTTP round trip and no mihomo. D43: asight writes nothing into the user's VPN, so this core answers reads only. What it says is held to the real core by N9
 // (test/netenv/mihomo-adapter-contract.test.mjs, ASIGHT_MIHOMO_BIN): createController + the adapter on a real core read GET /version and GET /configs (mode, mixed-port, tun), and the fixed messages of a refusal are the
 // real core's own (fixtures/real-rules.mjs).
 // Answers: GET /version · GET /configs (with the fields a user's core has that must never leave the adapter: find-process-mode, allow-lan, log-level, `extraConfig`); anything else is 404 `Resource not found`, which

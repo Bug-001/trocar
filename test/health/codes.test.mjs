@@ -147,7 +147,7 @@ test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot i
   assert.ok(Object.isFrozen(CODE_OFF))
 })
 
-// ---- D42 (RFC 4.8 §12, W38): the names the Windows collector writes --------------------------------------------------------
+// ---- (RFC 4.8 §12, W38): the names the Windows collector writes --------------------------------------------------------
 // The table below is the spec's §12 table written out by hand (code, where, class), not read back from the module, so a name
 // added, dropped or moved in codes.mjs and not in the RFC turns this red.
 const SPEC_12_FAILURES = [
@@ -155,8 +155,8 @@ const SPEC_12_FAILURES = [
   // the kernel family (fallback-active, forwarder-*) retired with the kernel on both arches (D47 and its win32 twin): no producer anywhere
   ['optin-failed', 'optin'],
   ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'],
-  ['task-register-failed', 'install'], ['launchd-register-failed', 'install'], // the darwin autostart (4.9 §12)
-  ['elevated-token', 'start'], ['root-token', 'start'], // elevated-token's darwin name (4.9 §12)
+  ['task-register-failed', 'install'], ['launchd-register-failed', 'install'], // the darwin autostart (4.9 §11)
+  ['elevated-token', 'start'], ['root-token', 'start'], // elevated-token's darwin name (4.9 §11)
 ] // every row of the §12 table is the class 失败
 // the names §12 says it does not define again: 1.6 §9.7 (`NET_*`) and 4.7 §5 own them (D43 withdrew the other 4.7 §5 names)
 const SHARED_WITH_NET = ['forwarder-down', 'egress-differs', 'route-loop']

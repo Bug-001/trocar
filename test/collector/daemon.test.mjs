@@ -219,7 +219,7 @@ test('daemon: status awaits the redirector\'s directCount — an arch whose answ
 })
 
 
-// 4.8 §3.5 (W69): the daemon's /status reply carries the host sets the plan last applied per host-tree form (`applied_hosts`, the wiring's win32 bag),
+// 4.8 §3 (W69): the daemon's /status reply carries the host sets the plan last applied per host-tree form (`applied_hosts`, the wiring's win32 bag),
 // which is where `status`'s facts reach them to compare with a fresh read and say when the kernel's set is old. A platform whose redirector has no
 // `win32` bag (Linux) simply says nothing there — no key, never a vacuous one.
 test('daemon: /status relays the win32 bag\'s applied host sets; a redirector without the bag carries no applied_hosts key', async () => {

@@ -54,10 +54,10 @@ test('V7: a first on outside a terminal without --yes prints the plan, writes no
   assert.equal(b.linger, true)
 })
 
-// W27 ⑥ / W74 (4.8 §8): the arch's read-only `prepare` hook. Its lines are plan lines and receipt notes; a refusal stops `on` before turnOn's first write
+// The arch's read-only `prepare` hook. Its lines are plan lines and receipt notes; a refusal stops `on` before turnOn's first write
 // (exit 1, one failure event where a collector directory exists — with none the receipt is the record, 4.6 §记录 — and the HOME byte-identical); a dry run
 // shows the stop as `blocked` (R6, V7); a hook that throws is the outer catch's; the Linux arch has no hook and the existing runs above are its guard.
-test('W27 ⑥: the arch prepare hook — its lines print with the plan and ride in the receipt; a refusal exits 1 before any write with one failure event; a dry run says blocked; a throw is the outer catch', async () => {
+test('the arch prepare hook — its lines print with the plan and ride in the receipt; a refusal exits 1 before any write with one failure event; a dry run says blocked; a throw is the outer catch', async () => {
   const withPrepare = (answer) => {
     const calls = []
     const parts = { os: 'none', osRootsFile: null, harnesses: [cc], scan: async () => [], match: () => ({ agent: null }), arch: { unit, prepare: async (a) => { calls.push(a); return answer } } }
@@ -76,7 +76,7 @@ test('W27 ⑥: the arch prepare hook — its lines print with the plan and ride 
   assert.match(io.stderrText(), /Smart App Control 开着/, 'the Smart App Control line too')
   assert.deepEqual([io.json().notes.includes(notes[0]), io.json().notes.includes(notes[1])], [true, true], 'and both are receipt notes')
 
-  // a refusal on nothing-installed: exit 1 before turnOn (nothing written), the reason with the manual alternative (D44: no reinstall commands any more), the receipt the only record
+  // a refusal on nothing-installed: exit 1 before turnOn (nothing written), the reason with the manual alternative (no reinstall commands any more), the receipt the only record
   const home2 = tmpDir('asight-w27b-'); seedClaude(home2)
   const before = snapshot(home2)
   const refuse = { code: 'EPRECONDITION', reason: 'a settled precondition the arch named', commands: ['把 mihomo-linux-amd64-v1.19.32.gz 放进 ~/.asight/collector/kernel-archive/ 再跑 asight on,或修好网络 / 代理(HTTPS_PROXY)后重跑'] }

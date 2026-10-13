@@ -1,4 +1,4 @@
-// test/collector/core/trust.test.mjs — acceptance T12, generic half (harness halves: Tasks 8 and 10).
+// test/collector/core/trust-confirm.test.mjs — acceptance T12, generic half (harness halves: Tasks 8 and 10).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

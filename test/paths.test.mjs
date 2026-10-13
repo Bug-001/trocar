@@ -7,7 +7,7 @@ import { captureOut, mitmOut, serveSource, asightHome, collectorHome, caDir } fr
 import * as off from '../src/off/paths.mjs';
 import { collectorPaths } from '../src/collector/daemon.mjs';
 
-// FIRST-RUN DEAD END (audit 2026-07-19). The capture writers and the board reader defaulted to
+// FIRST-RUN DEAD END. The capture writers and the board reader defaulted to
 // DIFFERENT paths: `asight capture` → ~/.atrace/capture.ndjson, `asight mitm` →
 // ~/.atrace/asight/claude-capture.ndjson, `asight serve` → ~/.atrace/capture.ndjson. So the
 // documented happy path (arrange capture, then serve) showed "No sessions captured yet" while the

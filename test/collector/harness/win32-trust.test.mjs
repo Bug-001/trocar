@@ -467,7 +467,7 @@ test('W19 GATE (Task 8(v) run, audit F5): Codex and Hermes — the proxy lines j
     // LIFO undo restores the user's bytes in both write orders
     assert.deepEqual([undoEntry(m.entries[1]).result, undoEntry(m.entries[0]).result], ['restored', 'restored'], `LIFO (${order})`)
     assert.equal(fs.readFileSync(file, 'utf8'), user, 'byte for byte')
-    // the user edited around the block: asight's text goes, the user's bytes (their edit included) stay (D28: never a whole-file rollback)
+    // the user edited around the block: asight's text goes, the user's bytes (their edit included) stay (1.6 R2: never a whole-file rollback)
     const m2 = newManifest()
     applyTextEntry({ dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: trust.path, edit: order === 'trust-first' ? trust : proxy })
     applyTextEntry({ dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: trust.path, edit: order === 'trust-first' ? { ...proxy, joinBlock: true, quote: true } : { ...trust, joinBlock: true, quote: true } })

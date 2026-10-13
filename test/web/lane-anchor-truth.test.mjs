@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// BUG 1 (audit 2026-07-19) · the lane/turn CONTRADICTION in src/web/index.html.
+// BUG 1 · the lane/turn CONTRADICTION in src/web/index.html.
 //
 // `anchor = lanes.find(kind==='main') || lanes[0]` falls through to whatever lane happens to be
 // first, and renderSaw() then labels it with a HARDCODED `💬 conversation`. Real Claude Desktop
