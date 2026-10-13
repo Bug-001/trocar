@@ -66,7 +66,7 @@ const EXPECT = {
     groups: { 'kimi-code.cli': ['kimi-code.cli'], 'kimi-code.vscode': ['kimi-code.vscode'] },
     forms: {
       'kimi-code.cli': { nameRule: true, optIn: true, yes: [`${U}\\.kimi-code\\bin\\kimi.exe`] },
-      'kimi-code.vscode': { nameRule: false, optIn: true, yes: [`${U}\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe`, raw`C:\Program Files\Microsoft VS Code\Code.exe`] },
+      'kimi-code.vscode': { nameRule: false, optIn: true, yes: [] }, // the host program Code.exe: named by hosts.processes at the door (D51 T7), no form match
     },
     unknown: [raw`D:\tools\kimi.exe`],
   },
@@ -166,6 +166,11 @@ test('every win32 data file has the shape the later tasks read: groups, forms, t
         continue
       }
       assert.ok(gids.has(f.g), `${f.id}: its group ${f.g} exists`)
+      if (f.hosts) { // a host-tree form (D51 T7): the host program is named by hosts.processes (normalized names), not matched by image
+        assert.equal(f.match, undefined, `${f.id}: no image match — the door names the host by hosts.processes`)
+        assert.ok(Array.isArray(f.hosts.processes) && f.hosts.processes.length > 0 && f.hosts.processes.every((n) => n === n.toLowerCase() && !/[\\/.]/.test(n)), `${f.id}: hosts.processes are normalized program names`)
+        continue
+      }
       assert.match(f.match.image, /^[^\\/]+\.exe$/i, `${f.id}: an image name`)
       for (const p of [...(f.match.path || []), ...(f.match.cmdline || [])]) {
         assert.deepEqual(lintPattern(p), [], `${f.id}: ${p}`)
@@ -222,7 +227,8 @@ test('W3: every install path the spike measured is its form, the same image else
 
 test('W3: Code.exe is only the Kimi extension, node.exe and python.exe are never told by their name, and a node.exe is an agent only with the dsh command line', () => {
   const forms = formsOf().filter((f) => f.match)
-  assert.deepEqual(forms.filter((f) => /^code\.exe$/i.test(f.match.image)).map((f) => f.id), ['kimi-code.vscode'])
+  assert.deepEqual(forms.filter((f) => /^code\.exe$/i.test(f.match.image)).map((f) => f.id), [], 'Code.exe is matched by no form: the Kimi extension\'s door names it by hosts.processes (D51 T7)')
+  assert.deepEqual(formsOf().filter((f) => f.hosts && f.hosts.processes.includes('code')).map((f) => f.id), ['kimi-code.vscode'])
   for (const f of forms.filter((x) => /^(node|python|code)\.exe$/i.test(x.match.image))) {
     assert.equal(f.nameRule, false, `${f.id}: a PROCESS-NAME rule on ${f.match.image} would hand every program of that name to this form`)
     assert.equal(!!f.match.reportUnknownPath, false, `${f.id}: most ${f.match.image} are no agent, so an odd path is not reported`)

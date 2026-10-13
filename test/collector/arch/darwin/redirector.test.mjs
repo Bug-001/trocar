@@ -18,9 +18,13 @@ import claudeCode from '../../../../src/collector/harness/darwin/claude-code.mjs
 import codex from '../../../../src/collector/harness/darwin/codex.mjs'
 import deepseekDsh from '../../../../src/collector/harness/darwin/deepseek-dsh.mjs'
 import zCode from '../../../../src/collector/harness/darwin/z-code.mjs'
+import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
+import { createRegistry } from '../../../../src/collector/core/registry.mjs'
 
 const GROUPS = groupsOf([{ name: 'claude-code', darwin: claudeCode }, { name: 'codex', darwin: codex }, { name: 'deepseek-dsh', darwin: deepseekDsh }, { name: 'z-code', darwin: zCode }])
 const HOME = '/Users/u'
+const ID = createRegistry(await loadHarnesses()).match // the D51 name list the daemon hands the door (identify)
+const ON = () => true // every harness's desired state is on
 const IMG = {
   ccCli: '/Users/u/.npm-global/lib/node_modules/@anthropic-ai/claude-code/bin/claude',
   ccVscode: '/Users/u/.vscode/extensions/anthropic.claude-code-2.1.292-darwin-arm64/resources/native-binary/claude',
@@ -34,7 +38,7 @@ const DSH_CMD = '/usr/local/bin/node /Users/u/.npm-global/lib/node_modules/@deep
 const ZCODE_CMD = '/Applications/ZCode.app/Contents/MacOS/ZCode /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs app-server --stdio'
 
 /** What procinfo's targeted ask carries (the fields the redirector reads, and the ones around them): the darwin ProcFacts contract, `envRead:false` included. */
-const facts = (pid, exe, extra = {}) => ({ os: 'darwin', pid, ppid: 1, name: exe.split('/').pop(), exe, argv: [], cmdline: exe, env: null, envRead: false, cwd: null, startedAt: 1000 + pid, startTicks: String(1000 + pid), sessionId: null, integrity: null, tokenDenied: false, elevated: false, elevationInferred: false, cmdlineState: 'ok', source: 'accept', ...extra })
+const facts = (pid, exe, extra = {}) => ({ os: 'darwin', pid, ppid: 1, name: exe.split('/').pop(), exe, argv: String(extra.cmdline ?? exe).split(/\s+/), cmdline: exe, env: null, envRead: false, cwd: null, startedAt: 1000 + pid, startTicks: String(1000 + pid), sessionId: null, integrity: null, tokenDenied: false, elevated: false, elevationInferred: false, cmdlineState: 'ok', source: 'accept', ...extra })
 
 /** The facts store the test fills and factsOf answers from: the pid's facts as the targeted ask would give them. */
 const factsStore = (rows = new Map()) => { const f = (pid) => (rows.has(pid) ? rows.get(pid) : null); f.rows = rows; return f }
@@ -63,7 +67,7 @@ function entriesLog(log, { writeResult = null, throwOnWrite = 0 } = {}) {
 
 const made = (over = {}) => {
   const store = factsStore()
-  const r = createDarwinRedirector({ groups: GROUPS, home: HOME, factsOf: store, verdictWaitMs: 60, ...over })
+  const r = createDarwinRedirector({ groups: GROUPS, identify: ID, isOn: ON, factsOf: store, verdictWaitMs: 60, ...over })
   return { r, store }
 }
 const collect = (r, names) => { const got = []; for (const n of names) r.on(n, (x) => got.push([n, x])); return got }
@@ -92,7 +96,7 @@ test('a pid met at a door is ANNOUNCED once per life (exec, its targeted facts) 
   const told = collect(r, ['exec'])
   const m = await withAliveLoop(() => r.lookupIngress({ peer: PEER, user: 'claude-code.settings', target: target('api.anthropic.com') }))
   assert.deepEqual(told.map(([, f]) => [f.pid, f.source]), [[10, 'accept']], 'the tracker was told, with the facts it judges by')
-  assert.deepEqual([m.pid, m.form, m.decrypt], [10, 'claude-code.cli', false], 'no verdict: not decrypted, and no code of ours — the engine\'s policy arm says untracked for a pid the tracker holds no row of')
+  assert.deepEqual([m.pid, m.door, m.agent, m.decrypt], [10, 'claude-code.settings', 'claude-code', false], 'no verdict: not decrypted, and no code of ours — the engine\'s policy arm says untracked for a pid the tracker holds no row of')
   assert.equal(r.verdictOf(10).none, true, 'the tombstone is in the table: the wait happened once, not per connection')
   const after = await r.lookupIngress({ peer: PEER, user: 'claude-code.settings', target: target('api.anthropic.com') })
   assert.deepEqual([after.pid, after.decrypt], [10, false], 'the second connection is answered by the tombstone at once, no new wait')
@@ -123,21 +127,21 @@ test('start() has nothing to wait for (no helper, no watcher — D47 deleted the
   await r.close()
 })
 
-test('the table is what the doors taught it: procs()/pidsOf()/scan() say which form each met process is, and a path nobody measured has the user\'s name masked', async () => {
+test('the table is what the doors taught it: procs()/pidsOfGroup()/scan() say which harness the name list names for each met process and the door it came through (D51: who a process is is not its door)', async () => {
   const store = factsStore()
   for (const f of [facts(10, IMG.ccCli), facts(12, IMG.ccVscode), facts(13, IMG.codexNpm), facts(14, IMG.ccElsewhere, { elevated: true }), facts(30, IMG.syslogd)]) store.rows.set(f.pid, f)
   const byPeer = (q) => ({ pid: q.peer.port - 50000, source: 'socket-table', ms: 1 })
   // the lookups that teach: one per pid (the store answers each time a door meets one)
   const ctx = made({ routes: () => ({ 'claude-code.settings': route(), 'codex.env': route() }), ingress: () => INGRESS, factsOf: store, ownerOf: byPeer })
   for (const pid of [10, 12, 13, 14, 30]) await withAliveLoop(() => ctx.r.lookupIngress({ peer: { ...PEER, port: 50000 + pid }, user: pid === 13 ? 'codex.env' : 'claude-code.settings', target: target('api.anthropic.com') }))
-  assert.deepEqual(ctx.r.pidsOf('claude-code.cli'), [10])
-  assert.deepEqual(ctx.r.pidsOf('claude-code.vscode'), [12], 'two forms of one image, told apart by path')
-  assert.deepEqual(ctx.r.procs().map((p) => [p.pid, p.match.kind, p.match.id ?? null, p.elevated]), [
-    [10, 'form', 'claude-code.cli', false],
-    [12, 'form', 'claude-code.vscode', false],
-    [13, 'form', 'codex.cli', false],
-    [14, 'path-unknown', null, true],
-  ], 'what planRoutes takes as `procs`: forms and the images only an agent has; syslogd is nobody\'s (it was met, and matched nothing)')
+  assert.deepEqual(ctx.r.pidsOfGroup('claude-code.settings'), [10, 12, 14, 30])
+  assert.deepEqual(ctx.r.pidsOfGroup('codex.env'), [13])
+  assert.deepEqual(ctx.r.procs().map((p) => [p.pid, p.agent, p.names, p.door, p.elevated]), [
+    [10, 'claude-code', ['claude'], 'claude-code.settings', false],
+    [12, 'claude-code', ['claude'], 'claude-code.settings', false],
+    [13, 'codex', ['codex'], 'codex.env', false],
+    [14, 'claude-code', ['claude'], 'claude-code.settings', true],
+  ], 'what planRoutes takes as `procs`: the processes a name list names, by name not by path (an unmeasured install path is still claude); syslogd was met and is nobody\'s')
   const live = await ctx.r.scan()
   assert.deepEqual(live.map((f) => f.pid).sort((a, b) => a - b), [10, 12, 13, 14, 30], 'scan() answers the met processes as facts: a rescan re-judges exactly those')
 })
@@ -172,7 +176,7 @@ const ownerAlways = (a) => { const calls = []; const fn = async (q) => { calls.p
 function bed(over = {}) {
   const store = factsStore()
   for (const f of [facts(10, IMG.ccCli), facts(11, IMG.ccCli, { startedAt: 5000 }), facts(12, IMG.ccVscode), facts(13, IMG.codexNpm), facts(20, IMG.node, { cmdline: DSH_CMD }), facts(21, IMG.node, { cmdline: '/usr/local/bin/node /Users/u/work/server.js' }), facts(30, IMG.syslogd), facts(40, IMG.helperUtility, { cmdline: `${IMG.helperUtility} --type=utility` })]) store.rows.set(f.pid, f)
-  const r = createDarwinRedirector({ groups: GROUPS, home: HOME, factsOf: store, verdictWaitMs: 60, routes: () => ({ 'claude-code.settings': route(), 'codex.env': route(), 'deepseek-dsh.env': route() }), ingress: () => INGRESS, authOf: () => CRED, ...over })
+  const r = createDarwinRedirector({ groups: GROUPS, identify: ID, isOn: ON, factsOf: store, verdictWaitMs: 60, routes: () => ({ 'claude-code.settings': route(), 'codex.env': route(), 'deepseek-dsh.env': route() }), ingress: () => INGRESS, authOf: () => CRED, ...over })
   return { r, store }
 }
 const trust = (r, ...pids) => { for (const p of pids) r.watch(p, { decrypt: true, agent: 'x' }) }
@@ -192,7 +196,7 @@ test('a connection of a group the plan has turned off before the doors followed 
   const off = (over = {}) => route({ on: false, entry: null, reason: 'desired-off', ...over })
   const { r } = bed({ routes: () => ({ 'claude-code.settings': off(), 'codex.env': off({ upstream: HTTP_PROXY, bypass: BYPASS }), 'deepseek-dsh.env': off({ upstream: null }) }), ownerOf: o })
   const m = await ask(r, 'claude-code.settings', target('api.anthropic.com'))
-  assert.deepEqual(m, { pid: null, agent: 'claude-code', decrypt: false, capture: 'proxy', form: null, exe: null, upstream: { kind: 'direct' }, pid_source: null, pid_ms: null, negKey: 'claude-code.settings', skip: { not_captured: 'untracked', reason: 'group-off' } })
+  assert.deepEqual(m, { pid: null, agent: 'claude-code', decrypt: false, capture: 'proxy', door: 'claude-code.settings', exe: null, upstream: { kind: 'direct' }, pid_source: null, pid_ms: null, negKey: 'claude-code.settings', skip: { not_captured: 'untracked', reason: 'group-off' } })
   assert.equal(o.calls.length, 0, 'a connection that is spliced anyway does not wait for the owner question')
   assert.deepEqual((await ask(r, 'codex.env', target('api.openai.com'))).upstream, { kind: 'http', host: '127.0.0.1', port: 7897, auth: CRED }, 'it goes where the agent\'s own proxy leads, with the login, as for any connection')
   assert.deepEqual((await ask(r, 'codex.env', target('gateway.internal'))).upstream, { kind: 'direct' }, 'and the bypass table applies')
@@ -203,7 +207,7 @@ test('W16 a pid known and judged trusted: decrypt, the form, the harness, the re
   const o = owner({ pid: 10, source: 'socket-table', ms: 7 })
   const { r } = bed({ ownerOf: o })
   trust(r, 10)
-  assert.deepEqual(await ask(r, 'claude-code.settings'), { pid: 10, agent: 'claude-code', decrypt: true, capture: 'proxy', form: 'claude-code.cli', exe: IMG.ccCli, upstream: { kind: 'direct' }, pid_source: 'socket-table', pid_ms: 7, negKey: '10' })
+  assert.deepEqual(await ask(r, 'claude-code.settings'), { pid: 10, agent: 'claude-code', decrypt: true, capture: 'proxy', door: 'claude-code.settings', exe: IMG.ccCli, upstream: { kind: 'direct' }, pid_source: 'socket-table', pid_ms: 7, negKey: '10' })
   assert.deepEqual(o.calls, [{ peer: PEER }], 'the ask is the accepted socket\'s peer 4-tuple: targeted, not a whole-table read with candidates')
 })
 
@@ -212,7 +216,7 @@ test('W16 a pid known and judged untrusted (or not judged at all): not decrypted
   distrust(r, 10)
   const a = await ask(r, 'claude-code.settings')
   const b = await withAliveLoop(() => ask(r, 'claude-code.settings')) // pid 11 has no verdict: this is the wait the tombstone ends
-  assert.deepEqual([a.pid, a.form, a.decrypt, a.skip, b.pid, b.decrypt, b.skip], [10, 'claude-code.cli', false, undefined, 11, false, undefined])
+  assert.deepEqual([a.pid, a.door, a.decrypt, a.skip, b.pid, b.decrypt, b.skip], [10, 'claude-code.settings', false, undefined, 11, false, undefined])
 })
 
 test('W16 wrong-pid-never, the D47 shape: no pid from the socket (no row, two rows, a slow or unreadable table) is spliced untracked and never guessed at — there is no candidate set and no form-whole decrypt any more, the process IS the answer or there is none', async () => {
@@ -222,16 +226,16 @@ test('W16 wrong-pid-never, the D47 shape: no pid from the socket (no row, two ro
   assert.deepEqual([m.pid, m.decrypt, m.skip, m.negKey, m.exe], [null, false, { not_captured: 'untracked', reason: 'pid-unresolved' }, 'claude-code.settings', null], 'all of the form trusted and it does not matter: without the pid there is no process to decrypt')
 })
 
-test('W16 a process of ANOTHER form at this door (the open desktop door\'s shape) or of no form at all: forwarded, untracked, named for what it is — the door\'s own group\'s forms are the only ones it decrypts', async () => {
+test('W16 · W79 at a door, the name list says who a process is, not the door (D51⑥): a child on no list and syslogd are forwarded `not-an-agent`; codex at the claude door is codex, judged by its own verdict, through the claude group\'s upstream', async () => {
   const o = owner({ pid: 21, source: 'socket-table', ms: 4 }, { pid: 30, source: 'socket-table', ms: 4 }, { pid: 13, source: 'socket-table', ms: 4 })
-  const { r } = bed({ ownerOf: o })
+  const { r } = bed({ ownerOf: o, routes: () => ({ 'claude-code.settings': route({ upstream: HTTP_PROXY }), 'codex.env': route() }) })
   trust(r, 21, 30, 13)
   const child = await ask(r, 'claude-code.settings')
-  assert.deepEqual([child.pid, child.decrypt, child.skip, child.form ?? null, child.exe], [21, false, { not_captured: 'untracked', reason: 'not-a-process-of-form' }, null, IMG.node], 'a Node child of the agent connecting at the claude door: spliced, and the row says whose it was')
+  assert.deepEqual([child.pid, child.decrypt, child.skip, child.agent, child.door, child.exe], [21, false, { not_captured: 'untracked', reason: 'not-an-agent' }, 'claude-code', 'claude-code.settings', IMG.node], 'a Node child of the agent (an MCP server) at the claude door: spliced, and the row says whose it was — trusted in the table or not')
   const other = await ask(r, 'claude-code.settings')
-  assert.deepEqual([other.pid, other.decrypt, other.exe], [30, false, IMG.syslogd], 'syslogd at the door: the same refusal, however trusted the table says nobody is')
-  const wrongDoor = await ask(r, 'claude-code.settings')
-  assert.deepEqual([wrongDoor.pid, wrongDoor.decrypt, wrongDoor.skip.reason], [13, false, 'not-a-process-of-form'], 'codex\'s own process at the claude door — trusted, even — is not claude\'s door\'s to decrypt: the desktop door is open to every process, and this is the arm that keeps that safe')
+  assert.deepEqual([other.pid, other.decrypt, other.skip.reason, other.exe], [30, false, 'not-an-agent', IMG.syslogd], 'syslogd at the door: the same answer')
+  const codexAt = await ask(r, 'claude-code.settings')
+  assert.deepEqual([codexAt.pid, codexAt.agent, codexAt.door, codexAt.decrypt, codexAt.skip, codexAt.upstream], [13, 'codex', 'claude-code.settings', true, undefined, { kind: 'http', host: '127.0.0.1', port: 7897, auth: CRED }], 'codex at the claude door is codex (W79): its own verdict, the door group\'s upstream')
 })
 
 test('the desktop family at its own door (4.9 §2.3 · §6.4): the utility Helper that owns the model sockets is the desktop form by its real executable — spaces and all — and the main binary is the same form', async () => {
@@ -239,7 +243,7 @@ test('the desktop family at its own door (4.9 §2.3 · §6.4): the utility Helpe
   const { r } = bed({ routes: () => ({ 'claude-code.desktop': route() }), ingress: () => ({ ...INGRESS, groupPorts: { ...PORTS, 'claude-code.desktop': 18805 } }), ownerOf: o })
   r.watch(40, { decrypt: true, agent: 'claude-code' })
   const m = await ask(r, 'claude-code.desktop')
-  assert.deepEqual([m.pid, m.form, m.exe, m.decrypt], [40, 'claude-code.desktop', IMG.helperUtility, true], 'the Helper\'s exe came from lsof\'s txt record (factsOf): the whole path, not the word ps\'s split would leave')
+  assert.deepEqual([m.pid, m.agent, m.door, m.exe, m.decrypt], [40, 'claude-code', 'claude-code.desktop', IMG.helperUtility, true], 'the Helper\'s exe came from lsof\'s txt record (factsOf): the whole path, not the word ps\'s split would leave')
 })
 
 test('a form told by its command line is its form the moment the facts carry the command line (the targeted ask gives both in one shot): until the tracker has judged it, it is not decrypted', async () => {
@@ -247,7 +251,7 @@ test('a form told by its command line is its form the moment the facts carry the
   const { r, store } = bed({ routes: () => ({ 'z-code.cli': route() }), ownerOf: o })
   store.rows.set(41, facts(41, IMG.syslogd.replace('syslogd', 'ZCode'), { exe: '/Applications/ZCode.app/Contents/MacOS/ZCode', cmdline: ZCODE_CMD }))
   const m = await withAliveLoop(() => ask(r, 'z-code.cli'))
-  assert.deepEqual([m.pid, m.form, m.decrypt, m.skip], [41, 'z-code.cli', false, undefined], 'one process and it is not judged: not decrypted, with no code of ours — the tracker\'s reason rides the row')
+  assert.deepEqual([m.pid, m.agent, m.decrypt, m.skip], [41, 'z-code', false, undefined], 'one process and it is not judged: not decrypted, with no code of ours — the tracker\'s reason rides the row')
   trust(r, 41)
   assert.equal((await ask(r, 'z-code.cli')).decrypt, true)
 })
@@ -382,7 +386,7 @@ test('W16 end to end on the open door\'s shape: a connection of a process that i
   assert.match(child.issuer, /private origin CA/)
   await E.settled()
   assert.equal(E.flows.length, 1, 'one row')
-  assert.deepEqual([E.flows[0].decision, E.flows[0].not_captured, E.flows[0].pid, E.flows[0].agent, E.flows[0].reason], ['splice', 'untracked', 21, 'claude-code', 'not-a-process-of-form'])
+  assert.deepEqual([E.flows[0].decision, E.flows[0].not_captured, E.flows[0].pid, E.flows[0].agent, E.flows[0].reason], ['splice', 'untracked', 21, 'claude-code', 'not-an-agent'])
   assert.deepEqual([E.envelopes.length, E.failures.length], [0, 0])
 })
 
@@ -446,7 +450,7 @@ function wiredDoors(over = {}) {
   const log = []
   const d = doorsLog(log, over.doors)
   const e = entriesLog(log, over.entries)
-  const r = createDarwinRedirector({ groups: GROUPS, home: HOME, factsOf: factsStore(), verdictWaitMs: 60, entries: e, doors: d, routes: ROUTES, ingress: () => INGRESS, authOf: () => CRED, gate: () => ({ ok: true }), carried: () => ['deepseek-dsh.env'], ...over.redirector }) // dsh was on once (its entries may still exist), the plan has it off: carried, so its door stays forward-only
+  const r = createDarwinRedirector({ groups: GROUPS, identify: ID, isOn: ON, factsOf: factsStore(), verdictWaitMs: 60, entries: e, doors: d, routes: ROUTES, ingress: () => INGRESS, authOf: () => CRED, gate: () => ({ ok: true }), carried: () => ['deepseek-dsh.env'], ...over.redirector }) // dsh was on once (its entries may still exist), the plan has it off: carried, so its door stays forward-only
   return { r, d, e, log }
 }
 
@@ -517,7 +521,7 @@ test('a door nobody carries any more is closed on attach() too: the group went o
   const closed = []
   const doors = { open: async (l) => l.map((x) => ({ [x.id]: x.port })), close: async (ids) => { closed.push([...ids]) } }
   let carried = ['deepseek-dsh.env']
-  const r = createDarwinRedirector({ groups: GROUPS, home: HOME, factsOf: factsStore(), verdictWaitMs: 60, doors, entries: entriesLog([]), routes: ROUTES, ingress: () => INGRESS, authOf: () => CRED, gate: () => ({ ok: true }), carried: () => carried })
+  const r = createDarwinRedirector({ groups: GROUPS, identify: ID, isOn: ON, factsOf: factsStore(), verdictWaitMs: 60, doors, entries: entriesLog([]), routes: ROUTES, ingress: () => INGRESS, authOf: () => CRED, gate: () => ({ ok: true }), carried: () => carried })
   const first = await r.attach()
   assert.deepEqual([first.doors.open, closed], [['claude-code.settings', 'codex.env', 'deepseek-dsh.env'], []], 'the carried off group\'s door is forward-only')
   carried = [] // the uninstall took the records: nothing carries the group any more
@@ -639,7 +643,7 @@ test('what the redirector may do (static): it imports only the modules that matc
   const src = fs.readFileSync(new URL('../../../../src/collector/arch/darwin/redirector.mjs', import.meta.url), 'utf8')
   const code = src.replace(/\/\*[^]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '')
   const imports = [...code.matchAll(/^import .* from '([^']+)'/gm)].map((m) => m[1]).sort()
-  assert.deepEqual(imports, ['../../core/engine/door-redirector.mjs', './forms.mjs'], 'the door core (the win32 twin closed 4.9 OPEN 9: both arches dress ONE shared core) and darwin\'s forms; no rules.mjs (gone with the kernel, D47), no helper (none on darwin, 4.9 §1)')
+  assert.deepEqual(imports, ['../../core/engine/door-redirector.mjs'], 'the door core (the win32 twin closed 4.9 OPEN 9: both arches dress ONE shared core) — who a process is comes in as identify (D51); no rules.mjs (gone with the kernel, D47), no helper (none on darwin, 4.9 §1)')
   assert.equal(/\b(writeFile\w*|appendFile\w*|mkdir\w*|rename\w*|unlink\w*|rmSync|spawn\w*|execFile\w*|execSync|fork|createServer|fetch|child_process|process\.platform|reg add|setx)\b|\.connect\(/.test(code), false, 'no write, no process, no socket, no platform branch')
   assert.equal(/\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code)\b/i.test(code), false, 'arch names no harness: the groups it is given say it')
   assert.equal([...code.matchAll(/authOf\(|loginOf\(/g)].length, 0, 'the adapter itself holds no reference to a login: the one place a proxy reference is turned into a login (the core\'s loginOf) lives in the shared door core, out of every adapter')

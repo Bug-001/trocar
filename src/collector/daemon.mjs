@@ -44,9 +44,9 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
   // NO redirector is built here at all (arch/index.mjs's win32 arm says the same: loadParts makes no redirector on win32) and this parts view answers an empty process table —
   // the CLI's `on` plan and `status` read paths work without a collector dir; the daemon itself builds the real one with the dir. Measured on a Windows test machine: without
   // this, `asight on --yes` on Windows died at once with createWin32Collector's "needs the collector dir (~/.asight/collector)".
-  const redirector = A.os === 'win32' ? null : await A.createRedirector({ env, harnesses: list }) // the await is the point: darwin's collector is async (4.9 §1), and without it `redirector` here is a Promise — `scan()` throws TypeError (review F1, reproduced on the real call before this line); Linux's and win32's sync returns pass through the await untouched
-  // the registry judges by name on every OS (D51): it needs no redirector
+  // the registry judges by name on every OS (D51) and is built FIRST: the doors ask it (identify), the redirector does not feed it
   const registry = createRegistry(list, { agentList }) // agentList: readAgentList's entries (the user's ~/.asight/agents.json, D51③); the daemon swaps them in place
+  const redirector = A.os === 'win32' ? null : await A.createRedirector({ env, harnesses: list, identify: registry.match }) // the await is the point: darwin's collector is async (4.9 §1), and without it `redirector` here is a Promise — `scan()` throws TypeError (review F1, reproduced on the real call before this line); Linux's and win32's sync returns pass through the await untouched
   // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `asight on` says so (1.6 §1.1), it never enables it (R8)
   return { arch: A, os: A.os, harnesses: list, registry, scan: () => (redirector ? redirector.scan() : []), match: (f) => registry.match(f), linger: () => (redirector && typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (redirector && typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
 }
@@ -230,7 +230,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     // TypeError — the comment below used to claim the construction lived elsewhere; it does not, this ternary is the only construction the daemon has).
     // Linux keeps the plain core redirector.
     redirector = A.os === 'darwin' || A.os === 'win32'
-      ? await A.createRedirector({ env, dir, home: netHome, harnesses: harnessList, failure, event, manifest: () => readManifest(P.dir), desired: () => { const st = readState(P.state, () => {}, {}); return st.harnesses || {} } })
+      ? await A.createRedirector({ env, dir, home: netHome, harnesses: harnessList, failure, event, identify: registry.match, manifest: () => readManifest(P.dir), desired: () => { const st = readState(P.state, () => {}, {}); return st.harnesses || {} } })
       : A.createRedirector({ env })
     const bag = redirector && ((typeof redirector.darwin === 'object' && redirector.darwin) || (typeof redirector.win32 === 'object' && redirector.win32) || null) // the arch bag (darwin's or win32's wiring): what only the daemon reaches
     // D38: one `agent-untrusted` per pid and reason (code = the resolver's reason, reason = what to do about it); a pid

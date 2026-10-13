@@ -83,9 +83,10 @@ async function sandbox(harnessName, rels = []) {
  *  a lookup would. `over` reaches the redirector. */
 function rigged({ descriptors, box: b, marker = false, over = {} }) {
   const helper = { ready: Promise.resolve({ ready: true, proto: 1, pid: 55, native: true }), pid: 55, async call() { throw new Error('no verb in the rig') }, async close() {} }
-  const redirector = createWin32Redirector({ helper, groups: groupsOf(descriptors), home: HOME, ...over })
+  const registry = winRegistry(descriptors)
+  const redirector = createWin32Redirector({ helper, groups: groupsOf(descriptors), identify: registry.match, isOn: () => true, ...over })
   const tracker = createTracker({
-    redirector, registry: winRegistry(descriptors), trust: createTrustChecker({ caCertPem: b.pem }), home: b.home, alive: () => false, collectorDir: b.dir,
+    redirector, registry, trust: createTrustChecker({ caCertPem: b.pem }), home: b.home, alive: () => false, collectorDir: b.dir,
     installedAt: (l) => installedAt(b.m, l),
     osLayers: { win32: (d) => (d.win32 && d.win32.layers) || d.layers },
     ...(marker ? { markerDir: path.join(b.dir, 'run', 'trust'), caPem: path.join(b.dir, 'ca', 'asight-ca.pem'), markerToleranceMs: MARKER_TOLERANCE_MS } : {}),
@@ -280,5 +281,5 @@ test('W76 end to end: a Windows connection of a trusted process is decrypted and
   assert.equal(never.got, RESP)
   assert.match(never.issuer, /private origin CA/)
   await settled()
-  assert.deepEqual([flows[0].decision, flows[0].not_captured, flows[0].reason ?? null], ['splice', 'untracked', 'not-a-process-of-form'], 'a pid whose process is not this door\'s own form (svchost at the claude door): the splice says so — the missing gate is what it looks like, never a broken connection')
+  assert.deepEqual([flows[0].decision, flows[0].not_captured, flows[0].reason ?? null], ['splice', 'untracked', 'not-an-agent'], 'a pid whose process is not this door\'s own form (svchost at the claude door): the splice says so — the missing gate is what it looks like, never a broken connection')
 })

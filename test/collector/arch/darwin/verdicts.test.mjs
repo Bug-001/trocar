@@ -72,10 +72,11 @@ async function sandbox(harnessName, rels = []) {
 
 /** The tracker over a real darwin redirector, wired the way the daemon wires it (the osMatch rule, the layers, the manifest's installed_at, the marker's tolerance). `over` reaches the redirector. A pid met at a door is told as the redirector's own 'exec' (D47: the scan is gone; the door announces) — the tests drive the same event by hand. */
 function rigged({ descriptors, box: b, marker = false, over = {} }) {
-  const redirector = createDarwinRedirector({ groups: groupsOf(descriptors), home: HOME, ...over })
+  const registry = darwinRegistry(descriptors)
+  const redirector = createDarwinRedirector({ groups: groupsOf(descriptors), identify: registry.match, isOn: () => true, ...over })
   const procWatcher = redirector
   const tracker = createTracker({
-    redirector, registry: darwinRegistry(descriptors), trust: createTrustChecker({ caCertPem: b.pem }), home: b.home, alive: () => false, collectorDir: b.dir,
+    redirector, registry, trust: createTrustChecker({ caCertPem: b.pem }), home: b.home, alive: () => false, collectorDir: b.dir,
     installedAt: (l) => installedAt(b.m, l),
     osLayers: { darwin: (d) => (d.darwin && d.darwin.layers) || d.layers },
     ...(marker ? { markerDir: path.join(b.dir, 'run', 'trust'), caPem: path.join(b.dir, 'ca', 'asight-ca.pem'), markerToleranceMs: MARKER_TOLERANCE_MS } : {}),
@@ -213,7 +214,7 @@ test('D47 a z-code CLI that rewrote its whole command line to its title (`proces
     const announced = []
     // the tracker's half of the seam, faked: judge → watch. The door's half is the real one (matchForm over the real form data, ownerOf, factsOf)
     const redirector = createDarwinRedirector({
-      groups: GROUPS, home: HOME,
+      groups: GROUPS, identify: darwinRegistry().match, isOn: () => true,
       ownerOf: async () => ({ pid: 50, source: 'socket-table', ms: 4 }),
       factsOf: () => facts(50, IMG.zcode, { cmdline, argv: cmdline.split(/\s+/), startedAt: 1700000005000, startTicks: '1700000005000', source: 'accept' }),
       routes: () => ({ 'z-code.cli': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }),
@@ -222,7 +223,7 @@ test('D47 a z-code CLI that rewrote its whole command line to its title (`proces
     redirector.on('exec', (f) => { announced.push(f.pid); redirector.watch(f.pid, { decrypt: true, agent: 'z-code' }) })
     const meta = await redirector.lookupIngress({ peer: { address: '127.0.0.1', port: 51000 }, user: 'z-code.cli', target: { address: 'relay.asight.test', port: 443 } })
     assert.deepEqual(announced, [50], cmdline === 'zcode-cli' ? 'the rewritten-title CLI was announced at accept time' : 'the as-invoked CLI was announced at accept time')
-    assert.equal(meta.form, 'z-code.cli', `${cmdline}: the door named the form`)
+    assert.deepEqual([meta.agent, meta.door], ['z-code', 'z-code.cli'], `${cmdline}: the name list named z-code at its door`)
     assert.equal(meta.decrypt, true, `${cmdline}: the verdict arrived through watch(), not the 5 s tombstone`)
     assert.equal(meta.skip, undefined, `${cmdline}: nothing says untracked`)
     assert.equal(meta.agent, 'z-code')
@@ -239,7 +240,7 @@ test('D47b the z-code DESKTOP\'s app-server is the form at the door: an Electron
   for (const cmdline of ['zcode-cli', `${HELPER} /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs app-server --stdio`]) {
     const announced = []
     const redirector = createDarwinRedirector({
-      groups: GROUPS, home: HOME,
+      groups: GROUPS, identify: darwinRegistry().match, isOn: () => true,
       ownerOf: async () => ({ pid: 60, source: 'socket-table', ms: 4 }),
       factsOf: () => facts(60, HELPER, { cmdline, argv: cmdline.split(/\s+/), startedAt: 1700000006000, startTicks: '1700000006000', source: 'accept' }),
       routes: () => ({ 'z-code.cli': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }),
@@ -248,7 +249,7 @@ test('D47b the z-code DESKTOP\'s app-server is the form at the door: an Electron
     redirector.on('exec', (f) => { announced.push(f.pid); redirector.watch(f.pid, { decrypt: true, agent: 'z-code' }) })
     const meta = await redirector.lookupIngress({ peer: { address: '127.0.0.1', port: 51000 }, user: 'z-code.cli', target: { address: 'relay.asight.test', port: 443 } })
     assert.deepEqual(announced, [60], `${cmdline.slice(0, 40)}: the desktop's app-server was announced at accept time`)
-    assert.equal(meta.form, 'z-code.desktop', `${cmdline.slice(0, 40)}: the door named the DESKTOP form (the Helper binary is not the CLI form's image)`)
+    assert.equal(meta.door, 'z-code.cli', `${cmdline.slice(0, 40)}: the name list names the Helper's app-server z-code, whichever door it uses (D51⑥)`)
     assert.equal(meta.decrypt, true, `${cmdline.slice(0, 40)}: the verdict arrived through watch()`)
     assert.equal(meta.skip, undefined, `${cmdline.slice(0, 40)}: nothing says untracked`)
     assert.equal(meta.agent, 'z-code')
@@ -325,5 +326,5 @@ test('W76 end to end: a darwin connection of a trusted process is decrypted and 
   assert.equal(never.got, RESP)
   assert.match(never.issuer, /private origin CA/)
   await settled()
-  assert.deepEqual([flows[0].decision, flows[0].not_captured, flows[0].reason ?? null], ['splice', 'untracked', 'not-a-process-of-form'], 'the tracker has no row to say why, and the door says what the process was not: the splice is what a missing gate looks like, never a broken connection')
+  assert.deepEqual([flows[0].decision, flows[0].not_captured, flows[0].reason ?? null], ['splice', 'untracked', 'not-an-agent'], 'the tracker has no row to say why, and the door says what the process was not: the splice is what a missing gate looks like, never a broken connection')
 })

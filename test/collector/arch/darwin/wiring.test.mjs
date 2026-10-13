@@ -10,12 +10,14 @@ import { loadArch } from '../../../../src/collector/arch/index.mjs'
 import { createDarwinCollector } from '../../../../src/collector/arch/darwin/wiring.mjs'
 import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
+import { createRegistry } from '../../../../src/collector/core/registry.mjs'
 import { installCollector } from '../../../../src/collector/install.mjs'
 import { readManifest } from '../../../../src/collector/core/trust/journal.mjs'
 import { saveManifest } from '../../../../src/off/manifest.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
 const ALL = await loadHarnesses()
+const ID = createRegistry(ALL).match // what the daemon hands the collector: registry.match, built first (D51)
 const one = (name) => ALL.find((d) => d.name === name)
 const GROUPS = groupsOf(ALL)
 /** The scutil dictionary of a machine whose https traffic follows a local proxy (the VERGE of the win32 test, in scutil's own key names). */
@@ -84,7 +86,7 @@ async function rigged(names, { proxyDict = VERGE, desired = {}, rels = [], optIn
     env: { HOME: home }, dir, home, harnesses: ds,
     failure: (where, e, extra) => failures.push({ where, reason: String((e && e.message) || e), ...(extra || {}) }),
     event: (rec) => events.push(rec),
-    manifest: () => readManifest(dir), desired: () => state.desired, optIns: () => optIns,
+    manifest: () => readManifest(dir), desired: () => state.desired, optIns: () => optIns, identify: ID,
     deps,
   })
   redirector.darwin.bindDoors(doors) // what the daemon does the moment the engine exists (daemon.mjs's bindDoors arm)
@@ -206,7 +208,7 @@ test('the host sets of a host-tree form are applied at on and kept for status (t
   let ports = 18800
   const redirector = await createDarwinCollector({
     env: { HOME: home }, dir: path.join(home, '.asight', 'collector'), home, harnesses: [made],
-    failure: () => {}, event: () => {}, desired: () => ({ 'made-up': { desired: 'on', extra_hosts: ['extra.relay.example'] } }), optIns: () => [],
+    failure: () => {}, event: () => {}, desired: () => ({ 'made-up': { desired: 'on', extra_hosts: ['extra.relay.example'] } }), optIns: () => [], identify: ID,
     deps: { exec: box.exec, loadIngress: async () => ({ enginePort: 18790, groupPorts: { 'made-up.settings': ++ports }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }), isFree: async () => true, random: (n) => Buffer.alloc(n, 7), timers: fakeTimers().timers, watchSystemProxy: false },
   })
   await redirector.start()

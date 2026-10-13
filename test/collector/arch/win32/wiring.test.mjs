@@ -12,6 +12,7 @@ import { createWin32Collector } from '../../../../src/collector/arch/win32/wirin
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
+import { createRegistry } from '../../../../src/collector/core/registry.mjs'
 import { installCollector } from '../../../../src/collector/install.mjs'
 import { readManifest } from '../../../../src/collector/core/trust/journal.mjs'
 import { saveManifest } from '../../../../src/off/manifest.mjs'
@@ -20,6 +21,7 @@ import { regReadAllowed } from '../../../../src/collector/arch/win32/helper.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
 const ALL = await loadHarnesses()
+const ID = createRegistry(ALL).match // what the daemon hands the collector: registry.match, built first (D51)
 const one = (name) => ALL.find((d) => d.name === name)
 const sha = (b) => createHash('sha256').update(b).digest('hex')
 const EXE = Buffer.from('MZ fake asight-forwarder.exe, sixty kilobytes of nothing '.repeat(8))
@@ -82,7 +84,7 @@ async function rigged(names, { internet = VERGE, desired = {}, rels = [], optIns
     env: { HOME: home, USERPROFILE: home }, dir, home, harnesses: ds,
     failure: (where, e, extra) => failures.push({ where, reason: String((e && e.message) || e), ...(extra || {}) }),
     event: (rec) => events.push(rec),
-    manifest: () => readManifest(dir), desired: () => state.desired, optIns: () => optIns,
+    manifest: () => readManifest(dir), desired: () => state.desired, optIns: () => optIns, identify: ID,
     deps,
   })
   // the daemon owns the engine: bind the wiring's door slot to a recorder of listen({groups}) / closeGroups, as daemon.mjs does once both exist

@@ -113,7 +113,9 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   }
 
   async function judge(facts, prev, cause = null) {
-    const m = registry.match(facts)
+    // a host-tree door already said whose it is (4.8 §3: the editor carrying the harness's extension, named by the group's hosts.processes): not the name list's to say
+    const host = facts.hostAgent ? registry.get(facts.hostAgent) : null
+    const m = host ? { agent: host.name, descriptor: host, reason: 'match' } : registry.match(facts)
     if (!m.agent) {
       // an agent that exec'd into a program no descriptor matches has left the table as surely as one that exited:
       // the daemon records agent-exit and drops its conditions and negative-cache entries (D-24, review D1-4)

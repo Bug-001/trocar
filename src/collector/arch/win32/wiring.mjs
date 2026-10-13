@@ -30,7 +30,6 @@ import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { MARKER_TOLERANCE_MS } from '../../core/trust/confirm.mjs'
 import { collectorDir } from '../../../off/paths.mjs'
-import { matchForm } from './forms.mjs'
 
 /** The gate `attach()` asks before it writes a group's proxy entry (4.8 W19; the Task 8(b) review made it the redirector's required argument): Codex's and
  *  Hermes's lines join a block their trust entry wrote, and may not be written before the journal's four W19 conditions hold. They hold (landed with the
@@ -51,15 +50,16 @@ const movedRoute = (a, b) => !a || !b || a.on !== b.on || JSON.stringify(a.upstr
  *   Everything is injected through `deps` for a test.
  *   failure (where, error, extra)  the daemon's failure recorder · event (record)  its event writer (netenv-change, the helper's own records)
  *   manifest  () → the manifest as it is NOW (the daemon re-reads it; null reads it here) · desired  () → state.json's `harnesses` (`{ <id>: { desired, extra_hosts } }`)
+ *   identify  (facts) → registry.match's answer: the D51 name list the daemon built BEFORE this collector (the same function the tracker judges by);
+ *             required with a dir (the daemon), a no-dir shell holds no door and gets a stand-in that names nobody
  *   optIns    () → the groups or forms the user named and asight has the record of; the default (null) DERIVES them from the manifest's `optin-*` entries
  *              (4.9 §6.4's wiring arm, the darwin twin's rule: without it a daemon that restarts after `on … --opt-in <item>` re-plans the group as unnamed
  *              → the entry points at a port with no listener)
  */
-export async function createWin32Collector({ env = process.env, dir, home = env.USERPROFILE || os.homedir(), harnesses = [], failure = () => {}, event = () => {}, manifest = null, desired = () => ({}), optIns = null, deps = {} } = {}) {
+export async function createWin32Collector({ env = process.env, dir, home = env.USERPROFILE || os.homedir(), harnesses = [], failure = () => {}, event = () => {}, manifest = null, desired = () => ({}), optIns = null, identify = null, deps = {} } = {}) {
   if (!dir) throw new TypeError('createWin32Collector needs the collector dir (~/.asight/collector)')
   const fs = deps.fs || nodeFs
   const groups = groupsOf(harnesses)
-  const forms = groups.flatMap((x) => x.forms)
   const ctx = { // the daemon's own ctx (4.8 §2.2): its env is not the install shell's, and priorOf reads the manifest's records by harness and entry, not by files(ctx)
     os: 'win32', home, env: new Map(Object.entries(env || {}).filter(([, v]) => typeof v === 'string')), running: [],
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } },
@@ -98,6 +98,9 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
     return groups.filter((x) => optinRecordsOf(m, x).length > 0).flatMap((x) => [x.g, ...x.forms.map((f) => f.id)])
   }
   const carriedOf = () => new Set(groups.filter((x) => proxyRecordsOf(manifestNow(), x.group, x.harness).length > 0 || optinRecordsOf(manifestNow(), x).length > 0).map((x) => x.g)) // installed, once on, or opted in (the opt-in's own record)
+  const isOn = (harness) => { const d = (desired() || {})[harness]; return (typeof d === 'string' ? d : d && d.desired) === 'on' } // the door's desired-state question (route-plan's own `wanted` rule)
+  if (dir && typeof identify !== 'function') throw new TypeError('the collector needs identify (registry.match): the daemon builds the registry first and hands it in')
+  const who = typeof identify === 'function' ? identify : () => ({ agent: null, descriptor: null, reason: 'no-match' }) // the no-dir shell: no door, nobody to name
   const extraHostsOf = (harness) => { const h = (desired() || {})[harness]; return h && Array.isArray(h.extra_hosts) ? h.extra_hosts : [] }
   const appliedHosts = new Map() // form id → the host set the last plan applied; `status` compares it with a fresh read
   let redirector = null
@@ -136,7 +139,8 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
     helper, groups, home, ownerOf, factsOf, doors,
     routes: () => plan, ingress,
     authOf: (ref) => resolveLogin(ref, { groups, ctx, manifest: manifestNow(), hkcuEnv }), // the closure reads the `let` as it is at call time: the watcher keeps it current
-    onFailure: (rec) => event(rec), entries, gate: w19Gate,
+    onFailure: (rec) => event(rec), onEvent: (rec) => event(rec), entries, gate: w19Gate,
+    identify: who, isOn,
     hostsOf: (f) => { const s = appliedHosts.get(f.id); return s ? s.hosts : null },
     carried: () => [...carriedOf()],
     ...(deps.now ? { now: deps.now } : {}),

@@ -379,7 +379,7 @@ test('the doors the engine is asked for: the desktop group\'s door takes no cred
   const opened = []
   const doors = { open: async (list) => { opened.push(list.map(({ id, port, auth, token }) => ({ id, port, auth, token: token ?? null }))); return list.map((x) => ({ [x.id]: x.port })) }, close: async () => {} }
   const entries = { write: async (l) => l.map((x) => ({ g: x.g, ok: true })), undo: async () => [], check: async () => [] }
-  const r = createDarwinRedirector({ groups, home: '/Users/u', routes: () => routes, ingress: () => ({ enginePort: 17990, groupPorts: ports, ingressToken: 'a'.repeat(32), listenerToken: LISTENER_TOKEN }), doors, entries, gate: () => ({ ok: true }) })
+  const r = createDarwinRedirector({ groups, identify: () => ({ agent: null, reason: 'no-match' }), isOn: () => true, routes: () => routes, ingress: () => ({ enginePort: 17990, groupPorts: ports, ingressToken: 'a'.repeat(32), listenerToken: LISTENER_TOKEN }), doors, entries, gate: () => ({ ok: true }) })
   await r.attach()
   assert.deepEqual(opened, [[
     { id: 'claude-code.settings', port: GROUP_PORT, auth: true, token: LISTENER_TOKEN },

@@ -11,10 +11,10 @@
 //     itself: written before the door stands, an agent would point at a dead port); `off` undoes the entries and leaves the carried doors forward-only.
 //   · identity is read FROM THE SOCKET AT ACCEPT TIME (4.9 §5.3, D47): the agent connects to the door itself, so the engine's peer 4-tuple IS the agent's
 //     outbound socket — ONE targeted owner question (`ownerOf`, the arch backend: lsof on darwin, GetExtendedTcpTable through the resident helper on win32)
-//     answers its pid, ONE targeted facts question (`factsOf`) answers that pid's facts for the form, cached per process life. No scan, no poll, no debounce:
+//     answers its pid, ONE targeted facts question (`factsOf`) answers that pid's facts for the name list (`identify`), asked per connection. No scan, no poll, no debounce:
 //     the peer process is alive by definition — it just connected.
 //   · the splice/decrypt decision (lookupIngress below) and the verdict announce-and-wait seam to the tracker ('exec' → `watch(pid, …)`).
-// What each arch injects: `matchForm` (its forms module), `ownerOf` / `factsOf` (its targeted identity backends), `directCount` (its established-connections
+// What each arch injects: `ownerOf` / `factsOf` (its targeted identity backends), `directCount` (its established-connections
 // table), and an optional resident `companion` (win32's read-only PowerShell helper: its ready line is `start()`'s, its close is `close()`'s, its protocol
 // `expectedProto`; darwin has none — ps, lsof and scutil are plain CLIs, run on demand).
 //
@@ -22,8 +22,13 @@
 // are the only places that do. Node built-ins and the injected questions only; nothing here execs anything itself.
 import { EventEmitter } from 'node:events'
 import { bypassHit } from '../upstream-shape.mjs'
+import { processNames, WIDE } from '../../../off/identity.mjs'
+import { UNTRACKED_REASONS } from '../../../health/codes.mjs'
 
-const untracked = (reason) => ({ not_captured: 'untracked', reason }) // the row's code for a connection whose process is not one the table can vouch for
+/** The row's code for a connection whose process is not one the table can vouch for; the reason is one of the closed set (a typo is a throw, not a new code). */
+const untracked = (reason) => { if (!UNTRACKED_REASONS.includes(reason)) throw new Error(`untracked reason ${reason} is not in UNTRACKED_REASONS`); return { not_captured: 'untracked', reason } }
+// registry.match's reasons that are not a harness (4.8 §5.3, 4.6 §识别进程) → the door's untracked reason; args-mismatch / no-match are `not-an-agent`
+const UNMATCHED = Object.freeze({ excluded: 'agent-helper', pending: 'cmdline-pending', ambiguous: 'ambiguous' })
 const msgOf = (e) => String((e && e.message) || e)
 
 /** How long a lookup waits for the tracker's verdict of a pid it just met: the judge is file reads (fast); the cap only bites when the judge never answers
@@ -38,19 +43,20 @@ function loginOf(g, up, authOf) {
 }
 
 /**
- * createDoorRedirector({ groups, home, ownerOf, factsOf, routes, ingress, authOf, onFailure, doors, entries, gate, carried, matchForm, directCount, companion, now, verdictWaitMs })
+ * createDoorRedirector({ groups, ownerOf, factsOf, routes, ingress, authOf, onFailure, onEvent, doors, entries, gate, carried, hostsOf, identify, isOn, ownUid, directCount, companion, now, verdictWaitMs })
  *   → the Redirector (an EventEmitter) — what arch/<os>/redirector.mjs returns after it dressed this core with its backends.
  *   groups    `groupsOf(descriptors)` (the arch's route-plan.mjs): `[{ g, harness, group, forms, proxy }]`, the harness files' OS data
- *   home      the user's home directory: `form-path-unknown` masks the user's name wherever the home is (the arch forms.mjs `formPathShape`)
  *   ownerOf   `({ peer: { address, port } }) → { pid, source, ms } | null` (the arch socktable's `ownerOfSocket`, bound to the arch's runner by the wiring):
  *             the owner of the accepted socket's peer end — the AGENT's own socket — read targeted at accept time; no candidates, no known table (D47)
  *   factsOf   `(pid) → ProcFacts | null` (the arch procinfo's `factsOfPid`, bound the same way): the pid's facts — its real executable, command line and start
- *             time — for the form match and the tracker's judgement; null = the pid is gone (not an error)
+ *             time (darwin: and its uid) — for `identify` and the tracker's judgement; null = the pid is gone or unreadable (`facts-unavailable`)
  *   routes    `() → planRoutes' result` ({ [group id]: { on, upstream, bypass, … } }): what the plan says NOW; the daemon re-plans when the system proxy or
  *             `desired` changes, so it is read at every lookup and every attach
  *   ingress   `() → loadIngressConfig's result` (`{ enginePort, groupPorts, ingressToken, listenerToken }`)
  *   authOf    `(auth_ref) → { username, password } | null`: the login a reference names
  *   onFailure the failure sink (the daemon's recorder): a record shaped `{ event: 'failure', where, code, reason }`
+ *   onEvent   the state-event sink (the same recorder): `{ event: 'process-unknown', where: 'engine', harness, door, name, wide, pid, reason }` — a process
+ *             on no name list used a door; one per (door group, name) in this redirector's life, never its command line (it may hold a key)
  *   doors     `{ open(list), close(ids) }` — the engine's door half, LATE-BOUND by the wiring's `bindDoors` (the daemon owns the engine and calls it after
  *             both exist): `open([{ id, port, auth, token? }])` binds one loopback listener per group (idempotent per id, engine.mjs), `close(ids)` stops
  *             accepting on those doors (connections in flight drain). Both may be absent (the lazy shell): `attach()` then refuses with its own TypeError.
@@ -61,10 +67,13 @@ function loginOf(g, up, authOf) {
  *   carried   `() → Iterable<group id> | null` (default: none): the groups whose entries may still exist and may therefore keep a forward-only door while the
  *             plan has them off (audit F7's other side: the wiring that knows the manifest says which ones; not saying is "no group")
  *   hostsOf   `(form) → [host] | null` (default: null): the APPLIED host set of a host-tree form (route-plan.mjs hostSetOf — the plan's last answer). A form that
- *             declares `hosts` lives in a host process tree (an editor carrying many extensions): its door reaches the engine ONLY for the targets on that set,
- *             every other connection of the program is forwarded, untracked — the arm the kernel's per-host rules used to hold (4.8 §3), moved into the door.
- *   matchForm the arch's own `(forms, { exe, cmdline }, { home }) → { kind: 'form', id } | { kind: 'none' } | …` (its forms.mjs) — which form a door's
- *             process is (the tracker then judges it by the D51 name list; the door takes registry.match in T7). Required: the core knows no OS's forms.
+ *             declares `hosts` lives in a host process tree (an editor carrying many extensions): a process named in its `hosts.processes` reaches the
+ *             engine ONLY for the targets on that set, as the door's harness (`hostAgent`); its other connections are forwarded, untracked (4.8 §3).
+ *   identify  `(facts) → { agent, reason, harness?, candidates? }` — registry.match, the D51 name list (required; the same function the tracker judges by,
+ *             so the door and the tracker never disagree on who a process is, W76). Identity and the door are apart (D51⑥): a process on the list is its
+ *             own harness's at whichever door it connects to; the upstream is still that door group's.
+ *   isOn      `(harness) → boolean` (required): the harness's desired state; a process of a harness that is off is `harness-off` and never judged
+ *   ownUid    this daemon's uid (default `process.getuid?.()`): a process whose facts carry another `uid` is `other-user` (darwin; win32's helper sees one session)
  *   directCount the arch's own `async (pid) → { count, error }` — how many of the process's established connections do not go to a group's door on loopback,
  *             what `status` shows as "still going direct". `{ count: null, error }` when it cannot be told — unknown, never 0 (D-17).
  *   companion `{ ready: async () => { pid?, proto?, build? }, close: async () => {}, proto } | null` — the arch's resident read-only helper (win32's), whose
@@ -74,18 +83,20 @@ function loginOf(g, up, authOf) {
  *   a process that dies simply stops connecting; its verdict row stays until the pid is met again with another start time (a wrapped pid is a new life,
  *   asked again — the facts cache keys by pid + startedAt).
  */
-export function createDoorRedirector({ groups, home = null, ownerOf = null, factsOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, doors = null, entries = null, gate = null, carried = () => null, hostsOf = () => null, matchForm = null, directCount = null, companion = null, now = Date.now, verdictWaitMs = VERDICT_WAIT_MS } = {}) {
+export function createDoorRedirector({ groups, ownerOf = null, factsOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, onEvent = () => {}, doors = null, entries = null, gate = null, carried = () => null, hostsOf = () => null, identify = null, isOn = null, ownUid = process.getuid?.() ?? null, directCount = null, companion = null, now = Date.now, verdictWaitMs = VERDICT_WAIT_MS } = {}) {
   if (!Array.isArray(groups)) throw new TypeError('createDoorRedirector needs the groups (the arch route-plan.mjs groupsOf)')
-  if (typeof matchForm !== 'function') throw new TypeError('createDoorRedirector needs the arch\'s matchForm (its forms.mjs): which form a process is has no OS-neutral answer')
+  if (typeof identify !== 'function') throw new TypeError('createDoorRedirector needs identify (registry.match): who a process is comes from the D51 name list, the one the tracker judges by')
+  if (typeof isOn !== 'function') throw new TypeError('createDoorRedirector needs isOn (the desired state of a harness): a process of a harness that is off is never judged')
   if (typeof directCount !== 'function') throw new TypeError('createDoorRedirector needs the arch\'s directCount (its established-connections table): how many of a process\'s connections still go direct has no OS-neutral answer')
   const ev = new EventEmitter()
-  const forms = groups.flatMap((x) => x.forms) // in the order the harness files list them: matchForm tries a shared image's forms in that order
   const byGroup = new Map(groups.map((x) => [x.g, x]))
-  const byForm = new Map(groups.flatMap((x) => x.forms.map((f) => [f.id, { form: f, g: x.g, harness: x.harness }])))
+  const factsOfEntry = (x) => (x.facts && x.host ? { ...x.facts, hostAgent: x.host } : x.facts) // what the tracker is told of a met pid
+  const agentOf = (facts) => { if (!facts) return null; if (facts.hostAgent) return facts.hostAgent; const m = identify(facts) || {}; return m.reason === 'match' ? m.agent ?? null : null }
   let info = { pid: null, proto: null, build: null } // the companion's ready line (a resident helper's pid, protocol, build), or the all-null answer of an arch without one; set by start()
 
   // ---- identity: the socket at accept time (D47) ------------------------------------------------------------------------------------------------------
-  const factsCache = new Map() // pid → { startedAt, facts } — the last life this pid was met in (for scan() and procs()); nothing sweeps
+  const factsCache = new Map() // pid → { startedAt, facts, door, host } — the last life this pid was met in, the door group it last came through and the harness a host-tree door gave it (for scan() and procs()); nothing sweeps
+  const unknownSaid = new Set() // `${door group}\0${name}`: process-unknown is written once per (door group, name) in this life — bounded
   const factsInflight = new Map() // pid → Promise<facts | null> — concurrent lookups of one new pid share the ask
   const verdicts = new Map() // pid → { decrypt, agent, startedAt }: what the tracker judged (4.8 §5.4), keyed to the life it judged; a process it has not judged has none, which is "not trusted"
   const waiting = new Map() // pid → { promise, answer(v) } — the lookups waiting for the tracker's watch() of a pid just met
@@ -97,7 +108,9 @@ export function createDoorRedirector({ groups, home = null, ownerOf = null, fact
   function factsCached(pid) {
     if (factsInflight.has(pid)) return factsInflight.get(pid)
     const ask = Promise.resolve().then(() => (typeof factsOf === 'function' ? factsOf(pid) : null)).then((facts) => {
-      factsCache.set(pid, { startedAt: facts && facts.startedAt != null ? facts.startedAt : null, facts })
+      const prev = factsCache.get(pid)
+      const startedAt = facts && facts.startedAt != null ? facts.startedAt : null
+      factsCache.set(pid, { door: prev ? prev.door : null, host: prev && prev.startedAt === startedAt ? prev.host : null, startedAt, facts }) // a host-tree door's harness is this life's
       return facts
     }).finally(() => { factsInflight.delete(pid) })
     factsInflight.set(pid, ask)
@@ -151,6 +164,16 @@ export function createDoorRedirector({ groups, home = null, ownerOf = null, fact
     }
   }
 
+  /** process-unknown (4.6 §记录, a state event, expected): a process on no name list used the door — once per (door group, name) in this life, with its
+   *  first name and whether that name is one of the wide ones (an interpreter: the user's entry would need an args pattern). Never its command line. */
+  function said(door, facts, pid) {
+    const name = processNames(facts)[0] ?? null
+    const key = `${door.g}\0${name}`
+    if (unknownSaid.has(key)) return
+    unknownSaid.add(key)
+    try { onEvent({ event: 'process-unknown', where: 'engine', harness: door.harness, door: door.g, name, wide: name != null && WIDE.has(name), pid, reason: `${name ?? 'a process'} (pid ${pid}) used the ${door.g} door but is on no name list: its connections are forwarded, not captured; add it to ~/.asight/agents.json to capture it` }) } catch { /* the sink's own failure is the sink's */ }
+  }
+
   const entryOf = (g) => ({ g, harness: byGroup.get(g).harness, entry: ((routes() || {})[g] || {}).entry ?? null })
 
   /** The doors the engine should hold for the plan as it is now: a group that is on, or carried while off, with a port, a supported form and an upstream —
@@ -167,7 +190,7 @@ export function createDoorRedirector({ groups, home = null, ownerOf = null, fact
       if (!r) continue // the plan has no answer yet: nothing to hold and nothing to say
       if (r.on !== true && !mayCarry.has(x.g)) continue // off and never installed or opted in: no door at all (audit F7)
       const port = (ing.groupPorts || {})[x.g]
-      const supported = x.forms.some((f) => f.supported === true && f.match)
+      const supported = x.forms.some((f) => f.supported === true)
       const why = !r.upstream ? 'no-upstream' : !Number.isInteger(port) ? 'no-port' : !supported ? 'no-supported-form' : x.group.auth === false && r.upstream.credentialed ? 'login-on-open-port' : null
       if (why) { skipped.push({ g: x.g, reason: why }); continue }
       wanted.push({ g: x.g, port, on: r.on === true, auth: x.group.auth !== false })
@@ -181,10 +204,12 @@ export function createDoorRedirector({ groups, home = null, ownerOf = null, fact
      *  nobody holds, or a target on this machine's own loopback (a loop through the door, not a flow — nothing legitimate asks a door to reach itself).
      *  An AGENT's connection of a group that is not on (the plan flipped before the doors followed) is served, not refused: a spliced meta, no identity
      *  asked for, the group's upstream, `skip` = `untracked` · `group-off`.
-     *  The meta: `pid` (or null) · `agent` the door's harness · `decrypt` (the tracker's verdict of the pid this socket belongs to — never a process the
-     *  door's own form does not claim) · `capture: 'proxy'` · `form` · `exe` · `upstream` (`{kind:'direct'}`, or the group's with its login: the ingress
-     *  uses it for this one connection and keeps only whether there was one) · `pid_source` · `pid_ms` · `negKey` (the pid, or the door's group when there
-     *  is none: forms must not poison one another's negative cache, 4.8 §5.5) · `skip`, only when it is not decrypted and the table has no verdict to say why.
+     *  The meta: `pid` (or null) · `agent` the harness the name list names (the door's harness when it names none) · `decrypt` (the tracker's verdict of
+     *  the pid this socket belongs to — never a process the list does not name) · `capture: 'proxy'` · `door` the group id · `exe` · `upstream`
+     *  (`{kind:'direct'}`, or the door group's with its login: the ingress uses it for this one connection and keeps only whether there was one) ·
+     *  `pid_source` · `pid_ms` · `negKey` (the pid, or the door's group when there is none: doors must not poison one another's negative cache, 4.8 §5.5)
+     *  · `skip`, only when it is not decrypted and the table has no verdict to say why. The order (4.8 §5.3): pid → facts → this user → host tree →
+     *  name list → desired state → the tracker's verdict.
      *  Rejects, with `code: 'upstream-unavailable'`, a `why` (`no-upstream`, `upstream-credentials-unavailable`) and no login in the message, when the
      *  upstream cannot be dialled: the ingress then writes its own `upstream-unavailable` failure and answers 502. */
     async lookupIngress({ peer, user, target }) {
@@ -195,42 +220,46 @@ export function createDoorRedirector({ groups, home = null, ownerOf = null, fact
       if ((target.address === '127.0.0.1' || target.address === 'localhost') && Number.isInteger(ownPort) && target.port === ownPort) return null // a CONNECT at the door's own address is a loop through the door, not a flow — nothing legitimate asks a door to reach itself. Any other loopback target (a local model server) is a flow like any other
       if (route.on !== true) { // the plan has this group off: an agent's connection that still arrives is the plan flipped before the doors followed, and is served
         if (!route.upstream) return null // nothing to serve it with: refused
-        return { pid: null, agent: door.harness, decrypt: false, capture: 'proxy', form: null, exe: null, upstream: upstreamFor(door.g, route, target.address), pid_source: null, pid_ms: null, negKey: door.g, skip: untracked('group-off') }
+        return { pid: null, agent: door.harness, decrypt: false, capture: 'proxy', door: door.g, exe: null, upstream: upstreamFor(door.g, route, target.address), pid_source: null, pid_ms: null, negKey: door.g, skip: untracked('group-off') }
       }
       const upstream = upstreamFor(door.g, route, target.address) // before the identity is asked: a connection that cannot be dialled should not wait on it (and one with nothing to dial is refused with its own why)
       const { pid, source, ms } = await owningPid(peer)
-      let form = null
-      let exe = null
-      let decrypt = false
-      if (pid != null) {
-        const facts = await factsCached(pid)
-        if (facts) {
-          exe = facts.exe // the row says whose connection it was, whichever way it is judged
-          const m = matchForm(forms, { exe: facts.exe, cmdline: facts.cmdline }, { home })
-          const row = m.kind === 'form' ? byForm.get(m.id) : null
-          if (row && row.g === door.g) { // this door's own form: the connection is this process's to decrypt (another group's form at this door — the open desktop door's shape — is forwarded, untracked)
-            form = row.form
-            if (form.hosts) { // a host-tree form (4.8 §3): only the connections to its host set reach the engine, the program's others are forwarded — the arm the kernel's per-host rules used to hold
-              const set = hostsOf(form)
-              const host = String(target.address || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-              const hit = Array.isArray(set) && set.some((h) => typeof h === 'string' && (host === h || host.endsWith(`.${h}`)))
-              if (!hit) return { pid, agent: door.harness, decrypt: false, capture: 'proxy', form: null, exe, upstream, pid_source: source, pid_ms: ms, negKey: pid != null ? String(pid) : door.g, skip: untracked('outside-host-set') }
-            } else {
-              const v = await verdictOf(pid, facts)
-              decrypt = !!(v && v.decrypt === true)
-            }
-          }
+      // the meta every answer shares: the door's group, its upstream (the one this process would use without asight), the door's harness until the name list says otherwise
+      const base = { pid, agent: door.harness, decrypt: false, capture: 'proxy', door: door.g, exe: null, upstream, pid_source: source, pid_ms: ms, negKey: pid != null ? String(pid) : door.g }
+      const spliced = (why, over = {}) => ({ ...base, ...over, skip: untracked(why) })
+      if (pid == null) return spliced('pid-unresolved') // never a guessed pid (4.8 W4)
+      const facts = await factsCached(pid)
+      if (!facts) return spliced('facts-unavailable') // gone between the accept and the ask, or unreadable: not the same as "not an agent" (4.8 §5.3)
+      const exe = facts.exe ?? null // the row says whose connection it was, whichever way it is judged
+      const held = factsCache.get(pid)
+      if (held) held.door = door.g
+      if (facts.uid != null && ownUid != null && facts.uid !== ownUid) return spliced('other-user', { exe }) // another user's process (the facts' uid, where the OS gives one): never judged, never decrypted
+      let agent = null
+      let hosted = false
+      const hostForm = door.forms.find((f) => f.hosts)
+      if (hostForm) { // a host-tree group (4.8 §3): the host program itself is the door harness's carrier, but only for the targets on the applied host set
+        const names = processNames(facts)
+        const hostNames = (hostForm.hosts.processes || []).map((n) => String(n).toLowerCase())
+        if (names.some((n) => hostNames.includes(n))) {
+          const set = hostsOf(hostForm)
+          const host = String(target.address || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+          const hit = Array.isArray(set) && set.some((h) => typeof h === 'string' && (host === h || host.endsWith(`.${h}`)))
+          if (!hit) return spliced('outside-host-set', { exe })
+          agent = door.harness
+          hosted = true
+          if (held) held.host = agent // a rescan re-tells it as the host's, never re-asks the name list
         }
       }
-      // a connection this door's own form owns but its process does not trust is spliced with the tracker's own reason (the engine's policy arm, flow.mjs
-      // skipOf): only a connection with no pid to vouch for, or one whose process is not this door's form, carries the table's untracked code here
-      const why = pid == null ? 'pid-unresolved' : form ? null : 'not-a-process-of-form'
-      return {
-        pid, agent: door.harness, decrypt, capture: 'proxy',
-        ...(form ? { form: form.id } : {}), exe,
-        upstream, pid_source: source, pid_ms: ms, negKey: pid != null ? String(pid) : door.g,
-        ...(!decrypt && why ? { skip: untracked(why) } : {}),
+      if (!agent) {
+        const m = identify(facts) || {}
+        if (m.reason === 'match' && m.agent) agent = m.agent
+        else if (UNMATCHED[m.reason]) return spliced(UNMATCHED[m.reason], { exe }) // pending is not cached anywhere: the next connection asks again (W78)
+        else { said(door, facts, pid); return spliced('not-an-agent', { exe }) }
       }
+      if (!isOn(agent)) return spliced('harness-off', { agent, exe })
+      const v = await verdictOf(pid, hosted ? { ...facts, hostAgent: agent } : facts)
+      // a process this list names but whose trust is not confirmed is spliced with the tracker's own reason (the engine's policy arm, flow.mjs skipOf)
+      return { ...base, agent, exe, decrypt: !!(v && v.decrypt === true) }
     },
 
     /** `on`: the doors first, then the entries (the pointing itself — written before the door stands, an agent would point at a port with nothing behind it,
@@ -318,7 +347,7 @@ export function createDoorRedirector({ groups, home = null, ownerOf = null, fact
     /** The live processes the doors have MET, as facts — the table is what connections taught (nothing is swept, D47): a rescan re-judges exactly the pids
      *  that are still connecting, and a pid nobody meets anymore is forgotten by the same rule. */
     async scan() {
-      return [...factsCache.values()].map((x) => x.facts).filter(Boolean)
+      return [...factsCache.values()].map(factsOfEntry).filter(Boolean)
     },
     unreadable: () => [], // no table of unreadable rows exists any more: the targeted ask either answers a row or the pid is gone
 
@@ -333,9 +362,10 @@ export function createDoorRedirector({ groups, home = null, ownerOf = null, fact
     unwatch(pid) { verdicts.delete(pid) },
     verdictOf: (pid) => (verdicts.has(pid) ? { ...verdicts.get(pid) } : null),
 
-    /** The pids of the processes that are `form`, and what `planRoutes` takes as `procs`: `[{ pid, match, elevated }]` for every process the doors have met
-     *  that is, or might be, a form's. */
-    pidsOf: (form) => [...factsCache.entries()].filter(([, x]) => { const m = x.facts ? matchForm(forms, { exe: x.facts.exe, cmdline: x.facts.cmdline }, { home }) : null; return m && m.kind === 'form' && m.id === form }).map(([pid]) => pid),
-    procs: () => [...factsCache.entries()].map(([pid, x]) => ({ pid, match: x.facts ? matchForm(forms, { exe: x.facts.exe, cmdline: x.facts.cmdline }, { home }) : { kind: 'none' }, elevated: x.facts ? x.facts.elevated : null })).filter((p) => p.match.kind !== 'none'),
+    /** What `planRoutes` takes as `procs`: `[{ pid, agent, names, door, elevated }]` for every process the doors have met that a name list (or a host-tree
+     *  door) names — `door` the group it last came through. */
+    procs: () => [...factsCache.entries()].map(([pid, x]) => ({ pid, agent: agentOf(factsOfEntry(x)), names: x.facts ? processNames(x.facts) : [], door: x.door ?? null, elevated: x.facts ? x.facts.elevated ?? null : null })).filter((p) => p.agent),
+    /** The pids the doors met through group `g`. */
+    pidsOfGroup: (g) => [...factsCache.entries()].filter(([, x]) => x.facts && x.door === g).map(([pid]) => pid),
   })
 }
