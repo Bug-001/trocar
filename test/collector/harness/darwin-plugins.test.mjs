@@ -146,6 +146,11 @@ test('W22 OpenCode: a missing or non-PEM CA file, --use-openssl-ca on a Node sid
   const m = await load(SRC.opencode, { fetch: inner })
   assert.equal(typeof m.mod.AsightCaPlugin, 'function', 'an OpenCode plugin export')
   assert.deepEqual(await m.mod.AsightCaPlugin({}), {}, 'it registers no hooks')
+  // OpenCode 2.0.x (the desktop's bundled core, measured on a macOS test machine) rejects a plugin module with no
+  // default export ("Plugin must export a default definition with an id and an effect or setup function") — the 1.x CLI
+  // loads the named export fine — so the module carries both shapes; the default's setup is the same nothing
+  assert.deepEqual(m.mod.default, { id: 'asight-ca', setup: m.mod.default.setup }, 'the 2.0.x default export: an id and a setup function')
+  assert.deepEqual(await m.mod.default.setup({}), {}, 'it registers no hooks either way')
 })
 
 test('W22: the marker is the process\' own start in milliseconds, one number — the engine tells a reused pid by it; a real Node loads the rendered dsh plugin into its default roots and writes it', { skip: !NODE_TLS_ROOTS && 'needs Node >= 22.19 (tls.setDefaultCACertificates)' }, async () => {

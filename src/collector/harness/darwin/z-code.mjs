@@ -4,10 +4,10 @@
 // (Electron as Node; the desktop's app-server runs the same bundle, so the form covers it, as on Windows): image ZCode under /Applications/ZCode.app/Contents/MacOS/ — the macOS
 // install shape inferred from the Linux desktop package (/opt/ZCode) and the Windows one (%LOCALAPPDATA%\Programs\ZCode), measured by nobody yet (MA4). `exe` on darwin is the first
 // word of the command line as invoked, so a `zcode` started through a symlink outside the bundle lands outside the known path and is reported (`reportUnknownPath`), not silently
-// missed; the remote-mode shape of the Linux descriptor (~/.zcode/server/node with the server's zcode.cjs) is unmeasured on macOS and not a form. The desktop app is unmeasured on
-// macOS too (4.6 OPEN ②'s darwin half, MA4): listed, not recognised — a ZCode process of neither command-line shape (the bundle path nor the title a `-p` CLI rewrites its whole
-// command line to, `zcode-cli`) is no form and comes out as form-path-unknown — and there is no desktop group, so nothing of it is ever written. ZCode is no shared image, but the
-// desktop door shares it, so there is no PROCESS-NAME rule.
+// missed; the remote-mode shape of the Linux descriptor (~/.zcode/server/node with the server's zcode.cjs) is unmeasured on macOS and not a form. The desktop app is MEASURED
+// (measured on a macOS test machine): its app-server is the Electron `ZCode Helper` binary carrying the CLI's own `zcode-cli` title (the third shape D47's list could not see), and it
+// shares the CLI's group — the trust door is the same file; the steering door that reached it is ZCODE_HTTP_PROXY (network.httpProxy steered nothing of it, measured the same day).
+// ZCode is no shared image, but the desktop door shares it, so there is no PROCESS-NAME rule.
 import linux, { CLI_CMDLINE } from '../z-code.mjs'
 
 const inject = (ctx) => linux.inject(ctx) // the base's: ~/.zcode/cli/config.json network.caCertFile = combined-z-code.pem, carrying the CAs it puts out of effect
@@ -26,7 +26,14 @@ export default {
     // line to (`zcode-cli`) — measured on a macOS test machine: a CLI's sockets had only the title, the form answered path-unknown at the door and
     // the verdict was never asked (D47's finding); the desktop's app-server keeps the bundle path and needs no title branch
     { id: 'z-code.cli', g: 'z-code.cli', match: { image: 'ZCode', path: ['/ZCode\\.app/Contents/MacOS/ZCode'], cmdline: CLI_CMDLINE, reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
-    { id: 'z-code.desktop', g: null, match: null, nameRule: false, processRules: false, supported: { reason: 'not-measured' } },
+    // the desktop app (ZCode 3.14.4), measured on a macOS test machine: its agent turns are served by an
+    // app-server that is the SAME z-code core (it rewrites its command line to the SAME `zcode-cli` title, cwd ~/.zcode/workspace/…) but runs as the
+    // Electron HELPER binary — lsof's txt record `ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper`, ps command line `zcode-cli`
+    // — a third image the CLI form's `ZCode` gate never sees: every door connection of the desktop's turn came out not-a-process-of-form and was spliced
+    // untracked (5 flows, decrypted 0). It shares the CLI's group: the same ~/.zcode/cli/config.json trust door (caCertFile) judged it, and the desktop's
+    // steering door is the env one — ZCODE_HTTP_PROXY moved the whole turn into the door while network.httpProxy in the same file (the group's own entry,
+    // laid and measured in the same run) steered nothing of the desktop: the config-file proxy door does not reach an app launched outside that shell.
+    { id: 'z-code.desktop', g: 'z-code.cli', match: { image: 'ZCode Helper', path: ['/ZCode\\.app/Contents/Frameworks/ZCode Helper\\.app/Contents/MacOS/ZCode Helper'], cmdline: CLI_CMDLINE, reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
   ],
   inject,
   proxy: {
