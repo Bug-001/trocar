@@ -225,7 +225,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     notes: draft.notes,
     records: path.join(dir, 'flows'), // install notes are kept here as install-note events (D38)
     events: path.join(dir, 'flows', `${day}.ndjson`), // install-note lines are appended here (D-28)
-    _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit },
+    _: { dir, prior, ca, descs, ctxFor, R, daemon, draft, unit, osSignature: arch && typeof arch.livenessSignature === 'function' ? arch.livenessSignature : null },
   }
 }
 
@@ -249,7 +249,7 @@ async function writeInstall(args) {
   try { return await writeInstallSteps(args, written) } catch (e) { if (e && e.stopsRun) e.written = written; throw e } // what was done before the stop is said
 }
 async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false }, written) {
-  const { ca, descs, ctxFor, R, daemon, draft, unit } = plan._
+  const { ca, descs, ctxFor, R, daemon, draft, unit, osSignature } = plan._
   const body = () => JSON.stringify({ ...m, upgraded_from: undefined })
   let saved = body()
   const save = () => { if (body() !== saved) { saveManifest(dir, m, fs); saved = body() } }
@@ -263,10 +263,11 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   if (JSON.stringify(final.paths) !== JSON.stringify(draft.paths)) throw new Error(`the files to change moved while installing (${draft.paths.join(', ')} → ${final.paths.join(', ')}); only the CA was written; run "asight uninstall", then "asight on"`)
   m.planned = final.paths
   // what `off` needs to judge, from this manifest alone, which live process may hold what asight wrote for a harness (4.6 撤销顺序): written before any user
-  // file changes. Only what is missing is added — a manifest an older asight wrote has none for its harnesses, and `on` is how it gets them (4.6 「判活快照」)
+  // file changes. Only what is missing is added — a manifest an older asight wrote has none for its harnesses, or a null signature (one written on macOS or
+  // Windows before their form tables were folded into it), and `on` is how it gets them (4.6 「判活快照」); a signature already there is not changed
   const named = new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))
   const touched = new Set([...final.entries, ...final.files, ...final.owned].map((x) => x.harness))
-  for (const d of harnesses) if ((touched.has(d.name) || named.has(d.name)) && !m.liveness[d.name]) m.liveness[d.name] = livenessOf(d, osName)
+  for (const d of harnesses) if ((touched.has(d.name) || named.has(d.name)) && !(m.liveness[d.name] && m.liveness[d.name].signature)) m.liveness[d.name] = livenessOf(d, osName, osSignature)
   const seen = new Set((m.watched || []).map((w) => w.path)) // `existed_before` was recorded when asight first came: a path an agent wrote since is not "there before"
   m.watched = [...(m.watched || []), ...final.watch.filter((w) => !seen.has(w.path)).map((w) => ({ ...w, existed_before: fs.existsSync(w.path) }))]
   save()

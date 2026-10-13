@@ -287,6 +287,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     u.still_trusting = out.still_trusting
     for (const p of out.still_trusting) note('still-trusting', { harness: p.harness, pid: p.pid }, `pid ${p.pid} (${p.harness}) trusts the asight CA ${UNTIL_REASON[p.until] || UNTIL_REASON.restart}`)
     if (out.procs_error) { note('harness-note', {}, `which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`); u.notes.push(`which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`) }
+    for (const x of out.trust_unknown || []) { const why = `which running ${x.harness} processes still trust the asight CA is not known: ${x.why}`; note('harness-note', { harness: x.harness }, why); u.notes.push(why) }
     u.procs_error = out.procs_error
     u.kept_backups = (manifest.kept_backups || []).map((k) => ({ ...k }))
     for (const k of u.kept_backups.filter((x) => x.at === at.toISOString())) note(CODE_OFF.backupKept, { path: k.path, backup: k.backup }, `${k.path}: ${k.reason}`)

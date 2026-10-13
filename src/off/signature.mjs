@@ -74,9 +74,13 @@ function signatureOf(l) {
   return revived.get(l.signature)
 }
 
+/** Does this liveness record (`liveness.<harness>`) carry a signature? A record without one — the asight that wrote it had none for its OS — tells no
+ *  process apart, so `off` reads it as "not known", never as "no process of it" (4.6 「判活快照」). */
+export const hasSignature = (l) => signatureOf(l) !== null
+
 /** Which harness a process belongs to, from `liveness` (`{ <harness>: { signature, … } }`, the manifest's snapshot) alone: the one whose
  *  `match` holds and whose `exclude` does not; none, or two that both claim it, is null (a process is never folded into a known identity on a
- *  guess, 0.1 §5). A harness whose snapshot has no signature (another OS, a manifest from before the snapshot) never matches. */
+ *  guess, 0.1 §5). A harness whose snapshot has no signature (another OS, a manifest from before the snapshot) never matches — the caller asks hasSignature first. */
 export function matchHarness(liveness, facts) {
   const view = patternView(facts)
   const hit = []

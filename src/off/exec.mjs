@@ -39,11 +39,13 @@ function refuseRealTool(file, args, env) {
   throw err
 }
 
-/** Runs `file args…` and returns `{ code, out, err }`: the exit code (null: killed by the timeout, or never started), stdout and
- *  stderr trimmed; when stderr is empty and the spawn itself failed, `err` is that error's message. `run(file, args, opts)` replaces
- *  the spawn (it returns what `spawnSync` does: `{ status, stdout, stderr, error? }`); what it throws is not caught. */
-export function execTool(file, args, { run = null, env = process.env, input = null, timeoutMs = 10000 } = {}) {
-  const opts = { encoding: 'utf8', env, input, timeout: timeoutMs }
+/** Runs `file args…` and returns `{ code, out, err }`: the exit code (null: killed by the timeout, by more output than `maxBuffer`
+ *  — spawnSync's ENOBUFS, `out` then cut short —, or never started), stdout and stderr trimmed; when stderr is empty and the spawn
+ *  itself failed, `err` is that error's message. `maxBuffer` (bytes) is spawnSync's own, 1 MiB when not given: a question about the
+ *  whole process table passes more. `run(file, args, opts)` replaces the spawn (it returns what `spawnSync` does: `{ status, stdout,
+ *  stderr, error? }`); what it throws is not caught. */
+export function execTool(file, args, { run = null, env = process.env, input = null, timeoutMs = 10000, maxBuffer = undefined } = {}) {
+  const opts = { encoding: 'utf8', env, input, timeout: timeoutMs, ...(maxBuffer ? { maxBuffer } : {}) }
   if (!run && (process.env.ASIGHT_TEST_SANDBOX === '1' || env.ASIGHT_TEST_SANDBOX === '1')) refuseRealTool(file, args, env)
   const r = (run || spawnSync)(file, args, opts)
   return { code: r.status ?? null, out: String(r.stdout || '').trim(), err: String(r.stderr || (r.error && r.error.message) || '').trim() }

@@ -55,13 +55,14 @@ export function validateDescriptor(d) {
 }
 
 /** What `off` needs to judge, from the install manifest alone, which live process may hold what asight wrote for this harness (4.6 撤销顺序
- *  第 2 / 5 步; manifest `liveness.<harness>`): the signature for `osName` as JSON (null: this descriptor has none for it, so it matches no
- *  process), whether the harness re-reads its entry while running, and until when a running one still trusts asight after `off` — the data form of
+ *  第 2 / 5 步; manifest `liveness.<harness>`): the signature for `osName` as JSON — `osSignature(d)` when the arch has one (macOS and Windows fold
+ *  their form tables, arch/<os>/forms.mjs formSignature: one source for which process is which harness), else `d.signatures[osName]`; null when
+ *  there is neither, which `off` reads as "not known", never as "no process" (4.6 「判活快照」) —, whether the harness re-reads its entry while running, and until when a running one still trusts asight after `off` — the data form of
  *  `trust.afterUninstall` ('restart' when it declares none, and when it is a function of the process, which a manifest cannot hold: Hermes). With
  *  `trust.untilEnviron` (Kimi), only a process whose environment names that variable at a file of asight's is reported at all. */
-export function livenessOf(d, osName) {
+export function livenessOf(d, osName, osSignature = null) {
   const t = d.trust || {}
-  const sig = d.signatures && d.signatures[osName]
+  const sig = typeof osSignature === 'function' ? osSignature(d) : d.signatures && d.signatures[osName]
   return {
     signature: sig ? serializeSignature(sig) : null,
     rereads: !!t.rereadsEntry,
