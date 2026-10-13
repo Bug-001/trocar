@@ -158,14 +158,14 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const hasOptinRecords = !!(m && Array.isArray(m.entries) && m.entries.some((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-')))
   if (platform === 'win32' || platform === 'darwin' || hasOptinRecords || deps.parts) {
     try {
-      const parts = deps.parts || await (deps.daemon || await import('../collector/daemon.mjs')).loadParts({ env })
+      const parts = deps.parts || await (deps.daemon || await import('../collector/daemon.mjs')).loadParts({ env, agentList: (list && list.entries) || [] })
       const hook = parts && parts.arch && parts.arch.optIn
       let rows = hook && typeof hook.plan === 'function' ? hook.plan({ harnesses: parts.harnesses, manifest: m }) : []
       // 「入口还有没有效」(1.6 §1.7, W68): the same hook's check re-verifies, read-only, the entries that are in effect — its findings fold
       // into the very same rows (a broken entry is `broken` with its code, a check that could not be told is `unknown`); the process table it
-      // sees is the one this status already read (the agents half of the check matches it to the forms itself).
+      // sees is the one this status already read (the agents half of the check judges it by the name list).
       if (hook && typeof hook.check === 'function' && hasOptinRecords) {
-        rows = applyEntryCheck(rows, hook.check({ harnesses: parts.harnesses, manifest: m, procs: table || [] }))
+        rows = applyEntryCheck(rows, hook.check({ harnesses: parts.harnesses, manifest: m, procs: table || [], identify: parts.match }))
       }
       f.optInRows = rows
     } catch (e) { rethrowSandbox(e); f.opt_in_error = errText(e) }

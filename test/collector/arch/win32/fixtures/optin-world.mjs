@@ -12,11 +12,14 @@ import { loadHarnesses } from '../../../../../src/collector/harness/index.mjs'
 import { groupsOf } from '../../../../../src/collector/arch/win32/route-plan.mjs'
 import { MACHINE_PATH_KEY } from '../../../../../src/collector/arch/win32/elevate.mjs'
 import { SAC_KEY } from '../../../../../src/collector/arch/win32/userpath.mjs'
+import { createRegistry } from '../../../../../src/collector/core/registry.mjs'
 import { createCa } from '../../../../../src/collector/core/tls/ca.mjs'
 import { applyOptIn, checkEntries } from '../../../../../src/collector/arch/win32/optin.mjs'
 import { tmpDir } from '../../../../helpers/tmp.mjs'
 
-export const GROUPS = groupsOf(await loadHarnesses())
+const HARNESSES = await loadHarnesses()
+export const GROUPS = groupsOf(HARNESSES)
+const REGISTRY = createRegistry(HARNESSES)
 export const POLICY_KEY = 'HKCU\\SOFTWARE\\Policies\\Claude'
 export const sha1Thumb = (pem) => crypto.createHash('sha1').update(new crypto.X509Certificate(pem).raw).digest('hex').toUpperCase()
 const b64dec = (s) => Buffer.from(s, 'base64').toString('utf8')
@@ -126,7 +129,7 @@ export async function rig({ form, item, forms = null, over = {}, win = {} } = {}
   const apply = () => applyAs(form, item)
   /** checkEntries over this rig's world (the manifest the apply filled, the fake registry / store / scripts behind `w.run`): `procs` is the
    *  process table the agents half sees; `over.deps` rides checkEntries' own deps. */
-  const check = (procs = [], over = {}) => checkEntries({ groups: GROUPS, manifest, procs, deps: { run: w.run, env, fs: wfs, ...(over.deps || {}) } })
+  const check = (procs = [], over = {}) => checkEntries({ manifest, procs, identify: REGISTRY.match, deps: { run: w.run, env, fs: wfs, ...(over.deps || {}) } }) // the presets' name list (D51), as the daemon's registry
   return { home, winHome, dir, ca, g, ingress, env, w, wfs, manifest, notes, events, failures, deps, apply, applyAs, check }
 }
 export const nativeKimi = (r) => { const p = path.win32.join(r.winHome, '.kimi-code', 'bin', 'kimi.exe'); r.wfs.mkdirSync(path.win32.dirname(p), { recursive: true }); r.wfs.writeFileSync(p, 'exe') }

@@ -165,7 +165,7 @@ test('W68 a changed VS Code setting → entry-changed naming the key and what it
   assert.match(cf.find((x) => /policy/.test(x.detail)).detail, /the policy value egressProxyUrl now holds http:\/\/elsewhere:3/)
 })
 
-test('W68 not-via-entry: a running agent whose parent is the shim (by command line), the launcher, or a process of its own form is nothing to report; any other parent — explorer, a gone parent — is not-via-entry, one finding naming the pids', async () => {
+test('W68 not-via-entry: a running agent whose parent is the shim (by command line), the launcher, or a process of its own harness is nothing to report; any other parent — explorer, a gone parent — is not-via-entry, one finding naming the pids', async () => {
   const r = await rig({ form: 'kimi-code.cli', item: 'user-path-shim' })
   nativeKimi(r)
   realCmd(r, 'kimi')
@@ -188,7 +188,7 @@ test('W68 not-via-entry: a running agent whose parent is the shim (by command li
   const f = r.check(around)
   assert.equal(f.length, 1)
   assert.deepEqual([f[0].form, f[0].item, f[0].code], ['kimi-code.cli', 'user-path-shim', 'not-via-entry'])
-  assert.match(f[0].detail, /2 running kimi-code\.cli process\(es\) were not started through the entry/)
+  assert.match(f[0].detail, /2 running kimi-code process\(es\) were not started through the entry/)
   assert.match(f[0].detail, /pid 21 \(parent .*explorer\.exe\)/)
   assert.match(f[0].detail, /pid 40 \(parent no longer running\)/)
 
@@ -246,7 +246,7 @@ test('recordEntryFindings: one failure record per finding not already reported, 
 })
 
 test('checkEntries with nothing in effect answers nothing: no manifest, no entries, a pending-admin machine entry and a confirmed:false apply are all outside the check', async () => {
-  assert.deepEqual(checkEntries({ groups: [], manifest: null, procs: [] }), [])
+  assert.deepEqual(checkEntries({ manifest: null, procs: [] }), [])
   const r = await rig({ form: 'kimi-code.cli', item: 'user-path-shim' })
   nativeKimi(r)
   realCmd(r, 'kimi')

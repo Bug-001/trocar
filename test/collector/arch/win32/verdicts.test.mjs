@@ -2,7 +2,7 @@
 // The redirector's verdict table is filled by `watch(pid, { decrypt, agent })`, and the one that pushes is the tracker. Until Task 8(v) nothing could produce a `decrypt:true`
 // verdict on Windows: `registry.match` keyed on `descriptor.signatures[facts.os]` and no harness had `signatures.win32`, and the tracker vetoed every process with
 // `facts.env === null` (`environ-unreadable`) while every Windows process has `env: null` (4.8 §10.1). Built (2026-10-08):
-//   the daemon hands `matchForm` to the registry (`createRegistry(descriptors, { osMatch: { win32 } })`: one rule for which form, no copy of the patterns),
+//   the daemon builds one registry from the name lists (`createRegistry(descriptors)`, D51: one rule for which harness on every OS),
 //   `procinfo` facts carry `envRead: false` so `env: null` is the OS's rule and not a failure to read, the tracker judges by the harness's Windows entry files
 //   (`desc.win32.layers` where the files move — Hermes's root is %LOCALAPPDATA%\hermes; the Linux layers otherwise, they read the same files), the plugin marker
 //   is compared with a fixed tolerance (`MARKER_TOLERANCE_MS`: the marker is ms-rounded `performance.timeOrigin`, the helper gives ms), and the tracker listens to
@@ -16,7 +16,6 @@ import os from 'node:os'
 import path from 'node:path'
 import tls from 'node:tls'
 import { createWin32Redirector } from '../../../../src/collector/arch/win32/redirector.mjs'
-import { matchForm } from '../../../../src/collector/arch/win32/forms.mjs'
 import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { createRegistry } from '../../../../src/collector/core/registry.mjs'
@@ -57,9 +56,6 @@ const facts = (pid, exe, extra = {}) => ({ os: 'win32', pid, ppid: 1, name: exe.
 
 const ALL = await loadHarnesses()
 const one = (name) => ALL.find((d) => d.name === name)
-const GROUPS = groupsOf(ALL)
-const FORMS = GROUPS.flatMap((g) => g.forms)
-const HARNESS_OF_FORM = new Map(GROUPS.flatMap((g) => g.forms.map((f) => [f.id, g.harness])))
 
 /** The registry as the daemon wires it: the D51 name lists, the same on every OS (no osMatch: the registry needs no redirector). */
 function winRegistry(descriptors = ALL) {
@@ -96,9 +92,9 @@ function rigged({ descriptors, box: b, marker = false, over = {} }) {
   return { redirector, tracker, settle }
 }
 
-// ── W76 cell 1: one rule for which form ─────────────────────────────────────────────────────────────────────────────────────────────────
+// ── W76 cell 1: one rule for which harness ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('W76 the registry the tracker judges by finds the same harness as matchForm for a process of each Windows form; there is no second rule (no signatures.win32 anywhere)', async () => {
+test('W76 the registry the tracker judges by finds the harness of a process of each Windows form by its name; there is no second rule (no identity data under harness/win32)', async () => {
   const registry = winRegistry()
   const rows = [
     [IMG.ccCli, {}, 'claude-code'], [IMG.ccVscode, {}, 'claude-code'], [IMG.ccDesktop, {}, 'claude-code'],
@@ -110,21 +106,18 @@ test('W76 the registry the tracker judges by finds the same harness as matchForm
   ]
   for (const [exe, extra, harness] of rows) {
     const f = facts(10, exe, extra)
-    const form = matchForm(FORMS, f, { home: HOME })
-    assert.equal(form.kind, 'form', `${exe} is a form`)
-    assert.equal(HARNESS_OF_FORM.get(form.id), harness)
-    assert.deepEqual(registry.match(f), { agent: harness, descriptor: one(harness), reason: 'match' }, `${exe}: the registry finds ${harness}, as the redirector's form ${form.id} says`)
+    assert.deepEqual(registry.match(f), { agent: harness, descriptor: one(harness), reason: 'match' }, `${exe}: the registry finds ${harness}`)
   }
-  assert.equal(registry.match(facts(11, IMG.svchost)).agent, null, 'a process of no form is no agent')
+  assert.equal(registry.match(facts(11, IMG.svchost)).agent, null, 'a process on no list is no agent')
   assert.deepEqual([registry.match(facts(13, IMG.zcode)).agent, registry.match(facts(14, IMG.hermesPy)).agent], [null, null], 'the Z-Code GUI itself (no zcode.cjs, no network-service args) and a bare python are no agent: a name alone is not enough for them (4.6 按 harness 名单, 4.8 W3)')
   const pending = registry.match(facts(12, IMG.node, { cmdline: null, argv: [], cmdlineState: 'pending' }))
   assert.equal(pending.agent, null, 'a command line not known yet judges nothing: the facts-update re-judges it (below)')
-  // no copy of the patterns as `signatures.win32`: the form data is the one rule, and the win32 files carry no signatures
+  // no second pattern set under harness/win32: the name list is the one rule
   const dir = new URL('../../../../src/collector/harness/win32/', import.meta.url)
   for (const name of fs.readdirSync(dir)) {
     if (!name.endsWith('.mjs') || name.startsWith('_')) continue
     const src = fs.readFileSync(new URL(name, dir), 'utf8')
-    assert.equal(src.includes('signatures'), false, `${name} carries no signatures: the registry is told matchForm, not a second pattern set`)
+    assert.equal(src.includes('signatures'), false, `${name} carries no signatures: the name list is the one rule`)
   }
   for (const d of ALL) assert.ok(d.processes && !d.signatures, `${d.name}: one name list for every OS (D51), no per-OS signatures`)
 })

@@ -200,7 +200,7 @@ test('the host sets of a host-tree form are applied at on and kept for status (t
     proxy: { env: ['HTTPS_PROXY'], files: [], systemProxy: { http: false, ws: false }, schemes: ['http'], unsupported: {}, branches: ['all'], measured: { win32: 'inferred', linux: 'inferred', darwin: 'inferred' }, restart: { hint: 'restart it', processes: ['made-up'] } },
     darwin: {
       groups: [{ g: 'made-up.settings', proxyEntry: { kind: 'file', format: 'json-key', files: (ctx) => [path.join(ctx.home, 'relay', 'settings.json')], key: ['HTTPS_PROXY'] }, auth: true, followsSystemProxy: { http: false, ws: false } }],
-      forms: [{ id: 'made-up.cli', g: 'made-up.settings', match: { image: 'made-up' }, nameRule: false, processRules: true, supported: true, hosts: { defaults: ['api.made-up.example'], settings: { file: (ctx) => path.join(ctx.home, 'relay', 'settings.json'), hostsOf: (text) => { const j = JSON.parse(text); return typeof j.api_base === 'string' ? [new URL(j.api_base).hostname] : [] } } } }],
+      forms: [{ id: 'made-up.cli', g: 'made-up.settings', supported: true, hosts: { defaults: ['api.made-up.example'], settings: { file: (ctx) => path.join(ctx.home, 'relay', 'settings.json'), hostsOf: (text) => { const j = JSON.parse(text); return typeof j.api_base === 'string' ? [new URL(j.api_base).hostname] : [] } } } }],
       proxy: { env: ['HTTPS_PROXY'], files: [], systemProxy: { http: false, ws: false }, schemes: ['http'], unsupported: {}, branches: ['all'], measured: { darwin: 'inferred' }, restart: { hint: 'restart it', processes: ['made-up'] } },
       inject: () => ({ entries: [] }),
     },

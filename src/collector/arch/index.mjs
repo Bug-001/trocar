@@ -20,12 +20,13 @@ export async function loadArch(platform = process.platform) {
     // routing is the proxy-mode routing object 1.6 §9.5's `on` consumes (Task 8(c)): a FACTORY runOnCli builds with its own shell's environment.
     // optIn is 4.8 §2.4's half the CLI and the daemon reach (1.6 §1.7): `forms` (what --opt-in may name), `plan` (the rows of the plan's 「要你点名的」
     // section), `apply` (one named item, ledgered) and `check` (W68: the read-only re-check that the entries are still the ones used — status folds its
-    // findings into the same rows). `procs` is the caller's process table (listProcs' rows or the redirector's scan: the check matches them to the forms
-    // itself). `record` is what the daemon's 5 s check does with the findings (once per occurrence, only §9.7's netenv failure codes) — on the arch object
+    // findings into the same rows). `procs` is the caller's process table (listProcs' rows or the redirector's scan: the check judges them by the name list,
+    // `identify`). `record` is what the daemon's 5 s check does with the findings (once per occurrence, only §9.7's netenv failure codes) — on the arch object
     // so the daemon, the one file allowed to wire arch in, stays platform-neutral about it. netFacts (Task 10(a)) is this platform's half of the network
     // facts: topology rows, doctor findings, the §11 plan and the drift checks all draw from it through src/netenv/facts.mjs.
     const [{ createWin32Collector, win32Routing }, unit, { controlEndpoint }, { osRootsFor }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn, checkEntries, recordEntryFindings }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('../../off/os-roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
     const { groupsOf } = await import('./win32/route-plan.mjs')
+    const { createRegistry } = await import('../core/registry.mjs')
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
       os: 'win32', install: null, unit,
@@ -40,7 +41,8 @@ export async function loadArch(platform = process.platform) {
         itemForms: ({ harnesses: h, ids = null } = {}) => optinItemForms(of(h, ids)),
         plan: ({ harnesses: h, ids = null, optIn = [], manifest = null, resolve = null } = {}) => planOptIns({ groups: of(h, ids), optIns: optIn, manifest, resolve }),
         apply: ({ harnesses: h, ids = null, ...rest }) => applyOptIn({ ...rest, groups: of(h, ids) }),
-        check: ({ harnesses: h, ids = null, procs = [], ...rest }) => checkEntries({ ...rest, groups: of(h, ids), procs }),
+        // `identify`: the caller's registry.match (the user's agents.json in it); without one, the presets' (D51)
+        check: ({ harnesses: h, ids = null, procs = [], identify = null, ...rest }) => checkEntries({ ...rest, procs, identify: identify || createRegistry(h || []).match }),
         record: recordEntryFindings,
       },
     }

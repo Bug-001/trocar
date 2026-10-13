@@ -1,6 +1,6 @@
 // test/collector/arch/darwin/verdicts.test.mjs — the verdict producer on macOS (RFC 4.9 §5.4 — which is 4.8 §5.4 「谁产生判定」 carried over, acceptance W76; plan Task 8(v)'s darwin run).
-// The redirector's verdict table is filled by `watch(pid, { decrypt, agent })`, and the one that pushes is the tracker. The Windows twin's two blockers are gone the same way here: the daemon hands
-// `matchForm` to the registry (`createRegistry(descriptors, { osMatch: { darwin } })`: one rule for which form, no copy of the patterns — the darwin harness files carry no `signatures`), and `procinfo`
+// The redirector's verdict table is filled by `watch(pid, { decrypt, agent })`, and the one that pushes is the tracker. The Windows twin's two blockers are gone the same way here: the daemon builds
+// one registry from the name lists (`createRegistry(descriptors)`, D51: one rule for which harness on every OS — the darwin harness files carry no identity data), and `procinfo`
 // facts carry `envRead: false` so `env: null` is the OS's rule (no privileged read of another process's environment on macOS either, 4.9 §5.4) and not a failure to read, so the tracker judges by the
 // entry files. The layers the tracker judges by are the descriptor's own (`d.layers`, the Linux ones — the darwin files carry no `layers` of their own, for only Windows moved a root, 4.9 §2.3), the
 // plugin marker is compared with the same fixed tolerance (`MARKER_TOLERANCE_MS`), and the tracker listens to `facts-update` as well (a form told by its command line is judged again when it arrives —
@@ -13,7 +13,6 @@ import net from 'node:net'
 import path from 'node:path'
 import tls from 'node:tls'
 import { createDarwinRedirector } from '../../../../src/collector/arch/darwin/redirector.mjs'
-import { matchForm } from '../../../../src/collector/arch/darwin/forms.mjs'
 import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { createRegistry } from '../../../../src/collector/core/registry.mjs'
@@ -50,8 +49,6 @@ const facts = (pid, exe, extra = {}) => ({ os: 'darwin', pid, ppid: 1, name: exe
 const ALL = await loadHarnesses()
 const one = (name) => ALL.find((d) => d.name === name)
 const GROUPS = groupsOf(ALL)
-const FORMS = GROUPS.flatMap((g) => g.forms)
-const HARNESS_OF_FORM = new Map(GROUPS.flatMap((g) => g.forms.map((f) => [f.id, g.harness])))
 
 /** The registry as the daemon wires it: the D51 name lists, the same on every OS (no osMatch: the registry needs no redirector). */
 function darwinRegistry(descriptors = ALL) {
@@ -86,9 +83,9 @@ function rigged({ descriptors, box: b, marker = false, over = {} }) {
   return { procWatcher, redirector, tracker, settle }
 } // `procWatcher` is the redirector itself now: emitting 'exec' on it is what a door does when it meets a pid
 
-// ── W76 cell 1: one rule for which form ─────────────────────────────────────────────────────────────────────────────────────────────────
+// ── W76 cell 1: one rule for which harness ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('W76 the registry the tracker judges by finds the same harness as matchForm for a process of each darwin form; there is no second rule (no signatures.darwin anywhere)', async () => {
+test('W76 the registry the tracker judges by finds the harness of a process of each darwin form by its name; there is no second rule (no identity data under harness/darwin)', async () => {
   const registry = darwinRegistry()
   const rows = [
     [IMG.ccNative, {}, 'claude-code'], [IMG.ccVscode, {}, 'claude-code'], [IMG.ccDesktop, {}, 'claude-code'],
@@ -100,20 +97,17 @@ test('W76 the registry the tracker judges by finds the same harness as matchForm
   ]
   for (const [exe, extra, harness] of rows) {
     const f = facts(10, exe, extra)
-    const form = matchForm(FORMS, f, { home: HOME })
-    assert.equal(form.kind, 'form', `${exe} is a form`)
-    assert.equal(HARNESS_OF_FORM.get(form.id), harness)
-    assert.deepEqual(registry.match(f), { agent: harness, descriptor: one(harness), reason: 'match' }, `${exe}: the registry finds ${harness}, as the redirector's form ${form.id} says`)
+    assert.deepEqual(registry.match(f), { agent: harness, descriptor: one(harness), reason: 'match' }, `${exe}: the registry finds ${harness}`)
   }
-  assert.equal(registry.match(facts(11, IMG.syslogd)).agent, null, 'a process of no form is no agent')
+  assert.equal(registry.match(facts(11, IMG.syslogd)).agent, null, 'a process on no list is no agent')
   const empty = registry.match(facts(12, IMG.node, { cmdline: null, argv: [], cmdlineState: 'empty' }))
   assert.equal(empty.agent, null, 'a row ps gave no command line for judges nothing here (final on darwin — the facts-update below is what would re-judge it, and nothing fires it today)')
-  // no copy of the patterns as `signatures.darwin`: the form data is the one rule, and the darwin files carry no signatures
+  // no second pattern set under harness/darwin: the name list is the one rule
   const dir = new URL('../../../../src/collector/harness/darwin/', import.meta.url)
   for (const name of fs.readdirSync(dir)) {
     if (!name.endsWith('.mjs') || name.startsWith('_')) continue
     const src = fs.readFileSync(new URL(name, dir), 'utf8')
-    assert.equal(src.includes('signatures'), false, `${name} carries no signatures: the registry is told matchForm, not a second pattern set`)
+    assert.equal(src.includes('signatures'), false, `${name} carries no signatures: the name list is the one rule`)
   }
   for (const d of ALL) assert.ok(d.processes && !d.signatures, `${d.name}: one name list for every OS (D51), no per-OS signatures`)
 })
@@ -208,11 +202,11 @@ test('W76 a form told by its command line is not judged "not an agent" while the
 // ── D47 finding, 2026-10-12: the z-code CLI's rewritten command line is still the form at the door ─────────────────────────────────────
 
 test('D47 a z-code CLI that rewrote its whole command line to its title (`process.title = "zcode-cli"`) is the form at the door: the pid is announced at accept time and the verdict arrives through watch() — found live on macOS (the form knew only `zcode\.cjs`, the door answered path-unknown and spliced every connection untracked, no llm_call, while cc/codex/dsh — none of which rewrites its command line — decrypted fine)', async () => {
-  // the two command lines a z-code CLI process lives in (the base descriptor's CLI_CMDLINE): the bundle path as invoked, and the title a `-p` / `tui`
+  // the two command lines a z-code CLI process lives in: the bundle path as invoked, and the title a `-p` / `tui`
   // CLI rewrites its whole command line to within moments of start — `ps` gave exactly `zcode-cli` for the process that owned the sockets (measured)
   for (const cmdline of [ZCODE_CMD, 'zcode-cli']) {
     const announced = []
-    // the tracker's half of the seam, faked: judge → watch. The door's half is the real one (matchForm over the real form data, ownerOf, factsOf)
+    // the tracker's half of the seam, faked: judge → watch. The door's half is the real one (the name list, ownerOf, factsOf)
     const redirector = createDarwinRedirector({
       groups: GROUPS, identify: darwinRegistry().match, isOn: () => true,
       ownerOf: async () => ({ pid: 50, source: 'socket-table', ms: 4 }),
@@ -228,9 +222,9 @@ test('D47 a z-code CLI that rewrote its whole command line to its title (`proces
     assert.equal(meta.skip, undefined, `${cmdline}: nothing says untracked`)
     assert.equal(meta.agent, 'z-code')
   }
-  // the desktop GUI's process (a command line of neither shape: the bare exe, no bundle path, no title) is still no form on macOS — the new title
-  // pattern widens the CLI, it must not swallow the unmeasured desktop (4.6 OPEN ②'s darwin half)
-  assert.equal(matchForm(FORMS, facts(51, IMG.zcode, { cmdline: IMG.zcode }), { home: HOME }).kind, 'path-unknown')
+  // the desktop GUI's process (a command line of neither shape: the bare exe, no bundle path, no title) is no agent on macOS — the title item
+  // widens the CLI, it must not swallow the GUI (4.6 OPEN ②'s darwin half)
+  assert.equal(darwinRegistry().match(facts(51, IMG.zcode, { cmdline: IMG.zcode })).agent, null)
 })
 
 // ── the z-code DESKTOP seam, 2026-10-13 : the app-server Helper ───────────────────────
@@ -254,10 +248,10 @@ test('D47b the z-code DESKTOP\'s app-server is the form at the door: an Electron
     assert.equal(meta.skip, undefined, `${cmdline.slice(0, 40)}: nothing says untracked`)
     assert.equal(meta.agent, 'z-code')
   }
-  // the OTHER processes of the same Helper binary — the Chromium family switches, no z-code title — are not the form: their connections at this
-  // door stay not-a-process-of-form (measured: the desktop's own GPU / network / NodeService Helpers carry --type=… command lines)
+  // the OTHER processes of the same Helper binary — the Chromium family switches, no z-code title — are no agent: their connections at this
+  // door stay untracked (measured: the desktop's own GPU / network / NodeService Helpers carry --type=… command lines)
   const notForm = `${HELPER} --type=utility --utility-sub-type=network.mojom.NetworkService --user-data-dir=/Users/u/Library/Application Support/ZCode`
-  assert.deepEqual(matchForm(FORMS, facts(61, HELPER, { cmdline: notForm }), { home: HOME }), { kind: 'path-unknown', forms: ['z-code.desktop'], shape: '/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper' }, 'a ZCode Helper without the agent command line is the desktop form\'s path-unknown, not the form')
+  assert.equal(darwinRegistry().match(facts(61, HELPER, { cmdline: notForm })).agent, null, 'a ZCode Helper without the agent command line is no agent')
 })
 
 // ── W76 cell 5: the whole path — the real redirector, tracker, registry and a real ingress ─────────────────────────────────────────────

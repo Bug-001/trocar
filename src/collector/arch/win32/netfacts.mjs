@@ -13,8 +13,9 @@
 //     read-back `entries.check` is), the opt-in state (planOptIns' rows over the manifest) and, for a host-tree form, the host set of 4.8 §3 (hostSetOf over the extension's own
 //     settings — read-only); plus `entryPlace` (where the group's proxy entry lives, filled in: the doctor's commands that name the place read it, 4.8 §10.4) and `route` (what the
 //     group's own plan says of it — the `why`/`detail` of a `not-routed`, the doctor's `code` for a refused protocol, `form-unsupported`: the doctor's rows split by them, 4.8 §10.4);
-//   · the processes: the helper's `ps` matched with `matchForm` (the same rule the daemon routes by), each with the elevated verdict of `elevationOf` (integrity ≥ High, or a token
-//     that will not open while the image path reads — the latter marked inferred);
+//   · the processes: the helper's `ps` rows judged by the name list (D51: the presets plus ~/.asight/agents.json — the registry the doors ask), each with the elevated
+//     verdict of `elevationOf` (integrity ≥ High, or a token that will not open while the image path reads — the latter marked inferred). The name list says which harness
+//     a process is, never which form: every form of that harness lists it;
 //   · the listeners: the helper's `tcp-table` LISTEN rows with their owner pid named by the snapshot;
 //
 // Everything is injected through `deps` for a test (`helper` — one is started and closed here when none is given;
@@ -23,11 +24,12 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { startHelper } from './helper.mjs'
 import { elevationOf, splitCommandLine } from './procinfo.mjs'
-import { matchForm } from './forms.mjs'
 import { groupsOf, planRoutes, priorOf, hostSetOf, proxyRecordsOf } from './route-plan.mjs'
 import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, readHkcuEnv, proxyAddress } from './upstream.mjs'
 import { planOptIns } from './optin.mjs'
+import { createRegistry } from '../../core/registry.mjs'
+import { readAgentList } from '../../../off/identity.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { readStateFile } from '../../../off/state.mjs'
@@ -110,7 +112,7 @@ function settingOf({ harness, group, proxy, ctx, manifest, hkcuEnv, shellSetting
 }
 
 /**
- * Windows's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, harnesses, settings, env, home, adopted, deps }); `deps` (over `ctx.deps`): `helper`
+ * Windows's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, harnesses, settings, env, home, adopted, deps }); `deps` (over `ctx.deps`): `identify` (the name list's judge; built from `harnesses` and agents.json when not given), `helper`
  * (the resident helper's client — one is started and closed here when none is given), `readSystemProxy`, `readHkcuEnv`, `fs`, `spawn`.
  * → { routing: 'proxy', listeners, procs, forwarder, forms, systemProxy, unknowns }.
  */
@@ -156,7 +158,6 @@ export async function gatherWin32Facts(ctx, deps = {}) {
 
     // ---- the groups, their plan and their forms (the same pure reads the daemon re-runs) --------------------------------------------------------------------------------------------------------
     const groups = groupsOf(harnesses)
-    const allForms = groups.flatMap((x) => x.forms)
     const reply = status.daemon && status.daemon.reply
     const linksKnown = !!(reply && Array.isArray(reply.links))
     const liveGroups = new Set((linksKnown ? reply.links : []).map((l) => l && l.name).filter(Boolean)) // the reply's `links` are the DOOR GROUPS the daemon holds on (the shared door core's status, D47): a group's forms are on as one
@@ -172,14 +173,18 @@ export async function gatherWin32Facts(ctx, deps = {}) {
       readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } },
       listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, collectorDir: dir, caPem: null,
     }
-    const matchOf = (r) => matchForm(allForms, { exe: r.exe, cmdline: r.cmdline, cmdlineState: r.cmdlineState }, { home })
+    // which harness each process is: the name list's word (D51) — a process is its harness's, never one form's
+    const identify = D.identify || createRegistry(harnesses, { agentList: readAgentList({ home, fs }).entries }).match
+    const harnessOf = new Map((psRows || []).map((r) => [r.pid, identify({ os: 'win32', exe: r.exe ?? null, argv: r.cmdline ? splitCommandLine(r.cmdline) : null, cmdlineState: r.cmdlineState }).agent]))
+    const rowsOf = (h) => (psRows || []).filter((r) => harnessOf.get(r.pid) === h)
     let extraHosts = {}
     try { extraHosts = (readStateFile(stateFile(home), { fs }).state || {}).harnesses || {} } catch { /* nothing installed: no extra hosts */ }
     const ownPorts = [...new Set([ing && ing.enginePort, ...Object.values((ing && ing.groupPorts) || {})].filter(Number.isInteger))]
     const plan = planRoutes({
       netenv: { systemProxy: sysForPlan, hkcuEnv, ownPorts },
       groups, desired, optIns: [...optIns], manifest, ctx: winCtx,
-      procs: (psRows || []).map((r) => ({ pid: r.pid, match: matchOf(r), elevated: elevationOf(r).elevated })),
+      // the doors' shape (route-plan observe): a process stands at every group of its harness, for `status` cannot know which door it came through
+      procs: groups.flatMap((x) => rowsOf(x.harness).map((r) => ({ pid: r.pid, agent: x.harness, door: x.g, elevated: elevationOf(r).elevated }))),
     })
 
     // the processes of each form, with the daemon's word on them where it answered
@@ -200,9 +205,9 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     for (const x of groups) {
       const r = plan[x.g] || null
       for (const f of x.forms) {
-        const rows = (psRows || []).filter((p) => { const m = matchOf(p); return m && m.kind === 'form' && m.id === f.id })
-        const mine = rows.map(procFacts)
-        ;(procs[x.harness] = procs[x.harness] || []).push(...mine)
+        const mine = rowsOf(x.harness).map(procFacts)
+        const listed = procs[x.harness] = procs[x.harness] || []
+        for (const p of mine) if (!listed.some((q) => q.pid === p.pid)) listed.push(p)
         const fr = r && r.forms ? r.forms[f.id] : null
         const items = (x.group.optIn || [])
         const optIn = items.length ? (() => {

@@ -541,7 +541,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         let m = null
         try { m = readManifest(P.dir) } catch { /* no entries can be known: nothing is in effect to check */ }
         if (m && Array.isArray(m.entries) && m.entries.some((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-'))) {
-          optHook.record({ findings: await optHook.check({ harnesses: harnessList, manifest: m, procs: await redirector.scan() }), state: entrySeen, appendEvent: (rec) => failure.write(rec) })
+          optHook.record({ findings: await optHook.check({ harnesses: harnessList, manifest: m, procs: await redirector.scan(), identify: registry.match }), state: entrySeen, appendEvent: (rec) => failure.write(rec) })
         }
       }
     }
