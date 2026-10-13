@@ -266,7 +266,7 @@ test('a process table that cannot be read is not "nobody is alive": the bundle i
   assert.deepEqual([older.kept_bundles, older.left, older.trust_unknown, fs.existsSync(v.b.ca('combined-aa.pem'))], [[], [], [], false], 'no process that may have read the entry: nobody holds the bundle, signature or not')
 })
 
-test('step 5: only a process that may have read the entry is reported, with until from the snapshot; untilEnviron limits it to a process whose environ names a file of asight\'s', async () => {
+test('step 5: only a process that may have read the entry is reported, with until from the snapshot; untilEnviron limits it to a process whose environ names a file of asight\'s — where the OS never shows an environment (macOS, Windows) such a process is reported, one whose read failed is not', async () => {
   const s = await setup((b) => [repH(b, 'aa', { afterUninstall: 'next-connection' }), { ...repH(b, 'bb', { afterUninstall: 'restart', untilEnviron: 'SSL_CERT_FILE' }) }, jsonH(b)])
   const t0 = Date.parse(readManifest(s.b.dir).entries[0].installed_at)
   const r = await s.run({ ids: ['aa', 'bb', 'jj'], procs: async () => [
@@ -274,8 +274,10 @@ test('step 5: only a process that may have read the entry is reported, with unti
     proc(3, '/x/bb', { startedAt: t0 + 1000 }), proc(4, '/x/bb', { startedAt: t0 + 1000, env: { SSL_CERT_FILE: s.b.ca('combined-bb.pem') } }), proc(5, '/x/bb', { startedAt: t0 + 1000, env: { SSL_CERT_FILE: '/corp/own.pem' } }),
     proc(6, '/x/jj', { startedAt: 1 }), // jj re-reads its entry: alive is enough, until the default
     proc(7, '/usr/bin/vim'),
+    proc(8, '/x/bb', { startedAt: t0 + 1000, env: null }), // a read that failed (Linux): whether it went through asight's file is not known — not listed
+    { ...proc(9, '/x/bb', { startedAt: t0 + 1000, env: null }), envRead: false }, // an environment the OS never shows: it may have, so it is listed
   ] })
-  assert.deepEqual(r.still_trusting, [{ pid: 2, harness: 'aa', until: 'next-connection' }, { pid: 4, harness: 'bb', until: 'restart' }, { pid: 6, harness: 'jj', until: 'restart' }])
+  assert.deepEqual(r.still_trusting, [{ pid: 2, harness: 'aa', until: 'next-connection' }, { pid: 4, harness: 'bb', until: 'restart' }, { pid: 6, harness: 'jj', until: 'restart' }, { pid: 9, harness: 'bb', until: 'restart' }])
   const only = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   assert.deepEqual((await only.run({ ids: ['aa'], procs: async () => [proc(1, '/x/bb')] })).still_trusting, [], 'a process of a harness that was not undone is not reported')
 })
