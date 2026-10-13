@@ -89,10 +89,13 @@ export function identityView(facts) {
 
 const revived = new WeakMap() // reviving builds RegExps; a table of hundreds of processes asks about the same few signatures
 const isObj = (v) => !!v && typeof v === 'object'
-// the record's patterns: `identity` (the compiled name list, D51), else the key an older asight wrote, `signature` (a Linux path signature, or the
-// macOS / Windows form tables folded, PR #65) — a manifest from before the next `on` is judged by what it has
+/** A liveness record's patterns, as JSON: `identity` (the compiled name list, D51), else the key an older asight wrote, `signature` (a Linux path signature,
+ *  or the macOS / Windows form tables folded, PR #65) — a manifest from before the next `on` is judged by what it has, and `on` unites with it. The one
+ *  place this rule is written (here, withAgentList, src/collector/install.mjs). */
+export const patternsOf = (l) => (!isObj(l) ? null : isObj(l.identity) ? l.identity : isObj(l.signature) ? l.signature : null)
+
 function signatureOf(l) {
-  const sig = !isObj(l) ? null : isObj(l.identity) ? l.identity : isObj(l.signature) ? l.signature : null
+  const sig = patternsOf(l)
   if (!sig) return null
   if (!revived.has(sig)) revived.set(sig, reviveSignature(sig))
   return revived.get(sig)
@@ -113,7 +116,7 @@ export function withAgentList(liveness, list) {
     ? `${list.path} could not be used (${(list.problems[0] || {}).detail || list.state}); the names put there are not counted when judging which processes still hold asight's files`
     : null
   for (const [h, l] of Object.entries(out)) {
-    const base = !isObj(l) ? null : isObj(l.identity) ? l.identity : isObj(l.signature) ? l.signature : null
+    const base = patternsOf(l)
     const names = (list.entries || []).filter((e) => e.harness === h && !e.ignore).map((e) => (e.args == null ? { name: e.name } : { name: e.name, args: e.args }))
     if (!base || !names.length) continue
     let custom

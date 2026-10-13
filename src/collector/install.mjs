@@ -15,6 +15,7 @@ import { bundleRoots } from './core/tls/roots.mjs'
 import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
+import { patternsOf } from '../off/signature.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
 import { controlRequest, controlEndpointFor } from './core/control.mjs'
@@ -230,9 +231,11 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   }
 }
 
-// A fresh liveness record with the `identity.match` patterns of the one already recorded kept: each pattern once (by its JSON text), sorted by it.
+// A fresh liveness record with the `match` patterns of the one already recorded kept — its `identity`, or the `signature` an older asight wrote (4.6
+// 判活快照: united with what is recorded) —: each pattern once (by its JSON text), sorted by it.
 function unitedLiveness(old, fresh) {
-  const prev = old && old.identity && Array.isArray(old.identity.match) ? old.identity.match : []
+  const was = patternsOf(old)
+  const prev = was && Array.isArray(was.match) ? was.match : []
   const byText = new Map([...prev, ...fresh.identity.match].map((p) => [JSON.stringify(p), p]))
   const match = [...byText.keys()].sort().map((k) => byText.get(k))
   return { ...fresh, identity: { ...fresh.identity, match } }

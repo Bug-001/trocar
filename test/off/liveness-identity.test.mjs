@@ -98,6 +98,8 @@ test('an old asight-off (OFF_VERSION 9) reads only `signature`: after on rewrite
   await s.on()
   const l = json(readManifest(s.dir).liveness.codex)
   assert.deepEqual([hasIdentity(l), 'signature' in l, hasIdentity({ ...l, identity: undefined })], [true, false, false], 'an old copy, finding no `signature`, has nothing to tell processes apart with')
+  assert.ok(l.identity.match.some((p) => p.exe && p.exe.re === 'codex$'), 'the old `signature` patterns are united into the new identity (4.6 判活快照): a process started under them still holds')
+  assert.equal(matchHarness({ codex: l }, { exe: '/opt/elsewhere/my-codex', argv: ['my-codex'] }), 'codex', 'judged by the united patterns')
 })
 
 // ── off: the older keys, and agents.json read when it runs ──────────────────────────────────────────────────────────────────────────────────
