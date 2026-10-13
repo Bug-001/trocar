@@ -168,7 +168,7 @@ for (const maxVersion of ['TLSv1.2', 'TLSv1.3']) {
     assert.deepEqual(h.ctx.negCache.list().map((e) => [e.pid, e.host, e.cause, e.rejections]), [[1, 'upstream.test', 'client-rejected-leaf', 2]])
     // the negative-cache write is an event of its own, but the engine's negCache wrapper writes it (engine.test, once);
     // the flow must not write it a second time
-    assert.deepEqual(h.failures, [], 'flow.mjs itself writes no negative-cache event (D-12: the engine owns it)')
+    assert.deepEqual(h.failures.filter((f) => f.code !== 'trust-rejected'), [], 'flow.mjs itself writes no negative-cache event (D-12: the engine owns it); its own is trust-rejected (trust-rejected.test.mjs)')
     const r = await request(h.port, upCa.certPem, REQ, { maxVersion })
     await h.close()
     assert.match(r.cert.issuer, /upstream test CA/)

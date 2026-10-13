@@ -22,7 +22,10 @@ export const UNTRACKED_REASONS = Object.freeze(['pid-unresolved', 'facts-unavail
 /** Failure codes the failure recorder never folds by where + code: the reader folds each of them into a condition per
  *  (pid, host), so a folded line would make the pairs folded into it vanish (4.6 §事件与码, D1-1). Bounded: a (pid,
  *  host) is written at most once in the process's life. */
-export const UNFOLDED_CODES = Object.freeze(['negative-cache'])
+export const UNFOLDED_CODES = Object.freeze(['negative-cache', 'trust-rejected'])
+
+/** The `level` a failure may carry (D51④, 4.6 §事件与码): `critical` — the reader puts it first, the daemon also tells stderr. No level = an ordinary failure. */
+export const LEVELS = Object.freeze(['critical'])
 
 /** The part of asight a record comes from. */
 export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
@@ -57,7 +60,8 @@ export const CODES_BY_PART = Object.freeze({
   bundle: ['roots-changed', 'missing', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial'], // the last three: the bundles of the harnesses that are on were (re)built with no OS root, without OS roots that did not parse, without a roots source whose read failed (4.6 「合并包」)
   note: ['ok'], // the code of an agent-trusted line
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
-  engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'upstream-ca-unreadable', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response'],
+  engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'upstream-ca-unreadable', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response',
+    'trust-rejected'], // a decrypted connection whose client refused asight's leaf: level 'critical', one per (pid, host) (D51④)
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
   // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
   // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in

@@ -8,6 +8,7 @@ import tls from 'node:tls'
 import { classify, parseClientHello, parseHead } from './sniff.mjs'
 import { createExchangeTee } from './exchange.mjs'
 import { negKey } from './negcache.mjs'
+import { processNames } from '../../../off/identity.mjs'
 import { createUpstreamTrust } from '../tls/roots.mjs'
 import { socksHandshake } from './socks.mjs'
 import { createDrain } from './drain.mjs'
@@ -479,6 +480,14 @@ export function handleFlow(client, meta, ctx) {
         // certificate-check code never reaches us.
         if (!rec.error) rec.error = e instanceof Error ? { type: e.code || 'error', message: msgOf(e), side: 'client' }
           : { type: 'closed_without_app_data', message: 'the client closed after the TLS handshake without sending application data', side: 'client' }
+        // D51④: the process was judged trusting asight and is not — a critical failure, once per (pid, host) (4.6 §事件与码). Names and
+        // the trust entry asight relied on; never the client's bytes or certificates.
+        if (!ctx.firstRejection || ctx.firstRejection(key)) {
+          const t = meta.trust && typeof meta.trust === 'object' ? meta.trust : null
+          ctx.failure({ code: 'trust-rejected', level: 'critical', harness: meta.agent ?? null, door: meta.door ?? null, process: processNames({ exe: meta.exe, argv: meta.argv })[0] ?? null,
+            pid: meta.pid ?? null, neg_key: String(meta.negKey ?? meta.pid), host, alert: rec.error.type, trust_entry: t ? { var: t.var ?? null, via: t.via ?? null, file: t.file ?? null } : null,
+            reason: `${meta.agent ?? 'an agent'}${meta.pid != null ? ` pid ${meta.pid}` : ''} refused asight's certificate for ${host} (${rec.error.type}) although it was judged to trust asight${t && t.var ? ` through ${t.var}` : ''}; this connection failed` })
+        }
         ctx.negCache.observe(key, { rejected: true, meta, host })
       }
       clientTls.on('error', judge); clientTls.on('end', judge); clientTls.on('close', judge)

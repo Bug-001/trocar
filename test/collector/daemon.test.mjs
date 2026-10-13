@@ -854,7 +854,9 @@ test('daemon: describe hands the engine the harness WebSocket terminators and th
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 5151, pid: 5151, comm: 'codex', filename: CODEX_EXE, ts_ns: 1 })
     const row = await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 5151 && a.trusted))
     assert.deepEqual([row.agent, row.trust_var, row.hosts.includes('proxy.lab.test')], ['codex', 'SSL_CERT_FILE', false], 'its proxy reaches the engine as FlowExtras, not as a decrypt host')
-    assert.deepEqual(d.tracker.extrasFor(5151), { wsTerminal: codex.wsTerminal, proxies: [{ scheme: 'https', host: 'proxy.lab.test', port: 8443, own: true, source: 'env:HTTPS_PROXY' }] })
+    const { trust, ...extras } = d.tracker.extrasFor(5151)
+    assert.equal(trust.var, 'SSL_CERT_FILE', 'the trust entry the verdict relied on rides along (D51④)')
+    assert.deepEqual(extras, { wsTerminal: codex.wsTerminal, proxies: [{ scheme: 'https', host: 'proxy.lab.test', port: 8443, own: true, source: 'env:HTTPS_PROXY' }] })
 
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 5151, decrypt: 1 })

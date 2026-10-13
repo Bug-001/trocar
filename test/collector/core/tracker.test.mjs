@@ -237,14 +237,16 @@ test('tracker: extrasFor hands the engine this process\'s own proxies and the ha
   const env = new Map([['EXTRA_CA', PEM], ['HTTPS_PROXY', 'https://user:secret@Proxy.Example.com:8443'], ['HTTP_PROXY', 'plain-proxy.example.com:3128'], ['ALL_PROXY', 'ftp://x']])
   redirector.emit('exec', facts(550, { exe: '/opt/delta', env }))
   redirector.emit('exec', facts(551, { env: new Map([['EXTRA_CA', PEM], ['HTTPS_PROXY', 'https://p.example.com']]) })); await settle()
-  assert.deepEqual(tracker.extrasFor(550), {
+  const noTrust = ({ trust, ...rest }) => rest // trust: the entry the verdict relied on (D51④, trust-rejected.test.mjs)
+  assert.equal(tracker.extrasFor(550).trust.var, 'EXTRA_CA')
+  assert.deepEqual(noTrust(tracker.extrasFor(550)), {
     wsTerminal: [{ pathSuffix: '/ws', patterns: ['^\\{"done"'] }],
     proxies: [
       { scheme: 'https', host: 'proxy.example.com', port: 8443, own: true, source: 'env:HTTPS_PROXY' }, // no credentials
       { scheme: 'http', host: 'plain-proxy.example.com', port: 3128, own: true, source: 'env:HTTP_PROXY' },
     ],
   })
-  assert.deepEqual(tracker.extrasFor(551), { wsTerminal: null, proxies: [] }, 'a harness that declares no proxy reader hands none over')
+  assert.deepEqual(noTrust(tracker.extrasFor(551)), { wsTerminal: null, proxies: [] }, 'a harness that declares no proxy reader hands none over')
   assert.deepEqual([tracker.extrasFor(null), tracker.extrasFor(9999)], [{}, {}])
   // its proxies are not decrypt hosts: the engine's proxy path decides from FlowExtras (4.6 §引擎 3, plan 3c-7)
   assert.deepEqual(['proxy.example.com', 'plain-proxy.example.com'].map((h) => tracker.policy({ pid: 550 }, h)), [false, false])

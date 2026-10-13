@@ -309,7 +309,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     unmatched: () => [...ambiguous.values()].sort((a, b) => a.pid - b.pid),
     describe: (pid) => (table.has(pid) ? { ...table.get(pid) } : null),
     // FlowExtras for the engine's describe (plan 3c §2): the harness's WebSocket terminators and this process's own proxies
-    extrasFor(pid) { const r = pid == null ? null : table.get(pid); return r ? { wsTerminal: r.wsTerminal, proxies: r.proxies.map((p) => ({ ...p })) } : {} },
+    extrasFor(pid) { const r = pid == null ? null : table.get(pid); return r ? { wsTerminal: r.wsTerminal, proxies: r.proxies.map((p) => ({ ...p })), trust: { var: r.trustVar, via: r.trustVia, file: r.trustFile ?? null } } : {} }, // trust: the entry the verdict relied on (trust-rejected, D51④)
     metaFor(pid) { const r = table.get(pid); return r ? { agent: r.agent, exe: r.exe, parentPid: r.ppid, parentAgent: r.parentAgent } : null },
     // setPolicy({mode, extraHosts}) is the default every harness uses; byHarness = {<id>: {mode, extraHosts}} gives one its own (1.6 §1.5)
     setPolicy({ mode: m = 'auto', extraHosts = [], byHarness = null } = {}) {

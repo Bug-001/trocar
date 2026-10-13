@@ -59,7 +59,7 @@ function daemonText(h) {
   return `collector daemon: not running (it stopped cleanly, or never started)${at}`
 }
 const groupLine = (g) => `  ${g.last_ts} ${g.last.event === 'failure' ? `failure (${g.last.where}/${g.last.code})` : g.last.event || `flow ${g.last.flow_id} not captured: ${g.last.not_captured || g.last.reason}`}${g.last.pid != null ? ` pid ${g.last.pid}` : ''}${g.last.agent ? ` ${g.last.agent}` : ''}: ${g.last.event === 'agent-untrusted' && g.last.code && g.last.code !== g.last.reason ? `${g.last.code} — ` : ''}${g.last.reason || (g.last.error && g.last.error.message) || ''}${g.count > 1 ? ` (×${g.count} in 24 h)` : ''}${g.last.hint ? ` — ${g.last.hint}` : ''}`
-const condLine = (c) => `  now: ${c.kind}${c.pid != null ? ` pid ${c.pid}` : ''}${c.agent ? ` ${c.agent}` : ''}${c.host ? ` ${c.host}` : ''} since ${c.since}: ${c.reason || ''}`
+const condLine = (c) => `  now: ${c.level ? `[${c.level}] ` : ''}${c.kind}${c.pid != null ? ` pid ${c.pid}` : ''}${c.agent ? ` ${c.agent}` : ''}${c.host ? ` ${c.host}` : ''} since ${c.since}: ${c.reason || ''}`
 export function formatHealth(h, { daemonLine = true } = {}) {
   const c = h.collector, lines = []
   if (daemonLine) lines.push(daemonText(h))
