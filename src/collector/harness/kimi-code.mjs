@@ -13,10 +13,16 @@
 // after the kimi installer's own PATH line, in each shell rc that has one. Installed only when the binary and such a
 // line exist; otherwise an install note `shim-not-on-path`. A CA the user already gives kimi (install shell, running
 // kimi) is carried over into extra-kimi.pem, as for Claude Code (4.6).
+// The marker entry (2026-10-12, the kimi gap found on a macOS test machine): an OS that never lets the collector read another process's
+// environment (macOS, 4.9 §5.3's procinfo) can never see the shim-set variable, so there the shim's own per-pid
+// launch marker — <collector>/run/trust/<pid> holding the process's start time, the plugin markers' door (4.6「标记」)
+// — is what the tracker confirms instead; dsh's chain shape. The linux shim (harness/shims/kimi) writes no marker:
+// on /proc the environment itself is the door, and a marker that is not there costs nothing (the chain appends).
 import path from 'node:path'
 import { hostOf, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
+import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { envValues, envProxies } from './_common.mjs'
 import { renderShim } from './_plugins.mjs'
 
@@ -81,6 +87,10 @@ const proxy = {
 export default {
   name: 'kimi-code',
   runtime: 'node',
+  // No file-borne trust variables: kimi reads its CA from the environment only. The empty function is the contract
+  // (darwin's osLayers calls it — a descriptor without it throws "own is not a function" in the live judge, the mac
+  // lab's run 2026-10-12: every kimi row degraded to its known hosts); nothing here is a layer.
+  layers: () => [],
   signatures: {
     linux: {
       match: [{ exe: SEA }, { exe: NODE, 'argv.1': NPM_ENTRY }],
@@ -93,11 +103,13 @@ export default {
   proxies: (ctx) => envProxies(ctx.env, ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY']),
   inject,
   trust: {
-    chain: [{ var: CA_VAR, semantic: 'append' }],
+    // the marker first (dsh's ordering): on an OS whose judge cannot read the environment, the shim's launch marker is
+    // the door; when it is there, a failure names it, not a CA door the process cannot be seen to use
+    chain: [{ var: MARKER_VAR, semantic: 'append' }, { var: CA_VAR, semantic: 'append' }],
     // the reason a kimi does not trust asight: the npm build has no shim entry; no shim was installed (install said
     // why); else it did not start through the shim. A CA file of asight's own that is gone keeps the generic reason.
     refine: (r, env, { argv = [], exe = null, readText = () => null, collectorDir = null }) => {
-      if (!['var-missing', 'ca-not-in-file', 'file-unreadable'].includes(r.reason)) return null
+      if (r.var === MARKER_VAR || !['var-missing', 'ca-not-in-file', 'file-unreadable'].includes(r.reason)) return null
       if (r.reason !== 'var-missing' && collectorDir && String(r.file || '').startsWith(collectorDir + path.sep)) return null
       if (NODE.test(exe || argv[0] || '')) return 'kimi-npm-no-shim'
       return collectorDir && readText(path.join(collectorDir, 'bin', 'kimi')) == null ? 'shim-not-on-path' : 'kimi-not-via-shim'

@@ -507,7 +507,7 @@ test('W12 detach() is the other way: every group\'s proxy entry undone, and the 
   log.length = 0
   const out = await r.detach()
   assert.deepEqual(log, ['undo', 'close'])
-  assert.deepEqual(e.undone.at(-1).map((x) => x.g).sort(), ['claude-code.desktop', 'claude-code.settings', 'codex.env', 'deepseek-dsh.env', 'z-code.cli'], 'every group, planned or not: off undoes what asight wrote, and only that (the writer knows what that is)')
+  assert.deepEqual(e.undone.at(-1).map((x) => x.g).sort(), ['claude-code.desktop', 'claude-code.settings', 'codex.env', 'deepseek-dsh.desktop', 'deepseek-dsh.env', 'z-code.cli'], 'every group, planned or not: off undoes what asight wrote, and only that (the writer knows what that is)')
   assert.deepEqual(d.closed, [['claude-code.settings', 'codex.env']], 'the doors of the groups nothing carries are closed; dsh\'s (carried) stays forward-only')
   assert.deepEqual(out.doors.open, ['deepseek-dsh.env'])
   assert.equal(out.ok, true)

@@ -112,6 +112,19 @@ const commandOf = (x) => (x.group && x.group.proxyEntry && x.group.proxyEntry.ki
  *  form whose only items are of the 「点名也不做」category is NOT nameable: there is nothing asight would do with the name. */
 export const optinFormsOf = (groups) => [...new Set(planOptIns({ groups }).filter((r) => r.state !== 'never').map((r) => r.form))]
 
+/** → [{ item, forms }] — the ITEM ids the plan's「要你点名的」section prints, each with every form that carries it. The CLI expands an item id
+ *  named on `--opt-in` back to its form (1.6 §1.7: what the plan shows is what the user copies); one carrier expands, several are the user's to
+ *  choose between (cli/on.mjs's rule). The rows are the same planOptIns truth as optinFormsOf's. */
+export const optinItemForms = (groups) => {
+  const byItem = new Map()
+  for (const r of planOptIns({ groups })) {
+    if (r.state === 'never') continue
+    if (!byItem.has(r.item)) byItem.set(r.item, new Set())
+    byItem.get(r.item).add(r.form)
+  }
+  return [...byItem.entries()].map(([item, forms]) => ({ item, forms: [...forms] }))
+}
+
 // ── the doing of a named item ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // applyOptIn({ row, manifest, dir, home, env, fs, now, save, note, failure, state, deps }) → { state: 'done' | 'pending-admin' | 'needs-admin' | 'failed', reason?,
 // elevated_command? }. Everything it touches is injected: the runner of OS tools (`deps.run`, execTool's), the UAC launcher (`deps.launch`), whether a
@@ -470,17 +483,17 @@ const isFirst = (dir, value) => {
 }
 
 /** What a machine item's step needs: the command name (the group's shim entry), the real binary's path (the resolver's answer) and the machine
- *  PATH as read now. Every piece injected, so a test answers and nothing here runs a tool for real. */
-async function machineValuesOf({ row, groups = [], deps = {} }) {
+ *  PATH as read now. Deps injected when a caller has them, else the real resolvers — the daemon's own apply path hands no deps, and the missing
+ *  fallback read every real machine item `optin-failed` on a Windows test machine (as the plan side 30 lines up already defaulted this
+ *  way, which is why the plan offered the item the apply then could not build). */
+async function machineValuesOf({ row, groups = [], deps = {}, env = process.env }) {
   if (row.item === 'machine-path-dispatcher') {
     const g = groups.find((x) => x.forms.some((f) => f.id === row.form)) || null
     const command = g && g.group && g.group.proxyEntry && g.group.proxyEntry.kind === 'shim' ? g.group.proxyEntry.command : null
     if (!command) return { error: `the form ${row.form} has no shim command, so there is no dispatcher to build` }
-    if (typeof deps.resolveCommand !== 'function') return { error: 'no command resolver is wired in (the machine PATH item cannot be built)' }
-    const real = deps.resolveCommand(command)
+    const real = typeof deps.resolveCommand === 'function' ? deps.resolveCommand(command) : resolveCommand(command, { env })
     if (!real || real.at !== 'machine' || !real.path) return { error: `the real binary of ${command} did not resolve on the machine PATH (the user-level shim item is the right one here)` }
-    if (typeof deps.readMachinePath !== 'function') return { error: 'the machine PATH could not be read (no reader wired in)' }
-    const machinePath = deps.readMachinePath()
+    const machinePath = typeof deps.readMachinePath === 'function' ? deps.readMachinePath() : readMachinePath({ env })
     if (machinePath == null) return { error: 'the machine PATH could not be read, so the elevated step cannot be built (nothing was changed)' }
     return { command, realBinary: real.path, machinePath }
   }

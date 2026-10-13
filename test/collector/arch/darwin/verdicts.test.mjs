@@ -205,6 +205,34 @@ test('W76 a form told by its command line is not judged "not an agent" while the
   assert.deepEqual(redirector.verdictOf(40), { decrypt: true, agent: 'deepseek-dsh' }, 'judged again on the update, and the marker it left trusts')
 })
 
+// ── D47 finding, 2026-10-12: the z-code CLI's rewritten command line is still the form at the door ─────────────────────────────────────
+
+test('D47 a z-code CLI that rewrote its whole command line to its title (`process.title = "zcode-cli"`) is the form at the door: the pid is announced at accept time and the verdict arrives through watch() — found live on macOS (the form knew only `zcode\.cjs`, the door answered path-unknown and spliced every connection untracked, no llm_call, while cc/codex/dsh — none of which rewrites its command line — decrypted fine)', async () => {
+  // the two command lines a z-code CLI process lives in (the base descriptor's CLI_CMDLINE): the bundle path as invoked, and the title a `-p` / `tui`
+  // CLI rewrites its whole command line to within moments of start — `ps` gave exactly `zcode-cli` for the process that owned the sockets (measured)
+  for (const cmdline of [ZCODE_CMD, 'zcode-cli']) {
+    const announced = []
+    // the tracker's half of the seam, faked: judge → watch. The door's half is the real one (matchForm over the real form data, ownerOf, factsOf)
+    const redirector = createDarwinRedirector({
+      groups: GROUPS, home: HOME,
+      ownerOf: async () => ({ pid: 50, source: 'socket-table', ms: 4 }),
+      factsOf: () => facts(50, IMG.zcode, { cmdline, argv: cmdline.split(/\s+/), startedAt: 1700000005000, startTicks: '1700000005000', source: 'accept' }),
+      routes: () => ({ 'z-code.cli': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }),
+      ingress: () => ({ enginePort: 18790, groupPorts: { 'z-code.cli': 18801 }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }),
+    })
+    redirector.on('exec', (f) => { announced.push(f.pid); redirector.watch(f.pid, { decrypt: true, agent: 'z-code' }) })
+    const meta = await redirector.lookupIngress({ peer: { address: '127.0.0.1', port: 51000 }, user: 'z-code.cli', target: { address: 'relay.asight.test', port: 443 } })
+    assert.deepEqual(announced, [50], cmdline === 'zcode-cli' ? 'the rewritten-title CLI was announced at accept time' : 'the as-invoked CLI was announced at accept time')
+    assert.equal(meta.form, 'z-code.cli', `${cmdline}: the door named the form`)
+    assert.equal(meta.decrypt, true, `${cmdline}: the verdict arrived through watch(), not the 5 s tombstone`)
+    assert.equal(meta.skip, undefined, `${cmdline}: nothing says untracked`)
+    assert.equal(meta.agent, 'z-code')
+  }
+  // the desktop GUI's process (a command line of neither shape: the bare exe, no bundle path, no title) is still no form on macOS — the new title
+  // pattern widens the CLI, it must not swallow the unmeasured desktop (4.6 OPEN ②'s darwin half)
+  assert.equal(matchForm(FORMS, facts(51, IMG.zcode, { cmdline: IMG.zcode }), { home: HOME }).kind, 'path-unknown')
+})
+
 // ── W76 cell 5: the whole path — the real redirector, tracker, registry and a real ingress ─────────────────────────────────────────────
 
 const REQ = 'GET /v1/models HTTP/1.1\r\nhost: upstream.test\r\n\r\n'

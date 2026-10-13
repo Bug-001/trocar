@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
-import { OPTIN_ITEMS, OPTIN_MACHINE_KINDS, optinItemIds, optinFormsOf, planOptIns, isOptinKind, SCRIPTS_DIR } from '../../../../src/collector/arch/win32/optin.mjs'
+import { OPTIN_ITEMS, OPTIN_MACHINE_KINDS, optinItemIds, optinFormsOf, optinItemForms, planOptIns, isOptinKind, SCRIPTS_DIR } from '../../../../src/collector/arch/win32/optin.mjs'
 import { KNOWN_KINDS, OPTIN_KINDS, OFF_VERSION } from '../../../../src/off/manifest.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import fs from 'node:fs'
@@ -47,6 +47,13 @@ test('the catalog is 4.8 §2.4\'s table: every item\'s kinds and scope, and the 
   const rows = planOptIns({ groups: GROUPS })
   assert.deepEqual(rowsOf(rows), EXPECT, 'per form: item, scope and manifest kinds, nothing else offered (a form without a row never appears)')
   assert.deepEqual([...optinFormsOf(GROUPS)].sort(), Object.keys(EXPECT).sort(), 'the forms --opt-in may name')
+  // the item side of the same list: every item id the plan prints maps to the forms that carry it (kimi-gap 第 2 条's sibling gap: the plan's
+  // hint printed ITEM ids the flag used to reject); the win table has no item two forms share yet — the moment one appears, the CLI makes the
+  // user name the form
+  const items = optinItemForms(GROUPS)
+  assert.deepEqual([...new Set(items.flatMap((x) => x.forms))].sort(), Object.keys(EXPECT).sort(), 'every carried form is a nameable one')
+  assert.deepEqual(items.filter((x) => x.forms.length > 1).map((x) => x.item).sort(), ['machine-path-dispatcher', 'user-path-shim'], 'the two shim items are shared (kimi and opencode) — the CLI makes the user name the form for those')
+  assert.ok(items.some((x) => x.item === 'cert-store-current-user' && x.forms.includes('claude-code.desktop')), 'the cert-store hint names Claude Desktop')
 })
 
 test('a row is what the plan prints (1.6 §1.7): the exact command, the impact text of the harness data, admin where the scope is machine, chosen where the user named the form', () => {

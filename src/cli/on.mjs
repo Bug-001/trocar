@@ -45,7 +45,7 @@ function splitOptIn(argv) {
 export async function runOnCli(argv, { io, env = process.env, home = os.homedir(), platform = process.platform, deps = {} } = {}) {
   const picked = splitOptIn(argv)
   if (picked.error) { io.err(`asight on: ${picked.error}\n${USAGE}`); return EXIT.usage }
-  const { optIn } = picked
+  let { optIn } = picked
   argv = picked.rest
   const flags = new Set(), names = []
   for (const a of argv) {
@@ -71,11 +71,24 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const optInHooks = deps.optIn || (parts.arch && parts.arch.optIn) || null
     if (optIn.length) {
       const known = optInHooks && typeof optInHooks.forms === 'function' ? optInHooks.forms({ harnesses: parts.harnesses, ids: named.ids }) : []
-      const unknown = [...new Set(optIn)].filter((f) => !known.includes(f))
+      // an ITEM id the plan's「要你点名的」section prints names its form (1.6 §1.7: what the plan shows is what the user copies) — one carrier
+      // expands to that form; an item several forms share is the user's to disambiguate, by naming the form itself
+      const items = optInHooks && typeof optInHooks.itemForms === 'function' ? optInHooks.itemForms({ harnesses: parts.harnesses, ids: named.ids }) : []
+      const expanded = [], unknown = []
+      for (const name of [...new Set(optIn)]) {
+        if (known.includes(name)) { expanded.push(name); continue }
+        const carriers = [...new Set(items.filter((x) => x.item === name).flatMap((x) => x.forms))]
+        if (carriers.length === 1) expanded.push(carriers[0])
+        else if (carriers.length > 1) {
+          io.err(`asight on: --opt-in 的 ${name} 是多个形态共有的点名项(${carriers.join(', ')});点名形态本身,如 --opt-in ${carriers[0]}`)
+          return EXIT.usage
+        } else unknown.push(name)
+      }
       if (unknown.length) {
         io.err(`asight on: --opt-in 名了不认识的形态 ${unknown.join(', ')}${known.length ? `;可以点名的形态是: ${known.join(', ')}` : ';这个平台没有要点名的形态(1.6 §1.7)'}`)
         return EXIT.usage
       }
+      optIn = expanded
     }
     const fs = deps.fs || nodeFs
     // The Node floor (4.8 §7, W24: the daemon is pulled up by THIS Node at every login, so an older one cannot run the collector): the arch's own read of

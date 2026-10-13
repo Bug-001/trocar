@@ -54,15 +54,16 @@ test('groupsOf: the darwin groups of the harness descriptors, each with its harn
   assert.deepEqual(GROUPS.map((x) => [x.harness, x.g, x.forms.map((f) => f.id)]), [
     ['claude-code', 'claude-code.settings', ['claude-code.native', 'claude-code.cli', 'claude-code.vscode']],
     ['claude-code', 'claude-code.desktop', ['claude-code.desktop']],
-    ['codex', 'codex.env', ['codex.cli']],
+    ['codex', 'codex.env', ['codex.cli', 'codex.vscode']],
     ['deepseek-dsh', 'deepseek-dsh.env', ['deepseek-dsh.cli']],
+    ['deepseek-dsh', 'deepseek-dsh.desktop', ['deepseek-dsh.desktop']],
     ['hermes', 'hermes.cli', ['hermes.cli']],
     ['kimi-code', 'kimi-code.cli', ['kimi-code.cli']],
     ['opencode', 'opencode.cli', ['opencode.cli']],
     ['z-code', 'z-code.cli', ['z-code.cli']],
   ])
   assert.ok(GROUPS.every((x) => x.group.g === x.g && x.proxy && Array.isArray(x.proxy.env) && Array.isArray(x.proxy.branches)), 'the group data and the harness\'s `proxy` (the variables it reads, its branches) are what upstreamFor is given')
-  for (const id of ['hermes.desktop', 'codex.vscode', 'codex.app', 'opencode.desktop', 'z-code.desktop', 'kimi-code.vscode']) {
+  for (const id of ['hermes.desktop', 'codex.app', 'opencode.desktop', 'z-code.desktop', 'kimi-code.vscode']) {
     assert.equal(GROUPS.flatMap((x) => x.forms).some((f) => f.id === id), false, `${id} has no group: on darwin it is listed but not measured, so nothing can be routed for it`)
   }
   assert.deepEqual(groupsOf([{ name: 'windows-only' }, null]), [], 'a harness with no darwin data has no group on darwin')

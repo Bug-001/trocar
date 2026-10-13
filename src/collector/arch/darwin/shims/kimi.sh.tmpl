@@ -2,7 +2,14 @@
 # asight collector: launch shim for Kimi Code on macOS (RFC 4.9 s2.4 / s6.3 — the POSIX twin of win32's kimi.cmd),
 # written by the user-path opt-in item of `asight on kimi-code --opt-in kimi-code.cli`. It sets the CA file Node
 # reads (the asight CA, plus any CA you already gave Kimi Code) and this form's kernel listener; an HTTPS_PROXY the
-# shell already set is your choice for that run and is not overridden (that run is not captured). `asight off
-# kimi-code` removes it.
+# shell already set is your choice for that run and is not overridden (that run is not captured). It also writes the
+# per-pid launch marker — <collector>/run/trust/<pid> holding this process's start time, the plugin markers' door
+# (4.6「标记」, confirm.mjs's shape): macOS never lets the collector read another process's environment, so the shim's
+# marker, fresh only for this process's own life (a reused pid reads stale and is not trusted), is what the tracker
+# confirms this kimi's trust by. A marker it could not write only costs this launch's capture, never the run.
+# `asight off kimi-code` removes the shim.
 if [ -z "${HTTPS_PROXY:-}" ]; then HTTPS_PROXY='__ASIGHT_PROXY__'; export HTTPS_PROXY; fi
+_m="$(dirname "$(dirname '__ASIGHT_CA_FILE__')")/run/trust"
+mkdir -p "$_m" 2>/dev/null
+echo "$(date +%s)000" > "$_m/$$" 2>/dev/null
 exec env NODE_EXTRA_CA_CERTS='__ASIGHT_CA_FILE__' '__ASIGHT_REAL_BINARY__' "$@"

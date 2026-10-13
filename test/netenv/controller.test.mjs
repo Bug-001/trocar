@@ -46,9 +46,6 @@ test('N9 the user\'s VPN (own:false, the default): GET /version and GET /configs
   for (const [method, target, body] of OWN_ONLY) assert.ok(refusal(method, target, body ?? null, { own: false }), `${method} ${target} is the own kernel's, not the VPN's`)
 })
 
-test('N9 the own kernel (own:true): the two reads, GET /proxies/asight-*, GET /group/asight-*/delay and PUT /configs?force=true', () => {
-  for (const [method, target, body] of [...READS, ...OWN_ONLY]) assert.equal(refusal(method, target, body ?? null, own), null, `${method} ${target}`)
-})
 
 test('N9 refused for both: the connection table, the logs, the node list, the rules, the providers, a group that is not ours, any other write', () => {
   const NO = [
@@ -69,8 +66,8 @@ test('N9 refused for both: the connection table, the logs, the node list, the ru
     ['PUT', '/configs?force=true', { payload: 'x', path: '/etc' }], ['PUT', '/configs?force=true', { path: 'a', payload: 'b' }], ['PUT', '/configs?force=false', { payload: 'x' }],
     ['PATCH', '/configs', { mode: 'rule' }], ['PATCH', '/configs', { 'find-process-mode': 'strict' }], ['POST', '/restart', {}], ['DELETE', `/proxies/asight-in-${G}`], ['HEAD', '/version'], [undefined, '/version'],
   ]
-  for (const [method, target, body] of NO) for (const o of [{ own: false }, own]) assert.ok(refusal(method, target, body ?? null, o), `${JSON.stringify(o)} ${method} ${target} ${JSON.stringify(body)}`)
-  assert.ok(refusal('GET', '/version', null, { own: 'yes' }) === null && refusal('PUT', '/configs?force=true', { payload: 'x' }, { own: 'yes' }), 'own is `true` and nothing else: a truthy string does not open the writes')
+  for (const [method, target, body] of NO) assert.ok(refusal(method, target, body ?? null), `${method} ${target} ${JSON.stringify(body)}`)
+  assert.equal(refusal('GET', '/version', null), null, 'and the two reads still pass: that is the whole allow-list')
 })
 
 test('N9 the user\'s VPN: every write method is refused whatever the path, with the reason that asight writes nothing into it', () => {
@@ -83,18 +80,14 @@ test('N9 a refused request throws ControllerRefused and the transport is never c
   let calls = 0
   const transport = { request() { calls++; throw new Error('the network must not be touched') } }
   const ctl = createController({ endpoint: 'pipe:verge-mihomo-0123456789abcdef', transport })
-  assert.equal(ctl.own, false, 'the default is the user\'s VPN')
   for (const f of [() => ctl.get('/connections'), () => ctl.get('/proxies'), () => ctl.get('/rules'), () => ctl.get('/providers/rules'), () => ctl.get('/proxies/asight-in-x'), () => ctl.put(`/proxies/asight-in-${G}`, { name: 'DIRECT' }),
-    () => ctl.put('/configs?force=true', { payload: 'mixed-port: 1\n' }), () => ctl.put('/configs?force=true', { path: 'x' }), () => ctl.put('/providers/rules/asight-x'), () => ctl.get('/logs')]) {
+    () => ctl.put('/configs?force=true', { payload: 'mixed-port: 1\n' }), () => ctl.put('/configs?force=true', { path: 'x' }), () => ctl.put('/providers/rules/asight-x'), () => ctl.get('/logs'), () => ctl.put('/version', null)]) {
     assert.throws(f, (e) => e instanceof ControllerRefused && e.code === 'controller-refused')
   }
-  const mine = createController({ endpoint: 'tcp:127.0.0.1:19090', own: true, transport })
-  assert.equal(mine.own, true)
-  for (const f of [() => mine.get('/connections'), () => mine.get('/rules'), () => mine.put('/proxies/asight-in-x', { name: 'PASS' }), () => mine.put('/configs?force=true', { payload: '' })]) assert.throws(f, ControllerRefused)
-  assert.equal(calls, 0)
+  assert.equal(calls, 0, 'the transport is never touched: the own-kernel mode is gone, every write is refused before any I/O')
 })
 
-test('the endpoint: a pipe maps to \\\\.\\pipe\\<name>, the secret goes only into Authorization, a body is JSON with its length', async () => {
+test('the endpoint: a pipe maps to \\\\.\\pipe\\<name>, the secret goes only into Authorization', async () => {
   const sent = []
   const transport = {
     request(opts, cb) {
@@ -112,13 +105,10 @@ test('the endpoint: a pipe maps to \\\\.\\pipe\\<name>, the secret goes only int
   assert.equal(sent[0].payload, null)
   assert.equal(sent[0].agent, false)
   assert.equal(pipe.endpoint, 'pipe:verge-mihomo-<k>', 'the random suffix never leaves the client')
-  const tcp = createController({ endpoint: 'tcp:127.0.0.1:19090', secret: 'sekret-value-1234', own: true, transport })
+  const tcp = createController({ endpoint: 'tcp:127.0.0.1:19090', secret: 'sekret-value-1234', transport })
   await tcp.get('/version')
   assert.deepEqual([sent[1].host, sent[1].port, sent[1].headers.Authorization], ['127.0.0.1', 19090, 'Bearer sekret-value-1234'])
   assert.equal(sent[1].payload, null)
-  await tcp.put('/configs?force=true', { payload: 'mixed-port: 7897\n' })
-  assert.equal(sent[2].payload, '{"payload":"mixed-port: 7897\\n"}', 'a body is JSON')
-  assert.equal(sent[2].headers['Content-Length'], Buffer.byteLength(sent[2].payload))
 })
 
 test('an endpoint must be a pipe with a plain name, or this machine\'s loopback; anything else is refused when the client is made', () => {
@@ -131,15 +121,12 @@ test('an endpoint must be a pipe with a plain name, or this machine\'s loopback;
   assert.equal(parseEndpoint('unix:/tmp/x.sock').req.socketPath, '/tmp/x.sock')
 })
 
-test('over a real loopback socket: reads and (own kernel) a reload round-trip, a 2xx gives json and no text, the secret arrives as a Bearer', async (t) => {
-  const s = await stub(t, (m, url) => (m === 'GET' && url === '/version' ? [200, { meta: true, version: 'v1.19.32' }] : m === 'PUT' && url === '/configs?force=true' ? [204] : [200, { ok: 1 }]))
-  const ctl = createController({ endpoint: `tcp:127.0.0.1:${s.port}`, secret: 'abcd1234abcd1234', own: true })
+test('over a real loopback socket: a read round-trip, a 2xx gives json and no text, the secret arrives as a Bearer', async (t) => {
+  const s = await stub(t, (m, url) => (m === 'GET' && url === '/version' ? [200, { meta: true, version: 'v1.19.32' }] : [200, { ok: 1 }]))
+  const ctl = createController({ endpoint: `tcp:127.0.0.1:${s.port}`, secret: 'abcd1234abcd1234' })
   const v = await ctl.get('/version')
   assert.deepEqual([v.status, v.ok, v.json, v.text], [200, true, { meta: true, version: 'v1.19.32' }, ''])
-  const p = await ctl.put('/configs?force=true', { path: 'C:/x/config.yaml' })
-  assert.deepEqual([p.status, p.ok, p.json], [204, true, null])
-  assert.deepEqual(s.seen.map((r) => [r.method, r.url, r.auth]), [['GET', '/version', 'Bearer abcd1234abcd1234'], ['PUT', '/configs?force=true', 'Bearer abcd1234abcd1234']])
-  assert.deepEqual(s.seen[1].body, { path: 'C:/x/config.yaml' })
+  assert.deepEqual(s.seen.map((r) => [r.method, r.url, r.auth]), [['GET', '/version', 'Bearer abcd1234abcd1234']])
 })
 
 test('over a unix socket (tests, a pinned endpoint)', async (t) => {
@@ -155,7 +142,8 @@ test('over a unix socket (tests, a pinned endpoint)', async (t) => {
 test('an error answer carries a message only when it is one of the core\'s fixed ones; every other message, and the json that holds it, is withheld (a real core prints the user\'s own names, quoted or not)', async (t) => {
   for (const { why, status, message } of RECORDED_REFUSALS) {
     const s = await stub(t, () => [status, { message }])
-    const r = await createController({ endpoint: `tcp:127.0.0.1:${s.port}`, own: true }).put('/configs?force=true', { payload: 'mixed-port: 7897\n' })
+    const s2 = s
+    const r = await createController({ endpoint: `tcp:127.0.0.1:${s2.port}` }).get('/configs')
     assert.deepEqual([r.status, r.ok, r.text, r.json], [status, false, '', null], `${why}: nothing of "${message.slice(0, 30)}…" is handed on`)
     assert.ok(!JSON.stringify(r).includes('Private') && !JSON.stringify(r).includes('Secret Node') && !JSON.stringify(r).includes('x.example'), why)
   }
@@ -175,7 +163,7 @@ test('the core\'s fixed messages are the ones this client can provoke: a wrong B
   assert.deepEqual([...RECORDED_FIXED].sort(), [...FIXED_MESSAGES].sort(), 'the recorded table and the allow-list are the same two')
   for (const message of ['Body invalid', 'Selector update error: proxy not exist']) {
     const s = await stub(t, () => [400, { message }])
-    const r = await createController({ endpoint: `tcp:127.0.0.1:${s.port}`, own: true }).put('/configs?force=true', { payload: 'mixed-port: 7897\n' })
+    const r = await createController({ endpoint: `tcp:127.0.0.1:${s.port}` }).get('/configs')
     assert.deepEqual([r.status, r.ok, r.text, r.json], [400, false, '', null], `${message}: the status is kept, the words are not`)
   }
 })

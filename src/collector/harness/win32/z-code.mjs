@@ -7,7 +7,7 @@
 //                   programs' connections (D40, 4.8 §3.5, OPEN 23): its process rule is the whole image and it has no `hosts`.
 // ZCode.exe is no shared image, but two forms use it, so there is no PROCESS-NAME rule (it would hand the other form's connections to this one's listener).
 import path from 'node:path'
-import linux from '../z-code.mjs'
+import linux, { CLI_CMDLINE } from '../z-code.mjs'
 
 const raw = String.raw
 const inject = (ctx) => linux.inject(ctx)
@@ -34,7 +34,11 @@ export default {
     },
   ],
   forms: [
-    { id: 'z-code.cli', g: 'z-code.cli', match: { image: 'ZCode.exe', path: [IMAGE_PATH], cmdline: [raw`zcode\.cjs`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    // `cmdline` is the base descriptor's CLI_CMDLINE (z-code.mjs): the bundle path as invoked AND the title a `-p` / `tui` CLI sets (`zcode-cli`). On
+    // Windows the assignment reaches only the console title, never GetCommandLineW, so the title pattern never hits here — it is carried because the
+    // rewrite is the agent's own behaviour, one list for both twins (found live on the darwin lab, 2026-10-12: the mac twin knew only the bundle path
+    // and a CLI's sockets came out path-unknown at the door, no verdict asked)
+    { id: 'z-code.cli', g: 'z-code.cli', match: { image: 'ZCode.exe', path: [IMAGE_PATH], cmdline: CLI_CMDLINE, reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
     { id: 'z-code.desktop', g: 'z-code.desktop', match: { image: 'ZCode.exe', path: [IMAGE_PATH], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
   ],
   inject,
