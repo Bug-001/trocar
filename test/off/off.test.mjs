@@ -716,3 +716,20 @@ test('off: a gone bundle rebuilt on a machine with no OS bundle says it carries 
   assert.equal(said.length, 1, JSON.stringify(flowEvents(s.dir).map((e) => e.reason)))
   assert.match(said[0].reason, /with Node's roots only \(no OS trust bundle holds a certificate\)/)
 })
+
+// 4.9 §6.2 「绝不用固定的 /etc/ssl/cert.pem 当 OS 根」, for `off`'s rebuild too (4.6 撤销顺序 第 2 步): a gone bundle a live codex may use, rebuilt on a Mac,
+// must not take its OS roots from a static PEM file — the keychain's added anchors (a corporate proxy's CA) are in none of them. The /etc here is a stock
+// Mac's, whatever this machine's is (a nix-darwin Mac also has the Debian path): /etc/ssl/cert.pem holds a marker root, every other file under /etc is absent.
+test('off on darwin: a gone bundle is rebuilt without opening a static OS bundle file such as /etc/ssl/cert.pem (4.9 §6.2, 4.6 撤销顺序 第 2 步)', async () => {
+  const s = await installedHome({ names: ['codex'] })
+  const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
+  fs.rmSync(bundle)
+  const marker = createCa({ commonName: 'static OS bundle root' })
+  const opened = []
+  const enoent = (f) => Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' })
+  const macFs = { ...fs, readFileSync: (f, ...a) => { if (!String(f).startsWith('/etc/')) return fs.readFileSync(f, ...a); opened.push(f); if (f === '/etc/ssl/cert.pem') return marker.certPem; throw enoent(f) } }
+  const { receipt } = await s.off({ deps: { platform: 'darwin', alive: () => false, roots: undefined, fs: macFs, procs: async () => [proc(4242, '/opt/homebrew/bin/codex', ['codex'])] } })
+  assert.deepEqual(receipt.kept_bundles.map((k) => [path.basename(k.path), k.rebuilt]), [['combined-codex.pem', true]])
+  const fps = certBlocks(fs.readFileSync(bundle, 'utf8')).map((c) => c.fp)
+  assert.deepEqual([opened, fps.includes(certBlocks(marker.certPem)[0].fp)], [[], false], 'no static OS bundle is opened, and cert.pem\'s roots are not in the rebuilt bundle')
+})
