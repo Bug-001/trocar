@@ -29,6 +29,7 @@ import { createServer } from '../../src/server.mjs'
 import { serveSource } from '../../src/paths.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
+import { failureBrief } from '../../src/cli/words.mjs'
 import { writeNetenv } from '../../src/netenv/index.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
 import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
@@ -692,8 +693,11 @@ test('daemon: the Linux arch\'s OS roots — none on the machine is a bundle fai
   const { loadArch } = await import('../../src/collector/arch/index.mjs')
   const { SYSTEM_BUNDLES } = await import('../../src/collector/core/tls/roots.mjs')
   const linux = await loadArch('linux')
-  const disk = new Map() // this machine's /etc as the arch reads it: empty = no OS bundle at all
-  const read = (f) => { if (disk.has(f)) return disk.get(f); throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' }) }
+  const disk = new Map(), denied = new Set() // this machine's /etc as the arch reads it: empty = no OS bundle at all
+  const read = (f) => {
+    if (denied.has(f)) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' })
+    if (disk.has(f)) return disk.get(f); throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' })
+  }
   const osRoots = () => linux.osRoots({ read })
   const dir = s.collector
   const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
@@ -709,12 +713,21 @@ test('daemon: the Linux arch\'s OS roots — none on the machine is a bundle fai
     assert.deepEqual(f.files, [bundle], 'the bundle that carries no OS root')
     for (const b of SYSTEM_BUNDLES) assert.ok(f.reason.includes(b), `the reason names every path looked at: ${b}`)
     const st = await req(s.sock, 'GET', '/status')
-    assert.ok(statusFailures(st).some((x) => x.where === 'bundle' && x.code === 'system-roots-unavailable'), 'status (the board\'s reader) shows it')
+    const g = st.health.collector.failures.find((x) => x.last.where === 'bundle' && x.last.code === 'system-roots-unavailable')
+    assert.ok(g, 'status (the board\'s reader) shows it')
+    assert.match(failureBrief(g), /^合并包里没有系统根证书\(/, 'in the words status prints')
     assert.ok(!fs.readFileSync(bundle, 'utf8').includes(fedora.certPem.trim()))
     disk.set('/etc/pki/tls/certs/ca-bundle.crt', fedora.certPem) // the machine is a Fedora one after all (or ca-certificates got installed): the next rebuild reads it
     await until(() => fs.readFileSync(bundle, 'utf8').includes(fedora.certPem.trim()))
     assert.ok(fs.readFileSync(bundle, 'utf8').includes(tls.rootCertificates[0].trim()), 'Node\'s roots stay in it')
     assert.ok(flowsOf(s).some((x) => x.event === 'bundles-rebuilt' && x.code === 'roots-changed' && x.reason.includes('combined-rep.pem')), 'the rebuild is recorded')
+    // a bundle that is there but cannot be read: the rebuild stops, the bundles keep the roots they have (not rebuilt without them), and that is a failure
+    const kept = fs.readFileSync(bundle, 'utf8')
+    denied.add(SYSTEM_BUNDLES[0])
+    const eacces = await until(() => flowsOf(s).find((x) => x.event === 'failure' && x.where === 'bundle' && x.code === 'EACCES'))
+    assert.match(eacces.reason, /the OS trust bundle cannot be read .*EACCES.*; they keep their previous roots/)
+    await new Promise((r) => setTimeout(r, 100)) // a few more rounds at 30 ms
+    assert.equal(fs.readFileSync(bundle, 'utf8'), kept, 'the bundle is as it was')
   } finally { await d.stop(); p.done(); s.done() }
 })
 

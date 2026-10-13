@@ -13,6 +13,8 @@ import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { SYSTEM_BUNDLES } from '../../src/collector/core/tls/roots.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
+import { captureHealth } from '../../src/health/read.mjs'
+import { formatInstallNotes } from '../../src/collector/cli.mjs'
 import { fakeDaemon, fakeIo } from './fixtures/on-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -45,7 +47,7 @@ async function onWith(disk) {
   const bundle = named[1].trim()
   const flowsDir = path.join(home, '.asight', 'collector', 'flows')
   const flows = fs.readdirSync(flowsDir).flatMap((n) => fs.readFileSync(path.join(flowsDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
-  return { exit, text: io.text(), bundle, held: certBlocks(fs.readFileSync(bundle, 'utf8')).map((b) => b.fp), flows }
+  return { exit, text: io.text(), home, bundle, held: certBlocks(fs.readFileSync(bundle, 'utf8')).map((b) => b.fp), flows }
 }
 
 test('Linux on: only the Fedora bundle exists → the combined bundle carries its CA, and nothing is said missing (4.6 「合并包」)', async () => {
@@ -68,6 +70,8 @@ test('Linux on: no OS bundle on the machine → the bundle has Node\'s roots and
   assert.ok(rec[0].reason.includes(r.bundle), 'it names the bundle')
   for (const f of SYSTEM_BUNDLES) assert.ok(rec[0].reason.includes(f), `and every path looked at: ${f}`)
   assert.match(r.text, /carries Node's roots only: no OS trust bundle holds a certificate/, 'the receipt says it too')
+  const doctorNotes = formatInstallNotes(captureHealth({ home: path.join(r.home, '.asight') })) // what `doctor` prints of the last install (doctor.mjs)
+  assert.ok(doctorNotes.some((l) => l.includes('[system-roots-unavailable]') && l.includes(r.bundle)), doctorNotes.join('\n'))
 })
 
 test('Linux on: an OS bundle that is there but cannot be read stops the on before the agent\'s file is touched (D38)', async () => {
@@ -84,8 +88,9 @@ test('Linux on: an OS bundle that is there but cannot be read stops the on befor
       netenv: async () => ({ at: '2026-10-13T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),
       freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
     },
-  }).catch((e) => e)
-  assert.notEqual(exit, 0)
+  })
+  assert.equal(exit, 1)
+  assert.match(io.text(), /the OS trust bundle cannot be read \(\/etc\/ssl\/certs\/ca-certificates\.crt: EACCES/, 'the reason, with the path and its errno')
   assert.equal(fs.readFileSync(path.join(home, '.codex', '.env'), 'utf8'), 'OPENAI_API_KEY=sk-test\n', 'the user\'s file is as it was')
   assert.ok(!fs.existsSync(path.join(home, '.asight', 'collector', 'ca', 'combined-codex.pem')), 'no bundle written on a guess')
 })
