@@ -18,6 +18,11 @@
 // launch marker — <collector>/run/trust/<pid> holding the process's start time, the plugin markers' door (4.6「标记」)
 // — is what the tracker confirms instead; dsh's chain shape. The linux shim (harness/shims/kimi) writes no marker:
 // on /proc the environment itself is the door, and a marker that is not there costs nothing (the chain appends).
+// The win twin (2026-10-13, the Windows kimi gap): Windows never reads another process's environment either
+// (4.8 §10.1, win32 procinfo's env:null/envRead:false — measured live: every door connection spliced var-missing
+// although the shim resolved first on the session PATH), so arch/win32's kimi.cmd shim writes the same marker
+// through kimi-marker.ps1 (a cmd cannot know its child's pid: a best-effort background writer matches the child by
+// its parent; the marker landed ~0.4 s after the child in the measurement).
 import path from 'node:path'
 import { hostOf, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
@@ -108,11 +113,15 @@ export default {
     chain: [{ var: MARKER_VAR, semantic: 'append' }, { var: CA_VAR, semantic: 'append' }],
     // the reason a kimi does not trust asight: the npm build has no shim entry; no shim was installed (install said
     // why); else it did not start through the shim. A CA file of asight's own that is gone keeps the generic reason.
+    // The shim file is `bin/kimi` on POSIX and `bin\kimi.cmd` on Windows (arch/win32's opt-in item) — both are
+    // looked for on every OS, so the reason does not name a door that is really there (a Windows test machine measured the
+    // mislabel live: flows rows said shim-not-on-path while the shim resolved first on the session PATH).
     refine: (r, env, { argv = [], exe = null, readText = () => null, collectorDir = null }) => {
       if (r.var === MARKER_VAR || !['var-missing', 'ca-not-in-file', 'file-unreadable'].includes(r.reason)) return null
       if (r.reason !== 'var-missing' && collectorDir && String(r.file || '').startsWith(collectorDir + path.sep)) return null
       if (NODE.test(exe || argv[0] || '')) return 'kimi-npm-no-shim'
-      return collectorDir && readText(path.join(collectorDir, 'bin', 'kimi')) == null ? 'shim-not-on-path' : 'kimi-not-via-shim'
+      const shim = collectorDir && (readText(path.join(collectorDir, 'bin', 'kimi')) != null || readText(path.join(collectorDir, 'bin', 'kimi.cmd')) != null)
+      return collectorDir && !shim ? 'shim-not-on-path' : 'kimi-not-via-shim'
     },
     // uninstall step 5: only a kimi the shim started (its NODE_EXTRA_CA_CERTS is asight's file) ever trusted asight, and one that did trusts it until it
     // restarts. Both as data, so the install manifest's liveness snapshot carries them and `off` (which has no descriptor) reports the same processes

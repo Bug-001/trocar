@@ -28,7 +28,7 @@ const FORBIDDEN = Object.freeze(['setx', 'HKLM', 'LocalMachine', 'MachineKeys', 
 /** One item's write plan: which writes (registry, store, files, directories, shortcut repoints) are this script's own — everything else is a
  * violation. `reg` holds whole command fragments as they must appear; `writeBytes` the exact first arguments of WriteAllBytes calls. */
 const WRITE_PLAN = Object.freeze({
-  'user-path.ps1': { writeBytes: ["(Join-Path $BinDir ($Command + '.cmd'))"], newItems: ['-Path $BinDir'], certutil: [], reg: [], repoints: 0, guards: [/\$Command -notmatch/] },
+  'user-path.ps1': { writeBytes: ["(Join-Path $BinDir ($Command + '.cmd'))", "(Join-Path $BinDir $MarkerName)"], newItems: ['-Path $BinDir'], certutil: [], reg: [], repoints: 0, guards: [/\$Command -notmatch/, /\$MarkerName -notmatch/] },
   'shortcut.ps1': { writeBytes: ['$Launcher'], newItems: ['-Path $d'], certutil: [], reg: [], repoints: 1, guards: [] },
   'cert-user.ps1': { writeBytes: [], newItems: [], certutil: ['-user -addstore Root $CertFile'], reg: [], repoints: 0, guards: [] },
   'claude-policy.ps1': { writeBytes: [], newItems: [], certutil: [], reg: null /* the harness data's own policy key, checked by test */, repoints: 0, guards: [/\$Url -notmatch/] },
@@ -115,7 +115,7 @@ test('the scanner is not a rubber stamp: a planted violation in each category is
 
 test('each script\'s parameters are its whole surface: named, mandatory where the item needs them, no positional extras', () => {
   const PARAMS = {
-    'user-path.ps1': [['BinDir', true], ['Command', true], ['ShimB64', true]],
+    'user-path.ps1': [['BinDir', true], ['Command', true], ['ShimB64', true], ['MarkerName', false], ['MarkerB64', false]], // the marker writer (kimi's door) is optional: only the item that needs it names it
     'shortcut.ps1': [['Launcher', true], ['LauncherB64', true], ['Shortcut', true]],
     'cert-user.ps1': [['CertFile', true]],
     'claude-policy.ps1': [['Url', true]],
