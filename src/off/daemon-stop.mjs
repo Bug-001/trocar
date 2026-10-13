@@ -12,7 +12,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
-import { controlRequest } from './control-client.mjs'
+import { controlRequest, isPipePath } from './control-client.mjs'
 import { procIdentity, pidAlive, readArgv, readExe } from './proc.mjs'
 import { UNIT_FILE_NAME } from './autostart.mjs'
 import { AGENT_LABEL, agentState, launchctl } from './darwin.mjs'
@@ -54,11 +54,11 @@ export function readDaemonLock({ file, now = Date.now(), alive = pidAlive, ident
  *    unresponsive  the lock was not refreshed for 5 s, or the socket is there and does not answer in `timeoutMs`: stuck (1.6 §1.4 第 2 步)
  *    unknown       the lock cannot be read (an I/O error), or is cut short and there is no control socket to ask, and nothing answers: whether a daemon runs is
  *                  not known (never read as "none") */
-export async function daemonState({ lockFile, socketPath = null, request = controlRequest, identity = procIdentity, alive = pidAlive, now = Date.now, fs = nodeFs, timeoutMs = 5000 } = {}) {
+export async function daemonState({ lockFile, socketPath = null, request = controlRequest, identity = procIdentity, alive = pidAlive, now = Date.now, fs = nodeFs, timeoutMs = 5000, platform = process.platform } = {}) {
   const L = readDaemonLock({ file: lockFile, now: now(), alive, identity, fs })
   const lock = L.lock || null
   let answered = false, hung = null, answeredOn = null
-  const sockets = [...new Set([socketPath, lock && lock.socket].filter(Boolean))]
+  const sockets = [...new Set([socketPath, lock && lock.socket].filter(Boolean))].filter((sock) => platform !== 'win32' || isPipePath(sock)) // on win32 only a pipe is asked: a lock naming a unix path is not connected to
   let refused = 0
   for (const sock of sockets) {
     try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs }); answered = true; answeredOn = sock; break } catch (e) {

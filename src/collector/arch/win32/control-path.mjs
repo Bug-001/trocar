@@ -3,15 +3,16 @@
 // Linux puts the control socket at $XDG_RUNTIME_DIR/asight/collector.sock, 0600 in a 0700 directory: the file mode keeps other users out. Windows has no such mode, and a named pipe's default access lets
 // other local users connect, so two things stand in for it: the pipe's NAME is random (a fixed name could be taken first by another user on the same machine) and every request carries a random TOKEN (the
 // server refuses one without it, core/control.mjs). Both are made once, at the first start, and kept in `<collector>\control.json`, which sits under the user's own profile (asight sets no ACL of its own;
-// the lab checks the default one, W26 [WinVM]). The CLI reads the file to find the daemon: `asight off` through src/off/control-client.mjs, which has its own reader (src/off imports nothing outside itself).
+// the lab checks the default one, W26 [WinVM]). The CLI reads the file to find the daemon: `asight off` through src/off/control-client.mjs, which has its own, lighter reader; the file name and the pipe prefix are src/off's, imported here (core may import src/off, not the reverse).
 // Everything the world gives is a parameter (`fs`, `randomBytes`), so a test on any OS runs it in a temp directory. Node built-ins only.
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { randomBytes as nodeRandomBytes } from 'node:crypto'
 
-export const CONTROL_FILE = 'control.json'
-export const PIPE_PREFIX = '\\\\.\\pipe\\asight-'
-const PIPE_RE = /^\\\\\.\\pipe\\asight-[0-9a-f]{16}$/
+import { CONTROL_FILE, PIPE_PREFIX } from '../../../off/control-client.mjs'
+
+export { CONTROL_FILE, PIPE_PREFIX }
+const PIPE_RE = new RegExp(`^${PIPE_PREFIX.replace(/[\\.]/g, '\\$&')}[0-9a-f]{16}$`) // the writer is strict where off is loose: asight-<16 hex>
 const TOKEN_RE = /^[0-9a-f]{64}$/
 
 /** `{ path: '\\.\pipe\asight-<16 hex>', token: <64 hex> }` from the random source: 8 bytes for the name, 32 for the secret. */
