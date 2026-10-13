@@ -23,7 +23,7 @@ const EXPECT = {
     forms: {
       'claude-code.cli': { nameRule: false, yes: [`${U}\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`, `${U}\\.local\\bin\\claude.exe`] },
       'claude-code.vscode': { nameRule: false, yes: [`${U}\\.vscode\\extensions\\anthropic.claude-code-2.1.289-win32-x64\\resources\\native-binary\\claude.exe`] },
-      'claude-code.desktop': { nameRule: false, yes: [raw`C:\Program Files\WindowsApps\Claude_1.0.0.0_x64__abc\app\claude.exe`], optIn: true },
+      'claude-code.desktop': { nameRule: false, yes: [raw`C:\Program Files\WindowsApps\Claude_1.0.0.0_x64__abc\app\claude.exe`, `${U}\\AppData\\Local\\AnthropicClaude\\claude.exe`], optIn: true },
     },
     unknown: [raw`D:\tools\claude.exe`],
   },
