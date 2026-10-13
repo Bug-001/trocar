@@ -52,7 +52,6 @@ const PLAN = `asight 要做的(本用户,不需要管理员):
   自启: 计划任务 \\asight\\collector(本用户,登录时)
   跳过: kimi-code(no kimi-code configuration was found on this machine: nothing to change for it)
   注意: on 期间启动的 agent,off 之后、重启之前仍连着 asight 的门(只转发)
-本机网络环境: 不知道(a test: no VPN probe runs here)
 asight 不会: 开 TUN、改系统代理、往你的 VPN 里写东西、往登录环境写代理变量`
 
 test('§11: on --dry-run prints the plan — the kernel line, every automatic group with its upstream and the §2.2 note, Codex\'s WebSocket line, Smart App Control, autostart, the off exception — line by line (squashed)', async () => {

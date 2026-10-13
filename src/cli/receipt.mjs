@@ -4,7 +4,6 @@
 // shown as `~/…` (the way the user knows them); `--json` keeps the absolute path.
 import path from 'node:path'
 import { formatOffReceipt } from '../off/receipt.mjs'
-import { netenvText } from '../netenv/index.mjs'
 import { collectorDir } from '../off/paths.mjs'
 import { noColor } from './color.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
@@ -107,7 +106,7 @@ function winGroupRows(p, facts, t) {
  * proxy fields, the machine's network, what to restart). There is no kernel line (D47's twin: the engine is the only local proxy, `on` downloads nothing); `adoption` = what prepareAdoption
  * returned (the facts, with each form's group plan), `prep` = the arch hook's answer when an arch has one (none does today). Pure: everything is handed in.
  */
-export function formatWinPlan(p, { home = null, autostart = true, netenv = null, env = process.env, adoption = null, prep = null, colors: c = noColor() } = {}) {
+export function formatWinPlan(p, { home = null, autostart = true, env = process.env, adoption = null, prep = null, colors: c = noColor() } = {}) {
   const t = (x) => winShown(x, home)
   const lines = [c.bold('asight 要做的(本用户,不需要管理员):')]
   if (prep && prep.refuse) {
@@ -159,7 +158,6 @@ export function formatWinPlan(p, { home = null, autostart = true, netenv = null,
   lines.push(...(p.edited || []).map((e) => `  你改过的代理设置: ${e.harness} 的 ${e.where || '代理字段'} 现在是 ${e.now ?? '空'}(asight 上次接上时是 ${e.was ?? '空'});继续会把它接成新的上游,再指回 asight`))
   lines.push('  注意: on 期间启动的 agent,off 之后、重启之前仍连着 asight 的门(只转发)')
   if (p.restart && p.restart.length) lines.push(`  正在跑的 ${p.restart.map((x) => `${x.harness}(pid ${x.pid})`).join('、')} 重启后才会被采集;在那之前照常直连`)
-  lines.push(...(netenv ? netenvText(netenv, { ids: p.targets || null, platform: 'win32' }) : []))
   lines.push('asight 不会: 开 TUN、改系统代理、往你的 VPN 里写东西、往登录环境写代理变量')
   return lines.join('\n')
 }
@@ -168,7 +166,7 @@ export function formatWinPlan(p, { home = null, autostart = true, netenv = null,
  *  `entries` / `unit` are only what would be written, so a later `on` lists only what is new), or what an `onPlan` of the legacy install is handed.
  *  D46: the header says the count first (one line of conclusions), the listing below is still every file — the confirmation's object (R3/R6). The
  *  autostart line names the real mechanism of `platform` (launchd on darwin, systemd --user on linux; the hardcoded systemd wording went). */
-export function formatPlan(p, { home = null, autostart = true, netenv = null, platform = 'linux', colors: c = noColor() } = {}) {
+export function formatPlan(p, { home = null, autostart = true, platform = 'linux', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
   const count = (p.manifest ? 1 : 0) + (p.state ? 1 : 0) + (p.standalone ? 1 : 0) + ((p.ca || []).length) + ((p.files || []).length) + ((p.owned || []).length) + ((p.entries || []).length)
     + ((p.optIn || []).filter((x) => x.chosen && x.applicable && x.state === 'needed').length) + (p.unit ? 1 : 0) + ((p.logs || []).length) + (p.records || p.events ? 1 : 0)
@@ -208,7 +206,6 @@ export function formatPlan(p, { home = null, autostart = true, netenv = null, pl
     ] : []),
     ...(p.edited || []).map((e) => `你改过的代理设置: ${e.harness} 的 ${e.where || '代理字段'} 现在是 ${e.now ?? '空'}(asight 上次接上时是 ${e.was ?? '空'});继续会把它接成新的上游,再指回 asight`),
     ...(p.adopted || []).filter(saysSomething).map((x) => adoptedLine(x.harness, x)), // §9.5: where a new connection of the agent goes once asight is on, credentials masked — only when the chain says something (D46)
-    ...(netenv ? netenvText(netenv, { ids: p.targets || null, platform }) : []), // §1.6: the plan names the machine's network environment (§6): what asight found, and that it changes none of it
     ...(p.restart && p.restart.length ? [`正在跑的 ${p.restart.map((x) => `${x.harness}(pid ${x.pid})`).join('、')} 重启后才会被采集;在那之前照常直连`] : []),
   ].join('\n')
 }
@@ -246,7 +243,6 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   }
   if (r.skipped.length) lines.push(`跳过: ${r.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
-  if (r.netenv) lines.push(...netenvText(r.netenv, { ids: r.harnesses || null, platform }))
   for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(adoptedLine(h, x)) // D46: a chain that says nothing is not printed
   if (r.daemon && !daemonBit) lines.push(`守护进程: 没在跑,什么都没有被采集(入口已写好,守护进程起来后才挂引流)`)
   if (r.restart.length) lines.push(`  ${c.yellow('⚠')} 重启后才被采: ${r.restart.map((x) => `${x.harness}(pid ${x.pid},启动早于信任入口)`).join('、')};在那之前照常直连`)
