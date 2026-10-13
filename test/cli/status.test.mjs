@@ -162,7 +162,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { snapshot, changedFiles, fakeIo } from './fixtures/on-ctx.mjs'
-import { runStatus, down, reply, asDaemon, claudeProc, NO_VPN, CLASH, SOCK } from './fixtures/status-ctx.mjs'
+import { runStatus, down, reply, asDaemon, claudeProc, SOCK } from './fixtures/status-ctx.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -316,17 +316,17 @@ test('a daemon that does not answer is daemon-not-responding; --json is one docu
   assert.equal(j.io.stderrText(), '', 'stdout carries the one JSON, nothing leaks to stderr')
 })
 
-test('status changes nothing in the HOME but ~/.asight/netenv.json (the board\'s copy of the VPN probe, 0600), and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', async () => {
+test('status changes nothing in the HOME but ~/.asight/netenv.json (the board\'s copy of the topology, 0600), and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', async () => {
   const s = await installedHome()
   const before = snapshot(s.home)
   await run(s); await run(s, ['--json']); await run(s, [], { request: asDaemon(reply()) })
   assert.deepEqual(changedFiles(before, snapshot(s.home)), [path.join('.asight', 'netenv.json')], 'read-only, but for the one cache')
   assert.equal(fs.statSync(path.join(s.home, '.asight', 'netenv.json')).mode & 0o777, 0o600)
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(s.home, '.asight', 'netenv.json'), 'utf8')).unknown, NO_VPN.unknown)
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(s.home, '.asight', 'netenv.json'), 'utf8'))).sort(), ['schema', 'topology'], 'D49: schema and topology, no probe result')
   let r = await run(s, ['claud']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown harness claud[^\n]*claude-code/); assert.equal(r.text, '')
   r = await run(s, ['--nope']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown option --nope/)
   const fresh = tmpDir('asight-fresh-')
-  const f = await runStatusCli([], { io: fakeIo(), home: fresh, platform: 'linux', env: { HOME: fresh }, deps: { request: down(), socketPath: SOCK, procs: async () => [], netenv: async () => NO_VPN, exec: () => ({ status: 0, stdout: '', stderr: '' }) } })
+  const f = await runStatusCli([], { io: fakeIo(), home: fresh, platform: 'linux', env: { HOME: fresh }, deps: { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }) } })
   assert.equal(f, 0); assert.deepEqual(fs.readdirSync(fresh), [], 'on a machine with nothing installed it prints so, exits 0, and creates nothing')
 })
 
@@ -336,7 +336,7 @@ test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arc
   const fresh = tmpDir('asight-fresh-')
   const asked = []
   const parts = { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: (q) => { asked.push(q); return [] } } } }
-  const deps = { request: down(), socketPath: SOCK, procs: async () => [], netenv: async () => NO_VPN, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
+  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
   const io = fakeIo()
   const exit = await runStatusCli([], { io, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps })
   assert.equal(exit, 0, io.stdoutText())
@@ -354,7 +354,7 @@ test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — the darwi
   const fresh = tmpDir('asight-fresh-')
   const asked = []
   const parts = { os: 'darwin', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: (q) => { asked.push(q); return [] } } } }
-  const deps = { request: down(), socketPath: SOCK, procs: async () => [], netenv: async () => NO_VPN, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
+  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
   const io = fakeIo()
   const exit = await runStatusCli([], { io, home: fresh, platform: 'darwin', env: { HOME: fresh }, deps })
   assert.equal(exit, 0, io.stdoutText())
@@ -377,35 +377,27 @@ test('connections still relayed after an off: N closing and M waiting, in the te
   assert.deepEqual((await run(s, ['--json'])).io.json().relayed, { closing: 0, waiting: 0, cut: 0 }, 'no daemon: no engine, so none — a known zero')
 })
 
-test('the VPN line: the digest\'s 路径 row names the product and mode and collapses the unknowns; the detail view keeps the full line and the probe\'s own reason', async () => {
+test('D49: status looks at no VPN software — the digest has no 路径 row and no 本机网络环境 line, the detail view none either, and --json has no `netenv` key (V10)', async () => {
   const s = await installedHome()
-  let r = await run(s, [], { netenv: async () => CLASH({ tun: true, mode: 'global', live: false, reason: 'no core answered' }) })
-  assert.match(r.text, /^路径    Clash Verge\(全局模式\) · claude-code、codex 经过它 · asight 没有改它$/m)
-  assert.ok(!/hermes/.test(r.text.split('\n').filter((l) => l.startsWith('路径')).join('\n')), 'only the harnesses in the table')
-  const detail = await run(s, ['claude-code'], { netenv: async () => CLASH({ tun: true, mode: 'global', live: false, reason: 'no core answered' }) })
-  assert.match(detail.text, /^本机网络环境: Clash Verge\(全局模式,TUN 已开,系统代理已开,没问到它的控制接口\);claude-code 的流量经过它;asight 没有改它$/m)
-  assert.match(detail.text, /^ {2}说明: no core answered$/m)
-  r = await run(s, [], { netenv: async () => CLASH({ via: { 'claude-code': 'unknown', codex: 'unknown' } }) })
-  assert.match(r.text, /^路径    Clash Verge\(规则模式\) · 各 harness 是否经它:不知道\(未读到它们的代理设置\)/m, 'all-unknown via collapses to ONE clause (D46)')
-  r = await run(s, ['codex'], { netenv: async () => CLASH({ via: { 'claude-code': true, codex: false, hermes: 'unknown' } }) })
-  assert.match(r.text, /^本机网络环境: Clash Verge\(规则模式,系统代理已开\);codex 不经过它;asight 没有改它$/m)
-  const j = (await run(s, ['--json'], { netenv: async () => CLASH() })).io.json()
-  assert.equal(j.netenv.products[0].product, 'clash-verge')
+  for (const argv of [[], ['claude-code']]) {
+    const r = await run(s, argv)
+    assert.ok(!/^路径 /m.test(r.text) && !/本机网络环境/.test(r.text), argv.join() || 'digest')
+  }
+  const j = (await run(s, ['--json'])).io.json()
+  assert.ok(!('netenv' in j), 'no netenv key')
 })
 
-test('the harnesses\' proxy settings reach the probe from the running processes\' environment (the URLs are the probe\'s to compare and drop: never printed); an asight serve you started is listed, not killed', async () => {
+test('a harness process\'s proxy credentials are never printed; an asight serve you started is listed, not killed', async () => {
   const s = await installedHome()
-  let seen = null
   const procs = async () => [claudeProc(5000, Date.now() + 5000, new Map([['HTTPS_PROXY', 'http://alice:pw@127.0.0.1:7897']])), { pid: 5310, ppid: 1, uid: 1000, startedAt: 1, exe: '/usr/bin/node', argv: ['node', '/repo/bin/asight.mjs', 'serve'], env: () => new Map() }]
-  const r = await run(s, [], { procs, request: asDaemon(reply()), netenv: async ({ proxies }) => { seen = proxies; return NO_VPN } })
-  assert.deepEqual(seen, { 'claude-code': ['http://alice:pw@127.0.0.1:7897'] })
+  const r = await run(s, [], { procs, request: asDaemon(reply()) })
   assert.ok(!r.text.includes('alice:pw'))
   assert.match(r.text, /^你自己起的 asight 进程仍在跑: asight serve\(pid 5310,只读看板,不在 agent 路径上\)$/m)
   const down2 = await run(s, [], { procs: async () => { throw new Error('the process table /proc cannot be read (EACCES)') } })
   assert.match(down2.text, /^你自己起的 asight 进程: 不知道\(the process table/m)
 })
 
-// R11 / D38: the copy of the VPN probe the board reads is a cache; that it could not be refreshed is said, not dropped (a board that keeps showing the old one is a silent failure)
+// R11 / D38: the copy of the topology the board reads is a cache; that it could not be refreshed is said, not dropped (a board that keeps showing the old one is a silent failure)
 const rootCanWrite = typeof process.getuid === 'function' && process.getuid() === 0 ? 'root can write into a directory with no write bit' : false
 test('a netenv.json that could not be written is said: a line in the text, netenv_write_error (the file and the errno) in --json; the verdicts and the exit code do not change', { skip: rootCanWrite }, async () => {
   const s = await installedHome()

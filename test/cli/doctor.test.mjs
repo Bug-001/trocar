@@ -11,7 +11,7 @@ import { validateReceipt } from '../../src/cli/schema.mjs'
 import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo, recordingExec, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
-import { down, reply, asDaemon, NO_VPN, CLASH, SOCK } from './fixtures/status-ctx.mjs'
+import { down, reply, asDaemon, SOCK } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 // a record the four questions are content with: an LLM call with its verbatim request and a reconstructed response
@@ -28,7 +28,7 @@ function capture(dir, { n = 1, mode = 0o600, name = 'capture.ndjson' } = {}) {
 }
 /** A HOME where asight has not been turned on: a doctor with nothing of its own to look at. */
 const plain = () => { const home = tmpDir('asight-doc-'); return { home, sh: { env: { HOME: home } }, sys: { exec: recordingExec() } } }
-const DEPS = { has: () => true, verify: () => true, request: down(), procs: async () => [], netenv: async () => NO_VPN, lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
+const DEPS = { has: () => true, verify: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
 async function doctor(s, argv = [], { deps = {}, io = fakeIo(), platform = 'linux' } = {}) {
   const exit = await runDoctor(argv, { io, home: s.home, platform, env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run'), ASIGHT_SOURCE: '' }, deps: { ...DEPS, exec: s.sys.exec.run, ...deps } })
   return { exit, io, out: io.stdoutText(), err: io.stderrText(), text: io.text() }
@@ -149,16 +149,16 @@ test('the old `verify` is ④: the CA is in the user trust store (✓), is not (
   assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*not found in the user trust store[^\n]*监测 toggle[^\n]*collector's own CA \(`asight on`\) is in no trust store/); assert.doesNotMatch(r.out, /run: asight on/); assert.equal(r.exit, 0)
   r = await doctor(s, ['--source', src], { deps: { verify: () => { throw new Error('security: the keychain could not be opened') } } })
   assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*trust check errored: security: the keychain could not be opened/); assert.equal(r.exit, 0)
-  assert.deepEqual(ranBesides(s), [], 'with the trust-store check, the process table and the VPN probe injected, no OS tool ran at all')
+  assert.deepEqual(ranBesides(s), [], 'with the trust-store check, and the process table injected, no OS tool ran at all')
 })
 
-test('what doctor runs, with the VPN probe left real: one read-only OS query (`ps`, to find the VPN core\'s socket) and nothing else — no `which`, no systemctl / launchctl / loginctl, nothing that starts, stops or changes a thing (the trust-store check and the process table are the other two queries; both are replaced here)', async () => {
+test('what doctor runs: no VPN query at all (D49), only the read of the network facts and nothing else — no `which`, no systemctl / launchctl / loginctl, nothing that starts, stops or changes a thing (the trust-store check and the process table are the other two queries; both are replaced here)', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   const before = s.sys.exec.calls.length
-  const r = await doctor(s, ['--source', src], { deps: { netenv: undefined, knownSocks: [] } })
+  const r = await doctor(s, ['--source', src], { deps: {} })
   assert.equal(r.exit, 0, r.text)
-  assert.deepEqual(ranBesides(s, before), ['ps -axww -o command='])
+  assert.deepEqual(ranBesides(s, before), [])
   assert.deepEqual(s.sys.exec.calls.slice(before).filter((c) => NET_READ.test(c)), ['ss -ltnpH'], 'and the one read of the network facts, which only reads')
 })
 
@@ -175,20 +175,17 @@ test('dependencies: found on PATH, or MISSING with the one line that installs it
   assert.equal(r.exit, 0, 'a missing tool is a warning: the four questions decide')
 })
 
-test('the collector section is `asight status` for the same harnesses (the daemon\'s answer, every agent captured or why not), then the VPN software, the standalone copy; the exit is the four questions\' alone (B-7)', async () => {
+test('the collector section is `asight status` for the same harnesses (the daemon\'s answer, every agent captured or why not), then the topology, the standalone copy; the exit is the four questions\' alone (B-7)', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: 'the trust entry was written after this process started; restart it once' }]
   const before = s.sys.exec.calls.length
-  const r = await doctor(s, ['--source', src], { deps: { request: asDaemon(reply({ agents })), netenv: async () => CLASH() } })
+  const r = await doctor(s, ['--source', src], { deps: { request: asDaemon(reply({ agents })) } })
   assert.equal(r.exit, 0, `status would say 1 here (an agent is not captured); doctor's exit is the capture's:\n${r.text}`)
   assert.match(r.out, /按进程采集器[\s\S]*没采\s+claude-code\([^)]*重启后才会被采集\)/, 'the embedded status is the digest: the verdict row with its reason')
-  assert.match(r.out, /路径\s+Clash Verge\(规则模式/, 'the VPN software, from the same probe as status')
+  assert.ok(!/路径\s+\S/.test(r.out) && !/本机网络环境/.test(r.out), 'no VPN software line: doctor probes none (D49)')
   assert.match(r.out, /✓ asight-off\(不依赖源码的撤销副本\):/, 'on wrote the standalone copy and it is the version this asight writes')
   assert.deepEqual(ranBesides(s, before), [], 'doctor ran no OS tool but the reads of the network facts: it reads, and it asks the daemon over its socket (R8)')
-  // a probe that fails is 不知道 with the reason, and still not an exit code
-  const f = await doctor(s, ['--source', src], { deps: { netenv: async () => { throw new Error('boom: probe') } } })
-  assert.match(f.out, /路径\s+不知道\(boom: probe\)/); assert.equal(f.exit, 0)
   // names restrict the harness table, as in status
   const one = await doctor(s, ['--source', src, 'claude'], { deps: { request: asDaemon(reply()) } })
   const table = one.out.split('按进程采集器')[1].split('\n').filter((l) => /^ {4}\w/.test(l)).join('\n')
@@ -230,11 +227,11 @@ test('backups no manifest names are listed (⚠, with the paths); the ones the m
   assert.match(r.out, /备份: 不知道\([^)]*install-manifest\.json/, 'a manifest that cannot be read: 不知道 with the file, not "none are orphans"')
 })
 
-test('doctor changes nothing in the HOME but ~/.asight/netenv.json (the board\'s copy of the VPN probe); usage errors (unknown option, unknown harness, --source with no value) exit 2 and touch nothing', async () => {
+test('doctor changes nothing in the HOME but ~/.asight/netenv.json (the board\'s copy of the topology); usage errors (unknown option, unknown harness, --source with no value) exit 2 and touch nothing', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   const before = snapshot(s.home)
-  const r = await doctor(s, ['--source', src], { deps: { request: asDaemon(reply()), netenv: async () => CLASH() } })
+  const r = await doctor(s, ['--source', src], { deps: { request: asDaemon(reply()) } })
   assert.equal(r.exit, 0, r.text)
   assert.deepEqual(changedFiles(before, snapshot(s.home)), [path.join('.asight', 'netenv.json')])
   const mid = snapshot(s.home)

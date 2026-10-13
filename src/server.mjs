@@ -765,7 +765,7 @@ export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null
         return sendJson(res, 200, withErrors(controlView(ctl, cls), ctl.sourceErrors));
       }
       // D38 (RFC 4.4): capture health, read from disk only — the collector's flows/, lock, manifest and state.json,
-      // the raw journal, the old capture's events, and `netenv` (~/.asight/netenv.json: the VPN / proxy software, 1.6 §6 「看板」)
+      // the raw journal, the old capture's events, and `netenv` (~/.asight/netenv.json: the adopted records and the topology, D49 「看板」)
       // — never through the collector daemon's socket (4.4 OPEN: that
       // relay waits for per-user isolation). Fixed paths under ~/.asight, nothing from the request (4.4 路径安全).
       // Unreadable → 503 with the reason, never an empty answer; metadata only (src/health/flows.mjs pick).

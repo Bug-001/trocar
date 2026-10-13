@@ -20,7 +20,7 @@ import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaemon } from './fixtures/on-ctx.mjs'
 import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
-import { runStatus, down, reply, asDaemon, NO_VPN } from './fixtures/status-ctx.mjs'
+import { runStatus, down, reply, asDaemon } from './fixtures/status-ctx.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
 
@@ -405,19 +405,15 @@ test('V29: the first on receipt, in the text and in --json, carries the four com
   }
 })
 
-// V10 (1.6 R11, §6): what `status` could not read is 「不知道」 with the reason — the connections still relayed (a daemon whose reply carries no count), the VPN probe (a file it could not read, nothing it found), the
+// V10 (1.6 R11, §6, D49): what `status` could not read is 「不知道」 with the reason — the connections still relayed (a daemon whose reply carries no count), the
 // daemon itself (a lock that cannot be read) — and never `0 条` or 「无」, in the text and in --json
-test('V10: status says 不知道 with the reason for connections the daemon did not count, a VPN probe that could not read, and a lock that could not be read — never 0 条 or 无', async () => {
+test('V10: status says 不知道 with the reason for connections the daemon did not count, and a lock that could not be read — never 0 条 or 无', async () => {
   const s = await installedHome()
   // the daemon answers, but its reply has no `relayed`
-  let r = await runStatus(s, [], { request: asDaemon(reply({ relayed: undefined })), netenv: async () => { throw new Error("EACCES: permission denied, open '/h/.local/share/io.github.clash-verge-rev.clash-verge-rev/verge.yaml'") } })
+  let r = await runStatus(s, [], { request: asDaemon(reply({ relayed: undefined })) })
   const line = (text, head) => text.split('\n').find((l) => l.startsWith(head)) || ''
   assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(the daemon's reply does not carry the connection counts\)$/)
-  assert.match(line(r.text, '路径'), /^路径    不知道\(EACCES[^)]*verge\.yaml/)
-  for (const head of ['仍经 asight 的连接', '路径']) { assert.ok(!/0 条|无/.test(line(r.text, head)), `${head}: never 0 条 or 无`) }
-  // a probe that found nothing is not 「无」 either
-  r = await runStatus(s, [], { request: asDaemon(reply()), netenv: async () => NO_VPN })
-  assert.match(line(r.text, '路径'), /^路径    不知道\(no Clash Verge directory/); assert.ok(!/无/.test(line(r.text, '路径')))
+  assert.ok(!/0 条|无/.test(line(r.text, '仍经 asight 的连接')), 'never 0 条 or 无')
   // the lock cannot be read and nothing answers
   const lock = path.join(s.dir, 'lock'); fs.writeFileSync(lock, '{}')
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === lock) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
@@ -426,10 +422,10 @@ test('V10: status says 不知道 with the reason for connections the daemon did 
   assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(whether a daemon runs is not known/)
   assert.ok(!/0 条|无/.test(line(r.text, '仍经 asight 的连接'))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
   // --json: the same, as data
-  const j = await runStatus(s, ['--json'], { request: down(), fs: broken, netenv: async () => { throw new Error('probe failed') } })
+  const j = await runStatus(s, ['--json'], { request: down(), fs: broken })
   const doc = j.io.json()
   assert.deepEqual(validateReceipt(doc), [])
-  assert.deepEqual([doc.relayed, typeof doc.relayed_reason, doc.netenv, doc.daemon.state], ['unknown', 'string', { error: 'probe failed' }, 'unknown'])
+  assert.deepEqual([doc.relayed, typeof doc.relayed_reason, 'netenv' in doc, doc.daemon.state], ['unknown', 'string', false, 'unknown'])
 })
 
 // D49 (1.6 §6): `on` looks at no VPN / proxy software — no 本机网络环境 line in the plan or the receipt, no `netenv` key in --json, and it writes no netenv.json when it has nothing to adopt (the receipt lists

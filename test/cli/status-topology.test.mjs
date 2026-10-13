@@ -13,24 +13,24 @@ import { createServer } from '../../src/server.mjs'
 import { asightHome } from '../../src/off/paths.mjs'
 import { renderCompact } from '../../src/netenv/topology.mjs'
 import { installedViaCli, snapshot } from './fixtures/dispatch-ctx.mjs'
-import { claudeProc, CLASH } from './fixtures/status-ctx.mjs'
+import { claudeProc } from './fixtures/status-ctx.mjs'
 
 const ENGINE = { status: { engine: { port: 47123 } } } // what the daemon's /status says of its engine
 const SS_MIHOMO = 'LISTEN 0 4096 127.0.0.1:7897 0.0.0.0:* users:(("verge-mihomo",pid=11800,fd=7))'
-/** The recording runner of the sandbox, except that `ss` lists a mihomo core on :7897 (what `CLASH()` says the product's port is). */
+/** The recording runner of the sandbox, except that `ss` lists a mihomo core on :7897 (the owner is the only name asight shows, D49). */
 const withMihomo = (s) => (file, args, o) => (file === 'ss' ? { status: 0, stdout: SS_MIHOMO, stderr: '' } : s.sys.exec.run(file, args, o))
 const status = async (s, argv = [], deps = {}) => {
   const r = await s.run(['status', ...argv], { deps })
   return { ...r, text: r.io.stdoutText(), json: () => r.io.json() }
 }
 
-test('V43: the digest draws a per-harness line under 路径 for every harness whose path is known — the chain and the verdict as the topology draws them (the mode rides the [eBPF] label; the block header with the probe age lives in the detail view)', async () => {
+test('V43: the digest draws a per-harness line under 各 harness 的路 for every harness whose path is known — the chain and the verdict as the topology draws them (the mode rides the [eBPF] label; the block header with the probe age lives in the detail view)', async () => {
   const s = await installedViaCli(ENGINE)
   const lines = (await status(s)).text.split('\n')
-  const head = lines.findIndex((l) => l.startsWith('路径    '))
-  assert.ok(head >= 1, 'the 路径 row is there, below the verdict rows')
+  const head = lines.findIndex((l) => l.startsWith('各 harness 的路('))
+  assert.ok(head >= 1, 'the block header is there, below the verdict rows')
   const drawn = lines.slice(head + 1).filter((l) => /^ {2}\S/.test(l) && l.includes(' → '))
-  assert.deepEqual(drawn.map((l) => l.trim().split(/\s+/)[0]), ['claude-code', 'codex', 'hermes', 'opencode', 'deepseek-dsh', 'kimi-code', 'z-code'], 'every harness with a known path is drawn, in the digest\'s order, right after 路径')
+  assert.deepEqual(drawn.map((l) => l.trim().split(/\s+/)[0]), ['claude-code', 'codex', 'hermes', 'opencode', 'deepseek-dsh', 'kimi-code', 'z-code'], 'every harness with a known path is drawn, in the digest\'s order, right after the header')
   assert.match(lines[head + 1], /^ {2}claude-code\s+claude-code → \[eBPF\] asight 引擎 :47123 → api\.anthropic\.com:443\(直连\)\s+在路径上 · 是$/)
 })
 
@@ -119,7 +119,7 @@ test('§9.2 「N 秒前探测」: the header of the block and the first line of 
 test('V44/D49: with asight on the path the detail says the one line about a VPN / proxy\'s per-process rules, product or none — and only there: not in `status`, not in `on --dry-run`', async () => {
   const s = await installedViaCli()
   const line = '若你的 VPN / 代理按进程分流,它看到的来源是 asight,不是 codex'
-  const deps = { netenv: async () => CLASH({ mixed_port: 7897 }), exec: withMihomo(s) }
+  const deps = { exec: withMihomo(s) }
   assert.ok((await status(s, ['codex'], deps)).text.includes(line))
   assert.ok(!(await status(s, [], deps)).text.includes('看到的来源是 asight'), 'the compact block does not say it')
   assert.ok((await status(s, ['codex'])).text.includes(line), 'no VPN detected: the same line, nothing to find')
@@ -176,19 +176,19 @@ test('1.6 §9.6: when the findings cannot be made `doctor --json` has `findings:
   assert.doesNotMatch(text, /发现\(网络与采集\): 没有/)
 })
 
-test('status writes ~/.asight/netenv.json once per run, with the probe and the topology in the same file (the board never sees one without the other)', async () => {
+test('status writes ~/.asight/netenv.json once per run, with the topology in it (schema and topology only, D49)', async () => {
   const s = await installedViaCli(ENGINE)
   const renamed = []
   const spy = new Proxy(fs, { get: (o, k) => (k === 'renameSync' ? (a, b) => { renamed.push(b); return o.renameSync(a, b) } : o[k]) })
   await status(s, [], { fs: spy })
   assert.deepEqual(renamed.filter((f) => f.endsWith('netenv.json')), [path.join(s.home, '.asight', 'netenv.json')])
   const file = JSON.parse(fs.readFileSync(path.join(s.home, '.asight', 'netenv.json'), 'utf8'))
-  assert.ok(Array.isArray(file.products) && file.topology['claude-code'], 'the probe\'s result and the topology')
+  assert.ok(!('products' in file) && file.topology['claude-code'], 'the topology, no probe result')
 })
 
 test('V44: `doctor codex --json` gives `findings` and every one of them is codex\'s; `doctor --json` gives the findings of all of them; the topology of `status --json` carries the codes of its harness', async () => {
   const s = await installedViaCli(ENGINE)
-  const deps = { netenv: async () => CLASH({ mixed_port: 7897 }), exec: withMihomo(s) }
+  const deps = { exec: withMihomo(s) }
   const some = fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8')
   fs.writeFileSync(path.join(s.home, '.codex', '.env'), `${some}HTTPS_PROXY=socks5://127.0.0.1:7897\n`) // codex cannot speak SOCKS and goes straight out: a finding of its own
   const one = (await s.run(['doctor', 'codex', '--json', '--source', path.join(s.home, 'none')], { deps })).io.json()
