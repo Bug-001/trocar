@@ -215,20 +215,23 @@ test('extra trust file: only a process whose environ names it keeps it (stripped
 test('an extra trust file whose holder\'s environment cannot be read: a process of the harness, or one started by it, with an unreadable environ makes it "not known" (kept without the CA, an item left); an unreadable one that is nothing of the harness\'s does not (D-20)', async () => {
   const s = await setup((b) => [jsonH(b)])
   const extra = s.b.ca('extra-jj.pem')
-  const t0 = Date.parse(readManifest(s.b.dir).entries[0].installed_at)
   const jj = proc(70, '/x/jj', { startedAt: 1 })
   const helper = proc(90, '/usr/libexec/asight-helper', { env: null }) // non-dumpable, started by init: nothing of jj's
   const asightFp = certBlocks(fs.readFileSync(s.b.ca('asight-ca.pem'), 'utf8'))[0].fp
   const gone = await s.run({ procs: async () => [jj, helper] })
   assert.deepEqual([gone.kept_bundles, gone.left, fs.existsSync(extra)], [[], [], false], 'an unreadable environ that descends from no jj process is not a holder: removed as ever')
-  // a child of jj, and a grandchild of it, whose environ cannot be read; one that started before the file existed cannot hold it
+  // a child of jj, and a grandchild of it, whose environ cannot be read; one that started before the file existed cannot hold it. Their start
+  // times are set from the install of the sandbox that judges them: one installed more than a second after another (a slow setup) would see
+  // a child timed from the other's as older than its file
+  const installedAt = (x) => Date.parse(readManifest(x.b.dir).entries[0].installed_at)
+  const kin = (x) => [proc(71, '/bin/sh', { ppid: 70, startedAt: installedAt(x) + 1000, env: null }), proc(72, '/usr/bin/node', { ppid: 71, startedAt: installedAt(x) + 2000, env: null })]
   const t = await setup((b) => [jsonH(b)])
-  const tExtra = t.b.ca('extra-jj.pem'), at = Date.parse(readManifest(t.b.dir).entries[0].installed_at)
-  const child = proc(71, '/bin/sh', { ppid: 70, startedAt: at + 1000, env: null }), grand = proc(72, '/usr/bin/node', { ppid: 71, startedAt: at + 2000, env: null })
-  const older = proc(73, '/bin/old', { ppid: 70, startedAt: at - 60000, env: null })
+  const tExtra = t.b.ca('extra-jj.pem')
+  const older = proc(73, '/bin/old', { ppid: 70, startedAt: installedAt(t) - 60000, env: null })
   const one = await t.run({ procs: async () => [jj, helper, older] })
   assert.deepEqual([one.kept_bundles, one.left, fs.existsSync(tExtra)], [[], [], false], 'started before the install: it cannot have inherited a path that was not there')
   const u = await setup((b) => [jsonH(b)])
+  const [child, grand] = kin(u)
   const r = await u.run({ procs: async () => [jj, child, grand, helper] })
   const kept = u.b.ca('extra-jj.pem')
   assert.deepEqual(r.kept_bundles.map((k) => [k.path, k.harness, k.pids, k.unjudged, /pid 71, 72, a running jj process or one started by it, cannot be read/.test(k.error)]), [[kept, 'jj', [], true, true]], 'pid 71 and its child 72 are named; the helper is not')
@@ -237,9 +240,9 @@ test('an extra trust file whose holder\'s environment cannot be read: a process 
   // they go: the next run removes it
   const next = await u.run({ manifest: r.manifest, procs: async () => [jj, helper] })
   assert.deepEqual([next.kept_bundles, next.left, fs.existsSync(kept)], [[], [], false])
-  // a holder that can be read decides on its own: the unreadable ones add nothing
+  // a holder that can be read decides on its own: the unreadable ones of jj's, which alone would make it "not known", add nothing
   const w = await setup((b) => [jsonH(b)])
-  const known = await w.run({ procs: async () => [proc(74, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: w.b.ca('extra-jj.pem') } }), child] })
+  const known = await w.run({ procs: async () => [proc(74, '/bin/node', { env: { NODE_EXTRA_CA_CERTS: w.b.ca('extra-jj.pem') } }), jj, ...kin(w)] })
   assert.deepEqual(known.kept_bundles, [{ path: w.b.ca('extra-jj.pem'), harness: 'jj', pids: [74] }])
 })
 

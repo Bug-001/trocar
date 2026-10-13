@@ -55,11 +55,11 @@ export const FINDINGS_WIN32 = {
     },
     commands: (c) => { const w = whyOf(c)
       if (!w.why) return [gui(`${c.h} 的这个形态没有入口:改用它的 CLI 形态`), asight(c, `asight status ${c.h}`)]
-      if (w.why === 'system-proxy-pac') return [gui(`在你的代理软件里看它的本地端口,把 ${c.h} 的代理设成它:${setProxyText(c.h, c.fm && c.fm.entryPlace, c.vpnProxy || unknownValue('你的代理地址', 'pac'))}`), asight(c, `asight on ${c.h}`)]
+      if (w.why === 'system-proxy-pac') return [gui(`在你的代理软件里看它的本地端口,把 ${c.h} 的代理设成它:${setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('你的代理地址', 'pac'))}`), asight(c, `asight on ${c.h}`)]
       if (w.why === 'system-proxy-unreadable') return [asight(c, `asight on ${c.h}`), asight(c, `asight doctor ${c.h}`), ps(REG_QUERY_PROXY)]
       return [
         gui(w.detail === 'credentials-in-system-proxy' ? '在系统代理设置里把用户名口令从代理地址里去掉(WinINET 本来就不取它们);要凭据的代理写进这个 agent 自己的代理设置:' : '把它改成一个 asight 读得懂的写法(http://host:port 或 socks5://host:port):'),
-        gui(setProxyText(c.h, c.fm && c.fm.entryPlace, c.vpnProxy || unknownValue('你的代理地址', 'absent'))),
+        gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('你的代理地址', 'absent'))),
         asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`), // 不想改就 off,不采它
       ]
     },
@@ -127,7 +127,7 @@ export const FINDINGS_WIN32 = {
   'proxy-unsupported': {
     what: (c) => `${c.h} 的代理协议接不上(${c.protocol || (c.setting && c.setting.scheme) || '不知道是哪一个'})`,
     why: (c) => (c.protocol ? `这个形态原来的代理是 ${c.protocol} 的,asight 的上游还不支持,on 因此不接这个形态` : `${c.h} 不支持 ${c.setting && c.setting.scheme}(它自己的代理设置里配的)`),
-    commands: (c) => [gui('把它改成 http://host:port 或 socks5://host:port 的写法'), gui(setProxyText(c.h, c.fm && c.fm.entryPlace, c.vpnProxy || unknownValue('你的代理地址', 'absent'))), asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)],
+    commands: (c) => [gui('把它改成 http://host:port 或 socks5://host:port 的写法'), gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('你的代理地址', 'absent'))), asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)],
     verify: (c) => `asight status ${c.h}:那一支「在路径上 · 是」`,
   },
   'system-proxy-pac': { commands: () => [ps(GET_PAC)], verify: () => '—' },

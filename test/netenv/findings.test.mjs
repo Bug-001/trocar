@@ -18,7 +18,7 @@ import path from 'node:path'
 const row = (n) => ROWS.find((r) => r.n === n)
 const codesOf = (f, h, names = null) => diagnose({ facts: f, topology: buildTopology(f), harnesses: names, user: 'alice' }).filter((x) => !x.harness || x.harness === h).map((x) => x.code).sort()
 const findingsOf = (f, names = null) => diagnose({ facts: f, topology: buildTopology(f), harnesses: names, user: 'alice' })
-const mihomoVia = { listeners: [MIHOMO], vpn: mihomoVpn() }
+const mihomoVia = { listeners: [MIHOMO] }
 const viaProxy = (value = 'http://127.0.0.1:7890') => ({ setting: proxyOf(value) })
 
 // one injected fact set per code: { codes: exactly what it must give, h, facts }. The rows of §9.3 serve for the codes they illustrate; the others are built here.
@@ -38,7 +38,6 @@ const SETS = {
   'proxy-dead': { h: 'claude-code', facts: facts('claude-code', {}, viaProxy()), codes: ['proxy-dead'] }, // claude-code's HTTPS_PROXY path is measured on Linux (V54): no hint about inferred data
   'proxy-unsupported': { h: 'deepseek-dsh', facts: facts('deepseek-dsh', mihomoVia, { setting: proxyOf('socks5://127.0.0.1:7890') }), codes: ['proxy-unsupported', 'inferred-behaviour'] },
   'proxy-changed': { h: 'codex', facts: row(17).facts, codes: row(17).findings },
-  'netenv-changed': { h: 'claude-code', facts: facts('claude-code', { vpn: mihomoVpn({ tun: true }), vpnKnown: true }, { adopted: { at: 'T', routing: 'driver', chain: 'c', source: [], sha256: null, file_sha256: null, proxy: null, vpn: { product: 'mihomo', version: '1.19.32', port: 7890, tun: false } } }), codes: ['netenv-changed'] },
   'elevated-agent': { h: 'claude-code', facts: row(19).facts, codes: row(19).findings },
   'forwarder-down': { h: 'codex', facts: row(13).facts, codes: row(13).findings },
   'upstream-unreachable': { h: 'codex', facts: pfacts('codex', form('codex.cli', { setting: proxyOf('http://proxy.corp:8080'), procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent', upstream_error: 'ECONNREFUSED' })), codes: ['upstream-unreachable'] },
@@ -65,7 +64,9 @@ for (const [code, set] of Object.entries(SETS)) {
 
 test('V49 both directions: every code of the closed sets (§9.7 net codes, the status reasons §9.6 uses) has a fact set, and the catalogue defines no code outside them', () => {
   const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE])
-  for (const code of closed) assert.ok(SETS[code], `${code} has a fact set`)
+  const EVENT_ONLY = ['netenv-changed'] // D49: the system-proxy watcher's event code, not a finding: diagnose never gives it
+  for (const code of closed) if (!EVENT_ONLY.includes(code)) assert.ok(SETS[code], `${code} has a fact set`)
+  for (const code of EVENT_ONLY) assert.ok(!FINDINGS[code] && !SETS[code], `${code} is no finding`)
   for (const code of Object.keys(FINDINGS)) assert.ok(closed.has(code) || TRUST_REASONS.includes(code), `${code} is in a closed set`)
   assert.deepEqual(Object.keys(SETS).filter((c) => !closed.has(c)), [], 'and no fact set is for a code nobody defined')
 })

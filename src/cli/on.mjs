@@ -14,7 +14,6 @@ import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { formatOnReceipt, formatPlan, formatWinPlan } from './receipt.mjs'
 import { colors, noColor } from './color.mjs'
 import { DESKTOP_LAUNCHER_HINT } from './words.mjs'
-import { probeNetenv } from '../netenv/index.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
@@ -103,8 +102,8 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       }
     }
     // R7 (4.8 §7): `on` never runs with an elevated or SYSTEM token — the arch's own question (the helper's `token` verb, self-started and closed by
-    // refuseElevated), asked before anything is touched: turnOn is `on`'s only writer, so this stops it before its first write, and the netenv probe and
-    // the adoption read never run under an elevated shell either. A token that cannot be read is not a refusal (R11: an on that stopped on a broken
+    // refuseElevated), asked before anything is touched: turnOn is `on`'s only writer, so this stops it before its first write, and
+    // the adoption read never runs under an elevated shell either. A token that cannot be read is not a refusal (R11: an on that stopped on a broken
     // question is not an on). Linux's arch has no refuseElevated and nothing here changes. The record's `where` is the §12 table's 'start' — that code
     // lives there whichever command asked (checkRecord's closed set); with no collector directory yet the receipt is the record (4.6 §记录).
     if (parts.arch && typeof parts.arch.refuseElevated === 'function') {
@@ -134,10 +133,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
         : 'asight 将按上面的清单写或改这些文件。继续?'
       return ask({ ...io, prompt: json ? io.stderr : io.stdout }, prompt)
     }
-    // the machine's VPN / proxy software (§6): looked at once, named in the plan and in the receipt; asight changes none of it. The cache ~/.asight/netenv.json is `status`'s and `doctor`'s to write, not `on`'s:
-    // the receipt lists exactly the files `on` wrote (V3), and a second `on` writes nothing (R9)
-    const netenv = await probeNetenv({ home, platform, env, deps })
-    const adoption = await prepareAdoption({ home, env, platform, deps, parts, netenv, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once asight is on
+    const adoption = await prepareAdoption({ home, env, platform, deps, parts, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once asight is on
     const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32, Task 8(c)); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
     // The arch's read-only preflight (historically the Windows kernel line and the Smart App Control line), run BEFORE turnOn so a
     // refusal stops `on` before its first write — a settled precondition with nothing to roll back. No arch carries one since the engines became the
@@ -157,8 +153,8 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       // ledger (an optIn row with state 'done'); nothing is ever installed by a hint (the win plan's codex twin, formatWinPlan's own line)
       const desktopHint = platform === 'darwin' && (raw.targets || []).includes('claude-code') && !(raw.optIn || []).some((x) => x && x.item === 'desktop-launcher' && x.state === 'done')
       return winPlan
-        ? formatWinPlan(raw, { home, autostart, netenv, env, adoption: adoption && !adoption.error ? adoption : null, prep, colors: c })
-        : [formatPlan({ ...raw, adopted }, { home, autostart, netenv, platform, colors: c }), ...(desktopHint ? ['', DESKTOP_LAUNCHER_HINT] : []), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
+        ? formatWinPlan(raw, { home, autostart, env, adoption: adoption && !adoption.error ? adoption : null, prep, colors: c })
+        : [formatPlan({ ...raw, adopted }, { home, autostart, platform, colors: c }), ...(desktopHint ? ['', DESKTOP_LAUNCHER_HINT] : []), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
     }
     if (prep && prep.refuse) {
       const rf = prep.refuse
@@ -184,14 +180,13 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
       onPlan: (p) => say(planText(p)),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
-    receipt.netenv = netenv.error ? { error: netenv.error } : netenv.result
     // the preflight's lines ride along (the plan showed them above). No arch carries a preflight today (the kernel line went with the kernel, D47's twin);
     // a future one that does keeps this append as its own.
     if (prep && prep.notes && prep.notes.length) receipt.notes.push(...prep.notes)
     if (prep && prep.blocked) { receipt.blocked = prep.blocked; receipt.notes.push(`${prep.blocked} (a real asight on stops there)`) }
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
     else if (adoption && receipt.harnesses && receipt.harnesses.length && receipt.ok !== false && !receipt.dry_run && !receipt.planned && !receipt.declined) {
-      const rec = await recordAdoption({ adoption, routing, targets: receipt.harnesses, home, env, now: deps.now ? () => deps.now().getTime() : Date.now, netenv, fs: deps.fs })
+      const rec = await recordAdoption({ adoption, routing, targets: receipt.harnesses, home, env, now: deps.now ? () => deps.now().getTime() : Date.now, fs: deps.fs })
       receipt.adopted = rec.adopted
       if (rec.wrote) receipt.created.push(rec.wrote)
       for (const h of rec.failed) receipt.ok = false

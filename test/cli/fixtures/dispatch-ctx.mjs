@@ -8,7 +8,7 @@ import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { sevenHomes } from '../../off/fixtures/seven-homes.mjs'
 import { fakeIo, fakeSystem, ROOTS, snapshot } from './on-ctx.mjs'
-import { reply, NO_VPN, SOCK } from './status-ctx.mjs'
+import { reply, SOCK } from './status-ctx.mjs'
 
 export { snapshot, fakeIo }
 const descs = await loadHarnesses()
@@ -32,7 +32,7 @@ export function sandbox({ platform = 'linux', status = {} } = {}) {
   const parts = { os: 'none', harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { unit: { userUnit } } }
   const deps = (over = {}) => ({
     parts, exec: sys.exec.run, request, socketPath: SOCK, helperState: () => ({ ok: true }), linger: () => true, lingerRead: () => ({ state: true }),
-    netenv: async () => NO_VPN, roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: tick, user: 'alice', procs: async () => [],
+    roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: tick, user: 'alice', procs: async () => [],
     has: () => true, verify: () => true, getuid: () => 1000, ...over,
   })
   const ctx = (over = {}) => ({ io: fakeIo(), home, platform, uid: 1000, env: { ...sh.env, XDG_RUNTIME_DIR: path.join(home, 'run'), ASIGHT_SOURCE: '' }, ...over, deps: deps(over.deps) })

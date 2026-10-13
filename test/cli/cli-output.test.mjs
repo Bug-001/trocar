@@ -29,7 +29,7 @@ test('D46 (a): the unnamed status digest is at most 10 lines in a quiet world, a
   assert.match(lines[0], /^asight · 在采 2\/7 · 守护进程 在跑/) // claude-code and codex, of the seven asight knows
   assert.match(lines[1], /^  在采   claude-code\(pid 4121\) · codex$/) // the process annotation, only where one runs
   assert.match(lines[2], /^  未装   hermes · opencode · deepseek-dsh · kimi-code · z-code$/)
-  assert.match(lines[3], /^路径    不知道\(/) // no VPN found: 不知道 with the reason, never 无 (R11)
+  assert.match(lines[3], /^各 harness 的路\(/) // D49: the block's own header takes the place of the 路径 row
   assert.match(lines[4], /^  claude-code\s+claude-code → /) // a known path is drawn per harness
   assert.match(r.text, /采集健康 ✓\(24 h 内无失败\)/) // zero failures is a ✓ line
   assert.match(r.text, /^日志     ~\/\.asight\/collector\/logs · 记录 ~\/\.asight · 关闭 asight off$/m)

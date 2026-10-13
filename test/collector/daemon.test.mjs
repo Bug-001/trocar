@@ -17,7 +17,8 @@ import { installCollector } from '../../src/collector/install.mjs'
 import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
 import { controlRequest } from '../../src/collector/core/control.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
-import { osBundleRoots } from '../../src/collector/core/tls/roots.mjs'
+import { osRootsFor } from '../../src/off/os-roots.mjs'
+const osBundleRoots = osRootsFor('linux') // the Linux reader, through the one table
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { createRedirectorClient } from '../../src/collector/arch/linux/redirector-client.mjs'
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
@@ -732,6 +733,40 @@ test('daemon: the Linux arch\'s OS roots — none on the machine is a bundle fai
     assert.match(eacces.reason, /the OS trust bundle cannot be read .*EACCES.*; they keep their previous roots/)
     await new Promise((r) => setTimeout(r, 100)) // a few more rounds at 30 ms
     assert.equal(fs.readFileSync(bundle, 'utf8'), kept, 'the bundle is as it was')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
+// 4.8 §6.2 / W20, 4.9 §6.2, 4.6 「合并包」: the OS roots the reader left out — certificates that did not parse, a source whose read failed while others gave
+// roots (darwin on Node 20: no getCACertificates, so not the keychain's local anchors, where a corporate CA lives) — are in no combined bundle, and every
+// rebuild says so as a `bundle` failure status shows (D38); an answer with nothing left out says nothing.
+test('daemon: OS roots the reader dropped as unparsable, or a roots source that failed, are bundle failures at every rebuild that status shows; nothing left out says nothing (4.8 §6.2, D38)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const dir = s.collector
+  const root = createCa({ commonName: 'an OS root' })
+  let answer = { pem: root.certPem, dropped: 0, tried: [] }, asked = 0
+  const osRoots = async () => { asked++; return answer }
+  const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots } })
+  writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
+  const bundle = path.join(dir, 'ca', 'combined-rep.pem')
+  const said = () => flowsOf(s).filter((x) => x.event === 'failure' && x.where === 'bundle' && /^system-roots-(unparsable|partial)$/.test(x.code))
+  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRoots }, harnesses: [rep], bundleMs: 30 })
+  try {
+    const before = asked
+    await until(() => asked >= before + 4) // three whole rebuilds with nothing left out (a round reads, then writes; the 4th read means the 3rd round wrote)
+    assert.deepEqual(said(), [], 'nothing left out: no failure')
+    answer = { pem: root.certPem, dropped: 2, tried: ['getCACertificates: not available (Node ≥ 22.15 has it)'] }
+    const u = await until(() => said().find((x) => x.code === 'system-roots-unparsable'))
+    const q = await until(() => said().find((x) => x.code === 'system-roots-partial'))
+    assert.deepEqual([u.files, u.dropped, q.files], [[bundle], 2, [bundle]], 'the bundle they are missing from, and how many did not parse')
+    assert.match(u.reason, /^2 certificates in the OS roots could not be parsed and are not in the combined bundles .*combined-rep\.pem/)
+    assert.match(q.reason, /combined-rep\.pem.*getCACertificates: not available \(Node ≥ 22\.15 has it\)/, 'the reason of the failed source')
+    const st = await req(s.sock, 'GET', '/status')
+    const g = (code) => st.health.collector.failures.find((x) => x.last.where === 'bundle' && x.last.code === code)
+    assert.ok(g('system-roots-unparsable') && g('system-roots-partial'), 'status (the board\'s reader) shows both')
+    assert.match(failureBrief(g('system-roots-unparsable')), /^有系统根证书解析不了,没进合并包\(/, 'in the words status prints')
+    assert.match(failureBrief(g('system-roots-partial')), /^合并包少了一部分系统根证书\(/)
   } finally { await d.stop(); p.done(); s.done() }
 })
 

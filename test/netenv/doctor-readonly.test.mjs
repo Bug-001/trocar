@@ -1,10 +1,9 @@
-// test/netenv/doctor-readonly.test.mjs — RFC 1.6 V50 (`status` and `doctor` only read, and never go online) and V52 (nothing secret in anything they print or write). A sandbox HOME of the dispatch fixture with Clash
-// Verge's directory laid out the way the real one is — a secret, a subscription address, a node and its password — a mihomo core behind a real unix-socket HTTP server that records every request, a recording
-// runner of OS tools and a Claude Code that has a proxy with credentials of its own. Nothing here reaches the machine (0.1 §3).
+// test/netenv/doctor-readonly.test.mjs — RFC 1.6 V50 (`status` and `doctor` only read, and never go online: zero connections of their own, D49) and V52 (no proxy credential in anything they print or write). A sandbox HOME of the
+// dispatch fixture, a recording runner of OS tools and a Claude Code that has a proxy with credentials of its own. Nothing here reaches the machine (0.1 §3).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import http from 'node:http'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,69 +17,47 @@ import { claudeProc } from '../cli/fixtures/status-ctx.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const descs = await loadHarnesses()
-const SECRETS = ['alice:pw', 's3cr3t', 'sub.example', 'HK-01']
+const SECRETS = ['alice:pw']
 const ENGINE = { status: { engine: { port: 47123 } } }
 // what a status or a doctor may run: queries that only read (1.6 V50). Anything else in a run is a failure of the test.
 const READ_ONLY = new Set(['ps', 'ss', 'ip', 'gsettings', 'scutil', 'lsof', 'netstat', 'reg', 'schtasks', 'where.exe'])
 // the Windows half of the allowlist (1.6 §9.7 / 4.8 §10.4: netstat, reg query, schtasks /Query, where.exe — the OS tools the printed commands name — plus the resident helper's read verbs).
 // What `doctor` itself executes on Windows goes through the helper, so the static form of the check is: the files that talk to it on the status / doctor path only ever ask its read verbs (the verb
-// closed set itself is 4.8 §1's, held by helper.test.mjs; the adapter reaches the helper through controller.mjs's discover). `netsh`, printed for the user, is held by the live test above (never run).
+// closed set itself is 4.8 §1's, held by helper.test.mjs). `netsh`, printed for the user, is held by the live test above (never run).
 const HELPER_READ_VERBS = new Set(['version', 'ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server'])
-const WIN_HELPER_FILES = ['src/collector/arch/win32/netfacts.mjs', 'src/collector/arch/win32/upstream.mjs', 'src/netenv/mihomo/controller.mjs']
+const WIN_HELPER_FILES = ['src/collector/arch/win32/netfacts.mjs', 'src/collector/arch/win32/upstream.mjs']
 
-function seedVerge(home, sock) {
-  const dir = path.join(home, '.local', 'share', 'io.github.clash-verge-rev.clash-verge-rev')
-  fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, 'verge.yaml'), 'enable_tun_mode: false\nenable_system_proxy: true\nverge_mixed_port: 7897\n')
-  fs.writeFileSync(path.join(dir, 'clash-verge.yaml'), `mode: global\nmixed-port: 7897\nsecret: s3cr3t\nexternal-controller-unix: ${sock}\nproxies:\n- {name: HK-01, type: ss, server: 1.2.3.4, port: 443, password: alice:pw}\nrules:\n- MATCH,HK-01\n`)
-  fs.writeFileSync(path.join(dir, 'profiles.yaml'), 'items:\n- uid: x\n  url: https://sub.example/xyz\n')
-}
-async function fakeMihomo() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ro-'))
-  const sock = path.join(dir, 'm.sock'), seen = []
-  const srv = http.createServer((req, res) => {
-    seen.push(`${req.method} ${req.url}`)
-    const send = (code, body) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
-    if (req.method === 'GET' && req.url === '/version') return send(200, { meta: true, version: 'v1.19.31' })
-    if (req.method === 'GET' && req.url === '/configs') return send(200, { mode: 'rule', 'mixed-port': 7897, secret: 's3cr3t', tun: { enable: false } })
-    send(404, { message: 'no route' })
-  })
-  await new Promise((r) => srv.listen(sock, r))
-  return { sock, seen, close: () => new Promise((r) => srv.close(() => { fs.rmSync(dir, { recursive: true, force: true }); r() })) }
-}
-
-/** The world of a run: a recording runner (ps names the core's socket and, as the real command line does, its secret; ss lists the core's port), and a Claude Code process whose environment holds a proxy with credentials. */
+/** The world of a run: a recording runner (ss lists a listener on the proxy port), and a Claude Code process whose environment holds a proxy with credentials. */
 async function world({ proxy = 'http://alice:pw@127.0.0.1:7897' } = {}) {
   const s = await installedViaCli(ENGINE)
-  const mh = await fakeMihomo()
-  seedVerge(s.home, mh.sock)
   const calls = []
   const exec = (file, args, o) => {
     calls.push(file)
-    if (file === 'ps') return { status: 0, stdout: `/usr/bin/verge-mihomo -d /x/runtime -ext-ctl-unix ${mh.sock} -secret s3cr3t\n/bin/zsh -l\n`, stderr: '' }
     if (file === 'ss') return { status: 0, stdout: 'LISTEN 0 4096 127.0.0.1:7897 0.0.0.0:* users:(("verge-mihomo",pid=11800,fd=7))', stderr: '' }
     return s.sys.exec.run(file, args, o)
   }
   const procEnv = new Map([['HTTPS_PROXY', proxy]])
   const settings = path.join(s.home, '.claude', 'settings.json')
   const d = JSON.parse(fs.readFileSync(settings, 'utf8')); d.env.HTTPS_PROXY = proxy; fs.writeFileSync(settings, `${JSON.stringify(d, null, 2)}\n`)
-  const deps = { exec, netenv: undefined, knownSocks: [], netFactsDeps: async () => ({ harnesses: descs, archFacts: linuxNetFacts }), procs: async () => [claudeProc(4121, Date.now() + 5000, procEnv)] }
-  return { s, mh, calls, deps, close: () => mh.close() }
+  const deps = { exec, netFactsDeps: async () => ({ harnesses: descs, archFacts: linuxNetFacts }), procs: async () => [claudeProc(4121, Date.now() + 5000, procEnv)] }
+  return { s, calls, deps, close: async () => {} }
 }
 const SRC = path.join(path.join(os.tmpdir(), 'none'))
 
-test('V50 status and doctor only read: they write netenv.json and flows/ and nothing else, run only read-only queries, ask the VPN core only GET /version and GET /configs — and `bpftool` / `netsh` are printed for the user, never run', async () => {
+test('V50 status and doctor only read: they write netenv.json and flows/ and nothing else, run only read-only queries, open no connection of their own — and `bpftool` / `netsh` are printed for the user, never run', async () => {
   const w = await world()
   try {
     const before = snapshot(w.s.home)
+    const connects = [], realConnect = net.Socket.prototype.connect
+    net.Socket.prototype.connect = function (...a) { connects.push(a[0]); return realConnect.apply(this, a) }
     const runs = [['status'], ['status', 'claude-code'], ['status', '--json'], ['doctor', '--source', SRC], ['doctor', 'claude-code', '--json', '--source', SRC]]
-    for (const argv of runs) await w.s.run(argv, { deps: w.deps })
+    try { for (const argv of runs) await w.s.run(argv, { deps: w.deps }) } finally { net.Socket.prototype.connect = realConnect }
     const changed = changedFiles(before, snapshot(w.s.home)).map((f) => f.split(path.sep).join('/'))
     assert.deepEqual(changed.filter((f) => f !== '.asight/netenv.json' && !f.startsWith('.asight/collector/flows/')), [], `written: ${changed.join(', ')}`)
     assert.ok(changed.includes('.asight/netenv.json'), 'the board\'s copy is the one thing it writes')
     assert.deepEqual([...new Set(w.calls)].filter((c) => !READ_ONLY.has(c)), [], 'every OS tool it ran is a reader')
     assert.ok(w.calls.length > 0 && w.calls.includes('ss'))
-    assert.deepEqual([...new Set(w.mh.seen)].sort(), ['GET /configs', 'GET /version'], 'the controller of the VPN core is only read: no write, no /connections, no /logs')
+    assert.deepEqual(connects, [], 'zero connections of their own: no VPN controller is asked, nothing goes online')
     // printed for the user, never run
     w.deps.netFactsDeps = async () => ({ harnesses: descs, archFacts: async (ctx) => ({ ...(await linuxNetFacts(ctx)), otherRedirector: true }) })
     const out = (await w.s.run(['doctor', '--source', SRC], { deps: w.deps })).io.stdoutText()
@@ -90,21 +67,15 @@ test('V50 status and doctor only read: they write netenv.json and flows/ and not
   } finally { await w.close() }
 })
 
-test('V50 the code: what the network facts run is named in a list of readers (ss, ip, gsettings, ps, scutil, lsof, netstat, reg, schtasks, where.exe), nothing in src/netenv or the facts of a platform connects anywhere but the VPN core\'s unix socket, and no write verb or `Get-NetTCPConnection` is in it', () => {
+test('V50 the code: what the network facts run is named in a list of readers (ss, ip, gsettings, ps, scutil, lsof, netstat, reg, schtasks, where.exe), nothing in src/netenv or the facts of a platform imports a networking module, and no write verb or `Get-NetTCPConnection` is in it', () => {
   const walkFiles = (d) => fs.readdirSync(path.join(REPO, d), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walkFiles(path.join(d, e.name)) : [path.join(d, e.name)]))
-  // src/netenv/mihomo/controller.mjs connects to a controller: its allow-list is held by test/netenv/controller.test.mjs (N9),
-  // so it is not scanned for verbs here. What this test holds is that the status / doctor side (src/netenv, src/cli, src/off) only ever asks it as the user's VPN: no `own: true` outside it.
-  const CONTROLLER = path.join('src/netenv/mihomo', 'controller.mjs')
-  const files = [...walkFiles('src/netenv').filter((f) => f !== CONTROLLER), 'src/collector/arch/linux/netfacts.mjs', 'src/collector/arch/win32/netfacts.mjs']
-  assert.ok(files.length > 10 && files.includes(path.join('src/netenv', 'clash.mjs')), 'the scan sees src/netenv, its subdirectories too')
-  const ownCallers = [...walkFiles('src/netenv'), ...walkFiles('src/cli'), ...walkFiles('src/off')].filter((f) => f !== CONTROLLER && /\bown:\s*true\b/.test(fs.readFileSync(path.join(REPO, f), 'utf8').replace(/^\s*\/\/.*$/gm, '')))
-  assert.deepEqual(ownCallers, [], 'no status / doctor file asks a controller in the writing form (own: true): asight only reads the user\'s core (D43)')
+  const files = [...walkFiles('src/netenv'), 'src/collector/arch/linux/netfacts.mjs', 'src/collector/arch/win32/netfacts.mjs']
+  assert.ok(files.length > 8 && files.includes(path.join('src/netenv', 'topology.mjs')), 'the scan sees src/netenv, its subdirectories too')
   for (const rel of files) {
     const src = fs.readFileSync(path.join(REPO, rel), 'utf8')
     for (const m of src.matchAll(/execTool\(\s*'([^']+)'/g)) assert.ok(READ_ONLY.has(m[1]), `${rel}: execTool('${m[1]}') is not a read-only query`)
     assert.ok(!/Get-NetTCPConnection/.test(src.replace(/^\s*\/\/.*$/gm, '')), `${rel}: Get-NetTCPConnection is denied to a restricted token (4.8 E6)`)
-    if (!rel.endsWith('clash.mjs')) assert.ok(!/from 'node:(net|http|https|dgram|dns|tls)'/.test(src), `${rel}: no connection of its own`)
-    assert.ok(!/method:\s*'(POST|PUT|PATCH|DELETE)'/.test(src) && !/\/connections|\/logs/.test(src.replace(/^\s*\/\/.*$/gm, '')), `${rel}: no write to a controller, no /connections or /logs`)
+    assert.ok(!/from 'node:(net|http|https|dgram|dns|tls)'/.test(src), `${rel}: no connection of its own`)
   }
 })
 
@@ -136,14 +107,13 @@ async function everything(w) {
   return { printed, written }
 }
 
-test('V52 nothing secret in anything they print or write: not a proxy credential (the agent\'s own, in its settings file and in its process\'s environment), nor the VPN\'s secret, subscription address or a node — in `status` (text and --json), `doctor` (text and --json), netenv.json and the events of flows/', async () => {
+test('V52 nothing secret in anything they print or write: not a proxy credential (the agent\'s own, in its settings file and in its process\'s environment) — in `status` (text and --json), `doctor` (text and --json), netenv.json and the events of flows/', async () => {
   const w = await world()
   try {
     const { printed, written } = await everything(w)
     const text = [...printed, ...written].join('\n')
     for (const secret of SECRETS) assert.ok(!text.includes(secret), `${secret} must not appear`)
     assert.ok(text.includes('http://***@127.0.0.1:7897'), 'the proxy setting is there, masked (what `on` recorded of it)')
-    assert.ok(printed.join('\n').includes('verge-mihomo') || printed.join('\n').includes('Clash Verge') || printed.join('\n').includes('mihomo'), 'and so is the product')
   } finally { await w.close() }
 })
 

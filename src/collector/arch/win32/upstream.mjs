@@ -315,3 +315,13 @@ export function watchSystemProxy({ helper, everyMs = 5000, initial = null, read 
     last: () => last,
   }
 }
+
+// "127.0.0.1:7897", or "http=127.0.0.1:7897;https=127.0.0.1:7897;socks=127.0.0.1:7898": the address of the entry asight dials — the same serverEntryOf pick (`https=` first, else the one with no
+// protocol) that upstreamFor uses, so the topology's system-proxy hop and the upstream cannot name two different proxies for `http=a;https=b` (4.8 §2.2 / §10.1, 4.9; D49). A SOCKS-only or empty value is no hop.
+export function proxyAddress(server) {
+  if (typeof server !== 'string' || server.trim() === '') return null
+  const entry = serverEntryOf(server)
+  if (entry.text === undefined) return null
+  const m = /^(?:[a-z]+:\/\/)?(\[[^\]]+\]|[^:\s/]+):(\d{1,5})\/?$/i.exec(entry.text)
+  return m && Number(m[2]) >= 1 && Number(m[2]) <= 65535 ? { host: m[1], port: Number(m[2]) } : null
+}

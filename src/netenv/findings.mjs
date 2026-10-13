@@ -70,7 +70,7 @@ export const FINDINGS = {
   'entry-changed': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口被改成了别的`, why: () => '你或别的程序改了 asight 写的那一项', commands: (c) => [asight(c, `asight off ${c.h}`), asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
   'negative-cache': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的进程拒绝了 asight 的证书,那个 host 之后透传`, why: () => '这个形态不认 asight 的信任入口;(pid, host) 随进程记着', commands: (c) => [asight(c, `asight status ${c.h}`), ...restartSteps(c)], verify: (c) => `重启后 asight status ${c.h}:「是」` },
   'not-routed': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 的新连接不经过 asight`, why: (c) => (c.pac ? '它跟随的系统代理是 PAC,asight 不执行 PAC' : '这个形态没有 asight 能用的入口'),
-    commands: (c) => (c.pac ? [gui(`把 ${c.h} 的代理设成一个具体地址:${setAt(c.h, placeOf(c.hf, c.setting), c.vpnProxy || unknownValue('你的代理地址', 'pac'))}`), asight(c, `asight on ${c.h}`)] : [gui(`${c.h} 的这个形态没有入口:改用它的 CLI 形态`), asight(c, `asight status ${c.h}`)]), verify: (c) => `asight status ${c.h}:该支「在路径上 · 是」` },
+    commands: (c) => (c.pac ? [gui(`把 ${c.h} 的代理设成一个具体地址:${setAt(c.h, placeOf(c.hf, c.setting), unknownValue('你的代理地址', 'pac'))}`), asight(c, `asight on ${c.h}`)] : [gui(`${c.h} 的这个形态没有入口:改用它的 CLI 形态`), asight(c, `asight status ${c.h}`)]), verify: (c) => `asight status ${c.h}:该支「在路径上 · 是」` },
   'route-loop': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的上游又是 asight 自己`, why: () => '算出的上游是 asight 自己的端口:代理字段的原值就是内核端口,或系统代理指着它;on 因此不接这个形态', commands: (c) => [asight(c, `asight off ${c.h}`), gui(`把 ${c.h} 的代理改回你原来的:${setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('原来的代理', 'absent'))}`), asight(c, `asight on ${c.h}`)], verify: () => 'asight doctor:不再报' },
   'proxy-dead': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 配的代理 ${c.dead.addr}:${c.dead.port} 没人在听`, why: () => '你的代理软件没开;这个设置不是 asight 写的',
     commands: (c) => [gui(`打开你的代理软件(它应该监听 ${c.dead.addr}:${c.dead.port})`), gui(`或者删掉这个设置:${c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('这个设置', 'absent')}`), portCheck(c, c.dead.port)], verify: (c) => `同一条命令看到监听;asight status ${c.h} 那一跳有属主` },
@@ -78,7 +78,6 @@ export const FINDINGS = {
     commands: (c) => [gui(`把它改成 HTTP 代理:${setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('代理地址', 'absent'))}`)], verify: (c) => `asight status ${c.h}:那条边是 proxy-http` },
   'proxy-changed': { cls: (c) => (c.F.routing === 'proxy' ? 'failure' : 'expected'), asightFirst: true, what: (c) => `${c.h} 的代理设置与上次 on 接上的不同`, why: () => '你改了它',
     commands: (c) => (c.F.routing === 'proxy' ? [asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)] : [gui(`无需操作:${c.h} 在跑的进程仍按启动时的设置,重启后按新设置走;新启动的进程照常被采`)]), verify: (c) => `asight status ${c.h}` },
-  'netenv-changed': { cls: 'hint', asightFirst: true, what: () => '本机网络环境与上次 on 时不同', why: () => '(VPN 新装、退出、换模式)别的变化不改 asight 的路,只改拓扑', commands: (c) => [asight(c, 'asight status')], verify: () => 'asight status' },
   'elevated-agent': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 以管理员权限运行`, why: () => '自带内核按进程认 agent,看不到提权进程的名字,只转发', commands: (c) => [gui(`关掉它,以普通权限重新启动 ${c.h}(不用「以管理员身份运行」)`)], verify: (c) => `asight status ${c.h}` },
   'forwarder-down': { cls: 'failure', asightFirst: true, what: () => 'asight 的本地代理(引擎的门)没在跑,入口指向它的 agent 连不上', why: () => '引擎死了或没起来;asight 的自启单元会把它拉起来', commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`)], verify: () => 'asight status:引擎「在跑」' },
   'upstream-unreachable': { cls: 'failure', asightFirst: false, what: (c) => `asight 给 ${c.h} 接的上游连不上`, why: () => '你的代理软件退出了而系统代理还指着它,或你配的代理不通;没有 asight 时同样连不上',
@@ -138,7 +137,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
   for (const h of ids) {
     const hf = F.harnesses[h], t = T[h]
     if (!hf || !t) continue
-    const base = { F, h, hf, t, user, sh, platform: F.platform, setting: settingOf(hf), vpnProxy: F.vpn && F.vpn.port ? `http://127.0.0.1:${F.vpn.port}` : null }
+    const base = { F, h, hf, t, user, sh, platform: F.platform, setting: settingOf(hf) }
     const found = new Map(), add = (code, extra = {}) => { if (!found.has(code)) found.set(code, make(code, { ...base, ...extra })) }
     const formOf = (r) => { const b = (t.branches || []).find((x) => x.reason === r); return (b && (hf.forms || []).find((f) => f.id === b.form)) || null } // the form facts of the branch that carries the reason (its route / entryPlace, the doctor's Windows rows read them, 4.8 §10.4)
     const reasons = [...new Set([t.reason, ...t.branches.map((b) => b.reason)].filter(Boolean))]
@@ -159,9 +158,8 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     if (sysPac) add('system-proxy-pac')
     if (t.branches.some((b) => b.path.some((id) => (nodeOf(t, id) || {}).asight) && hopKey(firstHopAfterAsight(t, b)) !== hopKey(firstHopOff(t, b)) && firstHopAfterAsight(t, b))) add('egress-differs')
     // drift is what the user changed in the files, not what this shell happens to export; and a harness that is off has no drift to report (asight is not on its path)
-    const drifts = F.desired[h] === 'off' ? [] : detectDrift({ adopted, h, setting: hf.fileSetting || hf.setting, routing: F.routing, scope: 'files', vpn: F.vpnKnown === false ? undefined : F.vpn })
+    const drifts = F.desired[h] === 'off' ? [] : detectDrift({ adopted, h, setting: hf.fileSetting || hf.setting, routing: F.routing, scope: 'files' })
     if (F.routing === 'driver' && drifts.some((d) => d.code === 'proxy-changed')) add('proxy-changed')
-    if (drifts.some((d) => d.code === 'netenv-changed')) add('netenv-changed')
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
     if (named && F.desired[h] === 'on' && hf.installed !== false && ![...found.values()].some((f) => f.class !== 'hint')) add('cause-unknown') // a failure or an expected finding already says why; only hints (about the data) leave it open

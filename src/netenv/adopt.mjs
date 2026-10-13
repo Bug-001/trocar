@@ -66,8 +66,6 @@ export function readAdopted(home, { fs = nodeFs } = {}) {
 }
 
 // ── what `on` found and drew, and the drift from it (§9.5) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-const vpnPrint = (v) => (v && !v.unknown ? { product: v.product, version: v.version ?? null, port: v.port ?? null, tun: v.tun ?? null } : null)
-
 /** The facts as they will be once `on` has turned `ids` on: wanted on, a daemon that answers, a helper and the links there, the entry in place, and no process of it yet. The chain `on` prints and records is the
  *  topology of these facts: where a new connection of the agent will go. Driver mode only: another routing's chain depends on what its platform starts (proxy mode: the kernel), so it is drawn from the facts after `on`. */
 export function projectedOn(facts, ids) {
@@ -79,41 +77,37 @@ export function projectedOn(facts, ids) {
 /** The topology `on` draws for `ids`: the projection above in driver mode, the facts as they are otherwise. */
 export const chainsAfterOn = (facts, ids) => buildTopology(facts.routing === 'driver' ? projectedOn(facts, ids) : facts)
 
-const FIELDS = ['routing', 'chain', 'source', 'sha256', 'file_sha256', 'file_paths', 'proxy', 'vpn', 'written_sha256']
+const FIELDS = ['routing', 'chain', 'source', 'sha256', 'file_sha256', 'file_paths', 'proxy', 'written_sha256']
 /** Is `a` the same adoption as `b`, whatever the time (`at`)? */
 export const sameAdoption = (a, b) => !!a && !!b && FIELDS.every((k) => JSON.stringify(a[k] ?? null) === JSON.stringify(b[k] ?? null))
 
 /**
  * `adopted.<h>` of ~/.asight/netenv.json: what `on` found of the harness's proxy and drew. `{ at, routing, chain (the compact chain, redacted), source: [{ kind, where, key? }], sha256 (of the setting as the agent
  * reads it: the original is not kept: it may hold a password), file_sha256 (of the file part alone: the daemon has not the agent's environment), proxy (the setting, redacted: 「仍按启动时的设置」 shows it),
- * file_paths (the files `on` read it from, in the order of the descriptor's `proxy.files`: the daemon reads those, it has not the environment that names them), vpn (product, version, port, TUN: what `netenv-changed` is measured against) }` plus `written_sha256` (of the value `on` put in the field a routing owns: proxy mode). Unchanged → `prev` itself, so a second `on` writes nothing.
+ * file_paths (the files `on` read it from, in the order of the descriptor's `proxy.files`: the daemon reads those, it has not the environment that names them) }` (an older record may still hold a `vpn` key: it is not compared) plus `written_sha256` (of the value `on` put in the field a routing owns: proxy mode). Unchanged → `prev` itself, so a second `on` writes nothing.
  */
 export function adoptedRecord({ facts, topology, h, now = Date.now, files = null, paths = null, prev = null, written = null }) {
   const s = (facts.harnesses[h] && facts.harnesses[h].setting) || { value: null, source: [], sha256: null }
   const rec = {
     at: new Date(typeof now === 'function' ? now() : now).toISOString(), routing: facts.routing, chain: topology && topology[h] ? renderCompact(topology[h]).join(' ; ') : '',
-    source: s.source || [], sha256: s.sha256 ?? null, file_sha256: files ? files.sha256 ?? null : s.sha256 ?? null, file_paths: paths, proxy: s.value ?? null, vpn: vpnPrint(facts.vpn),
+    source: s.source || [], sha256: s.sha256 ?? null, file_sha256: files ? files.sha256 ?? null : s.sha256 ?? null, file_paths: paths, proxy: s.value ?? null,
     ...(s.unknown ? { unknown: s.unknown } : {}), ...(written ? { written_sha256: written.sha256 ?? null } : {}),
   }
   return sameAdoption(prev, rec) && !!prev.unknown === !!rec.unknown ? prev : rec
 }
 
 /**
- * Has the setting (or the machine's network environment) moved since `on`? → [ { code: 'proxy-changed' | 'netenv-changed', from, to, captured } ], empty when it has not, or when it cannot be told (a setting that could
+ * Has the setting moved since `on`? → [ { code: 'proxy-changed', from, to, captured } ], empty when it has not, or when it cannot be told (a setting that could
  * not be read is not drift: `status` says it is unknown). `setting` is what the caller read; `scope: 'files'` is the daemon's reading (files alone). In driver mode the baseline is what `on` found, and the harness is
  * still captured (the kernel steers it whatever it is set to); in proxy mode it is what `on` wrote into the field, and a field that holds anything else bypasses asight (`captured: false`). Pure.
  */
-export function detectDrift({ adopted, h, setting, routing, vpn = undefined, scope = 'all' }) {
+export function detectDrift({ adopted, h, setting, routing, scope = 'all' }) {
   const a = adopted && adopted[h]
   if (!a || (setting && setting.unknown)) return []
   const out = []
   const now = setting ? setting.sha256 ?? null : null
   const base = routing === 'proxy' ? a.written_sha256 ?? null : scope === 'files' ? a.file_sha256 ?? null : a.sha256 ?? null
   if (now !== base) out.push({ code: 'proxy-changed', from: routing === 'proxy' ? 'asight' : a.proxy ?? null, to: setting ? setting.value ?? null : null, captured: routing !== 'proxy' })
-  if (vpn !== undefined && !(vpn && vpn.unknown) && a.vpn !== undefined && JSON.stringify(vpnPrint(vpn)) !== JSON.stringify(a.vpn ?? null)) {
-    const fmt = (v) => (v ? [v.product, v.version, v.port ? `:${v.port}` : null, v.tun ? 'TUN' : null].filter(Boolean).join(' ') : 'none')
-    out.push({ code: 'netenv-changed', from: fmt(a.vpn), to: fmt(vpnPrint(vpn)), captured: true })
-  }
   return out
 }
 

@@ -97,20 +97,15 @@ test('gatherNetFacts: the switch, the daemon, the link ids, the descriptors\' be
   assert.equal(w.harnesses['claude-code'].behaviour.measured, 'lab', 'measured on Windows')
 })
 
-test('gatherNetFacts: the VPN probe\'s product becomes the vpn fact and names the listener on its port; a controller that did not answer, a probe that failed and no probe at all are said', async () => {
+test('gatherNetFacts: no vpn / vpnKnown / tun in the facts and no product on a listener, even when a caller still passes a probe result or an arch part still returns tun / vpn (D49)', async () => {
   const home = tmpDir('asight-gather2-')
-  const arch = async () => ({ routing: 'driver', listeners: [{ addr: '127.0.0.1', port: 7890, pid: 777, exe: '/usr/bin/mihomo' }, { addr: '127.0.0.1', port: 9, pid: 1 }], tun: true })
+  const arch = async () => ({ routing: 'driver', listeners: [{ addr: '127.0.0.1', port: 7890, pid: 777, exe: '/usr/bin/mihomo' }], tun: true, vpn: { product: 'mihomo', port: 7890 } })
   const probe = { result: { products: [{ product: 'mihomo', mode: 'rule', tun: 'unknown', system_proxy: false, mixed_port: 7890, live: true, via: {} }], unknown: [] } }
   const f = await gatherNetFacts({ ...base, home, status: status(), netenv: probe, archFacts: arch })
-  assert.deepEqual(f.vpn, { product: 'mihomo', version: null, pid: null, port: 7890, mode: 'rule', tun: true }, 'the product did not say about TUN: the routing table did')
-  assert.equal(f.listeners[0].product, 'mihomo')
-  assert.equal(f.listeners[1].product, undefined)
-  const dead = await gatherNetFacts({ ...base, home, status: status(), archFacts: arch, netenv: { result: { products: [{ ...probe.result.products[0], live: false, reason: 'no core answered' }], unknown: [] } } })
-  assert.deepEqual(dead.vpn.unknown, { reason: 'controller-unreadable', detail: 'no core answered' })
+  for (const k of ['vpn', 'vpnKnown', 'tun']) assert.ok(!(k in f), `${k} is not a fact`)
+  assert.deepEqual(f.listeners, [{ addr: '127.0.0.1', port: 7890, pid: 777, exe: '/usr/bin/mihomo' }], 'the listener is not named after a product')
   const failed = await gatherNetFacts({ ...base, home, status: status(), archFacts: arch, netenv: { error: 'the probe broke' } })
-  assert.equal(failed.vpn, null)
-  assert.deepEqual(failed.unknowns, [{ fact: 'vpn', reason: 'denied', detail: 'the probe broke' }])
-  assert.equal((await gatherNetFacts({ ...base, home, status: status(), archFacts: arch })).vpn, null, 'nothing was probed: no VPN is claimed')
+  assert.deepEqual(failed.unknowns, [], 'a failed probe is not a fact either')
 })
 
 test('gatherNetFacts: a platform part that throws leaves the routing unknown and says why; none at all says so; the guard\'s refusal is not "the read failed"', async () => {
@@ -124,26 +119,19 @@ test('gatherNetFacts: a platform part that throws leaves the routing unknown and
   await assert.rejects(gatherNetFacts({ ...base, home, status: status(), archFacts: async () => { throw Object.assign(new Error('refusing to run ss'), { code: 'ESANDBOX' }) } }), /refusing to run ss/)
 })
 
-test('gatherNetFacts: the host\'s linger state and another redirector, whether the VPN probe answered, the files and keys a harness reads its proxy from (to name the line in a command), and a fake-ip an arch part saw', async () => {
+test('gatherNetFacts: the host\'s linger state and another redirector, the files and keys a harness reads its proxy from (to name the line in a command), and a fake-ip an arch part saw', async () => {
   const home = tmpDir('asight-gather4-')
   const arch = async () => ({ routing: 'driver', otherRedirector: true, fakeIp: { 'claude-code': true } })
-  const f = await gatherNetFacts({ ...base, home, status: { ...status(), linger: { linger: false } }, netenv: { result: { products: [], unknown: [{ reason: 'none' }] } }, archFacts: arch })
-  assert.deepEqual([f.linger, f.otherRedirector, f.vpnKnown], [false, true, true])
+  const f = await gatherNetFacts({ ...base, home, status: { ...status(), linger: { linger: false } }, archFacts: arch })
+  assert.deepEqual([f.linger, f.otherRedirector], [false, true])
   assert.deepEqual(f.harnesses['claude-code'].behaviour.fileKeys, [{ path: path.join(home, '.claude', 'settings.json'), format: 'json', key: 'env.HTTPS_PROXY' }, { path: path.join(home, '.claude.json'), format: 'json', key: 'env.HTTPS_PROXY' }])
   assert.deepEqual([f.harnesses['claude-code'].fakeIp, f.harnesses.codex.fakeIp], [true, null])
   const none = await gatherNetFacts({ ...base, home, status: status(), archFacts: async () => ({ routing: 'driver' }) })
-  assert.deepEqual([none.linger, none.otherRedirector, none.vpnKnown], [null, null, false], 'not read: not said')
-  const failed = await gatherNetFacts({ ...base, home, status: status(), netenv: { error: 'boom' }, archFacts: async () => ({ routing: 'driver' }) })
-  assert.equal(failed.vpnKnown, false, 'a probe that failed says nothing about whether the VPN changed')
+  assert.deepEqual([none.linger, none.otherRedirector], [null, null], 'not read: not said')
 })
 
-test('gatherNetFacts: the TUN the platform read stays a fact of its own — with no VPN product recognised too — and the NO_PROXY of the shell names the harness\'s API hosts it covers (a domain suffix, the host, `*`)', async () => {
+test('gatherNetFacts: the NO_PROXY of the shell names the harness\'s API hosts it covers (a domain suffix, the host, `*`)', async () => {
   const home = tmpDir('asight-gather5-')
-  const f = await gatherNetFacts({ ...base, home, status: status(), archFacts: async () => ({ routing: 'driver', tun: true }) })
-  assert.deepEqual([f.vpn, f.tun], [null, true], 'no product, a TUN device: both are said')
-  const no = await gatherNetFacts({ ...base, home, status: status(), archFacts: async () => ({ routing: 'driver', tun: false }) })
-  assert.equal(no.tun, false)
-  assert.equal((await gatherNetFacts({ ...base, home, status: status(), archFacts: async () => ({ routing: 'driver' }) })).tun, null, 'not read: not said')
   const env = (v) => gatherNetFacts({ ...base, env: v, home, status: status(), archFacts: async () => ({ routing: 'driver' }) })
   assert.deepEqual((await env({ NO_PROXY: 'localhost,.anthropic.com' })).harnesses['claude-code'].noProxy, ['api.anthropic.com'])
   assert.deepEqual((await env({ no_proxy: '*' })).harnesses['claude-code'].noProxy, ['api.anthropic.com'])

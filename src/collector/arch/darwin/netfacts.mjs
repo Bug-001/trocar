@@ -11,9 +11,6 @@
 //   · the OS proxy and PAC: `scutil --proxy` through the same reader the upstream rule uses (./upstream.mjs `readSystemProxy`, 4.9 §2.2 — one reader of one fact, so the topology cannot disagree with the kernel's
 //     dial): the `HTTPS*` keys are the hop an HTTPS request takes (the `HTTP*` ones alone send HTTPS direct, WinINET's own rule, kept apart there as here), `ProxyAutoConfigEnable` is PAC's own flag — the g row of
 //     1.6 §9.7's shape table, with none of Windows' OPEN 27 type ambiguity;
-//   · whether the way out of the machine is a utun (`route -n get default` names the interface — the address asked is `default`, no host is resolved, no packet is sent, the CLI never goes online — then `ifconfig
-//     <it>` answers for it: a utun is the interface a macOS VPN rides, and the interface's own stanza, not the route line's spelling, says its name; a ppp tunnel is not a utun, the same way Linux's `info_kind:
-//     'ppp'` is not `tun`).
 // Routing is `proxy` (D43: macOS has proxy mode only). This file is NOT a near-verbatim copy of a win32 one — Windows' netFacts is that line's open task; the shape donor is arch/linux/netfacts.mjs, and what
 // darwin replaces is the fact sources (lsof / scutil / route / ifconfig / the euid's ps) and the rows 4.9 §10 names: elevation (linux answers null), and the machine-PATH rows (n / o of 1.6 §9.7's Windows table),
 // which have no darwin counterpart at all (macOS has no machine-before-user PATH order) and so are read by nothing here. What darwin cannot do that linux does: another process's environment is NEVER read (no
@@ -33,7 +30,6 @@ const VERSIONED = /^v?\d+(\.\d+)+([-+.].*)?$/ // the native Claude Code is a fil
 const base = (p) => String(p).split('/').pop()
 const iso = (t) => (typeof t === 'number' && Number.isFinite(t) ? new Date(t).toISOString() : typeof t === 'string' ? t : null)
 const REASON = (r) => (r.code === null && /ETIMEDOUT|timed out/i.test(r.err) ? 'timeout' : r.code === null && /ENOENT/.test(r.err) ? 'absent' : 'denied')
-const UTUN = /^utun\d*$/
 
 /** `claude`, `codex app-server`: the name of the program, with its sub-command when it has one (a word, not a path or a flag); a generic runtime (node, python) and a file named by its version are named for the harness. */
 export function processName(argv, exe, harness) {
@@ -84,7 +80,7 @@ function startSettingOf({ proc, current, adopted, startedAt, keys }) {
 /**
  * macOS's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of `lsof`, `scutil`, `route`, `ifconfig` and the euid's `ps`:
  * spawnSync-shaped; execTool refuses a real one under npm test — `procRoot` is accepted by the shared call and unused, there is no /proc to point at on darwin, the process table arrives in `status`).
- * → { routing: 'proxy', listeners, procs: { <h>: [proc] }, systemProxy, tun, unknowns }.
+ * → { routing: 'proxy', listeners, procs: { <h>: [proc] }, systemProxy, unknowns }.
  */
 export async function darwinNetFacts(ctx, deps = {}) {
   const { status, settings = {}, adopted = null, env = process.env, harnesses = [] } = ctx
@@ -131,19 +127,5 @@ export async function darwinNetFacts(ctx, deps = {}) {
     // the `HTTPS*` keys are the hop an HTTPS request takes (the `HTTP*` ones alone send HTTPS direct, WinINET's own rule); the value is kept beside the PAC flag, and the topology prefers the flag
     systemProxy = { value: scutil.HTTPSEnable === true && scutil.HTTPSProxy ? `http://${scutil.HTTPSProxy}${scutil.HTTPSPort != null && scutil.HTTPSPort !== '' ? `:${scutil.HTTPSPort}` : ''}` : null, pac: scutil.ProxyAutoConfigEnable === true }
   } else { systemProxy = { unknown: { reason: scutil.reason, detail: `scutil --proxy: ${scutil.detail}` } }; unknowns.push({ fact: 'systemProxy', reason: scutil.reason, detail: `scutil --proxy: ${scutil.detail}` }) }
-  let tun = null
-  const route = run('route', ['-n', 'get', 'default'])
-  if (route.code === 0) {
-    const m = /^\s*interface:\s*(\S+)\s*$/m.exec(route.out)
-    const dev = m ? m[1] : null
-    if (dev) {
-      const link = run('ifconfig', [dev])
-      if (link.code === 0) {
-        const head = /^(\S+):\s+flags=/.exec(String(link.out).split('\n')[0] || '') // the interface's own stanza names it, not the route line's spelling
-        if (head) tun = UTUN.test(head[1])
-        else unknowns.push({ fact: 'tun', reason: 'unparseable', detail: `ifconfig ${dev} did not print the interface's stanza` })
-      } else unknowns.push({ fact: 'tun', reason: REASON(link), detail: `ifconfig ${dev}: ${link.err || `exit ${link.code}`}` })
-    } else unknowns.push({ fact: 'tun', reason: 'unparseable', detail: 'route -n get default printed no interface' })
-  } else unknowns.push({ fact: 'tun', reason: REASON(route), detail: `route -n get default: ${route.err || `exit ${route.code}`}` })
-  return { routing: 'proxy', listeners, procs, systemProxy, tun, unknowns }
+  return { routing: 'proxy', listeners, procs, systemProxy, unknowns }
 }

@@ -42,7 +42,6 @@ function darwinWorld({ osRoots, harness = codex, optInHooks = null } = {}) {
       env: { HOME: home },
       deps: {
         parts, request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true,
-        netenv: async () => ({ at: '2026-10-11T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),
         freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
         ...extraDeps,
       },

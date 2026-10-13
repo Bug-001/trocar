@@ -1,8 +1,7 @@
 // topology-text.mjs (src/netenv) — the words of the topology (RFC 1.6 §9.2). Everything printed is rendered from a HarnessTopology (topology.mjs) and from nothing else, so the text and `--json` cannot differ (V43):
 // `renderCompact` is one line per branch for `status`, `renderDetail` a hop per line for `status <harness>`, `firstHopAfterAsight` / `firstHopOff` the two hops V45 compares. Pure.
-// What is never printed: a proxy URL's credentials (the facts never held them), the VPN's secret, subscription address and node names (nothing here has them), and a hop's name when it could not be read — that
+// What is never printed: a proxy URL's credentials (the facts never held them), a proxy product's secret, subscription address and node names (nothing here has them), and a hop's name when it could not be read — that
 // hop says 「不知道 · <原因>」 (R11).
-const MODE = { rule: '规则模式', global: '全局模式', direct: '直连模式', tun: 'TUN 模式', 'system-proxy': '系统代理模式', unknown: '模式不知道' }
 export const ROUTING_TEXT = Object.freeze({ driver: '驱动模式(eBPF)', proxy: '代理模式', legacy: '旧采集', none: '没有采集', unknown: '引流模式不知道' })
 const BRANCH_TEXT = { http: 'HTTP', ws: 'WebSocket' }
 const tri = (v, yes = '是', no = '否') => (v === true ? yes : v === false ? no : '不知道')
@@ -23,11 +22,10 @@ function hopText(n, via, detail, inferred = false) {
     case 'legacy-mitm': return `${n.name} :${n.port}`
     case 'proxy': {
       const at = n.port && !String(n.name).endsWith(`:${n.port}`) ? ` :${n.port}` : '' // every proxy hop has its port; a hop already named `host:port` says it once
-      const who = `${n.name}${n.product && detail && n.version ? ` ${n.version}` : ''}${at}`
-      return `${who}${detail && n.pid ? ` · pid ${n.pid}` : ''}${detail && n.mode && n.mode !== 'unknown' ? ` · ${MODE[n.mode] || n.mode}` : ''}${paren(n.unknown ? unknownText(n) : n.down ? '没人在听' : null)}`
+      return `${n.name}${at}${detail && n.pid ? ` · pid ${n.pid}` : ''}${paren(n.unknown ? unknownText(n) : n.down ? '没人在听' : null)}`
     }
     case 'upstream': return `${n.name}${via === 'direct' ? `(直连${inferred ? ' · 推断' : ''})` : ''}`
-    case 'egress': return n.unknown ? (via === 'tun' ? `出口(${unknownText(n)})` : '?') : `出口${n.chosen_by ? `(${n.chosen_by} 选)` : ''}`
+    case 'egress': return n.unknown ? '?' : '出口'
     default: return `${n.name}${n.unknown ? paren(`${unknownText(n)}${n.inferred === true ? ' · 推断' : ''}`) : ''}`
   }
 }
@@ -39,7 +37,6 @@ function edgeLabel(e, from, to, detail) {
   if (from.kind === 'legacy-mitm') return ''
   if (e.via === 'ebpf') return detail && (e.evidence || []).find((x) => x.startsWith('link:')) ? `eBPF · link ${e.evidence.find((x) => x.startsWith('link:')).slice(5)}` : 'eBPF'
   if (e.via === 'system-proxy') return '系统代理'
-  if (e.via === 'tun') return 'TUN'
   if (e.via === 'proxy-http' || e.via === 'proxy-https' || e.via === 'proxy-socks') {
     if (e.entry) return `${e.entry.where} · ${e.entry.opt_in ? '你点名的' : 'asight 写的'}`
     if (from.asight) return e.via === 'proxy-socks' ? 'SOCKS 前导原样转' : e.via === 'proxy-https' ? 'CONNECT 原样转 · https 代理' : 'CONNECT 原样转' // an https proxy of the agent's own: the engine ends its outer TLS first (4.6 §引擎 第 3 步)
@@ -125,7 +122,7 @@ export function renderDetail(t, { now = null } = {}) {
   if (t.branches.some((b) => b.path.some((id) => isAsight(nodeOf(t, id))))) lines.push(`关掉 asight 时的路: ${t.branches.map((b) => `${prefixOf(t, b, 'off_path')}${chain(t, b.off_path)}`).join(' · ')}`)
   for (const r of t.running || []) lines.push(r.note === 'start-time-settings' ? `pid ${r.pid} 仍按启动时的设置:${chain(t, r.path)};重启后按上面的路` : `pid ${r.pid} 没有经过 asight${r.reason ? `(${r.reason})` : ''}:${chain(t, r.path)};重启后被采集`)
   for (const n of t.notes || []) lines.push(`说明: ${n}`)
-  if (t.vpn && t.on_path === true) lines.push(`你的 VPN 按进程分流时,看到的来源是 asight,不是 ${t.harness}`)
+  if (t.on_path === true) lines.push(`若你的 VPN / 代理按进程分流,它看到的来源是 asight,不是 ${t.harness}`)
   lines.push((CHANGE[t.routing] || CHANGE.unknown)(t.harness))
   return lines
 }

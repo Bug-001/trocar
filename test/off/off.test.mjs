@@ -710,9 +710,116 @@ test('off: a gone bundle rebuilt on a machine with no OS bundle says it carries 
   fs.rmSync(bundle)
   const noEtc = { ...fs, readFileSync: (f, ...a) => { if (SYSTEM_BUNDLES.includes(f)) throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' }); return fs.readFileSync(f, ...a) } }
   const { receipt } = await s.off({ deps: { alive: () => false, roots: undefined, fs: noEtc, procs: async () => [proc(4242, '/home/u/.local/bin/codex', ['codex'])] } })
-  assert.deepEqual(receipt.kept_bundles.map((k) => [path.basename(k.path), k.rebuilt, k.os_roots_missing]), [['combined-codex.pem', true, 'no OS trust bundle holds a certificate']])
+  assert.deepEqual(receipt.kept_bundles.map((k) => [path.basename(k.path), k.rebuilt]), [['combined-codex.pem', true]])
+  assert.equal(receipt.kept_bundles[0].os_roots_missing, `no OS trust bundle holds a certificate (looked at ${SYSTEM_BUNDLES.join(', ')})`, 'the Linux reader\'s own words: every path looked at (os-roots.mjs osBundleRoots, the collector\'s too)')
   assert.ok(certBlocks(fs.readFileSync(bundle, 'utf8')).length > 0, 'rebuilt: Node\'s roots are in it')
   const said = flowEvents(s.dir).filter((e) => e.path === bundle && /rebuilt without the asight CA/.test(e.reason))
   assert.equal(said.length, 1, JSON.stringify(flowEvents(s.dir).map((e) => e.reason)))
-  assert.match(said[0].reason, /with Node's roots only \(no OS trust bundle holds a certificate\)/)
+  assert.match(said[0].reason, /with Node's roots only \(no OS trust bundle holds a certificate \(looked at \/etc\/ssl\/certs\/ca-certificates\.crt, /)
+})
+
+// 4.9 §6.2 「绝不用固定的 /etc/ssl/cert.pem 当 OS 根」, for `off`'s rebuild too (4.6 撤销顺序 第 2 步): a gone bundle a live codex may use, rebuilt on a Mac,
+// must not take its OS roots from a static PEM file — the keychain's added anchors (a corporate proxy's CA) are in none of them. The /etc here is a stock
+// Mac's, whatever this machine's is (a nix-darwin Mac also has the Debian path): /etc/ssl/cert.pem holds a marker root, every other file under /etc is absent.
+// The rebuild reads what the install composed from instead (src/off/os-roots.mjs darwinRoots, through the one table): Node's set, the keychain's anchors, the
+// SystemRootCertificates export.
+const enoentOf = (f) => Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' })
+const stockMacFs = (marker, opened) => ({ ...fs, readFileSync: (f, ...a) => { if (!String(f).startsWith('/etc/')) return fs.readFileSync(f, ...a); opened.push(f); if (f === '/etc/ssl/cert.pem') return marker.certPem; throw enoentOf(f) } })
+const macRoots = { bundled: createCa({ commonName: 'node bundled root' }), anchor: createCa({ commonName: 'corporate proxy CA (keychain anchor)' }), apple: createCa({ commonName: 'apple system root' }) }
+const securityOf = (s, pems, calls = []) => (file, args, opts) => { if (file !== 'security') return s.sys.exec.run(file, args, opts); calls.push(args); return pems ? { status: 0, stdout: pems.join('\n'), stderr: '' } : { status: 1, stdout: '', stderr: 'SecKeychainOpen: I/O error' } }
+test('off on darwin: a gone bundle is rebuilt without opening a static OS bundle file such as /etc/ssl/cert.pem — from the keychain\'s anchors, Node\'s set and Apple\'s export, the install\'s own reader (4.9 §6.2, 4.6 撤销顺序 第 2 步)', async () => {
+  const s = await installedHome({ names: ['codex'] })
+  const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
+  const asightFp = certBlocks(fs.readFileSync(path.join(s.dir, 'ca', 'asight-ca.pem'), 'utf8'))[0].fp
+  fs.rmSync(bundle)
+  const marker = createCa({ commonName: 'static OS bundle root' })
+  const opened = []
+  const tls = { getCACertificates: (k) => (k === 'bundled' ? [macRoots.bundled.certPem] : [macRoots.anchor.certPem]) }
+  const { receipt } = await s.off({ deps: { platform: 'darwin', alive: () => false, roots: undefined, tls, exec: securityOf(s, [macRoots.apple.certPem]), fs: stockMacFs(marker, opened), procs: async () => [proc(4242, '/opt/homebrew/bin/codex', ['codex'])] } })
+  assert.deepEqual(receipt.kept_bundles.map((k) => [path.basename(k.path), k.rebuilt, k.os_roots_missing, k.os_roots_partial]), [['combined-codex.pem', true, undefined, undefined]])
+  const fps = certBlocks(fs.readFileSync(bundle, 'utf8')).map((c) => c.fp)
+  assert.deepEqual([opened, fps.includes(certBlocks(marker.certPem)[0].fp)], [[], false], 'no static OS bundle is opened, and cert.pem\'s roots are not in the rebuilt bundle')
+  assert.deepEqual(Object.values(macRoots).map((c) => fps.includes(certBlocks(c.certPem)[0].fp)), [true, true, true], 'the three darwin sources are in it — the corporate anchor among them, so codex keeps its relay')
+  assert.equal(fps.includes(asightFp), false, 'and the asight CA is not')
+  assert.match(formatOffReceipt(receipt), /重建了 \S*combined-codex\.pem(\(不含 asight CA\))/, 'the human receipt says it was rebuilt (4.6 第 2 步「回执写已重建」)')
+})
+
+// D38 on a Mac: a source that could not be read is said, the rebuild still made from the rest (no bundle = no network). Node 20 has no getCACertificates —
+// the keychain's anchors, where a corporate proxy's CA lives, are then missing; the security export alone still gives Apple's standard roots.
+test('off on darwin: a gone bundle rebuilt while a source cannot be read says which (Node < 22.15: the keychain\'s anchors), in flows/ and on the receipt (D38)', async () => {
+  const s = await installedHome({ names: ['codex'] })
+  const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
+  fs.rmSync(bundle)
+  const { receipt } = await s.off({ deps: { platform: 'darwin', alive: () => false, roots: undefined, tls: {}, exec: securityOf(s, [macRoots.apple.certPem]), procs: async () => [proc(4242, '/opt/homebrew/bin/codex', ['codex'])] } })
+  const k = receipt.kept_bundles[0]
+  assert.deepEqual([k.rebuilt, k.os_roots_missing, k.os_roots_partial], [true, undefined, 'getCACertificates: not available (Node ≥ 22.15 has it)'])
+  assert.ok(certBlocks(fs.readFileSync(bundle, 'utf8')).some((c) => c.fp === certBlocks(macRoots.apple.certPem)[0].fp), 'what could be read is in it')
+  const said = flowEvents(s.dir).filter((e) => e.path === bundle && /rebuilt without the asight CA/.test(e.reason))
+  assert.equal(said.length, 1)
+  assert.match(said[0].reason, /with the OS roots short of what could not be read \(getCACertificates: not available \(Node ≥ 22\.15 has it\)\)/)
+  assert.match(formatOffReceipt(receipt), /重建了 \S*combined-codex\.pem(\(不含 asight CA;OS 根缺读不到的那部分:getCACertificates: not available)/)
+  // and with no source at all: Node's roots only, said as such
+  const t = await installedHome({ names: ['codex'] })
+  fs.rmSync(path.join(t.dir, 'ca', 'combined-codex.pem'))
+  const none = await t.off({ deps: { platform: 'darwin', alive: () => false, roots: undefined, tls: {}, exec: securityOf(t, null), procs: async () => [proc(4242, '/opt/homebrew/bin/codex', ['codex'])] } })
+  assert.match(none.receipt.kept_bundles[0].os_roots_missing, /^the macOS root certificates could not be read \(getCACertificates: not available .*; security: SecKeychainOpen: I\/O error\)$/)
+  assert.ok(certBlocks(fs.readFileSync(path.join(t.dir, 'ca', 'combined-codex.pem'), 'utf8')).length > 0, 'still rebuilt: Node\'s roots are in it')
+})
+
+// 4.8 §6.2 in `off`: the system store through Node's own read; no helper here (the standalone undo starts none, the daemon may be gone), so a Node without
+// getCACertificates rebuilds with Node's roots and says why. Driven through undoSide: the Windows half of runOff (task kill, the run key) is not this test's.
+test('off on win32: a gone bundle is rebuilt from the Windows system store; with no getCACertificates (Node < 22.15) and no helper, from Node\'s roots, said (4.8 §6.2, D38)', async () => {
+  const winRoot = createCa({ commonName: 'windows store root' })
+  for (const [tls, want] of [[{ getCACertificates: (k) => (k === 'system' ? [winRoot.certPem] : []) }, null], [{}, /^the Windows root certificates could not be read \(getCACertificates: not available \(Node ≥ 22\.15 has it\)\)$/]]) {
+    const s = await installedHome({ names: ['codex'] })
+    const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
+    fs.rmSync(bundle)
+    const opened = []
+    const w = offWorld({ home: s.home, env: s.sh.env, deps: s.offDeps({ platform: 'win32', roots: undefined, tls, fs: stockMacFs(createCa({ commonName: 'not a windows root' }), opened), procs: async () => [proc(4242, '/home/u/.local/bin/codex', ['codex'])] }) }) // the sandbox install is a Linux user's (its liveness signature); the platform picks the reader
+    const u = await undoSide(w, { manifest: readManifest(s.dir) })
+    const k = u.kept_bundles.find((x) => x.path === bundle)
+    assert.equal(k.rebuilt, true, JSON.stringify(u.problems))
+    assert.deepEqual(opened, [], 'no static PEM file on Windows either')
+    const fps = certBlocks(fs.readFileSync(bundle, 'utf8')).map((c) => c.fp)
+    if (!want) assert.deepEqual([k.os_roots_missing, fps.includes(certBlocks(winRoot.certPem)[0].fp)], [undefined, true], 'the store\'s root is in it')
+    else {
+      assert.match(k.os_roots_missing, want)
+      assert.match(u.events.find((e) => e.path === bundle).reason, /with Node's roots only \(the Windows root certificates could not be read/)
+      assert.ok(fps.length > 0, 'Node\'s roots are in it')
+    }
+  }
+})
+
+// Read only for a bundle that is rebuilt: the darwin read runs `security` (up to 10 s). A bundle in place is stripped, a gone one nobody uses is removed —
+// neither needs roots; two rebuilt bundles share one read.
+test('off reads the OS roots only for a bundle it rebuilds, once: in place → stripped, gone and unused → removed, neither reads; two rebuilt share one read', async () => {
+  const run = async (names, { gone = [], procs = [] }) => {
+    const s = await installedHome({ names })
+    for (const n of gone) fs.rmSync(path.join(s.dir, 'ca', `combined-${n}.pem`))
+    const asked = [], ran = []
+    const tls = { getCACertificates: (k) => { asked.push(k); return [macRoots.bundled.certPem] } }
+    const w = offWorld({ home: s.home, env: s.sh.env, deps: s.offDeps({ platform: 'darwin', roots: undefined, tls, exec: securityOf(s, [macRoots.apple.certPem], ran), procs: async () => procs }) })
+    const u = await undoSide(w, { manifest: readManifest(s.dir) })
+    return { kept: u.kept_bundles.map((k) => [path.basename(k.path), k.rebuilt]).sort(), removed: u.removed.map((p) => path.basename(typeof p === 'string' ? p : p.path)).filter((n) => /^combined-/.test(n)), asked, ran: ran.length }
+  }
+  const codex = proc(4242, '/home/u/.local/bin/codex', ['codex']), zcode = proc(4343, '/opt/ZCode/zcode', ['/opt/ZCode/zcode', '/opt/ZCode/resources/glm/zcode.cjs', 'app-server', '--stdio'], { startedAt: 0, env: { ELECTRON_RUN_AS_NODE: '1' } }) // V15's shapes
+  assert.deepEqual(await run(['codex'], { procs: [codex] }), { kept: [['combined-codex.pem', undefined]], removed: [], asked: [], ran: 0 }, 'kept (a live codex), stripped in place: no root read')
+  assert.deepEqual(await run(['codex'], { gone: ['codex'] }), { kept: [], removed: [], asked: [], ran: 0 }, 'gone, and no process uses it: dropped from the manifest, nothing rebuilt, no root read')
+  const two = await run(['codex', 'z-code'], { gone: ['codex', 'z-code'], procs: [codex, zcode] })
+  assert.deepEqual([two.kept, two.asked, two.ran], [[['combined-codex.pem', true], ['combined-z-code.pem', true]], ['bundled', 'system'], 1], 'two rebuilt bundles, one read of the roots')
+})
+
+// The Linux reader's own rule in `off` too (4.6 「合并包」: an OS bundle there but unreadable before the one found is not guessed about): the rebuild is
+// made from Node's roots and says why, as `on` stops and the daemon keeps its bundles — never a bundle quietly built from a later file.
+test('off on Linux: an OS bundle that is there but unreadable ahead of a good one → the gone bundle is rebuilt from Node\'s roots, and the reason names the errno', async () => {
+  const s = await installedHome({ names: ['codex'] })
+  const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
+  fs.rmSync(bundle)
+  const later = createCa({ commonName: 'a later OS bundle root' })
+  const etc = { ...fs, readFileSync: (f, ...a) => { if (f === SYSTEM_BUNDLES[0]) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); if (f === SYSTEM_BUNDLES[1]) return later.certPem; if (SYSTEM_BUNDLES.includes(f)) throw enoentOf(f); return fs.readFileSync(f, ...a) } }
+  const { receipt } = await s.off({ deps: { alive: () => false, roots: undefined, fs: etc, procs: async () => [proc(4242, '/home/u/.local/bin/codex', ['codex'])] } })
+  const k = receipt.kept_bundles[0]
+  assert.equal(k.rebuilt, true)
+  assert.match(k.os_roots_missing, /^the OS trust bundle cannot be read \(\/etc\/ssl\/certs\/ca-certificates\.crt: EACCES/)
+  assert.equal(certBlocks(fs.readFileSync(bundle, 'utf8')).some((c) => c.fp === certBlocks(later.certPem)[0].fp), false, 'not built from the later file')
 })

@@ -165,6 +165,7 @@ test('V11: what is generated imports node:* and nothing else — no import or ex
   const bare = text.split('\n').filter((l) => /^\s*(import|export)\s/.test(l) || /\brequire\s*\(/.test(l.replace(/typeof require/g, '')) || /\bimport\s*\(/.test(l))
   assert.deepEqual(bare, [], 'nothing else brings code in')
   assert.ok(!/from\s+['"]\.{1,2}\//.test(text.replace(/\/\/.*$/gm, '')), 'and no relative path is left')
+  for (const fn of ['osRootsFor', 'osBundleRoots', 'darwinRoots', 'windowsRoots']) assert.match(text, new RegExp(`function ${fn}\\(`), `${fn} rides along: the copy rebuilds a gone bundle with the platform's own reader (4.6 撤销顺序 第 2 步)`)
 })
 
 // The file has no extension: which kind of module Node takes it for is up to the Node (and a package.json somewhere above it). It is written to be right either way.

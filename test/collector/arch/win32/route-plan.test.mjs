@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { bypassHit, parseProxyText, proxyAuthOf, readHkcuEnv, readSystemProxy, sameSystemProxy, translateBypass, upstreamFor, watchSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
+import { bypassHit, parseProxyText, proxyAddress, proxyAuthOf, readHkcuEnv, readSystemProxy, sameSystemProxy, translateBypass, upstreamFor, watchSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
 import { regReadAllowed } from '../../../../src/collector/arch/win32/helper.mjs'
 import { bypassRuleOf, upstreamOf } from '../../../../src/collector/core/upstream-shape.mjs'
 import { groupsOf, hostSetOf, planRoutes, priorOf, resolveLogin } from '../../../../src/collector/arch/win32/route-plan.mjs'
@@ -203,6 +203,16 @@ test('W5 a system proxy that cannot be read is 「不知道」 with a reason: a 
   assert.equal(up(CODEX, { systemProxy: null }).why, 'system-proxy-unreadable', 'not asked is not read either')
   assert.equal(up(CODEX, { systemProxy: { ok: false } }).detail, 'absent')
   assert.deepEqual(up(CLAUDE, { systemProxy: { ok: false, reason: 'denied' } }), direct)
+})
+
+test('W5 one reading of the system proxy (4.8 §2.2): for `http=a;https=b` the topology hop (proxyAddress) and the dialed upstream (upstreamFor) are the same address', () => {
+  for (const server of ['http=a:1;https=b:2', 'https=b:2;http=a:1', 'http=a:1;10.0.0.9:3128', 'http=127.0.0.1:10809;https=127.0.0.1:10810;socks=127.0.0.1:10808']) {
+    const hop = proxyAddress(server), dialed = up(HERMES, { systemProxy: sys({ server }) })
+    assert.ok(hop && dialed.kind === 'http', server)
+    assert.deepEqual({ host: hop.host, port: hop.port }, { host: dialed.host, port: dialed.port }, `${server}: the hop shows the proxy asight dials`)
+  }
+  assert.deepEqual(proxyAddress('http=a:1;https=b:2'), { host: 'b', port: 2 })
+  assert.equal(proxyAddress('socks=127.0.0.1:10808'), null, 'a SOCKS-only value is no hop, as it is no upstream')
 })
 
 test('W5 the ProxyServer string: https= first, then the one entry for every protocol; nothing for HTTPS is direct; a SOCKS entry alone, a TLS proxy or a mess is not routed', () => {

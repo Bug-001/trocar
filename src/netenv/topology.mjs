@@ -1,5 +1,5 @@
 // topology.mjs (src/netenv) — the path each harness's traffic takes, from facts (RFC 1.6 §9.2–§9.4, D39⑩, D43). `buildTopology(facts)` is pure: no file, no process, no clock. It turns a NetFacts (src/netenv/facts.mjs:
-// the daemon, the link, the listeners on this machine, the VPN product, and per harness its proxy setting, its processes and its entry) into `{ <harness>: HarnessTopology }`, the object `status --json` prints
+// the daemon, the link, the listeners on this machine, and per harness its proxy setting, its processes and its entry) into `{ <harness>: HarnessTopology }`, the object `status --json` prints
 // under `topology` and the board reads; the text (topology-text.mjs) is rendered from that object and from nothing else (V43).
 //
 // A harness has one or more branches: the path a connection of it takes, `path` with asight on it and `off_path` with asight taken out and every setting the same (the way out of asight changes nothing of the
@@ -16,17 +16,15 @@ export { renderCompact, renderDetail, renderPathBlock, verdictText, firstHopAfte
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost'])
 const VIA = { http: 'proxy-http', https: 'proxy-https', socks4: 'proxy-socks', socks5: 'proxy-socks', socks5h: 'proxy-socks' }
-const PRODUCT_NAME = { 'clash-verge': 'Clash Verge Rev', mihomo: 'mihomo', 'clash-verge-rev': 'Clash Verge Rev', 'clash-party': 'Clash Party', flclash: 'FlClash', 'gui-for-singbox': 'GUI.for.SingBox', v2rayn: 'v2rayN' }
-export const productName = (p) => PRODUCT_NAME[p] || p
 const ID_PREFIX = { agent: 'a', 'asight-engine': 'e', 'asight-forwarder': 'f', 'legacy-mitm': 'm', proxy: 'p', upstream: 'u', egress: 'x', unknown: 'q' }
 const drop = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null))
-const base = (p) => String(p).split('/').pop()
+const base = (p) => String(p).split(/[\\/]/).pop()
 const errorOf = (e) => (e && e.code) || String((e && e.message) || e)
 
 /** The nodes and edges of one harness. A node is the same node when its kind and what names it are the same (`intern`), so the path with asight and the path without share their common hops. */
 function graph() {
   const nodes = [], edges = [], keyed = new Map(), counts = {}
-  const keyOf = (n) => [n.kind, n.pid ?? '', n.name, n.addr ?? '', n.port ?? '', n.chosen_by ?? '', n.unknown ? n.unknown.reason : '', n.role ?? ''].join('|')
+  const keyOf = (n) => [n.kind, n.pid ?? '', n.name, n.addr ?? '', n.port ?? '', n.unknown ? n.unknown.reason : '', n.role ?? ''].join('|')
   const node = (props) => {
     const n = drop(props), k = keyOf(n)
     if (keyed.has(k)) return keyed.get(k)
@@ -41,35 +39,27 @@ function graph() {
   return { nodes, edges, node, edge }
 }
 
-/** The proxy a setting names, as a node: who listens on that port here (the listeners the facts hold, then the VPN product's own port), or a proxy on another machine. */
+/** The proxy a setting names, as a node (D49: asight does not know products): who listens on that port here (named by its executable), or a proxy on another machine. */
 function proxyNode(g, F, host, port) {
   if (!LOOPBACK.has(host)) return g.node({ kind: 'proxy', name: `${host}:${port}`, addr: host, port, remote: true })
   const l = F.listeners.find((x) => x.port === port)
-  const v = F.vpn && F.vpn.port === port ? F.vpn : null
   const name = `${host}:${port}`
   if (l && l.unknown) return g.node({ kind: 'proxy', name, addr: host, port, unknown: l.unknown })
-  if (l) {
-    // V42: a proxy hop says which product it is or that it does not know. The owner of the port was read but is no product asight recognises (a script, ssh -D, squid …): the hop is that process, and its product is not known (`absent`: the
-    // reason the TUN's exit uses for the same thing); a listener with a pid and nothing to name it by is an owner that could not be read.
-    const noProduct = l.product || v ? undefined : l.exe ? { reason: 'absent', detail: `${base(l.exe)} (pid ${l.pid}) listens on ${host}:${port}; it is not a VPN / proxy product asight recognises` } : { reason: 'owner-unreadable', detail: `pid ${l.pid} listens on ${host}:${port} and its executable could not be read` }
-    return g.node({ kind: 'proxy', name: l.product ? productName(l.product) : l.exe ? base(l.exe) : name, addr: host, port, product: l.product, version: l.version, pid: l.pid, mode: v ? v.mode : undefined, unknown: (v && v.unknown) || noProduct })
-  }
-  if (v) return g.node({ kind: 'proxy', name: productName(v.product), addr: host, port, product: v.product, version: v.version, pid: v.pid, mode: v.mode, unknown: v.unknown })
+  if (l) return g.node({ kind: 'proxy', name: l.exe ? base(l.exe) : name, addr: host, port, pid: l.pid })
   const gone = F.unknowns.find((u) => u.fact === 'listeners') // the listeners could not be read: that is why nobody is named, not that nobody listens
   return g.node({ kind: 'proxy', name, addr: host, port, ...(gone ? { unknown: { reason: gone.reason, detail: gone.detail } } : { down: true }) })
 }
 
-/** What follows the proxy: where the connection comes out, chosen by the VPN product when there is one; unknown when the proxy was. */
+/** What follows the proxy: where the connection comes out; unknown when the proxy was. */
 function egressOf(g, p) {
   const n = g.nodes.find((x) => x.id === p)
-  if (n.unknown && !n.product) return g.node({ kind: 'egress', name: '出口', unknown: n.unknown })
-  return g.node({ kind: 'egress', name: '出口', chosen_by: n.product ? productName(n.product) : undefined })
+  return g.node({ kind: 'egress', name: '出口', ...(n.unknown ? { unknown: n.unknown } : {}) })
 }
 
 const sourceKey = (s) => (s.kind === 'env' ? `env:${s.where}` : s.kind === 'file' ? `file:${s.where}${s.key ? `#${s.key}` : ''}` : s.kind)
 
 /**
- * The hops after the agent (or after asight), from a setting: the agent's own proxy; else, when it follows the OS proxy (`follow`), the OS proxy; else the API host direct, into the VPN's TUN when that is on.
+ * The hops after the agent (or after asight), from a setting: the agent's own proxy; else, when it follows the OS proxy (`follow`), the OS proxy; else the API host direct.
  * → { ids: [node ids in order], first: { via, evidence } } — the edge into `ids[0]` is the caller's, since it comes from the agent or from asight. The edges between the hops are made here.
  */
 function tail(g, F, hf, setting, follow) {
@@ -92,9 +82,6 @@ function tail(g, F, hf, setting, follow) {
   const host = (hf.apiHosts || [])[0] || 'api'
   const u = g.node({ kind: 'upstream', name: `${host}:443`, addr: host, port: 443 })
   const first = ignored ? { via: 'direct', evidence: [`unsupported-scheme:${setting.scheme}`], ...(hf.behaviour.measured === 'lab' ? {} : { inferred: true }) } : { via: 'direct', evidence: [] } // not measured on this OS: said, not claimed
-  if (F.vpn && F.vpn.tun === true) return { ids: [u, g.edge(u, g.node({ kind: 'egress', name: '出口', chosen_by: productName(F.vpn.product) }), 'tun')], first }
-  // the way out is a TUN device and no product was recognised (sing-box, v2rayA …): the hop is there, who chooses the exit is not known
-  if (!F.vpn && F.tun === true) return { ids: [u, g.edge(u, g.node({ kind: 'egress', name: '出口', unknown: { reason: 'absent', detail: 'the default route is a TUN device and no VPN / proxy product was recognised' } }), 'tun')], first, note: '去公网的默认路由走 TUN 设备,但没认出是哪个 VPN 产品,所以出口由谁选不知道' }
   return { ids: [u], first }
 }
 
@@ -160,11 +147,8 @@ function driverTopology(F, h, hf) {
   // NO_PROXY: an agent with a proxy of its own may keep its API host off it. Whether this agent honours the variable is not measured, so the path is drawn by its proxy setting and the note says what may differ.
   const bypass = main && Array.isArray(main.noProxy) ? main.noProxy : hf.noProxy || []
   if (bypass.length && hf.setting && hf.setting.value) notes.add(`NO_PROXY 里写了 ${bypass.join('、')}:${h} 对它可能不经代理直连(各 harness 认不认 NO_PROXY 还没逐个测),这里按它的代理设置画`)
-  return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: branches[0].on_path, captured: v.captured, reason: v.reason, vpn: vpnOf(F), nodes: g.nodes, edges: g.edges, branches, running, notes: [...notes], findings: [] }
+  return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: branches[0].on_path, captured: v.captured, reason: v.reason, nodes: g.nodes, edges: g.edges, branches, running, notes: [...notes], findings: [] }
 }
-
-/** The VPN / proxy product the machine has, as the topology states it (read-only facts: no node, no rule, no secret): what the one line of `status <h>` about per-process rules needs. */
-const vpnOf = (F) => (F.vpn ? drop({ product: F.vpn.product, version: F.vpn.version, mode: F.vpn.mode, tun: F.vpn.tun }) : null)
 
 // ── proxy mode (D43; 4.8 §10): agent → [its proxy entry, written by asight] asight's own kernel → asight's engine → the upstream the agent would have had without asight ─────────────────────────────────────────────
 // A form is one way of running a harness (codex.cli, claude-code.vscode, …). Per form the facts say: `setting` (the proxy the agent would use without asight, as of now), `systemProxy`, the `entry` it was
@@ -266,7 +250,7 @@ function proxyTopology(F, h, hf) {
   if (branches.some((x) => x.reason === 'proxy-changed')) notes.push(`接上: asight on ${h}`)
   for (const u of F.unknowns.filter((x) => x.reason === 'kernel-filter-invisible')) notes.push(`WFP 一类的内核过滤器本用户看不见(${u.reason}),所以路上有没有这样的过滤器不知道`)
   const b = branches[0]
-  return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: b.on_path, captured: b.captured, reason: b.reason, vpn: vpnOf(F), nodes: g.nodes, edges: g.edges, branches, running: [], notes: [...new Set(notes)], findings: [] }
+  return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: b.on_path, captured: b.captured, reason: b.reason, nodes: g.nodes, edges: g.edges, branches, running: [], notes: [...new Set(notes)], findings: [] }
 }
 
 // ── the macOS old capture: the system proxy → the VPN's script block → asight's old MITM → the VPN again ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -285,7 +269,7 @@ function legacyTopology(F, h, hf) {
     g.edge(p, m, 'proxy-http', { evidence: ['legacy-block'] }); g.edge(m, p2, 'proxy-http', { evidence: [] }); g.edge(p2, x, 'egress')
     path = [a, p, m, p2, x]
   }
-  return { harness: h, at: F.at, routing: 'legacy', desired: F.desired[h] ?? null, on_path: l.on_path ?? null, captured: l.captured ?? null, reason: l.reason ?? null, vpn: vpnOf(F), nodes: g.nodes, edges: g.edges,
+  return { harness: h, at: F.at, routing: 'legacy', desired: F.desired[h] ?? null, on_path: l.on_path ?? null, captured: l.captured ?? null, reason: l.reason ?? null, nodes: g.nodes, edges: g.edges,
     branches: [{ name: 'all', path, off_path: off, on_path: l.on_path ?? null, captured: l.captured ?? null, reason: l.reason ?? null }], running: [], notes: [], findings: [] }
 }
 
@@ -296,7 +280,7 @@ export function buildTopology(F) {
   const out = {}
   for (const [h, hf] of Object.entries(F.harnesses)) {
     try { out[h] = (BY_ROUTING[F.routing] || driverTopology)(F, h, hf) } catch (e) {
-      out[h] = { harness: h, at: F.at, routing: 'unknown', desired: F.desired[h] ?? null, on_path: null, captured: null, reason: null, vpn: null, nodes: [{ id: 'a', kind: 'agent', name: h }], edges: [], branches: [{ name: 'all', path: ['a'], off_path: ['a'], on_path: null, captured: null, reason: null }], running: [], notes: [`the path could not be worked out: ${errorOf(e)}`], findings: [] }
+      out[h] = { harness: h, at: F.at, routing: 'unknown', desired: F.desired[h] ?? null, on_path: null, captured: null, reason: null, nodes: [{ id: 'a', kind: 'agent', name: h }], edges: [], branches: [{ name: 'all', path: ['a'], off_path: ['a'], on_path: null, captured: null, reason: null }], running: [], notes: [`the path could not be worked out: ${errorOf(e)}`], findings: [] }
     }
   }
   return out

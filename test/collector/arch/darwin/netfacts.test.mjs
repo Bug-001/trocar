@@ -1,6 +1,6 @@
 // test/collector/arch/darwin/netfacts.test.mjs — macOS's part of the network facts (RFC 4.9 §10, 1.6 §9.7; the assertions are the linux twin's, test/collector/arch/linux/netfacts.test.mjs, adapted where 4.9 §10 names
 // a darwin row): the processes of each harness with the watch table's verdict, the proxy each was started with and whether it runs as root (euid/root), the listeners of this user, the OS proxy with PAC's own scutil
-// flag, and whether the way out is a utun. Everything is injected: a fake `lsof` / `scutil` / `route` / `ifconfig` / `ps` runner; nothing reads the machine and nothing is spawned.
+// flag. Everything is injected: a fake `lsof` / `scutil` / `ps` runner; nothing reads the machine and nothing is spawned.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { darwinNetFacts, parseLsof, processName, versionOf } from '../../../../src/collector/arch/darwin/netfacts.mjs'
@@ -18,16 +18,14 @@ const LSOF = [
   '                  user    3u  IPv4 0xabe      0t0  TCP *:22 (LISTEN)', // a LISTEN row with no owner: not a shape lsof's answer has on macOS (a listener of another user is not in the answer at all) — kept for the shared listener shape, the linux twin's owner-unreadable
 ].join('\n')
 
-/** The runner of `lsof` / `scutil` / `route` / `ifconfig` / `ps`: spawnSync-shaped, answers from a table, records what it was asked. */
+/** The runner of `lsof` / `scutil` / `ps`: spawnSync-shaped, answers from a table, records what it was asked. */
 const runner = (table, calls = []) => (file, args) => {
   calls.push([file, ...args].join(' '))
   const r = table[[file, ...args].join(' ')] ?? { status: null, stdout: '', stderr: '', error: new Error(`spawnSync ${file} ENOENT`) }
   return { status: 0, stdout: '', stderr: '', ...r }
 }
 const SCUTIL_OFF = '<dictionary> {\n  HTTPSEnable : 0\n}'
-const ROUTE_EN0 = '   route to: default\ndestination: default\n       mask: default\n    gateway: 10.0.0.1\n  interface: en0\n      flags: <UP,GATEWAY,DONE,STATIC>\n'
-const IFCONFIG_EN0 = 'en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n\toptions=400<CHANNEL_IO>\n\tether aa:bb:cc:dd:ee:ff\n'
-const TABLE = { 'lsof -nP -iTCP -sTCP:LISTEN': { stdout: LSOF }, 'scutil --proxy': { stdout: SCUTIL_OFF }, 'route -n get default': { stdout: ROUTE_EN0 }, 'ifconfig en0': { stdout: IFCONFIG_EN0 } }
+const TABLE = { 'lsof -nP -iTCP -sTCP:LISTEN': { stdout: LSOF }, 'scutil --proxy': { stdout: SCUTIL_OFF } }
 const row = (pid, over = {}) => ({ pid, trusted: true, reason: null, negative: false, startedAt: Date.parse('2026-10-07T09:30:00Z'), ...over })
 const statusOf = (rows, reply = { agents: [{ pid: 4121, decrypt: true }] }, matched = []) => ({ daemon: { state: 'running', reply }, harnesses: [{ id: 'claude-code', procs: rows }], matched })
 const current = (value = null, over = {}) => ({ value, scheme: null, host: null, port: null, source: [], sha256: value ? settingSha(value) : null, changedAt: null, ...over })
@@ -51,7 +49,7 @@ test('processName / versionOf: the program (and its sub-command), a runtime name
   assert.equal(versionOf('/opt/homebrew/bin/mihomo'), null)
 })
 
-test('darwinNetFacts: routing is proxy; the listeners are named by their owner (the exe from the process table, else the name lsof gave), a row lsof gives no owner for says so; TUN is read from ifconfig of the default route\'s interface; the OS proxy is scutil\'s dictionary with PAC\'s own flag', async () => {
+test('darwinNetFacts: routing is proxy; the listeners are named by their owner (the exe from the process table, else the name lsof gave), a row lsof gives no owner for says so; no TUN / route fact (D49); the OS proxy is scutil\'s dictionary with PAC\'s own flag', async () => {
   const matched = [{ h: null, p: { pid: 777, exe: '/opt/homebrew/bin/mihomo', argv: ['mihomo'], uid: 501, startedAt: Date.parse('2026-10-07T09:30:00Z') } }] // a process of no harness: the listener's owner
   const calls = []
   const f = await darwinNetFacts({ status: statusOf([], { agents: [] }, matched), settings: {}, env: {} }, { exec: runner(TABLE, calls) })
@@ -61,31 +59,24 @@ test('darwinNetFacts: routing is proxy; the listeners are named by their owner (
     { addr: '*', port: 7000, pid: 787, exe: 'ControlCe' }, // not in the process table: the name lsof gave (lsof truncates it to the column's width)
     { addr: '*', port: 22, unknown: { reason: 'owner-unreadable', detail: "lsof names no process for it — not a shape its answer has on macOS; a listener of another user is not in the answer at all, for without privilege lsof cannot open its fd table" } }])
   assert.deepEqual(f.systemProxy, { value: null, pac: false })
-  assert.equal(f.tun, false)
+  assert.ok(!('tun' in f), 'D49: no TUN fact')
   assert.deepEqual(f.unknowns, [])
-  assert.deepEqual(calls, ['lsof -nP -iTCP -sTCP:LISTEN', 'scutil --proxy', 'route -n get default', 'ifconfig en0'], 'only these four reads, and the route lookup names no host: nothing is resolved, nothing goes out')
-  const tun = await darwinNetFacts({ status: statusOf([], { agents: [] }, []), settings: {} }, { exec: runner({ ...TABLE, 'route -n get default': { stdout: '   route to: default\n    gateway: 2.0.0.1\n  interface: utun7\n' }, 'ifconfig utun7': { stdout: 'utun7: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n\tinet 203.0.113.147 --> 2.0.0.1 netmask 0xffffff00\n' } }) })
-  assert.equal(tun.tun, true)
+  assert.deepEqual(calls, ['lsof -nP -iTCP -sTCP:LISTEN', 'scutil --proxy'], 'only these two reads: no route / ifconfig lookup, nothing is resolved, nothing goes out')
 })
 
-test('darwinNetFacts: a tool that is not there, is refused or prints what it should not leaves the fact unknown with the reason (never an empty list, never "no TUN")', async () => {
+test('darwinNetFacts: a tool that is not there, is refused or prints what it should not leaves the fact unknown with the reason (never an empty list)', async () => {
   const f = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({}) })
   assert.deepEqual(f.listeners, [])
-  assert.equal(f.tun, null)
-  assert.deepEqual(f.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'absent'], ['systemProxy', 'absent'], ['tun', 'absent']])
+  assert.deepEqual(f.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'absent'], ['systemProxy', 'absent']])
   const refused = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ 'lsof -nP -iTCP -sTCP:LISTEN': { status: 1, stderr: 'permission denied' } }) })
   assert.deepEqual([refused.unknowns[0].fact, refused.unknowns[0].reason, refused.unknowns[0].detail], ['listeners', 'denied', 'lsof -nP -iTCP -sTCP:LISTEN: permission denied'])
   assert.match(f.unknowns[0].detail, /^lsof -nP -iTCP -sTCP:LISTEN: /)
-  const timed = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ 'lsof -nP -iTCP -sTCP:LISTEN': { status: null, stderr: 'spawnSync lsof ETIMEDOUT' }, 'route -n get default': { stdout: 'not the shape' } }) })
-  assert.deepEqual(timed.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'timeout'], ['systemProxy', 'absent'], ['tun', 'unparseable']])
+  const timed = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ 'lsof -nP -iTCP -sTCP:LISTEN': { status: null, stderr: 'spawnSync lsof ETIMEDOUT' } }) })
+  assert.deepEqual(timed.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'timeout'], ['systemProxy', 'absent']])
   assert.deepEqual(timed.systemProxy, { unknown: { reason: 'absent', detail: 'scutil --proxy: spawnSync scutil ENOENT' } })
   const unparsable = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ ...TABLE, 'scutil --proxy': { stdout: 'garbage' } }) })
   assert.deepEqual(unparsable.systemProxy, { unknown: { reason: 'unparseable', detail: 'scutil --proxy: answer' } })
   assert.deepEqual(unparsable.unknowns.map((u) => [u.fact, u.reason]), [['systemProxy', 'unparseable']])
-  const stanza = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ ...TABLE, 'ifconfig en0': { stdout: 'x' } }) })
-  assert.deepEqual(stanza.unknowns.map((u) => [u.fact, u.reason]), [['tun', 'unparseable']])
-  const noif = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ ...TABLE, 'ifconfig en0': { status: 1, stderr: 'ifconfig: interface en0 does not exist' } }) })
-  assert.deepEqual(noif.unknowns.map((u) => [u.fact, u.reason]), [['tun', 'denied']])
 })
 
 test('darwinNetFacts: the OS proxy is the HTTPS hop of scutil\'s dictionary; PAC is its own flag, kept beside the value (the topology prefers the flag); a proxy only in the HTTP keys sends HTTPS direct', async () => {
@@ -204,7 +195,7 @@ test('darwinNetFacts: elevation is euid/root — the process table\'s uid answer
   assert.equal((await ask(proc(0))).elevated, true, 'root in the table (a sudo-launched agent)')
   const calls = []
   assert.equal((await ask([], { ...TABLE, 'ps -o uid= -p 4121': { stdout: '0' } }, calls)).elevated, true, 'a process only the daemon listed: ps is asked for its uid')
-  assert.deepEqual(calls, ['ps -o uid= -p 4121', 'lsof -nP -iTCP -sTCP:LISTEN', 'scutil --proxy', 'route -n get default', 'ifconfig en0'], 'one ps ask, then the reads of the machine')
+  assert.deepEqual(calls, ['ps -o uid= -p 4121', 'lsof -nP -iTCP -sTCP:LISTEN', 'scutil --proxy'], 'one ps ask, then the reads of the machine')
   assert.equal((await ask([], { ...TABLE, 'ps -o uid= -p 4121': { stdout: '501' } })).elevated, false)
   assert.equal((await ask([], TABLE)).elevated, null, 'ps did not answer: not known, not "not elevated"')
   assert.equal((await ask(proc(undefined))).elevated, null, 'a table row with no uid says not-known (the ask is for processes the table does not have)')

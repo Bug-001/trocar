@@ -20,7 +20,7 @@ import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaemon } from './fixtures/on-ctx.mjs'
 import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
-import { runStatus, down, reply, asDaemon, NO_VPN } from './fixtures/status-ctx.mjs'
+import { runStatus, down, reply, asDaemon } from './fixtures/status-ctx.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
 
@@ -405,19 +405,15 @@ test('V29: the first on receipt, in the text and in --json, carries the four com
   }
 })
 
-// V10 (1.6 R11, §6): what `status` could not read is 「不知道」 with the reason — the connections still relayed (a daemon whose reply carries no count), the VPN probe (a file it could not read, nothing it found), the
+// V10 (1.6 R11, §6, D49): what `status` could not read is 「不知道」 with the reason — the connections still relayed (a daemon whose reply carries no count), the
 // daemon itself (a lock that cannot be read) — and never `0 条` or 「无」, in the text and in --json
-test('V10: status says 不知道 with the reason for connections the daemon did not count, a VPN probe that could not read, and a lock that could not be read — never 0 条 or 无', async () => {
+test('V10: status says 不知道 with the reason for connections the daemon did not count, and a lock that could not be read — never 0 条 or 无', async () => {
   const s = await installedHome()
   // the daemon answers, but its reply has no `relayed`
-  let r = await runStatus(s, [], { request: asDaemon(reply({ relayed: undefined })), netenv: async () => { throw new Error("EACCES: permission denied, open '/h/.local/share/io.github.clash-verge-rev.clash-verge-rev/verge.yaml'") } })
+  let r = await runStatus(s, [], { request: asDaemon(reply({ relayed: undefined })) })
   const line = (text, head) => text.split('\n').find((l) => l.startsWith(head)) || ''
   assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(the daemon's reply does not carry the connection counts\)$/)
-  assert.match(line(r.text, '路径'), /^路径    不知道\(EACCES[^)]*verge\.yaml/)
-  for (const head of ['仍经 asight 的连接', '路径']) { assert.ok(!/0 条|无/.test(line(r.text, head)), `${head}: never 0 条 or 无`) }
-  // a probe that found nothing is not 「无」 either
-  r = await runStatus(s, [], { request: asDaemon(reply()), netenv: async () => NO_VPN })
-  assert.match(line(r.text, '路径'), /^路径    不知道\(no Clash Verge directory/); assert.ok(!/无/.test(line(r.text, '路径')))
+  assert.ok(!/0 条|无/.test(line(r.text, '仍经 asight 的连接')), 'never 0 条 or 无')
   // the lock cannot be read and nothing answers
   const lock = path.join(s.dir, 'lock'); fs.writeFileSync(lock, '{}')
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === lock) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
@@ -426,29 +422,24 @@ test('V10: status says 不知道 with the reason for connections the daemon did 
   assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(whether a daemon runs is not known/)
   assert.ok(!/0 条|无/.test(line(r.text, '仍经 asight 的连接'))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
   // --json: the same, as data
-  const j = await runStatus(s, ['--json'], { request: down(), fs: broken, netenv: async () => { throw new Error('probe failed') } })
+  const j = await runStatus(s, ['--json'], { request: down(), fs: broken })
   const doc = j.io.json()
   assert.deepEqual(validateReceipt(doc), [])
-  assert.deepEqual([doc.relayed, typeof doc.relayed_reason, doc.netenv, doc.daemon.state], ['unknown', 'string', { error: 'probe failed' }, 'unknown'])
+  assert.deepEqual([doc.relayed, typeof doc.relayed_reason, 'netenv' in doc, doc.daemon.state], ['unknown', 'string', false, 'unknown'])
 })
 
-// 1.6 §1.6 / §6 / §7: the plan and the receipt of `on` name the machine's VPN / proxy software — what was found, which of the harnesses being turned on go through it, that asight changes none of it — and
-// say 不知道 with the reason when the probe cannot tell. `on` does not write the board's cache ~/.asight/netenv.json (the receipt lists exactly the files `on` wrote, V3; a second `on` writes nothing, R9).
-test('on names the network environment in the plan and in the receipt (text and --json), 不知道 with the reason when the probe failed, and writes no netenv.json', async () => {
-  const { CLASH } = await import('./fixtures/status-ctx.mjs')
+// D49 (1.6 §6): `on` looks at no VPN / proxy software — no 本机网络环境 line in the plan or the receipt, no `netenv` key in --json, and it writes no netenv.json when it has nothing to adopt (the receipt lists
+// exactly the files `on` wrote, V3; a second `on` writes nothing, R9).
+test('on prints no network-environment line and its --json receipt has no netenv key; --dry-run writes nothing', async () => {
   const home = tmpDir('asight-ne-on-'); seedClaude(home)
   const io = fakeIo()
-  assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { netenv: async () => CLASH() } })), 0, io.text())
-  const lines = io.stdoutText().split('\n').filter((l) => l.startsWith('本机网络环境'))
-  assert.deepEqual(lines, ['本机网络环境: Clash Verge(规则模式,系统代理已开);claude-code 的流量经过它;asight 没有改它', '本机网络环境: Clash Verge(规则模式,系统代理已开);claude-code 的流量经过它;asight 没有改它'], 'once in the plan, once in the receipt — only the harness being turned on')
+  assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: {} })), 0, io.text())
+  assert.ok(!/本机网络环境/.test(io.stdoutText()), 'neither in the plan nor in the receipt')
   assert.ok(!fs.existsSync(path.join(home, '.asight', 'netenv.json')), 'on does not write the board\'s cache')
   const j = fakeIo(); const home2 = tmpDir('asight-ne-on-'); seedClaude(home2)
-  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { deps: { netenv: async () => CLASH() } })), 0)
-  assert.equal(j.json().netenv.products[0].product, 'clash-verge')
-  const bad = fakeIo(); const home3 = tmpDir('asight-ne-on-'); seedClaude(home3)
-  assert.equal(await runOnCli(['--yes'], onCtx(home3, bad, { deps: { netenv: async () => { throw new Error('EACCES: permission denied, open verge.yaml') } } })), 0, 'a probe that fails does not stop the on')
-  assert.equal(bad.stdoutText().split('\n').filter((l) => l === '本机网络环境: 不知道(EACCES: permission denied, open verge.yaml)').length, 2)
+  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { deps: {} })), 0)
+  assert.ok(!('netenv' in j.json()), 'no netenv key in the receipt')
   const dry = fakeIo(); const home4 = tmpDir('asight-ne-on-'); seedClaude(home4); const before = snapshot(home4)
-  assert.equal(await runOnCli(['--dry-run'], onCtx(home4, dry, { deps: { netenv: async () => CLASH() } })), 0)
-  assert.match(dry.stdoutText(), /^本机网络环境: Clash Verge/m); assert.deepEqual(changedFiles(before, snapshot(home4)), [], '--dry-run writes nothing')
+  assert.equal(await runOnCli(['--dry-run'], onCtx(home4, dry, { deps: {} })), 0)
+  assert.ok(!/本机网络环境/.test(dry.stdoutText())); assert.deepEqual(changedFiles(before, snapshot(home4)), [], '--dry-run writes nothing')
 })
