@@ -16,8 +16,6 @@ export const backupDir = (home = os.homedir()) => path.join(asightHome(home), 'b
 export const standalonePath = (home = os.homedir()) => path.join(asightHome(home), 'bin', 'asight-off')
 /** ~/.asight/legacy-manifest.json: the ledger of what `on` changed through the old capture. */
 export const legacyManifestPath = (home = os.homedir()) => path.join(asightHome(home), 'legacy-manifest.json')
-/** ~/.asight/legacy-off.pending: `{pid, at}` while `asight off` is between stripping the old capture's Clash block and unloading its MITM; the MITM's steer watch does not call the block's going away a failure then. */
-export const legacyPendingPath = (home = os.homedir()) => path.join(asightHome(home), 'legacy-off.pending')
 /** ~/.asight/legacy-op.lock: the lock of the one `on` / `off` / `uninstall` that changes the old capture at a time (1.6 R12; the old capture has no ~/.asight/collector/). */
 export const legacyLockPath = (home = os.homedir()) => path.join(asightHome(home), 'legacy-op.lock')
 /** ~/.asight/logs/mitm-events.ndjson: where the old capture says what it did and what failed (D38, RFC 4.1 过渡期); `asight off` writes its notes there on a platform without the new collector (1.6 R11). */
