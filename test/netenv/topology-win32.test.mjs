@@ -307,8 +307,8 @@ import { fileURLToPath } from 'node:url'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const SEVEN = ['claude-code', 'codex', 'hermes', 'kimi-code', 'opencode', 'deepseek-dsh', 'z-code']
-/** A finding's context, filled the way `diagnose` fills it (`fm` = the form facts of the branch that carries the reason, `vpnProxy` the VPN's own port, the extras what the daemon's records will hand over). */
-const CTX = (over = {}) => ({ F: {}, h: 'codex', hf: null, t: null, user: 'u', sh: 'powershell', platform: 'win32', setting: null, vpnProxy: 'http://127.0.0.1:7897', ...over })
+/** A finding's context, filled the way `diagnose` fills it (`fm` = the form facts of the branch that carries the reason, the extras what the daemon's records will hand over). */
+const CTX = (over = {}) => ({ F: {}, h: 'codex', hf: null, t: null, user: 'u', sh: 'powershell', platform: 'win32', setting: null, ...over })
 const cmd = (run, shell = 'powershell') => ({ run, shell })
 const A = (run) => cmd(run) // asight's own, in the platform's shell
 
@@ -342,16 +342,16 @@ const LITERALS = {
   'not-routed': {
     pac: { ctx: CTX({ h: 'codex', pac: true, fm: { id: 'codex.app', route: { reason: 'not-routed', why: 'system-proxy-pac' }, entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.codex\\.env', format: 'dotenv', key: 'HTTPS_PROXY' } } }),
       what: 'codex 的形态 codex.app 的新连接不经过 asight', why: '这个形态跟随的系统代理是 PAC,asight 不执行 PAC,所以没接这个形态',
-      commands: [cmd('在你的代理软件里看它的本地端口,把 codex 的代理设成它:C:\\Users\\u\\.codex\\.env 里写一行 HTTPS_PROXY=http://127.0.0.1:7897', 'gui'), A('asight on codex')], verify: 'asight status codex:那一支「在路径上 · 是」' },
+      commands: [cmd('在你的代理软件里看它的本地端口,把 codex 的代理设成它:C:\\Users\\u\\.codex\\.env 里写一行 HTTPS_PROXY=不知道 · pac(你的代理地址)', 'gui'), A('asight on codex')], verify: 'asight status codex:那一支「在路径上 · 是」' },
     'system-proxy-unreadable': { ctx: CTX({ h: 'codex', fm: { id: 'codex.app', route: { reason: 'not-routed', why: 'system-proxy-unreadable', detail: 'denied' } } }),
       why: '助手这一次没读到系统代理(denied),asight 不猜它是不是开着,所以没接这个形态(on 之后读不到的是提示,不是失败:留在上一次的上游)',
       commands: [A('asight on codex'), A('asight doctor codex'), cmd('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable')] },
     'upstream-unparseable': { ctx: CTX({ h: 'claude-code', fm: { id: 'claude-code.cli', route: { reason: 'not-routed', why: 'upstream-unparseable' }, entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.claude\\settings.json', format: 'json', key: 'env.HTTPS_PROXY' } } }),
       why: '这个形态原来的代理值 asight 读不懂,所以没接这个形态(asight status 印出它的入口文件与那一行,值里的用户名与口令打码)',
-      commands: [cmd('把它改成一个 asight 读得懂的写法(http://host:port 或 socks5://host:port):', 'gui'), cmd('用记事本打开 C:\\Users\\u\\.claude\\settings.json,把 env.HTTPS_PROXY 写成 "http://127.0.0.1:7897"', 'gui'), A('asight on claude-code'), A('asight off claude-code')] },
+      commands: [cmd('把它改成一个 asight 读得懂的写法(http://host:port 或 socks5://host:port):', 'gui'), cmd('用记事本打开 C:\\Users\\u\\.claude\\settings.json,把 env.HTTPS_PROXY 写成 "不知道 · absent(你的代理地址)"', 'gui'), A('asight on claude-code'), A('asight off claude-code')] },
     'credentials-in-system-proxy': { ctx: CTX({ h: 'codex', fm: { id: 'codex.app', route: { reason: 'not-routed', why: 'upstream-unparseable', detail: 'credentials-in-system-proxy' }, entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.codex\\.env', format: 'dotenv', key: 'HTTPS_PROXY' } } }),
       why: '系统代理的 ProxyServer 里带了用户名口令,WinINET 本来就不从这个值取凭据,asight 不照读,所以没接这个形态',
-      commands: [cmd('在系统代理设置里把用户名口令从代理地址里去掉(WinINET 本来就不取它们);要凭据的代理写进这个 agent 自己的代理设置:', 'gui'), cmd('C:\\Users\\u\\.codex\\.env 里写一行 HTTPS_PROXY=http://127.0.0.1:7897', 'gui'), A('asight on codex'), A('asight off codex')] },
+      commands: [cmd('在系统代理设置里把用户名口令从代理地址里去掉(WinINET 本来就不取它们);要凭据的代理写进这个 agent 自己的代理设置:', 'gui'), cmd('C:\\Users\\u\\.codex\\.env 里写一行 HTTPS_PROXY=不知道 · absent(你的代理地址)', 'gui'), A('asight on codex'), A('asight off codex')] },
     'no-why': { ctx: CTX({ h: 'kimi-code', fm: null }),
       why: '这个形态没有 asight 能用的入口',
       commands: [cmd('kimi-code 的这个形态没有入口:改用它的 CLI 形态', 'gui'), A('asight status kimi-code')] },
@@ -388,7 +388,7 @@ const LITERALS = {
     commands: [cmd('改用 claude-code 的 CLI 或编辑器扩展形态', 'gui')], verify: '—' },
   'proxy-unsupported': { ctx: CTX({ h: 'deepseek-dsh', protocol: 'socks4', fm: { entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.dsh\\.env', format: 'dotenv', key: 'HTTPS_PROXY' } } }),
     what: 'deepseek-dsh 的代理协议接不上(socks4)', why: '这个形态原来的代理是 socks4 的,asight 的上游还不支持,on 因此不接这个形态',
-    commands: [cmd('把它改成 http://host:port 或 socks5://host:port 的写法', 'gui'), cmd('C:\\Users\\u\\.dsh\\.env 里写一行 HTTPS_PROXY=http://127.0.0.1:7897', 'gui'), A('asight on deepseek-dsh'), A('asight off deepseek-dsh')], verify: 'asight status deepseek-dsh:那一支「在路径上 · 是」' },
+    commands: [cmd('把它改成 http://host:port 或 socks5://host:port 的写法', 'gui'), cmd('C:\\Users\\u\\.dsh\\.env 里写一行 HTTPS_PROXY=不知道 · absent(你的代理地址)', 'gui'), A('asight on deepseek-dsh'), A('asight off deepseek-dsh')], verify: 'asight status deepseek-dsh:那一支「在路径上 · 是」' },
   'system-proxy-pac': { ctx: CTX({}),
     commands: [cmd("Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL")], verify: '—' },
   'other-redirector': { ctx: CTX({}), commands: [cmd('netsh winsock show catalog')], verify: '—' },
@@ -398,7 +398,7 @@ const LITERALS = {
   'cause-unknown': { ctx: CTX({ h: 'codex' }), commands: [A('asight off codex'), cmd('再试 codex:仍连不上 → 与 asight 无关', 'gui')], verify: '再试 codex' },
 }
 
-test('W36 each §10.4 command equals its literal (the values filled: the entry file and its key, the VPN\'s port, the ports of the facts — no placeholder, no download address)', () => {
+test('W36 each §10.4 command equals its literal (the values filled: the entry file and its key, the ports of the facts — no placeholder, no download address)', () => {
   const one = (name, spec, entry, ctx) => {
     assert.deepEqual(entry.commands(ctx), spec.commands, `${name}: the commands, as literals`)
     if (spec.verify) assert.equal(entry.verify(ctx), spec.verify, `${name}: how to check`)
@@ -435,8 +435,8 @@ test('W36 the not-routed 「set it to your proxy app\'s port」 step is table-dr
   const groups = groupsOf(all)
   assert.deepEqual([...new Set(groups.map((x) => x.g))].sort(), Object.keys(EXPECT).sort(), 'every group of every harness has its place written out — none missing')
   const stepText = (place) => {
-    if (place.kind === 'file') return place.format === 'json' ? `用记事本打开 ${place.file},把 ${place.key} 写成 "http://127.0.0.1:7897"` : `${place.file} 里写一行 ${place.key}=http://127.0.0.1:7897`
-    if (place.kind === 'policy') return `在注册表策略 ${place.path} 里把 ${place.name} 写成 http://127.0.0.1:7897(regedit)`
+    if (place.kind === 'file') return place.format === 'json' ? `用记事本打开 ${place.file},把 ${place.key} 写成 "不知道 · pac(你的代理地址)"` : `${place.file} 里写一行 ${place.key}=不知道 · pac(你的代理地址)`
+    if (place.kind === 'policy') return `在注册表策略 ${place.path} 里把 ${place.name} 写成 不知道 · pac(你的代理地址)(regedit)`
     if (place.kind === 'shim') return `${place.command} 的代理入口是 asight 的 shim(${place.command}.cmd 设 HTTPS_PROXY):没有你可以改的自己的代理项`
     return '这个形态的代理入口是 asight 的启动器:没有你可以改的自己的代理项(不经它启动的连接 asight 不在路径上)'
   }
@@ -452,7 +452,7 @@ test('W36 the not-routed 「set it to your proxy app\'s port」 step is table-dr
 
 test('W36 not-routed by why, through the REAL facts path: a PAC, a registry the helper could not read, an unparseable prior and credentials in the system proxy each give their own why and commands — and the credentials never appear', async () => {
   const verge = { pid: 11800, name: 'verge-mihomo.exe', exe: 'C:\\Program Files\\Clash Verge\\verge-mihomo.exe', startedAt: 1759000000000, sessionId: 1, integrity: 'medium', tokenDenied: false, cmdline: null, cmdlineState: 'not-asked' }
-  // a PAC, with the VPN's own port in the facts: the value of the step is filled from it
+  // a PAC, with a proxy app listening on its own port in the facts: the value of the step is still said unknown (D49)
   const pacHome = tmpDir('asight-w36-pac-')
   put(path.join(pacHome, '.codex', '.env'), '')
   const pacHelper = helperOf({ procs: [KERNEL_ROW, verge], listen: [{ pid: 11800, state: 'listen', localAddr: '127.0.0.1', localPort: 7897, remoteAddr: '0.0.0.0', remotePort: 0 }],
@@ -465,9 +465,9 @@ test('W36 not-routed by why, through the REAL facts path: a PAC, a registry the 
   const pac = diagnose({ facts: pacFacts, topology: buildTopology(pacFacts), harnesses: ['codex'], user: 'u' }).find((x) => x.code === 'not-routed')
   assert.match(pac.why, /PAC/)
   assert.deepEqual(pac.commands, [
-    { run: `在你的代理软件里看它的本地端口,把 codex 的代理设成它:${path.join(pacHome, '.codex', '.env')} 里写一行 HTTPS_PROXY=http://127.0.0.1:7897`, shell: 'gui' },
+    { run: `在你的代理软件里看它的本地端口,把 codex 的代理设成它:${path.join(pacHome, '.codex', '.env')} 里写一行 HTTPS_PROXY=不知道 · pac(你的代理地址)`, shell: 'gui' },
     { run: 'asight on codex', shell: 'powershell' },
-  ], 'the value filled from the VPN\'s own port')
+  ], 'the value to write is said unknown (D49: asight does not know the proxy app\'s port), never a placeholder')
   assert.equal(pac.verify, 'asight status codex:那一支「在路径上 · 是」')
   assert.deepEqual(validateFinding(pac), [])
   // the helper could not read the registry: retry, the doctor's helper line, and the hand-read
