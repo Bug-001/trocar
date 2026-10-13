@@ -203,7 +203,12 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       if (!s.removed) return { ok: true } // already without it (an earlier run kept it so)
       try { writeDurable(f.path, s.text, 0o600, fs); Object.assign(f, { sha256: sha256(Buffer.from(s.text)), without_ca: true }); return { ok: true } } catch (e) { return { holds: errText(e) } }
     }
-    const rebuild = (f, keep) => { // gone while a live process may use it: an agent whose entry named it has no network without it (4.6 撤销顺序 第 2 步)
+    // `roots` may be a function: `off` reads this platform's OS roots only for a bundle it rebuilds, once (the darwin read runs `security`, os-roots.mjs).
+    // Asked outside rebuild's try: what it throws (only a sandboxed test's ESANDBOX, orchestrate.mjs rebuildRoots) is not a bundle that could not be rebuilt.
+    let rootsRead = null
+    const rootsNow = () => (typeof roots === 'function' ? (rootsRead || (rootsRead = Promise.resolve(roots()))) : Promise.resolve(roots))
+    const rebuild = async (f, keep) => { // gone while a live process may use it: an agent whose entry named it has no network without it (4.6 撤销顺序 第 2 步)
+      const roots = await rootsNow()
       try {
         if (!roots) throw new Error('no trusted roots were given to rebuild it from')
         const userCerts = [], unread = []
@@ -213,7 +218,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
         writeDurable(f.path, c.data, 0o600, fs)
         const lost = (f.user_fps || []).filter((x) => !c.user_fps.includes(x))
         Object.assign(f, { roots_fp: c.roots_fp, sha256: sha256(Buffer.from(c.data)), user_fps: c.user_fps, without_ca: true })
-        out.kept_bundles.push({ ...keep, rebuilt: true, ...(lost.length ? { lost_fps: lost, unread } : {}), ...(roots.missing ? { os_roots_missing: roots.missing } : {}) })
+        out.kept_bundles.push({ ...keep, rebuilt: true, ...(lost.length ? { lost_fps: lost, unread } : {}), ...(roots.missing ? { os_roots_missing: roots.missing } : {}), ...(roots.partial ? { os_roots_partial: roots.partial } : {}), ...(roots.dropped ? { os_roots_dropped: roots.dropped } : {}) })
       } catch (e) {
         out.kept_bundles.push({ ...keep, error: errText(e) })
         fail(f, `${f.path} is gone and could not be rebuilt (${errText(e)}); ${keep.pids.length ? `a running process may use it (pid ${keep.pids.join(', ')}): restart ${f.harness}` : `${f.harness} reads it at its next start, through ${keep.entry_left.join(', ')} that could not be undone: fix that, then run it again`}`)
@@ -234,7 +239,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       }
       return viaLeft(f)
     }
-    const one = (f, byHarness) => {
+    const one = async (f, byHarness) => {
       const away = outside(f)
       if (away) { fail(f, away); return }
       const h = holders(f, byHarness)
@@ -260,11 +265,11 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
         out.kept_bundles.push({ ...keep, holds_ca: true, error: why })
         fail(f, `${f.path} still holds the asight CA: it could not be rewritten without it (${why}), and ${used}; it is kept as it is — fix the file, then run it again`)
       } else if (!byHarness) without(manifest.files, f) // an extra file that is gone only warns where it is named: nothing to keep
-      else if (h.pids || entry.length) rebuild(f, keep)
+      else if (h.pids || entry.length) await rebuild(f, keep)
       else { out.kept_bundles.push(keep); fail(f, `${f.path} is gone, and whether a running process uses it is not known (${h.why}), so it was not rebuilt`) }
     }
-    for (const f of bundles) one(f, true)
-    for (const f of extras) one(f, false)
+    for (const f of bundles) await one(f, true)
+    for (const f of extras) await one(f, false)
   }
   if (dropCa) for (const f of manifest.files.filter((x) => x.role === 'ca-cert' && known(x))) { const away = outside(f); if (away) { fail(f, away); continue }; try { rm(f.path); without(manifest.files, f) } catch (e) { fail(f, `${f.path} could not be removed (${errText(e)})`) } } // uninstall only (4.6 第 3 步)
 

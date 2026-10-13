@@ -68,7 +68,9 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   if ((r.still_trusting || []).length) lines.push(`重启前仍信任 asight CA(不经 asight,只是还信任): ${r.still_trusting.map((p) => `${p.harness} pid ${p.pid}(${UNTIL_WORDS[p.until] || UNTIL_WORDS.restart})`).join('、')}`)
   for (const k of r.kept_bundles || []) {
     const who = k.pids && k.pids.length ? `pid ${k.pids.join(', ')} 可能加载过它,它们退出后再跑 asight off` : ''
-    lines.push(k.holds_ca ? `${t(k.path)} 仍含 asight CA(没能改写: ${k.error});${who || '修好这个文件后再跑 asight off'}` : `保留了 ${t(k.path)}(已去掉 asight CA)${who ? `:${who}` : k.error ? `:${k.error}` : ''}`)
+    // a rebuilt one says so, and what its OS roots lack (4.6 撤销顺序 第 2 步「回执写已重建」, D38)
+    const roots = [...(k.os_roots_missing ? [`只有 Node 根:${k.os_roots_missing}`] : []), ...(k.os_roots_partial ? [`OS 根缺读不到的那部分:${k.os_roots_partial}`] : []), ...(k.os_roots_dropped ? [`${k.os_roots_dropped} 张 OS 根证书解析不了,没放进去`] : [])]
+    lines.push(k.holds_ca ? `${t(k.path)} 仍含 asight CA(没能改写: ${k.error});${who || '修好这个文件后再跑 asight off'}` : k.rebuilt ? `重建了 ${t(k.path)}(不含 asight CA${roots.map((x) => `;${x}`).join('')})${who ? `:${who}` : ''}` : `保留了 ${t(k.path)}(已去掉 asight CA)${who ? `:${who}` : k.error ? `:${k.error}` : ''}`)
   }
   const shown = new Set(changed.map((c) => c.backup).filter(Boolean))
   const more = (r.kept_backups || []).filter((k) => !shown.has(k.backup))

@@ -1,5 +1,6 @@
 // roots.mjs — the trust set the engine verifies upstreams against (RFC 4.6 §引擎 5: 按系统根证书校验), and the roots a combined bundle
-// starts from (4.6 「合并包」: bundleRoots, the one resolver of them; rootsLeftOut, what they lack as the records that say it; osBundleRoots, the Linux arch's osRoots).
+// starts from (4.6 「合并包」: bundleRoots, the collector's way to them; rootsLeftOut, what they lack as the records that say it; the readers themselves are
+// src/off/os-roots.mjs, `off`'s too).
 // The engine's set is the union of three, none overriding another, read once: the OS store (corporate and TLS-inspection CAs live there),
 // Node's bundled roots, and this process's NODE_EXTRA_CA_CERTS. The OS store comes from tls.getCACertificates('system') where Node has it
 // (≥ 22.15) plus the first OS PEM bundle that holds a certificate (Node's own system read can come back empty on Linux; Node 20 has only the
@@ -7,7 +8,7 @@
 // list, R3), and a path that does not exist is skipped.
 import fs from 'node:fs'
 import tls from 'node:tls'
-import { SYSTEM_BUNDLES, osBundle, certBlocks } from '../../../off/pem.mjs'
+import { SYSTEM_BUNDLES, osBundle } from '../../../off/pem.mjs'
 import { CODE } from '../codes.mjs'
 
 export { SYSTEM_BUNDLES }
@@ -29,24 +30,10 @@ export function systemRoots({ api = tls.getCACertificates, files = SYSTEM_BUNDLE
   return { certs, sources, errors }
 }
 
-/** osBundleRoots({files, read}) → {pem, file, missing, dropped}: the OS roots of a combined bundle on an arch whose OS store is one PEM file — the first
- *  of `files` that holds a certificate (4.6 「合并包」; Linux: Debian's, Fedora's, openSUSE's, … whichever this machine has). None → pem '' and
- *  `missing` says so, naming every path looked at: the bundles then carry Node's roots only, and a CA installed system-wide (a corporate
- *  proxy's) is not in them — the caller records that (D38), never an empty answer alone. `dropped` counts the blocks of the file that are not
- *  certificates Node parses (a broken one, another PEM type, one cut short): composeBundle leaves them out of every bundle, so they are said like
- *  the darwin and win32 readers' (4.8 §6.2 / W20). A bundle that is there but cannot be read throws
- *  (with its errno as `code`): the caller keeps what it had and says why (`on` stops; the daemon keeps the previous bundles). */
-export function osBundleRoots({ files = SYSTEM_BUNDLES, read = readText } = {}) {
-  const b = osBundle({ files, read })
-  if (b.failed.length) throw Object.assign(new Error(`the OS trust bundle cannot be read (${b.failed.map((f) => `${f.file}: ${msg(f.error)}`).join('; ')})`), { code: b.failed[0].error && b.failed[0].error.code })
-  const dropped = b.file ? (b.text.match(/-----BEGIN [A-Z0-9 ]+-----/g) || []).length - certBlocks(b.text).length : 0
-  return { pem: b.text, file: b.file, missing: b.file ? null : `no OS trust bundle holds a certificate (looked at ${files.join(', ')})`, dropped }
-}
-
 /** bundleRoots(arch, {nodeRoots}) → {node, osText, missing, dropped, partial}: the roots every combined bundle starts from (4.6 「合并包」) — Node's own and what
- *  `arch.osRoots()` answers, read each time it is asked (Linux: osBundleRoots above; darwin: darwinRoots, 4.9 §6.2; win32: windowsRoots, 4.8 §6.2).
+ *  `arch.osRoots()` answers, read each time it is asked — src/off/os-roots.mjs osRootsFor(<the arch's os>): Linux osBundleRoots, darwin darwinRoots (4.9 §6.2), win32 windowsRoots (4.8 §6.2).
  *  The one resolver of them in the collector (the platform-seam rule): the install's plan (install.mjs planOn — `on`, `collector install`) and the daemon's
- *  rebuild both ask it, and no caller keeps a fallback of its own. (`off` rebuilds a gone bundle without collector code, R3: src/off/orchestrate.mjs.) An arch without osRoots (a test's) gives Node's roots alone, nothing said missing. A read
+ *  rebuild both ask it, and no caller keeps a fallback of its own. (`off` rebuilds a gone bundle without collector code, R3, through the same osRootsFor table: src/off/orchestrate.mjs.) An arch without osRoots (a test's) gives Node's roots alone, nothing said missing. A read
  *  that fails throws: `on` stops before a file is written, the daemon keeps the previous bundles (D38). What the reader left out is passed on, never
  *  dropped here: `dropped` = how many certificates did not parse (0 when none), `partial` = the reasons of the sources whose read failed while others
  *  gave roots (darwin's `tried`, joined), or null — the callers say both through rootsLeftOut below. */

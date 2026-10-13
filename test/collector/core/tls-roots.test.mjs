@@ -5,7 +5,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import tls from 'node:tls'
 import { fileURLToPath } from 'node:url'
-import { systemRoots, nodeRoots, createUpstreamTrust, osBundleRoots, bundleRoots, SYSTEM_BUNDLES } from '../../../src/collector/core/tls/roots.mjs'
+import { systemRoots, nodeRoots, createUpstreamTrust, bundleRoots, SYSTEM_BUNDLES } from '../../../src/collector/core/tls/roots.mjs'
+import { osRootsFor } from '../../../src/off/os-roots.mjs'
+const osBundleRoots = osRootsFor('linux') // the Linux reader, through the one table
 import { SYSTEM_BUNDLES as OFF_BUNDLES } from '../../../src/off/pem.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
@@ -40,6 +42,9 @@ test('osBundleRoots: the first of SYSTEM_BUNDLES that holds a certificate; none 
   assert.equal(osBundleRoots({ read: only({ '/etc/ssl/certs/ca-certificates.crt': '', '/etc/ssl/ca-bundle.pem': b.certPem }) }).file, '/etc/ssl/ca-bundle.pem', 'a path that holds no certificate is passed over (openSUSE)')
   const none = osBundleRoots({ read: only({}) })
   assert.deepEqual([none.pem, none.file, none.dropped], ['', null, 0], 'none: Node\'s roots are all a bundle gets')
+  const broken = '-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n'
+  const trusted = '-----BEGIN TRUSTED CERTIFICATE-----\nAAAA\n-----END TRUSTED CERTIFICATE-----\n'
+  assert.equal(osBundleRoots({ read: only({ [SYSTEM_BUNDLES[0]]: `${b.certPem}${broken}${trusted}` }) }).dropped, 2, 'a block that is not a certificate Node parses is counted: composeBundle leaves it out (W20\'s count, every reader)')
   for (const f of SYSTEM_BUNDLES) assert.ok(none.missing.includes(f), `the reason names ${f}`)
   assert.throws(() => osBundleRoots({ read: (f) => { throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }) } }),
     (e) => e.code === 'EACCES' && e.message.includes(SYSTEM_BUNDLES[0]), 'there but unreadable: thrown, the caller keeps what it had and says why')
@@ -67,8 +72,9 @@ test('SYSTEM_BUNDLES is one list: the collector\'s is the one `off` reads (src/o
 })
 
 // the platform-seam rule: the combined bundles' roots have one resolver. A caller with an arm of its own (a named file read beside the arch's osRoots, a
-// fallback) is the drift this closes — on.mjs, install.mjs and the daemon once each chose between `osRootsFile` and `osRoots()`, an arm only test arches took.
-test('bundleRoots is the collector\'s one resolver of the combined bundles\' roots: the arch\'s osRoots or Node\'s alone; no other code in src/ asks osRoots, and no file arm is left', async () => {
+// fallback) is the drift this closes — on.mjs, install.mjs and the daemon once each chose between `osRootsFile` and `osRoots()`, an arm only test arches took;
+// and `off` once read a fixed PEM list of its own (/etc/ssl/cert.pem on a Mac). The readers are src/off/os-roots.mjs's, chosen by its one table osRootsFor.
+test('bundleRoots is the collector\'s one resolver of the combined bundles\' roots: the arch\'s osRoots or Node\'s alone; no other code in src/ asks osRoots, no file arm is left, and every reader is reached through osRootsFor — by the arches with their own name, by off with its platform', async () => {
   assert.deepEqual(await bundleRoots({ osRoots: async () => ({ pem: b.certPem, file: '/f' }) }, { nodeRoots: [x.certPem] }), { node: [x.certPem], osText: b.certPem, missing: null, dropped: 0, partial: null })
   assert.deepEqual(await bundleRoots({ osRoots: () => ({ pem: '', missing: 'none here' }) }, { nodeRoots: [] }), { node: [], osText: '', missing: 'none here', dropped: 0, partial: null }, '`missing` reaches the callers (planTrust\'s note, the daemon\'s failure)')
   assert.deepEqual(await bundleRoots(null, { nodeRoots: [x.certPem] }), { node: [x.certPem], osText: '', missing: null, dropped: 0, partial: null }, 'no osRoots: Node\'s roots alone')
@@ -80,13 +86,15 @@ test('bundleRoots is the collector\'s one resolver of the combined bundles\' roo
   await assert.rejects(bundleRoots({ osRoots: async () => { throw new Error('the OS trust bundle cannot be read (EACCES)') } }), /cannot be read/, 'a read that fails throws: `on` stops, the daemon keeps its bundles')
   const src = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src')
   const home = path.join(src, 'collector', 'core', 'tls', 'roots.mjs')
+  const readers = path.join(src, 'off', 'os-roots.mjs')
   const code = (t) => t.replace(/\/\/.*$/gm, '').replace(/^\s*\/?\*.*$/gm, '') // comments may name the hook; only code is judged
-  const files = fs.readdirSync(src, { recursive: true }).map((f) => path.join(src, f)).filter((f) => f.endsWith('.mjs') && f !== home)
-  const linuxArch = path.join(src, 'collector', 'arch', 'index.mjs') // the Linux arch's osRoots is osBundleRoots
-  // `.osRoots` / `['osRoots']` / `{ osRoots }` read the hook; osBundleRoots called anywhere but the Linux arch reads an OS file beside it; osRootsFile is the old file arm
-  const second = (f, t) => /\.osRoots\b|\[\s*['"]osRoots['"]\s*\]|\bosRoots\s*[,}]|osRootsFile/.test(t) || (f !== linuxArch && /\bosBundleRoots\s*\(/.test(t))
-  const hits = files.filter((f) => second(f, code(fs.readFileSync(f, 'utf8')))).map((f) => path.relative(src, f))
-  assert.deepEqual(hits, [], 'a second reader of the OS roots, or a file arm beside them, is a second resolver')
+  const all = fs.readdirSync(src, { recursive: true }).map((f) => path.join(src, f)).filter((f) => f.endsWith('.mjs')).map((f) => ({ f, t: code(fs.readFileSync(f, 'utf8')) }))
+  // `.osRoots` / `['osRoots']` / `{ osRoots }` read the hook; a reader called outside its table reads OS roots beside it; osRootsFile is the old file arm
+  const second = ({ f, t }) => (f !== home && /\.osRoots\b|\[\s*['"]osRoots['"]\s*\]|\bosRoots\s*[,}]|osRootsFile/.test(t)) || (f !== readers && /\b(osBundleRoots|darwinRoots|windowsRoots)\b/.test(t)) // a reader named at all — called, imported or handed on by reference — outside its table
+  assert.deepEqual(all.filter(second).map(({ f }) => path.relative(src, f)), [], 'a second reader of the OS roots, or a file arm beside them, is a second resolver')
+  const askers = all.filter(({ f, t }) => f !== readers && /\bosRootsFor\s*\(/.test(t))
+  assert.deepEqual(askers.map(({ f }) => path.relative(src, f)).sort(), [path.join('collector', 'arch', 'index.mjs'), path.join('off', 'orchestrate.mjs')], 'the table is asked by the arches and by off\'s rebuild, no one else')
+  assert.deepEqual([...askers.find(({ f }) => f.endsWith('index.mjs')).t.matchAll(/osRootsFor\('([a-z0-9]+)'\)/g)].map((m) => m[1]).sort(), ['darwin', 'linux', 'win32'], 'each arch asks for its own platform, once')
 })
 
 test('nodeRoots: without the API, Node\'s bundled roots plus this process\'s NODE_EXTRA_CA_CERTS', () => {
