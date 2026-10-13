@@ -96,7 +96,7 @@ function validateIdentity(x) {
   for (const key of ['names', 'ignored']) {
     if (!Array.isArray(x[key])) { bad.push(`identity.${key}: not a list`); continue }
     x[key].forEach((n, i) => {
-      if (!isObject(n) || !isId(n.name) || !NAME_SOURCES.includes(n.source) || !(n.args === undefined || isId(n.args))) bad.push(`identity.${key}[${i}]: needs name, source (${NAME_SOURCES.join(' | ')}) and args only as a pattern`)
+      if (!isObject(n) || !isId(n.name) || !NAME_SOURCES.includes(n.source) || !(n.args === undefined || isId(n.args)) || !(n.entry === undefined || isId(n.entry))) bad.push(`identity.${key}[${i}]: needs name, source (${NAME_SOURCES.join(' | ')}) and args / entry only as a pattern`)
     })
   }
   if (!Array.isArray(x.unknown)) bad.push('identity.unknown: not a list')

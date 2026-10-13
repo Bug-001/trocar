@@ -76,10 +76,10 @@ function inject(ctx) {
 }
 
 // Which processes are Kimi Code (D51 preset, every OS): the single-file build (its exe is kimi; the title kimi-code it rewrites argv to is no name: a node retitled so is unidentifiable) and the npm package run by
-// node (its dist/main.mjs, or the bin symlink — anchored, so a wrapper merely naming kimi later in its arguments is not it). The update
+// node (the program it runs, its `entry`, is dist/main.mjs or the bin symlink — so a wrapper merely naming kimi later in its arguments is not it). The update
 // downloader and the plugin runner are its helpers.
 const processes = {
-  names: [{ name: 'kimi' }, { name: 'node', args: '@moonshot-ai/kimi-code/dist/main\\.mjs' }, { name: 'node', args: '^\\S*/bin/kimi( |$)' }],
+  names: [{ name: 'kimi' }, { name: 'node', entry: '(/@moonshot-ai/kimi-code/dist/main\\.mjs|/bin/kimi)$' }],
   exclude: [{ name: ['kimi', 'node'], args: '(^| )__(update_download|plugin_run_node)( |$)' }],
 }
 

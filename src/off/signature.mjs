@@ -13,7 +13,7 @@
 // Put cheap paths (exe, argv) before 'env' in a pattern: env may be a lazy read of the process.
 // The derived facts `names` / `name0` / `rest` (src/off/identity.mjs, D51) are read through identityView, so a signature compiled from a name list
 // (compileIdentity) and an older one over exe / argv match with the same code. Imports only src/off/identity.mjs.
-import { processNames, name0, argRest, compileIdentity } from './identity.mjs'
+import { processNames, name0, argRest, entryOf, compileIdentity } from './identity.mjs'
 
 function factAt(facts, p) {
   let cur = facts
@@ -72,7 +72,7 @@ function patternView(facts) {
   return view
 }
 
-/** The facts as a pattern reads them, plus the derived identity facts as lazy getters: `names` (processNames), `name0`, `rest` (argRest). None of
+/** The facts as a pattern reads them, plus the derived identity facts as lazy getters: `names` (processNames), `name0`, `rest` (argRest), `entry` (entryOf). None of
  *  them reads `env`, so a lazy env stays unread until a pattern asks for it. */
 export function identityView(facts) {
   const view = Object.create(patternView(facts))
@@ -83,6 +83,7 @@ export function identityView(facts) {
   lazy('names', processNames)
   lazy('name0', name0)
   lazy('rest', argRest)
+  lazy('entry', entryOf)
   return view
 }
 

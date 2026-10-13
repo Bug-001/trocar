@@ -3,11 +3,16 @@
 // axes: the install prefix (Homebrew and its Caskroom, npm global, nvm, volta, pnpm, bun, a version-named file under ~/.local/share/<prog>/versions,
 // /Applications and ~/Applications; on Windows AppData\Local\Programs, Program Files, scoop, an MSIX WindowsApps package), the editor extension
 // directories (.vscode .cursor .vscode-insiders .vscode-oss .windsurf), letter case, `.exe`, ` (deleted)`, directories with spaces and Chinese,
-// argv[0] a symlink's name while the exe is the real file, and Windows quotes and slashes. It derives the program file name itself (the last
-// segment, or the directory above `versions` for a version-named file), not with the code under test.
+// argv[0] a symlink's name while the exe is the real file, and Windows quotes and slashes; for a process that runs a script (its first non-flag
+// argument is a path): that path under directories with spaces and Chinese, 0–3 interpreter flags before it; the user's home with a space in its
+// name (a Windows profile `John Smith`). On darwin every variant also comes as the collector really sees it (`ps-split`): the joined command line and
+// lsof's exe through arch/darwin/procinfo.mjs factsOfPid, so the seeds meet the darwin shape, argument boundaries lost. It derives the program file
+// name itself (the last segment, or the directory above `versions` for a version-named file), not with the code under test.
 //
 //   import { variantsOf } from '../helpers/proc-variants.mjs'
 //   for (const v of [seed, ...variantsOf(seed)]) …
+import { factsOfPid } from '../../src/collector/arch/darwin/procinfo.mjs'
+
 const VERSION = /^v?\d+(\.\d+)+([-+][0-9a-z.]+)?$/i
 const EDITORS = ['.vscode', '.cursor', '.vscode-insiders', '.vscode-oss', '.windsurf']
 
@@ -81,5 +86,29 @@ export function variantsOf(seed) {
     add('back-slashes', seed.exe, [seed.argv[0], ...seed.argv.slice(1).map((a) => (/^[A-Za-z]:\//.test(a) ? a.replace(/\//g, '\\') : a))])
     add('quoted', seed.exe, seed.argv.map((a) => `"${a}"`))
   }
+  // a script run by an interpreter: its path with spaces and Chinese in it, interpreter flags before it (the entry, not its position, says what runs)
+  const at = seed.argv.findIndex((x, i) => i > 0 && !String(x).startsWith('-'))
+  if (at > 0 && /[\\/]/.test(seed.argv[at])) {
+    const sep = os === 'win32' ? '\\' : '/'
+    const home = os === 'win32' ? String.raw`C:\Users\u` : os === 'darwin' ? '/Users/u' : '/home/u'
+    const script = seed.argv[at].replace(/^[A-Za-z]:/, '').replace(/[\\/]/g, sep)
+    add('entry-space-cjk', seed.exe, seed.argv.map((x, i) => (i === at ? `${home}${sep}My Tools${sep}我的 工具${script}` : x)))
+    const FLAGS = ['--no-warnings', '--max-old-space-size=512', '--enable-source-maps']
+    for (let n = 0; n <= FLAGS.length; n++) add(`flags:${n}`, seed.exe, [...seed.argv.slice(0, at), ...FLAGS.slice(0, n), ...seed.argv.slice(at)])
+  }
+  // the user's home with a space in its name (every path under it)
+  const H = os === 'win32' ? 'C:\\Users\\u\\' : os === 'darwin' ? '/Users/u/' : '/home/u/'
+  const spaced = (x) => String(x).split(H).join(H.replace(/u([\\/])$/, 'John Smith$1'))
+  if ([seed.exe, ...seed.argv].some((x) => String(x).includes(H))) add('home-space', spaced(seed.exe), seed.argv.map(spaced))
+  if (os === 'darwin') for (const v of [{ ...seed, variant: 'seed' }, ...out.slice()]) out.push(psSplit(v))
   return out
+}
+
+/** A darwin variant as the collector sees it: `ps` prints argv joined by spaces, lsof names the exe; factsOfPid turns the two into the facts. */
+function psSplit(v) {
+  const run = (cmd) => (cmd === 'ps'
+    ? { status: 0, stdout: `  42     1   501 x Mon Oct  5 17:00:00 2026     ${v.argv.join(' ')}\n` }
+    : { status: 0, stdout: `p42\nfcwd\nn/\nftxt\nn${v.exe}\n` })
+  const f = factsOfPid(42, { exec: run })
+  return { ...v, exe: f.exe, argv: f.argv, argvSplit: f.argvSplit, cmdline: f.cmdline, variant: `${v.variant}+ps-split` }
 }

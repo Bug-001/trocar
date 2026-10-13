@@ -22,7 +22,7 @@ import { CODE } from '../core/codes.mjs'
 import { urlHostsDeep, dotenvLayer, isOwnPath } from './_common.mjs'
 import { NETWORK_SERVICE_ARG } from '../core/trust/chromium.mjs'
 
-const ZCJS = '/glm/zcode\\.cjs' // the bundle, as an `args` pattern over the arguments (D51)
+const ZCJS = '/glm/zcode\\.cjs$' // the bundle, as an `entry` pattern: the program the exe runs as Node (D51)
 
 // the model fetch follows only ZCODE_HTTP_PROXY / network.httpProxy (HTTP(S)_PROXY is web-fetch only)
 const CDN_HOST = 'cdn-zcode.z.ai'
@@ -141,7 +141,7 @@ export default {
   // Which processes are Z-Code (D51 preset, every OS): the bundle zcode.cjs under glm/ run by the app's exe, its Helper or a plain node (remote
   // mode), the CLI's retitled zcode-cli, and on win32 the desktop's Chromium network service. Its plugin host and dwf child are helpers.
   processes: {
-    names: [{ name: 'zcode-cli' }, { name: 'zcode', args: ZCJS }, { name: 'zcode helper', args: ZCJS }, { name: 'node', args: ZCJS }, { name: 'zcode', args: NETWORK_SERVICE_ARG }],
+    names: [{ name: 'zcode-cli' }, { name: 'zcode', entry: ZCJS }, { name: 'zcode helper', entry: ZCJS }, { name: 'node', entry: ZCJS }, { name: 'zcode', args: NETWORK_SERVICE_ARG }],
     // on Linux (the one OS that reads another process's environment) the app's exe is the agent only as Node (ELECTRON_RUN_AS_NODE=1): without it, the GUI
     exclude: [{ name: 'zcode', env: { ELECTRON_RUN_AS_NODE: null } }, { name: ['zcode', 'zcode helper', 'node'], args: '(^| )__zcode-(plugin-host|dwf-child)( |$)' }, { name: 'zcode helper', args: '--utility-sub-type=network' }],
     longLived: [{ args: '(^| )(app|agent)-server( |$)' }],

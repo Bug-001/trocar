@@ -7,6 +7,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
+import { normalizeName } from './identity.mjs'
 
 /** readlink /proc/<pid>/exe → absolute path, or null (onError(e) is told why). */
 export function readExe(pid, { root = '/proc', onError = () => {} } = {}) {
@@ -166,6 +167,25 @@ const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\
 // then `f<fd>` / `n<name>` pairs; the first txt name that is a path is the executable. It runs AFTER `ps`, so a row it does not name is a process that ended
 // between the two (its `ps` word is kept). An lsof that did not finish (code null: killed by its timeout, more output than TABLE_MAX_BUFFER, or never
 // started — what it printed is cut short) or that names no process while `ps` listed some cannot be read: the table is not known (4.6 「判活快照」).
+/** psArgv(cmdline, exe) — the argv of a `ps` command line (darwin): the line split on white space, the argument boundaries being lost — except argv[0],
+ *  which the real executable (lsof's, `exe`) lets us keep whole: a line that begins with that path, or whose first words (as many as the exe's file name
+ *  names) name the same program (src/off/identity.mjs normalizeName: a symlink of that name, the version-named file's directory). So a bundle path with spaces (`…/Claude Helper (Renderer)`) is never cut
+ *  into a fragment that names another program. The facts it goes into carry `argvSplit: true` (src/off/identity.mjs entryOf reads it). */
+export function psArgv(cmdline, exe = null) {
+  const line = typeof cmdline === 'string' ? cmdline.trim() : ''
+  if (line === '') return []
+  const words = line.split(/\s+/)
+  if (typeof exe !== 'string' || exe === '') return words
+  if (line === exe || line.startsWith(`${exe} `)) {
+    const rest = line.slice(exe.length).trim()
+    return [exe, ...(rest === '' ? [] : rest.split(/\s+/))]
+  }
+  const name = normalizeName(exe)
+  const k = name ? name.split(/\s+/).length : 1
+  const head = words.slice(0, k).join(' ')
+  return k > 1 && normalizeName(head) === name ? [head, ...words.slice(k)] : words
+}
+
 function exesOfLsof({ uid, exec, env, rows }) {
   const r = execTool('lsof', [...(uid != null ? ['-a', '-u', String(uid)] : []), '-d', 'txt', '-Fpn'], { run: exec, env: lsofEnv(env), maxBuffer: TABLE_MAX_BUFFER })
   if (r.code === null) throw new Error(`lsof did not finish (${r.err || 'no reason given'}), so the executables of the ${rows} process(es) ps listed are not known, nor which agents are alive`)
@@ -192,14 +212,14 @@ function procsOfPs({ uid, exec, env }) {
     parsed++
     if (uid != null && Number(m[3]) !== uid) continue
     const cmdline = m[5].trim()
-    const argv = cmdline.split(/\s+/)
+    const argv = psArgv(cmdline)
     const at = new Date(m[4].replace(/\s+/g, ' ')).getTime()
-    out.push({ pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), startedAt: Number.isFinite(at) ? at : null, exe: argv[0], argv, cmdline, env: () => null, envRead: false })
+    out.push({ pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), startedAt: Number.isFinite(at) ? at : null, exe: argv[0], argv, argvSplit: true, cmdline, env: () => null, envRead: false })
   }
   if (rows > 0 && parsed === 0) throw new Error(`ps printed ${rows} line(s) and none could be read (the first: ${JSON.stringify(r.out.split('\n').find((l) => l.trim()).slice(0, 80))}), so which agents are alive is not known`)
   if (!out.length) return out // nobody of this user: nothing for lsof to name
   const exes = exesOfLsof({ uid, exec, env, rows: out.length })
-  for (const p of out) if (exes.get(p.pid)) p.exe = exes.get(p.pid)
+  for (const p of out) if (exes.get(p.pid)) { p.exe = exes.get(p.pid); p.argv = psArgv(p.cmdline, p.exe) }
   return out
 }
 
@@ -234,7 +254,7 @@ function procsOfWin({ exec, env }) {
     if (row === null || typeof row !== 'object' || !Number.isFinite(row.p)) continue
     const name = typeof row.n === 'string' && row.n !== '' ? row.n : null
     const cmdline = typeof row.c === 'string' && row.c !== '' ? row.c : null
-    out.push({ pid: Number(row.p), ppid: Number.isFinite(row.pp) ? Number(row.pp) : null, uid: null, startedAt: Number.isFinite(row.s) ? Number(row.s) : null, exe: typeof row.x === 'string' && row.x !== '' ? row.x : name, argv: (cmdline || name || '').split(/\s+/).filter((s) => s !== ''), cmdline, env: () => null, envRead: false })
+    out.push({ pid: Number(row.p), ppid: Number.isFinite(row.pp) ? Number(row.pp) : null, uid: null, startedAt: Number.isFinite(row.s) ? Number(row.s) : null, exe: typeof row.x === 'string' && row.x !== '' ? row.x : name, argv: (cmdline || name || '').split(/\s+/).filter((s) => s !== ''), argvSplit: true, cmdline, env: () => null, envRead: false })
   }
   return out
 }

@@ -8,7 +8,7 @@ import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { SEEDS } from '../helpers/proc-seeds.mjs'
 import { variantsOf } from '../helpers/proc-variants.mjs'
-import { WIDE, HARNESS_IDS, normalizeName, processNames, name0, argRest, compileIdentity, readAgentList, mergeAgentList } from '../../src/off/identity.mjs'
+import { WIDE, HARNESS_IDS, normalizeName, processNames, name0, argRest, entryOf, compileIdentity, readAgentList, mergeAgentList } from '../../src/off/identity.mjs'
 import { identityView, matchHarness, matchPattern, serializeSignature, reviveSignature } from '../../src/off/signature.mjs'
 
 test('normalizeName: quotes, (deleted), both separators, case, .exe, version-named files', () => {
@@ -60,18 +60,29 @@ test('processNames / name0 / argRest', () => {
   assert.equal(argRest({ argv: undefined }), null)
 })
 
-test('every variant of every seed keeps the seed\'s names and rest (the derived facts do not move with the install)', () => {
+test('entryOf: the program an interpreter runs — one exact candidate where argv is exact (spaces kept), every rejoin up to the next flag where it is a ps split', () => {
+  assert.deepEqual(entryOf({ argv: ['node.exe', '--no-warnings', 'C:\\Users\\John Smith\\npm\\dsh\\lib\\bin.js', 'tui'] }), ['C:/Users/John Smith/npm/dsh/lib/bin.js'])
+  assert.deepEqual(entryOf({ argv: ['node', '/home/u/my', 'tools/bin/kimi', '-p'], argvSplit: true }), ['/home/u/my', '/home/u/my tools/bin/kimi'])
+  assert.deepEqual(entryOf({ argv: ['node', '--x', '/a/process.js', '--parent', '/usr/local/bin/dsh'], argvSplit: true }), ['/a/process.js'], 'a flag ends the rejoin: a later argument is never the entry')
+  assert.deepEqual(entryOf({ argv: ['node', '--inspect'] }), [])
+  assert.equal(entryOf({}), null)
+})
+
+test('every variant of every seed keeps the seed\'s names, and rest (or, where the axis moves the script, its entry\'s program file) — the derived facts do not move with the install', () => {
   let n = 0
   for (const seed of SEEDS) {
     assert.ok(seed.source && (seed.harness === null || HARNESS_IDS.includes(seed.harness)), `seed shape: ${seed.exe}`)
-    const want = { names: new Set(processNames(seed)), rest: argRest(seed) }
+    const file = (f) => { const e = entryOf(f); return e && e.length ? e.at(-1).split('/').pop() : null } // the program file the entry ends in
+    const want = { names: new Set(processNames(seed)), rest: argRest(seed), file: file(seed) }
     const vs = variantsOf(seed)
     assert.ok(vs.length >= 8, `${seed.exe}: the generator bends it along the axes`)
     for (const v of vs) {
       n++
       assert.equal(v.harness, seed.harness)
       assert.deepEqual(new Set(processNames(v)), want.names, `${v.variant}: ${v.exe} ${JSON.stringify(v.argv)}`)
-      assert.equal(argRest(v), want.rest, `${v.variant}: ${JSON.stringify(v.argv)}`)
+      if (/^(entry-space-cjk|flags:|home-space)/.test(v.variant) || /\+ps-split$/.test(v.variant)) {
+        if (want.file != null) assert.ok(entryOf(v).some((e) => e.endsWith(`/${want.file}`) || e === want.file), `${v.variant}: the entry still runs ${want.file}: ${JSON.stringify(v.argv)}`)
+      } else assert.equal(argRest(v), want.rest, `${v.variant}: ${JSON.stringify(v.argv)}`)
     }
   }
   assert.ok(n > 500, `${n} variants`)

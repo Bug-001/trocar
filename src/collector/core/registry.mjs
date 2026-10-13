@@ -24,6 +24,8 @@ const NAME_RE = /^[a-z][a-z0-9-]*$/
 const PENDING = new Set(['pending', 'cim-backoff'])
 
 const anyOf = (patterns, facts) => (patterns || []).some((p) => matchPattern(p, facts))
+// an item's argument patterns: `rest` over the whole argument string, `entry` over the program an interpreter runs (identity.mjs entryOf)
+const argsHold = (p, view) => (!p.rest || holds(p.rest, view.rest)) && (!p.entry || holds(p.entry, view.entry))
 const compileOf = (d) => compileIdentity({ harness: d.name, ...d.processes })
 
 export function validateDescriptor(d) {
@@ -104,9 +106,9 @@ export function createRegistry(descriptors, { agentList = [] } = {}) {
       for (const p of sig.match) {
         if (!holds(p.names, view.names)) continue
         named = true
-        if (!p.rest) { claimed = true; break }
+        if (!p.rest && !p.entry) { claimed = true; break }
         if (unknownArgs) { waits = true; continue }
-        if (holds(p.rest, view.rest)) { claimed = true; break }
+        if (argsHold(p, view)) { claimed = true; break }
       }
       if (!named) continue
       if (anyOf(sig.exclude, view)) { excludedBy = excludedBy || h; continue }
@@ -128,7 +130,7 @@ export function createRegistry(descriptors, { agentList = [] } = {}) {
     const view = identityView({ os: facts.os, argv: facts.argv, exe: null, env: null })
     const out = []
     for (const [h, sig] of lists) {
-      if (!sig.match.some((p) => holds(p.names, view.names) && (!p.rest || holds(p.rest, view.rest)))) continue
+      if (!sig.match.some((p) => holds(p.names, view.names) && argsHold(p, view))) continue
       if (anyOf(sig.exclude, view)) continue
       out.push(h)
     }

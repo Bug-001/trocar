@@ -1,7 +1,7 @@
 // deepseek-dsh.mjs — DeepSeek dsh (RFC 4.6 §身份与信任 tables, D37). Facts: dsh 0.2.0-rc.2 on Node 22.23.3 on a test machine,
 // the installed package and its source; lab ⑤ in the RFC. `#!/usr/bin/env node` gives two execs on one pid (env, then
 // node): the second is judged. The agent is node with the dsh bin as its entry script (`/usr/local/bin/dsh`, or
-// …/@deepseek-ai/dsh/lib/bin.js), at most two node flags before it. Its subprocess runner
+// …/@deepseek-ai/dsh/lib/bin.js), whatever node flags come before it. Its subprocess runner
 // (…/dsh-subprocess-local/lib/runner.js), PTC child (node --max-old-space-size=… <bootstrap>) and browser opener
 // (node --input-type=module --eval …) carry @deepseek-ai/dsh paths elsewhere and are not the agent; they do not
 // inherit the plugin's trust (D37). Env: inherited > <cwd>/.env > $DSH_HOME/.env, a file only fills names the
@@ -80,10 +80,10 @@ const proxy = {
 export default {
   name: 'deepseek-dsh',
   runtime: 'node',
-  // Which processes are dsh (D51 preset, every OS): node running dsh's bin (…/bin/dsh, or npm's …/@deepseek-ai/dsh/lib/bin.js), at most two node
-  // flags before it — anchored, so its runner and PTC children (whose argv names dsh only later) are not it — and the desktop's main process.
+  // Which processes are dsh (D51 preset, every OS): node whose `entry` (the program it runs, after any node flags) is dsh's bin (…/dsh, or npm's
+  // …/@deepseek-ai/dsh/lib/bin.js) — so its runner and PTC children (whose argv names dsh only later) are not it — and the desktop's main process.
   processes: {
-    names: [{ name: 'node', args: '^(-\\S*\\s+){0,2}\\S*(/dsh|/@deepseek-ai/dsh/lib/bin\\.js)( |$)' }, { name: 'deepseek harness' }],
+    names: [{ name: 'node', entry: '(/dsh|/@deepseek-ai/dsh/lib/bin\\.js)$' }, { name: 'deepseek harness' }],
     exclude: [{ name: 'node', args: 'dsh-ptc-runtime-node' }],
     longLived: [{ args: '(^| )(web|acp)( |$)' }, { args: '(^| )--profile=(web|acp)( |$)' }],
   },

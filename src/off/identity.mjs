@@ -4,6 +4,9 @@
 //   name0  the normalized name of argv[0] alone (exclude items read it: `rg`, `apply-seccomp` run under the agent's exe)
 //   rest   argv[1..] without double quotes, joined by one space, `\` turned to `/` — so Linux's exact argv, darwin's `ps` split and Windows'
 //          CommandLineToArgvW give one string for one process (4.8 W76)
+//   entry  what an interpreter runs: the first argv[1..] element that is not a flag, unquoted, `\` → `/` — a LIST of candidates: one where argv is
+//          exact (Linux, Windows); where argv is a `ps` line split on white space (darwin, facts.argvSplit) one per way the words from there up to the
+//          next flag word may join back into a path with spaces. A name item says `entry: '<pattern>'` (anchor with `$`: "the entry ends with …").
 // A harness's preset (`processes` in src/collector/harness/<h>.mjs) and the user's ~/.asight/agents.json (D51③; `on` / `off` never write it, D48)
 // are compiled here into the signature shape src/off/signature.mjs matches (`{ match, exclude, longLived }` of patterns over names / name0 / rest /
 // env), so the daemon, `status` and `off` — the standalone copy too — judge with one matcher. Imports only node:* and src/off.
@@ -71,6 +74,19 @@ export function argRest(facts) {
   return argv.slice(1).map((a) => String(a).replace(/"/g, '')).join(' ').replace(/\\/g, '/')
 }
 
+/** entry: the candidates for the program an interpreter runs (see the file header); [] when every argument is a flag, null when argv is not known. */
+export function entryOf(facts) {
+  const argv = identArgv(facts)
+  if (!argv) return null
+  const args = argv.slice(1).map((a) => String(a).replace(/"/g, '').replace(/\\/g, '/'))
+  const i = args.findIndex((a) => a !== '' && !a.startsWith('-'))
+  if (i < 0) return []
+  if (!facts.argvSplit) return [args[i]]
+  const out = [args[i]]
+  for (let j = i + 1; j < args.length && !args[j].startsWith('-'); j++) out.push(`${out[out.length - 1]} ${args[j]}`)
+  return out
+}
+
 const identEscape = (s) => s.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&')
 const identNamesRe = (list) => new RegExp(`^(?:${list.map(identEscape).join('|')})$`)
 const identList = (v) => (Array.isArray(v) ? v : [v])
@@ -97,9 +113,12 @@ export function compileIdentity({ harness = '?', names = [], exclude = [], longL
   const match = names.map((n) => {
     const w = `${where} name ${JSON.stringify(n && n.name)}`
     identCheckName(w, n && n.name)
-    if (n.args == null && WIDE.has(n.name)) throw new Error(`${w}: ${n.name} is an interpreter name; the item needs an args pattern`)
+    if (n.args == null && n.entry == null && WIDE.has(n.name)) throw new Error(`${w}: ${n.name} is an interpreter name; the item needs an args or entry pattern`)
     known.add(n.name)
-    return n.args == null ? { names: identNamesRe([n.name]) } : { names: identNamesRe([n.name]), rest: identArgsRe(w, n.args) }
+    const p = { names: identNamesRe([n.name]) }
+    if (n.args != null) p.rest = identArgsRe(w, n.args)
+    if (n.entry != null) p.entry = identArgsRe(w, n.entry)
+    return p
   })
   const ex = exclude.map((x, i) => {
     const w = `${where} exclude[${i}]`

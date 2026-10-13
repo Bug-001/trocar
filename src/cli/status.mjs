@@ -197,7 +197,8 @@ const mergedNames = (descriptors, list) => {
   const presets = Object.fromEntries((descriptors || []).map((d) => [d.name, d.processes || {}]))
   return mergeAgentList(presets, list.entries.filter((e) => presets[e.harness]))
 }
-const nameView = (n) => ({ name: n.name, ...(n.args != null ? { args: n.args instanceof RegExp ? n.args.source : String(n.args) } : {}), source: n.source })
+const patternText = (v) => (v instanceof RegExp ? v.source : String(v))
+const nameView = (n) => ({ name: n.name, ...(n.args != null ? { args: patternText(n.args) } : {}), ...(n.entry != null ? { entry: patternText(n.entry) } : {}), source: n.source })
 /** The name of `p` (a process of the table) that one of the harness's names in effect holds, or null (a daemon row whose process the table does not have). */
 const hitName = (p, m) => { if (!p || !m) return null; const names = processNames(p); return (m.names.find((n) => names.includes(n.name)) || {}).name || null }
 /** Per harness: { file: { path, state, problems }, names, ignored, unknown } (`status --json`'s `identity`). `unknown` = the process-unknown of this daemon life
@@ -208,7 +209,7 @@ function identityBlocks({ ids, list, merged, health }) {
   const out = {}
   for (const id of ids) {
     const m = merged[id] || { names: [], ignored: [] }
-    const plain = new Set(m.names.filter((n) => n.args == null).map((n) => n.name))
+    const plain = new Set(m.names.filter((n) => n.args == null && n.entry == null).map((n) => n.name))
     out[id] = { file, names: m.names.map(nameView), ignored: m.ignored.map(nameView), unknown: seen.filter((u) => u.harness === id && !plain.has(u.name)).map((u) => ({ name: u.name, wide: u.wide, named: u.named === true, pid: u.pid, door: u.door })) }
   }
   return out
@@ -292,7 +293,7 @@ export function renderStatus(f, { home = null, detail = [], now = null, colors: 
 
 // the name list of one harness (1.6 §9.7): the names in effect with their source, the ignored presets, the processes on no list that used its door
 const SOURCE_TEXT = { preset: '预设', custom: '自定' }
-const nameText = (n) => `${n.name}(${SOURCE_TEXT[n.source] || n.source}${n.args ? `, args ${n.args}` : ''})`
+const nameText = (n) => `${n.name}(${SOURCE_TEXT[n.source] || n.source}${n.args ? `, args ${n.args}` : ''}${n.entry ? `, entry ${n.entry}` : ''})`
 const unknownText = (u) => `${u.name ?? '不知道名字'}(pid ${u.pid ?? '不知道'}${u.named ? ';名字在名单上、参数没对上' : ''})`
 function identityLines(f, id) {
   if (!f.identity) return f.identity_error ? [`      名单: 不知道(${f.identity_error})`] : []

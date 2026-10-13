@@ -25,6 +25,7 @@ import { installCollector } from '../../../../src/collector/install.mjs'
 import { readManifest, installedAt } from '../../../../src/collector/core/trust/journal.mjs'
 import { within, closeWithin } from '../../../helpers/bounded.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
+import { psArgv } from '../../../../src/off/proc.mjs'
 
 const HOME = '/Users/u'
 const IMG = {
@@ -44,7 +45,7 @@ const HERMES_CMD = `${IMG.hermesPy} -I -c "import hermes_bootstrap; import herme
 const ZCODE_CMD = '/Applications/ZCode.app/Contents/MacOS/ZCode /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs app-server --stdio'
 
 /** What the darwin procinfo gives, with `envRead: false` — "this OS never reads another process's environment", so `env: null` is the rule here and not a failure to read (the tracker judges by the entry files instead). */
-const facts = (pid, exe, extra = {}) => ({ os: 'darwin', pid, ppid: 1, name: exe.split('/').pop(), exe, argv: (extra.cmdline ?? exe).split(/\s+/), cmdline: exe, env: null, envRead: false, cwd: null, startedAt: 1700000000000 + pid, startTicks: String(1700000000000 + pid), cmdlineState: 'ok', elevated: false, elevationInferred: false, source: 'exec', ...extra })
+const facts = (pid, exe, extra = {}) => ({ os: 'darwin', pid, ppid: 1, name: exe.split('/').pop(), exe, argv: psArgv(extra.cmdline ?? exe, exe), argvSplit: true, cmdline: exe, env: null, envRead: false, cwd: null, startedAt: 1700000000000 + pid, startTicks: String(1700000000000 + pid), cmdlineState: 'ok', elevated: false, elevationInferred: false, source: 'exec', ...extra })
 
 const ALL = await loadHarnesses()
 const one = (name) => ALL.find((d) => d.name === name)
@@ -219,7 +220,7 @@ test('D47 a z-code CLI that rewrote its whole command line to its title (`proces
     const redirector = createDarwinRedirector({
       groups: GROUPS, identify: darwinRegistry().match, isOn: () => true,
       ownerOf: async () => ({ pid: 50, source: 'socket-table', ms: 4 }),
-      factsOf: () => facts(50, IMG.zcode, { cmdline, argv: cmdline.split(/\s+/), startedAt: 1700000005000, startTicks: '1700000005000', source: 'accept' }),
+      factsOf: () => facts(50, IMG.zcode, { cmdline, argv: psArgv(cmdline, IMG.zcode), startedAt: 1700000005000, startTicks: '1700000005000', source: 'accept' }),
       routes: () => ({ 'z-code.cli': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }),
       ingress: () => ({ enginePort: 18790, groupPorts: { 'z-code.cli': 18801 }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }),
     })
@@ -245,7 +246,7 @@ test('D47b the z-code DESKTOP\'s app-server is the form at the door: an Electron
     const redirector = createDarwinRedirector({
       groups: GROUPS, identify: darwinRegistry().match, isOn: () => true,
       ownerOf: async () => ({ pid: 60, source: 'socket-table', ms: 4 }),
-      factsOf: () => facts(60, HELPER, { cmdline, argv: cmdline.split(/\s+/), startedAt: 1700000006000, startTicks: '1700000006000', source: 'accept' }),
+      factsOf: () => facts(60, HELPER, { cmdline, argv: psArgv(cmdline, HELPER), startedAt: 1700000006000, startTicks: '1700000006000', source: 'accept' }),
       routes: () => ({ 'z-code.cli': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }),
       ingress: () => ({ enginePort: 18790, groupPorts: { 'z-code.cli': 18801 }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }),
     })
