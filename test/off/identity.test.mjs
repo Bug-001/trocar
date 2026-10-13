@@ -6,6 +6,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { SEEDS } from '../helpers/proc-seeds.mjs'
+import { variantsOf } from '../helpers/proc-variants.mjs'
 import { WIDE, HARNESS_IDS, normalizeName, processNames, name0, argRest, compileIdentity, readAgentList, mergeAgentList } from '../../src/off/identity.mjs'
 import { identityView, matchHarness, matchPattern, serializeSignature, reviveSignature } from '../../src/off/signature.mjs'
 
@@ -58,6 +60,23 @@ test('processNames / name0 / argRest', () => {
   assert.equal(argRest({ argv: undefined }), null)
 })
 
+test('every variant of every seed keeps the seed\'s names and rest (the derived facts do not move with the install)', () => {
+  let n = 0
+  for (const seed of SEEDS) {
+    assert.ok(seed.source && (seed.harness === null || HARNESS_IDS.includes(seed.harness)), `seed shape: ${seed.exe}`)
+    const want = { names: new Set(processNames(seed)), rest: argRest(seed) }
+    const vs = variantsOf(seed)
+    assert.ok(vs.length >= 8, `${seed.exe}: the generator bends it along the axes`)
+    for (const v of vs) {
+      n++
+      assert.equal(v.harness, seed.harness)
+      assert.deepEqual(new Set(processNames(v)), want.names, `${v.variant}: ${v.exe} ${JSON.stringify(v.argv)}`)
+      assert.equal(argRest(v), want.rest, `${v.variant}: ${JSON.stringify(v.argv)}`)
+    }
+  }
+  assert.ok(n > 500, `${n} variants`)
+})
+
 test('identityView: lazy names / name0 / rest, env not read unless a pattern asks', () => {
   let envReads = 0
   const facts = { exe: '/x/claude', argv: ['claude', '-p', 'hi'], env: () => { envReads++; return new Map([['A', '1']]) } }
@@ -88,6 +107,23 @@ test('compileIdentity: the signature shape; refuses /g /y, a wide name without a
   assert.throws(() => compileIdentity({ harness: 'codex', names: [{ name: 'codex' }], exclude: [{}] }), /needs name, name0, args or env/)
   assert.throws(() => compileIdentity({ harness: 'codex', names: [{ name: '/usr/bin/codex' }] }), /not a normalized program name/)
   assert.throws(() => compileIdentity({ harness: 'codex', names: [{ name: 'codex', args: '(' }] }), /not a regular expression/)
+})
+
+test('G8: a compiled list answers the same after the manifest round trip (serialize → JSON → revive), for every seed and variant', () => {
+  const sigs = [compileIdentity(DSH_LIKE), compileIdentity(CC_LIKE)]
+  const back = sigs.map((s) => reviveSignature(JSON.stringify(serializeSignature(s))))
+  const answer = (s, f) => { const v = identityView(f); return [s.match.some((p) => matchPattern(p, v)), s.exclude.some((p) => matchPattern(p, v)), s.longLived.some((p) => matchPattern(p, v))] }
+  let hits = 0
+  for (const seed of SEEDS) {
+    for (const f of [seed, ...variantsOf(seed)]) {
+      sigs.forEach((s, i) => {
+        const a = answer(s, f)
+        if (a[0]) hits++
+        assert.deepEqual(answer(back[i], f), a, `${f.variant || 'seed'}: ${f.exe}`)
+      })
+    }
+  }
+  assert.ok(hits > 50, `the sample signatures match some facts (${hits}); a round trip of patterns that never match proves nothing`)
 })
 
 const writeList = (home, doc) => {
