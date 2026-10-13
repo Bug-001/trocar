@@ -101,6 +101,7 @@ test('every darwin data file has the shape the later tasks read: groups, forms, 
       assert.ok(!ids.has(f.id), `${f.id} once`)
       ids.add(f.id)
       assert.ok(f.id.startsWith(`${h}.`), f.id)
+      assert.deepEqual(Object.keys(f).filter((k) => !['id', 'g', 'supported', 'hosts'].includes(k)), [], `${f.id}: a form keeps only id · g · supported · hosts (D51: no identity data)`)
       if (f.supported !== true) { // a form nobody could install: listed so status says "unknown · not measured", with no group (4.8 §2.3, §6.4; the darwin rows 4.6 OPEN ① ② ⑥ ⑦)
         assert.deepEqual([f.supported, f.g], [{ reason: 'not-measured' }, null], f.id)
         continue

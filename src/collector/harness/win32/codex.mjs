@@ -5,9 +5,9 @@
 // by the block and read as the group's bypass table, 4.8 §2.2); the trust half of the same block is SSL_CERT_FILE = combined-codex.pem, written by the Linux descriptor's
 // `inject` as it is (a Codex home that exists, plus the CODEX_HOME of the install shell). The HTTPS_PROXY in .env also takes Codex's WebSocket through the proxy [E16], and
 // Codex follows the system proxy for HTTP only [E2], so a system-proxy upstream changes the WebSocket's way out: `egress-differs` (4.8 §2.2).
+// Processes are told by the name list (D51), see the base file's `processes`.
 import linux from '../codex.mjs'
 
-const raw = String.raw
 const inject = (ctx) => linux.inject(ctx)
 
 export default {
@@ -21,11 +21,11 @@ export default {
   }],
   forms: [
     // npm: …\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe
-    { id: 'codex.cli', g: 'codex.env', match: { image: 'codex.exe', path: [raw`\\node_modules\\@openai\\.*\\codex\.exe`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    { id: 'codex.cli', g: 'codex.env', supported: true },
     // …\.vscode\extensions\openai.chatgpt-<version>-win32-x64\bin\windows-x86_64\codex.exe
-    { id: 'codex.vscode', g: 'codex.env', match: { image: 'codex.exe', path: [raw`\\\.vscode\\extensions\\openai\.chatgpt-[^\\]*\\bin\\[^\\]*\\codex\.exe`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    { id: 'codex.vscode', g: 'codex.env', supported: true },
     // %LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe (a child of ChatGPT.exe)
-    { id: 'codex.app', g: 'codex.env', match: { image: 'codex.exe', path: [raw`\\OpenAI\\Codex\\bin\\[^\\]*\\codex\.exe`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    { id: 'codex.app', g: 'codex.env', supported: true },
   ],
   inject,
   proxy: {

@@ -3,12 +3,12 @@
 //   kimi-code.cli     the native app %USERPROFILE%\.kimi-code\bin\kimi.exe; entry = a shim in a directory first on the user's PATH (Task 14), so there is no automatic trust entry either
 //   kimi-code.vscode  `Code.exe` (hosts.processes `code`), the editor itself: VS Code's user setting http.proxy sends ALL extensions' connections to this form's port, so the kernel hands the engine only
 //                     the connections to Kimi's hosts (the host-tree rule, §3.5) and forwards the rest untouched: `hosts` below, with the set built at `on` by hostSetOf (Task 8)
+// Processes are told by the name list (D51), see the base file's `processes`.
 import path from 'node:path'
 import { hostOf } from '../../core/config-read.mjs'
 import linux from '../kimi-code.mjs'
 import { appData } from './_paths.mjs'
 
-const raw = String.raw
 const kimiHome = (ctx) => (ctx.env.get('KIMI_CODE_HOME') || '') || path.join(ctx.home, '.kimi-code')
 // `base_url = "…"` / `X_BASE_URL = '…'` at a line start or inside an inline table (the Linux harness reads config.toml the same way)
 const TOML_URL = /(?:^|[{,])[ \t]*(base_url|[A-Z][A-Z0-9_]*_BASE_URL)[ \t]*=[ \t]*(["'])([^"'\n]+)\2/gm
@@ -39,10 +39,10 @@ export default {
     },
   ],
   forms: [
-    { id: 'kimi-code.cli', g: 'kimi-code.cli', match: { image: 'kimi.exe', path: [raw`\\\.kimi-code\\bin\\kimi\.exe`], reportUnknownPath: true }, nameRule: true, processRules: true, supported: true },
+    { id: 'kimi-code.cli', g: 'kimi-code.cli', supported: true },
     {
       id: 'kimi-code.vscode', g: 'kimi-code.vscode',
-      nameRule: false, processRules: true, supported: true,
+      supported: true,
       hosts: {
         // `program` / `extension` name the two sides of the host-tree line of 4.8 §3.5: the host program whose other connections only forward, and the extension whose own settings carry the relay
         program: 'VS Code', extension: 'Kimi',

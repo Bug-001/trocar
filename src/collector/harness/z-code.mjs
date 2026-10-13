@@ -24,16 +24,6 @@ import { NETWORK_SERVICE_ARG } from '../core/trust/chromium.mjs'
 
 const ZCJS = '/glm/zcode\\.cjs' // the bundle, as an `args` pattern over the arguments (D51)
 
-/** The command line of a Z-Code CLI process, both shapes it lives in: the bundle path as invoked, and the title a `-p` / `tui` CLI rewrites its WHOLE
- *  command line to within moments of start (`process.title = "zcode-cli"`, the header's own fact — the desktop's app-server never rewrites). The darwin
- *  and win32 form tables carry these (their twins import this list): the rewrite is the agent's own behaviour, not a platform fact, so the patterns
- *  live here beside the signature that has always known the title. Found live on macOS (D47): the macOS form knew only the
- *  bundle path, so a `-p` CLI's sockets — whose `ps` command line is exactly `zcode-cli` — came out `path-unknown` at the door, the accept-time verdict
- *  was never asked, and every connection was spliced `untracked` with no llm_call, while cc/codex/dsh (none of which rewrites its command line)
- *  decrypted fine. The title pattern is unanchored because the form-pattern subset has no anchors (4.8 §2.3: `^` and `$` are not letters JavaScript and
- *  .NET read the same way): the image and path gates are what pin the binary, the command line only tells the CLI from the desktop. On win32 the title
- *  assignment reaches the console title alone, never GetCommandLineW, so the title pattern simply never hits there. */
-export const CLI_CMDLINE = ['zcode\\.cjs', 'zcode-cli']
 // the model fetch follows only ZCODE_HTTP_PROXY / network.httpProxy (HTTP(S)_PROXY is web-fetch only)
 const CDN_HOST = 'cdn-zcode.z.ai'
 const PROXY_SOURCES = [

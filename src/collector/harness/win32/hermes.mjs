@@ -1,11 +1,12 @@
 // win32/hermes.mjs — Hermes Agent on Windows (RFC 4.8 §2.3 · §6.1; lab L1): data, no behaviour but the trust injection. `hermes.cli` runs Hermes' own private CPython,
 // %LOCALAPPDATA%\hermes\tools\python-<version>\python.exe; its entry is the sentinel block atop %LOCALAPPDATA%\hermes\.env (HTTPS_PROXY, and NO_PROXY with 127.0.0.1 so Hermes' own calls
-// to this machine never go round the kernel). `python.exe` is every Python of the machine, so the form is told by its path alone and never has a PROCESS-NAME rule.
-// `hermes.desktop` has no known install: a form with no way to recognise it, listed so `status` says 「unknown · not measured」 and does not leave it out.
+// to this machine never go round the kernel).
+// `hermes.desktop` has no known install: listed so `status` says 「unknown · not measured」 and does not leave it out.
 // Trust: the same sentinel block carries SSL_CERT_FILE = combined-hermes.pem (and HERMES_CA_BUNDLE for a release ≤ v2026.9.24, by the checkout's install-stamp.json), in the
 // .env of the Hermes root and of every profile; it is the Linux descriptor's injection with the Windows root: the Linux file reads ~/.hermes, Windows keeps its data in
 // %LOCALAPPDATA%\hermes, so the root moves and nothing else does. The managed .env note is kept for HERMES_MANAGED_DIR (that variable applies on Windows too); Linux's default
 // /etc/hermes has no Windows counterpart that anyone measured, so without the variable there is nothing to read (4.8 §6.1).
+// Processes are told by the name list (D51), see the base file's `processes`.
 import path from 'node:path'
 import { expandHome, parseDotenv } from '../../core/config-read.mjs'
 import { CODE } from '../../core/codes.mjs'
@@ -13,7 +14,6 @@ import { isOwnPath, argAfter, dotenvLayer } from '../_common.mjs'
 import { localAppData } from './_paths.mjs'
 import { OLD_RELEASE, LAST_CA_BUNDLE_RELEASE, oldRelease } from '../hermes.mjs'
 
-const raw = String.raw
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what the block sets over the launch env and the user's lines
 const FALSEY = /^(false|0|no|off)$/i
 
@@ -114,8 +114,8 @@ export default {
     noProxyKey: 'NO_PROXY',
   }],
   forms: [
-    { id: 'hermes.cli', g: 'hermes.cli', match: { image: 'python.exe', path: [raw`\\hermes\\tools\\python[^\\]*\\python\.exe`] }, nameRule: false, processRules: true, supported: true },
-    { id: 'hermes.desktop', g: null, match: null, nameRule: false, processRules: false, supported: { reason: 'not-measured' } },
+    { id: 'hermes.cli', g: 'hermes.cli', supported: true },
+    { id: 'hermes.desktop', g: null, supported: { reason: 'not-measured' } },
   ],
   inject,
   layers,

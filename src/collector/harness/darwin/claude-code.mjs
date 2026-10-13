@@ -1,7 +1,7 @@
 // darwin/claude-code.mjs — Claude Code on macOS (RFC 4.9 §2.3 · §2.4 · §6.4; the entry group, the one-file-two-entries rule and the opt-in item are 4.8 §2.3 · §2.4 · §6.1, acceptance
 //   W3 W23): data, no behaviour — the darwin twin of win32/claude-code.mjs. The npm CLI's two doors (the settings trust entry and the HTTPS_PROXY proxy entry) are lab-measured
 //   live by the 4.9 smoke on a macOS test machine; everything else rides the twin until MA4. Three forms in two entry groups:
-//   claude-code.cli · claude-code.vscode   `claude`, told apart by path; both read one file, ~/.claude/settings.json (or $CLAUDE_CONFIG_DIR), so they share one group, one port and
+//   claude-code.cli · claude-code.vscode   `claude`; both read one file, ~/.claude/settings.json (or $CLAUDE_CONFIG_DIR), so they share one group, one port and
 //                                         one listener, and the engine tells them apart by their own user name `of.<form>` (§2.3 入口组). The native install's real binary is the
 //                                         version-named file under ~/.local/share/claude/versions/ (what ~/.local/bin/claude points at — the same shape measured on Linux);
 //                                         npm keeps the package's own bin/ (its file is claude.exe on every platform; the pattern meets it either way, it is not anchored at the end);
@@ -15,17 +15,13 @@
 //                                         measured): the model traffic lives in the Chromium network service
 //                                         (`Claude Helper --type=utility`), every proxy env var is ignored, and the one door that works is the desktop-launcher
 //                                         opt-in item — a named launcher starting the real app with Chromium's --proxy-server at the group's credential-less
-//                                         listener (the system proxy is out even by naming, D43⑥). The family's paths are the kernel's process rules
-//                                         (2026-10-12's phase-2 gap closed: the Helper reached the listener but no rule claimed it → MATCH→upstream,
-//                                         pid:null, untracked splice; now the sub-rule hands it to the desktop fb group and the table holds its row).
-// `claude` and `Claude` are one image name to the matcher (paths compare ignoring case on darwin too), so all three forms are told by their paths alone and none has a
-//   PROCESS-NAME rule. Trust (§6.1): the same one key as on Linux, env.NODE_EXTRA_CA_CERTS in settings.json, so the Linux descriptor's `inject` is used as it is; unlike Windows,
+//                                         listener (the system proxy is out even by naming, D43⑥).
+// Processes are told by the name list (D51), see the base file's `processes`. Trust (§6.1): the same one key as on Linux, env.NODE_EXTRA_CA_CERTS in settings.json, so the Linux descriptor's `inject` is used as it is; unlike Windows,
 //   the managed settings directory /Library/Application Support/ClaudeCode (MANAGED_DIR.darwin in the base) IS read on macOS — a NODE_EXTRA_CA_CERTS the administrator put there is
 //   carried into extra-cc.pem by that same inject, and its keys win over the user's on read (the base's layers).
 import path from 'node:path'
 import linux from '../claude-code.mjs'
 
-const raw = String.raw
 const settingsFile = (ctx) => path.join(ctx.env.get('CLAUDE_CONFIG_DIR') || path.join(ctx.home, '.claude'), 'settings.json')
 
 export default {
@@ -57,26 +53,15 @@ export default {
     },
   ],
   forms: [
-    // native: ~/.local/share/claude/versions/<v> (the version-named FILE — `versions/2.1.296` is the executable itself, its basename is the
-    // version, and no image gate can ever name it; the Linux pattern set matches the same shape by path regex alone, so this form is PATH-ONLY, 4.9 §2.3) ·
-    // ~/.local/bin/claude (the symlink, as invoked) · npm: …/node_modules/@anthropic-ai/claude-code/bin/claude(.exe)
-    // · Homebrew's npm-global prefix (measured: `npm i -g` under Homebrew node puts the invoked symlink at /opt/homebrew/bin/claude —
-    //   ps shows the path AS INVOKED, the resolved node_modules target never appears, and without these two a Homebrew claude was form-path-unknown
-    //   on every connection: spliced, nothing captured; /usr/local is Homebrew on Intel and npm's own default prefix besides)
-    { id: 'claude-code.native', g: 'claude-code.settings', match: { image: null, path: [raw`\/claude\/versions\/[^/]*`] }, nameRule: false, processRules: true, supported: true },
-    { id: 'claude-code.cli', g: 'claude-code.settings', match: { image: 'claude', path: [raw`\/\.local\/bin\/claude`, raw`\/node_modules\/@anthropic-ai\/claude-code\/bin\/claude`, raw`\/opt\/homebrew\/bin\/claude`, raw`\/usr\/local\/bin\/claude`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    // native: ~/.local/share/claude/versions/<v> (the version-named FILE) · ~/.local/bin/claude · npm: …/node_modules/@anthropic-ai/claude-code/bin/claude(.exe)
+    // · Homebrew's npm-global prefix /opt/homebrew/bin/claude, /usr/local/bin/claude. Which process is Claude Code is the name list's (D51), not a form's.
+    { id: 'claude-code.native', g: 'claude-code.settings', supported: true },
+    { id: 'claude-code.cli', g: 'claude-code.settings', supported: true },
     // ~/.vscode/extensions/anthropic.claude-code-<version>-darwin-<arch>/resources/native-binary/claude
-    { id: 'claude-code.vscode', g: 'claude-code.settings', match: { image: 'claude', path: [raw`\/\.vscode\/extensions\/anthropic\.claude-code-[^/]*\/resources\/native-binary\/claude`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
-    // one form, a process FAMILY (4.9 §2.3's image-list increment · §6.4): the main binary /Applications/Claude.app/Contents/MacOS/Claude
-    // (and ~/Applications/…: the patterns are not anchored) AND the Chromium Helpers under Contents/Frameworks/ — `Claude Helper` (the --type=utility network
-    // service that owns every model socket), with (Renderer) and (GPU) beside it, conservatively, so the family's processes never fall out of the form (a
-    // Helper CONNECT that the kernel's MATCH→upstream took was the untracked splice of the 2026-10-12 phase-2 run). Image names are exact, one by one.
-    { id: 'claude-code.desktop', g: 'claude-code.desktop', match: { image: ['Claude', 'Claude Helper', 'Claude Helper (Renderer)', 'Claude Helper (GPU)'], path: [
-      raw`\/Claude\.app\/Contents\/MacOS\/Claude`,
-      raw`\/Claude\.app\/Contents\/Frameworks\/Claude Helper\.app\/Contents\/MacOS\/Claude Helper`,
-      raw`\/Claude\.app\/Contents\/Frameworks\/Claude Helper \(Renderer\)\.app\/Contents\/MacOS\/Claude Helper \(Renderer\)`,
-      raw`\/Claude\.app\/Contents\/Frameworks\/Claude Helper \(GPU\)\.app\/Contents\/MacOS\/Claude Helper \(GPU\)`,
-    ], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    { id: 'claude-code.vscode', g: 'claude-code.settings', supported: true },
+    // one form, a process FAMILY (§6.4): the main binary /Applications/Claude.app/Contents/MacOS/Claude and the Chromium Helpers under
+    // Contents/Frameworks/ — `Claude Helper` (the --type=utility network service that owns every model socket), (Renderer) and (GPU).
+    { id: 'claude-code.desktop', g: 'claude-code.desktop', supported: true },
   ],
   inject: (ctx) => linux.inject(ctx),
   // Trust: no darwin layers of their own. The base layers split the Desktop family by Chromium role (D51④, core/trust/chromium.mjs): the network

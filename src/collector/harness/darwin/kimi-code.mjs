@@ -10,6 +10,7 @@
 // automatic trust entry — the win32 twin's stance. The native app is ~/.kimi-code/bin/kimi (the installer's app, the same path as on Linux; whether the base's SEA title change
 // (`process.title = "kimi-code"`) shows in this kernel's `ps` the way it shows in /proc is not measured — MA4). The npm build (`node …/kimi-code/dist/main.mjs`) has no shim entry, as
 // on Linux and Windows. The desktop app and the VS Code extension are unmeasured on macOS (4.6 OPEN ⑦'s darwin half, MA4): listed, not recognised, `status` says 「unknown · 未测」.
+// Processes are told by the name list (D51), see the base file's `processes`.
 export default {
   groups: [
     {
@@ -24,8 +25,8 @@ export default {
     },
   ],
   forms: [
-    { id: 'kimi-code.cli', g: 'kimi-code.cli', match: { image: 'kimi', path: ['/\\.kimi-code/bin/kimi'], reportUnknownPath: true }, nameRule: true, processRules: true, supported: true },
-    { id: 'kimi-code.vscode', g: null, match: null, nameRule: false, processRules: false, supported: { reason: 'not-measured' } },
+    { id: 'kimi-code.cli', g: 'kimi-code.cli', supported: true },
+    { id: 'kimi-code.vscode', g: null, supported: { reason: 'not-measured' } },
   ],
   inject: () => ({}), // no automatic trust entry: the shim and the rc PATH line that makes `kimi` resolve to it are one opt-in item (the shim also sets the group's proxy URL, which is only known once the kernel is up)
   proxy: {

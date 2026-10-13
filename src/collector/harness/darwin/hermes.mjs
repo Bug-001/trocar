@@ -9,14 +9,7 @@
 //     model block's inline route — gets one ssl_ca_cert line right after its header line, carrying the route's name in the sentinel comment (two routes in one file are two entries,
 //     told apart by that name); a route that already holds an ssl_ca_cert of the user's is NOT touched (asight rewrites no YAML value): it is reported as not captured while it is
 //     there, like the managed .env below.
-// hermes.cli is told by its command line — the Linux descriptor's identity (the sh launchers exec the private CPython as `python3 -I -c '<bootstrap>'` naming hermes_bootstrap and
-// hermes_cli.main / acp_adapter.entry; the TUI children as `-m tui_gateway.entry` / `slash_worker`), which needs no install path; python3 is every Python of the machine, so there is
-// no PROCESS-NAME rule, and a command-line form has no PROCESS-PATH-REGEX either: no process rule, the engine judges it by pid on its port (the dsh precedent, 4.8 §3). The image is a
-// LIST of the two spellings one launcher takes: the exec names `…/tools/python-<ver>/bin/python3`, but the facts' exe is lsof's txt record — the REAL binary the symlink resolves to — and
-// that is the version-named `python3.14` (installer main 0.21.5+9145: `bin/python3 -> python3.14`; MA4's "a python3.12 is not measured" answered). A private
-// CPython of another minor extends this list — its miss is the form going `none` again, and the capture-matrix cell is the tripwire. `exe` on darwin
-// is that lsof answer (never the launcher's own word), so `python3` alone gated nothing of the real launcher: every capture-path connection spliced `not-a-process-of-form` — the
-// 2026-10-12 gap this list closes.
+// Processes are told by the name list (D51), see the base file's `processes`.
 // hermes.desktop was not installable in any lab (the Windows one could not install it either): listed, not recognised, so `status` says 「unknown · not measured」 and does not leave it
 // out. The managed .env note stays for a HERMES_MANAGED_DIR (the variable applies on macOS too); whether Hermes defaults to /etc/hermes there is unmeasured, so without the variable
 // there is nothing to read. Nothing here execs anything: readText / listDir arrive in the ctx.
@@ -133,8 +126,8 @@ export default {
     noProxyKey: 'NO_PROXY',
   }],
   forms: [
-    { id: 'hermes.cli', g: 'hermes.cli', match: { image: ['python3', 'python3.14'], cmdline: ['hermes_bootstrap.*(hermes_cli\\.main|acp_adapter\\.entry)', '-m tui_gateway\\.(entry|slash_worker)'] }, nameRule: false, processRules: false, supported: true },
-    { id: 'hermes.desktop', g: null, match: null, nameRule: false, processRules: false, supported: { reason: 'not-measured' } },
+    { id: 'hermes.cli', g: 'hermes.cli', supported: true },
+    { id: 'hermes.desktop', g: null, supported: { reason: 'not-measured' } },
   ],
   inject,
   proxy: {
