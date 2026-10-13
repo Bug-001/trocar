@@ -85,6 +85,17 @@ const proxy = {
 export default {
   name: 'codex',
   runtime: 'rust',
+  // Which processes are Codex (D51 preset, every OS): the Rust binary by any install (npm's vendor dir, the editor extensions, the app). Its sandbox
+  // and patch helpers run as their own argv[0] or as codex with a helper verb; the Node launcher (node …/bin/codex) is not codex.
+  processes: {
+    names: [{ name: 'codex' }],
+    exclude: [
+      { name0: ['codex-linux-sandbox', 'apply_patch', 'applypatch', 'codex-execve-wrapper'] },
+      { name: 'codex', args: '^--codex-run-as-(arg0-exec-helper|apply-patch)( |$)' },
+      { name: 'codex', args: '(^| )pid-update-loop( |$)' },
+    ],
+    longLived: [{ args: '(^| )--managed-daemon( |$)' }, { args: '(^| )app-server( |$)' }],
+  },
   signatures: {
     linux: {
       match: [{ exe: /(^|\/)codex( \(deleted\))?$/ }],

@@ -1,0 +1,66 @@
+// test/collector/core/identity-presets.test.mjs — the seven harnesses' preset name lists, compiled and judged by src/off's matcher (RFC 4.6 R1,
+// 4.8 W3 the name half; D51; plan 2026-10-14-d51-name-allowlist §3). Every measured / specified process shape in test/helpers/proc-seeds.mjs, and
+// every install variant of it (test/helpers/proc-variants.mjs), is the harness its seed says — the expectation comes from the seed's own source,
+// never from the lists under test (0.1 §3 约定 7: no count pinned, no list restated here). The counter-examples name each reason of 4.6's table.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
+import { HARNESS_IDS, compileIdentity } from '../../../src/off/identity.mjs'
+import { matchHarness, serializeSignature } from '../../../src/off/signature.mjs'
+import { SEEDS } from '../../helpers/proc-seeds.mjs'
+import { variantsOf } from '../../helpers/proc-variants.mjs'
+
+const ALL = await loadHarnesses()
+const LIVE = Object.fromEntries(ALL.map((d) => [d.name, { signature: serializeSignature(compileIdentity({ harness: d.name, ...d.processes })) }]))
+const REG = { match: (f) => ({ agent: matchHarness(LIVE, f) }) }
+const W = String.raw`C:\Users\u`
+const win = (exe, args, more = {}) => ({ os: 'win32', exe, argv: [exe, ...args], env: null, cmdlineState: 'ok', ...more })
+const mac = (exe, args) => ({ os: 'darwin', exe, argv: [exe, ...args], env: null })
+const lin = (exe, argv, env = new Map()) => ({ os: 'linux', exe, argv, env })
+
+test('HARNESS_IDS (src/off, which imports nothing outside itself) names exactly the harnesses loadHarnesses finds', () => {
+  assert.deepEqual([...HARNESS_IDS].sort(), ALL.map((d) => d.name).sort())
+})
+
+test('R1 / W3: every seed, and every install variant of it (prefix, editor dir, case, .exe, (deleted), spaces and CJK, symlinked argv[0], Windows quotes and slashes), is the harness it IS — null: no agent', () => {
+  const wrong = []
+  let n = 0
+  for (const seed of SEEDS) {
+    for (const f of [seed, ...variantsOf(seed)]) {
+      n++
+      const m = REG.match(f)
+      if (m.agent !== seed.harness) wrong.push(`${f.variant || 'seed'}: ${f.exe} ${JSON.stringify(f.argv.slice(1))} → ${m.agent} (${m.reason}); the seed says ${seed.harness} [${seed.source}]`)
+    }
+  }
+  assert.ok(n > SEEDS.length, 'the variants ran')
+  assert.deepEqual(wrong, [])
+})
+
+test('R1: wrappers and helpers are no agent — the reason says which (excluded names its harness; a known name with other arguments is args-mismatch; an unknown name is no-match)', () => {
+  const mods = '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai'
+  const rows = [
+    // the Node launchers of codex / opencode: node is a name of other harnesses, with other arguments
+    [lin('/usr/bin/node', ['node', '/usr/local/bin/codex', 'exec']), [null, 'args-mismatch', null]],
+    [lin('/usr/bin/node', ['node', '/usr/lib/node_modules/opencode-ai/bin/opencode']), [null, 'args-mismatch', null]],
+    // Claude Code's helpers run under its exe with their own argv[0]
+    [lin('/home/u/.local/share/claude/versions/2.1.296', ['rg', '--files']), [null, 'excluded', 'claude-code']],
+    [{ ...mac('/Users/u/.local/share/claude/versions/2.1.296', []), argv: ['apply-seccomp', 'x'] }, [null, 'excluded', 'claude-code']],
+    // kimi's plugin runner, on every OS (mac plugin-shim F10, win PS-F13)
+    [mac('/Users/u/.kimi-code/bin/kimi', ['__plugin_run_node', 'x.js']), [null, 'excluded', 'kimi-code']],
+    [win(`${W}\\.kimi-code\\bin\\kimi.exe`, ['__plugin_run_node', 'x.js']), [null, 'excluded', 'kimi-code']],
+    [lin('/home/u/.kimi-code/bin/kimi', ['kimi', '__update_download']), [null, 'excluded', 'kimi-code']],
+    // dsh's runner and PTC child (test/collector/harness/deepseek-dsh.test.mjs:22-27), Linux and Windows
+    [lin('/usr/local/bin/node', ['node', `${mods}/dsh-subprocess-local/lib/runner.js`]), [null, 'args-mismatch', null]],
+    [lin('/usr/local/bin/node', ['node', '--max-old-space-size=512', `${mods}/dsh-ptc-runtime-node/lib/process.js`, '--parent', '/usr/local/bin/dsh']), [null, 'excluded', 'deepseek-dsh']],
+    [win(String.raw`C:\Program Files\nodejs\node.exe`, ['--max-old-space-size=512', `${W}\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\node_modules\\@deepseek-ai\\dsh-ptc-runtime-node\\lib\\process.js`, '--parent', `${W}\\AppData\\Roaming\\npm\\dsh.cmd`]), [null, 'excluded', 'deepseek-dsh']],
+    // names that only look like a harness's
+    [lin('/usr/local/bin/codexx', ['codexx']), [null, 'no-match', null]],
+    [mac('/usr/local/bin/claude-helper-tool', []), [null, 'no-match', null]],
+    // an interpreter with no harness's arguments
+    [lin('/usr/bin/node', ['node']), [null, 'args-mismatch', null]],
+    [mac('/usr/bin/python3', []), [null, 'args-mismatch', null]],
+    [win('C:\\Python312\\python.exe', ['-c', 'print(1)']), [null, 'args-mismatch', null]],
+  ]
+  for (const [f, want] of rows) assert.equal(REG.match(f).agent, want[0], `${f.exe} ${JSON.stringify(f.argv)}`)
+})
+

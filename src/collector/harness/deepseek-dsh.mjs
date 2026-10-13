@@ -18,8 +18,8 @@ import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
 import { envValues, envProxies, argAfter, dotenvLayer } from './_common.mjs'
 import { renderPlugin, ANONYMOUS_MODULE_MANIFEST } from './_plugins.mjs'
-
 const NODE = /(^|\/)node( \(deleted\))?$/
+
 const ENTRY = /(^|\/)dsh$|\/@deepseek-ai\/dsh\/lib\/bin\.js$/
 // dsh-app-boot BOOTSTRAP_NAMES / _PREFIXES: names no .env file may set (dsh aborts its start when one does)
 const BOOTSTRAP = new Set(['PATH', 'HOME', 'USERPROFILE', 'SHELL', 'NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'PERL5OPT', 'PERL5LIB', 'PYTHONSTARTUP', 'PYTHONPATH', 'RUBYOPT', 'RUBYLIB', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'PYTHONHOME', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_EXTERNAL_DIFF', 'GIT_PAGER', 'GIT_EDITOR', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_COUNT', 'EDITOR', 'VISUAL', 'PAGER', 'BROWSER', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_SEARCH_BASE_URL', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE', 'NODE_TLS_REJECT_UNAUTHORIZED'])
@@ -81,6 +81,13 @@ const proxy = {
 export default {
   name: 'deepseek-dsh',
   runtime: 'node',
+  // Which processes are dsh (D51 preset, every OS): node running dsh's bin (…/bin/dsh, or npm's …/@deepseek-ai/dsh/lib/bin.js), at most two node
+  // flags before it — anchored, so its runner and PTC children (whose argv names dsh only later) are not it — and the desktop's main process.
+  processes: {
+    names: [{ name: 'node', args: '^(-\\S*\\s+){0,2}\\S*(/dsh|/@deepseek-ai/dsh/lib/bin\\.js)( |$)' }, { name: 'deepseek harness' }],
+    exclude: [{ name: 'node', args: 'dsh-ptc-runtime-node' }],
+    longLived: [{ args: '(^| )(web|acp)( |$)' }, { args: '(^| )--profile=(web|acp)( |$)' }],
+  },
   signatures: {
     linux: {
       match: [{ exe: NODE, 'argv.1': ENTRY }, { exe: NODE, 'argv.1': /^-/, 'argv.2': ENTRY }, { exe: NODE, 'argv.1': /^-/, 'argv.2': /^-/, 'argv.3': ENTRY }],

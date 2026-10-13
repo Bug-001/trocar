@@ -77,6 +77,14 @@ function inject(ctx) {
   }
 }
 
+// Which processes are Kimi Code (D51 preset, every OS): the single-file build (its exe is kimi; the title kimi-code it rewrites argv to is no name: a node retitled so is unidentifiable) and the npm package run by
+// node (its dist/main.mjs, or the bin symlink — anchored, so a wrapper merely naming kimi later in its arguments is not it). The update
+// downloader and the plugin runner are its helpers.
+const processes = {
+  names: [{ name: 'kimi' }, { name: 'node', args: '@moonshot-ai/kimi-code/dist/main\\.mjs' }, { name: 'node', args: '^\\S*/bin/kimi( |$)' }],
+  exclude: [{ name: ['kimi', 'node'], args: '(^| )__(update_download|plugin_run_node)( |$)' }],
+}
+
 // How Kimi Code reads a proxy (RFC 1.6 §9.7): the proxy variables of its environment, at start; SOCKS is supported; no config file, no OS proxy (its VS Code extension follows VS Code's own setting, on Windows).
 const proxy = {
   env: ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY'],
@@ -86,7 +94,7 @@ const proxy = {
   unsupported: {},
   branches: ['all'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '退出这个 kimi,在新开的终端里以 `kimi` 重新启动(经 asight 的启动脚本,在那里读代理环境变量)', processes: 'kimi' },
+  restart: { hint: '退出这个 kimi,在新开的终端里以 `kimi` 重新启动(经 asight 的启动脚本,在那里读代理环境变量)', processes: processes.names[0].name },
 }
 
 export default {
@@ -96,6 +104,7 @@ export default {
   // (darwin's osLayers calls it — a descriptor without it throws "own is not a function" in the live judge, the mac
   // lab's run 2026-10-12: every kimi row degraded to its known hosts); nothing here is a layer.
   layers: () => [],
+  processes,
   signatures: {
     linux: {
       match: [{ exe: SEA }, { exe: NODE, 'argv.1': NPM_ENTRY }],

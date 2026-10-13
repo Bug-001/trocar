@@ -16,6 +16,7 @@ test('the registry matches with the function that moved to src/off/signature.mjs
   assert.equal(registryMatchPattern, matchPattern)
   assert.equal(matchPattern({ exe: /codex$/, argv: [/^app-server$/] }, { exe: '/x/codex', argv: ['codex', 'app-server'] }), true)
   assert.equal(matchPattern({ env: { A: '1' } }, { env: new Map([['A', '2']]) }), false)
+  assert.deepEqual([new Map(), new Map([['A', '1']]), null].map((env) => matchPattern({ env: { A: null } }, { env })), [true, false, false], 'null asks for an absent key; an unreadable env (null) holds no key, not even an absent one')
 })
 
 test('a signature survives JSON: every RegExp comes back with its source and flags, and the revived one matches what the original does', () => {
@@ -27,7 +28,7 @@ test('a signature survives JSON: every RegExp comes back with its source and fla
     const flat = (x) => JSON.stringify(x, (k, v) => (v instanceof RegExp ? `/${v.source}/${v.flags}` : v))
     assert.equal(flat(back), flat(sig), `${d.name}: the revived signature is the declared one`)
   }
-  assert.deepEqual(reviveSignature(serializeSignature({ match: [{ 'argv.0': /^x$/i, env: { K: 'v', R: /r/ } }] })), { match: [{ 'argv.0': /^x$/i, env: { K: 'v', R: /r/ } }] })
+  assert.deepEqual(reviveSignature(serializeSignature({ match: [{ 'argv.0': /^x$/i, env: { K: 'v', R: /r/, Z: null } }] })), { match: [{ 'argv.0': /^x$/i, env: { K: 'v', R: /r/, Z: null } }] })
 })
 
 test('matchHarness names the one harness whose match holds and whose exclude does not, from the snapshot alone, resolving a lazy env', () => {

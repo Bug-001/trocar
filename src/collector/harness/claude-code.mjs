@@ -113,6 +113,18 @@ function inject(ctx) {
   }
 }
 
+/** The Chromium network-service process's arguments (an `args` pattern over `rest`): the Electron hosts' (Claude Desktop, Z-Code Desktop on
+ *  win32) utility process that owns the sockets. T6 moves it to core/trust/chromium.mjs. */
+export const NETWORK_SERVICE_ARG = '(^| )--utility-sub-type=network\\.mojom\\.NetworkService( |$)'
+
+// Which processes are Claude Code (D51 preset, every OS; RFC 4.6 「按 harness」): the CLI by any install (native versions/<v>, npm, the editor
+// extensions' native binary, the Desktop-bundled copy, Desktop's own main process), and Desktop's Chromium network service. Its helpers `rg` and
+// `apply-seccomp` run under its exe with their own argv[0].
+const processes = {
+  names: [{ name: 'claude' }, { name: 'claude helper', args: NETWORK_SERVICE_ARG }],
+  exclude: [{ name0: ['rg', 'apply-seccomp'] }],
+}
+
 // How Claude Code reads a proxy (RFC 1.6 §9.7; `asight status` draws its path from this and `asight doctor` takes its instructions from it): HTTPS_PROXY / HTTP_PROXY from its environment, and the same keys in the
 // `env` block of ~/.claude.json and of the user settings (which win over the launch env); once, at start. It does not follow the OS proxy and takes no SOCKS proxy. Project and local settings depend on the
 // directory it was started in: not read here.
@@ -129,12 +141,13 @@ const proxy = {
   unsupported: { socks4: 'fails', socks5: 'fails', socks5h: 'fails' },
   branches: ['all'],
   measured: { win32: 'lab', linux: 'lab', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3). Linux: V54 ran a real `claude -p` with HTTPS_PROXY in its settings.json env through a CONNECT proxy (the setting is read, the CONNECT comes from claude's pid) — what the path depends on when it has a proxy of its own; SOCKS and the OS proxy are not measured on Linux (it reads none). macOS: inferred, until measured
-  restart: { hint: '退出这个 Claude Code,再重新启动(它只在启动时读一次代理设置)', processes: 'claude' },
+  restart: { hint: '退出这个 Claude Code,再重新启动(它只在启动时读一次代理设置)', processes: processes.names[0].name },
 }
 
 export default {
   name: 'claude-code',
   runtime: 'node', // Bun standalone; NODE_EXTRA_CA_CERTS semantics
+  processes,
   signatures: {
     linux: {
       match: [

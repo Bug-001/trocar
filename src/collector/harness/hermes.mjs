@@ -22,9 +22,9 @@ import path from 'node:path'
 import { hostOf, expandHome, parseDotenv } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { envProxies, argAfter, dotenvLayer } from './_common.mjs'
-
 const PY = /(^|\/)python3(\.\d+)?( \(deleted\))?$/
 const BOOT = /\bhermes_bootstrap\b[\s\S]*\b(hermes_cli\.main|acp_adapter\.entry)\b/
+
 const MANAGED = { linux: '/etc/hermes' }
 const FALSEY = /^(false|0|no|off)$/i
 export const OLD_RELEASE = 'hermes:release-ca-bundle' // pseudo-variable: this process may be a release ≤ LAST_CA_BUNDLE_RELEASE
@@ -147,6 +147,12 @@ const proxy = {
 export default {
   name: 'hermes',
   runtime: 'python',
+  // Which processes are Hermes (D51 preset, every OS): python (any version: the normalizer folds python3.N into python) running its bootstrap
+  // isolated (`-I … -c "import hermes_bootstrap; … hermes_cli.main | acp_adapter.entry"`, the code may span lines) or its TUI gateway module. Other python is not Hermes.
+  processes: {
+    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' }],
+    longLived: [{ args: '(^| )(gateway|cron|dashboard|serve)( |$)' }],
+  },
   signatures: {
     linux: {
       match: [

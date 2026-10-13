@@ -9,7 +9,7 @@
 //   factPath is a dotted path into the facts ('exe', 'argv', 'argv.0', 'env', …).
 //   RegExp   vs string  → test;      RegExp vs array → some element matches
 //   RegExp[] vs array   → every RegExp matches some element
-//   object   vs Map/obj → every key present and equal (string) or matching (RegExp)
+//   object   vs Map/obj → every key present and equal (string) or matching (RegExp), or absent (null); vs null (unreadable) → false
 // Put cheap paths (exe, argv) before 'env' in a pattern: env may be a lazy read of the process.
 // The derived facts `names` / `name0` / `rest` (src/off/identity.mjs, D51) are read through identityView, so a signature compiled from a name list
 // (compileIdentity) and an older one over exe / argv match with the same code. Imports only src/off/identity.mjs.
@@ -30,9 +30,11 @@ export function holds(want, got) {
     return Array.isArray(got) && got.some((g) => typeof g === 'string' && want.test(g))
   }
   if (Array.isArray(want)) return Array.isArray(got) && want.every((re) => got.some((g) => typeof g === 'string' && re.test(g)))
-  const get = got instanceof Map ? (k) => got.get(k) : (k) => (got || {})[k]
+  if (got == null) return false // an environment that cannot be read (darwin, win32) holds no key, not even an absent one
+  const get = got instanceof Map ? (k) => got.get(k) : (k) => got[k]
   return Object.entries(want).every(([k, v]) => {
     const g = get(k)
+    if (v === null) return g == null // null: the key is absent
     return g != null && (v instanceof RegExp ? v.test(g) : g === v)
   })
 }

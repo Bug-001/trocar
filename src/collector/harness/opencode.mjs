@@ -50,6 +50,14 @@ function inject(ctx) {
   }
 }
 
+// Which processes are OpenCode (D51 preset, every OS): its Bun binary (npm's .opencode, ~/.opencode/bin, the desktop's opencode-cli core). Bun
+// re-executing itself as plain bun (BUN_BE_BUN=1, Linux reads the env) is not the agent; the Node launcher (node …/bin/opencode) is not either.
+const processes = {
+  names: [{ name: 'opencode' }, { name: '.opencode' }, { name: 'opencode-cli' }],
+  exclude: [{ name: ['opencode', '.opencode', 'opencode-cli'], env: { BUN_BE_BUN: '1' } }],
+  longLived: [{ args: '^(-\\S+ )*(serve|web)( |$)' }], // the subcommand, not an argument that says serve
+}
+
 // How OpenCode reads a proxy (RFC 1.6 §9.7): HTTPS_PROXY / HTTP_PROXY from its environment, at start; no config file, no OS proxy, no SOCKS (the request fails).
 const proxy = {
   env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'],
@@ -59,12 +67,13 @@ const proxy = {
   unsupported: { socks4: 'fails', socks5: 'fails', socks5h: 'fails' },
   branches: ['all'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '退出这个 OpenCode(含 serve / web),在设好代理环境变量的终端里重新启动', processes: 'opencode' },
+  restart: { hint: '退出这个 OpenCode(含 serve / web),在设好代理环境变量的终端里重新启动', processes: processes.names[0].name },
 }
 
 export default {
   name: 'opencode',
   runtime: 'node', // Bun-compiled; NODE_EXTRA_CA_CERTS semantics
+  processes,
   signatures: {
     linux: {
       match: [{ exe: /(^|\/)\.?opencode( \(deleted\))?$/ }],
