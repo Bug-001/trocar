@@ -233,6 +233,33 @@ test('D47 a z-code CLI that rewrote its whole command line to its title (`proces
   assert.equal(matchForm(FORMS, facts(51, IMG.zcode, { cmdline: IMG.zcode }), { home: HOME }).kind, 'path-unknown')
 })
 
+// ── the z-code DESKTOP seam, 2026-10-13 : the app-server Helper ───────────────────────
+
+test('D47b the z-code DESKTOP\'s app-server is the form at the door: an Electron `ZCode Helper` binary carrying the CLI\'s own `zcode-cli` title (lsof txt record + ps command line, both measured live) — before the form existed every connection of the desktop\'s turn was spliced untracked (5 flows, decrypted 0, no llm_call); with it the pid is announced, the verdict arrives through watch(), and the OTHER Helper processes of the same binary (GPU / network / NodeService, Chromium switch command lines) are not the form', async () => {
+  const HELPER = '/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper'
+  for (const cmdline of ['zcode-cli', `${HELPER} /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs app-server --stdio`]) {
+    const announced = []
+    const redirector = createDarwinRedirector({
+      groups: GROUPS, home: HOME,
+      ownerOf: async () => ({ pid: 60, source: 'socket-table', ms: 4 }),
+      factsOf: () => facts(60, HELPER, { cmdline, argv: cmdline.split(/\s+/), startedAt: 1700000006000, startTicks: '1700000006000', source: 'accept' }),
+      routes: () => ({ 'z-code.cli': { entry: 'auto', on: true, reason: null, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }),
+      ingress: () => ({ enginePort: 18790, groupPorts: { 'z-code.cli': 18801 }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }),
+    })
+    redirector.on('exec', (f) => { announced.push(f.pid); redirector.watch(f.pid, { decrypt: true, agent: 'z-code' }) })
+    const meta = await redirector.lookupIngress({ peer: { address: '127.0.0.1', port: 51000 }, user: 'z-code.cli', target: { address: 'relay.asight.test', port: 443 } })
+    assert.deepEqual(announced, [60], `${cmdline.slice(0, 40)}: the desktop's app-server was announced at accept time`)
+    assert.equal(meta.form, 'z-code.desktop', `${cmdline.slice(0, 40)}: the door named the DESKTOP form (the Helper binary is not the CLI form's image)`)
+    assert.equal(meta.decrypt, true, `${cmdline.slice(0, 40)}: the verdict arrived through watch()`)
+    assert.equal(meta.skip, undefined, `${cmdline.slice(0, 40)}: nothing says untracked`)
+    assert.equal(meta.agent, 'z-code')
+  }
+  // the OTHER processes of the same Helper binary — the Chromium family switches, no z-code title — are not the form: their connections at this
+  // door stay not-a-process-of-form (measured: the desktop's own GPU / network / NodeService Helpers carry --type=… command lines)
+  const notForm = `${HELPER} --type=utility --utility-sub-type=network.mojom.NetworkService --user-data-dir=/Users/u/Library/Application Support/ZCode`
+  assert.deepEqual(matchForm(FORMS, facts(61, HELPER, { cmdline: notForm }), { home: HOME }), { kind: 'path-unknown', forms: ['z-code.desktop'], shape: '/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper' }, 'a ZCode Helper without the agent command line is the desktop form\'s path-unknown, not the form')
+})
+
 // ── W76 cell 5: the whole path — the real redirector, tracker, registry and a real ingress ─────────────────────────────────────────────
 
 const REQ = 'GET /v1/models HTTP/1.1\r\nhost: upstream.test\r\n\r\n'
