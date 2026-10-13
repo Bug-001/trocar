@@ -3,15 +3,20 @@
 // name and secret token live in <collector>\control.json — a pipe has no file mode, so the token is what keeps it to the operator).
 // Moved here from src/collector/core/control.mjs, which re-exports both names: `asight off` and the standalone `~/.asight/bin/asight-off`
 // ask the daemon to switch off and must not need the collector code (0.1 §2: src/off imports only node:* and itself). The server side
-// stays in core/control.mjs; test/off/win32.test.mjs holds the two sides' header name equal.
+// stays in core/control.mjs. The facts both sides share (CONTROL_FILE, CONTROL_TOKEN_HEADER, PIPE_PREFIX, the pipe shape) live HERE once: the
+// daemon (core/control.mjs, arch/*/control-path.mjs) imports them — core may import src/off (0.1 §2), src/off cannot import core.
 import nodeFs from 'node:fs'
 import nodeHttp from 'node:http'
 import path from 'node:path'
 
 export const CONTROL_FILE = 'control.json'
-/** The header every request to a token-guarded endpoint carries. The same name as core/control.mjs's own (the server's); src/off cannot
- *  import it, so the test holds the two equal — a drift would make every off on Windows a 401. */
+/** The header every request to a token-guarded endpoint carries; the daemon's server (core/control.mjs) imports this name. */
 export const CONTROL_TOKEN_HEADER = 'x-asight-token'
+/** What a Windows daemon's pipe name starts with (`\\.\pipe\asight-`); the writer (arch/win32/control-path.mjs) adds `<16 hex>` and holds that strictly. */
+export const PIPE_PREFIX = '\\\\.\\pipe\\asight-'
+/** Is `p` a Windows named pipe: `\\.\pipe\` or `\\?\pipe\` and any name. Deliberately loose — off must not refuse a pipe a newer daemon build named differently —
+ *  but never a unix path or a file: on win32 nothing that is no pipe is ever connected to (the platform-seam rule). */
+export const isPipePath = (p) => typeof p === 'string' && /^\\\\[.?]\\pipe\\./.test(p)
 
 /** $XDG_RUNTIME_DIR/asight/collector.sock; throws when XDG_RUNTIME_DIR is not set (the caller says why it cannot ask the daemon).
  *  Linux's endpoint; Windows finds its own through controlEndpointOf (offWorld asks the right one for its platform). */
@@ -49,6 +54,7 @@ export function controlEndpointFor({ platform = process.platform, dir, env = pro
     const ep = controlEndpointOf({ dir, fs })
     if (ep == null) return { socketPath: null, request: controlRequest, why: `${CONTROL_FILE} names no daemon here (none was ever started)` }
     if (ep.error) return { socketPath: null, request: controlRequest, why: ep.error }
+    if (platform === 'win32' && !isPipePath(ep.path)) return { socketPath: null, request: controlRequest, why: `${CONTROL_FILE} names ${ep.path}, which is no Windows named pipe` }
     return { socketPath: ep.path, request: ep.token ? ((o) => controlRequest({ ...o, token: ep.token })) : controlRequest }
   }
   let socketPath = null, why = null

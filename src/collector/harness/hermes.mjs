@@ -27,7 +27,12 @@ const PY = /(^|\/)python3(\.\d+)?( \(deleted\))?$/
 const BOOT = /\bhermes_bootstrap\b[\s\S]*\b(hermes_cli\.main|acp_adapter\.entry)\b/
 const MANAGED = { linux: '/etc/hermes' }
 const FALSEY = /^(false|0|no|off)$/i
-const OLD_RELEASE = 'hermes:release-ca-bundle' // pseudo-variable: this process may be a release ≤ v2026.9.24
+export const OLD_RELEASE = 'hermes:release-ca-bundle' // pseudo-variable: this process may be a release ≤ LAST_CA_BUNDLE_RELEASE
+/** The last release that reads HERMES_CA_BUNDLE first (the plan's research; lab ③). */
+export const LAST_CA_BUNDLE_RELEASE = 'v2026.9.24'
+/** A release tag (`v2026.9.24`, `2026.09.24`) as a number that orders by date; null when it is not one. */
+const releaseDay = (tag) => { const m = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(tag)); return m ? Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) : null }
+const CUTOFF = releaseDay(LAST_CA_BUNDLE_RELEASE)
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what asight's block sets over the launch env and the user's lines
 
 // The root of the Hermes data dirs (HERMES_HOME may name a profile under it) and the active home of this process.
@@ -51,13 +56,13 @@ function checkout(ctx) {
   const m = /sys\.path\.insert\(\s*0\s*,\s*(['"])(\/[^'"]+)\1/.exec(ctx.argv[3] || '')
   return m ? m[2] : ctx.environ.get('HERMES_PYTHON_SRC_ROOT') || path.join(ctx.home, '.hermes', 'hermes-agent')
 }
-// A release dated v2026.9.24 or earlier, by the checkout's install stamp; null when there is no readable stamp.
-function oldRelease(readText, dir) {
+// A release dated LAST_CA_BUNDLE_RELEASE or earlier, by the checkout's install stamp; null when there is no readable stamp.
+export function oldRelease(readText, dir) {
   let stamp
   try { stamp = JSON.parse(readText(path.join(dir, 'install-stamp.json'))) } catch { return null }
   if (!stamp || typeof stamp !== 'object') return null
-  const m = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(stamp.tag || stamp.baseVersion || ''))
-  return !!m && Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) <= 20260924
+  const day = releaseDay(stamp.tag || stamp.baseVersion || '')
+  return day !== null && day <= CUTOFF
 }
 
 // Per-route TLS keys anywhere in config.yaml (providers map and custom_providers list): every ssl_ca_cert (a `list`
@@ -83,7 +88,7 @@ function layers(ctx) {
   const managed = ctx.environ.get('HERMES_MANAGED_DIR') || MANAGED[ctx.os]
   if (managed) out.push(dotenvLayer(ctx, path.join(managed, '.env'), { name: path.join(managed, '.env') }))
   out.push(tlsKeys(ctx, home))
-  if (oldRelease(ctx.readText, checkout(ctx)) !== false) out.push({ name: `${checkout(ctx)}/install-stamp.json (release ≤ v2026.9.24, or no stamp)`, mode: 'override', vars: { [OLD_RELEASE]: '1' }, live: true })
+  if (oldRelease(ctx.readText, checkout(ctx)) !== false) out.push({ name: `${checkout(ctx)}/install-stamp.json (release ≤ ${LAST_CA_BUNDLE_RELEASE}, or no stamp)`, mode: 'override', vars: { [OLD_RELEASE]: '1' }, live: true })
   return out.filter(Boolean)
 }
 
@@ -160,7 +165,7 @@ export default {
   trust: {
     chain: [{ var: 'SSL_CERT_FILE', semantic: 'append' }], // main build on Linux
     variants: [
-      { name: 'release build (v2026.9.24 and older, or no install stamp)', when: OLD_RELEASE, chain: REPLACE(['HERMES_CA_BUNDLE', 'SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE']) },
+      { name: `release build (${LAST_CA_BUNDLE_RELEASE} and older, or no install stamp)`, when: OLD_RELEASE, chain: REPLACE(['HERMES_CA_BUNDLE', 'SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE']) },
       { name: 'routes with their own ssl_ca_cert', when: 'hermes:ssl_ca_cert', chain: [{ var: 'hermes:ssl_ca_cert', semantic: 'replace', list: true }] },
     ],
     disable: ['hermes:ssl_verify'],

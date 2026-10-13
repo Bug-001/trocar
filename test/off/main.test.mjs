@@ -123,9 +123,10 @@ test('the flip\'s platform threading: runOffCli\'s platform is offWorld\'s — t
   const home = tmpDir('asight-off-cli-plat-')
   const dir = path.join(home, '.asight', 'collector')
   fs.mkdirSync(dir, { recursive: true })
-  // the socket lives in its own SHORT directory: a unix socket path must stay under macOS's 104-byte sun_path, and the run-private TMPDIR is deep
-  const shortDir = fs.mkdtempSync(path.join(os.tmpdir(), 'a-'))
-  const sock = path.join(shortDir, 'sock')
+  // the real pipe shape, served on this host: a POSIX name may hold backslashes and a relative unix-socket path resolves against the cwd (see win32-control.test.mjs)
+  const sock = '\\\\.\\pipe\\asight-0011223344556677'
+  const cwd = process.cwd()
+  process.chdir(tmpDir('asight-off-cli-pipe-'))
   const token = 'e'.repeat(64)
   const asked = []
   const server = http.createServer((req, res) => { asked.push([req.method, req.url, req.headers['x-asight-token']]); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ pid: 4242, confirmed: true })) })
@@ -144,5 +145,5 @@ test('the flip\'s platform threading: runOffCli\'s platform is offWorld\'s — t
     assert.ok(asked.length > 0, 'the daemon was asked through the socket control.json names')
     assert.ok(asked.every(([, , t]) => t === token), `every request carried control.json's token — the win32 arm ran (${JSON.stringify(asked)})`)
     assert.ok([0, 1].includes(exit), `the off ran to its end: ${io.text()}`)
-  } finally { await new Promise((resolve) => server.close(resolve)); fs.rmSync(shortDir, { recursive: true, force: true }) }
+  } finally { process.chdir(cwd); await new Promise((resolve) => server.close(resolve)) }
 })

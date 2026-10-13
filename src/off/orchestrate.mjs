@@ -65,7 +65,7 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
   }
   const once = (fn) => { let p; return () => p || (p = Promise.resolve().then(fn)) } // the process table is read once per run
   w.procs = once(deps.procs || (() => listProcs({ exec: w.exec, platform, env })))
-  w.daemonState = deps.daemonState || (() => daemonState({ lockFile: w.lockFile, socketPath: w.socketPath, request: w.request, identity: w.identity, alive: w.alive, now: w.ms, fs: w.fs, timeoutMs: OFF_ASK_MS }))
+  w.daemonState = deps.daemonState || (() => daemonState({ lockFile: w.lockFile, socketPath: w.socketPath, request: w.request, identity: w.identity, alive: w.alive, now: w.ms, fs: w.fs, timeoutMs: OFF_ASK_MS, platform }))
   w.stopDaemon = deps.stopDaemon || ((o = {}) => stopDaemon({ lockFile: w.lockFile, socketPath: w.socketPath, exec: w.exec, kill: w.kill, alive: w.alive, identity: w.identity, isHelper: w.isHelper, sleep: w.sleep, now: w.ms, fs: w.fs, env, platform, ...o }))
   // The autostart the off-side knows: Linux's systemd unit, or darwin's LaunchAgent plist (4.9 §4; the flip checklist ① — before it, step 5 asked systemd
   // on darwin unconditionally). win32 has none to ask about: its task and Run value are manifest entries, undone with the rest (4.8 §4.2).

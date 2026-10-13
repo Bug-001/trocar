@@ -6,7 +6,7 @@
 // file; the name is random anyway because $TMPDIR is shared by every process of this user, and a fixed name could be taken first by anything else it runs) and every request carries a random
 // TOKEN (the server refuses one without it before any route is looked up, core/control.mjs). Both are made once, at the first start, and kept in `<collector>/control.json`, 0600 — on
 // darwin that mode is a real permission (4.9 §7), not the inert metadata it is on Windows. The socket itself is made by the server, 0600 (core/control.mjs does the chmod); this file only
-// names it. The CLI reads control.json to find the daemon: `asight off` through src/off, which has its own reader of it (src/off imports nothing outside itself). The file is made whole in
+// names it. The CLI reads control.json to find the daemon: `asight off` through src/off, which has its own reader of it (the file name is src/off's, imported here). The file is made whole in
 // a temp name, then linked into place, so two processes that start together end up with the one that got there first: the loser reads the winner's. Everything the world gives is a
 // parameter (`fs`, `randomBytes`, `tmp`), so a test on any OS runs it in a temp directory. Node built-ins only.
 import nodeFs from 'node:fs'
@@ -14,7 +14,9 @@ import nodeOs from 'node:os'
 import path from 'node:path'
 import { randomBytes as nodeRandomBytes } from 'node:crypto'
 
-export const CONTROL_FILE = 'control.json'
+import { CONTROL_FILE } from '../../../off/control-client.mjs'
+
+export { CONTROL_FILE }
 export const SOCKET_PREFIX = 'asight-' // the socket's name inside the user's tmp directory: a fixed name could be taken first by another process of this user
 export const SOCKET_SUFFIX = '.sock'
 const NAME_RE = /^asight-[0-9a-f]{16}\.sock$/

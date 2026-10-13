@@ -9,6 +9,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { CONTROL_TOKEN_HEADER, isPipePath } from '../../off/control-client.mjs'
 
 // The client side (controlSocketPath, controlRequest, controlEndpointFor) is src/off/control-client.mjs: `asight off` asks the daemon without this directory (1.6 R3).
 export { controlSocketPath, controlRequest, controlEndpointFor } from '../../off/control-client.mjs'
@@ -23,8 +24,8 @@ function probe(socketPath) {
 
 // Windows (RFC 4.8 §7 控制面; W26): the daemon listens on a named pipe `\\.\pipe\asight-<16 hex>` and every request carries the secret of `control.json` in this header. A pipe has no file mode to keep other
 // users out, so the secret is what does: a request without it, or with another one, is answered 401 before a route is looked up (nothing is said about which routes exist).
-export const CONTROL_TOKEN_HEADER = 'x-asight-token'
-const isPipePath = (p) => /^\\\\[.?]\\pipe\\/.test(p)
+// The header name and the pipe shape are src/off's (control-client.mjs: one fact, one place; the standalone asight-off reads them too); re-exported because the tests import the name from here.
+export { CONTROL_TOKEN_HEADER }
 const sameToken = (want, got) => typeof got === 'string' && timingSafeEqual(createHash('sha256').update(want).digest(), createHash('sha256').update(got).digest())
 
 const send = (res, status, obj) => { const b = JSON.stringify(obj); res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(b) }); res.end(b) }
