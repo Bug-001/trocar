@@ -24,9 +24,9 @@ const ENGINE = { status: { engine: { port: 47123 } } }
 const READ_ONLY = new Set(['ps', 'ss', 'ip', 'gsettings', 'scutil', 'lsof', 'netstat', 'reg', 'schtasks', 'where.exe'])
 // the Windows half of the allowlist (1.6 §9.7 / 4.8 §10.4: netstat, reg query, schtasks /Query, where.exe — the OS tools the printed commands name — plus the resident helper's read verbs).
 // What `doctor` itself executes on Windows goes through the helper, so the static form of the check is: the files that talk to it on the status / doctor path only ever ask its read verbs (the verb
-// closed set itself is 4.8 §1's, held by helper.test.mjs; the adapter reaches the helper through controller.mjs's discover). `netsh`, printed for the user, is held by the live test above (never run).
+// closed set itself is 4.8 §1's, held by helper.test.mjs). `netsh`, printed for the user, is held by the live test above (never run).
 const HELPER_READ_VERBS = new Set(['version', 'ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server'])
-const WIN_HELPER_FILES = ['src/collector/arch/win32/netfacts.mjs', 'src/collector/arch/win32/upstream.mjs', 'src/netenv/mihomo/controller.mjs']
+const WIN_HELPER_FILES = ['src/collector/arch/win32/netfacts.mjs', 'src/collector/arch/win32/upstream.mjs']
 
 function seedVerge(home, sock) {
   const dir = path.join(home, '.local', 'share', 'io.github.clash-verge-rev.clash-verge-rev')
@@ -90,15 +90,10 @@ test('V50 status and doctor only read: they write netenv.json and flows/ and not
   } finally { await w.close() }
 })
 
-test('V50 the code: what the network facts run is named in a list of readers (ss, ip, gsettings, ps, scutil, lsof, netstat, reg, schtasks, where.exe), nothing in src/netenv or the facts of a platform connects anywhere but the VPN core\'s unix socket, and no write verb or `Get-NetTCPConnection` is in it', () => {
+test('V50 the code: what the network facts run is named in a list of readers (ss, ip, gsettings, ps, scutil, lsof, netstat, reg, schtasks, where.exe), nothing in src/netenv or the facts of a platform opens a connection, and no write verb or `Get-NetTCPConnection` is in it', () => {
   const walkFiles = (d) => fs.readdirSync(path.join(REPO, d), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walkFiles(path.join(d, e.name)) : [path.join(d, e.name)]))
-  // src/netenv/mihomo/controller.mjs connects to a controller: its allow-list is held by test/netenv/controller.test.mjs (N9),
-  // so it is not scanned for verbs here. What this test holds is that the status / doctor side (src/netenv, src/cli, src/off) only ever asks it as the user's VPN: no `own: true` outside it.
-  const CONTROLLER = path.join('src/netenv/mihomo', 'controller.mjs')
-  const files = [...walkFiles('src/netenv').filter((f) => f !== CONTROLLER), 'src/collector/arch/linux/netfacts.mjs', 'src/collector/arch/win32/netfacts.mjs']
-  assert.ok(files.length > 10 && files.includes(path.join('src/netenv', 'clash.mjs')), 'the scan sees src/netenv, its subdirectories too')
-  const ownCallers = [...walkFiles('src/netenv'), ...walkFiles('src/cli'), ...walkFiles('src/off')].filter((f) => f !== CONTROLLER && /\bown:\s*true\b/.test(fs.readFileSync(path.join(REPO, f), 'utf8').replace(/^\s*\/\/.*$/gm, '')))
-  assert.deepEqual(ownCallers, [], 'no status / doctor file asks a controller in the writing form (own: true): asight only reads the user\'s core (D43)')
+  const files = [...walkFiles('src/netenv'), 'src/collector/arch/linux/netfacts.mjs', 'src/collector/arch/win32/netfacts.mjs']
+  assert.ok(files.length > 8 && files.includes(path.join('src/netenv', 'clash.mjs')), 'the scan sees src/netenv, its subdirectories too')
   for (const rel of files) {
     const src = fs.readFileSync(path.join(REPO, rel), 'utf8')
     for (const m of src.matchAll(/execTool\(\s*'([^']+)'/g)) assert.ok(READ_ONLY.has(m[1]), `${rel}: execTool('${m[1]}') is not a read-only query`)
