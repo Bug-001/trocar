@@ -15,7 +15,6 @@ import { installCollector } from '../../../src/collector/install.mjs'
 import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
-import { onNone } from '../../helpers/signature-os.mjs'
 
 const EXE = '/opt/ZCode/zcode'
 const CJS = '/opt/ZCode/resources/glm/zcode.cjs'
@@ -134,7 +133,7 @@ test('z-code through install / uninstall: the user\'s caCertFile is replaced and
     const corp = s.put('corp.pem', OTHER.certPem)
     const before = JSON.stringify({ model: 'lab/m', network: { caCertFile: corp, timeout: 30 } }, null, 2) + '\n'
     const cfg = s.put('.zcode/cli/config.json', before)
-    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [onNone(zcode)], freePort: async () => 47016, roots: { node: [], osText: '' } })
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [zcode], freePort: async () => 47016, roots: { node: [], osText: '' } })
     const dir = path.join(s.home, '.asight', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-z-code.pem')
     assert.deepEqual(JSON.parse(fs.readFileSync(cfg, 'utf8')), { model: 'lab/m', network: { caCertFile: bundle, timeout: 30 } })

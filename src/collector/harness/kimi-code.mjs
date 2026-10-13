@@ -31,9 +31,7 @@ import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { envValues, envProxies } from './_common.mjs'
 import { renderShim } from './_plugins.mjs'
 
-const SEA = /\/\.kimi-code\/bin\/kimi( \(deleted\))?$/
 const NODE = /(^|\/)node( \(deleted\))?$/
-const NPM_ENTRY = /(^|\/)kimi$|\/@moonshot-ai\/kimi-code\/dist\/main\.mjs$/
 const CA_VAR = 'NODE_EXTRA_CA_CERTS'
 // POSIX shell rc files the kimi installer may have put its PATH line in (asight's line is an `export`, not for fish)
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin']
@@ -105,12 +103,6 @@ export default {
   // lab's run 2026-10-12: every kimi row degraded to its known hosts); nothing here is a layer.
   layers: () => [],
   processes,
-  signatures: {
-    linux: {
-      match: [{ exe: SEA }, { exe: NODE, 'argv.1': NPM_ENTRY }],
-      exclude: [{ 'argv.1': /^__(update_download|plugin_run_node)$/ }],
-    },
-  },
   hosts: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'],
   proxy,
   configHosts,

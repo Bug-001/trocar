@@ -1,22 +1,22 @@
-// test/collector/core/identity-presets.test.mjs — the seven harnesses' preset name lists, compiled and judged by src/off's matcher (RFC 4.6 R1,
+// test/collector/core/identity-presets.test.mjs — the seven harnesses' preset name lists, through the registry the tracker judges by (RFC 4.6 R1,
 // 4.8 W3 the name half; D51; plan 2026-10-14-d51-name-allowlist §3). Every measured / specified process shape in test/helpers/proc-seeds.mjs, and
 // every install variant of it (test/helpers/proc-variants.mjs), is the harness its seed says — the expectation comes from the seed's own source,
 // never from the lists under test (0.1 §3 约定 7: no count pinned, no list restated here). The counter-examples name each reason of 4.6's table.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
-import { HARNESS_IDS, compileIdentity } from '../../../src/off/identity.mjs'
-import { matchHarness, serializeSignature } from '../../../src/off/signature.mjs'
+import { createRegistry } from '../../../src/collector/core/registry.mjs'
+import { HARNESS_IDS } from '../../../src/off/identity.mjs'
 import { SEEDS } from '../../helpers/proc-seeds.mjs'
 import { variantsOf } from '../../helpers/proc-variants.mjs'
 
 const ALL = await loadHarnesses()
-const LIVE = Object.fromEntries(ALL.map((d) => [d.name, { signature: serializeSignature(compileIdentity({ harness: d.name, ...d.processes })) }]))
-const REG = { match: (f) => ({ agent: matchHarness(LIVE, f) }) }
+const REG = createRegistry(ALL)
 const W = String.raw`C:\Users\u`
 const win = (exe, args, more = {}) => ({ os: 'win32', exe, argv: [exe, ...args], env: null, cmdlineState: 'ok', ...more })
 const mac = (exe, args) => ({ os: 'darwin', exe, argv: [exe, ...args], env: null })
 const lin = (exe, argv, env = new Map()) => ({ os: 'linux', exe, argv, env })
+const said = (m) => [m.agent, m.reason, m.harness ?? null]
 
 test('HARNESS_IDS (src/off, which imports nothing outside itself) names exactly the harnesses loadHarnesses finds', () => {
   assert.deepEqual([...HARNESS_IDS].sort(), ALL.map((d) => d.name).sort())
@@ -61,6 +61,26 @@ test('R1: wrappers and helpers are no agent — the reason says which (excluded 
     [mac('/usr/bin/python3', []), [null, 'args-mismatch', null]],
     [win('C:\\Python312\\python.exe', ['-c', 'print(1)']), [null, 'args-mismatch', null]],
   ]
-  for (const [f, want] of rows) assert.equal(REG.match(f).agent, want[0], `${f.exe} ${JSON.stringify(f.argv)}`)
+  for (const [f, want] of rows) assert.deepEqual(said(REG.match(f)), want, `${f.exe} ${JSON.stringify(f.argv)}`)
 })
 
+test('W3: a Windows node.exe whose command line is not known yet is pending (re-asked on the next connection), not "no agent"; once it arrives, dsh', () => {
+  const node = String.raw`C:\Program Files\nodejs\node.exe`
+  for (const state of ['pending', 'cim-backoff']) assert.deepEqual(said(REG.match({ os: 'win32', exe: node, argv: [], env: null, cmdlineState: state })), [null, 'pending', null], state)
+  assert.equal(REG.match(win(node, [`${W}\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`])).agent, 'deepseek-dsh')
+})
+
+test('the user\'s list (D51③): a custom item makes a renamed build an agent; ignore drops a preset; replaceAgentList swaps in place (a held match keeps working)', () => {
+  const nightly = lin('/opt/claude-nightly/bin/claude-nightly', ['claude-nightly', '-p', 'hi'])
+  const codex = lin('/usr/local/bin/codex', ['codex', 'exec'])
+  assert.deepEqual(said(REG.match(nightly)), [null, 'no-match', null], 'not on the preset list')
+  const reg = createRegistry(ALL, { agentList: [{ harness: 'claude-code', name: 'claude-nightly' }] })
+  const { match } = reg
+  assert.equal(match(nightly).agent, 'claude-code')
+  assert.equal(match(codex).agent, 'codex')
+  reg.replaceAgentList([{ harness: 'codex', name: 'codex', ignore: true }])
+  assert.equal(match(codex).agent, null, 'the preset codex is ignored — and its exclude items naming it went with it, without an error')
+  assert.equal(match(nightly).agent, null, 'the custom item is gone with the old list')
+  reg.replaceAgentList([{ harness: 'deepseek-dsh', name: 'node', args: 'my-fork/bin\\.js' }])
+  assert.equal(match(lin('/usr/bin/node', ['node', '/opt/my-fork/bin.js'])).agent, 'deepseek-dsh')
+})

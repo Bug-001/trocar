@@ -96,17 +96,6 @@ export default {
     ],
     longLived: [{ args: '(^| )--managed-daemon( |$)' }, { args: '(^| )app-server( |$)' }],
   },
-  signatures: {
-    linux: {
-      match: [{ exe: /(^|\/)codex( \(deleted\))?$/ }],
-      exclude: [
-        { 'argv.0': /(^|\/)(codex-linux-sandbox|apply_patch|applypatch|codex-execve-wrapper)$/ },
-        { 'argv.1': /^--codex-run-as-(arg0-exec-helper|apply-patch)$/ },
-        { argv: [/^pid-update-loop$/] },
-      ],
-      longLived: [{ argv: [/^--managed-daemon$/] }, { argv: [/^app-server$/] }],
-    },
-  },
   hosts: ['api.openai.com', 'chatgpt.com'],
   proxy,
   layers: (ctx) => [dotenvLayer(ctx, path.join(codexHome(ctx.environ, ctx.home), '.env'), { name: '$CODEX_HOME/.env', drop: (k) => /^CODEX_/.test(k), live: false })],

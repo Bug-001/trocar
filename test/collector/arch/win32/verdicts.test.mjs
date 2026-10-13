@@ -122,7 +122,7 @@ test('W76 the registry the tracker judges by finds the same harness as matchForm
     const src = fs.readFileSync(new URL(name, dir), 'utf8')
     assert.equal(src.includes('signatures'), false, `${name} carries no signatures: the registry is told matchForm, not a second pattern set`)
   }
-  for (const d of ALL) assert.ok(d.signatures && d.signatures.linux && !d.signatures.win32, `${d.name}: the descriptor keeps its Linux signatures and gains no win32 ones`)
+  for (const d of ALL) assert.ok(d.processes && !d.signatures, `${d.name}: one name list for every OS (D51), no per-OS signatures`)
 })
 
 // ── W76 cell 2: per harness, on its Windows files (planTrust's entries really installed; `installed_at` from the manifest) ─────────────

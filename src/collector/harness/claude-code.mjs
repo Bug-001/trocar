@@ -148,16 +148,6 @@ export default {
   name: 'claude-code',
   runtime: 'node', // Bun standalone; NODE_EXTRA_CA_CERTS semantics
   processes,
-  signatures: {
-    linux: {
-      match: [
-        { exe: /\/claude\/versions\/[^/]+( \(deleted\))?$/ },
-        { exe: /\/bin\/claude\.exe( \(deleted\))?$/ },
-        { exe: /\/claude-code-linux-[^/]+\/claude( \(deleted\))?$/ },
-      ],
-      exclude: [{ 'argv.0': /(^|\/)(rg|apply-seccomp)$/ }],
-    },
-  },
   hosts: ['api.anthropic.com'],
   proxy,
   layers,

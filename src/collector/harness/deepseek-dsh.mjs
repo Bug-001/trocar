@@ -18,7 +18,6 @@ import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
 import { envValues, envProxies, argAfter, dotenvLayer } from './_common.mjs'
 import { renderPlugin, ANONYMOUS_MODULE_MANIFEST } from './_plugins.mjs'
-const NODE = /(^|\/)node( \(deleted\))?$/
 
 const ENTRY = /(^|\/)dsh$|\/@deepseek-ai\/dsh\/lib\/bin\.js$/
 // dsh-app-boot BOOTSTRAP_NAMES / _PREFIXES: names no .env file may set (dsh aborts its start when one does)
@@ -87,12 +86,6 @@ export default {
     names: [{ name: 'node', args: '^(-\\S*\\s+){0,2}\\S*(/dsh|/@deepseek-ai/dsh/lib/bin\\.js)( |$)' }, { name: 'deepseek harness' }],
     exclude: [{ name: 'node', args: 'dsh-ptc-runtime-node' }],
     longLived: [{ args: '(^| )(web|acp)( |$)' }, { args: '(^| )--profile=(web|acp)( |$)' }],
-  },
-  signatures: {
-    linux: {
-      match: [{ exe: NODE, 'argv.1': ENTRY }, { exe: NODE, 'argv.1': /^-/, 'argv.2': ENTRY }, { exe: NODE, 'argv.1': /^-/, 'argv.2': /^-/, 'argv.3': ENTRY }],
-      longLived: [{ argv: [/^web$/] }, { argv: [/^acp$/] }, { argv: [/^--profile=(web|acp)$/] }],
-    },
   },
   hosts: ['api.deepseek.com'],
   proxy,

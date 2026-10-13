@@ -22,8 +22,6 @@ import path from 'node:path'
 import { hostOf, expandHome, parseDotenv } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { envProxies, argAfter, dotenvLayer } from './_common.mjs'
-const PY = /(^|\/)python3(\.\d+)?( \(deleted\))?$/
-const BOOT = /\bhermes_bootstrap\b[\s\S]*\b(hermes_cli\.main|acp_adapter\.entry)\b/
 
 const MANAGED = { linux: '/etc/hermes' }
 const FALSEY = /^(false|0|no|off)$/i
@@ -152,15 +150,6 @@ export default {
   processes: {
     names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' }],
     longLived: [{ args: '(^| )(gateway|cron|dashboard|serve)( |$)' }],
-  },
-  signatures: {
-    linux: {
-      match: [
-        { exe: PY, argv: [/^-I$/, /^-c$/, BOOT] }, // flags anywhere: the bootstrap relaunches itself with interpreter flags first
-        { exe: PY, 'argv.1': /^-m$/, 'argv.2': /^tui_gateway\.(entry|slash_worker)$/ },
-      ],
-      longLived: [{ argv: [/^gateway$/] }, { argv: [/^cron$/] }, { argv: [/^dashboard$/] }, { argv: [/^serve$/] }],
-    },
   },
   hosts: ['openrouter.ai', 'inference-api.nousresearch.com', 'chatgpt.com', 'api.openai.com', 'api.anthropic.com', 'api.z.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com', 'api.deepseek.com', 'api.x.ai'],
   proxy,

@@ -5,10 +5,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { matchPattern, serializeSignature, reviveSignature, matchHarness } from '../../src/off/signature.mjs'
 import { createRegistry, matchPattern as registryMatchPattern } from '../../src/collector/core/registry.mjs'
+import { compileIdentity } from '../../src/off/identity.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 
 const harnesses = await loadHarnesses()
-const SIGS = Object.fromEntries(harnesses.map((d) => [d.name, d.signatures.linux]))
+const SIGS = Object.fromEntries(harnesses.map((d) => [d.name, compileIdentity({ harness: d.name, ...d.processes })])) // the compiled name lists (D51), what livenessOf snapshots
 const live = (names = Object.keys(SIGS)) => Object.fromEntries(names.map((n) => [n, { signature: JSON.parse(JSON.stringify(serializeSignature(SIGS[n]))) }]))
 const proc = (exe, argv = [exe], env = null) => ({ exe, argv, env: env == null ? () => new Map() : () => new Map(Object.entries(env)) })
 
@@ -21,7 +22,7 @@ test('the registry matches with the function that moved to src/off/signature.mjs
 
 test('a signature survives JSON: every RegExp comes back with its source and flags, and the revived one matches what the original does', () => {
   for (const d of harnesses) {
-    const sig = d.signatures.linux
+    const sig = SIGS[d.name]
     const json = JSON.parse(JSON.stringify(serializeSignature(sig)))
     assert.doesNotMatch(JSON.stringify(json), /\{\}/, `${d.name}: no RegExp was flattened to {}`)
     const back = reviveSignature(json)

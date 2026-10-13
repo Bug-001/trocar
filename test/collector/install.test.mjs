@@ -23,7 +23,6 @@ import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector
 import cc from '../../src/collector/harness/claude-code.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { spawnStandin } from '../helpers/standin.mjs'
-import { onNone } from '../helpers/signature-os.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { fakeSystem, recordingExec, fakeDaemon, ROOTS } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, ALL_HARNESSES } from '../off/fixtures/off-ctx.mjs'
@@ -119,7 +118,7 @@ test('uninstall: stops the daemon first, reports CC processes still trusting unt
   try {
     const running = [{ pid: 4242, exe: '/x/claude/versions/2.1.289', argv: ['claude'], env: new Map() }]
     const match = (f) => ({ agent: f.pid === 4242 ? 'claude-code' : null })
-    await installCollector(base(b, { harnesses: [onNone(cc)], scan: async () => running, match }))
+    await installCollector(base(b, { harnesses: [cc], scan: async () => running, match }))
     fs.writeFileSync(path.join(b.dir, 'capture-2026-10-06.ndjson'), '{}\n'); fs.mkdirSync(path.join(b.dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(b.dir, 'flows', 'x.ndjson'), '{}\n')
     fs.writeFileSync(path.join(b.dir, 'lock'), '{}'); fs.writeFileSync(path.join(b.dir, 'state.json'), '{}')
     const order = []
@@ -721,7 +720,7 @@ test('install: an autostart unit file already there is refused before anything i
 test('uninstall step 5: a Claude Code from before install is reported too — it uses a settings value added while it runs (acceptance ④, review 4 #2)', async () => {
   const b = box()
   try {
-    await installCollector(base(b, { harnesses: [onNone(cc)] }))
+    await installCollector(base(b, { harnesses: [cc] }))
     const early = [{ pid: 4343, exe: '/x/claude/versions/2.1.289', argv: ['claude'], startedAt: 1, env: new Map() }]
     const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => early })
     assert.deepEqual(r.still_trusting, [{ pid: 4343, agent: 'claude-code', until: 'restart' }])
@@ -768,7 +767,7 @@ test('uninstall writes an uninstall-note for every result but a plain restore an
     fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
     const running = [{ pid: 4242, exe: '/x/claude/versions/2.1.289', argv: ['claude'], env: new Map() }]
     const match = (f) => ({ agent: f.pid === 4242 ? 'claude-code' : null })
-    await installCollector(base(b, { harnesses: [onNone(cc)], scan: async () => running, match }))
+    await installCollector(base(b, { harnesses: [cc], scan: async () => running, match }))
     const doc = JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')); doc.theme = 'dark'; fs.writeFileSync(settingsOf(b), JSON.stringify(doc)) // edited since
     const r = await uninstallCollector({ home: b.home, env: {}, scan: async () => running, stop: stopNone })
     assert.deepEqual(r.entries.map((e) => e.result), ['reverted-not-identical'])
@@ -780,7 +779,7 @@ test('uninstall writes an uninstall-note for every result but a plain restore an
     assert.deepEqual(recentFailures(b.dir), [], 'notes are not failures')
     assert.equal(readManifest(b.dir), null)
 
-    await installCollector(base(b, { harnesses: [onNone(cc)], scan: async () => running, match }))
+    await installCollector(base(b, { harnesses: [cc], scan: async () => running, match }))
     fs.rmSync(path.join(b.dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(b.dir, 'flows'), 'not a directory')
     const r2 = await uninstallCollector({ home: b.home, env: {}, scan: async () => running, stop: stopNone })
     assert.ok(r2.notes.some((n) => /^not recorded \(.+\): pid 4242 \(claude-code\) trusts the asight CA until it restarts$/.test(n)), JSON.stringify(r2.notes))
@@ -833,7 +832,7 @@ test('install writes manifest version 2: every item has kind and undo_by_hand, a
     fs.writeFileSync(settingsOf(b), before, { mode: 0o640 })
     await installCollector(base(b))
     const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file itself: readManifest would fill in what is missing
-    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, m.liveness], [2, [], [], { 'claude-code': { signature: null, rereads: true, until: 'restart' } }], 'liveness: osName none has no signature to snapshot')
+    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, { ...m.liveness['claude-code'], signature: !!m.liveness['claude-code'].signature }], [2, [], [], { signature: true, rereads: true, until: 'restart' }], 'liveness: the name list is snapshotted on every OS, osName none too (D51)')
     for (const it of [...m.entries, ...m.files]) { assert.ok(it.kind && it.undo_by_hand && it.undo_by_hand.length > 10, JSON.stringify(it)) }
     assert.deepEqual(m.files.map((f) => f.kind), ['owned-file', 'owned-file'], 'the CA files install pushes with a role only get their kind when saved')
     const e = m.entries[0]
@@ -926,12 +925,13 @@ test('install records liveness per harness it changed anything for: its signatur
   } finally { b.done() }
 })
 
-test('liveness of a harness with no signature for this OS or no data form of afterUninstall: no signature (it matches no process), and a descriptor whose afterUninstall is a function snapshots restart', async () => {
+test('liveness of a harness with no data form of afterUninstall snapshots restart; its signature is the name list, the same on every OS (D51: no OS without one)', async () => {
   const b = box()
   try {
     const fn = { ...cc, trust: { ...cc.trust, rereadsEntry: false, afterUninstall: () => 'next-handshake' } }
-    await installCollector(base(b, { harnesses: [fn] })) // osName 'none': claude-code declares a linux signature only
-    assert.deepEqual(readManifest(b.dir).liveness, { 'claude-code': { signature: null, rereads: false, until: 'restart' } })
+    await installCollector(base(b, { harnesses: [fn] })) // osName 'none': the preset list holds there too
+    const l = readManifest(b.dir).liveness['claude-code']
+    assert.deepEqual([l.rereads, l.until, l.signature !== null], [false, 'restart', true])
   } finally { b.done() }
 })
 

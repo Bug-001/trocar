@@ -123,7 +123,7 @@ export function testOnlyExports() {
 }
 // The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
 // It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
-const TEST_ONLY_EXPORTS_CEILING = 327 // +6 (D51 T3): src/off/identity.mjs + identityView land before their callers (registry T4, agents.json T5); those tasks bring it back down
+const TEST_ONLY_EXPORTS_CEILING = 324 // D51 T3 raised it for src/off/identity.mjs + identityView before their callers; the registry (T4) took three of them in, agents.json (T5) brings the rest
 
 test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
   const n = testOnlyExports().length

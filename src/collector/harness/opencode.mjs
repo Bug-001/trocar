@@ -74,13 +74,6 @@ export default {
   name: 'opencode',
   runtime: 'node', // Bun-compiled; NODE_EXTRA_CA_CERTS semantics
   processes,
-  signatures: {
-    linux: {
-      match: [{ exe: /(^|\/)\.?opencode( \(deleted\))?$/ }],
-      exclude: [{ env: { BUN_BE_BUN: '1' } }],
-      longLived: [{ argv: [/^serve$/] }, { argv: [/^web$/] }],
-    },
-  },
   hosts: ['api.anthropic.com', 'api.openai.com', 'chatgpt.com', 'api.deepseek.com', 'api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com', 'open.bigmodel.cn', 'api.z.ai', 'openrouter.ai', 'opencode.ai', 'api.minimax.io', 'api.x.ai', 'generativelanguage.googleapis.com'],
   proxy,
   configHosts: (ctx) => providerHosts(configDocs(ctx)),

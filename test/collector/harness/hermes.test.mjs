@@ -15,7 +15,6 @@ import { installCollector } from '../../../src/collector/install.mjs'
 import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
-import { onNone } from '../../helpers/signature-os.mjs'
 
 const PY = '/home/u/.hermes/tools/python-3.14.7+20260901-linux-arm64/bin/python3.14'
 const boot = (root, entry = "from hermes_cli.main import main\nsys.exit(main())") => `import os, re, sys\nos.environ.pop('PYTHONHOME', None)\nsys.path.insert(0, '${root}')\nimport hermes_bootstrap\n${entry}\n`
@@ -184,7 +183,7 @@ test('hermes through install / uninstall: the user\'s SSL_CERT_FILE line is put 
     const before = `OPENAI_API_KEY=sk-secret\nSSL_CERT_FILE=${corp}\n`
     const env = s.put('.hermes/.env', before)
     s.put('.hermes/hermes-agent/install-stamp.json', MAIN_STAMP)
-    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [onNone(hermes)], freePort: async () => 47015, roots: { node: [], osText: '' } })
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [hermes], freePort: async () => 47015, roots: { node: [], osText: '' } })
     const dir = path.join(s.home, '.asight', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-hermes.pem')
     const now = fs.readFileSync(env, 'utf8')

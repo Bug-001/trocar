@@ -22,11 +22,6 @@ import { CODE } from '../core/codes.mjs'
 import { urlHostsDeep, dotenvLayer, isOwnPath } from './_common.mjs'
 import { NETWORK_SERVICE_ARG } from './claude-code.mjs'
 
-const ZEXE = /(^|\/)zcode( \(deleted\))?$/
-const NODE = /(^|\/)node( \(deleted\))?$/
-const CJS = /\/glm\/zcode\.cjs$/
-const AS_NODE = { ELECTRON_RUN_AS_NODE: '1' }
-const TITLE = /^zcode-cli$/
 const ZCJS = '/glm/zcode\\.cjs' // the bundle, as an `args` pattern over the arguments (D51)
 
 /** The command line of a Z-Code CLI process, both shapes it lives in: the bundle path as invoked, and the title a `-p` / `tui` CLI rewrites its WHOLE
@@ -160,18 +155,6 @@ export default {
     // on Linux (the one OS that reads another process's environment) the app's exe is the agent only as Node (ELECTRON_RUN_AS_NODE=1): without it, the GUI
     exclude: [{ name: 'zcode', env: { ELECTRON_RUN_AS_NODE: null } }, { name: ['zcode', 'zcode helper', 'node'], args: '(^| )__zcode-(plugin-host|dwf-child)( |$)' }, { name: 'zcode helper', args: '--utility-sub-type=network' }],
     longLived: [{ args: '(^| )(app|agent)-server( |$)' }],
-  },
-  signatures: {
-    linux: {
-      match: [
-        { exe: ZEXE, argv: [CJS], env: AS_NODE },
-        { exe: ZEXE, 'argv.0': TITLE, env: AS_NODE },
-        { exe: NODE, 'argv.1': CJS },
-        { exe: NODE, 'argv.0': TITLE },
-      ],
-      exclude: [{ argv: [/^__zcode-(plugin-host|dwf-child)$/] }],
-      longLived: [{ argv: [/^(app|agent)-server$/] }],
-    },
   },
   hosts: ['api.z.ai', 'open.bigmodel.cn', 'zcode.z.ai', 'api.moonshot.cn', 'api.minimaxi.com', 'api.deepseek.com', 'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com', 'api.xiaomimimo.com', 'api.openai.com', 'api.anthropic.com', 'api.x.ai', 'openrouter.ai', 'opencode.ai'],
   layers,
