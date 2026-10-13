@@ -3,7 +3,7 @@
 // the autostart unit, the control socket), decides how a confirmation is asked, and prints the plan and the receipt. Everything the world gives is a
 // `deps` entry a test replaces (0.1 §3): `parts` (the descriptors, `scan`, `match`, the arch), `exec` (the runner of OS tools: spawnSync-shaped),
 // `request` (the control socket), `helperState`, `linger` / `lingerRead`, `now`, `freePort`, `sleep`, `roots`, `user`, `getuid`, `fs`, `script`.
-// A platform without a collector is refused by loadArch's own error (D39⑥ executed 2026-10-11: the old capture's on went with it).
+// A platform without a collector is refused by loadArch's own error.
 // Exit codes (R4): 0 done · 1 not done or a problem · 2 usage error / not in a terminal without --yes (nothing touched).
 import os from 'node:os'
 import tls from 'node:tls'
@@ -140,14 +140,14 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const netenv = await probeNetenv({ home, platform, env, deps })
     const adoption = await prepareAdoption({ home, env, platform, deps, parts, netenv, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once asight is on
     const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32, Task 8(c)); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
-    // The arch's read-only preflight (4.8 §8 ⑥, W27 ⑥, W74; historically the Windows kernel line and the Smart App Control line), run BEFORE turnOn so a
+    // The arch's read-only preflight (historically the Windows kernel line and the Smart App Control line), run BEFORE turnOn so a
     // refusal stops `on` before its first write — a settled precondition with nothing to roll back. No arch carries one since the engines became the
     // proxies (D47 and its win32 twin: darwin never had one, win32's went with the kernel — wiring.mjs exports neither `prepare` nor `ensureKernel`);
     // the seam stays because a future arch's settled precondition belongs exactly here, and with no collector directory yet (nothing installed) the
     // receipt is the record (4.6 §记录).
     const archPrepare = parts.arch && typeof parts.arch.prepare === 'function' ? parts.arch.prepare : null
     const prep = archPrepare ? await archPrepare({ env, home }) : null
-    const afterConfirm = null // D44's kernel-ensure hook retired with the kernel: no arch's first write-phase step downloads anything now (the engine IS the proxy, and its first write is the CA)
+    const afterConfirm = null // the kernel-ensure hook retired with the kernel: no arch's first write-phase step downloads anything now (the engine IS the proxy, and its first write is the CA)
     // the plan of 4.8 §11: Windows draws its own (one row per entry group with the upstream, the named opt-in items, the drain note) — fed by the same
     // `on`'s facts (adoption). The Linux plan and the hook's own notes stay as they are.
     const winPlan = parts.os === 'win32'
