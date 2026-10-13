@@ -90,7 +90,6 @@ export function winWorld({ internet = { ProxyEnable: { kind: 'REG_DWORD', value:
     },
     socketPath: path.join(home, 'run', 'asight.sock'), exec: recordingExec().run,
     netFactsDeps: async () => ({ harnesses: descs, archFacts: gatherWin32Facts, deps: { helper: over.helper || helper } }),
-    netenv: async () => ({ at: '2026-10-10T00:00:00.000Z', products: [], unknown: [{ reason: 'a test: no VPN probe runs here' }] }),
     helperState: () => ({ ok: true }), linger: () => true, roots: { node: [], osText: '' }, freePort: async () => 47011,
     script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs, ...over,
   })
@@ -102,6 +101,6 @@ export function winWorld({ internet = { ProxyEnable: { kind: 'REG_DWORD', value:
   const statusOf = (ids = descs.map((d) => d.name)) => ({ daemon: { state: 'running', pid: 4121, reply: { engine: { port: 17990 }, links: [], negatives: [], agents: [] }, lock: { engine_port: 17990 } },
     link: { attached: true, helper: 'ok', ids: [] }, harnesses: ids.map((id) => ({ id, installed: true, desired: 'on', entry: { state: 'intact' }, installedAt: '2026-10-10T09:47:00.000Z', procs: [] })) })
   const facts = (over = {}) => gatherNetFacts({ platform: 'win32', home, env: { USERPROFILE: home }, harnesses: descs, status: over.status || statusOf(over.ids),
-    netenv: { result: { products: [], unknown: [] } }, archFacts: gatherWin32Facts, adopted: 'adopted' in over ? over.adopted : readAdopted(home, { fs }), deps: { helper: over.helper || helper } })
+    archFacts: gatherWin32Facts, adopted: 'adopted' in over ? over.adopted : readAdopted(home, { fs }), deps: { helper: over.helper || helper } })
   return { home, dir, envFile, put, helper, run, facts, writeEntry, groups }
 }

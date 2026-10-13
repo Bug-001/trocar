@@ -13,12 +13,9 @@ export const down = (code = 'ECONNREFUSED') => async () => { throw Object.assign
 export const reply = (o = {}) => ({ desired: 'on', actual: 'on', mismatch: false, recording: true, harnesses: { 'claude-code': { desired: 'on' }, codex: { desired: 'on' } }, helper: { pid: 4243, proto: 1, ok: true, down: null, expected_proto: 1 }, agents: [], negatives: [], relayed: { closing: 0, waiting: 0 }, ...o })
 export const asDaemon = (r) => async (q) => { if (q.path === '/status') return r; throw new Error(`unexpected ${q.method} ${q.path}`) }
 export const claudeProc = (pid, startedAt, env = new Map()) => ({ pid, ppid: 1, uid: 1000, startedAt, exe: '/home/u/.local/share/claude/versions/2.1.289', argv: ['claude'], env: () => env })
-/** The probe's answer when nothing is found / a product is: what status prints for each. */
-export const NO_VPN = { at: '2026-10-07T00:00:00.000Z', products: [], unknown: [{ reason: 'no Clash Verge directory (/h/.local/share/io.github.clash-verge-rev.clash-verge-rev) and no mihomo control socket answered' }] }
-export const CLASH = (o = {}) => ({ at: '2026-10-07T00:00:00.000Z', products: [{ product: 'clash-verge', mode: 'rule', tun: false, system_proxy: true, mixed_port: 7897, live: true, via: { 'claude-code': true, codex: true, hermes: 'unknown' }, ...o }], unknown: [] })
 
-/** `asight status argv` over the sandbox `s` (an installedHome()) → { exit, io, text }. `request` is the control socket, `procs` the process table, `netenv` the probe (a function that may throw), `lingerRead` what logind says (default: linger is on, so there is no line about it), `fs` replaces the file system the command reads. */
-export async function runStatus(s, argv = [], { request = down(), procs = async () => [], netenv = async () => NO_VPN, lingerRead = () => ({ state: true }), fs: fsx, io = fakeIo(), deps = {} } = {}) {
-  const exit = await runStatusCli(argv, { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { request, socketPath: SOCK, procs, netenv, lingerRead, ...(fsx ? { fs: fsx } : {}), user: 'alice', exec: s.sys.exec.run, ...deps } })
+/** `asight status argv` over the sandbox `s` (an installedHome()) → { exit, io, text }. `request` is the control socket, `procs` the process table, `lingerRead` what logind says (default: linger is on, so there is no line about it), `fs` replaces the file system the command reads. */
+export async function runStatus(s, argv = [], { request = down(), procs = async () => [], lingerRead = () => ({ state: true }), fs: fsx, io = fakeIo(), deps = {} } = {}) {
+  const exit = await runStatusCli(argv, { io, home: s.home, platform: 'linux', env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run') }, deps: { request, socketPath: SOCK, procs, lingerRead, ...(fsx ? { fs: fsx } : {}), user: 'alice', exec: s.sys.exec.run, ...deps } })
   return { exit, io, text: io.stdoutText() }
 }

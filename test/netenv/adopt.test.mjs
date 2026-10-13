@@ -9,7 +9,7 @@ import path from 'node:path'
 import { userUnit } from '../../src/collector/arch/linux/unit.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
-import { readProxySetting, detectDrift, recordDrift, driftCheck, newDriftState, sameAdoption, driftRoutingOf } from '../../src/netenv/adopt.mjs'
+import { readProxySetting, adoptedRecord, detectDrift, recordDrift, driftCheck, newDriftState, sameAdoption, driftRoutingOf } from '../../src/netenv/adopt.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
@@ -51,6 +51,7 @@ test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and
   const file = fs.readFileSync(netenvOf(s), 'utf8')
   assert.ok(!/dave|hunter2|proxy\.corp:8080"/.test(file.replace('http://***@proxy.corp:8080', '')), 'netenv.json: no original value')
   assert.equal(readJson(netenvOf(s)).adopted['claude-code'].sha256, settingSha(USER_PROXY))
+  assert.deepEqual(Object.keys(readJson(netenvOf(s))).sort(), ['adopted', 'schema'], 'D49: `on` leaves nothing but the schema and the adoption record in netenv.json (no vpn / topology key it did not write)')
   assert.ok(doc.created.includes(netenvOf(s)), 'the file `on` wrote is in the receipt (V3)')
   assert.equal(fs.statSync(netenvOf(s)).mode & 0o777, 0o600)
 })
@@ -303,18 +304,11 @@ test('sameAdoption: the time does not make a record another one', () => {
   assert.equal(sameAdoption(null, a), false)
 })
 
-test('netenv-changed: the VPN software differs from what `on` saw (turned TUN on, gone, upgraded, newly installed) — the product, its version, port and TUN — and a probe that was not run or could not be read is no change', () => {
-  const vpn = { product: 'clash-verge', version: '2.5.7', port: 7897, tun: false }
-  const adopted = { codex: { at: 'T', routing: 'driver', chain: 'c', source: [], sha256: null, file_sha256: null, proxy: null, vpn } }
+test('D49: a record `on` wrote before (holding a `vpn` key) is the same adoption as one without it, and no drift comes of it: only the setting is compared', () => {
   const setting = { value: null, scheme: null, host: null, port: null, source: [], sha256: null, changedAt: null }
-  const drift = (v) => detectDrift({ adopted, h: 'codex', setting, routing: 'driver', vpn: v })
-  assert.deepEqual(drift({ ...vpn }), [], 'the same')
-  assert.deepEqual(drift({ ...vpn, mode: 'global', pid: 99 }), [], 'its mode and pid are not what asight\'s route depends on')
-  assert.deepEqual(drift({ ...vpn, tun: true }), [{ code: 'netenv-changed', from: 'clash-verge 2.5.7 :7897', to: 'clash-verge 2.5.7 :7897 TUN', captured: true }])
-  assert.deepEqual(drift({ ...vpn, version: '2.6.0' }).map((d) => d.code), ['netenv-changed'])
-  assert.deepEqual(drift(null).map((d) => [d.code, d.to]), [['netenv-changed', 'none']], 'it quit')
-  assert.deepEqual(drift(undefined), [], 'not probed: nothing to compare')
-  assert.deepEqual(drift({ ...vpn, tun: null, unknown: { reason: 'controller-unreadable' } }), [], 'a product whose controller could not be read is not a change: status says it is unknown')
-  const none = { codex: { ...adopted.codex, vpn: null } }
-  assert.deepEqual(detectDrift({ adopted: none, h: 'codex', setting, routing: 'driver', vpn: { ...vpn } }).map((d) => [d.code, d.from]), [['netenv-changed', 'none']], 'newly installed')
+  const old = { at: 'T', routing: 'driver', chain: '', source: [], sha256: null, file_sha256: null, file_paths: null, proxy: null, vpn: { product: 'clash-verge', version: '2.5.7', port: 7897, tun: true } }
+  assert.deepEqual(detectDrift({ adopted: { codex: old }, h: 'codex', setting, routing: 'driver' }), [])
+  const facts = { routing: 'driver', harnesses: { codex: { setting } }, vpn: { product: 'mihomo', version: '1', port: 7890, tun: false } }
+  assert.equal(adoptedRecord({ facts, topology: null, h: 'codex', prev: old, paths: null }), old, 'nothing to rewrite')
+  assert.equal('vpn' in adoptedRecord({ facts, topology: null, h: 'codex', prev: null }), false, 'and a new record does not hold one')
 })

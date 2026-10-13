@@ -1,25 +1,20 @@
-// no-vpn-writes.test.mjs — 4.7 N15 (D43): asight has no write path into a VPN / proxy product's data directory. Two scans that can see their target, because a count of
+// no-vpn-writes.test.mjs — 4.7 N15 (invariant 6, D43/D49): asight has no write path into a VPN / proxy product's data directory. Two scans that can see their target, because a count of
 // write-function names is never zero (asight writes its own files) and so can never be the test:
-//   (a) static: a module that names a product's data directory, and anything under src/netenv/, calls a write function only inside a helper the allowlist names; the Verge adapter exports no write
-//       function; no module passes `own: true` to a controller client (it has no writable mode);
-//   (b) runtime: detect and the adapter's reads, run over a recording fs in a sandbox, put no write under any product directory.
+//   (a) static: a module that names a product's data directory, and anything under src/netenv/, calls a write function only inside a helper the allowlist names;
+//   (b) runtime: a recording fs puts a write under a product directory in the log, and a write under asight's own directory is not one. Since D49 nothing of asight reads a product's directory
+//       (the probe, the product table, the Verge adapter and the controller client are gone), so there is no read path left to run over the recorder: the recorder is held by planted counter-examples.
 // The allowlist is by the NAME of one helper per legitimate writer (4.7 N15): `writeNetenv` writes ~/.asight/netenv.json (it is the CLI's, src/netenv/index.mjs). The helpers of arch/win32 that write
 // asight's own directory are registered by name in OWN_WRITERS ONLY if that module names a product directory or sits in src/netenv/: this scan watches nothing else.
-// Those writers are held by the lab's W53 (4.8). The Verge adapter has no write site (it only reads), so it is not on the list.
 // The OLD capture is exempt as a whole (OLD_CAPTURE: src/capture/): the Clash steer in src/capture/desktop-steer.mjs writes Verge's Script.js and merge file by design until those files
 // are swept (4.7 N15). The exemption is a pinned list, not a switch.
-// Two planted counter-examples turn each scan red.
+// Planted counter-examples turn each scan red.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { writesOf, balanced, callArgs, PRODUCT_DIR_NAMES, WRITE_FNS } from './fixtures/write-scan.mjs'
-import { startWorld, snapshot } from './fixtures/verge-world.mjs'
+import { writesOf, balanced, PRODUCT_DIR_NAMES, WRITE_FNS } from './fixtures/write-scan.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { detect } from '../../src/netenv/probe.mjs'
-import { vergeProcs } from './fixtures/win-facts.mjs'
-import { PRODUCTS_WIN32 } from '../../src/netenv/products-win32.mjs'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const rel = (f) => path.relative(ROOT, f).split(path.sep).join('/')
@@ -149,26 +144,6 @@ test('N15 (a) planted counter-example: a write through any receiver or an alias 
   assert.deepEqual(at("import { writeFileSync as wf } from 'node:fs'\nexport function writeNetenv(p) { wf(p, 'x') }\n"), [], 'and the allowlisted helper may write through an alias too')
 })
 
-// The controller client has no writable mode (D47: nothing of asight owns a core), so no module may ask for one. Other `own: true` in the tree (the tracker's proxy settings) are another thing.
-const writesToCore = (src) => callArgs(src, ['createController', 'makeClient']).some((a) => /\bown\s*:\s*true\b/.test(a))
-test('N15 (a) no module passes `own: true` to `createController` (a client that may write to a core)', () => {
-  const users = SOURCES.filter((f) => writesToCore(fs.readFileSync(f, 'utf8'))).map(rel)
-  assert.deepEqual(users, [])
-  assert.ok(writesToCore('const c = createController({ endpoint, secret, own: true })'), 'and the check can see one')
-  assert.ok(writesToCore('makeClient({\n  endpoint,\n  own:true,\n})'))
-  assert.ok(!writesToCore('createController({ endpoint, own: false }); const p = { own: true }'), 'another `own: true` in the same file is another thing')
-})
-
-// The Verge adapter exports no write function (4.7 N15): not from the module, and not on the adapter object. A write verb in a name is the tell (the adapter's surface is also pinned to its reads in verge-adapter.test.mjs).
-const WRITE_VERB = /^(write|strip|put|push|remove|install|apply|refresh|reset|insert|delete|patch|post|save|update)/i
-test('N15 (a) the Verge adapter exports no write function (module and adapter object)', async (t) => {
-  const mod = await import('../../src/netenv/adapters/clash-verge-rev.mjs')
-  const w = await startWorld(t)
-  assert.deepEqual([...Object.keys(mod), ...Object.keys(w.adapter)].filter((k) => WRITE_VERB.test(k)), [])
-  assert.ok(Object.keys(w.adapter).length >= 5, 'and the check looks at something: the adapter\'s reads')
-  assert.ok(['writeConfig', 'saveChoice', 'applyChange', 'resetAll'].every((n) => WRITE_VERB.test(n)) && !WRITE_VERB.test('readFields'), 'and the pattern tells a write verb from a read')
-})
-
 // ---- (b) runtime: a recording fs ---------------------------------------------------------------------------------------------------------------------------
 
 const TWO_PATHS = new Set(['rename', 'copyFile', 'cp', 'link', 'symlink']) // a write that has a source and a target: both are touched
@@ -202,24 +177,6 @@ export const writesUnder = (log, dirs) => log.filter((e) => e.paths.some((p) => 
 
 const PRODUCT_NAMES = ['io.github.clash-verge-rev.clash-verge-rev', 'mihomo-party', 'FlClash', 'GUI.for.SingBox', 'v2rayN']
 
-test('N15 (b) detect and every read of the Verge adapter run over a recording fs: no write lands under a product directory, and Verge\'s data directory is byte for byte as it was', async (t) => {
-  const log = []
-  const w = await startWorld(t, { adapter: { fs: recordingFs(fs, log) } })
-  const roaming = path.dirname(w.home)
-  const dirs = PRODUCT_NAMES.map((n) => path.join(roaming, n))
-  for (const d of dirs.slice(1)) { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'config.yaml'), 'secret: s3cr3t\n') }
-  const before = snapshot(roaming)
-  log.length = 0 // what the fixture wrote to build the world is the test's, not asight's
-  const procs = vergeProcs()
-  const facts = { procs: { ok: true, rows: procs }, listeners: { ok: true, rows: [{ pid: 4101, port: 7897 }] }, systemProxy: { ok: true, enable: true, server: '127.0.0.1:7897', autoConfigUrl: '' }, interfaces: { ok: true, rows: [], defaultIface: 'Ethernet' }, focusPorts: [7897], verge: await w.adapter.facts() }
-  await w.adapter.readFields()
-  const r = detect(facts)
-  assert.equal(r.products.length, 1, 'the run did something: Verge was read')
-  assert.deepEqual(writesUnder(log, dirs), [])
-  assert.deepEqual(snapshot(roaming), before)
-  assert.ok(PRODUCTS_WIN32.some((p) => p.dataDir), 'the table still names a data directory to protect')
-})
-
 test('N15 (b) the recording fs sees every way to write: sync, callback and promises forms, an `open` with a write flag (a string or a number), a write on its fd, a stream; and not a read', async () => {
   const dir = tmpDir('asight-rec-')
   const log = []
@@ -251,20 +208,21 @@ test('N15 (b) the recording fs sees every way to write: sync, callback and promi
   assert.equal(writesUnder(log, [dir]).length, 1, 'the finding\'s probe (promises.writeFile) lands in the log and under the directory')
 })
 
-test('N15 (b) planted counter-example: an `on` that writes a file under a product directory is red, a write under asight\'s own directory is not', async (t) => {
+test('N15 (b) recorder counter-example (hand-written write, `on` is not run): a write under a product directory is caught, a write under asight\'s own directory is not', () => {
+  const sandbox = tmpDir('asight-nvw-')
+  const roaming = path.join(sandbox, 'AppData', 'Roaming')
   const log = []
-  const w = await startWorld(t, { adapter: { fs: recordingFs(fs, log) } })
-  const roaming = path.dirname(w.home)
   const dirs = PRODUCT_NAMES.map((n) => path.join(roaming, n))
   const rfs = recordingFs(fs, log)
-  log.length = 0
-  fs.mkdirSync(path.join(w.sandbox, '.asight'))
-  rfs.writeFileSync(path.join(w.sandbox, '.asight', 'netenv.json'), '{}') // asight's own: fine
+  fs.mkdirSync(path.join(roaming, 'v2rayN', 'guiConfigs'), { recursive: true })
+  fs.writeFileSync(path.join(roaming, 'v2rayN', 'guiConfigs', 'x.json'), '{}') // the world's own, outside the recorder
+  fs.mkdirSync(path.join(sandbox, '.asight'))
+  rfs.writeFileSync(path.join(sandbox, '.asight', 'netenv.json'), '{}') // asight's own: fine
   assert.deepEqual(writesUnder(log, dirs), [])
-  const wrongOn = () => { rfs.mkdirSync(path.join(roaming, 'v2rayN', 'guiConfigs'), { recursive: true }); rfs.writeFileSync(path.join(roaming, 'v2rayN', 'guiConfigs', 'x.json'), '{}') }
+  const wrongOn = () => { rfs.mkdirSync(path.join(roaming, 'v2rayN', 'guiConfigs', 'sub'), { recursive: true }); rfs.writeFileSync(path.join(roaming, 'v2rayN', 'guiConfigs', 'y.json'), '{}') }
   wrongOn()
   assert.deepEqual(writesUnder(log, dirs).map((e) => e.fn), ['mkdirSync', 'writeFileSync'])
   log.length = 0
-  rfs.renameSync(path.join(roaming, 'v2rayN', 'guiConfigs', 'x.json'), path.join(w.sandbox, 'moved.json'))
+  rfs.renameSync(path.join(roaming, 'v2rayN', 'guiConfigs', 'x.json'), path.join(sandbox, 'moved.json'))
   assert.equal(writesUnder(log, dirs).length, 1, 'a rename OUT of a product directory is a write in it too')
 })

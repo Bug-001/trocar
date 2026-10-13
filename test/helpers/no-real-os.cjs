@@ -25,8 +25,7 @@ const cp = require('node:child_process')
 const { syncBuiltinESMExports } = require('node:module')
 
 process.env.ASIGHT_TEST_SANDBOX = '1'
-// the VPN software's control socket, pinned to a place nothing listens (0.1 §3 「Clash 用 ASIGHT_MIHOMO_SOCK」): a command a test starts as a child (`asight status`, `asight doctor`) looks at the VPN software
-// (1.6 §6) and, without the pin, would ask the developer's own mihomo. A test that wants a core sets the variable itself; src/netenv/clash.mjs and src/capture/desktop-steer.mjs read it before anything else.
+// the old capture's mihomo control socket, pinned to a place nothing listens (0.1 §3 「Clash 用 ASIGHT_MIHOMO_SOCK」): src/capture/desktop-steer.mjs reads it before anything else, and a test that wants a core sets the variable itself.
 process.env.ASIGHT_MIHOMO_SOCK = path.join(fs.realpathSync(os.tmpdir()), 'asight-test-no-mihomo.sock')
 
 const REAL_TOOLS = new Set(['launchctl', 'systemctl', 'security', 'certutil', 'loginctl'])

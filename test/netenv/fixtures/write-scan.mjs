@@ -155,8 +155,8 @@ export function balanced(src) {
   return d === 0
 }
 
-/** The product data directories a module may name (4.7 N15): the table's `dataDir`, and the directory names. */
-export const PRODUCT_DIR_NAMES = /io\.github\.clash-verge-rev|mihomo-party|FlClash|GUI\.for\.SingBox|v2rayN|\bdataDir\b/
+/** The product data directories a module may name (4.7 N15): the directory names. */
+export const PRODUCT_DIR_NAMES = /io\.github\.clash-verge-rev|mihomo-party|FlClash|GUI\.for\.SingBox|v2rayN/
 
 /** The argument text of every call of one of `names` in `src` (`createController({ … })`): the text between the parentheses, comments blanked. */
 export function callArgs(src, names) {

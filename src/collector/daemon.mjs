@@ -498,7 +498,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       // the win32 twin of this arm is the win line's follow-up (4.9 §6.4's note), so it is scoped to darwin here.
       if (A.os === 'darwin' && bag && typeof bag.replan === 'function') { try { await bag.replan({ reload: true }) } catch (e) { failure('netenv', e) } }
       // §9.5: the files each harness reads its proxy from, against what `on` found: a change is one `netenv-change` (and one failure when it leaves a harness that is on uncaptured). Read-only: only the operator's
-      // `on` writes an agent's setting (D30). The VPN is not probed here (a probe of the controller every 5 s is not a check); `status` and `doctor` compare it live.
+      // `on` writes an agent's setting (D30). No VPN / proxy software is read here or anywhere (D49): `status` and `doctor` compare the same files live.
       driftCheck({ home: netHome, env, harnesses: harnessList, desired: (h) => (sw.state().harnesses[h] || {}).desired ?? null, appendEvent: (rec) => failure.write(rec), state: drift })
       // 4.8 §2.4「入口还有没有效」+ W68, the daemon's half of the same check: nobody has to run `status` for a displaced shim or an agent started around
       // the entry to reach flows/ (the 5 s check's own rule). The same check status folds into its rows, through the same arch hook — the manifest as the

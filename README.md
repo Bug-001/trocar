@@ -164,6 +164,10 @@ before it changes a file of yours it keeps a copy in `~/.asight/backup/`. `on` n
 capture that is running: the processes that need a restart are listed. Name an agent (`asight off claude-code`)
 to switch only that one.
 
+`asight status` and `asight doctor` show where asight forwards each agent's connections — the upstream, and where
+it comes from: the agent's own proxy, the system proxy, or a direct connection. They no longer recognise or name your
+VPN product. asight only reads your proxy settings and never writes anything into a VPN.
+
 The collector has descriptors for seven harnesses (D37) — Claude Code, Codex (its WebSocket transport is recorded
 call by call), OpenCode, DeepSeek `dsh`, Kimi Code, Hermes and Z-Code — on all three platforms. Which form of which one
 has been shown to capture verbatim on which platform is the matrix in

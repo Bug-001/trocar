@@ -204,7 +204,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       }
       if (!m) rm(path.join(w.dir, 'ca'))
       const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
-      // `netenv.json` is what `status`, `doctor` and `on` last read of the VPN software, for the board: asight's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)
+      // `netenv.json` is the adopted records and the topology, for the board: asight's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)
       // `logs/` is the daemon's own console (D46): asight's own file, removed with the rest of it — by its manifest entries (role 'daemon-log'), so the receipt names the files; the directory follows when empty (or whole, when there is no manifest to name them)
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'daemon-log') : []) rm(f.path)
       if (!m || m.unsupported) rm(path.join(w.dir, 'logs'))

@@ -135,8 +135,8 @@ test('receipt schema: a receipt that went through JSON.stringify and back still 
 test('topology schema: the closed sets are the ones of 1.6 §9.4, proxy mode and the old capture included, so the Windows branch adds none', () => {
   assert.deepEqual([...ROUTING], ['driver', 'proxy', 'legacy', 'none', 'unknown'])
   assert.deepEqual([...TOPOLOGY_KINDS], ['agent', 'proxy', 'asight-engine', 'asight-forwarder', 'legacy-mitm', 'upstream', 'egress', 'unknown'])
-  assert.deepEqual([...TOPOLOGY_VIA], ['direct', 'proxy-http', 'proxy-socks', 'proxy-https', 'system-proxy', 'tun', 'ebpf', 'forward', 'egress', 'unknown'])
-  assert.deepEqual([...UNKNOWN_REASONS], ['denied', 'timeout', 'absent', 'unparseable', 'owner-unreadable', 'pac', 'controller-unreadable', 'kernel-filter-invisible', 'env-unreadable'])
+  assert.deepEqual([...TOPOLOGY_VIA], ['direct', 'proxy-http', 'proxy-socks', 'proxy-https', 'system-proxy', 'ebpf', 'forward', 'egress', 'unknown'])
+  assert.deepEqual([...UNKNOWN_REASONS], ['denied', 'timeout', 'absent', 'unparseable', 'owner-unreadable', 'pac', 'kernel-filter-invisible', 'env-unreadable'])
   assert.deepEqual([...FINDING_CLASSES], ['failure', 'expected', 'hint'])
 })
 

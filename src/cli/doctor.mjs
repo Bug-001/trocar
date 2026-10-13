@@ -1,13 +1,13 @@
 // doctor.mjs — `asight doctor [harness…] [--source F|DIR] [--json]` (RFC 1.6 §2, R4, R11; 4.1 §凭据处置): the self-check an operator runs when something looks wrong. It answers the four questions
 // of the 「测试」(is it capturing · is what it captured right · no credential outside the files · no machine-wide TLS weakening) and ④b (every file that holds captured bytes is owner-only), and it
-// folds in what `asight verify` was (the old CA is in the user trust store only). Then it prints, read-only, what `status` knows (the daemon, every harness, the VPN software) and what the last
+// folds in what `asight verify` was (the old CA is in the user trust store only). Then it prints, read-only, what `status` knows (the daemon, every harness, the topology) and what the last
 // install noted, the standalone undo copy, and the backups no manifest names. It never changes a thing of the user's and starts nothing: its OS queries are read-only (`ps`, the trust-store
-// lookup, the process table); the files it may write are `status`'s ~/.asight/netenv.json and, when a sealed capture file could only be read in part, one line in ~/.asight/raw/journal.jsonl.
+// lookup, the process table); the files it may write are `status`'s ~/.asight/netenv.json (the topology) and, when a sealed capture file could only be read in part, one line in ~/.asight/raw/journal.jsonl.
 //
 // Exit (R4): 1 — a capture file others can read (「采集文件可被他人读取」: the bytes hold live API keys) · 3 — it could not judge: no records examined, no file's permissions examined, a file whose permissions
 // could not be read, a capture file only partly read — never 0 (reading nothing and answering 「过」 is what this command once did, 0.1 §3) · 0 — the rest. The status block is a report and
 // does not change the exit (review B-7). Everything the world gives is a `deps` entry a test replaces (0.1 §3): `has(bin)` (dependency probe), `verify()` (the trust-store check), and the
-// ones `runStatusCli` takes (`request`, `procs`, `netenv`, `lingerRead`, …). With none, `has` looks at PATH, `verify` asks the user trust store of THIS home, everything else is real.
+// ones `runStatusCli` takes (`request`, `procs`, `lingerRead`, …). With none, `has` looks at PATH, `verify` asks the user trust store of THIS home, everything else is real.
 import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'

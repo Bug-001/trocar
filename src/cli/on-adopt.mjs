@@ -15,7 +15,7 @@ const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e }
 /** The facts and chains `on` needs, for every harness the platform has descriptors for → `{ facts, chains, descriptors, adopted }`; `null` when this platform has no network facts to read (then `on` adopts nothing); or `{ error }`.
  *  `deps.netFactsDeps()` may also answer `deps` — the platform reader's own injections (a test's fake helper): they ride into `gatherNetFacts` untouched. The production one does not (the Windows
  *  facts start the resident helper of their own); it is the seam a sandbox reaches the real `gatherWin32Facts` through, the same seam `status`'s direct calls have. */
-export async function prepareAdoption({ home, env, platform, deps, parts, netenv, now = Date.now }) {
+export async function prepareAdoption({ home, env, platform, deps, parts, now = Date.now }) {
   try {
     const fs = deps.fs || nodeFs
     const nd = deps.netFactsDeps ? await deps.netFactsDeps() : { harnesses: parts && parts.harnesses, archFacts: parts && parts.arch && parts.arch.netFacts }
@@ -23,7 +23,7 @@ export async function prepareAdoption({ home, env, platform, deps, parts, netenv
     const status = { daemon: { state: 'unknown', pid: null, reply: null, lock: null }, link: { attached: null, helper: 'ok' }, matched: [],
       harnesses: nd.harnesses.map((d) => ({ id: d.name, installed: true, desired: 'on', entry: { state: 'intact' }, installedAt: null, procs: [] })) }
     const adopted = readAdopted(home, { fs })
-    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status, netenv, archFacts: nd.archFacts, adopted, now, fs, deps: { exec: deps.exec || null, ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...((nd && nd.deps) || {}) } })
+    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status, archFacts: nd.archFacts, adopted, now, fs, deps: { exec: deps.exec || null, ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...((nd && nd.deps) || {}) } })
     if (facts.routing === 'unknown') return null
     return { facts, descriptors: nd.harnesses, adopted: adopted || {}, chains: (ids) => chainsAfterOn(facts, ids) }
   } catch (e) { rethrowSandbox(e); return { error: `the network settings could not be read (${errText(e)})` } }
@@ -46,7 +46,7 @@ export function editedFields({ adoption, routing, targets, home, env, fs = nodeF
  * After a successful `on`: hands each harness's setting to the routing that owns the field (it writes the field and starts its kernel), then records `adopted.<h>` — once, and only what changed (a second `on`
  * writes nothing, R9). → { adopted: { <h>: record }, wrote: path | null, notes: [], failed: [harness] }.
  */
-export async function recordAdoption({ adoption, routing, targets, home, env, now = Date.now, netenv, fs = nodeFs }) {
+export async function recordAdoption({ adoption, routing, targets, home, env, now = Date.now, fs = nodeFs }) {
   const out = { adopted: {}, wrote: null, notes: [], failed: [] }
   const chains = adoption.chains(targets), changed = {}
   for (const h of targets) {
@@ -65,8 +65,7 @@ export async function recordAdoption({ adoption, routing, targets, home, env, no
     if (rec !== prev) changed[h] = rec
   }
   if (Object.keys(changed).length) {
-    const base = netenv && netenv.result ? netenv.result : { at: new Date(typeof now === 'function' ? now() : now).toISOString(), products: [], unknown: [{ reason: (netenv && netenv.error) || 'not probed' }] }
-    try { writeNetenv(home, { ...base, adopted: { ...adoption.adopted, ...changed } }, { fs }); out.wrote = netenvFile(home) } catch (e) { rethrowSandbox(e); out.notes.push(`${netenvFile(home)} could not be written (${errText(e)}): what asight found of ${Object.keys(changed).join(', ')} is not recorded, so a later change of it cannot be told`) }
+    try { writeNetenv(home, { adopted: { ...adoption.adopted, ...changed } }, { fs }); out.wrote = netenvFile(home) } catch (e) { rethrowSandbox(e); out.notes.push(`${netenvFile(home)} could not be written (${errText(e)}): what asight found of ${Object.keys(changed).join(', ')} is not recorded, so a later change of it cannot be told`) }
   }
   return out
 }
