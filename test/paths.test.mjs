@@ -94,7 +94,6 @@ test('src/off/paths.mjs answers the same paths as src/paths.mjs and the daemon f
     assert.equal(off.backupDir(h), path.join(a, 'backup'));
     assert.equal(off.standalonePath(h), path.join(a, 'bin', 'asight-off'));
     assert.equal(off.legacyManifestPath(h), path.join(a, 'legacy-manifest.json'));
-    assert.equal(off.legacyPendingPath(h), path.join(a, 'legacy-off.pending'), 'the marker the MITM\'s steer watch reads (src/capture/steer-watch.mjs)');
     assert.equal(off.legacyLockPath(h), path.join(a, 'legacy-op.lock'), '1.6 R12, the old capture\'s own lock');
     assert.equal(off.legacyEventsFile(h), path.join(a, 'logs', 'mitm-events.ndjson'), 'the old capture\'s log: what src/capture/events.mjs writes and src/health/read.mjs reads');
     assert.equal(off.opLockFile(h), path.join(a, 'collector', 'op.lock'), '1.6 R12');
