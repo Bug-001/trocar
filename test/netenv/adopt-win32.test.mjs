@@ -88,7 +88,7 @@ test('V47(b) + W37: the user changes the entry\'s key — the real facts give pr
   assert.equal(plan.exit, 2)
   assert.match(plan.stdout(), /你改过的代理设置: codex 的 .*\.env HTTPS_PROXY 现在是 http:\/\/proxy\.new:3128\(asight 上次接上时是 http:\/\/proxy\.old:3128\)/, 'the plan names the real field and both values')
   assert.deepEqual(snap(w.home), before, 'nothing was written')
-  await assert.rejects(() => win32Routing({ harnesses: descs, home: w.home, env: {} }).adopt('codex'), /the proxy entry of codex\.env is in the ledger but the field does not hold the kernel's address/, 'the verifier\'s failure half: the on that wrote it did not finish (V47)')
+  await assert.rejects(() => win32Routing({ harnesses: descs, home: w.home, env: {} }).adopt('codex'), /the proxy entry of codex\.env is in the ledger but the field does not hold the engine door's address/, 'the verifier\'s failure half: the on that wrote it did not finish (V47)')
   const found = diagnose({ facts: f, topology: { codex: t }, harnesses: null, user: 'alice' })
   const pc = found.find((x) => x.code === 'proxy-changed')
   assert.ok(pc, 'doctor\'s finding for the drift')

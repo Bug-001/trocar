@@ -90,7 +90,6 @@ const KERNEL_URL = 'http://claude-code.settings:s3-listener-token@127.0.0.1:1799
 /** The collector dir of an installed proxy mode: the kernel's lock, the ports of ingress.json, and the manifest's record of the entry that was written over the user's own proxy. */
 function collectorOf(home, { url = KERNEL_URL, prior = 'http://proxy.corp:8080', groupPorts = { 'claude-code.settings': 17991 } } = {}) {
   const dir = path.join(home, '.asight', 'collector')
-  put(path.join(dir, 'forwarder.lock'), `${JSON.stringify({ pid: 6120, startedAt: 1760000000000, endpoint: 'tcp:127.0.0.1:19001', config: path.join(dir, 'forwarder', 'config.json') })}\n`)
   put(path.join(dir, 'ingress.json'), `${JSON.stringify({ enginePort: 17990, groupPorts, ingressToken: 'a'.repeat(32), listenerToken: 's3-listener-token' })}\n`)
   const settings = path.join(home, '.claude', 'settings.json')
   if (prior != null) put(settings, `${JSON.stringify({ env: { HTTPS_PROXY: prior } }, null, 2)}\n`)
@@ -118,7 +117,7 @@ test('gatherNetFacts on win32: the entry edge comes from the manifest\'s record 
   assert.ok(!JSON.stringify(f).includes('s3-listener-token'.slice(0, 8)), 'the listener token of the kernel\'s address is not in the facts')
   assert.equal(forms[2].entry, null, 'the desktop\'s policy entry is an opt-in nobody named')
   assert.equal(forms[2].optIn.state, 'needed')
-  assert.deepEqual(f.forwarder, { pid: 6120, up: true, forms: { 'claude-code.cli': { h: 'claude-code', port: 17991, state: 'forward-only', upstream: 'http://proxy.corp:8080', source: 'agent', clients: [] }, 'claude-code.vscode': { h: 'claude-code', port: 17991, state: 'forward-only', upstream: 'http://proxy.corp:8080', source: 'agent', clients: [] } } }, 'the daemon read back nothing on (links empty): said, and the plan says the group is wired')
+  assert.deepEqual(f.forwarder, { pid: 4121, up: true, forms: { 'claude-code.cli': { h: 'claude-code', port: 17991, state: 'forward-only', upstream: 'http://proxy.corp:8080', source: 'agent', clients: [] }, 'claude-code.vscode': { h: 'claude-code', port: 17991, state: 'forward-only', upstream: 'http://proxy.corp:8080', source: 'agent', clients: [] } } }, 'the daemon read back nothing on (links empty): said, and the plan says the group is wired; the local proxy hop is the engine\'s door itself (pid = the daemon\'s)')
   // and the topology built from those facts carries the entry edge (W29 row c\'s shape, this time from the real facts path)
   const t = buildTopology(f)['claude-code']
   const edge = t.edges.find((e) => e.entry)
@@ -151,9 +150,9 @@ test('the post-off drain window (row k), through the REAL facts path: a real und
   assert.equal(f.forwarder.forms['claude-code.cli'].state, 'forward-only', 'and the kernel only forwards for it')
   const t = buildTopology(f)['claude-code']
   assert.deepEqual([t.on_path, t.captured, t.reason], [true, false, 'desired-off'], 'the row k verdict, from the facts a real off produces (before the 2026-10-10 fix the entry check fired first and this said not-routed)')
-  assert.ok(t.notes.includes('还有 1 个 agent 连着 asight 的内核,重启它们之后 asight 就完全退出'), t.notes.join(' / '))
+  assert.ok(t.notes.includes('还有 1 个 agent 连着 asight 的门,重启它们之后 asight 就完全退出'), t.notes.join(' / '))
   const lines = renderCompact(t)
-  assert.ok(lines.some((l) => l.includes('claude 4121 → asight 自带内核 :17991(只转发) →')), lines.join(' / '))
+  assert.ok(lines.some((l) => l.includes('claude 4121 → asight 本地代理 :17991(只转发) →')), lines.join(' / '))
   assert.ok(!lines.some((l) => l.includes('asight 写的') || l.includes('你点名的')), 'the hop\'s edge names no entry: the file no longer points at the kernel (the agent holds the address it read at startup)')
   assert.ok(lines.some((l) => l.includes('proxy.corp:8080')), 'the kernel forwards to the user\'s own proxy, the upstream re-planned for the drain')
   assert.deepEqual(validateTopology({ 'claude-code': t }), [], 'and the object is one the schema accepts (V43)')
@@ -247,13 +246,10 @@ test('the host set of an opted-in Kimi VS Code extension (4.8 §3.5, read-only):
 test('W69 the operator\'s extra_hosts reach the set through the REAL facts path (state.json\'s per-harness list), and the daemon\'s reply carries the set it applied: `status` compares the two — and the read changes nothing (the settings file and the kernel\'s config are byte for byte what they were)', async () => {
   const home = tmpDir('asight-w69-extra-')
   put(path.join(home, '.asight', 'collector', 'ingress.json'), `${JSON.stringify({ enginePort: 17990, groupPorts: { 'kimi-code.vscode': 17995 }, ingressToken: 'a'.repeat(32), listenerToken: 's3-listener-token' })}\n`)
-  const kernelConfig = path.join(home, '.asight', 'collector', 'forwarder', 'config.json')
-  put(kernelConfig, '{"rules":[]}\n') // the kernel's own config, as forwarder.lock names it
-  put(path.join(home, '.asight', 'collector', 'forwarder.lock'), `${JSON.stringify({ pid: 6120, startedAt: 1760000000000, endpoint: 'tcp:127.0.0.1:19001', config: kernelConfig })}\n`)
   put(path.join(home, '.asight', 'collector', 'state.json'), `${JSON.stringify({ version: 2, updated_at: '2026-10-09T09:00:00.000Z', harnesses: { 'kimi-code': { desired: 'on', extra_hosts: ['relay.extra.example'], updated_at: '2026-10-09T09:00:00.000Z' } } })}\n`)
   const toml = path.join(home, '.kimi-code', 'config.toml')
   put(toml, 'base_url = "https://relay.corp.example/api"\n')
-  const before = { toml: fs.readFileSync(toml), config: fs.readFileSync(kernelConfig) }
+  const before = { toml: fs.readFileSync(toml) }
   const helper = helperOf({ procs: [KERNEL_ROW] })
   const of = (f) => f.harnesses['kimi-code'].forms.find((x) => x.id === 'kimi-code.vscode')
   const bare = await gather(home, { helper, ids: ['kimi-code'] })
@@ -265,8 +261,7 @@ test('W69 the operator\'s extra_hosts reach the set through the REAL facts path 
   // the daemon reports the set it applied — one the fresh read does not give back (the user added the relay after `on`)
   const withApplied = await gather(home, { helper, ids: ['kimi-code'], appliedHosts: { 'kimi-code.vscode': { hosts: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'relay.extra.example'], settings: 'read', dropped: [] } } })
   assert.deepEqual(of(withApplied).hosts.applied, ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'relay.extra.example'], 'the applied set, as the reply carries it (the wiring\'s win32 bag, relayed by /status)')
-  assert.deepEqual(fs.readFileSync(toml), before.toml, 'the settings file is byte for byte what it was')
-  assert.deepEqual(fs.readFileSync(kernelConfig), before.config, 'and so is the kernel\'s own config: the read, the compare and the line change nothing')
+  assert.deepEqual(fs.readFileSync(toml), before.toml, 'the settings file is byte for byte what it was: the read, the compare and the line change nothing')
 })
 
 test('W69 the host-set lines of `status` (4.8 §3.5): the host program\'s other connections only forward and only the form\'s host set reaches the engine; settings that cannot be read leave the set at the defaults and extra_hosts, said with the reason and the hosts that are still captured; a fresh read that differs from the applied set says the kernel\'s is old and names the command — three notes of the detail view, none when the set is current and reads', () => {
@@ -300,7 +295,7 @@ test('a helper that cannot be started, and one that answers nothing: every read 
   assert.ok(f.unknowns.length >= 3, `the processes, the listeners and the interfaces are each said: ${JSON.stringify(f.unknowns)}`)
   for (const u of f.unknowns) assert.ok(['denied', 'timeout', 'absent', 'unparseable'].includes(u.reason), `${JSON.stringify(u)}: a reason of the closed set`)
   assert.deepEqual(f.listeners, [])
-  assert.equal(f.forwarder.up, null, 'the kernel\'s lock is there, whether its pid lives is not: said, not guessed')
+  assert.equal(f.forwarder.up, true, 'the local proxy hop is the engine\'s door: up = the daemon answered (the helper being down does not make the daemon gone)')
   assert.equal(f.harnesses.codex.systemProxy.unknown.reason, 'absent', 'the registry read did not happen (a harness that follows the OS proxy carries it: codex)')
 })
 
@@ -311,7 +306,6 @@ test('a helper that cannot be started, and one that answers nothing: every read 
 import { diagnose, FINDINGS, FINDING_CODES } from '../../src/netenv/findings.mjs'
 import { FINDINGS_WIN32 } from '../../src/netenv/findings-win32.mjs'
 import { validateFinding } from '../../src/cli/schema.mjs'
-import { reinstallCommands, loadPin } from '../../src/collector/arch/win32/forwarder.mjs'
 import { groupsOf } from '../../src/collector/arch/win32/route-plan.mjs'
 import { fileURLToPath } from 'node:url'
 
@@ -320,21 +314,19 @@ const SEVEN = ['claude-code', 'codex', 'hermes', 'kimi-code', 'opencode', 'deeps
 /** A finding's context, filled the way `diagnose` fills it (`fm` = the form facts of the branch that carries the reason, `vpnProxy` the VPN's own port, the extras what the daemon's records will hand over). */
 const CTX = (over = {}) => ({ F: {}, h: 'codex', hf: null, t: null, user: 'u', sh: 'powershell', platform: 'win32', setting: null, vpnProxy: 'http://127.0.0.1:7897', ...over })
 const cmd = (run, shell = 'powershell') => ({ run, shell })
-/** forwarder.mjs's own manual alternative for x64 — what the Windows facts carry in `reinstall` (the pin's archive for THIS machine's architecture when it is x64, D44). */
-const REINSTALL_X64 = reinstallCommands(loadPin().assets.x64)
 const A = (run) => cmd(run) // asight's own, in the platform's shell
 
 test('W36 one entry per code row of §10.4 — no more, no less — and each entry\'s own output is a finding the schema accepts (a win-only code defines every field; no run holds a placeholder)', () => {
   assert.deepEqual(Object.keys(FINDINGS_WIN32), [
-    'not-routed', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'entry-changed', 'needs-admin', 'egress-differs', 'form-path-unknown', 'fallback-active', 'elevated-agent', 'proxy-dead',
-    'upstream-unreachable', 'engine-port-taken', 'forwarder-down', 'form-unsupported', 'proxy-unsupported', 'forwarder-start-failed', 'forwarder-binary-missing', 'forwarder-digest-mismatch', 'forwarder-download-failed',
+    'not-routed', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'entry-changed', 'needs-admin', 'egress-differs', 'form-path-unknown', 'elevated-agent', 'proxy-dead',
+    'upstream-unreachable', 'engine-port-taken', 'forwarder-down', 'form-unsupported', 'proxy-unsupported',
     'system-proxy-pac', 'other-redirector', 'socktable-unavailable', 'cause-unknown',
   ])
   for (const [code, entry] of Object.entries(FINDINGS_WIN32)) {
     assert.equal(typeof entry.commands, 'function', `${code}: the commands are a function of the context`)
     const own = !FINDINGS[code]
     if (own) for (const f of ['cls', 'what', 'why', 'verify']) assert.ok(entry[f] !== undefined, `${code}: a code the cross-platform catalogue does not have defines ${f} itself`)
-    const c = CTX({ h: 'codex', code, F: { reinstall: REINSTALL_X64 }, dead: { addr: '127.0.0.1', port: 7890 }, enginePort: 17990, upPort: 7897, port: 17992, reason: 'port-taken', protocol: 'socks4',
+    const c = CTX({ h: 'codex', code, F: {}, dead: { addr: '127.0.0.1', port: 7890 }, enginePort: 17990, upPort: 7897, port: 17992, reason: 'port-taken', protocol: 'socks4',
       fm: { id: 'codex.app', entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.codex\\.env', format: 'dotenv', key: 'HTTPS_PROXY' }, route: { reason: 'not-routed', why: 'system-proxy-pac' }, setting: null, systemProxy: null, procs: [] },
       hf: { forms: [], behaviour: {}, systemProxy: null }, setting: { scheme: 'socks4' } })
     const cls = typeof entry.cls === 'function' ? entry.cls(c) : entry.cls
@@ -401,26 +393,6 @@ const LITERALS = {
   'proxy-unsupported': { ctx: CTX({ h: 'deepseek-dsh', protocol: 'socks4', fm: { entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.dsh\\.env', format: 'dotenv', key: 'HTTPS_PROXY' } } }),
     what: 'deepseek-dsh 的代理协议接不上(socks4)', why: '这个形态原来的代理是 socks4 的,asight 的上游还不支持,on 因此不接这个形态',
     commands: [cmd('把它改成 http://host:port 或 socks5://host:port 的写法', 'gui'), cmd('C:\\Users\\u\\.dsh\\.env 里写一行 HTTPS_PROXY=http://127.0.0.1:7897', 'gui'), A('asight on deepseek-dsh'), A('asight off deepseek-dsh')], verify: 'asight status deepseek-dsh:那一支「在路径上 · 是」' },
-  'forwarder-start-failed': {
-    'smart-app-control': { ctx: CTX({ h: 'codex', reason: 'smart-app-control' }),
-      what: 'asight 的内核起不来', why: 'Smart App Control 开着,它拦未签名的 asight-forwarder.exe;asight 不改这个系统安全设置,也不替你选',
-      commands: [cmd('你的选择:这台机器不用代理模式;或自己决定关掉它(关掉后一般不能再开,先看微软的说明);或等 asight 的内核有签名的版本', 'gui')], verify: 'asight on 退出 0' },
-    'port-taken': { ctx: CTX({ h: 'codex', reason: 'port-taken', port: 17992 }),
-      why: '内核的端口被占了(:17992)',
-      commands: [cmd('netstat -ano -p TCP | findstr ":17992"'), A('asight off'), A('asight on')], verify: 'asight on 退出 0' },
-  },
-  'forwarder-binary-missing': { ctx: CTX({ h: 'codex', reason: 'file-missing', F: { reinstall: REINSTALL_X64 } }),
-    what: 'asight 的内核没装上,所以没有拉起它',
-    why: '内核不在运行位,缓存里也没有(file-missing);on 会自己下载(D44),asight 不替你跑手动步骤',
-    commands: [cmd(REINSTALL_X64, 'gui'), A('asight on')], verify: 'asight on 退出 0' },
-  'forwarder-digest-mismatch': { ctx: CTX({ h: 'codex', of: 'copy', F: { reinstall: REINSTALL_X64 } }),
-    what: 'asight 的内核与钉死的 sha256 不符,所以没有拉起它',
-    why: '在位的那份(copy)的摘要不是 pin 的那个;on 会重新下载钉死的版本(D44),asight 不替你跑手动步骤',
-    commands: [cmd(REINSTALL_X64, 'gui'), A('asight on')], verify: 'asight on 退出 0' },
-  'forwarder-download-failed': { ctx: CTX({ h: 'codex', reason: 'curl is not on this machine', F: { reinstall: REINSTALL_X64 } }),
-    what: 'asight 的内核下载不成,所以 on 没有开始',
-    why: '内核缺失时 on 从 pin 钉死的官方发布页下载(curl),这一步失败了(curl is not on this machine);失败发生在写任何 agent 文件之前',
-    commands: [cmd(REINSTALL_X64, 'gui'), A('asight on')], verify: 'asight on 退出 0' },
   'system-proxy-pac': { ctx: CTX({}),
     commands: [cmd("Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL")], verify: '—' },
   'other-redirector': { ctx: CTX({}), commands: [cmd('netsh winsock show catalog')], verify: '—' },
@@ -444,14 +416,6 @@ test('W36 each §10.4 command equals its literal (the values filled: the entry f
       one(variant === 'ctx' ? code : `${code}(${variant})`, half, entry, { ...half.ctx, ...(code === 'forwarder-start-failed' ? { reason: variant } : {}) })
     }
   }
-  // the manual alternative is forwarder.mjs's own literal, carried by the facts verbatim, and carries no address to download from (W36, D44)
-  for (const code of ['forwarder-binary-missing', 'forwarder-digest-mismatch', 'forwarder-download-failed']) {
-    const runs = FINDINGS_WIN32[code].commands(LITERALS[code].ctx).map((c) => c.run)
-    assert.equal(runs[0], REINSTALL_X64, `${code}: reinstallCommands' own literal, carried by the facts verbatim`)
-    assert.ok(runs.every((r) => !/https?:\/\//.test(r)), `${code}: no download address`)
-  }
-  // the download failure's own row: the reason rides the why, the failure happened before any agent file was touched
-  assert.equal(FINDINGS_WIN32['forwarder-download-failed'].what(LITERALS['forwarder-download-failed'].ctx), 'asight 的内核下载不成,所以 on 没有开始')
 })
 
 test('W36 the not-routed 「set it to your proxy app\'s port」 step is table-driven over every groups[].proxyEntry of the seven harnesses, none missing (4.8 §10.4 row 1)', async () => {
@@ -501,9 +465,7 @@ test('W36 not-routed by why, through the REAL facts path: a PAC, a registry the 
     deps: { helper: pacHelper, adapter: { fields: {}, running: true, runtime: { version: '2.5.7', mode: 'rule', mixedPort: 7897, tun: false }, controller: {} } } })
   const fm = pacFacts.harnesses.codex.forms.find((x) => x.id === 'codex.app')
   assert.deepEqual(fm.route, { reason: 'not-routed', code: 'not-routed', why: 'system-proxy-pac' }, 'the group\'s plan, on the form (the doctor rows read it)')
-  // the manual alternative rides the facts (4.8 §8 ⑤ / §10.4, D44): computed on the arch side from THIS build's pin, for this machine's architecture — src/netenv imports no arch module (W39's rule 6)
-  const mine = loadPin().assets[process.arch]
-  assert.deepEqual(pacFacts.reinstall, mine && mine.name ? reinstallCommands(mine) : null, 'forwarder.mjs\'s own literal, carried by the facts')
+  assert.equal(pacFacts.reinstall, null, 'no reinstall line any more: the kernel is gone and nothing of asight downloads (D47\'s twin)')
   const pac = diagnose({ facts: pacFacts, topology: buildTopology(pacFacts), harnesses: ['codex'], user: 'u' }).find((x) => x.code === 'not-routed')
   assert.match(pac.why, /PAC/)
   assert.deepEqual(pac.commands, [

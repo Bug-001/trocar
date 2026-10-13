@@ -103,13 +103,13 @@ export const pfacts = (h, fm, fw, over = {}) => facts(h, {
 }, { forms: [fm], procs: fm.procs, behaviour: { ...BEHAVE[h], measured: 'lab' } }) // what the Windows branch measured on a test machine: nothing here is inferred
 const codexForm = (over = {}) => form('codex.cli', { procs: [proc(5530, CODEX_PROC)], ...over })
 const ENGINE_AND_KERNEL = ['agent', 'asight-forwarder', 'asight-engine']
-const CODEX_VIA_CLASH = '5530 → [.env HTTPS_PROXY · asight 写的] asight 自带内核 :17992 → asight 引擎 :17990 → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'
+const CODEX_VIA_CLASH = '5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992 → asight 引擎 :17990 → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'
 const viaSystemProxy = (port = 7897) => ({ listeners: [{ ...CLASH, port }], vpn: clashVpn({ port }) })
 
 row({ n: 8, title: 'proxy mode: the agent has no proxy and there is no VPN: the kernel and the engine dial the API host', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, asight: true, opt_in: false, intact: true }, procs: [proc(4121)] }), fwForm(17991)),
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], on_path: true, captured: true, reason: null,
-  compact: ['claude 4121 → [settings env.HTTPS_PROXY · asight 写的] asight 自带内核 :17991 → asight 引擎 :17990 → api.anthropic.com:443(直连)'], findings: [] })
+  compact: ['claude 4121 → [settings env.HTTPS_PROXY · asight 写的] asight 本地代理 :17991 → asight 引擎 :17990 → api.anthropic.com:443(直连)'], findings: [] })
 
 row({ n: 9, title: 'proxy mode: a form that follows the OS proxy (Codex HTTP) with the OS proxy on: the upstream is the OS proxy; the WebSocket used to go direct', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), viaSystemProxy()),
@@ -119,7 +119,7 @@ row({ n: 9, title: 'proxy mode: a form that follows the OS proxy (Codex HTTP) wi
 row({ n: 10, title: 'proxy mode: the agent had a proxy of its own: it is the upstream, the entry points at the kernel', h: 'codex',
   facts: pfacts('codex', codexForm({ setting: proxyOf('http://proxy.corp:8080', [{ kind: 'file', where: 'C:\\Users\\u\\.codex\\.env', key: 'HTTPS_PROXY' }]) }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent' })),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 自带内核 :17992 → asight 引擎 :17990 → [CONNECT 原样转] proxy.corp:8080 → 出口'], findings: [] })
+  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992 → asight 引擎 :17990 → [CONNECT 原样转] proxy.corp:8080 → 出口'], findings: [] })
 
 row({ n: 11, title: 'proxy mode: the OS proxy is a PAC and the form follows it: asight does not run a PAC, the form is not wired', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: { value: null, pac: true }, follows: { http: true, ws: false }, entry: null }), fwForm(17992, { state: 'forward-only' })),
@@ -129,18 +129,18 @@ row({ n: 11, title: 'proxy mode: the OS proxy is a PAC and the form follows it: 
 row({ n: 12, title: 'proxy mode: wanted on, the engine is gone: the kernel falls back to the upstream and only forwards', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), { daemon: { state: 'not-running', pid: null, enginePort: null }, ...viaSystemProxy() }),
   kinds: [['agent', 'asight-forwarder', 'proxy', 'egress'], ['agent', 'asight-forwarder', 'proxy', 'egress']], on_path: true, captured: false, reason: 'daemon-not-running',
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 自带内核 :17992(只转发) → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'], findings: ['daemon-not-running', 'egress-differs'] })
+  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(只转发) → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'], findings: ['daemon-not-running', 'egress-differs'] })
 
 row({ n: 13, title: 'proxy mode: wanted on, the kernel is not running: nobody listens on the entry the agent points at', h: 'codex',
   facts: pfacts('codex', codexForm(), fwForm(17992), { forwarder: { pid: null, up: false, forms: { 'codex.cli': fwForm(17992) } } }),
   kinds: [['agent', 'asight-forwarder']], on_path: true, captured: false, reason: 'forwarder-down',
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 自带内核 :17992(没人在听)'], findings: ['forwarder-down'] })
+  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(没人在听)'], findings: ['forwarder-down'] })
 
 row({ n: 14, title: 'proxy mode: after `off`, an agent started while it was on is still connected to the kernel, which only forwards', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { state: 'forward-only', upstream: 'http://127.0.0.1:7897', source: 'system-proxy', clients: [5530] }), { desired: { codex: 'off' }, ...viaSystemProxy() }),
   kinds: [['agent', 'asight-forwarder', 'proxy', 'egress'], ['agent', 'asight-forwarder', 'proxy', 'egress']], on_path: true, captured: false, reason: 'desired-off',
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 自带内核 :17992(只转发) → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'], findings: ['desired-off', 'egress-differs'],
-  notes: ['还有 1 个 agent 连着 asight 的内核,重启它们之后 asight 就完全退出'] })
+  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(只转发) → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'], findings: ['desired-off', 'egress-differs'],
+  notes: ['还有 1 个 agent 连着 asight 的门,重启它们之后 asight 就完全退出'] })
 
 row({ n: 15, title: 'proxy mode: a form that has to be named (Kimi CLI\'s shim on PATH) and was not: asight is not wired in', h: 'kimi-code',
   facts: pfacts('kimi-code', form('kimi-code.cli', { entry: null, optIn: { state: 'needed', code: 'opt-in-needed', enable: 'asight on kimi-code --opt-in kimi-code.cli' }, procs: [proc(7001, { name: 'kimi', version: '1.4.0' })] }), fwForm(17993)),
@@ -165,7 +165,7 @@ row({ n: 18, title: 'proxy mode: the OS proxy changed its port: the kernel was r
 row({ n: 19, title: 'proxy mode: the agent runs elevated: the kernel cannot tell the process and only forwards', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, asight: true, opt_in: false, intact: true }, procs: [proc(4121, { elevated: true })] }), fwForm(17991)),
   kinds: [['agent', 'asight-forwarder', 'upstream']], on_path: true, captured: false, reason: 'elevated-agent',
-  compact: ['claude 4121(提权) → [settings env.HTTPS_PROXY · asight 写的] asight 自带内核 :17991(只转发) → api.anthropic.com:443(直连)'], findings: ['elevated-agent'] })
+  compact: ['claude 4121(提权) → [settings env.HTTPS_PROXY · asight 写的] asight 本地代理 :17991(只转发) → api.anthropic.com:443(直连)'], findings: ['elevated-agent'] })
 
 // ── the macOS old capture (§4) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 row({ n: 20, title: 'old capture: Claude Desktop → the OS proxy (the VPN) → the VPN\'s block → asight\'s old MITM → the VPN again', h: 'claude-code',
@@ -191,7 +191,7 @@ row({ n: 22, title: 'the OS proxy is a PAC and the agent follows it for HTTP (no
 row({ n: 23, title: 'Windows: a kernel-level filter this user cannot see is said once, and changes no verdict', h: 'claude-code',
   facts: { ...ROWS.find((r) => r.n === 8).facts, unknowns: [{ fact: 'kernel-filter', reason: 'kernel-filter-invisible', detail: 'WFP filters are not readable by a user token' }] },
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], on_path: true, captured: true, reason: null,
-  compact: ['claude 4121 → [settings env.HTTPS_PROXY · asight 写的] asight 自带内核 :17991 → asight 引擎 :17990 → api.anthropic.com:443(直连)'], findings: [], notes: ['WFP 一类的内核过滤器本用户看不见(kernel-filter-invisible),所以路上有没有这样的过滤器不知道'] })
+  compact: ['claude 4121 → [settings env.HTTPS_PROXY · asight 写的] asight 本地代理 :17991 → asight 引擎 :17990 → api.anthropic.com:443(直连)'], findings: [], notes: ['WFP 一类的内核过滤器本用户看不见(kernel-filter-invisible),所以路上有没有这样的过滤器不知道'] })
 
 // Row 24 is not in the spec's table of §9.3 as an example of its own: it is the case the table's rows left out, found by running the real binary (a proxy whose owner is a readable process that is no VPN product). V42: the hop
 // keeps its port and says it does not know the product, the exit after it is not known either.

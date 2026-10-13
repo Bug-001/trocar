@@ -211,7 +211,7 @@ test('N9 the adapter asks the core GET /version and GET /configs and nothing els
   assert.deepEqual(Object.keys(w.adapter).sort(), ['controllerInfo', 'facts', 'home', 'paths', 'readConfigs', 'readFields'], 'the adapter\'s whole surface is reads')
 })
 
-test('N9 the clients discovery and the adapter make are the user\'s-VPN form (own:false): the endpoint came from Verge, never from forwarder.lock', async (t) => {
+test('N9 the clients discovery and the adapter make are the user\'s-VPN form (the read-only allow-list; the own-kernel mode went with the kernel): the endpoint came from Verge', async (t) => {
   const w = await startWorld(t)
   const made = []
   const spy = ({ endpoint, secret, ...rest }) => { made.push(rest); return { get: async () => ({ status: 200, ok: true, json: { version: 'v1.19.32', mode: 'rule', 'mixed-port': 7897, tun: { enable: false } } }) } }
@@ -220,7 +220,7 @@ test('N9 the clients discovery and the adapter make are the user\'s-VPN form (ow
   const adapter = createVergeAdapter({ home: w.home, helper: world().helper, listPipes: async () => [PIPE.enumerate], makeClient: spy, running: () => true, env: {} })
   assert.equal((await adapter.readConfigs()).ok, true)
   assert.ok(made.length >= 2, 'a client for the probe and one for the reads')
-  assert.deepEqual(made.map((m) => m.own), made.map(() => false), 'every one says own:false out loud, not by default')
+  assert.ok(made.every((m) => m.own === undefined), 'no own mode exists to pass: the allow-list is read-only for every client')
 })
 
 // ---- the probe facts ----------------------------------------------------------------------------------------------------------------------------------------------------

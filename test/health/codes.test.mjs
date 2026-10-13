@@ -152,10 +152,7 @@ test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot i
 // added, dropped or moved in codes.mjs and not in the RFC turns this red.
 const SPEC_12_FAILURES = [
   ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['engine-port-taken', 'ingress'], ['upstream-unavailable', 'ingress'],
-  ['fallback-active', 'routing'],
-  ['forwarder-start-failed', 'forwarder'], ['forwarder-restart', 'forwarder'], ['forwarder-digest-mismatch', 'forwarder'], ['forwarder-binary-missing', 'forwarder'],
-  ['forwarder-download-failed', 'forwarder'], // D44 (4.8 §8 ①): the kernel is missing and the `on` that downloads it failed — restored after the 2026-10-07 withdrawal
-  // 'gatekeeper' went with the darwin kernel itself (D47): it was the darwin forwarder's precheck code, and no producer is left anywhere
+  // the kernel family (fallback-active, forwarder-*) retired with the kernel on both arches (D47 and its win32 twin): no producer anywhere
   ['optin-failed', 'optin'],
   ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'],
   ['task-register-failed', 'install'], ['launchd-register-failed', 'install'], // the darwin autostart (4.9 §12)
@@ -180,19 +177,21 @@ test('W38 every §12 code is a code, and a failure event naming it with its wher
   }
   // the case the plan names
   assert.deepEqual(checkRecord({ event: 'failure', where: 'ingress', code: 'ingress-auth-failed', reason: 'token mismatch' }), [])
-  // the download failure D44 restored (4.8 §8 ①): the code is in the set, a failure event naming it passes checkRecord, and the withdrawal's reverse assertion is gone
-  assert.ok(ROUTE_CODES.includes('forwarder-download-failed') && isCode('forwarder-download-failed'), 'forwarder-download-failed is restored (D44)')
-  assert.deepEqual(checkRecord({ event: 'failure', where: 'forwarder', code: 'forwarder-download-failed', reason: 'x' }), [])
-  assert.equal(isFailure({ event: 'failure', where: 'forwarder', code: 'forwarder-download-failed', reason: 'x' }), true)
+  // the kernel family is gone from every closed set (D47's twin): the reverse assertion — no arch produces one, no set holds one
+  for (const gone of ['forwarder-download-failed', 'forwarder-start-failed', 'forwarder-restart', 'forwarder-digest-mismatch', 'forwarder-binary-missing', 'fallback-active', 'pid-unresolved-mixed', 'kernel-not-off']) {
+    assert.ok(!isCode(gone) && !ROUTE_CODES.includes(gone) && !CODES.includes(gone), `${gone} retired with the kernel`)
+    assert.deepEqual(checkRecord({ event: 'failure', where: 'routing', code: gone, reason: 'x' }), ['where "routing"' === '' ? undefined : `code "${gone}"`].filter(Boolean))
+  }
+  assert.ok(!ROUTE_WHERE.includes('forwarder') && !isWhere('forwarder'), 'the where retired too')
   // Windows codes sit beside the Linux ones, not inside the lists D40 edits
   for (const c of ROUTE_CODES) assert.ok(!CODES.includes(c), `${c} is defined once: ROUTE_CODES, not also CODES`)
 })
 
 test('W38 the where / state events / trust reasons / status reasons / capture kinds are the §12 lists', () => {
-  assert.deepEqual(ROUTE_WHERE, ['routing', 'forwarder', 'ingress', 'optin'])
-  assert.deepEqual(ROUTE_EVENTS, ['route-applied', 'forwarder-start', 'forwarder-stop', 'forwarder-draining', 'probes-refreshed', 'optin-applied', 'optin-removed', 'forwarder-download-started', 'forwarder-download-ok'])
-  assert.deepEqual(ROUTE_TRUST_REASONS, ['pid-unresolved-mixed', 'smart-app-control', 'env-unreadable-fill'])
-  assert.deepEqual(ROUTE_STATUS_REASONS, ['form-unsupported', 'fallback-active', 'form-path-unknown'])
+  assert.deepEqual(ROUTE_WHERE, ['routing', 'ingress', 'optin'])
+  assert.deepEqual(ROUTE_EVENTS, ['route-applied', 'optin-applied', 'optin-removed'])
+  assert.deepEqual(ROUTE_TRUST_REASONS, ['smart-app-control', 'env-unreadable-fill'])
+  assert.deepEqual(ROUTE_STATUS_REASONS, ['form-unsupported', 'form-path-unknown'])
   assert.deepEqual(CAPTURE_KINDS, ['transparent', 'proxy'], 'the envelope `capture` closed set (4.8 §5.6, 4.1 信封表): Windows has the one proxy mode (D43)')
   for (const l of [ROUTE_WHERE, ROUTE_EVENTS, ROUTE_CODES, ROUTE_FAILURE_CODES, ROUTE_TRUST_REASONS, ROUTE_STATUS_REASONS, CAPTURE_KINDS, NET_WHERE, NET_CODES, NET_FAILURE_CODES]) assert.ok(Object.isFrozen(l))
   for (const w of ROUTE_WHERE) assert.ok(isWhere(w), w)
@@ -206,14 +205,8 @@ test('W38 the where / state events / trust reasons / status reasons / capture ki
 test('W38 the route events are state changes: they pass checkRecord with their fields and never turn the indicator', () => {
   const recs = [
     { event: 'route-applied', where: 'routing', form: 'claude-code.cli', upstream_kind: 'user-proxy', verified: true },
-    { event: 'forwarder-start', where: 'forwarder', pid: 4242 },
-    { event: 'forwarder-stop', where: 'forwarder', pid: 4242 },
-    { event: 'forwarder-draining', where: 'forwarder', pids: [11, 12] },
-    { event: 'probes-refreshed', where: 'forwarder', reason: 'the engine came up: the kernel was asked to health-test every on-form\'s fallback group now (4.8 §3.3)', forms: [{ f: 'codex.app', ok: true, status: 200 }] },
     { event: 'optin-applied', where: 'optin', form: 'codex.app', item: 'cert-store', scope: 'user' },
     { event: 'optin-removed', where: 'optin', form: 'codex.app', item: 'cert-store', scope: 'user' },
-    { event: 'forwarder-download-started', where: 'forwarder', url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-windows-amd64-compatible-v1.19.32.zip', size: 22525067, command: 'curl -fsSL --retry 2 -o /tmp/asight-kernel-x/mihomo-windows-amd64-compatible-v1.19.32.zip https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-windows-amd64-compatible-v1.19.32.zip' },
-    { event: 'forwarder-download-ok', where: 'forwarder', url: 'https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-windows-amd64-compatible-v1.19.32.zip', archive_sha256: 'a'.repeat(64), exe_sha256: 'b'.repeat(64) },
   ]
   assert.deepEqual(recs.map((r) => r.event), ROUTE_EVENTS)
   for (const r of recs) {
@@ -252,7 +245,7 @@ test('W38 the three names 4.7 §5 and 1.6 §9.7 share: route-loop and forwarder-
 test('W38 the sets still reject a name beside the Windows ones (the check can fail)', () => {
   assert.deepEqual(checkRecord({ event: 'route-apply', where: 'route', reason: 'x' }), ['event "route-apply"', 'where "route"'])
   assert.deepEqual(checkRecord({ event: 'failure', where: 'ingres', code: 'ingress-auth-fail', reason: 'x' }), ['where "ingres"', 'code "ingress-auth-fail"'])
-  assert.deepEqual(checkRecord({ event: 'failure', where: 'forwarder', code: 'forwarder-restarted', reason: 'x' }), ['code "forwarder-restarted"'])
+  assert.deepEqual(checkRecord({ event: 'failure', where: 'routing', code: 'forwarder-restarted', reason: 'x' }), ['code "forwarder-restarted"'], 'the kernel family is no code any more')
   assert.deepEqual(checkRecord({ event: 'failure', where: 'netenv', code: 'route-lost', reason: 'x' }), ['code "route-lost"'])
 })
 
