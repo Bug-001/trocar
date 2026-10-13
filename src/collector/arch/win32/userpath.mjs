@@ -2,7 +2,7 @@
 // The user-level PATH write of `asight on <harness> --opt-in <form>` is `prependUserPath` here — `reg query` then `reg add … /t REG_EXPAND_SZ`
 // through execTool, NEVER `setx` (it truncates at 1024 characters), the value's type kept as it is — and ONE `WM_SETTINGCHANGE` broadcast after
 // the write, so the shells that are already open see the new order. The undo (`removeUserPathItem`) drops asight's one directory from the
-// CURRENT value and never writes the pre-asight value back wholesale (D28's lesson); the src/off half that runs with the source tree gone has
+// CURRENT value and never writes the pre-asight value back wholesale (1.6 R2); the src/off half that runs with the source tree gone has
 // its own inline copy of the same three commands, and test/off/win32-optin.test.mjs holds the two copies to the same bytes. `resolveCommand`
 // follows Windows' own order — the machine PATH first, then the user PATH (§6.3「机器 PATH 在前」) — reading both from the registry, not from
 // this process's environment (the daemon's is not the install shell's). `sacOf` reads Smart App Control's one value the same way the helper's
@@ -61,7 +61,7 @@ export function prependUserPath({ dir, run = null, env = process.env } = {}) {
   return { ok: true, value, prior, ...(b.ok ? {} : { broadcast_failed: b.reason }) }
 }
 
-/** asight's one directory OFF the user PATH: the item is dropped from the CURRENT value (never the pre-asight one written back, D28), the
+/** asight's one directory OFF the user PATH: the item is dropped from the CURRENT value (never the pre-asight one written back, 1.6 R2), the
  *  type kept, one broadcast. → `{ ok, result: 'undone' | 'absent', value? }` · `{ ok: false, reason }`. */
 export function removeUserPathItem({ dir, run = null, env = process.env } = {}) {
   const cur = readUserPath({ run, env })

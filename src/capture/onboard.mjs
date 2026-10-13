@@ -1,4 +1,4 @@
-// onboard.mjs — real cross-platform onboard (D22 · RFC 4.1 §onboard · 4.5). Three jobs:
+// onboard.mjs — real cross-platform onboard (D22). Three jobs:
 //   1. generate the capture CA + api.anthropic.com leaf (OpenSSL — all platforms),
 //   2. install the CA IMPORT-ONLY into the USER-LEVEL trust store (TrustStoreInstaller dispatch),
 //   3. steer the CC-CLI harness at the local capture proxy via ~/.claude/settings.json env.
@@ -11,7 +11,7 @@ import os from 'node:os'
 import { getTrustStoreInstaller, CA_CN } from './trust-store.mjs'
 import { caDir as canonicalCaDir } from '../paths.mjs'
 
-// D27 canonical CA home. It MUST equal paths.caDir() so every CA consumer (mitm, onboard install,
+// D27 canonical CA home. It MUST equal paths.caDir() so every CA consumer (onboard install,
 // leafHosts) resolves the SAME directory — a second dir is how a second same-CN CA came to exist and
 // broke every steered TLS handshake on 2026-07-21.
 // caDir() already falls back to the legacy ~/.atrace/ca when only that exists, so old installs still
@@ -22,13 +22,6 @@ export const DEFAULT_SETTINGS_PATH = path.join(os.homedir(), '.claude', 'setting
 export const DEFAULT_STASH_PATH = path.join(os.homedir(), '.atrace', 'steer-backup.json')
 const CA_SUBJECT = `/CN=${CA_CN}/O=atrace`
 const LEAF_HOST = 'api.anthropic.com' // the v1 default capture target (4.1:13)
-// ⚠ WIRING GAP (B4, half-done): `generateCa` now takes `hosts` and refuses to reuse a leaf that
-// cannot authorize them, but `bin/asight.mjs` (`mitm` case) still calls a bare `generateCa()` while
-// accepting any `--host`. Until that call passes its target through —
-//     const ca = generateCa({ hosts: [targetHost] })
-// — `asight mitm --host X` for any X other than api.anthropic.com still hands the TLS server an
-// anthropic leaf, and every client handshake fails ERR_TLS_CERT_ALTNAME_INVALID. The one-line change
-// belongs in bin/asight.mjs, which was outside this change's permitted edit surface.
 
 function defaultRun(file, args) {
   execFileSync(file, args, { stdio: ['ignore', 'ignore', 'pipe'] })
@@ -115,8 +108,7 @@ export function uninstallCa({ platform = process.platform, installerOpts = {} } 
 
 // ── CC-CLI steer (cross-platform): point the harness at the local capture proxy via
 // ~/.claude/settings.json env; atraceOff reverts. No Clash (that is macOS-Desktop only). ──
-// The undo half (readSettings, backupSettingsOnce, STEER_KEYS, readStash, clearCliSteer) lived in src/off/legacy.mjs from
-// Task 10 until the old capture retired (D39⑥ executed 2026-10-11): it came back here, where the write half always was —
+// The undo half (readSettings, backupSettingsOnce, STEER_KEYS, readStash, clearCliSteer) sits here beside the write half —
 // there is one undo, not two, and `atraceOff` (the web switch's off, src/capture/control.mjs) runs it.
 // The user's settings.json is THEIR file (model / permissions / mcpServers live here). A read we cannot fully understand MUST NOT become an empty object we then write back — that silently
 // destroys everything in it. Only a genuinely absent file means "start from {}"; every other failure (unparseable JSON, EACCES, a directory, …) THROWS so nothing is written.
@@ -188,9 +180,9 @@ export function clearCliSteer({ settingsPath = DEFAULT_SETTINGS_PATH, stashPath 
 // The steer's PRECONDITION is a trusted CA. Steering the harness at a MITM whose CA was never
 // installed does not degrade gracefully — every request dies at the TLS handshake, with nothing to
 // point at the cause. So a failed install ABORTS before the steer is written, leaving the harness
-// exactly as it was (direct). It throws rather than returning ok:false because the callers
-// (bin/asight.mjs `on`, control.mjs `monitoringOn`) both read the result as an already-succeeded
-// onboard; a throw is the only shape they surface truthfully today (see WIRING GAP note below).
+// exactly as it was (direct). It throws rather than returning ok:false because the caller
+// (src/capture/control.mjs `monitoringOn`, behind the board's /control/monitoring) reads the result as an already-succeeded
+// onboard; a throw is the only shape it surfaces truthfully.
 export function atraceOn({ caDir, proxyUrl = 'http://127.0.0.1:8899', settingsPath, stashPath, platform, installerOpts, run } = {}) {
   const ca = generateCa({ caDir, run })
   const install = installCa({ caCrt: ca.caCrt, platform, installerOpts })

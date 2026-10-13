@@ -62,7 +62,7 @@ function loginOf(g, up, authOf) {
  *             plan has them off (audit F7's other side: the wiring that knows the manifest says which ones; not saying is "no group")
  *   hostsOf   `(form) → [host] | null` (default: null): the APPLIED host set of a host-tree form (route-plan.mjs hostSetOf — the plan's last answer). A form that
  *             declares `hosts` lives in a host process tree (an editor carrying many extensions): its door reaches the engine ONLY for the targets on that set,
- *             every other connection of the program is forwarded, untracked — the arm the kernel's per-host rules used to hold (4.8 §3.5), moved into the door.
+ *             every other connection of the program is forwarded, untracked — the arm the kernel's per-host rules used to hold (4.8 §3), moved into the door.
  *   matchForm the arch's own `(forms, { exe, cmdline }, { home }) → { kind: 'form', id } | { kind: 'none' } | …` (its forms.mjs) — one rule for which form,
  *             the same one the registry's osMatch judges by (4.8 §5.4). Required: the core knows no OS's forms.
  *   directCount the arch's own `async (pid) → { count, error }` — how many of the process's established connections do not go to a group's door on loopback,
@@ -154,7 +154,7 @@ export function createDoorRedirector({ groups, home = null, ownerOf = null, fact
   const entryOf = (g) => ({ g, harness: byGroup.get(g).harness, entry: ((routes() || {})[g] || {}).entry ?? null })
 
   /** The doors the engine should hold for the plan as it is now: a group that is on, or carried while off, with a port, a supported form and an upstream —
-   *  and no login on a door whose entry takes none (4.8 §3.2). `skipped` says every group the plan has ON that none of this holds, with its reason, so a
+   *  and no login on a door whose entry takes none (4.8 §3). `skipped` says every group the plan has ON that none of this holds, with its reason, so a
    *  group left out is said by whoever asked, never silently. */
   function doorPlan() {
     const table = routes() || {}
@@ -210,7 +210,7 @@ export function createDoorRedirector({ groups, home = null, ownerOf = null, fact
           const row = m.kind === 'form' ? byForm.get(m.id) : null
           if (row && row.g === door.g) { // this door's own form: the connection is this process's to decrypt (another group's form at this door — the open desktop door's shape — is forwarded, untracked)
             form = row.form
-            if (form.hosts) { // a host-tree form (4.8 §3.5): only the connections to its host set reach the engine, the program's others are forwarded — the arm the kernel's per-host rules used to hold
+            if (form.hosts) { // a host-tree form (4.8 §3): only the connections to its host set reach the engine, the program's others are forwarded — the arm the kernel's per-host rules used to hold
               const set = hostsOf(form)
               const host = String(target.address || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
               const hit = Array.isArray(set) && set.some((h) => typeof h === 'string' && (host === h || host.endsWith(`.${h}`)))

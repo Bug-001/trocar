@@ -30,7 +30,7 @@ export function normalizeRecord(raw) {
   };
 }
 
-// SKIPPED LINES (audit 2026-07-19 · invariant 4 — a loss MUST NOT be invisible) ─────────────────
+// SKIPPED LINES (invariant 4 — a loss MUST NOT be invisible) ─────────────────
 // A capture is an APPEND-ONLY file being written while the session runs, so a TORN FINAL LINE is
 // the normal mid-session state, not an exception. The old bare `catch {}` dropped such a line
 // silently: the returned array was quietly short and nothing anywhere said so. For a tool whose

@@ -1,4 +1,4 @@
-// ingress-config.mjs — the ports and secrets proxy mode needs, chosen once and kept (RFC 4.8 §3.1 · §3.2 · §5.1; acceptance W27 W70).
+// ingress-config.mjs — the ports and secrets proxy mode needs, chosen once and kept (RFC 4.8 §3 · §5.1; acceptance W70).
 //
 // `~/.asight/collector/ingress.json` (0600) holds: the engine's proxy-ingress port, one listener port per entry group, the ingress token (the kernel's `of.<f>` password to the engine) and the listener token (the
 // agents' and the re-entry's password at the kernel's listener, a second secret). The agents' entries hold the group ports (`http://<g>:<listenerToken>@127.0.0.1:<port>`), so a port, once given, never changes

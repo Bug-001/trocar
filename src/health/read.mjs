@@ -206,7 +206,7 @@ function legacyHealth({ home, now, fs, alive, read }) {
   for (const r of t.recs) {
     if (r.event !== 'mitm-start' && r.event !== 'mitm-stop') continue
     const k = r.source || 'mitm', s = by.get(k) || { source: k, last_start: null, last_stop: null }
-    // `cut`: how many connections the MITM cut when it stopped (it drains for 10 s on `asight off`, 1.6 §4) — a count the whitelist of pick() does not carry, so the stop line says it here
+    // `cut`: how many connections the MITM cut when it stopped (it drains for 10 s on `asight off`) — a count the whitelist of pick() does not carry, so the stop line says it here
     if (r.event === 'mitm-start') { s.last_start = pick(r); s.last_stop = null } else s.last_stop = { ...pick(r), ...(Number.isInteger(r.cut) && r.cut >= 0 ? { cut: r.cut } : {}) }
     by.set(k, s)
   }

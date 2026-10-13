@@ -351,7 +351,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
       if (r.code === 0 && r.warn) final.notes.push(r.warn) // enable's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say)
       if (r.code !== 0) {
         // the flip checklist ③ (4.9 §4 末): an arch whose enable() carries its own failure record (the darwin LaunchAgent: `launchd-register-failed`, launchctl wording —
-        // launchd is the only autostart there, 4.9 §12) has THAT recorded verbatim, not the systemd-shaped remediation below replacing it.
+        // launchd is the only autostart there, 4.9 §11) has THAT recorded verbatim, not the systemd-shaped remediation below replacing it.
         if (r.event) { unitEvent = r.event; unitFailed = r.event.reason }
         else unitFailed = `${opts.unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
       }
@@ -435,9 +435,9 @@ export async function turnOn(opts = {}) {
       if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'] }, manifest: plan._.prior, plan, exit: 2 }
       if (verdict === false) return { receipt: { ...r, ok: false, planned: true, declined: true, notes: [...r.notes, '没有确认:什么都没改'] }, manifest: plan._.prior, plan, exit: 1 }
     }
-    // D44 — the kernel's download, verify and placement, the CLI's one online step, is the FIRST write-phase action: after the confirmation (the plan already
+    // The kernel's download, verify and placement, the CLI's one online step, is the FIRST write-phase action: after the confirmation (the plan already
     // showed the download line), before the op lock and any agent file — a failed download leaves zero agent files written (the precondition's nature
-    // unchanged, 4.8 §8 ① ⑥). `null` = the arch has no kernel to ensure (Linux's driver mode). A not-ok answer stops the run here with an unwritten receipt
+    // unchanged). `null` = the arch has no kernel to ensure (Linux's driver mode). A not-ok answer stops the run here with an unwritten receipt
     // (exit 1); the hook's own records (the download's started / ok / failed, the missing / mismatch failures) are already in flows/ by the time it answers
     // (R11 — `recorded` writes nothing for a clean answer, and a stop here is not a throw). The hook runs before the lock on purpose: the download can take
     // a while, and `off` / `uninstall` must not wait behind it (the kernel is asight's own file; concurrent `on`s each verify their own copy).
@@ -465,7 +465,7 @@ export async function turnOn(opts = {}) {
     }
     try {
     const m = openManifest({ dir, plan, now, fs })
-    // the kernel this run placed (D44, 4.8 §531 · §4.2): ledgered as asight's own file the moment the manifest exists, so an `uninstall` — this run's or a
+    // the kernel this run placed (4.8 §8): ledgered as asight's own file the moment the manifest exists, so an `uninstall` — this run's or a
     // later one's — removes the exe, the licence and source beside it, the kernel directory and the verified-archive cache (undo.mjs's forwarder-binary
     // role). `off` never removes it: a kernel that is draining stays (the undo's note says so). A kernel this run did not place needs no entry: the on
     // that placed it wrote one, and it survives every undo but uninstall's.
@@ -585,7 +585,7 @@ export async function turnOn(opts = {}) {
         if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // enable's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
         if (rr && rr.code !== 0) {
           // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —
-          // launchd is the only autostart there, 4.9 §12); the systemd wording below is the answer of an arch that has none.
+          // launchd is the only autostart there, 4.9 §11); the systemd wording below is the answer of an arch that has none.
           if (rr.event) { unitFailed = rr.event.reason; notes.push(unitFailed); problems.push(unitFailed); put(rr.event) }
           else {
             // the start question in the platform's own words: win32's unit is a scheduled task (\asight\collector, autostart.mjs), darwin's a LaunchAgent,

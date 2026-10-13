@@ -1,8 +1,8 @@
-// win32/deepseek-dsh.mjs — DeepSeek dsh on Windows (RFC 4.8 §2.3 · §3.5 · §6.1; lab L1–L3, T0): data and the trust injection. Two forms, one entry group: `deepseek-dsh.cli` (node.exe running
+// win32/deepseek-dsh.mjs — DeepSeek dsh on Windows (RFC 4.8 §2.3 · §3 · §6.1; lab L1–L3, T0): data and the trust injection. Two forms, one entry group: `deepseek-dsh.cli` (node.exe running
 // dsh's bin script) and `deepseek-dsh.desktop` (DeepSeek Harness.exe) both read %USERPROFILE%\.dsh\.env (or $DSH_HOME), so they share one group, one port, one listener. dsh accepts a
 // proxy variable from the HOME .env (not a CA or TLS one, which it refuses to start on), and dsh configured with SOCKS silently goes direct [E19], so the entry is always http://.
 // The CLI is `node.exe`, which is every Node program of the machine: it is told by its command line (…\@deepseek-ai\dsh), has no process rule in the kernel and is judged by the engine
-// by pid on the group's port (4.8 §3.5). The desktop app's own image is unique, so it has a name rule as well as its path.
+// by pid on the group's port (4.8 §3). The desktop app's own image is unique, so it has a name rule as well as its path.
 // Trust (§6.1): the plugin file asight-ca.mjs beside cordis.patch.yml and one sentinel row in that patch file, in the form lab L1 measured and [T0] re-measured (relative path, the row loaded
 // the plugin): `- insert: [{id: asight-ca, name: ./asight-ca.mjs}]`. The plugin (plugins/win32/dsh.mjs) adds nothing on Node < 22.19 or under --use-openssl-ca.
 import path from 'node:path'

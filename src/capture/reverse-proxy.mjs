@@ -1,4 +1,4 @@
-// reverse-proxy.mjs — base_url tee (CC-CLI / DeepSeek-CLI path, RFC 4.1 §三个采集源#1).
+// reverse-proxy.mjs — base_url tee (CC-CLI / DeepSeek-CLI path).
 // TRANSPARENCY CONTRACT: the only request headers changed are HOP_BY_HOP + Host; the request
 // body is forwarded byte-for-byte and the response is streamed to the client verbatim. All
 // recording happens on a decoded side-copy (tee) that can never affect the client's bytes.

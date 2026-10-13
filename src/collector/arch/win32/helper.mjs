@@ -24,7 +24,7 @@ export const HELPER_PS1 = fileURLToPath(new URL('./helper.ps1', import.meta.url)
 export const HELPER_VERBS = Object.freeze(['ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'version'])
 /** What reg-read may read, besides the keys a harness file declares (below): the Internet Settings proxy values (4.7 §3, 4.8 §2.2), the user's Path and the proxy variables of the login environment
  *  (`HKCU\Environment`: the agent's own proxy when no file names one, 4.8 §2.2; asight reads them and never writes one, D43), the machine PATH (the Kimi and OpenCode shims, 4.8 §6.3)
- *  and the Smart App Control policy state (4.8 §8). Hive and key compare case-insensitively with `/` taken as `\` and no trailing `\`; names compare case-insensitively (a registry value name is
+ *  and the Smart App Control policy state (4.8 §6.3). Hive and key compare case-insensitively with `/` taken as `\` and no trailing `\`; names compare case-insensitively (a registry value name is
  *  not case-sensitive, so `https_proxy` is read as `HTTPS_PROXY`). helper.ps1 carries the same list as one JSON literal. */
 export const REG_READ_ALLOW = Object.freeze([
   { hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', names: Object.freeze(['ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL']) },

@@ -71,7 +71,7 @@ function hydrateForBoard(r) {
 
 // headersOf tolerates BOTH the demo v0 `request_headers` and the product D10 `req_headers` envelope key.
 export const headersOf = (rec) => (rec && (rec.request_headers || rec.req_headers)) || {};
-// Envelope drift guard (R1, audit 2026-07-19). The product D10 envelope stores the response under
+// Envelope drift guard (R1). The product D10 envelope stores the response under
 // `resp` (src/capture/envelope.mjs); demo v0 used `response`. Readers MUST go through this helper —
 // reading `.response` directly is what silently killed the probe rail, every HTTP status and the
 // whole control-plane view on real captures (`.response` was present on 0 of 25,817 live records)

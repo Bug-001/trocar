@@ -28,7 +28,7 @@ import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 const NL = 0x0a;
 const BODY_LRU = 8; // req_body strings held at once — a call's blocks resolve off one cached body
 
-// ── record-id collisions across files (audit 2026-07-19 · invariant 2) ───────────────────────
+// ── record-id collisions across files (invariant 2) ───────────────────────
 // A record id is unique only WITHIN one capture file — every harness mints req_00001, req_00002…
 // So a DIRECTORY source indexing on the bare id let the last-scanned file silently overwrite the
 // earlier one, and the "回源 verbatim bytes" panel then served the WRONG file's body while
@@ -44,7 +44,7 @@ const AMBIGUOUS = Symbol('ambiguous-record-id');
 // rawRef = `<sessionId>/<streamBasename>#<recordId>` → the stream component.
 const streamOfRawRef = (rawRef) => rawRef.slice(rawRef.indexOf('/') + 1, rawRef.lastIndexOf('#'));
 
-// ── fidelity of the bytes we hand back (audit 2026-07-19 · invariant 4 保真边界写明) ──────────
+// ── fidelity of the bytes we hand back (invariant 4 保真边界写明) ──────────
 // NOT every record we can resolve is byte-faithful. `normalizeRecord` (src/etl/ingest.mjs:14)
 // has two branches:
 //   · D10 — `req_body` is the VERBATIM captured request string → the bytes that went on the wire.
@@ -64,7 +64,7 @@ function classifyFidelity(raw) {
   return 'reserialized';                                     // v0 parsed JSON → JSON.stringify(…)
 }
 
-// ── outcomes (audit 2026-07-19) ───────────────────────────────────────────────────────────────
+// ── outcomes ───────────────────────────────────────────────────────────────
 // "no such record", "the record's bytes are damaged" and "the record carries no body" used to
 // collapse into a single `null`, so the caller of the SOURCE-TRUTH resolver — the one place the
 // difference matters most — could not tell missing from broken. They are distinct now, and the
@@ -330,7 +330,7 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
   if (roots.length > 1) return buildMultiResolver(roots, { retryMs, sessionsRoot, exclude });
   const sourcePath = roots[0];
   const files = [];
-  // scan (audit 2026-07-19): what is not read is recorded with its reason, so the omission is
+  // scan: what is not read is recorded with its reason, so the omission is
   // reportable rather than silent. Which files are read, and the reasons for the rest, come from the
   // shared rule (src/raw/discover.mjs): the flat *.ndjson, one level down `<sid>/calls.ndjson`, and
   // sealed files standing where those streams would be read.

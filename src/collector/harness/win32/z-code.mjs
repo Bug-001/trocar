@@ -4,7 +4,7 @@
 //   z-code.cli      network.httpProxy in %USERPROFILE%\.zcode\cli\config.json (the ZCODE_HTTP_PROXY variable does not honour caCertFile), the same file as the trust key
 //                   network.caCertFile (written by the Linux descriptor's `inject`, as it is)
 //   z-code.desktop  opt-in (4.8 §2.4): httpProxy and httpProxyCaCertPath in %USERPROFILE%\.zcode\v2\setting.json. ZCode.exe IS this agent's process, not a host that carries other
-//                   programs' connections (D40, 4.8 §3.5, OPEN 23): its process rule is the whole image and it has no `hosts`.
+//                   programs' connections (D40, 4.8 §3, OPEN 23): its process rule is the whole image and it has no `hosts`.
 // ZCode.exe is no shared image, but two forms use it, so there is no PROCESS-NAME rule (it would hand the other form's connections to this one's listener).
 import path from 'node:path'
 import linux, { CLI_CMDLINE } from '../z-code.mjs'

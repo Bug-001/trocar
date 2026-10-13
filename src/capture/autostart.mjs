@@ -25,7 +25,7 @@ function macAutostart({ home = os.homedir(), run = defaultRun, fs = realFs } = {
     // KeepAlive is per-agent: the durable mitm restarts on crash (true), but a one-shot
     // `launchctl setenv` primer exits immediately and MUST NOT be respawn-looped (false).
     const keepAliveXml = keepAlive ? '  <key>KeepAlive</key><true/>\n' : '';
-    // ExitTimeOut: how long launchd waits after SIGTERM before SIGKILL (default 20 s). The MITM drains its open connections for up to 10 s on SIGTERM (RFC 1.6 §4), so it asks for 15.
+    // ExitTimeOut: how long launchd waits after SIGTERM before SIGKILL (default 20 s). The MITM drains its open connections for up to 10 s on SIGTERM, so it asks for 15.
     const exitXml = Number.isInteger(exitTimeOut) ? `  <key>ExitTimeOut</key><integer>${exitTimeOut}</integer>\n` : '';
     return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

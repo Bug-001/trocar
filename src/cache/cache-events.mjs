@@ -1,9 +1,9 @@
 // src/cache/cache-events.mjs — RFC 3.3 cache-events derivation (D17 forensics · asight's
-// differentiating moat, roadmap §1·5). Pure, offline functions: given a class='llm' call's
+// differentiating moat, D17 · spec 3.3). Pure, offline functions: given a class='llm' call's
 // ordered BlockRow[] + its same-lane predecessor's BlockRow[] + canonical usage, derive ONE
 // cache_events row (3.2 columns).
 //
-// UPGRADES over the earlier prototype's cacheBreak/groundTruth (roadmap §1·5 ①④):
+// UPGRADES over the v0 prototype's cacheBreak/groundTruth (D17 · spec 3.3):
 //   • block identity = full sha-256 content_hash (D19, over VERBATIM wire bytes) — NOT the demo's
 //     32-bit blkKey over the first 4096 chars.
 //   • divergence_byte_offset over the block's VERBATIM source bytes (BlockRow.text = the exact

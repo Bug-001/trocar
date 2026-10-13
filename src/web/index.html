@@ -521,7 +521,7 @@ const fmtTime = ts => { try{ return new Date(ts).toLocaleTimeString() }catch{ re
 const fmtDur = ms => ms==null?'?':ms>=1000?(ms/1000).toFixed(1)+'s':ms+'ms'
 // rough cost estimate ($/Mtok: input, output, cache-write-5m, cache-read) — editable
 let PRICING={opus:[15,75,18.75,1.5],sonnet:[3,15,3.75,0.3],haiku:[1,5,1.25,0.1]} // D14: overridden by /api/pricing (editable config); cost = usage × price, derived-only
-// BUG 3 (audit 2026-07-19): pricing is a (provider, model) space — spec 2.2:42 `price[provider,
+// BUG 3: pricing is a (provider, model) space — spec 2.2:42 `price[provider,
 // model, role]` / 2.2:44 「单价表按 (provider, model) 扩展」. The old priceKey() matched the
 // ANTHROPIC family names opus/sonnet/haiku as substrings **with haiku as the fallback**, so every
 // OpenAI / DeepSeek model silently got haiku rates and a confident $ figure. A wrong number is
@@ -621,7 +621,7 @@ let lastRenderSig=null // poll skips re-analyze+render when the session's data h
 let lastCheapSig=null   // poll skips the whole /api/session fetch when calls/last_ts (from the cheap projects list) are unchanged — avoids re-shipping a large trace every 1.5s
 let navSeenExpanded=false
 
-// ── BUG 1 (audit 2026-07-19): cursor paging, browser half (3.5 游标契约 · 4.4:88②) ────────────
+// ── BUG 1: cursor paging, browser half (3.5 游标契约 · 4.4:88②) ────────────
 // The server has shipped `?cursor=<gi>&limit=<n>` since 2026-07-16 and the board never once called
 // it, so it could only ever ask for the WHOLE session — which cannot be shipped, so the server
 // tail-bounds the view and the user sees a handful of calls out of hundreds. We now request a
@@ -744,7 +744,7 @@ async function poll(){
         eb.innerHTML=`⚠ 加载失败 · could not load this session: <b>${String(d.error).replace(/[<>&]/g,'')}</b> — the raw trace on disk is intact (source truth unaffected). If the server died, restart it; if the session is huge, it is served tail-bounded.` }
       renderEmpty('Could not load this session — see the banner above.')
       document.getElementById('stats').innerHTML=''
-      // R8 (audit 2026-07-19): the cheap short-circuit sig was set BEFORE this fetch, so leaving it
+      // R8: the cheap short-circuit sig was set BEFORE this fetch, so leaving it
       // set means the next poll skips the retry and the board stays wedged even after the server
       // recovers — re-selecting the same session could not un-stick it. Clear both sigs so the very
       // next poll re-fetches. And drop the live dot: a green dot during an outage claims a freshness
@@ -816,7 +816,7 @@ async function poll(){
     document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked)
   }catch(e){ document.getElementById('dot').classList.remove('on'); console.error(e) }
 }
-// BUG 2 (audit 2026-07-19): this used to clear only the panels, leaving the overview strip, the
+// BUG 2: this used to clear only the panels, leaving the overview strip, the
 // position indicator, the axis captions and the header stats carrying the PREVIOUS session's data
 // — so a session that failed or is empty rendered under another session's waveform and a header
 // like "6 turns · peak 140k". Every widget that carries per-session data MUST be neutralized here
@@ -831,7 +831,7 @@ function renderEmpty(msg){ document.body.classList.remove('ctrlmode'); brushDrag
 }
 function hideSessionChrome(hide){ document.getElementById('saw').style.display=hide?'none':''; document.getElementById('rails').style.display=hide?'none':''; const lb=document.getElementById('loggedbar'); if(hide&&lb){ lb.style.display='none'; lb.innerHTML='' } }
 
-// Envelope-tolerant readers (R1, audit 2026-07-19). /api/control ships RAW records: the product
+// Envelope-tolerant readers (R1). /api/control ships RAW records: the product
 // D10 envelope uses `resp`/`req_headers`/`req_body`, demo v0 used `response`/`request_headers`/
 // `request`. Reading only the v0 names made every status cell render "?" (260/260 rows on a real
 // capture), the feature-flags section never render, and the detail panel show UA "?" with blank
@@ -1101,7 +1101,7 @@ function render(){
   if(fc){ fc.textContent=_fork; fc.style.display=_fork?'':'none'; fc.title=_same>1?'other sessions share this title — likely forks / different branches; the id chip disambiguates':'subagent branches spawned from this session' }
   if(!anchor){ renderEmpty('No LLM calls traced yet.'); document.getElementById('stats').innerHTML=''; return }
   const st=A.stats, err=errStats()
-  // BUG 1 (audit 2026-07-19): this used to count `A.lanes.find(kind==='main')` while the board
+  // BUG 1: this used to count `A.lanes.find(kind==='main')` while the board
   // RENDERS `anchor` — on a capture with no main lane (routine on real Desktop traces) the header
   // read "0 turns" over N drawn bars. The count MUST come from the lane actually on screen, and
   // "turns" is a main-conversation word: an off-main anchor is counted in its own calls (不变式4).
@@ -1124,7 +1124,7 @@ function render(){
 // per-call context composition by type, cached on the step. Paints each timeline bar as a stacked
 // multi-color column (point 3).
 //
-// BUG 2 (audit 2026-07-19) — invariant 3 / AC-3. This used to read the ANTHROPIC wire body
+// BUG 2 — invariant 3 / AC-3. This used to read the ANTHROPIC wire body
 // (`rq.system[]`, `rq.messages[].content[]`, block `.type`) directly. An OpenAI-Responses body has
 // none of those (it carries `instructions` + `input[]`), so every Codex / OpenCode call scored 0 in
 // every bucket except `tools` and the signature multi-colour bar rendered as one solid column —
@@ -1297,7 +1297,7 @@ function renderSaw(){
     return `<div class="cbar ${cls} ${i===playhead?'cur':''}" title="#${i+1} · cache read ${kf(read)}/${kf(tot)} · ${Math.round(r*100)}%"></div>`
   }).join('')
   const full=(lo===0&&hi===N)
-  // BUG 1 (audit 2026-07-19): the label was hardcoded `💬 conversation` while the anchor may be
+  // BUG 1: the label was hardcoded `💬 conversation` while the anchor may be
   // ANY lane (`lanes.find(main)||lanes[0]` — real Desktop captures often have no main lane), so a
   // security-monitor / subagent lane was presented AS the conversation. Name the lane we are
   // actually drawing (server ships lane.icon/lane.label — invariant 3: no provider logic here).
@@ -2376,15 +2376,15 @@ function renderMon(el,d){
     btn.textContent='…'; btn.disabled=true
     try{
       const pr=await fetch('/control/monitoring',{method:'POST',headers:{'content-type':'application/json','x-asight-csrf':d.csrf},body:JSON.stringify({action})})
-      // where the server runs `asight off` (no new collector, 1.6 §4) an off that is not done says so and why (D38: never a silent switch back to OFF)
+      // where the server runs `asight off` (1.6 §4, V40) an off that is not done says so and why (D38: never a silent switch back to OFF)
       let pb=null; try{ pb=await pr.json() }catch(e){ pb=null }
       const s=await fetch('/control/status',{cache:'no-store'})
       if(s.ok){ const sd=await s.json(); if(action==='off'&&(!pr.ok||(pb&&pb.ok===false))) sd.offProblem=((pb&&(pb.error||(pb.receipt&&((pb.receipt.problems&&pb.receipt.problems[0])||(pb.receipt.notes&&pb.receipt.notes[0])))||pb.stderr))||`HTTP ${pr.status}`); renderMon(el, sd) }
     }catch(e){ btn.disabled=false; btn.textContent='监测 ✗' }
   }
 }
-// BUG 3 (audit 2026-07-19): probed EXACTLY ONCE, at boot — never from poll()'s 1.5s loop (the audit
-// suspected a 404-per-cycle; measured, it was already one-shot, and control-availability.test.mjs
+// BUG 3: probed EXACTLY ONCE, at boot — never from poll()'s 1.5s loop (a 404-per-cycle
+// was suspected; measured, it was already one-shot, and control-availability.test.mjs
 // now pins that). The real defect was the failure path: a bare `return` left the pill
 // `display:none` forever, so on a read-only server (D26 control is opt-in) the user could not tell
 // "monitoring control is off" from "this build has no such feature" — a silent failure, which is

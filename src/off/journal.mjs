@@ -1,5 +1,5 @@
 // journal.mjs (src/off) — the undo half of the install journal: take one entry or one owned file of the manifest back out by the
-// 4.6 rules (RFC 4.6 §安装清单与卸载「撤一个文件的规则」, 1.6 R3; D28: only asight's key / block / line, never a whole-file rollback).
+// 4.6 rules (RFC 4.6 §安装清单与卸载「撤一个文件的规则」, 1.6 R3; R2: only asight's key / block / line, never a whole-file rollback).
 // The install half (applyJsonKey, applyTextEntry, writeOwnedFile) stays in src/collector/core/trust/journal.mjs; this half is here so
 // `asight off` and the standalone `~/.asight/bin/asight-off` can run it from node:* alone (0.1 §2).
 import nodeFs from 'node:fs'

@@ -1,9 +1,8 @@
-// trust-store.mjs — cross-OS TrustStoreInstaller (D22 · RFC 4.1 §采集安全#3 · 4.5).
+// trust-store.mjs — cross-OS TrustStoreInstaller (D22).
 //
 // Import-only, USER-LEVEL trust; NEVER machine-wide TLS weakening (必拒). `process.platform`
 // dispatches to a per-OS installer. Each method BUILDS argv; execution goes through an INJECTED
-// `run` so the unit is fully testable offline WITHOUT mutating any real trust store
-// (RFC 4.1 §验收5 / 4.5 §验收1). Mirrors mitm.mjs's injectable-connector pattern.
+// `run` so the unit is fully testable offline WITHOUT mutating any real trust store.
 //
 // v1: darwin + linux. win32 throws (reserved, D22) rather than silently no-op'ing, so no caller
 // mistakes the absence of a Windows installer for coverage — same discipline as relay-tee's X.
@@ -11,8 +10,7 @@ import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 
 // CA subject CN — "/CN=atrace local MITM CA" (a legacy name, not to be renamed: a root
-// already in a keychain is found by it). The names and the removal argv lived in src/off/legacy.mjs from Task 10 until the
-// old capture retired (D39⑥ executed 2026-10-11); they came back here, beside the installers that use them.
+// already in a keychain is found by it).
 export const CA_CN = 'atrace local MITM CA'
 // NSS nickname the CA is registered under (Linux).
 export const CA_NICKNAME = 'asight-ca'

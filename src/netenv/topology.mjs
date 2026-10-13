@@ -227,7 +227,7 @@ function proxyTopology(F, h, hf) {
     if (fm.optIn && fm.optIn.state === 'needed' && fm.optIn.enable) notes.push(`要采它: ${fm.optIn.enable}`)
     if (fm.reason === 'form-path-unknown') notes.push(`这个安装方式的路径 asight 还不认识(${(fm.unknownPaths || []).join('; ') || 'path shape not read'});把它报给 asight`)
     if (fm.hosts && wired) {
-      // the host-tree lines of 4.8 §3.5 (W69): the host program's other connections only forward, only the form's host set reaches the engine; the extension's own settings, when they
+      // the host-tree lines of 4.8 §3 (W69): the host program's other connections only forward, only the form's host set reaches the engine; the extension's own settings, when they
       // cannot be read, leave the set at the defaults and extra_hosts (said, never silent); and a fresh read that differs from what the daemon reports as applied means the kernel's
       // set is old — the line names the command that recomputes it, `status` itself changes nothing (read-only).
       const program = fm.hosts.program || '宿主程序', extension = fm.hosts.extension || '这个形态'
@@ -269,8 +269,8 @@ function proxyTopology(F, h, hf) {
   return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: b.on_path, captured: b.captured, reason: b.reason, vpn: vpnOf(F), nodes: g.nodes, edges: g.edges, branches, running: [], notes: [...new Set(notes)], findings: [] }
 }
 
-// ── the macOS old capture (§4): the system proxy → the VPN's script block → asight's old MITM → the VPN again ──────────────────────────────────────────────────────────────────────────────────────────────────────
-// The old capture judges itself (src/cli/legacy-status.mjs); the facts bring its verdict: `legacy: { mitm: { addr, port, pid } | null, on_path, captured, reason }`. The MITM and the VPN that routes into it and out of it
+// ── the macOS old capture: the system proxy → the VPN's script block → asight's old MITM → the VPN again ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// The facts bring the old capture's verdict: `legacy: { mitm: { addr, port, pid } | null, on_path, captured, reason }`. The MITM and the VPN that routes into it and out of it
 // are two nodes of the same product (`role`), so the path is a path of distinct nodes.
 function legacyTopology(F, h, hf) {
   const g = graph(), main = hf.procs[0] || null, a = agentOf(g, h, main), l = hf.legacy || {}

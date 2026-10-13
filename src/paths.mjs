@@ -1,6 +1,6 @@
 // src/paths.mjs — the ONE place default capture/serve paths are decided.
 //
-// Why this module exists (audit 2026-07-19, first-run dead end): the capture writers and the board
+// Why this module exists (first-run dead end): the capture writers and the board
 // reader each computed their own default, inline, and they disagreed —
 //   asight capture → ~/.atrace/capture.ndjson
 //   asight mitm    → ~/.atrace/asight/claude-capture.ndjson

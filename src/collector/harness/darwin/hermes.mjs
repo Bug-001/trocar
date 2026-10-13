@@ -11,7 +11,7 @@
 //     there, like the managed .env below.
 // hermes.cli is told by its command line — the Linux descriptor's identity (the sh launchers exec the private CPython as `python3 -I -c '<bootstrap>'` naming hermes_bootstrap and
 // hermes_cli.main / acp_adapter.entry; the TUI children as `-m tui_gateway.entry` / `slash_worker`), which needs no install path; python3 is every Python of the machine, so there is
-// no PROCESS-NAME rule, and a command-line form has no PROCESS-PATH-REGEX either: no process rule, the engine judges it by pid on its port (the dsh precedent, 4.8 §3.5). The image is a
+// no PROCESS-NAME rule, and a command-line form has no PROCESS-PATH-REGEX either: no process rule, the engine judges it by pid on its port (the dsh precedent, 4.8 §3). The image is a
 // LIST of the two spellings one launcher takes: the exec names `…/tools/python-<ver>/bin/python3`, but the facts' exe is lsof's txt record — the REAL binary the symlink resolves to — and
 // that is the version-named `python3.14` (installer main 0.21.5+9145: `bin/python3 -> python3.14`; MA4's "a python3.12 is not measured" answered). A private
 // CPython of another minor extends this list — its miss is the form going `none` again, and the capture-matrix cell is the tripwire. `exe` on darwin

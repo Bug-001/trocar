@@ -10,7 +10,7 @@
 //            (Codex / Hermes .env files hold API keys): the copy made before the change is a file in ~/.asight/backup/
 //            (src/off/backup.mjs, 1.6 R2) and `backup` only names it.
 // Write-ahead: the intent (no post_sha256) is fsynced before the user's file is touched, so an install that
-// crashed half-way is still found and undone. No whole-file snapshot rollback, ever (D28).
+// crashed half-way is still found and undone. No whole-file snapshot rollback, ever (1.6 R2).
 // 1.6 R9 (D39): `on` is idempotent and resumable, so the install half judges before it writes — judgeEntry / judgeOwned say, per planned item and
 // from the manifest and the disk, whether it is to be written, is intact (never rewritten: `installed_at`, inode and mtime stay), is only an intent
 // a crash left (resume: finish it), or was changed by the user since (reported, left). apply* run the same judgement themselves, so a caller that

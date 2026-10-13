@@ -309,7 +309,7 @@ const LANE_ORDER = { main: 0, subagent: 1, monitor: 2, notify: 3, titlegen: 4, q
 const AUX_KINDS = new Set(['aux', 'notify', 'titlegen', 'quota'])
 const EVENT_ONLY_KINDS = new Set(['monitor', 'probe', ...AUX_KINDS]) // one event per call, no ReAct / resource walk
 
-// ── admission (audit 2026-07-19 · invariant 4) ──────────────────────────────────────────
+// ── admission (invariant 4) ──────────────────────────────────────────
 // EVERY captured LLM call is admitted, whatever its HTTP status. The old filter demanded a
 // parsed 200, which made the spec's `status≠200 → 红柱` unreachable BY CONSTRUCTION (the call
 // never reached the timeline) while the board's errStats() counted the same failures straight
@@ -418,7 +418,7 @@ export function analyze(records, opts = {}) {
       error: failed,
       errMsg: r._unparsed ? unparsedErrMsg(reqIncomplete)
         : (rs.error?.message || (status != null && status !== 200 ? `HTTP ${status}` : (r.error ? String(r.error.message || r.error) : null))),
-      // Cache-prefix chaining (audit 2026-07-19). A call that FAILED did not establish a new cache
+      // Cache-prefix chaining. A call that FAILED did not establish a new cache
       // prefix at the provider — a 401/429/502 never got far enough to write one — so the next call's
       // prefix diff must be taken against the last SUCCESSFUL call, not against the failure. This flag
       // makes that skip EXPLICIT and inspectable; the call still APPEARS on the timeline (that was the
@@ -673,7 +673,7 @@ function truncNote(text) {
 
 export function linearContext(request) {
   const flat = []
-  // ── resource ↔ RESULT linking (audit 2026-07-19) ────────────────────────────────────────
+  // ── resource ↔ RESULT linking ────────────────────────────────────────
   // The 📂 resource explorer promises "the bytes that entered the context". The dissector keys a
   // file resource to its `tool_use` (that is where the path is), but a tool_use carries only the
   // ARGUMENTS the model sent — the file's bytes live in the sibling `tool_result`. The board's

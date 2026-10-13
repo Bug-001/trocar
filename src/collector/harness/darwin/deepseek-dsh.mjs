@@ -1,9 +1,9 @@
-// darwin/deepseek-dsh.mjs — DeepSeek dsh on macOS (RFC 4.9 §2.3; the entry group, the dedicated port and the plugin trust are 4.8 §2.3 · §3.5 · §6.1): data, no behaviour but the
+// darwin/deepseek-dsh.mjs — DeepSeek dsh on macOS (RFC 4.9 §2.3; the entry group, the dedicated port and the plugin trust are 4.8 §2.3 · §3 · §6.1): data, no behaviour but the
 //   trust injection — the darwin twin of win32/deepseek-dsh.mjs, inferred everywhere until MA4. One form, one entry group: `deepseek-dsh.cli` is `node` running dsh's entry script
 //   (the command line holds …/bin/dsh — the global npm symlink — or …/@deepseek-ai/dsh/lib/bin.js, the two shapes measured on Linux, 4.6's identity row) and it reads
 //   ~/.dsh/.env (or $DSH_HOME), so the one form owns one group, one port and one listener. dsh accepts a proxy variable from the HOME .env (not a CA or TLS one, which it refuses
 //   to start on), and dsh configured with SOCKS silently goes direct [E19], so the entry is always http://.
-// `node` is every Node program of the machine: no PROCESS-NAME, and no process rule at all — the group's port is the dedicated port of 4.8 §3.5 and the engine judges by pid
+// `node` is every Node program of the machine: no PROCESS-NAME, and no process rule at all — the group's port is the dedicated port of 4.8 §3 and the engine judges by pid
 //   (dsh's own subprocess runner and PTC children never read the .env, so they never reach the kernel through it; a pid that is not this form's, or none at all, is passed
 //   through). The DESKTOP app is measured (on a macOS test machine, dmg 0.2.0-rc.2): it is NOT the CLI's twin — its dsh core READS ~/.dsh/.env (the real home,
 //   NSHomeDirectory) but a launcher key there (DEEPSEEK_BASE_URL) is FATAL to it ("only the launching environment may set"), and a proxy key there is IGNORED by the
@@ -47,7 +47,7 @@ export default {
   }],
   forms: [
     // the agent is node with dsh's entry script in its command line: …/bin/dsh (the global symlink) or …/@deepseek-ai/dsh/lib/bin.js (npm); no path of its own — node is not
-    // unique — so the form has no process rule and the engine judges it by pid on the group's dedicated port (4.8 §3.5)
+    // unique — so the form has no process rule and the engine judges it by pid on the group's dedicated port (4.8 §3)
     { id: 'deepseek-dsh.cli', g: 'deepseek-dsh.env', match: { image: 'node', cmdline: [raw`@deepseek-ai\/dsh`, raw`\/bin\/dsh`] }, nameRule: false, processRules: false, supported: true },
     // the dmg app's family, measured 2026-10-12: the bundle's main binary and its Chromium Helpers — the network utility Helper owns the sockets (lsof, live); a Helper of
     // another app's bundle is not this form (the paths stay inside DeepSeek Harness.app)

@@ -35,7 +35,7 @@ function hopText(n, via, detail, inferred = false) {
 /** The word on an edge: how the connection gets from one hop to the next. */
 function edgeLabel(e, from, to, detail) {
   if (!e) return ''
-  if (to.kind === 'legacy-mitm') return '旧块 · 旧采集' // the old capture's block in the VPN's script routes the connection into its MITM (1.6 §4)
+  if (to.kind === 'legacy-mitm') return '旧块 · 旧采集' // the old capture's block in the VPN's script routes the connection into its MITM
   if (from.kind === 'legacy-mitm') return ''
   if (e.via === 'ebpf') return detail && (e.evidence || []).find((x) => x.startsWith('link:')) ? `eBPF · link ${e.evidence.find((x) => x.startsWith('link:')).slice(5)}` : 'eBPF'
   if (e.via === 'system-proxy') return '系统代理'

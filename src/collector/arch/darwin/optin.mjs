@@ -18,13 +18,12 @@
 //   desktop-launcher claude-code.desktop — the proxy door the 2026-10-12 lab verdict measured (§6.4): env is dead to Desktop's Chromium
 //                    network service, so the item writes a LAUNCHER, ~/.asight/collector/bin/claude-desktop-asight (0755), which execs the
 //                    real bundle binary with Chromium's --proxy-server at the group's listener plus --proxy-bypass-list. The URL carries no
-//                    password (Chromium ignores embedded credentials anyway; the group is auth:false, 4.8 §3.2), the app binary is
+//                    password (Chromium ignores embedded credentials anyway; the group is auth:false, 4.8 §3), the app binary is
 //                    /Applications/Claude.app's, ~/Applications' as the fallback, and neither being there is a refusal (Desktop is not
 //                    installed). The item steers ONLY instances started through the launcher — a running Desktop is untouched (the impact,
 //                    the summary and the plan hint all say so verbatim). Undo: the launcher file goes (src/off/darwin-optin.mjs).
 // Pure data and injected-exec functions (the win32 twin's rule): no socket, no process, no keychain of its own; a test runs everything
-// against a sandbox HOME and a recording runner. The planOptIns / optinFormsOf core is the win32 twin's same-logic copy (4.9's
-// development boundary: the hoist into core/ is the merge-period coordination, OPEN 3) — if you change what it means, change both.
+// against a sandbox HOME and a recording runner. The planOptIns / optinFormsOf core is the win32 twin's same-logic copy — if you change what it means, change both.
 import path from 'node:path'
 import fs from 'node:fs'
 import crypto from 'node:crypto'

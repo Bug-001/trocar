@@ -1,12 +1,11 @@
-// steer-watch.mjs — the CC-Desktop Clash steer is never lost silently (D38, transitional — deleted with the old capture;
-// RFC 4.1 「过渡期采集源的失败也不静默」 落地细节 (7)(8)). Before, a Verge regen or a stopped Script.js left Desktop
+// steer-watch.mjs — the CC-Desktop Clash steer is never lost silently (D38, transitional — deleted with the old capture). Before, a Verge regen or a stopped Script.js left Desktop
 // capturing nothing with not one line anywhere, and `asight uninstall` printed a steer revert error as "n/a".
 //   createSteerWatch(): the MITM calls it at start and every 60 s with `asight desktop status`. Once the steer has
 // been seen installed, its going missing (the block or Script.js gone) is `steer-missing`; installed but not in
 // mihomo's live proxy list is `steer-missing` too; a Script.js that cannot be read is `steer-unreadable` (even at
 // the first check). One line per transition, none while it stays the same; a steer never installed (CC-CLI only)
 // writes nothing.
-//   legacyOffPending(): `asight off` writes ~/.asight/legacy-off.pending ({pid}) before it strips the Clash block and removes it after the MITM is unloaded (RFC 1.6 §4); while the pid in it is alive the
+//   legacyOffPending(): `asight off` writes ~/.asight/legacy-off.pending ({pid}) before it strips the Clash block and removes it after the MITM is unloaded; while the pid in it is alive the
 // block's going away is off's own doing, not a loss, so the watch says nothing.
 //   uninstallSteer(): `asight uninstall`'s steer step — what to print, and the line to write when it failed.
 import { homedir } from 'node:os'
@@ -26,7 +25,7 @@ export function legacyOffPending({ home = homedir(), fs = nodeFs, alive = pidAli
 export function createSteerWatch({ status, record = appendLegacyEvent, pending = () => false }) {
   let seen = false, last = null
   return async function check() {
-    if (pending()) return null // asight off is taking the steer out (1.6 §4): the block going away is its doing, not a failure
+    if (pending()) return null // asight off is taking the steer out: the block going away is its doing, not a failure
     let st
     try { st = await status() } catch (e) { st = { scriptInstalled: null, readError: String((e && e.message) || e) } }
     if (!st || st.reserved) return null
