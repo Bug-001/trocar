@@ -51,6 +51,7 @@ test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and
   const file = fs.readFileSync(netenvOf(s), 'utf8')
   assert.ok(!/dave|hunter2|proxy\.corp:8080"/.test(file.replace('http://***@proxy.corp:8080', '')), 'netenv.json: no original value')
   assert.equal(readJson(netenvOf(s)).adopted['claude-code'].sha256, settingSha(USER_PROXY))
+  assert.deepEqual(Object.keys(readJson(netenvOf(s))).sort(), ['adopted', 'schema'], 'D49: `on` leaves nothing but the schema and the adoption record in netenv.json (no vpn / topology key it did not write)')
   assert.ok(doc.created.includes(netenvOf(s)), 'the file `on` wrote is in the receipt (V3)')
   assert.equal(fs.statSync(netenvOf(s)).mode & 0o777, 0o600)
 })
