@@ -480,7 +480,7 @@ test('F5 decoding and truncation of HTTP/1 calls: a response that cannot be fram
 // as the start, so the start is what is driven here.
 test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and records it; a rebuild that fails (read-only dir) leaves the old file, a failure event, and the endpoint lists the harness and path', { skip: process.getuid && process.getuid() === 0 ? 'root ignores directory modes' : false }, async () => {
   const s = sandbox(); const p = fakeProc()
-  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
+  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, createCa({ commonName: 'an OS root' }).certPem) // a machine with an OS bundle: none would be a bundle failure of its own (4.6 「合并包」)
   fs.mkdirSync(path.join(s.home, '.codex')); fs.writeFileSync(path.join(s.home, '.codex', 'config.toml'), 'model = "gpt-test-1"\n')
   const CODEX_EXE = '/home/u/.local/bin/codex'
   await install(s, { harnesses: [codex], osRootsFile: osRoots }); turnedOn(s, ['codex'])
@@ -532,7 +532,7 @@ test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and r
 // errno (D38 ②: a silent partial is not allowed), and the endpoint lists it. A rebuild that lost nothing says nothing of the kind.
 test('F1(d) a bundle rebuilt without a user CA it held (its source file moved) is a failure naming the harness, the file, the lost CA and the source errno; the endpoint lists it; nothing lost, nothing said', async () => {
   const s = sandbox()
-  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
+  const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, createCa({ commonName: 'an OS root' }).certPem) // a machine with an OS bundle: none would be a bundle failure of its own (4.6 「合并包」)
   const corpCa = createCa({ commonName: 'corp relay CA' })
   const corp = path.join(s.home, 'corp.pem'); fs.writeFileSync(corp, corpCa.certPem)
   fs.mkdirSync(path.join(s.home, '.codex')); fs.writeFileSync(path.join(s.home, '.codex', 'config.toml'), 'model = "gpt-test-1"\n')
