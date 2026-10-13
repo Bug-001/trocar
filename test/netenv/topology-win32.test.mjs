@@ -1,7 +1,7 @@
 // test/netenv/topology-win32.test.mjs — RFC 4.8 §10.2 (W29): every row a–s drawn from facts, literally (the node kinds, the verdict, the compact text — the row's own NetFacts is in
 // fixtures/rows-win32.mjs, written by hand), and the machinery those rows share driven through the REAL gatherNetFacts path (archFacts = gatherWin32Facts) with injected readers:
 // the entry edge (the manifest's record and the file's read-back), the elevated detector (integrity, or a token that will not open while the image path reads — the latter inferred),
-// the 「不知道 · env-unreadable」 of a proxy that lives only in the starting terminal, the host set of an opted-in Kimi VS Code extension and the VPN the probe saw. Nothing here
+// the 「不知道 · env-unreadable」 of a proxy that lives only in the starting terminal, the host set of an opted-in Kimi VS Code extension and the proxy hop named by its process. Nothing here
 // runs Windows or reads the machine: the helper is a fake that answers the read verbs, the collector dir is a sandbox's, the clock is fixed (0.1 §3).
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -38,23 +38,23 @@ for (const row of ROWS) {
   })
 }
 
-test('W29 the one line about the user\'s VPN per-process rules: in `status <h>` for every row whose machine has a VPN / proxy product (a–e), absent for row f — and it is a line of the detail view, not a note of the topology, so `on`\'s plan (which renders the notes) never prints it', () => {
-  const LINE = (h) => `你的 VPN 按进程分流时,看到的来源是 asight,不是 ${h}`
+test('W29/D49 the one line about per-process rules of a VPN / proxy: in `status <h>` for every row where asight is on the path, whatever the machine has (a–f, h, i, k, m, q, r), absent where it is not — and it is a line of the detail view, not a note of the topology, so `on`\'s plan (which renders the notes) never prints it', () => {
+  const LINE = (h) => `若你的 VPN / 代理按进程分流,它看到的来源是 asight,不是 ${h}`
   for (const row of ROWS) {
     const t = buildTopology(row.facts)[row.h]
     const detail = renderDetail(t, { now: NOW }).join('\n')
-    assert.equal(detail.includes(LINE(row.h)), row.vpnLine === true, `row ${row.n}: the line is ${row.vpnLine ? 'there' : 'not there'}`)
+    assert.equal(detail.includes(LINE(row.h)), row.on_path === true, `row ${row.n}: the line is ${row.on_path === true ? 'there' : 'not there'}`)
     assert.ok(!t.notes.some((n) => /按进程分流/.test(n)), `row ${row.n}: it is not a note, so nothing else renders it`)
   }
-  assert.ok(ROWS.filter((r) => r.vpnLine).length >= 5, 'a–e are covered')
+  assert.ok(ROWS.some((r) => r.on_path === true) && ROWS.some((r) => r.on_path === false), 'both sides are covered')
 })
 
-test('W29 row e (v2rayN) names the product the probe gave and nothing else about it: no rule, no secret, no node name of the user\'s', () => {
+test('W29 row e (v2rayN) is a proxy hop named by its executable and its port, and nothing else about it (D49: no product, no mode, no rule, no secret, no node name of the user\'s)', () => {
   const row = ROWS.find((r) => r.n === 'e'), t = buildTopology(row.facts).codex
   const hop = t.nodes.find((n) => n.kind === 'proxy')
-  assert.deepEqual([hop.product, hop.port], ['v2rayn', 10808])
-  assert.equal(renderCompact(t)[0].includes('v2rayN :10808'), true)
-  for (const n of t.nodes) assert.ok(!/password|secret|HK-|proxies:/i.test(JSON.stringify(n)), 'nothing of the user\'s VPN but the product, mode and port')
+  assert.deepEqual(hop, { id: hop.id, kind: 'proxy', name: 'v2rayN.exe', addr: '127.0.0.1', port: 10808, pid: 23001 })
+  assert.equal(renderCompact(t)[0].includes('v2rayN.exe :10808'), true)
+  for (const n of t.nodes) assert.ok(!/password|secret|HK-|proxies:/i.test(JSON.stringify(n)))
 })
 
 // ---------- the machinery of those rows, through gatherNetFacts (archFacts = gatherWin32Facts) with injected readers ----------
@@ -196,7 +196,7 @@ test('an env-only proxy is 「不知道 · env-unreadable」 (inferred): Windows
   assert.deepEqual(clean.harnesses.opencode.forms[0].setting, { value: null, scheme: null, host: null, port: null, source: [], sha256: null })
 })
 
-test('the VPN of the machine, through the 4.7 probe over the helper\'s reads and the adapter\'s facts: the product names the listener, the per-process line\'s data is a fact of the topology (and none of it is a rule, a secret or a node of the user\'s)', async () => {
+test('the proxy of the machine, through the real facts path over the helper\'s reads: the system proxy\'s listener is a hop named by its executable (D49: no product), and the per-process line is there because asight is on the path', async () => {
   const home = tmpDir('asight-wf-vpn-')
   collectorOf(home)
   const verge = { pid: 11800, name: 'verge-mihomo.exe', exe: 'C:\\Program Files\\Clash Verge\\verge-mihomo.exe', startedAt: 1759000000000, sessionId: 1, integrity: 'medium', tokenDenied: false, cmdline: null, cmdlineState: 'not-asked' }
@@ -210,12 +210,8 @@ test('the VPN of the machine, through the 4.7 probe over the helper\'s reads and
   })
   const adapter = { fields: {}, running: true, runtime: { version: '2.5.7', mode: 'rule', mixedPort: 7897, tun: false }, controller: {} }
   const f = await gatherNetFacts({ platform: 'win32', home, env: {}, harnesses: all, status: statusOf(['claude-code']), netenv: { result: { products: [], unknown: [] } }, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper, adapter } })
-  assert.deepEqual(f.vpn, { product: 'clash-verge-rev', version: '2.5.7', pid: null, port: 7897, mode: 'rule', tun: false })
-  assert.equal(f.listeners.find((l) => l.port === 7897).product, 'clash-verge-rev', 'the product names its own listener')
   const detail = renderDetail(buildTopology(f)['claude-code'], { now: NOW }).join('\n')
-  assert.ok(detail.includes('你的 VPN 按进程分流时,看到的来源是 asight,不是 claude-code'), 'the one line, from the fact')
-  const none = await gather(home, { helper: helperOf({ procs: [KERNEL_ROW, claudeRow(4121)] }) })
-  assert.equal(none.vpn, null, 'no product running: no VPN is claimed')
+  assert.ok(detail.includes('若你的 VPN / 代理按进程分流,它看到的来源是 asight,不是 claude-code'), 'the one line')
 })
 
 test('the host set of an opted-in Kimi VS Code extension (4.8 §3, read-only): the defaults plus the relay of the extension\'s own settings, said when they cannot be read, and the names the kernel cannot meet are dropped — `status` changes nothing', async () => {

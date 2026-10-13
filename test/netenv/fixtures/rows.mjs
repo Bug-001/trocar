@@ -1,8 +1,8 @@
 // test/netenv/fixtures/rows.mjs — one NetFacts per row of RFC 1.6 §9.3, with what `buildTopology` must say of it written out literally (V41, V42, V45). A NetFacts is what src/netenv/facts.mjs hands the
-// topology: the daemon, the link, the listeners, the VPN product, and per harness its setting, its processes and its entry. The expected values here are written by hand, not computed by
+// topology: the daemon, the link, the listeners, and per harness its setting, its processes and its entry. The expected values here are written by hand, not computed by
 // the code under test. `compact` is the chain of each branch as `renderCompact` prints it (whitespace is squashed by the test): the compact form, which is NOT the 「链」 column of RFC 1.6 §9.3 word for word
-// (V41's wording says so). That column is an example for a reader; the differences are mainly (not only) these: `link <id>` and a product's version are in the detail view only (rows 1, 2); the compact line has the pid,
-// the edge's source (`[HTTPS_PROXY]`) and `出口(<product> 选)` (rows 4–7); row 3's TUN is `→ [TUN] 出口(<product> 选)`; the ports and the product names in the spec's examples are examples. Rows 21 and 22 differ in their verdict
+// (V41's wording says so). That column is an example for a reader; the differences are mainly (not only) these: `link <id>` is in the detail view only (rows 1, 2); the compact line has the pid,
+// the edge's source (`[HTTPS_PROXY]`) and a proxy hop named by its executable (rows 2, 4–7); a VPN's `vpn` / TUN facts in the rows are not read (D49: row 3 is direct); the ports and the names in the spec's examples are examples. Rows 21 and 22 differ in their verdict
 // and are noted where they are.
 export const squash = (s) => String(s).replace(/\s+/g, '')
 
@@ -18,7 +18,7 @@ export const proxyOf = (value, source = [{ kind: 'env', where: 'HTTPS_PROXY' }],
   const u = new URL(value)
   return { value, scheme: u.protocol.slice(0, -1), host: u.hostname, port: Number(u.port), source, sha256: `sha-${value}`, ...over }
 }
-export const MIHOMO = { addr: '127.0.0.1', port: 7890, pid: 777, exe: '/usr/bin/mihomo', product: 'mihomo', version: '1.19.32' }
+export const MIHOMO = { addr: '127.0.0.1', port: 7890, pid: 777, exe: '/usr/bin/mihomo' }
 export const mihomoVpn = (over = {}) => ({ product: 'mihomo', version: '1.19.32', pid: 777, port: 7890, mode: 'rule', tun: false, ...over })
 
 /** A steered process (watched with decrypt, trusted) of harness `h`. */
@@ -60,36 +60,36 @@ row({ n: 1, title: 'no proxy in the agent: eBPF → engine → the API host, dir
 row({ n: 2, title: 'the agent has its own proxy (HTTPS_PROXY → mihomo, rule mode): the engine hands the CONNECT on', h: 'claude-code',
   facts: facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, viaMihomo),
   kinds: [['agent', 'asight-engine', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → [CONNECT 原样转] mihomo :7890 → 出口(mihomo 选)'], findings: [] })
+  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → [CONNECT 原样转] mihomo :7890 → 出口'], findings: [] })
 
-row({ n: 3, title: 'the VPN has TUN on and the agent has no proxy: the engine dials the API host as the agent would, into the TUN', h: 'claude-code',
+row({ n: 3, title: 'a VPN with TUN on is not read (D49): with no proxy in the agent the path stops at the API host, direct', h: 'claude-code',
   facts: facts('claude-code', { vpn: mihomoVpn({ product: 'clash-verge', tun: true }) }),
-  kinds: [['agent', 'asight-engine', 'upstream', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → api.anthropic.com:443(直连) → [TUN] 出口(Clash Verge Rev 选)'], findings: [] })
+  kinds: [['agent', 'asight-engine', 'upstream']], on_path: true, captured: true, reason: null,
+  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → api.anthropic.com:443(直连)'], findings: [] })
 
 row({ n: 4, title: 'asight is off (after `asight off`): the agent goes to its own proxy', h: 'claude-code',
   facts: facts('claude-code', { desired: { 'claude-code': 'off' }, listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { watched: 'absent', trusted: false, reason: 'off' })] }),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'desired-off',
-  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口(mihomo 选)'], findings: ['desired-off'] })
+  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口'], findings: ['desired-off'] })
 
 row({ n: 5, title: 'on, and this process started before `on`: the kernel does not rewrite its connections', h: 'claude-code',
   facts: facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { startedAt: BEFORE, watched: 'no-decrypt', trusted: false, reason: 'config-after-start' })] }),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'config-after-start',
-  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口(mihomo 选)'], findings: ['config-after-start'] })
+  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口'], findings: ['config-after-start'] })
 
 row({ n: 6, title: 'on, and (pid, host) is in the negative cache: the engine is on the path and passes the connection through', h: 'claude-code',
   facts: facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { negative: true })], negatives: [{ pid: 4121, host: 'api.anthropic.com', reason: 'negative-cache' }] }),
   kinds: [['agent', 'asight-engine', 'proxy', 'egress']], on_path: true, captured: false, reason: 'negative-cache',
-  compact: ['claude 4121 → [eBPF] asight 引擎 :47123(透传 · 负缓存 api.anthropic.com) → [CONNECT 原样转] mihomo :7890 → 出口(mihomo 选)'], findings: ['negative-cache'] })
+  compact: ['claude 4121 → [eBPF] asight 引擎 :47123(透传 · 负缓存 api.anthropic.com) → [CONNECT 原样转] mihomo :7890 → 出口'], findings: ['negative-cache'] })
 
 row({ n: 7, title: 'wanted on and the daemon is not running: the links went with the helper, the agent goes to its own proxy', h: 'claude-code',
   facts: facts('claude-code', { daemon: { state: 'not-running', pid: null, enginePort: null }, link: { attached: null, helper: 'ok', ids: [] }, listeners: [MIHOMO], vpn: mihomoVpn() }, { ...viaMihomo, procs: [proc(4121, { watched: 'unknown', trusted: null })] }),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'daemon-not-running',
-  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口(mihomo 选)'], findings: ['daemon-not-running'] })
+  compact: ['claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口'], findings: ['daemon-not-running'] })
 
 // ── proxy mode (4.8 §10.2; the facts are the Windows branch's to give, here they are injected) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // A harness has forms; each form has the proxy it would use without asight (`setting`: as of now), the OS proxy, the entry asight wrote, and the kernel's own state for it (`forwarder.forms`).
-export const CLASH = { addr: '127.0.0.1', port: 7897, pid: 11800, exe: 'C:\\Program Files\\Clash Verge\\verge-mihomo.exe', product: 'clash-verge', version: '2.5.7' }
+export const CLASH = { addr: '127.0.0.1', port: 7897, pid: 11800, exe: 'C:\\Program Files\\Clash Verge\\verge-mihomo.exe' }
 export const clashVpn = (over = {}) => ({ product: 'clash-verge', version: '2.5.7', pid: 11800, port: 7897, mode: 'rule', tun: false, ...over })
 const ENV = '.env HTTPS_PROXY', SETTINGS = 'settings env.HTTPS_PROXY'
 export const form = (id, over = {}) => ({ id, setting: none(), systemProxy: null, procs: [], entry: { where: ENV, asight: true, opt_in: false, intact: true }, optIn: null, ...over })
@@ -103,7 +103,7 @@ export const pfacts = (h, fm, fw, over = {}) => facts(h, {
 }, { forms: [fm], procs: fm.procs, behaviour: { ...BEHAVE[h], measured: 'lab' } }) // what the Windows branch measured on a test machine: nothing here is inferred
 const codexForm = (over = {}) => form('codex.cli', { procs: [proc(5530, CODEX_PROC)], ...over })
 const ENGINE_AND_KERNEL = ['agent', 'asight-forwarder', 'asight-engine']
-const CODEX_VIA_CLASH = '5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992 → asight 引擎 :17990 → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'
+const CODEX_VIA_CLASH = '5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992 → asight 引擎 :17990 → [系统代理] verge-mihomo.exe :7897 → 出口'
 const viaSystemProxy = (port = 7897) => ({ listeners: [{ ...CLASH, port }], vpn: clashVpn({ port }) })
 
 row({ n: 8, title: 'proxy mode: the agent has no proxy and there is no VPN: the kernel and the engine dial the API host', h: 'claude-code',
@@ -129,7 +129,7 @@ row({ n: 11, title: 'proxy mode: the OS proxy is a PAC and the form follows it: 
 row({ n: 12, title: 'proxy mode: wanted on, the engine is gone: the kernel falls back to the upstream and only forwards', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), { daemon: { state: 'not-running', pid: null, enginePort: null }, ...viaSystemProxy() }),
   kinds: [['agent', 'asight-forwarder', 'proxy', 'egress'], ['agent', 'asight-forwarder', 'proxy', 'egress']], on_path: true, captured: false, reason: 'daemon-not-running',
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(只转发) → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'], findings: ['daemon-not-running', 'egress-differs'] })
+  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(只转发) → [系统代理] verge-mihomo.exe :7897 → 出口'], findings: ['daemon-not-running', 'egress-differs'] })
 
 row({ n: 13, title: 'proxy mode: wanted on, the kernel is not running: nobody listens on the entry the agent points at', h: 'codex',
   facts: pfacts('codex', codexForm(), fwForm(17992), { forwarder: { pid: null, up: false, forms: { 'codex.cli': fwForm(17992) } } }),
@@ -139,7 +139,7 @@ row({ n: 13, title: 'proxy mode: wanted on, the kernel is not running: nobody li
 row({ n: 14, title: 'proxy mode: after `off`, an agent started while it was on is still connected to the kernel, which only forwards', h: 'codex',
   facts: pfacts('codex', codexForm({ systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { state: 'forward-only', upstream: 'http://127.0.0.1:7897', source: 'system-proxy', clients: [5530] }), { desired: { codex: 'off' }, ...viaSystemProxy() }),
   kinds: [['agent', 'asight-forwarder', 'proxy', 'egress'], ['agent', 'asight-forwarder', 'proxy', 'egress']], on_path: true, captured: false, reason: 'desired-off',
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(只转发) → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'], findings: ['desired-off', 'egress-differs'],
+  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(只转发) → [系统代理] verge-mihomo.exe :7897 → 出口'], findings: ['desired-off', 'egress-differs'],
   notes: ['还有 1 个 agent 连着 asight 的门,重启它们之后 asight 就完全退出'] })
 
 row({ n: 15, title: 'proxy mode: a form that has to be named (Kimi CLI\'s shim on PATH) and was not: asight is not wired in', h: 'kimi-code',
@@ -172,7 +172,7 @@ row({ n: 20, title: 'old capture: Claude Desktop → the OS proxy (the VPN) → 
   facts: facts('claude-code', { platform: 'darwin', routing: 'legacy', daemon: { state: 'not-running', pid: null, enginePort: null }, link: { attached: null, helper: 'ok', ids: [] }, listeners: [CLASH], vpn: clashVpn() },
     { procs: [proc(8801, { name: 'Claude', version: '1.4', watched: 'absent', trusted: null })], systemProxy: sysProxy(), legacy: { mitm: { addr: '127.0.0.1', port: 8443, pid: 321 }, on_path: true, captured: true, reason: null } }),
   kinds: [['agent', 'proxy', 'legacy-mitm', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['Claude 8801 → [系统代理] Clash Verge Rev :7897 → [旧块 · 旧采集] asight 旧 MITM :8443 → Clash Verge Rev :7897 → 出口(Clash Verge Rev 选)'], findings: [] })
+  compact: ['Claude 8801 → [系统代理] verge-mihomo.exe :7897 → [旧块 · 旧采集] asight 旧 MITM :8443 → verge-mihomo.exe :7897 → 出口'], findings: [] })
 
 // ── the unknowns ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // Rows 21 and 22 say 「不知道」 under 「在路径上」. The builder judges on_path from asight's own facts (the watch table, the link), which an unreadable proxy owner or a PAC does not change, so these rows
@@ -193,13 +193,13 @@ row({ n: 23, title: 'Windows: a kernel-level filter this user cannot see is said
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], on_path: true, captured: true, reason: null,
   compact: ['claude 4121 → [settings env.HTTPS_PROXY · asight 写的] asight 本地代理 :17991 → asight 引擎 :17990 → api.anthropic.com:443(直连)'], findings: [], notes: ['WFP 一类的内核过滤器本用户看不见(kernel-filter-invisible),所以路上有没有这样的过滤器不知道'] })
 
-// Row 24 is not in the spec's table of §9.3 as an example of its own: it is the case the table's rows left out, found by running the real binary (a proxy whose owner is a readable process that is no VPN product). V42: the hop
-// keeps its port and says it does not know the product, the exit after it is not known either.
+// Row 24 is not in the spec's table of §9.3 as an example of its own: it is the case the table's rows left out, found by running the real binary (a proxy whose owner is a readable process). D49: the hop is named by
+// its executable and keeps its port; asight does not say which product it is.
 export const SCRIPT_PROXY = { addr: '127.0.0.1', port: 38743, pid: 898, exe: '/usr/bin/node' }
-row({ n: 24, title: 'the proxy port is owned by a process asight can read that is not a VPN product (a script, ssh -D, squid …): the hop is that process with its port, its product is 「不知道 · absent」, and so is the exit', h: 'claude-code',
+row({ n: 24, title: 'the proxy port is owned by a process asight can read (a script, ssh -D, squid, a VPN client …): the hop is that process with its port, nothing is guessed about what it is, and the exit is just the exit', h: 'claude-code',
   facts: facts('claude-code', { listeners: [SCRIPT_PROXY] }, { setting: proxyOf('http://127.0.0.1:38743') }),
   kinds: [['agent', 'asight-engine', 'proxy', 'egress']], on_path: true, captured: true, reason: null,
-  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → [CONNECT 原样转] node :38743(不知道 · absent) → ?'], findings: [] })
+  compact: ['claude 4121 → [eBPF] asight 引擎 :47123 → [CONNECT 原样转] node :38743 → 出口'], findings: [] })
 
 /** The same facts with the OS proxy off / without a VPN product (V45). */
 export const withSystemProxyOff = (f) => ({ ...f, harnesses: Object.fromEntries(Object.entries(f.harnesses).map(([h, x]) => [h, { ...x, systemProxy: x.systemProxy ? { value: null, pac: false } : null, forms: x.forms ? x.forms.map((fm) => ({ ...fm, systemProxy: { value: null, pac: false } })) : null }])) })

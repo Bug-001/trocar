@@ -80,9 +80,9 @@ export function validateReceipt(r) {
 /** How the platform steers an agent's connections to asight (D43: one mode per platform; there is no `mixed`). */
 export const ROUTING = Object.freeze(['driver', 'proxy', 'legacy', 'none', 'unknown'])
 export const TOPOLOGY_KINDS = Object.freeze(['agent', 'proxy', 'asight-engine', 'asight-forwarder', 'legacy-mitm', 'upstream', 'egress', 'unknown'])
-export const TOPOLOGY_VIA = Object.freeze(['direct', 'proxy-http', 'proxy-socks', 'proxy-https', 'system-proxy', 'tun', 'ebpf', 'forward', 'egress', 'unknown'])
+export const TOPOLOGY_VIA = Object.freeze(['direct', 'proxy-http', 'proxy-socks', 'proxy-https', 'system-proxy', 'ebpf', 'forward', 'egress', 'unknown'])
 /** Why a hop is 「不知道」 (R11: a hop that could not be read is said, with its reason, never left out and never 「无」). */
-export const UNKNOWN_REASONS = Object.freeze(['denied', 'timeout', 'absent', 'unparseable', 'owner-unreadable', 'pac', 'controller-unreadable', 'kernel-filter-invisible', 'env-unreadable'])
+export const UNKNOWN_REASONS = Object.freeze(['denied', 'timeout', 'absent', 'unparseable', 'owner-unreadable', 'pac', 'kernel-filter-invisible', 'env-unreadable'])
 export const BRANCH_NAMES = Object.freeze(['all', 'http', 'ws'])
 /** What a running process's line says about it: it still goes by the setting it started with, or asight is not on its path. */
 export const RUNNING_NOTES = Object.freeze(['start-time-settings', 'not-steered'])

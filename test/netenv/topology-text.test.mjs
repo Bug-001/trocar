@@ -33,11 +33,13 @@ test('V45: with asight on the path, the first hop after asight is the first hop 
   assert.notEqual(hopKey(firstHopAfterAsight(t2, b)), hopKey(firstHopOff(t2, b)))
 })
 
-test('V45: `status <h>` says what a VPN sees only when a VPN product was found and asight is on the path; the line is about the source of the connection, nothing of the VPN\'s rules', () => {
+test('V45/D49: `status <h>` says what a per-process VPN / proxy sees whenever asight is on the path, product found or not; the line is about the source of the connection, nothing of the VPN\'s rules', () => {
   const row = ROWS.find((r) => r.n === 2)
   const text = (f, h = row.h) => renderDetail(buildTopology(f)[h]).join('\n')
-  assert.match(text(row.facts), /你的 VPN 按进程分流时,看到的来源是 asight,不是 claude-code/)
-  assert.doesNotMatch(text(withoutVpn(row.facts)), /看到的来源是 asight/)
+  const line = '若你的 VPN / 代理按进程分流,它看到的来源是 asight,不是 claude-code'
+  assert.ok(text(row.facts).split('\n').includes(line))
+  assert.ok(text(withoutVpn(row.facts)).split('\n').includes(line), 'no product to find: the line is the same')
+  assert.ok(text(ROWS.find((r) => r.n === 1).facts).split('\n').includes(line), 'and with no proxy at all')
   const off = ROWS.find((r) => r.n === 4)
   assert.doesNotMatch(text(off.facts), /看到的来源是 asight/, 'asight is not on the path: the line would be untrue')
 })
@@ -50,10 +52,10 @@ test('renderDetail: the header, a hop to a line with the edge words, the way out
     '新连接的路 · 12 秒前探测  在路径上 · 是',
     '  claude pid 4121 · 2.1.291',
     '  → [eBPF · link 17] asight 引擎 pid 4012 · 127.0.0.1:47123 · 解密',
-    '  → [CONNECT 原样转] mihomo 1.19.32 :7890 · pid 777 · 规则模式',
-    '  → 出口(mihomo 选)',
+    '  → [CONNECT 原样转] mihomo :7890 · pid 777',
+    '  → 出口',
   ])
-  assert.ok(lines.includes('关掉 asight 时的路: claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口(mihomo 选)'))
+  assert.ok(lines.includes('关掉 asight 时的路: claude 4121 → [HTTPS_PROXY] mihomo :7890 → 出口'))
   assert.match(lines.at(-1), /^要换代理: 照常改 claude-code 的设置/)
   const two = renderCompact(buildTopology(ROWS.find((r) => r.n === 22).facts).codex)
   assert.deepEqual(two.map((l) => l.split(' ')[0]), ['HTTP', 'WebSocket'])
@@ -64,7 +66,7 @@ test('renderDetail: the header, a hop to a line with the edge words, the way out
 })
 
 test('V42 (text): a hop that could not be read says 「不知道 · <reason>」 in the compact line and in the detail, and no hop says 「无」', () => {
-  for (const [n, h, reason] of [[21, 'hermes', 'owner-unreadable'], [22, 'codex', 'pac'], [24, 'claude-code', 'absent']]) {
+  for (const [n, h, reason] of [[21, 'hermes', 'owner-unreadable'], [22, 'codex', 'pac']]) {
     const t = buildTopology(ROWS.find((r) => r.n === n).facts)[h]
     for (const text of [renderCompact(t).join('\n'), renderDetail(t).join('\n')]) {
       assert.match(text, new RegExp(`不知道 · ${reason}`), `row ${n}`)
@@ -75,8 +77,8 @@ test('V42 (text): a hop that could not be read says 「不知道 · <reason>」 
 
 test('V42 (text): a proxy hop always has its port — a hop named by its process too, in the compact line and the detail (the pid after it) — and a hop already named host:port says the port once', () => {
   const script = buildTopology(ROWS.find((r) => r.n === 24).facts)['claude-code']
-  assert.match(renderCompact(script)[0], /\[CONNECT 原样转\] node :38743\(不知道 · absent\) → \?$/)
-  assert.ok(renderDetail(script).includes('  → [CONNECT 原样转] node :38743 · pid 898(不知道 · absent)'), renderDetail(script).join('\n'))
+  assert.match(renderCompact(script)[0], /\[CONNECT 原样转\] node :38743 → 出口$/)
+  assert.ok(renderDetail(script).includes('  → [CONNECT 原样转] node :38743 · pid 898'), renderDetail(script).join('\n'))
   const unreadable = buildTopology(ROWS.find((r) => r.n === 21).facts).hermes
   assert.ok(renderCompact(unreadable)[0].includes('127.0.0.1:7891(不知道'), 'named by its address: the port is not said twice')
   assert.ok(!renderCompact(unreadable)[0].includes('7891:7891') && !/:7891 :7891/.test(renderCompact(unreadable)[0]))
@@ -95,13 +97,13 @@ test('V43 (text): every hop of the compact line is a node of the object it was d
   }
 })
 
-test('renderDetail in proxy mode: the way out says HTTP and WebSocket apart when they differ, the entry says who wrote it, the notes come after the processes, and the VPN line is there once', () => {
+test('renderDetail in proxy mode: the way out says HTTP and WebSocket apart when they differ, the entry says who wrote it, the notes come after the processes, and the per-process VPN line is there once', () => {
   const t = buildTopology(ROWS.find((r) => r.n === 9).facts).codex
   const lines = renderDetail(t)
   assert.equal(lines[0], 'codex · 开 · 代理模式 · 被采集: 是')
   assert.equal(lines.filter((l) => l.startsWith('新连接的路')).length, 1, 'HTTP and WebSocket take the same path with asight: one block')
   assert.ok(lines.includes('  → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992'))
-  assert.ok(lines.includes('关掉 asight 时的路: HTTP codex app-server 5530 → [系统代理] Clash Verge Rev :7897 → 出口(Clash Verge Rev 选) · WebSocket codex app-server 5530 → chatgpt.com:443(直连)'))
+  assert.ok(lines.includes('关掉 asight 时的路: HTTP codex app-server 5530 → [系统代理] verge-mihomo.exe :7897 → 出口 · WebSocket codex app-server 5530 → chatgpt.com:443(直连)'))
   assert.equal(lines.filter((l) => /看到的来源是 asight/.test(l)).length, 1)
   assert.match(lines.at(-1), /^要换代理: 照常改 codex 的设置,再跑 asight on codex/)
   const off = renderDetail(buildTopology(ROWS.find((r) => r.n === 14).facts).codex)

@@ -5,7 +5,6 @@
 import path from 'node:path'
 import { formatOffReceipt } from '../off/receipt.mjs'
 import { netenvText } from '../netenv/index.mjs'
-import { productName } from '../netenv/topology.mjs'
 import { collectorDir } from '../off/paths.mjs'
 import { noColor } from './color.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
@@ -49,10 +48,10 @@ const PROXY_VARS = ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'] // §2.2's family:
 
 /** The upstream a group's row names, from the facts' own plan read (§2.2): the agent's own proxy (the address; its credentials are not in the facts), the system proxy it follows, or direct —
  *  or the plan's own word for why it is left unwired. */
-function upstreamText(fm, vpn) {
+function upstreamText(fm) {
   const u = fm.upstream
   if (!u) return fm.route ? `不接(${fm.route.code || fm.route.reason})` : '不知道'
-  const base = u.source === 'system-proxy' ? `系统代理 ${u.host}:${u.port}${vpn && vpn.product ? `(${productName(vpn.product)})` : ''}` : u.source === 'agent' ? `${u.host}:${u.port}(你原来的代理)` : '直连'
+  const base = u.source === 'system-proxy' ? `系统代理 ${u.host}:${u.port}` : u.source === 'agent' ? `${u.host}:${u.port}(你原来的代理)` : '直连'
   return fm.envUnreadable ? `${base}(${ENV_NOTE})` : base
 }
 
@@ -92,7 +91,7 @@ function winGroupRows(p, facts, t) {
       if (file) shown.add(file)
       const wired = !(fm.route && fm.route.reason) // the plan connected the group: its proxy key is written beside the trust keys
       const what = place.kind === 'file' && place.format === 'dotenv' ? '顶部 asight 哨兵块' : [wired ? place.key : null, ...trustOf(h, file)].filter(Boolean).join(' · ')
-      rows.push(`    ${x.forms.join(' · ')}${fm.optIn ? '(你点名的)' : ''}  ${file ? t(file) : ''}  ${what}  上游: ${upstreamText(fm, facts && facts.vpn)}`.replace(/ {2,}/g, '  ').trimEnd())
+      rows.push(`    ${x.forms.join(' · ')}${fm.optIn ? '(你点名的)' : ''}  ${file ? t(file) : ''}  ${what}  上游: ${upstreamText(fm)}`.replace(/ {2,}/g, '  ').trimEnd())
       if (wired && fm.egressDiffers) rows.push(`      WebSocket 原本直连,之后也经${fm.upstream && fm.upstream.source === 'system-proxy' ? '系统代理' : '同一个上游'}`)
     }
     // 1.6 §1.6: every file, even one whose group has no row — under the harness's own row when it has one, else at the end of the block

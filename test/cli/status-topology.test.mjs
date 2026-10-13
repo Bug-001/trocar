@@ -116,13 +116,13 @@ test('§9.2 「N 秒前探测」: the header of the block and the first line of 
   assert.doesNotMatch((await status(s, ['--json'], { ms: () => (t += 1000) })).text, /秒前探测/, '--json has the topology\'s `at`, and no words')
 })
 
-test('V44: with a VPN product on the machine the detail says the one line about its per-process rules — and only there: not in `status`, not in `on --dry-run`', async () => {
+test('V44/D49: with asight on the path the detail says the one line about a VPN / proxy\'s per-process rules, product or none — and only there: not in `status`, not in `on --dry-run`', async () => {
   const s = await installedViaCli()
-  const line = '你的 VPN 按进程分流时,看到的来源是 asight,不是 codex'
+  const line = '若你的 VPN / 代理按进程分流,它看到的来源是 asight,不是 codex'
   const deps = { netenv: async () => CLASH({ mixed_port: 7897 }), exec: withMihomo(s) }
   assert.ok((await status(s, ['codex'], deps)).text.includes(line))
   assert.ok(!(await status(s, [], deps)).text.includes('看到的来源是 asight'), 'the compact block does not say it')
-  assert.ok(!(await status(s, ['codex'])).text.includes('看到的来源是 asight'), 'no VPN product detected: no such line')
+  assert.ok((await status(s, ['codex'])).text.includes(line), 'no VPN detected: the same line, nothing to find')
   const dry = await s.run(['on', 'codex', '--dry-run'], { deps })
   assert.ok(!dry.io.text().includes('看到的来源是 asight'), '`on`\'s plan does not print it')
 })

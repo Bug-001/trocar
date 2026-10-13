@@ -18,22 +18,21 @@ for (const row of ROWS) {
   })
 }
 
-test('V42: every node has a kind and a name; an agent with a process has its pid; a proxy has its port and says what it is or that it does not know', () => {
+test('V42: every node has a kind and a name; an agent with a process has its pid; a proxy has its port and is named by its process or says that it does not know', () => {
   for (const row of ROWS) {
     const t = buildTopology(row.facts)[row.h]
     const running = row.facts.harnesses[row.h].procs.length > 0
     for (const n of t.nodes) {
       assert.ok(n.kind && n.name, `row ${row.n}: ${JSON.stringify(n)}`)
       if (n.kind === 'agent' && running) assert.ok(Number.isInteger(n.pid), `row ${row.n}: the agent has its pid`)
-      if (n.kind === 'proxy') assert.ok(Number.isInteger(n.port) && (n.product || n.unknown || n.remote), `row ${row.n}: ${JSON.stringify(n)}`)
+      if (n.kind === 'proxy') assert.ok(Number.isInteger(n.port) && (n.pid || n.unknown || n.remote || n.down), `row ${row.n}: ${JSON.stringify(n)}`)
     }
   }
 })
 
-test('V42: an owner that cannot be read, a PAC and a controller that cannot be read are nodes with an unknown reason from the closed set, the hop is kept, and nothing says 「无」', () => {
+test('V42: an owner that cannot be read and a PAC are nodes with an unknown reason from the closed set, the hop is kept, and nothing says 「无」', () => {
   const ownerUnreadable = ROWS.find((r) => r.n === 21), pac = ROWS.find((r) => r.n === 22)
-  const controllerDown = facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn({ mode: 'unknown', tun: 'unknown', unknown: { reason: 'controller-unreadable', detail: 'ECONNREFUSED' } }) }, { setting: proxyOf('http://127.0.0.1:7890') })
-  for (const [f, h, reason] of [[ownerUnreadable.facts, 'hermes', 'owner-unreadable'], [pac.facts, 'codex', 'pac'], [controllerDown, 'claude-code', 'controller-unreadable']]) {
+  for (const [f, h, reason] of [[ownerUnreadable.facts, 'hermes', 'owner-unreadable'], [pac.facts, 'codex', 'pac']]) {
     const t = buildTopology(f)[h]
     const n = t.nodes.find((x) => x.unknown)
     assert.equal(n.unknown.reason, reason)
@@ -43,18 +42,16 @@ test('V42: an owner that cannot be read, a PAC and a controller that cannot be r
   }
 })
 
-test('V42: a proxy whose owner is a readable process that is no VPN product (row 24) is that process with its port and an unknown product (`absent`, with who it is in `detail`), the exit after it is unknown; a listener with a pid and no name to read is `owner-unreadable`; a product is neither', () => {
+test('V42/D49: a proxy whose owner is a readable process (row 24, and a VPN client, row 2) is that process by its executable with its port and pid, and nothing is said of what product it is; the exit after it is just the exit; an owner that gave no name is the address', () => {
   const t = buildTopology(ROWS.find((r) => r.n === 24).facts)['claude-code']
   const p = t.nodes.find((n) => n.kind === 'proxy')
-  assert.deepEqual([p.name, p.port, p.pid, p.product, p.unknown.reason], ['node', 38743, 898, undefined, 'absent'])
-  assert.match(p.unknown.detail, /node/)
-  assert.match(p.unknown.detail, /898/)
-  assert.deepEqual(t.nodes.find((n) => n.kind === 'egress').unknown, p.unknown, 'where it leads is not known either')
+  assert.deepEqual(p, { id: p.id, kind: 'proxy', name: 'node', addr: '127.0.0.1', port: 38743, pid: 898 })
+  assert.deepEqual(t.nodes.find((n) => n.kind === 'egress'), { id: t.nodes.find((n) => n.kind === 'egress').id, kind: 'egress', name: '出口' }, 'no unknown, no chosen_by')
   assert.deepEqual(validateTopology({ 'claude-code': t }), [])
-  const nameless = buildTopology(facts('claude-code', { listeners: [{ addr: '127.0.0.1', port: 38743, pid: 898 }] }, { setting: proxyOf('http://127.0.0.1:38743') }))['claude-code']
-  assert.equal(nameless.nodes.find((n) => n.kind === 'proxy').unknown.reason, 'owner-unreadable')
-  const product = buildTopology(ROWS.find((r) => r.n === 2).facts)['claude-code']
-  assert.equal(product.nodes.find((n) => n.kind === 'proxy').unknown, undefined, 'a recognised product is not said to be unknown')
+  const nameless = buildTopology(facts('claude-code', { listeners: [{ addr: '127.0.0.1', port: 38743, pid: 898 }] }, { setting: proxyOf('http://127.0.0.1:38743') }))['claude-code'].nodes.find((n) => n.kind === 'proxy')
+  assert.deepEqual([nameless.name, nameless.pid, nameless.unknown], ['127.0.0.1:38743', 898, undefined])
+  const vpnClient = buildTopology(ROWS.find((r) => r.n === 2).facts)['claude-code'].nodes.find((n) => n.kind === 'proxy')
+  assert.deepEqual([vpnClient.name, vpnClient.unknown, vpnClient.product, vpnClient.version, vpnClient.mode], ['mihomo', undefined, undefined, undefined, undefined])
 })
 
 test('V42: a listener list that could not be read gives the proxy its reason, and one that was read and holds nobody gives 「没人在听」, never an unknown owner', () => {
@@ -165,19 +162,17 @@ test('proxy mode verdicts the platform\'s facts can ask for: a form it refused t
 
 // ── what the Linux reads gave and the topology dropped (4.6 「eBPF 模式下的网络拓扑」) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('a default route on a TUN device with no VPN product recognised (sing-box, v2rayA …) is a hop, not nothing: [TUN] 出口(不知道 · …) after the API host, and a note says why; with no TUN, or with the product known, the path is as it was', () => {
-  const t = buildTopology(facts('claude-code', { tun: true }))['claude-code']
-  assert.deepEqual(t.branches[0].path.map((id) => kindOf(t, id)), ['agent', 'asight-engine', 'upstream', 'egress'])
-  const egress = t.nodes.find((n) => n.kind === 'egress')
-  assert.ok(egress.unknown && UNKNOWN_REASONS.includes(egress.unknown.reason), 'a hop the facts could not name: unknown, with a reason from the closed set')
-  assert.equal(renderCompact(t)[0], 'claude 4121 → [eBPF] asight 引擎 :47123 → api.anthropic.com:443(直连) → [TUN] 出口(不知道 · absent)')
-  assert.ok(t.notes.some((n) => /TUN/.test(n) && /没认出/.test(n)), t.notes.join('|'))
-  assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'upstream', 'egress'], 'and the way without asight goes the same way')
-  assert.deepEqual(validateTopology({ 'claude-code': t }), [])
-  for (const f of [facts('claude-code', { tun: false }), facts('claude-code', { tun: null }), facts('claude-code')]) assert.equal(renderCompact(buildTopology(f)['claude-code'])[0], 'claude 4121 → [eBPF] asight 引擎 :47123 → api.anthropic.com:443(直连)')
-  assert.match(renderCompact(buildTopology(facts('claude-code', { tun: true, vpn: mihomoVpn({ tun: true }) }))['claude-code'])[0], /\[TUN\] 出口\(mihomo 选\)$/, 'the product named: as before')
-  // a proxy of the agent's own decides the path: the TUN is not a hop of it
-  assert.ok(!/TUN/.test(renderCompact(buildTopology(facts('claude-code', { tun: true, listeners: [MIHOMO], vpn: mihomoVpn() }, { setting: proxyOf('http://127.0.0.1:7890') }))['claude-code'])[0]))
+test('D49: a TUN device or a VPN product in the facts changes nothing of the topology: a direct agent stops at the API host, with or without asight, whatever F.tun and F.vpn say', () => {
+  const plain = renderCompact(buildTopology(facts('claude-code'))['claude-code'])[0]
+  assert.equal(plain, 'claude 4121 → [eBPF] asight 引擎 :47123 → api.anthropic.com:443(直连)')
+  for (const f of [facts('claude-code', { tun: true }), facts('claude-code', { tun: true, vpn: mihomoVpn({ tun: true }) }), facts('claude-code', { vpn: mihomoVpn({ tun: true }) })]) {
+    const t = buildTopology(f)['claude-code']
+    assert.equal(renderCompact(t)[0], plain)
+    assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'upstream'], 'and the way without asight goes the same way')
+    assert.deepEqual(t.notes, [])
+    assert.equal(t.vpn, undefined, 'the topology carries no vpn key')
+    assert.deepEqual(validateTopology({ 'claude-code': t }), [])
+  }
 })
 
 test('NO_PROXY: when the environment names the API host, an agent with a proxy may not use it for that host — said as a note (whether the agent honours NO_PROXY is not measured), from the running process\'s own environment else from the shell\'s; no proxy or no match is no note', () => {
