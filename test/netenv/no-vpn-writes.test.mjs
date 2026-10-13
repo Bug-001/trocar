@@ -208,7 +208,7 @@ test('N15 (b) the recording fs sees every way to write: sync, callback and promi
   assert.equal(writesUnder(log, [dir]).length, 1, 'the finding\'s probe (promises.writeFile) lands in the log and under the directory')
 })
 
-test('N15 (b) planted counter-example: an `on` that writes a file under a product directory is red, a write under asight\'s own directory is not', () => {
+test('N15 (b) recorder counter-example (hand-written write, `on` is not run): a write under a product directory is caught, a write under asight\'s own directory is not', () => {
   const sandbox = tmpDir('asight-nvw-')
   const roaming = path.join(sandbox, 'AppData', 'Roaming')
   const log = []
