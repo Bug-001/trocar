@@ -14,6 +14,7 @@ import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { installCollector } from '../../../../src/collector/install.mjs'
 import { readManifest } from '../../../../src/collector/core/trust/journal.mjs'
+import { saveManifest } from '../../../../src/off/manifest.mjs'
 import { readText, readTextOrError } from '../../../../src/collector/core/config-read.mjs'
 import { regReadAllowed } from '../../../../src/collector/arch/win32/helper.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
@@ -194,3 +195,36 @@ test('W71 the watcher stops with the collector: close() stops it (no timer left)
 
 
 
+
+test('osLayers hands the layers ctx the desktop door (D51④): claude-code\'s CONFIRMED optin-cert-user only while its thumbprint is this build\'s CA, z-code\'s CONFIRMED optin-zcode; read live off the manifest; the CLI\'s settings door untouched', async () => {
+  const r = await rigged(['claude-code', 'z-code'], { desired: { 'claude-code': { desired: 'on' }, 'z-code': { desired: 'on' } } })
+  const { X509Certificate } = await import('node:crypto')
+  const caFile = path.join(r.dir, 'ca', 'asight-ca.pem')
+  const thumbprint = createHash('sha1').update(new X509Certificate(fs.readFileSync(caFile)).raw).digest('hex').toUpperCase()
+  const NS = ['--type=utility', '--utility-sub-type=network.mojom.NetworkService']
+  const ctx = (argv) => ({ os: 'win32', environ: new Map(), env: new Map(), home: r.home, cwd: r.home, argv, startedAt: null, readText, readTextOrError,
+    mtimeOf: (f) => { try { return fs.statSync(f).mtimeMs } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, unparsable: () => {} })
+  const cc = r.redirector.win32.osLayers.win32(one('claude-code'))
+  const zc = r.redirector.win32.osLayers.win32(one('z-code'))
+  assert.deepEqual(cc(ctx(['claude.exe', ...NS])), [], 'no item: the network service gets no layer')
+  const m = readManifest(r.dir)
+  const t0 = Date.now()
+  const cert = (tp, confirmed = true) => ({ kind: 'optin-cert-user', harness: 'claude-code', form: 'claude-code.desktop', item: 'cert-store-current-user', scope: 'user', path: `CurrentUser\\Root\\${tp}`, installed_at: new Date(t0).toISOString(), confirmed, values: { thumbprint: tp, certFile: caFile } })
+  m.entries.push(cert(thumbprint, false)); saveManifest(r.dir, m)
+  assert.deepEqual(cc(ctx(['claude.exe', ...NS])), [], 'unconfirmed (the box was declined): shut')
+  m.entries.push(cert('AABBCCDD')); saveManifest(r.dir, m)
+  assert.deepEqual(cc(ctx(['claude.exe', ...NS])), [], 'a thumbprint of a CA this build no longer holds: shut')
+  assert.deepEqual(zc(ctx(['ZCode.exe', ...NS])), [], 'another harness\'s item opens nothing')
+  m.entries.push(cert(thumbprint)); saveManifest(r.dir, m)
+  const door = cc(ctx(['claude.exe', ...NS]))
+  assert.deepEqual([door.length, door[0].vars.NODE_EXTRA_CA_CERTS, door[0].since, door[0].live], [1, caFile, t0, false])
+  assert.match(door[0].name, /CurrentUser\\Root/)
+  assert.ok(cc(ctx(['claude.exe'])).every((l) => /settings/.test(l.name)), 'claude.exe with no --type= reads settings (the CA `on` wrote there), not the door')
+
+  const setting = path.join(r.home, '.zcode', 'v2', 'setting.json')
+  fs.mkdirSync(path.dirname(setting), { recursive: true }); fs.writeFileSync(setting, JSON.stringify({ httpProxyCaCertPath: caFile }))
+  assert.deepEqual(zc(ctx(['ZCode.exe', ...NS])), [], 'the setting without the confirmed optin-zcode item: shut')
+  m.entries.push({ kind: 'optin-zcode', harness: 'z-code', form: 'z-code.desktop', item: 'zcode-app-settings', scope: 'user', path: setting, installed_at: new Date(t0).toISOString(), confirmed: true, values: {} }); saveManifest(r.dir, m)
+  const z = zc(ctx(['ZCode.exe', ...NS]))
+  assert.deepEqual([z.length, z[0].vars.ZCODE_AGENT_CA_CERT, z[0].since], [1, caFile, t0])
+})

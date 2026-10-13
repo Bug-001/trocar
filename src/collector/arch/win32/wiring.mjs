@@ -17,6 +17,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import nodeFs from 'node:fs'
+import { createHash, X509Certificate } from 'node:crypto'
 import { startHelper, policyAllowOf } from './helper.mjs'
 import { factsOfPid } from './procinfo.mjs'
 import { ownerOfSocket as askOwnerOfSocket } from './socktable.mjs'
@@ -180,12 +181,36 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
   const innerDetach = redirector.detach
   redirector.detach = async (...a) => { await replan(); return innerDetach(...a) }
 
+  // ---- the desktop doors a Chromium network service is trusted by (D51④, plan 2026-10-14 §2.5; darwin's keychainDoorOf twin) -----------------------
+  // The tracker judges by layers, so a desktop's trust item reaches the harness layers as two ctx keys the osLayers wrapper injects: `caFile` (this
+  // build's CA) and `desktopDoor` ({ since, name } | null) — the manifest's newest CONFIRMED entry of THAT harness, read live: `optin-cert-user`
+  // (Claude Desktop: the CA in CurrentUser\Root) only while its thumbprint is this build's CA (a certificate asight cannot decrypt with stays shut);
+  // `optin-zcode` (Z-Code Desktop's own setting.json) — that layer reads the setting's CA path itself and evaluate() checks the file holds the CA.
+  const caFileOf = () => path.join(dir, 'ca', 'asight-ca.pem')
+  const thumbprintOf = (f) => { try { return createHash('sha1').update(new X509Certificate(fs.readFileSync(f)).raw).digest('hex').toUpperCase() } catch { return null } }
+  const certStoreDoorOf = (d) => {
+    let door = null
+    let tp
+    for (const e of (manifestNow() || {}).entries || []) {
+      if (!e || e.harness !== d.name || e.confirmed !== true || e.pending_admin) continue
+      if (e.kind === 'optin-cert-user') {
+        if (tp === undefined) tp = thumbprintOf(caFileOf())
+        if (!tp || String((e.values || {}).thumbprint || '').toUpperCase() !== tp) continue
+      } else if (e.kind !== 'optin-zcode') continue
+      const since = Date.parse(e.installed_at)
+      if (!Number.isFinite(since)) continue
+      if (!door || since > door.since) door = { since, name: e.kind === 'optin-cert-user' ? `CurrentUser\\Root (asight's CA, ${tp.slice(0, 16)}…)` : `Z-Code desktop setting (${e.path})` }
+    }
+    return door
+  }
+
   redirector.win32 = {
     ...(redirector.win32 || {}), // bindDoors stays: the slot the daemon fills once the engine exists
     helper, ingress, replan, groups,
     netenv: () => ({ systemProxy, hkcuEnv, ownPorts: ownPorts() }),
     appliedHosts: () => Object.fromEntries(appliedHosts),
-    osLayers: { win32: (d) => (d.win32 && d.win32.layers) || d.layers }, // Hermes declares its own Windows layers; the rest read the same files as on Linux
+    // Hermes and Z-Code declare their own Windows layers; the rest read the same files as on Linux. Every one gets the desktop door's two ctx keys (above)
+    osLayers: { win32: (d) => { const own = (d.win32 && d.win32.layers) || d.layers; return (ctx2) => own({ ...ctx2, desktopDoor: certStoreDoorOf(d), caFile: caFileOf() }) } },
     markerToleranceMs: MARKER_TOLERANCE_MS, // the Windows plugin twins (dsh, OpenCode) write Math.round(performance.timeOrigin) against the process table's own ms-epoch startedAt (procinfo.mjs): the byte-exact 0 default (daemon.mjs's `|| 0`) read every one of them `marker-stale` → untrusted → spliced, traffic relayed with no llm_call (measured live on a Windows test machine; darwin's bag has carried the same confirm.mjs tolerance since review F4 — the win line simply never wired it)
     close: () => { if (netenvWatcher) netenvWatcher.stop() }, // the helper and the watcher stop with the redirector's own close()
   }
