@@ -267,7 +267,9 @@ test('isOwnPath: on Windows a path is asight\'s when it is under the collector d
 
 // ── W20: the combined bundle's Windows roots (4.8 §6.2) ──
 import nodeFs from 'node:fs'
-import { windowsRoots, osRootsFor, RootsUnavailableError } from '../../../src/off/os-roots.mjs'
+import { osRootsFor } from '../../../src/off/os-roots.mjs'
+const windowsRoots = osRootsFor('win32') // the readers are reached through their one table, as src/ reaches them
+const unavailable = (e) => e instanceof Error && e.name === 'RootsUnavailableError'
 import { rewriteBundles } from '../../../src/collector/core/trust/bundle.mjs'
 
 const R = [createCa({ commonName: 'Windows root one' }), createCa({ commonName: 'Windows root two' }), createCa({ commonName: 'Windows root three' })].map((c) => c.certPem)
@@ -293,9 +295,9 @@ test('W20: without Node\'s system store — or when it fails or is empty — the
   assert.deepEqual([calls[0][0], calls[0][1]], ['roots', {}])
   assert.ok(calls[0][2].timeoutMs >= 10000, 'about 430 KB through a cold PowerShell: the call is given time')
   for (const tls of [{ getCACertificates: () => { throw new Error('no system store') } }, { getCACertificates: () => [] }, { getCACertificates: () => [BROKEN] }]) assert.equal((await windowsRoots({ tls, helper: helperOf([R[1]]) })).source, 'helper')
-  await assert.rejects(windowsRoots({ tls: {} }), (e) => e instanceof RootsUnavailableError && e.name === 'RootsUnavailableError' && /^the Windows root certificates could not be read \(getCACertificates: not available \(Node ≥ 22\.15 has it\)\)$/.test(e.message) && e.tried.length === 1, 'no Node 22.15 read and no helper (off has none, 4.8 §6.2): the reason says which, so off\'s note can')
-  await assert.rejects(windowsRoots({ tls: { getCACertificates: () => [] }, helper: { call: async () => { throw Object.assign(new Error('x'), { code: 'helper-down' }) } } }), (e) => e instanceof RootsUnavailableError && /node-system: no certificate; helper: helper-down/.test(e.message) && e.tried.length === 2)
-  await assert.rejects(windowsRoots({ tls: {}, helper: helperOf([BROKEN]) }), RootsUnavailableError, 'a store of nothing but broken certificates is not a root set')
+  await assert.rejects(windowsRoots({ tls: {} }), (e) => unavailable(e) && /^the Windows root certificates could not be read \(getCACertificates: not available \(Node ≥ 22\.15 has it\)\)$/.test(e.message) && e.tried.length === 1, 'no Node 22.15 read and no helper (off has none, 4.8 §6.2): the reason says which, so off\'s note can')
+  await assert.rejects(windowsRoots({ tls: { getCACertificates: () => [] }, helper: { call: async () => { throw Object.assign(new Error('x'), { code: 'helper-down' }) } } }), (e) => unavailable(e) && /node-system: no certificate; helper: helper-down/.test(e.message) && e.tried.length === 2)
+  await assert.rejects(windowsRoots({ tls: {}, helper: helperOf([BROKEN]) }), unavailable, 'a store of nothing but broken certificates is not a root set')
 })
 
 test('W20: the fingerprint is of the set, not of its order, and changes with the set', async () => {
@@ -305,7 +307,7 @@ test('W20: the fingerprint is of the set, not of its order, and changes with the
 })
 
 test('W20: the Windows reader reads no file at all — never the macOS cert.pem a test machine once used — not even through the `read` the table\'s callers pass (off does)', async () => {
-  assert.equal(osRootsFor('win32'), windowsRoots, 'win32\'s entry of the one table (src/off/os-roots.mjs)')
+  assert.equal(windowsRoots.name, 'windowsRoots', 'win32\'s entry of the one table (src/off/os-roots.mjs)')
   assert.ok(!/cert\.pem|\/etc\/ssl|readFile|createReadStream|\bfs\b|\bread\b/.test(windowsRoots.toString().replace(/\/\/.*$/gm, '')), 'its own code names no file and takes no reader')
   const reads = []
   const real = nodeFs.readFileSync

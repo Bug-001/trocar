@@ -3,8 +3,9 @@
 // one `off` rebuilds a gone bundle with (4.6 撤销顺序 第 2 步). It is here, not in the collector, because `off` may import only node:* and src/off (1.6 R3); before
 // it was, `off` read a fixed list of PEM files on every platform — /etc/ssl/cert.pem on a Mac, which 4.9 §6.2 forbids, and nothing on Windows.
 //
-//   osRootsFor(platform)  the reader of a platform: darwin → darwinRoots, win32 → windowsRoots, any other → osBundleRoots. The one table of them (the platform-seam rule): the
-//                         arches ask it with their own name, `off` with the platform it runs on. Every reader takes one options object and ignores what it does not use.
+//   osRootsFor(platform)  the reader of a platform: darwin → darwinRoots, win32 → windowsRoots, any other → osBundleRoots. The one table of them (the platform-seam rule), and
+//                         the one export: the arches ask it with their own name, `off` with the platform it runs on, the tests through it too. Every reader takes one
+//                         options object and ignores what it does not use; a failed read is an Error named RootsUnavailableError.
 //   osBundleRoots({files, read}) → {pem, file, missing, dropped}
 //                         Linux: the first OS PEM bundle of SYSTEM_BUNDLES that holds a certificate (pem.mjs osBundle, the one list). None → pem '' and `missing` names
 //                         every path looked at; one there but unreadable throws with its errno as `code`. `dropped` counts the blocks of the file that are not a
@@ -59,7 +60,7 @@ const rootsOutcome = (byFp, dropped, source, tried) => ({
 
 /** No source gave a usable root set. `tried` says why each source gave nothing (`node-system: …`, `security: …`, `helper: …`); the caller turns it into a record with a
  *  name from the closed set (D38). `what` is whose roots: 'the macOS root certificates' | 'the Windows root certificates'. */
-export class RootsUnavailableError extends Error {
+class RootsUnavailableError extends Error {
   constructor(tried, what = 'the OS root certificates') {
     super(`${what} could not be read (${tried.join('; ') || 'no source'})`)
     this.name = 'RootsUnavailableError'
@@ -67,14 +68,14 @@ export class RootsUnavailableError extends Error {
   }
 }
 
-export function osBundleRoots({ files = SYSTEM_BUNDLES, read = (f) => nodeFs.readFileSync(f, 'utf8') } = {}) {
+function osBundleRoots({ files = SYSTEM_BUNDLES, read = (f) => nodeFs.readFileSync(f, 'utf8') } = {}) {
   const b = osBundle({ files, read })
   if (b.failed.length) throw Object.assign(new Error(`the OS trust bundle cannot be read (${b.failed.map((f) => `${f.file}: ${rootsErr(f.error)}`).join('; ')})`), { code: b.failed[0].error && b.failed[0].error.code })
   const dropped = (b.text.match(PEM_BEGIN) || []).length - certBlocks(b.text).length
   return { pem: b.text, file: b.file, missing: b.file ? null : `no OS trust bundle holds a certificate (looked at ${files.join(', ')})`, dropped }
 }
 
-export async function darwinRoots({ tls = nodeTls, exec = null, timeoutMs = SECURITY_TIMEOUT_MS } = {}) {
+async function darwinRoots({ tls = nodeTls, exec = null, timeoutMs = SECURITY_TIMEOUT_MS } = {}) {
   const tried = [] // reads that failed
   const reasons = [] // every source that gave nothing, in order: what a RootsUnavailableError says
   const byFp = new Map()
@@ -105,7 +106,7 @@ export async function darwinRoots({ tls = nodeTls, exec = null, timeoutMs = SECU
   return rootsOutcome(byFp, dropped, source, tried)
 }
 
-export async function windowsRoots({ tls = nodeTls, helper = null, timeoutMs = HELPER_TIMEOUT_MS } = {}) {
+async function windowsRoots({ tls = nodeTls, helper = null, timeoutMs = HELPER_TIMEOUT_MS } = {}) {
   const tried = []
   if (typeof tls.getCACertificates === 'function') {
     try {
