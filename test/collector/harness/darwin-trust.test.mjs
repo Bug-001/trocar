@@ -322,7 +322,7 @@ test('isOwnPath: on macOS a path is asight\'s when it is under the collector dir
 
 // ── W20: the combined bundle's macOS roots (4.9 §6.2: the union of three sources, none a fallback for another) ──
 import nodeFs from 'node:fs'
-import { darwinRoots, droppedNote, RootsUnavailableError } from '../../../src/collector/arch/darwin/roots.mjs'
+import { darwinRoots, RootsUnavailableError } from '../../../src/collector/arch/darwin/roots.mjs'
 import { rewriteBundles } from '../../../src/collector/core/trust/bundle.mjs'
 
 const R = [createCa({ commonName: 'macOS root one' }), createCa({ commonName: 'macOS root two' }), createCa({ commonName: 'macOS root three' })].map((c) => c.certPem)
@@ -344,14 +344,20 @@ test('W20: the macOS roots are the union of Node\'s bundled set, the keychain\'s
   assert.ok(r.pem.includes(R[0].trim()) && r.pem.includes(R[1].trim()) && r.pem.includes(R[2].trim()) && !r.pem.includes('bm90IGEg'), 'the broken block is not in the text')
   assert.ok(r.pem.endsWith('\n') && !r.pem.includes('\n\n'))
   assert.match(r.fingerprint, /^[0-9a-f]{64}$/)
-  assert.match(droppedNote(r), /^1 certificate in the macOS roots could not be parsed and is not in the combined bundles/, 'the receipt and status say so')
-  assert.equal(droppedNote({ dropped: 0 }), null)
-  assert.match(droppedNote({ dropped: 3 }), /^3 certificates .* could not be parsed and are not/)
 })
 
 test('W20: a source that fails while the others give the set is named in tried (D38), and with no usable source at all the answer is a reason, not an empty bundle; the sandbox refusal is re-thrown, never passed off as a failed source', async () => {
   const oneDown = await darwinRoots({ tls: { getCACertificates: (k) => k === 'bundled' ? [R[0]] : (() => { throw Object.assign(new Error('no keychain read'), { code: 'EIO' }) })() }, exec: () => ({ status: 1, stdout: '', stderr: 'segv' }) })
   assert.deepEqual([oneDown.source, oneDown.tried], [['node-bundled'], ['node-system: EIO', 'security: segv']], 'a bundle quietly missing two of its three sources is not fine: both failures are said')
+  // an EMPTY answer is not a failed read: a Mac with no root added to its keychain has no local anchor, and 'system' gives nothing — saying so at every
+  // rebuild would be a false alarm on every clean Mac (4.9 §6.2); the reasons of a RootsUnavailableError still name it
+  const noAnchor = await darwinRoots({ tls: { getCACertificates: (k) => k === 'bundled' ? [R[0]] : [] }, exec: execOf([R[1]]) })
+  assert.deepEqual([noAnchor.source, noAnchor.tried], [['node-bundled', 'security'], []], 'no local anchor on this machine: nothing failed, nothing to say')
+  const node20 = await darwinRoots({ tls: {}, exec: execOf([R[1]]) })
+  assert.deepEqual([node20.source, node20.tried.length], [['security'], 1], 'Node 20: the standard set from the export, and the missing keychain read is said')
+  assert.match(node20.tried[0], /^getCACertificates: not available/)
+  await assert.rejects(darwinRoots({ tls: { getCACertificates: (k) => k === 'bundled' ? [] : (() => { throw Object.assign(new Error('x'), { code: 'EIO' }) })() }, exec: execOf([]) }),
+    (e) => e instanceof RootsUnavailableError && e.tried.join(' | ') === 'node-bundled: no certificate | node-system: EIO | security: no certificate', 'nothing at all: every source\'s reason, empty or failed, in source order')
   await assert.rejects(darwinRoots({ tls: {}, exec: () => ({ status: 1, stdout: '', stderr: '' }) }), (e) => e instanceof RootsUnavailableError && e.name === 'RootsUnavailableError' && /could not be read/.test(e.message) && e.tried.length === 2 && /Node ≥ 22.15/.test(e.tried[0]) && e.tried[1] === 'security: exit 1', 'no Node 22.15 read and a failed export: both reasons')
   await assert.rejects(darwinRoots({ tls: { getCACertificates: () => [BROKEN] }, exec: execOf([BROKEN]) }), (e) => e instanceof RootsUnavailableError && e.tried.length === 3 && e.tried.every((t) => t.endsWith(': no certificate')), 'stores of nothing but broken certificates are not a root set')
   await assert.rejects(darwinRoots({ tls: {}, exec: () => { throw new Error('boom') } }), (e) => e instanceof RootsUnavailableError && /security: boom/.test(e.message), 'a thrown runner is a reason')

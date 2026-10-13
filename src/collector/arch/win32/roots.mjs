@@ -4,7 +4,7 @@
 // windowsRoots({ tls, helper }) → { pem, fingerprint, source: 'node-system' | 'helper', dropped }
 //   `tls.getCACertificates('system')` (Node ≥ 22.15) when there is one; else, or when it fails or gives nothing, the helper's `roots` verb (the read-only export of CurrentUser\Root and
 //   LocalMachine\Root, de-duplicated by the DER's SHA-256, ~430 KB: the call is given time). Every certificate goes through `new X509Certificate()` first: one that does not parse is dropped and
-//   COUNTED (`dropped`), because Codex reads the bundle with rustls and a single broken block makes it refuse the whole file and connect to nothing [T0, W20]; a duplicate is kept once.
+//   COUNTED (`dropped`, said by `on` and the daemon through core/tls/roots.mjs bundleRoots, 4.8 §6.2), because Codex reads the bundle with rustls and a single broken block makes it refuse the whole file and connect to nothing [T0, W20]; a duplicate is kept once.
 //   `pem` is what the install hands the combined bundle as the OS roots (core/tls/roots.mjs `bundleRoots` → `composeBundle`, core/trust); `fingerprint` is a hash of the SET of certificates, so the daily
 //   comparison knows the roots changed whatever their order. No usable source is a RootsUnavailableError with a reason (D38: unreadable is 「unknown」 and says why), never an empty set.
 import crypto from 'node:crypto'
@@ -56,10 +56,4 @@ export async function windowsRoots({ tls = nodeTls, helper = null, timeoutMs = H
     } catch (e) { tried.push(`helper: ${e.code || e.message}`) }
   }
   throw new RootsUnavailableError(tried)
-}
-
-/** The line the receipt and `status` carry when some certificates were dropped (4.8 §6.2); null when none were. */
-export function droppedNote(roots) {
-  const n = roots && roots.dropped
-  return n > 0 ? `${n} certificate${n === 1 ? '' : 's'} in the Windows roots could not be parsed and ${n === 1 ? 'is' : 'are'} not in the combined bundles (one broken certificate makes Codex refuse the whole bundle)` : null
 }

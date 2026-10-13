@@ -36,13 +36,23 @@ test('systemRoots: Node\'s system store and the first existing OS bundle togethe
 // Fedora / RHEL / openSUSE have none there, and the bundles then dropped the OS roots and every CA installed system-wide with them. None is said (D38).
 test('osBundleRoots: the first of SYSTEM_BUNDLES that holds a certificate; none is `missing`, naming every path looked at; one there but unreadable throws with its errno', () => {
   const only = (files) => (f) => { if (f in files) return files[f]; throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' }) }
-  assert.deepEqual(osBundleRoots({ read: only({ '/etc/pki/tls/certs/ca-bundle.crt': b.certPem }) }), { pem: b.certPem, file: '/etc/pki/tls/certs/ca-bundle.crt', missing: null }, 'Fedora / RHEL: only its path exists')
+  assert.deepEqual(osBundleRoots({ read: only({ '/etc/pki/tls/certs/ca-bundle.crt': b.certPem }) }), { pem: b.certPem, file: '/etc/pki/tls/certs/ca-bundle.crt', missing: null, dropped: 0 }, 'Fedora / RHEL: only its path exists')
   assert.equal(osBundleRoots({ read: only({ '/etc/ssl/certs/ca-certificates.crt': '', '/etc/ssl/ca-bundle.pem': b.certPem }) }).file, '/etc/ssl/ca-bundle.pem', 'a path that holds no certificate is passed over (openSUSE)')
   const none = osBundleRoots({ read: only({}) })
-  assert.deepEqual([none.pem, none.file], ['', null], 'none: Node\'s roots are all a bundle gets')
+  assert.deepEqual([none.pem, none.file, none.dropped], ['', null, 0], 'none: Node\'s roots are all a bundle gets')
   for (const f of SYSTEM_BUNDLES) assert.ok(none.missing.includes(f), `the reason names ${f}`)
   assert.throws(() => osBundleRoots({ read: (f) => { throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }) } }),
     (e) => e.code === 'EACCES' && e.message.includes(SYSTEM_BUNDLES[0]), 'there but unreadable: thrown, the caller keeps what it had and says why')
+})
+
+// 4.8 §6.2 / W20, carried to Linux by 4.6 「合并包」: a block of the OS bundle that is not a certificate Node parses is left out of every combined bundle
+// (composeBundle skips it — one broken block makes Codex's rustls refuse the whole file), and that is counted, so it can be said (D38), never only skipped.
+test('osBundleRoots: the blocks of the OS bundle that are not certificates Node parses are counted in `dropped` — a broken one, another type, one cut short', () => {
+  const BROKEN = '-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n'
+  const text = `${b.certPem}${BROKEN}-----BEGIN TRUSTED CERTIFICATE-----\nAAAA\n-----END TRUSTED CERTIFICATE-----\n${a.certPem}-----BEGIN CERTIFICATE-----\nMIIcut`
+  const r = osBundleRoots({ read: (f) => { if (f === SYSTEM_BUNDLES[0]) return text; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) } })
+  assert.deepEqual([r.file, r.dropped], [SYSTEM_BUNDLES[0], 3], 'two certificates parse; the broken one, the TRUSTED CERTIFICATE and the cut-short one do not')
+  assert.equal(r.pem, text, 'the text is handed on as read: composeBundle takes the certificates out of it')
 })
 
 test('SYSTEM_BUNDLES is one list: the collector\'s is the one `off` reads (src/off/pem.mjs), and no path of it is a string literal anywhere else in src/', () => {
@@ -59,9 +69,14 @@ test('SYSTEM_BUNDLES is one list: the collector\'s is the one `off` reads (src/o
 // the platform-seam rule: the combined bundles' roots have one resolver. A caller with an arm of its own (a named file read beside the arch's osRoots, a
 // fallback) is the drift this closes — on.mjs, install.mjs and the daemon once each chose between `osRootsFile` and `osRoots()`, an arm only test arches took.
 test('bundleRoots is the collector\'s one resolver of the combined bundles\' roots: the arch\'s osRoots or Node\'s alone; no other code in src/ asks osRoots, and no file arm is left', async () => {
-  assert.deepEqual(await bundleRoots({ osRoots: async () => ({ pem: b.certPem, file: '/f' }) }, { nodeRoots: [x.certPem] }), { node: [x.certPem], osText: b.certPem, missing: null })
-  assert.deepEqual(await bundleRoots({ osRoots: () => ({ pem: '', missing: 'none here' }) }, { nodeRoots: [] }), { node: [], osText: '', missing: 'none here' }, '`missing` reaches the callers (planTrust\'s note, the daemon\'s failure)')
-  assert.deepEqual(await bundleRoots(null, { nodeRoots: [x.certPem] }), { node: [x.certPem], osText: '', missing: null }, 'no osRoots: Node\'s roots alone')
+  assert.deepEqual(await bundleRoots({ osRoots: async () => ({ pem: b.certPem, file: '/f' }) }, { nodeRoots: [x.certPem] }), { node: [x.certPem], osText: b.certPem, missing: null, dropped: 0, partial: null })
+  assert.deepEqual(await bundleRoots({ osRoots: () => ({ pem: '', missing: 'none here' }) }, { nodeRoots: [] }), { node: [], osText: '', missing: 'none here', dropped: 0, partial: null }, '`missing` reaches the callers (planTrust\'s note, the daemon\'s failure)')
+  assert.deepEqual(await bundleRoots(null, { nodeRoots: [x.certPem] }), { node: [x.certPem], osText: '', missing: null, dropped: 0, partial: null }, 'no osRoots: Node\'s roots alone')
+  // 4.8 §6.2 / W20, 4.9 §6.2: what the reader left out reaches the callers too — the count of certificates that did not parse, and the sources whose read
+  // failed while others gave roots (darwin's `tried`: on Node 20 the keychain's local anchors, where a corporate CA lives, are not in the bundles)
+  assert.deepEqual(await bundleRoots({ osRoots: async () => ({ pem: b.certPem, dropped: 2, tried: ['getCACertificates: not available (Node ≥ 22.15 has it)', 'security: exit 1'] }) }, { nodeRoots: [] }),
+    { node: [], osText: b.certPem, missing: null, dropped: 2, partial: 'getCACertificates: not available (Node ≥ 22.15 has it); security: exit 1' }, '`dropped` and `partial` reach planTrust\'s notes and the daemon\'s failures')
+  assert.deepEqual(await bundleRoots({ osRoots: () => ({ pem: b.certPem, dropped: 0, tried: [] }) }, { nodeRoots: [] }), { node: [], osText: b.certPem, missing: null, dropped: 0, partial: null }, 'nothing left out: nothing to say')
   await assert.rejects(bundleRoots({ osRoots: async () => { throw new Error('the OS trust bundle cannot be read (EACCES)') } }), /cannot be read/, 'a read that fails throws: `on` stops, the daemon keeps its bundles')
   const src = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src')
   const home = path.join(src, 'collector', 'core', 'tls', 'roots.mjs')

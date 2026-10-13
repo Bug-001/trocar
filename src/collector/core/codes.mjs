@@ -52,6 +52,8 @@ export const CODE = Object.freeze({
   unitNotDisabled: 'unit-not-disabled', // uninstall: systemd refused to disable the unit, or its wants link could not be removed
   unitEnvNotCarried: 'unit-env-not-carried', // the install shell's NODE_EXTRA_CA_CERTS could not be given to the autostart unit
   systemRootsUnavailable: 'system-roots-unavailable', // a combined bundle was composed with no OS root: no OS trust bundle on this machine holds a certificate (the engine's own record has the same name)
+  systemRootsUnparsable: 'system-roots-unparsable', // certificates of the OS roots did not parse and are in no combined bundle (4.8 §6.2 / W20)
+  systemRootsPartial: 'system-roots-partial', // a source of the OS roots could not be read while others gave roots: what only it holds is in no combined bundle (4.9 §6.2)
   describeError: 'describe-error', // the daemon could not describe a process to the engine (the engine's own record has the same name)
 })
 

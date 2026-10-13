@@ -267,7 +267,7 @@ test('isOwnPath: on Windows a path is asight\'s when it is under the collector d
 
 // ── W20: the combined bundle's Windows roots (4.8 §6.2) ──
 import nodeFs from 'node:fs'
-import { windowsRoots, droppedNote, RootsUnavailableError } from '../../../src/collector/arch/win32/roots.mjs'
+import { windowsRoots, RootsUnavailableError } from '../../../src/collector/arch/win32/roots.mjs'
 import { rewriteBundles } from '../../../src/collector/core/trust/bundle.mjs'
 
 const R = [createCa({ commonName: 'Windows root one' }), createCa({ commonName: 'Windows root two' }), createCa({ commonName: 'Windows root three' })].map((c) => c.certPem)
@@ -284,9 +284,6 @@ test('W20: the Windows roots come from Node\'s own system store when it has one,
   assert.ok(r.pem.includes(R[0].trim()) && r.pem.includes(R[1].trim()) && !r.pem.includes('bm90IGEg'), 'the broken block is not in the text')
   assert.ok(r.pem.endsWith('\n') && !r.pem.includes('\n\n'))
   assert.match(r.fingerprint, /^[0-9a-f]{64}$/)
-  assert.match(droppedNote(r), /^1 certificate in the Windows roots could not be parsed and is not in the combined bundles/, 'the receipt and status say so')
-  assert.equal(droppedNote({ dropped: 0 }), null)
-  assert.match(droppedNote({ dropped: 3 }), /^3 certificates .* could not be parsed and are not/)
 })
 
 test('W20: without Node\'s system store — or when it fails or is empty — the helper\'s read-only export is the source, and with neither the answer is a reason, not an empty bundle', async () => {
