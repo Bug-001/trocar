@@ -7,18 +7,24 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { renderCmdTemplate, SHIM_SOURCES } from '../../../../src/collector/arch/win32/shims.mjs'
+import { renderCmdTemplate, markerScript, SHIM_SOURCES } from '../../../../src/collector/arch/win32/shims.mjs'
 
 const read = (name) => fs.readFileSync(new URL(name, SHIM_SOURCES), 'utf8')
 const PROXY = 'http://kimi-code.cli:0123456789abcdef0123456789abcdef@127.0.0.1:18042'
 const CA = 'C:\\Users\\alice\\.asight\\collector\\ca\\extra-kimi.pem'
 const BIN = 'C:\\Users\\alice\\.kimi-code\\bin\\kimi.exe'
+const MARKER = 'C:\\Users\\alice\\.asight\\collector\\run\\trust'
+const kimiRender = (over = {}) => renderCmdTemplate('kimi.cmd.tmpl', { proxy: PROXY, caFile: CA, realBinary: BIN, markerDir: MARKER, ...over })
 
 test('W21 the shims: kimi.cmd sets NODE_EXTRA_CA_CERTS and HTTPS_PROXY; opencode.cmd sets HTTPS_PROXY only — and neither overrides an HTTPS_PROXY the shell already set (OPEN 16)', () => {
-  const kimi = renderCmdTemplate('kimi.cmd.tmpl', { proxy: PROXY, caFile: CA, realBinary: BIN })
+  const kimi = kimiRender()
   assert.match(kimi, /^if not defined HTTPS_PROXY set "HTTPS_PROXY=http:\/\/kimi-code\.cli:[0-9a-f]+@127\.0\.0\.1:18042"\r$/m, 'the proxy is the form\'s own kernel listener, with its credentials, set only when the shell has none')
   assert.match(kimi, /^set "NODE_EXTRA_CA_CERTS=C:\\Users\\alice\\\.asight\\collector\\ca\\extra-kimi\.pem"\r$/m)
   assert.match(kimi, /^"C:\\Users\\alice\\\.kimi-code\\bin\\kimi\.exe" %\*\r$/m, 'the real binary, quoted, with the arguments through')
+  // the per-pid launch marker's writer rides along, best-effort, beside the real run (the win twin of the mac shim's
+  // marker: a Windows process's environment is never readable, 4.8 s10.1 — measured live on Windows)
+  assert.match(kimi, /^start "" \/b powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0kimi-marker\.ps1" -MarkerDir "C:\\Users\\alice\\\.asight\\collector\\run\\trust" -Image kimi\.exe\r$/m, 'the marker writer starts hidden, beside the real run, pointing at the tracker marker dir')
+  assert.ok(!/kimi-marker\.ps1.*%(?![~*])/.test(kimi), 'the marker line passes no cmd percent-expansions of its own')
   const opencode = renderCmdTemplate('opencode.cmd.tmpl', { proxy: PROXY, realBinary: 'C:\\Users\\alice\\AppData\\Roaming\\npm\\opencode.exe' })
   assert.match(opencode, /if not defined HTTPS_PROXY set "HTTPS_PROXY=/)
   assert.doesNotMatch(opencode, /NODE_EXTRA_CA_CERTS/, 'OpenCode\'s trust is its in-process plugin: the shim sets no CA file')
@@ -39,16 +45,28 @@ test('the launchers: OpenCode Desktop\'s sets the proxy, VS Code\'s sets the CA 
 })
 
 test('the renderer\'s contract: CRLF and plain ASCII out, every slot filled or refused, a value that would break the set line refused', () => {
-  const out = renderCmdTemplate('kimi.cmd.tmpl', { proxy: PROXY, caFile: CA, realBinary: BIN })
+  const out = kimiRender()
   assert.ok(!/(?<!\r)\n/.test(out), 'every newline is CRLF')
   assert.ok(/^[\x20-\x7e\r\n\t]*$/.test(out), 'plain ASCII')
   assert.ok(!out.includes('__ASIGHT_'), 'no slot left standing')
   // a missing value: the half-filled shim is refused, never written
-  assert.throws(() => renderCmdTemplate('kimi.cmd.tmpl', { proxy: PROXY, caFile: CA }), /__ASIGHT_REAL_BINARY__ \(realBinary\) not filled/)
+  assert.throws(() => renderCmdTemplate('kimi.cmd.tmpl', { proxy: PROXY, caFile: CA, markerDir: MARKER }), /__ASIGHT_REAL_BINARY__ \(realBinary\) not filled/)
+  assert.throws(() => renderCmdTemplate('kimi.cmd.tmpl', { proxy: PROXY, caFile: CA, realBinary: BIN }), /__ASIGHT_MARKER_DIR__ \(markerDir\) not filled/, 'a kimi shim without its marker dir is a half-shim: refused, never written')
   assert.throws(() => renderCmdTemplate('opencode.cmd.tmpl', { proxy: PROXY, realBinary: BIN, caFile: CA }), /has no __ASIGHT_CA_FILE__ slot/, 'a value the template does not take is an error, not a silent drop')
   // a value that would break the one set line or the quoted call
-  for (const bad of ['a"b', 'a%b', 'a\nb']) assert.throws(() => renderCmdTemplate('kimi.cmd.tmpl', { proxy: `${PROXY}${bad}`, caFile: CA, realBinary: BIN }), /must not receive verbatim/)
-  assert.throws(() => renderCmdTemplate('kimi.cmd.tmpl', { proxy: PROXY, caFile: CA, realBinary: 'C:\\x\\kimi"dash.exe' }), /must not receive verbatim/)
+  for (const bad of ['a"b', 'a%b', 'a\nb']) assert.throws(() => kimiRender({ proxy: `${PROXY}${bad}` }), /must not receive verbatim/)
+  assert.throws(() => kimiRender({ realBinary: 'C:\\x\\kimi"dash.exe' }), /must not receive verbatim/)
+  assert.throws(() => kimiRender({ markerDir: 'C:\\a%b\\trust' }), /must not receive verbatim/, 'the marker dir is rendered into a quoted argument: same refusal')
+})
+
+test('the marker writer as a file: plain ASCII, parameterised, no path or address of any machine in it, and shipped verbatim', () => {
+  const srcps1 = read('kimi-marker.ps1')
+  assert.ok(/^[\x20-\x7e\n\t]*$/.test(srcps1), 'kimi-marker.ps1 is plain ASCII (a ps1 with a stray code page is a broken ps1)')
+  assert.ok(!/[0-9]{1,3}(\.[0-9]{1,3}){3}/.test(srcps1), 'kimi-marker.ps1 holds no address')
+  assert.ok(!/Users\\/.test(srcps1), 'kimi-marker.ps1 holds no user path (the dir arrives as -MarkerDir)')
+  assert.match(srcps1, /param\(\[string\]\$MarkerDir/, 'its parameters are its whole surface')
+  assert.match(srcps1, /ToUnixTimeMilliseconds/, 'the marker is the creation time in epoch ms, the helper startedAt convention')
+  assert.equal(markerScript(), srcps1, 'markerScript() ships the file verbatim')
 })
 
 test('the four templates as files: plain ASCII, no real path, host or credential of any machine in them', () => {

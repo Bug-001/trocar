@@ -15,7 +15,7 @@ import { execTool } from '../../../off/exec.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
 import { setKey, getPath } from '../../../off/json-text.mjs'
 import { proxyUrl, matchForm } from './forms.mjs'
-import { renderCmdTemplate } from './shims.mjs'
+import { renderCmdTemplate, markerScript } from './shims.mjs'
 import { readIngressConfig } from './ingress-config.mjs'
 import { readUserPath, prependUserPath, resolveCommand, sacOf, sacBlocksShims, readShortcutTarget, shortcutPlaces } from './userpath.mjs'
 import { readMachinePath, MACHINE_BIN } from './elevate.mjs'
@@ -256,16 +256,21 @@ async function userValuesOf(a) {
     if (command === 'kimi' && !exists(path.win32.join(home, '.kimi-code', 'bin', 'kimi.exe'))) return { refuse: { reason: 'Kimi Code is not the native install (%USERPROFILE%\\.kimi-code\\bin\\kimi.exe is not there), so asight installs no kimi shim (4.8 §6.3)' } }
     const real = deps.resolveCommand ? deps.resolveCommand(command) : resolveCommand(command, { run, env, exists, skip: [dirs.bin] })
     if (!real || !real.path) return { error: `the real binary of ${command} did not resolve on the PATH (Windows reads the machine PATH first, then the user PATH), so there is nothing for a shim to forward to` }
-    const shim = renderCmdTemplate(command === 'kimi' ? 'kimi.cmd.tmpl' : 'opencode.cmd.tmpl', { proxy: ku.url, ...(command === 'kimi' ? { caFile: kimiCaFile(dirs.ca, fs) } : {}), realBinary: real.path })
+    // kimi's trust is env-only (NODE_EXTRA_CA_CERTS) and a Windows process's environment is never readable from
+    // outside (4.8 §10.1) — so the shim also gets the per-pid launch marker's writer (4.6 「标记」, the darwin shim's
+    // door) and the marker dir the tracker reads (daemon.mjs's collectorPaths.markers spelling: <collector>\run\trust)
+    const markerDir = command === 'kimi' ? path.win32.join(collectorDir, 'run', 'trust') : null
+    const shim = renderCmdTemplate(command === 'kimi' ? 'kimi.cmd.tmpl' : 'opencode.cmd.tmpl', { proxy: ku.url, ...(command === 'kimi' ? { caFile: kimiCaFile(dirs.ca, fs), markerDir } : {}), realBinary: real.path })
+    const markerName = command === 'kimi' ? 'kimi-marker.ps1' : null
     const prior = readUserPath({ run, env })
     if (prior.error) return { error: `the user PATH could not be read, so nothing was written: ${prior.error}` }
     const shimPath = path.win32.join(dirs.bin, `${command}.cmd`)
     return { parts: [{
       kind: 'optin-user-path',
       entry: ledgerEntry({ kind: 'optin-user-path', harness: row.harness, form: row.form, item: row.item, scope: 'user', path: shimPath,
-        values: { command, binDir: dirs.bin, realBinary: real.path }, prior_value: prior.absent ? null : { kind: prior.kind, value: prior.value } }),
+        values: { command, binDir: dirs.bin, realBinary: real.path, ...(markerName ? { markerScript: path.win32.join(dirs.bin, markerName) } : {}) }, prior_value: prior.absent ? null : { kind: prior.kind, value: prior.value } }),
       do: async () => {
-        const s = runScript('user-path.ps1', ['-BinDir', dirs.bin, '-Command', command, '-ShimB64', b64(shim)], { run, env })
+        const s = runScript('user-path.ps1', ['-BinDir', dirs.bin, '-Command', command, '-ShimB64', b64(shim), ...(markerName ? ['-MarkerName', markerName, '-MarkerB64', b64(markerScript())] : [])], { run, env })
         if (s.code !== 0) return { ok: false, reason: `user-path.ps1 failed (exit ${s.code ?? 'none'}${s.err ? `: ${s.err.slice(0, 200)}` : ''})` }
         const p = prependUserPath({ dir: dirs.bin, run, env })
         if (!p.ok) return { ok: false, reason: `the shim was written, but the user PATH half failed: ${p.reason}` }
@@ -273,7 +278,7 @@ async function userValuesOf(a) {
         if (!exists(shimPath) || back.error || back.absent || !isFirst(dirs.bin, back.value)) return { ok: false, reason: 'the script ran, but the read-back did not confirm (the shim file, or the PATH holding the directory first)' }
         return { ok: true }
       },
-    }], summary: `${command}.cmd in ${dirs.bin}, the directory first on the user PATH` }
+    }], summary: `${command}.cmd in ${dirs.bin}, the directory first on the user PATH${markerName ? `, and ${markerName} beside it (the launch marker's writer)` : ''}` }
   }
 
   // the Start-menu / desktop shortcuts: asight's launcher, each shortcut repointed at it (§2.4 opencode.desktop). The launcher carries this

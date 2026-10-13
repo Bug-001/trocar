@@ -86,7 +86,7 @@ export function fakeWin({ reg = {}, sac = 0, declineCert = false, fs: wfs = fs }
       if (args.includes('-File')) {
         const p = params(args)
         scripts.push(p)
-        if (p.script === 'user-path.ps1') { wfs.mkdirSync(p.params['-BinDir'][0], { recursive: true }); wfs.writeFileSync(path.win32.join(p.params['-BinDir'][0], `${p.params['-Command'][0]}.cmd`), b64dec(p.params['-ShimB64'][0])); return out('') }
+        if (p.script === 'user-path.ps1') { wfs.mkdirSync(p.params['-BinDir'][0], { recursive: true }); wfs.writeFileSync(path.win32.join(p.params['-BinDir'][0], `${p.params['-Command'][0]}.cmd`), b64dec(p.params['-ShimB64'][0])); if (p.params['-MarkerName']) wfs.writeFileSync(path.win32.join(p.params['-BinDir'][0], p.params['-MarkerName'][0]), b64dec(p.params['-MarkerB64'][0])); return out('') }
         if (p.script === 'shortcut.ps1') { wfs.mkdirSync(path.win32.dirname(p.params['-Launcher'][0]), { recursive: true }); wfs.writeFileSync(p.params['-Launcher'][0], b64dec(p.params['-LauncherB64'][0])); for (const s of p.params['-Shortcut']) wfs.writeFileSync(s, p.params['-Launcher'][0]); return out('') }
         if (p.script === 'cert-user.ps1') { if (declineCert) return { status: 1, stdout: '', stderr: 'The user cancelled the certificate import.' }; store.add(sha1Thumb(wfs.readFileSync(p.params['-CertFile'][0], 'utf8'))); return out('') }
         if (p.script === 'claude-policy.ps1') { state[POLICY_KEY] = state[POLICY_KEY] || {}; state[POLICY_KEY].egressProxyUrl = { kind: 'REG_SZ', value: p.params['-Url'][0] }; return out('') }

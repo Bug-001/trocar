@@ -50,6 +50,7 @@ test('W64 round-trip, the PATH item: apply then inline undo is byte-identical â€
   assert.deepEqual(r.w.state['HKCU\\Environment'].Path, before, 'the value and its type, byte for byte')
   const binDir = path.win32.join(r.dir, 'bin')
   assert.equal(r.wfs.existsSync(path.win32.join(binDir, 'kimi.cmd')), false, 'the shim file is gone')
+  assert.equal(r.wfs.existsSync(path.win32.join(binDir, 'kimi-marker.ps1')), false, 'the marker writer goes with the shim (the entry names it)')
   assert.equal(r.wfs.existsSync(binDir), false, 'with the last shim the directory goes too')
   assert.equal(r.w.broadcasts.length, 2, 'one broadcast at the apply, one at the undo')
   assert.equal(r.w.calls.some((c) => c[0] === 'setx'), false, 'never setx, in either direction')
