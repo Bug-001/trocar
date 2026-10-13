@@ -28,6 +28,7 @@ import { createLru, memoKey } from './query/memo.mjs';
 import { loadPricing } from './view/pricing.mjs';
 import { randomBytes } from 'node:crypto';
 import { monitoringStatus, monitoringOn, monitoringOff, OFF_NOTE_STEER_ONLY } from './capture/control.mjs';
+import { OLD_CAPTURE_PROXY_URL } from './capture/onboard.mjs';
 import { appendLegacyEvent } from './capture/events.mjs';
 import { listSources, dirInputs, isSealedPath, sealedSources, unreadCapture } from './raw/discover.mjs';
 import { sealedReadProblem } from './raw/journal.mjs';
@@ -445,7 +446,7 @@ async function handleControl(req, res, { p, csrf, captureTarget, proxyUrl, deps,
 
 export async function createServer({ dbPath = DEFAULT_DB_PATH, sourcePath = null, enrich = enrichClaude,
   control = false, captureTarget = process.env.ASIGHT_CAPTURE_TARGET || 'https://api.anthropic.com',
-  proxyUrl = process.env.ASIGHT_PROXY_URL || 'http://127.0.0.1:8899', controlDeps = {}, readRetryMs = 30000,
+  proxyUrl = process.env.ASIGHT_PROXY_URL || OLD_CAPTURE_PROXY_URL, controlDeps = {}, readRetryMs = 30000,
   // where `asight raw seal` files a shard's records by session (bin passes ~/.asight/sessions): sealed
   // files there continuing a shard of a served root are read with it (src/raw/discover.mjs rule 3)
   sessionsRoot = null,

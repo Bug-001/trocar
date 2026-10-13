@@ -21,10 +21,11 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
+import { DEFAULT_REDIRECTOR_BIN } from './redirector-client.mjs'
 
 export const DEFAULTS = {
-  helperDir: '/usr/local/libexec/asight',
-  helperBin: '/usr/local/libexec/asight/asight-redirector',
+  helperDir: path.dirname(DEFAULT_REDIRECTOR_BIN),
+  helperBin: DEFAULT_REDIRECTOR_BIN,
   caps: 'cap_bpf,cap_net_admin,cap_perfmon+ep',
 }
 

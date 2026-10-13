@@ -11,6 +11,9 @@ import os from 'node:os'
 import { getTrustStoreInstaller, CA_CN } from './trust-store.mjs'
 import { caDir as canonicalCaDir } from '../paths.mjs'
 
+/** The old capture's MITM listens here (D22); the board's 监测 toggle and `asight serve` default to it. */
+export const OLD_CAPTURE_PROXY_URL = 'http://127.0.0.1:8899'
+
 // D27 canonical CA home. It MUST equal paths.caDir() so every CA consumer (onboard install,
 // leafHosts) resolves the SAME directory — a second dir is how a second same-CN CA came to exist and
 // broke every steered TLS handshake on 2026-07-21.
@@ -183,7 +186,7 @@ export function clearCliSteer({ settingsPath = DEFAULT_SETTINGS_PATH, stashPath 
 // exactly as it was (direct). It throws rather than returning ok:false because the caller
 // (src/capture/control.mjs `monitoringOn`, behind the board's /control/monitoring) reads the result as an already-succeeded
 // onboard; a throw is the only shape it surfaces truthfully.
-export function atraceOn({ caDir, proxyUrl = 'http://127.0.0.1:8899', settingsPath, stashPath, platform, installerOpts, run } = {}) {
+export function atraceOn({ caDir, proxyUrl = OLD_CAPTURE_PROXY_URL, settingsPath, stashPath, platform, installerOpts, run } = {}) {
   const ca = generateCa({ caDir, run })
   const install = installCa({ caCrt: ca.caCrt, platform, installerOpts })
   // The precondition is "is the CA trusted", NOT "did the installer exit 0". macOS

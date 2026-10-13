@@ -11,25 +11,17 @@ import { expandHome, parseDotenv } from '../../core/config-read.mjs'
 import { CODE } from '../../core/codes.mjs'
 import { isOwnPath, argAfter, dotenvLayer } from '../_common.mjs'
 import { localAppData } from './_paths.mjs'
+import { OLD_RELEASE, LAST_CA_BUNDLE_RELEASE, oldRelease } from '../hermes.mjs'
 
 const raw = String.raw
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what the block sets over the launch env and the user's lines
 const FALSEY = /^(false|0|no|off)$/i
-const OLD_RELEASE = 'hermes:release-ca-bundle' // pseudo-variable: this process may be a release ≤ v2026.9.24
 
 // HERMES_HOME may name a profile under the root; the root is where the profiles directory lives.
 function hermesRoot(ctx) {
   const h = expandHome(ctx.env.get('HERMES_HOME') || '', ctx.home)
   if (!h) return path.join(localAppData(ctx), 'hermes')
   return path.basename(path.dirname(h)) === 'profiles' ? path.dirname(path.dirname(h)) : h
-}
-// A release dated v2026.9.24 or earlier, by the checkout's install stamp; null when there is no readable stamp (as the Linux file).
-function oldRelease(readText, dir) {
-  let stamp
-  try { stamp = JSON.parse(readText(path.join(dir, 'install-stamp.json'))) } catch { return null }
-  if (!stamp || typeof stamp !== 'object') return null
-  const m = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(stamp.tag || stamp.baseVersion || ''))
-  return !!m && Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) <= 20260924
 }
 
 function inject(ctx) {
@@ -108,7 +100,7 @@ function layers(ctx) {
   const managed = ctx.environ.get('HERMES_MANAGED_DIR')
   if (managed) out.push(dotenvLayer(ctx, path.join(managed, '.env'), { name: path.join(managed, '.env') }))
   out.push(tlsKeys(ctx, home))
-  if (oldRelease(ctx.readText, checkout(ctx)) !== false) out.push({ name: `${checkout(ctx)}/install-stamp.json (release ≤ v2026.9.24, or no stamp)`, mode: 'override', vars: { [OLD_RELEASE]: '1' }, live: true })
+  if (oldRelease(ctx.readText, checkout(ctx)) !== false) out.push({ name: `${checkout(ctx)}/install-stamp.json (release ≤ ${LAST_CA_BUNDLE_RELEASE}, or no stamp)`, mode: 'override', vars: { [OLD_RELEASE]: '1' }, live: true })
   return out.filter(Boolean)
 }
 

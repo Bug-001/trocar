@@ -10,9 +10,9 @@ import { expandHome } from '../../core/config-read.mjs'
 import { lineComment } from '../../../off/text-edit.mjs'
 import { renderPlugin } from '../_plugins.mjs'
 import { fwd } from './_paths.mjs'
+import { MIN_NODE } from '../deepseek-dsh.mjs'
 
 const raw = String.raw
-const MIN_NODE = '22.19.0' // tls.setDefaultCACertificates
 const dshHome = (ctx) => expandHome(ctx.env.get('DSH_HOME'), ctx.home) || path.join(ctx.home, '.dsh')
 
 function inject(ctx) {

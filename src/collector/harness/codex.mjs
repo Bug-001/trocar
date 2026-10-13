@@ -20,7 +20,8 @@ import { parseTomlLite, parseDotenv, hostOf, dig, expandHome } from '../core/con
 import { CODE } from '../core/codes.mjs'
 import { envProxies, argAfter, dotenvLayer, isOwnPath } from './_common.mjs'
 
-const SYSTEM_CONFIG = { linux: '/etc/codex/config.toml', darwin: '/etc/codex/config.toml' }
+const ETC_CONFIG = '/etc/codex/config.toml'
+const SYSTEM_CONFIG = { linux: ETC_CONFIG, darwin: ETC_CONFIG }
 const codexHome = (env, home) => expandHome(env.get('CODEX_HOME') || '', home) || path.join(home, '.codex')
 // A config.toml asight cannot fully read is reported (D38): a relay host set in the unread part stays off the list.
 function tomlAt(ctx, file) {
