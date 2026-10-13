@@ -30,7 +30,9 @@ const FALSEY = /^(false|0|no|off)$/i
 export const OLD_RELEASE = 'hermes:release-ca-bundle' // pseudo-variable: this process may be a release ≤ LAST_CA_BUNDLE_RELEASE
 /** The last release that reads HERMES_CA_BUNDLE first (the plan's research; lab ③). */
 export const LAST_CA_BUNDLE_RELEASE = 'v2026.9.24'
-const CUTOFF = Number(LAST_CA_BUNDLE_RELEASE.slice(1).split('.').map((x, i) => (i ? x.padStart(2, '0') : x)).join(''))
+/** A release tag (`v2026.9.24`, `2026.09.24`) as a number that orders by date; null when it is not one. */
+const releaseDay = (tag) => { const m = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(tag)); return m ? Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) : null }
+const CUTOFF = releaseDay(LAST_CA_BUNDLE_RELEASE)
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what asight's block sets over the launch env and the user's lines
 
 // The root of the Hermes data dirs (HERMES_HOME may name a profile under it) and the active home of this process.
@@ -54,13 +56,13 @@ function checkout(ctx) {
   const m = /sys\.path\.insert\(\s*0\s*,\s*(['"])(\/[^'"]+)\1/.exec(ctx.argv[3] || '')
   return m ? m[2] : ctx.environ.get('HERMES_PYTHON_SRC_ROOT') || path.join(ctx.home, '.hermes', 'hermes-agent')
 }
-// A release dated v2026.9.24 or earlier, by the checkout's install stamp; null when there is no readable stamp.
+// A release dated LAST_CA_BUNDLE_RELEASE or earlier, by the checkout's install stamp; null when there is no readable stamp.
 export function oldRelease(readText, dir) {
   let stamp
   try { stamp = JSON.parse(readText(path.join(dir, 'install-stamp.json'))) } catch { return null }
   if (!stamp || typeof stamp !== 'object') return null
-  const m = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(stamp.tag || stamp.baseVersion || ''))
-  return !!m && Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) <= CUTOFF
+  const day = releaseDay(stamp.tag || stamp.baseVersion || '')
+  return day !== null && day <= CUTOFF
 }
 
 // Per-route TLS keys anywhere in config.yaml (providers map and custom_providers list): every ssl_ca_cert (a `list`
