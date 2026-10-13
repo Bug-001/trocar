@@ -56,9 +56,13 @@ const mayHaveRead = (p, l, since) => !!(l && l.rereads) || p.startedAt == null |
 // process that may have read its entry may be one of them (a record that is missing says nothing of re-reading either: alive is enough). → their pids;
 // none means nobody can hold what asight wrote for it, signature or not (4.6 「判活快照」).
 const unsignedOf = (liveness, list, h, since) => (hasSignature(liveness[h]) ? [] : list.filter((p) => mayHaveRead(p, liveness[h] || { rereads: true }, since)).map((p) => p.pid))
+// why such a harness cannot be judged, said the same way for its files (step 2 / 3) and for who still trusts asight (step 5)
+const unsignedWhy = (liveness, h) => (liveness[h]
+  ? `the install manifest has no process signature for ${h} (the asight that wrote it had none for this OS; "asight on" records it, then run this again)`
+  : `the install manifest has no liveness record for ${h} (written by an older asight; "asight on" adds it, then run this again)`)
 
-/** Undoes the entries (see the header) → `{ results, kept_bundles, removed, still_trusting, trust_unknown, left, residue, changed, procs_error, manifest }` (`trust_unknown`: the
- *  harnesses step 5 cannot judge, their snapshot having no signature). An error that stops it
+/** Undoes the entries (see the header) → `{ results, kept_bundles, removed, still_trusting, trust_unknown, left, residue, changed, procs_error, manifest }` (`trust_unknown`:
+ *  `[{ harness, why }]`, the harnesses step 5 cannot judge, their snapshot having no signature). An error that stops it
  *  part-way (the last write of the manifest: ENOSPC, EACCES, a failed rename) is thrown with `partial` on it: the same object, as far as it got — the files that were
  *  changed or removed by then are in it, because a receipt that said "nothing was changed" over a settings.json that was put back would be untrue (1.6 R1, V3). */
 export async function undoHarnesses(args) {
@@ -194,7 +198,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     // variable, never by an entry that re-reads), or any whose environ names it (a child that inherited it). `why`: cannot be told.
     const holders = (f, byHarness) => {
       if (t.error) return { why: t.error }
-      if (unsigned(f.harness).length) return { why: liveness[f.harness] ? `the install manifest has no process signature for ${f.harness} (the asight that wrote it had none for this OS; "asight on" records it, then run this again)` : `the install manifest has no liveness record for ${f.harness} (written by an older asight; "asight on" adds it, then run this again)` }
+      if (unsigned(f.harness).length) return { why: unsignedWhy(liveness, f.harness) }
       const pids = t.list.filter((p) => {
         const env = processEnv(p)
         return (byHarness && matchHarness(liveness, p) === f.harness && mayHaveRead(p, liveness[f.harness], since.get(f.harness))) || (!!env && [...env.values()].some((v) => typeof v === 'string' && v.includes(f.path)))
@@ -304,7 +308,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   if (touched.size) {
     const t = await table()
     out.procs_error = t.error
-    if (!t.error) out.trust_unknown = [...touched].filter((h) => unsignedOf(liveness, t.list, h, since.get(h)).length) // nothing tells its processes apart: not "none of them"
+    if (!t.error) out.trust_unknown = [...touched].filter((h) => unsignedOf(liveness, t.list, h, since.get(h)).length).map((h) => ({ harness: h, why: unsignedWhy(liveness, h) })) // nothing tells its processes apart: not "none of them"
     for (const p of t.list) {
       const h = matchHarness(liveness, p)
       const l = h && touched.has(h) ? liveness[h] : null

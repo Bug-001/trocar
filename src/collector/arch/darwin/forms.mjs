@@ -74,13 +74,16 @@ const anyOf = (patterns) => patterns.map((p) => `(?:${p})`).join('|')
  *  `cmdline` holding exactly when `matchForm` answers that form — the image is the basename after the last `/`, case-blind, a vestigial `.exe` dropped, one of the
  *  names exactly; the path patterns are looked ahead for anywhere in it; a PATH-ONLY form (`image: null`) is its paths alone; `cmdline` hits one of the form's command-line
  *  patterns (no command line: no match). The subset the patterns are written in (no anchors, no lookaround, no back-reference — 4.8 §2.3) is what lets them sit inside one
- *  RegExp unchanged. `matchForm`'s "first form in the data's order" is not needed: no two harnesses' forms claim one process (test/collector/harness/darwin-forms.test.mjs). */
+ *  RegExp unchanged. `matchForm`'s "first form in the data's order" is not needed: no two harnesses' forms claim one process (test/collector/harness/darwin-forms.test.mjs).
+ *  A `path-unknown` answer (the image of an agent at an install path no form carries) is no form, so the signature does not claim that process either: `off` judges
+ *  what the collector would capture. */
 export function formSignature(forms) {
   const match = []
   for (const f of forms) {
     const m = f.match
     if (!m) continue
     const names = imagesOf(f)
+    if (!names.length && !(m.path && m.path.length)) throw new Error(`form ${f.id}: a match with neither an image nor a path names every process; it cannot be a liveness signature`)
     const ahead = m.path ? `(?=[\\s\\S]*(?:${anyOf(m.path)}))` : ''
     const exe = names.length ? new RegExp(`^${ahead}(?:[\\s\\S]*/)?(?:${names.map(esc).join('|')})(?:\\.exe)?$`, 'i') : new RegExp(anyOf(m.path), 'i')
     match.push({ exe, ...(m.cmdline ? { cmdline: new RegExp(anyOf(m.cmdline), 'i') } : {}) })

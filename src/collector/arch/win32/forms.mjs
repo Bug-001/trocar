@@ -62,12 +62,14 @@ const anyOf = (patterns) => patterns.map((p) => `(?:${p})`).join('|')
  *  `cmdline` holding exactly when `matchForm` answers that form — the image is the basename after the last `\` or `/`, case-blind; the path patterns are looked
  *  ahead for anywhere in it; `cmdline` hits one of the form's command-line patterns (no command line: no match — `off` asks the whole table once, there is no
  *  `pending` to wait for). The subset the patterns are written in (no anchors, no lookaround, no back-reference — §2.3) is what lets them sit inside one RegExp
- *  unchanged. `matchForm`'s "first form in the data's order" is not needed: no two harnesses' forms claim one process (test/collector/harness/win32-forms.test.mjs). */
+ *  unchanged. `matchForm`'s "first form in the data's order" is not needed: no two harnesses' forms claim one process (test/collector/harness/win32-forms.test.mjs).
+ *  A `path-unknown` or `pending` answer is no form, so the signature does not claim that process either: `off` judges what the collector would capture. */
 export function formSignature(forms) {
   const match = []
   for (const f of forms) {
     const m = f.match
     if (!m) continue
+    if (typeof m.image !== 'string' || m.image === '') throw new Error(`form ${f.id}: a match with no image cannot be a liveness signature (matchForm gates every Windows form by its image)`)
     const ahead = m.path ? `(?=[\\s\\S]*(?:${anyOf(m.path)}))` : ''
     match.push({ exe: new RegExp(`^${ahead}(?:[\\s\\S]*[\\\\/])?${esc(m.image)}$`, 'i'), ...(m.cmdline ? { cmdline: new RegExp(anyOf(m.cmdline), 'i') } : {}) })
   }

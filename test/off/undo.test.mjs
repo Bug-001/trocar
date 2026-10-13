@@ -254,7 +254,7 @@ test('a process table that cannot be read is not "nobody is alive": the bundle i
   const t = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(t.b.dir); delete m.liveness.aa // a manifest written before the snapshot existed
   const old = await t.run({ manifest: m, procs: async () => [proc(91, '/x/anything', { env: null })] }) // nothing says whether it is an aa
-  assert.deepEqual([old.kept_bundles.map((k) => [k.unjudged, /no liveness record for aa/.test(k.error)]), old.left.length, old.trust_unknown], [[[true, true]], 1, ['aa']])
+  assert.deepEqual([old.kept_bundles.map((k) => [k.unjudged, /no liveness record for aa/.test(k.error)]), old.left.length, old.trust_unknown.map((x) => [x.harness, /no liveness record for aa/.test(x.why)])], [[[true, true]], 1, [['aa', true]]], 'step 5 says why in the same words as the files')
   const u = await setup((b) => [repH(b, 'aa')])
   const t0 = Date.parse(readManifest(u.b.dir).entries[0].installed_at)
   const n = readManifest(u.b.dir); delete n.liveness.aa

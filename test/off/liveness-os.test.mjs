@@ -77,7 +77,7 @@ for (const osName of Object.keys(OS)) {
     const r = await s.off(OS[osName].codex)
     assert.deepEqual(r.kept_bundles.map((k) => [path.basename(k.path), k.unjudged, /no process signature for codex/.test(k.error)]), [['combined-codex.pem', true, true]], 'not known is not "nobody": kept')
     assert.ok(!certBlocks(fs.readFileSync(s.bundle, 'utf8')).some((c) => c.fp === s.caFp()), 'without the asight CA')
-    assert.deepEqual([r.left.map((l) => path.basename(l.path)), r.trust_unknown, r.still_trusting], [['combined-codex.pem'], ['codex'], []], 'an item left (exit 1); who still trusts asight is said to be unknown, not none')
+    assert.deepEqual([r.left.map((l) => path.basename(l.path)), r.trust_unknown.map((x) => [x.harness, /no process signature for codex/.test(x.why)]), r.still_trusting], [['combined-codex.pem'], [['codex', true]], []], 'an item left (exit 1); who still trusts asight is said to be unknown, not none, and why')
     assert.equal((await on()).exit, 0)
     assert.deepEqual(readManifest(s.dir).liveness.codex.signature, folded, 'the next on records the signature it can now fold')
     const judged = await s.off(OS[osName].codex)
@@ -85,18 +85,25 @@ for (const osName of Object.keys(OS)) {
   })
 }
 
-test('darwin: an extra trust file is held by a Claude Code process started after on, whose environment macOS never shows — kept without the CA, its pid named, not "not known" (4.6 「判活快照」)', async () => {
-  const home = tmpDir('asight-liveness-os-')
-  const corp = createCa({ commonName: 'liveness-os relay CA' })
-  fs.writeFileSync(path.join(home, 'relay-ca.pem'), corp.certPem)
-  fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
-  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{\n  "model": "x"\n}\n')
-  const env = { HOME: home, NODE_EXTRA_CA_CERTS: path.join(home, 'relay-ca.pem') } // the user's own CA: Claude Code gets an extra-cc.pem
-  await installCollector({ home, env, ids: ['claude-code'], osName: 'darwin', arch: await loadArch('darwin'), harnesses: HARNESSES, freePort: async () => 47011, scan: async () => [], roots })
-  const dir = path.join(home, '.asight', 'collector'), extra = path.join(dir, 'ca', 'extra-cc.pem')
-  const at = new Date(Date.now() + 60_000), claude = `${home}/.local/share/claude/versions/2.1.296`
-  const table = darwinTools([{ pid: 5151, at, exe: claude, cmdline: 'claude' }, { pid: 5152, ppid: 5151, at, exe: '/bin/zsh', cmdline: '/bin/zsh -c npm test' }, { pid: 5160, at, exe: '/bin/zsh', cmdline: '-zsh' }]).run
-  const r = await undoHarnesses({ dir, home, manifest: readManifest(dir), ids: ['claude-code'], roots, procs: () => listProcs({ uid: 501, platform: 'darwin', exec: table }) })
-  assert.deepEqual(r.kept_bundles.map((k) => [path.basename(k.path), k.pids, !!k.unjudged]), [['extra-cc.pem', [5151, 5152], false]], 'Claude Code and the shell it started may hold it; a shell it did not start does not')
-  assert.deepEqual([fs.existsSync(extra), r.left], [true, []], 'kept, nothing left undone (exit 0)')
-})
+// a Claude Code started after on (and a shell it started) on each OS's table; a shell it did not start, beside them
+const CLAUDE = {
+  darwin: (home, at) => darwinTools([{ pid: 5151, at, exe: `${home}/.local/share/claude/versions/2.1.296`, cmdline: 'claude' }, { pid: 5152, ppid: 5151, at, exe: '/bin/zsh', cmdline: '/bin/zsh -c npm test' }, { pid: 5160, at, exe: '/bin/zsh', cmdline: '-zsh' }]).run,
+  win32: (home, at) => () => ({ status: 0, stdout: JSON.stringify([{ p: 5151, pp: 1, n: 'claude.exe', x: 'C:\\Users\\u\\.local\\bin\\claude.exe', s: at.getTime(), c: 'claude' }, { p: 5152, pp: 5151, n: 'cmd.exe', x: 'C:\\Windows\\System32\\cmd.exe', s: at.getTime(), c: 'cmd.exe /c npm test' }, { p: 5160, pp: 1, n: 'cmd.exe', x: 'C:\\Windows\\System32\\cmd.exe', s: at.getTime(), c: 'cmd.exe' }]), stderr: '' }),
+}
+for (const osName of Object.keys(CLAUDE)) {
+  test(`${osName}: an extra trust file is held by a Claude Code process started after on, whose environment the OS never shows — kept without the CA, its pid named, not "not known" (4.6 「判活快照」)`, async () => {
+    const home = tmpDir('asight-liveness-os-')
+    const corp = createCa({ commonName: 'liveness-os relay CA' })
+    fs.writeFileSync(path.join(home, 'relay-ca.pem'), corp.certPem)
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{\n  "model": "x"\n}\n')
+    const env = { HOME: home, USERPROFILE: home, NODE_EXTRA_CA_CERTS: path.join(home, 'relay-ca.pem') } // the user's own CA: Claude Code gets an extra-cc.pem
+    await installCollector({ home, env, ids: ['claude-code'], osName, arch: await loadArch(osName), harnesses: HARNESSES, freePort: async () => 47011, scan: async () => [], roots })
+    const dir = path.join(home, '.asight', 'collector'), extra = path.join(dir, 'ca', 'extra-cc.pem')
+    assert.ok(fs.existsSync(extra), 'the user\'s own CA made an extra-cc.pem')
+    const table = CLAUDE[osName](home, new Date(Date.now() + 60_000))
+    const r = await undoHarnesses({ dir, home, manifest: readManifest(dir), ids: ['claude-code'], roots, procs: () => listProcs({ uid: 501, platform: osName, exec: table }) })
+    assert.deepEqual(r.kept_bundles.map((k) => [path.basename(k.path), k.pids, !!k.unjudged]), [['extra-cc.pem', [5151, 5152], false]], 'Claude Code and the shell it started may hold it; a shell it did not start does not')
+    assert.deepEqual([fs.existsSync(extra), r.left], [true, []], 'kept, nothing left undone (exit 0)')
+  })
+}

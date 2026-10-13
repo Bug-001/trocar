@@ -107,6 +107,11 @@ export function winIdentity(pid, { run = null, env = process.env } = {}) {
   try { const o = JSON.parse(r.out); return { start_time: Number.isFinite(o.s) ? String(o.s) : null, boot_id: Number.isFinite(o.b) ? String(o.b) : null } } catch { return { start_time: null, boot_id: null } }
 }
 
+// What one question about the whole process table may print (spawnSync's own default is 1 MiB): `lsof`'s txt records of one user's processes on a
+// working Mac are 1.6 MB (every mapped library is a txt record), and a cut answer reads as a table whose newest processes — the highest pids, the
+// ones started after `on` — have no executable. An answer longer than this is not read at all (code null), never read in part.
+const TABLE_MAX_BUFFER = 64 * 1024 * 1024
+
 // `ps` prints dates in the user's language: under LC_ALL=zh_CN.UTF-8 or ja_JP.UTF-8 the five words of `lstart` are no longer "Wed Oct  7 04:27:00 2026" and every row
 // failed to parse — no error, just an empty table, which `off` read as "nobody is alive" (audit rule-b 2). The C locale gives the same words on every machine.
 const psEnv = (env = process.env) => ({ ...env, LC_ALL: 'C' })
@@ -154,9 +159,11 @@ const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\
 // first space under `ZCode Helper.app` — and the macOS form tables (src/collector/harness/darwin/) are measured against the real one, the first `txt` record
 // of `lsof` (the collector's own source, arch/darwin/procinfo.mjs realExeOf). One `lsof … -d txt -Fpn` answers it for every process of the user: `p<pid>`,
 // then `f<fd>` / `n<name>` pairs; the first txt name that is a path is the executable. It runs AFTER `ps`, so a row it does not name is a process that ended
-// between the two (its `ps` word is kept). An lsof that names no process while `ps` listed some cannot be read: the table is not known (4.6 「判活快照」).
+// between the two (its `ps` word is kept). An lsof that did not finish (code null: killed by its timeout, more output than TABLE_MAX_BUFFER, or never
+// started — what it printed is cut short) or that names no process while `ps` listed some cannot be read: the table is not known (4.6 「判活快照」).
 function exesOfLsof({ uid, exec, env, rows }) {
-  const r = execTool('lsof', [...(uid != null ? ['-a', '-u', String(uid)] : []), '-d', 'txt', '-Fpn'], { run: exec, env: psEnv(env) })
+  const r = execTool('lsof', [...(uid != null ? ['-a', '-u', String(uid)] : []), '-d', 'txt', '-Fpn'], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER })
+  if (r.code === null) throw new Error(`lsof did not finish (${r.err || 'no reason given'}), so the executables of the ${rows} process(es) ps listed are not known, nor which agents are alive`)
   const exes = new Map()
   let pid = null, txt = false
   for (const line of String(r.out || '').split('\n')) {
@@ -164,11 +171,11 @@ function exesOfLsof({ uid, exec, env, rows }) {
     else if (line[0] === 'f') txt = line === 'ftxt'
     else if (line[0] === 'n' && txt && pid != null && exes.get(pid) == null && line[1] === '/') exes.set(pid, line.slice(1))
   }
-  if (exes.size === 0 && rows > 0) throw new Error(`lsof ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `named no process (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`}, so the executables of the ${rows} process(es) ps listed are not known, nor which agents are alive`)
+  if (exes.size === 0 && rows > 0) throw new Error(`lsof named no process (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}), so the executables of the ${rows} process(es) ps listed are not known, nor which agents are alive`)
   return exes
 }
 function procsOfPs({ uid, exec, env }) {
-  const r = execTool('ps', ['-Axo', 'pid=,ppid=,uid=,lstart=,command='], { run: exec, env: psEnv(env) })
+  const r = execTool('ps', ['-Axo', 'pid=,ppid=,uid=,lstart=,command='], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER })
   if (r.code !== 0) throw new Error(`ps failed (${r.code === null ? r.err : `exit ${r.code}: ${r.err}`}), so which agents are alive is not known`)
   const out = []
   let rows = 0, parsed = 0
@@ -211,7 +218,7 @@ export async function listProcs({ uid = typeof process.getuid === 'function' ? p
 // an empty table: an empty one would say "nobody holds the bundle" and delete it (D38, the rule of the other two readers).
 const WIN_TABLE_SCRIPT = 'Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = $_.ProcessId; pp = $_.ParentProcessId; n = $_.Name; x = $_.ExecutablePath; s = $(try { [DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { $null }); c = $_.CommandLine } } | ConvertTo-Json -Compress'
 function procsOfWin({ exec, env }) {
-  const r = execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', WIN_TABLE_SCRIPT], { run: exec, env })
+  const r = execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', WIN_TABLE_SCRIPT], { run: exec, env, maxBuffer: TABLE_MAX_BUFFER })
   const what = `the Windows process table (one Get-CimInstance question) ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`}, so which agents are alive is not known`
   if (r.code !== 0) throw new Error(what)
   if (r.out === '') return [] // a table that printed nothing is an empty table (the same reading as `ps` printing nothing)
