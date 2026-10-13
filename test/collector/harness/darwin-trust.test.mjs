@@ -322,7 +322,7 @@ test('isOwnPath: on macOS a path is asight\'s when it is under the collector dir
 
 // ── W20: the combined bundle's macOS roots (4.9 §6.2: the union of three sources, none a fallback for another) ──
 import nodeFs from 'node:fs'
-import { darwinRoots, droppedNote, RootsUnavailableError } from '../../../src/collector/arch/darwin/roots.mjs'
+import { darwinRoots, osRootsFor, RootsUnavailableError } from '../../../src/off/os-roots.mjs'
 import { rewriteBundles } from '../../../src/collector/core/trust/bundle.mjs'
 
 const R = [createCa({ commonName: 'macOS root one' }), createCa({ commonName: 'macOS root two' }), createCa({ commonName: 'macOS root three' })].map((c) => c.certPem)
@@ -344,14 +344,14 @@ test('W20: the macOS roots are the union of Node\'s bundled set, the keychain\'s
   assert.ok(r.pem.includes(R[0].trim()) && r.pem.includes(R[1].trim()) && r.pem.includes(R[2].trim()) && !r.pem.includes('bm90IGEg'), 'the broken block is not in the text')
   assert.ok(r.pem.endsWith('\n') && !r.pem.includes('\n\n'))
   assert.match(r.fingerprint, /^[0-9a-f]{64}$/)
-  assert.match(droppedNote(r), /^1 certificate in the macOS roots could not be parsed and is not in the combined bundles/, 'the receipt and status say so')
-  assert.equal(droppedNote({ dropped: 0 }), null)
-  assert.match(droppedNote({ dropped: 3 }), /^3 certificates .* could not be parsed and are not/)
+  assert.deepEqual(r.tried, [], 'every source answered: nothing to say')
 })
 
 test('W20: a source that fails while the others give the set is named in tried (D38), and with no usable source at all the answer is a reason, not an empty bundle; the sandbox refusal is re-thrown, never passed off as a failed source', async () => {
   const oneDown = await darwinRoots({ tls: { getCACertificates: (k) => k === 'bundled' ? [R[0]] : (() => { throw Object.assign(new Error('no keychain read'), { code: 'EIO' }) })() }, exec: () => ({ status: 1, stdout: '', stderr: 'segv' }) })
   assert.deepEqual([oneDown.source, oneDown.tried], [['node-bundled'], ['node-system: EIO', 'security: segv']], 'a bundle quietly missing two of its three sources is not fine: both failures are said')
+  const clean = await darwinRoots({ tls: { getCACertificates: (k) => k === 'bundled' ? [R[0]] : [] }, exec: execOf([R[1]]) })
+  assert.deepEqual([clean.source, clean.tried], [['node-bundled', 'security'], []], 'a keychain with no added anchor answers empty: that is not a failed read (no daily alarm on a clean Mac)')
   await assert.rejects(darwinRoots({ tls: {}, exec: () => ({ status: 1, stdout: '', stderr: '' }) }), (e) => e instanceof RootsUnavailableError && e.name === 'RootsUnavailableError' && /could not be read/.test(e.message) && e.tried.length === 2 && /Node ≥ 22.15/.test(e.tried[0]) && e.tried[1] === 'security: exit 1', 'no Node 22.15 read and a failed export: both reasons')
   await assert.rejects(darwinRoots({ tls: { getCACertificates: () => [BROKEN] }, exec: execOf([BROKEN]) }), (e) => e instanceof RootsUnavailableError && e.tried.length === 3 && e.tried.every((t) => t.endsWith(': no certificate')), 'stores of nothing but broken certificates are not a root set')
   await assert.rejects(darwinRoots({ tls: {}, exec: () => { throw new Error('boom') } }), (e) => e instanceof RootsUnavailableError && /security: boom/.test(e.message), 'a thrown runner is a reason')
@@ -364,14 +364,13 @@ test('W20: the fingerprint is of the set, not of its order or its duplicates, an
   assert.notEqual((await darwinRoots({ tls: { getCACertificates: (k) => k === 'bundled' ? [R[0], R[2]] : [] }, exec: () => ({ status: 1, stdout: '', stderr: '' }) })).fingerprint, a.fingerprint)
 })
 
-test('W20: roots.mjs reads no file at all — never the static /etc/ssl/cert.pem a lazy port would reach for — and imports Node built-ins and the one tool wrapper only', async () => {
-  const src = nodeFs.readFileSync(new URL('../../../src/collector/arch/darwin/roots.mjs', import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, '')
-  assert.deepEqual([...src.matchAll(/^import .* from '([^']+)'/gm)].map((m) => m[1]).sort(), ['../../../off/exec.mjs', 'node:crypto', 'node:tls'])
-  assert.ok(!/cert\.pem|\/etc\/ssl|readFile|createReadStream|\bfs\b/.test(src))
+test('W20: the darwin reader reads no file at all — never the static /etc/ssl/cert.pem a lazy port would reach for, not even through the `read` the table\'s callers pass (off does)', async () => {
+  assert.equal(osRootsFor('darwin'), darwinRoots, 'darwin\'s entry of the one table (src/off/os-roots.mjs)')
+  assert.ok(!/cert\.pem|\/etc\/ssl|readFile|createReadStream|\bfs\b|\bread\b/.test(darwinRoots.toString().replace(/\/\/.*$/gm, '')), 'its own code names no file and takes no reader')
   const reads = []
   const real = nodeFs.readFileSync
   nodeFs.readFileSync = (...a) => { reads.push(String(a[0])); return real(...a) }
-  try { await darwinRoots({ tls: { getCACertificates: (k) => k === 'bundled' ? [R[0]] : [] }, exec: execOf([R[1]]) }) } finally { nodeFs.readFileSync = real }
+  try { await osRootsFor('darwin')({ tls: { getCACertificates: (k) => k === 'bundled' ? [R[0]] : [] }, exec: execOf([R[1]]), read: (f) => { reads.push(f); return '' } }) } finally { nodeFs.readFileSync = real }
   assert.deepEqual(reads, [])
 })
 
