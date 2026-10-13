@@ -12,6 +12,7 @@ import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
 import { loadOrCreateCa, caPaths, readCa } from './core/tls/ca-store.mjs'
 import { checkCa } from './core/tls/ca.mjs'
+import { osBundleRoots } from './core/tls/roots.mjs'
 import { planTrust } from './core/trust/plan.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
@@ -82,11 +83,11 @@ async function recorded(dir, where, fn) {
   }
 }
 
-// The roots a combined bundle starts from (4.6 「合并包」): Node's own, and the OS bundle the arch names.
+// The roots a combined bundle starts from (4.6 「合并包」): Node's own, and the OS bundle the arch names — read by the same resolver as the Linux
+// arch's (tls/roots.mjs osBundleRoots), so a file with no certificate in it is `missing` and said per bundle (planTrust), never an empty osText alone (D38).
 export function readRoots(osRootsFile, { nodeRoots = tls.rootCertificates } = {}) {
-  let osText = ''
-  if (osRootsFile) { try { osText = fs.readFileSync(osRootsFile, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e } }
-  return { node: [...nodeRoots], osText }
+  const got = osRootsFile ? osBundleRoots({ files: [osRootsFile] }) : { pem: '', missing: null }
+  return { node: [...nodeRoots], osText: got.pem, missing: got.missing }
 }
 
 // 4.6 §引擎 5: the engine checks an upstream with Node's roots + NODE_EXTRA_CA_CERTS of the daemon's own environment. A

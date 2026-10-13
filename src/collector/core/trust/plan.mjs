@@ -40,7 +40,8 @@ const CA_WORDS = /\b(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|SSL_CERT_FILE|SSL_CERT_DIR
 // what a command name resolves to, it is not a CA variable. Exactly this shape, the dir under the collector dir.
 const shimPathLine = (collectorDir) => new RegExp(`^export PATH="${(collectorDir + '/bin').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\$PATH" # ${SENTINEL}: `)
 
-// roots = { node: tls.rootCertificates, osText: the OS bundle's text } — needed only when a harness declares a bundle.
+// roots = { node: tls.rootCertificates, osText: the OS bundle's text, missing: why no OS root is in osText (null when one is) } — needed only when a
+// harness declares a bundle; each bundle composed without an OS root says so in the plan, the receipt and flows/ (4.6 「合并包」, D38).
 export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots = { node: [], osText: '' } }) {
   const entries = []
   const files = []
@@ -138,6 +139,7 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
       if (f.bundle) {
         const b = composeBundle({ nodeRoots: roots.node, osRootsText: roots.osText, userCerts, caPem: caCertPem })
         files.push({ harness: d.name, path: f.path, role: 'bundle', data: b.data, sources, user_fps: b.user_fps, roots_fp: b.roots_fp })
+        if (roots.missing) note(d.name, CODE.systemRootsUnavailable, `${f.path} carries Node's roots only: ${roots.missing}; a CA installed system-wide (a corporate proxy's) is not in it`)
       } else {
         const seen = new Set()
         const pems = []

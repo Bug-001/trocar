@@ -213,7 +213,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
         writeDurable(f.path, c.data, 0o600, fs)
         const lost = (f.user_fps || []).filter((x) => !c.user_fps.includes(x))
         Object.assign(f, { roots_fp: c.roots_fp, sha256: sha256(Buffer.from(c.data)), user_fps: c.user_fps, without_ca: true })
-        out.kept_bundles.push({ ...keep, rebuilt: true, ...(lost.length ? { lost_fps: lost, unread } : {}) })
+        out.kept_bundles.push({ ...keep, rebuilt: true, ...(lost.length ? { lost_fps: lost, unread } : {}), ...(roots.missing ? { os_roots_missing: roots.missing } : {}) })
       } catch (e) {
         out.kept_bundles.push({ ...keep, error: errText(e) })
         fail(f, `${f.path} is gone and could not be rebuilt (${errText(e)}); ${keep.pids.length ? `a running process may use it (pid ${keep.pids.join(', ')}): restart ${f.harness}` : `${f.harness} reads it at its next start, through ${keep.entry_left.join(', ')} that could not be undone: fix that, then run it again`}`)

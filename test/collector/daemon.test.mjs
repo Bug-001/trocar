@@ -684,6 +684,40 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
   } finally { await d.stop(); p.done(); s.done() }
 })
 
+// 4.6 「合并包」, D38: the Linux arch's OS roots are the first OS PEM bundle of SYSTEM_BUNDLES this machine has, read on every rebuild — not the Debian path alone
+// (Fedora / RHEL / openSUSE have no /etc/ssl/certs/ca-certificates.crt). A machine with none gets bundles with Node's roots only, and that is a failure record that
+// status (and the board, the same reader) shows; Fedora's bundle, once there, is in the next rebuild. Judged by the bundle on disk and the records, through the real arch.
+test('daemon: the Linux arch\'s OS roots — none on the machine is a bundle failure status shows; Fedora\'s bundle, once there, is in the rebuilt bundle (4.6 「合并包」, D38)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  const { loadArch } = await import('../../src/collector/arch/index.mjs')
+  const { SYSTEM_BUNDLES } = await import('../../src/collector/core/tls/roots.mjs')
+  const linux = await loadArch('linux')
+  const disk = new Map() // this machine's /etc as the arch reads it: empty = no OS bundle at all
+  const read = (f) => { if (disk.has(f)) return disk.get(f); throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' }) }
+  const osRoots = () => linux.osRoots({ read })
+  const dir = s.collector
+  const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+    inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
+  const first = osRoots()
+  await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, roots: { node: [...tls.rootCertificates], osText: first.pem, missing: first.missing } })
+  writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
+  const bundle = path.join(dir, 'ca', 'combined-rep.pem')
+  const fedora = createCa({ commonName: 'corp CA in the Fedora system bundle' })
+  const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...fakeArch(p).arch, osRoots }, harnesses: [rep], bundleMs: 30 })
+  try {
+    const f = await until(() => flowsOf(s).find((x) => x.event === 'failure' && x.where === 'bundle' && x.code === 'system-roots-unavailable'))
+    assert.deepEqual(f.files, [bundle], 'the bundle that carries no OS root')
+    for (const b of SYSTEM_BUNDLES) assert.ok(f.reason.includes(b), `the reason names every path looked at: ${b}`)
+    const st = await req(s.sock, 'GET', '/status')
+    assert.ok(statusFailures(st).some((x) => x.where === 'bundle' && x.code === 'system-roots-unavailable'), 'status (the board\'s reader) shows it')
+    assert.ok(!fs.readFileSync(bundle, 'utf8').includes(fedora.certPem.trim()))
+    disk.set('/etc/pki/tls/certs/ca-bundle.crt', fedora.certPem) // the machine is a Fedora one after all (or ca-certificates got installed): the next rebuild reads it
+    await until(() => fs.readFileSync(bundle, 'utf8').includes(fedora.certPem.trim()))
+    assert.ok(fs.readFileSync(bundle, 'utf8').includes(tls.rootCertificates[0].trim()), 'Node\'s roots stay in it')
+    assert.ok(flowsOf(s).some((x) => x.event === 'bundles-rebuilt' && x.code === 'roots-changed' && x.reason.includes('combined-rep.pem')), 'the rebuild is recorded')
+  } finally { await d.stop(); p.done(); s.done() }
+})
+
 // 4.6 「合并包」, D39: the daily rebuild is for the harnesses whose desired state is on, and works on the manifest as it is on disk. `asight off <h>` runs while
 // the daemon does (it is not stopped for one harness): what it removed or kept without the asight CA must not come back with it, and the manifest it saved
 // must not be written over by the copy the daemon read at start.

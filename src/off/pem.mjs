@@ -4,6 +4,7 @@
 // is gone (composeBundle). The functions that were in src/collector/core/trust/bundle.mjs moved here with their behaviour, so the file that
 // install writes and the file `off` writes are made by one piece of code; bundle.mjs re-exports them. Imports only node:* (0.1 §2).
 import crypto, { X509Certificate } from 'node:crypto'
+import nodeFs from 'node:fs'
 
 const BLOCK = /-----BEGIN ([A-Z0-9 ]+)-----[\s\S]*?-----END \1-----/g
 // Every PEM block of a file, in order, from its BEGIN line: a block whose END line does not come before the next BEGIN (a
@@ -75,6 +76,34 @@ export function composeBundle({ nodeRoots, osRootsText, userCerts = [], caPem = 
   for (const p of userCerts) { const fp = fpOf(p); if (fp && !userFps.includes(fp)) userFps.push(fp); add(p) } // kept even when a root today
   if (caPem) add(caPem)
   return { data: out.join('\n') + '\n', user_fps: userFps, roots_fp: rootsFingerprint(nodeRoots, osRootsText) }
+}
+
+// The OS PEM bundle of each distro family, in the order a lookup tries them: the one list of this fact. It lives here because `off` may import
+// nothing outside src/off (R3) and rebuilds a gone bundle from it; src/collector/core/tls/roots.mjs re-exports it for the engine's trust set and
+// for the Linux arch's combined-bundle roots (4.6 §引擎 第 5 步, 「合并包」). Data, not a platform branch: a path that is not on this OS is skipped.
+export const SYSTEM_BUNDLES = Object.freeze([
+  '/etc/ssl/certs/ca-certificates.crt',                // Debian, Ubuntu, Arch, Alpine, NixOS, Gentoo
+  '/etc/pki/tls/certs/ca-bundle.crt',                  // Fedora, RHEL, CentOS
+  '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem', // RHEL 7+
+  '/etc/ssl/ca-bundle.pem',                            // openSUSE
+  '/etc/pki/tls/cacert.pem',                           // OpenELEC
+  '/etc/ssl/cert.pem',                                 // Alpine's link; macOS, BSD (not the keychain's added roots)
+])
+
+/** osBundle({files, read}) → {file, text, failed}: the first OS PEM bundle that holds a certificate — file null and text '' when none
+ *  does. A path that is not on this OS (ENOENT, ENOTDIR) is skipped; one that is there but cannot be read is skipped and listed in
+ *  `failed` as {file, error}, for the caller to say (D38). */
+export function osBundle({ files = SYSTEM_BUNDLES, read = (f) => nodeFs.readFileSync(f, 'utf8') } = {}) {
+  const failed = []
+  for (const file of files) {
+    let text
+    try { text = String(read(file)) } catch (e) {
+      if (!(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR'))) failed.push({ file, error: e })
+      continue
+    }
+    if (certBlocks(text).length) return { file, text, failed }
+  }
+  return { file: null, text: '', failed }
 }
 
 // The user's certificates of an existing bundle (by fingerprint, as recorded at install): what a rebuild carries over

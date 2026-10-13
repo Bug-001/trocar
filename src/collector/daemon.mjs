@@ -21,6 +21,7 @@ import { readCa } from './core/tls/ca-store.mjs'
 import { tryOpLock } from '../off/lock.mjs'
 import { loadCa, checkCa } from './core/tls/ca.mjs'
 import { createLeafIssuer } from './core/tls/leaf.mjs'
+import { osBundleRoots } from './core/tls/roots.mjs'
 import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, createFailureRecorder } from './core/events.mjs'
@@ -271,10 +272,15 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
           const installedIds = [...new Set([...(fresh.entries || []), ...(fresh.files || [])].map((x) => x.harness).filter(Boolean))]
           const st = readState(P.state, () => {}, { installed: installedIds }) // a state file that cannot be read reads as every harness off, and the switch records that (switch.mjs): nothing to rebuild then
           const on = new Set(Object.entries(st.harnesses).filter(([, h]) => h.desired === 'on').map(([id]) => id))
-          let osText = ''
-          if (A.osRootsFile) { try { osText = fs.readFileSync(A.osRootsFile, 'utf8') } catch (e) { if (e.code !== 'ENOENT') throw e } }
-          else if (A.osRoots) { osText = (await A.osRoots()).pem } // the arm is NOT darwin's: it is any arch whose OS roots are not one file (osRoots set, osRootsFile unset) — today only darwin (4.9 §6.2, review F3), whose union is keychain-administered anchors ∪ Node's bundled ∪ Apple's SystemRootCertificates; another arch reaching here gets the same service for free. Without this arm the combined bundles carry no enterprise root and a replace-semantics entry (Codex's SSL_CERT_FILE) silently cuts the agent off its relay. A read that fails entirely reaches the catch below: the bundles keep their previous roots and the failure is said (D38)
-          rewriteBundles({ dir: P.dir, manifest: fresh, nodeRoots: tls.rootCertificates, osRootsText: osText, caPem: ca.certPem, report, only: on })
+          // The OS roots, from either shape an arch gives them in (the two arms install's readRoots and on.mjs take): `osRootsFile` (one named PEM file, read by the
+          // Linux arch's own resolver; the test arches) or `osRoots()` — every real arch: Linux's first OS PEM bundle (tls/roots.mjs), darwin's keychain-administered anchors ∪ Node's bundled ∪ Apple's
+          // SystemRootCertificates (4.9 §6.2, review F3), win32's stores (4.8 §6.2). Without it the combined bundles carry no enterprise root and a replace-semantics entry
+          // (Codex's SSL_CERT_FILE) silently cuts the agent off its relay. A read that fails entirely reaches the catch below: the bundles keep their previous roots and the
+          // failure is said (D38). An answer with no OS root in it (`missing`: no OS bundle on this machine holds a certificate) is used — Node's roots are all there is — and said.
+          const got = A.osRootsFile ? osBundleRoots({ files: [A.osRootsFile] }) : A.osRoots ? await A.osRoots() : { pem: '', missing: null }
+          rewriteBundles({ dir: P.dir, manifest: fresh, nodeRoots: tls.rootCertificates, osRootsText: got.pem, caPem: ca.certPem, report, only: on })
+          const bare = got.missing ? fresh.files.filter((f) => f.role === 'bundle' && on.has(f.harness) && !f.without_ca).map((f) => f.path) : []
+          if (bare.length) failure.event({ where: 'bundle', code: CODE.systemRootsUnavailable, files: bare, reason: `the combined bundles ${bare.join(', ')} carry Node's roots only: ${got.missing}; a CA installed system-wide (a corporate proxy's) is not in them, and an agent whose entry points at one may not reach a relay that signs with it` })
         }
       } catch (e) { failure('bundle', Object.assign(new Error(`rebuilding the combined bundles failed: ${errText(e)}; they keep their previous roots`), { code: e && e.code })) } finally { if (held && held.lock) held.lock.release() }
       const changed = report.rebuilt.filter((r) => r.why === 'roots-changed').map((r) => r.path)

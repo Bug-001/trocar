@@ -4,7 +4,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import tls from 'node:tls'
-import { systemRoots, nodeRoots, createUpstreamTrust, SYSTEM_BUNDLES } from '../../../src/collector/core/tls/roots.mjs'
+import { fileURLToPath } from 'node:url'
+import { systemRoots, nodeRoots, createUpstreamTrust, osBundleRoots, SYSTEM_BUNDLES } from '../../../src/collector/core/tls/roots.mjs'
+import { SYSTEM_BUNDLES as OFF_BUNDLES } from '../../../src/off/pem.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
@@ -28,6 +30,30 @@ test('systemRoots: Node\'s system store and the first existing OS bundle togethe
   const denied = systemRoots({ api: null, read: (f) => { if (f === SYSTEM_BUNDLES[0]) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return f === '/etc/pki/tls/certs/ca-bundle.crt' ? b.certPem : missing() } })
   assert.deepEqual([denied.sources, denied.errors], [['/etc/pki/tls/certs/ca-bundle.crt'], [`${SYSTEM_BUNDLES[0]}: EACCES: permission denied`]], 'a bundle that exists but cannot be read is reported')
   assert.ok(SYSTEM_BUNDLES.includes('/etc/ssl/certs/ca-certificates.crt') && SYSTEM_BUNDLES.includes('/etc/pki/tls/certs/ca-bundle.crt'))
+})
+
+// 4.6 「合并包」: on Linux the combined bundles start from the first OS bundle this machine has (the Linux arch's osRoots), not the Debian path alone —
+// Fedora / RHEL / openSUSE have none there, and the bundles then dropped the OS roots and every CA installed system-wide with them. None is said (D38).
+test('osBundleRoots: the first of SYSTEM_BUNDLES that holds a certificate; none is `missing`, naming every path looked at; one there but unreadable throws with its errno', () => {
+  const only = (files) => (f) => { if (f in files) return files[f]; throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' }) }
+  assert.deepEqual(osBundleRoots({ read: only({ '/etc/pki/tls/certs/ca-bundle.crt': b.certPem }) }), { pem: b.certPem, file: '/etc/pki/tls/certs/ca-bundle.crt', missing: null }, 'Fedora / RHEL: only its path exists')
+  assert.equal(osBundleRoots({ read: only({ '/etc/ssl/certs/ca-certificates.crt': '', '/etc/ssl/ca-bundle.pem': b.certPem }) }).file, '/etc/ssl/ca-bundle.pem', 'a path that holds no certificate is passed over (openSUSE)')
+  const none = osBundleRoots({ read: only({}) })
+  assert.deepEqual([none.pem, none.file], ['', null], 'none: Node\'s roots are all a bundle gets')
+  for (const f of SYSTEM_BUNDLES) assert.ok(none.missing.includes(f), `the reason names ${f}`)
+  assert.throws(() => osBundleRoots({ read: (f) => { throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }) } }),
+    (e) => e.code === 'EACCES' && e.message.includes(SYSTEM_BUNDLES[0]), 'there but unreadable: thrown, the caller keeps what it had and says why')
+})
+
+test('SYSTEM_BUNDLES is one list: the collector\'s is the one `off` reads (src/off/pem.mjs), and no path of it is a string literal anywhere else in src/', () => {
+  assert.equal(SYSTEM_BUNDLES, OFF_BUNDLES)
+  const src = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src')
+  const home = path.join(src, 'off', 'pem.mjs')
+  const files = fs.readdirSync(src, { recursive: true }).map((f) => path.join(src, f)).filter((f) => f.endsWith('.mjs') && f !== home)
+  const esc = (t) => t.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+  // a quoted string is a copy of the fact; a comment's `backticked` mention of a path is prose
+  const hits = files.flatMap((f) => { const t = fs.readFileSync(f, 'utf8'); return SYSTEM_BUNDLES.filter((p) => new RegExp(`['"]${esc(p)}['"]`).test(t)).map((p) => `${path.relative(src, f)}: ${p}`) })
+  assert.deepEqual(hits, [], 'a second copy of the list drifts from the first (the Linux arch named Debian\'s path alone; off had three of six)')
 })
 
 test('nodeRoots: without the API, Node\'s bundled roots plus this process\'s NODE_EXTRA_CA_CERTS', () => {

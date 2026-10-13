@@ -2,11 +2,12 @@
 // the daemon asks this module once and hands core an object that satisfies the Redirector contract.
 export async function loadArch(platform = process.platform) {
   if (platform === 'linux') {
-    const [{ createLinuxRedirector }, { createRedirectorClient }, install, unit, { linuxNetFacts }] = await Promise.all([import('./linux/redirector.mjs'), import('./linux/redirector-client.mjs'), import('./linux/install.mjs'), import('./linux/unit.mjs'), import('./linux/netfacts.mjs')])
+    const [{ createLinuxRedirector }, { createRedirectorClient }, install, unit, { linuxNetFacts }, { osBundleRoots }] = await Promise.all([import('./linux/redirector.mjs'), import('./linux/redirector-client.mjs'), import('./linux/install.mjs'), import('./linux/unit.mjs'), import('./linux/netfacts.mjs'), import('../core/tls/roots.mjs')])
     // install: the machine-wide helper (setupHelper / uninstallHelper); the per-user install is src/collector/install.mjs
-    // osRootsFile: the OS trust bundle a combined bundle starts from (4.6 「合并包」; Debian / Ubuntu layout)
+    // osRoots: the OS roots a combined bundle starts from (4.6 「合并包」) — the first OS PEM bundle of SYSTEM_BUNDLES this machine has (Debian's, Fedora's,
+    // openSUSE's, …), read each time it is asked (the daemon's daily rebuild sees a bundle installed since); none → `missing`, which on and the daemon record (D38)
     // netFacts: this platform's part of the network facts (1.6 §9.7): `status` and `doctor` hand it to src/netenv/facts.mjs
-    return { os: 'linux', install, unit, netFacts: linuxNetFacts, osRootsFile: '/etc/ssl/certs/ca-certificates.crt', createRedirector: ({ env = process.env } = {}) => createLinuxRedirector({ makeClient: () => createRedirectorClient({ env }) }) }
+    return { os: 'linux', install, unit, netFacts: linuxNetFacts, osRoots: ({ read } = {}) => osBundleRoots({ read }), createRedirector: ({ env = process.env } = {}) => createLinuxRedirector({ makeClient: () => createRedirectorClient({ env }) }) }
   }
   if (platform === 'win32') {
     // 4.9 §1 (D47's twin, carried): no machine-wide helper (install: null — the per-user one is a PowerShell process, not a root service); no kernel to download, verify or
