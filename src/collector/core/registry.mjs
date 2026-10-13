@@ -84,6 +84,17 @@ function compileAll(byName, entries) {
   return out
 }
 
+/** whoseBy(match, get?) → (facts) → match's answer shape: whose process this is. A host-tree door already said (`facts.hostAgent`: the editor carrying the
+ *  harness's extension, named by the form's hosts.processes, 4.8 §3) — that harness, as a match; else the name list (`match`). With `get` (name →
+ *  descriptor) a hostAgent no descriptor has falls back to the list. The one place this rule is written: the tracker, its rejudge, the doors, the entry check. */
+export function whoseBy(match, get = null) {
+  return (facts) => {
+    const h = facts && facts.hostAgent
+    if (h && (!get || get(h))) return { agent: h, descriptor: get ? get(h) : null, reason: 'match' }
+    return match(facts)
+  }
+}
+
 export function createRegistry(descriptors, { agentList = [] } = {}) {
   const byName = new Map()
   for (const d of descriptors) {
@@ -139,5 +150,6 @@ export function createRegistry(descriptors, { agentList = [] } = {}) {
 
   const isLongLived = (d, facts) => { const sig = lists.get(d.name); return !!sig && anyOf(sig.longLived, identityView(facts)) }
 
-  return { match, couldMatch, isLongLived, replaceAgentList, get: (name) => byName.get(name) || null, names: () => [...byName.keys()] }
+  const get = (name) => byName.get(name) || null
+  return { match, whose: whoseBy(match, get), couldMatch, isLongLived, replaceAgentList, get, names: () => [...byName.keys()] }
 }

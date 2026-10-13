@@ -165,11 +165,40 @@ test('W68 a changed VS Code setting → entry-changed naming the key and what it
   assert.match(cf.find((x) => /policy/.test(x.detail)).detail, /the policy value egressProxyUrl now holds http:\/\/elsewhere:3/)
 })
 
-test('W68 not-via-entry: a running agent whose parent is the shim (by command line), the launcher, or a process of its own harness is nothing to report; any other parent — explorer, a gone parent — is not-via-entry, one finding naming the pids', async () => {
-  const r = await rig({ form: 'kimi-code.cli', item: 'user-path-shim' })
+/** Kimi with both of its forms opted in: the CLI's shim and VS Code's launcher (a harness whose every form has a start entry is the one W68 can judge). */
+async function bothKimiForms() {
+  const r = await rig({ form: 'kimi-code.cli', item: 'user-path-shim', forms: ['kimi-code.cli', 'kimi-code.vscode'] })
   nativeKimi(r)
   realCmd(r, 'kimi')
   assert.equal((await r.apply()).state, 'done')
+  const code = winJoin(r.winHome, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe')
+  writeShortcut(r, winJoin(r.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Visual Studio Code.lnk'), code)
+  assert.equal((await r.applyAs('kimi-code.vscode', 'vscode-settings-and-launcher')).state, 'done')
+  return { r, code, launcher: r.manifest.entries.find((e) => e.kind === 'optin-vscode').values.launcher }
+}
+
+test('W68 not-via-entry is said only when every form of the harness has a start entry: with only one form opted in, a process cannot be put in a form, so nothing is said (D25)', async () => {
+  const r = await rig({ form: 'kimi-code.vscode', item: 'vscode-settings-and-launcher' })
+  const code = winJoin(r.winHome, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'Code.exe')
+  writeShortcut(r, winJoin(r.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Visual Studio Code.lnk'), code)
+  assert.equal((await r.apply()).state, 'done')
+  const kimiExe = winJoin(r.winHome, '.kimi-code', 'bin', 'kimi.exe')
+  const procs = [{ pid: 20, ppid: 4, exe: 'C:\\Windows\\explorer.exe' }, { pid: 21, ppid: 20, exe: kimiExe }, { pid: 22, ppid: 20, exe: code }]
+  assert.deepEqual(r.check(procs), [], 'the CLI kimi.exe is not compared with the VS Code launcher; Code.exe alone does not make the CLI form judged')
+})
+
+test('W68 not-via-entry: the host program (Code.exe, named by the form\'s hosts.processes) is its harness\'s process too — started around the launcher, it is reported', async () => {
+  const { r, code, launcher } = await bothKimiForms()
+  const procs = [{ pid: 20, ppid: 4, exe: 'C:\\Windows\\explorer.exe' }, { pid: 50, ppid: 51, exe: code }, { pid: 51, ppid: 4, exe: 'C:\\Windows\\System32\\wscript.exe', cmdline: `wscript "${launcher}"` }]
+  assert.deepEqual(r.check(procs), [], 'Code.exe started by the launcher')
+  const f = r.check([...procs, { pid: 52, ppid: 20, exe: code }])
+  assert.equal(f.length, 1)
+  assert.equal(f[0].code, 'not-via-entry')
+  assert.match(f[0].detail, /pid 52 \(parent .*explorer\.exe\)/)
+})
+
+test('W68 not-via-entry: a running agent whose parent is the shim (by command line), the launcher, or a process of its own harness is nothing to report; any other parent — explorer, a gone parent — is not-via-entry, one finding naming the pids', async () => {
+  const { r } = await bothKimiForms()
   const shim = winJoin(r.dir, 'bin', 'kimi.cmd')
   const kimiExe = winJoin(r.winHome, '.kimi-code', 'bin', 'kimi.exe')
   const via = [
@@ -254,4 +283,11 @@ test('checkEntries with nothing in effect answers nothing: no manifest, no entri
   r.manifest.entries.push({ kind: 'optin-machine-path', harness: 'kimi-code', form: 'kimi-code.cli', item: 'machine-path-dispatcher', scope: 'machine', pending_admin: true, values: { command: 'kimi', realBinary: 'C:\\x.exe', machinePath: 'C:\\Windows' } })
   r.manifest.entries.push({ kind: 'optin-user-path', harness: 'kimi-code', form: 'kimi-code.cli', item: 'user-path-shim', scope: 'user', confirmed: false, values: { command: 'kimi', binDir: 'C:\\nowhere', realBinary: 'C:\\x.exe' } })
   assert.deepEqual(r.check(), [], 'a pending-admin machine item is not in effect (its own state says pending-admin), and a failed apply is not a broken entry — the one real entry is intact')
+})
+
+test('the arch\'s optIn.check needs the caller\'s identify (registry.match, agents.json in it): no silent judge built from the presets alone', async () => {
+  const { loadArch } = await import('../../../../src/collector/arch/index.mjs')
+  const A = await loadArch('win32')
+  assert.throws(() => A.optIn.check({ harnesses: [], manifest: null, procs: [] }), /needs identify/)
+  assert.deepEqual(A.optIn.check({ harnesses: [], manifest: null, procs: [], identify: () => ({ agent: null, reason: 'no-match' }) }), [])
 })

@@ -113,9 +113,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   }
 
   async function judge(facts, prev, cause = null) {
-    // a host-tree door already said whose it is (4.8 §3: the editor carrying the harness's extension, named by the group's hosts.processes): not the name list's to say
-    const host = facts.hostAgent ? registry.get(facts.hostAgent) : null
-    const m = host ? { agent: host.name, descriptor: host, reason: 'match' } : registry.match(facts)
+    const m = registry.whose(facts) // a host-tree door's hostAgent, else the name list (registry.mjs whoseBy)
     if (!m.agent) {
       // an agent that exec'd into a program no descriptor matches has left the table as surely as one that exited:
       // the daemon records agent-exit and drops its conditions and negative-cache entries (D-24, review D1-4)
@@ -292,7 +290,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       for (const [pid, row] of [...table]) {
         const f = factsOf.get(pid)
         if (!f || table.get(pid) !== row) continue
-        const m = registry.match(f)
+        const m = registry.whose(f)
         if (m.agent === row.agent) continue
         if (m.agent) { try { await onExec(f) } catch (e) { onError(e, { pid, phase: 'judge' }) } continue }
         forget(pid); gone(row, via)

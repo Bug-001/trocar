@@ -129,7 +129,7 @@ export async function rig({ form, item, forms = null, over = {}, win = {} } = {}
   const apply = () => applyAs(form, item)
   /** checkEntries over this rig's world (the manifest the apply filled, the fake registry / store / scripts behind `w.run`): `procs` is the
    *  process table the agents half sees; `over.deps` rides checkEntries' own deps. */
-  const check = (procs = [], over = {}) => checkEntries({ manifest, procs, identify: REGISTRY.match, deps: { run: w.run, env, fs: wfs, ...(over.deps || {}) } }) // the presets' name list (D51), as the daemon's registry
+  const check = (procs = [], over = {}) => checkEntries({ manifest, procs, identify: REGISTRY.match, groups: GROUPS, deps: { run: w.run, env, fs: wfs, ...(over.deps || {}) } }) // the presets' name list (D51), as the daemon's registry
   return { home, winHome, dir, ca, g, ingress, env, w, wfs, manifest, notes, events, failures, deps, apply, applyAs, check }
 }
 export const nativeKimi = (r) => { const p = path.win32.join(r.winHome, '.kimi-code', 'bin', 'kimi.exe'); r.wfs.mkdirSync(path.win32.dirname(p), { recursive: true }); r.wfs.writeFileSync(p, 'exe') }

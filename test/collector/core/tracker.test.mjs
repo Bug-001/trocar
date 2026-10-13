@@ -566,3 +566,13 @@ test('tracker: the decrypt policy is per harness — each uses its own mode and 
   tracker.setPolicy({ mode: 'all' }) // the old form: one policy for every harness
   assert.deepEqual([tracker.policy({ pid: 750 }, 'anything.example'), tracker.policy({ pid: 751 }, 'anything.example')], [true, true])
 })
+
+test('rejudgeAll: a row a host-tree door named (hostAgent) is the door\'s harness whatever the name list says — it survives an agents.json change, no false agent-exit', async () => {
+  const gone = []
+  const { redirector, tracker } = rig([agent], { onGone: (row, via) => gone.push([row.pid, via]) })
+  redirector.emit('exec', facts(300, { exe: '/usr/share/code/code', argv: ['code'], hostAgent: 'alpha' })); await settle()
+  assert.deepEqual(tracker.agents().map((r) => [r.pid, r.agent]), [[300, 'alpha']], 'judged as the door\'s harness, not by its name')
+  await tracker.rejudgeAll('list')
+  assert.deepEqual(tracker.agents().map((r) => [r.pid, r.agent]), [[300, 'alpha']], 'still there after the list changed')
+  assert.deepEqual(gone, [], 'no agent-exit')
+})

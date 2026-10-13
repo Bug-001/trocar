@@ -26,7 +26,6 @@ export async function loadArch(platform = process.platform) {
     // facts: topology rows, doctor findings, the §11 plan and the drift checks all draw from it through src/netenv/facts.mjs.
     const [{ createWin32Collector, win32Routing }, unit, { controlEndpoint }, { osRootsFor }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn, checkEntries, recordEntryFindings }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('../../off/os-roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
     const { groupsOf } = await import('./win32/route-plan.mjs')
-    const { createRegistry } = await import('../core/registry.mjs')
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
       os: 'win32', install: null, unit,
@@ -41,8 +40,11 @@ export async function loadArch(platform = process.platform) {
         itemForms: ({ harnesses: h, ids = null } = {}) => optinItemForms(of(h, ids)),
         plan: ({ harnesses: h, ids = null, optIn = [], manifest = null, resolve = null } = {}) => planOptIns({ groups: of(h, ids), optIns: optIn, manifest, resolve }),
         apply: ({ harnesses: h, ids = null, ...rest }) => applyOptIn({ ...rest, groups: of(h, ids) }),
-        // `identify`: the caller's registry.match (the user's agents.json in it); without one, the presets' (D51)
-        check: ({ harnesses: h, ids = null, procs = [], identify = null, ...rest }) => checkEntries({ ...rest, procs, identify: identify || createRegistry(h || []).match }),
+        // `identify`: the caller's registry.match (the user's agents.json in it, D51) — required: a judge built here would silently drop that list
+        check: ({ harnesses: h, ids = null, procs = [], identify = null, ...rest }) => {
+          if (typeof identify !== 'function') throw new TypeError('optIn.check needs identify (registry.match): who a process is comes from the D51 name list the caller built')
+          return checkEntries({ ...rest, procs, identify, groups: of(h, ids) })
+        },
         record: recordEntryFindings,
       },
     }

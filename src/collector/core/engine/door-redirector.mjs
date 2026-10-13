@@ -24,6 +24,7 @@ import { EventEmitter } from 'node:events'
 import { bypassHit } from '../upstream-shape.mjs'
 import { processNames, WIDE } from '../../../off/identity.mjs'
 import { UNTRACKED_REASONS } from '../../../health/codes.mjs'
+import { whoseBy } from '../registry.mjs'
 
 /** The row's code for a connection whose process is not one the table can vouch for; the reason is one of the closed set (a typo is a throw, not a new code). */
 const untracked = (reason) => { if (!UNTRACKED_REASONS.includes(reason)) throw new Error(`untracked reason ${reason} is not in UNTRACKED_REASONS`); return { not_captured: 'untracked', reason } }
@@ -91,7 +92,8 @@ export function createDoorRedirector({ groups, ownerOf = null, factsOf = null, r
   const ev = new EventEmitter()
   const byGroup = new Map(groups.map((x) => [x.g, x]))
   const factsOfEntry = (x) => (x.facts && x.host ? { ...x.facts, hostAgent: x.host } : x.facts) // what the tracker is told of a met pid
-  const agentOf = (facts) => { if (!facts) return null; if (facts.hostAgent) return facts.hostAgent; const m = identify(facts) || {}; return m.reason === 'match' ? m.agent ?? null : null }
+  const whose = whoseBy(identify)
+  const agentOf = (facts) => { if (!facts) return null; const m = whose(facts) || {}; return m.reason === 'match' ? m.agent ?? null : null }
   let info = { pid: null, proto: null, build: null } // the companion's ready line (a resident helper's pid, protocol, build), or the all-null answer of an arch without one; set by start()
 
   // ---- identity: the socket at accept time (D47) ------------------------------------------------------------------------------------------------------
