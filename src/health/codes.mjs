@@ -106,7 +106,7 @@ export const ROUTE_FAILURE_CODES = Object.freeze([...ROUTE_CODES])
 export const ROUTE_TRUST_REASONS = Object.freeze(['smart-app-control', 'env-unreadable-fill'])
 /** What `status` says when a form is not captured, that the Windows collector adds (4.8 §2.3, §12). The status reason set itself is the CLI's
  *  (1.6 §2); its list takes these in. */
-export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported', 'form-path-unknown'])
+export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported'])
 /** The envelope's `capture`: how the call reached the engine (4.1 信封表, 4.8 §5.6): `transparent` (Linux, and the other per-process captures) or `proxy` (Windows: the call came through asight's own kernel, D43). */
 export const CAPTURE_KINDS = Object.freeze(['transparent', 'proxy'])
 
@@ -120,7 +120,7 @@ const ROUTE_LOOP = 'route-loop', FORWARDER_DOWN = 'forwarder-down', EGRESS_DIFFE
 const NET_FAILURE_OWN = ['not-routed', 'proxy-dead', 'proxy-unsupported', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path', 'not-via-entry']
 export const NET_CODES = Object.freeze([...NET_FAILURE_OWN, 'proxy-changed', 'netenv-changed', 'opt-in-needed', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', ROUTE_LOOP, FORWARDER_DOWN, EGRESS_DIFFERS])
 export const NET_FAILURE_CODES = Object.freeze([...NET_FAILURE_OWN, ROUTE_LOOP, FORWARDER_DOWN])
-// the net names `status` gives as the reason an agent is not captured (1.6 §9.7); the proxy-mode reasons of 4.8 §12 (`form-unsupported`, `fallback-active`, `form-path-unknown`) are ROUTE_STATUS_REASONS above
+// the net names `status` gives as the reason an agent is not captured (1.6 §9.7); the proxy-mode reasons of 4.8 §12 (`form-unsupported`) is ROUTE_STATUS_REASONS above; a process on no name list is `process-unknown` (a state event, D51⑥), not a status reason
 const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', ROUTE_LOOP, FORWARDER_DOWN])
 
 // What `asight status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. asight's own, then every trust

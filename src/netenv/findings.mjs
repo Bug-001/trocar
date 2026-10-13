@@ -94,6 +94,14 @@ export const FINDINGS = {
   'other-redirector': { cls: 'hint', asightFirst: false, what: () => '本机还有别的连接改写', why: () => '根 cgroup 上有别人的 connect 程序(如 dae),或有 Winsock LSP:可能与 asight 互相改写', commands: (c) => [os(c, { linux: 'sudo bpftool cgroup tree /sys/fs/cgroup', win32: 'netsh winsock show catalog', darwin: 'netstat -rn' })], verify: () => '—' },
   'fake-ip': { cls: 'hint', asightFirst: false, what: (c) => `${c.h} 的 API host 解析到 198.18.0.0/15`, why: () => 'VPN 的 fake-ip;asight 按 SNI 记 host', commands: () => [], verify: () => '—' },
   'inferred-behaviour': { cls: 'hint', asightFirst: false, what: (c) => `${c.h} 在本平台的代理行为是按别的平台实测推断的`, why: () => '本平台还没测', commands: () => [], verify: () => '—' },
+  // the name list (D51③⑤, 4.6 §识别进程): a process on no list used the harness's door (only forwarded), and agents.json's own problems. Not a WIDE name: the line to add, every value filled in;
+  // an interpreter name needs args (its script), and asight does not keep command lines, so that line cannot be written (§9.6: no <…> left, an unknown value is said)
+  'process-unknown': { cls: 'hint', asightFirst: false, what: (c) => `名为 ${c.u.name ?? '(名字不知道)'} 的进程(pid ${c.u.pid ?? '不知道'})用了 ${c.h} 的入口,不在名单上,只转发`,
+    why: () => 'asight 按进程名认 agent(D51);这个名字不在预设里,也不在你的 agents.json 里',
+    commands: (c) => [gui(c.u.name == null ? unknownValue('它的名字', '入口读不到这个进程的名字') : c.u.wide ? `解释器名要带 args(它的脚本名);asight 不记命令行,脚本名不知道:${c.u.name} 这一项要你自己在 ${c.listPath} 的 agents 里写,带上 "args"`
+      : `把 ${JSON.stringify({ harness: c.h, name: c.u.name })} 加进 ${c.listPath} 的 agents(文件不在就新建为 {"version":1,"agents":[…]}),不用重启`)], verify: (c) => `asight status ${c.h}:该 pid 带上命中的名字` },
+  'agent-list-invalid': { cls: 'failure', asightFirst: false, what: (c) => `${c.file.path} ${{ unreadable: '读不出', unparsable: '解析不了或版本不对' }[c.file.state] || '有坏项'}`, why: (c) => (c.file.state === 'ok' ? '坏项不生效,其余照用' : '整个文件不生效,只用预设的名字'),
+    commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `改好 ${c.file.path}` : `改好或删掉 ${c.file.path} 的第 ${p.index + 1} 项(agents[${p.index}])`}:${p.code} — ${p.detail};不用重启`)), verify: () => 'asight status:不再列' },
   // The user named the harness (§9.1: the symptom is said by agent), and nothing in the facts explains it. asight has no fact that says an agent cannot connect, so this does not claim it: a condition, a hint.
   'cause-unknown': { cls: 'hint', asightFirst: true, what: (c) => `如果 ${c.h} 仍连不上:asight 这边没找到具体原因`, why: () => 'asight 读到的(期望态、进程、信任入口、代理设置)里没有哪一项能解释它;你点名了它,所以给出怎样把 asight 排除在外',
     commands: (c) => [asight(c, `asight off ${c.h}`), gui(`再试 ${c.h}:仍连不上 → 与 asight 无关;连得上 → ${`asight on ${c.h}`},再跑 asight doctor ${c.h} --json,并看看板「采集健康」里那段时间的失败`)], verify: (c) => `再试 ${c.h}:仍连不上 → 与 asight 无关` },
@@ -162,6 +170,8 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     if (F.routing === 'driver' && drifts.some((d) => d.code === 'proxy-changed')) add('proxy-changed')
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
+    const listPath = F.identity && F.identity[h] ? F.identity[h].file.path : null
+    for (const u of (F.identity && F.identity[h] && F.identity[h].unknown) || []) found.set(`process-unknown\u0000${u.name}`, make('process-unknown', { ...base, u, listPath }))
     if (named && F.desired[h] === 'on' && hf.installed !== false && ![...found.values()].some((f) => f.class !== 'hint')) add('cause-unknown') // a failure or an expected finding already says why; only hints (about the data) leave it open
     out.push(...[...found.values()].sort((a, b) => BY_CLASS[a.class] - BY_CLASS[b.class]))
   }
@@ -169,6 +179,8 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     const host = { F, h: null, hf: null, t: null, user, sh, platform: F.platform }
     if (F.linger === false) out.push(make('linger-off', host))
     if (F.otherRedirector === true) out.push(make('other-redirector', host))
+    const file = F.identity ? (Object.values(F.identity)[0] || {}).file : null
+    if (file && file.problems.length) out.push(make('agent-list-invalid', { ...host, file }))
   }
   return out
 }

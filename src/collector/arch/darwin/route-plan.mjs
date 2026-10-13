@@ -140,7 +140,7 @@ const dialOf = (a) => (a.kind ? Object.fromEntries(['kind', 'host', 'port', 'cre
  *  `elevated` that is not `true` (null: not readable) is not counted. The name list decides who a process is (D51), so no path shape is reported here. */
 function observe(procs, groups) {
   const seen = new Map()
-  const at = (id) => { if (!seen.has(id)) seen.set(id, { elevated: new Set(), unknown: new Set() }); return seen.get(id) }
+  const at = (id) => { if (!seen.has(id)) seen.set(id, { elevated: new Set() }); return seen.get(id) }
   const byG = new Map((groups || []).map((x) => [x.g, x]))
   for (const p of procs || []) {
     const x = p && byG.get(p.door)
@@ -166,7 +166,7 @@ function observe(procs, groups) {
  *   upstream  where the group's connections go on from, `{ kind, host?, port?, credentialed?, auth_ref?, source }`, or null when there is none to dial. It is worked out for a group that is off as well: the kernel forwards to it
  *             what an agent that outlives `off` sends. `bypass` the targets that hop is left direct for, `untranslated` how many entries asight could not read, `egressDiffers` (a connected group whose WebSocket did not follow the
  *             system proxy), `hint` (`system-proxy-pac` / `system-proxy-unreadable`: kept on the last upstream), `unknown` what could not be read (1.6 §9.4's reasons), `envUnreadable` (a proxy in the user's terminal alone is invisible).
- *   forms     `{ [form id]: { reason, elevatedPids?, unknownPaths? } }` — the group's reason for each form, else `elevated-agent` or `form-path-unknown` when a process says so
+ *   forms     `{ [form id]: { reason, elevatedPids? } }` — the group's reason for each form, else `elevated-agent` when a process says so
  *   answer    the raw `upstreamFor` answer, with the bypass table and without any login: what the next call keeps from `last[g]` (when the group is `on`), and what is compared to know whether the system proxy moved the group's upstream
  * Nothing here writes. The order of the reasons is the order in which a user can act: switch the harness on, name the item, fix the proxy, and only then the entry that takes no login.
  */
@@ -206,8 +206,8 @@ export function planRoutes({ netenv, groups, desired = null, optIns = [], manife
       ...(answer.egressDiffers && entry !== null ? { egressDiffers: true } : {}), ...(answer.hint ? { hint: answer.hint } : {}), ...(unknown.length ? { unknown } : {}),
       forms: Object.fromEntries(forms.map((f) => {
         const s = seen.get(f.id)
-        const own = s && s.elevated.size ? 'elevated-agent' : s && s.unknown.size ? 'form-path-unknown' : null
-        return [f.id, { reason: reason ?? own, ...(s && s.elevated.size ? { elevatedPids: [...s.elevated].sort((a, b) => a - b) } : {}), ...(s && s.unknown.size ? { unknownPaths: [...s.unknown].sort() } : {}) }]
+        const own = s && s.elevated.size ? 'elevated-agent' : null
+        return [f.id, { reason: reason ?? own, ...(s && s.elevated.size ? { elevatedPids: [...s.elevated].sort((a, b) => a - b) } : {}) }]
       })),
       answer,
     }

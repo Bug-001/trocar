@@ -8,6 +8,7 @@
 //     harnesses: { <h>: { installed, entry: { state }, installedAt, setting, fileSetting (the same read of the files alone: drift is measured on it), systemProxy: null | { value, pac } | { unknown },
 //                         behaviour: { env, follows: { http, ws }, schemes, unsupported, branches, measured, restart, files, fileKeys }, procs: [ { pid, name, exe, version, startedAt, watched, trusted, reason, negative,
 //                         startSetting: null | setting, elevated } ], negatives: [ { pid, host, reason } ], apiHosts, noProxy: [the API hosts the NO_PROXY of this shell covers], adopted: null | { at, routing, chain, source, sha256 }, forms: null | [ … ] } },
+//     identity: { <h>: { file: { path, state, problems }, names, ignored, unknown } } | null (status's name list, D51③⑤),
 //     linger: true | false | null (Linux: does the OS keep the daemon after the last logout), otherRedirector: true | false | null (another connect-rewriter on the machine: a platform that cannot tell says null),
 //     unknowns: [ { fact, reason, detail } ] }                                                    // a read that failed: said with its reason, never left out (R11)
 //
@@ -51,6 +52,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     link: { attached: status.link.attached, helper: status.link.helper, ids: reply && Array.isArray(reply.links) ? reply.links.map((l) => l.id).filter((x) => Number.isInteger(x)) : [] },
     listeners: part.listeners || [], forwarder: part.forwarder || null, harnesses: {}, unknowns: [...(part.unknowns || [])],
     linger: status.linger && typeof status.linger.linger === 'boolean' ? status.linger.linger : null, otherRedirector: typeof part.otherRedirector === 'boolean' ? part.otherRedirector : null,
+    identity: status.identity || null, // the name list per harness (status's `identity`, D51③⑤): the doctor's process-unknown and agent-list-invalid read it
     reinstall: part.reinstall || null, // always null: no platform part sets it (test/netenv/topology-win32.test.mjs pins that)
   }
   for (const h of status.harnesses) {

@@ -234,7 +234,6 @@ export async function gatherWin32Facts(ctx, deps = {}) {
           procs: mine, entry, optIn,
           entryPlace: entryPlaceOf(x.group, winCtx), // where the entry lives, filled in (the doctor's 「把 <h> 的代理设成…」 step names it; always there, wired or not)
           ...(routeOf(r) ? { route: routeOf(r) } : {}), // the group's own plan: why it was left unwired, the doctor's name for it (4.8 §10.4)
-          ...(fr && fr.reason === 'form-path-unknown' ? { reason: 'form-path-unknown', unknownPaths: fr.unknownPaths || [] } : {}),
           ...(fr && fr.reason === 'elevated-agent' ? { reason: 'elevated-agent', elevatedPids: fr.elevatedPids || [] } : {}),
           ...(f.hosts ? { hosts: {
             ...(f.hosts.program ? { program: f.hosts.program } : {}), // the names the status lines of §3.5 are written with: the host program, the extension

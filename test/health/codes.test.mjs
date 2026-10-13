@@ -191,7 +191,7 @@ test('W38 the where / state events / trust reasons / status reasons / capture ki
   assert.deepEqual(ROUTE_WHERE, ['routing', 'ingress', 'optin'])
   assert.deepEqual(ROUTE_EVENTS, ['route-applied', 'optin-applied', 'optin-removed'])
   assert.deepEqual(ROUTE_TRUST_REASONS, ['smart-app-control', 'env-unreadable-fill'])
-  assert.deepEqual(ROUTE_STATUS_REASONS, ['form-unsupported', 'form-path-unknown'])
+  assert.deepEqual(ROUTE_STATUS_REASONS, ['form-unsupported']) // form-path-unknown retired: the name list decides who a process is (D51; 4.8 §2.2), and a process on no list is the state event process-unknown
   assert.deepEqual(CAPTURE_KINDS, ['transparent', 'proxy'], 'the envelope `capture` closed set (4.8 §5.6, 4.1 信封表): Windows has the one proxy mode (D43)')
   for (const l of [ROUTE_WHERE, ROUTE_EVENTS, ROUTE_CODES, ROUTE_FAILURE_CODES, ROUTE_TRUST_REASONS, ROUTE_STATUS_REASONS, CAPTURE_KINDS, NET_WHERE, NET_CODES, NET_FAILURE_CODES]) assert.ok(Object.isFrozen(l))
   for (const w of ROUTE_WHERE) assert.ok(isWhere(w), w)

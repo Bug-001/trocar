@@ -177,7 +177,6 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (fm.entry.intact === null) return none(null, null, null)
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
   if (!F.forwarder || F.forwarder.up === false || !fwf) return none(true, false, 'forwarder-down')
-  if (fm.reason === 'form-path-unknown') return none(false, false, 'form-path-unknown') // the platform's plan saw a process whose image it knows and whose install path it has not measured (4.8 §2.2): the form is not claimed
   if (main) return none(true, false, 'elevated-agent')
   if (F.daemon.state === 'not-running' || F.daemon.state === 'not-responding') return none(true, false, `daemon-${F.daemon.state}`)
   if (fwf.upstream_error) return { on: true, captured: false, reason: 'upstream-unreachable', engine: true } // the engine could not dial the upstream (the platform's last 60 s of it)
@@ -203,13 +202,12 @@ function proxyTopology(F, h, hf) {
     // what wires the kernel hop: the entry holding the kernel's address (the form is on), or — in the post-off drain window, where a real `off` has taken the record out of the manifest and the
     // file is the user's own again — the agent's live connection to the group's port (row k). In the drain the edge names no entry: the file no longer points here; the agent holds the address it
     // read at startup, and the note says what restart ends it.
-    const wired = !!(fwf && fm.reason !== 'form-path-unknown' && (!fm.optIn || fm.optIn.state === 'done')
+    const wired = !!(fwf && (!fm.optIn || fm.optIn.state === 'done')
       && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : fm.entry && fm.entry.intact === true))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
     if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`还有 ${fwf.clients.length} 个 agent 连着 asight 的门,重启它们之后 asight 就完全退出`)
     if (fm.optIn && fm.optIn.state === 'needed' && fm.optIn.enable) notes.push(`要采它: ${fm.optIn.enable}`)
-    if (fm.reason === 'form-path-unknown') notes.push(`这个安装方式的路径 asight 还不认识(${(fm.unknownPaths || []).join('; ') || 'path shape not read'});把它报给 asight`)
     if (fm.hosts && wired) {
       // the host-tree lines of 4.8 §3 (W69): the host program's other connections only forward, only the form's host set reaches the engine; the extension's own settings, when they
       // cannot be read, leave the set at the defaults and extra_hosts (said, never silent); and a fresh read that differs from what the daemon reports as applied means the kernel's

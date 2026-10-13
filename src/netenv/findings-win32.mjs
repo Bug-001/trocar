@@ -1,7 +1,7 @@
 // findings-win32.mjs (src/netenv) — the Windows half of `doctor`'s catalogue (RFC 4.8 §10.4, the kernel-era rows retired with the kernel — D47's twin: the forwarder-* family and the fallback verdict
 // have no producer on any arch now, and the engine's per-group doors are the only local proxy): the commands of 1.6 §9.6's codes on Windows, one entry per code row of the §10.4 table, every value
 // filled from the facts (a value that could not be read says 「不知道 · <原因>」, never a `<…>` placeholder). `src/netenv/findings.mjs` picks an entry from here first on win32; a field an entry leaves
-// out falls back to the cross-platform catalogue's, and an entry for a code the cross-platform catalogue does not have (`form-unsupported`, `form-path-unknown`, `engine-port-taken`,
+// out falls back to the cross-platform catalogue's, and an entry for a code the cross-platform catalogue does not have (`form-unsupported`, `engine-port-taken`,
 // `socktable-unavailable`) defines every field itself. `not-routed` splits by the `why` the group's plan gave (`system-proxy-pac` · `system-proxy-unreadable` · `upstream-unparseable`, whose
 // `credentials-in-system-proxy` detail says WinINET takes no login from that value); `upstream-protocol` has no row of its own — it is the `proxy-unsupported` row. Nothing here runs anything (R8)
 // and nothing here changes a system setting. `Get-NetTCPConnection` never appears — a restricted token is refused it (4.8 E6) — the port check is always `netstat -ano -p TCP | findstr
@@ -87,13 +87,6 @@ export const FINDINGS_WIN32 = {
     verify: () => 'asight status:不再列',
   },
   'egress-differs': { commands: (c) => [asight(c, `asight off ${c.h}`)], verify: () => '—' },
-  'form-path-unknown': {
-    cls: 'failure', asightFirst: false,
-    what: () => '这个安装方式的路径 asight 还不认识',
-    why: () => '进程名对得上、安装路径没测过,asight 不猜它是哪个形态(路径的形状已在 asight status 里印出,用户名打码)',
-    commands: () => [gui('把它报给 asight(附 asight status 印出的那一行)')],
-    verify: () => '—',
-  },
   'elevated-agent': {
     commands: (c) => [gui(`关掉它,不用「以管理员身份运行」重新打开 ${c.h}`), ps('whoami /groups | findstr /i "Mandatory"')],
     verify: (c) => `asight status ${c.h}`,

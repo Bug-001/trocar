@@ -13,6 +13,9 @@ import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
 import { installedViaCli } from '../cli/fixtures/dispatch-ctx.mjs'
 import fs from 'node:fs'
 import os from 'node:os'
+import { tmpDir } from '../helpers/tmp.mjs'
+import { readAgentList } from '../../src/off/identity.mjs'
+import { createRegistry } from '../../src/collector/core/registry.mjs'
 import path from 'node:path'
 
 const row = (n) => ROWS.find((r) => r.n === n)
@@ -20,6 +23,10 @@ const codesOf = (f, h, names = null) => diagnose({ facts: f, topology: buildTopo
 const findingsOf = (f, names = null) => diagnose({ facts: f, topology: buildTopology(f), harnesses: names, user: 'alice' })
 const mihomoVia = { listeners: [MIHOMO] }
 const viaProxy = (value = 'http://127.0.0.1:7890') => ({ setting: proxyOf(value) })
+
+// status's name list per harness (1.6 §9.7 `identity`), the shape the facts carry it in
+const LIST = '/home/alice/.asight/agents.json'
+function idOf(h, { unknown = [], problems = [], state = 'ok' } = {}) { return { [h]: { file: { path: LIST, state, problems }, names: [{ name: 'claude', source: 'preset' }], ignored: [], unknown } } }
 
 // one injected fact set per code: { codes: exactly what it must give, h, facts }. The rows of §9.3 serve for the codes they illustrate; the others are built here.
 const SETS = {
@@ -51,7 +58,11 @@ const SETS = {
   'fake-ip': { h: 'claude-code', facts: facts('claude-code', {}, { fakeIp: true }), codes: ['fake-ip'] },
   'inferred-behaviour': { h: 'hermes', facts: row(21).facts, codes: row(21).findings }, // hermes on Linux: inferred from the Windows measurements (claude-code's proxy path is measured there: V54)
   'cause-unknown': { h: 'claude-code', facts: facts('claude-code'), names: ['claude-code'], codes: ['cause-unknown'] },
+  'process-unknown': { h: 'claude-code', facts: facts('claude-code', { identity: idOf('claude-code', { unknown: [{ name: 'claude-canary', wide: false, pid: 7002, door: 'claude-code.settings' }] }) }), codes: ['process-unknown'] },
+  'agent-list-invalid': { h: null, facts: facts('claude-code', { identity: idOf('claude-code', { problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'agents[1]: node is an interpreter name; add "args"' }] }) }), codes: ['agent-list-invalid'] },
 }
+// D51③⑤ (1.6 §9.6): the name list's two findings — a state event of the door and a failure code of the harness part, both in health/codes.mjs's closed sets
+const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
 const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache']
 
 for (const [code, set] of Object.entries(SETS)) {
@@ -63,7 +74,7 @@ for (const [code, set] of Object.entries(SETS)) {
 }
 
 test('V49 both directions: every code of the closed sets (§9.7 net codes, the status reasons §9.6 uses) has a fact set, and the catalogue defines no code outside them', () => {
-  const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE])
+  const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE, ...IDENTITY_CODES])
   const EVENT_ONLY = ['netenv-changed'] // D49: the system-proxy watcher's event code, not a finding: diagnose never gives it
   for (const code of closed) if (!EVENT_ONLY.includes(code)) assert.ok(SETS[code], `${code} has a fact set`)
   for (const code of EVENT_ONLY) assert.ok(!FINDINGS[code] && !SETS[code], `${code} is no finding`)
@@ -71,12 +82,12 @@ test('V49 both directions: every code of the closed sets (§9.7 net codes, the s
   assert.deepEqual(Object.keys(SETS).filter((c) => !closed.has(c)), [], 'and no fact set is for a code nobody defined')
 })
 
-// The Windows half (1.6 §9.7 / 4.8 §10.4): its codes are in the closed sets too — the net codes, the status reasons (which already hold form-unsupported, fallback-active, form-path-unknown),
+// The Windows half (1.6 §9.7 / 4.8 §10.4): its codes are in the closed sets too — the net codes, the status reasons (which already hold form-unsupported),
 // the route codes (engine-port-taken, forwarder-start-failed, forwarder-binary-missing, forwarder-digest-mismatch, forwarder-download-failed, socktable-unavailable) and the trust reasons — and FINDING_CODES, what
 // schema.mjs checks a finding against, is exactly the union of the two catalogues and the trust reasons (the literal per-row shape of FINDINGS_WIN32 is held by topology-win32.test.mjs, W36).
 test('V49 both directions, the Windows half: FINDINGS_WIN32 defines no code outside the closed sets (net codes, status reasons, route codes, trust reasons), and FINDING_CODES is exactly FINDINGS ∪ FINDINGS_WIN32 ∪ the trust reasons (the Windows collector\'s own trust reasons included)', () => {
   const closed = new Set([...NET_CODES, ...STATUS_REASONS, ...ROUTE_CODES, ...TRUST_REASONS])
-  assert.ok(Object.keys(FINDINGS_WIN32).length === 19, 'the §10.4 rows (held row-by-row by topology-win32.test.mjs; the forwarder-* family retired with the kernel, D47 twin)')
+  assert.ok(Object.keys(FINDINGS_WIN32).length === 18, 'the §10.4 rows (held row-by-row by topology-win32.test.mjs; the forwarder-* family retired with the kernel, D47 twin)')
   for (const code of Object.keys(FINDINGS_WIN32)) assert.ok(closed.has(code), `${code} is in a closed set`)
   assert.deepEqual([...FINDING_CODES].sort(), [...new Set([...Object.keys(FINDINGS), ...Object.keys(FINDINGS_WIN32), ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])].sort(), 'the union, nothing defined that the doctor cannot name')
 })
@@ -310,4 +321,32 @@ test('V49 end to end, with the real descriptors: a proxy that came from the invo
   const fromFile = await dead({})
   assert.ok(fromFile.text.includes(`${second} 里的 env.HTTPS_PROXY`), fromFile.text)
   assert.ok(!fromFile.text.includes('settings.json'))
+})
+
+// ── V66 (D51③⑤, G5): the line process-unknown gives closes the loop — written into a sandbox agents.json, the same facts are claimed by that harness ────────────────
+test('V66 process-unknown: its line, written into agents.json, makes the registry claim the same process for that harness; a WIDE name gets no such line; agent-list-invalid has its code, the file and the item', async () => {
+  const home = tmpDir('asight-v66-')
+  const list = path.join(home, '.asight', 'agents.json')
+  const F = facts('claude-code', { identity: { 'claude-code': { ...idOf('claude-code')['claude-code'], file: { path: list, state: 'absent', problems: [] }, unknown: [{ name: 'claude-canary', wide: false, pid: 7002, door: 'claude-code.settings' }, { name: 'python', wide: true, pid: 7003, door: 'claude-code.settings' }] } } })
+  const found = findingsOf(F).filter((x) => x.code === 'process-unknown')
+  assert.equal(found.length, 2, 'one finding per name')
+  for (const f of found) { assert.equal(f.class, 'hint'); assert.deepEqual(validateFinding(f), [], f.what); assert.equal(f.verify, 'asight status claude-code:该 pid 带上命中的名字') }
+  const [named, wide] = [found.find((f) => /claude-canary/.test(f.what)), found.find((f) => /python/.test(f.what))]
+  const line = /把 (\{.*?\}) 加进 (\S+) 的 agents/.exec(named.commands[0].run)
+  assert.ok(line, named.commands[0].run)
+  assert.equal(line[2], list, 'the path is filled in')
+  assert.ok(!/\{"harness"/.test(wide.commands[0].run) && /解释器名要带 args/.test(wide.commands[0].run), 'a WIDE name gets no line to paste')
+  const proc = { os: 'linux', pid: 7002, exe: '/opt/canary/claude-canary', argv: ['claude-canary'], env: () => new Map() }
+  const ds = await loadHarnesses()
+  assert.equal(createRegistry(ds, { agentList: readAgentList({ home }).entries }).match(proc).agent, null, 'on no list before')
+  fs.mkdirSync(path.dirname(list), { recursive: true })
+  fs.writeFileSync(list, JSON.stringify({ version: 1, agents: [JSON.parse(line[1])] }))
+  const read = readAgentList({ home })
+  assert.deepEqual([read.state, read.problems], ['ok', []])
+  assert.equal(createRegistry(ds, { agentList: read.entries }).match(proc).agent, 'claude-code', 'the same facts are claude-code\'s now')
+  const bad = findingsOf(SETS['agent-list-invalid'].facts).find((x) => x.code === 'agent-list-invalid')
+  assert.equal(bad.class, 'failure'); assert.ok(!bad.harness, 'the file is the machine\'s, not a harness\'s')
+  assert.match(bad.what, new RegExp(LIST.replace(/[.]/g, '\\.')))
+  assert.match(bad.commands[0].run, /第 2 项\(agents\[1\]\):wide-name-needs-args/)
+  assert.deepEqual(validateFinding(bad), [])
 })
