@@ -75,7 +75,7 @@ test('V50 the code: what the network facts run is named in a list of readers (ss
     const src = fs.readFileSync(path.join(REPO, rel), 'utf8')
     for (const m of src.matchAll(/execTool\(\s*'([^']+)'/g)) assert.ok(READ_ONLY.has(m[1]), `${rel}: execTool('${m[1]}') is not a read-only query`)
     assert.ok(!/Get-NetTCPConnection/.test(src.replace(/^\s*\/\/.*$/gm, '')), `${rel}: Get-NetTCPConnection is denied to a restricted token (4.8 E6)`)
-    if (!rel.endsWith('clash.mjs')) assert.ok(!/from 'node:(net|http|https|dgram|dns|tls)'/.test(src), `${rel}: no connection of its own`)
+    assert.ok(!/from 'node:(net|http|https|dgram|dns|tls)'/.test(src), `${rel}: no connection of its own`)
   }
 })
 
