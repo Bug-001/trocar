@@ -205,7 +205,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     }
     const rebuild = (f, keep) => { // gone while a live process may use it: an agent whose entry named it has no network without it (4.6 撤销顺序 第 2 步)
       try {
-        if (!roots) throw new Error('no trusted roots were given to rebuild it from')
+        if (!roots || typeof roots === 'function') throw new Error('no trusted roots were given to rebuild it from')
         const userCerts = [], unread = []
         for (const src of f.sources || []) { try { userCerts.push(...certsOf(src, fs.readFileSync(src)).certs) } catch (e) { unread.push({ file: src, errno: errText(e) }) } } // moved or gone: not carried over, and said
         const c = composeBundle({ nodeRoots: roots.node, osRootsText: roots.osText, userCerts, caPem: null })
@@ -213,7 +213,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
         writeDurable(f.path, c.data, 0o600, fs)
         const lost = (f.user_fps || []).filter((x) => !c.user_fps.includes(x))
         Object.assign(f, { roots_fp: c.roots_fp, sha256: sha256(Buffer.from(c.data)), user_fps: c.user_fps, without_ca: true })
-        out.kept_bundles.push({ ...keep, rebuilt: true, ...(lost.length ? { lost_fps: lost, unread } : {}), ...(roots.missing ? { os_roots_missing: roots.missing } : {}) })
+        out.kept_bundles.push({ ...keep, rebuilt: true, ...(lost.length ? { lost_fps: lost, unread } : {}), ...(roots.missing ? { os_roots_missing: roots.missing } : {}), ...(roots.partial ? { os_roots_partial: roots.partial } : {}), ...(roots.dropped ? { os_roots_dropped: roots.dropped } : {}) })
       } catch (e) {
         out.kept_bundles.push({ ...keep, error: errText(e) })
         fail(f, `${f.path} is gone and could not be rebuilt (${errText(e)}); ${keep.pids.length ? `a running process may use it (pid ${keep.pids.join(', ')}): restart ${f.harness}` : `${f.harness} reads it at its next start, through ${keep.entry_left.join(', ')} that could not be undone: fix that, then run it again`}`)
@@ -263,6 +263,8 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       else if (h.pids || entry.length) rebuild(f, keep)
       else { out.kept_bundles.push(keep); fail(f, `${f.path} is gone, and whether a running process uses it is not known (${h.why}), so it was not rebuilt`) }
     }
+    // `roots` may be a function: `off` reads this platform's OS roots only when one of these bundles is gone (a read that can run `security`, os-roots.mjs)
+    if (typeof roots === 'function') roots = bundles.some((f) => !fs.existsSync(f.path)) ? await roots() : null
     for (const f of bundles) one(f, true)
     for (const f of extras) one(f, false)
   }

@@ -13,7 +13,7 @@
 //   6  the receipt (R1) and the `off-note` lines of `flows/`, the last of them `kind:'result'`; exit 0 only when the routing is confirmed off and every
 //      entry is undone (connections that are still draining do not count against it)
 // Everything the world gives is a `deps` entry a test replaces (0.1 §3): `fs` `exec` `request` `socketPath` `alive` `identity` `kill` `isHelper` `sleep` `ms`
-// `now` `procs` `roots` `daemonState` `stopDaemon` `lockWaitMs` `releaseHeld`. Imports only node:* and src/off.
+// `now` `procs` `roots` `tls` (the getCACertificates the OS-roots reader asks, os-roots.mjs) `daemonState` `stopDaemon` `lockWaitMs` `releaseHeld`. Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import nodeTls from 'node:tls'
@@ -38,7 +38,7 @@ import { runEventWriter } from './events.mjs'
 import { confirm } from './io.mjs'
 import { describeEntry } from './journal.mjs'
 import { orphanBackups } from './backup.mjs'
-import { osBundle } from './pem.mjs'
+import { osRootsFor } from './os-roots.mjs'
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from './names.mjs'
 
 export const OFF_LOCK_WAIT_MS = 10_000 // 1.6 R12: the lock is waited for at most this long
@@ -195,12 +195,19 @@ const MARKER_TEXT = { block: '去掉 asight 哨兵块', line: '去掉 asight 加
 const SKIP_REASON = { 'already-restored': '早已是安装前的样子', missing: '文件已不在,没有 asight 的东西了', 'left-user-value': '这个键现在是你自己设的值,没动', 'already-removed': 'asight 的文字已不在这个文件里' }
 const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 'left-user-value': 'left-user-value' } // the results that are in the closed set of codes (src/health/codes.mjs)
 const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
-// The roots a gone bundle is rebuilt from (4.6 撤销顺序 第 2 步): Node's and the first OS PEM bundle of the one list (pem.mjs SYSTEM_BUNDLES, the collector's
-// too). None that holds a certificate, or one that is there and unreadable → `missing`, which the rebuilt bundle's note says (D38).
-const defaultRoots = (fs) => {
-  const b = osBundle({ read: (f) => fs.readFileSync(f, 'utf8') })
-  const missing = b.file ? null : `no OS trust bundle holds a certificate${b.failed.length ? ` (${b.failed.map((x) => `${x.file}: ${errMessage(x.error)}`).join('; ')})` : ''}`
-  return { node: [...nodeTls.rootCertificates], osText: b.text, missing }
+// The roots a gone bundle is rebuilt from (4.6 撤销顺序 第 2 步): Node's and this platform's OS roots, read by the reader the collector composes the bundles with
+// (os-roots.mjs osRootsFor — darwin: Node's set, the keychain's anchors and Apple's export, never /etc/ssl/cert.pem, 4.9 §6.2; win32: the system store, with no helper
+// here, 4.8 §6.2; Linux: the first OS PEM bundle of the one list). undo.mjs asks only when a bundle is gone. None read → `missing`, a source that could not be read →
+// `partial`, certificates that do not parse → `dropped`: the rebuilt bundle's note says each (D38), in the shape of the collector's bundleRoots. The sandbox's refusal
+// of a real tool (ESANDBOX) is a test's missing injection, not a missing root: it is thrown.
+const rebuildRoots = async (w) => {
+  const node = [...nodeTls.rootCertificates]
+  let got
+  try { got = await osRootsFor(w.platform)({ tls: w.deps.tls, exec: w.exec, read: (f) => w.fs.readFileSync(f, 'utf8') }) } catch (e) {
+    if (e && e.code === 'ESANDBOX') throw e
+    return { node, osText: '', missing: errMessage(e), dropped: 0, partial: null }
+  }
+  return { node, osText: got.pem || '', missing: got.missing || null, dropped: got.dropped || 0, partial: got.tried && got.tried.length ? got.tried.join('; ') : null }
 }
 
 /** Step 4: the entries, by the manifest or by asight's own marks. `dropCa`: only `uninstall` removes asight-ca.pem. → one object of what was undone and what was left
@@ -237,7 +244,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     const before = new Map(manifest.entries.map((e) => [label(e), { ...e }]))
     let out, stopped = null
     try {
-      const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? defaultRoots(w.fs) : null)
+      const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? () => rebuildRoots(w) : null)
       out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, fs: w.fs, exec: w.exec, env: w.env })
     } catch (e) {
       if (!e || !e.partial) { // it stopped before one entry was touched
@@ -271,7 +278,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       const entry = k.entry_left ? `${k.entry_left.join(', ')}, which could not be undone, still points at it` : null // an agent's next start reads the bundle through it
       const again = `run it again once ${k.pids.length ? 'they exit' : 'that is fixed'}`
       note(k.rebuilt ? 'harness-note' : 'bundle-kept', { harness: k.harness, path: k.path }, k.rebuilt
-        ? `${k.path} was gone while ${[...(k.pids.length ? [`a running process may use it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [entry] : [])].join(' and ')}; it was rebuilt without the asight CA${k.lost_fps ? `, but without ${k.lost_fps.length} user CA(s) its source files no longer hold` : ''}${k.os_roots_missing ? `, with Node's roots only (${k.os_roots_missing})` : ''}; ${again}`
+        ? `${k.path} was gone while ${[...(k.pids.length ? [`a running process may use it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [entry] : [])].join(' and ')}; it was rebuilt without the asight CA${k.lost_fps ? `, but without ${k.lost_fps.length} user CA(s) its source files no longer hold` : ''}${k.os_roots_missing ? `, with Node's roots only (${k.os_roots_missing})` : ''}${k.os_roots_partial ? `, with the OS roots short of what could not be read (${k.os_roots_partial})` : ''}${k.os_roots_dropped ? `, without ${k.os_roots_dropped} OS root certificate(s) that do not parse` : ''}; ${again}`
         : `${k.path} is kept, without the asight CA, ${[...(k.pids.length ? [`for running processes that may have loaded it (pid ${k.pids.join(', ')})`] : []), ...(entry ? [`because ${entry}`] : [])].join(' and ')}; ${again}`)
     }
     for (const c of out.changed) { note('harness-note', { harness: c.harness, path: c.path }, `${c.path}, asight's ${c.role}, had been changed since install; it was removed all the same`); u.notes.push(`${c.path}, asight's ${c.role}, had been changed since asight wrote it; it was removed all the same`) }
