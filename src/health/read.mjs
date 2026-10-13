@@ -156,6 +156,7 @@ function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
     // flows/ read whole with no daemon-start is a daemon that never started, its conditions complete
     conditions: fold.conditions, ...(fold.partial && flows.truncated ? { conditions_partial: true } : {}),
     ...(daemon.state !== 'running' && fold.conditions.length ? { conditions_as_of: fold.last_ts } : {}),
+    unknown_procs: fold.unknown_procs, // process-unknown of this daemon life (D51⑥): expected, not a condition
     failures: fold.groups, expected: fold.expected, agents: fold.agents, install: notesOf(dir, fold, m, fs, read),
   }
   c.summary = collectorSummary(c)

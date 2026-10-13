@@ -70,7 +70,39 @@ export function validateReceipt(r) {
   }
   if ('log' in r && !(r.log === null || isString(r.log))) bad.push('log: neither a path nor null')
   if ('linger' in r && !(r.linger === true || r.linger === false || r.linger === 'unknown')) bad.push('linger: not true, false or "unknown"')
+  if (Array.isArray(r.harnesses)) r.harnesses.forEach((h, i) => { if (isObject(h) && h.identity !== undefined) bad.push(...validateIdentity(h.identity).map((x) => `harnesses[${i}].${x}`)) })
   checkHarnessIds(r, '', bad, new WeakSet())
+  return bad
+}
+
+// ── the name list of `status --json` (RFC 1.6 §9.7, D51③⑤): `harnesses[].identity` ──────────────────────────────────────────────────────────────────────────
+export const AGENT_LIST_STATES = Object.freeze(['absent', 'ok', 'unreadable', 'unparsable'])
+export const NAME_SOURCES = Object.freeze(['preset', 'custom'])
+/** Problems with one harness's `identity` block (`[]` = valid): { file: { path, state, problems: [{ index, code, detail }] }, names / ignored: [{ name, args?, source }],
+ *  unknown: [{ name, wide, pid, door }] } — the closed sets above, a problem's index an item number or null (the whole file), an unknown's name null only when the door could not read it. */
+export function validateIdentity(x) {
+  if (!isObject(x)) return ['identity: not an object']
+  const bad = []
+  const f = x.file
+  if (!isObject(f)) bad.push('identity.file: not an object')
+  else {
+    if (!isId(f.path)) bad.push('identity.file.path: empty')
+    if (!AGENT_LIST_STATES.includes(f.state)) bad.push(`identity.file.state: ${JSON.stringify(f.state)} is not one of ${AGENT_LIST_STATES.join(' ')}`)
+    listOf(f, 'problems', bad, (p, at) => {
+      if (!isObject(p) || !(p.index === null || isCount(p.index)) || !isId(p.code) || !isId(p.detail)) bad.push(`identity.file.${at}: needs index (an item number or null), code and detail`)
+    })
+    if (!Array.isArray(f.problems)) bad.push('identity.file.problems: not a list')
+  }
+  for (const key of ['names', 'ignored']) {
+    if (!Array.isArray(x[key])) { bad.push(`identity.${key}: not a list`); continue }
+    x[key].forEach((n, i) => {
+      if (!isObject(n) || !isId(n.name) || !NAME_SOURCES.includes(n.source) || !(n.args === undefined || isId(n.args))) bad.push(`identity.${key}[${i}]: needs name, source (${NAME_SOURCES.join(' | ')}) and args only as a pattern`)
+    })
+  }
+  if (!Array.isArray(x.unknown)) bad.push('identity.unknown: not a list')
+  else x.unknown.forEach((u, i) => {
+    if (!isObject(u) || !(u.name === null || isId(u.name)) || typeof u.wide !== 'boolean' || !(u.pid === null || Number.isInteger(u.pid)) || !(u.door === null || isId(u.door))) bad.push(`identity.unknown[${i}]: needs name, wide, pid and door`)
+  })
   return bad
 }
 

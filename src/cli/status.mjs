@@ -17,6 +17,7 @@ import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlSocketPath, controlEndpointFor } from '../off/control-client.mjs'
 import { listProcs, procIdentity, pidAlive } from '../off/proc.mjs'
 import { matchHarness } from '../off/signature.mjs'
+import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
@@ -116,6 +117,11 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const matched = table && m ? table.map((p) => ({ p, h: matchHarness(m.liveness, p) })) : [] // which harness each process of the table is, by the manifest's signatures
   f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
+  // the name list (D51③⑤, 1.6 §9.7): read here, daemon or not — the presets of the descriptors with the user's agents.json merged in
+  const list = readAgentList({ home, fs })
+  let merged = null
+  try { merged = mergedNames(await descriptorsOf({ platform, env, deps }), list) } catch (e) { rethrowSandbox(e); f.identity_error = `the harness descriptors could not be loaded (${errMessage(e)})` }
+  const tableOf = new Map((table || []).map((p) => [p.pid, p]))
   for (const id of wanted) {
     const why = []
     const desired = fromReply && fromReply[id] ? (fromReply[id].desired === 'on' ? 'on' : 'off') : state ? (state.harnesses[id] && state.harnesses[id].desired === 'on' ? 'on' : 'off') : null
@@ -135,6 +141,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     else { procs = []; why.push(`the processes could not be listed (${matchError})`) }
     const installedAt = m ? installedAtOf(m, id) : null
     const judged = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', linkAttached: f.link.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt })
+    if (merged) judged.rows = judged.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
     if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && f.link.attached === null) why.push(f.link.reason) // the link is what the verdict waits for, and the daemon could not say
     f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, judged, why: [...new Set(why.filter(Boolean))] })
@@ -171,7 +178,39 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     f.linger = read.state === true || read.state === false ? { linger: read.state } : { linger: 'unknown', linger_reason: read.error || 'the linger state could not be read' }
   }
   try { f.health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
+  if (merged) f.identity = identityBlocks({ ids: f.harnesses.map((h) => h.id), list, merged, health: effectiveHealth(f).health })
   return f
+}
+
+// ── the name list (D51③⑤, 1.6 §9.7 「名单」) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** The harness descriptors (their `processes` are the preset names): an injected list, else the daemon module's (the CLI reaches harness only through it, layering rule 5). */
+async function descriptorsOf({ platform, env, deps }) {
+  if (deps.harnesses) return deps.harnesses
+  if (deps.netFactsDeps) return (await deps.netFactsDeps()).harnesses
+  const mod = await (deps.daemon || import('../collector/daemon.mjs'))
+  if (typeof mod.netFactsDeps !== 'function') throw new Error('no reader of the harness descriptors is wired into this build')
+  return (await mod.netFactsDeps({ platform, env })).harnesses
+}
+/** The presets with the user's list merged in (mergeAgentList, the registry's own merge) → { <h>: { names, ignored } }. */
+const mergedNames = (descriptors, list) => {
+  const presets = Object.fromEntries((descriptors || []).map((d) => [d.name, d.processes || {}]))
+  return mergeAgentList(presets, list.entries.filter((e) => presets[e.harness]))
+}
+const nameView = (n) => ({ name: n.name, ...(n.args != null ? { args: n.args instanceof RegExp ? n.args.source : String(n.args) } : {}), source: n.source })
+/** The name of `p` (a process of the table) that one of the harness's names in effect holds, or null (a daemon row whose process the table does not have). */
+const hitName = (p, m) => { if (!p || !m) return null; const names = processNames(p); return (m.names.find((n) => names.includes(n.name)) || {}).name || null }
+/** Per harness: { file: { path, state, problems }, names, ignored, unknown } (`status --json`'s `identity`). `unknown` = the process-unknown of this daemon life
+ *  (the fold's `unknown_procs`), less a name the user has since put on the harness's list without args (it is claimed now). */
+function identityBlocks({ ids, list, merged, health }) {
+  const seen = (health && health.collector && Array.isArray(health.collector.unknown_procs)) ? health.collector.unknown_procs : []
+  const file = { path: list.path, state: list.state, problems: list.problems }
+  const out = {}
+  for (const id of ids) {
+    const m = merged[id] || { names: [], ignored: [] }
+    const plain = new Set(m.names.filter((n) => n.args == null).map((n) => n.name))
+    out[id] = { file, names: m.names.map(nameView), ignored: m.ignored.map(nameView), unknown: seen.filter((u) => u.harness === id && !plain.has(u.name)).map((u) => ({ name: u.name, wide: u.wide, pid: u.pid, door: u.door })) }
+  }
+  return out
 }
 
 /**
@@ -237,15 +276,35 @@ export function renderStatus(f, { home = null, detail = [], now = null, colors: 
     for (const r of j.rows.filter((x) => x.pid != null)) {
       const p = h.procs.find((x) => x.pid === r.pid)
       const byEntry = p && p.trusted === null // the daemon has not judged this one: the entry and when it started say
-      lines.push(`      pid ${r.pid}  ${r.captured === true ? `已被采集${byEntry ? '(守护进程还没判过它,这是按信任入口与启动时间判的)' : ''}` : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
+      lines.push(`      ${r.name ? `${r.name} ` : ''}pid ${r.pid}  ${r.captured === true ? `已被采集${byEntry ? '(守护进程还没判过它,这是按信任入口与启动时间判的)' : ''}` : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
     }
+    lines.push(...identityLines(f, h.id))
   }
+  lines.push(...listProblemLines(f))
   if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id), now }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id], { now })]))
   else if (f.topology_error) lines.push(`各 harness 的路: 不知道(${f.topology_error})`)
   lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvWriteText(f), ...userProcsText(f.userProcs))
   const restart = restartOf(f)
   if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
   return lines
+}
+
+// the name list of one harness (1.6 §9.7): the names in effect with their source, the ignored presets, the processes on no list that used its door
+const SOURCE_TEXT = { preset: '预设', custom: '自定' }
+const nameText = (n) => `${n.name}(${SOURCE_TEXT[n.source] || n.source}${n.args ? `, args ${n.args}` : ''})`
+const unknownText = (u) => `${u.name ?? '不知道名字'}(pid ${u.pid ?? '不知道'})`
+function identityLines(f, id) {
+  if (!f.identity) return f.identity_error ? [`      名单: 不知道(${f.identity_error})`] : []
+  const x = f.identity[id]
+  if (!x) return []
+  return [`      名单: ${x.names.length ? x.names.map(nameText).join(' · ') : '(空:没有名字认它的进程)'}`, ...(x.ignored.length ? [`      忽略的预设: ${x.ignored.map(nameText).join(' · ')}`] : []),
+    ...(x.unknown.length ? [`      不在名单上、用了它的入口: ${x.unknown.map(unknownText).join('、')}(只转发;doctor ${id} 给出加进名单的那一行)`] : [])]
+}
+/** agents.json's own problems (once: the file is one for every harness) — a bad item does not apply, the others do (4.6 §识别进程). */
+function listProblemLines(f) {
+  const x = f.identity && Object.values(f.identity)[0]
+  if (!x || !x.file.problems.length) return []
+  return [`名单文件 ${x.file.path}: ${x.file.state === 'ok' ? '有坏项(坏项不生效,其余照用)' : `${x.file.state}(只用预设)`}`, ...x.file.problems.map((p) => `  agents.json ${p.index == null ? '整个文件' : `第 ${p.index + 1} 项(agents[${p.index}])`}: ${p.code} — ${p.detail}`)]
 }
 
 // ── the digest of the unnamed `asight status` (D46: one screen of conclusions) ──────────────────────────────────────────────────────────────────────────────
@@ -326,6 +385,9 @@ export function renderStatusDigest(f, { home = null, now = null, colors: c = noC
     if (drawn.length) lines.push(...renderPathBlock(f.topology, { ids: drawn, now })) // header and rows: the 各 harness 的路 line is the block's own
     if (rest.length) lines.push(`各 harness 的路: 不知道(${[...new Set(rest.flatMap((id) => f.topology[id].notes || []))].join('; ') || '画不出来(读不到足够的事实)'};细节: asight status <harness>)`)
   }
+  const outsiders = f.identity ? Object.entries(f.identity).filter(([, x]) => x.unknown.length) : []
+  if (outsiders.length) lines.push(`不在名单上、用了入口(只转发): ${outsiders.map(([id, x]) => `${id}: ${x.unknown.map(unknownText).join('、')}`).join(' · ')};细节: asight status <harness>`)
+  lines.push(...listProblemLines(f))
   lines.push(...healthSummary(f, c))
   lines.push(`日志     ${c.dim(tilde(path.join(f.dir, 'logs'), home))} · 记录 ${c.dim(tilde(path.dirname(f.dir), home))} · 关闭 asight off`)
   if (f.relayed !== 'unknown' && f.relayed.closing + f.relayed.waiting > 0) lines.push(relayedText(f))
@@ -372,7 +434,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   const exit = unreadable ? EXIT.unknown : failing ? EXIT.incomplete : EXIT.ok
   const restart = restartOf(f)
   if (json) {
-    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows })), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), ...(f.netenv_write_error ? { netenv_write_error: f.netenv_write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), ...(f.optInRows ? { opt_in: optInOf(f.optInRows) } : {}), ...(f.opt_in_error ? { opt_in_error: f.opt_in_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
+    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows, ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}) })), ...(f.identity_error ? { identity_error: f.identity_error } : {}), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), ...(f.netenv_write_error ? { netenv_write_error: f.netenv_write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), ...(f.optInRows ? { opt_in: optInOf(f.optInRows) } : {}), ...(f.opt_in_error ? { opt_in_error: f.opt_in_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
     io.out(JSON.stringify(r, null, 2))
     return { exit, f }
   }
