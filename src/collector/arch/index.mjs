@@ -25,10 +25,12 @@ export async function loadArch(platform = process.platform) {
     // so the daemon, the one file allowed to wire arch in, stays platform-neutral about it. netFacts (Task 10(a)) is this platform's half of the network
     // facts: topology rows, doctor findings, the §11 plan and the drift checks all draw from it through src/netenv/facts.mjs.
     const [{ createWin32Collector, win32Routing }, unit, { controlEndpoint }, { osRootsFor }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn, checkEntries, recordEntryFindings }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('../../off/os-roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
-    const { groupsOf } = await import('./win32/route-plan.mjs')
+    const [{ groupsOf }, { formSignature }] = await Promise.all([import('./win32/route-plan.mjs'), import('./win32/forms.mjs')])
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
       os: 'win32', install: null, unit,
+      // the liveness signature `on` writes into the manifest for `off` (4.6 「判活快照」): this OS's form table folded into patterns, never a second copy of it
+      livenessSignature: (d) => formSignature((d.win32 && d.win32.forms) || []),
       controlEndpoint,
       refuseElevated: unit.refuseElevated, nodePreflight: unit.nodePreflight, runSupervisor: unit.runSupervisor,
       osRoots: ({ helper = null } = {}) => osRootsFor('win32')({ helper }),
@@ -55,10 +57,11 @@ export async function loadArch(platform = process.platform) {
     // 「要你点名的」 section) and `apply` (one named item, ledgered with scope). The check half (the read-only re-check that the entries are still the ones used, W68) is the
     // status-side work of MA4's row — not this arm; the daemon's own opt-in check is guarded by the hook's absence and checks nothing.
     const [{ createDarwinCollector }, unit, { controlEndpoint }, { osRootsFor }, { darwinNetFacts }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn }] = await Promise.all([import('./darwin/wiring.mjs'), import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('../../off/os-roots.mjs'), import('./darwin/netfacts.mjs'), import('./darwin/optin.mjs')])
-    const { groupsOf } = await import('./darwin/route-plan.mjs')
+    const [{ groupsOf }, { formSignature }] = await Promise.all([import('./darwin/route-plan.mjs'), import('./darwin/forms.mjs')])
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
       os: 'darwin', install: null, unit,
+      livenessSignature: (d) => formSignature((d.darwin && d.darwin.forms) || []), // the win32 twin's: the form table, folded (4.6 「判活快照」)
       controlEndpoint,
       refuseElevated: unit.refuseElevated, nodePreflight: unit.nodePreflight,
       osRoots: () => osRootsFor('darwin')(),

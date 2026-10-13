@@ -14,7 +14,9 @@
 // Liveness is judged from the manifest alone — `manifest.liveness.<harness>` (signature, rereads, until, until_environ) and the `installed_at` of
 // the harness's items — plus the process table `procs()` reads, never from the daemon (stopped by now) or the entries (undone by now), so `asight
 // off` and `asight-off` give the same answer (1.6 R3). A process table that cannot be read is not "nobody is alive": what depends on it is kept and
-// reported unjudged.
+// reported unjudged — and so is a harness whose snapshot has no signature (none recorded, or null: the asight that wrote it had none for its OS).
+// Where the OS never shows another process's environment (macOS, Windows: the rows say `envRead: false`), a process of the harness, or one it
+// started, may hold an extra trust file: it is a holder, not "not known" (4.6 「判活快照」).
 //
 // `ids` null = every harness; otherwise only those harnesses' entries, bundle, extra files, plugin / shim / rc lines — never the CA (unless
 // `dropCa`), never an item of another harness (byte for byte), never a file with no harness. An undone entry leaves manifest.entries; backups: dropped
@@ -28,7 +30,7 @@ import { undoRunKey, undoScheduledTask } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, asightHome } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
-import { matchHarness } from './signature.mjs'
+import { matchHarness, hasSignature } from './signature.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
 
 const UNDO_LEFT = new Set(['left-unparsable', 'left-link', 'left-text', 'error']) // an entry that could not be undone stays in the manifest
@@ -50,12 +52,21 @@ const without = (list, item) => { const i = list.indexOf(item); if (i >= 0) list
 // May a live process of a harness have read asight's entry for it? It started after the harness's first install time (its entries and the files
 // asight owns for it), or the harness re-reads its entry while running (alive is enough), or its start time / the install time is unknown.
 const mayHaveRead = (p, l, since) => !!(l && l.rereads) || p.startedAt == null || since == null || p.startedAt >= since
+// A harness whose snapshot has no signature (no record: an older asight; null: none for its OS) cannot tell its processes from the others, so any live
+// process that may have read its entry may be one of them (a record that is missing says nothing of re-reading either: alive is enough). → their pids;
+// none means nobody can hold what asight wrote for it, signature or not (4.6 「判活快照」).
+const unsignedOf = (liveness, list, h, since) => (hasSignature(liveness[h]) ? [] : list.filter((p) => mayHaveRead(p, liveness[h] || { rereads: true }, since)).map((p) => p.pid))
+// why such a harness cannot be judged, said the same way for its files (step 2 / 3) and for who still trusts asight (step 5)
+const unsignedWhy = (liveness, h) => (liveness[h]
+  ? `the install manifest has no process signature for ${h} (the asight that wrote it had none for this OS; "asight on" records it, then run this again)`
+  : `the install manifest has no liveness record for ${h} (written by an older asight; "asight on" adds it, then run this again)`)
 
-/** Undoes the entries (see the header) → `{ results, kept_bundles, removed, still_trusting, left, residue, changed, procs_error, manifest }`. An error that stops it
+/** Undoes the entries (see the header) → `{ results, kept_bundles, removed, still_trusting, trust_unknown, left, residue, changed, procs_error, manifest }` (`trust_unknown`:
+ *  `[{ harness, why }]`, the harnesses step 5 cannot judge, their snapshot having no signature). An error that stops it
  *  part-way (the last write of the manifest: ENOSPC, EACCES, a failed rename) is thrown with `partial` on it: the same object, as far as it got — the files that were
  *  changed or removed by then are in it, because a receipt that said "nothing was changed" over a settings.json that was put back would be untrue (1.6 R1, V3). */
 export async function undoHarnesses(args) {
-  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], left: [], residue: [], changed: [], notes: [], procs_error: null, manifest: args.manifest }
+  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], trust_unknown: [], left: [], residue: [], changed: [], notes: [], procs_error: null, manifest: args.manifest }
   try { return await undoInto(args, out) } catch (e) {
     if (e && typeof e === 'object') e.partial = out
     throw e
@@ -168,26 +179,31 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       const file = (manifest.files.find((f) => f.role === 'ca-cert') || {}).path || path.join(dir, 'ca', 'asight-ca.pem')
       try { const b = certBlocks(fs.readFileSync(file, 'utf8')); return b.length ? { fp: b[0].fp, error: null } : { fp: null, error: `${file} holds no certificate` } } catch (e) { return { fp: null, error: errText(e) } }
     })()
-    // An environment that cannot be read is not an empty one (proc.mjs): for an extra file, which only an environment names, a process whose environ is
-    // unreadable and that is a live process of the harness or descends from one (so it may have inherited the path) is "not known". Not every unreadable
-    // one: the capability helper and gpg-agent are non-dumpable on every machine, and nothing of the harness's.
-    const unknownEnv = (harness) => {
+    const unsigned = (harness) => unsignedOf(liveness, t.list, harness, since.get(harness))
+    // the live processes `pick` keeps that are of `harness` or descend from one of it (so they may have inherited a path), started after its first install time
+    const kin = (harness, pick) => {
       const byPid = new Map(t.list.map((p) => [p.pid, p])), from = since.get(harness)
       return t.list.filter((p) => {
-        if (processEnv(p) || (p.startedAt != null && from != null && p.startedAt < from)) return false // readable, or older than the file: it cannot hold it
+        if (!pick(p) || (p.startedAt != null && from != null && p.startedAt < from)) return false // older than the file: it cannot hold it
         for (let a = p, seen = new Set(); a && !seen.has(a.pid) && seen.size < 64; a = byPid.get(a.ppid)) { seen.add(a.pid); if (matchHarness(liveness, a) === harness) return true }
         return false
       }).map((p) => p.pid)
     }
+    // An environment that cannot be read is not an empty one (proc.mjs): for an extra file, which only an environment names, a process whose environ
+    // could not be read and that is of the harness or descends from one is "not known". Not every unreadable one: the capability helper and gpg-agent are
+    // non-dumpable on every machine, and nothing of the harness's. Where the OS never shows it (`envRead: false`: macOS, Windows) such a process is a holder.
+    const unknownEnv = (harness) => kin(harness, (p) => !processEnv(p) && p.envRead !== false)
+    const hiddenEnv = (harness) => kin(harness, (p) => p.envRead === false)
     // who may hold this file: a process of its harness that may have read the entry (bundles only — an extra file is named by an environment
     // variable, never by an entry that re-reads), or any whose environ names it (a child that inherited it). `why`: cannot be told.
     const holders = (f, byHarness) => {
       if (t.error) return { why: t.error }
-      if (byHarness && !liveness[f.harness]) return { why: `the install manifest has no liveness record for ${f.harness} (written by an older asight; "asight on" adds it, then run this again)` }
+      if (unsigned(f.harness).length) return { why: unsignedWhy(liveness, f.harness) }
       const pids = t.list.filter((p) => {
         const env = processEnv(p)
         return (byHarness && matchHarness(liveness, p) === f.harness && mayHaveRead(p, liveness[f.harness], since.get(f.harness))) || (!!env && [...env.values()].some((v) => typeof v === 'string' && v.includes(f.path)))
       }).map((p) => p.pid)
+      if (!byHarness) pids.push(...hiddenEnv(f.harness).filter((pid) => !pids.includes(pid)))
       const unknown = byHarness || pids.length ? [] : unknownEnv(f.harness)
       return unknown.length ? { why: `the environment of pid ${unknown.join(', ')}, a running ${f.harness} process or one started by it, cannot be read, so whether it holds this file is not known` } : { pids }
     }
@@ -292,11 +308,13 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   if (touched.size) {
     const t = await table()
     out.procs_error = t.error
+    if (!t.error) out.trust_unknown = [...touched].filter((h) => unsignedOf(liveness, t.list, h, since.get(h)).length).map((h) => ({ harness: h, why: unsignedWhy(liveness, h) })) // nothing tells its processes apart: not "none of them"
     for (const p of t.list) {
       const h = matchHarness(liveness, p)
       const l = h && touched.has(h) ? liveness[h] : null
       if (!l || !mayHaveRead(p, l, since.get(h))) continue
-      if (l.until_environ) { const v = (processEnv(p) || new Map()).get(l.until_environ); if (!(typeof v === 'string' && v.startsWith(dir + path.sep))) continue } // it never read asight's file
+      // it never read asight's file — told by its environment, where the OS shows one (on macOS and Windows a process that may have read it is listed)
+      if (l.until_environ && p.envRead !== false) { const v = (processEnv(p) || new Map()).get(l.until_environ); if (!(typeof v === 'string' && v.startsWith(dir + path.sep))) continue }
       out.still_trusting.push({ pid: p.pid, harness: h, until: UNTIL_VALUES.includes(l.until) ? l.until : 'restart' })
     }
   }

@@ -246,18 +246,27 @@ test('an extra trust file whose holder\'s environment cannot be read: a process 
   assert.deepEqual(known.kept_bundles, [{ path: w.b.ca('extra-jj.pem'), harness: 'jj', pids: [74] }])
 })
 
-test('a process table that cannot be read is not "nobody is alive": the bundle is kept without the CA and unjudged, an item left; so is a harness with no liveness record', async () => {
+test('a process table that cannot be read is not "nobody is alive": the bundle is kept without the CA and unjudged, an item left; so is a harness with no liveness record while a process that may have read its entry runs — with none, nobody holds it', async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const r = await s.run({ procs: async () => { throw new Error('ps: boom') } })
   assert.deepEqual(r.kept_bundles, [{ path: s.b.ca('combined-aa.pem'), harness: 'aa', pids: [], unjudged: true, error: 'ps: boom' }])
   assert.deepEqual([r.left.map((l) => l.result), r.procs_error, fpsOf(s.b.ca('combined-aa.pem')).length], [['error'], 'ps: boom', 2], 'kept, with Node\'s root and the user CA, not the asight CA')
   const t = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(t.b.dir); delete m.liveness.aa // a manifest written before the snapshot existed
-  const old = await t.run({ manifest: m })
-  assert.deepEqual([old.kept_bundles.map((k) => [k.unjudged, /no liveness record for aa/.test(k.error)]), old.left.length], [[[true, true]], 1])
+  const old = await t.run({ manifest: m, procs: async () => [proc(91, '/x/anything', { env: null })] }) // nothing says whether it is an aa
+  assert.deepEqual([old.kept_bundles.map((k) => [k.unjudged, /no liveness record for aa/.test(k.error)]), old.left.length, old.trust_unknown.map((x) => [x.harness, /no liveness record for aa/.test(x.why)])], [[[true, true]], 1, [['aa', true]]], 'step 5 says why in the same words as the files')
+  const u = await setup((b) => [repH(b, 'aa')])
+  const t0 = Date.parse(readManifest(u.b.dir).entries[0].installed_at)
+  const n = readManifest(u.b.dir); delete n.liveness.aa
+  const none = await u.run({ manifest: n, procs: async () => [proc(92, '/x/older', { startedAt: t0 - 60000 }), proc(93, '/x/older', { startedAt: t0 - 1 })] }) // no record: whether aa re-reads is not known either, so alive is enough
+  assert.deepEqual([none.kept_bundles.map((k) => k.unjudged), none.left.length], [[true], 1], 'with no record, an older process may still be an aa that re-reads its entry')
+  const v = await setup((b) => [repH(b, 'aa')])
+  const q = readManifest(v.b.dir); q.liveness.aa.signature = null // a record with no signature: whether aa re-reads IS known (it does not)
+  const older = await v.run({ manifest: q, procs: async () => [proc(94, '/x/older', { startedAt: t0 - 60000 })] })
+  assert.deepEqual([older.kept_bundles, older.left, older.trust_unknown, fs.existsSync(v.b.ca('combined-aa.pem'))], [[], [], [], false], 'no process that may have read the entry: nobody holds the bundle, signature or not')
 })
 
-test('step 5: only a process that may have read the entry is reported, with until from the snapshot; untilEnviron limits it to a process whose environ names a file of asight\'s', async () => {
+test('step 5: only a process that may have read the entry is reported, with until from the snapshot; untilEnviron limits it to a process whose environ names a file of asight\'s — where the OS never shows an environment (macOS, Windows) such a process is reported, one whose read failed is not', async () => {
   const s = await setup((b) => [repH(b, 'aa', { afterUninstall: 'next-connection' }), { ...repH(b, 'bb', { afterUninstall: 'restart', untilEnviron: 'SSL_CERT_FILE' }) }, jsonH(b)])
   const t0 = Date.parse(readManifest(s.b.dir).entries[0].installed_at)
   const r = await s.run({ ids: ['aa', 'bb', 'jj'], procs: async () => [
@@ -265,8 +274,10 @@ test('step 5: only a process that may have read the entry is reported, with unti
     proc(3, '/x/bb', { startedAt: t0 + 1000 }), proc(4, '/x/bb', { startedAt: t0 + 1000, env: { SSL_CERT_FILE: s.b.ca('combined-bb.pem') } }), proc(5, '/x/bb', { startedAt: t0 + 1000, env: { SSL_CERT_FILE: '/corp/own.pem' } }),
     proc(6, '/x/jj', { startedAt: 1 }), // jj re-reads its entry: alive is enough, until the default
     proc(7, '/usr/bin/vim'),
+    proc(8, '/x/bb', { startedAt: t0 + 1000, env: null }), // a read that failed (Linux): whether it went through asight's file is not known — not listed
+    { ...proc(9, '/x/bb', { startedAt: t0 + 1000, env: null }), envRead: false }, // an environment the OS never shows: it may have, so it is listed
   ] })
-  assert.deepEqual(r.still_trusting, [{ pid: 2, harness: 'aa', until: 'next-connection' }, { pid: 4, harness: 'bb', until: 'restart' }, { pid: 6, harness: 'jj', until: 'restart' }])
+  assert.deepEqual(r.still_trusting, [{ pid: 2, harness: 'aa', until: 'next-connection' }, { pid: 4, harness: 'bb', until: 'restart' }, { pid: 6, harness: 'jj', until: 'restart' }, { pid: 9, harness: 'bb', until: 'restart' }])
   const only = await setup((b) => [repH(b, 'aa'), repH(b, 'bb')])
   assert.deepEqual((await only.run({ ids: ['aa'], procs: async () => [proc(1, '/x/bb')] })).still_trusting, [], 'a process of a harness that was not undone is not reported')
 })
