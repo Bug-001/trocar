@@ -1,8 +1,8 @@
 // darwin/opencode.mjs — OpenCode on macOS (RFC 4.9 §2.3 · §2.4; the shim entry, the opt-in item and the plugin trust are 4.8 §2.3 · §2.4 · §6.1): data, no behaviour but the trust
-//   injection — the darwin twin of win32/opencode.mjs, inferred everywhere until MA4. `opencode.cli` is the curl install's binary ~/.opencode/bin/opencode (an npm install puts a
-//   launcher named bin/opencode.exe in the package — the agent is whatever that launcher runs, not measured, MA4); `opencode.desktop` is NOT MEASURED on macOS (4.6 OPEN ⑥),
-//   listed with nothing to match, so `status` says unknown · not measured and does not leave it out. `opencode` and `OpenCode` are one image name to the matcher (paths compare
-//   ignoring case on darwin), so the CLI is told by its path alone and has no PROCESS-NAME rule.
+//   injection — the darwin twin of win32/opencode.mjs, inferred until MA4. `opencode.cli` is the curl install's binary ~/.opencode/bin/opencode (an npm install puts a
+//   launcher named bin/opencode.exe in the package — the agent is whatever that launcher runs, not measured, MA4); `opencode.desktop` is MEASURED (on a macOS test machine:
+//   the app's own bundled core under ~/Library/Application Support/ai.opencode.desktop/cli/, the `opencode-cli` image) and shares the CLI's group. `opencode` and `OpenCode` are
+//   one image name to the matcher (paths compare ignoring case on darwin), so the CLI is told by its path alone and has no PROCESS-NAME rule.
 // The entry is a launch shim, as on Windows: OpenCode reads its proxy from the environment only — its own proxy keys are HTTPS_PROXY / HTTP_PROXY (and NO_PROXY), once, at start;
 //   no config file, no OS proxy, no SOCKS (the request fails) — and the login environment is never written (D37④), so the shim sets HTTPS_PROXY and is found through the marked
 //   PATH line in your shell rc files (the mechanism 4.9 §2.3's Kimi row names: reference-counted, `which -a` tells whether it is first). The Windows twin's machine-level
@@ -36,7 +36,13 @@ export default {
   forms: [
     // the curl install: ~/.opencode/bin/opencode; whether HTTPS_PROXY moves it at all is itself unmeasured on macOS (4.6 OPEN ⑥) — the shim entry is the best-known door
     { id: 'opencode.cli', g: 'opencode.cli', match: { image: 'opencode', path: [raw`\/\.opencode\/bin\/opencode`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
-    { id: 'opencode.desktop', g: null, match: null, nameRule: false, processRules: false, supported: { reason: 'not-measured' } }, // the desktop app (4.6 OPEN ⑥)
+    // the desktop app (OpenCode.app 2.0.25), measured on a macOS test machine: it spawns its OWN bundled core —
+    // ~/Library/Application Support/ai.opencode.desktop/cli/<ver>/opencode-cli serve --service — a REAL-Library path ($HOME does not move it; the image is
+    // `opencode-cli`, not `opencode`, so the CLI form's gate never saw it: the desktop's whole turn was spliced untracked, decrypted 0) — and that core
+    // inherits the launch env (the door's HTTPS_PROXY steered it live) and resolves its config under $HOME. Same group as the CLI: the env door the shim
+    // sets is the same one the desktop inherits, and the plugin (~/.config/opencode/plugins) is the same trust door — the marker it writes is what darwin
+    // judges the desktop core by (its env is unreadable, so NODE_EXTRA_CA_CERTS can never vouch for it here).
+    { id: 'opencode.desktop', g: 'opencode.cli', match: { image: 'opencode-cli', path: [raw`\/Application Support\/ai\.opencode\.desktop\/cli\/[^/]*\/opencode-cli`] }, nameRule: false, processRules: true, supported: true },
   ],
   inject,
   proxy: {

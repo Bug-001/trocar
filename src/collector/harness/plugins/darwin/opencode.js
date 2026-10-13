@@ -46,3 +46,8 @@ function addCa() {
 try { addCa() } catch { /* asight never stops the agent from starting */ }
 
 export const AsightCaPlugin = async () => ({})
+// OpenCode 2.0.x (the desktop's bundled core, measured on a macOS test machine) requires a DEFAULT export —
+// "a default definition with an id and an effect or setup function" — and rejects a module without one (the 1.x CLI
+// loads the named export fine). The work is already done at import; this shape only satisfies the newer loader, and
+// its setup returns the same nothing the 1.x export does.
+export default { id: 'asight-ca', setup: async () => ({}) }

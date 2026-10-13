@@ -46,9 +46,11 @@ test('the catalog: the darwin harness data\'s opt-in items surface as plan rows,
   const m = newManifest(new Date())
   m.entries.push({ kind: 'optin-rc-path', harness: 'kimi-code', form: 'kimi-code.cli', item: 'user-path-shim', scope: 'user', path: '/x', confirmed: true })
   assert.equal(planOptIns({ groups: groupsOf([byName('kimi-code')]), manifest: m }).find((r) => r.form === 'kimi-code.cli').state, 'done')
-  assert.deepEqual(optinFormsOf(groupsOf(descs)).sort(), ['claude-code.desktop', 'deepseek-dsh.desktop', 'kimi-code.cli', 'opencode.cli'])
+  // the OpenCode desktop joined the CLI's group (measured 2026-10-13: the app's bundled core reads the same env the shim
+  // sets) — the group's item is its item too, so it surfaces as its own row (`--opt-in opencode.desktop` is a valid name)
+  assert.deepEqual(optinFormsOf(groupsOf(descs)).sort(), ['claude-code.desktop', 'deepseek-dsh.desktop', 'kimi-code.cli', 'opencode.cli', 'opencode.desktop'])
   // the arch object exposes the same hooks the CLI reaches (forms / plan / apply — the flip checklist ④'s seam)
-  assert.deepEqual(darwin.optIn.forms({ harnesses: descs }).sort(), ['claude-code.desktop', 'deepseek-dsh.desktop', 'kimi-code.cli', 'opencode.cli'])
+  assert.deepEqual(darwin.optIn.forms({ harnesses: descs }).sort(), ['claude-code.desktop', 'deepseek-dsh.desktop', 'kimi-code.cli', 'opencode.cli', 'opencode.desktop'])
   const viaArch = darwin.optIn.plan({ harnesses: descs, optIn: [] })
   assert.equal(viaArch.length, rows.length)
 })

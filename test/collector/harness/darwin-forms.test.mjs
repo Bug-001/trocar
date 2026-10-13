@@ -46,11 +46,17 @@ const EXPECT = {
     unknown: ['/opt/tools/codex'],
   },
   'opencode': {
-    groups: { 'opencode.cli': ['opencode.cli'] },
+    groups: { 'opencode.cli': ['opencode.cli', 'opencode.desktop'] },
     forms: {
       // opencode and OpenCode are one image name to the matcher (paths compare ignoring case on darwin too): the path alone tells the curl install's binary
       'opencode.cli': { nameRule: false, optIn: true, yes: [`${U}/.opencode/bin/opencode`] },
-      'opencode.desktop': { nameRule: false, yes: [], unmeasured: true }, // the desktop app (4.6 OPEN ⑥)
+      // the desktop app (OpenCode.app 2.0.25, measured on macOS): it spawns its OWN bundled core —
+      // ~/Library/Application Support/ai.opencode.desktop/cli/<ver>/opencode-cli serve --service — a REAL-Library path ($HOME does not move it), the image
+      // `opencode-cli` (the CLI form's `opencode` gate never saw it: the desktop's whole turn was spliced untracked); the core inherits the launch env (the
+      // door's HTTPS_PROXY steered it live) and shares the CLI's group — the plugin marker is what darwin judges it by (its env is unreadable)
+      'opencode.desktop': { nameRule: false, optIn: true, yes: [
+        { exe: `${U}/Library/Application Support/ai.opencode.desktop/cli/2.0.25/opencode-cli`, cmdline: `${U}/Library/Application Support/ai.opencode.desktop/cli/2.0.25/opencode-cli serve --service` },
+      ] },
     },
     unknown: ['/opt/tools/opencode'],
   },
@@ -220,7 +226,7 @@ test('every darwin data file has the shape the later tasks read: groups, forms, 
 })
 
 test('the group table: the one shared group holds its forms, the env groups of codex and dsh hold their measured forms (an unmeasured form has no group), and a group has at most one form without a process rule', () => {
-  const shared = { 'claude-code.settings': ['claude-code.native', 'claude-code.cli', 'claude-code.vscode'], 'codex.env': ['codex.cli', 'codex.vscode'], 'deepseek-dsh.env': ['deepseek-dsh.cli'], 'deepseek-dsh.desktop': ['deepseek-dsh.desktop'], 'z-code.cli': ['z-code.cli', 'z-code.desktop'] }
+  const shared = { 'claude-code.settings': ['claude-code.native', 'claude-code.cli', 'claude-code.vscode'], 'codex.env': ['codex.cli', 'codex.vscode'], 'deepseek-dsh.env': ['deepseek-dsh.cli'], 'deepseek-dsh.desktop': ['deepseek-dsh.desktop'], 'z-code.cli': ['z-code.cli', 'z-code.desktop'], 'opencode.cli': ['opencode.cli', 'opencode.desktop'] }
   for (const [h, w] of Object.entries(MAC)) {
     for (const g of w.groups) {
       const members = w.forms.filter((f) => f.g === g.g).map((f) => f.id)
@@ -432,10 +438,10 @@ test('a group\'s proxy entry goes into the files its trust entry does (Claude Co
   assert.ok(MAC.hermes.inject(rctx).entries.some((e) => e.format === 'line' && e.path === path.join(rw.home, '.hermes', 'profiles', 'work', 'config.yaml')), 'the chat_completions route itself gets its ssl_ca_cert trust line')
 })
 
-test('no darwin group is an app-setting or a policy entry, and the TWO launchers are Claude Desktop\'s and the dsh desktop\'s measured doors: every form that would carry another (the Kimi extension, the Codex app, the OpenCode desktop) is not measured on macOS, so it has no group and nothing of it is ever located or written (the Z-Code desktop is measured now — 2026-10-13, the app-server Helper — and shares the CLI\'s group, whose config door is its trust door)', () => {
+test('no darwin group is an app-setting or a policy entry, and the TWO launchers are Claude Desktop\'s and the dsh desktop\'s measured doors: every form that would carry another (the Kimi extension, the Codex app) is not measured on macOS, so it has no group and nothing of it is ever located or written (the Z-Code desktop is measured now — 2026-10-13, the app-server Helper — and shares the CLI\'s group, whose config door is its trust door; so is the OpenCode desktop — its bundled core, the same env door and plugin the CLI has)', () => {
   assert.deepEqual(groupsOf().map((g) => g.proxyEntry.kind).sort(), ['file', 'file', 'file', 'file', 'file', 'launcher', 'launcher', 'shim', 'shim'], 'the darwin entry kinds: five files, two shims, two launchers — Claude Desktop\'s door (measured 2026-10-12, 4.9 §6.4) and the dsh desktop\'s (the dmg app, measured 2026-10-12: .env is not its door)')
   assert.deepEqual(groupsOf().filter((g) => g.proxyEntry.kind === 'launcher').map((g) => g.g), ['claude-code.desktop', 'deepseek-dsh.desktop'], 'the launcher groups are exactly the two desktops')
-  for (const id of ['codex.app', 'opencode.desktop', 'hermes.desktop', 'kimi-code.vscode']) {
+  for (const id of ['codex.app', 'hermes.desktop', 'kimi-code.vscode']) {
     const f = formsOf().find((x) => x.id === id)
     assert.equal(f.supported.reason, 'not-measured', id)
     assert.equal(f.g, null, `${id}: no group, so there is no entry of it to locate`)
