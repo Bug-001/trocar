@@ -18,6 +18,7 @@ import { createSwitch, readState } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
 import { tryOpLock } from '../off/lock.mjs'
+import { readAgentList, agentListPath } from '../off/identity.mjs'
 import { loadCa, checkCa } from './core/tls/ca.mjs'
 import { createLeafIssuer } from './core/tls/leaf.mjs'
 import { bundleRoots, rootsLeftOut } from './core/tls/roots.mjs'
@@ -35,7 +36,7 @@ export { loadArch } // the CLI reaches arch only through this file (layering rul
 
 // What install / uninstall need from arch and harness, without starting anything: the descriptors, the OS key,
 // and the process table (`scan` reads /proc; it does not need the helper).
-export async function loadParts({ arch = null, harnesses = null, env = process.env } = {}) {
+export async function loadParts({ arch = null, harnesses = null, env = process.env, agentList = [] } = {}) {
   const A = arch || (await loadArch())
   const list = harnesses || (await loadHarnesses())
   // The darwin collector's LAZY construction (4.9 §1 接线) makes building one here safe: with { env, harnesses } only, it is the shell — a watcher `scan` can use, no
@@ -45,7 +46,7 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
   // this, `asight on --yes` on Windows died at once with createWin32Collector's "needs the collector dir (~/.asight/collector)".
   const redirector = A.os === 'win32' ? null : await A.createRedirector({ env, harnesses: list }) // the await is the point: darwin's collector is async (4.9 §1), and without it `redirector` here is a Promise — `scan()` throws TypeError (review F1, reproduced on the real call before this line); Linux's and win32's sync returns pass through the await untouched
   // the registry judges by name on every OS (D51): it needs no redirector
-  const registry = createRegistry(list)
+  const registry = createRegistry(list, { agentList }) // agentList: readAgentList's entries (the user's ~/.asight/agents.json, D51③); the daemon swaps them in place
   // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `asight on` says so (1.6 §1.1), it never enables it (R8)
   return { arch: A, os: A.os, harnesses: list, registry, scan: () => (redirector ? redirector.scan() : []), match: (f) => registry.match(f), linger: () => (redirector && typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (redirector && typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
 }
@@ -105,6 +106,32 @@ function ownedLikeDir(dir, chown) {
 // `dir` is <asight home>/collector.
 export function healthOnDisk(dir) {
   try { return captureHealth({ home: path.dirname(dir) }) } catch (e) { return { error: `capture health could not be read: ${errText(e)}` } }
+}
+
+// The user's agent list ~/.asight/agents.json (D51③, 4.6 R6): read again only when its stat key moved — inode:size:mtime, plus the mode (a chmod
+// makes a readable file unreadable without touching the other three); an atomic rename is a new inode; a file that is not there is a key too.
+// A broken file (unreadable, unparsable, bad items) is one agent-list-invalid per file version (D38); one that reads cleanly again or is removed
+// ends it with agent-list-ok; a file that was never there writes nothing. The daemon never writes the file, nor do on / off (D48).
+// → next(): readAgentList's result when the key moved, else null.
+function agentListWatch({ home, write }) {
+  const file = agentListPath(home)
+  const keyOf = () => { try { const st = fs.statSync(file); return `${st.ino}:${st.size}:${st.mtimeMs}:${st.mode}` } catch (e) { return `gone:${(e && e.code) || 'error'}` } }
+  let key = null, bad = false
+  return function next() {
+    const k = keyOf()
+    if (k === key) return null
+    key = k
+    const r = readAgentList({ home })
+    if (r.state === 'unreadable' || r.state === 'unparsable' || r.problems.length) {
+      bad = true
+      write({ event: EVENT.failure, where: 'harness', code: CODE.agentListInvalid, path: r.path, problems: r.problems,
+        reason: r.state === 'ok' ? `${r.path} has ${r.problems.length} bad item(s); the other items and the preset names apply` : `${r.path} cannot be used (${r.state}); only the preset names apply` })
+    } else if (bad) {
+      bad = false
+      write({ event: EVENT.agentListOk, where: 'harness', path: r.path, reason: r.state === 'absent' ? `${r.path} is gone; the preset names apply` : `${r.path} reads cleanly again; its items apply` })
+    }
+    return r
+  }
 }
 
 async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null }) {
@@ -194,7 +221,8 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     let engine = null // created after the tracker; the tracker's onGone reaches it at call time
     const event = (e) => failure.write({ ...e, ...(e.error != null && e.reason == null ? { reason: String(e.error) } : {}) })
 
-    const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch: A0 ?? arch, harnesses, env })
+    const nextAgentList = agentListWatch({ home: netHome, write: (rec) => failure.write(rec) }) // at start here, then on every 5 s check
+    const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch: A0 ?? arch, harnesses, env, agentList: (nextAgentList() || { entries: [] }).entries })
     // 4.9 §1 wiring: the darwin collector needs the collector dir and this daemon's sinks, so it is built here with them (started below; the kernel itself
     // comes with the first attach, 4.8 §4.1) — `desired` reads state.json as it is NOW: the switch changes it while this daemon runs. The win32 collector needs
     // exactly the same shape (createWin32Collector({ env, dir, home, harnesses, failure, event, manifest, desired }) — wiring.mjs), so it joins this arm: with
@@ -488,6 +516,9 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       }
       if (r.drops && typeof r.drops === 'object') { lastDrops = r.drops; noteDrops() }
       await tracker.recheck()
+      // D51③: agents.json changed — the new list judges every row again (one it no longer names leaves, agent-exit via 'list') and the rescan judges the rest, no restart
+      const list = nextAgentList()
+      if (list) { registry.replaceAgentList(list.entries); await tracker.rejudgeAll('list'); await tracker.rescan() }
       // 4.9 §6.4's wiring arm, second half (found live on a test machine): the plan a proxy-mode collector runs is a function of the MANIFEST too —
       // an opt-in's ledger entry names a group — and nothing else re-computes it for a harness that is already on: the switch's `on` answers noop (no attach),
       // so a launcher applied to a live install pointed at a port no listener was on until the next system-proxy move. The 5 s check re-plans, and when the

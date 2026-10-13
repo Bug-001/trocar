@@ -12,6 +12,7 @@ export const EVENT = Object.freeze({
   agentUntrusted: 'agent-untrusted', // one per pid and reason; code = the resolver's reason
   agentTrusted: 'agent-trusted', // a pid recorded untrusted that is now trusted
   agentExit: 'agent-exit', // a pid recorded untrusted that exited
+  agentListOk: 'agent-list-ok', // ~/.asight/agents.json reads cleanly again (or is gone): ends agent-list-invalid
   installNote: 'install-note',
   uninstallNote: 'uninstall-note',
 })
@@ -54,6 +55,7 @@ export const CODE = Object.freeze({
   systemRootsUnavailable: 'system-roots-unavailable', // a combined bundle was composed with no OS root: no OS trust bundle on this machine holds a certificate (the engine's own record has the same name)
   systemRootsUnparsable: 'system-roots-unparsable', // certificates of the OS roots did not parse and are in no combined bundle (4.8 §6.2 / W20)
   systemRootsPartial: 'system-roots-partial', // a source of the OS roots could not be read while others gave roots: what only it holds is in no combined bundle (4.9 §6.2)
+  agentListInvalid: 'agent-list-invalid', // ~/.asight/agents.json unreadable / unparsable / bad items: once per file version (D51③)
   describeError: 'describe-error', // the daemon could not describe a process to the engine (the engine's own record has the same name)
 })
 

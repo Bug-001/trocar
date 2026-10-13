@@ -12,7 +12,8 @@ export const NOT_CAPTURED_EXPECTED = Object.freeze(['policy', 'not-trust-path', 
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
-export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set'])
+export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set',
+  'agent-list-ok']) // ~/.asight/agents.json reads cleanly again, or is gone: ends the agent-list-invalid condition (D51③, 4.6 R6)
 
 /** Failure codes the failure recorder never folds by where + code: the reader folds each of them into a condition per
  *  (pid, host), so a folded line would make the pairs folded into it vanish (4.6 §事件与码, D1-1). Bounded: a (pid,
@@ -46,7 +47,8 @@ export const CODES_BY_PART = Object.freeze({
   record: ['record-error', 'file-replaced'],
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
   // a harness's configuration or files, read or written (the Claude Code settings layers have their own codes, above)
-  harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial'],
+  harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial',
+    'agent-list-invalid'], // ~/.asight/agents.json cannot be read / parsed, or holds bad items (with `path` and `problems`; one per file version, D51③)
   trust: [...TRUST_REASONS],
   bundle: ['roots-changed', 'missing', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial'], // the last three: the bundles of the harnesses that are on were (re)built with no OS root, without OS roots that did not parse, without a roots source whose read failed (4.6 「合并包」)
   note: ['ok'], // the code of an agent-trusted line

@@ -66,7 +66,7 @@ const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${
 // is told every error judging or (un)watching a process — that process stays unwatched (its connections go
 // direct) and the rest of the table carries on; nothing here is swallowed (review 2 #4).
 // onGone(row, via) is told every agent that leaves the table — its exit event ('exit'), found gone by a rescan
-// ('rescan'), exec'd into a program no descriptor matches ('exec'), or dropped because judging it again threw
+// ('rescan'), exec'd into a program no descriptor matches ('exec'), no longer named by a changed name list ('list', rejudgeAll), or dropped because judging it again threw
 // ('judge-error') — so the daemon records agent-exit and drops the conditions it held (D-24, review D1-4); a row that is off (below)
 // is told only if it was judged while its harness was on (`reported`): what was recorded about it was ended by onOff(row), told with the row as it
 // was judged, and its exit is still an exit; one that was off since it started was never reported and leaves unreported. onUnmatched({pid, exe,
@@ -282,6 +282,20 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
       for (const [pid, row] of [...table]) if (!seen.has(pid) && !(row.judged > begun)) { forget(pid); gone(row, 'rescan') }
       for (const pid of [...ambiguous.keys()]) if (!seen.has(pid)) ambiguous.delete(pid)
       if (markerDir) for (const n of listDir(markerDir)) if (/^\d+$/.test(n) && !seen.has(Number(n)) && !alive(Number(n))) { try { fs.rmSync(path.join(markerDir, n), { force: true }) } catch { /* void */ } }
+    },
+    // The name list changed (D51③): every row is judged again on the facts it was judged on. A row the list no longer names leaves the
+    // table as an exec into an unknown program does (onGone with `via`; its conditions and negative-cache entries go); one another harness
+    // now claims is judged as that one; one still of its harness stays for the rescan that follows.
+    async rejudgeAll(via) {
+      for (const [pid, row] of [...table]) {
+        const f = factsOf.get(pid)
+        if (!f || table.get(pid) !== row) continue
+        const m = registry.match(f)
+        if (m.agent === row.agent) continue
+        if (m.agent) { try { await onExec(f) } catch (e) { onError(e, { pid, phase: 'judge' }) } continue }
+        forget(pid); gone(row, via)
+        if (!row.off) try { await redirector.unwatch(pid) } catch (e) { onError(e, { pid, phase: 'unwatch' }) }
+      }
     },
     async recheck() {
       for (const [pid, row] of [...table]) {
