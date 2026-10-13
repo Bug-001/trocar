@@ -1,16 +1,16 @@
 // Linux redirector client — the platform half of the collector's `Redirector` contract
-// (spec/01-asight-rfc/4.6-process-collector.md §Linux 机制, §结构; contract defined by the
-// the collector engine design).
+// (spec/01-asight-rfc/4.6-process-collector.md §Linux 机制, §结构; the engine consumes it through
+// src/collector/arch/linux/redirector.mjs).
 //
 // It spawns the privileged C loader (src/collector/arch/linux/redirector/redirector.c),
 // which owns the eBPF bpf_links and the kernel maps, and talks to it over a newline-JSON
-// line protocol on the loader's stdin/stdout. The engine (core, built on another branch)
+// line protocol on the loader's stdin/stdout. The engine (src/collector/core/engine/)
 // consumes only `lookup(peer)`; the platform methods below drive the switch and the watch
 // set. Node built-ins only (D18): child_process, readline, events, net.
 //
-// D36: the loader is the shared capability helper, installed today by `sudo node install.mjs
-// setup-helper` (the operator-facing `asight setup-helper` CLI is not built yet) at
-// /usr/local/libexec/asight/asight-redirector and spawned as a child of this (operator) engine.
+// D36: the loader is the shared capability helper, installed once per machine by `sudo asight
+// setup-helper` at /usr/local/libexec/asight/asight-redirector and spawned as a child of this
+// (operator) engine.
 // The client passes `--parent-pid` so the loader can bind its self-exclusion to this engine and
 // die with it; it never sends an engine uid (the loader bakes owner_uid from getuid() itself).
 //
@@ -49,8 +49,7 @@ import net from 'node:net'
 export const HEARTBEAT_STALE_MS = 2000
 export const REDIRECTOR_PROTO = 2 // 2 (D38): status `drops`; config / heartbeat / watch / unwatch say when the map write failed
 
-/** Where the setup-helper step installs the capped loader (the `asight setup-helper` CLI is not built
- *  yet; use `sudo node install.mjs setup-helper`); override with ASIGHT_REDIRECTOR_BIN. */
+/** Where `sudo asight setup-helper` installs the capped loader; override with ASIGHT_REDIRECTOR_BIN. */
 export const DEFAULT_REDIRECTOR_BIN = '/usr/local/libexec/asight/asight-redirector'
 
 /** The helper's exit codes (redirector.c main) by name, for helper-down (D38 D-14). */

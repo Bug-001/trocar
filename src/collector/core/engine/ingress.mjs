@@ -9,7 +9,7 @@
 //      `ingress-unknown`;
 //   2. check the token, in constant time — 407 / SOCKS auth failure and `ingress-auth-failed`, zero upstream connections;
 //   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or null (an unknown user: also an auth failure);
-//   4. a health probe (the target is the group's re-entry point itself, §3.3): 200, then 204 to every `HEAD`/`GET /asight-health/<g>`
+//   4. a health probe (the target is the group's re-entry point itself): 200, then 204 to every `HEAD`/`GET /asight-health/<g>`
 //      on the kept-alive tunnel; no upstream, no flows/ row, no envelope. It never leaves the machine (invariant 1);
 //   5. dial the upstream — direct, or the proxy prelude asight writes (http / socks5; the user's proxy credentials ride only here) —
 //      and say 200 only once it is up: a failure is `502`, or the proxy's own refusal, never a success first;
@@ -192,7 +192,7 @@ async function viaSocks5(sock, up, target, deadline) {
 
 /**
  * createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing, refuse }) → { attach(server), handle(socket), stats(), closeIdle() }
- *   token            the install's ingress token (4.8 §3.2); a connection that does not present it gets 407 / auth failure
+ *   token            the install's ingress token (4.8 §3); a connection that does not present it gets 407 / auth failure
  *   lookupIngress    async ({peer, user, target:{address, port, family?}}) → IngressMeta | {health:true, group} | null (an unknown user)
  *   handleFlow       (socket, meta, {upstream, redial}) — the engine's flow starter; `redial` re-dials through the same upstream when the
  *                    upstream carries no credentials (4.6 让路), else undefined
@@ -375,7 +375,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     } finally { if (slow) clearTimeout(slow) }
   }
 
-  // a health probe tunnel (4.8 §3.3, §5.1): the group's own re-entry point, answered with what mihomo's http / socks5 outbound looks for
+  // a health probe tunnel (4.8 §5.1): the group's own re-entry point, answered with what mihomo's http / socks5 outbound looks for
   async function healthTunnel(socket, r, o, group, unknown) {
     counters.health++
     o.ok()

@@ -1,6 +1,6 @@
 // fsutil.mjs — the file primitives both halves of the install journal stand on: the hash, the durable atomic write, the
 // directories a write creates, the temp files a crash leaves, and the file a symlinked path really edits (RFC 4.6 §安装清单与卸载,
-// D28). They live in src/off/ because `asight off` and the standalone `~/.asight/bin/asight-off` need them without the repo
+// 1.6 R2). They live in src/off/ because `asight off` and the standalone `~/.asight/bin/asight-off` need them without the repo
 // (0.1 §2: this directory imports only node:* and itself); the install side (src/collector/core/trust/journal.mjs) imports them.
 // Every function that touches the disk takes `fs` last, default node:fs, so a test can inject a spy or a failing one.
 import nodeFs from 'node:fs'

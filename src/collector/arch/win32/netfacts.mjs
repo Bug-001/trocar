@@ -10,7 +10,7 @@
 //   · the forms: one per the harness file's own data (groupsOf), each with the proxy the agent would use without asight (priorOf over the entry files and the manifest's prior_value,
 //     the login environment, and「不知道 · env-unreadable」when the only place it is set is a variable of the terminal that started the agent — Windows reads no other process's
 //     environment, 4.8 §10.1), the OS proxy a follower reads, the entry edge ({ where, asight: true, opt_in } — intact while the file still holds the door's address, the same
-//     read-back `entries.check` is), the opt-in state (planOptIns' rows over the manifest) and, for a host-tree form, the host set of 4.8 §3.5 (hostSetOf over the extension's own
+//     read-back `entries.check` is), the opt-in state (planOptIns' rows over the manifest) and, for a host-tree form, the host set of 4.8 §3 (hostSetOf over the extension's own
 //     settings — read-only); plus `entryPlace` (where the group's proxy entry lives, filled in: the doctor's commands that name the place read it, 4.8 §10.4) and `route` (what the
 //     group's own plan says of it — the `why`/`detail` of a `not-routed`, the doctor's `code` for a refused protocol, `form-unsupported`: the doctor's rows split by them, 4.8 §10.4);
 //   · the processes: the helper's `ps` matched with `matchForm` (the same rule the daemon routes by), each with the elevated verdict of `elevationOf` (integrity ≥ High, or a token
@@ -194,7 +194,7 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const reply = status.daemon && status.daemon.reply
     const linksKnown = !!(reply && Array.isArray(reply.links))
     const liveGroups = new Set((linksKnown ? reply.links : []).map((l) => l && l.name).filter(Boolean)) // the reply's `links` are the DOOR GROUPS the daemon holds on (the shared door core's status, D47): a group's forms are on as one
-    // the host set the daemon's plan last applied to a host-tree form (4.8 §3.5, W69): the reply's `applied_hosts` (the wiring's win32 bag, relayed by /status) — what `status` compares
+    // the host set the daemon's plan last applied to a host-tree form (4.8 §3, W69): the reply's `applied_hosts` (the wiring's win32 bag, relayed by /status) — what `status` compares
     // its own fresh `hostSetOf` read with, to say when the kernel's set is old. A daemon that did not answer, or one without the bag, leaves nothing to compare: no vacuous line.
     const appliedSetOf = (id) => { const a = reply && reply.applied_hosts && typeof reply.applied_hosts === 'object' ? reply.applied_hosts[id] : null; return a && Array.isArray(a.hosts) ? [...a.hosts] : null }
     const desired = Object.fromEntries((status.harnesses || []).map((h) => [h.id, h.desired === 'on' ? 'on' : 'off']))

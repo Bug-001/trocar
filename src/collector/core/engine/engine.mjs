@@ -20,7 +20,7 @@ import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
 // (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
 // timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default.
-// ingressToken: the install's ingress token (4.8 §3.2), required for listen({ingress}).
+// ingressToken: the install's ingress token (4.8 §3), required for listen({ingress}).
 export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, timing = {}, drainTimeoutMs, ingressToken = null }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
   const servers = []

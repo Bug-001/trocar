@@ -11,7 +11,7 @@
 //   The per-user half (operator, no sudo: the collector CA, the agents' trust entries, the install manifest) is
 //     `asight collector install|uninstall` in src/collector/install.mjs (RFC 4.6 §安装清单与卸载). It records
 //     every change in ~/.asight/collector/install-manifest.json and undoes key by key; it never copies a user
-//     file or rewrites whole JSON (D28). The earlier installUser / uninstallUser here did both and are gone
+//     file or rewrites whole JSON (1.6 R2). The earlier installUser / uninstallUser here did both and are gone
 //     (Plan 3a).
 //
 // Node built-ins only (D18).

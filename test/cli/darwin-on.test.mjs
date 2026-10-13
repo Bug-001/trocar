@@ -18,7 +18,7 @@ const descs = await loadHarnesses()
 const codex = descs.find((d) => d.name === 'codex')
 
 /** One darwin `on` world: the codex .env a user has, the arch hooks of the flip's seam (`osRoots` a spy over a generated certificate), a daemon that answers.
- *  The fake arch carries NO kernel hooks (D47: darwin has none — no `prepare`, no `ensureKernel`; the plumbing's win32 twins are test/cli/win-plan.test.mjs's D44 cells).
+ *  The fake arch carries NO kernel hooks (D47: darwin has none — no `prepare`, no `ensureKernel`; the plumbing's win32 twins are test/cli/win-plan.test.mjs's).
  *  `harness` swaps the one harness in parts (the desktop-hint test runs claude-code); `optInHooks` gives the fake arch an optIn half (plan rows). */
 function darwinWorld({ osRoots, harness = codex, optInHooks = null } = {}) {
   const home = tmpDir('asight-darwin-on-')

@@ -204,7 +204,7 @@ export async function runEtl(records, connection, opts = {}) {
   const stats = { ingested: 0, skipped: 0, quarantined: 0 };
 
   // B-seq FIX: SEED the per-session resource_events.seq counter from the DB, so the seq
-  // stays CONTINUOUS across incremental batches (RFC 4.2:78 AC#2 / roadmap B-seq). A
+  // stays CONTINUOUS across incremental batches (RFC 4.2:78 AC#2). A
   // fresh Map()-per-run would restart at 0 for records skipped by the watermark, making
   // incremental != full. Seeding from max(seq)+1 makes batch-B resources continue the
   // sequence batch-A left off.
@@ -537,7 +537,7 @@ export async function runEtl(records, connection, opts = {}) {
 // reconstructable byte-for-byte from the source (AC-1 diff=0). `resolveSource(text_ref)`
 // may be sync or async and returns the verbatim block bytes for a stored text_ref.
 //
-// FIDELITY PASSTHROUGH (audit 2026-07-19 · invariant 4 保真边界写明) — NOT every resolvable body
+// FIDELITY PASSTHROUGH (invariant 4 保真边界写明) — NOT every resolvable body
 // is wire bytes. `resolveSource.detail(ref)` (src/query/source.mjs) classifies each one:
 //   · 'verbatim'     — D10 capture: req_body IS the string that went over the wire.
 //   · 'reserialized' — demo v0 capture: the request was stored PARSED, so the body is rebuilt

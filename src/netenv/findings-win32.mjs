@@ -4,7 +4,7 @@
 // out falls back to the cross-platform catalogue's, and an entry for a code the cross-platform catalogue does not have (`form-unsupported`, `form-path-unknown`, `engine-port-taken`,
 // `socktable-unavailable`) defines every field itself. `not-routed` splits by the `why` the group's plan gave (`system-proxy-pac` · `system-proxy-unreadable` · `upstream-unparseable`, whose
 // `credentials-in-system-proxy` detail says WinINET takes no login from that value); `upstream-protocol` has no row of its own — it is the `proxy-unsupported` row. Nothing here runs anything (R8)
-// and nothing here changes a system setting (W74). `Get-NetTCPConnection` never appears — a restricted token is refused it (4.8 E6) — the port check is always `netstat -ano -p TCP | findstr
+// and nothing here changes a system setting. `Get-NetTCPConnection` never appears — a restricted token is refused it (4.8 E6) — the port check is always `netstat -ano -p TCP | findstr
 // ":<port>"`. A JSON edit is a `gui` step worded as 记事本 (a PowerShell one-liner would reorder the user's JSON).
 
 const asight = (c, run) => ({ run, shell: c.sh })

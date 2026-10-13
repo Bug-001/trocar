@@ -116,7 +116,7 @@ export function formatWinPlan(p, { home = null, autostart = true, netenv = null,
     if (Array.isArray(prep.refuse.commands) && prep.refuse.commands.length) lines.push(`    手动替代(asight 不替你跑):${prep.refuse.commands.join(' 或 ')}`)
     return lines.join('\n')
   }
-  // the kernel line's shapes (4.8 §8 ⑥ / §11, D44): ready (the run location holds the pinned one — or the verified archive cache does, and it will be placed
+  // the kernel line's shapes: ready (the run location holds the pinned one — or the verified archive cache does, and it will be placed
   // from there, no network) or will-download (the plan's download line: version, the archive's size, the pinned sha256, the url's host — the download itself
   // happens only after the confirmation, in the write phase, and never in a dry run)
   if (prep && prep.kernel && home) {
@@ -279,7 +279,7 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
   const dropped = r.dropped_backups || []
   if (dropped.length) extra.push(`删了 ${dropped.length} 个备份(${t(path.dirname(dropped[0]))}/)`)
   if ((r.non_identical || []).length) extra.push(`其中不逐字节相同的(你在 asight 改过之后又改了它们,只撤了 asight 的部分): ${r.non_identical.map((n) => `${t(n.path)}(备份 ${t(n.backup)}:${n.reason})`).join('  ')}`)
-  if (dataNote) extra.push(dataNote) // a platform whose captures are not the collector's (the old capture: 1.6 §4) says where its own are
+  if (dataNote) extra.push(dataNote) // a platform whose captures are not the collector's (the old capture) says where its own are
   else if (r.purge_data) extra.push(past ? '采集数据已删(--purge-data)。' : '采集数据(capture-*.ndjson、flows/、audit/、replays/)将删(--purge-data)。')
   else extra.push(`${past ? '采集数据保留在' : '采集数据将保留在'} ${t(path.dirname(r.log || ''))}/ (flows/、audit/、capture-*.ndjson);--purge-data 才删。`)
   const header = !past ? 'asight 将卸载(本用户):先关掉全部 harness 的采集,再删 asight 自己的文件。' : r.ok === false ? 'asight 没有卸完(原因在下面)。' : 'asight 已卸载(本用户)。'

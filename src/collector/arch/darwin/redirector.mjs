@@ -3,7 +3,7 @@
 // doors, and the engine dials each connection's upstream itself — no forwarder process, no kernel config, no read-back.
 //
 // The contract's OS-neutral half — the doors' lifecycle, the accept-time socket identity, the splice/decrypt decision, the tracker's announce-and-wait seam
-// — lives in ONE shared core since the win32 twin conversion closed 4.9 OPEN 9: core/engine/door-redirector.mjs (`createDoorRedirector`). What this adapter
+// — lives in ONE shared core since the win32 twin conversion: core/engine/door-redirector.mjs (`createDoorRedirector`). What this adapter
 // adds is darwin's three backends and nothing else:
 //   · `matchForm` — darwin's forms table (forms.mjs): `ps` gives the whole command line in the same shot as the image, so a form that needs it either has it
 //     or there is none (no `pending`, 4.9 §1);

@@ -83,7 +83,7 @@ export default {
       // real app with Chromium's --proxy-server at this group's listener. `kind:'launcher'` stays a non-file kind (route-plan and forms treat every
       // non-file kind as a user-named item with no automatic entry): nothing is written for this group's routing outside the launcher item itself
       proxyEntry: { kind: 'launcher' },
-      auth: false, // Chromium ignores credentials embedded in --proxy-server, so the launcher's listener carries none (4.9 §6.4's decision): its authorization is the user's naming of the item (D43⑥), the loopback-only bind, and the engine's per-process judgment — an upstream that needs a login stays refused here (4.8 §3.2, FormUnsupportedError)
+      auth: false, // Chromium ignores credentials embedded in --proxy-server, so the launcher's listener carries none (4.9 §6.4's decision): its authorization is the user's naming of the item (D43⑥), the loopback-only bind, and the engine's per-process judgment — an upstream that needs a login stays refused here (4.8 §3, FormUnsupportedError)
       followsSystemProxy: { http: true, ws: true }, // measured (2026-10-12): the Chromium network service reads the system proxy on macOS — asight never writes it (D43⑥); the launcher's switch is the door
       optIn: [
         { item: 'keychain-login', scope: 'user',

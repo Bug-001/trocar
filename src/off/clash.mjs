@@ -1,9 +1,8 @@
-// clash.mjs (src/off) — taking asight's route out of Clash Verge / mihomo, and asking the core whether it is gone (RFC 1.6 §4 「旧 MITM 达到 off 保证的条件」, §6 「入账」「核对生效」;
-// D28 only the sentinel block goes; D29 the runtime is reloaded by payload and the live proxy list is read back). `asight off` (src/off/legacy.mjs) and `asight desktop off` (src/capture/
-// desktop-steer.mjs) run THIS code: there is one undo, not two. Moved here from src/capture/desktop-steer.mjs without a change of behaviour — the steer's `on` side (scriptBlock, injectScript,
+// clash.mjs (src/off) — taking asight's route out of Clash Verge / mihomo, and asking the core whether it is gone (only the sentinel block goes; the runtime is reloaded by payload and the live proxy list is read back). `asight desktop off` (src/capture/
+// desktop-steer.mjs) runs THIS code. Moved here from src/capture/desktop-steer.mjs without a change of behaviour — the steer's `on` side (scriptBlock, injectScript,
 // spliceRuntime) stays there, and the old names are re-exported from it. Imports only node:* and src/off (0.1 §2: the standalone ~/.asight/bin/asight-off is made of this directory).
 //   pure          stripBlock · stripRuntime · stripMergeLegacy — the text of a file with asight's route taken out, every other byte as it was
-//   the core      knownMihomoSocks · mihomoSockCandidates · discoverMihomoSock · probeVersion · mihomoPayloadReload · probeProxy — the control socket is discovered, never hard-coded (D29)
+//   the core      knownMihomoSocks · mihomoSockCandidates · discoverMihomoSock · probeVersion · mihomoPayloadReload · probeProxy — the control socket is discovered, never hard-coded
 //   makeClash     the files of one Verge install and the core behind them: read, status, off (strip → reload → verify), with the reload and the probe replaceable by a test
 import nodeFs from 'node:fs'
 import http from 'node:http'
@@ -28,7 +27,7 @@ export function stripBlock(text) {
 }
 
 /** Removes EVERY atrace route from a runtime yaml: our sentinel-marked splice, AND the unmarked copy the durable Script.js puts there at each Verge regen (serde_yaml block style, `- name: atrace-mitm`
- *  + `- <DESKTOP_RULE>`). Stripping only the sentinel form was D29's bug: after any regen, on() spliced a second proxy of the same name (mihomo 400 "duplicate name") and off() pushed a config that
+ *  + `- <DESKTOP_RULE>`). Stripping only the sentinel form was a bug: after any regen, on() spliced a second proxy of the same name (mihomo 400 "duplicate name") and off() pushed a config that
  *  still routed into the MITM. Only the top-level `proxies:` items named EXACTLY atrace-mitm and `rules:` items equal to DESKTOP_RULE go; every other byte stays. */
 export function stripRuntime(yaml) {
   const lines = stripBlock(yaml).split('\n')
@@ -69,7 +68,7 @@ function isOurRuleItem(line) {
   return new RegExp(`,\\s*${clashEscape(PROXY_NAME)}\\s*(?:,\\s*no-resolve\\s*)?$`).test(text)
 }
 
-/** The demo's atrace-desktop wrote `prepend-proxies:` / `prepend-rules:` blocks into Merge.yaml (inert on Verge 2.5.1). Takes out ASIGHT'S items of those two lists and nothing else (D28: every other
+/** The demo's atrace-desktop wrote `prepend-proxies:` / `prepend-rules:` blocks into Merge.yaml (inert on Verge 2.5.1). Takes out ASIGHT'S items of those two lists and nothing else (every other
  *  byte stays): a proxy named exactly atrace-mitm, a rule whose target is atrace-mitm. A list's header goes with its last item; a list that holds anything else — the user's own `prepend-rules`
  *  — keeps its header and its items, and a Merge.yaml with none of asight's items comes back byte for byte. (The old version took both lists whole, whatever they held.) */
 export function stripMergeLegacy(yaml) {
@@ -108,7 +107,7 @@ export function stripMergeLegacy(yaml) {
   return out.join('\n')
 }
 
-// ── the mihomo control socket: discovered, never hard-coded (D29) ────────────────────────────────
+// ── the mihomo control socket: discovered, never hard-coded ────────────────────────────────
 // Where the live core listens depends on how Verge runs it: 2.5.x service mode = clash-verge-service starts mihomo as root with `-ext-ctl-unix /var/run/clash-verge-service/users/<uid>/…`; older
 // service mode used /tmp/verge/…; sidecar mode uses the runtime yaml's external-controller-unix (which service mode leaves STALE). So: ask the running process first, then the yaml, then the
 // known spots — and only trust a candidate that actually answers.
@@ -199,7 +198,7 @@ export const REACTIVATE_HINT = 'open Clash Verge → Profiles and click the flam
 
 /**
  * The files of one Clash Verge install and the core that runs them. Everything that touches the world is a parameter a test replaces: `fs`, `psText` (the process listing the socket is looked for in),
- * `knownSocks`, `mihomoReload(yaml)`, `probeLive()`, `exec` (the runner of `ps`), `env`. The live control socket (D29): `sock` pins it; otherwise it is discovered lazily — only by the DEFAULT reload /
+ * `knownSocks`, `mihomoReload(yaml)`, `probeLive()`, `exec` (the runner of `ps`), `env`. The live control socket: `sock` pins it; otherwise it is discovered lazily — only by the DEFAULT reload /
  * probe, so a caller that injects both never has the real machine probed. A found socket is remembered; a miss is retried next call (Verge may just be starting). ASIGHT_MIHOMO_SOCK in `env` pins it
  * too (unusual installs; and CLI tests, so a sandboxed run can never reach the developer's own core). No Verge runtime config for this HOME → there is no Verge to look for.
  * → { platform, scriptPath, runtimePath, mergePath, read, mihomoReload, probeLive, located, status, off }
@@ -246,9 +245,9 @@ export function makeClash({ fs = nodeFs, scriptPath, runtimePath, mergePath, soc
   }
 
   // off() MUST report the REAL teardown outcome. A failed undo that reports ok:true tells the user monitoring is off while CC-Desktop traffic is STILL routed into the MITM — the worst shape of failure
-  // for a tool whose undo is first-class (4.1:64 「off 对称 … 零残留」). The undo strips ONLY the sentinel block (D28). Everything outside it — the user's own global-Script logic, including rules
+  // for a tool whose undo is first-class. The undo strips ONLY the sentinel block (1.6 R2). Everything outside it — the user's own global-Script logic, including rules
   // added while capture was on — stays byte-for-byte. Never roll the whole file back to a snapshot: that silently deletes whatever the user changed since it was taken.
-  // The file having no block does not skip the reload (1.6 §6 「核对生效」): the runtime may still hold the route (a regen wrote it there), so it is stripped, reloaded and read back all the same.
+  // The file having no block does not skip the reload: the runtime may still hold the route (a regen wrote it there), so it is stripped, reloaded and read back all the same.
   async function off() {
     let restoreError = null
     if (fs.existsSync(scriptPath)) {

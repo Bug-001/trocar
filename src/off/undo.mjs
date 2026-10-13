@@ -1,5 +1,5 @@
 // undo.mjs (src/off) — take asight's trust entries back out, for all harnesses or some, by the 4.6 undo order (RFC 4.6 §安装清单与卸载「撤销顺序」
-// 第 1–5 步 and「按 harness 撤」, 1.6 §1.5 / R2 / R3, D28, D39). This is `asight off`'s file work and `asight uninstall`'s (install.mjs calls it for
+// 第 1–5 步 and「按 harness 撤」, 1.6 §1.5 / R2 / R3, D39). This is `asight off`'s file work and `asight uninstall`'s (install.mjs calls it for
 // every harness); the standalone ~/.asight/bin/asight-off is made of src/off alone, so it needs nothing outside this directory (0.1 §2).
 //
 //   1  the config entries (JSON keys, dotenv blocks), each by the rule for one file (journal.mjs undoEntry): back byte for byte when untouched,
@@ -62,7 +62,7 @@ export async function undoHarnesses(args) {
   }
 }
 
-/** `uninstall`'s kernel removal (4.8 §531 · §4.2; D44 ②): the exe, `LICENSE-mihomo.txt` and `SOURCE-mihomo.txt` beside it, the kernel directory, and the
+/** `uninstall`'s kernel removal (4.8 §8): the exe, `LICENSE-mihomo.txt` and `SOURCE-mihomo.txt` beside it, the kernel directory, and the
  * verified-archive cache (`kernel-archive/`) — the whole thing asight's `on` placed or downloaded. A file the system still holds (the kernel is running, a
  * drain is on) stays and the reason says so: asight does not stop it by itself (W28, the entries-kind branch's rule from day one). */
 const removeKernelCopy = (exe, fs) => {

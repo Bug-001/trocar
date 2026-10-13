@@ -1,14 +1,13 @@
 // no-vpn-writes.test.mjs — 4.7 N15 (D43): asight has no write path into a VPN / proxy product's data directory. Two scans that can see their target, because a count of
 // write-function names is never zero (asight writes its own files) and so can never be the test:
 //   (a) static: a module that names a product's data directory, and anything under src/netenv/, calls a write function only inside a helper the allowlist names; the Verge adapter exports no write
-//       function; `own: true` (a controller client that may write) appears only in forwarder.mjs;
+//       function; no module passes `own: true` to a controller client (it has no writable mode);
 //   (b) runtime: detect and the adapter's reads, run over a recording fs in a sandbox, put no write under any product directory.
-// The allowlist is by the NAME of one helper per legitimate writer (4.7 N15): `writeNetenv` writes ~/.asight/netenv.json (it is the CLI's, src/netenv/index.mjs, T9). The helpers of arch/win32 that write
-// asight's own directory are registered by name in OWN_WRITERS when their files exist (Tasks 7, 8, 9, 14) ONLY if that module names a product directory or sits in src/netenv/: this scan watches nothing else.
-// Those writers are held by the runtime half ((b), extended by Tasks 8(c), 9(b) and 14 with `on`, `off` and `uninstall`) and later by the lab's W53. The Verge adapter has no write site (Task 6r took the
-// last two out: it only reads), so it is not on the list.
-// The OLD capture is exempt as a whole (OLD_CAPTURE: src/capture/ and the src/off/legacy*.mjs files): its Clash steer writes Verge's Script.js and merge file by design until it is retired, which D43 and 4.7 §4
-// leave to 1.6 §4 and §6 (the old Clash block is booked there). The exemption is a pinned list, not a switch.
+// The allowlist is by the NAME of one helper per legitimate writer (4.7 N15): `writeNetenv` writes ~/.asight/netenv.json (it is the CLI's, src/netenv/index.mjs). The helpers of arch/win32 that write
+// asight's own directory are registered by name in OWN_WRITERS ONLY if that module names a product directory or sits in src/netenv/: this scan watches nothing else.
+// Those writers are held by the lab's W53 (4.8). The Verge adapter has no write site (it only reads), so it is not on the list.
+// The OLD capture is exempt as a whole (OLD_CAPTURE: src/capture/): the Clash steer in src/capture/desktop-steer.mjs writes Verge's Script.js and merge file by design until those files
+// are swept (4.7 N15). The exemption is a pinned list, not a switch.
 // Two planted counter-examples turn each scan red.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -32,7 +31,7 @@ function walk(dir) {
 }
 const SOURCES = walk(path.join(ROOT, 'src'))
 
-// The old capture is exempt as a WHOLE, by file (the shared pinned list is fixtures/old-capture.mjs, so the D43 scan of no-sysproxy-no-elevation.test.mjs exempts the same two and nothing else).
+// The old capture is exempt as a WHOLE, by file (the shared pinned list is fixtures/old-capture.mjs, so the D43 scan of no-sysproxy-no-elevation.test.mjs exempts the same files and nothing else).
 export { OLD_CAPTURE, isOldCapture } from './fixtures/old-capture.mjs'
 import { OLD_CAPTURE, isOldCapture } from './fixtures/old-capture.mjs'
 
@@ -78,8 +77,8 @@ test('N15 (a) a module that names a product data directory, or sits in src/neten
   assert.ok(SOURCES.filter((f) => !isOldCapture(rel(f))).length > 50, 'and the exemption is the old capture\'s, not the tree\'s: the scan still sees the rest of src/')
 })
 
-// What the old capture's undo looked like (the shape src/off/legacy.mjs had: it names Verge's data directory; the file went with the old capture, D39⑥ executed 2026-10-11 —
-// the excerpt stays as the shape the exemption must cover in the files that remain) and what the one writer of ~/.asight/netenv.json looks like (src/netenv/index.mjs).
+// What the old capture's undo looks like (a module that names Verge's data directory and writes: the shape the exemption must cover in src/capture/) and what the one writer of
+// ~/.asight/netenv.json looks like (src/netenv/index.mjs).
 const OLD_UNDO = [
   "import nodeFs from 'node:fs'",
   'export function legacyPaths({ home }) {',
@@ -108,19 +107,19 @@ const NETENV_WRITER = [
   '}',
 ].join('\n')
 
-test('N15 (a) the writers are known: the old capture\'s remaining files are exempt as files of the old capture, `writeNetenv` is the one named helper of src/netenv, and neither opens a door elsewhere', () => {
-  assert.deepEqual(violations('src/capture/desktop-steer.mjs', OLD_UNDO), [], 'src/capture/desktop-steer.mjs names Verge\'s directory and writes: the old capture\'s own (D43, 4.7 §4; the src/off/legacy*.mjs leg of the exemption went with those files, D39⑥ executed 2026-10-11)')
+test('N15 (a) the writers are known: the old capture\'s files are exempt as files of the old capture, `writeNetenv` is the one named helper of src/netenv, and neither opens a door elsewhere', () => {
+  assert.deepEqual(violations('src/capture/desktop-steer.mjs', OLD_UNDO), [], 'src/capture/desktop-steer.mjs names Verge\'s directory and writes: the old capture\'s own (D43, 4.7 §4)')
   assert.equal(violations('src/off/win32.mjs', OLD_UNDO).length, 3, 'the same text in a new module is three writes')
-  assert.equal(violations('src/collector/arch/win32/forwarder.mjs', OLD_UNDO).length, 3)
+  assert.equal(violations('src/collector/arch/win32/redirector.mjs', OLD_UNDO).length, 3)
   assert.deepEqual(violations('src/netenv/index.mjs', NETENV_WRITER), [], 'the CLI\'s writer of ~/.asight/netenv.json is `writeNetenv` (4.7 N15 names it)')
   assert.equal(violations('src/netenv/index.mjs', NETENV_WRITER.replace('writeNetenv', 'persist')).length, 5, 'any other name is five writes in src/netenv')
 })
 
-test('N15 (a) the old-capture exemption is a pinned list of one — src/capture/ — and nothing that only looks like it (the src/off/legacy*.mjs leg went with the files, D39⑥ executed 2026-10-11)', () => {
+test('N15 (a) the old-capture exemption is a pinned list of one — src/capture/ — and nothing that only looks like it', () => {
   assert.equal(OLD_CAPTURE.length, 1, 'one more entry is a decision, taken here and in 4.7 N15, not a drive-by')
   for (const f of ['src/capture/desktop-steer.mjs', 'src/capture/deep/x.mjs']) assert.ok(isOldCapture(f), f)
   for (const f of ['src/off/clash.mjs', 'src/off/win32.mjs', 'src/off/win32-optin.mjs', 'src/off/legacy.mjs', 'src/off/legacy-cli.mjs', 'src/off/legacy/x.mjs', 'src/off/legacy.mjs.bak', 'src/off/xlegacy.mjs', 'src/netenv/legacy.mjs', 'src/netenv/index.mjs',
-    'src/capturer/x.mjs', 'src/collector/capture/x.mjs', 'src/collector/arch/win32/forwarder.mjs', 'test/off/legacy.mjs']) assert.ok(!isOldCapture(f), `${f}: a future file of that name is scanned, not exempted by a glob whose files are gone`)
+    'src/capturer/x.mjs', 'src/collector/capture/x.mjs', 'src/collector/arch/win32/redirector.mjs', 'test/off/legacy.mjs']) assert.ok(!isOldCapture(f), `${f}: a file of that name is scanned, not exempted by a glob`)
 })
 
 test('N15 (a) planted counter-example: a module that writes a Verge path is red; so is a write in any other helper of src/netenv, and the same code in an allowlisted helper is not', () => {
@@ -150,11 +149,11 @@ test('N15 (a) planted counter-example: a write through any receiver or an alias 
   assert.deepEqual(at("import { writeFileSync as wf } from 'node:fs'\nexport function writeNetenv(p) { wf(p, 'x') }\n"), [], 'and the allowlisted helper may write through an alias too')
 })
 
-// the one place that makes a controller client that may write to a core: the own kernel's supervisor (4.7 §3.4) — win32's and darwin's forwarder are the one writer per platform. Other `own: true` in the tree (the tracker's proxy settings) are another thing.
+// The controller client has no writable mode (D47: nothing of asight owns a core), so no module may ask for one. Other `own: true` in the tree (the tracker's proxy settings) are another thing.
 const writesToCore = (src) => callArgs(src, ['createController', 'makeClient']).some((a) => /\bown\s*:\s*true\b/.test(a))
-test('N15 (a) `createController({ own: true })` (a client that may write to a core) appears only in forwarder.mjs', () => {
+test('N15 (a) no module passes `own: true` to `createController` (a client that may write to a core)', () => {
   const users = SOURCES.filter((f) => writesToCore(fs.readFileSync(f, 'utf8'))).map(rel)
-  assert.deepEqual(users.filter((f) => f !== 'src/collector/arch/win32/forwarder.mjs' && f !== 'src/collector/arch/darwin/forwarder.mjs'), [])
+  assert.deepEqual(users, [])
   assert.ok(writesToCore('const c = createController({ endpoint, secret, own: true })'), 'and the check can see one')
   assert.ok(writesToCore('makeClient({\n  endpoint,\n  own:true,\n})'))
   assert.ok(!writesToCore('createController({ endpoint, own: false }); const p = { own: true }'), 'another `own: true` in the same file is another thing')
@@ -220,11 +219,6 @@ test('N15 (b) detect and every read of the Verge adapter run over a recording fs
   assert.deepEqual(snapshot(roaming), before)
   assert.ok(PRODUCTS_WIN32.some((p) => p.dataDir), 'the table still names a data directory to protect')
 })
-
-// The runs that do not exist for Windows yet, each with its owner in the plan (2026-10-07-win-collector.md): a deferral that is only a comment does not show up in the test output (audit F9).
-test.todo('N15 (b) the `on` run (plan Task 8(c)): with the injected win32 platform, `on` over a recording fs puts no write under a product directory')
-test.todo('N15 (b) the `off` and `uninstall` runs (plan Task 9(b)): with the injected win32 platform, both over a recording fs, `undoWin32` included, put no write under a product directory')
-test.todo('N15 (b) the opt-in runs (plan Task 14): `on --opt-in` for every form and the `off` after it, over a recording fs, put no write under a product directory')
 
 test('N15 (b) the recording fs sees every way to write: sync, callback and promises forms, an `open` with a write flag (a string or a number), a write on its fd, a stream; and not a read', async () => {
   const dir = tmpDir('asight-rec-')

@@ -1,7 +1,6 @@
 // entries.mjs — the proxy entries' writer, undo and check (RFC 4.9 §1 · §2.1; the mechanism and its reasons are 4.8 §2.1 · §2.3's — W12's entry half, W19's combined case, plan Task 8(c)).
 //
-// This is the darwin same-logic copy of `arch/win32/entries.mjs` (4.9 §1: pure platform-free logic, copied per the development
-// boundary; the hoist into `core/` is coordination with the win line's merge, OPEN 3). If you change what the file means, change both.
+// This is the darwin same-logic copy of `arch/win32/entries.mjs` (4.9 §1: pure platform-free logic, kept as a copy). If you change what the file means, change both.
 //
 // The redirector decides WHEN these run (only after the kernel has read the group back as on; undone the other way round); this file is WHAT
 // happens then: `forms.mjs proxyEntries`' edits written through the install journal (`applyJsonKey` / `applyTextEntry`, so the record, the

@@ -1,5 +1,4 @@
-// events.mjs — the old capture's durable failure records (D38, transitional — deleted with the old capture; RFC 4.1
-// 「过渡期采集源的失败也不静默」): one JSON line per failure or lifecycle step in ~/.asight/logs/mitm-events.ndjson,
+// events.mjs — the old capture's durable failure records (D38, transitional — deleted with the old capture): one JSON line per failure or lifecycle step in ~/.asight/logs/mitm-events.ndjson,
 // the shape of the collector's flows/ event lines ({ts, event, where?, code?, reason, …}; the closed names live in
 // src/health/codes.mjs, which src/capture may not import — test/health/codes.test.mjs checks these writers against
 // it). Not in the ~/.asight top level, so the board never reads it as envelopes; GET /api/capture-health reads it

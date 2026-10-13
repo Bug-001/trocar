@@ -11,7 +11,7 @@
 // global Script instead runs LAST on the fully-assembled config on EVERY enhance (subscription /
 // profile update, restart), so imperatively unshifting the proxy + rule both SURVIVES a regen and
 // is RELIABLY applied. We also hot-reload mihomo once so it goes live immediately, without waiting
-// for a natural regen (D29: discover the live control socket, reload by `{payload}`, write no file).
+// for a natural regen (discover the live control socket, reload by `{payload}`, write no file).
 // mihomo validates a reload and keeps the OLD config on error → a bad edit can't break the VPN.
 // macOS-only: non-darwin refuses explicitly (D22 — not a cross-OS contract).
 
@@ -23,7 +23,7 @@ import {
   discoverMihomoSock, mihomoPayloadReload, makeClash, reloadOk, reloadWhy, REACTIVATE_HINT,
 } from '../off/clash.mjs';
 
-// The strip / reload / verify half and the socket discovery live in src/off/clash.mjs (RFC 1.6 §4: `asight off` and `desktop off` run one undo); the names tests and other modules import from here stay.
+// The strip / reload / verify half and the socket discovery live in src/off/clash.mjs (`desktop off` runs it); the names tests and other modules import from here stay.
 export { PROXY_NAME, DESKTOP_RULE, stripBlock, stripRuntime, stripMergeLegacy, knownMihomoSocks, mihomoSockCandidates, discoverMihomoSock, mihomoPayloadReload, REACTIVATE_HINT };
 const BEGIN = `// ${MARK_BEGIN}`;  // Script.js (JavaScript)
 const END = `// ${MARK_END}`;
@@ -104,7 +104,7 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
   const mergePath = deps.mergePath || path.join(vergeDir, 'profiles', 'Merge.yaml');
   const NO_OP = '// Define main function (script entry)\nfunction main(config, profileName) { return config; }\n';
 
-  // The files of this Verge install and the core behind them (src/off/clash.mjs): the live control socket is discovered there (D29), `read` refuses a file it cannot read, and `status` / `off` are the
+  // The files of this Verge install and the core behind them (src/off/clash.mjs): the live control socket is discovered there, `read` refuses a file it cannot read, and `status` / `off` are the
   // undo `asight off` runs too. deps.sock / psText / knownSocks / mihomoReload / probeLive are that module's own seams.
   const clash = makeClash({ fs, scriptPath, runtimePath, mergePath, sock: deps.sock, psText: deps.psText, knownSocks: deps.knownSocks, mihomoReload: deps.mihomoReload, probeLive: deps.probeLive, exec: deps.exec, env: deps.env || process.env, platform });
   const { read, mihomoReload, status } = clash;
@@ -112,7 +112,7 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
   async function on({ port = 9899 } = {}) {
     // 1. DURABLE: augment the global Script (rebuild from the clean original each time → idempotent).
     //    READ FIRST: a present-but-unreadable Script.js throws here, before anything is written.
-    //    No whole-file backup (D28): the undo is stripping our sentinel block, not a snapshot restore.
+    //    No whole-file backup (1.6 R2): the undo is stripping our sentinel block, not a snapshot restore.
     const original = read(scriptPath, null);
     const base = stripBlock(original ?? NO_OP) || NO_OP;
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true });

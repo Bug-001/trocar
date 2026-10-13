@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { analyze } from '../../src/view/analyze.mjs';
 import { fixtureGate } from '../helpers/fixture.mjs';
 
-// ── BUG 1 (audit 2026-07-19) — analyze() silently DROPPED every non-200 call ──────────
+// ── BUG 1 — analyze() silently DROPPED every non-200 call ──────────
 // The admission filter only let through a parsed 200 (or a record carrying an `error` key),
 // so the spec's `status≠200 → 红柱` was unreachable BY CONSTRUCTION: the failed call never
 // reached the timeline at all. Meanwhile the board's errStats() counts non-200 straight off

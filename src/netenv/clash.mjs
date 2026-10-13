@@ -2,7 +2,7 @@
 // port, and which harnesses' traffic goes through it. Read-only. It reads four things and nothing else:
 //   verge.yaml        enable_tun_mode, enable_system_proxy, verge_mixed_port          (Verge's own switches)
 //   clash-verge.yaml  mode, mixed-port, external-controller-unix                      (the runtime config the core was started with: also holds `secret` and the nodes, which are never read)
-//   GET /version and GET /configs on the core's control socket (found the way the old steer finds it: the process's `-ext-ctl-unix`, the runtime file, the known places; D29)
+//   GET /version and GET /configs on the core's control socket (found the way the old steer finds it: the process's `-ext-ctl-unix`, the runtime file, the known places)
 //   `ps -axww -o command=`  for the socket path only
 // Each value is picked by name out of the file or the JSON; the `secret`, the subscription address (profiles.yaml is never opened), the nodes and the proxy URLs are never held, so no
 // error text, reason or result can carry them. A value that could not be read is 'unknown' with the file and the errno in the reason, never false and never absent (R11).

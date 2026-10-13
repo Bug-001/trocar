@@ -9,7 +9,8 @@ stores the raw bytes verbatim, and replays them step by step. Nothing to integra
 
 Observe-only today: it never originates a request and never uses your app's token on its own, and it binds loopback only. A request is only ever changed or re-sent by you, on purpose (D30; none of that is built yet).
 
-Supported harnesses: **Claude Code** (CLI + Desktop), **Codex**, **OpenCode**.
+The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**, **DeepSeek `dsh`**, **Hermes** and
+**Z-Code**. A form that has not been shown to capture verbatim on an OS is not claimed here.
 
 ## See it in 30 seconds, with no capture and no setup
 
@@ -27,13 +28,15 @@ your own. Everything below is about capturing your own traffic.
 **"Why did my prompt cache break?"** asight finds the first block where this call's context diverged
 from the previous one, classifies *why* — tools array reordered · JSON keys reordered · compaction
 rewrote history · a shared-prefix block changed in place — and attributes it: **yours**, **the
-harness**, or **provider-excluded**. Each cause carries a fix hint and the byte offset inside the
-diverging block. "Emit the tools array in a stable order" is a one-line fix you cannot find without
-seeing the wire.
+harness**, or **provider-excluded**. Each cause carries a fix hint and the character offset inside the
+diverging block's rebuilt text. The cause is a structural estimate from comparing the two calls' blocks, not the
+provider's real boundary — `usage` stays the numeric truth. "Emit the tools array in a stable order" is a one-line
+fix you cannot find without seeing the wire.
 
-**"My prefix was byte-identical — why was I billed a miss?"** asight hashes the reusable prefix over
-verbatim bytes and cross-checks it against what the provider's `usage` actually credited.
-`read=0, write>0` is labelled a TTL rebuild, not a bug; `read=0, write=0` on an identical prefix is
+**"My prefix looked identical — why was I billed a miss?"** asight hashes the reusable prefix (SHA-256
+over each block's canonical text — tools re-serialized, messages rebuilt from their parsed blocks — not over the
+wire bytes) and cross-checks it against what the provider's `usage` actually credited.
+`read=0, write>0` is labelled a TTL rebuild, not a bug; `read=0, write=0` on a prefix that hashes identical is
 flagged as a provider contradiction. The structural guess and the numeric truth are shown separately
 and never conflated.
 
@@ -68,8 +71,8 @@ asight uninstall --purge-data  # also deletes capture data (asks first)
 ## What you see
 
 No ETL, no database, no build step — the board reads the NDJSON directly (`asight serve` →
-http://127.0.0.1:9800). With no `--source` it reads the capture directory, so **Claude Code, Codex
-and OpenCode sessions appear side by side on one board** (`asight shard` groups the older capture
+http://127.0.0.1:9800). With no `--source` it reads the capture directory, so **the sessions of every
+captured harness appear side by side on one board** (`asight shard` groups the older capture
 streams by session into `~/.asight/sessions/`, which the board and `asight raw seal` also read). It
 also reads the per-user process collector's `~/.asight/collector/capture-*.ndjson` when that
 directory exists (its `flows/`, `audit/` and `replays/` are not envelopes and are not shown). Pass
@@ -80,7 +83,8 @@ wire body) · **cache overlay** (real `cache_read` / `cache_write` counts, the m
 and fix hint) · **reconstructed streamed reply** with usage and an estimated cost · **resource
 lifecycle** — which files entered context, when, via which tool *(Claude Code only — see Limits)*.
 
-Cost is a local, editable estimate in `~/.asight/pricing.json`; providers return usage, never dollars.
+Cost is a local, editable estimate in `~/.atrace/pricing.json` (or the file `ASIGHT_PRICING` names; `atrace` is this
+project's v0 name, kept for what is already on disk); providers return usage, never dollars.
 
 What the board cannot vouch for, it labels on the call (raw panel and the top of the context window):
 - **不完整 · partial context**: what is shown is not the whole context the model saw (an earlier record is
@@ -138,7 +142,7 @@ only `sudo`, and it only sets capability bits on one root-owned file). What it c
 is in the table further down; `off` takes every entry back out.
 
 `asight doctor` answers four questions: am I capturing, is it correct, did credentials leak, is machine
-TLS intact — the last one is what `verify` used to be (the CA is user-level only, with zero machine-wide trust).
+TLS intact (the CA is user-level only, with zero machine-wide trust).
 
 **Your captures are full plaintext transcripts.** Credential headers (`authorization`, `x-api-key`,
 `cookie`, `proxy-authorization`) are stored **verbatim**, like the request bodies: a byte-faithful
@@ -160,42 +164,39 @@ before it changes a file of yours it keeps a copy in `~/.asight/backup/`. `on` n
 capture that is running: the processes that need a restart are listed. Name an agent (`asight off claude-code`)
 to switch only that one.
 
-On Linux the capture is a process collector (RFC 4.6, D31) — Claude Code, Codex (its WebSocket transport is
-recorded call by call), OpenCode, DeepSeek `dsh`, Kimi Code, Hermes and Z-Code. An
-eBPF helper steers only the connections of agent processes you run to a loopback engine, which decrypts
-only for agents that trust the collector CA. Everything else, including other users, goes direct. On
-Windows (RFC 4.8) the same harnesses are captured in proxy mode — Kimi Code only through its opt-in shims.
-`asight on` prints its plan first — one row per agent group with its upstream, Codex's WebSocket, and
-the autostart task; then it writes the proxy and trust entries in the
-agents' own config files (your prior values recorded, `off` restores them). The forms that reach further
-are opt-in, each named with what it touches — `asight on <harness> --opt-in <form>`: Claude Desktop's
-user-level certificate store, the Kimi / OpenCode PATH shims, the Kimi VS Code extension capture, the
-OpenCode and Z-Code desktop launchers and app settings (the machine-level ones run in the administrator
-step asight shows, never with a password field of its own). `asight off` runs the same undo as on Linux:
-the supervisor and daemon stopped, every entry and opt-in item taken out — and, as the plan says
-up front, an agent started while it was on still passes through its group's door (forwarded untouched) until
-you restart it. On Windows and macOS (RFC 4.8 / 4.9, D47 and its win32 twin) the proxy is the collector's
-own engine — one loopback door per agent group, loopback only, no TUN, never the system proxy, nothing
-written into your VPN; nothing is downloaded and there is no second kernel at all (`asight on`'s first
-write is the CA, as on Linux), and the connection's identity is read from the socket at accept time
-(a targeted owner lookup per connection) rather than from a process scan.
-`asight on` prints its plan first — one row per agent group with its upstream (the engine dials it
-for each connection; loopback only, no TUN, never the system proxy, nothing written into your VPN),
-Codex's WebSocket, and the autostart LaunchAgent (`com.asight.collector` in `~/Library/LaunchAgents`,
-`RunAtLoad` + `KeepAlive` — logout stops it; no linger on macOS); then it writes the proxy and trust
-entries in the
-agents' own config files (your prior values recorded, `off` restores them; the first install's combined
-bundles carry the keychain-administered roots, so an enterprise proxy's upstream still verifies on day
-one). The forms that reach further are opt-in, each named with what it touches — `asight on <harness>
---opt-in <form>`: Kimi / OpenCode's launch shims and their one marked PATH line in the zsh rc files
-(reference-counted: `off kimi-code` does not break opencode), and Claude Desktop's certificate in the
-login keychain (`security add-trusted-cert` in the user domain — the OS's own authorization dialog
-carries the consent; found and removed by its SHA-256 fingerprint, never the common name). If the
-engine dies, launchd pulls the daemon (and with it the doors) back up; an agent's own retry carries it
-over the gap — there is no second fallback layer. `asight off`
-runs the same undo: the LaunchAgent booted out before the daemon is stopped (launchd's `KeepAlive`
-really does pull a killed daemon back), every entry and opt-in item taken out. The old capture's own
-commands (`desktop`, `monitor`, `capture`, `mitm`) are gone — see *The old capture is retired* below.
+The collector has descriptors for seven harnesses (D37) — Claude Code, Codex (its WebSocket transport is recorded
+call by call), OpenCode, DeepSeek `dsh`, Kimi Code, Hermes and Z-Code — on all three platforms. Which form of which one
+has been shown to capture verbatim on which platform is the matrix in
+the capture matrix: each cell is a PASS with its evidence, an N/A with its reason, or
+not yet tested. Read the cell before trusting a form.
+
+**Linux** is driver mode (RFC 4.6, D31): an eBPF helper steers only the connections of agent processes you run to a
+loopback engine, which decrypts only for agents that trust the collector CA. Everything else, including other users,
+goes direct.
+
+**Windows and macOS** are proxy mode (RFC 4.8 / 4.9, D47 and its win32 twin). The proxy is the collector's own engine:
+one loopback door per agent group, loopback only, no TUN, never the system proxy, nothing written into your VPN. The
+engine dials each connection's upstream itself, and the connection's identity is read from the socket at accept time
+(a targeted owner lookup per connection) rather than from a process scan. `asight on` prints its plan first — one row
+per agent group with its upstream, Codex's WebSocket, and the autostart unit — then writes the proxy and trust entries
+in the agents' own config files (your prior values recorded, `off` restores them). The forms that reach further are
+opt-in, each named with what it touches — `asight on <harness> --opt-in <form>`. `asight off` runs the same undo as on
+Linux: the daemon stopped, every entry and opt-in item taken out — and, as the plan says up front, an agent started
+while it was on still passes through its group's door (forwarded untouched) until you restart it.
+
+- *Windows*: the autostart unit is a scheduled task, run by a supervisor that re-pulls the daemon; `asight off` stops
+  the supervisor and the daemon. Opt-in forms: Claude Desktop's user-level certificate store, the Kimi / OpenCode PATH
+  shims, the Kimi VS Code extension capture, the OpenCode and Z-Code desktop launchers and app settings (the
+  machine-level ones run in the administrator step asight shows, never with a password field of its own).
+- *macOS*: the autostart unit is the LaunchAgent `com.asight.collector` in `~/Library/LaunchAgents` (`RunAtLoad` +
+  `KeepAlive` — logout stops it; no linger on macOS). The first install's combined bundles carry the
+  keychain-administered roots, so an enterprise proxy's upstream still verifies on day one. Opt-in forms: Kimi /
+  OpenCode's launch shims and their one marked PATH line in the zsh rc files (reference-counted: `off kimi-code` does
+  not break opencode), and the launchers that start a desktop app through the engine's door — Claude Desktop's, with its
+  certificate in the login keychain (see *Claude Desktop* below), and DeepSeek `dsh`'s; the plan lists exactly which
+  apply. If the engine dies, launchd pulls the daemon (and with it the doors) back up; an agent's own retry carries it
+  over the gap. `asight off` boots the LaunchAgent out before the daemon is stopped (launchd's `KeepAlive` really does
+  pull a killed daemon back).
 
 What it keeps (D40): for a trusted agent it decrypts **every** host it talks to by default (policy `all`), not just the
 model API, and stores every call verbatim — telemetry, uploads, account calls, session sync, downloads — so you can see
@@ -209,11 +210,11 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 
 | what | where | undo |
 |---|---|---|
-| capability helper (once per machine, `sudo`) | `/usr/local/libexec/asight/asight-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo asight setup-helper --remove` |
+| capability helper (Linux, once per machine, `sudo`) | `/usr/local/libexec/asight/asight-redirector`, root 0755, file caps `cap_bpf,cap_net_admin,cap_perfmon` — no setuid, no account, no system unit | `sudo asight setup-helper --remove` |
 | collector CA (per user, in **no** trust store) | `~/.asight/collector/ca/` (key 0600) | `asight uninstall` |
 | Claude Code trust entry | `env.NODE_EXTRA_CA_CERTS` in `~/.claude/settings.json` → the collector CA, or → `~/.asight/collector/ca/extra-cc.pem` (your existing CA's certificates + the collector CA) when you already set one | `asight off` removes only that key, or puts your value back |
 | the other agents' trust entries | OpenCode: plugin `~/.config/opencode/plugins/asight-ca.js`; dsh: plugin dir `~/.asight/collector/plugins/dsh/` + a sentinel row in its patch file; Kimi Code: launch shim `~/.asight/collector/bin/kimi` + one sentinel `PATH` line after the installer's in your shell rc; Hermes / Codex: a sentinel block atop their `.env` (`SSL_CERT_FILE` → `combined-<agent>.pem`); Z-Code: `network.caCertFile` in `~/.zcode/cli/config.json` → `combined-z-code.pem`. A combined bundle = Node + OS roots + the CAs that agent already used + the collector CA | `asight off` takes out only asight's text or key and removes asight's files (a bundle a running agent still uses is kept, without the collector CA, until the next `off` or `uninstall`) |
-| autostart unit (per user) | `~/.config/systemd/user/asight-collector.service` (runs `asight daemon`), enabled `--now`; it carries the `NODE_EXTRA_CA_CERTS` of the shell you install from, for the daemon only | `asight off` with no names disables it, `asight uninstall` removes it (`on --no-unit` skips it) |
+| autostart unit (per user) | Linux: `~/.config/systemd/user/asight-collector.service`, enabled `--now` · macOS: `~/Library/LaunchAgents/com.asight.collector.plist` · Windows: the scheduled task `\asight\collector`; each runs `asight daemon`. The Linux unit and the macOS plist carry the `NODE_EXTRA_CA_CERTS` of the shell you install from, for the daemon only | `asight off` with no names disables it, `asight uninstall` removes it (`on --no-unit` skips it) |
 | install manifest | `~/.asight/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `asight uninstall` |
 | backups of your files | `~/.asight/backup/` (0700, files 0600): the file as it was before `on` changed it — API keys included | `off` drops a copy once the file is back as it was; `uninstall` deletes them all |
 | the standalone undo | `~/.asight/bin/asight-off`, rewritten by every `on`; `asight doctor` checks it is current | `asight uninstall` |
@@ -221,7 +222,7 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 
 ```sh
 sudo asight setup-helper      # once per machine (Linux)
-asight on                     # per user, no sudo; lists every file it will change and asks (not in a terminal: add --yes); starts the daemon (systemd --user); then restart your agents
+asight on                     # per user, no sudo; lists every file it will change and asks (not in a terminal: add --yes); starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
 asight on --no-unit           # no autostart unit: start the daemon yourself, with `asight daemon` in the foreground
 asight status                 # each agent and why it is (not) captured, and the recent failures
 asight off                    # every trace of it is off your agents' path (off claude-code: only that one)
@@ -230,8 +231,9 @@ asight serve                  # the captures appear on the board
 
 A relay or proxy with a private CA keeps working: `on` carries the CA you already gave Claude Code
 into `extra-cc.pem` (the other agents' CAs into their bundles), and the daemon verifies upstreams with
-Node's store plus `NODE_EXTRA_CA_CERTS`: the autostart unit carries the value of the shell you install
-from; with `--no-unit`, start the daemon from a shell that has it. asight does not count on a Claude Code process that was already
+Node's store plus `NODE_EXTRA_CA_CERTS`: the Linux unit and the macOS plist carry the value of the shell you install
+from (a Windows scheduled task carries none — set it at user level there, which the task loads); with `--no-unit`,
+start the daemon from a shell that has it. asight does not count on a Claude Code process that was already
 running at install picking up the new trust entry (not verified for every mode), so `status` reports it
 untrusted (`config-after-start`, with a hint to restart it) and its connections go direct, unrecorded,
 until you restart it.
@@ -250,8 +252,8 @@ back — each leaves a line with its reason and a closed code in `~/.asight/coll
 the daemon from its lock: not running, or stuck). One exception: an install refused before it wrote
 anything (nothing installed yet, or run as root) has no collector directory to write into, so the
 command's output is its only report. An `off` or `uninstall` that cannot undo something exits 1 and
-keeps the install manifest for the next run. After upgrading, run `sudo asight setup-helper` again: the helper protocol is
-now 2.
+keeps the install manifest for the next run. The Linux helper is a root-owned copy of the build, so after upgrading
+run `sudo asight setup-helper` again to replace it.
 
 ## Shrinking the raw logs — sealed files (D35)
 
@@ -283,31 +285,30 @@ plaintext and credentials as the capture and are created owner-only (0600); `asi
 
 ## Claude Desktop — the one environment-dependent case
 
-Desktop ignores `settings.json`, so its trust does not ride the CLI's entry. On macOS the collector
-reaches it through the opt-in form that puts the collector's certificate in your **login keychain**
-(user domain, `security add-trusted-cert`; the OS's own dialog carries the consent, asight never draws
-a password field), and its connections are captured like any other agent's — no VPN software is
-involved:
+Desktop ignores `settings.json`, and its model traffic runs in the Chromium network service, which ignores every proxy
+environment variable — so neither the CLI's trust entry nor a proxy variable reaches it. It has its own opt-in form,
+`claude-code.desktop`; the plan lists the items it names and what each touches, and `off` takes them out again:
 
 ```sh
-asight on claude-code --opt-in desktop-keychain   # named in the plan with what it touches; off takes it out again by fingerprint
+asight on claude-code --opt-in claude-code.desktop
 ```
 
-(The retired route — a Clash Verge rule into a local MITM — is described in *The old capture is
-retired* below; machines it is still installed on are cleaned by hand.)
+- *macOS*, two items. `keychain-login` puts the collector's certificate in your **login keychain** (user domain,
+  `security add-trusted-cert`; the OS's own dialog carries the consent, asight never draws a password field; found and
+  removed by its SHA-256 fingerprint, never the common name). `desktop-launcher` writes
+  `~/.asight/collector/bin/claude-desktop-asight`, which starts the real app with Chromium's `--proxy-server` at the
+  engine's loopback door for this form (the system proxy is never touched). Only instances started through the launcher
+  are steered — quit a running Desktop first.
+- *Windows*, one item. `cert-store-current-user` puts the CA in `CurrentUser\Root` (Windows asks you to confirm) and
+  writes the HKCU policy value `egressProxyUrl` that points Desktop at its door.
 
-## The old capture is retired (2026-10-11)
+Whether Desktop's own model calls come out decrypted verbatim is not claimed here.
 
-The v0→product transition capture — the base_url reverse proxy, the MITM, the Clash Verge steer,
-and the CC-CLI steer (the `capture` / `mitm` / `desktop` / `monitor` commands) —
-is gone: the per-process collector serves Linux, Windows and macOS, and every `asight on` / `off` /
-`status` / `uninstall` drives it. Captures those tools wrote are **still read** (they are the source
-truth; the board lists them beside the collector's), and the board's 监测 toggle keeps steering only
-the old CC-CLI steer until the 4.4 control plane is reworked — it is labelled 「只管旧 CC-CLI steer」.
+## Leftovers of the earlier capture
 
-`asight off` and `asight uninstall` no longer undo what the old capture left on a machine. If an old
-capture is still installed there, take it out by hand (check with `asight doctor --only old-ca` and
-`asight status`; `~/.asight/logs/mitm-events.ndjson` is its log):
+`asight off` and `asight uninstall` do not undo what the earlier capture — the base_url reverse proxy, the MITM, the
+Clash Verge steer and the CC-CLI steer — left on a machine. If one is still installed there, take it out by hand
+(check with `asight doctor --only old-ca` and `asight status`; `~/.asight/logs/mitm-events.ndjson` is its log):
 
 ```sh
 launchctl bootout gui/$(id -u)/com.asight.mitm   # the resident MITM; likewise com.asight.monitor and com.asight.env
@@ -320,13 +321,17 @@ The old CC-CLI steer (`HTTPS_PROXY` / `NO_PROXY` in `~/.claude/settings.json`) a
 Verge's `Script.js` are yours to revert the same way they were written; v0 leftovers
 (`com.atrace.serve`, `~/.local/share/atrace`, `.atrace-bak`) are only ever reported, never touched.
 
+Captures the earlier capture wrote are still read (they are the source truth; the board lists them beside the
+collector's). The board's 监测 toggle steers only the old CC-CLI steer — it is labelled 「只管旧 CC-CLI steer」 — and is
+not the collector's switch; `asight off` is.
+
 ## Limits
 
 - **Long sessions are tail-bounded.** One assembled view is capped at 6 MB of source bytes, so a
   several-hundred-call session shows only its most recent calls. Omitted calls are disclosed in the UI,
   never silently dropped; raise it with `ASIGHT_SESSION_MAX_MB`. The raw NDJSON always holds everything.
-- **Resource lifecycle is Claude Code only.** It is built on Claude Code's tool vocabulary. Codex and
-  OpenCode get context replay, blocks, cache analysis and usage — their resource lanes render empty
+- **Resource lifecycle is Claude Code only.** It is built on Claude Code's tool vocabulary. Codex, OpenCode
+  and the other harnesses get context replay, blocks, cache analysis and usage — their resource lanes render empty
   rather than guessing.
 - **DeepSeek's cache semantics on its Anthropic endpoint are not settled.** `dsh` (that endpoint) and
   DeepSeek's Chat Completions API are read like any other wire, but calls to the Anthropic endpoint show
@@ -357,24 +362,24 @@ Verge's `Script.js` are yours to revert the same way they were written; v0 lefto
 
 ```sh
 # common
-asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]
+asight on [harness…] [--dry-run] [--yes] [--opt-in <form>[,<form>…]] [--no-autostart | --no-unit] [--json]
 asight off [harness…] [--now] [--dry-run] [--yes] [--json]
-asight status [harness…] [--json]
+asight status [harness…] [--json] [--failures]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
 asight uninstall [--purge-data] [--dry-run] [--yes] [--json]
 asight doctor [harness…] [--source <ndjson|dir>] [--json]
 
 # data
 asight serve [--port 9800] [--source <ndjson|dir>] [--db <path>] [--control]
 asight etl <ndjson|sealed|dir> [--db <path>] [--rebuild]
-asight shard [<ndjson>] [--out <dir>] [--watch] [--interval <s>]   # group a capture stream by session into ~/.asight/sessions/
+asight shard [<ndjson>] [--out <dir>] [--watch] [--interval <s>] [--rebuild-meta | --resplit]   # group a capture stream by session into ~/.asight/sessions/
 asight keep [<harness|all> <class|all> <full|log>] [--db <store>] [--json]   # what is kept of each call: show the levels and sizes, or set one (no daemon needed)
-asight raw export <session-id|file.sealed> [--out <dir|file>] | journal [--tail <n>]
+asight raw export <session-id|file.sealed> [--sessions <dir>] [--out <dir|file>] | journal [--tail <n>]
 
 # maintenance
-asight raw seal <closed-shard> | seal --legacy <file|dir> [--dry-run] [--delete-original]
+asight raw seal <closed-shard> [--sessions <dir>] | seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <s>]
 asight raw verify <sealed|dir> [--against <original>] | compare <dir> [--list]
 sudo asight setup-helper [--binary <path>] [--remove]   # Linux, once per machine
-asight daemon                                           # the daemon in the foreground; the autostart unit runs it
+asight daemon                                           # the daemon in the foreground; the autostart unit runs it (Windows's task runs `asight daemon --supervise`)
 asight help [command]
 ```
 

@@ -1,5 +1,5 @@
 // text-edit.mjs — the trust entries asight writes into text files that can hold comments (RFC 4.6 §身份与信任「标记与
-// 安装」, §安装清单与卸载「撤一个文件的规则」, D37④, D28): a sentinel-marked block at the top of a dotenv file
+// 安装」, §安装清单与卸载「撤一个文件的规则」, D37④, 1.6 R2): a sentinel-marked block at the top of a dotenv file
 // (Codex, Hermes), and one sentinel-marked line in a shell rc (the Kimi shim's PATH line) or a YAML list (the dsh
 // plugin row). Pure functions over the file text; every change is a list of splices {offset, removed, inserted}
 // applied in order (json-text.mjs applyOps / reverseOps), so an untouched file is restored byte for byte and nothing

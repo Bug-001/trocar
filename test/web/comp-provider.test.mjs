@@ -10,7 +10,7 @@ import { linearContext } from '../../src/view/analyze.mjs';
 import { readRecords } from '../../src/etl/ingest.mjs';
 import { sessionView, forWire } from '../../src/view/board.mjs';
 
-// BUG 2 (audit 2026-07-19) — PROVIDER KNOWLEDGE LEAKED INTO THE BROWSER (invariant 3 / AC-3).
+// BUG 2 — PROVIDER KNOWLEDGE LEAKED INTO THE BROWSER (invariant 3 / AC-3).
 //
 // callComp() built the per-call composition bar by reading ANTHROPIC request fields straight off
 // the wire body: `rq.system[]`, `rq.messages[].content[]`, `rq.tools[]`. An OpenAI Responses body

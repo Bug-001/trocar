@@ -135,7 +135,7 @@ test('the old capture: running / failing / stopped; no events but a fresh captur
   } finally { b.done() }
 })
 
-// RFC 1.6 §4: the old MITM drains on `asight off` and says how many connections it cut in its stop line; the board's 旧 MITM row carries the count (and never invents one for a stop that had none).
+// The old MITM drains on `asight off` and says how many connections it cut in its stop line; the board's 旧 MITM row carries the count (and never invents one for a stop that had none).
 test('the old MITM\'s last stop carries `cut` when the line has it — and not otherwise', () => {
   const b = home()
   try {

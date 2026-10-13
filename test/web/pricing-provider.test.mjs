@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// BUG 3 (audit 2026-07-19) · cross-provider pricing was never built — gpt-5.5 was silently
+// BUG 3 · cross-provider pricing was never built — gpt-5.5 was silently
 // priced at ANTHROPIC rates.
 //
 // `PRICING` holds Anthropic $/Mtok under the family keys opus/sonnet/haiku, and `priceKey()`

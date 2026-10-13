@@ -56,7 +56,7 @@ const cidrOf = (tok) => {
  * 「exclude simple hostnames」 token (a name without a dot: the one spelling the NO_PROXY dialect has no room for and WinINET's `local` row is), the one item scutil adds of its own. Entries of one spelling never leak
  * into the other (a CIDR is no WinINET entry, `<local>` no NO_PROXY one — in scutil's list it is, because macOS itself writes it there). `*.name` is the suffix in all (it also covers the bare name, which WinINET
  * itself does not: a known, one-way difference).
- * A name `localhost` is also the loopback range: the kernel's own hosts table has turned it into 127.0.0.1 by the time its rules run (4.8 §3.1), so the name alone would never match there.
+ * A name `localhost` is also the loopback range: the kernel's own hosts table has turned it into 127.0.0.1 by the time its rules run (4.8 §3), so the name alone would never match there.
  * Whatever is not read (a wildcard inside a name, a port, a scheme, `*`, IPv6, `<-loopback>`, a name the generator refuses) is counted in `untranslated` and is NOT in the table: such a target goes to the upstream (OPEN 21).
  * Every row passes `bypassRuleOf`, so no input of the user's can make the kernel config throw. Rows keep the order written; one row for what is said twice.
  */

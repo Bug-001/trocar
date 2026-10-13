@@ -5,7 +5,7 @@
 //                with `#asight-collector-off# ` come back
 //   line         a line with the sentinel comment `# asight collector: …` that points under ~/.asight (the Kimi PATH line, the dsh patch row)
 //   json-value   a JSON string that points under ~/.asight (a CC / Z-Code trust key): the value asight replaced comes back from the NEWEST backup of that
-//                file (R2), one key at a time — never the whole file (D28); no value in the backup, the key goes
+//                file (R2), one key at a time — never the whole file (1.6 R2); no value in the backup, the key goes
 //   owned-file   a plugin or shim asight wrote (its sentinel in it, or exactly asight's own plugin manifest)
 // Nothing else is touched, and no byte of a file outside those marks changes. The result says `undone-by-marker` (the code `off` records and the
 // receipt shows, 1.6 R3). Not done here, said in the docs: a combined bundle (no manifest, so nobody can say who holds it — `uninstall` removes it with the

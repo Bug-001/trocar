@@ -97,21 +97,6 @@ test('§11: a named opt-in item moves out of 「要你点名的」 into the plan
 })
 
 
-// D44 (4.8 §8 ① ⑥): the kernel is neither in `kernel\` nor in the cache → the plan's download line (version, the archive's size, the pinned sha256, the host),
-// and the download itself happens only in the write phase of a REAL on — never in a dry run, never before the confirmation.
-
-// D44 (4.8 §8 ①): a failed download stops the on AFTER the confirmation and BEFORE any agent file — the sandbox HOME is byte-identical to what it was, and
-// the unwritten receipt carries the reason with the manual alternative (the hook's own failure event is the wiring test's cell; here the hook is a fake).
-
-/** every file and its bytes under the home — a refusal or a failed download must leave all of it untouched (W27 ⑥ / D44). */
-function snapshot(home) {
-  const out = []
-  const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); const st = fs.statSync(p); if (st.isDirectory()) walk(p); else out.push([path.relative(home, p), fs.readFileSync(p).toString('utf8')]) } }
-  walk(home)
-  return out
-}
-
-
 // the codex WebSocket hint (measured on a Windows test machine): Codex's WebSocket client does not read the .env block's SSL_CERT_FILE, so the WS's TLS is not decrypted through the block; the door that works is the NAMED cert-store item. The plan says so — exactly when codex is a target and the item is not recorded; never installed automatically.
 const HINT = 'Windows 上采 Codex 的 WebSocket 需要点名装证书: asight on codex --opt-in cert-store-current-user(会弹 Windows 自己的确认框,不弹不装)'
 test('the codex WebSocket cert hint: in the plan exactly when codex is a target and the cert-store opt-in is not recorded — not for other targets, not once the item is done, and never an install', () => {

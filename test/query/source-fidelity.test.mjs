@@ -1,4 +1,4 @@
-// test/query/source-fidelity.test.mjs — audit 2026-07-19, three defects in the source-truth
+// test/query/source-fidelity.test.mjs — three defects in the source-truth
 // resolver (src/query/source.mjs). This module IS the "回源 verbatim bytes" path, so a
 // plausible-but-wrong answer here is the worst failure the product can produce.
 //

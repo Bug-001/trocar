@@ -621,7 +621,7 @@ test('install: a unit systemd refuses to enable is a recorded failure, the insta
 
 // the flip checklist ③ (4.9 §4 末): an arch whose enable() carries its own failure record — the darwin userUnit answers a refused bootstrap with the `launchd-register-failed`
 // code and launchctl wording — has that record reach flows/ VERBATIM, not the systemd-shaped unit-not-enabled + 「systemctl --user enable --now」 remediation that used to replace
-// it (launchd is the only autostart on darwin, 4.9 §12: the receipt must say so). Both halves of the install: installCollector (the harness/lab shape) and turnOn (`asight on`).
+// it (launchd is the only autostart on darwin, 4.9 §11: the receipt must say so). Both halves of the install: installCollector (the harness/lab shape) and turnOn (`asight on`).
 test('install: a unit whose enable() carries its own failure event — the darwin LaunchAgent — records THAT, not unit-not-enabled and systemd words (flip ③, 4.9 §4)', async () => {
   const refused = { code: 1, err: 'Boot-on-boot failed: 5: Input/output error', event: { event: 'failure', where: 'install', code: 'launchd-register-failed', reason: 'launchctl bootstrap was refused (exit 5: Boot-on-boot failed: 5: Input/output error); launchd is the only autostart, so asight does not start at login' } }
   const unit = (b) => ({ path: path.join(b.home, 'Library', 'LaunchAgents', 'com.asight.collector.plist'), links: [], text: (env) => JSON.stringify(env), enable: () => ({ ...refused }), disable: () => ({ code: 0 }), stop: () => {} })

@@ -74,7 +74,7 @@ export const OFF_WHERE = Object.freeze(['off'])
 export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
 export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker'])
 
-// What the Windows collector writes (RFC 4.8 §12, D42; the kernel-era rows retired with the kernel — D47's darwin conversion and its win32 twin: the forwarder-* family, the download pair,
+// What the Windows collector writes (RFC 4.8 §12; the kernel-era rows retired with the kernel — D47's darwin conversion and its win32 twin: the forwarder-* family, the download pair,
 // the probe refresh and the fallback verdict have no producer on any arch now) and the names it shares with the netenv side (4.7 §5, D41; read-only since D43) and the CLI (1.6 §9.7).
 // Blocks of their own, below OFF_*, for the reason OFF_* is: D40 edits WHERE / STATE_EVENTS / CODES_BY_PART, and the lists that
 // another branch appends to stay edit-free here; `sets` below adds the blocks. test/health/codes.test.mjs holds each against the
@@ -89,7 +89,7 @@ export const ROUTE_CODES = Object.freeze([
   'task-register-failed', // install: `on` still succeeds, through the HKCU Run fallback (4.8 §7)
   'launchd-register-failed', // install, darwin: the LaunchAgent would not register (4.9 §4) — launchd is the only autostart, so `on`'s receipt says it; no fallback exists to succeed through
   'elevated-token', // start
-  'root-token', // start, darwin: `elevated-token`'s refusal under the darwin name — the daemon runs as the user and root is refused (4.9 §12)
+  'root-token', // start, darwin: `elevated-token`'s refusal under the darwin name — the daemon runs as the user and root is refused (4.9 §11)
 ])
 /** The codes of ROUTE_CODES a writer puts on a `failure` event. Today that is all of them; a later notice-class code goes into ROUTE_CODES only. */
 export const ROUTE_FAILURE_CODES = Object.freeze([...ROUTE_CODES])

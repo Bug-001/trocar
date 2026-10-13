@@ -1,4 +1,4 @@
-// route-plan.mjs — which groups get a proxy entry, and what each one's upstream and bypass table are (RFC 4.8 §2.2, §2.3, §3.5; acceptance W5, W72).
+// route-plan.mjs — which groups get a proxy entry, and what each one's upstream and bypass table are (RFC 4.8 §2.2, §2.3, §3; acceptance W5, W72).
 //
 // `upstream.mjs` answers one group at a time from the facts it is handed; this file hands it those facts for every group of every harness — the user's own proxy (the manifest once asight has written the entry,
 // else the file the agent reads), the system proxy and the login environment as they were read, asight's own ports — and puts the answers beside the gates that decide whether the entry is written
@@ -209,10 +209,10 @@ export function planRoutes({ netenv, groups, desired = null, optIns = [], manife
   return out
 }
 
-// ---- the host set of a host-tree form (4.8 §3.5, OPEN 22) -------------------------------------------------------------------------------------------------
+// ---- the host set of a host-tree form (4.8 §3, OPEN 22) -------------------------------------------------------------------------------------------------
 
 // What the kernel's rule `DOMAIN-SUFFIX,<host>` can meet. Three kinds of name cannot: a name the generator refuses (its own check, asked through `bypassRuleOf`, so there is no copy of its pattern here); a numeric dotted quad (an address,
-// or something that cannot be a name): the rule never matches a connection to an address literal; and the name `localhost`: the kernel's own hosts table has made it 127.0.0.1 by the time its rules run, so the name is gone (4.8 §3.1 末,
+// or something that cannot be a name): the rule never matches a connection to an address literal; and the name `localhost`: the kernel's own hosts table has made it 127.0.0.1 by the time its rules run, so the name is gone (4.8 §3 末,
 // measured on the re-entry path; OPEN 28). Each of them would be a line that looks like capture and is none, so each is said (`dropped`) and not written.
 const NUMERIC_QUAD = /^\d+(\.\d+){3}$/
 function matchable(name) {
@@ -222,7 +222,7 @@ function matchable(name) {
 
 /**
  * hostSetOf({ form, readSettings, extraHosts }) → { hosts: [name], settings: 'read' | 'absent' | { unreadable: { reason, detail? } }, dropped: [name] }
- * The hosts whose connections a host-tree form (an editor that carries many extensions, whose proxy setting sends them all to the form's port) hands to the engine; every other connection of the editor is only forwarded (4.8 §3.5).
+ * The hosts whose connections a host-tree form (an editor that carries many extensions, whose proxy setting sends them all to the form's port) hands to the engine; every other connection of the editor is only forwarded (4.8 §3).
  * The set is the form's default hosts (its harness file), then the base-URL hosts found in the extension's own settings (`form.hosts.settings.hostsOf` over the text `readSettings()` gives: `{ text, error }`, the shape of the
  * ctx's `readTextOrError`; read-only, `on` and `status` both call this), then `extraHosts` (the operator's, state.json): each name once, lower case, in that order. A settings file that is not there is `'absent'` (nothing configured: not a failure);
  * one that cannot be read or parsed is `{ unreadable: { reason } }` (`denied` · `unparseable`, 1.6 §9.4; `detail` the errno, never a path) and the set is then the other two sources, which the caller says (D38).

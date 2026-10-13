@@ -4,7 +4,7 @@
 //                    that change state refuse root (on off uninstall daemon). `needsRoot`: setup-helper, the only command that must be root. `run` gets the argv after the name and the context
 //                    of runCli: { io, env, home, platform, uid, deps }; each takes what it needs from `deps` (0.1 §3): the old bodies `runLegacy`, `setup-helper` `arch`.
 //   HIDDEN_ALIASES  [{ argv, to }]: not in help, dispatched like the command they name; what follows the alias is passed on as typed.
-//   helpText        the help: three sections (the old capture's 「旧采集(过渡期)」 went with the old capture, D39⑥ executed 2026-10-11); one command when named.
+//   helpText        the help: three sections; one command when named.
 const SECTIONS = Object.freeze([['common', '常用'], ['data', '数据'], ['maintenance', '维护']])
 const via = (file, fn) => async (argv, c) => (await import(file))[fn](argv, c)
 // `deps.runLegacy(name, argv)` replaces the runner of the old bodies: a test asks which body a command reaches, not what it does (those read and write the machine)
@@ -30,13 +30,13 @@ async function help(argv, c) {
 
 export const COMMANDS = Object.freeze([
   { name: 'on', section: 'common', mutates: true, run: via('./on.mjs', 'runOnCli'),
-    usage: 'asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]',
+    usage: 'asight on [harness…] [--dry-run] [--yes] [--opt-in <形态>[,<形态>…]] [--no-autostart | --no-unit] [--json]',
     summary: '开始采集。第一次 on 就是安装:先列出要改的每个文件,等你确认;之后的 on 只补缺的。',
-    notes: ['--dry-run  只打印将要做的,什么都不写', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '--no-autostart  装单元但不 enable,本次只 start', '--no-unit  不装自启单元(测试用;平台自启机制见回执)', 'on 不重启任何 agent、桌面程序或在跑的采集;要重启的进程在回执里列出'] },
+    notes: ['--dry-run  只打印将要做的,什么都不写', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '--opt-in <形态>  点名影响超出这个 agent 自己的项(用户证书库、PATH 垫片、启动器…);不点名不做;计划里「要你点名的」一节印出每项的确切命令;可重复、逗号分隔,也可写那一节里的项 id', '--no-autostart  装单元但不 enable,本次只 start', '--no-unit  不装自启单元(测试用;平台自启机制见回执)', 'on 不重启任何 agent、桌面程序或在跑的采集;要重启的进程在回执里列出'] },
   { name: 'off', section: 'common', mutates: true, run: via('../off/main.mjs', 'runOffCli'),
     usage: 'asight off [harness…] [--now] [--dry-run] [--yes] [--json]',
     summary: '撤掉 asight 对这些 agent 的全部影响;asight 自己坏了也能用(~/.asight/bin/asight-off)。',
-    notes: ['不带名字:全部 harness,并让守护进程排空后退出、停用自启', '--now  不等在途连接,立即切断', '--yes  只在清单丢失、按标记撤销时用', '--remove-ca  照收,已无作用(旧采集已退役;它留下的东西按 README 手动清理)'] },
+    notes: ['不带名字:全部 harness,并让守护进程排空后退出、停用自启', '--now  不等在途连接,立即切断', '--yes  只在清单丢失、按标记撤销时用', '--remove-ca  照收,没有作用:off 不动旧采集留在机器上的东西(按 README 手动清理)'] },
   { name: 'status', section: 'common', mutates: false, run: via('./status.mjs', 'runStatusCli'),
     usage: 'asight status [harness…] [--json] [--failures]',
     summary: '每个 agent 有没有被采集、为什么;守护进程、助手、仍经 asight 的连接、最近 24 h 的失败、本机网络环境。',
@@ -71,8 +71,9 @@ export const COMMANDS = Object.freeze([
     usage: 'sudo asight setup-helper [--binary <path>] [--remove]',
     summary: '唯一要 sudo 的命令:本机一次,给能力助手(eBPF)加能力位、放进 root 所有的路径。Linux。' },
   { name: 'daemon', section: 'maintenance', mutates: true, run: via('./daemon.mjs', 'runDaemonCli'),
-    usage: 'asight daemon',
-    summary: '前台跑守护进程;自启单元跑的就是它。Linux。' },
+    usage: 'asight daemon [--supervise]',
+    summary: '前台跑守护进程;自启单元(Linux systemd · macOS LaunchAgent · Windows 计划任务)跑的就是它。',
+    notes: ['--supervise  只在 Windows:计划任务起的监管父进程,拉起真守护进程、非零退出就重拉;不用手敲'] },
   { name: 'help', section: 'maintenance', mutates: false, run: help,
     usage: 'asight help [命令] · --help · -h · --version · -v',
     summary: '`asight help <命令>` 或 `asight <命令> --help` 看一个命令。' },
@@ -99,8 +100,8 @@ export function resolveAlias(argv) {
   return hit ? { argv: [...hit.to, ...argv.slice(hit.argv.length)], alias: hit } : { argv, alias: null }
 }
 
-// one wording for every platform (D39⑥ executed 2026-10-11): linux / win32 / darwin have the per-process collector; a platform without one is refused by loadArch in `on` / `daemon` — the old capture's platform split went with it
-const generation = (platform) => `本平台(${platform}):on / off 驱动按进程采集器(4.6);还没有采集器的平台由 on / daemon 自己报「not supported yet」。`
+// one wording for every platform: linux / win32 / darwin have the per-process collector; a platform without one is refused by loadArch in `on` / `daemon`
+const generation = (platform) => `本平台(${platform}):on / off 驱动按进程采集器(Linux 4.6 · Windows 4.8 · macOS 4.9);还没有采集器的平台由 on / daemon 自己报「not supported yet」。`
 const lines = (usage, summary) => [...usage.split('\n').map((l) => `  ${l}`), `      ${summary}`]
 
 /** The help: `helpText()` is the three sections (the first screen says on, off and status, and that they drive the per-process collector on `platform`); `helpText('off')` is that one command. */

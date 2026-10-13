@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// BUG 2 (audit 2026-07-19) · `renderEmpty()` leaves the PREVIOUS session's chrome on screen.
+// BUG 2 · `renderEmpty()` leaves the PREVIOUS session's chrome on screen.
 //
 // It clears ctxwin / ctxnav / rails / sawrow / resexp / rawpanel / cacherow — but NOT the overview
 // strip (#ovstrip), the position indicator (#phlabel), the axis (#sawmid/#sawstart/#sawend/

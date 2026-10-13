@@ -2,7 +2,7 @@
 // userUnit interface is arch/linux/unit.mjs's). The daemon is `node <asight> daemon`, started at login by a LaunchAgent — a plist in ~/Library/LaunchAgents, `RunAtLoad` + `KeepAlive` —
 // and that is the whole of it: NO supervisor parent (4.9 §4). launchd's KeepAlive really does bring a killed process back (the Windows scheduled task does not, which is why the win32
 // side built one), so the win32 supervisor machinery — superviseChild, runSupervisor, supervisor.lock, the backoff — is dropped, and with it the task / Run-key double mechanism:
-// launchd is the one autostart, and when launchctl refuses it there is no fallback to succeed through (the `launchd-register-failed` record, 4.9 §12). The launchctl verbs are the modern
+// launchd is the one autostart, and when launchctl refuses it there is no fallback to succeed through (the `launchd-register-failed` record, 4.9 §11). The launchctl verbs are the modern
 // ones: `bootstrap gui/<uid> <plist>` installs the job into the user's GUI session domain and starts it, `bootout gui/<uid> <label>` takes it out — and bootout is what `off` leans on:
 // **the autostart goes FIRST, before the daemon process is stopped**, because a process stopped while the agent is still loaded is pulled right back by KeepAlive (the off order, 4.9 §4;
 // this module's verbs return before the caller stops anything). launchctl runs only through execTool, so a test injects the runner; the spawn, the uid and the fs are parameters too,
@@ -37,7 +37,7 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 
 /**
  * R7 on darwin (4.9 §7): asight never runs as root. → `null` (go on) or `{ code: 'root-token', reason, token }`, which `on` and `daemon` turn into the refusal and the `start` failure
- * record — `root-token` is the darwin name of win32's `elevated-token` (4.9 §12; the closed set takes it). The check is this process's own uid and euid: darwin has no resident helper
+ * record — `root-token` is the darwin name of win32's `elevated-token` (4.9 §11; the closed set takes it). The check is this process's own uid and euid: darwin has no resident helper
  * (4.9 §1) and a uid needs none, so there is no unreadable case (the win32 helper's R11 unknown has no darwin counterpart) and `getuid` / `geteuid` are parameters only so a test can say
  * which world it is in.
  */
@@ -149,7 +149,7 @@ const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist
  *                    win32 `/Create /F` analog: a job that is already loaded is replaced, and a bootout of a job that is not loaded answers with an error that is not ours to fail on).
  *                    With `now: false` (a daemon already answers) launchctl is not asked at all: the plist in ~/Library/LaunchAgents is what launchd loads at the NEXT login, and a
  *                    bootstrap would start a second daemon beside the one that answers (拉起不是重启, R8). When launchctl refuses the bootstrap the answer is not 0 and carries the
- *                    `launchd-register-failed` failure record for the caller to write: launchd is the only autostart, so `on`'s receipt says it (4.9 §12) — there is no fallback.
+ *                    `launchd-register-failed` failure record for the caller to write: launchd is the only autostart, so `on`'s receipt says it (4.9 §11) — there is no fallback.
  *   start()          the `--no-autostart` run: this session, nothing at login. A LaunchAgent with RunAtLoad would be an autostart, so none is registered: the daemon is started directly,
  *                    detached, with the environment of `directStartEnv(env)` (the shell's, without the trust and proxy variables a login-started daemon would not have) and no
  *                    supervisor flag (launchd is the restart; a `--no-autostart` daemon is not under it and dies when it dies).

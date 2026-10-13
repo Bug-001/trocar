@@ -25,7 +25,7 @@ export const MANIFEST_VERSION = 2
 export const OFF_VERSION = 6 // 6: the copy's off knows the desktop launcher (4.9 §6.4, 2026-10-12) — a copy written by 5 lists an optin-desktop-launcher entry as unknown and leaves the file behind. 5: the copy's off undoes darwin's opt-in items — the rc PATH line + the launch shim AND the login-keychain certificate (4.9 §2.4, the flip checklist ④) — a copy written by 4 knows neither kind, so its `off` would only list them. 4: the copy's off knows darwin — the autostart it takes out there is the LaunchAgent (launchctl bootout + the plist, the flip checklist ① of 4.9 §4), not systemd's unit; a copy written by 3 would run systemctl on a Mac. 3: the copy undoes BOTH the Windows collector's items (run-key, scheduled-task, forwarder-binary, proxy-entry, trust-entry — 4.8 §4.2, plan 9(b), audit F3) and the opt-in items with their `scope` ('agent' | 'user' | 'machine', 1.6 §1.7, plan 14) — a copy written by 2 undoes none of them
 // (The plan gave Task 9(b) the collector's kinds and Task 14 the `scope` field with the opt-in kinds; the two branches landed side by side and both bumped to 3, so their merge is the union at 3.)
 
-/** The kinds of item this build can undo. The `legacy-*` ones are the old capture's ledger (1.6 §4, written by `on` on a platform without the
+/** The kinds of item this build can undo. The `legacy-*` ones are the old capture's ledger (written by `on` on a platform without the
  *  new collector). The Windows collector's kinds (plan 9(b), audit F3 — they land WITH or BEFORE the flip so every entry a flipped `on` writes
  *  is a kind `off` undoes):
  *    proxy-entry · trust-entry   file edits (an agent's proxy field, a trust bundle entry): undone by the same file rule as json-key / text
@@ -83,7 +83,7 @@ export function undoByHand(e) {
 }
 
 /** The command that puts a file back as it was before asight, from the backup of it (R2), and what it costs; null when there is no backup (asight made the file). Plain `cp`: an
- *  existing file keeps its own mode and owner, and the user chooses to run it — asight never writes a backup over a user's file by itself (D28). */
+ *  existing file keeps its own mode and owner, and the user chooses to run it — asight never writes a backup over a user's file by itself (1.6 R2). */
 export function restoreByHand(e) {
   if (!e || typeof e.backup !== 'string' || e.backup === '') return null
   return { backup: e.backup, command: `cp ${shellWord(e.backup)} ${shellWord(e.real_path || e.path)}`, loses: 'puts the whole file back as it was before asight, so every change made to it since is lost' }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assembleSession } from '../../src/view/assemble.mjs';
 
-// Follow-up to the analyze() admission fix (audit 2026-07-19). Admitting non-200 calls into the
+// Follow-up to the analyze() admission fix. Admitting non-200 calls into the
 // timeline was correct — but it exposed a second defect one layer up: `assembleSession` advanced
 // `prevFlat` after EVERY call (assemble.mjs:187), so a FAILED call became the cache-prefix baseline
 // for the next one.

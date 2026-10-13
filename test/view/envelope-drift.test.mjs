@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sessionView } from '../../src/view/board.mjs';
 
-// R1 · ENVELOPE DRIFT (audit 2026-07-19) — the D10 capture writes `resp` / `req_headers`
+// R1 · ENVELOPE DRIFT — the D10 capture writes `resp` / `req_headers`
 // (src/capture/envelope.mjs:52), but the board still read the v0 names `response` /
 // `request_headers`. Measured on the live capture: `.response` was present on 0 of 25,817 records.
 // Everything downstream of those reads was therefore dead on EVERY real capture while looking fine

@@ -1,6 +1,6 @@
 // What the Windows helper (src/collector/arch/win32/helper.ps1, RFC 4.8 §1) answers, as the netenv tests need it: a stub with the verbs `ps`, `pipe-server` and `tcp-table` and the shapes the
 // real helper documents (`ps` → { sessionId, procs: [{ pid, ppid, name, exe, cmdline, startedAt, sessionId, integrity, tokenDenied, cmdlineState }] }, `pipe-server` → { exists, serverPid, exe,
-// startedAt }, `tcp-table` → { rows: [{ pid, state, family, localAddr, localPort, remoteAddr, remotePort }] }). Task 11 records the real answers and holds this stub to them (as W57 does for mihomo).
+// startedAt }, `tcp-table` → { rows: [{ pid, state, family, localAddr, localPort, remoteAddr, remotePort }] }). Task 11 records the real answers and holds this stub to them (as N9 does for mihomo).
 export const VERGE_DIR = String.raw`C:\Program Files\Clash Verge`
 export const SESSION = 2 // the helper's own (the user's) session
 

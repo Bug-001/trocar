@@ -3,7 +3,7 @@
 //   name    <first 16 hex of sha256(resolved original path)>-<UTC YYYYMMDDTHHMMSSmmmZ>[-n]: found by path without the manifest; one per
 //           change; a name that is taken gets -1, -2 … — never written over (an `off` that kept one leaves it for the user)
 //   rule    a backup that cannot be written means the file is not changed (the caller turns the throw into `backup-failed`)
-//   never   used to put a whole file back (D28: undo takes out only asight's key / block / line). Only a JSON key replaced by asight that
+//   never   used to put a whole file back (1.6 R2: undo takes out only asight's key / block / line). Only a JSON key replaced by asight that
 //           the manifest lost is read back from one, by marker (1.6 R3).
 // The manifest names a backup by path and holds the file's `pre_sha256`; it never holds the contents. Imports only node:* and src/off.
 import nodeFs from 'node:fs'

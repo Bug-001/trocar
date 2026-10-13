@@ -1,7 +1,6 @@
 // ca-store.mjs — the collector CA on disk (RFC 4.6 §身份与信任「CA」, D36, acceptance T9). The private
 // key lives in the operator's own ~/.asight/collector/ca/ca.key (0600, dir 0700) — never in the legacy
-// MITM CA dirs (~/.asight/ca, ~/.atrace/ca: a second CA with the same CN once broke Desktop networking,
-// the CA collision of 2026-07-21), never in any trust store, never rotated (agents read
+// MITM CA dirs (~/.asight/ca, ~/.atrace/ca: a second CA with the same CN once broke Desktop networking), never in any trust store, never rotated (agents read
 // the PEM once at start). Half pairs: key without PEM means a mint crashed before the PEM was written,
 // so nothing can trust it yet → mint again; PEM without key may already be injected into agents →
 // refuse rather than silently replace it.

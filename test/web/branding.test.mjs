@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COMMANDS, HIDDEN_ALIASES } from '../../src/cli/commands.mjs';
 
-// R14 (audit 2026-07-19) — the product is `asight`, but the served UI still called itself `atrace`
+// R14 — the product is `asight`, but the served UI still called itself `atrace`
 // (browser tab title + the empty state), and the empty state instructed the user to run a command
 // that does not exist. A first-time user who captures nothing lands exactly there, so the one screen
 // most likely to be someone's first impression named the wrong product and gave a dead instruction.

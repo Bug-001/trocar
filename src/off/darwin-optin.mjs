@@ -7,7 +7,7 @@
 // The rc PATH line is the SHARED item the reference count is about (4.9 §2.3's kimi row, 4.8 §6.3's semantics): each command's shim is
 // its own file, and the lines + the shim directory go when the LAST shim in them is removed, so `off kimi-code` does not break opencode.
 // The count is by shim files that still exist, not by manifest entries — both harnesses' entries are in the manifest while one `off`
-// walks them. The line itself is dropped from the CURRENT text (D28: never the pre-asight file written back wholesale); a file the user
+// walks them. The line itself is dropped from the CURRENT text (1.6 R2: never the pre-asight file written back wholesale); a file the user
 // has not touched since the apply is restored from its backup byte for byte (R2's copy, the win32 settings twin's rule).
 // The keychain certificate is keyed by its SHA-256 fingerprint end to end (V56: 点名后按指纹可查、按指纹撤销) — see its undo below.
 import path from 'node:path'
@@ -44,7 +44,7 @@ export const DARWIN_UNDO_BY_KIND = {
       return rcOk('undone', `${v.command} removed; the PATH lines and the shim directory stay (${names.join(', ')} still resolves through them)`)
     }
     // the last shim: the line goes from every rc file the apply listed — byte for byte from the backup when the user has not touched the
-    // file since (R2), else only asight's line goes and the user's own edits stay (D28; removeAsightText's own rule)
+    // file since (R2), else only asight's line goes and the user's own edits stay (1.6 R2; removeAsightText's own rule)
     const line = rcLineOf(v.binDir)
     const notes = []
     for (const rc of Array.isArray(v.rcs) ? v.rcs : []) {

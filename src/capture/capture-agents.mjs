@@ -22,7 +22,7 @@ import { getAutostartInstaller } from './autostart.mjs';
 export const MITM_LABEL = 'com.asight.mitm';
 export const ENV_LABEL = 'com.asight.env';
 const ENV_VAR = 'NODE_EXTRA_CA_CERTS';
-export const MITM_EXIT_TIMEOUT = 15; // seconds: the 10 s drain of the old MITM and a margin (1.6 §4)
+export const MITM_EXIT_TIMEOUT = 15; // seconds: the 10 s drain of the old MITM and a margin
 
 // Pick a node the durable agent can still find after a nix GC. `process.execPath` is whatever node
 // ran the install — under nix/home-manager that is a HASHED /nix/store path that moves on GC, so a
@@ -54,7 +54,7 @@ export function installCaptureAgents({
     label: MITM_LABEL,
     programArguments: [node, asightBin, 'mitm', '--port', String(port), '--out', out, '--upstream', upstream],
     keepAlive: true,
-    exitTimeOut: MITM_EXIT_TIMEOUT, // launchd waits this long after SIGTERM: the MITM drains its open connections for up to 10 s (RFC 1.6 §4)
+    exitTimeOut: MITM_EXIT_TIMEOUT, // launchd waits this long after SIGTERM: the MITM drains its open connections for up to 10 s
     logPath: path.join(home, '.asight', 'logs', 'mitm.log'),
   });
   // The primer sets the login-session env var so GUI Desktop (and new terminals) inherit the CA

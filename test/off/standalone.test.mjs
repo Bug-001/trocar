@@ -394,8 +394,8 @@ test('a copy that cannot be written stops the on before one file of the agents\'
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, retry)), 0, 'and once that is put right, the same on finishes')
 })
 
-// ── the old capture (1.6 §4): the copy takes it out too, with the repository out of reach ────────────
+// ── the old capture: the copy takes it out too, with the repository out of reach ────────────
 
-// 1.6 §4 (the pre-D39⑥ shape) went with the old capture (executed 2026-10-11): the standalone copy no longer carries undoLegacy /
+// The pre-D39⑥ shape went with the old capture (executed 2026-10-11): the standalone copy no longer carries undoLegacy /
 // legacyOffCli — it is the NEW off only, on every platform, and what the old capture left on a machine is cleaned by hand (README).
 // The copy's own behavior (the new off, no repository needed) is the cells above and below.

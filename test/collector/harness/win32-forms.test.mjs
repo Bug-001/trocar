@@ -1,4 +1,4 @@
-// test/collector/harness/win32-forms.test.mjs — the Windows forms of the harnesses (RFC 4.8 §2.3 · §2.4 · §3.5; acceptance W3, W23). Table-driven from §2.3 and the install paths
+// test/collector/harness/win32-forms.test.mjs — the Windows forms of the harnesses (RFC 4.8 §2.3 · §2.4 · §3; acceptance W3, W23). Table-driven from §2.3 and the install paths
 // the T0 spike measured (user directory made up). The mechanics of matching are held on made-up forms in test/collector/arch/win32/forms.test.mjs; here the REAL data is.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -185,7 +185,7 @@ test('the group table: the three shared groups hold their forms, every other for
       const members = w.forms.filter((f) => f.g === g.g).map((f) => f.id)
       assert.deepEqual(members, shared[g.g] || [g.g], `${g.g}: its forms`)
       assert.ok(members.length >= 1)
-      assert.ok(w.forms.filter((f) => f.g === g.g && !f.processRules).length <= 1, `${g.g}: only one form with no process rule (the engine judges it by pid, 4.8 §3.5)`)
+      assert.ok(w.forms.filter((f) => f.g === g.g && !f.processRules).length <= 1, `${g.g}: only one form with no process rule (the engine judges it by pid, 4.8 §3)`)
     }
     assert.deepEqual(Object.fromEntries(w.groups.map((g) => [g.g, w.forms.filter((f) => f.g === g.g).map((f) => f.id)])), EXPECT[h].groups, `${h}: the table of 4.8 §2.3`)
   }
@@ -233,13 +233,13 @@ test('W3: Code.exe is only the Kimi extension, node.exe and python.exe are never
   for (const exe2 of [raw`C:\Python312\python.exe`, raw`C:\Program Files\Microsoft VS Code Insiders\Code - Insiders.exe`, raw`D:\portable\Code.exe`]) assert.deepEqual(matchForm(forms, { exe: exe2, cmdline: null, cmdlineState: 'not-asked' }), { kind: 'none' }, exe2)
 })
 
-test('W3: only the dsh CLI has no process rule in the kernel (node.exe is every Node program: the engine judges it by pid on its port, 4.8 §3.5); every other supported form has one', () => {
+test('W3: only the dsh CLI has no process rule in the kernel (node.exe is every Node program: the engine judges it by pid on its port, 4.8 §3); every other supported form has one', () => {
   assert.deepEqual(formsOf().filter((f) => f.supported === true && !f.processRules).map((f) => f.id), ['deepseek-dsh.cli'])
 })
 
 test('W3: the ZCode forms match the whole image and carry no hosts; only the Kimi extension has a host set, and its settings reader finds the base URLs in a config.toml', () => {
   const forms = formsOf()
-  assert.deepEqual(forms.filter((f) => f.hosts).map((f) => f.id), ['kimi-code.vscode'], 'a host tree is only the editor Kimi lives in (4.8 §3.5); ZCode.exe is the agent\'s own process (OPEN 23)')
+  assert.deepEqual(forms.filter((f) => f.hosts).map((f) => f.id), ['kimi-code.vscode'], 'a host tree is only the editor Kimi lives in (4.8 §3); ZCode.exe is the agent\'s own process (OPEN 23)')
   for (const f of forms.filter((x) => x.match && /^zcode\.exe$/i.test(x.match.image))) {
     assert.ok(f.match.path.every((p) => new RegExp(p, 'i').test(`${U}\\AppData\\Local\\Programs\\ZCode\\ZCode.exe`)), `${f.id}: any ZCode.exe of the install, not only some of its processes`)
   }

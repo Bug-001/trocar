@@ -1,5 +1,5 @@
 // verge-adapter.test.mjs — the Clash Verge Rev adapter (src/netenv/adapters/clash-verge-rev.mjs, RFC 4.7 §3; acceptance N3 N4 N9, and the fields and facts N1 is built on). D43: the adapter only reads. The controller is a
-// fake core on a loopback socket (fixtures/fake-core.mjs: answers as mihomo v1.19.32 does; W57 holds each thing it fakes to the real binary) and the helper a stub speaking the real helper's shapes
+// fake core on a loopback socket (fixtures/fake-core.mjs: answers as mihomo v1.19.32 does; N9 holds each thing it fakes to the real binary) and the helper a stub speaking the real helper's shapes
 // (fixtures/win-facts.mjs). Everything runs in a sandbox: Verge's data directory is a temp directory, nothing of the user's is read or written.
 import test from 'node:test'
 import assert from 'node:assert/strict'

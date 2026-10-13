@@ -54,7 +54,7 @@ export function matchForm(forms, proc, { home = null } = {}) {
   return { kind: 'none' }
 }
 
-/** May this group's proxy entry be written now (4.8 §2.4, §3.2)? `optedIn`: the user named the group's form (`--opt-in`); `upstreamCredentialed`: the
+/** May this group's proxy entry be written now (4.8 §2.4, §3)? `optedIn`: the user named the group's form (`--opt-in`); `upstreamCredentialed`: the
  *  upstream asight would use needs a user name and password. → { ok:true } | { ok:false, reason:'opt-in-needed' | 'form-unsupported' }.
  *  An entry that takes no credentials (Claude Desktop's policy value is an address only) opens a port any process on the machine can use, so its upstream
  *  must carry none. */
@@ -67,7 +67,7 @@ export function entryGate(group, { optedIn = false, upstreamCredentialed = false
 const PORT = (n) => Number.isInteger(n) && n >= 1 && n <= 65535
 const TOKEN = /^[A-Za-z0-9_-]{16,128}$/
 
-/** The value an automatic proxy entry holds (4.8 §3.2): the group's id and the listener's password are the Basic credentials of the kernel's loopback port for that group (`port`, and
+/** The value an automatic proxy entry holds (4.8 §3): the group's id and the listener's password are the Basic credentials of the kernel's loopback port for that group (`port`, and
  *  `listenerToken`, both from ~/.asight/collector/ingress.json, allocated by Task 7). A group whose entry takes no credentials (`auth:false`) holds the address alone. */
 export function proxyUrl(group, { port, listenerToken } = {}) {
   if (!PORT(port)) throw new TypeError(`the kernel port of ${group.g} must be a TCP port, got ${typeof port === 'number' ? port : typeof port}`)

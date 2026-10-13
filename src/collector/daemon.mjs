@@ -340,7 +340,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         }
       },
       issuer, store, upstreamCa,
-      ...(macIng ? { ingressToken: macIng.ingressToken } : {}), // win32: the kernel's CONNECT authenticates to the ingress with of.<form>:this token (4.8 §3.2); darwin: the doors' own token is each group's listener token, this one the ingress's (D47); listen({ingress}) refuses without it
+      ...(macIng ? { ingressToken: macIng.ingressToken } : {}), // win32: the kernel's CONNECT authenticates to the ingress with of.<form>:this token (4.8 §3); darwin: the doors' own token is each group's listener token, this one the ingress's (D47); listen({ingress}) refuses without it
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: (meta) => sw.isRecording(meta && meta.agent), // sampled per request, per harness (4.6 §开关): a request after off is never recorded
       retention: (meta, host, method, path) => keep.decide({ harness: harnessIdOfAgent(meta && meta.agent), host, method, endpoint: path }), // sampled with it (D40)
@@ -539,7 +539,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
         agents, running_untrusted: agents.filter((a) => !a.trusted && !a.off).length,
         unjudged: { count: unjudged.length, sample: unjudged.slice(0, 10).map((u) => ({ pid: u.pid, comm: u.comm, errno: u.errno })) },
-        // the host sets the plan last applied per host-tree form (4.8 §3.5, W69): the reply is where `status`'s facts reach them (the wiring's win32 bag keeps them);
+        // the host sets the plan last applied per host-tree form (4.8 §3, W69): the reply is where `status`'s facts reach them (the wiring's win32 bag keeps them);
         // `status` compares them with a fresh read and says when the kernel's set is old — read-only, a platform without the bag (Linux) simply says nothing here
         ...(redirector.win32 && typeof redirector.win32.appliedHosts === 'function' ? { applied_hosts: redirector.win32.appliedHosts() } : {}),
         health: healthOnDisk(P.dir),

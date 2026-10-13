@@ -218,7 +218,7 @@ test('the VPN of the machine, through the 4.7 probe over the helper\'s reads and
   assert.equal(none.vpn, null, 'no product running: no VPN is claimed')
 })
 
-test('the host set of an opted-in Kimi VS Code extension (4.8 §3.5, read-only): the defaults plus the relay of the extension\'s own settings, said when they cannot be read, and the names the kernel cannot meet are dropped — `status` changes nothing', async () => {
+test('the host set of an opted-in Kimi VS Code extension (4.8 §3, read-only): the defaults plus the relay of the extension\'s own settings, said when they cannot be read, and the names the kernel cannot meet are dropped — `status` changes nothing', async () => {
   const home = tmpDir('asight-wf-hosts-')
   put(path.join(home, '.asight', 'collector', 'ingress.json'), `${JSON.stringify({ enginePort: 17990, groupPorts: { 'kimi-code.vscode': 17995 }, ingressToken: 'a'.repeat(32), listenerToken: 's3-listener-token' })}\n`)
   const toml = (base) => path.join(home, '.kimi-code', 'config.toml')
@@ -264,7 +264,7 @@ test('W69 the operator\'s extra_hosts reach the set through the REAL facts path 
   assert.deepEqual(fs.readFileSync(toml), before.toml, 'the settings file is byte for byte what it was: the read, the compare and the line change nothing')
 })
 
-test('W69 the host-set lines of `status` (4.8 §3.5): the host program\'s other connections only forward and only the form\'s host set reaches the engine; settings that cannot be read leave the set at the defaults and extra_hosts, said with the reason and the hosts that are still captured; a fresh read that differs from the applied set says the kernel\'s is old and names the command — three notes of the detail view, none when the set is current and reads', () => {
+test('W69 the host-set lines of `status` (4.8 §3): the host program\'s other connections only forward and only the form\'s host set reaches the engine; settings that cannot be read leave the set at the defaults and extra_hosts, said with the reason and the hosts that are still captured; a fresh read that differs from the applied set says the kernel\'s is old and names the command — three notes of the detail view, none when the set is current and reads', () => {
   const hostForm = (hosts) => form('kimi-code.vscode', { entry: { where: 'settings.json http.proxy', asight: true, opt_in: true, intact: true }, optIn: { state: 'done' }, procs: [proc(8100, { name: 'Code', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', version: null })], hosts })
   const DEFAULTS = ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn']
   const tree = 'VS Code 别的连接经 asight 的内核(只转发),只有到 Kimi 的 host 集的连接进引擎'
@@ -541,7 +541,7 @@ test('W36 form-unsupported through the REAL facts path: a named Claude Desktop (
   const manifest = readManifest(dir, fs)
   for (const kind of ['optin-cert-user', 'optin-claude-policy']) manifest.entries.push({ kind, harness: 'claude-code', form: 'claude-code.desktop', item: 'cert-store-current-user', scope: 'user', path: 'claude-code.desktop:cert-store-current-user' })
   saveManifest(dir, manifest, fs)
-  // the desktop group's upstream: the login environment's proxy with the user's login in it — the policy value takes an address only (auth:false, 4.8 §3.2)
+  // the desktop group's upstream: the login environment's proxy with the user's login in it — the policy value takes an address only (auth:false, 4.8 §3)
   const f = await gather(home, { helper: helperOf({ procs: [KERNEL_ROW], loginEnv: { HTTPS_PROXY: { kind: 'REG_SZ', value: 'http://alice:pw@corp.example:3128' } } }), ids: ['claude-code'] })
   const desktop = f.harnesses['claude-code'].forms.find((x) => x.id === 'claude-code.desktop')
   assert.deepEqual(desktop.route, { reason: 'form-unsupported', code: 'form-unsupported' }, "the plan's own reason on the form (planRoutes → routeOf)")
@@ -562,7 +562,7 @@ test('W36 form-unsupported through the REAL facts path: a named Claude Desktop (
   assert.ok(!JSON.stringify(found).includes('alice'), 'nor in the finding')
 })
 
-test('W36 the static scans (W74\'s clause; 4.8 E6): findings-win32.mjs has no command that changes Smart App Control, and the port check is always the netstat + findstr form', () => {
+test('W36 the static scans (4.8 E6): findings-win32.mjs has no command that changes Smart App Control, and the port check is always the netstat + findstr form', () => {
   const src = fs.readFileSync(path.join(REPO, 'src/netenv/findings-win32.mjs'), 'utf8').replace(/^\s*\/\/.*$/gm, '') // the code, not its comments (which say why each of these is absent)
   for (const bad of ['Set-ItemProperty', 'reg add', 'CI\\Policy', 'Get-NetTCPConnection']) assert.ok(!src.includes(bad), `${bad} is not in the Windows doctor table`)
   assert.ok((src.match(/netstat -ano -p TCP \| findstr/g) || []).length >= 1, 'the port check is the netstat + findstr form')

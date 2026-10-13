@@ -1,6 +1,6 @@
 // ingress.test.mjs — the engine's proxy ingress (RFC 4.8 §5.1 · §5.2 · §5.5; acceptance W13, W15, W17). A real engine on loopback, the static
 // redirector's lookupIngress, a plain TCP echo as the upstream and, where a proxy is the upstream, the mock proxy. No mihomo here: the
-// health probe is replayed from the bytes the REAL mihomo sent (test/netenv/fixtures/mihomo-probe.bytes, recorded by the W57 contract test).
+// health probe is replayed from the bytes the REAL mihomo sent (test/netenv/fixtures/mihomo-probe.bytes, recorded from a real mihomo).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
