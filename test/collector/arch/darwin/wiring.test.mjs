@@ -15,6 +15,7 @@ import { installCollector } from '../../../../src/collector/install.mjs'
 import { readManifest } from '../../../../src/collector/core/trust/journal.mjs'
 import { saveManifest } from '../../../../src/off/manifest.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
+import { factsOfPid } from '../../../../src/collector/arch/darwin/procinfo.mjs'
 
 const ALL = await loadHarnesses()
 const ID = createRegistry(ALL).match // what the daemon hands the collector: registry.match, built first (D51)
@@ -316,4 +317,34 @@ test('osLayers hands the layers ctx the keychain door (4.9 §6.4): open only for
 
   const codex = r.redirector.darwin.osLayers.darwin(one('codex'))
   assert.deepEqual(codex(ctx(['/opt/homebrew/bin/codex'])), [null], 'the wrapper is a no-op for a harness with no darwin layers of its own (its base layers ran as ever and answered their absent-files [null] — the tracker filters it; the door\'s keys were simply ignored)')
+})
+
+// The collector -> door handoff (D51 T7, review of the T7 branch): the door this wiring builds asks the identify the daemon handed in and the isOn read from
+// desired(), and its process-unknown reaches the daemon's event sink. The door's own tests inject both straight into createDoorRedirector; this one drives a
+// lookup through the wiring with real-shaped facts (procinfo's factsOfPid over recorded ps / lsof output, convention 3) behind the peer.
+test('the wiring\'s door names a process by the identify handed in, splices an off harness as harness-off, and sends one process-unknown to the event sink (D51⑤⑥)', async () => {
+  const uid = process.getuid()
+  const facts = (pid, exe, cmdline) => factsOfPid(pid, { env: {}, exec: (file) => {
+    if (file === 'ps') return { status: 0, stdout: `${pid}     1   ${uid} ${cmdline.split(' ')[0]}  Tue Oct 14 10:00:01 2026     ${cmdline}\n`, stderr: '' }
+    if (file === 'lsof') return { status: 0, stdout: `p${pid}\nftxt\nn${exe}\n`, stderr: '' }
+    return { status: 1, stdout: '', stderr: 'not in the fake' }
+  } })
+  const store = new Map([
+    [61, facts(61, '/Users/u/.local/share/claude/versions/2.1.296', 'claude -p hi')],
+    [62, facts(62, '/Users/u/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex', 'codex exec hi')],
+    [63, facts(63, '/Users/u/.local/bin/claude-nightly', 'claude-nightly -p hi')],
+  ])
+  const owner = { pid: null }
+  const r = await rigged(['claude-code', 'codex'], { desired: { 'claude-code': { desired: 'on' }, codex: { desired: 'off' } }, over: { deps: { ownerOf: async () => ({ pid: owner.pid, source: 'socket-table', ms: 1 }), factsOf: (pid) => store.get(pid) ?? null } } })
+  r.redirector.on('exec', (f) => r.redirector.watch(f.pid, { decrypt: true, agent: ID(f).agent }))
+  const ask = (pid) => { owner.pid = pid; return r.redirector.lookupIngress({ peer: { address: '127.0.0.1', port: 50000 + pid }, user: 'claude-code.settings', target: { address: 'api.anthropic.com', port: 443 } }) }
+  const cc = await ask(61)
+  assert.deepEqual([cc.agent, cc.door, cc.decrypt, cc.skip], ['claude-code', 'claude-code.settings', true, undefined], 'named by the identify the daemon handed in, and judged')
+  const codex = await ask(62)
+  assert.deepEqual([codex.agent, codex.skip && codex.skip.reason], ['codex', 'harness-off'], 'codex is off in desired(): the wiring\'s isOn says so at the claude door')
+  const n1 = await ask(63)
+  await ask(63)
+  assert.equal(n1.skip && n1.skip.reason, 'not-an-agent')
+  const unknown = r.events.filter((e) => e.event === 'process-unknown')
+  assert.deepEqual(unknown.map((e) => [e.name, e.door, e.pid]), [['claude-nightly', 'claude-code.settings', 63]], 'one process-unknown, through the wiring to the daemon\'s event sink')
 })
