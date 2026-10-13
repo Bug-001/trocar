@@ -168,17 +168,20 @@ test('R9: on after off writes the entries again with a new installed_at; a bundl
   assert.equal(bundlesAreValid(s).length, 3)
 })
 
-test('R9: a manifest an older asight wrote has no liveness for some harness: on adds it, only the missing, and leaves the ones that are there', async () => {
+test('R9: a manifest an older asight wrote has no liveness for some harness: on adds it, and rewrites the others from the descriptors (identity united with what was recorded, 4.6 「判活快照」)', async () => {
   const s = sandbox()
   await s.run()
   const file = path.join(s.dir, 'install-manifest.json')
   const m = JSON.parse(fs.readFileSync(file, 'utf8'))
-  m.liveness['claude-code'].until = 'session-end' // a value only a hand could have put there: it must survive
+  m.liveness['claude-code'].until = 'session-end' // not what the descriptor says: the record is rewritten from it
+  const recorded = { re: '(^|/)claude-old$', flags: 'i' }
+  m.liveness['claude-code'].identity.match.push({ names: recorded }) // a name an earlier list held: kept
   delete m.liveness.codex
   fs.writeFileSync(file, JSON.stringify(m, null, 2))
   assert.equal((await s.run()).exit, 0)
   const after = readManifest(s.dir).liveness
-  assert.equal(after['claude-code'].until, 'session-end')
+  assert.equal(after['claude-code'].until, 'restart')
+  assert.ok(after['claude-code'].identity.match.some((p) => JSON.stringify(p.names) === JSON.stringify(recorded)), 'the recorded pattern is united in')
   assert.ok(after.codex && typeof after.codex.rereads === 'boolean', 'codex has its record again')
 })
 
