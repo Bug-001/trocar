@@ -14,7 +14,7 @@ export const FAILURE_WORDS = Object.freeze({
   // record / events (R11's own failures)
   'record/record-error': '采集写不进', 'record/file-replaced': '采集文件被换掉了', 'events/log-gap': '事件日志有缺口',
   // tracker / trust / bundle
-  'bundle/system-roots-unavailable': '合并包里没有系统根证书', 'tracker/watch-failed': '进程没看住', 'tracker/judge-error': '进程判不了', 'tracker/ambiguous': '进程认不出是哪一个 harness',
+  'bundle/system-roots-unavailable': '合并包里没有系统根证书', 'bundle/system-roots-unparsable': '有系统根证书解析不了,没进合并包', 'bundle/system-roots-partial': '合并包少了一部分系统根证书', 'tracker/watch-failed': '进程没看住', 'tracker/judge-error': '进程判不了', 'tracker/ambiguous': '进程认不出是哪一个 harness',
   // engine
   'engine/lookup-miss': '拿不到连接的原目的地', 'engine/engine-error': '引擎出错', 'engine/flow-write-failed': '流写不进', 'engine/negative-cache': '客户端拒了证书,那个 host 之后透传', 'engine/upstream-slow': '上游慢', 'engine/leaf-error': '出证书失败', 'engine/framer-error': '解析请求失败',
   // kernel / helper

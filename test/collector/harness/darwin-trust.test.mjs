@@ -354,6 +354,12 @@ test('W20: a source that fails while the others give the set is named in tried (
   assert.deepEqual([oneDown.source, oneDown.tried], [['node-bundled'], ['node-system: EIO', 'security: segv']], 'a bundle quietly missing two of its three sources is not fine: both failures are said')
   const clean = await darwinRoots({ tls: { getCACertificates: (k) => k === 'bundled' ? [R[0]] : [] }, exec: execOf([R[1]]) })
   assert.deepEqual([clean.source, clean.tried], [['node-bundled', 'security'], []], 'a keychain with no added anchor answers empty: that is not a failed read (no daily alarm on a clean Mac)')
+  // an EMPTY answer is not a failed read (above); a missing read is, and with no source at all every reason is kept, empty or failed, in source order
+  const node20 = await darwinRoots({ tls: {}, exec: execOf([R[1]]) })
+  assert.deepEqual([node20.source, node20.tried.length], [['security'], 1], 'Node 20: the standard set from the export, and the missing keychain read is said')
+  assert.match(node20.tried[0], /^getCACertificates: not available/)
+  await assert.rejects(darwinRoots({ tls: { getCACertificates: (k) => k === 'bundled' ? [] : (() => { throw Object.assign(new Error('x'), { code: 'EIO' }) })() }, exec: execOf([]) }),
+    (e) => unavailable(e) && e.tried.join(' | ') === 'node-bundled: no certificate | node-system: EIO | security: no certificate', 'nothing at all: every source\'s reason, empty or failed, in source order')
   await assert.rejects(darwinRoots({ tls: {}, exec: () => ({ status: 1, stdout: '', stderr: '' }) }), (e) => unavailable(e) && /could not be read/.test(e.message) && e.tried.length === 2 && /Node ≥ 22.15/.test(e.tried[0]) && e.tried[1] === 'security: exit 1', 'no Node 22.15 read and a failed export: both reasons')
   await assert.rejects(darwinRoots({ tls: { getCACertificates: () => [BROKEN] }, exec: execOf([BROKEN]) }), (e) => unavailable(e) && e.tried.length === 3 && e.tried.every((t) => t.endsWith(': no certificate')), 'stores of nothing but broken certificates are not a root set')
   await assert.rejects(darwinRoots({ tls: {}, exec: () => { throw new Error('boom') } }), (e) => unavailable(e) && /security: boom/.test(e.message), 'a thrown runner is a reason')

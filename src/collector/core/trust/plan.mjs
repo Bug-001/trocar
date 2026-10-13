@@ -23,6 +23,7 @@ import { X509Certificate } from 'node:crypto'
 import { certsOf, composeBundle } from './bundle.mjs'
 import { SENTINEL } from '../../../off/text-edit.mjs'
 import { CODE } from '../codes.mjs'
+import { rootsLeftOut } from '../tls/roots.mjs'
 
 // Login-environment locations: a CA variable there makes every program of the user trust asight (vetoed, D37④).
 const LOGIN_ENV = [/\/\.config\/environment\.d\//, /\/\.(profile|bash_profile|bash_login|bashrc|zshrc|zshenv|zprofile|zlogin|pam_environment)$/, /\/\.config\/fish\//, /^\/etc\//]
@@ -40,8 +41,9 @@ const CA_WORDS = /\b(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|SSL_CERT_FILE|SSL_CERT_DIR
 // what a command name resolves to, it is not a CA variable. Exactly this shape, the dir under the collector dir.
 const shimPathLine = (collectorDir) => new RegExp(`^export PATH="${(collectorDir + '/bin').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\$PATH" # ${SENTINEL}: `)
 
-// roots = { node: tls.rootCertificates, osText: the OS bundle's text, missing: why no OS root is in osText (null when one is) } — needed only when a
-// harness declares a bundle; each bundle composed without an OS root says so in the plan, the receipt and flows/ (4.6 「合并包」, D38).
+// roots = { node: tls.rootCertificates, osText: the OS bundle's text, missing: why no OS root is in osText (null when one is), dropped, partial } (core/tls/roots.mjs
+// bundleRoots) — needed only when a harness declares a bundle; each bundle composed without an OS root says so in the plan, the receipt and flows/, and what
+// the OS roots lack (`dropped` certificates that did not parse, a `partial` read) is one line naming every bundle (4.6 「合并包」, 4.8 §6.2, D38).
 export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots = { node: [], osText: '' } }) {
   const entries = []
   const files = []
@@ -149,6 +151,8 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
     }
     for (const n of out.notes || []) note(d.name, typeof n === 'string' ? CODE.harnessNote : n.code, typeof n === 'string' ? n : n.text)
   }
+  // what the OS roots lack is missing from every bundle composed here alike: one line naming them all, not one per bundle (4.8 §6.2 「回执…各一行」)
+  for (const r of rootsLeftOut(roots, files.filter((f) => f.role === 'bundle').map((f) => f.path))) { notes.push(r.reason); records.push(r) }
   function note(harness, code, text, extra = {}) { const n = `${harness}: ${text}`; notes.push(n); records.push({ harness, code, reason: n, ...extra }) } // the record says what was printed, word for word (D-28)
   if (new Set(shimNames).size !== shimNames.length) throw new Error('two launch shims of one name: the shim directory holds one shim per command')
   return { entries, files, owned, watch, notes, records, skipped, paths: [...files.map((f) => f.path), ...owned.map((o) => o.path), ...entries.map((e) => e.path)] }

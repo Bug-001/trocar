@@ -77,6 +77,33 @@ test('trust plan: a replace-semantics entry may only point at its own harness\'s
   assert.deepEqual(planTrust({ descriptors: [{ name: 'beta' }], ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: DIR }).paths, [])
 })
 
+// 4.8 §6.2 / W20, 4.9 §6.2, 4.6 「合并包」: what the OS roots reader left out — certificates that did not parse, a source whose read failed while others
+// gave roots — is in none of the combined bundles, and the plan (on's plan, receipt and install-notes) says it once, naming every bundle (D38); a plan
+// with no bundle has nothing to say, and roots with nothing left out add no line.
+test('trust plan: OS roots that did not parse, and a roots source that failed, are one note each naming every combined bundle — never per bundle, never when nothing is left out', () => {
+  const two = [
+    { name: 'alpha', inject: () => ({ files: [{ path: `${DIR}/ca/combined-alpha.pem`, bundle: true }] }) },
+    { name: 'beta', inject: () => ({ files: [{ path: `${DIR}/ca/combined-beta.pem`, bundle: true }] }) },
+    { name: 'gamma', inject: () => ({ entries: [entry({ path: '/h/.gamma/settings.json' })] }) }, // no bundle of its own
+  ]
+  const roots = (o) => ({ node: [USER.certPem], osText: '', missing: null, dropped: 0, partial: null, ...o })
+  const run = (r, descriptors = two) => planTrust({ descriptors, ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: DIR, roots: r })
+  const left = run(roots({ dropped: 2, partial: 'getCACertificates: not available (Node ≥ 22.15 has it)' }))
+  const unparsable = left.records.filter((x) => x.code === 'system-roots-unparsable')
+  const partial = left.records.filter((x) => x.code === 'system-roots-partial')
+  assert.equal(unparsable.length, 1, 'one line for the receipt, not one per bundle')
+  assert.equal(partial.length, 1)
+  assert.deepEqual([unparsable[0].dropped, unparsable[0].files, partial[0].files], [2, [`${DIR}/ca/combined-alpha.pem`, `${DIR}/ca/combined-beta.pem`], [`${DIR}/ca/combined-alpha.pem`, `${DIR}/ca/combined-beta.pem`]], 'the count, and the bundles it is missing from')
+  assert.match(unparsable[0].reason, /^2 certificates in the OS roots could not be parsed and are not in the combined bundles .*combined-alpha\.pem.*combined-beta\.pem/)
+  assert.match(partial[0].reason, /combined-alpha\.pem.*combined-beta\.pem.*getCACertificates: not available \(Node ≥ 22\.15 has it\)/, 'the reason of each failed source')
+  for (const x of [...unparsable, ...partial]) assert.ok(left.notes.includes(x.reason), 'the record says what was printed, word for word (D-28)')
+  assert.match(run(roots({ dropped: 1 })).records.find((x) => x.code === 'system-roots-unparsable').reason, /^1 certificate in the OS roots could not be parsed and is not in/)
+  const clean = run(roots({}))
+  assert.deepEqual(clean.records.filter((x) => /^system-roots-/.test(x.code)), [], 'nothing left out: no line')
+  const noBundle = run(roots({ dropped: 2, partial: 'security: exit 1' }), [two[2]])
+  assert.deepEqual(noBundle.records.filter((x) => /^system-roots-/.test(x.code)), [], 'no combined bundle in the plan: nothing is missing from one')
+})
+
 test('trust plan: text entries — a dotenv block passes the same checks as a key; a login-environment file only ever gets the shim PATH line', async () => {
   const { lineComment } = await import('../../../src/off/text-edit.mjs')
   const block = (vars, o = {}) => ({ kind: 'text', format: 'dotenv-block', path: '/h/.alpha/.env', vars, semantic: 'replace', ...o })

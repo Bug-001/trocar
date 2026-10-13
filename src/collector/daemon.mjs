@@ -20,7 +20,7 @@ import { readCa } from './core/tls/ca-store.mjs'
 import { tryOpLock } from '../off/lock.mjs'
 import { loadCa, checkCa } from './core/tls/ca.mjs'
 import { createLeafIssuer } from './core/tls/leaf.mjs'
-import { bundleRoots } from './core/tls/roots.mjs'
+import { bundleRoots, rootsLeftOut } from './core/tls/roots.mjs'
 import { createRecordStore } from './core/record/store.mjs'
 import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, createFailureRecorder } from './core/events.mjs'
@@ -274,11 +274,13 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
           // The roots, through the one resolver the install's plan asks too (tls/roots.mjs bundleRoots: the arch's osRoots, 4.6 「合并包」). Without the OS roots the
           // combined bundles carry no enterprise root and a replace-semantics entry (Codex's SSL_CERT_FILE) silently cuts the agent off its relay. A read that fails
           // entirely reaches the catch below: the bundles keep their previous roots and the failure is said (D38). An answer with no OS root in it (`missing`: no OS
-          // bundle on this machine holds a certificate) is used — Node's roots are all there is — and said.
+          // bundle on this machine holds a certificate) is used — Node's roots are all there is — and said; so is an answer that left certificates out (`dropped`:
+          // they did not parse) or lacks a source whose read failed (`partial`): rootsLeftOut, the same line `on`'s plan writes.
           const got = await bundleRoots(A)
           rewriteBundles({ dir: P.dir, manifest: fresh, nodeRoots: got.node, osRootsText: got.osText, caPem: ca.certPem, report, only: on })
-          const bare = got.missing ? fresh.files.filter((f) => f.role === 'bundle' && on.has(f.harness) && !f.without_ca).map((f) => f.path) : []
-          if (bare.length) failure.event({ where: 'bundle', code: CODE.systemRootsUnavailable, files: bare, reason: `the combined bundles ${bare.join(', ')} carry Node's roots only: ${got.missing}; a CA installed system-wide (a corporate proxy's) is not in them, and an agent whose entry points at one may not reach a relay that signs with it` })
+          const live = fresh.files.filter((f) => f.role === 'bundle' && on.has(f.harness) && !f.without_ca).map((f) => f.path) // the bundles this round composes
+          if (got.missing && live.length) failure.event({ where: 'bundle', code: CODE.systemRootsUnavailable, files: live, reason: `the combined bundles ${live.join(', ')} carry Node's roots only: ${got.missing}; a CA installed system-wide (a corporate proxy's) is not in them, and an agent whose entry points at one may not reach a relay that signs with it` })
+          for (const r of rootsLeftOut(got, live)) failure.event({ where: 'bundle', ...r }) // certificates that did not parse, a source whose read failed: the plan's line, at every rebuild (4.8 §6.2, D38)
         }
       } catch (e) { failure('bundle', Object.assign(new Error(`rebuilding the combined bundles failed: ${errText(e)}; they keep their previous roots`), { code: e && e.code })) } finally { if (held && held.lock) held.lock.release() }
       const changed = report.rebuilt.filter((r) => r.why === 'roots-changed').map((r) => r.path)
