@@ -58,7 +58,7 @@ test('SYSTEM_BUNDLES is one list: the collector\'s is the one `off` reads (src/o
 
 // the platform-seam rule: the combined bundles' roots have one resolver. A caller with an arm of its own (a named file read beside the arch's osRoots, a
 // fallback) is the drift this closes — on.mjs, install.mjs and the daemon once each chose between `osRootsFile` and `osRoots()`, an arm only test arches took.
-test('bundleRoots is the one resolver of the combined bundles\' roots: the arch\'s osRoots or Node\'s alone; no other code in src/ asks osRoots, and no file arm is left', async () => {
+test('bundleRoots is the collector\'s one resolver of the combined bundles\' roots: the arch\'s osRoots or Node\'s alone; no other code in src/ asks osRoots, and no file arm is left', async () => {
   assert.deepEqual(await bundleRoots({ osRoots: async () => ({ pem: b.certPem, file: '/f' }) }, { nodeRoots: [x.certPem] }), { node: [x.certPem], osText: b.certPem, missing: null })
   assert.deepEqual(await bundleRoots({ osRoots: () => ({ pem: '', missing: 'none here' }) }, { nodeRoots: [] }), { node: [], osText: '', missing: 'none here' }, '`missing` reaches the callers (planTrust\'s note, the daemon\'s failure)')
   assert.deepEqual(await bundleRoots(null, { nodeRoots: [x.certPem] }), { node: [x.certPem], osText: '', missing: null }, 'no osRoots: Node\'s roots alone')
@@ -67,8 +67,11 @@ test('bundleRoots is the one resolver of the combined bundles\' roots: the arch\
   const home = path.join(src, 'collector', 'core', 'tls', 'roots.mjs')
   const code = (t) => t.replace(/\/\/.*$/gm, '').replace(/^\s*\/?\*.*$/gm, '') // comments may name the hook; only code is judged
   const files = fs.readdirSync(src, { recursive: true }).map((f) => path.join(src, f)).filter((f) => f.endsWith('.mjs') && f !== home)
-  const hits = files.filter((f) => /\.osRoots\b|osRootsFile/.test(code(fs.readFileSync(f, 'utf8')))).map((f) => path.relative(src, f))
-  assert.deepEqual(hits, [], 'a second reader of the arch\'s OS roots, or a file arm beside them, is a second resolver')
+  const linuxArch = path.join(src, 'collector', 'arch', 'index.mjs') // the Linux arch's osRoots is osBundleRoots
+  // `.osRoots` / `['osRoots']` / `{ osRoots }` read the hook; osBundleRoots called anywhere but the Linux arch reads an OS file beside it; osRootsFile is the old file arm
+  const second = (f, t) => /\.osRoots\b|\[\s*['"]osRoots['"]\s*\]|\bosRoots\s*[,}]|osRootsFile/.test(t) || (f !== linuxArch && /\bosBundleRoots\s*\(/.test(t))
+  const hits = files.filter((f) => second(f, code(fs.readFileSync(f, 'utf8')))).map((f) => path.relative(src, f))
+  assert.deepEqual(hits, [], 'a second reader of the OS roots, or a file arm beside them, is a second resolver')
 })
 
 test('nodeRoots: without the API, Node\'s bundled roots plus this process\'s NODE_EXTRA_CA_CERTS', () => {

@@ -41,8 +41,8 @@ export function osBundleRoots({ files = SYSTEM_BUNDLES, read = readText } = {}) 
 
 /** bundleRoots(arch, {nodeRoots}) → {node, osText, missing}: the roots every combined bundle starts from (4.6 「合并包」) — Node's own and what
  *  `arch.osRoots()` answers, read each time it is asked (Linux: osBundleRoots above; darwin: darwinRoots, 4.9 §6.2; win32: windowsRoots, 4.8 §6.2).
- *  The one resolver of them (the platform-seam rule): the install's plan (install.mjs planOn — `on`, `collector install`) and the daemon's rebuild both
- *  ask it, and no caller keeps a fallback of its own. An arch without osRoots (a test's) gives Node's roots alone, nothing said missing. A read
+ *  The one resolver of them in the collector (the platform-seam rule): the install's plan (install.mjs planOn — `on`, `collector install`) and the daemon's
+ *  rebuild both ask it, and no caller keeps a fallback of its own. (`off` rebuilds a gone bundle without collector code, R3: src/off/orchestrate.mjs.) An arch without osRoots (a test's) gives Node's roots alone, nothing said missing. A read
  *  that fails throws: `on` stops before a file is written, the daemon keeps the previous bundles (D38). */
 export async function bundleRoots(arch, { nodeRoots = tls.rootCertificates } = {}) {
   const got = arch && typeof arch.osRoots === 'function' ? await arch.osRoots() : null
