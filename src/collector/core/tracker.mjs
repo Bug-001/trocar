@@ -238,8 +238,11 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
   // Those get the code their connection row carries (RFC 4.6 §记录, D38): `not-trust-path` with the harness's own reason
   // for a host it declares not via the trust path, `untracked` for a pid the kernel steers but the table does not hold
   // (exited, dropped by a rescan), `untrusted` with the resolver's reason (review B-3: the first used to be a bare false,
-  // which the engine wrote as `policy`).
+  // which the engine wrote as `policy`). A connection the redirector already judged not to decrypt and said why (`meta.skip`, the door's
+  // closed-set untracked reason: not-an-agent, agent-helper, cmdline-pending, …, 4.6 §记录 连接行怎么落码) gets that code as it is: it was
+  // judged for this one connection, so it is said before any table row the pid has (a host program off its host set has one from another).
   function policy(meta, host) {
+    if (meta && meta.decrypt !== true && meta.skip && typeof meta.skip === 'object') return meta.skip
     const row = meta && table.get(meta.pid)
     if (!row) return { not_captured: 'untracked' }
     if (row.off) return false // a connection that raced in before the kernel stopped steering it: spliced as policy (expected), not a failure

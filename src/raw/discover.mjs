@@ -1,7 +1,7 @@
 // src/raw/discover.mjs — which files ARE the source, for every reader (D35 · RFC 4.2 「读」「并存期」).
 //
 // The board loader, the resolver and `asight doctor` used to each decide this for themselves, and
-// drifted (src/server.mjs::sourceFiles explains how that once certified a capture nobody had read).
+// drifted (the scan comment in src/server.mjs, above scanRoots, explains how that once certified a capture nobody had read).
 // D35 adds sealed files, and with them the one rule that MUST be the same for all three readers:
 //
 // 1. Where. A root is scanned flat (every `*.ndjson`, every `*.sealed`) plus exactly one level down,

@@ -13,6 +13,8 @@ import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo, recordingExec, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { down, reply, asDaemon, SOCK } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { captureHealth } from '../../src/health/read.mjs'
+import { closure } from '../helpers/imports.mjs'
 
 // a record the four questions are content with: an LLM call with its verbatim request and a reconstructed response
 const REC = { id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages', ts_request: '2026-01-01T00:00:00.000Z',
@@ -308,4 +310,38 @@ test('the Claude Desktop steering hint on darwin: said for claude-code when the 
   const done = plain(); manifestWith([{ kind: 'optin-desktop-launcher', harness: 'claude-code', form: 'claude-code.desktop', item: 'desktop-launcher', scope: 'user', path: '/x/bin/claude-desktop-asight', confirmed: true, installed_at: '2026-10-12T00:00:00Z' }])(done.home)
   r = await doctor(done, ['claude-code'], { platform: 'darwin' })
   assert.ok(!r.out.includes(DESKTOP_HINT), 'the item in the ledger: the hint has done its job and goes')
+})
+
+// ── V66 wired (1.6 §9.6, D51③⑤): from the flows/ a daemon wrote to the line doctor prints — no facts injected ─────────────────────────────────────────────────────
+const NIGHTLY = { harness: 'claude-code', name: 'claude-nightly' }
+function unknownOnDisk(home) { // what the door wrote on the macOS and Windows test machines (the D51 cells' mac-6 / win-13): a daemon life, then one process-unknown for a renamed claude
+  const dir = path.join(home, '.asight', 'collector', 'flows')
+  fs.mkdirSync(dir, { recursive: true })
+  const ts = new Date().toISOString()
+  fs.appendFileSync(path.join(dir, `${ts.slice(0, 10)}.ndjson`), [{ event: 'daemon-start', pid: 1 }, { event: 'process-unknown', where: 'engine', harness: 'claude-code', door: 'claude-code.settings', name: 'claude-nightly', wide: false, pid: 8622, reason: 'claude-nightly (pid 8622) used the claude-code.settings door but is on no name list' }].map((r) => JSON.stringify({ ts, ...r }) + '\n').join(''))
+}
+
+test('V66 wired: a process-unknown in ~/.asight\'s flows/ reaches `doctor claude-code` — the filled-in agents.json line in the text and in --json findings, daemon or not, on every platform\'s doctor', async () => {
+  const s = await installedHome()
+  unknownOnDisk(s.home)
+  const line = JSON.stringify(NIGHTLY)
+  const daemon = asDaemon(reply({ health: captureHealth({ home: path.join(s.home, '.asight') }) })) // what the daemon serves: the same fold of the same flows/
+  for (const platform of ['linux', 'darwin', 'win32']) {
+    for (const [label, request] of [['no daemon', down()], ['daemon', daemon]]) {
+      const what = `${platform}, ${label}`
+      const text = await doctor(s, ['claude-code'], { platform, deps: { request } })
+      assert.ok(text.out.includes(line), `${what}: the text gives ${line}\n${text.out}`)
+      assert.match(text.out, /process-unknown/, what)
+      const j = await doctor(s, ['claude-code', '--json'], { platform, deps: { request } })
+      const doc = JSON.parse(j.out)
+      const f = (doc.findings || []).filter((x) => x.code === 'process-unknown')
+      assert.equal(f.length, 1, `${what}: one process-unknown finding (${doc.findings_error || ''})`)
+      assert.deepEqual([f[0].harness, f[0].class, f[0].commands.some((c) => c.run.includes(line))], ['claude-code', 'hint', true], `${what}: a hint whose command is the line`)
+    }
+  }
+})
+
+test('doctor and status need no package: their import closure is node builtins and this repository\'s own files — a tree with no node_modules (a test machine\'s, a broken native DuckDB) still self-checks', () => {
+  // 2026-10-14: doctor reached @duckdb/node-api through server.mjs just to list the capture files, and on the macOS and Windows test machines printed only ERR_MODULE_NOT_FOUND
+  assert.deepEqual(closure(['src/cli/doctor.mjs', 'src/cli/status.mjs']).problems, [])
 })

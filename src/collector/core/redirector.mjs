@@ -24,8 +24,9 @@
 //       target is the group's own re-entry point (the health probe: the ingress answers it without an upstream and records nothing);
 //       or null for an unknown user (the ingress refuses it as an auth failure). IngressMeta = FlowMeta (dst may be left out: the
 //       ingress fills it from the target) & { capture, form, upstream: {kind:'direct'|'http'|'socks5', host?, port?, auth?:{username,
-//       password}}, pid_source, pid_ms, negKey, exe?, skip? }. `skip` = {not_captured, reason} is for a connection that is not decrypted and whose pid the tracker holds no row for (no pid, or one that is not the form's own): the code
-//       the daemon's policy hands the engine for the row (4.8 §5.4). `upstream.auth` is the user's own proxy's credentials, used for this one
+//       password}}, pid_source, pid_ms, negKey, exe?, skip? }. `skip` = {not_captured, reason} is the door's own verdict on a connection it does not decrypt (no pid, a process on no name list,
+//       or a host program's connection outside its host set — whether or not the tracker holds a row for the pid): the code the daemon's
+//       policy hands the engine for the row, ahead of any table lookup (4.8 §5.4, 4.6 §记录). `upstream.auth` is the user's own proxy's credentials, used for this one
 //       connection's prelude and then dropped (the flow only learns whether there were some). A redirector without `lookup` gets no
 //       transparent listener (Windows has no transparent rewrite).
 //   attach(): Promise<void>        — load kernel programs / start the OS redirector (Plan 2).

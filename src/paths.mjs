@@ -36,7 +36,7 @@ export const captureOut = () => path.join(asightHome(), 'capture.ndjson');
 export const mitmOut = () => path.join(asightHome(), 'claude-capture.ndjson');
 // The per-user process collector (RFC 4.6 §记录) writes its envelopes to <here>/capture-<date>.ndjson.
 // Its subdirectories flows/ audit/ replays/ are NOT envelopes; the board never reads them because a
-// root's scan only descends into <sub>/calls.ndjson (server.mjs sourceFiles), and `asight etl <dir>`
+// root's scan only descends into <sub>/calls.ndjson (server.mjs scanRoots), and `asight etl <dir>`
 // does not descend at all. It needs a root of its own: the home's one-level scan never reaches it.
 export const collectorHome = (home = asightHome()) => path.join(home, 'collector');
 // D40 (RFC 4.6 §记录「保存级别」): what to keep of each call, per harness × traffic class — one per-user file read by BOTH

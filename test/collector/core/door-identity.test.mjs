@@ -5,6 +5,7 @@
 // is the real one (createRegistry over the real descriptors), the same function the tracker judges by.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import net from 'node:net'
 import { createDoorRedirector } from '../../../src/collector/core/engine/door-redirector.mjs'
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { createTracker } from '../../../src/collector/core/tracker.mjs'
@@ -13,7 +14,11 @@ import { groupsOf as darwinGroupsOf } from '../../../src/collector/arch/darwin/r
 import { groupsOf as win32GroupsOf } from '../../../src/collector/arch/win32/route-plan.mjs'
 import { factsOfPid } from '../../../src/collector/arch/darwin/procinfo.mjs'
 import { factsOfRow } from '../../../src/collector/arch/win32/procinfo.mjs'
-import { checkRecord } from '../../../src/health/codes.mjs'
+import { checkRecord, UNTRACKED_REASONS } from '../../../src/health/codes.mjs'
+import { createEngine } from '../../../src/collector/core/engine/engine.mjs'
+import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
+import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
+import { within, closeWithin } from '../../helpers/bounded.mjs'
 
 const ALL = await loadHarnesses()
 const REG = createRegistry(ALL)
@@ -52,7 +57,7 @@ function door(os, { store = new Map(), identify = REG.match, isOn = () => true, 
   })
   r.on('exec', (f) => execs.push(f))
   const ask = async (pid, user, t = target()) => { owner.pid = pid; return r.lookupIngress({ peer: { address: '127.0.0.1', port: 50000 + (pid || 0) }, user, target: t }) }
-  return { r, store, events, execs, ask }
+  return { r, store, events, execs, ask, owner }
 }
 
 test('the door needs identify and isOn: who a process is and whether its harness is on have no default answer', () => {
@@ -217,4 +222,82 @@ test('4.9 MA1 (unit half): curl holding the door\'s token is not an agent — fo
   d.r.watch(121, { decrypt: true, agent: 'claude-code' }) // even a verdict row in the table does not make curl an agent
   const m = await d.ask(121, 'claude-code.settings')
   assert.deepEqual([m.decrypt, m.skip, d.events.map((e) => e.name)], [false, { not_captured: 'untracked', reason: 'not-an-agent' }, ['curl']])
+})
+
+// ── the door's why on the connection row, through the daemon's own wiring ──────────────────────────────────────────────────────────────────────
+// A real engine ingress over the door core, its policy wired exactly as daemon.mjs wires it (`(meta, host) => tracker.policy(meta, host)`, a
+// real tracker on the same door), one plain HTTP exchange per connection, and the flows/ row it leaves (RFC 4.6 §记录 连接行怎么落码, item 7).
+const NO_TRUST = { check: () => ({ trusted: false, reason: 'var-missing', var: null, via: null }) }
+const ENOENT = () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }
+const engineCa = createCa()
+async function wired(t, d) {
+  const tracker = createTracker({ redirector: d.r, registry: REG, trust: NO_TRUST, home: '/nonexistent', alive: () => true, readFile: ENOENT })
+  tracker.start()
+  const echo = net.createServer((s) => { s.on('error', () => {}); s.pipe(s) })
+  await new Promise((r) => echo.listen(0, '127.0.0.1', r))
+  const flows = []
+  const engine = createEngine({
+    redirector: d.r, issuer: createLeafIssuer(loadCa(engineCa)), ingressToken: 'a'.repeat(32),
+    connectUpstream: () => net.connect(echo.address().port, '127.0.0.1'), // every target lands on the local echo: the row, not the network, is under test
+    policy: (meta, host) => tracker.policy(meta, host), // daemon.mjs's line, verbatim
+    store: { envelope: () => true, flow: (f) => { flows.push(structuredClone(f)); return true } }, onFailure: () => {},
+  })
+  const { ingressPort } = await engine.listen({ ingress: { port: 0 } })
+  t.after(async () => { echo.close(); tracker.stop?.(); await closeWithin(engine) })
+  /** one connection of `pid` through door group `user` to `host`: CONNECT, a plain request echoed back, closed → its flows/ row */
+  return async (pid, user, host = 'api.anthropic.com') => {
+    d.owner.pid = pid
+    const n = flows.length
+    const sock = net.connect(ingressPort, '127.0.0.1'); sock.on('error', () => {})
+    const req = `GET /v1/models HTTP/1.1\r\nHost: ${host}\r\n\r\n`
+    sock.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\nProxy-Authorization: Basic ${Buffer.from(`${user}:${'a'.repeat(32)}`).toString('base64')}\r\n\r\n`)
+    await within(new Promise((res) => { let got = ''; let sent = false; sock.on('data', (b) => { got += b.toString('latin1'); if (!sent && got.includes('\r\n\r\n')) { sent = true; got = ''; sock.write(req) } else if (sent && got.length >= req.length) res() }) }), 4000, 'the echoed request', () => sock.destroy())
+    sock.end()
+    for (let i = 0; i < 400 && flows.length <= n; i++) await new Promise((x) => setTimeout(x, 10))
+    return flows[n]
+  }
+}
+
+test('item 7 wired: every untracked why the door gives lands on the flows/ row through the daemon\'s policy — `not-an-agent` (unlisted, args-mismatch), agent-helper, facts-unavailable, pid-unresolved, other-user, harness-off, cmdline-pending, ambiguous, group-off, outside-host-set even when the host\'s pid has a table row', async (t) => {
+  const seen = []
+  const expect = (row, reason, what) => { seen.push(reason); assert.deepEqual([row && row.not_captured, row && row.reason], ['untracked', reason], what) }
+
+  const mac = door('darwin', { isOn: (h) => h !== 'codex', store: new Map([
+    [51, darwinFacts(51, { exe: '/Users/u/bin/claude-nightly', cmdline: 'claude-nightly -p hi' })],
+    [62, darwinFacts(62, { exe: '/Users/u/.kimi-code/bin/kimi', cmdline: '/Users/u/.kimi-code/bin/kimi __plugin_run_node /Users/u/.kimi-code/plugins/x.js' })],
+    [81, darwinFacts(81, { exe: '/Users/v/.local/bin/claude', cmdline: 'claude', uid: OWN_UID + 1 })],
+    [91, darwinFacts(91, { exe: '/Users/u/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex', cmdline: 'codex exec hi' })],
+  ]) })
+  const viaMac = await wired(t, mac)
+  expect(await viaMac(51, 'claude-code.settings'), 'not-an-agent', 'a renamed binary on no list')
+  expect(await viaMac(62, 'kimi-code.cli', 'api.kimi.com'), 'agent-helper', 'a harness\'s own helper')
+  expect(await viaMac(71, 'claude-code.settings'), 'facts-unavailable', 'no facts for the pid')
+  expect(await viaMac(null, 'claude-code.settings'), 'pid-unresolved', 'no pid at all')
+  expect(await viaMac(81, 'claude-code.settings'), 'other-user', 'another user\'s claude')
+  expect(await viaMac(91, 'claude-code.settings'), 'harness-off', 'codex, whose desired state is off')
+
+  const zexe = `${W}\\AppData\\Local\\Programs\\ZCode\\ZCode.exe`
+  const code = String.raw`C:\Program Files\Microsoft VS Code\Code.exe`
+  const win = door('win32', { hostsOf: (f) => (f.id === 'kimi-code.vscode' ? ['api.kimi.com'] : null), store: new Map([
+    [21, win32Facts(winRow(21, String.raw`C:\Program Files\nodejs\node.exe`, null, { cmdlineState: 'pending' }))],
+    [41, win32Facts(winRow(41, zexe, `"${zexe}"`))],
+    [101, win32Facts(winRow(101, code, `"${code}"`))],
+  ]) })
+  const viaWin = await wired(t, win)
+  expect(await viaWin(21, 'deepseek-dsh.env', 'api.deepseek.com'), 'cmdline-pending', 'a win32 command line not read yet')
+  expect(await viaWin(41, 'z-code.desktop', 'open.bigmodel.cn'), 'not-an-agent', 'a preset name whose args miss (args-mismatch)')
+  const inSet = await viaWin(101, 'kimi-code.vscode', 'api.kimi.com') // the host program, judged as Kimi's: a tracker row for pid 101 now exists
+  assert.deepEqual([inSet.not_captured, inSet.reason], ['untrusted', 'var-missing'], 'inside the host set it is judged, with the resolver\'s why')
+  expect(await viaWin(101, 'kimi-code.vscode', 'marketplace.visualstudio.com'), 'outside-host-set', 'off the host set: the door\'s why for this connection, not the row the pid has from another')
+
+  // ambiguous: no two presets overlap today, so a name list that answers it stands in; group-off: the plan has the group off while a connection still arrives
+  const groups = darwinGroupsOf(ALL)
+  const routes = Object.fromEntries(groups.map((x) => [x.g, { g: x.g, ...ROUTE }]))
+  routes['codex.env'] = { ...ROUTE, on: false }
+  const odd = door('darwin', { routes, identify: () => ({ reason: 'ambiguous', agent: null }), store: new Map([[131, darwinFacts(131, { exe: '/Users/u/bin/both', cmdline: 'both' })]]) })
+  const viaOdd = await wired(t, odd)
+  expect(await viaOdd(131, 'claude-code.settings'), 'ambiguous', 'a process two lists both claim')
+  expect(await viaOdd(131, 'codex.env', 'api.openai.com'), 'group-off', 'a group the plan has off')
+
+  assert.deepEqual(UNTRACKED_REASONS.filter((r) => !seen.includes(r)), [], 'every reason of the closed set reached a row through the wiring')
 })
