@@ -21,7 +21,9 @@ import { X509Certificate } from 'node:crypto'
 import { factsOfPid } from './procinfo.mjs'
 import { ownerOfSocket as askOwnerOfSocket } from './socktable.mjs'
 import { loadIngressConfig, freeOnLoopback } from './ingress-config.mjs'
-import { groupsOf, planRoutes, resolveLogin, hostSetOf, proxyRecordsOf } from './route-plan.mjs'
+import { groupsOf, planRoutes, resolveLogin, hostSetOf } from './route-plan.mjs'
+import { isDesiredOn, movedRoute, optedInOf, carriedOf as carriedGroupsOf } from '../../core/route-plan.mjs'
+import { identifyOf, desktopDoorOf } from '../../core/proxy-wiring.mjs'
 import { createDarwinRedirector } from './redirector.mjs'
 import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, watchSystemProxy } from './upstream.mjs'
@@ -36,10 +38,6 @@ import { MARKER_TOLERANCE_MS } from '../../core/trust/confirm.mjs'
  *  by test/collector/harness/darwin-trust.test.mjs's GATE. This is the named place that would refuse those two groups again, and what keeps it honest is the wiring's own combined
  *  case (test/collector/arch/darwin/entries.test.mjs): a journal that regresses the join refuses it and that test goes red with the GATE. */
 const w19Gate = () => ({ ok: true })
-
-/** Whether a re-plan moved this group in a way the doors and the entries must be told: its upstream, its bypass table, or on/off (4.8 §2.2, carried by 4.9 §2.2: a change whose
- *  recomputed answers equal the group's `last` reloads nothing — a `scutil` read that timed out and the read back are two changes with the same upstream). */
-const movedRoute = (a, b) => !a || !b || a.on !== b.on || JSON.stringify(a.upstream ?? null) !== JSON.stringify(b.upstream ?? null) || JSON.stringify(a.bypass ?? null) !== JSON.stringify(b.bypass ?? null)
 
 /**
  * createDarwinCollector({ env, dir, home, harnesses, failure, event, manifest, desired, optIns, deps }) → the Redirector (4.9 §1), carrying a `darwin` bag of what only the daemon
@@ -90,21 +88,12 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   let systemProxy = deps.systemProxy ?? null
   let plan = null
   const ownPorts = () => (ing ? [ing.enginePort, ...Object.values(ing.groupPorts)] : [])
-  // the manifest's opt-in records of one group's forms (confirmed: an entry whose write failed is re-offered, not treated as in effect — planOptIns' own 'done' rule); these say the
-  // group is opted in (the plan's gate) and may keep a forward-only door while off (carried, audit F7) — the desktop-launcher's door lives or dies by this arm (4.9 §6.4)
-  const optinRecordsOf = (m, x) => (m && Array.isArray(m.entries) ? m.entries : []).filter((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-') && e.confirmed !== false && e.harness === x.harness && x.forms.some((f) => f.id === e.form))
-  // the named-and-recorded forms (and their groups) the daemon's re-plan treats as opted in: the caller's own list when it brought one, else derived from the manifest — a caller
-  // that passes none (the daemon today) still re-plans a launcher'd group as on (4.9 §6.4's wiring arm)
-  const namedOptIns = () => {
-    const given = optIns ? optIns() : null
-    if (given && given.length) return given
-    const m = manifestNow()
-    return groups.filter((x) => optinRecordsOf(m, x).length > 0).flatMap((x) => [x.g, ...x.forms.map((f) => f.id)])
-  }
-  const carriedOf = () => new Set(groups.filter((x) => proxyRecordsOf(manifestNow(), x.group, x.harness).length > 0 || optinRecordsOf(manifestNow(), x).length > 0).map((x) => x.g)) // installed, once on, or opted in (the opt-in's own record — the desktop launcher's arm, 4.9 §6.4)
-  const isOn = (harness) => { const d = (desired() || {})[harness]; return (typeof d === 'string' ? d : d && d.desired) === 'on' } // the door's desired-state question (route-plan's own `wanted` rule)
-  if (dir && typeof identify !== 'function') throw new TypeError('the collector needs identify (registry.match): the daemon builds the registry first and hands it in')
-  const who = typeof identify === 'function' ? identify : () => ({ agent: null, descriptor: null, reason: 'no-match' }) // the no-dir shell: no door, nobody to name
+  // the named-and-recorded forms (and their groups) the daemon's re-plan treats as opted in: the caller's own list when it brought one, else derived from the manifest's
+  // `optin-*` records (core/route-plan.mjs optedInOf) — the desktop-launcher's door lives or dies by this arm (4.9 §6.4)
+  const namedOptIns = () => { const given = optIns ? optIns() : null; return given && given.length ? given : optedInOf(groups, manifestNow()) }
+  const carriedOf = () => carriedGroupsOf(groups, manifestNow()) // installed, once on, or opted in (audit F7)
+  const isOn = (harness) => isDesiredOn(desired() || {}, harness) // the door's desired-state question: the plan's own rule
+  const who = identifyOf(identify, dir) // required with a dir; the no-dir shell gets a stand-in that names nobody
   const extraHostsOf = (harness) => { const h = (desired() || {})[harness]; return h && Array.isArray(h.extra_hosts) ? h.extra_hosts : [] }
   const appliedHosts = new Map() // form id → the host set the last plan applied; `status` compares it with a fresh read
   let redirector = null
@@ -204,14 +193,7 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
     if (!caFile) return null
     let fp = null
     try { fp = new X509Certificate(fs.readFileSync(caFile)).fingerprint256 } catch { return null }
-    let door = null
-    for (const e of (manifestNow() || {}).entries || []) {
-      if (!e || e.kind !== 'optin-keychain-cert' || e.harness !== d.name || e.confirmed !== true) continue
-      const since = Date.parse(e.installed_at)
-      if (!Number.isFinite(since) || (e.values || {}).fp256 !== fp) continue
-      if (!door || since > door.since) door = { since, name: `login keychain (asight's CA trusted, ${fp.slice(0, 23)}…)` } // a re-install supersedes: config-after-start is judged against the newest install
-    }
-    return door
+    return desktopDoorOf(manifestNow(), d.name, { 'optin-keychain-cert': (e) => ((e.values || {}).fp256 === fp ? `login keychain (asight's CA trusted, ${fp.slice(0, 23)}…)` : null) })
   }
 
   redirector.darwin = {

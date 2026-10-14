@@ -23,6 +23,8 @@ import { factsOfPid } from './procinfo.mjs'
 import { ownerOfSocket as askOwnerOfSocket } from './socktable.mjs'
 import { loadIngressConfig, freeOnLoopback } from './ingress-config.mjs'
 import { groupsOf, planRoutes, resolveLogin, hostSetOf, proxyRecordsOf } from './route-plan.mjs'
+import { isDesiredOn, movedRoute, optedInOf, carriedOf as carriedGroupsOf } from '../../core/route-plan.mjs'
+import { identifyOf, desktopDoorOf } from '../../core/proxy-wiring.mjs'
 import { createWin32Redirector } from './redirector.mjs'
 import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, readHkcuEnv, watchSystemProxy } from './upstream.mjs'
@@ -38,11 +40,6 @@ import { collectorDir } from '../../../off/paths.mjs'
  *  groups again, and what keeps it honest is the wiring's own combined case (test/collector/arch/win32/entries.test.mjs): a journal that regresses the join
  *  refuses it and that test goes red with the GATE. */
 const w19Gate = () => ({ ok: true })
-
-/** Whether a re-plan moved this group in a way the doors and the entries must be told: its upstream, its bypass table, or on/off (4.8 §2.2, carried by 4.9
- *  §2.2: a change whose recomputed answers equal the group's `last` reloads nothing — a `reg-read` that timed out behind a slow `ps` and the read back are
- *  two changes with the same upstream). */
-const movedRoute = (a, b) => !a || !b || a.on !== b.on || JSON.stringify(a.upstream ?? null) !== JSON.stringify(b.upstream ?? null) || JSON.stringify(a.bypass ?? null) !== JSON.stringify(b.bypass ?? null)
 
 /**
  * createWin32Collector({ env, dir, home, harnesses, failure, event, manifest, desired, optIns, deps }) → the Redirector (4.9 §1), carrying a `win32` bag of
@@ -86,21 +83,12 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
   let hkcuEnv = deps.hkcuEnv ?? null
   let plan = null
   const ownPorts = () => [ing.enginePort, ...Object.values(ing.groupPorts)]
-  // the manifest's opt-in records of one group's forms (confirmed: an entry whose write failed is re-offered, not treated as in effect — planOptIns' own
-  // 'done' rule); these say the group is opted in (the plan's gate) and may keep a forward-only door while off (carried, audit F7)
-  const optinRecordsOf = (m, x) => (m && Array.isArray(m.entries) ? m.entries : []).filter((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-') && e.confirmed !== false && e.harness === x.harness && x.forms.some((f) => f.id === e.form))
   // the named-and-recorded forms (and their groups) the daemon's re-plan treats as opted in: the caller's own list when it brought one, else derived from
-  // the manifest — a caller that passes none (the daemon today) still re-plans a named group as on (4.9 §6.4's wiring arm)
-  const namedOptIns = () => {
-    const given = optIns ? optIns() : null
-    if (given && given.length) return given
-    const m = manifestNow()
-    return groups.filter((x) => optinRecordsOf(m, x).length > 0).flatMap((x) => [x.g, ...x.forms.map((f) => f.id)])
-  }
-  const carriedOf = () => new Set(groups.filter((x) => proxyRecordsOf(manifestNow(), x.group, x.harness).length > 0 || optinRecordsOf(manifestNow(), x).length > 0).map((x) => x.g)) // installed, once on, or opted in (the opt-in's own record)
-  const isOn = (harness) => { const d = (desired() || {})[harness]; return (typeof d === 'string' ? d : d && d.desired) === 'on' } // the door's desired-state question (route-plan's own `wanted` rule)
-  if (dir && typeof identify !== 'function') throw new TypeError('the collector needs identify (registry.match): the daemon builds the registry first and hands it in')
-  const who = typeof identify === 'function' ? identify : () => ({ agent: null, descriptor: null, reason: 'no-match' }) // the no-dir shell: no door, nobody to name
+  // the manifest's `optin-*` records (core/route-plan.mjs optedInOf) — a daemon that restarts still re-plans a named group as on (4.9 §6.4's wiring arm)
+  const namedOptIns = () => { const given = optIns ? optIns() : null; return given && given.length ? given : optedInOf(groups, manifestNow()) }
+  const carriedOf = () => carriedGroupsOf(groups, manifestNow()) // installed, once on, or opted in (audit F7)
+  const isOn = (harness) => isDesiredOn(desired() || {}, harness) // the door's desired-state question: the plan's own rule
+  const who = identifyOf(identify, dir) // required with a dir; the no-dir shell gets a stand-in that names nobody
   const extraHostsOf = (harness) => { const h = (desired() || {})[harness]; return h && Array.isArray(h.extra_hosts) ? h.extra_hosts : [] }
   const appliedHosts = new Map() // form id → the host set the last plan applied; `status` compares it with a fresh read
   let redirector = null
@@ -193,19 +181,14 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
   const caFileOf = () => path.join(dir, 'ca', 'asight-ca.pem')
   const thumbprintOf = (f) => { try { return createHash('sha1').update(new X509Certificate(fs.readFileSync(f)).raw).digest('hex').toUpperCase() } catch { return null } }
   const certStoreDoorOf = (d) => {
-    let door = null
-    let tp
-    for (const e of (manifestNow() || {}).entries || []) {
-      if (!e || e.harness !== d.name || e.confirmed !== true || e.pending_admin) continue
-      if (e.kind === 'optin-cert-user') {
+    let tp // this build's CA thumbprint, read once per question and only when a cert entry asks
+    return desktopDoorOf(manifestNow(), d.name, {
+      'optin-cert-user': (e) => {
         if (tp === undefined) tp = thumbprintOf(caFileOf())
-        if (!tp || String((e.values || {}).thumbprint || '').toUpperCase() !== tp) continue
-      } else if (e.kind !== 'optin-zcode') continue
-      const since = Date.parse(e.installed_at)
-      if (!Number.isFinite(since)) continue
-      if (!door || since > door.since) door = { since, name: e.kind === 'optin-cert-user' ? `CurrentUser\\Root (asight's CA, ${tp.slice(0, 16)}…)` : `Z-Code desktop setting (${e.path})` }
-    }
-    return door
+        return tp && String((e.values || {}).thumbprint || '').toUpperCase() === tp ? `CurrentUser\\Root (asight's CA, ${tp.slice(0, 16)}…)` : null
+      },
+      'optin-zcode': (e) => `Z-Code desktop setting (${e.path})`,
+    })
   }
 
   redirector.win32 = {
