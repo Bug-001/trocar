@@ -658,8 +658,8 @@ function reaches(src, allowed = ['../../core/upstream-shape.mjs']) {
   return out
 }
 
-test('route-plan.mjs imports only the config readers, forms.mjs, upstream.mjs and the rule text generator (the judge of a host name), touches no disk, process, network or OS by itself (the files it reads come through the ctx it is given), and names no harness: its groups are data (W39, MA9)', () => {
-  assert.deepEqual(reaches(PLAN_SRC, ['../../core/config-read.mjs', '../../core/upstream-shape.mjs', './forms.mjs', './upstream.mjs']), [])
+test('route-plan.mjs imports only the shared plan (core/route-plan.mjs, whose own scan is test/collector/core/route-plan.test.mjs) and upstream.mjs, touches no disk, process, network or OS by itself (the files it reads come through the ctx it is given), and names no harness: its groups are data (W39, MA9)', () => {
+  assert.deepEqual(reaches(PLAN_SRC, ['../../core/route-plan.mjs', './upstream.mjs']), [])
   assert.ok(reaches("import fs from 'node:fs'\n", ['./forms.mjs']).length > 0, 'the scan can fail')
   assert.ok(reaches("/** the process. */\nconst x = process.platform\n", []).length > 0 && reaches('/** the process. */\nconst x = 1\n', []).length === 0, 'a call is found, prose in a comment is not')
   const code = PLAN_SRC.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
