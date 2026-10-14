@@ -70,6 +70,20 @@ test('V65 a name the user has since put on the list is no longer said to be on n
   assert.deepEqual(j.agent_list.problems.map((p) => [p.index, p.code]), [[null, 'unparsable']])
 })
 
+test('R18 V65 status puts a process under a harness by the name list in effect NOW (presets + agents.json, `ignore` applied, as the daemon identifies), not by the manifest\'s ever-growing liveness snapshot — with and without a daemon', async () => {
+  const s = await installedHome()
+  const procs = async () => [claudeProc(5000, Date.now() + 5000)]
+  const pidsOf = (j) => j.harnesses.find((h) => h.harness === 'claude-code').rows.map((x) => x.pid)
+  for (const [label, deps] of [['no daemon', { procs }], ['daemon', { procs, request: asDaemon(reply({ agents: [] })) }]]) {
+    assert.ok(pidsOf((await identityOf(s, deps)).j).includes(5000), `${label}: the preset name claude is claude-code's`)
+    writeList(s.home, { version: 1, agents: [{ harness: 'claude-code', name: 'claude', ignore: true }] })
+    const { j, by } = await identityOf(s, deps)
+    assert.deepEqual(by['claude-code'].ignored.map((n) => n.name), ['claude'], label)
+    assert.ok(!pidsOf(j).includes(5000), `${label}: an ignored name is no process of the harness — never said captured or waiting for a verdict (the daemon forwards it untouched)`)
+    fs.rmSync(path.join(s.home, '.asight', 'agents.json'))
+  }
+})
+
 test('fold: process-unknown is a per-(harness, name) fact of this daemon life — not a condition (no ⚠), and a daemon restart clears it', () => {
   const at = (s) => new Date(Date.parse('2026-10-14T12:00:00Z') - s * 1000).toISOString()
   const recs = [{ ts: at(300), event: 'daemon-start', pid: 1 }, { ts: at(200), ...unknownEvent('claude-canary', 7001) }, { ts: at(100), ...unknownEvent('claude-canary', 7002) }]

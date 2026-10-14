@@ -29,6 +29,7 @@ import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, readHkcuEnv, proxyAddress } from './upstream.mjs'
 import { planOptIns } from './optin.mjs'
 import { createRegistry } from '../../core/registry.mjs'
+import { whoseWithHosts } from '../../core/host-agent.mjs'
 import { readAgentList } from '../../../off/identity.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
@@ -174,8 +175,9 @@ export async function gatherWin32Facts(ctx, deps = {}) {
       listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, collectorDir: dir, caPem: null,
     }
     // which harness each process is: the name list's word (D51) — a process is its harness's, never one form's
-    const identify = D.identify || createRegistry(harnesses, { agentList: readAgentList({ home, fs }).entries }).match
-    const harnessOf = new Map((psRows || []).map((r) => [r.pid, identify({ os: 'win32', exe: r.exe ?? null, argv: r.cmdline ? splitCommandLine(r.cmdline) : null, cmdlineState: r.cmdlineState }).agent]))
+    // — with the host-tree rule first (a form's hosts.processes → its harness, core/host-agent.mjs), as the doors and the entry check judge
+    const whose = whoseWithHosts(D.identify || createRegistry(harnesses, { agentList: readAgentList({ home, fs }).entries }).match, groups)
+    const harnessOf = new Map((psRows || []).map((r) => [r.pid, (whose({ os: 'win32', exe: r.exe ?? null, argv: r.cmdline ? splitCommandLine(r.cmdline) : null, cmdlineState: r.cmdlineState }) || {}).agent]))
     const rowsOf = (h) => (psRows || []).filter((r) => harnessOf.get(r.pid) === h)
     let extraHosts = {}
     try { extraHosts = (readStateFile(stateFile(home), { fs }).state || {}).harnesses || {} } catch { /* nothing installed: no extra hosts */ }

@@ -16,8 +16,7 @@ import { writeBackup } from '../../../off/backup.mjs'
 import { setKey, getPath } from '../../../off/json-text.mjs'
 import { proxyUrl } from './forms.mjs'
 import { splitCommandLine } from './procinfo.mjs'
-import { processNames } from '../../../off/identity.mjs'
-import { whoseBy } from '../../core/registry.mjs'
+import { whoseWithHosts } from '../../core/host-agent.mjs'
 import { renderCmdTemplate, markerScript } from './shims.mjs'
 import { readIngressConfig } from './ingress-config.mjs'
 import { readUserPath, prependUserPath, resolveCommand, sacOf, sacBlocksShims, readShortcutTarget, shortcutPlaces } from './userpath.mjs'
@@ -661,16 +660,13 @@ export function checkEntries({ manifest = null, procs = [], identify = null, gro
     if (!forms.length || !forms.every((f) => startForms.has(f))) startTargetsOf.delete(h)
   }
   if (startTargetsOf.size && Array.isArray(procs) && procs.length && typeof identify === 'function') {
-    const hostOf = new Map() // a host program's name (a form's hosts.processes) → its harness; a name two harnesses host says none
-    for (const x of groups || []) for (const f of x.forms) for (const n of (f.hosts && f.hosts.processes) || []) { const k = String(n).toLowerCase(); hostOf.set(k, hostOf.has(k) && hostOf.get(k) !== x.harness ? null : x.harness) }
-    const whose = whoseBy(identify)
+    const whose = whoseWithHosts(identify, groups) // the host-tree rule (a form's hosts.processes → its harness) first, then the name list: core/host-agent.mjs
     const rows = procs.map((p) => ({ pid: p && p.pid, ppid: p && p.ppid, exe: p && p.exe, argv: Array.isArray(p && p.argv) ? p.argv : p && p.cmdline != null ? splitCommandLine(String(p.cmdline)) : null, cmdline: p && p.cmdline != null ? String(p.cmdline) : Array.isArray(p && p.argv) ? p.argv.join(' ') : null }))
     const harnessOf = new Map()
     for (const p of rows) {
       if (p.exe == null) continue
       const facts = { os: 'win32', exe: p.exe, argv: p.argv, cmdlineState: p.argv ? 'ok' : 'empty' }
-      const host = processNames(facts).map((n) => hostOf.get(n)).find(Boolean)
-      const m = whose(host ? { ...facts, hostAgent: host } : facts)
+      const m = whose(facts)
       if (m && m.agent) harnessOf.set(p.pid, m.agent)
     }
     for (const [harness, targets] of startTargetsOf) {

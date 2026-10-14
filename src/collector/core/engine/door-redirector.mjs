@@ -25,6 +25,7 @@ import { bypassHit } from '../upstream-shape.mjs'
 import { processNames, WIDE } from '../../../off/identity.mjs'
 import { UNTRACKED_REASONS } from '../../../health/codes.mjs'
 import { whoseBy } from '../registry.mjs'
+import { hostFormOf } from '../host-agent.mjs'
 
 /** The row's code for a connection whose process is not one the table can vouch for; the reason is one of the closed set (a typo is a throw, not a new code). */
 const untracked = (reason) => { if (!UNTRACKED_REASONS.includes(reason)) throw new Error(`untracked reason ${reason} is not in UNTRACKED_REASONS`); return { not_captured: 'untracked', reason } }
@@ -243,19 +244,15 @@ export function createDoorRedirector({ groups, ownerOf = null, factsOf = null, r
       if (facts.uid != null && ownUid != null && facts.uid !== ownUid) return spliced('other-user', { exe }) // another user's process (the facts' uid, where the OS gives one): never judged, never decrypted
       let agent = null
       let hosted = false
-      const hostForm = door.forms.find((f) => f.hosts)
-      if (hostForm) { // a host-tree group (4.8 §3): the host program itself is the door harness's carrier, but only for the targets on the applied host set
-        const names = processNames(facts)
-        const hostNames = (hostForm.hosts.processes || []).map((n) => String(n).toLowerCase())
-        if (names.some((n) => hostNames.includes(n))) {
-          const set = hostsOf(hostForm)
-          const host = String(target.address || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-          const hit = Array.isArray(set) && set.some((h) => typeof h === 'string' && (host === h || host.endsWith(`.${h}`)))
-          if (!hit) return spliced('outside-host-set', { exe })
-          agent = door.harness
-          hosted = true
-          if (held) held.host = agent // a rescan re-tells it as the host's, never re-asks the name list
-        }
+      const hostForm = (hostFormOf([door], facts) || {}).form // a host-tree group (4.8 §3, the one rule: core/host-agent.mjs): the host program itself is the door harness's carrier, but only for the targets on the applied host set
+      if (hostForm) {
+        const set = hostsOf(hostForm)
+        const host = String(target.address || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+        const hit = Array.isArray(set) && set.some((h) => typeof h === 'string' && (host === h || host.endsWith(`.${h}`)))
+        if (!hit) return spliced('outside-host-set', { exe })
+        agent = door.harness
+        hosted = true
+        if (held) held.host = agent // a rescan re-tells it as the host's, never re-asks the name list
       }
       if (!agent) {
         const m = identify(facts) || {}

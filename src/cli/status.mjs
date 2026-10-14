@@ -16,7 +16,7 @@ import { readManifest } from '../off/manifest.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlSocketPath, controlEndpointFor } from '../off/control-client.mjs'
 import { listProcs, procIdentity, pidAlive } from '../off/proc.mjs'
-import { matchHarness, withAgentList } from '../off/signature.mjs'
+import { createRegistry } from '../collector/core/registry.mjs'
 import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
@@ -72,7 +72,7 @@ const entriesOf = (m, id) => [...(m.entries || []).filter((e) => e.harness === i
 const installedAtOf = (m, id) => { const t = [...(m.entries || []).filter((e) => e.harness === id && e.kind !== 'owned-file'), ...(m.files || []).filter((f) => f.harness === id && (f.role === 'plugin' || f.role === 'shim'))].map((x) => Date.parse(x.installed_at)).filter(Number.isFinite); return t.length ? Math.max(...t) : null }
 
 /** The facts `status` is made of. The daemon's `GET /status` when it answers (its view of the switch, the kernel, the processes and the connections), else the disk (state.json, the manifest, the process table
- *  read with the manifest's `liveness`). → { at, platform, user, daemon: { state, pid, reason, socket, reply }, state: { error? }, manifest: { value, error }, harnesses: [ { id, installed, desired, entry: { state, why },
+ *  matched with the name list in effect now: the presets plus agents.json, `ignore` applied). → { at, platform, user, daemon: { state, pid, reason, socket, reply }, state: { error? }, manifest: { value, error }, harnesses: [ { id, installed, desired, entry: { state, why },
  *  installedAt, procs, judged: { captured, rows }, why: [] } ], link, relayed, health }. Anything that could not be read is `null` / `unknown` and says why; nothing is thrown for it. */
 export async function gatherStatus({ home = nodeOs.homedir(), env = process.env, deps = {}, names = null } = {}) {
   const fs = deps.fs || nodeFs, platform = deps.platform || process.platform
@@ -107,22 +107,27 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const kernelReason = (r) => (r.actual === 'unknown' ? `the daemon could not read the kernel state: ${r.error || 'it gave no reason'}${r.error_code && !String(r.error || '').includes(r.error_code) ? ` (${r.error_code})` : ''}` : `the daemon's reply does not say whether the kernel has this instance's link (actual: ${JSON.stringify(r.actual ?? null)})`)
   const attached = reply ? (reply.actual === 'on' ? true : reply.actual === 'off' ? false : null) : null
   f.link = reply ? { attached, helper: reply.helper && (reply.helper.down || reply.helper.ok === false) ? 'missing' : 'ok', helper_reason: reply.helper && reply.helper.down ? String(reply.helper.down) : reply.helper && reply.helper.ok === false ? `helper protocol ${reply.helper.proto} (this daemon expects ${reply.helper.expected_proto})` : null, reason: attached === null ? kernelReason(reply) : null } : { attached: null, helper: 'ok', helper_reason: null, reason: null }
-  // the processes: the daemon's rows when it answered, else the process table matched with the manifest's `liveness`
+  // the processes: the daemon's rows when it answered, else the process table matched with the name list in effect now (below)
   // The table is read whatever else is missing: the processes the user started themselves (`asight serve`, a foreground `capture`) are found by their command line alone. Only the
-  // matching of a process to a harness needs the manifest's signatures; with no daemon and no manifest (a fresh machine, or after uninstall) that is what cannot be said (audit rule-b 6, R11)
+  // matching of a process to a harness needs the name list; with no daemon and no descriptors to build it from, that is what cannot be said (audit rule-b 6, R11)
   let table = null, tableError = null
   try { table = await (deps.procs ? deps.procs() : listProcs({ exec: deps.exec || null, platform, env })) } catch (e) { rethrowSandbox(e); tableError = errText(e) }
-  const matchError = !reply && !m ? (f.manifest.error || 'there is no install manifest to match the processes with') : tableError
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
   const list = readAgentList({ home, fs }) // the name list (D51③⑤, 1.6 §9.7): read here, daemon or not
   f.agent_list = { path: list.path, state: list.state, problems: list.problems } // the file is one for the machine: said once, whatever harnesses there are
-  const judged = m ? withAgentList(m.liveness, list).liveness : null // the manifest's identities plus the names agents.json holds now (as `off` judges)
-  const matched = table && m ? table.map((p) => ({ p, h: matchHarness(judged, p) })) : [] // which harness each process of the table is
+  // the name list in effect NOW — the descriptors' presets with the user's agents.json merged in, its `ignore` applied — built by the daemon's own primitive
+  // (createRegistry, the registry the doors and the tracker judge by), so `status` names the same harness for a process with a daemon and without (1.6 V65).
+  // Not the manifest's liveness: that is `off`'s holder snapshot, a union that never drops a name and never applies `ignore` (the safe direction for `off` only).
+  let merged = null, whose = null
+  try {
+    const descriptors = await descriptorsOf({ platform, env, deps })
+    merged = mergedNames(descriptors, list)
+    whose = createRegistry(descriptors, { agentList: list.entries }).match
+  } catch (e) { rethrowSandbox(e); f.identity_error = `the harness descriptors could not be loaded (${errMessage(e)})` }
+  const matchError = !reply && !whose ? (f.identity_error || 'there is no name list to match the processes with') : tableError
+  const matched = table && whose ? table.map((p) => ({ p, h: (whose(p) || {}).agent ?? null })) : [] // which harness each process of the table is
   f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
-  // the presets of the descriptors with the user's agents.json merged in
-  let merged = null
-  try { merged = mergedNames(await descriptorsOf({ platform, env, deps }), list) } catch (e) { rethrowSandbox(e); f.identity_error = `the harness descriptors could not be loaded (${errMessage(e)})` }
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
   for (const id of wanted) {
     const why = []
@@ -139,7 +144,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
       // a process of this harness the daemon has not listed (it started since the daemon last looked): not judged by it, so the entry and when it started decide (V32, 4.6 确认信任)
       const listed = new Set(rows.map((a) => a.pid))
       for (const x of matched) if (x.h === id && !listed.has(x.p.pid)) procs.push({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null })
-    } else if (table && m) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
+    } else if (table && whose) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
     else { procs = []; why.push(`the processes could not be listed (${matchError})`) }
     const installedAt = m ? installedAtOf(m, id) : null
     const judged = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', linkAttached: f.link.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt })

@@ -16,6 +16,7 @@ import { colors, noColor } from './color.mjs'
 import { DESKTOP_LAUNCHER_HINT } from './words.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
+import { readAgentList } from '../off/identity.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
 
 const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--opt-in <形态>[,<形态>…]] [--no-autostart | --no-unit] [--json]'
@@ -62,7 +63,8 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   const c = json ? noColor() : colors(io) // --json never colours (D46); a non-TTY or NO_COLOR run colours nothing anywhere
   if ((deps.getuid || processUid)() === 0) { io.err('asight on: 用你自己的账号跑,不要用 root / sudo(D36;只有 `sudo asight setup-helper` 要 root)'); return EXIT.incomplete }
   try {
-    const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env })
+    // the name list in effect (D51③): the presets plus ~/.asight/agents.json, as the daemon and `status` judge — the running processes the plan restarts and whose CAs it carries
+    const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env, agentList: readAgentList({ home, fs: deps.fs || nodeFs }).entries })
     const install = deps.install || await import('../collector/install.mjs')
     // the opt-in half (1.6 §1.7): the arch that has opt-in items (Windows, 4.8 §2.4) hands `forms` (the ids --opt-in may name), `plan` (the rows)
     // and `apply`; an arch with none (Linux today) makes every --opt-in name a usage error, never a silent skip

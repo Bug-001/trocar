@@ -265,7 +265,8 @@ this file. `off` adds your names to the list it uses to judge which agents are s
 `agents.json`, and the processes that came through that agent's entry but are on no list (those connections are
 forwarded, not captured). The command line is never recorded, only the name. For each such process,
 `asight doctor` prints the exact line to add to `agents.json`; for an interpreter it says the item needs `args`.
-`asight status --json` carries the same data under each harness's `identity`.
+`asight status --json` carries the same data: the file once, at the top level, as `agent_list` (its path, state and
+problems), and per harness an `identity` with the names in effect, the ignored presets and the processes on no list.
 
 When a process asight decrypted refuses the collector's certificate anyway, asight writes a critical
 `trust-rejected` record: the harness, the entry group, the process name and pid, the host, the client's alert
