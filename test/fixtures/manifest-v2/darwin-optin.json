@@ -1,0 +1,63 @@
+{
+  "version": 2,
+  "created_at": "2026-10-11T00:00:00.000Z",
+  "complete": false,
+  "engine_port": null,
+  "planned": [],
+  "confirmed_paths": [],
+  "kept_backups": [],
+  "liveness": {},
+  "dirs": [],
+  "files": [],
+  "entries": [
+    {
+      "kind": "optin-keychain-cert",
+      "harness": "claude-code",
+      "form": "claude-code.desktop",
+      "item": "keychain-login",
+      "scope": "user",
+      "path": "login-keychain:D8:80:0F:BD:FC:7A:4F:15:BA:97:4E:7B:8D:53:8F:64:EA:D5:61:01:FF:39:29:81:0F:F9:67:EB:46:BB:16:E1",
+      "undo_by_hand": "claude-code.desktop 的点名项(optin-keychain-cert):撤销是 asight off claude-code",
+      "installed_at": "2026-10-14T12:18:14.540Z",
+      "values": {
+        "keychain": "/HOME/Library/Keychains/login.keychain-db",
+        "fp256": "D8:80:0F:BD:FC:7A:4F:15:BA:97:4E:7B:8D:53:8F:64:EA:D5:61:01:FF:39:29:81:0F:F9:67:EB:46:BB:16:E1",
+        "certFile": "/HOME/.asight/collector/ca/asight-ca.pem"
+      },
+      "backup": null,
+      "confirmed": true
+    },
+    {
+      "kind": "optin-rc-path",
+      "harness": "kimi-code",
+      "form": "kimi-code.cli",
+      "item": "user-path-shim",
+      "scope": "user",
+      "path": "/HOME/.asight/collector/bin/kimi",
+      "undo_by_hand": "kimi-code.cli 的点名项(optin-rc-path):撤销是 asight off kimi-code",
+      "installed_at": "2026-10-14T12:18:14.557Z",
+      "values": {
+        "command": "kimi",
+        "binDir": "/HOME/.asight/collector/bin",
+        "realBinary": "/HOME/.kimi-code/bin/kimi",
+        "proxy": "http://kimi-code.cli:TOKEN@127.0.0.1:17992",
+        "rcs": [
+          {
+            "file": "/HOME/.zshrc",
+            "backup": "/HOME/.asight/backup/527d9d3a0233bca1-20261011T000000000Z",
+            "ops": [
+              {
+                "offset": 41,
+                "removed": "",
+                "inserted": "export PATH=\"/HOME/.asight/collector/bin:$PATH\" # asight collector: runs kimi / opencode through its asight launch shim (`asight collector uninstall` removes this line)\n"
+              }
+            ],
+            "post": "8c50da227bdeec61f3e22bd089ff62e872a2504314b0d53db98b831b1c56b4cd"
+          }
+        ]
+      },
+      "backup": null,
+      "confirmed": true
+    }
+  ]
+}

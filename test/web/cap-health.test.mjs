@@ -103,7 +103,7 @@ test('#caphealth: a payload the real reader produced (a collector failure) shows
   try {
     const c = path.join(home, 'collector');
     fs.mkdirSync(path.join(c, 'flows'), { recursive: true });
-    fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ complete: true, entries: [], files: [] }));
+    fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, entries: [], files: [] }));
     const ts = new Date().toISOString();
     fs.writeFileSync(path.join(c, 'flows', `${ts.slice(0, 10)}.ndjson`), JSON.stringify({ ts, event: 'failure', where: 'ca', code: 'ca-invalid', which: 'expired', reason: 'r' }) + '\n');
     fs.writeFileSync(path.join(c, 'lock'), JSON.stringify({ pid: process.pid }));

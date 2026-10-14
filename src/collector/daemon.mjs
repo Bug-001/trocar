@@ -12,6 +12,7 @@ import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
 import { createTrustChecker } from './core/trust/confirm.mjs'
 import { readManifest, installedAt } from './core/trust/journal.mjs'
+import { installComplete } from '../off/manifest.mjs'
 import { rewriteBundles } from './core/trust/bundle.mjs'
 import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
@@ -140,7 +141,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   const failure = createFailureRecorder(P.dir, { log })
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
-  const ca = manifest && manifest.complete ? readCa({ dir: P.caDir }) : null
+  const ca = installComplete(manifest) ? readCa({ dir: P.caDir }) : null
   if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight on" first'), { code: 'not-installed' })
   // The arch is loaded once, here at the entry (loadParts below takes it back): the platform's start gates and endpoint come before anything is claimed.
   // The endpoint is any arch that has one: darwin's control.json — a random name under the user's $TMPDIR, 0600, with a token every request carries
@@ -435,7 +436,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     const installed = () => [...new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness).filter(Boolean))]
     // a manifest the CLI wrote since (and that this build reads, and that is complete) replaces the one read at start; one that cannot be read leaves the old one, and says so
     const reloadManifest = () => {
-      try { const fresh = readManifest(P.dir); if (fresh && !fresh.unsupported && fresh.complete) manifest = fresh } catch (e) { failure('daemon', coded(e, 'manifest-unreadable')) }
+      try { const fresh = readManifest(P.dir); if (fresh && !fresh.unsupported && installComplete(fresh)) manifest = fresh } catch (e) { failure('daemon', coded(e, 'manifest-unreadable')) }
     }
     // desired state → the tracker: which harnesses are enabled, and each one's decrypt policy
     const syncTracker = () => { const st = sw.state(); tracker.setEnabled(sw.enabled()); tracker.setPolicy({ byHarness: Object.fromEntries(Object.entries(st.harnesses).map(([id, h]) => [id, { mode: h.policy, extraHosts: h.extra_hosts }])) }) }

@@ -173,7 +173,7 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   // the codex WebSocket hint (measured on a Windows test machine): on win32, for codex, while the named cert-store opt-in is not in the ledger — said, never installed
   if (platform === 'win32' && (names.length === 0 || names.includes('codex'))) {
     let certStoreRecorded = false
-    try { const m = readManifest(collectorDir(home), fs); certStoreRecorded = !!(m && !m.unsupported && Array.isArray(m.entries) && m.entries.some((e) => e && e.kind === 'optin-cert-user')) } catch { /* no manifest, or one that will not read: nothing was recorded */ }
+    try { const m = readManifest(collectorDir(home), fs); certStoreRecorded = !!(m && !m.unsupported && Array.isArray(m.entries) && m.entries.some((e) => e && (e.kind === 'optin-cert-user' || (e.kind === 'system-root' && e.store === 'win-currentuser-root')))) } catch { /* no manifest, or one that will not read: nothing was recorded */ }
     if (!certStoreRecorded) io.out(indent(`⚠ ${CODEX_WS_CERT_HINT}`))
   }
   // the Claude Desktop steering hint (4.9 §6.4): on darwin, for claude-code, while the named desktop-launcher opt-in is not

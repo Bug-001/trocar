@@ -1,0 +1,377 @@
+{
+  "version": 2,
+  "created_at": "2026-10-14T12:18:14.315Z",
+  "complete": true,
+  "engine_port": 47011,
+  "planned": [
+    "/HOME/.asight/collector/ca/combined-codex.pem",
+    "/HOME/.asight/collector/ca/combined-hermes.pem",
+    "/HOME/.claude/settings.json",
+    "/HOME/.codex/.env",
+    "/HOME/AppData/Local/hermes/.env"
+  ],
+  "confirmed_paths": [],
+  "kept_backups": [],
+  "liveness": {
+    "claude-code": {
+      "identity": {
+        "match": [
+          {
+            "names": {
+              "re": "^(?:claude helper)$",
+              "flags": ""
+            },
+            "rest": {
+              "re": "(^| )--utility-sub-type=network\\.mojom\\.NetworkService( |$)",
+              "flags": "i"
+            }
+          },
+          {
+            "names": {
+              "re": "^(?:claude)$",
+              "flags": ""
+            }
+          }
+        ],
+        "exclude": [
+          {
+            "name0": {
+              "re": "^(?:rg|apply\\-seccomp)$",
+              "flags": ""
+            }
+          }
+        ],
+        "longLived": []
+      },
+      "rereads": true,
+      "until": "restart"
+    },
+    "codex": {
+      "identity": {
+        "match": [
+          {
+            "names": {
+              "re": "^(?:codex)$",
+              "flags": ""
+            }
+          }
+        ],
+        "exclude": [
+          {
+            "name0": {
+              "re": "^(?:codex\\-linux\\-sandbox|apply_patch|applypatch|codex\\-execve\\-wrapper)$",
+              "flags": ""
+            }
+          },
+          {
+            "names": {
+              "re": "^(?:codex)$",
+              "flags": ""
+            },
+            "rest": {
+              "re": "^--codex-run-as-(arg0-exec-helper|apply-patch)( |$)",
+              "flags": "i"
+            }
+          },
+          {
+            "names": {
+              "re": "^(?:codex)$",
+              "flags": ""
+            },
+            "rest": {
+              "re": "(^| )pid-update-loop( |$)",
+              "flags": "i"
+            }
+          }
+        ],
+        "longLived": [
+          {
+            "rest": {
+              "re": "(^| )--managed-daemon( |$)",
+              "flags": "i"
+            }
+          },
+          {
+            "rest": {
+              "re": "(^| )app-server( |$)",
+              "flags": "i"
+            }
+          }
+        ]
+      },
+      "rereads": false,
+      "until": "next-connection"
+    },
+    "hermes": {
+      "identity": {
+        "match": [
+          {
+            "names": {
+              "re": "^(?:python)$",
+              "flags": ""
+            },
+            "entry": {
+              "re": "\\/hermes(-acp)?\\.exe$",
+              "flags": "i"
+            }
+          },
+          {
+            "names": {
+              "re": "^(?:python)$",
+              "flags": ""
+            },
+            "rest": {
+              "re": "(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b",
+              "flags": "i"
+            }
+          },
+          {
+            "names": {
+              "re": "^(?:python)$",
+              "flags": ""
+            },
+            "rest": {
+              "re": "(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*['\"]?[^'\",)]*\\/hermes(-acp)?\\.exe(?![\\w.-])",
+              "flags": "i"
+            }
+          },
+          {
+            "names": {
+              "re": "^(?:python)$",
+              "flags": ""
+            },
+            "rest": {
+              "re": "(^| )-m tui_gateway\\.(entry|slash_worker)( |$)",
+              "flags": "i"
+            }
+          }
+        ],
+        "exclude": [],
+        "longLived": [
+          {
+            "rest": {
+              "re": "(^| )(gateway|cron|dashboard|serve)( |$)",
+              "flags": "i"
+            }
+          }
+        ]
+      },
+      "rereads": true,
+      "until": "restart"
+    }
+  },
+  "dirs": [
+    "/HOME/.asight",
+    "/HOME/.asight/collector",
+    "/HOME/.asight/collector/ca"
+  ],
+  "files": [
+    {
+      "path": "/HOME/.asight/collector/ca/ca.key",
+      "role": "ca-key",
+      "kind": "owned-file",
+      "undo_by_hand": "rm /HOME/.asight/collector/ca/ca.key"
+    },
+    {
+      "path": "/HOME/.asight/collector/ca/asight-ca.pem",
+      "role": "ca-cert",
+      "kind": "owned-file",
+      "undo_by_hand": "rm /HOME/.asight/collector/ca/asight-ca.pem"
+    },
+    {
+      "kind": "owned-file",
+      "path": "/HOME/.asight/collector/ca/combined-codex.pem",
+      "role": "bundle",
+      "harness": "codex",
+      "sha256": "e3a1e9720ce1c1eb9eb7dffbef09d33ab4271760466115b6946ab9803c955990",
+      "mode": 384,
+      "created_dirs": [],
+      "installed_at": "2026-10-14T12:18:14.334Z",
+      "sources": [],
+      "user_fps": [],
+      "roots_fp": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "undo_by_hand": "rm /HOME/.asight/collector/ca/combined-codex.pem"
+    },
+    {
+      "kind": "owned-file",
+      "path": "/HOME/.asight/collector/ca/combined-hermes.pem",
+      "role": "bundle",
+      "harness": "hermes",
+      "sha256": "e3a1e9720ce1c1eb9eb7dffbef09d33ab4271760466115b6946ab9803c955990",
+      "mode": 384,
+      "created_dirs": [],
+      "installed_at": "2026-10-14T12:18:14.350Z",
+      "sources": [],
+      "user_fps": [],
+      "roots_fp": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "undo_by_hand": "rm /HOME/.asight/collector/ca/combined-hermes.pem"
+    }
+  ],
+  "entries": [
+    {
+      "kind": "json-key",
+      "harness": "claude-code",
+      "path": "/HOME/.claude/settings.json",
+      "keys": [
+        "env",
+        "NODE_EXTRA_CA_CERTS"
+      ],
+      "value": "/HOME/.asight/collector/ca/asight-ca.pem",
+      "existed_before": true,
+      "mode": 420,
+      "pre_sha256": "891f7e936582b05b31b4735934af7135b4412378a093fcf8396db99138ea674c",
+      "post_sha256": "fe9b3e05c204d1702279a4b2ed6ed930d5451fa8201e77a381db4e0c0f21767c",
+      "ops": [
+        {
+          "offset": 12,
+          "removed": "",
+          "inserted": "\n    \"NODE_EXTRA_CA_CERTS\": \"/HOME/.asight/collector/ca/asight-ca.pem\","
+        }
+      ],
+      "prior_value": null,
+      "existing_depth": 1,
+      "created_dirs": [],
+      "installed_at": "2026-10-14T12:18:14.365Z",
+      "backup": "/HOME/.asight/backup/5837e34f5c9c6cdb-20261014T121814365Z",
+      "undo_by_hand": "edit /HOME/.claude/settings.json: delete the key env.NODE_EXTRA_CA_CERTS",
+      "scope": "agent"
+    },
+    {
+      "kind": "text",
+      "harness": "codex",
+      "path": "/HOME/.codex/.env",
+      "format": "dotenv-block",
+      "vars": {
+        "SSL_CERT_FILE": "/HOME/.asight/collector/ca/combined-codex.pem"
+      },
+      "existed_before": true,
+      "mode": 420,
+      "pre_sha256": "40163c3ec0fed3b71e8b526cb218c0b52cab54c8f880769315d803bbe5056990",
+      "post_sha256": "88d37635db1c9ff4b9a3298d8b748bd630092c01bc3b1c337bcb7e26fd5cd7a4",
+      "ops": [
+        {
+          "offset": 0,
+          "removed": "",
+          "inserted": "# >>> asight collector >>> written by `asight collector install`; `asight collector uninstall` removes this block\nSSL_CERT_FILE=/HOME/.asight/collector/ca/combined-codex.pem\n# <<< asight collector <<<\n"
+        }
+      ],
+      "prior_value": null,
+      "created_dirs": [],
+      "installed_at": "2026-10-14T12:18:14.390Z",
+      "backup": "/HOME/.asight/backup/0137c6c6e65633ec-20261014T121814390Z",
+      "undo_by_hand": "edit /HOME/.codex/.env: delete the lines from \"# >>> asight collector >>>\" to \"# <<< asight collector <<<\", then remove the prefix \"#asight-collector-off# \" from any line that has it",
+      "scope": "agent"
+    },
+    {
+      "kind": "text",
+      "harness": "hermes",
+      "path": "/HOME/AppData/Local/hermes/.env",
+      "format": "dotenv-block",
+      "vars": {
+        "SSL_CERT_FILE": "/HOME/.asight/collector/ca/combined-hermes.pem"
+      },
+      "existed_before": true,
+      "mode": 420,
+      "pre_sha256": "7169412703c3edbf2de7c2dcd1fb1476dea91d7c951621eb2e3b79c06a3d174e",
+      "post_sha256": "e38cf22e88ea9c5c3c841a13bcaa3b0e9b177581cfb3abffa31f98f75b276045",
+      "ops": [
+        {
+          "offset": 0,
+          "removed": "",
+          "inserted": "# >>> asight collector >>> written by `asight collector install`; `asight collector uninstall` removes this block\nSSL_CERT_FILE=/HOME/.asight/collector/ca/combined-hermes.pem\n# <<< asight collector <<<\n"
+        }
+      ],
+      "prior_value": null,
+      "created_dirs": [],
+      "installed_at": "2026-10-14T12:18:14.418Z",
+      "backup": "/HOME/.asight/backup/19f2c0ca083c367d-20261014T121814418Z",
+      "undo_by_hand": "edit /HOME/AppData/Local/hermes/.env: delete the lines from \"# >>> asight collector >>>\" to \"# <<< asight collector <<<\", then remove the prefix \"#asight-collector-off# \" from any line that has it",
+      "scope": "agent"
+    },
+    {
+      "kind": "json-key",
+      "harness": "claude-code",
+      "path": "/HOME/.claude/settings.json",
+      "keys": [
+        "env",
+        "HTTPS_PROXY"
+      ],
+      "value": "http://claude-code.settings:TOKEN@127.0.0.1:18802",
+      "existed_before": true,
+      "mode": 420,
+      "pre_sha256": "fe9b3e05c204d1702279a4b2ed6ed930d5451fa8201e77a381db4e0c0f21767c",
+      "post_sha256": "db52a610755cd8ad2ff968f7ca0d4365a69b496dc5e168061eb0da8949c08adb",
+      "ops": [
+        {
+          "offset": 164,
+          "removed": "\"http://user-proxy.example:3128\"",
+          "inserted": "\"http://claude-code.settings:TOKEN@127.0.0.1:18802\""
+        }
+      ],
+      "prior_value": "http://user-proxy.example:3128",
+      "existing_depth": 1,
+      "created_dirs": [],
+      "installed_at": "2026-10-14T12:18:14.452Z",
+      "backup": "/HOME/.asight/backup/5837e34f5c9c6cdb-20261014T121814452Z",
+      "undo_by_hand": "edit /HOME/.claude/settings.json: set env.HTTPS_PROXY back to \"http://user-proxy.example:3128\"",
+      "scope": "agent"
+    },
+    {
+      "kind": "text",
+      "harness": "codex",
+      "path": "/HOME/.codex/.env",
+      "format": "dotenv-block",
+      "vars": {
+        "HTTPS_PROXY": "http://codex.env:TOKEN@127.0.0.1:18801",
+        "NO_PROXY": "localhost,127.0.0.1,::1"
+      },
+      "existed_before": true,
+      "mode": 420,
+      "pre_sha256": "88d37635db1c9ff4b9a3298d8b748bd630092c01bc3b1c337bcb7e26fd5cd7a4",
+      "post_sha256": "fcf666cf8e4429cd57cbd0aa68fc611cbb983395e42c06ff120f2b9a8c10ed0f",
+      "ops": [
+        {
+          "offset": 235,
+          "removed": "",
+          "inserted": "HTTPS_PROXY=http://codex.env:TOKEN@127.0.0.1:18801\nNO_PROXY=localhost,127.0.0.1,::1\n",
+          "asight": true
+        }
+      ],
+      "prior_value": null,
+      "created_dirs": [],
+      "installed_at": "2026-10-14T12:18:14.480Z",
+      "backup": "/HOME/.asight/backup/0137c6c6e65633ec-20261014T121814480Z",
+      "undo_by_hand": "edit /HOME/.codex/.env: delete the lines from \"# >>> asight collector >>>\" to \"# <<< asight collector <<<\", then remove the prefix \"#asight-collector-off# \" from any line that has it",
+      "scope": "agent"
+    },
+    {
+      "kind": "text",
+      "harness": "hermes",
+      "path": "/HOME/AppData/Local/hermes/.env",
+      "format": "dotenv-block",
+      "vars": {
+        "HTTPS_PROXY": "http://hermes.cli:TOKEN@127.0.0.1:18803",
+        "NO_PROXY": "localhost,127.0.0.1,::1"
+      },
+      "existed_before": true,
+      "mode": 420,
+      "pre_sha256": "e38cf22e88ea9c5c3c841a13bcaa3b0e9b177581cfb3abffa31f98f75b276045",
+      "post_sha256": "ce72126d311d1a82bf4d0c25cebf88e50ee8c65fa580c24b44c894ac726e375c",
+      "ops": [
+        {
+          "offset": 236,
+          "removed": "",
+          "inserted": "HTTPS_PROXY=http://hermes.cli:TOKEN@127.0.0.1:18803\nNO_PROXY=localhost,127.0.0.1,::1\n",
+          "asight": true
+        }
+      ],
+      "prior_value": null,
+      "created_dirs": [],
+      "installed_at": "2026-10-14T12:18:14.508Z",
+      "backup": "/HOME/.asight/backup/19f2c0ca083c367d-20261014T121814508Z",
+      "undo_by_hand": "edit /HOME/AppData/Local/hermes/.env: delete the lines from \"# >>> asight collector >>>\" to \"# <<< asight collector <<<\", then remove the prefix \"#asight-collector-off# \" from any line that has it",
+      "scope": "agent"
+    }
+  ],
+  "watched": []
+}

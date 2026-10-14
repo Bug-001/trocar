@@ -238,7 +238,7 @@ test('V35: an item of a kind the copy does not know is left alone — ok:false, 
   const mystery = path.join(s.home, 'mystery.cfg')
   fs.writeFileSync(mystery, 'x')
   const m = readManifest(s.dir)
-  m.entries.push({ harness: 'codex', path: mystery, kind: 'mystery', undo_by_hand: 'rm it' })
+  m.entries.push({ phase: 'on', harness: 'codex', path: mystery, kind: 'mystery', undo_by_hand: 'rm it' })
   saveManifest(s.dir, m)
   const r = await runWritten(s, ['--json'])
   assert.equal(r.status, 1, r.stderr)
@@ -253,7 +253,7 @@ test('V35: an item of a kind the copy does not know is left alone — ok:false, 
   // `asight off` itself says the same thing with its own words: it IS the asight, so it cannot send anyone to itself
   const t = await brokenAsight()
   const mt = readManifest(t.dir); const myst2 = path.join(t.home, 'mystery.cfg'); fs.writeFileSync(myst2, 'x')
-  mt.entries.push({ harness: 'codex', path: myst2, kind: 'mystery', undo_by_hand: 'rm it' }); saveManifest(t.dir, mt)
+  mt.entries.push({ phase: 'on', harness: 'codex', path: myst2, kind: 'mystery', undo_by_hand: 'rm it' }); saveManifest(t.dir, mt)
   const io = fakeIo()
   assert.equal(await runOffCli(['--json'], cliCtx(t, io)), 1, 'asight off is not done either: an item left is a not-done off')
   assert.ok(!/asight off/.test(io.json().left.find((l) => l.path === myst2).reason), 'but it does not tell anyone to run itself')

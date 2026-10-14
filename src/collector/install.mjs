@@ -26,7 +26,7 @@ import { backupDir, opLockFile, standalonePath } from '../off/paths.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt } from '../off/schema.mjs'
-import { OFF_VERSION, undoByHand } from '../off/manifest.mjs'
+import { OFF_VERSION, undoByHand, installComplete } from '../off/manifest.mjs'
 import { writeStandalone, checkStandalone } from '../off/standalone.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -139,7 +139,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
     throw new Error(`the install manifest cannot be read (${String((e && e.message) || e)}); asight on does not write over it. Run "asight off" (it undoes asight's changes by their marks, after a yes, or at once with --yes); if asight on still refuses, the file is damaged and nothing else lists what asight changed: move it aside (mv '${manifestPath(dir)}' '${manifestPath(dir)}.damaged'), then run asight on`)
   }
   refuseUnsupported(dir, prior)
-  if (prior && prior.complete) {
+  if (installComplete(prior)) {
     // installed — but only usable when its CA is (D-4): a CA that cannot be read or used is said, with how to start over
     const c = readCa({ dir: path.join(dir, 'ca'), fs })
     const st = c.error ? { ok: false, which: c.which, reason: c.error } : checkCa(c)
@@ -323,7 +323,9 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
       if (!(m.files || []).some((x) => x.path === lf.path)) { writeOwnedFile({ dir, manifest: m, role: 'daemon-log', phase: 'on', file: lf.path, data: '', mode: 0o600, now: now(), fs }); written.files.push(lf.path) }
     }
   }
-  m.complete = true
+  // D55: install's own record (before P10 the `on` that writes the certificates sets it): kept as it is once complete, so a second `on` saves nothing (D54)
+  const names = [...new Set([...((m.install && m.install.harnesses) || []), ...descs.map((d) => d.name)])].sort()
+  if (!installComplete(m) || JSON.stringify(names) !== JSON.stringify(m.install.harnesses)) m.install = { state: 'complete', at: installComplete(m) ? m.install.at : now().toISOString(), pending: [], harnesses: names }
   if (confirmed) m.confirmed_paths = [...new Set([...(m.confirmed_paths || []), ...final.paths, ...(unit ? [unit.path] : [])])] // what the operator was shown and said yes to (1.6 §1.6)
   save()
   return { manifest: m, final, written }
@@ -350,7 +352,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
     const fs = opts.fs || nodeFs
     const now = opts.now || (() => new Date())
     const plan = await planOn({ home, ...opts })
-    if (plan._.prior && plan._.prior.complete && !plan.writing) return { already: true, manifest: plan._.prior, plan: null }
+    if (installComplete(plan._.prior) && !plan.writing) return { already: true, manifest: plan._.prior, plan: null }
     const onPlan = opts.onPlan || (() => {})
     onPlan(plan)
     const m = openManifest({ dir, plan, now, fs })

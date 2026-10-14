@@ -125,14 +125,14 @@ test('backups (R2): dropped when the file is back at its pre_sha256, kept and li
 test('an entry of a kind this build does not know is left alone, and so is a manifest of a version it does not read (R3)', async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(s.b.dir)
-  m.entries.push({ kind: 'mystery', harness: 'aa', path: path.join(s.b.home, 'x'), undo_by_hand: 'rm x' })
+  m.entries.push({ phase: 'on', kind: 'mystery', harness: 'aa', path: path.join(s.b.home, 'x'), undo_by_hand: 'rm x' })
   const r = await s.run({ manifest: m })
   assert.deepEqual([r.results.length, r.manifest.entries.map((e) => e.kind)], [1, ['mystery']], 'the one it knows is undone, the one it does not stays')
   assert.deepEqual(r.left.map((l) => [l.path, l.harness, l.result]), [[path.join(s.b.home, 'x'), 'aa', 'unknown-kind']], 'and it is said by undoHarnesses itself, so no caller (off, asight-off, uninstall) can forget it (1.6 R3)')
   assert.match(r.left[0].reason, /kind "mystery", which this build does not undo; by hand: rm x/)
   // another harness's unknown item is not this run's; an entry that names no harness is said by a run for everything, never by one for some
   const m2 = readManifest(s.b.dir)
-  m2.entries.push({ kind: 'mystery', harness: 'bb', path: '/y', undo_by_hand: 'rm y' }, { kind: 'text', path: '/z', line: 'x', format: 'line', undo_by_hand: 'edit z' }, { kind: 'legacy-env', path: '/legacy', undo_by_hand: 'unset it' })
+  m2.entries.push({ phase: 'on', kind: 'mystery', harness: 'bb', path: '/y', undo_by_hand: 'rm y' }, { phase: 'on', kind: 'text', path: '/z', line: 'x', format: 'line', undo_by_hand: 'edit z' }, { phase: 'on', kind: 'legacy-env', path: '/legacy', undo_by_hand: 'unset it' })
   assert.deepEqual((await s.run({ manifest: m2, ids: ['aa'] })).left.map((l) => l.path), [path.join(s.b.home, 'x')], 'a run for aa says aa\'s item and not bb\'s or the one with no harness')
   const all = await s.run({ manifest: m2 })
   assert.deepEqual(all.left.map((l) => [l.path, l.result]), [[path.join(s.b.home, 'x'), 'unknown-kind'], ['/y', 'unknown-kind'], ['/z', 'unknown-kind']], 'a run for everything says all three; a kind of the old capture\'s ledger is known: the legacy undo takes it')

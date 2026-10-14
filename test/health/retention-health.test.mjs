@@ -46,7 +46,7 @@ test('captureHealth over a real collector dir: the condition shows, the state is
   const h = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-rh-'))
   try {
     const c = path.join(h, 'collector'); fs.mkdirSync(path.join(c, 'flows'), { recursive: true })
-    fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 1, complete: true, created_at: at(9999), entries: [], files: [] }))
+    fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: at(9999), entries: [], files: [] }))
     fs.writeFileSync(path.join(c, 'lock'), JSON.stringify({ pid: 4242, start_time: '900', boot_id: 'b1' })); const t = new Date(NOW); fs.utimesSync(path.join(c, 'lock'), t, t)
     const day = at(0).slice(0, 10), flow = path.join(c, 'flows', `${day}.ndjson`)
     const write = (...recs) => fs.appendFileSync(flow, recs.map((r) => JSON.stringify(r) + '\n').join(''))

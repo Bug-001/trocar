@@ -531,7 +531,7 @@ test('W36 form-unsupported through the REAL facts path: a named Claude Desktop (
   const { dir } = collectorOf(home, { groupPorts: { 'claude-code.settings': 17991, 'claude-code.desktop': 17996 } })
   // what a real `on --opt-in claude-code.desktop` leaves in the ledger: the item's two records (the certificate and the policy value — Task 14's apply writes both)
   const manifest = readManifest(dir, fs)
-  for (const kind of ['optin-cert-user', 'optin-claude-policy']) manifest.entries.push({ kind, harness: 'claude-code', form: 'claude-code.desktop', item: 'cert-store-current-user', scope: 'user', path: 'claude-code.desktop:cert-store-current-user' })
+  for (const kind of ['optin-cert-user', 'optin-claude-policy']) manifest.entries.push({ phase: 'on', kind, harness: 'claude-code', form: 'claude-code.desktop', item: 'cert-store-current-user', scope: 'user', path: 'claude-code.desktop:cert-store-current-user' })
   saveManifest(dir, manifest, fs)
   // the desktop group's upstream: the login environment's proxy with the user's login in it — the policy value takes an address only (auth:false, 4.8 §3)
   const f = await gather(home, { helper: helperOf({ procs: [KERNEL_ROW], loginEnv: { HTTPS_PROXY: { kind: 'REG_SZ', value: 'http://alice:pw@corp.example:3128' } } }), ids: ['claude-code'] })

@@ -58,9 +58,9 @@ test('the kinds are known, the file rule takes proxy-entry and trust-entry, and 
 
 test('a run-key entry: ours is deleted, ours over a prior restores it, a value that is not ours is left (and the entry is done — asight has nothing there), an absent one is already as asked, a dead reg says so and stays', async () => {
   const dir = tmpDir('asight-w32-rk-')
-  const entry = (prior = null) => ({ kind: 'run-key', harness: 'claude-code', hive: RUN_KEY.hive, key: RUN_KEY.key, name: RUN_KEY.name, value: OURS, prior, installed_at: '2026-10-09T00:00:00Z' })
+  const entry = (prior = null) => ({ phase: 'on', kind: 'run-key', harness: 'claude-code', hive: RUN_KEY.hive, key: RUN_KEY.key, name: RUN_KEY.name, value: OURS, prior, installed_at: '2026-10-09T00:00:00Z' })
   const run = async (e, tools) => {
-    const m = { version: 2, entries: [e], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
+    const m = { version: 3, entries: [e], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
     return { out: await undoHarnesses({ dir, home: dir, manifest: m, ids: null, procs: async () => [], now: new Date(), fs, exec: execOf(...tools), env: {} }), m }
   }
   let r = await run(entry(), [reg()])
@@ -83,9 +83,9 @@ test('a run-key entry: ours is deleted, ours over a prior restores it, a value t
 
 test('a scheduled-task entry: off disables the task, uninstall deletes it, an absent one is already as asked, a query that cannot tell changes nothing on a guess', async () => {
   const dir = tmpDir('asight-w32-task-')
-  const entry = { kind: 'scheduled-task', harness: 'claude-code', task: TASK_NAME, installed_at: '2026-10-09T00:00:00Z' }
+  const entry = { phase: 'on', kind: 'scheduled-task', harness: 'claude-code', task: TASK_NAME, installed_at: '2026-10-09T00:00:00Z' }
   const run = async (dropCa, tools) => {
-    const m = { version: 2, entries: [entry], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
+    const m = { version: 3, entries: [entry], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
     return { out: await undoHarnesses({ dir, home: dir, manifest: m, ids: null, procs: async () => [], now: new Date(), dropCa, fs, exec: execOf(...tools), env: {} }), m }
   }
   const st = schtasks()
@@ -109,9 +109,9 @@ test('a forwarder-binary entry: an off keeps it (draining) and the entry STAYS f
   const exe = path.join(dir, 'kernel', 'asight-forwarder.exe')
   fs.mkdirSync(path.dirname(exe), { recursive: true })
   fs.writeFileSync(exe, 'the kernel')
-  const entry = { kind: 'forwarder-binary', harness: 'claude-code', path: exe, sha256: 'x', installed_at: '2026-10-09T00:00:00Z' }
+  const entry = { phase: 'on', kind: 'forwarder-binary', harness: 'claude-code', path: exe, sha256: 'x', installed_at: '2026-10-09T00:00:00Z' }
   const run = async (dropCa) => {
-    const m = { version: 2, entries: [entry], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
+    const m = { version: 3, entries: [entry], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
     return { out: await undoHarnesses({ dir, home: dir, manifest: m, ids: null, procs: async () => [], now: new Date(), dropCa, fs, exec: execOf(reg(), schtasks({ state: 'absent' })), env: {} }), m }
   }
   let r = await run(false)
@@ -126,7 +126,7 @@ test('a forwarder-binary entry: an off keeps it (draining) and the entry STAYS f
   fs.mkdirSync(path.dirname(exe), { recursive: true })
   fs.writeFileSync(exe, 'held')
   const broken = { ...fs, rmSync: (p, o) => { throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }) }, existsSync: fs.existsSync }
-  const m = { version: 2, entries: [entry], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
+  const m = { version: 3, entries: [entry], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
   const out = await undoHarnesses({ dir, home: dir, manifest: m, ids: null, procs: async () => [], now: new Date(), dropCa: true, fs: broken, exec: execOf(reg(), schtasks({ state: 'absent' })), env: {} })
   assert.equal(out.results[0].result, 'error')
   assert.ok(out.results[0].reason.includes('EBUSY') || out.results[0].reason.includes('asight off --now'), 'a kernel Windows holds is said, with the way out')
@@ -154,9 +154,9 @@ test('the round trip (audit F3): an off over a manifest of every collector kind 
   fs.mkdirSync(path.dirname(exe), { recursive: true })
   fs.writeFileSync(exe, 'the kernel')
   m.entries.push(
-    { kind: 'run-key', harness: 'claude-code', hive: RUN_KEY.hive, key: RUN_KEY.key, name: RUN_KEY.name, value: OURS, prior: null, installed_at: '2026-10-09T00:00:00Z' },
-    { kind: 'scheduled-task', harness: 'claude-code', task: TASK_NAME, installed_at: '2026-10-09T00:00:00Z' },
-    { kind: 'forwarder-binary', harness: 'claude-code', path: exe, sha256: 'x', installed_at: '2026-10-09T00:00:00Z' },
+    { phase: 'on', kind: 'run-key', harness: 'claude-code', hive: RUN_KEY.hive, key: RUN_KEY.key, name: RUN_KEY.name, value: OURS, prior: null, installed_at: '2026-10-09T00:00:00Z' },
+    { phase: 'on', kind: 'scheduled-task', harness: 'claude-code', task: TASK_NAME, installed_at: '2026-10-09T00:00:00Z' },
+    { phase: 'on', kind: 'forwarder-binary', harness: 'claude-code', path: exe, sha256: 'x', installed_at: '2026-10-09T00:00:00Z' },
   )
   saveCoreManifest(dir, m)
   const rg = reg(), st = schtasks()

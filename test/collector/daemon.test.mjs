@@ -1691,7 +1691,7 @@ test('daemon: the 5 s check re-verifies the opt-in entries (W68) — the fresh m
     const scansBefore = scans
     // what `on --opt-in` leaves behind: the manifest on disk gains the entry while this daemon runs — the copy read at start never knew it
     const m = readManifest(s.collector)
-    m.entries.push({ kind: 'optin-user-path', harness: 'claude-code', form: 'claude-code.cli', item: 'user-path-shim', scope: 'user', confirmed: true, values: { command: 'claude', binDir: 'C:\\b', realBinary: 'C:\\r.exe' } })
+    m.entries.push({ kind: 'optin-user-path', phase: 'on', harness: 'claude-code', form: 'claude-code.cli', item: 'user-path-shim', scope: 'user', confirmed: true, values: { command: 'claude', binDir: 'C:\\b', realBinary: 'C:\\r.exe' } })
     saveManifest(s.collector, m)
     answer = [
       { form: 'claude-code.cli', item: 'user-path-shim', harness: 'claude-code', code: 'shim-not-on-path', detail: 'claude resolves first to C:\\npm\\claude.cmd — the machine PATH\'s C:\\npm' },

@@ -43,7 +43,7 @@ test('install: CA under ~/.asight/collector/ca, CC settings key → asight-ca.pe
   try {
     const r = await installCollector(base(b))
     const m = readManifest(b.dir)
-    assert.deepEqual([m.complete, m.engine_port, m.planned], [true, 47011, [settingsOf(b)]])
+    assert.deepEqual([m.install?.state, m.engine_port, m.planned], ['complete', 47011, [settingsOf(b)]])
     assert.deepEqual(m.files.map((f) => [path.relative(b.dir, f.path), f.role]), [['ca/ca.key', 'ca-key'], ['ca/asight-ca.pem', 'ca-cert']])
     assert.equal(JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')).env.NODE_EXTRA_CA_CERTS, path.join(b.dir, 'ca', 'asight-ca.pem'))
     assert.ok(new X509Certificate(fs.readFileSync(path.join(b.dir, 'ca', 'asight-ca.pem'))).ca)
@@ -149,11 +149,11 @@ test('a crashed install (intent written, file changed, never completed) is finis
   try {
     fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
     await installCollector(base(b))
-    const forge = () => { const m = readManifest(b.dir); m.complete = false; m.entries[0].post_sha256 = null; fs.writeFileSync(path.join(b.dir, 'install-manifest.json'), JSON.stringify(m)) }
+    const forge = () => { const m = readManifest(b.dir); m.install = null; m.entries[0].post_sha256 = null; fs.writeFileSync(path.join(b.dir, 'install-manifest.json'), JSON.stringify(m)) }
     forge()
     const settled = fs.readFileSync(settingsOf(b), 'utf8')
     assert.equal((await installCollector(base(b))).already, false, 'an earlier install that did not finish no longer refuses: it is resumed')
-    assert.deepEqual([readManifest(b.dir).complete, readManifest(b.dir).entries[0].post_sha256 != null, fs.readFileSync(settingsOf(b), 'utf8')], [true, true, settled], 'the file had been written: only its record is finished')
+    assert.deepEqual([readManifest(b.dir).install?.state, readManifest(b.dir).entries[0].post_sha256 != null, fs.readFileSync(settingsOf(b), 'utf8')], ['complete', true, settled], 'the file had been written: only its record is finished')
     forge()
     const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
     assert.deepEqual(r.entries.map((e) => e.result), ['restored'])
@@ -266,7 +266,7 @@ test('install → uninstall → install → uninstall stays clean and never remo
     for (const f of keep) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, 'legacy') }
     for (let i = 0; i < 2; i++) {
       await installCollector(base(b))
-      assert.ok(readManifest(b.dir).complete, `round ${i}: installed`)
+      assert.equal(readManifest(b.dir).install?.state, 'complete', `round ${i}: installed`)
       await uninstallCollector({ home: b.home, env: {}, purgeData: true, stop: stopNone })
       assert.ok(!fs.existsSync(b.dir) && !fs.existsSync(settingsOf(b)), `round ${i}: nothing of the install is left`)
     }
@@ -299,7 +299,7 @@ test('install lists every file it will write or change before writing any, and w
     assert.deepEqual(notes.filter((n) => n.kind !== 'result').map((n) => n.reason), r.plan.notes, 'every printed note is on disk, in order')
     assert.deepEqual([notes.at(-1).kind, notes.at(-1).outcome, notes.at(-1).counts], ['result', 'installed', { entries: 1, files: 1, notes: 1 }], 'the run ends with its result line (D1-5)')
     assert.equal(new Set(notes.map((n) => n.run)).size, 1, 'one run id on every line')
-    assert.ok(r.manifest.complete)
+    assert.equal(r.manifest.install?.state, 'complete')
   } finally { b.done() }
 })
 
@@ -587,7 +587,7 @@ test('install / uninstall: the autostart unit is listed with its env and link, w
     const calls = []
     const unitFile = path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service')
     const link = path.join(b.home, '.config', 'systemd', 'user', 'default.target.wants', 'asight-collector.service')
-    const enable = () => { calls.push(`enable, manifest complete: ${readManifest(b.dir).complete}`); return { code: 0 } }
+    const enable = () => { calls.push(`enable, manifest complete: ${readManifest(b.dir).install?.state === 'complete'}`); return { code: 0 } }
     const unit = { path: unitFile, links: [link], text: (env) => `[Service]\n${JSON.stringify(env)}\n`, enable, disable: () => { calls.push('disable'); return { code: 0 } }, stop: () => calls.push('stop'), removeWants: () => { calls.push('wants'); return [] } }
     let listed = null
     const env = { HOME: b.home, NODE_EXTRA_CA_CERTS: '/corp/relay-ca.pem' }
@@ -611,7 +611,7 @@ test('install: a unit systemd refuses to enable is a recorded failure, the insta
   try {
     const unit = { path: path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service'), text: () => '[Unit]\n', enable: () => ({ code: 1, err: 'Failed to connect to bus' }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
     const r = await installCollector(base(b, { unit }))
-    assert.ok(r.manifest.complete)
+    assert.equal(r.manifest.install?.state, 'complete')
     const { recentFailures } = await import('../../src/collector/core/events.mjs')
     const f = recentFailures(b.dir).find((x) => x.code === 'unit-not-enabled')
     assert.ok(f && /Failed to connect to bus/.test(f.reason) && /asight daemon/.test(f.reason), JSON.stringify(f))
@@ -628,7 +628,7 @@ test('install: a unit whose enable() carries its own failure event — the darwi
   const a = box()
   try {
     const r = await installCollector(base(a, { unit: unit(a) }))
-    assert.ok(r.manifest.complete, 'the install itself still completes — the unit file is written, only its registration failed')
+    assert.equal(r.manifest.install?.state, 'complete', 'the install itself still completes — the unit file is written, only its registration failed')
     const f = recentFailures(a.dir).find((x) => x.event === 'failure')
     assert.equal(f.code, 'launchd-register-failed', JSON.stringify(f))
     assert.match(f.reason, /launchctl bootstrap was refused/, 'the launchctl wording')
@@ -748,8 +748,8 @@ test('uninstall that cannot undo an entry keeps the manifest with only what is l
     const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone })
     assert.deepEqual(r.left, [{ path: settingsOf(b), harness: 'claude-code', result: 'left-link' }])
     const m = readManifest(b.dir)
-    assert.deepEqual([m.complete, m.entries.map((e) => [e.path, e.keys.join('.')]), m.files, m.uninstall_left.map((l) => l.result), typeof m.uninstalled_at],
-      [false, [[settingsOf(b), 'env.NODE_EXTRA_CA_CERTS']], [], ['left-link'], 'string'], 'the manifest stays, listing only what is left')
+    assert.deepEqual([m.install, m.entries.map((e) => [e.path, e.keys.join('.')]), m.files, m.uninstall_left.map((l) => l.result), typeof m.uninstalled_at],
+      [null, [[settingsOf(b), 'env.NODE_EXTRA_CA_CERTS']], [], ['left-link'], 'string'], 'the manifest stays, listing only what is left')
     assert.deepEqual([fs.existsSync(path.join(b.dir, 'ca', 'asight-ca.pem')), fs.existsSync(path.join(b.dir, 'ca', 'ca.key'))], [false, false], 'the CA files go all the same (an append-semantics agent only warns about a missing file)')
     await assert.rejects(installCollector(base(b)), /an earlier uninstall could not undo 1 item\(s\) \(.*settings\.json\); fix them, run "asight uninstall" again, then "asight on"$/)
     fs.rmSync(settingsOf(b)); fs.writeFileSync(settingsOf(b), installed) // the user puts a regular file back
@@ -817,7 +817,7 @@ test('install: a failure that cannot be recorded keeps its own message and says 
     await assert.rejects(installCollector(base(b)), (e) => /JSON/.test(e.message) && /\(and recording this failure failed: .+\)$/.test(e.message))
     fs.writeFileSync(settingsOf(b), '{"model": "x"}')
     const r = await installCollector(base(b)) // an install note that cannot be written: printed instead, and the install stands (D-28)
-    assert.ok(r.manifest.complete)
+    assert.equal(r.manifest.install?.state, 'complete')
     assert.ok(r.plan.notes.some((n) => /^not recorded \(.+\): claude-code: a NODE_EXTRA_CA_CERTS exported only in a shell/.test(n)), JSON.stringify(r.plan.notes))
   } finally { b.done() }
 })
@@ -825,16 +825,18 @@ test('install: a failure that cannot be recorded keeps its own message and says 
 // ---- D39③ / 1.6 R2 R3 (Task 3): backups before every user-file change, manifest version 2 --------------------------------------
 const backupsIn = (b) => (fs.existsSync(path.join(b.home, '.asight', 'backup')) ? fs.readdirSync(path.join(b.home, '.asight', 'backup')).sort().map((n) => path.join(b.home, '.asight', 'backup', n)) : [])
 
-test('install writes manifest version 2: every item has kind and undo_by_hand, and an existing settings file is backed up (0700/0600) before it changes (R2, R3)', async () => {
+test('install writes manifest version 3: every item has kind, undo_by_hand and its phase, and an existing settings file is backed up (0700/0600) before it changes (R2, R3)', async () => {
   const b = box()
   try {
     fs.mkdirSync(path.join(b.home, '.claude')); const before = '{\n  "model": "x",\n  "env": {\n    "ANTHROPIC_API_KEY": "sk-ant-secret"\n  }\n}\n'
     fs.writeFileSync(settingsOf(b), before, { mode: 0o640 })
     await installCollector(base(b))
     const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file itself: readManifest would fill in what is missing
-    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, { ...m.liveness['claude-code'], identity: !!m.liveness['claude-code'].identity }], [2, [], [], { identity: true, rereads: true, until: 'restart' }], 'liveness: the name list is snapshotted on every OS, osName none too (D51)')
+    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, { ...m.liveness['claude-code'], identity: !!m.liveness['claude-code'].identity }], [3, [], [], { identity: true, rereads: true, until: 'restart' }], 'liveness: the name list is snapshotted on every OS, osName none too (D51)')
     for (const it of [...m.entries, ...m.files]) { assert.ok(it.kind && it.undo_by_hand && it.undo_by_hand.length > 10, JSON.stringify(it)) }
     assert.deepEqual(m.files.map((f) => f.kind), ['owned-file', 'owned-file'], 'the CA files install pushes with a role only get their kind when saved')
+    assert.deepEqual([...m.entries, ...m.files].map((x) => x.phase), ['install', 'install', 'install'], 'the trust entry and the CA files are install\'s (D55①)')
+    assert.deepEqual([m.install.state, m.install.harnesses, 'complete' in m], ['complete', ['claude-code'], false], 'install.state replaced v2\'s complete')
     const e = m.entries[0]
     assert.deepEqual(backupsIn(b), [e.backup])
     assert.equal(fs.readFileSync(e.backup, 'utf8'), before, 'the backup is the settings file as it was before install')
@@ -892,15 +894,15 @@ test('a manifest of a version this build does not read stops install before anyt
   const b = box()
   try {
     fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}\n')
-    fs.mkdirSync(b.dir, { recursive: true }); fs.writeFileSync(path.join(b.dir, 'install-manifest.json'), JSON.stringify({ version: 3, complete: true, entries: [{ path: settingsOf(b), kind: 'something-new' }], files: [] }))
+    fs.mkdirSync(b.dir, { recursive: true }); fs.writeFileSync(path.join(b.dir, 'install-manifest.json'), JSON.stringify({ version: 4, install: { state: 'complete' }, entries: [{ path: settingsOf(b), kind: 'something-new' }], files: [] }))
     const snap = () => [fs.readFileSync(settingsOf(b)), fs.readFileSync(path.join(b.dir, 'install-manifest.json'))]
     const first = snap()
-    await assert.rejects(installCollector(base(b)), /version 3/)
+    await assert.rejects(installCollector(base(b)), /version 4/)
     let stopped = 0
     const r = await uninstallCollector({ home: b.home, env: {}, stop: async () => { stopped++; return 'none' } })
     assert.deepEqual(snap(), first)
     assert.equal(r.receipt.ok, false)
-    assert.match(r.receipt.problems.join('\n'), /manifest is version 3, which this build does not read; no entry was touched/)
+    assert.match(r.receipt.problems.join('\n'), /manifest is version 4, which this build does not read; no entry was touched/)
     assert.equal(stopped, 1, 'what does not need the manifest still happens: the daemon is stopped (1.6 R3)')
     assert.deepEqual(readEvents(b.dir).filter((e) => e.event === 'uninstall-note' && e.kind === 'result').map((e) => e.outcome), ['failed'], 'and the run ends with a result line')
   } finally { b.done() }

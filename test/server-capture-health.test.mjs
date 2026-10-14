@@ -26,7 +26,7 @@ function sandbox() {
   const h = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-sch-'))
   const c = path.join(h, 'collector')
   fs.mkdirSync(path.join(c, 'flows'), { recursive: true })
-  fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 1, complete: true, created_at: new Date().toISOString(), entries: [], files: [] }))
+  fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: new Date().toISOString(), entries: [], files: [] }))
   const day = new Date().toISOString().slice(0, 10)
   const put = (recs) => fs.appendFileSync(path.join(c, 'flows', `${day}.ndjson`), recs.map((r) => JSON.stringify({ ts: new Date().toISOString(), ...r }) + '\n').join(''))
   return { h, c, put, done: () => fs.rmSync(h, { recursive: true, force: true }) }

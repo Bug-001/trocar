@@ -98,7 +98,7 @@ test('W19: on writes each automatic trust entry and off puts every file back to 
   const before = b.snapshot()
   const r = await install(b, { env: { HOME: b.home, USERPROFILE: b.home, NODE_EXTRA_CA_CERTS: corpFile } })
   const m = readManifest(b.dir)
-  assert.equal(m.complete, true)
+  assert.equal(m.install?.state, 'complete')
   const zconf = path.join(b.home, '.zcode', 'cli', 'config.json')
   // trust entries only: the CA keys and the one block of SSL_CERT_FILE, whose paths are forward-slashed; no proxy key anywhere (that entry is Task 8's, after the read-back)
   const holding = (re) => [...b.snapshot().keys()].filter((f) => re.test(fs.readFileSync(f, 'utf8')))
@@ -186,7 +186,7 @@ for (const eol of ['\n', '\r\n']) for (const prof of PROFILES) {
       const label = `${set === 'all' ? 'all seven' : set.join('+')}`
       await install(b, { harnesses })
       const m = readManifest(b.dir)
-      assert.equal(m.complete, true, label)
+      assert.equal(m.install?.state, 'complete', label)
       for (const e of m.entries) assert.ok(!/\\/.test(e.value || Object.values(e.vars || {}).join('')), `${label}: ${e.path}: forward slashes, and the plain path (no quotes) is what the manifest holds`)
       for (const [name, rel, bundle] of [['codex', '.codex/.env', 'combined-codex.pem'], ['hermes', 'AppData/Local/hermes/.env', 'combined-hermes.pem']].filter(([n]) => set === 'all' || set.includes(n))) {
         const text = fs.readFileSync(path.join(b.home, rel), 'utf8')

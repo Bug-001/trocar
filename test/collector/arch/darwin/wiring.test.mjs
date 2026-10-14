@@ -164,7 +164,7 @@ test('attach() (through the wiring\'s own gate) writes Codex\'s proxy lines into
 // a daemon that starts after `on … --opt-in claude-code.desktop` re-plans the group as unnamed and the launcher points at a port with no listener.
 test('a manifest-recorded desktop-launcher re-plans the group on with nobody passing optIns; an unconfirmed record names nothing; off keeps the listener (carried)', async () => {
   const r = await rigged(['claude-code'], { desired: { 'claude-code': { desired: 'on' } } })
-  const entry = { kind: 'optin-desktop-launcher', harness: 'claude-code', form: 'claude-code.desktop', item: 'desktop-launcher', scope: 'user', path: path.join(r.dir, 'bin', 'claude-desktop-asight'), values: { launcher: path.join(r.dir, 'bin', 'claude-desktop-asight') }, confirmed: true, installed_at: new Date().toISOString() }
+  const entry = { phase: 'on', kind: 'optin-desktop-launcher', harness: 'claude-code', form: 'claude-code.desktop', item: 'desktop-launcher', scope: 'user', path: path.join(r.dir, 'bin', 'claude-desktop-asight'), values: { launcher: path.join(r.dir, 'bin', 'claude-desktop-asight') }, confirmed: true, installed_at: new Date().toISOString() }
   const m = readManifest(r.dir)
   m.entries.push(entry)
   saveManifest(r.dir, m)
@@ -297,12 +297,12 @@ test('osLayers hands the layers ctx the keychain door (4.9 §6.4): open only for
   assert.ok(cc(ctx([cli, '-p', 'hi'])).some((l) => l.vars && l.vars.NODE_EXTRA_CA_CERTS === caFile), 'the cli form reads the settings file through the base layers all along')
 
   const m = readManifest(r.dir)
-  m.entries.push({ kind: 'optin-keychain-cert', harness: 'codex', form: 'codex.app', item: 'keychain-login', scope: 'user', path: `login-keychain:${fp256}`, installed_at: new Date().toISOString(), values: { fp256, certFile: caFile } })
+  m.entries.push({ phase: 'on', kind: 'optin-keychain-cert', harness: 'codex', form: 'codex.app', item: 'keychain-login', scope: 'user', path: `login-keychain:${fp256}`, installed_at: new Date().toISOString(), values: { fp256, certFile: caFile } })
   saveManifest(r.dir, m) // another harness's entry, and unconfirmed (the dialog was never answered)
   assert.deepEqual(cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService'])), [], 'an entry of another harness — unconfirmed at that — opens nothing')
 
   const t0 = Date.now()
-  m.entries.push({ kind: 'optin-keychain-cert', harness: 'claude-code', form: 'claude-code.desktop', item: 'keychain-login', scope: 'user', path: `login-keychain:${fp256}`, installed_at: new Date(t0).toISOString(), confirmed: true, values: { fp256, certFile: caFile } })
+  m.entries.push({ phase: 'on', kind: 'optin-keychain-cert', harness: 'claude-code', form: 'claude-code.desktop', item: 'keychain-login', scope: 'user', path: `login-keychain:${fp256}`, installed_at: new Date(t0).toISOString(), confirmed: true, values: { fp256, certFile: caFile } })
   saveManifest(r.dir, m)
   const door = cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService']))
   assert.equal(door.length, 1, 'exactly the keychain layer')
@@ -311,7 +311,7 @@ test('osLayers hands the layers ctx the keychain door (4.9 §6.4): open only for
   assert.equal(door[0].live, false)
 
   m.entries = m.entries.filter((e) => !(e.kind === 'optin-keychain-cert' && e.harness === 'claude-code'))
-  m.entries.push({ kind: 'optin-keychain-cert', harness: 'claude-code', form: 'claude-code.desktop', item: 'keychain-login', scope: 'user', path: 'login-keychain:AA:BB:CC:DD', installed_at: new Date(t0).toISOString(), confirmed: true, values: { fp256: 'AA:BB:CC:DD', certFile: caFile } })
+  m.entries.push({ phase: 'on', kind: 'optin-keychain-cert', harness: 'claude-code', form: 'claude-code.desktop', item: 'keychain-login', scope: 'user', path: 'login-keychain:AA:BB:CC:DD', installed_at: new Date(t0).toISOString(), confirmed: true, values: { fp256: 'AA:BB:CC:DD', certFile: caFile } })
   saveManifest(r.dir, m)
   assert.deepEqual(cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService'])), [], 'a fingerprint of a CA this build no longer holds: the keychain trusts a certificate asight cannot decrypt with — the door stays shut')
 
