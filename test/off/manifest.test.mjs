@@ -57,10 +57,10 @@ test('R3: a version 1 manifest on disk reads as version 2: every entry has kind,
 test('R3: the manifest written by the journal is version 2 and every item, entries and files, has kind and undo_by_hand (also the ones pushed without)', () => {
   const { home, dir } = dirOf(); const m = newManifest(T)
   const json = path.join(home, '.claude', 'settings.json'); fs.mkdirSync(path.dirname(json)); fs.writeFileSync(json, '{"env":{}}\n')
-  applyJsonKey({ home, dir, manifest: m, harness: 'claude-code', file: json, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: '/ca.pem', now: T })
-  applyTextEntry({ home, dir, manifest: m, harness: 'codex', file: path.join(home, '.codex', '.env'), edit: { format: 'dotenv-block', vars: { SSL_CERT_FILE: '/b.pem' } }, now: T })
-  applyTextEntry({ home, dir, manifest: m, harness: 'kimi-code', file: path.join(home, '.zshrc'), edit: { format: 'line', line: `export PATH=x ${lineComment('kimi shim')}` }, now: T })
-  writeOwnedFile({ dir, manifest: m, harness: 'codex', role: 'bundle', file: path.join(dir, 'ca', 'combined-codex.pem'), data: 'PEM\n', now: T })
+  applyJsonKey({ phase: 'install', home, dir, manifest: m, harness: 'claude-code', file: json, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: '/ca.pem', now: T })
+  applyTextEntry({ phase: 'install', home, dir, manifest: m, harness: 'codex', file: path.join(home, '.codex', '.env'), edit: { format: 'dotenv-block', vars: { SSL_CERT_FILE: '/b.pem' } }, now: T })
+  applyTextEntry({ phase: 'install', home, dir, manifest: m, harness: 'kimi-code', file: path.join(home, '.zshrc'), edit: { format: 'line', line: `export PATH=x ${lineComment('kimi shim')}` }, now: T })
+  writeOwnedFile({ phase: 'install', dir, manifest: m, harness: 'codex', role: 'bundle', file: path.join(dir, 'ca', 'combined-codex.pem'), data: 'PEM\n', now: T })
   m.files.push({ path: path.join(dir, 'ca', 'ca.key'), role: 'ca-key' }) // what install.mjs pushes for the CA, with nothing else
   saveManifest(dir, m)
   const back = JSON.parse(fs.readFileSync(manifestPath(dir), 'utf8')) // the file itself: readManifest would fill in what is missing

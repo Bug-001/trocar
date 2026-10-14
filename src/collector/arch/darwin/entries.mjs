@@ -55,8 +55,8 @@ export function createProxyEntries({ dir, home, groups, ctx, ingress, manifest =
         try {
           const m = freshManifest()
           if (!m) throw new Error('the install manifest cannot be read')
-          if (e.kind === 'json-key') applyJsonKey({ dir, manifest: m, harness: x.harness, file: e.path, keys: e.keys, value: e.value, home, now: now(), fs })
-          else applyTextEntry({ dir, manifest: m, harness: x.harness, file: e.path, edit: { ...e, joinBlock: true }, home, now: now(), fs }) // the journal joins only a block its own manifest lists for this harness (W19's gate lives there, default off for anyone else)
+          if (e.kind === 'json-key') applyJsonKey({ dir, manifest: m, harness: x.harness, phase: 'on', file: e.path, keys: e.keys, value: e.value, home, now: now(), fs })
+          else applyTextEntry({ dir, manifest: m, harness: x.harness, phase: 'on', file: e.path, edit: { ...e, joinBlock: true }, home, now: now(), fs }) // the journal joins only a block its own manifest lists for this harness (W19's gate lives there, default off for anyone else)
         } catch (err) { ok = false; reason = msgOf(err) }
       }
       out.push({ g: x.g, ok, ...(ok ? {} : { reason }) })

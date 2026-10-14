@@ -94,7 +94,7 @@ function collectorOf(home, { url = KERNEL_URL, prior = 'http://proxy.corp:8080',
   const settings = path.join(home, '.claude', 'settings.json')
   if (prior != null) put(settings, `${JSON.stringify({ env: { HTTPS_PROXY: prior } }, null, 2)}\n`)
   const manifest = newManifest()
-  applyJsonKey({ dir, manifest, harness: 'claude-code', file: settings, keys: ['env', 'HTTPS_PROXY'], value: url, home, now: new Date('2026-10-09T09:00:00Z'), fs })
+  applyJsonKey({ phase: 'install', dir, manifest, harness: 'claude-code', file: settings, keys: ['env', 'HTTPS_PROXY'], value: url, home, now: new Date('2026-10-09T09:00:00Z'), fs })
   return { dir, settings }
 }
 const CLAUDE_EXE = 'C:\\Users\\someone\\.local\\bin\\claude.exe'

@@ -136,7 +136,7 @@ export const optinItemForms = (groups) => {
 // prompt was consented to (4.8 §2.4: 先入账 pending-admin;核对到了才记成已做). `state(rec)` writes the §12 state events (optin-applied), `note(rec)`
 // an install-note of this run, `failure(rec)` a failure record.
 
-const ledgerEntry = ({ kind, harness, form, item, scope, path, ...rest }) => ({ kind, harness, form, item, scope, path: path ?? `${form}:${item}`, undo_by_hand: `${form} 的点名项(${kind}):撤销是 asight off ${harness}`, installed_at: new Date().toISOString(), ...rest })
+const ledgerEntry = ({ kind, harness, form, item, scope, path, ...rest }) => ({ kind, harness, form, item, scope, path: path ?? `${form}:${item}`, phase: 'on', undo_by_hand: `${form} 的点名项(${kind}):撤销是 asight off ${harness}`, installed_at: new Date().toISOString(), ...rest })
 
 /** The machine half: ONE self-contained elevated step (elevate.mjs; the OS's own prompt, never a password of asight's). Outcomes with their codes
  *  (each is recorded: the note carries the attempt, the ledger entry the state): ok + read-back → done; the consent box declined, or the step ran

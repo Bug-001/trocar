@@ -22,7 +22,7 @@ import path from 'node:path'
 import { setKey, getPath, reverseOps } from '../../../off/json-text.mjs'
 import { dotenvBlock, joinDotenvBlock, insertLine, removeAsightText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
 import { sha256, readOrNull, writeDurable, missingDirs, editTarget } from '../../../off/fsutil.mjs'
-import { saveManifest, undoByHand } from '../../../off/manifest.mjs'
+import { saveManifest, undoByHand, PHASES } from '../../../off/manifest.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
 import { backupDir } from '../../../off/paths.mjs'
 import { CODE_OFF } from '../../../off/names.mjs'
@@ -42,6 +42,8 @@ function backupFirst({ home, file, before, now, fs }) {
   }
 }
 const needHome = (what, home) => { if (!home) throw new TypeError(`${what}: home is required (backups go to <home>/.asight/backup, 1.6 R2)`) }
+// D55①: every item says which command wrote it — `off` undoes phase 'on', `uninstall` the rest; a writer that forgets fails here, before anything is written
+const needPhase = (what, phase) => { if (!PHASES.includes(phase)) throw new TypeError(`${what}: phase is required (${PHASES.join(' | ')}), got ${JSON.stringify(phase)}`) }
 
 // A file asight owns (a trust file of certificate blocks, a trust plugin, a launch shim): listed before it is written,
 // with the directories its write creates. `sources` names the user files a trust file carries certificates from
@@ -49,11 +51,12 @@ const needHome = (what, home) => { if (!home) throw new TypeError(`${what}: home
 // (an agent's plugin directory is the user's; asight only adds its own file to it): `on` passes `exclusive` for a file the manifest does not list,
 // and not for one it does — that is asight's own, written before or recorded by a run that crashed before the write (R9). A record for a path the
 // manifest already lists is replaced, not added (a second one would be undone twice), and the directories the first attempt made stay listed.
-export function writeOwnedFile({ dir, manifest, harness = null, role, file, data, sources = null, mode = 0o600, exclusive = false, extra = {}, now = new Date(), fs = nodeFs }) {
+export function writeOwnedFile({ dir, manifest, harness = null, role, phase, file, data, sources = null, mode = 0o600, exclusive = false, extra = {}, now = new Date(), fs = nodeFs }) {
+  needPhase('writeOwnedFile', phase)
   const known = manifest.files.find((f) => f.path === file)
   if (exclusive && fs.existsSync(file)) throw new Error(`${file} already exists; asight will not write over it`)
   const created = [...new Set([...((known && known.created_dirs) || []), ...missingDirs(path.dirname(file), fs)])]
-  const item = { kind: 'owned-file', path: file, role, harness, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, installed_at: now.toISOString(), ...(sources ? { sources } : {}), ...extra }
+  const item = { kind: 'owned-file', path: file, role, harness, phase, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, installed_at: now.toISOString(), ...(sources ? { sources } : {}), ...extra }
   item.undo_by_hand = undoByHand(item)
   if (known) manifest.files[manifest.files.indexOf(known)] = item
   else manifest.files.push(item)
@@ -147,8 +150,9 @@ function commit({ dir, manifest, fresh, resumed, before, res, backup, real, now,
 
 // A symlinked file is edited at its target; the entry records both (`path` the link, `real_path` the target). An entry the manifest already lists
 // is judged first (judgeEntry): intact → handed back as it is, nothing written; an intent a crash left → finished; changed by the user → refused.
-export function applyJsonKey({ dir, manifest, harness, file, keys, value, home, now = new Date(), fs = nodeFs }) {
+export function applyJsonKey({ dir, manifest, harness, phase, file, keys, value, home, now = new Date(), fs = nodeFs }) {
   needHome('applyJsonKey', home)
+  needPhase('applyJsonKey', phase)
   const j = judgeEntry({ manifest, planned: { harness, kind: 'json-key', path: file, keys }, fs })
   if (j.action === 'skip-intact') return null // nothing written, as when the key already held the value
   if (j.action === 'skip-user-changed') throw refuseChanged(j)
@@ -159,7 +163,7 @@ export function applyJsonKey({ dir, manifest, harness, file, keys, value, home, 
   if (res.prior === value) return null
   const resumed = j.action === 'resume' ? j.entry : null
   const fresh = {
-    kind: 'json-key', harness, path: file, ...(real !== file ? { real_path: real } : {}), keys, value,
+    kind: 'json-key', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), keys, value,
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : 0o600,
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
     existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
@@ -194,8 +198,9 @@ export function previewTextEntry({ file, edit, fs = nodeFs }) {
   const res = editText(file, before == null ? null : before.toString('utf8'), edit)
   return { path: file, ...(real !== file ? { real_path: real } : {}), changes: true, prior: res.prior ?? null }
 }
-export function applyTextEntry({ dir, manifest, harness, file, edit, home, now = new Date(), fs = nodeFs }) {
+export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home, now = new Date(), fs = nodeFs }) {
   needHome('applyTextEntry', home)
+  needPhase('applyTextEntry', phase)
   const j = judgeEntry({ manifest, planned: { harness, kind: 'text', path: file, format: edit.format, ...(edit.vars ? { vars: edit.vars } : { line: edit.line }) }, fs })
   if (j.action === 'skip-intact') return null // nothing written, as when the key already held the value
   if (j.action === 'skip-user-changed') throw refuseChanged(j)
@@ -209,7 +214,7 @@ export function applyTextEntry({ dir, manifest, harness, file, edit, home, now =
   const res = editText(file, before == null ? null : before.toString('utf8'), edit, { joined })
   const resumed = j.action === 'resume' ? j.entry : null
   const fresh = {
-    kind: 'text', harness, path: file, ...(real !== file ? { real_path: real } : {}), format: edit.format,
+    kind: 'text', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), format: edit.format,
     ...(edit.vars ? { vars: edit.vars } : { line: edit.line }),
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : (edit.mode || 0o600),
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,

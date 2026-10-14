@@ -23,17 +23,17 @@ test('judgeEntry: not listed → write; intact → skip-intact and applying it a
     const file = path.join(b.root, '.app', 'settings.json'); fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, USER)
     const m = newManifest()
     assert.equal(judgeEntry({ manifest: m, planned: planned(file) }).action, 'write')
-    const e = applyJsonKey({ home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value })
+    const e = applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value })
     assert.equal(judgeEntry({ manifest: m, planned: planned(file) }).action, 'skip-intact')
     const before = stamp(file), at = e.installed_at
-    assert.equal(applyJsonKey({ home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), null, 'nothing applied')
+    assert.equal(applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), null, 'nothing applied')
     assert.deepEqual(stamp(file), before); assert.equal(m.entries[0].installed_at, at); assert.equal(m.entries.length, 1)
     fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), model: 'y' }, null, 2)) // the agent rewrote its own settings
     assert.deepEqual([judgeEntry({ manifest: m, planned: planned(file) }).action, judgeEntry({ manifest: m, planned: planned(file) }).edited], ['skip-intact', true])
     fs.writeFileSync(file, JSON.stringify({ env: { CA_FILE: '/the/users/own.pem' } }))
     const j = judgeEntry({ manifest: m, planned: planned(file) })
     assert.equal(j.action, 'skip-user-changed'); assert.match(j.why, /no longer holds what asight wrote/)
-    assert.throws(() => applyJsonKey({ home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), /asight off.*asight on/)
+    assert.throws(() => applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value }), /asight off.*asight on/)
     assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).env.CA_FILE, '/the/users/own.pem', 'the user\'s value is left')
   } finally { b.done() }
 })
@@ -43,15 +43,15 @@ test('judgeEntry: an intent a crash left (no post_sha256) is resume when the fil
   try {
     const file = path.join(b.root, '.app', 'settings.json'); fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, USER)
     const m = newManifest()
-    applyJsonKey({ home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value })
+    applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value })
     const written = fs.readFileSync(file)
     m.entries[0].post_sha256 = null // crash after the write, before the record
     assert.deepEqual([judgeEntry({ manifest: m, planned: planned(file) }).action, judgeEntry({ manifest: m, planned: planned(file) }).adopt], ['resume', true])
-    applyJsonKey({ home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value })
+    applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value })
     assert.deepEqual([m.entries.length, m.entries[0].post_sha256, fs.readFileSync(file).equals(written)], [1, sha256(written), true], 'adopted: the record is finished, the file is not touched')
     m.entries[0].post_sha256 = null; fs.writeFileSync(file, USER) // crash before the write
     assert.deepEqual([judgeEntry({ manifest: m, planned: planned(file) }).action, judgeEntry({ manifest: m, planned: planned(file) }).adopt], ['resume', undefined])
-    applyJsonKey({ home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value })
+    applyJsonKey({ phase: 'install', home: b.root, dir: b.dir, manifest: m, harness: 'h', file, keys: K, value: b.value })
     assert.deepEqual([m.entries.length, fs.readFileSync(file).equals(written)], [1, true], 'resumed: written once, one entry')
     m.entries[0].post_sha256 = null; fs.writeFileSync(file, '{"something":"else"}')
     assert.equal(judgeEntry({ manifest: m, planned: planned(file) }).action, 'skip-user-changed')
@@ -63,14 +63,14 @@ test('judgeOwned: unlisted → write; byte for byte what was recorded → skip-i
   try {
     const file = path.join(b.dir, 'ca', 'extra-h.pem'); const m = newManifest()
     assert.equal(judgeOwned({ manifest: m, file }).action, 'write')
-    writeOwnedFile({ dir: b.dir, manifest: m, harness: 'h', role: 'trust-file', file, data: 'AAA' })
+    writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, harness: 'h', role: 'trust-file', file, data: 'AAA' })
     assert.equal(judgeOwned({ manifest: m, file }).action, 'skip-intact')
     assert.equal(judgeOwned({ manifest: m, file, planned: sha256(Buffer.from('AAA')) }).action, 'skip-intact')
     assert.equal(judgeOwned({ manifest: m, file, planned: sha256(Buffer.from('BBB')) }).action, 'rewrite', 'a unit whose script moved is not kept')
     fs.writeFileSync(file, 'tampered'); assert.equal(judgeOwned({ manifest: m, file }).action, 'rewrite')
     fs.writeFileSync(file, 'AAA'); m.files[0].without_ca = true; assert.equal(judgeOwned({ manifest: m, file }).action, 'rewrite')
     delete m.files[0].without_ca; fs.rmSync(file); assert.equal(judgeOwned({ manifest: m, file }).action, 'rewrite')
-    writeOwnedFile({ dir: b.dir, manifest: m, harness: 'h', role: 'trust-file', file, data: 'AAA' }) // upsert: one record
+    writeOwnedFile({ phase: 'install', dir: b.dir, manifest: m, harness: 'h', role: 'trust-file', file, data: 'AAA' }) // upsert: one record
     assert.equal(m.files.filter((f) => f.path === file).length, 1)
     saveManifest(b.dir, m)
   } finally { b.done() }

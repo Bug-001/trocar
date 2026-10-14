@@ -249,7 +249,7 @@ function openManifest({ dir, plan, now, fs }) {
   const m = newManifest(now())
   m.dirs = missingDirs(dir, fs)
   m.dirs.push(...missingDirs(ca.dir, fs).filter((d) => !m.dirs.includes(d)))
-  m.files.push({ path: ca.key, role: 'ca-key' }, { path: ca.pem, role: 'ca-cert' })
+  m.files.push({ path: ca.key, role: 'ca-key', phase: 'install' }, { path: ca.pem, role: 'ca-cert', phase: 'install' })
   saveManifest(dir, m, fs)
   return m
 }
@@ -289,7 +289,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   for (const f of final.files) {
     if (judgeOwned({ manifest: m, file: f.path, fs }).action === 'skip-intact') { written.intact.push(f.path); continue }
     guard()
-    writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, file: f.path, data: f.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: f.user_fps, roots_fp: f.roots_fp } : {}, now: now(), fs })
+    writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, phase: 'install', file: f.path, data: f.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: f.user_fps, roots_fp: f.roots_fp } : {}, now: now(), fs })
     written.files.push(f.path)
   }
   // a plugin or shim exists before the entry that loads it (a dsh patch row naming a missing file only warns, still)
@@ -297,7 +297,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
     const j = judgeOwned({ manifest: m, file: o.path, fs })
     if (j.action === 'skip-intact') { written.intact.push(o.path); continue }
     guard()
-    writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, file: o.path, data: o.data, mode: o.mode, exclusive: j.action === 'write', now: now(), fs })
+    writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, phase: 'install', file: o.path, data: o.data, mode: o.mode, exclusive: j.action === 'write', now: now(), fs })
     written.owned.push(o.path)
   }
   for (const e of final.entries) {
@@ -306,8 +306,8 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
     if (j.action === 'skip-user-changed') { written.userChanged.push({ path: e.path, why: j.why }); continue }
     guard()
     const entry = e.kind === 'text'
-      ? applyTextEntry({ dir, manifest: m, harness: e.harness, file: e.path, edit: e, home, now: now(), fs }) // a backup of the file first (1.6 R2): no backup, no change
-      : applyJsonKey({ dir, manifest: m, harness: e.harness, file: e.path, keys: e.keys, value: e.value, home, now: now(), fs })
+      ? applyTextEntry({ dir, manifest: m, harness: e.harness, phase: 'install', file: e.path, edit: e, home, now: now(), fs }) // a backup of the file first (1.6 R2): no backup, no change
+      : applyJsonKey({ dir, manifest: m, harness: e.harness, phase: 'install', file: e.path, keys: e.keys, value: e.value, home, now: now(), fs })
     if (entry) written.entries.push(entry)
   }
   // the per-user autostart unit (arch: systemd --user on Linux), listed like every other file. The manifest is complete before the unit starts the
@@ -315,12 +315,12 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   if (unit) {
     const text = unit.text(daemon.env)
     const j = judgeOwned({ manifest: m, file: unit.path, planned: sha256(Buffer.from(text)), fs })
-    if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', file: unit.path, data: text, mode: 0o644, exclusive: j.action === 'write', now: now(), fs }); written.unit = j.action }
+    if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', phase: 'on', file: unit.path, data: text, mode: 0o644, exclusive: j.action === 'write', now: now(), fs }); written.unit = j.action }
     // D46: the daemon's own log sinks the unit names — directory 0700, two files 0600, made here at unit-write time and listed in the manifest like
     // every file asight owns; NEVER rewritten afterwards (a later on only lists what the manifest does not know yet, so no log line is ever truncated)
     if (typeof unit.ensureLogs === 'function') { guard(); unit.ensureLogs() }
     if (typeof unit.logFiles === 'function') for (const lf of unit.logFiles()) {
-      if (!(m.files || []).some((x) => x.path === lf.path)) { writeOwnedFile({ dir, manifest: m, role: 'daemon-log', file: lf.path, data: '', mode: 0o600, now: now(), fs }); written.files.push(lf.path) }
+      if (!(m.files || []).some((x) => x.path === lf.path)) { writeOwnedFile({ dir, manifest: m, role: 'daemon-log', phase: 'on', file: lf.path, data: '', mode: 0o600, now: now(), fs }); written.files.push(lf.path) }
     }
   }
   m.complete = true
@@ -482,7 +482,7 @@ export async function turnOn(opts = {}) {
     // that placed it wrote one, and it survives every undo but uninstall's.
     if (kernelLedger) {
       const have = m.files.find((f) => f.role === 'forwarder-binary' && f.path === kernelLedger.path)
-      const item = { kind: 'owned-file', path: kernelLedger.path, role: 'forwarder-binary', harness: null, sha256: kernelLedger.sha256, mode: 0o755, created_dirs: [...new Set([...((have && have.created_dirs) || []), kernelLedger.dir])], installed_at: now().toISOString() }
+      const item = { kind: 'owned-file', path: kernelLedger.path, role: 'forwarder-binary', harness: null, phase: 'on', sha256: kernelLedger.sha256, mode: 0o755, created_dirs: [...new Set([...((have && have.created_dirs) || []), kernelLedger.dir])], installed_at: now().toISOString() }
       item.undo_by_hand = undoByHand(item)
       if (have) m.files[m.files.indexOf(have)] = item
       else m.files.push(item)

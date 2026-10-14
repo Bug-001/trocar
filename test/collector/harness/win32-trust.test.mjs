@@ -381,7 +381,7 @@ for (const c0 of CASES) for (const shape of SHAPES) {
     assert.deepEqual(entries.map((e) => e.path), [file], 'the file the agent reads')
     const m = newManifest()
     const e = entries[0]
-    const done = e.kind === 'text' ? applyTextEntry({ dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: e.path, edit: e }) : applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: e.path, keys: e.keys, value: e.value })
+    const done = e.kind === 'text' ? applyTextEntry({ phase: 'install', dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: e.path, edit: e }) : applyJsonKey({ phase: 'install', dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: e.path, keys: e.keys, value: e.value })
     const written = fs.readFileSync(file, 'utf8')
     assert.equal(c.value(written), URL_OF(c.g), 'the agent now reads the group\'s port, with the credentials the listener asks for')
     if (c.block) assert.equal(/NO_PROXY=localhost,127\.0\.0\.1,::1\r?\n/.test(written), c.noProxy !== false, 'the loopback never goes round the kernel (a block that writes NO_PROXY)')
@@ -399,7 +399,7 @@ for (const c0 of CASES) for (const shape of SHAPES) {
     const fresh = proxyEntries(group, { ...ctxOf(b), listDir: () => ['x'] }, INGRESS)
     if (fresh.length) {
       const m2 = newManifest()
-      const d2 = fresh[0].kind === 'text' ? applyTextEntry({ dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: fresh[0].path, edit: fresh[0] }) : applyJsonKey({ dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: fresh[0].path, keys: fresh[0].keys, value: fresh[0].value })
+      const d2 = fresh[0].kind === 'text' ? applyTextEntry({ phase: 'install', dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: fresh[0].path, edit: fresh[0] }) : applyJsonKey({ phase: 'install', dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: fresh[0].path, keys: fresh[0].keys, value: fresh[0].value })
       assert.equal(c.value(fs.readFileSync(fresh[0].path, 'utf8')), URL_OF(c.g))
       undoEntry(d2)
       assert.equal(fs.existsSync(fresh[0].path), false)
@@ -415,9 +415,9 @@ test('W19 proxy entry: Claude Code and Z-Code write the proxy key beside the tru
     const ctx = ctxOf(b)
     const trust = planTrust({ descriptors: [d], ctxFor: () => ctx, caCertPem: CA.certPem, collectorDir: b.dir }).entries[0]
     const m = newManifest()
-    const first = applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: trust.path, keys: trust.keys, value: trust.value })
+    const first = applyJsonKey({ phase: 'install', dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: trust.path, keys: trust.keys, value: trust.value })
     const [p] = proxyEntries(d.win32.groups.find((g) => g.g === c.g), ctx, INGRESS)
-    const second = applyJsonKey({ dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: p.path, keys: p.keys, value: p.value })
+    const second = applyJsonKey({ phase: 'install', dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: p.path, keys: p.keys, value: p.value })
     assert.equal(c.value(fs.readFileSync(file, 'utf8')), URL_OF(c.g))
     assert.ok(fs.readFileSync(file, 'utf8').includes(trust.value), 'both keys are there')
     assert.deepEqual([undoEntry(second).result, undoEntry(first).result], ['restored', 'restored'])
@@ -441,12 +441,12 @@ test('W19 GATE (Task 8(v) run, audit F5): Codex and Hermes — the proxy lines j
     assert.equal(trust.path, proxy.path, 'one file: the trust block and the proxy lines are entered separately into it')
     // the join is not the default: without joinBlock the journal still refuses a second block in a file that already holds one
     const m0 = newManifest()
-    const alone = applyTextEntry({ dir: b.dir, home: b.home, manifest: m0, harness: c.harness, file: trust.path, edit: trust })
-    assert.throws(() => applyTextEntry({ dir: b.dir, home: b.home, manifest: m0, harness: c.harness, file: proxy.path, edit: proxy }), /already holds asight's text/, 'the join is an explicit opt-in of the entry, never a silent second block')
+    const alone = applyTextEntry({ phase: 'install', dir: b.dir, home: b.home, manifest: m0, harness: c.harness, file: trust.path, edit: trust })
+    assert.throws(() => applyTextEntry({ phase: 'install', dir: b.dir, home: b.home, manifest: m0, harness: c.harness, file: proxy.path, edit: proxy }), /already holds asight's text/, 'the join is an explicit opt-in of the entry, never a silent second block')
     assert.equal(undoEntry(alone).result, 'restored')
     assert.equal(fs.readFileSync(file, 'utf8'), user, 'the probe round leaves the file as the user had it')
     const m = newManifest()
-    const write = (e, join) => applyTextEntry({ dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: e.path, edit: join ? { ...e, joinBlock: true, quote: true } : e })
+    const write = (e, join) => applyTextEntry({ phase: 'install', dir: b.dir, home: b.home, manifest: m, harness: c.harness, file: e.path, edit: join ? { ...e, joinBlock: true, quote: true } : e })
     const first = order === 'trust-first' ? write(trust) : write(proxy)
     const second = order === 'trust-first' ? write(proxy, true) : write(trust, true) // whichever comes second joins the block the first wrote
     const written = fs.readFileSync(file, 'utf8')
@@ -468,8 +468,8 @@ test('W19 GATE (Task 8(v) run, audit F5): Codex and Hermes — the proxy lines j
     assert.equal(fs.readFileSync(file, 'utf8'), user, 'byte for byte')
     // the user edited around the block: asight's text goes, the user's bytes (their edit included) stay (1.6 R2: never a whole-file rollback)
     const m2 = newManifest()
-    applyTextEntry({ dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: trust.path, edit: order === 'trust-first' ? trust : proxy })
-    applyTextEntry({ dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: trust.path, edit: order === 'trust-first' ? { ...proxy, joinBlock: true, quote: true } : { ...trust, joinBlock: true, quote: true } })
+    applyTextEntry({ phase: 'install', dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: trust.path, edit: order === 'trust-first' ? trust : proxy })
+    applyTextEntry({ phase: 'install', dir: b.dir, home: b.home, manifest: m2, harness: c.harness, file: trust.path, edit: order === 'trust-first' ? { ...proxy, joinBlock: true, quote: true } : { ...trust, joinBlock: true, quote: true } })
     const edited = user + `EXTRA_FLAG=1${shape.eol}` // the user's own line, after the block
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8') + `EXTRA_FLAG=1${shape.eol}`)
     assert.deepEqual([undoEntry(m2.entries[1]).result, undoEntry(m2.entries[0]).result], ['reverted-not-identical', 'reverted-not-identical'], 'the edited-since fallback of removeAsightText, LIFO')

@@ -145,8 +145,8 @@ test('the round trip (audit F3): an off over a manifest of every collector kind 
   const preSettings = fs.readFileSync(settings)
   const preEnv = fs.readFileSync(envFile)
   const m = newManifest(new Date())
-  applyJsonKey({ dir, manifest: m, harness: 'claude-code', file: settings, keys: ['proxy'], value: 'http://127.0.0.1:17999', home, now: new Date(), fs })
-  applyTextEntry({ dir, manifest: m, harness: 'codex', file: envFile, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:17998' } }, home, now: new Date(), fs })
+  applyJsonKey({ phase: 'install', dir, manifest: m, harness: 'claude-code', file: settings, keys: ['proxy'], value: 'http://127.0.0.1:17999', home, now: new Date(), fs })
+  applyTextEntry({ phase: 'install', dir, manifest: m, harness: 'codex', file: envFile, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:17998' } }, home, now: new Date(), fs })
   assert.equal(m.entries.length, 2, 'the writers ledgered the two files')
   m.entries[0].kind = 'proxy-entry'
   m.entries[1].kind = 'trust-entry'
@@ -185,7 +185,7 @@ test('off step 5 disables the scheduled task ITSELF, whatever the manifest holds
   const settings = path.join(home, 'settings.json')
   fs.writeFileSync(settings, JSON.stringify({ other: true }, null, 2) + '\n')
   const m = newManifest(new Date())
-  applyJsonKey({ dir, manifest: m, harness: 'claude-code', file: settings, keys: ['proxy'], value: 'http://127.0.0.1:17999', home, now: new Date(), fs })
+  applyJsonKey({ phase: 'install', dir, manifest: m, harness: 'claude-code', file: settings, keys: ['proxy'], value: 'http://127.0.0.1:17999', home, now: new Date(), fs })
   m.entries[0].kind = 'proxy-entry'
   saveCoreManifest(dir, m) // no scheduled-task entry in the ledger: the task was registered by an on whose manifest is gone, or by hand from asight's file
   const st = schtasks()
@@ -201,7 +201,7 @@ test('off step 5 disables the scheduled task ITSELF, whatever the manifest holds
   assert.deepEqual(receipt.autostart, { disabled: true, removed: [], note: 'the task is disabled now; the Run value is a ledger entry, undone with the rest (4.8 §4.2)' })
   // a task that cannot be disabled: the receipt says so and the off is not clean
   const bad = schtasks({ fail: ['/Change'] })
-  const f = await runOff({ home: (() => { const h = tmpDir('asight-w32-step5f-'); const d = path.join(h, '.asight', 'collector'); fs.mkdirSync(d, { recursive: true }); const sf = path.join(h, 'settings.json'); fs.writeFileSync(sf, JSON.stringify({ other: true }, null, 2) + '\n'); const mm = newManifest(new Date()); applyJsonKey({ dir: d, manifest: mm, harness: 'claude-code', file: sf, keys: ['proxy'], value: 'http://127.0.0.1:17999', home: h, now: new Date(), fs }); mm.entries[0].kind = 'proxy-entry'; saveCoreManifest(d, mm); return h })(), env: { ASIGHT_TEST_SANDBOX: '1' }, ids: null, yes: true, deps: {
+  const f = await runOff({ home: (() => { const h = tmpDir('asight-w32-step5f-'); const d = path.join(h, '.asight', 'collector'); fs.mkdirSync(d, { recursive: true }); const sf = path.join(h, 'settings.json'); fs.writeFileSync(sf, JSON.stringify({ other: true }, null, 2) + '\n'); const mm = newManifest(new Date()); applyJsonKey({ phase: 'install', dir: d, manifest: mm, harness: 'claude-code', file: sf, keys: ['proxy'], value: 'http://127.0.0.1:17999', home: h, now: new Date(), fs }); mm.entries[0].kind = 'proxy-entry'; saveCoreManifest(d, mm); return h })(), env: { ASIGHT_TEST_SANDBOX: '1' }, ids: null, yes: true, deps: {
     platform: 'win32',
     exec: execOf(reg({ value: 'gone' }), bad),
     procs: async () => [],

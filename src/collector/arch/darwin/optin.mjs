@@ -102,7 +102,7 @@ export const optinItemForms = (groups) => {
 // undoable, not a mystery) and confirmed only by the read-back after it. `state(rec)` writes the §12 state events (optin-applied),
 // `note(rec)` an install-note of this run, `failure(rec)` a failure record. Everything the world gives is injected (`deps`: ingress).
 
-const ledgerEntry = ({ kind, harness, form, item, scope, path: p, ...rest }) => ({ kind, harness, form, item, scope, path: p ?? `${form}:${item}`, undo_by_hand: `${form} 的点名项(${kind}):撤销是 asight off ${harness}`, installed_at: new Date().toISOString(), ...rest })
+const ledgerEntry = ({ kind, harness, form, item, scope, path: p, ...rest }) => ({ kind, harness, form, item, scope, path: p ?? `${form}:${item}`, phase: 'on', undo_by_hand: `${form} 的点名项(${kind}):撤销是 asight off ${harness}`, installed_at: new Date().toISOString(), ...rest })
 
 const groupOf = (groups, form) => (groups || []).find((x) => x.forms && x.forms.some((f) => f.id === form)) || null
 const ingressOf = ({ dir, deps = {}, fs: f = nodeFs }) => deps.ingress || readIngressConfig({ dir, fs: f })
