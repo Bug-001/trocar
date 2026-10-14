@@ -78,6 +78,11 @@ export const SEEDS = [
   l('/home/u/.hermes/tools/python-3.12.4/bin/python3', ['python3', '-m', 'tui_gateway.slash_worker', '--session-key', 'k', '--parent-pid', '7'], 'hermes', 'test/collector/harness/hermes.test.mjs:36'),
   l('/usr/bin/python3', ['python3', '-c', 'import json'], null, `${S46} (other python -c probes do not count)`),
   w(`${W}\\AppData\\Local\\hermes\\installs\\a1b2c3\\environments\\d4e5f6\\venv\\Scripts\\python.exe`, ['-I', '-c', HERMES_BOOT], 'hermes', `${P} (the installs\\…\\venv layout)`),
+  w(`${W}\\AppData\\Local\\hermes\\tools\\python-3.14.7+20260901-win32-x64\\python.exe`, ['-I', `${W}\\AppData\\Local\\hermes\\bin\\hermes.exe`, '-z', 'hi'], 'hermes', 'a Windows test machine, 2026-10-14 (hermes.exe execs python -I <the launcher>)'),
+  w(`${W}\\AppData\\Local\\hermes\\tools\\python-3.14.7+20260901-win32-x64\\python.exe`, ['-I', '-I', '-c', String.raw`import sys, runpy; sys.path.insert(0, 'C:\\Users\\u\\AppData\\Local\\hermes\\hermes-agent'); sys.argv = ['C:\\Users\\u\\AppData\\Local\\hermes\\bin\\hermes.exe', '-z', 'hi']; runpy.run_path('C:\\Users\\u\\AppData\\Local\\hermes\\bin\\hermes.exe', run_name='__main__')`], 'hermes', 'a Windows test machine, 2026-10-14 (the launcher python runs itself again through runpy)'),
+  w(`${W}\\AppData\\Local\\hermes\\installs\\9d6e\\pm-runtime\\generations\\fadb\\Scripts\\python.exe`, ['-I', '-B', `${W}\\AppData\\Local\\hermes\\hermes-agent\\pm\\worker.py`], null, 'a Windows test machine, 2026-10-14 (a package-manager worker is not the agent: forwarded)'),
+  w(String.raw`C:\Users\Jo Smith\AppData\Local\hermes\tools\python-3.14.7+20260901-win32-x64\python.exe`, ['-I', String.raw`C:\Users\Jo Smith\AppData\Local\hermes\bin\hermes-acp.exe`], 'hermes', 'a Windows test machine, 2026-10-14 (the ACP launcher; a profile path with a space)'),
+  w(`${W}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe`, ['-I', `${W}\\tools\\notes.exe`], null, 'a Windows test machine, 2026-10-14 (python -I running another zip launcher is not Hermes)'),
   // ── kimi-code ──
   d(`${U}/.kimi-code/bin/kimi`, ['-p', 'hi'], 'kimi-code', `${DF} (kimi-code.cli)`),
   l('/home/u/.kimi-code/bin/kimi', ['kimi-code'], 'kimi-code', 'test/collector/harness/kimi-code.test.mjs:25 (argv rewritten to the title, acceptance ③)'),

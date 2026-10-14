@@ -70,8 +70,8 @@ function hermesHome(ctx) {
 // The checkout the bootstrap puts on sys.path; the default under the Windows root.
 function checkout(ctx) {
   const root = hermesRoot(ctx)
-  const m = /sys\.path\.insert\(\s*0\s*,\s*(['"])([A-Za-z]:[^'"]+)\1/.exec(ctx.argv[3] || '')
-  return m ? m[2] : path.join(root, 'hermes-agent')
+  const m = /sys\.path\.insert\(\s*0\s*,\s*(['"])([A-Za-z]:[^'"]+)\1/.exec(argAfter(ctx.argv, ['-c']) || '') // `-I -c` or the launcher's `-I -I -c` runpy re-run
+  return m ? m[2].replace(/\\\\/g, '\\') : path.join(root, 'hermes-agent') // a Python literal doubles its backslashes
 }
 // Per-route TLS keys in the active home's config.yaml, as the Linux descriptor reads them.
 function tlsKeys(ctx, home) {
@@ -104,11 +104,12 @@ function layers(ctx) {
   return out.filter(Boolean)
 }
 
-// D51④: the lab measured the live Windows client rejecting every door asight writes there, so until the user settles that item no
-// Hermes process is decrypted — recognised, judged, `status` names win-doors-rejected, the agent is forwarded intact. One last override layer shuts
-// the CA variables and names the reason (the base refine turns it into the verdict whatever the files above it say); the file layers stay for when
-// a trust door opens again.
-const DOORS_REJECTED = { name: 'Windows Hermes trust entries (rejected by the client)', mode: 'override', vars: { SSL_CERT_FILE: '', HERMES_CA_BUNDLE: '', 'hermes:ssl_ca_cert': '', [DOORS_SHUT]: 'win-doors-rejected' }, live: true }
+// D51④: on Windows the live client does not take the trust entry asight writes — the .env block's SSL_CERT_FILE
+// (measured win 2026-10-14T09-06-56-260Z: with the .env block in place the live client refused asight's leaf with ECONNRESET and the turn failed; its connections do reach the door; the earlier "proxy ignored, direct dial" did not reproduce and was not re-traced — that install also had known ACL and sandbox-root faults).
+// So no Hermes process is decrypted here — recognised, judged, `status` names win-doors-rejected, the agent is forwarded intact. One last
+// override layer shuts the CA variables and names the reason (the base refine turns it into the verdict whatever the files above it say);
+// the file layers stay for the system trust root of D55, which this client may read (it imports truststore; to be measured).
+const DOORS_REJECTED = { name: 'Windows Hermes trust entry (the .env SSL_CERT_FILE is refused by the client)', mode: 'override', vars: { SSL_CERT_FILE: '', HERMES_CA_BUNDLE: '', 'hermes:ssl_ca_cert': '', [DOORS_SHUT]: 'win-doors-rejected' }, live: true }
 
 export default {
   groups: [{

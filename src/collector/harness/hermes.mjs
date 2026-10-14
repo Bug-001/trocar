@@ -149,9 +149,12 @@ export default {
   name: 'hermes',
   runtime: 'python',
   // Which processes are Hermes (D51 preset, every OS): python (any version: the normalizer folds python3.N into python) running its bootstrap
-  // isolated (`-I … -c "import hermes_bootstrap; … hermes_cli.main | acp_adapter.entry"`, the code may span lines) or its TUI gateway module. Other python is not Hermes.
+  // isolated (`-I … -c "import hermes_bootstrap; … hermes_cli.main | acp_adapter.entry"`, the code may span lines), the Windows launcher's
+  // script (`hermes.exe` / `hermes-acp.exe` exec `python.exe -I <that exe> …`, which runs the zip appended to it, and that may run itself
+  // again as `-I -c "import sys, runpy; …; runpy.run_path('<that exe>', …)"`; measured win 2026-10-14), or its TUI gateway module. Other
+  // python is not Hermes, its package-manager workers (`hermes-agent/pm/worker.py`) included: they are forwarded.
   processes: {
-    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' }],
+    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', entry: '/hermes(-acp)?\\.exe$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe\\b' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' }],
     longLived: [{ args: '(^| )(gateway|cron|dashboard|serve)( |$)' }],
   },
   hosts: ['openrouter.ai', 'inference-api.nousresearch.com', 'chatgpt.com', 'api.openai.com', 'api.anthropic.com', 'api.z.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com', 'api.deepseek.com', 'api.x.ai'],
@@ -167,7 +170,7 @@ export default {
       { name: 'routes with their own ssl_ca_cert', when: 'hermes:ssl_ca_cert', chain: [{ var: 'hermes:ssl_ca_cert', semantic: 'replace', list: true }] },
     ],
     disable: ['hermes:ssl_verify'],
-    // an OS whose doors cannot grant (DOORS_SHUT above): win32's always wins (the doors are measured rejected, whatever a stale file would say);
+    // an OS whose doors cannot grant (DOORS_SHUT above): win32's always wins (its client refuses the entry asight writes, whatever a file says);
     // darwin's only replaces var-missing (an asight route line written after start stays config-after-start)
     refine: (r, env) => { const shut = env.get(DOORS_SHUT) || ''; return shut === 'win-doors-rejected' || (shut && r.reason === 'var-missing') ? shut : null },
     rereadsEntry: true, // the CLI on /reload and a gateway that does not multiplex read .env again while running
@@ -184,7 +187,7 @@ export default {
       'replace-without-ca': 'a provider ssl_ca_cert in config.yaml names a bundle without the asight CA; that route trusts only that file',
       'verify-disabled': 'a provider in config.yaml sets ssl_verify: false',
       'route-without-ca': 'macOS Hermes trusts only the ssl_ca_cert of the route it uses; the route in use (or the built-in provider) has no ssl_ca_cert line written by asight, so it is forwarded without capture',
-      'win-doors-rejected': 'on Windows Hermes refused every trust entry asight can write (measured on a Windows test machine), so it is forwarded without capture until that is settled',
+      'win-doors-rejected': 'on Windows Hermes refuses the certificate entry asight writes into its .env (measured on a Windows test machine), so it is forwarded without capture until the system trust root of D55 covers it',
     },
   },
 }

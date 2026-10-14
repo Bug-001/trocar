@@ -47,7 +47,8 @@ const IMG = {
   svchost: String.raw`C:\Windows\System32\svchost.exe`,
 }
 const DSH_CMD = String.raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\lib\bin.js`
-const HERMES_CMD = String.raw`"C:\Users\u\AppData\Local\hermes\tools\python-3.12.6\python.exe" -I -c "import hermes_bootstrap; import hermes_cli.main"`
+// what `hermes.exe -z …` execs (measured win 2026-10-14): the private python runs the zip appended to the launcher
+const HERMES_CMD = String.raw`"C:\Users\u\AppData\Local\hermes\tools\python-3.12.6\python.exe" -I "C:\Users\u\AppData\Local\hermes\bin\hermes.exe" -z "hi"`
 const ZCODE_NET_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" --type=utility --utility-sub-type=network.mojom.NetworkService`
 const ZCODE_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" C:\Users\u\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs app-server --stdio`
 
@@ -142,7 +143,7 @@ test('W76 a process started after its harness\'s Windows trust entry is judged t
   }
 })
 
-test('W76 Hermes on Windows is recognised and never decrypted (D51④): the lab measured its live client rejecting every door asight writes there, so even after its .env block it is win-doors-rejected', async () => {
+test('W76 Hermes on Windows is recognised and never decrypted (D51④): its live client refuses the .env entry asight writes (win 2026-10-14T09-06-56-260Z), so even after its .env block it is win-doors-rejected', async () => {
   const b = await sandbox('hermes', [['AppData/Local/hermes/config.yaml']])
   const { redirector, tracker, settle } = rigged({ descriptors: [b.d], box: b })
   assert.equal(typeof b.d.win32.layers, 'function', 'the Windows data carries its own layers: the Linux ones read ~/.hermes, which is not where Windows Hermes keeps its .env')
@@ -150,8 +151,8 @@ test('W76 Hermes on Windows is recognised and never decrypted (D51④): the lab 
   redirector.emit('exec', facts(21, IMG.hermesPy, { cmdline: HERMES_CMD, startedAt: b.t0 - 5000 }))
   await settle()
   for (const pid of [20, 21]) {
-    assert.deepEqual(redirector.verdictOf(pid), { decrypt: false, agent: 'hermes' }, `pid ${pid}: a row is pushed, recognised as Hermes, not decrypted`)
-    assert.equal(tracker.describe(pid).reason, 'win-doors-rejected', `pid ${pid}: the reason names the rejected doors, not config-after-start or a silent "not an agent"`)
+    assert.deepEqual(redirector.verdictOf(pid), { decrypt: false, agent: 'hermes' }, `pid ${pid}: a row is pushed, recognised as Hermes (the launcher shape), not decrypted`)
+    assert.equal(tracker.describe(pid).reason, 'win-doors-rejected', `pid ${pid}: the reason names the refused entry, not config-after-start or a silent "not an agent"`)
   }
 })
 
