@@ -126,18 +126,11 @@ export function withAgentList(liveness, list) {
   return { liveness: out, note }
 }
 
-/** Which harness a process belongs to, from `liveness` (`{ <harness>: { identity, … } }`, the manifest's snapshot) alone: the one whose
- *  `match` holds and whose `exclude` does not; none, or two that both claim it, is null (a process is never folded into a known identity on a
- *  guess, 0.1 §5). A harness whose record has no patterns (a manifest from before the snapshot) never matches — the caller asks hasIdentity first. */
-export function matchHarness(liveness, facts) {
-  const hit = harnessesOf(liveness, facts)
-  return hit.length === 1 ? hit[0] : null
-}
-
 /** Every harness whose record in `liveness` claims this process (`match` holds, `exclude` does not), in the record order. For judging who may
  *  HOLD a file (`off` steps 2, 3, 5) a process two harnesses claim is a process of each — a name on two lists (agents.json added after `on`, or a
  *  name moved between harnesses and kept by the union) must add a holder, never take one away (D50: a bundle is not deleted under a running agent).
- *  matchHarness, which needs one answer, says null for such a process. */
+ *  A process two harnesses claim is never folded into one of them (0.1 §5); a harness whose record has no patterns (a manifest from before
+ *  the snapshot) never claims anything — the caller asks hasIdentity first. */
 export function harnessesOf(liveness, facts) {
   const view = identityView(facts)
   const hit = []

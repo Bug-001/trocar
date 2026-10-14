@@ -5,7 +5,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRegistry, matchPattern, validateDescriptor, livenessOf } from '../../../src/collector/core/registry.mjs'
-import { reviveSignature, matchHarness } from '../../../src/off/signature.mjs'
+import { reviveSignature } from '../../../src/off/signature.mjs'
+import { matchHarness } from '../../helpers/one-harness.mjs'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
@@ -142,4 +143,33 @@ test('R6 a user name that does not normalize to itself is that item\'s problem, 
   reg2.replaceAgentList(raw) // the 5 s swap does not throw either
   const codex = ALL.find((d) => d.name === 'codex')
   assert.doesNotThrow(() => livenessOf(codex, { agentList: raw }))
+})
+
+test('registry: a win32 command line not known yet (pending / cim-backoff) is `pending` for every name on a list — its exclusions, args and Chromium role all read it; never `match` (review R17, 4.8 W78)', async () => {
+  const reg = createRegistry(await loadHarnesses())
+  const pend = (exe, cmdlineState = 'pending') => ({ os: 'win32', exe, argv: [], cmdline: null, env: null, envRead: false, cmdlineState })
+  const known = (exe, argv) => ({ os: 'win32', exe, argv: [exe, ...argv], cmdline: 'x', env: null, envRead: false, cmdlineState: 'ok' })
+  const KIMI = String.raw`C:\Users\u\.kimi-code\bin\kimi.exe`
+  const CODEX = String.raw`C:\Users\u\AppData\Local\OpenAI\Codex\bin\0123\codex.exe`
+  const CLAUDE = String.raw`C:\Users\u\AppData\Local\AnthropicClaude\app-1.0.1307\claude.exe`
+  const OPENCODE = String.raw`C:\Users\u\AppData\Local\Programs\@opencodedesktop\OpenCode.exe`
+  for (const [exe, state, after, want] of [
+    [KIMI, 'pending', ['__update_download', '2.1.2'], [null, 'excluded', 'kimi-code']],
+    [CODEX, 'cim-backoff', ['pid-update-loop'], [null, 'excluded', 'codex']],
+    [CLAUDE, 'pending', ['--type=renderer'], ['claude-code', 'match', null]], // a match whose trust confirm.mjs then refuses as chromium-child: needs the argv
+    [OPENCODE, 'pending', ['--type=gpu-process'], ['opencode', 'match', null]], // the Electron desktop's children share its exe name on Windows
+  ]) {
+    assert.deepEqual(said(reg.match(pend(exe, state))), [null, 'pending', null], `${exe} (${state}): not known yet — never match`)
+    assert.deepEqual(said(reg.match(known(exe, after))), want, `${exe} once its command line came`)
+  }
+  assert.deepEqual(said(reg.match(pend(String.raw`C:\Windows\System32\notepad.exe`))), [null, 'no-match', null], 'a name on no list is still no-match')
+  assert.deepEqual(said(reg.match({ ...pend(KIMI), cmdlineState: 'empty' })), ['kimi-code', 'match', null], '`empty` is final: judged as no arguments (4.8 §2.3)')
+})
+
+test('registry: darwin\'s ps-split argv — a wrapper whose later argument is the agent\'s bin is not the agent (review R1)', async () => {
+  const reg = createRegistry(await loadHarnesses())
+  const ps = (argv) => ({ os: 'darwin', exe: '/usr/local/bin/node', argv, argvSplit: true, env: null, envRead: false })
+  assert.equal(reg.match(ps(['node', '/tmp/wrapper.js', '/usr/local/bin/kimi'])).agent, null)
+  assert.equal(reg.match(ps(['node', '/tmp/ptc-runner.js', '/usr/local/bin/dsh'])).agent, null)
+  assert.equal(reg.match(ps(['node', '/usr/local/bin/kimi', '-p', 'hi'])).agent, 'kimi-code', 'the npm kimi itself still is')
 })

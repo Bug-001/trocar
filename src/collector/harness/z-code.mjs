@@ -143,7 +143,7 @@ export default {
   processes: {
     names: [{ name: 'zcode-cli' }, { name: 'zcode', entry: ZCJS }, { name: 'zcode helper', entry: ZCJS }, { name: 'node', entry: ZCJS }, { name: 'zcode', args: NETWORK_SERVICE_ARG }],
     // on Linux (the one OS that reads another process's environment) the app's exe is the agent only as Node (ELECTRON_RUN_AS_NODE=1): without it, the GUI
-    exclude: [{ name: 'zcode', env: { ELECTRON_RUN_AS_NODE: null } }, { name: ['zcode', 'zcode helper', 'node'], args: '(^| )__zcode-(plugin-host|dwf-child)( |$)' }, { name: 'zcode helper', args: '--utility-sub-type=network' }],
+    exclude: [{ name: 'zcode', env: { ELECTRON_RUN_AS_NODE: null } }, { name: ['zcode', 'zcode helper', 'node'], args: '(^| )__zcode-(plugin-host|dwf-child)( |$)' }, { name: 'zcode helper', args: NETWORK_SERVICE_ARG }],
     longLived: [{ args: '(^| )(app|agent)-server( |$)' }],
   },
   hosts: ['api.z.ai', 'open.bigmodel.cn', 'zcode.z.ai', 'api.moonshot.cn', 'api.minimaxi.com', 'api.deepseek.com', 'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com', 'api.xiaomimimo.com', 'api.openai.com', 'api.anthropic.com', 'api.x.ai', 'openrouter.ai', 'opencode.ai'],

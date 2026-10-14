@@ -15,6 +15,7 @@ import { installCollector } from '../../../src/collector/install.mjs'
 import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
+import { NETWORK_SERVICE_ARG } from '../../../src/collector/core/trust/chromium.mjs'
 
 const EXE = '/opt/ZCode/zcode'
 const CJS = '/opt/ZCode/resources/glm/zcode.cjs'
@@ -166,4 +167,12 @@ test('z-code and claude-code: a JSON config that exists but does not parse is re
     const seen3 = []; judge(cc, ctxFor({ home: s.home, unparsable: (f) => seen3.push(f) }))
     assert.deepEqual(seen3, [], 'a file that parses is not reported')
   } finally { s.done() }
+})
+
+test('z-code: the Helper\'s network-service exclusion is written with the one definition of the switch (chromium.mjs NETWORK_SERVICE_ARG, review R9)', () => {
+  const helperNet = zcode.processes.exclude.filter((x) => x.name === 'zcode helper')
+  assert.deepEqual(helperNet.map((x) => x.args), [NETWORK_SERVICE_ARG], 'no second spelling of --utility-sub-type=network…')
+  const H = '/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper'
+  const m = createRegistry([zcode]).match({ os: 'darwin', exe: H, argv: [H, '--type=utility', '--utility-sub-type=network.mojom.NetworkService'], argvSplit: true, env: null, envRead: false })
+  assert.deepEqual([m.reason, m.harness], ['excluded', 'z-code'], 'the Helper\'s network service is still a z-code helper')
 })

@@ -8,6 +8,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
 import { normalizeName } from './identity.mjs'
+import { splitCommandLine } from './winargv.mjs'
 
 /** readlink /proc/<pid>/exe → absolute path, or null (onError(e) is told why). */
 export function readExe(pid, { root = '/proc', onError = () => {} } = {}) {
@@ -237,8 +238,9 @@ export async function listProcs({ uid = typeof process.getuid === 'function' ? p
 
 // The one fixed question of the whole process table on Windows (4.8 §7): one Get-CimInstance over Win32_Process, every field this file's
 // row shape wants, as JSON — one question for the whole machine, not one per process. Windows has no uid (null: the row says whose it is
-// not), the command line comes joined by spaces (argv is it split on whitespace, its argument boundaries lost — the same as macOS's `ps`; `cmdline`
-// is the line as it came, what the form tables' command-line patterns read), and another process's environment cannot be read at all (`env` null,
+// not), argv is the command line split by the one CommandLineToArgvW splitter the collector uses too (./winargv.mjs: a quoted exe path with a space stays
+// one word, so the name list reads the same argv here as in the daemon, 4.6 §识别进程 / 4.8 W76; no command line is no argv, as there; `cmdline` is the
+// line as it came), and another process's environment cannot be read at all (`env` null,
 // `envRead: false`: the OS's rule, 4.8 §10.1). A question that died, or an answer that is not JSON, is an error, never
 // an empty table: an empty one would say "nobody holds the bundle" and delete it (D38, the rule of the other two readers).
 const WIN_TABLE_SCRIPT = 'Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = $_.ProcessId; pp = $_.ParentProcessId; n = $_.Name; x = $_.ExecutablePath; s = $(try { [DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { $null }); c = $_.CommandLine } } | ConvertTo-Json -Compress'
@@ -254,7 +256,7 @@ function procsOfWin({ exec, env }) {
     if (row === null || typeof row !== 'object' || !Number.isFinite(row.p)) continue
     const name = typeof row.n === 'string' && row.n !== '' ? row.n : null
     const cmdline = typeof row.c === 'string' && row.c !== '' ? row.c : null
-    out.push({ pid: Number(row.p), ppid: Number.isFinite(row.pp) ? Number(row.pp) : null, uid: null, startedAt: Number.isFinite(row.s) ? Number(row.s) : null, exe: typeof row.x === 'string' && row.x !== '' ? row.x : name, argv: (cmdline || name || '').split(/\s+/).filter((s) => s !== ''), argvSplit: true, cmdline, env: () => null, envRead: false })
+    out.push({ pid: Number(row.p), ppid: Number.isFinite(row.pp) ? Number(row.pp) : null, uid: null, startedAt: Number.isFinite(row.s) ? Number(row.s) : null, exe: typeof row.x === 'string' && row.x !== '' ? row.x : name, argv: splitCommandLine(cmdline), cmdline, env: () => null, envRead: false })
   }
   return out
 }

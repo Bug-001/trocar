@@ -3,7 +3,8 @@
 // JSON round trip, or a match that differs from the registry's, would make `off` call a live agent dead — so the two are held equal here.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { matchPattern, serializeSignature, reviveSignature, matchHarness } from '../../src/off/signature.mjs'
+import { matchPattern, serializeSignature, reviveSignature } from '../../src/off/signature.mjs'
+import { matchHarness } from '../helpers/one-harness.mjs'
 import { createRegistry, matchPattern as registryMatchPattern } from '../../src/collector/core/registry.mjs'
 import { compileIdentity } from '../../src/off/identity.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'

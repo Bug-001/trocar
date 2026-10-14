@@ -910,7 +910,8 @@ test('a manifest of a version this build does not read stops install before anyt
 test('install records liveness per harness it changed anything for: its signature as JSON, whether it re-reads its entry, until when a running one still trusts', async () => {
   const b = box()
   try {
-    const { reviveSignature, matchHarness } = await import('../../src/off/signature.mjs')
+    const { reviveSignature } = await import('../../src/off/signature.mjs')
+    const { matchHarness } = await import('../helpers/one-harness.mjs')
     const rep = { ...repHarness(b.dir, { rereadsEntry: true, afterUninstall: 'next-connection', untilEnviron: 'SSL_CERT_FILE' }), processes: { names: [{ name: 'rep' }], exclude: [{ name: 'rep', args: '(^| )--helper( |$)' }] } }
     const quiet = { name: 'quiet', runtime: 'node', processes: { names: [{ name: 'quiet' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] }, inject: () => ({}) } // injects nothing
     fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)

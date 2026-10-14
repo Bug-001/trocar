@@ -17,6 +17,8 @@
 // accept-time seam there is no "later" to wait for: a form that needs the command line and does not have it simply does not match this ask (the fail-safe
 // answer, never a wrong one). Only this session's processes are in the helper's snapshot: a process of another session is not this user's agent.
 
+import { splitCommandLine } from '../../../off/winargv.mjs'
+
 /** How long one targeted ask waits: the first `ps` after the helper starts has an empty command-line cache, so more than 40 processes take a full
  *  Win32_Process enumeration through CIM (plus the module load), which on a cold or busy machine is more than the 2 s a table read gets. */
 export const PS_TIMEOUT_MS = 10000
@@ -39,52 +41,9 @@ export function elevationOf(row) {
   return { elevated: null, inferred: false }
 }
 
-/** A command line split into arguments the way CommandLineToArgvW does (the post-2008 rules; MS "Parsing C++ command-line arguments"): the program
- *  name (up to the first space, or the closing quote when it starts with one) takes no backslash escapes; after it 2n backslashes before a quote
- *  are n backslashes and the quote toggles quoting, 2n+1 are n backslashes and a literal quote, backslashes elsewhere are literal, and `""` inside
- *  a quoted string is one quote. Nothing (null, empty) is no arguments. */
-export function splitCommandLine(cmdline) {
-  if (typeof cmdline !== 'string') return []
-  const s = cmdline
-  const out = []
-  let i = 0
-  const skipBlank = () => { while (i < s.length && (s[i] === ' ' || s[i] === '\t')) i++ }
-  skipBlank()
-  if (i >= s.length) return out
-  if (s[i] === '"') { // the program name: quoted up to the next quote, no escapes
-    const end = s.indexOf('"', i + 1)
-    out.push(s.slice(i + 1, end < 0 ? s.length : end))
-    i = end < 0 ? s.length : end + 1
-  } else {
-    let j = i
-    while (j < s.length && s[j] !== ' ' && s[j] !== '\t') j++
-    out.push(s.slice(i, j))
-    i = j
-  }
-  for (skipBlank(); i < s.length; skipBlank()) {
-    let arg = ''
-    let quoted = false
-    let backslashes = 0
-    for (; i < s.length; i++) {
-      const c = s[i]
-      if (c === '\\') { backslashes++; continue }
-      if (c === '"') {
-        arg += '\\'.repeat(backslashes >> 1)
-        const escaped = backslashes % 2 === 1
-        backslashes = 0
-        if (escaped) { arg += '"'; continue }
-        if (quoted && s[i + 1] === '"') { arg += '"'; i++; continue }
-        quoted = !quoted
-        continue
-      }
-      arg += '\\'.repeat(backslashes); backslashes = 0
-      if (!quoted && (c === ' ' || c === '\t')) break
-      arg += c
-    }
-    out.push(arg + '\\'.repeat(backslashes))
-  }
-  return out
-}
+/** splitCommandLine(cmdline) → argv, the CommandLineToArgvW rules: one function for the collector and `off` / `status` (src/off/winargv.mjs), so both
+ *  sides hand the name list the same argv for the same process (4.6 §识别进程, 4.8 W76). Re-exported here for the win32 callers. */
+export { splitCommandLine }
 
 /** One helper `ps` row as ProcFacts. `source` is the ask's own ('accept' on this seam). */
 export function factsOfRow(row, source = 'accept') {

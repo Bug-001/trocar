@@ -9,7 +9,8 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { SEEDS } from '../helpers/proc-seeds.mjs'
 import { variantsOf } from '../helpers/proc-variants.mjs'
 import { WIDE, HARNESS_IDS, normalizeName, processNames, name0, argRest, entryOf, compileIdentity, readAgentList, mergeAgentList } from '../../src/off/identity.mjs'
-import { identityView, matchHarness, matchPattern, serializeSignature, reviveSignature } from '../../src/off/signature.mjs'
+import { identityView, matchPattern, serializeSignature, reviveSignature } from '../../src/off/signature.mjs'
+import { matchHarness } from '../helpers/one-harness.mjs'
 
 test('normalizeName: quotes, (deleted), both separators, case, .exe, version-named files', () => {
   const table = [
@@ -66,6 +67,14 @@ test('entryOf: the program an interpreter runs — one exact candidate where arg
   assert.deepEqual(entryOf({ argv: ['node', '--x', '/a/process.js', '--parent', '/usr/local/bin/dsh'], argvSplit: true }), ['/a/process.js'], 'a flag ends the rejoin: a later argument is never the entry')
   assert.deepEqual(entryOf({ argv: ['node', '--inspect'] }), [])
   assert.equal(entryOf({}), null)
+})
+
+test('entryOf (ps split): a word that starts a new path ends the rejoin, as a flag does — a wrapper naming the agent later is not the agent (review R1)', () => {
+  assert.deepEqual(entryOf({ argv: ['node', '/tmp/wrapper.js', '/usr/local/bin/kimi'], argvSplit: true }), ['/tmp/wrapper.js'])
+  assert.deepEqual(entryOf({ argv: ['node', '/tmp/ptc-runner.js', '~/bin/dsh'], argvSplit: true }), ['/tmp/ptc-runner.js'], 'a home path too')
+  assert.deepEqual(entryOf({ argv: ['node', '/tmp/w.js', 'C:/x/dsh'], argvSplit: true }), ['/tmp/w.js'], 'a drive path too')
+  assert.deepEqual(entryOf({ argv: ['node', '/Users/John', 'Smith/x.js', '/usr/local/bin/kimi'], argvSplit: true }), ['/Users/John', '/Users/John Smith/x.js'], 'a path with a space still rejoins: its second word starts no path')
+  assert.deepEqual(entryOf({ argv: ['node', '/tmp/wrapper.js', '/usr/local/bin/kimi'] }), ['/tmp/wrapper.js'], 'exact argv: the same single candidate')
 })
 
 test('every variant of every seed keeps the seed\'s names, and rest (or, where the axis moves the script, its entry\'s program file) — the derived facts do not move with the install', () => {

@@ -6,7 +6,8 @@
 //          CommandLineToArgvW give one string for one process (4.8 W76)
 //   entry  what an interpreter runs: the first argv[1..] element that is not a flag, unquoted, `\` → `/` — a LIST of candidates: one where argv is
 //          exact (Linux, Windows); where argv is a `ps` line split on white space (darwin, facts.argvSplit) one per way the words from there up to the
-//          next flag word may join back into a path with spaces. A name item says `entry: '<pattern>'` (anchor with `$`: "the entry ends with …").
+//          next flag word or new path (`/`, `~`, `C:/`) may join back into a path with spaces. A name item says `entry: '<pattern>'` (anchor with `$`:
+//          "the entry ends with …").
 // A harness's preset (`processes` in src/collector/harness/<h>.mjs) and the user's ~/.asight/agents.json (D51③; `on` / `off` never write it, D48)
 // are compiled here into the signature shape src/off/signature.mjs matches (`{ match, exclude, longLived }` of patterns over names / name0 / rest /
 // env), so the daemon, `status` and `off` — the standalone copy too — judge with one matcher. Imports only node:* and src/off.
@@ -25,6 +26,9 @@ export const HARNESS_IDS = Object.freeze(['claude-code', 'codex', 'opencode', 'k
 const IDENT_VERSION_NAME = /^v?\d+(\.\d+)+([-+][0-9a-z.]+)?$/ // a file or directory named by a version: 2.1.296, v22.20.0, 3.14.7+20260901
 const IDENT_FAMILY = /^([a-z]+?)(\d+(?:\.\d+)*)(t?)$/ // python3, python3.14, python3.14t, node22, ruby3.3 — not x264 (x is no interpreter)
 const IDENT_ARGS_MAX = 200
+// A ps word that cannot continue a path cut at a space: a flag, or the start of a new path (`/…`, `~…`, `C:/…` — `\` is `/` by then). A wrapper whose
+// later argument names the agent (`node /tmp/wrapper.js /usr/local/bin/kimi`) is then not the agent, as where argv is exact (review R1).
+const IDENT_STOPS_REJOIN = /^(-|\/|~|[A-Za-z]:\/)/
 
 const identSegment = (s) => s.trim().toLowerCase().replace(/\.exe$/, '')
 
@@ -83,7 +87,7 @@ export function entryOf(facts) {
   if (i < 0) return []
   if (!facts.argvSplit) return [args[i]]
   const out = [args[i]]
-  for (let j = i + 1; j < args.length && !args[j].startsWith('-'); j++) out.push(`${out[out.length - 1]} ${args[j]}`)
+  for (let j = i + 1; j < args.length && !IDENT_STOPS_REJOIN.test(args[j]); j++) out.push(`${out[out.length - 1]} ${args[j]}`)
   return out
 }
 

@@ -8,7 +8,8 @@
 // match(facts) → { agent, descriptor, reason, harness?, candidates? }; reason (4.6 「按名单认」, plan §2.3):
 //   match          exactly one harness claims it and none of its exclude items holds
 //   excluded       a name of `harness` and one of its exclude items holds (a helper of that harness)
-//   pending        a command line not known yet (win32 cmdlineState pending / cim-backoff) and an item with that name needs `args`
+//   pending        a command line not known yet (win32 cmdlineState pending / cim-backoff) and the name is on a list: its args, its exclusions and
+//                  its Chromium role read the command line, so it is never `match` before it came (review R17; not cached, 4.8 W78)
 //   args-mismatch  the name is on some list, but none of those items' `args` holds
 //   no-match       the name is on no list
 //   ambiguous      two harnesses claim it (`candidates`)
@@ -26,6 +27,8 @@ const PENDING = new Set(['pending', 'cim-backoff'])
 const anyOf = (patterns, facts) => (patterns || []).some((p) => matchPattern(p, facts))
 // an item's argument patterns: `rest` over the whole argument string, `entry` over the program an interpreter runs (identity.mjs entryOf)
 const argsHold = (p, view) => (!p.rest || holds(p.rest, view.rest)) && (!p.entry || holds(p.entry, view.entry))
+// an exclude item that reads the command line (its `rest`, argv[0]'s `name0`)
+const READS_ARGV = (x) => x.rest != null || x.name0 != null || x.entry != null
 const compileOf = (d) => compileIdentity({ harness: d.name, ...d.processes })
 
 export function validateDescriptor(d) {
@@ -113,18 +116,19 @@ export function createRegistry(descriptors, { agentList = [] } = {}) {
     const claims = []
     let excludedBy = null, argsMiss = false, pending = false
     for (const [h, sig] of lists) {
-      let named = false, claimed = false, waits = false
-      for (const p of sig.match) {
-        if (!holds(p.names, view.names)) continue
-        named = true
-        if (!p.rest && !p.entry) { claimed = true; break }
-        if (unknownArgs) { waits = true; continue }
-        if (argsHold(p, view)) { claimed = true; break }
+      if (!sig.match.some((p) => holds(p.names, view.names))) continue
+      if (unknownArgs) {
+        // the command line is not known yet: whether an item's args hold, whether an exclusion (args, name0) holds and which Chromium process it is
+        // (core/trust/confirm.mjs chromium-child, every harness) all read it, so a name on this list is not yet an answer — only an exclusion that
+        // reads no argv (env) may already hold (review R17; 4.8 W78: not cached, the next connection asks again)
+        if (anyOf(sig.exclude.filter((x) => !READS_ARGV(x)), view)) excludedBy = excludedBy || h
+        else pending = true
+        continue
       }
-      if (!named) continue
+      let claimed = false
+      for (const p of sig.match) if (holds(p.names, view.names) && argsHold(p, view)) { claimed = true; break }
       if (anyOf(sig.exclude, view)) { excludedBy = excludedBy || h; continue }
       if (claimed) claims.push(h)
-      else if (waits) pending = true
       else argsMiss = true
     }
     if (claims.length === 1) return { agent: claims[0], descriptor: byName.get(claims[0]), reason: 'match' }
