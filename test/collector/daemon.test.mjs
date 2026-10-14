@@ -963,6 +963,23 @@ test('daemon: started where asight is not installed, or where the manifest canno
   } finally { s.done() }
 })
 
+// D55: a v2 manifest reads as install null (on refuses until install runs), but a v2 install that was complete may still have its routing in agents' configs —
+// the daemon keeps serving it (v2_complete) instead of leaving every agent pointed at a closed loopback proxy (invariant 5); an incomplete v2 one is not installed.
+test('daemon: on a v2 manifest whose install was complete it starts (the routing `on` left still needs it); on an incomplete v2 one it is not-installed (D55)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const file = path.join(s.collector, 'install-manifest.json')
+  const v3 = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const asV2 = (complete) => { const { install: _i, ca: _c, ...rest } = v3; const strip = (x) => { const { phase: _p, ...y } = x; return y }; fs.writeFileSync(file, JSON.stringify({ ...rest, version: 2, complete, entries: rest.entries.map(strip), files: rest.files.map(strip) })) }
+  try {
+    asV2(true)
+    const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] })
+    await d.stop()
+    asV2(false)
+    await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch: { os: 'linux', createRedirector: () => { throw new Error('must not get this far') } }, harnesses: [cc] }), (e) => e.code === 'not-installed')
+  } finally { p.done(); s.done() }
+})
+
 // D-31: started as root (sudo -E), it refuses before writing anything else, and the refusal it records in the user's
 // collector directory is given back to the directory's owner — no root-owned file the user's daemon cannot append to.
 test('daemon: started as root it refuses (root-refused), and the record it leaves is chowned to the collector directory owner (D-31)', async () => {

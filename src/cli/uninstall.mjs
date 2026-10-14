@@ -235,7 +235,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (!blocked) {
       if (m && (left || receipt.kept_bundles.length)) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
         const files = m.files.filter((f) => f.role !== 'ca-key' && f.role !== 'ca-cert' && (f !== unitFile || unitLeft))
-        saveManifest(w.dir, { ...m, install: null, ...(left ? { uninstall_left: receipt.left.map((l) => ({ path: l.path, harness: l.harness ?? null, result: l.result })), uninstalled_at: w.clock().toISOString() } : {}), ...(receipt.kept_bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], files }, fs)
+        saveManifest(w.dir, { ...m, install: null, v2_complete: undefined, ...(left ? { uninstall_left: receipt.left.map((l) => ({ path: l.path, harness: l.harness ?? null, result: l.result })), uninstalled_at: w.clock().toISOString() } : {}), ...(receipt.kept_bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], files }, fs)
       } else {
         if (lock) lock.release() // its file is in the directory that may go with the manifest
         if (m) {

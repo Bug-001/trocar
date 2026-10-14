@@ -122,6 +122,15 @@ test('backups (R2): dropped when the file is back at its pre_sha256, kept and li
   assert.deepEqual([fs.existsSync(aa.backup), u.manifest.kept_backups.map((k) => k.backup), fs.existsSync(bbBackup)], [true, [aa.backup], false])
 })
 
+test('D55 kinds this build has no undo for yet (login-env, json-array-item) are listed as left with their undo_by_hand, never skipped silently (D38)', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  m.entries.push({ phase: 'install', kind: 'login-env', harness: null, path: 'login-env:NODE_EXTRA_CA_CERTS', name: 'NODE_EXTRA_CA_CERTS', carriers: [{ path: '/p' }] }, { phase: 'install', kind: 'json-array-item', harness: 'aa', path: path.join(s.b.home, 'a.json'), keys: ['k'], item: 'x' })
+  const r = await s.run({ manifest: m })
+  assert.deepEqual(r.left.map((l) => [l.path, l.result]), [['login-env:NODE_EXTRA_CA_CERTS', 'unknown-kind'], [path.join(s.b.home, 'a.json'), 'unknown-kind']])
+  for (const l of r.left) assert.match(l.reason, /by hand: /)
+})
+
 test('an entry of a kind this build does not know is left alone, and so is a manifest of a version it does not read (R3)', async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(s.b.dir)

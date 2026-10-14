@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { MANIFEST_VERSION, OFF_VERSION, KNOWN_KINDS, PHASES, newManifest, readManifest, saveManifest, readManifestAt, saveManifestAt, undoByHand, unknownItems, manifestPath, classifyV2, itemsOfPhase, parseManifest, installComplete } from '../../src/off/manifest.mjs'
+import { MANIFEST_VERSION, OFF_VERSION, KNOWN_KINDS, PHASES, newManifest, readManifest, saveManifest, readManifestAt, saveManifestAt, undoByHand, unknownItems, manifestPath, classifyV2, itemsOfPhase, parseManifest, installComplete, daemonMayStart } from '../../src/off/manifest.mjs'
 import { applyJsonKey, applyTextEntry, writeOwnedFile } from '../../src/collector/core/trust/journal.mjs'
 import { SENTINEL, OFF_PREFIX, lineComment } from '../../src/off/text-edit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -227,7 +227,7 @@ test('V42 the captured v2 manifests: every item gets the phase of the command th
   assert.equal(win.undo_by_hand, `run: certutil -user -delstore Root ${cu.values.thumbprint}`)
 })
 
-test('V42 classifyV2 is pure, and every certificate opt-in of a manifest (keychain, cert-user, cert-machine) collapses into ONE system-root with the earliest installed_at', () => {
+test('V42 classifyV2 is pure, and the certificate opt-ins of each store collapse into ONE system-root of that store, the earliest installed_at; a machine one keeps its own root and elevated undo', () => {
   const doc = captured('win32-optin'); const cu = doc.entries.find((e) => e.kind === 'optin-cert-user')
   doc.entries.push({ ...cu, kind: 'optin-cert-machine', scope: 'machine', installed_at: '2026-10-01T00:00:00.000Z' }, { ...cu, installed_at: '2026-10-20T00:00:00.000Z' })
   const v2 = parseManifest(JSON.stringify(doc)) // the read classifies it; classifyV2 again over the v2 input itself:
@@ -236,10 +236,22 @@ test('V42 classifyV2 is pure, and every certificate opt-in of a manifest (keycha
   assert.deepEqual(input, before, 'the input is not changed')
   for (const m of [v2, out]) {
     const roots = m.entries.filter((e) => e.kind === 'system-root')
-    assert.equal(roots.length, 1, 'one certificate, one item')
-    assert.deepEqual([roots[0].installed_at, roots[0].thumbprint, roots[0].phase], ['2026-10-01T00:00:00.000Z', cu.values.thumbprint, 'install'])
+    assert.deepEqual(roots.map((r) => [r.store, r.scope, r.installed_at, r.thumbprint, r.phase, r.values.thumbprint]), [
+      ['win-currentuser-root', 'user', cu.installed_at, cu.values.thumbprint, 'install', cu.values.thumbprint],
+      ['win-localmachine-root', 'machine', '2026-10-01T00:00:00.000Z', cu.values.thumbprint, 'install', cu.values.thumbprint]], 'one root per store')
+    assert.match(roots[1].undo_by_hand, new RegExp(`^run as administrator: certutil -delstore Root ${cu.values.thumbprint}$`), 'the machine root is undone in LocalMachine, elevated')
+    assert.ok(roots[1].elevated_command, 'the machine root keeps an elevated command for off to hand back')
     assert.ok(!m.entries.some((e) => /^optin-cert|keychain/.test(e.kind)), 'the opt-in records are folded away')
   }
+})
+
+test('V42 classifyV2 keeps a v2 install that was complete as `v2_complete` (the daemon still serves its routing); an incomplete one has none', () => {
+  for (const [complete, want] of [[true, true], [false, undefined]]) {
+    const m = parseManifest(JSON.stringify({ ...captured('darwin-proxy'), complete }))
+    assert.deepEqual([m.install, m.v2_complete, daemonMayStart(m)], [null, want, !!want])
+  }
+  assert.equal(daemonMayStart({ install: { state: 'complete' } }), true)
+  assert.equal(daemonMayStart({ install: { state: 'partial' } }), false)
 })
 
 test('V42 classifyV2 of a file entry by its own values, over every loopback host × entry shape: a loopback proxy URL naming no ~/.asight path is on; a path of asight\'s, another host, or both is install', () => {

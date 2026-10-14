@@ -25,7 +25,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { undoEntry, removeOwnedFile, describeEntry } from './journal.mjs'
-import { saveManifest, KNOWN_KINDS, FILE_ENTRY_KINDS, undoByHand, restoreByHand } from './manifest.mjs'
+import { saveManifest, KNOWN_KINDS, NO_UNDO_YET, FILE_ENTRY_KINDS, undoByHand, restoreByHand } from './manifest.mjs'
 import { undoRunKey, undoScheduledTask } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, asightHome } from './paths.mjs'
@@ -44,7 +44,7 @@ const KEPT_BECAUSE = {
 }
 const UNTIL_VALUES = ['restart', 'next-connection', 'next-handshake', 'session-end']
 
-const known = (item) => KNOWN_KINDS.includes(item.kind)
+const known = (item) => KNOWN_KINDS.includes(item.kind) && !NO_UNDO_YET.includes(item.kind) // a kind with no undo yet is listed as left, never skipped silently (D38)
 const isMap = (v) => v instanceof Map
 const processEnv = (p) => { try { const e = typeof p.env === 'function' ? p.env() : p.env; return isMap(e) ? e : null } catch { return null } } // gone, or not ours to read
 const errText = (e) => String((e && e.code) || (e && e.message) || e)

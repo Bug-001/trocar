@@ -15,6 +15,7 @@ import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import { removeAsightText, lineComment } from './text-edit.mjs'
 import { execTool } from './exec.mjs'
+import { ROOT_STORE_KIND } from './manifest.mjs'
 import { certBlocks } from './pem.mjs'
 
 const rcSha256 = (text) => crypto.createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex')
@@ -118,10 +119,12 @@ export async function undoDarwinOptIns({ manifest, ids = null, exec = null, env 
   const out = { results: [], needsAdmin: [], unknown: [] }
   const inScope = (h) => typeof h === 'string' && (ids == null || ids.includes(h))
   for (const e of (manifest && Array.isArray(manifest.entries) ? manifest.entries : [])) {
-    if (!e || !e.scope || e.scope === 'agent' || !inScope(e.harness)) continue // the opt-in ones are scope 'user' / 'machine'; an 'agent' entry is the harness undo's own (parseManifest defaults every entry's scope)
+    // a system-root (D55; classifyV2 folds the v2 certificate opt-ins into it) belongs to no harness: the whole-machine off / uninstall takes it, by its store's opt-in undo
+    const root = e && e.kind === 'system-root'
+    if (!e || !e.scope || e.scope === 'agent' || !(root ? ids == null : inScope(e.harness))) continue // the opt-in ones are scope 'user' / 'machine'; an 'agent' entry is the harness undo's own (parseManifest defaults every entry's scope)
     const row = (r) => out.results.push({ path: e.path, kind: e.kind, scope: e.scope, ...(e.form != null && e.item != null ? { form: e.form, item: e.item } : {}), ...r })
     if (e.scope === 'machine') { out.unknown.push({ path: e.path, kind: e.kind }); row({ result: 'unknown-kind', reason: `${e.path} is a machine-level opt-in item, which darwin has no form of in v1 (4.9 §2.4); use the asight that wrote it` }); continue }
-    const undo = DARWIN_UNDO_BY_KIND[e.kind]
+    const undo = DARWIN_UNDO_BY_KIND[root ? ROOT_STORE_KIND[e.store] : e.kind]
     if (!undo) { out.unknown.push({ path: e.path, kind: e.kind }); row({ result: 'unknown-kind', reason: `${e.path} is an opt-in item of kind ${JSON.stringify(e.kind)}, which this build has no undo for; use the asight that wrote it` }); continue }
     try { row(await undo({ entry: e, manifest, exec, env, fs: fs || nodeFs, home })) } catch (err) { row({ result: 'failed', reason: String((err && err.message) || err) }) }
   }

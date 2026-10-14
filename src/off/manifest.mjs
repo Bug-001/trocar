@@ -53,11 +53,18 @@ export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry'
  *  are the ones whose undo is an elevated step, never inline. */
 export const OPTIN_KINDS = Object.freeze(KNOWN_KINDS.filter((k) => k.startsWith('optin-')))
 export const OPTIN_MACHINE_KINDS = Object.freeze(['optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine'])
+/** Each OS store a system-root sits in → the v2 certificate opt-in kind whose undo takes it out (by its fingerprint / thumbprint, the same record values).
+ *  classifyV2 folds the opt-ins into system-roots by this map, and the opt-in undo loops route a system-root back through it until the D55 apply/undo lands. */
+export const ROOT_STORE_KIND = Object.freeze({ 'darwin-user-trust': 'optin-keychain-cert', 'win-currentuser-root': 'optin-cert-user', 'win-localmachine-root': 'optin-cert-machine' })
+/** Known kinds no undo of this build takes out yet: `off` / `uninstall` list them as left, with their undo_by_hand, and keep the manifest (D38) — never skip them silently. */
+export const NO_UNDO_YET = Object.freeze(['login-env', 'json-array-item'])
 
 export const newManifest = (now = new Date()) => ({ version: MANIFEST_VERSION, created_at: now.toISOString(), install: null, ca: null, engine_port: null, planned: [], confirmed_paths: [], kept_backups: [], liveness: {}, dirs: [], files: [], entries: [] })
 
 /** Has `install` finished (D55: `install.state`, which replaced v2's `complete`)? */
 export const installComplete = (m) => !!(m && isPlainObject(m.install) && m.install.state === 'complete')
+/** May the daemon start on `m`? An install that finished — or a version 2 one that was complete (classifyV2's `v2_complete`): its `on` left routing that still needs the engine. */
+export const daemonMayStart = (m) => installComplete(m) || !!(m && m.v2_complete === true)
 /** The entries and files of one phase. */
 export const itemsOfPhase = (m, phase) => [...(Array.isArray(m && m.entries) ? m.entries : []), ...(Array.isArray(m && m.files) ? m.files : [])].filter((x) => isPlainObject(x) && x.phase === phase)
 
@@ -84,6 +91,7 @@ export function undoByHand(e) {
   if (e.kind === 'owned-file') return `rm ${shellWord(where)}`
   if (e.kind === 'system-root') {
     if (e.store === 'win-currentuser-root') return `run: certutil -user -delstore Root ${e.thumbprint ?? '<thumbprint of the asight CA>'}`
+    if (e.store === 'win-localmachine-root') return `run as administrator: certutil -delstore Root ${e.thumbprint ?? '<thumbprint of the asight CA>'}`
     return `run: security remove-trusted-cert ${e.cert_file ? shellWord(e.cert_file) : '<the asight CA file>'}, then security delete-certificate -Z ${e.thumbprint ?? '<SHA-1 of the asight CA>'} (the certificate with SHA-256 ${e.fp256 ?? 'unknown'})`
   }
   if (e.kind === 'login-env') {
@@ -136,7 +144,7 @@ function completeManifest(m) {
 }
 
 // ── classifyV2: the phase of each item of a version 1 / 2 manifest (D55, 4.6 安装清单). The last use of shape matching: a v3 writer says its phase.
-const CERT_OPTINS = ['optin-keychain-cert', 'optin-cert-user', 'optin-cert-machine']
+const CERT_OPTINS = Object.values(ROOT_STORE_KIND)
 const ON_FILE_ROLES = ['unit', 'daemon-log', 'forwarder-binary']
 const ON_ENTRY_KINDS = ['proxy-entry', 'run-key', 'scheduled-task', 'forwarder-binary'] // the routing and the autostart; the legacy-* kinds are the old capture's switch
 const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost'])
@@ -150,15 +158,18 @@ function entryPhase(e) {
   const values = [e.value, ...(isPlainObject(e.vars) ? Object.values(e.vars) : [])].filter((v) => typeof v === 'string')
   return values.some(isLoopbackUrl) && !values.some(namesAsightPath) ? 'on' : 'install'
 }
-// the certificate opt-ins of one machine are one certificate in the user's OS store: one system-root, the earliest installed_at
-function systemRootOf(recs) {
+// the certificate opt-ins of one store are one certificate there: one system-root per store (ROOT_STORE_KIND), the earliest installed_at. The records' values
+// (fingerprint, thumbprint, keychain, cert file) ride along: the opt-in undo takes the root out by them, as it took the opt-in out.
+function systemRootOf(store, recs) {
   const v = (r) => (isPlainObject(r.values) ? r.values : {})
-  const pick = (k) => recs.map((r) => v(r)[k]).find((x) => typeof x === 'string' && x) ?? null
-  const store = recs.some((r) => r.kind === 'optin-keychain-cert') ? 'darwin-user-trust' : 'win-currentuser-root'
+  const values = Object.assign({}, ...[...recs].reverse().map(v))
+  const pick = (k) => (typeof values[k] === 'string' && values[k]) || null
   const fp256 = pick('fp256'), thumbprint = pick('thumbprint')
   const at = recs.map((r) => r.installed_at).filter((x) => typeof x === 'string').sort()[0] ?? null
-  const e = { kind: 'system-root', harness: null, phase: 'install', scope: 'user', path: `${store}:${fp256 ?? thumbprint}`, store, fp256, thumbprint, cert_file: pick('certFile'), status: 'done', installed_at: at, backup: null }
+  const machine = recs.some((r) => r.scope === 'machine')
+  const e = { kind: 'system-root', harness: null, phase: 'install', scope: machine ? 'machine' : 'user', path: `${store}:${fp256 ?? thumbprint}`, store, fp256, thumbprint, cert_file: pick('certFile'), status: 'done', installed_at: at, backup: null, values }
   e.undo_by_hand = undoByHand(e)
+  if (machine) e.elevated_command = recs.map((r) => r.elevated_command).find((c) => typeof c === 'string') ?? e.undo_by_hand
   return e
 }
 
@@ -168,10 +179,14 @@ export function classifyV2(m) {
   const out = structuredClone(m)
   delete out.complete
   out.install = null
+  if (m.complete === true) out.v2_complete = true // the routing a v2 `on` left still needs its daemon; only `install` replaces this (daemonMayStart)
   out.ca = out.ca ?? null
   const certs = out.entries.filter((e) => isPlainObject(e) && CERT_OPTINS.includes(e.kind))
   out.entries = out.entries.filter((e) => !certs.includes(e)).map((e) => (isPlainObject(e) ? { ...e, phase: entryPhase(e) } : e))
-  if (certs.length) out.entries.push(systemRootOf(certs))
+  for (const [store, kind] of Object.entries(ROOT_STORE_KIND)) {
+    const recs = certs.filter((r) => r.kind === kind)
+    if (recs.length) out.entries.push(systemRootOf(store, recs))
+  }
   out.files = out.files.map((f) => (isPlainObject(f) ? { ...f, phase: ON_FILE_ROLES.includes(f.role) ? 'on' : 'install' } : f))
   out.version = MANIFEST_VERSION
   return out

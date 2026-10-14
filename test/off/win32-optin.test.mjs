@@ -11,7 +11,7 @@ import path from 'node:path'
 import { UNDO_BY_KIND, undoOptIns, readUserPathArgs as inlineReadArgs, setUserPathArgs as inlineSetArgs, BROADCAST_ARGS as inlineBroadcast, readShortcutArgs as inlineShortcutArgs } from '../../src/off/win32-optin.mjs'
 import { DARWIN_UNDO_BY_KIND } from '../../src/off/darwin-optin.mjs'
 import { readUserPathArgs, setUserPathArgs, BROADCAST_ARGS, readShortcutArgs, USER_PATH_VALUE } from '../../src/collector/arch/win32/userpath.mjs'
-import { OPTIN_KINDS, OPTIN_MACHINE_KINDS } from '../../src/off/manifest.mjs'
+import { OPTIN_KINDS, OPTIN_MACHINE_KINDS, parseManifest } from '../../src/off/manifest.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { GROUPS, POLICY_KEY, rig, nativeKimi, realCmd, writeShortcut } from '../collector/arch/win32/fixtures/optin-world.mjs'
@@ -150,6 +150,23 @@ test('W64 round-trip, Claude Desktop: the certificate deleted by thumbprint, the
   // an already-gone certificate is absent, not a failure
   const again = await undoOptIns({ manifest: noPrior.manifest, exec: noPrior.w.run, env: noPrior.env, fs: noPrior.wfs })
   assert.equal(again.results[0].result, 'absent')
+})
+
+test('D55 a v2 cert opt-in, read as a system-root (classifyV2), is still taken out by the whole-machine off / uninstall; a harness-scoped off leaves it; a machine one is handed back elevated', async () => {
+  const r = await rig({ form: 'claude-code.desktop', item: 'cert-store-current-user' })
+  await r.apply()
+  const m = parseManifest(JSON.stringify({ files: [], ...r.manifest, version: 2 }))
+  const root = m.entries.find((e) => e.kind === 'system-root')
+  assert.ok(root && !m.entries.some((e) => e.kind === 'optin-cert-user'), 'the record is a system-root now')
+  const some = await undoOptIns({ manifest: m, ids: ['claude-code'], exec: r.w.run, env: r.env, fs: r.wfs })
+  assert.deepEqual([some.results.map((x) => x.kind), r.w.store.size], [['optin-claude-policy'], 1], 'a harness-scoped off does not take the machine\'s root')
+  const all = await undoOptIns({ manifest: m, exec: r.w.run, env: r.env, fs: r.wfs })
+  assert.deepEqual([all.results.find((x) => x.kind === 'system-root').result, all.unknown.length, r.w.store.size], ['undone', 0, 0], 'the root is out of CurrentUser\\Root')
+  const machine = parseManifest(JSON.stringify({ files: [], ...r.manifest, version: 2, entries: r.manifest.entries.map((e) => (e.kind === 'optin-cert-user' ? { ...e, kind: 'optin-cert-machine', scope: 'machine' } : e)) }))
+  const o = await undoOptIns({ manifest: machine, exec: r.w.run, env: r.env, fs: r.wfs })
+  assert.equal(o.results.find((x) => x.kind === 'system-root').result, 'needs-admin')
+  assert.match(o.needsAdmin[0].command, /certutil -delstore Root /)
+  assert.doesNotMatch(o.needsAdmin[0].command, /-user/, 'the machine store, not CurrentUser')
 })
 
 test('W64 round-trip, VS Code and Z-Code: the settings files byte-identical through reverseOps; a file edited since keeps the user\'s edits and loses only asight\'s keys; the shortcuts and the launcher as above', async () => {
