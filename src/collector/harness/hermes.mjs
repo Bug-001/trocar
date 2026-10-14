@@ -154,7 +154,7 @@ export default {
   // again as `-I -c "import sys, runpy; …; runpy.run_path('<that exe>', …)"`; measured win 2026-10-14), or its TUI gateway module. Other
   // python is not Hermes, its package-manager workers (`hermes-agent/pm/worker.py`) included: they are forwarded.
   processes: {
-    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', entry: '/hermes(-acp)?\\.exe$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe\\b' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' }],
+    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', entry: '/hermes(-acp)?\\.exe$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe(?![\\w.-])' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' }],
     longLived: [{ args: '(^| )(gateway|cron|dashboard|serve)( |$)' }],
   },
   hosts: ['openrouter.ai', 'inference-api.nousresearch.com', 'chatgpt.com', 'api.openai.com', 'api.anthropic.com', 'api.z.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com', 'api.deepseek.com', 'api.x.ai'],

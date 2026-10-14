@@ -49,6 +49,7 @@ const IMG = {
 const DSH_CMD = String.raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\lib\bin.js`
 // what `hermes.exe -z …` execs (measured win 2026-10-14): the private python runs the zip appended to the launcher
 const HERMES_CMD = String.raw`"C:\Users\u\AppData\Local\hermes\tools\python-3.12.6\python.exe" -I "C:\Users\u\AppData\Local\hermes\bin\hermes.exe" -z "hi"`
+const HERMES_RERUN_CMD = String.raw`"C:\Users\u\AppData\Local\hermes\tools\python-3.12.6\python.exe" -I -I -c "import sys, runpy; sys.argv = ['C:\\Users\\u\\AppData\\Local\\hermes\\bin\\hermes.exe', '-z', 'hi']; runpy.run_path('C:\\Users\\u\\AppData\\Local\\hermes\\bin\\hermes.exe', run_name='__main__')"`
 const ZCODE_NET_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" --type=utility --utility-sub-type=network.mojom.NetworkService`
 const ZCODE_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" C:\Users\u\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs app-server --stdio`
 
@@ -154,6 +155,17 @@ test('W76 Hermes on Windows is recognised and never decrypted (D51④): its live
     assert.deepEqual(redirector.verdictOf(pid), { decrypt: false, agent: 'hermes' }, `pid ${pid}: a row is pushed, recognised as Hermes (the launcher shape), not decrypted`)
     assert.equal(tracker.describe(pid).reason, 'win-doors-rejected', `pid ${pid}: the reason names the refused entry, not config-after-start or a silent "not an agent"`)
   }
+})
+
+test('W76 Hermes on Windows: no CA variable a release build reads lifts the exclusion (REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE naming asight\'s CA in the home .env: a variant only ever takes trust away), the runpy re-run shape included', async () => {
+  const b = await sandbox('hermes', [['AppData/Local/hermes/config.yaml']])
+  const ca = path.join(b.dir, 'ca', 'asight-ca.pem')
+  fs.appendFileSync(path.join(b.home, 'AppData', 'Local', 'hermes', '.env'), `REQUESTS_CA_BUNDLE=${ca}\nCURL_CA_BUNDLE=${ca}\n`)
+  const { redirector, tracker, settle } = rigged({ descriptors: [b.d], box: b })
+  redirector.emit('exec', facts(22, IMG.hermesPy, { cmdline: HERMES_RERUN_CMD, startedAt: Date.now() + 5000 }))
+  await settle()
+  assert.deepEqual(redirector.verdictOf(22), { decrypt: false, agent: 'hermes' }, 'the re-run is Hermes, and a release-chain variable holding asight\'s CA does not make it decrypted')
+  assert.equal(tracker.describe(22).reason, 'win-doors-rejected')
 })
 
 test('W76 Kimi has no automatic Windows trust entry (its shim is an opt-in item, Task 14): the process is judged and stays untrusted — fail-safe, never a broken connection', async () => {
