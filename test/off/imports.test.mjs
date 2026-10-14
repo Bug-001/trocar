@@ -8,34 +8,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { stripComments, specsOf, OPAQUE } from '../helpers/imports.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-
-// Drop // and /* */ comments, keeping strings, template literals and regex literals (a regex like /\/\// must not start a comment).
-function stripComments(src) {
-  let out = ''; let i = 0; let q = null
-  const prevSig = () => { for (let j = out.length - 1; j >= 0; j--) if (!/\s/.test(out[j])) return out[j]; return '' }
-  while (i < src.length) {
-    const c = src[i]; const n = src[i + 1]
-    if (q) { out += c; if (c === '\\') { out += n ?? ''; i += 2; continue } if (c === q) q = null; i++; continue }
-    if (c === '"' || c === "'" || c === '`') { q = c; out += c; i++; continue }
-    if (c === '/' && n === '/') { while (i < src.length && src[i] !== '\n') i++; continue }
-    if (c === '/' && n === '*') { const e = src.indexOf('*/', i + 2); i = e < 0 ? src.length : e + 2; out += ' '; continue }
-    if (c === '/' && (prevSig() === '' || '(,=:[!&|?{};'.includes(prevSig()) || /\b(return|typeof)$/.test(out.trimEnd()))) {
-      let j = i + 1; let cls = false
-      while (j < src.length && src[j] !== '\n') { const d = src[j]; if (d === '\\') { j += 2; continue } if (d === '[') cls = true; else if (d === ']') cls = false; else if (d === '/' && !cls) break; j++ }
-      out += src.slice(i, j + 1); i = j + 1; continue
-    }
-    out += c; i++
-  }
-  return out
-}
-
-// `import … from 'x'` and `export … from 'x'` at the start of a statement (the clause is names, braces, commas, `*` and `as`: nothing
-// that could be code), `import 'x'`, and `import('x')` anywhere. A string that merely mentions an import is not one.
-const IMPORT_RE = /(?:^|[;{}\n])[ \t]*(?:import|export)\s+[\w\s{},*$]*?\bfrom\s*(['"])([^'"]+)\1|\bimport\s*\(\s*(['"])([^'"]+)\3\s*\)|(?:^|[;{}\n])[ \t]*import\s+(['"])([^'"]+)\5/gm
-// `import(expr)` with anything but a plain string, and `require(` / `createRequire`: a way in the scan cannot read, so it is refused too.
-const OPAQUE = /\bimport\s*\(\s*(?!['"])|\brequire\s*\(|\bcreateRequire\b/
 
 /** The problems with the files directly in `<root>/src/off`: one line each, `<file>: <why>`. Empty = fine. */
 function offImportProblems(root) {
@@ -43,14 +18,13 @@ function offImportProblems(root) {
   const problems = []
   const names = fs.readdirSync(dir).filter((n) => /\.(m|c)?js$/.test(n)).sort()
   for (const name of names) {
-    const code = stripComments(fs.readFileSync(path.join(dir, name), 'utf8'))
-    for (const m of code.matchAll(IMPORT_RE)) {
-      const spec = m[2] ?? m[4] ?? m[6]
+    const text = fs.readFileSync(path.join(dir, name), 'utf8')
+    for (const spec of specsOf(text)) {
       if (spec.startsWith('node:')) continue
       if (/^\.\/[A-Za-z0-9_.-]+\.mjs$/.test(spec)) { if (!names.includes(spec.slice(2))) problems.push(`${name}: ${spec} is not a file of src/off`); continue }
       problems.push(`${name}: imports ${JSON.stringify(spec)}; src/off may import only node:* and ./x.mjs`)
     }
-    if (OPAQUE.test(code)) problems.push(`${name}: a dynamic import or a require the scan cannot read`)
+    if (OPAQUE.test(stripComments(text))) problems.push(`${name}: a dynamic import or a require the scan cannot read`)
   }
   return problems
 }
