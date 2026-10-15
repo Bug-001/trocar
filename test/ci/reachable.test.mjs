@@ -39,6 +39,8 @@ export const UNREACHED = Object.freeze({
   'src/collector/arch/win32/wrapper.mjs': 'T17 lands the C# wrapper renderer and the csc.exe compile; T20 install passes them to placeWrapper and removes this row',
   'src/collector/harness/templates/index.mjs': 'T17 lands the P9 plugin template index; install / on write the templates and the door header gate reads sendsUpstreamHeader, removing this row',
   'src/collector/core/proxymode/sources.mjs': 'the descriptor reader lands ahead of its callers; T15 wires it in and removes this row',
+  'src/collector/core/proxymode/holders.mjs': 'T19 lands the daemon side of P12 (the 10 s holder poll, mayExit, doorSeen) as factories; the daemon runs them after off and removes this row',
+  'src/collector/core/proxymode/pac.mjs': 'T19 lands P10 (the PAC text, its GET /asight.pac handler, the PAC door peer check) as factories; it is served on the PAC group door next, which removes this row',
   'src/collector/core/tls/issuer.mjs': 'T12 lands the intermediate issuer ahead of the daemon; it is wired into the doors next, which removes this row',
   'src/off/root-store.mjs': 'T12 lands the P3 argv (plan §E.5 #3) ahead of its callers; T13 / T14 (custody backends) and T20 (install) import it and remove this row',
   'src/collector/arch/darwin/custody.mjs': 'T13 lands the keychain custody and installHelper ahead of their callers; install and the daemon\'s issuer wire them in and remove this row',

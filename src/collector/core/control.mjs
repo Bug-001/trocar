@@ -68,3 +68,6 @@ export async function startControlServer({ socketPath, routes, maxBody = 64 * 10
     close: () => new Promise((resolve) => { server.close(() => { if (!pipe) fs.rmSync(socketPath, { force: true }); resolve() }); server.closeAllConnections?.() }),
   }
 }
+
+/** GET /holders (4.11 P12; registered on the daemon): `holders()` → holdersOf's rows, the daemon's last poll. → { count, holders }. */
+export const holdersRoute = ({ holders }) => async () => { const rows = (await holders()) || []; return { count: rows.length, holders: rows } }
