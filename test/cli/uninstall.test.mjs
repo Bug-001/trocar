@@ -311,8 +311,8 @@ test('V8 (uninstall): every backup goes, the ones of files the user edited after
   fs.appendFileSync(codexEnv, 'EXTRA=1\n') // after install: undone but not identical
   const backup = s.manifest().entries.find((e) => e.path === codexEnv).backup
   assert.ok(fs.existsSync(backup))
-  const off = await s.off() // `off` keeps it and lists it
-  assert.ok(off.receipt.kept_backups.some((k) => k.backup === backup), 'off kept the backup of the edited file')
+  const off = await s.off() // the entry is install's: off leaves it and its backup (D55①)
+  assert.ok(fs.existsSync(backup) && !(off.receipt.kept_backups || []).length, 'off left the backup of the edited file as it was')
   const r = await s.uninstall({ yes: true })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
   assert.ok(!fs.existsSync(path.join(s.home, '.asight', 'backup')), '~/.asight/backup/ is gone')

@@ -1,5 +1,6 @@
 // test/collector/install.test.mjs — per-user install / uninstall with Claude Code's real descriptor in a sandbox
 // HOME (acceptance S10 collector part, T10 + T11 for the CC entry). No root, no daemon (stop is injected).
+import { PHASES } from '../../src/off/manifest.mjs' // install's items are phase install, which off spares (D55①): these cases drive the undo rules over both phases, as uninstall runs them
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -1029,7 +1030,7 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     await until(async () => { const a = await agentOf(4242); return a && a.trusted })
     // off for the harness: the daemon stops watching it and the entry goes
     await ask('POST', '/off', { harnesses: ['claude-code'] })
-    const out = await undoHarnesses({ dir: b.dir, home, manifest: readManifest(b.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
+    const out = await undoHarnesses({ dir: b.dir, home, phases: PHASES, manifest: readManifest(b.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
     assert.deepEqual(out.left, [])
     await pause(30)
     await start(4343) // started while it is off

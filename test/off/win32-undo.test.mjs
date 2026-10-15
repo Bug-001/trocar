@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { KNOWN_KINDS, OFF_VERSION, FILE_ENTRY_KINDS, undoByHand, parseManifest } from '../../src/off/manifest.mjs'
+import { KNOWN_KINDS, OFF_VERSION, FILE_ENTRY_KINDS, undoByHand, parseManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
 import { TASK_NAME, RUN_KEY } from '../../src/off/win32.mjs'
@@ -61,7 +61,7 @@ test('a run-key entry: ours is deleted, ours over a prior restores it, a value t
   const entry = (prior = null) => ({ phase: 'on', kind: 'run-key', harness: 'claude-code', hive: RUN_KEY.hive, key: RUN_KEY.key, name: RUN_KEY.name, value: OURS, prior, installed_at: '2026-10-09T00:00:00Z' })
   const run = async (e, tools) => {
     const m = { version: 3, entries: [e], files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [] }
-    return { out: await undoHarnesses({ dir, home: dir, manifest: m, ids: null, procs: async () => [], now: new Date(), fs, exec: execOf(...tools), env: {} }), m }
+    return { out: await undoHarnesses({ dir, home: dir, phases: PHASES, manifest: m, ids: null, procs: async () => [], now: new Date(), fs, exec: execOf(...tools), env: {} }), m }
   }
   let r = await run(entry(), [reg()])
   assert.deepEqual(r.out.results.map((x) => [x.result, x.path]), [['restored', `HKCU\\${RUN_KEY.key}\\${RUN_KEY.name}`]], 'ours, no prior: deleted')
@@ -145,8 +145,8 @@ test('the round trip (audit F3): an off over a manifest of every collector kind 
   const preSettings = fs.readFileSync(settings)
   const preEnv = fs.readFileSync(envFile)
   const m = newManifest(new Date())
-  applyJsonKey({ phase: 'install', dir, manifest: m, harness: 'claude-code', file: settings, keys: ['proxy'], value: 'http://127.0.0.1:17999', home, now: new Date(), fs })
-  applyTextEntry({ phase: 'install', dir, manifest: m, harness: 'codex', file: envFile, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:17998' } }, home, now: new Date(), fs })
+  applyJsonKey({ phase: 'on', dir, manifest: m, harness: 'claude-code', file: settings, keys: ['proxy'], value: 'http://127.0.0.1:17999', home, now: new Date(), fs })
+  applyTextEntry({ phase: 'on', dir, manifest: m, harness: 'codex', file: envFile, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:17998' } }, home, now: new Date(), fs })
   assert.equal(m.entries.length, 2, 'the writers ledgered the two files')
   m.entries[0].kind = 'proxy-entry'
   m.entries[1].kind = 'trust-entry'
@@ -185,7 +185,7 @@ test('off step 5 disables the scheduled task ITSELF, whatever the manifest holds
   const settings = path.join(home, 'settings.json')
   fs.writeFileSync(settings, JSON.stringify({ other: true }, null, 2) + '\n')
   const m = newManifest(new Date())
-  applyJsonKey({ phase: 'install', dir, manifest: m, harness: 'claude-code', file: settings, keys: ['proxy'], value: 'http://127.0.0.1:17999', home, now: new Date(), fs })
+  applyJsonKey({ phase: 'on', dir, manifest: m, harness: 'claude-code', file: settings, keys: ['proxy'], value: 'http://127.0.0.1:17999', home, now: new Date(), fs })
   m.entries[0].kind = 'proxy-entry'
   saveCoreManifest(dir, m) // no scheduled-task entry in the ledger: the task was registered by an on whose manifest is gone, or by hand from asight's file
   const st = schtasks()

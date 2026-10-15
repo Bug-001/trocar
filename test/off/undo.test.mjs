@@ -9,7 +9,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { installCollector } from '../../src/collector/install.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
-import { readManifest, restoreByHand } from '../../src/off/manifest.mjs'
+import { readManifest, restoreByHand, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses, undoRootKeys } from '../../src/off/undo.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { certBlocks, composeBundle } from '../../src/off/pem.mjs'
@@ -55,7 +55,9 @@ async function setup(pick = (b) => [repH(b, 'aa'), repH(b, 'bb'), jsonH(b), plug
   write(b, '.aa/.env', 'KEY_A=sk-a\n'); write(b, '.bb/.env', 'KEY_B=sk-b\n'); write(b, '.jj/settings.json', '{\n  "model": "m"\n}\n'); write(b, '.plug/patch.yml', '- set: {a: 1}\n')
   await installCollector({ home: b.home, env: { HOME: b.home }, osName: 'none', harnesses: pick(b), freePort: async () => 47011, roots })
   const user = ['.aa/.env', '.bb/.env', '.jj/settings.json', '.plug/patch.yml'].map((r) => path.join(b.home, r))
-  const run = (o = {}) => undoHarnesses({ dir: b.dir, home: b.home, manifest: readManifest(b.dir), ids: null, procs: async () => [], roots, ...o })
+  // install writes these items (phase install), so `off` spares them (D55①): the cases below drive the undo rules themselves over both phases, as uninstall
+  // runs them, with the CA kept so each case can see what happens to it; what plain off does is the phase case at the end
+  const run = (o = {}) => undoHarnesses({ dir: b.dir, home: b.home, manifest: readManifest(b.dir), ids: null, procs: async () => [], roots, phases: PHASES, ...o })
   return { b, user, run, hashes: () => Object.fromEntries([...user, ...fs.readdirSync(b.ca('.')).map((n) => b.ca(n))].map((f) => [path.relative(b.home, f), sha(f)])) }
 }
 
@@ -136,14 +138,16 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
     { phase: 'install', kind: 'root-key', harness: null, path: 'keychain:asight-root', custody: { kind: 'keychain', id: 'asight-root' }, fp256: 'AB:CD', installed_at: at })
   m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: 'aa', path: sw }, { phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg, sha256: sha(cfg) },
     { phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
-  const removed = []
-  const off = await s.run({ manifest: m, custody: { remove: async (h) => removed.push(h) } })
+  const removed = [], installed = m.entries.concat(m.files).filter((x) => x.phase === 'install'), bytes = () => installed.filter((x) => x.path && fs.existsSync(x.path)).map((x) => [x.path, sha(x.path)])
+  const before = bytes()
+  const off = await s.run({ manifest: m, phases: ['on'], custody: { remove: async (h) => removed.push(h) } })
   assert.deepEqual(off.left, [])
   assert.equal(fs.readFileSync(arr, 'utf8'), '{\n  "list": [\n    "u"\n  ]\n}\n', 'only asight\'s element left the list')
   assert.deepEqual([fs.existsSync(sw), fs.existsSync(cfg), fs.readFileSync(bin, 'utf8'), fs.existsSync(real), removed], [false, false, '#!/bin/dash\nexec real\n', true, []], 'off keeps the wrapper and the key')
-  assert.ok(off.notes.some((n) => n.startsWith('keychain:asight-root: ') && /asight uninstall removes it/.test(n)), 'off lists the key')
+  assert.ok(off.notes.some((n) => /asight uninstall removes it: .*keychain:asight-root/.test(n)), 'off lists the key')
   const kept = readManifest(s.b.dir)
-  assert.deepEqual([kept.entries.map((e) => e.kind), kept.files.map((f) => f.role).filter((r) => !r.startsWith('ca-'))], [['root-key'], ['wrapper']])
+  assert.deepEqual(kept.entries.concat(kept.files).map((x) => x.phase), installed.map(() => 'install'), 'off took every phase-on item and left every phase-install one in the manifest')
+  assert.deepEqual(bytes(), before, 'every file install wrote (the dotenv block, the bundle, the CA, the wrapper) is byte for byte')
   const un = await s.run({ manifest: kept, dropCa: true })
   assert.deepEqual([un.left, removed, readManifest(s.b.dir).entries.map((e) => e.kind)], [[], [], ['root-key']], 'undoHarnesses never takes the key: its caller does, last (undoRootKeys)')
   assert.deepEqual([fs.readFileSync(bin, 'utf8'), fs.existsSync(path.dirname(real))], ['REAL PROGRAM', false], 'the real program is back under its name')
@@ -159,9 +163,9 @@ test('P13 pem-block: off leaves the user\'s certificate file byte-identical and 
   applyTextEntry({ dir: s.b.dir, manifest: m, harness: 'aa', phase: 'install', file, edit: { format: 'pem-block', pem: ROOT.certPem }, home: s.b.home })
   const written = fs.readFileSync(file)
   assert.notDeepEqual(written, before)
-  const off = await s.run({ manifest: m })
+  const off = await s.run({ manifest: m, phases: ['on'] })
   assert.deepEqual([fs.readFileSync(file), off.left], [written, []], 'off: byte for byte what install left')
-  assert.ok(off.notes.some((n) => n.startsWith(`${file}: `) && /asight uninstall removes it/.test(n)), 'off lists the block')
+  assert.ok(off.notes.some((n) => /asight uninstall removes it: /.test(n) && n.includes(file)), 'off lists the block')
   assert.ok(readManifest(s.b.dir).entries.some((e) => e.format === 'pem-block'), 'the entry stays for uninstall')
   const un = await s.run({ manifest: readManifest(s.b.dir), dropCa: true })
   assert.deepEqual([fs.readFileSync(file), un.left, readManifest(s.b.dir).entries.some((e) => e.format === 'pem-block')], [before, [], false])
@@ -488,7 +492,7 @@ test('before a bundle is removed the entry files of its harness are read again: 
   const file = path.join(b.home, '.jr', 'settings.json'), bundle = b.ca('combined-jr.pem')
   const moved = JSON.stringify({ model: 'm', SSL_CERT_FILE: bundle, env: {} }, null, 2) + '\n' // the key is not where asight put it: its value there is "the user's"
   fs.writeFileSync(file, moved)
-  const r = await undoHarnesses({ dir: b.dir, home: b.home, manifest: readManifest(b.dir), ids: null, procs: async () => [], roots })
+  const r = await undoHarnesses({ dir: b.dir, home: b.home, manifest: readManifest(b.dir), ids: null, procs: async () => [], roots, phases: PHASES })
   assert.equal(r.results.find((x) => x.path === file).result, 'left-user-value', 'step 1 took the key for the user\'s')
   assert.equal(fs.readFileSync(file, 'utf8'), moved)
   assert.ok(fs.existsSync(bundle), 'the bundle is not taken away from under a file that names it')

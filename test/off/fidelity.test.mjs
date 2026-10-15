@@ -1,6 +1,7 @@
 // test/off/fidelity.test.mjs — the user's file, byte for byte, along the shape generator's axes (spec 0.1 G2, 4.6「文件的编码」, plan file-fidelity
 // §2.10 I1–I7). Every case is a seeded shape from test/helpers/file-shapes.mjs (a failure names its id and seed); expectations come from that
 // generator's own decoder and readers, never from src/. The formats here are the text entries: a dotenv block, a YAML-list row, an rc line.
+import { PHASES } from '../../src/off/manifest.mjs' // install's items are phase install, which off spares (D55①): these cases drive the undo rules over both phases, as uninstall runs them
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -103,7 +104,7 @@ for (const format of Object.keys(FORMATS)) {
       assert.ok(r.reason.includes(b.file) && r.reason.includes(r.why), `the reason names the file and why: ${r.reason}`)
       assert.ok(fs.readFileSync(b.file).equals(resaved), `not a byte written: ${tag(c)}`)
       if (i % 5 === 0) { // through `off`'s undo of the whole manifest: the entry is left in it, with a failure the receipt shows
-        const out = await undoHarnesses({ dir: b.dir, home: b.root, manifest: readManifest(b.dir), procs: async () => [] })
+        const out = await undoHarnesses({ dir: b.dir, home: b.root, phases: PHASES, manifest: readManifest(b.dir), procs: async () => [] })
         assert.ok(out.left.some((l) => l.result === 'left-unreadable' && l.path === b.file), tag(c))
         assert.equal(readManifest(b.dir).entries.length, 1, `the entry stays: ${tag(c)}`)
         assert.ok(fs.readFileSync(b.file).equals(resaved), tag(c))
@@ -235,7 +236,7 @@ test('fidelity X8 (seed): CRLF and LF Codex .env, the user sets HTTPS_PROXY to t
     assert.ok(on.includes(`HTTPS_PROXY=${PROXY_GATE}${eol}`) && on.includes(`${OFF_PREFIX}HTTPS_PROXY=http://corp.example:8080`), JSON.stringify(on))
     fs.writeFileSync(b.file, on.replace(`HTTPS_PROXY=${PROXY_GATE}`, 'HTTPS_PROXY=http://newcorp:3128'))
     assert.equal(es.filter(Boolean).length, 2)
-    const rs = (await undoHarnesses({ dir: b.dir, home: b.root, manifest: readManifest(b.dir), procs: async () => [] })).results // off's undo of the whole manifest: the join first, then the block
+    const rs = (await undoHarnesses({ dir: b.dir, home: b.root, phases: PHASES, manifest: readManifest(b.dir), procs: async () => [] })).results // off's undo of the whole manifest: the join first, then the block
     assert.deepEqual(rs.map((r) => r.result), ['reverted-not-identical', 'reverted-not-identical'], JSON.stringify(rs))
     const out = fs.readFileSync(b.file)
     const read = readDotenv(out)
@@ -260,7 +261,7 @@ test('fidelity dotenv I5: along the user-edit axis (proxy / CA key in the block 
       n++
       fs.writeFileSync(b.file, edited)
       assert.equal(es.filter(Boolean).length, 2, tag(c))
-      const rs = (await undoHarnesses({ dir: b.dir, home: b.root, manifest: readManifest(b.dir), procs: async () => [] })).results
+      const rs = (await undoHarnesses({ dir: b.dir, home: b.root, phases: PHASES, manifest: readManifest(b.dir), procs: async () => [] })).results
       assert.equal(rs.length, 2, tag(c))
       for (const r of rs) assert.ok(['reverted-not-identical', 'already-removed'].includes(r.result), `${edit.id} → ${r.result} ${r.reason || ''}: ${tag(c)}`)
       const out = fs.readFileSync(b.file), d = decodeBytes(out), e = decodeBytes(edited)
@@ -290,12 +291,12 @@ test('fidelity dotenv I5: along the user-edit axis (proxy / CA key in the block 
   assert.ok(n > 300 && bytewise > 100 && kept > 10, `edits applied ${n}, compared byte for byte ${bytewise}, keys the user set over an old line ${kept}`)
 })
 
-test('fidelity X8 through asight off: the receipt names the line left out of effect and how to have the old value back; --json carries it', async () => {
+test('fidelity X8 through asight uninstall: the receipt names the line left out of effect and how to have the old value back; --json carries it', async () => {
   const s = await installedHome({ names: ['codex'], seed: (home) => { fs.mkdirSync(path.join(home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\r\nSSL_CERT_FILE=/corp/ca.pem\r\n') } })
   const file = s.manifest().entries.find((e) => e.kind === 'text').path
   const on = fs.readFileSync(file, 'utf8')
   fs.writeFileSync(file, on.replace(/^SSL_CERT_FILE=[^\r\n]*/m, 'SSL_CERT_FILE=/mine/ca.pem'))
-  const off = await s.off()
+  const off = await s.uninstall({ yes: true }) // the certificate entry is install's: uninstall undoes it, off spares it (D55①)
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.left))
   const after = fs.readFileSync(file, 'utf8')
   assert.equal(readDotenv(Buffer.from(after)).SSL_CERT_FILE, '/mine/ca.pem')

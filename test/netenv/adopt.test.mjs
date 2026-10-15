@@ -294,8 +294,10 @@ test('V48 Linux: `off` touches no proxy key — the user\'s HTTPS_PROXY is where
   const off = await s.run(['off', '--yes'], { deps: FACTS })
   assert.equal(off.exit, 0, off.io.text())
   assert.equal(readJson(settingsOf(s)).env.HTTPS_PROXY, USER_PROXY)
-  assert.deepEqual(Object.keys(readJson(settingsOf(s)).env), ['HTTPS_PROXY'])
-  assert.equal(fs.readFileSync(settingsOf(s), 'utf8'), original, 'byte for byte, as R2 promises')
+  assert.deepEqual(Object.keys(readJson(settingsOf(s)).env).filter((k) => k !== 'NODE_EXTRA_CA_CERTS'), ['HTTPS_PROXY'], 'off left only the certificate entry, which is install\'s (D55①)')
+  const un = await s.run(['uninstall', '--yes'], { deps: FACTS })
+  assert.equal(un.exit, 0, un.io.text())
+  assert.equal(fs.readFileSync(settingsOf(s), 'utf8'), original, 'after uninstall: byte for byte, as R2 promises')
 })
 
 test('sameAdoption: the time does not make a record another one', () => {

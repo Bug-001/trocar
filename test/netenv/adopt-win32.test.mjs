@@ -4,6 +4,7 @@
 // (createProxyEntries, the same journal `off` undoes by). The `on` runs with platform 'linux' and parts.os 'win32' (win32 is a new-collector platform since the flip (9(b)); parts carries the win32 arch
 // either way). What is deliberately NOT here: V47(b)'s 「带 --yes re-adopts」 half — that re-adopt depends on the real daemon's write behavior
 // (8(c)'s unlanded remainder), so its contract stays in adopt.test.mjs's injected platform; V48's json-key half ('left-user-value') is src/off's win32-undo tests.
+import { PHASES } from '../../src/off/manifest.mjs' // the file holds install's certificate block too: the undo here runs over both phases, as uninstall does (off spares install's, D55①)
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -100,14 +101,14 @@ test('V48(b): `off` restores — the field still asight\'s own value → the fil
   const w1 = winWorld(onPrior)
   const before = fs.readFileSync(w1.envFile, 'utf8')
   await w1.run(['--yes', 'codex', '--json'])
-  const undone = await undoHarnesses({ dir: w1.dir, home: w1.home, manifest: readManifest(w1.dir, fs), ids: ['codex'], procs: async () => [], env: {}, fs })
+  const undone = await undoHarnesses({ dir: w1.dir, home: w1.home, phases: PHASES, manifest: readManifest(w1.dir, fs), ids: ['codex'], procs: async () => [], env: {}, fs })
   assert.ok(undone.results.every((x) => x.result === 'restored'), 'each entry of the harness: restored')
   assert.equal(fs.readFileSync(w1.envFile, 'utf8'), before, 'byte-identical to before on')
   // the user changed the field while on: off takes asight\'s own value out and leaves the user\'s line exactly where it is
   const w2 = winWorld(onPrior)
   await w2.run(['--yes', 'codex', '--json'])
   fs.writeFileSync(w2.envFile, fs.readFileSync(w2.envFile, 'utf8').replace(kernelUrl('codex.env'), 'http://proxy.new:3128'))
-  const kept = await undoHarnesses({ dir: w2.dir, home: w2.home, manifest: readManifest(w2.dir, fs), ids: ['codex'], procs: async () => [], env: {}, fs })
+  const kept = await undoHarnesses({ dir: w2.dir, home: w2.home, phases: PHASES, manifest: readManifest(w2.dir, fs), ids: ['codex'], procs: async () => [], env: {}, fs })
   assert.ok(kept.results.every((x) => x.result === 'reverted-not-identical'), 'the file was not as it was left: asight\'s part only, never the whole file back')
   const after = fs.readFileSync(w2.envFile, 'utf8')
   assert.ok(!after.includes(kernelUrl('codex.env')), 'asight\'s value is gone')

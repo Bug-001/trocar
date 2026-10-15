@@ -8,7 +8,7 @@ import path from 'node:path'
 import { turnOn, installCollector } from '../../src/collector/install.mjs'
 import { userUnit } from '../../src/collector/arch/linux/unit.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
-import { readManifest } from '../../src/off/manifest.mjs'
+import { readManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
@@ -97,7 +97,7 @@ test('R9: a crash at every one of the writes of a first on is finished by the ne
     assert.equal(fs.readFileSync(path.join(s.dir, 'install-manifest.json'), 'utf8'), manifestBytes, 'the manifest is not rewritten')
     assert.equal(fs.readFileSync(path.join(s.dir, 'state.json'), 'utf8'), state, 'nor the desired state')
     // and off takes everything out, whichever way it got in
-    const out = await undoHarnesses({ dir: s.dir, home: s.home, manifest: readManifest(s.dir), ids: null, procs: async () => [], roots: ROOTS })
+    const out = await undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: null, procs: async () => [], roots: ROOTS })
     assert.deepEqual(out.left, [], `off leaves nothing after resuming write ${k}`)
     assert.deepEqual(userView(s.home), before, `the user's files are byte for byte what they were, after a crash at write ${k}`)
   }
@@ -133,7 +133,7 @@ test('R9: an entry the operator changed after asight wrote it is reported and le
   assert.deepEqual([r.exit, r.receipt.ok], [1, false], 'an entry that is not in effect is not "done"')
   assert.match(JSON.stringify(r.receipt.skipped), /settings\.json[\s\S]*asight off[\s\S]*asight on/, 'the receipt says which file and what to do')
   // off takes asight's part out (there is none left: the user's own value stays), and on writes the entry again
-  const out = await undoHarnesses({ dir: s.dir, home: s.home, manifest: readManifest(s.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
+  const out = await undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
   assert.deepEqual(out.results.map((x) => x.result), ['left-user-value'])
   await s.install() // the entry is a certificate item: install writes it again, never on (D55⑥)
   const back = await s.run()
@@ -161,7 +161,7 @@ test('R9: on after off writes the entries again with a new installed_at; a bundl
   assert.ok(certBlocks(fs.readFileSync(bundle, 'utf8')).some((b) => b.fp === caFp))
   const was = readManifest(s.dir).entries.find((e) => e.harness === 'codex').installed_at
   const codex = { pid: 4242, exe: '/home/u/.local/bin/codex', argv: ['codex'], startedAt: Date.now() + 5000, env: () => new Map() } // started after install: it may have loaded the bundle
-  const out = await undoHarnesses({ dir: s.dir, home: s.home, manifest: readManifest(s.dir), ids: ['codex'], procs: async () => [codex], roots: ROOTS })
+  const out = await undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: ['codex'], procs: async () => [codex], roots: ROOTS })
   assert.deepEqual(out.kept_bundles.map((k) => k.pids), [[4242]])
   assert.equal(readManifest(s.dir).files.find((f) => f.path === bundle).without_ca, true)
   await new Promise((r) => setTimeout(r, 15))

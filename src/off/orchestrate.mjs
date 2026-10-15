@@ -229,7 +229,7 @@ export async function undoSide(w, opts = {}) {
   }
 }
 
-async function undoBody(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false } = {}, u) {
+async function undoBody(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false, phases = undefined } = {}, u) {
   if (manifest && manifest.unsupported) {
     u.mode = 'unsupported'
     u.problems.push(w.standalone
@@ -245,7 +245,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     let out, stopped = null
     try {
       const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? () => rebuildRoots(w) : null)
-      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, fs: w.fs, exec: w.exec, env: w.env })
+      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, phases, fs: w.fs, exec: w.exec, env: w.env })
     } catch (e) {
       if (!e || !e.partial) { // it stopped before one entry was touched
         u.stopped = true; u.problems.push(`undoing the entries stopped: ${errMessage(e)}`); u.failures.push({ code: 'entry-not-undone', reason: errMessage(e) })
@@ -405,7 +405,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   if (ids === null) receipt.harnesses = installed
   const hadAnything = w.fs.existsSync(w.dir) || w.unitManaged() || manifest != null || manifestError != null // no collector directory, no unit, no manifest: asight was never installed here (or is uninstalled, and purged)
   if (dryRun) { // R6: the same receipt in the future tense, nothing written, nothing asked of the daemon, exit 0
-    const mine = (x) => ids == null || ids.includes(x.harness)
+    const mine = (x) => x.phase === 'on' && (ids == null || ids.includes(x.harness)) // off spares what install wrote (D55①), so its plan does too
     const items = manifest && !manifest.unsupported ? manifest : { entries: [], files: [] }
     const gone = items.files.filter((f) => mine(f) && ['plugin', 'shim', 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
     const marks = manifest && !manifest.unsupported ? [] : planByMarker({ home, ids, fs: w.fs })

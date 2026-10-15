@@ -13,7 +13,7 @@ import { loadArch } from '../../src/collector/arch/index.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { createRegistry, livenessOf } from '../../src/collector/core/registry.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
-import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
+import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { listProcs } from '../../src/off/proc.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
@@ -139,7 +139,7 @@ const OS = {
     table: (codex, at) => () => ({ status: 0, stdout: JSON.stringify([{ p: 4241, pp: 1, n: 'node.exe', x: 'C:\\Program Files\\nodejs\\node.exe', s: at.getTime(), c: '"C:\\Program Files\\nodejs\\node.exe" codex.js' }, ...(codex ? [{ p: 4242, pp: 4241, n: 'codex.exe', x: codex, s: at.getTime(), c: `"${codex}" --model x` }] : [])]), stderr: '' }),
   },
 }
-const offWith = (s, osName, exe) => undoHarnesses({ dir: s.dir, home: s.home, manifest: readManifest(s.dir), ids: ['codex'], roots, procs: () => listProcs({ uid: 501, platform: osName, exec: exe }) })
+const offWith = (s, osName, exe) => undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: ['codex'], roots, procs: () => listProcs({ uid: 501, platform: osName, exec: exe }) })
 
 test('off counts a name put on agents.json after on: that live process holds the bundle — kept without the asight CA, its pid in the receipt; an unreadable list adds nothing and says so', async () => {
   const s = await codexBox('darwin')
@@ -217,7 +217,7 @@ for (const osName of Object.keys(CLAUDE)) {
     const dir = path.join(home, '.asight', 'collector'), extra = path.join(dir, 'ca', 'extra-cc.pem')
     assert.ok(fs.existsSync(extra), 'the user\'s own CA made an extra-cc.pem')
     const table = CLAUDE[osName](home, new Date(Date.now() + 60_000))
-    const r = await undoHarnesses({ dir, home, manifest: readManifest(dir), ids: ['claude-code'], roots, procs: () => listProcs({ uid: 501, platform: osName, exec: table }) })
+    const r = await undoHarnesses({ dir, home, phases: PHASES, manifest: readManifest(dir), ids: ['claude-code'], roots, procs: () => listProcs({ uid: 501, platform: osName, exec: table }) })
     assert.deepEqual(r.kept_bundles.map((k) => [path.basename(k.path), k.pids, !!k.unjudged]), [['extra-cc.pem', [5151, 5152], false]], 'Claude Code and the shell it started may hold it; a shell it did not start does not')
     assert.deepEqual([fs.existsSync(extra), r.left], [true, []], 'kept, nothing left undone (exit 0)')
   })

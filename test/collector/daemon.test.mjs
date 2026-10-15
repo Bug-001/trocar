@@ -34,7 +34,7 @@ import { checkRecord } from '../../src/health/codes.mjs'
 import { failureBrief } from '../../src/cli/words.mjs'
 import { writeNetenv } from '../../src/netenv/index.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
-import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
+import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { recordEntryFindings } from '../../src/collector/arch/win32/optin.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -793,7 +793,7 @@ test('daemon: the daily bundle rebuild never writes the asight CA back into a bu
   const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...arch, osRoots: fileRoots(osRoots) }, harnesses: list, bundleMs: 30 })
   try {
     // `asight off gone`, while the daemon runs: its entry out, its bundle removed (nobody holds it), the manifest saved
-    const off = await undoHarnesses({ dir, home: s.home, manifest: readManifest(dir), ids: ['gone'], procs: async () => [], roots: { node: tlsMod.rootCertificates, osText: '' } })
+    const off = await undoHarnesses({ dir, home: s.home, phases: PHASES, manifest: readManifest(dir), ids: ['gone'], procs: async () => [], roots: { node: tlsMod.rootCertificates, osText: '' } })
     writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['stay'], 'on'))
     assert.deepEqual([off.results.map((r) => r.result), fs.existsSync(bundle('gone'))], [['restored'], false])
     const saved = fs.readFileSync(path.join(dir, 'install-manifest.json'), 'utf8')

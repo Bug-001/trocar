@@ -73,17 +73,16 @@ const backToBefore = (list) => list.filter((e) => !fs.existsSync(e.path) || sha2
 
 // ── V2 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('V2: with the repository out of reach the copy `on` wrote undoes the same entries and prints what `asight off` prints (the daemon gone)', async () => {
+test('V2: with the repository out of reach the copy install wrote does what `asight off` does — no certificate entry taken (D55①) — and prints what it prints (the daemon gone)', async () => {
   const a = await brokenAsight(), b = await brokenAsight()
-  const io = fakeIo()
+  const io = fakeIo(), kept = readManifest(b.dir).entries.map((e) => [e.harness, e.kind, e.path])
   const viaCli = await runOffCli(['--json'], cliCtx(a, io))
   const r = await runWritten(b, ['--json'])
   assert.equal(r.status, viaCli, r.stderr)
   assert.equal(viaCli, 0, 'and it is a done off')
   assert.deepEqual(normalize(JSON.parse(r.stdout), b.home), normalize(io.json(), a.home), 'the same receipt, key for key')
-  assert.deepEqual(backToBefore(preEntries(b)), [], 'every user file byte for byte as before on')
-  assert.ok(JSON.parse(r.stdout).changed.length >= 2, 'a receipt that lists what it undid')
-  assert.deepEqual(readManifest(b.dir).entries, [], 'the manifest was brought up to date')
+  assert.deepEqual([backToBefore(preEntries(b)).length, JSON.parse(r.stdout).changed], [preEntries(b).length, []], 'every certificate entry install wrote is still in (D55①): the copy, like off, takes none')
+  assert.deepEqual(readManifest(b.dir).entries.map((e) => [e.harness, e.kind, e.path]), kept, 'and its manifest keeps the same entries')
   assert.ok(r.stubs.calls().some((c) => /^systemctl --user disable asight-collector\.service/.test(c)), `no names: the autostart was disabled, through the one runner (${r.stubs.calls()})`)
   assert.equal(r.stderr, '')
 })
@@ -95,7 +94,8 @@ test('V2: the text a person reads is the same too, and a per-harness off leaves 
   const r = await runWritten(b, ['claude'])
   assert.equal(r.status, 0, r.stderr)
   assert.equal(r.stdout.split(b.home).join('~').replace(/\n$/, ''), io.stdoutText().split(a.home).join('~').replace(/\n$/, ''), 'the same words')
-  assert.deepEqual(readManifest(b.dir).entries.map((e) => e.harness).filter((h) => h).filter((h, i, all) => all.indexOf(h) === i), ['codex'], 'only claude-code came out')
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(b.dir, 'state.json'), 'utf8')).harnesses.codex.desired, 'on', 'only claude-code was turned off')
+  assert.deepEqual([...new Set(readManifest(b.dir).entries.map((e) => e.harness).filter(Boolean))].sort(), ['claude-code', 'codex'], 'and the certificate entries of both stay (D55①)')
 })
 
 test('V2: with the install manifest lost the copy undoes by asight\'s own marks, after a yes, and prints what `asight off --yes` prints', async () => {
