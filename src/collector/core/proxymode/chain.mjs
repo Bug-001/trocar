@@ -4,14 +4,15 @@
 // come from the OS backend (cached there by pid + start), the system proxy from the OS reader, already in the shape below. Nothing here does I/O.
 //
 // upstreamFor({ desc, form, facts, recordedPrior, systemProxy, header, headerAllowed, isAsightDoor, transport }) →
-//   { url: string | null, source, bypass: [row], code?, pac?, unreadable?, notes? }
+//   { url: string | null, source, bypass: [row], code?, pac?, wpad?, unreadable?, notes? }
 //   source ∈ 'hook' | 'config-prior' | 'process-env' | 'system-proxy' | 'direct' | 'unknown'
 //
 //   desc          the harness descriptor (its `proxy.env`, `proxy.systemProxy`) · form the identified process's form (the caller judges headerAllowed by it)
 //   facts         { pid, start, env, parentOf } of the identified process, or null when identity failed: then only steps 2, 4 and 5 run (decision #12).
 //                 `env` is an object or a Map (null / undefined = could not be read); `parentOf()` → the parent's facts, or null when it is gone.
 //   recordedPrior the `prior_value` recorded by `on` for this form's entry (null: the user had none)
-//   systemProxy   null (none, or off) · { url, bypass } · { pac: true } (a PAC or WPAD: reported, never executed) · { ok: false } (unreadable)
+//   systemProxy   null (none, or off) · { url, bypass, wpad? } · { pac: true, wpad? } (a PAC, or WPAD alone: reported, never executed) · { ok: false }
+//                 (unreadable). `wpad: true` (WPAD is on) is a hint carried onto the result; it never changes the URL.
 //   header        the CONNECT's `X-Asight-Upstream` value, if any; it counts only when `headerAllowed` (the form uses a hook that sends it), else it is
 //                 ignored and `notes` says so (`{ note: 'header-ignored' }`; a skipped door is `{ note: 'door-skipped', source }`; never a value: the caller records them)
 //   isAsightDoor  (text) → bool; default `isAsightDoorUrl`. Applied at EVERY source: a door is never an upstream.
@@ -50,9 +51,10 @@ export function isAsightDoorUrl(text, { ports = [] } = {}) {
 function systemOf(sp) {
   if (sp == null) return null
   if (sp.ok === false) return { unreadable: true }
-  if (sp.pac) return { pac: true }
+  const wpad = sp.wpad === true ? { wpad: true } : {}
+  if (sp.pac) return { pac: true, ...wpad }
   const url = textOf(sp.url)
-  return url === null ? null : { url, bypass: Array.isArray(sp.bypass) ? sp.bypass : [] }
+  return url === null ? null : { url, bypass: Array.isArray(sp.bypass) ? sp.bypass : [], ...wpad }
 }
 
 export async function upstreamFor({ desc, form = null, facts = null, recordedPrior = null, systemProxy = null, header = null, headerAllowed = false, isAsightDoor = isAsightDoorUrl, transport = 'http' } = {}) {
@@ -70,10 +72,11 @@ export async function upstreamFor({ desc, form = null, facts = null, recordedPri
   const sys = systemOf(systemProxy)
   const viaSystem = (source, extra = {}) => {
     if (!sys) return null
-    if (sys.pac) return out(source, null, { pac: true, ...extra })
+    const wpad = sys.wpad ? { wpad: true } : {}
+    if (sys.pac) return out(source, null, { pac: true, ...wpad, ...extra })
     if (sys.unreadable) return out(source, null, { unreadable: true, ...extra })
     if (door(sys.url)) { notes.push({ note: 'door-skipped', source: 'system-proxy' }); return null }
-    return out(source, sys.url, { bypass: sys.bypass, ...extra })
+    return out(source, sys.url, { bypass: sys.bypass, ...wpad, ...extra })
   }
   const unknown = () => viaSystem('unknown', { code: CODE.priorProxyUnknown }) ?? out('unknown', null, { code: CODE.priorProxyUnknown })
 

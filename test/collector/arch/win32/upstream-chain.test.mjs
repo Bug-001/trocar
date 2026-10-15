@@ -1,5 +1,6 @@
 // test/collector/arch/win32/upstream-chain.test.mjs — D57 scope: the Windows system-proxy reader the P7 chain takes. WPAD (AutoDetect, flag 0x8 of
-// Connections\DefaultConnectionSettings) is a PAC like an AutoConfigURL: reported, never executed, never judged direct. The HKLM policy
+// Connections\DefaultConnectionSettings) alone is a PAC like an AutoConfigURL: reported, never executed, never judged direct; beside an enabled manual
+// ProxyServer it is only a hint (WinINET falls back to the manual proxy; Windows ships with flags 0x09), so the manual proxy stands. The HKLM policy
 // ProxySettingsPerUser=0 moves the settings to HKLM. Every key read is on the helper's allow-list. Nothing here runs Windows: the helper is an object.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -37,7 +38,7 @@ test('WPAD on (no ProxyServer, no AutoConfigURL) is a PAC: the follower\'s upstr
   const helper = registry({ [`HKCU\\${IS}`]: {}, [`HKCU\\${IS}\\Connections`]: { DefaultConnectionSettings: conn(0x9) } })
   const sp = await readSystemProxyChain({ helper })
   assert.equal(sp.autoDetect, true)
-  assert.deepEqual(chainSystemProxy(sp), { pac: true })
+  assert.deepEqual(chainSystemProxy(sp), { pac: true, wpad: true })
   const descs = await loadHarnesses()
   const follower = descs.find((d) => d.proxy.systemProxy.http === true)
   const r = await upstreamFor({ desc: follower, facts: { pid: 1, start: 1, env: {}, parentOf: async () => null }, systemProxy: chainSystemProxy(sp) })
@@ -47,13 +48,31 @@ test('WPAD on (no ProxyServer, no AutoConfigURL) is a PAC: the follower\'s upstr
   for (const a of helper.calls) assert.notEqual(regReadAllowed(a), null, JSON.stringify(a))
 })
 
-test('AutoDetect is flag 0x8 of DefaultConnectionSettings, whatever else is set; a short or absent blob is no WPAD', async () => {
-  for (const [blob, want] of [[conn(0x9), true], [conn(0x8 | 0x2), true], [conn(0xd), true], [conn(0x1), false], [conn(0x3), false], [{ kind: 'REG_BINARY', value: 'RgAAAA==' }, false], [sz('x'), false], [undefined, false]]) {
-    const helper = registry({ [`HKCU\\${IS}`]: VERGE, [`HKCU\\${IS}\\Connections`]: blob === undefined ? {} : { DefaultConnectionSettings: blob } })
+test('AutoDetect is flag 0x8 of DefaultConnectionSettings; an enabled manual proxy stands beside it (hint only), WPAD alone is a PAC, an AutoConfigURL always is', async () => {
+  const blobs = [[conn(0x9), true], [conn(0x8 | 0x2), true], [conn(0xd), true], [conn(0x1), false], [conn(0x3), false], [{ kind: 'REG_BINARY', value: 'RgAAAA==' }, false], [sz('x'), false], [undefined, false]]
+  const manuals = [[VERGE, 'http://127.0.0.1:7897'], [{ ...VERGE, ProxyEnable: dword(0) }, null], [{}, null], [{ ProxyEnable: dword(1), ProxyServer: sz('socks=127.0.0.1:1080') }, 'unusable']]
+  for (const [blob, wpad] of blobs) for (const [is, manual] of manuals) for (const pacUrl of [false, true]) {
+    const k = pacUrl ? { ...is, AutoConfigURL: sz('http://wpad/proxy.pac') } : is
+    const helper = registry({ [`HKCU\\${IS}`]: k, [`HKCU\\${IS}\\Connections`]: blob === undefined ? {} : { DefaultConnectionSettings: blob } })
     const sp = await readSystemProxyChain({ helper })
-    assert.equal(sp.autoDetect, want, JSON.stringify(blob))
-    if (want) assert.deepEqual(chainSystemProxy(sp), { pac: true }, 'WPAD wins over a manual proxy, as an AutoConfigURL does')
+    const at = JSON.stringify({ blob, manual, pacUrl })
+    assert.equal(sp.autoDetect, wpad, at)
+    const got = chainSystemProxy(sp)
+    if (pacUrl) assert.equal(got.pac, true, at)
+    else if (manual === 'unusable') assert.equal(got.ok, false, at)
+    else if (manual) { assert.equal(got.url, manual, at); assert.equal(got.pac, undefined, at); assert.equal(got.wpad, wpad ? true : undefined, at) }
+    else assert.deepEqual(got, wpad ? { pac: true, wpad: true } : null, at)
   }
+})
+
+test('stock Windows (flags 0x09) plus a Settings-app manual proxy: the follower dials the manual proxy, carrying the WPAD hint', async () => {
+  const helper = registry({ [`HKCU\\${IS}`]: VERGE, [`HKCU\\${IS}\\Connections`]: { DefaultConnectionSettings: conn(0x9 | 0x2) } })
+  const follower = (await loadHarnesses()).find((d) => d.proxy.systemProxy.http === true)
+  const r = await upstreamFor({ desc: follower, facts: { pid: 1, start: 1, env: {}, parentOf: async () => null }, systemProxy: chainSystemProxy(await readSystemProxyChain({ helper })) })
+  assert.equal(r.source, 'system-proxy')
+  assert.equal(r.url, 'http://127.0.0.1:7897')
+  assert.equal(r.wpad, true)
+  assert.equal(r.pac, undefined)
 })
 
 test('ProxySettingsPerUser=0 reads HKLM Internet Settings (and its Connections); any other value or none reads HKCU', async () => {

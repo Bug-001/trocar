@@ -279,11 +279,20 @@ export async function readSystemProxyChain({ helper, timeoutMs = 2000 } = {}) {
   return { ok: true, hive, enable: n === 1 ? true : n === 0 ? false : null, server: stringOf(v.ProxyServer), override: stringOf(v.ProxyOverride), autoConfigUrl: stringOf(v.AutoConfigURL), autoDetect: !!(blob && blob.length >= 12 && blob.readUInt32LE(8) & AUTO_DETECT) }
 }
 
-/** chainSystemProxy(sp) → the chain's systemProxy: null (off, or nothing for HTTPS) · { url, bypass } · { pac: true } (an AutoConfigURL or WPAD: never
- *  executed) · { ok: false, why } (unreadable, or a ProxyServer asight cannot dial: SOCKS-only, TLS, credentials WinINET would not send). */
+/** chainSystemProxy(sp) → the chain's systemProxy: null (off, or nothing for HTTPS) · { url, bypass, wpad? } · { pac: true, wpad? } (an AutoConfigURL, or
+ *  WPAD with no usable manual proxy: never executed) · { ok: false, why } (unreadable, or a ProxyServer asight cannot dial: SOCKS-only, TLS, credentials
+ *  WinINET would not send). WPAD (AutoDetect) does not override an enabled manual proxy: WinINET falls back to the ProxyServer when discovery finds
+ *  nothing, and Windows ships with AutoDetect on (flags 0x09), so the manual proxy stands and `wpad: true` rides along as a hint. */
 export function chainSystemProxy(sp) {
   if (!sp || !sp.ok) return { ok: false, why: 'system-proxy-unreadable' }
-  if (text(sp.autoConfigUrl) || sp.autoDetect) return { pac: true }
+  if (text(sp.autoConfigUrl)) return { pac: true }
+  const wpad = sp.autoDetect ? { wpad: true } : {}
+  const manual = manualOf(sp)
+  if (manual === null) return sp.autoDetect ? { pac: true, wpad: true } : null
+  return manual.url ? { ...manual, ...wpad } : manual
+}
+
+function manualOf(sp) {
   if (sp.enable !== true) return null
   const entry = serverEntryOf(sp.server)
   if (entry.socks) return { ok: false, why: 'upstream-protocol' }
