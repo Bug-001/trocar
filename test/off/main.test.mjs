@@ -138,7 +138,7 @@ test('the flip\'s platform threading: runOffCli\'s platform is offWorld\'s — t
     // one installed harness, so the off actually runs its steps (the routing switch is where the daemon is asked)
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{"env":{"NODE_EXTRA_CA_CERTS":"/x/asight.pem"}}\n')
-    fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 2, entries: [{ kind: 'json-key', harness: 'claude-code', path: path.join(home, '.claude', 'settings.json'), keys: ['env', 'NODE_EXTRA_CA_CERTS'], backup: null }], files: [] }) + '\n')
+    fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 3, entries: [{ kind: 'json-key', phase: 'on', harness: 'claude-code', path: path.join(home, '.claude', 'settings.json'), keys: ['env', 'NODE_EXTRA_CA_CERTS'], backup: null }], files: [] }) + '\n')
     const io = fakeIo()
     // deps carries NO platform of its own — the CLI's platform must be what offWorld uses (a test's deps.platform still wins; that half is every other test here)
     const exit = await runOffCli(['claude-code'], { io, home, env: { HOME: home }, platform: 'win32', deps: { getuid: () => 1000, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, fs, exec: (file) => ({ status: 0, stdout: file === 'whoami' ? 'alice' : '', stderr: '' }) } }) // exec answers the arm's own reads (whoami); nothing it stubs ever runs for real

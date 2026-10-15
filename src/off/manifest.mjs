@@ -12,9 +12,8 @@
 //   install          null until `install` ran; then { state: 'complete' | 'partial', at, pending: [], harnesses: [] } (D55; replaces v2's `complete`).
 //   ca               null, or { fp256, created_at } of the collector CA `install` minted (D55).
 // Every entry and file carries `phase`: 'install' | 'on', the command that wrote it (D55①): `off` undoes phase 'on', `uninstall` the rest.
-// A version 2 manifest is classified in memory (classifyV2, `upgraded_from: 2`); it stays version 2 on disk until something saves it.
-// A version 1 manifest (before D39) reads as version 3 with `upgraded_from: 1`: kind, `backup: null` and undo_by_hand filled in memory;
-// the file on disk stays version 1 until something saves it. Imports only node:* and src/off (0.1 §2).
+// A version 1 or 2 manifest (before the collector model) is not read: every writing command refuses it before any write (refuseOldManifest, 4.11 ⑰).
+// Imports only node:* and src/off (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { readOrNull, writeDurable } from './fsutil.mjs'
@@ -53,8 +52,8 @@ export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry'
  *  are the ones whose undo is an elevated step, never inline. */
 export const OPTIN_KINDS = Object.freeze(KNOWN_KINDS.filter((k) => k.startsWith('optin-')))
 export const OPTIN_MACHINE_KINDS = Object.freeze(['optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine'])
-/** Each OS store a system-root sits in → the v2 certificate opt-in kind whose undo takes it out (by its fingerprint / thumbprint, the same record values).
- *  classifyV2 folds the opt-ins into system-roots by this map, and the opt-in undo loops route a system-root back through it until the D55 apply/undo lands. */
+/** Each OS store a system-root sits in → the certificate opt-in kind whose undo takes it out (by its fingerprint / thumbprint, the same record values): the opt-in
+ *  undo loops route a system-root through it until the D55 apply/undo lands (T12–T14). */
 export const ROOT_STORE_KIND = Object.freeze({ 'darwin-user-trust': 'optin-keychain-cert', 'win-currentuser-root': 'optin-cert-user', 'win-localmachine-root': 'optin-cert-machine' })
 // The `owned-file` roles 4.11 P13 adds: `switch` (the route switch file) and `config-entry` (a config-library entry asight created) are removed like a plugin;
 // a `wrapper` (P8: `real` is where the real program was moved, `sha256` the wrapper's, `real_sha256` the program's) is undone by `uninstall` only, by putting
@@ -64,8 +63,8 @@ export const newManifest = (now = new Date()) => ({ version: MANIFEST_VERSION, c
 
 /** Has `install` finished (D55: `install.state`, which replaced v2's `complete`)? */
 export const installComplete = (m) => !!(m && isPlainObject(m.install) && m.install.state === 'complete')
-/** May the daemon start on `m`? An install that finished — or a version 2 one that was complete (classifyV2's `v2_complete`): its `on` left routing that still needs the engine. */
-export const daemonMayStart = (m) => installComplete(m) || !!(m && m.v2_complete === true)
+/** May the daemon start on `m`? Only on an install that finished (a version 1 / 2 manifest is never read, 4.11 ⑰). */
+export const daemonMayStart = (m) => installComplete(m)
 /** The entries and files of one phase. */
 export const itemsOfPhase = (m, phase) => [...(Array.isArray(m && m.entries) ? m.entries : []), ...(Array.isArray(m && m.files) ? m.files : [])].filter((x) => isPlainObject(x) && x.phase === phase)
 
@@ -132,7 +131,7 @@ function completeManifest(m) {
   if (!isPlainObject(m.liveness)) m.liveness = {}
   for (const e of Array.isArray(m.entries) ? m.entries : []) {
     if (!isPlainObject(e)) continue
-    if (e.kind == null) e.kind = e.format ? 'text' : 'json-key' // a JSON entry of a version 1 manifest carried no kind
+    if (e.kind == null) e.kind = e.format ? 'text' : 'json-key' // a writer that pushed an entry without its kind (saveManifestAt fills it)
     if (e.backup === undefined) e.backup = null
     if (e.scope === undefined) e.scope = OPTIN_KINDS.includes(e.kind) ? (OPTIN_MACHINE_KINDS.includes(e.kind) ? 'machine' : 'user') : 'agent' // 1.6 §1.7: what the item reaches — a manifest of before the field reads everything automatic as 'agent' (the opt-in kinds only ever came with it)
     if (!e.undo_by_hand) e.undo_by_hand = undoByHand(e)
@@ -147,62 +146,15 @@ function completeManifest(m) {
   return m
 }
 
-// ── classifyV2: the phase of each item of a version 1 / 2 manifest (D55, 4.6 安装清单). The last use of shape matching: a v3 writer says its phase.
-const CERT_OPTINS = Object.values(ROOT_STORE_KIND)
-const ON_FILE_ROLES = ['unit', 'daemon-log', 'forwarder-binary']
-const ON_ENTRY_KINDS = ['proxy-entry', 'run-key', 'scheduled-task', 'forwarder-binary'] // the routing and the autostart; the legacy-* kinds are the old capture's switch
-const LOOPBACK = new Set(['127.0.0.1', '[::1]', 'localhost'])
-const isLoopbackUrl = (v) => { try { return LOOPBACK.has(new URL(v).hostname) } catch { return false } }
-const namesAsightPath = (v) => /[\\/]\.asight([\\/]|$)/.test(v)
-// json-key / text / trust-entry: a proxy entry records a loopback URL and no path of asight's; a trust entry records a path under ~/.asight. A Codex / Hermes
-// proxy block joined into the cert block is its own entry, with only the proxy variables, so each entry is judged by its own values.
-function entryPhase(e) {
-  if (OPTIN_KINDS.includes(e.kind) || ON_ENTRY_KINDS.includes(e.kind) || String(e.kind).startsWith('legacy-')) return 'on'
-  if (!['json-key', 'text', 'trust-entry'].includes(e.kind)) return 'install'
-  const values = [e.value, ...(isPlainObject(e.vars) ? Object.values(e.vars) : [])].filter((v) => typeof v === 'string')
-  return values.some(isLoopbackUrl) && !values.some(namesAsightPath) ? 'on' : 'install'
-}
-// the certificate opt-ins of one store are one certificate there: one system-root per store (ROOT_STORE_KIND), the earliest installed_at. The records' values
-// (fingerprint, thumbprint, keychain, cert file) ride along: the opt-in undo takes the root out by them, as it took the opt-in out.
-function systemRootOf(store, recs) {
-  const v = (r) => (isPlainObject(r.values) ? r.values : {})
-  const values = Object.assign({}, ...[...recs].reverse().map(v))
-  const pick = (k) => (typeof values[k] === 'string' && values[k]) || null
-  const fp256 = pick('fp256'), thumbprint = pick('thumbprint')
-  const at = recs.map((r) => r.installed_at).filter((x) => typeof x === 'string').sort()[0] ?? null
-  const machine = recs.some((r) => r.scope === 'machine')
-  const e = { kind: 'system-root', harness: null, phase: 'install', scope: machine ? 'machine' : 'user', path: `${store}:${fp256 ?? thumbprint}`, store, fp256, thumbprint, cert_file: pick('certFile'), status: 'done', installed_at: at, backup: null, values }
-  e.undo_by_hand = undoByHand(e)
-  if (machine) e.elevated_command = recs.map((r) => r.elevated_command).find((c) => typeof c === 'string') ?? e.undo_by_hand
-  return e
-}
+const unsupportedVersion = (v) => v !== MANIFEST_VERSION
+/** The tools that undo a manifest of version 1 or 2, in the order a refusal names them (4.11 ⑰): the asight from main before the collector model, then the standalone copy. */
+const V2_TOOLS = Object.freeze(['main-before-model', 'standalone'])
 
-/** A version 1 / 2 manifest (already shaped by parseManifest) → a version 3 one, with `phase` on every item. Pure: `m` is not changed. `install` stays null (v2's
- *  `complete` goes): `on` refuses until `install` has run. The certificate opt-ins collapse into one system-root (phase install), every other opt-in is 'on'. */
-export function classifyV2(m) {
-  const out = structuredClone(m)
-  delete out.complete
-  out.install = null
-  if (m.complete === true) out.v2_complete = true // the routing a v2 `on` left still needs its daemon; only `install` replaces this (daemonMayStart)
-  out.ca = out.ca ?? null
-  const certs = out.entries.filter((e) => isPlainObject(e) && CERT_OPTINS.includes(e.kind))
-  out.entries = out.entries.filter((e) => !certs.includes(e)).map((e) => (isPlainObject(e) ? { ...e, phase: entryPhase(e) } : e))
-  for (const [store, kind] of Object.entries(ROOT_STORE_KIND)) {
-    const recs = certs.filter((r) => r.kind === kind)
-    if (recs.length) out.entries.push(systemRootOf(store, recs))
-  }
-  out.files = out.files.map((f) => (isPlainObject(f) ? { ...f, phase: ON_FILE_ROLES.includes(f.role) ? 'on' : 'install' } : f))
-  out.version = MANIFEST_VERSION
-  return out
-}
-
-const unsupportedVersion = (v) => !Number.isInteger(v) || v < 1 || v > MANIFEST_VERSION
-
-// What a manifest of a version this build reads must look like before anything uses it: the lists it names are lists of the right items. A file that parses as JSON but
-// has another shape (`{"version":2}`, `entries: {}`, `entries: [null]`, `files: null`) is not the manifest asight wrote — it is as unusable as one that does not parse, and
-// the callers treat it the same way (an error to say, then asight's own marks), instead of crashing half-way through an undo with the routing already off (R3, R11).
-// A version-1 manifest may lack a list (it is then empty); a version 2 or 3 one is written with `entries` and `files` always (newManifest), so a missing one is damage.
-function checkShape(m, v, name) {
+// What a manifest of the version this build reads must look like before anything uses it: the lists it names are lists of the right items. A file that parses as JSON but
+// has another shape (`entries: {}`, `entries: [null]`, `files: null`) is not the manifest asight wrote — it is as unusable as one that does not parse, and the callers treat it
+// the same way (an error to say, then asight's own marks), instead of crashing half-way through an undo with the routing already off (R3, R11). `entries` and `files` are
+// always written (newManifest), so a missing one is damage.
+function checkShape(m, name) {
   const need = (key, item, required) => {
     if (m[key] === undefined && !required) { m[key] = []; return }
     if (!Array.isArray(m[key])) throw new Error(`${name} is not an install manifest this build can use: \`${key}\` is ${m[key] === undefined ? 'missing' : `not a list (${m[key] === null ? 'null' : typeof m[key]})`}`)
@@ -210,22 +162,23 @@ function checkShape(m, v, name) {
     if (bad >= 0) throw new Error(`${name} is not an install manifest this build can use: \`${key}[${bad}]\` is not ${item === 'object' ? 'an object' : 'a string'}`)
   }
   if (m.entries === undefined && m.files === undefined) throw new Error(`${name} is not an install manifest this build can use: it lists neither \`entries\` nor \`files\``)
-  need('entries', 'object', v >= 2)
-  need('files', 'object', v >= 2)
+  need('entries', 'object', true)
+  need('files', 'object', true)
   need('watched', 'object', false)
   need('dirs', 'string', false)
 }
 
-/** Text → manifest. A version 1 or 2 text is classified to version 3 (classifyV2, `upgraded_from`); a version this build does not know comes back as parsed, flagged
- *  `unsupported: true`, untouched. Throws what JSON.parse throws, or an Error for JSON that is not an object or whose lists are not the lists of a manifest. */
+/** Text → manifest. A version 1 or 2 text (written before the collector model) is not read at all: `{ unsupported: 'v2', version, tools }` — nothing in this
+ *  build migrates or undoes it (4.11 ⑰; refuseOldManifest says what does). A version above 3 comes back as parsed, flagged `unsupported: true`, untouched.
+ *  Throws what JSON.parse throws, or an Error for JSON that is not an object or whose lists are not the lists of a manifest. */
 export function parseManifest(text, name = MANIFEST) {
   const m = JSON.parse(text)
   if (!isPlainObject(m)) throw new Error(`${name} is not a manifest (a JSON object)`)
   const v = m.version === undefined ? 1 : m.version
+  if (Number.isInteger(v) && v >= 1 && v < MANIFEST_VERSION) return { unsupported: 'v2', version: v, tools: [...V2_TOOLS] }
   if (unsupportedVersion(v)) return { ...m, unsupported: true }
-  checkShape(m, v, name)
-  if (v === MANIFEST_VERSION) return completeManifest(m)
-  return { ...classifyV2(completeManifest(m)), upgraded_from: v }
+  checkShape(m, name)
+  return completeManifest(m)
 }
 
 /** The manifest in the file `file` (the install manifest, or the old capture's ledger ~/.asight/legacy-manifest.json: the same format), or null when there is none. Never writes. */
@@ -242,14 +195,13 @@ export function readManifest(dir, fs = nodeFs) {
 /** Writes the manifest to `file` (atomic, durable, 0600; the directory above it is made 0700 when it is not there). Items pushed without a kind or an undo_by_hand get them first (in the
  *  caller's object too). Refuses a manifest of a version this build does not know: it would write version 3 shapes over data it cannot read. Refuses an item without a `phase` (D55): a writer that forgets fails its own test. */
 export function saveManifestAt(file, m, fs = nodeFs) {
-  if (m.unsupported || unsupportedVersion(m.version)) throw new Error(`the manifest ${file} is version ${JSON.stringify(m.version)}; this build reads versions 1 to ${MANIFEST_VERSION} and will not write over it (use the asight that wrote it, or "asight off")`)
+  if (m.unsupported || unsupportedVersion(m.version)) throw new Error(`the manifest ${file} is version ${JSON.stringify(m.version)}; this build reads version ${MANIFEST_VERSION} only and will not write over it (use the asight that wrote it)`)
   completeManifest(m)
   for (const it of [...m.entries, ...m.files]) {
     if (!PHASES.includes(it && it.phase)) throw new Error(`the manifest ${file} was not saved: the item ${JSON.stringify((it && it.path) ?? null)} (${it && it.kind}) has no phase (${PHASES.join(' | ')}); every writer says which command wrote it (D55)`)
   }
-  const { upgraded_from: _read, ...out } = m // a fact about the read, not part of the manifest
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  writeDurable(file, JSON.stringify(out, null, 2) + '\n', 0o600, fs)
+  writeDurable(file, JSON.stringify(m, null, 2) + '\n', 0o600, fs)
 }
 
 /** Writes the install manifest in `dir`. */

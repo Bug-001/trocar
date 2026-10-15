@@ -110,10 +110,10 @@ test('the manifest side (1.6 §1.7, Task 14(e)): the opt-in kinds are known, sco
   // a round trip through the real manifest file: parse keeps scope and fills it for a manifest of before the field, machine kinds read machine
   const dir = tmpDir('asight-optin-manifest-')
   const file = path.join(dir, 'install-manifest.json')
-  fs.writeFileSync(file, JSON.stringify({ version: 2, entries: [
-    { kind: 'optin-user-path', harness: 'kimi-code', form: 'kimi-code.cli', item: 'user-path-shim', scope: 'user', undo_by_hand: 'x' },
-    { kind: 'optin-machine-path', harness: 'opencode', form: 'opencode.cli', item: 'machine-path-dispatcher', scope: 'machine' },
-    { kind: 'json-key', harness: 'cc', path: 'C:\\a', keys: ['env', 'HTTPS_PROXY'] },
+  fs.writeFileSync(file, JSON.stringify({ version: 3, entries: [
+    { kind: 'optin-user-path', phase: 'on', harness: 'kimi-code', form: 'kimi-code.cli', item: 'user-path-shim', scope: 'user', undo_by_hand: 'x' },
+    { kind: 'optin-machine-path', phase: 'on', harness: 'opencode', form: 'opencode.cli', item: 'machine-path-dispatcher', scope: 'machine' },
+    { kind: 'json-key', phase: 'on', harness: 'cc', path: 'C:\\a', keys: ['env', 'HTTPS_PROXY'] },
   ], files: [] }))
   const { readManifestAt } = await import('../../../../src/off/manifest.mjs')
   const m = readManifestAt(file)

@@ -52,7 +52,7 @@ export async function freeEnginePort({ tries = 20, listen = bindOnce } = {}) {
 // 1.6 R3: a manifest of a version this build does not read is never acted on — "already installed", or entries undone by guessing what its
 // fields mean. Plain Error: the caller records it as install-error / uninstall-error.
 function refuseUnsupported(dir, m) {
-  if (m && m.unsupported) throw new Error(`the install manifest ${manifestPath(dir)} is version ${JSON.stringify(m.version)}, which this build does not read (it reads 1 and 2); nothing was changed. Use the asight that wrote it, or run "asight off", which leaves what it does not know`)
+  if (m && m.unsupported) throw new Error(`the install manifest ${manifestPath(dir)} is version ${JSON.stringify(m.version)}, which this build does not read (it reads version 3); nothing was changed. Use the asight that wrote it`)
 }
 
 function refuseRoot(verb, getuid = processUid) {
@@ -262,7 +262,7 @@ async function writeInstall(args) {
 }
 async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false }, written) {
   const { ca, descs, ctxFor, R, daemon, draft, unit } = plan._
-  const body = () => JSON.stringify({ ...m, upgraded_from: undefined })
+  const body = () => JSON.stringify(m)
   let saved = body()
   const save = () => { if (body() !== saved) { saveManifest(dir, m, fs); saved = body() } }
   guard()

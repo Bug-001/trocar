@@ -405,7 +405,7 @@ test('semantics 2: an install manifest of the wrong shape is treated as unreadab
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   s.sys.daemon.state.up = false
   const file = path.join(s.dir, 'install-manifest.json')
-  fs.writeFileSync(file, '{"version":2}')
+  fs.writeFileSync(file, '{"version":3}')
   const before = s.userFiles()
   const no = await s.uninstall({}) // not a terminal, no yes
   assert.equal(no.exit, 1)
@@ -416,7 +416,7 @@ test('semantics 2: an install manifest of the wrong shape is treated as unreadab
   assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight') && !fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8').includes('asight collector'), 'the entries went by their marks')
   // `on` does not write over a manifest it cannot read, and says what to do
   const t = await installedHome({ names: ['claude-code'] })
-  fs.writeFileSync(path.join(t.dir, 'install-manifest.json'), '{"version":2,"entries":null,"files":[]}')
+  fs.writeFileSync(path.join(t.dir, 'install-manifest.json'), '{"version":3,"entries":null,"files":[]}')
   const snap = t.userFiles()
   await assert.rejects(() => t.on(), /the install manifest cannot be read .*asight on does not write over it.*asight off.*mv '.*install-manifest\.json'/)
   assert.deepEqual(t.userFiles(), snap, 'and wrote nothing')

@@ -155,7 +155,7 @@ export function testOnlyExports() {
 }
 // The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
 // It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
-const TEST_ONLY_EXPORTS_CEILING = 322 // D51 T3 raised it for src/off/identity.mjs + identityView before their callers; the registry (T4) took three of them in, the daemon's agents.json watch (T5) readAgentList; the door (T7) took WIDE in; T10 deleted the form matcher; the D51 review fixes took one more in; D55 P3 raised it by two for the manifest interface ahead of its callers (classifyV2: the install migration P8; itemsOfPhase: the off / uninstall phase filter)
+const TEST_ONLY_EXPORTS_CEILING = 320 // T11 dropped classifyV2 and its fixture readers (4.11 ⑰); D51 T3 raised it for src/off/identity.mjs + identityView before their callers; the registry (T4) took three of them in, the daemon's agents.json watch (T5) readAgentList; the door (T7) took WIDE in; T10 deleted the form matcher; the D51 review fixes took one more in; D55 P3 raised it by two for the manifest interface ahead of its callers (classifyV2: the install migration P8; itemsOfPhase: the off / uninstall phase filter)
 
 test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
   const n = testOnlyExports().length

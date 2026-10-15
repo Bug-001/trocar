@@ -655,7 +655,7 @@ for (const [harness, rel] of [['codex', '.codex/.env'], ['hermes', '.hermes/.env
 
 // The audit's MEDIUM finding (semantics 2): a manifest that parses but has another shape used to crash `off` before it did anything (routing still on, nothing undone) or half-way
 // (routing off, no receipt). Now it is as unreadable as one that does not parse: the routing is taken off, the entries are found by asight's marks after a yes (R3), and a receipt is printed.
-for (const [what, doc] of [['{"version":2}', () => ({ version: 2 })], ['entries is an object', (m) => ({ ...m, entries: { a: 1 } })], ['entries holds null', (m) => ({ ...m, entries: [...m.entries, null] })], ['files is null', (m) => ({ ...m, files: null })]]) {
+for (const [what, doc] of [['{"version":3}', () => ({ version: 3 })], ['entries is an object', (m) => ({ ...m, entries: { a: 1 } })], ['entries holds null', (m) => ({ ...m, entries: [...m.entries, null] })], ['files is null', (m) => ({ ...m, files: null })]]) {
   test(`R3 / semantics 2: an install manifest of the wrong shape (${what}) — off takes the routing off, touches no file without a yes, says why and exits 1; with --yes it undoes by the marks; a receipt either way`, async () => {
     const s = await installedHome({ names: ['claude-code', 'codex'] })
     s.sys.daemon.state.up = false

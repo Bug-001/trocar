@@ -11,7 +11,7 @@ import path from 'node:path'
 import { UNDO_BY_KIND, undoOptIns, readUserPathArgs as inlineReadArgs, setUserPathArgs as inlineSetArgs, BROADCAST_ARGS as inlineBroadcast, readShortcutArgs as inlineShortcutArgs } from '../../src/off/win32-optin.mjs'
 import { DARWIN_UNDO_BY_KIND } from '../../src/off/darwin-optin.mjs'
 import { readUserPathArgs, setUserPathArgs, BROADCAST_ARGS, readShortcutArgs, USER_PATH_VALUE } from '../../src/collector/arch/win32/userpath.mjs'
-import { OPTIN_KINDS, OPTIN_MACHINE_KINDS, parseManifest } from '../../src/off/manifest.mjs'
+import { OPTIN_KINDS, OPTIN_MACHINE_KINDS } from '../../src/off/manifest.mjs'
 import { runOff } from '../../src/off/orchestrate.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { GROUPS, POLICY_KEY, rig, nativeKimi, realCmd, writeShortcut } from '../collector/arch/win32/fixtures/optin-world.mjs'
@@ -152,17 +152,19 @@ test('W64 round-trip, Claude Desktop: the certificate deleted by thumbprint, the
   assert.equal(again.results[0].result, 'absent')
 })
 
-test('D55 a v2 cert opt-in, read as a system-root (classifyV2), is still taken out by the whole-machine off / uninstall; a harness-scoped off leaves it; a machine one is handed back elevated', async () => {
+// a certificate opt-in record as the system-root of its store (D55): the record's values ride along, the opt-in undo takes the root out by them
+const asRoot = (m, kind, store) => ({ files: [], ...m, entries: m.entries.map((e) => (e.kind === kind ? { kind: 'system-root', harness: null, phase: 'install', scope: e.scope, path: `${store}:root`, store, fp256: e.values.fp256 ?? null, thumbprint: e.values.thumbprint ?? null, values: e.values, elevated_command: e.elevated_command } : e)) })
+test('D55 a system-root is taken out by the whole-machine off / uninstall through its store\'s opt-in undo; a harness-scoped off leaves it; a machine one is handed back elevated', async () => {
   const r = await rig({ form: 'claude-code.desktop', item: 'cert-store-current-user' })
   await r.apply()
-  const m = parseManifest(JSON.stringify({ files: [], ...r.manifest, version: 2 }))
+  const m = asRoot(r.manifest, 'optin-cert-user', 'win-currentuser-root')
   const root = m.entries.find((e) => e.kind === 'system-root')
   assert.ok(root && !m.entries.some((e) => e.kind === 'optin-cert-user'), 'the record is a system-root now')
   const some = await undoOptIns({ manifest: m, ids: ['claude-code'], exec: r.w.run, env: r.env, fs: r.wfs })
   assert.deepEqual([some.results.map((x) => x.kind), r.w.store.size], [['optin-claude-policy'], 1], 'a harness-scoped off does not take the machine\'s root')
   const all = await undoOptIns({ manifest: m, exec: r.w.run, env: r.env, fs: r.wfs })
   assert.deepEqual([all.results.find((x) => x.kind === 'system-root').result, all.unknown.length, r.w.store.size], ['undone', 0, 0], 'the root is out of CurrentUser\\Root')
-  const machine = parseManifest(JSON.stringify({ files: [], ...r.manifest, version: 2, entries: r.manifest.entries.map((e) => (e.kind === 'optin-cert-user' ? { ...e, kind: 'optin-cert-machine', scope: 'machine' } : e)) }))
+  const machine = asRoot({ ...r.manifest, entries: r.manifest.entries.map((e) => (e.kind === 'optin-cert-user' ? { ...e, scope: 'machine', elevated_command: e.elevated_command ?? 'certutil -delstore Root x' } : e)) }, 'optin-cert-user', 'win-localmachine-root')
   const o = await undoOptIns({ manifest: machine, exec: r.w.run, env: r.env, fs: r.wfs })
   assert.equal(o.results.find((x) => x.kind === 'system-root').result, 'needs-admin')
   assert.match(o.needsAdmin[0].command, /certutil -delstore Root /)
@@ -245,7 +247,7 @@ test('W64/W54 command-level: `asight off` over a rig-produced opt-in manifest â€
   realCmd(r, 'kimi')
   assert.deepEqual(await r.apply(), { state: 'done' })
   // the manifest ON DISK, as on's ledger leaves it: runOff reads it back from <collector>\install-manifest.json, not from the rig's memory
-  r.wfs.writeFileSync(path.win32.join(r.dir, 'install-manifest.json'), JSON.stringify({ version: 2, complete: true, created_at: '2026-10-10T00:00:00Z', confirmed_paths: [], kept_backups: [], liveness: {}, dirs: [], files: [], entries: r.manifest.entries }))
+  r.wfs.writeFileSync(path.win32.join(r.dir, 'install-manifest.json'), JSON.stringify({ version: 3, install: null, ca: null, created_at: '2026-10-10T00:00:00Z', confirmed_paths: [], kept_backups: [], liveness: {}, dirs: [], files: [], entries: r.manifest.entries.map((e) => ({ phase: 'on', ...e })) }))
   const at = new Date('2026-10-10T12:00:00Z')
   const { receipt, exit } = await runOff({ home: r.winHome, env: { ...r.env, ASIGHT_TEST_SANDBOX: '1' }, ids: null,
     deps: { platform: 'win32', exec: r.w.run, fs: r.wfs, procs: async () => [], daemonState: async () => ({ state: 'none' }), lockWaitMs: 0, now: () => new Date(at) } })

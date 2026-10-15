@@ -15,7 +15,7 @@ import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
 import { createDarwinRedirector } from '../../../../src/collector/arch/darwin/redirector.mjs'
 import { DARWIN_UNDO_BY_KIND, undoDarwinOptIns, rcLineOf as rcLineOfOff } from '../../../../src/off/darwin-optin.mjs'
 import { KNOWN_KINDS } from '../../../../src/off/manifest.mjs'
-import { readManifest, saveManifest, newManifest, parseManifest } from '../../../../src/off/manifest.mjs'
+import { readManifest, saveManifest, newManifest } from '../../../../src/off/manifest.mjs'
 import { certBlocks } from '../../../../src/off/pem.mjs'
 import { createCa } from '../../../../src/collector/core/tls/ca.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
@@ -276,11 +276,11 @@ test('the keychain undo: by fingerprint out and back — remove-trusted-cert car
   assert.equal(u2.results[0].result, 'absent')
 })
 
-test('D55 a v2 keychain opt-in, read as a system-root (classifyV2), is still taken out by the whole-machine off / uninstall by its fingerprint; a harness-scoped off leaves it', async () => {
+test('D55 a system-root of the user keychain is taken out by the whole-machine off / uninstall by its fingerprint; a harness-scoped off leaves it', async () => {
   const w = world()
   const { out } = await w.apply('claude-code', 'claude-code.desktop', 'keychain-login', { run: securityRunner({ caPem: w.ca.certPem }).run })
   assert.equal(out.state, 'done')
-  const m = parseManifest(JSON.stringify({ ...w.manifest, version: 2 }))
+  const m = { ...w.manifest, entries: w.manifest.entries.map((e) => (e.kind === 'optin-keychain-cert' ? { kind: 'system-root', harness: null, phase: 'install', scope: 'user', path: 'darwin-user-trust:root', store: 'darwin-user-trust', fp256: e.values.fp256 ?? null, thumbprint: e.values.thumbprint ?? null, cert_file: e.values.certFile ?? null, values: e.values } : e)) }
   assert.deepEqual(m.entries.map((e) => e.kind), ['system-root'])
   const none = securityRunner({ caPem: w.ca.certPem })
   assert.deepEqual([(await undoDarwinOptIns({ manifest: m, ids: ['claude-code'], exec: none.run, env: { HOME: w.home }, fs, home: w.home })).results, none.calls], [[], []])
