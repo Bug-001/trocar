@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
-import { shapeCases, axes, readDotenv, readJsonc, readYamlList, inFamily } from './file-shapes.mjs'
+import { shapeCases, axes, seeds, readDotenv, readJsonc, readYamlList, inFamily, userEdits } from './file-shapes.mjs'
 
 const SEED = Number(process.env.ASIGHT_SHAPES_SEED) || 0x5eed
 const FORMATS = ['dotenv', 'json', 'yaml-list', 'rc']
@@ -35,7 +35,7 @@ function strictReadProblem(bytes) {
 const all = (seed = SEED) => FORMATS.flatMap((format) => shapeCases({ format, seed }))
 
 test('① every determinable shape round-trips byte for byte through Node\'s strict decoder and Buffer', () => {
-  for (const c of all().filter((x) => x.determinable)) assert.equal(roundTripProblem(c), null, at(c))
+  for (const c of [...all(), ...seeds].filter((x) => x.determinable)) assert.equal(roundTripProblem(c), null, at(c))
 })
 
 test('① the round-trip check goes red on a mislabelled shape (wrong charset, wrong BOM flag, wrong text)', () => {
@@ -47,7 +47,7 @@ test('① the round-trip check goes red on a mislabelled shape (wrong charset, w
 })
 
 test('② every undeterminable shape is refused by the spec\'s strict reading (rejected, UTF-32, or NUL in the text)', () => {
-  for (const c of all().filter((x) => !x.determinable)) {
+  for (const c of [...all(), ...seeds].filter((x) => !x.determinable)) {
     assert.ok(axes.undeterminable.includes(c.why), `${at(c)}: why ${c.why} is in the spec's closed set`)
     assert.notEqual(strictReadProblem(c.bytes), null, at(c))
   }
@@ -115,3 +115,76 @@ test('readYamlList reads back the list rows', () => {
   for (const c of all().filter((x) => x.determinable && x.format === 'yaml-list')) assert.deepEqual(readYamlList(c.bytes), c.userValues.rows, at(c))
 })
 
+test('seeds: each measured shape names its verified finding and reads as declared', () => {
+  for (const s of seeds) {
+    assert.match(s.from, /^X[3-8]-/, s.id)
+    if (!s.determinable) continue
+    if (s.format === 'json') assert.deepEqual(pick(readJsonc(s.bytes)?.env || {}), s.userValues, s.id)
+    else assert.deepEqual(pick(readDotenv(s.bytes)), s.userValues, s.id)
+  }
+  assert.deepEqual(new Set(seeds.map((s) => s.from.slice(0, 2))), new Set(['X3', 'X4', 'X5', 'X6', 'X7', 'X8']))
+})
+
+// ④ userEdits: an edit a user makes while asight is on. Read with the independent readers, the file differs from before only in
+// what the operator declares; every line it did not declare survives; its anchor is still there; the charset stays, the BOM
+// stays (a resave-as-<form> puts the text in that form); line breaks it inserts follow the file. Run on S0 itself and on an S1 = a foreign block on top of S0.
+const flatJson = (v) => {
+  if (v === undefined) return {}
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return { '': JSON.stringify(v) }
+  const o = {}
+  for (const [k, x] of Object.entries(v)) if (k === 'env' && x && typeof x === 'object' && !Array.isArray(x)) for (const [e, y] of Object.entries(x)) o[`env.${e}`] = y; else o[k] = JSON.stringify(x)
+  return o
+}
+const READ = { dotenv: (b) => readDotenv(b), rc: (b) => readDotenv(b), json: (b) => flatJson(readJsonc(b)), 'yaml-list': (b) => ({ rows: JSON.stringify(readYamlList(b)) }) }
+const bodies = (t) => t.split('\n').map((l) => l.replace(/\r$/, ''))
+const breaks = (t) => { const crlf = (t.match(/\r\n/g) || []).length; return { crlf, lf: (t.match(/\n/g) || []).length - crlf } }
+
+function editProblem(format, op, c, cur, before) {
+  const p = op.plan(cur, { before })
+  if (!p) return null
+  const after = op.apply(cur, { before })
+  if (after.equals(cur)) return 'the edit changed nothing'
+  let s
+  try { s = new TextDecoder(LABEL[p.charset], { fatal: true, ignoreBOM: true }).decode(after) } catch { return `not the ${p.charset} it says` }
+  if (p.charset !== c.charset && !/^resave-as-/.test(op.id)) return `the charset changed (${c.charset} → ${p.charset})`
+  if (s.startsWith(BOM_CHAR) !== p.bom || (p.bom !== c.bom && !/^resave-as-/.test(op.id))) return 'the BOM changed'
+  const was = new TextDecoder(LABEL[c.charset], { ignoreBOM: true }).decode(cur).replace(/^\uFEFF/, ''), now = s.replace(/^\uFEFF/, '')
+  if (p.anchor != null && !(was.includes(p.anchor) && now.includes(p.anchor))) return `anchor ${JSON.stringify(p.anchor)} is not in both`
+  const a = READ[format](cur), b = READ[format](after)
+  const changed = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k] && !p.keys.includes(k))
+  if (changed.length) return `undeclared change to ${changed.join(', ')}`
+  const left = bodies(now)
+  for (const l of bodies(was)) { if (p.removed.includes(l)) continue; const i = left.indexOf(l); if (i < 0) return `line ${JSON.stringify(l)} lost`; left.splice(i, 1) }
+  if (!op.id.startsWith('eol-')) { const x = breaks(was), y = breaks(now), lf = (x.crlf > x.lf) ? 'lf' : 'crlf'; if (y[lf] > x[lf]) return `inserted a ${lf} break into a file that uses the other` }
+  return null
+}
+
+test('④ every userEdits operator keeps its anchor and changes only what it declares, on S0 and on S1', () => {
+  for (const format of FORMATS) {
+    const ops = userEdits(format), used = new Set()
+    for (const c of [...shapeCases({ format, seed: SEED }), ...seeds.filter((x) => x.format === format)]) {
+      if (!c.determinable) { for (const op of ops) assert.equal(op.apply(c.bytes), null, `${op.id} writes nothing to ${at(c)}`); continue }
+      const runs = [[c.bytes, c.bytes]]
+      if (format === 'dotenv' || format === 'rc') runs.push([s1Of(c), c.bytes])
+      for (const [cur, before] of runs) for (const op of ops) {
+        if (op.plan(cur, { before })) used.add(op.id)
+        assert.equal(editProblem(format, op, c, cur, before), null, `${op.id} on ${at(c)}${cur === before ? '' : ' (S1)'}`)
+      }
+    }
+    for (const op of ops) assert.ok(used.has(op.id), `${format}: ${op.id} applies to some case`)
+    for (const form of axes.encodings) assert.ok(used.has(`resave-as-${form}`), `${format}: the user may save the file again in every determinable form (${form}), a mark added or dropped among them`)
+  }
+})
+// S1 for line formats: a foreign block (HTTPS_PROXY to a loopback door, an unrelated key) on top of S0, in S0's encoding.
+function s1Of(c) {
+  const eol = c.eol === 'crlf' ? '\r\n' : '\n'
+  const t = (c.bom ? BOM_CHAR : '') + ['# >>> block >>>', 'HTTPS_PROXY=http://127.0.0.1:1', 'SSL_CERT_FILE=/tmp/x.pem', '# <<< block <<<', ''].join(eol) + c.text
+  const le = Buffer.from(t, 'utf16le')
+  return c.charset === 'utf8' ? Buffer.from(t) : c.charset === 'utf16le' ? le : le.swap16()
+}
+
+test('④ the edit check goes red on an operator that touches more than it declares', () => {
+  const c = seeds.find((s) => s.id === 'seed-X8')
+  const liar = { id: 'liar', plan: () => ({ charset: 'utf8', bom: false, keys: [], removed: [], anchor: null }), apply: () => Buffer.from('OPENAI_API_KEY=sk-x\r\n') }
+  assert.match(editProblem('dotenv', liar, c, c.bytes, c.bytes), /undeclared change to HTTPS_PROXY/)
+})

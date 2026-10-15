@@ -273,3 +273,130 @@ export function shapeCases({ format, seed = 0x5eed, budget } = {}) {
 const familyOf = (o) => o && typeof o === 'object' ? Object.fromEntries(Object.entries(o).filter(([k]) => inFamily(k))) : {}
 const readYamlListText = (lines) => readYamlList(lines.join('\n'))
 
+// ---- seeds: measured shapes (verified.json ids), kept as regression seeds only (G6); the shape is copied, never a path --
+function seedOf(id, from, format, text, charset, bom, userValues) {
+  const c = { id, from, format, text, charset, bom, determinable: true, encoding: charset + (bom ? '+BOM' : ''), bytes: encodeText(text, charset, bom), eol: eolLabel(text), userValues }
+  c.describe = `${from}: ${format} ${c.encoding} eol=${c.eol}`
+  return c
+}
+const CRLF = (...lines) => lines.map((l) => l + '\r\n').join('')
+export const seeds = [
+  // A settings.json written by a shell whose UTF-8 output carries a BOM: `{}` behind EF BB BF.
+  seedOf('seed-X3', 'X3-json-abort', 'json', '{}', 'utf8', true, {}),
+  // A BOM'd, CRLF settings.json whose env holds a proxy.
+  seedOf('seed-X4', 'X4-json-bom-off', 'json', CRLF('{', '  "env": {', '    "ANTHROPIC_BASE_URL": "http://127.0.0.1:9",', '    "HTTPS_PROXY": "http://corp.example:8080"', '  }', '}'), 'utf8', true, { HTTPS_PROXY: 'http://corp.example:8080' }),
+  // A UTF-16LE .env with a BOM and CRLF, as an editor's "Unicode" save writes it.
+  seedOf('seed-X5', 'X5-dotenv-utf16', 'dotenv', CRLF('OPENAI_API_KEY=sk-x', 'HTTPS_PROXY=http://corp.example:8080', 'NO_PROXY=localhost'), 'utf16le', true, { HTTPS_PROXY: 'http://corp.example:8080', NO_PROXY: 'localhost' }),
+  // A UTF-8 .env with a BOM whose first line is the user's proxy.
+  seedOf('seed-X6', 'X6-dotenv-bom-insert', 'dotenv', CRLF('HTTPS_PROXY=http://corp.example:8080', 'DEEPSEEK_API_KEY=sk-x'), 'utf8', true, { HTTPS_PROXY: 'http://corp.example:8080' }),
+  // Lower- and upper-case proxy names side by side.
+  seedOf('seed-X7', 'X7-proxy-names', 'dotenv', CRLF('https_proxy=http://corp.example:8080', 'ALL_PROXY=socks5://127.0.0.1:1080', 'no_proxy=*.anthropic.com', 'HTTP_PROXY=http://corp.example:8080'), 'utf8', false, { https_proxy: 'http://corp.example:8080', ALL_PROXY: 'socks5://127.0.0.1:1080', no_proxy: '*.anthropic.com', HTTP_PROXY: 'http://corp.example:8080' }),
+  // A CRLF Codex-style .env: an API key and the user's proxy.
+  seedOf('seed-X8', 'X8-inblock-edit', 'dotenv', CRLF('OPENAI_API_KEY=sk-x', 'HTTPS_PROXY=http://corp.example:8080'), 'utf8', false, { HTTPS_PROXY: 'http://corp.example:8080' }),
+  // X5's other measured shape: a comment line in a legacy double-byte encoding, no BOM (bytes that are not UTF-8).
+  { id: 'seed-X5-legacy', from: 'X5-dotenv-utf16', format: 'dotenv', determinable: false, why: 'not-utf8-no-bom', describe: 'X5-dotenv-utf16: a non-UTF-8 comment line, no BOM',
+    bytes: Buffer.concat([Buffer.from('# '), Buffer.from([0xd6, 0xd0, 0xce, 0xc4]), Buffer.from(CRLF('', 'HTTPS_PROXY=http://corp.example:8080'))]) },
+]
+
+// ---- user edits: what a user does to the file while asight is on (I5) ----------------------------------------------------
+// Each operator: { id, plan(bytes, { before }) → { text, charset, bom, keys, anchor, removed } | null, apply(bytes, { before })
+// → Buffer | null }. `before` is S0 (the file before `on`), `bytes` is S1 (now); an operator that locates by text uses a line
+// or key literal found exactly once in both. `keys` are the reader keys it may change (dotenv/rc: names; json: top-level
+// keys and `env.<name>`; yaml-list: 'rows'); `removed` are the lines of S1 it rewrites. Undeterminable bytes: null, no write.
+const linesOf = (t) => { const out = []; for (let s = 0; s < t.length;) { const e = t.indexOf('\n', s), end = e < 0 ? t.length : e + 1; out.push({ start: s, end, body: t.slice(s, end).replace(/\r?\n$/, '') }); s = end } return out }
+const occurrences = (t, sub) => { let n = 0; for (let i = t.indexOf(sub); i >= 0; i = t.indexOf(sub, i + 1)) n++; return n }
+const onceIn = (t, body) => linesOf(t).filter((l) => l.body === body).length === 1
+const uniqueLine = (t, b, ok = () => true) => linesOf(t).find((l) => l.body.trim() && ok(l) && onceIn(t, l.body) && onceIn(b, l.body)) || null
+const insertAfter = (t, line, newLine) => {
+  const at = line ? line.end : t.length
+  return at === 0 || t.slice(0, at).endsWith('\n') ? { at, del: 0, ins: newLine + eolOf(t) } : { at, del: 0, ins: eolOf(t) + newLine }
+}
+const DEFAULT_HOME = `/Users/${String.fromCodePoint(0x7528, 0x6237)} alpha`
+const USER_PROXY = 'http://user-own.example:3128'
+const userCa = (home) => `${home}/${String.fromCodePoint(0x8bc1, 0x4e66)} dir/user-ca.pem`
+
+function lineOps(format, families) {
+  const rc = format === 'rc', yaml = format === 'yaml-list'
+  const val = (v) => /\s/.test(v) ? `"${v}"` : v
+  const kv = (name, v) => `${rc ? 'export ' : ''}${name}=${val(v)}`
+  const unrelated = (l) => yaml ? /^\s*-/.test(l.body) : !!ASSIGN.exec(l.body) && !inFamily(ASSIGN.exec(l.body)[2])
+  const listOk = (t) => !yaml || !linesOf(t).some((l) => l.body.trim().startsWith('[]'))
+  const ops = [
+    ['add-unrelated', (t, b) => { if (!listOk(t)) return null; const a = uniqueLine(t, b); return { splice: insertAfter(t, a, yaml ? '- added-by-user' : kv('ASIGHT_SHAPES_ADDED', 'added')), keys: [yaml ? 'rows' : 'ASIGHT_SHAPES_ADDED'], anchor: a?.body ?? null } }],
+    ['modify-unrelated', (t, b) => {
+      const l = uniqueLine(t, b, unrelated)
+      if (!l) return null
+      const m = yaml ? null : ASSIGN.exec(l.body), head = yaml ? l.body : m[1] + m[2] + m[3]
+      return { splice: { at: l.start, del: l.body.length, ins: head + (yaml ? '-changed' : 'changed-by-user') }, keys: [yaml ? 'rows' : m[2]], anchor: head }
+    }],
+    ['delete-unrelated', (t, b) => { const l = uniqueLine(t, b, unrelated); return l && { splice: { at: l.start, del: l.end - l.start, ins: '' }, keys: [yaml ? 'rows' : ASSIGN.exec(l.body)[2]], anchor: null } }],
+  ]
+  if (!yaml) for (const [fam, name, v] of families) ops.push(
+    // In place: the last assignment of the name (in S1 that is asight's line, inside its block).
+    [`set-${fam}-in-place`, (t) => {
+      const l = linesOf(t).filter((x) => ASSIGN.exec(x.body)?.[2] === name).pop()
+      if (!l) return null
+      const m = ASSIGN.exec(l.body)
+      return { splice: { at: l.start, del: l.body.length, ins: m[1] + m[2] + m[3] + val(v) }, keys: [name], anchor: m[1] + m[2] + m[3] }
+    }],
+    // Outside the block: a new line after a line the user owns (unique in S0 and S1), or at the end.
+    [`set-${fam}-after-anchor`, (t, b) => { const a = uniqueLine(t, b); return a && { splice: insertAfter(t, a, kv(name, v)), keys: [name], anchor: a.body } }],
+    [`set-${fam}-append`, (t) => ({ splice: insertAfter(t, null, kv(name, v)), keys: [name], anchor: null })],
+  )
+  return ops
+}
+
+const indentAt = (t, pos) => t.slice(t.lastIndexOf('\n', pos - 1) + 1, pos).match(/^[ \t]*/)[0]
+function insertMember(t, obj, key, value) {
+  const first = obj.members[0], at = obj.start + 1, piece = `${JSON.stringify(key)}: ${JSON.stringify(value)}`
+  if (!t.slice(obj.start, obj.end).includes('\n')) return { at, del: 0, ins: piece + (first ? ', ' : '') }
+  return { at, del: 0, ins: eolOf(t) + (first ? indentAt(t, first.keyStart) : indentAt(t, obj.start) + '  ') + piece + (first ? ',' : '') }
+}
+function deleteMember(t, obj, m) {
+  const next = skipWs(t, m.value.end)
+  if (t[next] === ',') return { at: m.keyStart, del: next + 1 - m.keyStart, ins: '' }
+  const i = obj.members.indexOf(m)
+  if (i === 0) return { at: m.keyStart, del: m.value.end - m.keyStart, ins: '' }
+  const comma = skipWs(t, obj.members[i - 1].value.end)
+  return { at: comma, del: m.value.end - comma, ins: '' }
+}
+function jsonOps(families) {
+  const rootOf = (t) => { try { const n = parseJsonc(t); return n && n.type === 'object' ? n : null } catch { return null } }
+  const envOf = (r) => { const v = r && r.members.filter((m) => m.key === 'env').pop()?.value; return v && v.type === 'object' ? v : null }
+  const unrelated = (r, t, b) => r?.members.find((m) => m.key !== 'env' && occurrences(t, JSON.stringify(m.key)) === 1 && occurrences(b, JSON.stringify(m.key)) === 1) || null
+  const ops = [
+    ['add-unrelated', (t) => { const r = rootOf(t); return r && { splice: insertMember(t, r, 'asightShapesAdded', 'added'), keys: ['asightShapesAdded'], anchor: null } }],
+    ['modify-unrelated', (t, b) => { const m = unrelated(rootOf(t), t, b); return m && { splice: { at: m.value.start, del: m.value.end - m.value.start, ins: JSON.stringify('changed-by-user') }, keys: [m.key], anchor: JSON.stringify(m.key) } }],
+    ['delete-unrelated', (t, b) => { const r = rootOf(t), m = unrelated(r, t, b); return m && { splice: deleteMember(t, r, m), keys: [m.key], anchor: null } }],
+  ]
+  for (const [fam, name, v] of families) ops.push(
+    [`set-${fam}-in-place`, (t) => { const m = envOf(rootOf(t))?.members.filter((x) => x.key === name).pop(); return m && { splice: { at: m.value.start, del: m.value.end - m.value.start, ins: JSON.stringify(v) }, keys: [`env.${name}`], anchor: JSON.stringify(name) } }],
+    [`set-${fam}-new-key`, (t) => { const env = envOf(rootOf(t)); return env && !env.members.some((x) => x.key === name) ? { splice: insertMember(t, env, name, v), keys: [`env.${name}`], anchor: null } : null }],
+  )
+  return ops
+}
+// The user saves the file again in another determinable form (a mark added or dropped, UTF-8 ↔ UTF-16): one operator per form of DETERMINABLE.
+const RESAVE = DETERMINABLE.map(([charset, bom]) => [`resave-as-${charset}${bom ? '+BOM' : ''}`, (t, b, d) => (d.charset === charset && d.bom === bom ? null : { text: t, charset, bom, keys: [], anchor: null })])
+const COMMON = [
+  ...RESAVE,
+  ['eol-to-crlf', (t) => { const x = t.replace(/\r?\n/g, '\r\n'); return x === t ? null : { text: x, keys: [], anchor: null } }],
+  ['eol-to-lf', (t) => { const x = t.replace(/\r\n/g, '\n'); return x === t ? null : { text: x, keys: [], anchor: null } }],
+]
+/** The user's edits for one format; `proxyName` / `caName` are the names the harness's entry sets, `home` goes into the CA path. */
+export function userEdits(format, { proxyName = 'HTTPS_PROXY', caName = format === 'json' ? 'NODE_EXTRA_CA_CERTS' : 'SSL_CERT_FILE', home = DEFAULT_HOME } = {}) {
+  if (!axes.content[format]) throw new Error(`unknown format ${format}`)
+  const families = [['proxy', proxyName, USER_PROXY], ['ca', caName, userCa(home)]]
+  return [...(format === 'json' ? jsonOps(families) : lineOps(format, families)), ...COMMON].map(([id, edit]) => {
+    const plan = (bytes, { before } = {}) => {
+      const d = decodeBytes(bytes), b = before ? decodeBytes(before) : d
+      if (d.why || b.why) return null
+      const r = edit(d.text, b.text, d)
+      if (!r) return null
+      const s = r.splice
+      const text = s ? d.text.slice(0, s.at) + s.ins + d.text.slice(s.at + s.del) : r.text
+      const removed = s ? linesOf(d.text).filter((l) => s.del ? l.start < s.at + s.del && l.end > s.at : l.start < s.at && s.at < l.end).map((l) => l.body) : []
+      return { text, charset: r.charset ?? d.charset, bom: r.bom ?? d.bom, keys: r.keys, anchor: r.anchor, removed }
+    }
+    return { id, plan, apply: (bytes, o) => { const p = plan(bytes, o); return p && encodeText(p.text, p.charset, p.bom) } }
+  })
+}
