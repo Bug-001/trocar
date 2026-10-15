@@ -175,7 +175,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         const pdir = resolveLoc(c.dir, ctx)[0], loader = resolveLoc(c.loader.file, ctx)[0]
         if (!pdir || !loader) return { state: 'skipped', code: 'not-routed', why: 'the plugin folder does not resolve here' }
         if (!renderHook) return { state: 'skipped', code: 'not-routed', why: 'this build was given no hook renderer' }
-        const hook = await renderHook(c.template, { CA_FILE: ca.pem, SWITCH: path.join(dir, 'switch', desc.name), PROXY_ENV: (desc.proxy && desc.proxy.env) || [], NO_PROXY_ENV: noProxyNames(desc) })
+        const hook = renderHook(c.template, { CA_FILE: ca.pem, SWITCH: path.join(dir, 'switch', desc.name), PROXY_ENV: (desc.proxy && desc.proxy.env) || [], NO_PROXY_ENV: noProxyNames(desc) })
         const file = path.join(pdir, hook.name), text = hook.text
         owned(file, 'plugin', desc.name, text, 0o644)
         const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit: { format: 'yaml-list', line: `- ${c.loader.keys.at(-1)}: [{ name: ${JSON.stringify(file)} }] ${lineComment("loads asight's CA trust plugin")}` }, home, now: now(), fs })

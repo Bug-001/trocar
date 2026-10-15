@@ -33,6 +33,7 @@ export async function modelWorld({ os = 'darwin', env = {}, commands = [], cwd =
   const store = rootStoreStub()
   const fullEnv = { HOME: home, PATH: bin, ...(typeof env === 'function' ? env(home) : env) }
   const ctx = sourcesCtx({ os, home, env: fullEnv, cwd: cwd || home, dirs: { appSupport: path.join(home, 'Library', 'Application Support'), localAppData: path.join(home, 'AppData', 'Local') } })
+  ctx.exists = (p) => (p === home || p.startsWith(`${home}${path.sep}`)) && fs.existsSync(p) // hermetic: the dev machine's /Applications never makes a form present
   const harnesses = await loadHarnesses()
   const owns = (p) => { try { return fs.statSync(p).uid === process.getuid() } catch { return null } }
   const install = (over = {}) => runInstall({ os, home, env: fullEnv, harnesses, custody, rootStore: store, ctx, owns, renderHook, ...over })

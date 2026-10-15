@@ -32,6 +32,7 @@ export const UNREACHED = Object.freeze({
   'src/capture/desktop-steer.mjs': 'old CC-Desktop Clash Verge steer; only src/netenv/clash.mjs reached it (for socket discovery), and D49 deleted that. Removal waits on the backlog',
   'src/collector/core/proxymode/chain.mjs': 'T15 lands the P7 upstream chain beside the arch upstreamFor trunks; the doors move onto it, the twins are deleted, and that wiring removes this row',
   'src/collector/core/proxymode/verdict.mjs': 'T18 lands the P11 decrypt verdict beside the mac/win layers() / tracker paths; the doors ask it next, and that wiring removes this row',
+  'src/collector/model-on.mjs': 'T20 lands turnOnModel (precondition ⑪, ports, POST /on, the P5 entries) with its real-socket e2e; asight on calls it in the commit that stops the daemon writing entries (one writer at every commit) and removes this row',
   'src/collector/core/proxymode/entries.mjs': 'T16 lands the P5 route writers beside the arch entries twins; turnOnModel calls them and removes this row, and on / off move onto them',
   'src/collector/core/proxymode/holders.mjs': 'T19 lands the daemon side of P12 (the 10 s holder poll, mayExit, doorSeen) as factories; the daemon runs them after off and removes this row',
   'src/collector/core/proxymode/pac.mjs': 'T19 lands P10 (the PAC text, its GET /asight.pac handler, the PAC door peer check) as factories; it is served on the PAC group door next, which removes this row',
