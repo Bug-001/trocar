@@ -50,3 +50,7 @@ export function urlHostsDeep(value, keyRe, out = []) {
 
 // Whether a variable is set to a true-ish value ('1', 'true', 'yes', 'on').
 export const truthy = (v) => /^(1|true|yes|on)$/i.test(String(v || '').trim())
+
+// A value that differs per OS, as plain tagged data (spec 4.11 §2.3): core/proxymode/sources.mjs picks the entry of ctx.os. Not a function value, so
+// a descriptor's proxyMode stays data only.
+export const perOs = ({ darwin, win32 }) => ({ perOs: { ...(darwin !== undefined ? { darwin } : {}), ...(win32 !== undefined ? { win32 } : {}) } })
