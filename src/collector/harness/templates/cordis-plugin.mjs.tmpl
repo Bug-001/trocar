@@ -1,0 +1,95 @@
+// asight plugin for DeepSeek dsh (spec 4.11 P9 `cordis-plugin`; lab W8 dsh-switch, R3-M6 / R3-W3). Written once by `asight install` and
+// loaded by one line of cordis.patch.yml; inert while the switch file is absent. What it does, and nothing else:
+//   trust — adds the asight root to Node's default roots in this process (appended; nothing taken away). Not under --use-openssl-ca, not
+//           when tls.setDefaultCACertificates is missing, not when the root file is unreadable — and then it never routes either (§3 ⑦):
+//           a connection through the door with no root in the process would fail its handshake.
+//   route — wraps the undici dispatcher dsh's own proxy policy installed before plugins load. On every request it reads the switch file at
+//           the absolute path baked at install: present (it holds the door URL) and the origin is not loopback → a ProxyAgent to the door
+//           whose CONNECT carries X-Asight-Upstream = the proxy dsh itself would use for this origin (its environment, after dsh read its
+//           .env), or `none` when dsh would go direct (no proxy set, its bypass list matches, or a scheme dsh does not take); absent → the
+//           prior dispatcher, exactly what dsh would have done. A changed door closes the old agent, so a switch takes effect on the next request.
+// It reads and changes no request or response bytes, connects nowhere but the door, writes no file and no agent config, never throws.
+import tls from 'node:tls'
+import fs from 'node:fs'
+import path from 'node:path'
+import { createRequire } from 'node:module'
+
+const CA_FILE = __ASIGHT_CA_FILE__
+const SWITCH = __ASIGHT_SWITCH__
+const PROXY_ENV = __ASIGHT_PROXY_ENV__
+const NO_PROXY_ENV = __ASIGHT_NO_PROXY_ENV__
+const LOOPBACK = /^(localhost|127(\.\d+){3}|\[::1\]|::1|0\.0\.0\.0)$/i
+const SCHEMES = new Set(['http:', 'https:'])
+
+function addRoot() {
+  if (typeof tls.setDefaultCACertificates !== 'function' || typeof tls.getCACertificates !== 'function') return false
+  if ([...process.execArgv, ...String(process.env.NODE_OPTIONS || '').split(/\s+/)].includes('--use-openssl-ca')) return false
+  const roots = fs.readFileSync(CA_FILE, 'utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g)
+  if (!roots) return false
+  tls.setDefaultCACertificates([...tls.getCACertificates('default'), ...roots])
+  return true
+}
+
+// dsh's own undici, found from its entry script (npm lib/bin.js, the desktop core's index.js or cli.js).
+function hostUndici() {
+  try { return createRequire(process.argv[1])('undici') } catch { /* look up the tree */ }
+  let d = path.dirname(fs.realpathSync(process.argv[1]))
+  for (let i = 0; i < 8; i++, d = path.dirname(d)) { const f = path.join(d, 'node_modules', 'undici', 'index.js'); if (fs.existsSync(f)) return createRequire(f)(f) }
+  throw new Error(`undici not found from ${process.argv[1]}`)
+}
+
+const bypassed = (host, list) => String(list || '').split(/[\s,]+/).filter(Boolean).some((e) => {
+  const h = e.replace(/:\d+$/, '').replace(/^\*?\./, '').toLowerCase()
+  return e === '*' || host === h || host.endsWith(`.${h}`)
+})
+
+// The proxy dsh would use for this origin: the first set name of its precedence list whose scheme applies (http_proxy only to http,
+// https_proxy only to https, the others to both), or 'none' when its bypass list matches, nothing is set, or the proxy is not one it takes.
+function ownProxy(origin) {
+  const env = process.env
+  const noProxy = NO_PROXY_ENV.map((k) => env[k]).find((v) => v)
+  if (bypassed(origin.hostname.toLowerCase(), noProxy)) return 'none'
+  const scheme = origin.protocol.slice(0, -1)
+  for (const k of PROXY_ENV) {
+    const n = k.toLowerCase(), v = env[k]
+    if (!v || (n === 'http_proxy' && scheme !== 'http') || (n === 'https_proxy' && scheme !== 'https')) continue
+    try { return SCHEMES.has(new URL(v).protocol) ? v : 'none' } catch { return 'none' }
+  }
+  return 'none'
+}
+
+let rooted = false
+try { rooted = addRoot() } catch { rooted = false }
+
+if (rooted) try {
+  const u = hostUndici()
+  const prior = u.getGlobalDispatcher()
+  const agents = new Map() // `${door}\n${upstream}` → ProxyAgent, for the door the switch file names now
+  let door = null
+  const doorNow = () => {
+    let s = null
+    try { s = fs.readFileSync(SWITCH, 'utf8').split(/\r?\n/)[0] || null } catch { s = null }
+    if (s !== door) { for (const a of agents.values()) a.close().catch(() => {}); agents.clear(); door = s }
+    return s
+  }
+  const agentFor = (d, up) => {
+    const key = `${d}\n${up}`
+    if (!agents.has(key)) agents.set(key, new u.ProxyAgent({ uri: d, headers: { 'X-Asight-Upstream': up } }))
+    return agents.get(key)
+  }
+  class AsightSwitch extends u.Dispatcher {
+    dispatch(opts, handler) {
+      let origin = null
+      try { origin = new URL(String(opts.origin)) } catch { origin = null }
+      const d = origin && !LOOPBACK.test(origin.hostname) ? doorNow() : null
+      return (d ? agentFor(d, ownProxy(origin)) : prior).dispatch(opts, handler)
+    }
+    close() { return Promise.all([prior.close(), ...[...agents.values()].map((a) => a.close())]) }
+    destroy(e) { return Promise.all([prior.destroy(e), ...[...agents.values()].map((a) => a.destroy(e))]) }
+  }
+  u.setGlobalDispatcher(new AsightSwitch())
+} catch { /* a plugin never stops its host: dsh keeps its own dispatcher */ }
+
+// a cordis plugin must export apply (lab round 1, mac finding 4)
+export const name = 'asight'
+export function apply() {}
