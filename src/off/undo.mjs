@@ -30,8 +30,9 @@ import { undoRunKey, undoScheduledTask } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, asightHome } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
-import { harnessesOf, hasIdentity, withAgentList } from './signature.mjs'
+import { harnessesOf, hasIdentity, withAgentList, mayHaveRead } from './signature.mjs'
 import { readAgentList } from './identity.mjs'
+import { holdersOf } from './holders.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
 import { offLines } from './text-edit.mjs'
 import { decodeText } from './text-codec.mjs'
@@ -59,9 +60,6 @@ const processEnv = (p) => { try { const e = typeof p.env === 'function' ? p.env(
 const errText = (e) => String((e && e.code) || (e && e.message) || e)
 const without = (list, item) => { const i = list.indexOf(item); if (i >= 0) list.splice(i, 1) }
 
-// May a live process of a harness have read asight's entry for it? It started after the harness's first install time (its entries and the files
-// asight owns for it), or the harness re-reads its entry while running (alive is enough), or its start time / the install time is unknown.
-const mayHaveRead = (p, l, since) => !!(l && l.rereads) || p.startedAt == null || since == null || p.startedAt >= since
 // A harness whose snapshot has no signature (no record: an older asight; null: none for its OS) cannot tell its processes from the others, so any live
 // process that may have read its entry may be one of them (a record that is missing says nothing of re-reading either: alive is enough). → their pids;
 // none means nobody can hold what asight wrote for it, signature or not (4.6 「判活快照」).
@@ -76,7 +74,7 @@ const unsignedWhy = (liveness, h) => (liveness[h]
  *  part-way (the last write of the manifest: ENOSPC, EACCES, a failed rename) is thrown with `partial` on it: the same object, as far as it got — the files that were
  *  changed or removed by then are in it, because a receipt that said "nothing was changed" over a settings.json that was put back would be untrue (1.6 R1, V3). */
 export async function undoHarnesses(args) {
-  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], trust_unknown: [], left: [], residue: [], changed: [], notes: [], procs_error: null, manifest: args.manifest }
+  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], holders: [], trust_unknown: [], left: [], residue: [], changed: [], notes: [], procs_error: null, manifest: args.manifest }
   try { return await undoInto(args, out) } catch (e) {
     if (e && typeof e === 'object') e.partial = out
     throw e
@@ -345,10 +343,20 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     }
   }
 
-  // a harness with nothing left in the manifest needs no liveness and no watched path any more
+  // P12 (4.11): a route of the collector model is off now — its record gets `off_at`, and it stays after its items are gone: the holder table
+  // (the receipt's 「还剩 N 个」, status, uninstall's refusal while the daemon is down) is judged from it. A record without `on_at` is not the model's.
+  const windowed = Object.keys(liveness).filter((h) => inScope(h) && liveness[h] && typeof liveness[h] === 'object' && liveness[h].on_at)
+  for (const h of windowed) liveness[h].off_at = now.toISOString()
+  if (windowed.length) {
+    const t = await table()
+    out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))
+    if (t.error) out.notes.push(`the process table could not be read (${t.error}), so which processes may still use a door is not known`)
+  }
+
+  // a harness with nothing left in the manifest needs no liveness and no watched path any more (a model record keeps its window, above)
   for (const h of touched) {
     if (manifest.entries.some((x) => x.harness === h) || manifest.files.some((x) => x.harness === h)) continue
-    delete liveness[h]
+    if (!windowed.includes(h)) delete liveness[h]
     if (Array.isArray(manifest.watched)) manifest.watched = manifest.watched.filter((w) => w.harness !== h)
   }
   saveManifest(dir, manifest, fs)

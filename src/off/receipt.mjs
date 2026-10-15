@@ -69,6 +69,8 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   if ((r.skipped || []).length) lines.push(`跳过: ${r.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
   if (past && r.routing) lines.push(`引流: ${r.routing.confirmed ? '已摘' : '没有确认摘掉'}(${ROUTING_WORDS[r.routing.how] || r.routing.state || '不知道'})`)
   lines.push(...daemonLines(r, past, cutNote))
+  if (r.holders === null) lines.push('还剩几个进程可能还在用门:不知道(进程表读不到)')
+  else if ((r.holders || []).length) lines.push(`还剩 ${new Set(r.holders.map((x) => x.pid)).size} 个进程可能还在用门(守护进程等它们退出后才退): ${r.holders.map((x) => `${x.harness} pid ${x.pid}`).join('、')}`)
   if ((r.still_trusting || []).length) lines.push(`重启前仍信任 asight CA(不经 asight,只是还信任): ${r.still_trusting.map((p) => `${p.harness} pid ${p.pid}(${UNTIL_WORDS[p.until] || UNTIL_WORDS.restart})`).join('、')}`)
   for (const k of r.kept_bundles || []) {
     const who = k.pids && k.pids.length ? `pid ${k.pids.join(', ')} 可能加载过它,它们退出后再跑 asight off` : ''

@@ -13,6 +13,7 @@ import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest } from '../off/manifest.mjs'
+import { holdersOf } from '../off/holders.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlSocketPath, controlEndpointFor } from '../off/control-client.mjs'
 import { listProcs, procIdentity, pidAlive } from '../off/proc.mjs'
@@ -115,6 +116,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
   const list = readAgentList({ home, fs }) // the name list (D51③⑤, 1.6 §9.7): read here, daemon or not
   f.agent_list = { path: list.path, state: list.state, problems: list.problems } // the file is one for the machine: said once, whatever harnesses there are
+  f.holders = m && table ? holdersOf({ manifest: m, procs: table, agentList: list }) : null // P12: who may still use a door after off (「还剩 N 个」), the judge off and the daemon use
   // the name list in effect NOW — the descriptors' presets with the user's agents.json merged in, its `ignore` applied — built by the daemon's own primitive
   // (createRegistry, the registry the doors and the tracker judge by), so `status` names the same harness for a process with a daemon and without (1.6 V65).
   // Not the manifest's liveness: that is `off`'s holder snapshot, a union that never drops a name and never applies `ignore` (the safe direction for `off` only).
@@ -291,6 +293,8 @@ export function renderStatus(f, { home = null, detail = [], now = null, colors: 
   if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id), now }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id], { now })]))
   else if (f.topology_error) lines.push(`各 harness 的路: 不知道(${f.topology_error})`)
   lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvWriteText(f), ...userProcsText(f.userProcs))
+  const holders = f.holders || []
+  if (holders.length) lines.push(`还剩 ${new Set(holders.map((x) => x.pid)).size} 个进程可能还在用门(关掉后守护进程等它们退出): ${holders.map((x) => `${x.harness} pid ${x.pid}`).join('、')}`)
   const restart = restartOf(f)
   if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
   return lines
@@ -406,6 +410,8 @@ export function renderStatusDigest(f, { home = null, now = null, colors: c = noC
   lines.push(`日志     ${c.dim(tilde(path.join(f.dir, 'logs'), home))} · 记录 ${c.dim(tilde(path.dirname(f.dir), home))} · 关闭 asight off`)
   if (f.relayed !== 'unknown' && f.relayed.closing + f.relayed.waiting > 0) lines.push(relayedText(f))
   if (f.relayed === 'unknown') lines.push(relayedText(f))
+  const holders = f.holders || []
+  if (holders.length) lines.push(`还剩 ${new Set(holders.map((x) => x.pid)).size} 个进程可能还在用门(关掉后守护进程等它们退出): ${holders.map((x) => `${x.harness} pid ${x.pid}`).join('、')}`)
   const restart = restartOf(f)
   if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
   if (f.linger && lingerText({ ...f.linger, user: f.user })) lines.push(lingerText({ ...f.linger, user: f.user }))
@@ -449,6 +455,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   const restart = restartOf(f)
   if (json) {
     const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows, ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}) })), agent_list: f.agent_list, ...(f.identity_error ? { identity_error: f.identity_error } : {}), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), ...(f.netenv_write_error ? { netenv_write_error: f.netenv_write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), ...(f.optInRows ? { opt_in: optInOf(f.optInRows) } : {}), ...(f.opt_in_error ? { opt_in_error: f.opt_in_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, critical: criticalOf(f), log: path.join(f.dir, 'flows') }
+    r.holders = f.holders // P12: 「还剩 N 个」, with pids (null: the table or the manifest could not be read)
     io.out(JSON.stringify(r, null, 2))
     return { exit, f }
   }

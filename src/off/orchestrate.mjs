@@ -285,6 +285,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     u.residue = out.residue
     for (const x of out.residue) note('residue-not-removed', { harness: x.harness, path: x.path }, `${x.path} appeared after install (${x.why}); it may serve the user's own plugins too, so asight did not remove it`)
     u.still_trusting = out.still_trusting
+    u.holders = out.holders // P12: who may still use a door (null: the table could not be read)
     for (const p of out.still_trusting) note('still-trusting', { harness: p.harness, pid: p.pid }, `pid ${p.pid} (${p.harness}) trusts the asight CA ${UNTIL_REASON[p.until] || UNTIL_REASON.restart}`)
     if (out.procs_error) { note('harness-note', {}, `which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`); u.notes.push(`which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`) }
     for (const x of out.trust_unknown || []) { const why = `which running ${x.harness} processes still trust the asight CA is not known: ${x.why}`; note('harness-note', { harness: x.harness }, why); u.notes.push(why) }
@@ -465,6 +466,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       const u = await undoSide(w, { ids, manifest, manifestError, yes, interactive, io, say })
       for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
       for (const k of ['kept_bundles', 'still_trusting', 'residue', 'kept_backups', 'orphan_backups', 'pending']) receipt[k] = u[k]
+      if (u.holders !== undefined) receipt.holders = u.holders
       receipt.problems.push(...u.problems); receipt.notes.push(...u.notes)
       receipt.undone_by_marker = u.undone_by_marker
       for (const ev of u.events) put(ev)
