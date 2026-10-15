@@ -166,7 +166,7 @@ export function formatWinPlan(p, { home = null, autostart = true, env = process.
  *  `entries` / `unit` are only what would be written, so a later `on` lists only what is new), or what an `onPlan` of the legacy install is handed.
  *  D46: the header says the count first (one line of conclusions), the listing below is still every file — the confirmation's object (R3/R6). The
  *  autostart line names the real mechanism of `platform` (launchd on darwin, systemd --user on linux; the hardcoded systemd wording went). */
-export function formatPlan(p, { home = null, autostart = true, platform = 'linux', colors: c = noColor() } = {}) {
+export function formatPlan(p, { home = null, autostart = true, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
   const count = (p.manifest ? 1 : 0) + (p.state ? 1 : 0) + (p.standalone ? 1 : 0) + ((p.ca || []).length) + ((p.files || []).length) + ((p.owned || []).length) + ((p.entries || []).length)
     + ((p.optIn || []).filter((x) => x.chosen && x.applicable && x.state === 'needed').length) + (p.unit ? 1 : 0) + ((p.logs || []).length) + (p.records || p.events ? 1 : 0)
@@ -174,7 +174,7 @@ export function formatPlan(p, { home = null, autostart = true, platform = 'linux
     ? `autostart unit (launchd, RunAtLoad + KeepAlive)` // launchd is the only autostart there (4.9 §4): a LaunchAgent plist, never a systemd unit
     : `autostart unit (systemd --user, ${autostart ? 'enabled --now' : 'started, not enabled'})`
   return [
-    c.bold(`asight on · 将写 ${count} 个文件${p.first ? '(首次确认时逐个列出' : '(已在位、没变的不重写,下面只列这次要写的'};备份进 ${t(p.backups || path.join(home || '~', '.asight', 'backup'))}/):`),
+    c.bold(`asight ${command} · 将写 ${count} 个文件${p.first ? '(首次确认时逐个列出' : '(已在位、没变的不重写,下面只列这次要写的'};备份进 ${t(p.backups || path.join(home || '~', '.asight', 'backup'))}/):`),
     ...(p.manifest ? [`  install manifest: ${t(p.manifest)}`] : []),
     ...(p.state ? [`  state file (which agents are on): ${t(p.state)}`] : []),
     ...(p.standalone ? [`  asight-off, the undo that works without the source tree or the daemon: ${t(p.standalone)}`] : []),

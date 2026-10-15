@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import tls from 'node:tls'
 import { runOnCli } from '../../src/cli/on.mjs'
+import { runInstallCli } from '../../src/cli/install.mjs'
 import { loadArch } from '../../src/collector/arch/index.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { SYSTEM_BUNDLES } from '../../src/collector/core/tls/roots.mjs'
@@ -33,7 +34,7 @@ async function onWith(disk) {
   // the real Linux arch's osRoots, its filesystem injected; no other arch hook (unit, routing, …) is in play here
   const arch = { osRoots: (o = {}) => linux.osRoots({ ...o, read }) }
   const io = fakeIo()
-  const exit = await runOnCli(['--yes', 'codex'], {
+  const ctx = (io) => ({
     io, home, platform: 'linux', env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run') },
     deps: {
       parts: { os: 'linux', harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch },
@@ -42,12 +43,18 @@ async function onWith(disk) {
       freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
     },
   })
+  // D55 / override #15: the combined bundle is install's (the OS roots are read there); on writes no certificate
+  const inst = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], ctx(inst)), 0, inst.text())
+  const flowsDir = path.join(home, '.asight', 'collector', 'flows')
+  const readFlows = () => fs.readdirSync(flowsDir).flatMap((n) => fs.readFileSync(path.join(flowsDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+  const flows = readFlows() // install's lines: the roots are read and said there (on plans the same bundle again and may repeat the note)
+  const exit = await runOnCli(['--yes', 'codex'], ctx(io))
   const named = /^SSL_CERT_FILE=(.+)$/m.exec(fs.readFileSync(path.join(home, '.codex', '.env'), 'utf8'))
   assert.ok(named, 'the codex trust entry was written')
   const bundle = named[1].trim()
-  const flowsDir = path.join(home, '.asight', 'collector', 'flows')
-  const flows = fs.readdirSync(flowsDir).flatMap((n) => fs.readFileSync(path.join(flowsDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
-  return { exit, text: io.text(), home, bundle, held: certBlocks(fs.readFileSync(bundle, 'utf8')).map((b) => b.fp), flows }
+  return { exit, text: inst.text() + io.text(), // what is said of the OS roots is install's receipt now
+    home, bundle, held: certBlocks(fs.readFileSync(bundle, 'utf8')).map((b) => b.fp), flows }
 }
 
 test('Linux on: only the Fedora bundle exists → the combined bundle carries its CA, and nothing is said missing (4.6 「合并包」)', async () => {
@@ -89,13 +96,13 @@ test('Linux on: no OS bundle on the machine → the bundle has Node\'s roots and
   assert.ok(doctorNotes.some((l) => l.includes('[system-roots-unavailable]') && l.includes(r.bundle)), doctorNotes.join('\n'))
 })
 
-test('Linux on: an OS bundle that is there but cannot be read stops the on before the agent\'s file is touched (D38)', async () => {
+test('Linux install: an OS bundle that is there but cannot be read stops the install before the agent\'s file is touched, exit 1 with the reason (D38)', async () => {
   const home = tmpDir('asight-linux-roots-')
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
   fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\n')
   const read = (f) => { throw Object.assign(new Error(`${f === SYSTEM_BUNDLES[0] ? 'EACCES: permission denied' : 'ENOENT: no such file'}, open '${f}'`), { code: f === SYSTEM_BUNDLES[0] ? 'EACCES' : 'ENOENT' }) }
   const io = fakeIo()
-  const exit = await runOnCli(['--yes', 'codex'], {
+  const ctx = (io) => ({
     io, home, platform: 'linux', env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run') },
     deps: {
       parts: { os: 'linux', harnesses: [codex], scan: async () => [], match: () => ({ agent: null }), arch: { osRoots: (o = {}) => linux.osRoots({ ...o, read }) } },
@@ -104,6 +111,8 @@ test('Linux on: an OS bundle that is there but cannot be read stops the on befor
       freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, fs,
     },
   })
+  // D55 / override #15: the combined bundle is install's (the OS roots are read there); on writes no certificate
+  const exit = await runInstallCli(['--yes'], ctx(io)) // the bundle is install's (D55): install is what stops
   assert.equal(exit, 1)
   assert.match(io.text(), /the OS trust bundle cannot be read \(\/etc\/ssl\/certs\/ca-certificates\.crt: EACCES/, 'the reason, with the path and its errno')
   assert.equal(fs.readFileSync(path.join(home, '.codex', '.env'), 'utf8'), 'OPENAI_API_KEY=sk-test\n', 'the user\'s file is as it was')

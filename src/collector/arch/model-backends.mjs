@@ -4,8 +4,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 
-export const MODEL_OS = Object.freeze(['darwin', 'win32'])
-export const isModelOs = (os) => MODEL_OS.includes(os)
+export { MODEL_OS, isModelOs } from '../model-install.mjs' // the one list of the OSes the model runs on
 
 /** The installed signing helper the darwin custody runs (4.11 P1): under ~/.asight/bin, beside asight-off. */
 export const signHelperPath = (home, name) => path.join(home, '.asight', 'bin', name)

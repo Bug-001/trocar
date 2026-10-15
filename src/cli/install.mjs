@@ -14,6 +14,12 @@ import { isInteractive, confirm } from '../off/io.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT } from '../collector/core/codes.mjs'
 
+const NEEDS_YES = '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'
+// R5 / R6: no terminal and no --yes — the plan was printed, nothing written, exit 2; with --json stdout is the one receipt that says so
+function needsYes(io, json) {
+  if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, planned: true, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES)
+  return EXIT.usage
+}
 const USAGE = 'usage: asight install [--dry-run] [--yes] [--json]'
 const FLAGS = new Set(['--dry-run', '--yes', '--json'])
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -30,7 +36,7 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
   const fs = deps.fs || nodeFs
   const old = refuseOldManifest({ home, platform, fs })
   if (old) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [old.message] }, null, 2)); else io.err(`asight install: ${old.message}`); return EXIT.incomplete }
-  const { isModelOs } = await import('../collector/arch/model-backends.mjs')
+  const { isModelOs } = await import('../collector/model-install.mjs')
   const model = isModelOs(platform)
   // R12: the writes run under op.lock, taken after the yes (a plan that is only printed takes nothing and writes nothing)
   const locked = async (fn) => {
@@ -56,7 +62,7 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
       `  · 独立撤销程序 ${standalonePath(home)}`, `代价:${COST}`, `剩余风险:${RISK}`].join('\n'))
     if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned: rows }, null, 2)); return EXIT.ok }
     if (!flags.has('--yes')) {
-      if (!isInteractive(io)) { io.err('不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'); return EXIT.usage }
+      if (!isInteractive(io)) return needsYes(io, json)
       if (!(await confirm({ ...io, prompt: json ? io.stderr : io.stdout }, 'asight 将按上面的计划安装。继续?'))) { io.err('没有确认:什么都没改'); return EXIT.incomplete }
     }
     const r = await locked(() => runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
@@ -80,23 +86,38 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
 // No unit, no state, no daemon: those are `on`'s. The plan printed is the one `on` used to print (formatPlan) with D55's cost line.
 async function linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked }) {
   const { readAgentList } = await import('../off/identity.mjs')
-  const { writeStandalone } = await import('../off/standalone.mjs')
+  const { writeStandalone, buildStandalone } = await import('../off/standalone.mjs')
   const { formatPlan } = await import('./receipt.mjs')
   const { OFF_VERSION } = await import('../off/manifest.mjs')
   const parts = deps.parts || await (await import('../collector/daemon.mjs')).loadParts({ env, agentList: readAgentList({ home, fs }).entries })
   const inst = await import('../collector/install.mjs')
   const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}) }
-  const plan = await inst.planOn(args)
-  say(`${formatPlan({ ...plan, adopted: [] }, { home, autostart: false, platform })}\n代价:${COST}`)
-  if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, harnesses: plan.targets }, null, 2)); return EXIT.ok }
-  if (plan.writing && !flags.has('--yes')) {
-    if (!isInteractive(io)) { io.err('不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'); return EXIT.usage }
+  let plan
+  try { plan = await inst.planOn(args) } catch (e) { io.err(`asight install 没有做:${String((e && e.message) || e)}。什么都没改`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
+  // asight-off (R3) is install's: named in the plan and the dry run when this run would write it, i.e. when it is not already what src/off generates
+  const stdPath = standalonePath(home)
+  let stdNew = true
+  try { stdNew = fs.readFileSync(stdPath, 'utf8') !== buildStandalone({ version: OFF_VERSION, fs }) } catch { stdNew = true }
+  say(`${formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, autostart: false, platform, command: 'install' })}\n代价:${COST}`)
+  if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, harnesses: plan.targets, changed: plan.changed, created: [...(stdNew ? [stdPath] : []), ...plan.created] }, null, 2)); return EXIT.ok }
+  if ((plan.writing || stdNew) && !flags.has('--yes')) {
+    if (!isInteractive(io)) return needsYes(io, json)
     if (!(await confirm({ ...io, prompt: json ? io.stderr : io.stdout }, 'asight 将按上面的计划安装。继续?'))) { io.err('没有确认:什么都没改'); return EXIT.incomplete }
   }
-  const done = await locked(async () => ({ stdl: writeStandalone({ home, version: OFF_VERSION, fs }), r: await inst.installCollector({ ...args, onPlan: () => {} }) }))
+  // the undo that needs no source tree comes before the first thing it undoes (R3): a copy that cannot be written stops the install here, with a failure line (R11)
+  const done = await locked(async () => {
+    let stdl
+    try { stdl = writeStandalone({ home, version: OFF_VERSION, fs }) } catch (e) {
+      const reason = `${stdPath}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run asight install again`
+      try { appendEvent(path.join(home, '.asight', 'collector'), { event: EVENT.failure, where: 'install', code: (e && e.code) || 'install-error', reason }) } catch {}
+      return { failed: reason }
+    }
+    return { stdl, r: await inst.installCollector({ ...args, onPlan: () => {} }) }
+  })
   if (!done) return EXIT.incomplete
+  if (done.failed) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [done.failed] }, null, 2)); else io.err(`asight install: ${done.failed}`); return EXIT.incomplete }
   const { stdl, r } = done
-  const receipt = { ...newReceipt('install'), ok: true, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], created: [...(stdl.written ? [stdl.path] : []), ...(r.plan ? r.plan.paths || [] : [])], standalone: standalonePath(home), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], notes: r.plan ? r.plan.notes : [] }
+  const receipt = { ...newReceipt('install'), ok: true, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created)], standalone: standalonePath(home), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], notes: r.plan ? r.plan.notes : [] }
   if (json) io.out(JSON.stringify(receipt, null, 2))
   else io.out([`asight install ${r.already ? '已经装好,什么都没改' : '完成'}。`, ...receipt.notes.map((n) => `  · ${n}`), `开 asight on · 关 asight off · 状态 asight status · 卸载 asight uninstall · 独立撤销 ${standalonePath(home)}`].join('\n'))
   return EXIT.ok

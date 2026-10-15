@@ -3,7 +3,7 @@
 // to the recording runner, every process question to a table the test owns, HOME is a temp directory (0.1 §3).
 import fs from 'node:fs'
 import path from 'node:path'
-import { turnOn } from '../../../src/collector/install.mjs'
+import { turnOn, installCollector } from '../../../src/collector/install.mjs'
 import { userUnit } from '../../../src/collector/arch/linux/unit.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { runOff } from '../../../src/off/orchestrate.mjs'
@@ -19,7 +19,7 @@ export const ALL_HARNESSES = HARNESS_IDS
 const allDescriptors = await loadHarnesses()
 const tick = () => new Promise((resolve) => setTimeout(resolve, 1))
 
-/** `asight on` has run for `names` (default Claude Code and Codex) in a fresh sandbox HOME of the seven-homes layout; `seed(home, sh)` may change the user's files first.
+/** `asight install`, then `asight on`, has run for `names` (default Claude Code and Codex) in a fresh sandbox HOME of the seven-homes layout; `seed(home, sh)` may change the user's files first.
  *  → { home, sh, dir, sys, descs, on(o), off(o), uninstall(o), offDeps(o), manifest(), state(), userFiles() }. `sys.daemon` is the fake daemon (`state.up`, `isRecording(h)`),
  *  `sys.exec.calls` every OS tool run, in order. */
 export async function installedHome({ names = ['claude-code', 'codex'], seed = null, daemon = {} } = {}) {
@@ -35,6 +35,7 @@ export async function installedHome({ names = ['claude-code', 'codex'], seed = n
   const s = {
     home, sh, dir, sys, descs,
     on: (o) => turnOn(onOpts(o)),
+    install: (o) => installCollector({ ...onOpts(o), unit: null }), // `asight install`'s collector half: the CA and every certificate item (D55)
     offDeps,
     off: (o = {}) => runOff({ home, env: sh.env, ...o, deps: offDeps(o.deps) }),
     uninstall: (o = {}) => runUninstall({ home, env: sh.env, ...o, deps: offDeps(o.deps) }),
@@ -42,6 +43,7 @@ export async function installedHome({ names = ['claude-code', 'codex'], seed = n
     state: () => JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')),
     userFiles: () => Object.fromEntries(Object.entries(snapshot(home)).filter(([rel]) => !rel.startsWith('.asight') && !rel.startsWith(path.join('.config', 'systemd')))),
   }
+  await s.install() // D55: install first (the CA and every certificate item), then on (override #15)
   const first = await s.on()
   if (first.exit !== 0) throw new Error(`the fixture's first on failed: ${JSON.stringify(first.receipt.notes)}`)
   return s

@@ -4,6 +4,7 @@
 // harness or an OS: the descriptors declare their entries (`inject`), the caller passes `scan` / `match` (the
 // process table) from daemon.mjs. Install lists every file before touching one. The way back — `asight off` and
 // `asight uninstall` — is src/off/ (the entries, the daemon stop, the lock) and src/cli/uninstall.mjs (1.6 §1.4, R3).
+import { isModelOs } from './model-install.mjs' // macOS / Windows: their on is turnOnModel; until then this turnOn still installs there
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -191,7 +192,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
   const reasonOf = (name) => draft.records.filter((r) => r.harness === name).map((r) => r.reason.replace(`${name}: `, '')).join('; ') || `no ${name} configuration was found on this machine: nothing to change for it`
   const skipped = [
     ...descs.map((d) => d.name).filter((n) => !targets.includes(n)).map((n) => ({ what: n, reason: reasonOf(n) })),
-    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: `${s.why}; run "asight off", then "asight on", to write it again` })),
+    ...steps.filter((s) => s.action === 'skip-user-changed').map((s) => ({ what: s.path, reason: `${s.why}; run "asight off", then ${isModelOs(osName) ? '"asight on"' : '"asight install" and "asight on"'}, to write it again` })), // D55⑥: off then install writes a certificate item again; on never does (macOS / Windows: turnOnModel)
   ]
   // what is written, and what the user has not yet confirmed (1.6 §1.6: the paths beyond the manifest's `confirmed_paths`; an installed one counts as confirmed)
   const known = new Set([...((prior && prior.confirmed_paths) || []), ...((prior && prior.entries) || []).map((x) => x.path), ...((prior && prior.files) || []).filter((x) => x.role !== 'ca-key' && x.role !== 'ca-cert').map((x) => x.path)])
@@ -257,16 +258,17 @@ function openManifest({ dir, plan, now, fs }) {
 // Every write of an `on`, in R9's order. `guard()` runs before each one (R12: it throws when an `off` asked for one of the harnesses in the meantime).
 // The manifest is saved only when it changed, so a second `on` on a complete install rewrites nothing. → { manifest, final, written }.
 async function writeInstall(args) {
-  const written = { entries: [], files: [], owned: [], unit: null, caCreated: false, intact: [], userChanged: [] }
+  const written = { entries: [], files: [], owned: [], unit: null, caCreated: false, intact: [], userChanged: [], needInstall: [] }
   try { return await writeInstallSteps(args, written) } catch (e) { if (e && e.stopsRun) e.written = written; throw e } // what was done before the stop is said
 }
-async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false }, written) {
+async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard = () => {}, confirmed = false, certs = true }, written) {
   const { ca, descs, ctxFor, R, daemon, draft, unit } = plan._
   const body = () => JSON.stringify(m)
   let saved = body()
   const save = () => { if (body() !== saved) { saveManifest(dir, m, fs); saved = body() } }
   guard()
   const caThere = fs.existsSync(ca.key) && fs.existsSync(ca.pem)
+  if (!certs && !caThere) throw stop('the collector CA is not there; run asight install (on never makes it, D55⑤)')
   const { certPem } = loadOrCreateCa({ dir: ca.dir, fs })
   written.caCreated = !caThere
   if (m.engine_port == null) m.engine_port = await freePort()
@@ -286,8 +288,10 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   m.watched = [...(m.watched || []), ...final.watch.filter((w) => !seen.has(w.path)).map((w) => ({ ...w, existed_before: fs.existsSync(w.path) }))]
   save()
   fs.mkdirSync(path.join(dir, 'run', 'trust'), { recursive: true, mode: 0o700 }) // plugins write their marker here, daemon up or not
+  const certItem = (p) => { if (certs) return false; written.needInstall.push(p); return true } // on (certs:false) writes no certificate item: a missing one is install's (D55①)
   for (const f of final.files) {
     if (judgeOwned({ manifest: m, file: f.path, fs }).action === 'skip-intact') { written.intact.push(f.path); continue }
+    if (certItem(f.path)) continue
     guard()
     writeOwnedFile({ dir, manifest: m, harness: f.harness, role: f.role, phase: 'install', file: f.path, data: f.data, sources: f.sources, extra: f.role === 'bundle' ? { user_fps: f.user_fps, roots_fp: f.roots_fp } : {}, now: now(), fs })
     written.files.push(f.path)
@@ -296,6 +300,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   for (const o of final.owned) {
     const j = judgeOwned({ manifest: m, file: o.path, fs })
     if (j.action === 'skip-intact') { written.intact.push(o.path); continue }
+    if (certItem(o.path)) continue
     guard()
     writeOwnedFile({ dir, manifest: m, harness: o.harness, role: o.role, phase: 'install', file: o.path, data: o.data, mode: o.mode, exclusive: j.action === 'write', now: now(), fs })
     written.owned.push(o.path)
@@ -304,6 +309,7 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
     const j = judgeEntry({ manifest: m, planned: e, fs })
     if (j.action === 'skip-intact') { written.intact.push(e.path); continue }
     if (j.action === 'skip-user-changed') { written.userChanged.push({ path: e.path, why: j.why }); continue }
+    if (certItem(e.path)) continue
     guard()
     const entry = e.kind === 'text'
       ? applyTextEntry({ dir, manifest: m, harness: e.harness, phase: 'install', file: e.path, edit: e, home, now: now(), fs }) // a backup of the file first (1.6 R2): no backup, no change
@@ -411,6 +417,8 @@ export async function turnOn(opts = {}) {
   } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
     const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit, fs, now })
+    // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
+    if (!isModelOs(osName) && !installComplete(plan._.prior)) return { receipt: unwritten({ ...fresh(), ok: false, code: CODE.certNotInstalled, notes: ['asight 还没装证书(没有完整的 install 记录):先跑 asight install。on 从不写证书,所以也不会悄悄安装(D55⑥)'] }), manifest: plan._.prior, plan, exit: 1 }
     // the opt-in rows (1.6 §1.7, 4.8 §2.4): the arch that has opt-in items computes them from the same descriptors and manifest; `plan.optIn` is what
     // the plan prints (every applicable row of the target forms, chosen or not — the section says what each implies and the exact command) and what
     // `status --json`'s opt_in is later built from. An arch with no optIn hook and an empty optIn list writes no key at all.
@@ -511,11 +519,12 @@ export async function turnOn(opts = {}) {
     const notes = r.notes
     const problems = []
     let written = null, final = null, halt = false
-    try { ({ final, written } = await writeInstall({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard, confirmed: true })) } catch (e) {
+    try { ({ final, written } = await writeInstall({ dir, home, plan, m, osName, harnesses, freePort, now, fs, guard, confirmed: true, certs: isModelOs(osName) })) } catch (e) {
       if (!e.stopsRun) throw e
       written = e.written; halt = true
       problems.push(e.message)
     }
+    if (written && written.needInstall.length) problems.push(`these certificate items are not in place and on does not write them: ${written.needInstall.join(', ')}; run asight install (D55①)`)
     const put = noteRun({ dir, run, final: final || { records: [] }, written: written || { entries: [] }, notes, fs, log: opts.log })
     // the named opt-in items (1.6 §1.7, 4.8 §2.4) — after the install's own writes, still inside the lock and before the daemon is asked anything. The
     // arch's apply does each item (its fixed script, or the ONE elevated step for a machine item) and ledgers it; `off` and the standalone undo take

@@ -421,7 +421,7 @@ test('a netenv.json that could not be written is said: a line in the text, neten
 
 // ── V39: logging out stops the daemon unless linger is on (1.6 §1.1) — `on` and `status` say so, give the command, and never run loginctl (R8) ───────────────────────────────────────────────────
 import { runOnCli } from '../../src/cli/on.mjs'
-import { onCtx, seedClaude, recordingExec } from './fixtures/on-ctx.mjs'
+import { onCtx, seedClaude, recordingExec, installFirst } from './fixtures/on-ctx.mjs'
 
 test('V39 status: linger off says 登出后停采(未开 linger) and loginctl enable-linger <user>, --json linger false; on says nothing; unreadable says 不知道 with the file and the errno, never 已开', async () => {
   const s = await installedHome()
@@ -443,13 +443,13 @@ test('V39 status: linger off says 登出后停采(未开 linger) and loginctl en
 
 test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --json: linger is false / true / "unknown" with a reason); nothing runs loginctl', async () => {
   for (const [lingerRead, want] of [[() => ({ state: false }), false], [() => ({ state: true }), true], [() => ({ state: null, error: '/var/lib/systemd/linger/alice: EACCES' }), 'unknown']]) {
-    const home = tmpDir('asight-v39-'); seedClaude(home)
+    const home = tmpDir('asight-v39-'); seedClaude(home); await installFirst(home)
     const io = fakeIo(), exec = recordingExec(), ctx = onCtx(home, io, { exec, deps: { lingerRead, linger: undefined } })
     assert.equal(await runOnCli(['--yes'], ctx), 0, io.text())
     if (want === false) assert.match(io.stdoutText(), /^登出后停采\(未开 linger\): 要登出后继续采集,跑 loginctl enable-linger alice$/m)
     else if (want === true) assert.ok(!/linger|登出/.test(io.stdoutText()))
     else { assert.match(io.stdoutText(), /^登出后停采: 不知道\(\/var\/lib\/systemd\/linger\/alice: EACCES\)$/m); assert.ok(!/已开/.test(io.stdoutText())) }
-    const j = fakeIo(); const home2 = tmpDir('asight-v39-'); seedClaude(home2); const exec2 = recordingExec()
+    const j = fakeIo(); const home2 = tmpDir('asight-v39-'); seedClaude(home2); await installFirst(home2); const exec2 = recordingExec()
     assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { exec: exec2, deps: { lingerRead, linger: undefined } })), 0)
     for (const e of [exec, exec2]) {
       assert.ok(e.calls.length > 0, 'on ran its OS tools through this runner: the check below looks at something')

@@ -13,7 +13,7 @@ import { colors, useColor, noColor } from '../../src/cli/color.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { appendEvent } from '../../src/collector/core/events.mjs'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
-import { fakeIo, onCtx, seedClaude, fakeSystem } from './fixtures/on-ctx.mjs'
+import { fakeIo, onCtx, seedClaude, fakeSystem, installFirst } from './fixtures/on-ctx.mjs'
 import { runStatus, reply, asDaemon } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -63,7 +63,7 @@ test('D46 (c)+(d): a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan
       const io = fakeIo({ tty })
       const r = await runStatus(s, [], { request: asDaemon(reply({ health: HEALTH_OK })), io })
       assert.ok(!r.text.includes('\u001b'), 'status carries no ANSI byte on ' + (tty ? 'a TTY with NO_COLOR' : 'a pipe'))
-      const home = tmpDir('asight-color-'); seedClaude(home)
+      const home = tmpDir('asight-color-'); seedClaude(home); await installFirst(home)
       const on = fakeIo({ tty })
       await runOnCli(['--dry-run'], onCtx(home, on))
       assert.ok(!on.text().includes('\u001b'), 'the plan and the receipt either')
@@ -74,7 +74,7 @@ test('D46 (c)+(d): a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan
   const onTheRow = r.text.split('\n').find((l) => l.startsWith('  ') && l.includes('在采'))
   assert.ok(/\u001b\[32m/.test(onTheRow), 'the 在采 row is green on a TTY: ' + JSON.stringify(onTheRow))
   assert.match(r.text.split('\n')[0].replace(/\u001b\[\d+m/g, ''), /^asight · 在采/, 'the bold header strips back to the same words')
-  const home = tmpDir('asight-color-'); seedClaude(home)
+  const home = tmpDir('asight-color-'); seedClaude(home); await installFirst(home)
   const sys = fakeSystem(); const on = fakeIo({ tty: true })
   await runOnCli(['--yes'], onCtx(home, on, { exec: sys.exec, daemon: sys.daemon }))
   assert.match(on.stdoutText(), /\u001b\[32m✔\u001b\[0m 入口已写/, 'the receipt verdict mark is green on a TTY')
@@ -87,19 +87,18 @@ test('D46 (c)+(d): a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan
 
 // (e) R6 once more through the reworked words: the dry run prints the receipt of the real run, word for word, and writes nothing
 test('D46 (e): --dry-run still prints the same receipt the real run will (R6) — the same files in the future tense, zero writes', async () => {
-  const home = tmpDir('asight-r6-'); seedClaude(home)
+  const home = tmpDir('asight-r6-'); seedClaude(home); await installFirst(home)
   assert.equal(await runOnCli(['--dry-run'], onCtx(home, fakeIo())), 0)
-  const realHome = tmpDir('asight-r6-'); seedClaude(realHome); const sys = fakeSystem()
+  const realHome = tmpDir('asight-r6-'); seedClaude(realHome); await installFirst(realHome); await installFirst(realHome); const sys = fakeSystem()
   const real = fakeIo()
   assert.equal(await runOnCli(['--yes'], onCtx(realHome, real, { exec: sys.exec, daemon: sys.daemon })), 0, real.text())
-  const dryHome = tmpDir('asight-r6-'); seedClaude(dryHome); const dry = fakeIo()
+  const dryHome = tmpDir('asight-r6-'); seedClaude(dryHome); await installFirst(dryHome); await installFirst(dryHome); const dry = fakeIo()
   assert.equal(await runOnCli(['--dry-run'], onCtx(dryHome, dry)), 0, dry.text())
   assert.match(dry.stdoutText(), /^asight 将打开采集/m)
   for (const row of real.stdoutText().split('\n').filter((l) => l.startsWith('  ~/') && /备份|新建/.test(l))) {
     assert.ok(dry.stdoutText().includes(row.replace(/备份 ~\/\.asight\/backup\/[0-9a-zA-Z-]+/, '备份 改前先存进 ~/.asight/backup/')), 'the dry run lists the row the real run wrote: ' + row)
   }
-  assert.match(dry.stdoutText(), /将改这些文件:/)
-  assert.match(dry.stdoutText(), /不会改任何用户文件\.|将改这些文件:/)
+  assert.match(dry.stdoutText(), /不会改任何用户文件。/, 'every user file asight changes is install\'s (D55①): the on after it changes none')
 })
 
 // the autostart line names the real mechanism of the platform (D46): launchd on darwin — the hardcoded systemd wording is gone
@@ -150,7 +149,7 @@ test('D46: the plan folds the watch entries of one (harness, reason) into one li
 
 // the daemon own log files (D46): made at unit-write time, owner-only, listed in the manifest — and never truncated by a later on
 test('D46: the unit write makes the daemon log directory (0700, two 0600 files), lists them in the manifest, and a later on does not truncate them', async () => {
-  const home = tmpDir('asight-dlogs-'); seedClaude(home)
+  const home = tmpDir('asight-dlogs-'); seedClaude(home); await installFirst(home)
   const sys = fakeSystem()
   assert.equal(await runOnCli(['--yes'], onCtx(home, fakeIo(), { exec: sys.exec, daemon: sys.daemon })), 0)
   const logs = path.join(home, '.asight', 'collector', 'logs')

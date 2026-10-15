@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { once } from 'node:events'
-import { turnOn } from '../../src/collector/install.mjs'
+import { turnOn, installCollector } from '../../src/collector/install.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { ROOTS } from '../cli/fixtures/on-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -78,6 +78,7 @@ test('on (linux): the daemon is found through $XDG_RUNTIME_DIR, and POST /on sen
     fs.mkdirSync(path.dirname(sock), { recursive: true })
     const d = daemon({ sock, token: null })
     await d.start
+    await installCollector({ home, env: { HOME: home, XDG_RUNTIME_DIR: run }, osName: 'linux', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, unit: null }) // D55: install first, on writes no certificate
     const r = await turnOn({ home, env: { HOME: home, XDG_RUNTIME_DIR: run }, osName: 'linux', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, confirm: async () => true, unit: fakeUnit(home), sleep: async () => {} })
     assert.equal(r.exit, 0, JSON.stringify(r.receipt.notes))
     assert.equal(r.receipt.daemon.state, 'running')

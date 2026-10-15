@@ -22,6 +22,10 @@ import { readAgentList } from '../off/identity.mjs'
 import { unitedLiveness } from './install.mjs'
 import { CODE } from './core/codes.mjs'
 
+/** The OSes the collector model (4.11) runs on — the one list `install`, `on`, `uninstall` and the arch backends ask. */
+export const MODEL_OS = Object.freeze(['darwin', 'win32'])
+export const isModelOs = (os) => MODEL_OS.includes(os)
+
 const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // manifest.mjs ROOT_STORE_KIND's keys: the store the user root goes into
 const ROOT_SUBJECT = 'asight local root'
 const NOT_USERS = CODE.notUsersFile

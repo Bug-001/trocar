@@ -38,7 +38,7 @@ test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and
   assert.equal(r.exit, 0, r.io.text())
   const doc = r.io.json()
   assert.deepEqual(validateReceipt(doc), [])
-  assert.ok(doc.changed.length > 0 && doc.changed.every((c) => !/proxy/i.test(c.change)), `no changed key is a proxy key: ${JSON.stringify(doc.changed.map((c) => c.change))}`)
+  assert.ok(doc.changed.every((c) => !/proxy/i.test(c.change)), `no changed key is a proxy key: ${JSON.stringify(doc.changed.map((c) => c.change))}`)
   assert.deepEqual(readJson(settingsOf(s)).env.HTTPS_PROXY, USER_PROXY, 'the user\'s setting is exactly what it was')
   assert.equal(readJson(settingsOf(s)).env.NODE_EXTRA_CA_CERTS.endsWith('extra-cc.pem'), true, 'and asight\'s own entry is the only thing it added')
   const a = doc.adopted['claude-code']
@@ -72,6 +72,7 @@ test('V46 (a) R9: a second `on` finds the same setting and writes nothing — ne
 
 test('V46 (a) `on --dry-run` draws the chain and writes nothing; a platform with no network facts adopts nothing (no netenv.json written by `on`)', async () => {
   const s = sandbox(ENGINE); seedProxy(s)
+  assert.equal((await s.run(['install', '--yes'], { deps: FACTS })).exit, 0) // D55: an on (dry or not) has an install under it
   const before = snapshot(s.home)
   const r = await s.run(['on', '--dry-run', '--json'], { deps: FACTS })
   assert.equal(r.exit, 0)
