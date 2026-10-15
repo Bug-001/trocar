@@ -28,6 +28,8 @@ import { refuseElevatedByWhoami, disableScheduledTask } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readAgentList } from '../off/identity.mjs'
+import { signHelperPath } from '../collector/arch/model-backends.mjs'
+import { NATIVE } from '../collector/arch/darwin/native.mjs'
 import { isModelOs } from '../collector/model-install.mjs' // macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
 
 /** Is capture online (1.6 §1.1 「下线」)? → null when offline, else { on, holders, unknown } — `on`: harnesses whose desired state is on or that still have
@@ -249,7 +251,9 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'daemon-log') : []) rm(f.path)
       if (!m || m.unsupported) rm(path.join(w.dir, 'logs'))
       removeEmptyDirs([path.join(w.dir, 'logs')], fs)
-      for (const p of [path.join(w.dir, 'run'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home)]) if (p) rm(p)
+      // the darwin key custody's signing helper (install put it there, 4.11 P1): it goes once no root key is left for it to remove — after undoRootKeys, which needs it
+      const helper = w.platform === 'darwin' && !(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) ? signHelperPath(home, NATIVE.signHelper) : null
+      for (const p of [path.join(w.dir, 'run'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p)
       removeEmptyDirs([path.dirname(standalonePath(home))], fs)
       // the door ports and their tokens (decision #16): the next install and on choose them again
       const ing = removeIngressConfig({ dir: w.dir, fs })

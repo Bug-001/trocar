@@ -94,3 +94,28 @@ test('CM24 · offline: LIFO — the wrapper back, the plugin and its loader line
   assert.equal(seq.at(-1), 'custody:remove', `the root's key goes last: ${seq.join(', ')}`)
   assert.equal(w.custody.exists(), false)
 })
+
+// invariant 5: uninstall leaves nothing of asight's but the captures — the darwin signing helper install put in ~/.asight/bin goes too, after the key;
+// while the key could not be removed (the custody unreachable), the helper stays with its record: the next uninstall needs it
+const leftUnder = (home) => { const out = []; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); if (p.includes(`${path.sep}flows`)) continue; if (fs.lstatSync(p).isDirectory()) walk(p); else out.push(path.relative(home, p)) } }; if (fs.existsSync(path.join(home, '.asight'))) walk(path.join(home, '.asight')); return out }
+test('invariant 5 · offline uninstall: ~/.asight keeps only the captures — the signing helper and ~/.asight/bin go after the key', async () => {
+  const w = await installed()
+  const helper = path.join(w.home, '.asight', 'bin', 'asight-sign-helper')
+  fs.writeFileSync(helper, MACHO, { mode: 0o755 })
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.deepEqual(leftUnder(w.home), [], 'nothing of asight\'s but the captures')
+  assert.equal(fs.existsSync(path.join(w.home, '.asight', 'bin')), false)
+  assert.ok(receipt.removed.includes(helper))
+})
+test('invariant 5 · D38: a key the custody cannot reach now stays recorded, listed as left, and its signing helper stays for the next uninstall', async () => {
+  const w = await installed()
+  const helper = path.join(w.home, '.asight', 'bin', 'asight-sign-helper')
+  fs.writeFileSync(helper, MACHO, { mode: 0o755 })
+  w.custody.switches.unavailable = true
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 1)
+  assert.ok(receipt.left.some((l) => /private key/.test(l.reason)), JSON.stringify(receipt.left))
+  assert.equal(fs.existsSync(helper), true)
+  assert.ok(readManifest(w.dir).entries.some((e) => e.kind === 'root-key'))
+})
