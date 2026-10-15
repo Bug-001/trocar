@@ -58,6 +58,8 @@ export const CODE = Object.freeze({
   systemRootsPartial: 'system-roots-partial', // a source of the OS roots could not be read while others gave roots: what only it holds is in no combined bundle (4.9 §6.2)
   agentListInvalid: 'agent-list-invalid', // ~/.asight/agents.json unreadable / unparsable / bad items: once per file version (D51③)
   describeError: 'describe-error', // the daemon could not describe a process to the engine (the engine's own record has the same name)
+  certKeyMissing: 'cert-key-missing', // the root key is not in its custody backend: no issuer, doors forward only (4.11 P2)
+  certIntermediateUnavailable: 'cert-intermediate-unavailable', // the custody backend did not issue an intermediate: once per failure streak, retried hourly (4.11 P2)
 })
 
 export const trustReasonText = (code) => TRUST_REASON[code] || null

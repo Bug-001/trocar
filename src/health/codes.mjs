@@ -70,7 +70,7 @@ export const CODES_BY_PART = Object.freeze({
   retention: ['retention-unparsable', 'retention-unreadable', 'classify-failed', 'pattern-invalid', 'retention-log-failed'],
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
-  ca: ['ca-invalid'],
+  ca: ['ca-invalid', 'cert-key-missing', 'cert-intermediate-unavailable'], // the last two: the issuer's (4.11 P2, ⑱): the root key is not in its custody; the custody did not issue an intermediate
   install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'optin-not-undone', 'needs-admin'], // the last two: the Windows collector's off-side — an opt-in item that could not be undone, a machine-level item left for the operator's elevated command (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
   legacy: ['tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
 })
