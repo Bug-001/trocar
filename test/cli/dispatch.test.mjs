@@ -73,8 +73,8 @@ test('V19: every hidden alias dispatches to the command it claims, the rest of t
     assert.deepEqual(seen, [a.to], `${a.argv.join(' ')} runs ${a.to.join(' ')} and nothing else`)
   }
   const seen = []
-  await runCli(['collector', 'install', '--no-unit', '--yes', 'claude'], spying(seen)); await runCli(['collector', 'uninstall', '--purge-data'], spying(seen)); await runCli(['install', '--dry-run'], spying(seen))
-  assert.deepEqual(seen, [['on', '--no-unit', '--yes', 'claude'], ['uninstall', '--purge-data'], ['on', '--dry-run']], 'what follows the alias is passed on as typed')
+  await runCli(['collector', 'install', '--no-unit', '--yes', 'claude'], spying(seen)); await runCli(['collector', 'uninstall', '--purge-data'], spying(seen))
+  assert.deepEqual(seen, [['install', '--no-unit', '--yes', 'claude'], ['uninstall', '--purge-data']], 'what follows the alias is passed on as typed (`collector install` is install now)')
   for (const argv of [['collector'], ['collector', 'bogus']]) {
     const c = spying([])
     assert.equal(await runCli(argv, c), 2, argv.join(' '))

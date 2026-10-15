@@ -33,6 +33,10 @@ export const COMMANDS = Object.freeze([
     usage: 'asight on [harness…] [--dry-run] [--yes] [--opt-in <形态>[,<形态>…]] [--no-autostart | --no-unit] [--json]',
     summary: '开始采集。第一次 on 就是安装:先列出要改的每个文件,等你确认;之后的 on 只补缺的。',
     notes: ['--dry-run  只打印将要做的,什么都不写', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '--opt-in <形态>  点名影响超出这个 agent 自己的项(用户证书库、PATH 垫片、启动器…);不点名不做;计划里「要你点名的」一节印出每项的确切命令;可重复、逗号分隔,也可写那一节里的项 id', '--no-autostart  装单元但不 enable,本次只 start', '--no-unit  不装自启单元(测试用;平台自启机制见回执)', 'on 不重启任何 agent、桌面程序或在跑的采集;要重启的进程在回执里列出'] },
+  { name: 'install', section: 'common', mutates: true, run: via('./install.mjs', 'runInstallCli'),
+    usage: 'asight install [--dry-run] [--yes] [--json]',
+    summary: '一次性装好证书(D55):生成本机的根、装成用户级根证书、放 harness 自己读的证书载体。先打印计划、等确认。',
+    notes: ['--dry-run  只打印计划', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '退出码:0 全部装好 · 1 部分或失败 · 2 用法错误,或不在终端又没有 --yes'] },
   { name: 'off', section: 'common', mutates: true, run: via('../off/main.mjs', 'runOffCli'),
     usage: 'asight off [harness…] [--now] [--dry-run] [--yes] [--json]',
     summary: '撤掉 asight 对这些 agent 的全部影响;asight 自己坏了也能用(~/.asight/bin/asight-off)。',
@@ -84,8 +88,7 @@ export const commandNamed = (name) => COMMANDS.find((c) => c.name === name)
 
 // What each old way of writing a command is now (1.6 §2 「隐藏别名」): not in help, dispatched like the command it names. `verify` is the item of `doctor` that was `verify`.
 export const HIDDEN_ALIASES = Object.freeze([
-  { argv: ['install'], to: ['on'] },
-  { argv: ['collector', 'install'], to: ['on'] },
+  { argv: ['collector', 'install'], to: ['install'] },
   { argv: ['collector', 'on'], to: ['on'] },
   { argv: ['collector', 'off'], to: ['off'] },
   { argv: ['collector', 'status'], to: ['status'] },
