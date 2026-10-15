@@ -4,6 +4,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 
+import { isModelOs } from '../model-install.mjs'
 export { MODEL_OS, isModelOs } from '../model-install.mjs' // the one list of the OSes the model runs on
 
 /** The installed signing helper the darwin custody runs (4.11 P1): under ~/.asight/bin, beside asight-off. */
@@ -57,4 +58,27 @@ export async function backendsFor({ os, home, run = null, env = process.env, fs 
     }
   }
   throw new Error(`the collector model runs on macOS and Windows, not ${os}`)
+}
+
+/** The door's readers of the world for the model collector (4.11 §1, createModelCollector): who owns a socket and that pid's facts, its env / cwd /
+ *  parent (P7), how a proxy address is dialled, the system proxy now (a watcher's last read), the process table (P12). → { ownerOf, factsOf, proc,
+ *  proxyOf, systemProxy, procTable, close }. Read-only, as the arch's own modules are; a test passes its own parts to the daemon instead. */
+export async function doorPartsFor({ os, env = process.env, harnesses = [], event = () => {}, failure = () => {} }) {
+  if (!isModelOs(os)) throw new Error(`the collector model runs on macOS and Windows, not ${os}`)
+  const [up, { listProcs }] = await Promise.all([import(`./${os}/upstream.mjs`), import('../../off/proc.mjs')])
+  const proxyOf = (text) => { const p = up.parseProxyText(text); return p && p.ok ? { kind: p.kind, host: p.host, port: p.port, ...(p.credentialed ? { auth: up.proxyAuthOf(text) } : {}) } : null }
+  let parts, watch
+  if (os === 'darwin') {
+    const [{ ownerOfSocket }, pi, { execTool }] = await Promise.all([import('./darwin/socktable.mjs'), import('./darwin/procinfo.mjs'), import('../../off/exec.mjs')])
+    const execOf = async (file, args, o = {}) => execTool(file, args, o)
+    parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid), proc: { envOf: (p, n) => pi.envOf(p, n), cwdOf: (p) => pi.cwdOf(p), parentOf: (p) => pi.parentOf(p) }, close: () => {} }
+    watch = up.watchSystemProxy({ initial: await up.readSystemProxy().catch(() => null), onError: (e) => failure('netenv', e) })
+  } else {
+    const [{ ownerOfSocket }, pi, { startHelper, policyAllowOf }, { groupsOf }] = await Promise.all([import('./win32/socktable.mjs'), import('./win32/procinfo.mjs'), import('./win32/helper.mjs'), import('./win32/route-plan.mjs')])
+    const helper = startHelper({ env, regAllow: policyAllowOf(groupsOf(harnesses)), onFailure: event })
+    const r = pi.procReaders({ helper })
+    parts = { ownerOf: (q) => ownerOfSocket({ helper, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, { helper }), proc: r, close: () => helper.close() }
+    watch = up.watchSystemProxy({ helper, initial: await up.readSystemProxy({ helper }).catch(() => null), onError: (e) => failure('helper', e) })
+  }
+  return { ...parts, proxyOf, systemProxy: () => watch.last(), procTable: () => listProcs({ platform: os, env }), close: () => { watch.stop(); parts.close() } }
 }

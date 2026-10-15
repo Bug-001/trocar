@@ -13,6 +13,7 @@ import { readOrNull } from '../off/fsutil.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { checkWrapper } from './core/proxymode/hooks/wrapper.mjs'
 import { planRoutes, writeRoutes } from './core/proxymode/entries.mjs'
+import { resolveLoc } from './core/proxymode/sources.mjs'
 import { loadIngressConfig, rebindTaken, freeOnLoopback } from './core/ingress-config.mjs'
 import { controlEndpointFor } from './core/control.mjs'
 import { CODE } from './core/codes.mjs'
@@ -43,7 +44,7 @@ export function installDrift(m, harness, fs = nodeFs) {
 
 /** turnOnModel({ os, home, env, ids, harnesses, ctx, … }) → { on, refused, routes, notes, problems, doors, exit }. `request` / `isFree` replace the
  *  world in a test that needs to; the default asks the endpoint controlEndpointFor resolves (no socket path is ever passed in). */
-export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined }) {
+export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined, dryRun = false }) {
   const dir = collectorHome(path.join(home, '.asight'))
   const m = readManifest(dir, fs)
   if (!installUsable(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`asight is not installed for this user (no install record with a root): run ${INSTALL_HINT} first`], exit: 1 }
@@ -57,8 +58,14 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   // what install left pending (the root store declined or not answered, the custody unreachable): on goes on — the forms the root cannot reach go through
   // their doors forwarding only (D51④) — and says each one, with the command, forward only (1.6 §1.1)
   const pending = (Array.isArray(m.install.pending) ? m.install.pending : []).map((p) => ({ harness: null, code: CODE.installPending, item: p.item, state: p.state, why: p.reason, command: INSTALL_HINT }))
-  const out = { on, refused, routes: [], notes: [...pending], problems: [], doors: {}, exit: 1 }
+  const out = { on, refused, routes: [], notes: [...pending], problems: [], doors: {}, planned: [], exit: 1 }
   if (!on.length) return out
+  const render = (tpl, { door, harness }) => { const p = (byName.get(harness).proxy || {}).env || []; return renderHook(tpl, { DOOR: door, PROXY_ENV: p, PROXY_NAMES: p }).text }
+  const wctx = { ...ctx, dir, home, manifest: m, fs, now, persistentEnv, systemProxy, render, ...(newId ? { newId } : {}) }
+  const planned = on.map((h) => ({ h, plan: planRoutes(byName.get(h), wctx) }))
+  // --dry-run (1.6 §1.1): what would be written — each planned route with the files it resolves to — and nothing written
+  out.planned = planned.flatMap(({ h, plan }) => plan.routes.map((r) => ({ harness: h, route: r.id, kind: r.route.kind, forms: r.forms, paths: r.route.file ? resolveLoc(r.route.file, wctx) : [] })))
+  if (dryRun) return { ...out, exit: refused.length || pending.length ? 1 : 0 }
   // desired on first (R9), then the liveness window opens: the holder judge (P12) counts from here
   const stateF = path.join(dir, 'state.json')
   let st
@@ -67,9 +74,6 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   for (const h of on) { const l = { ...(m.liveness[h] || {}), on_at: now().toISOString() }; delete l.off_at; m.liveness[h] = l }
   saveManifest(dir, m, fs)
 
-  const render = (tpl, { door, harness }) => { const p = (byName.get(harness).proxy || {}).env || []; return renderHook(tpl, { DOOR: door, PROXY_ENV: p, PROXY_NAMES: p }).text }
-  const wctx = { ...ctx, dir, home, manifest: m, fs, now, persistentEnv, systemProxy, render, ...(newId ? { newId } : {}) }
-  const planned = on.map((h) => ({ h, plan: planRoutes(byName.get(h), wctx) }))
   const groups = planned.flatMap(({ h, plan }) => plan.routes.map((r) => groupOf(h, r.id)))
   const ep = controlEndpointFor({ platform: os, dir, env, fs })
   const ask = request || ep.request

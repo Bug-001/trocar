@@ -69,30 +69,28 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
 })
 const tmpHomeOf = () => tmpDir('asight-model-2-') // a second HOME, made where the leak guard sweeps
 
-// the high finding of the branch review: until `asight on` on macOS / Windows is turnOnModel, install there would leave the old on unable to
-// start (its loadOrCreateCa refuses an asight-ca.pem without ca.key). So install refuses there, writes nothing, and says to run on.
+// the documented order — install, then on — through the CLI (MODEL_ON_WIRED flipped with the switch): install writes the root, its carriers and
+// the inert autostart unit; on enables the unit, which starts the REAL daemon (test/helpers/model-daemon.mjs), asks it for the doors and writes the entries.
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: until the model on is wired, install refuses (exit 1), writes nothing and says to run asight on`, async () => {
-    const w = await modelWorld({ os: platform, commands: ['codex'] })
-    const io = fakeIo()
-    assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform, deps: { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, dirs: w.ctx.dirs }, harnesses: w.harnesses, owns: w.owns } }), 1)
-    assert.match(io.text(), /直接跑 asight on/)
-    assert.equal(fs.existsSync(path.join(w.home, '.asight')), false)
-    assert.deepEqual([w.custody.calls, w.store.calls], [[], []])
-  })
-  // the documented order — install, then on — through the CLI, the gate forced open. While MODEL_ON_WIRED is false this pins the very failure the gate
-  // exists for (the old on refuses the model install's root); the commit that flips it makes the same test demand that on starts.
-  test(`${platform}: install then on through the CLI (temp HOME, stub backends) — ${MODEL_ON_WIRED ? 'on starts' : 'the old on cannot start over it: why install refuses'}`, async () => {
+  test(`${platform}: install then on through the CLI (temp HOME, stub backends) — on starts: exit 0, the doors' entries written`, { timeout: 30_000 }, async () => {
     const { runOnCli } = await import('../../src/cli/on.mjs')
-    const { fakeDaemon, recordingExec, ROOTS } = await import('./fixtures/on-ctx.mjs')
+    const { liveUnit, withScratchCwd } = await import('../helpers/model-daemon.mjs')
+    assert.equal(MODEL_ON_WIRED, true)
     const w = await modelWorld({ os: platform, commands: ['codex'] })
-    const deps = { getuid: () => 501, modelOnWired: true, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns }
+    const box = await liveUnit({ w, platform })
+    const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: box.unit }
     const io = fakeIo()
     assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text())
-    const io2 = fakeIo()
-    const exit = await runOnCli(['--yes'], { io: io2, env: w.env, home: w.home, platform, deps: { ...deps, exec: recordingExec().run, roots: ROOTS, parts: { os: platform, harnesses: w.harnesses.filter((d) => d.name === 'codex'), scan: async () => [], match: () => ({ agent: null }), arch: { osRoots: async () => ({ pem: ROOTS.osText }) } }, request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice' } })
-    if (!MODEL_ON_WIRED) { assert.equal(exit, 1); assert.match(io2.text(), /CA is unusable.*ca\.key/); return }
-    assert.doesNotMatch(io2.text(), /ca\.key|CA is unusable/, 'the old on refusing the model install\'s root (the finding)')
-    assert.equal(exit, 0, io2.text())
+    await withScratchCwd(platform, async () => {
+      try {
+        const io2 = fakeIo()
+        const exit = await runOnCli(['--yes'], { io: io2, env: w.env, home: w.home, platform, deps: { ...deps, parts: box.parts, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 25))) } })
+        assert.equal(exit, 0, io2.text())
+        assert.doesNotMatch(io2.text(), /ca\.key|CA is unusable/, 'the old on refusing the model install\'s root (the finding) is gone')
+        assert.match(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'), /127\.0\.0\.1:\d+/, 'codex\'s entry holds its door')
+        const m = JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8'))
+        assert.ok(m.files.some((f) => f.role === 'unit' && f.phase === 'install'), 'the unit is install\'s item')
+      } finally { await box.stop() }
+    })
   })
 }

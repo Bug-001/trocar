@@ -19,6 +19,8 @@ import { appendEvent } from '../collector/core/events.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
 import { refuseOldManifest } from '../off/manifest.mjs'
+import { isModelOs } from '../collector/model-install.mjs'
+import { runModelOn } from './on-model.mjs'
 
 const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--opt-in <形态>[,<形态>…]] [--no-autostart | --no-unit] [--json]'
 const FLAGS = new Set(['--dry-run', '--yes', '--no-autostart', '--no-unit', '--json'])
@@ -77,7 +79,8 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     // the opt-in half (1.6 §1.7): the arch that has opt-in items (Windows, 4.8 §2.4) hands `forms` (the ids --opt-in may name), `plan` (the rows)
     // and `apply`; an arch with none (Linux today) makes every --opt-in name a usage error, never a silent skip
     const optInHooks = deps.optIn || (parts.arch && parts.arch.optIn) || null
-    if (optIn.length) {
+    const model = isModelOs(parts.os) // macOS / Windows: the collector model's on (on-model.mjs); none of the old adoption / routing / opt-in code runs there
+    if (optIn.length && !model) {
       const known = optInHooks && typeof optInHooks.forms === 'function' ? optInHooks.forms({ harnesses: parts.harnesses, ids: named.ids }) : []
       // an ITEM id the plan's「要你点名的」section prints names its form (1.6 §1.7: what the plan shows is what the user copies) — one carrier
       // expands to that form; an item several forms share is the user's to disambiguate, by naming the form itself
@@ -127,6 +130,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
         return EXIT.incomplete
       }
     }
+    if (model) return await runModelOn({ io, env, home, os: parts.os, deps, parts, flags, ids: named.ids, json, optIn })
     const script = deps.script || process.argv[1]
     const unit = flags.has('--no-unit') || !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script, run: deps.exec || null, env })
     const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)

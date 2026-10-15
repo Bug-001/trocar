@@ -3,6 +3,7 @@
 // before anything else (one daemon, one helper per user), spawns the capability helper through arch, serves the
 // engine on loopback, restores the desired switch state, and fails open everywhere: a dead helper means direct
 // connections, never broken ones. It never mints the CA: `asight on` does, inside the manifest.
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -32,6 +33,10 @@ import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
 import { createRetention, retentionFile } from '../capture/retention.mjs'
 import { endpointClass } from '../capture/envelope.mjs'
 import { makeClassifier, harnessIdOfAgent } from '../dissect/traffic.mjs'
+import { isModelOs, backendsFor, doorPartsFor, sourcesCtx } from './arch/model-backends.mjs'
+import { createModelCollector } from './core/proxymode/collector.mjs'
+import { TEMPLATES } from './harness/templates/index.mjs'
+import { readStateFile } from '../off/state.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
@@ -135,14 +140,10 @@ function agentListWatch({ home, write }) {
   }
 }
 
-async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null }) {
+async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {} }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
-  let manifest
-  try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
-  const ca = daemonMayStart(manifest) ? readCa({ dir: P.caDir }) : null
-  if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight on" first'), { code: 'not-installed' })
   // The arch is loaded once, here at the entry (loadParts below takes it back): the platform's start gates and endpoint come before anything is claimed.
   // The endpoint is any arch that has one: darwin's control.json — a random name under the user's $TMPDIR, 0600, with a token every request carries
   // (arch/darwin/control-path.mjs, 4.9 §7; the same file the CLI's `off` reads; found live by a smoke run 2026-10-09: without this arm the darwin daemon
@@ -156,6 +157,12 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   }
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
+  // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model })
+  let manifest
+  try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
+  const ca = daemonMayStart(manifest) ? readCa({ dir: P.caDir }) : null
+  if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight on" first'), { code: 'not-installed' })
   let markReady
   const ready = new Promise((r) => { markReady = r })
   const impl = {} // filled once wiring is done; requests that arrive earlier wait for it
@@ -662,6 +669,83 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     failure.flush()
     await control.close()
     if (redirector) await redirector.close().catch((w) => failure('helper', w)) // the start failure itself is recorded by startDaemon
+    throw e
+  }
+}
+
+// The collector model's daemon (4.11 §1 on / off, §3 ① ②): macOS and Windows. It writes no agent file and no ingress.json — `asight on`
+// writes them after POST /on opened the doors and read them back; the daemon opens doors, judges at the door, signs leaves through the custody, keeps
+// a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
+// { backends: { custody, dirs, policy }, parts: doorPartsFor's shape } — the endpoint, the control server and the engine are always the real ones.
+async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model }) {
+  const list = harnesses || (await loadHarnesses())
+  const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
+  let agents = (nextAgentList() || { entries: [] }).entries
+  const registry = createRegistry(list, { agentList: agents })
+  const event = (rec) => failure.write(rec)
+  const b = model.backends || (await backendsFor({ os: A.os, home, env }))
+  const parts = model.parts || (await doorPartsFor({ os: A.os, env, harnesses: list, event, failure }))
+  let rootPem = null
+  try { rootPem = fs.readFileSync(path.join(P.caDir, 'asight-ca.pem'), 'utf8') } catch { /* no root: the issuer says so, every door forwards only */ }
+  const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
+  let collector = null
+  const desired = () => { try { return readStateFile(P.state).state.harnesses || {} } catch { return {} } }
+  const engine = createEngine({
+    redirector: { lookupIngress: (q) => collector.lookupIngress(q), servePac: (q) => collector.servePac(q) },
+    issuer: { secureContextFor: (h) => collector.issuer.secureContextFor(h), issue: (h) => collector.issuer.issue(h) }, store, upstreamCa,
+    ingressToken: crypto.randomBytes(24).toString('hex'), // the model listens on no shared ingress: each door carries its group's token (ingress.json's), this one guards nothing
+    isRecording: (meta) => (desired()[meta && meta.agent] || {}).desired === 'on',
+    onFailure: (rec) => failure.event(rec), onError: (e) => log('engine', e),
+  })
+  collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
+    ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
+    record: event, event, proxyOf: parts.proxyOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
+    drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }), ...(model.fs ? { fs: model.fs } : {}) })
+  collector.bindDoors({ open: (l) => engine.listen({ groups: l }), close: (ids) => Promise.resolve(engine.closeGroups(ids)) })
+  let exitAsked = 0, exitTimer = null
+  const status = async () => {
+    const st = collector.issuer.state()
+    return { pid: process.pid, doors: collector.doors(), harnesses: desired(), holders: (await collector.holders()).count ?? null, cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st }, engine: engine.stats() }
+  }
+  const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
+  let stop = null
+  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: {
+    'GET /status': status,
+    'GET /holders': () => collector.holders(),
+    'POST /on': async (q) => { exitAsked++; clearInterval(exitTimer); return collector.on(body(q)) },
+    'POST /off': async (q) => {
+      const r = await collector.off(body(q))
+      if (body(q).exit === true) { const mine = ++exitAsked; clearInterval(exitTimer); exitTimer = setInterval(() => { if (mine === exitAsked && collector.mayExit()) { clearInterval(exitTimer); stop({ reason: 'off' }) } }, 250) }
+      return r
+    },
+  } })
+  try {
+    await collector.start()
+    const me = identity(process.pid)
+    fs.writeFileSync(`${P.lock}.tmp-${process.pid}`, JSON.stringify({ pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }) + '\n', { mode: 0o600 })
+    fs.renameSync(`${P.lock}.tmp-${process.pid}`, P.lock)
+    const lockTimer = setInterval(() => { try { const t = new Date(); fs.utimesSync(P.lock, t, t) } catch (e) { failure('daemon', coded(e, 'record-error')) } }, lockRefreshMs); lockTimer.unref()
+    const listTimer = setInterval(() => { const l = nextAgentList(); if (l) { agents = l.entries; registry.replaceAgentList(agents) } }, 5000); listTimer.unref()
+    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: VERSION, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
+    let stopping = null, markExited
+    const exited = new Promise((r) => { markExited = r })
+    const doStop = async ({ signal = null, reason = null } = {}) => {
+      clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
+      const failed = []
+      const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
+      await step('control', () => control.close())
+      await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))
+      collector.close(); await step('helper', () => parts.close && parts.close())
+      await step('record', () => store.close())
+      failure.flush()
+      failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
+      fs.rmSync(P.lock, { force: true })
+      return { failed }
+    }
+    stop = (o) => { if (!stopping) { stopping = doStop(o); stopping.then(markExited, () => markExited({ failed: ['stop'] })) } return stopping }
+    return { port: null, socketPath: sock, paths: P, stop, exited, status, engine, collector }
+  } catch (e) {
+    failure.flush(); await control.close(); collector.close(); if (parts.close) parts.close()
     throw e
   }
 }

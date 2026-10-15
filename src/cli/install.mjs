@@ -61,6 +61,8 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
     const ctx = sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
     const rows = planInstall({ os: platform, harnesses, ctx })
+    // the autostart unit is install's, inert until `on` enables it (4.11 §1 install d; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
+    const unit = deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch(platform)).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
     say(['asight install 的计划:', '  · 生成本机的 asight 根(私钥不能导出),装成用户级根证书(系统会弹一次框,等 120 秒)',
       ...rows.map((r) => `  · ${r.harness} · ${r.form}: ${r.carrier === 'root' ? '靠用户级根' : `证书载体 ${r.carrier}`}`),
       ...(rows.length ? [] : ['  · 本机没找到任何 harness 的形态:只装根']),
@@ -71,7 +73,7 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
       if (!(await confirm({ ...io, prompt: json ? io.stderr : io.stdout }, 'asight 将按上面的计划安装。继续?'))) { io.err('没有确认:什么都没改'); return EXIT.incomplete }
     }
     const r = await locked(() => runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
-      wrapperKit: b.wrapperKit, facts: b.facts, ctx, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) }))
+      wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) }))
     if (!r) return EXIT.incomplete
     const receipt = { ...newReceipt('install'), ok: r.exit === 0, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: r.pending, problems: r.problems, standalone: standalonePath(home), residual_risk: RISK,
       commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
