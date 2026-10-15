@@ -108,3 +108,85 @@ for (const answer of ['declined', 'pending']) {
     assert.equal(readManifest(w.dir).install.state, 'complete')
   })
 }
+
+// CM35 (4.11 §3 ㉒): the lost-key install. The custody's key gone behind asight's back (exists() false, the manifest records the old root) → the old
+// root leaves the store by its recorded fingerprint, one new key and root are made and added, and every carrier holding root bytes holds only the new
+// root: asight-ca.pem, Z-Code's bundle, the pem-block in the user's file (the user's bytes outside the marks as they were); their installed_at moves.
+async function lostKeyWorld() {
+  const w = await modelWorld({ commands: ['codex', 'dsh'], env: (home) => ({ SSL_CERT_FILE: path.join(home, 'certs', 'mine.pem') }) })
+  put(w.env.SSL_CERT_FILE, USER_PEM)
+  fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
+  fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
+  const r1 = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r1.exit, 0, JSON.stringify({ c: r1.carriers, p: r1.problems }))
+  return { w, r1, at1: carrierTimes(w) }
+}
+const later = () => new Date(Date.now() + 3600e3)
+const bundleOf = (w) => json(path.join(w.home, '.zcode', 'cli', 'config.json')).network.caCertFile
+const fpsIn = (f) => certBlocks(fs.readFileSync(f, 'utf8')).map((b) => b.fp)
+function carrierTimes(w) {
+  const m = readManifest(w.dir)
+  return { ca: m.files.find((f) => f.role === 'ca-cert').installed_at, bundle: m.files.find((f) => f.role === 'bundle').installed_at, block: m.entries.find((e) => e.format === 'pem-block').installed_at }
+}
+function assertOnlyNewRoot(w, r1, r2, at1) {
+  assert.notEqual(r2.fp256, r1.fp256)
+  assert.deepEqual(fpsIn(path.join(w.dir, 'ca', 'asight-ca.pem')), [r2.fp256])
+  assert.equal(fpsIn(bundleOf(w)).at(-1), r2.fp256); assert.ok(!fpsIn(bundleOf(w)).includes(r1.fp256), 'the bundle no longer holds the old root')
+  const mine = fs.readFileSync(w.env.SSL_CERT_FILE, 'utf8')
+  assert.ok(mine.startsWith(USER_PEM), 'the user\'s bytes before the marks as they were')
+  assert.deepEqual(fpsIn(w.env.SSL_CERT_FILE), [certBlocks(USER_PEM)[0].fp, r2.fp256], 'one block, the new root\'s')
+  const m = readManifest(w.dir)
+  assert.equal(m.entries.filter((e) => e.format === 'pem-block').length, 1)
+  assert.deepEqual(m.entries.filter((e) => e.kind === 'root-key').map((e) => e.fp256), [r2.fp256])
+  const at2 = carrierTimes(w)
+  for (const k of Object.keys(at1)) assert.ok(at2[k] > at1[k], `${k}: installed_at moved (${at1[k]} → ${at2[k]})`)
+}
+
+test('CM35: the key lost → remove the old root once by its fingerprint, create once, add once; every carrier holds only the new root; exit 0', async () => {
+  const { w, r1, at1 } = await lostKeyWorld()
+  w.custody.switches.keyLost = true
+  const calls = w.store.calls.length, creates = w.custody.calls.filter((c) => c.verb === 'create').length
+  const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+  assert.equal(r2.exit, 0, JSON.stringify({ c: r2.carriers, p: r2.problems, pe: r2.pending }))
+  assert.deepEqual(w.store.calls.slice(calls), ['remove', 'has', 'add'])
+  assert.equal(w.custody.calls.filter((c) => c.verb === 'create').length - creates, 1)
+  assert.ok(!w.store.held.has(r1.fp256) && w.store.held.has(r2.fp256))
+  assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'system-root').map((e) => e.fp256), [r2.fp256])
+  assertOnlyNewRoot(w, r1, r2, at1)
+})
+
+test('CM35: the old root\'s removal refused → the new root is installed all the same, the old one reported as an orphan with its removal, exit 1', async () => {
+  const { w, r1, at1 } = await lostKeyWorld()
+  w.custody.switches.keyLost = true
+  w.store.remove = () => ({ ok: false, reason: 'User canceled' })
+  const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+  assert.equal(r2.exit, 1)
+  assert.match(r2.problems.join('\n'), new RegExp(`orphan: the old asight root ${r1.fp256}.*User canceled.*by hand`))
+  assert.deepEqual(r2.items.find((i) => i.item === 'old-root'), { item: 'old-root', state: 'orphan', fp256: r1.fp256 })
+  assert.ok(readManifest(w.dir).entries.some((e) => e.kind === 'system-root' && e.fp256 === r1.fp256 && e.orphan), 'kept on record: uninstall removes it')
+  assertOnlyNewRoot(w, r1, r2, at1)
+})
+
+// the reverse: the key is there but asight cannot read its root back — asight-ca.pem gone, or the manifest's record gone — install must not crash on
+// the custody's 'exists'; it takes ㉒'s path (the custody has no verb that returns the root)
+for (const [what, lose] of [['asight-ca.pem gone', (w) => fs.rmSync(path.join(w.dir, 'ca', 'asight-ca.pem'))], ['the root-key record gone', (w) => { const m = readManifest(w.dir); m.entries = m.entries.filter((e) => e.kind !== 'root-key'); fs.writeFileSync(path.join(w.dir, 'install-manifest.json'), JSON.stringify(m)) }]]) {
+  test(`CM35 reverse: the key present, ${what} → no crash; the stray key goes, a new root is made and carried`, async () => {
+    const { w, r1 } = await lostKeyWorld()
+    lose(w)
+    const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
+    assert.ok(w.custody.calls.some((c) => c.verb === 'remove'))
+    assert.notEqual(r2.fp256, r1.fp256)
+    assert.deepEqual(fpsIn(path.join(w.dir, 'ca', 'asight-ca.pem')), [r2.fp256])
+    assert.equal(fpsIn(bundleOf(w)).at(-1), r2.fp256)
+    assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'root-key').map((e) => e.fp256), [r2.fp256])
+    assert.ok(!w.store.held.has(r1.fp256), 'the old root left the store by the fingerprint its store record holds')
+    assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'system-root').map((e) => e.fp256), [r2.fp256])
+  })
+}
+
+test('CM35 · 1.6 V67: the key present and readable → install calls create zero times', async () => {
+  const { w } = await lostKeyWorld()
+  const creates = w.custody.calls.filter((c) => c.verb === 'create').length
+  await w.install({ wrapperKit: { renderWrapper }, now: later })
+  assert.equal(w.custody.calls.filter((c) => c.verb === 'create').length, creates)
+})

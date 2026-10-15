@@ -16,7 +16,7 @@ import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/m
 import { writeStandalone } from '../off/standalone.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
 import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
-import { lineComment } from '../off/text-edit.mjs'
+import { lineComment, removeAsightText } from '../off/text-edit.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { unitedLiveness } from './install.mjs'
@@ -69,6 +69,25 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   if (has === 'unavailable') { pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody is not reachable (macOS: no graphical login session); run asight install again in a terminal of that session' }) }
   else if (rec && has === true && fs.existsSync(ca.pem)) { rootDer = pemToDer(fs.readFileSync(ca.pem, 'utf8')); said('root-key', 'intact', { fp256: rec.fp256 }) }
   else {
+    // 4.11 §3 ㉒: a key that is gone (exists() false while the manifest records one), or one whose root asight cannot read back (no record, or
+    // asight-ca.pem gone: the custody has no verb that returns the root), is replaced — never refused. A stray key goes first (create over it is
+    // the helper's 'exists'); then the old root leaves the store by its recorded fingerprint; the carriers below are rewritten for the new root.
+    if (has === true) {
+      const gone = await custody.remove(rec ? rec.custody : { kind: custody.kind })
+      if (!gone || typeof gone !== 'object' || typeof gone.removed !== 'boolean') { pending.push({ item: 'root-key', state: 'pending', reason: `the custody holds a key whose root certificate asight can no longer read back, and could not remove it now (${JSON.stringify(gone)}); run asight install again in a terminal of the graphical login session` }); return finish() }
+    }
+    if (rec) { m.entries.splice(m.entries.indexOf(rec), 1); save() }
+    // every root this manifest put in the store belongs to a key that is gone now (the record of the key may be gone too): each leaves by its fingerprint
+    for (const old of m.entries.filter((e) => e.kind === 'system-root' && e.store === STORE[os])) {
+      let r
+      try { r = await rootStore.remove({ fp256: old.fp256, sha1: old.thumbprint || (old.values && old.values.thumbprint) }) } catch (e) { r = { ok: false, reason: errText(e) } }
+      if (r && r.ok) { m.entries.splice(m.entries.indexOf(old), 1); save(); said('old-root', 'removed', { fp256: old.fp256 }) }
+      else { // its key is gone, so it signs nothing any more: an orphan, kept on record for uninstall, and named with its removal (1.6 §9.4 orphan)
+        old.orphan = true; save()
+        said('old-root', 'orphan', { fp256: old.fp256 })
+        problems.push(`orphan: the old asight root ${old.fp256} is still in your root store (${(r && r.reason) || 'the removal was not confirmed'}); its key is gone, so it signs nothing. Remove it by hand: ${old.undo_by_hand || undoByHand(old)}`)
+      }
+    }
     const made = await custody.create({ subject: ROOT_SUBJECT })
     if (made === 'unavailable') pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody could not create the key now (no graphical login session?); run asight install again there' })
     else {
@@ -76,7 +95,6 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       if (bad.length) { problems.push(`the root the custody made does not have the root profile (${bad.join('; ')}); nothing uses it`); await custody.remove({ kind: custody.kind, id: made.fp256 }) }
       else {
         rootDer = made.rootDer
-        if (rec) m.entries.splice(m.entries.indexOf(rec), 1)
         const k = { kind: 'root-key', harness: null, phase: 'install', custody: { kind: custody.kind, id: made.id || made.fp256 }, fp256: made.fp256, ...(made.provider ? { provider: made.provider } : {}), installed_at: now().toISOString() }
         k.undo_by_hand = undoByHand(k)
         m.entries.push(k); save()
@@ -86,6 +104,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   }
   if (!rootDer) return finish()
   const rootPem = certPem(rootDer)
+  const rootBody = rootPem.replace(/-----[A-Z ]+-----|\s/g, '') // the base64 of the root: how a pem-block of this root is told from one of an older root
   const id = rootIdOf(rootDer)
   owned(ca.pem, 'ca-cert', null, rootPem, 0o644)
 
@@ -200,6 +219,14 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     const why = usersFileWhy(file, { fs, owns })
     if (why) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: NOT_USERS, why }); return }
     try {
+      // ㉒: a block this manifest placed for an older root comes out by its marks (the user's bytes outside them stay, read and written as bytes),
+      // and its record with it; the block for this root is then placed as new (a fresh installed_at)
+      const older = m.entries.find((e) => e.kind === 'text' && e.format === 'pem-block' && e.harness === desc.name && e.path === file && !(e.ops || []).some((o) => o.pem && o.inserted.replace(/\s/g, '').includes(rootBody)))
+      if (older) {
+        const out = removeAsightText(fs.readFileSync(file, 'latin1'), older.ops)
+        if (out.found) fs.writeFileSync(file, out.text, 'latin1')
+        m.entries.splice(m.entries.indexOf(older), 1); save()
+      }
       const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file, edit: { format: 'pem-block', pem: rootPem }, home, now: now(), fs })
       carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: e ? 'placed' : 'intact' })
     } catch (e) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: e.code || NOT_USERS, why: errText(e) }) }
