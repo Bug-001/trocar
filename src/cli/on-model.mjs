@@ -1,46 +1,19 @@
 // on-model.mjs — `asight on` on macOS and Windows in the collector model (RFC 1.6 §1.1, 4.11 §1 on / off, §3 ①): the CLI is the one writer.
 // In order: the install record (else cert-not-installed, exit 1); the plan — the routes turnOnModel would write, nothing written (--dry-run stops here);
 // R6 — a yes only for files beyond the manifest's confirmed_paths (1.6 §1.6), not a terminal and no --yes → exit 2; under op.lock: the autostart unit
-// enabled and the daemon up with its endpoint answering (the old on's unit / probe mechanism: unit.enable / unit.start, controlEndpointFor re-resolved
+// enabled and the daemon up with its endpoint answering (ensureDaemonUp, install.mjs: the one copy Linux's turnOn uses too; controlEndpointFor re-resolved
 // every probe — control.json appears only at the daemon's first start); then turnOnModel (POST /on, the doors read back, the entries written).
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
-import { controlEndpointFor } from '../off/control-client.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile } from '../off/paths.mjs'
 import { readManifest, saveManifest } from '../collector/core/trust/journal.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
-import { EVENT } from '../collector/core/codes.mjs'
 
 const errText = (e) => String((e && e.message) || e)
 const NEEDS_YES = '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'
-const START = 'asight daemon'
-
-/** The daemon up with its endpoint answering (1.6 §1.1「启用自启并拉起守护进程」; 拉起不是重启, R8). → { ok, started, why?, warn? } */
-async function ensureDaemon({ unit, autostart, os, dir, env, fs, sleep, put }) {
-  let why = null
-  const probe = async () => {
-    const ep = controlEndpointFor({ platform: os, dir, env, fs })
-    if (!ep.socketPath) { why = ep.why; return { up: false } }
-    try { await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (e) { why = errText(e); return { up: false, stuck: !(e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) } }
-  }
-  const was = await probe()
-  if (was.up) { if (unit && autostart) unit.enable({ now: false }); return { ok: true, started: false } }
-  if (was.stuck) return { ok: false, why: `a daemon holds the control endpoint but does not answer (${why}); run "asight off", then "asight on"` }
-  if (!unit) return { ok: false, why: `没有自启单元,守护进程没在跑:运行 ${START}${why ? `;${why}` : ''}` }
-  const rr = autostart ? unit.enable({ now: true }) : unit.start()
-  if (rr && rr.code !== 0) {
-    const reason = rr.event ? rr.event.reason : `the autostart unit ${unit.path} could not be ${autostart ? 'enabled' : 'started'} (${rr.err || `exit ${rr.code}`}); start the daemon with "${START}"`
-    put(rr.event || { event: EVENT.failure, where: 'install', code: 'unit-not-enabled', reason })
-    return { ok: false, why: reason }
-  }
-  for (let i = 0; i < 60; i++) { if ((await probe()).up) return { ok: true, started: true, ...(rr && rr.warn ? { warn: rr.warn } : {}) }; await sleep(250) }
-  const reason = `the unit was started, but no daemon answers (${why}); look at ${os === 'darwin' ? 'launchctl print gui/$(id -u)/com.asight.collector' : 'schtasks /Query /TN \\asight\\collector'} and the board's capture health`
-  put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason })
-  return { ok: false, why: reason }
-}
 
 const routeLine = (p) => `  · ${p.harness} · ${p.route}: ${p.kind}${p.paths.length ? ` ${p.paths.join(', ')}` : ''}`
 const noteLine = (n) => (n.code === 'install-pending' ? `  · ${n.item}: ${n.state} — ${n.why};再跑一次 ${n.command}` : `  · ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
@@ -80,10 +53,11 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) { io.err(`asight on: ${e.message}`); return EXIT.incomplete } throw e }
   try {
     const unit = flags.has('--no-unit') || !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
-    const up = await ensureDaemon({ unit, autostart: !flags.has('--no-autostart'), os, dir, env, fs, sleep: deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))), put })
-    const r = up.ok ? await turnOnModel(args) : { ...plan, routes: [], problems: [up.why], exit: EXIT.incomplete }
-    if (up.warn) r.notes.push({ harness: null, text: up.warn })
-    if (r.on.length && up.ok) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
-    return out(receiptOf(r, { daemon: { state: up.ok ? 'running' : 'not-running', started: !!up.started }, doors: r.doors || {} }), r.exit)
+    const { ensureDaemonUp } = await import('../collector/install.mjs')
+    const up = await ensureDaemonUp({ osName: os, dir, env, fs, unit, autostart: !flags.has('--no-autostart'), put, ...(deps.sleep ? { pause: deps.sleep } : {}) })
+    const r = up.up ? await turnOnModel(args) : { ...plan, routes: [], problems: up.problems.length ? up.problems : up.notes, exit: EXIT.incomplete }
+    if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
+    if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
+    return out(receiptOf(r, { daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, doors: r.doors || {} }), r.exit)
   } finally { lock.release() }
 }

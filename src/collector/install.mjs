@@ -575,60 +575,13 @@ export async function turnOn(opts = {}) {
     if (halt) { put({ event: EVENT.failure, where: 'install', code: 'install-error', reason: problems[0] }); return finish('stopped', `on stopped: ${problems[0]}`) }
 
     // ── the unit and the daemon: started when nothing answers, never started a second time (拉起不是重启, R8) ──
-    // The endpoint is resolved the one way every caller resolves it (4.8 §7 / 4.9 §7: darwin / win32 find the daemon through control.json and every
-    // request carries its token; Linux through $XDG_RUNTIME_DIR). This was the 2026-10-11 incident's seam: a Linux-only fallback here made every
-    // `asight on` on a real Mac a false start-failed while the daemon was up.
-    // Second seam of the same incident (caught on a macOS test machine, 2026-10-11): on darwin / win32 control.json is written by the daemon AT ITS
-    // FIRST START, so a FIRST install has no endpoint to resolve before the unit runs — resolving once up here kept sock null through the whole
-    // poll and every first `on` ended "no daemon answers on null", exit 1, while the daemon was up and healthy. The probe re-resolves while
-    // there is no socket; Linux's XDG-derived path is stable, so re-resolving is a no-op there.
-    const resolveEndpoint = () => controlEndpointFor({ platform: osName, dir, env, fs })
-    let endpoint = resolveEndpoint()
-    let sock = socketPath || endpoint.socketPath
-    let ask = request || endpoint.request
-    const probe = async () => {
-      if (!sock && !socketPath) { endpoint = resolveEndpoint(); sock = endpoint.socketPath; ask = request || endpoint.request }
-      if (!sock) return { up: false, why: endpoint.why || 'no control socket to ask' }
-      try { await ask({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (e) {
-        if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) return { up: false }
-        return { up: false, stuck: String((e && e.message) || e) }
-      }
-    }
     const checked = (fn) => { try { fn() } catch (e) { if (!e.stopsRun) throw e; problems.push(e.message); halt = true } }
-    const was = await probe()
-    let up = was.up, started = false, unitFailed = null
-    if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "asight off", then "asight on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
-    else if (unit) {
-      checked(() => guard())
-      if (!halt) {
-        if (written.unit === 'rewrite' && typeof unit.reload === 'function') unit.reload() // a unit file rewritten under a loaded unit
-        const rr = autostart ? unit.enable({ now: !was.up }) : (was.up ? null : unit.start())
-        started = !was.up
-        if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // enable's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
-        if (rr && rr.code !== 0) {
-          // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —
-          // launchd is the only autostart there, 4.9 §11); the systemd wording below is the answer of an arch that has none.
-          if (rr.event) { unitFailed = rr.event.reason; notes.push(unitFailed); problems.push(unitFailed); put(rr.event) }
-          else {
-            // the start question in the platform's own words: win32's unit is a scheduled task (\asight\collector, autostart.mjs), darwin's a LaunchAgent,
-            // and the systemd wording is Linux's alone — a Windows user told to run `systemctl --user status` has been handed nothing (tested 2026-10-11)
-            const startHint = osName === 'win32' ? `the scheduled task \\asight\\collector was not registered or run (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}"`
-              : `${unit.path} is written but "systemctl --user ${autostart ? `enable${was.up ? '' : ' --now'}` : 'start'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
-            unitFailed = startHint
-            notes.push(unitFailed); problems.push(unitFailed); put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
-          }
-        } else if (!was.up) {
-          for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); checked(() => guard()) } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
-          if (!up && !halt) {
-            const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.asight.collector' : osName === 'win32' ? 'schtasks /Query /TN \\asight\\collector (and "asight status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
-            const why = `the unit was ${autostart ? 'enabled and started' : 'started'}, but no daemon answers on ${sock}; look at "${where}" and the board's capture health`
-            problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
-          }
-        }
-      }
-    } else if (!up) notes.push(`没有自启单元,守护进程没在跑:运行 ${DAEMON_CMD}(它按 state.json 里的期望态挂引流)${was.why ? `;${was.why}` : ''}`)
+    const d = await ensureDaemonUp({ osName, dir, env, fs, unit, autostart, reload: written.unit === 'rewrite', socketPath, request, pause, put, halted: () => { checked(() => guard()); return halt } })
+    const { sock, ask, started, unitFailed } = d
+    const up = d.up
+    notes.push(...d.notes); problems.push(...d.problems); if (d.halt) halt = true
     const pid = readLockPid(dir, fs)
-    receipt.daemon = { state: up ? 'running' : 'not-running', started: started && up, ...(pid ? { pid } : {}) }
+    receipt.daemon = { state: up ? 'running' : 'not-running', started, ...(pid ? { pid } : {}) }
     receipt.unit = unit ? { path: unit.path, written: written.unit || false, autostart, enabled: autostart && !unitFailed } : null
     // the links last: the daemon attaches on this request, and answers with what the kernel confirms
     if (up && !halt) checked(() => guard())
@@ -656,6 +609,65 @@ export async function turnOn(opts = {}) {
 }
 
 const UNIT_NAME_HINT = 'asight-collector.service'
+
+// ── the daemon up with its endpoint answering (1.6 §1.1「启用自启并拉起守护进程」; 拉起不是重启, R8): the one copy every `on` uses (Linux's turnOn and
+// macOS / Windows' runModelOn, 4.9 §4, 4.8 §7) — two copies of this seam is the 2026-10-11 incident's pattern.
+// The endpoint is resolved the one way every caller resolves it (4.8 §7 / 4.9 §7: darwin / win32 find the daemon through control.json and every
+// request carries its token; Linux through $XDG_RUNTIME_DIR). This was the 2026-10-11 incident's seam: a Linux-only fallback here made every
+// `asight on` on a real Mac a false start-failed while the daemon was up.
+// Second seam of the same incident (caught on a macOS test machine, 2026-10-11): on darwin / win32 control.json is written by the daemon AT ITS
+// FIRST START, so a FIRST install has no endpoint to resolve before the unit runs — resolving once up here kept sock null through the whole
+// poll and every first `on` ended "no daemon answers on null", exit 1, while the daemon was up and healthy. The probe re-resolves while
+// → { up, started, sock, ask, unitFailed, notes, problems, halt }: `halted()` is asked before the unit is touched and after each poll (R12: an `off` that
+// lands meanwhile stops the run); `put` records each failure; `reload`: the unit file was rewritten under a loaded unit.
+export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = null, autostart = true, reload = false, socketPath = null, request = null, pause = sleep, put = () => {}, halted = () => false }) {
+  const resolveEndpoint = () => controlEndpointFor({ platform: osName, dir, env, fs })
+  let endpoint = resolveEndpoint()
+  let sock = socketPath || endpoint.socketPath
+  let ask = request || endpoint.request
+  const probe = async () => {
+    if (!sock && !socketPath) { endpoint = resolveEndpoint(); sock = endpoint.socketPath; ask = request || endpoint.request }
+    if (!sock) return { up: false, why: endpoint.why || 'no control socket to ask' }
+    try { await ask({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (e) {
+      if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) return { up: false }
+      return { up: false, stuck: String((e && e.message) || e) }
+    }
+  }
+  const notes = [], problems = []
+  const was = await probe()
+  let up = was.up, started = false, unitFailed = null, halt = false
+  if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "asight off", then "asight on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
+  else if (unit) {
+    if (halted()) halt = true
+    else {
+      if (reload && typeof unit.reload === 'function') unit.reload() // a unit file rewritten under a loaded unit
+      const rr = autostart ? unit.enable({ now: !was.up }) : (was.up ? null : unit.start())
+      started = !was.up
+      if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // enable's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
+      if (rr && rr.code !== 0) {
+        // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —
+        // launchd is the only autostart there, 4.9 §11); the systemd wording below is the answer of an arch that has none.
+        if (rr.event) { unitFailed = rr.event.reason; put(rr.event) }
+        else {
+          // the start question in the platform's own words: win32's unit is a scheduled task (\asight\collector, autostart.mjs), darwin's a LaunchAgent,
+          // and the systemd wording is Linux's alone — a Windows user told to run `systemctl --user status` has been handed nothing (tested 2026-10-11)
+          unitFailed = osName === 'win32' ? `the scheduled task \\asight\\collector was not registered or run (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}"`
+            : `${unit.path} is written but "systemctl --user ${autostart ? `enable${was.up ? '' : ' --now'}` : 'start'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
+          put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
+        }
+        notes.push(unitFailed); problems.push(unitFailed)
+      } else if (!was.up) {
+        for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
+        if (!up && !halt) {
+          const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.asight.collector' : osName === 'win32' ? 'schtasks /Query /TN \\asight\\collector (and "asight status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
+          const why = `the unit was ${autostart ? 'enabled and started' : 'started'}, but no daemon answers on ${sock}; look at "${where}" and the board's capture health`
+          problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
+        }
+      }
+    }
+  } else if (!up) notes.push(`没有自启单元,守护进程没在跑:运行 ${DAEMON_CMD}(它按 state.json 里的期望态挂引流)${was.why ? `;${was.why}` : ''}`)
+  return { up, started: started && up, sock, ask, unitFailed, notes, problems, halt }
+}
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
 
 // `asight install` on macOS and Windows (4.11 §1, plan T20): the model's install lives beside this one; Linux keeps installCollector.
