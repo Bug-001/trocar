@@ -41,7 +41,7 @@ const alive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { r
 // ---------- W1: the helper is read-only, and its verb set is closed ----------
 
 test('W1 the verb set is the closed list, frozen', () => {
-  assert.deepEqual([...HELPER_VERBS], ['ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'version'])
+  assert.deepEqual([...HELPER_VERBS], ['ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'version', 'proc-env'])
   assert.ok(Object.isFrozen(HELPER_VERBS))
   assert.ok(HELPER_PS1.endsWith('helper.ps1'))
 })
@@ -395,7 +395,7 @@ const NATIVE_IMPORTS = [
   'iphlpapi.dll!GetBestInterface', 'iphlpapi.dll!GetExtendedTcpTable',
   'kernel32.dll!CloseHandle', 'kernel32.dll!CreateFile', 'kernel32.dll!CreateToolhelp32Snapshot', 'kernel32.dll!GetCurrentProcess', 'kernel32.dll!GetNamedPipeServerProcessId',
   'kernel32.dll!GetProcessTimes', 'kernel32.dll!OpenProcess', 'kernel32.dll!Process32FirstW', 'kernel32.dll!Process32NextW', 'kernel32.dll!ProcessIdToSessionId',
-  'kernel32.dll!QueryFullProcessImageName',
+  'kernel32.dll!QueryFullProcessImageName', 'kernel32.dll!ReadProcessMemory', 'ntdll.dll!NtQueryInformationProcess',
 ]
 const IMPORT_RE = /\[(?:System\.Runtime\.InteropServices\.)?DllImport\(\s*"([^"]+)"([^\]]*)\)\]\s*(?:(?:public|private|internal|static|extern|unsafe)\s+)+[\w.<>[\]]+\s+(\w+)\s*\(/g
 /** What the C# may not contain, wherever it sits (comments too). */
@@ -414,7 +414,7 @@ const CS_BANS = [
 function callSiteViolations(cs) {
   const body = cs.split('\n').filter((l) => !/\bextern\b/.test(l)).join('\n') // the declarations name the parameters; the calls give the values
   const out = []
-  for (const m of body.matchAll(/\bOpenProcess\(\s*([^,)]*)/g)) if (m[1].trim() !== '0x1000') out.push(`OpenProcess with access ${m[1].trim()}: only PROCESS_QUERY_LIMITED_INFORMATION (0x1000) reads`)
+  for (const m of body.matchAll(/\bOpenProcess\(\s*([^,)]*)/g)) if (!['0x1000', '0x1010'].includes(m[1].trim())) out.push(`OpenProcess with access ${m[1].trim()}: only PROCESS_QUERY_LIMITED_INFORMATION (0x1000), with PROCESS_VM_READ (0x0010) for proc-env, reads`)
   for (const m of body.matchAll(/\bOpenProcessToken\(\s*[^,]+,\s*([^,]+),/g)) if (m[1].trim() !== '0x8') out.push(`OpenProcessToken with access ${m[1].trim()}: only TOKEN_QUERY (0x8) reads`)
   for (const m of body.matchAll(/\bCreateFile\(\s*[^,]+,\s*([^,]+),\s*[^,]+,\s*[^,]+,\s*([^,]+),/g)) {
     if (m[1].trim() !== '0x80000000') out.push(`CreateFile with access ${m[1].trim()}: only GENERIC_READ (0x80000000) reads`)
@@ -445,7 +445,7 @@ test('W1 the C# in helper.ps1 imports exactly the read-only native functions, us
   assert.deepEqual(nativeViolations(PS), [])
   const imports = [...PS.matchAll(IMPORT_RE)].map((m) => `${m[1].toLowerCase()}!${m[3]}`)
   assert.deepEqual([...imports].sort(), [...NATIVE_IMPORTS].sort())
-  assert.equal(NATIVE_IMPORTS.length, 17)
+  assert.equal(NATIVE_IMPORTS.length, 19)
 })
 
 test('W1 the native scan can fail: each planted write, run, kill or registry change in the C# is caught', () => {
@@ -813,12 +813,12 @@ test('W4 through the real client and the fake helper: the verb answers the rows 
 test('W2 factsOfPid: the pid\'s row of the helper\'s ps answer, as ProcFacts with source accept; a pid nobody lists is null, not an error', async () => {
   const h = tableHelper([]) // shape only; a ps helper of its own below
   const psHelper = (procs) => ({ calls: [], async call(verb, args, opts) { this.calls.push({ verb, args, opts }); return { sessionId: 2, procs } } })
-  const row = { pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', cmdline: '"C:\\apps\\p12.exe" --x', startedAt: 1012, sessionId: 2, integrity: 'medium', tokenDenied: false }
+  const row = { pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', cmdline: '"C:\\apps\\p12.exe" --x', startedAt: 1012, sessionId: 2, sameUser: true, integrity: 'medium', tokenDenied: false }
   const good = psHelper([row, { ...row, pid: 13 }])
   const facts = await factsOfPid(12, { helper: good })
   assert.deepEqual({ ...facts }, {
     os: 'win32', pid: 12, ppid: 1, name: 'p12.exe', exe: 'C:\\apps\\p12.exe', argv: ['C:\\apps\\p12.exe', '--x'], cmdline: '"C:\\apps\\p12.exe" --x', env: null, envRead: false, cwd: null,
-    startedAt: 1012, startTicks: '1012', sessionId: 2, integrity: 'medium', tokenDenied: false, elevated: false, elevationInferred: false, source: 'accept', cmdlineState: 'ok',
+    startedAt: 1012, startTicks: '1012', sessionId: 2, sameUser: true, integrity: 'medium', tokenDenied: false, elevated: false, elevationInferred: false, source: 'accept', cmdlineState: 'ok',
   })
   assert.equal(facts.envError, 'env-unreadable')
   assert.deepEqual(good.calls.map((c) => [c.verb, c.args]), [['ps', {}]], 'one targeted ask: the session snapshot, the row picked here')

@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url'
 export const HELPER_PROTO = 1
 export const HELPER_PS1 = fileURLToPath(new URL('./helper.ps1', import.meta.url))
 /** The closed verb set (4.8 §1). Every one only reads: no registry write, no process control, no file write, no network. */
-export const HELPER_VERBS = Object.freeze(['ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'version'])
+export const HELPER_VERBS = Object.freeze(['ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'version', 'proc-env'])
 /** What reg-read may read, besides the keys a harness file declares (below): the Internet Settings proxy values (4.7 §3, 4.8 §2.2), the user's Path and the proxy variables of the login environment
  *  (`HKCU\Environment`: the agent's own proxy when no file names one, 4.8 §2.2; asight reads them and never writes one, D43), the machine PATH (the Kimi and OpenCode shims, 4.8 §6.3)
  *  and the Smart App Control policy state (4.8 §6.3). Hive and key compare case-insensitively with `/` taken as `\` and no trailing `\`; names compare case-insensitively (a registry value name is

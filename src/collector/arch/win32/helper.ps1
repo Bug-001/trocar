@@ -8,7 +8,7 @@
 # Protocol, one JSON object per line each way:
 #   helper -> client, once, after the native code is compiled:  {"ready":true,"proto":1,"pid":N,"ps":"5.1...","native":true}
 #   client -> helper:  {"id":N,"verb":"ps","args":{...}}        helper -> client:  {"id":N,"ok":true,"data":{...}} | {"id":N,"ok":false,"error":"..."}
-# EOF on stdin ends the loop. Verbs: version ps tcp-table reg-read net-if route token roots pipe-server (what each returns: section 1 of 4.8).
+# EOF on stdin ends the loop. Verbs: version ps tcp-table reg-read net-if route token roots pipe-server proc-env (what each returns: section 1 of 4.8).
 #
 # Windows PowerShell 5.1, C# 5 (Add-Type compiles with the .NET Framework compiler: no string interpolation, no ?., no out var).
 # The one parameter: the registry keys the harness files declare (policy values), as base64 of JSON, which reg-read may read besides the fixed list below.
@@ -59,7 +59,7 @@ using System.Text;
 
 public class AsightProc {
   public int Pid; public int Ppid; public int Session; public int Rid; public long StartedMs;
-  public string Name; public string Exe; public bool TokenDenied;
+  public string Name; public string Exe; public bool TokenDenied; public bool SameUser;
 }
 
 public static class AsightWin {
@@ -82,9 +82,12 @@ public static class AsightWin {
   [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr buf, int len, out int returned);
   [DllImport("advapi32.dll")] static extern IntPtr GetSidSubAuthority(IntPtr sid, int n);
   [DllImport("advapi32.dll")] static extern IntPtr GetSidSubAuthorityCount(IntPtr sid);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, byte[] info, int len, out int returned);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool ReadProcessMemory(IntPtr h, IntPtr addr, byte[] buf, IntPtr size, out IntPtr read);
 
   static readonly string[] States = { "unknown", "closed", "listen", "syn-sent", "syn-received", "established", "fin-wait-1", "fin-wait-2", "close-wait", "closing", "last-ack", "time-wait", "delete-tcb" };
   static int ownSession = -2;
+  static string ownUser = null;
 
   static string N(long v) { return v.ToString(CultureInfo.InvariantCulture); }
   static void Q(StringBuilder b, string s) {
@@ -97,6 +100,22 @@ public static class AsightWin {
     uint s;
     if (ownSession == -2) ownSession = ProcessIdToSessionId((uint)System.Diagnostics.Process.GetCurrentProcess().Id, out s) ? (int)s : -1;
     return ownSession;
+  }
+  public static string OwnUser() {
+    if (ownUser == null) ownUser = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
+    return ownUser;
+  }
+  // the SID of the user a process runs as (TokenUser), or null when its token cannot be opened
+  static string UserOf(IntPtr proc) {
+    IntPtr tok;
+    if (!OpenProcessToken(proc, 0x8, out tok)) return null;
+    try {
+      int need = 0;
+      GetTokenInformation(tok, 1, IntPtr.Zero, 0, out need);
+      if (need <= 0) return null;
+      IntPtr buf = Marshal.AllocHGlobal(need);
+      try { return GetTokenInformation(tok, 1, buf, need, out need) ? new System.Security.Principal.SecurityIdentifier(Marshal.ReadIntPtr(buf)).Value : null; } finally { Marshal.FreeHGlobal(buf); }
+    } finally { CloseHandle(tok); }
   }
   static string ImagePath(IntPtr h) {
     for (int cap = 1024; cap <= 32768; cap *= 32) {
@@ -135,7 +154,8 @@ public static class AsightWin {
     return rid < 0 ? null : rid < 0x1000 ? "untrusted" : rid < 0x2000 ? "low" : rid < 0x3000 ? "medium" : rid < 0x4000 ? "high" : rid < 0x5000 ? "system" : "protected";
   }
 
-  // the processes of this session (all = every session), without command lines: those come from CIM and are merged in ProcsJson
+  // the processes of this session and the user's own in every other session (an agent in another ssh / RDP session of the same user is
+  // still the user's agent); all = every process of every session. Without command lines: those come from CIM and are merged in ProcsJson
   public static List<AsightProc> Snapshot(bool all) {
     List<AsightProc> res = new List<AsightProc>();
     int own = OwnSession();
@@ -148,12 +168,12 @@ public static class AsightWin {
         int pid = (int)pe.th32ProcessID;
         if (pid == 0) continue;
         uint sess; int sid = ProcessIdToSessionId((uint)pid, out sess) ? (int)sess : -1;
-        if (!all && sid != own) continue;
         AsightProc p = new AsightProc(); p.Pid = pid; p.Ppid = (int)pe.th32ParentProcessID; p.Name = pe.szExeFile; p.Session = sid; p.StartedMs = -1; p.Rid = -1;
         IntPtr h = OpenProcess(0x1000, false, pid);
         if (h != IntPtr.Zero) {
-          try { p.Exe = ImagePath(h); p.StartedMs = StartedOf(h); bool denied; p.Rid = RidOfProcess(h, out denied); p.TokenDenied = denied; } finally { CloseHandle(h); }
+          try { p.Exe = ImagePath(h); p.StartedMs = StartedOf(h); bool denied; p.Rid = RidOfProcess(h, out denied); p.TokenDenied = denied; p.SameUser = UserOf(h) == OwnUser(); } finally { CloseHandle(h); }
         }
+        if (!all && sid != own && !p.SameUser) continue;
         res.Add(p);
       } while (Process32NextW(snap, ref pe));
     } finally { CloseHandle(snap); }
@@ -174,7 +194,7 @@ public static class AsightWin {
       b.Append(",\"cmdline\":"); Q(b, c);
       b.Append(",\"cmdlineState\":"); Q(b, cstate);
       b.Append(",\"startedAt\":" + (p.StartedMs >= 0 ? N(p.StartedMs) : "null") + ",\"sessionId\":" + (p.Session >= 0 ? N(p.Session) : "null") + ",\"integrity\":"); Q(b, IntegrityNameOf(p.Rid));
-      b.Append(",\"tokenDenied\":" + (p.Exe != null && p.TokenDenied ? "true" : "false") + "}");
+      b.Append(",\"tokenDenied\":" + (p.Exe != null && p.TokenDenied ? "true" : "false") + ",\"sameUser\":" + (p.SameUser ? "true" : "false") + "}");
     }
     return b.Append("]}").ToString();
   }
@@ -230,6 +250,48 @@ public static class AsightWin {
   }
 
   // a named pipe: does it exist, and which process serves it. Opening it as a client (read access, sends nothing) is the only way to ask.
+  static byte[] Rd(IntPtr h, long addr, int n) {
+    byte[] b = new byte[n]; IntPtr got;
+    if (n > 0 && (!ReadProcessMemory(h, new IntPtr(addr), b, new IntPtr(n), out got) || got.ToInt64() != n)) throw new InvalidOperationException("ReadProcessMemory failed: " + Marshal.GetLastWin32Error());
+    return b;
+  }
+  // proc-env: ONE read of a process of this user (PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, x64 PEB layout): ProcessParameters ->
+  // CurrentDirectory.DosPath (+0x38) and Environment (+0x80, EnvironmentSize +0x3F0), the parent pid from ProcessBasicInformation, and the
+  // parent's start time: the parent is the CREATOR only when it started no later than the child (a pid is reused once its process is gone).
+  // Only the entries of `names` (compared case-insensitively) leave the helper, as UTF-16LE "N=V\0...\0" in base64. The environment is the
+  // block as it is NOW (a process that set a variable after it started shows the new value).
+  public static string ProcEnvJson(int pid, string[] names) {
+    StringBuilder b = new StringBuilder("{\"pid\":" + N(pid));
+    if (IntPtr.Size != 8) return b.Append(",\"ok\":false,\"error\":\"not-64-bit\"}").ToString();
+    IntPtr h = OpenProcess(0x1010, false, pid);
+    if (h == IntPtr.Zero) { int e = Marshal.GetLastWin32Error(); return b.Append(",\"ok\":false,\"error\":\"" + (e == 5 ? "access-denied" : e == 87 ? "gone" : "open-failed") + "\",\"winError\":" + N(e) + "}").ToString(); }
+    try {
+      if (UserOf(h) != OwnUser()) return b.Append(",\"ok\":false,\"error\":\"other-user\"}").ToString();
+      long started = StartedOf(h);
+      byte[] pbi = new byte[48]; int ret;
+      int st = NtQueryInformationProcess(h, 0, pbi, 48, out ret);
+      if (st != 0) return b.Append(",\"ok\":false,\"error\":\"query-failed\",\"ntstatus\":" + N(st) + "}").ToString();
+      long pp = BitConverter.ToInt64(Rd(h, BitConverter.ToInt64(pbi, 8) + 0x20, 8), 0);
+      int ppid = (int)BitConverter.ToInt64(pbi, 40);
+      int cwdLen = BitConverter.ToUInt16(Rd(h, pp + 0x38, 2), 0);
+      string cwd = cwdLen > 0 ? Encoding.Unicode.GetString(Rd(h, BitConverter.ToInt64(Rd(h, pp + 0x40, 8), 0), cwdLen)) : null;
+      long size = BitConverter.ToInt64(Rd(h, pp + 0x3F0, 8), 0);
+      if (size < 0 || size > (1 << 24)) return b.Append(",\"ok\":false,\"error\":\"env-size\"}").ToString();
+      string block = Encoding.Unicode.GetString(Rd(h, BitConverter.ToInt64(Rd(h, pp + 0x80, 8), 0), (int)size));
+      HashSet<string> want = new HashSet<string>(names ?? new string[0], StringComparer.OrdinalIgnoreCase);
+      StringBuilder kept = new StringBuilder();
+      foreach (string e in block.Split('\0')) { int eq = e.Length > 1 ? e.IndexOf('=', 1) : -1; if (eq > 0 && want.Contains(e.Substring(0, eq))) kept.Append(e).Append('\0'); }
+      long pStarted = -1;
+      IntPtr hp = ppid > 0 ? OpenProcess(0x1000, false, ppid) : IntPtr.Zero;
+      if (hp != IntPtr.Zero) { try { pStarted = StartedOf(hp); } finally { CloseHandle(hp); } }
+      string parent = pStarted >= 0 && started >= 0 && pStarted <= started ? "{\"pid\":" + N(ppid) + ",\"startedAt\":" + N(pStarted) + "}" : "null";
+      b.Append(",\"ok\":true,\"startedAt\":" + (started >= 0 ? N(started) : "null") + ",\"cwd\":"); Q(b, cwd);
+      b.Append(",\"envB64\":\"" + Convert.ToBase64String(Encoding.Unicode.GetBytes(kept.ToString())) + "\",\"ppid\":" + N(ppid) + ",\"parent\":" + parent + "}");
+      return b.ToString();
+    } catch (Exception ex) { b.Append(",\"ok\":false,\"error\":\"read-failed\",\"message\":"); Q(b, ex.Message); return b.Append("}").ToString(); }
+    finally { CloseHandle(h); }
+  }
+
   public static string PipeJson(string name) {
     StringBuilder b = new StringBuilder();
     IntPtr h = CreateFile("\\\\.\\pipe\\" + name, 0x80000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
@@ -445,6 +507,16 @@ function Verb-PipeServer($a) {
   return @{ __raw = [AsightWin]::PipeJson($name) }
 }
 
+# proc-env: one PEB read of a process of this user (the environment entries asked for, the current directory, the parent that created it)
+function Verb-ProcEnv($a) {
+  Need-Native
+  $p = [int]$a.pid
+  if ($p -le 0) { throw 'bad-pid' }
+  $names = @()
+  if ($null -ne $a.names) { $names = @($a.names | ForEach-Object { [string]$_ }) }
+  return @{ __raw = [AsightWin]::ProcEnvJson($p, [string[]]$names) }
+}
+
 function Dispatch([string]$verb, $a) {
   switch ($verb) {
     'version' { return (Verb-Version $a) }
@@ -456,6 +528,7 @@ function Dispatch([string]$verb, $a) {
     'token' { return (Verb-Token $a) }
     'roots' { return (Verb-Roots $a) }
     'pipe-server' { return (Verb-PipeServer $a) }
+    'proc-env' { return (Verb-ProcEnv $a) }
     default { throw ('unknown-verb: ' + $verb) }
   }
 }
