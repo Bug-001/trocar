@@ -8,6 +8,11 @@ import { fileURLToPath } from 'node:url'
 import { startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
 import { factsOfPid } from '../../../../src/collector/arch/win32/procinfo.mjs'
 import { ownerOfSocket } from '../../../../src/collector/arch/win32/socktable.mjs'
+import { createWin32Redirector } from '../../../../src/collector/arch/win32/redirector.mjs'
+import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
+import claudeCode from '../../../../src/collector/harness/win32/claude-code.mjs'
+import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
+import { createRegistry } from '../../../../src/collector/core/registry.mjs'
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-helper.mjs', import.meta.url))
 const fakeSpawn = (fixture) => () => spawn(process.execPath, [FAKE, JSON.stringify(fixture)], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ASIGHT_FAKE_HELPER: '1' } })
@@ -65,4 +70,39 @@ test('a process of the same user in another session is listed by ps and answers 
   await h.ready
   const f = await factsOfPid(20, { helper: h })
   assert.deepEqual([f.pid, f.sessionId, f.sameUser], [20, 2, true])
+})
+
+// The backlog's repro runs the REAL createWin32Redirector over the in-order helper (cases A and B): the reason a connection is
+// spliced with is the door's (4.8 §5.3, the closed set in src/health/codes.mjs).
+const CC_IMG = 'C:\\Users\\u\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe'
+const CC_GROUPS = groupsOf([{ name: 'claude-code', win32: claudeCode }])
+const ID = createRegistry(await loadHarnesses()).match
+async function doorOver(t, fixture, { psTimeoutMs } = {}) {
+  const h = started(t, fixture)
+  await h.ready
+  const r = createWin32Redirector({
+    helper: h, groups: CC_GROUPS, identify: ID, isOn: () => true, verdictWaitMs: 40,
+    ownerOf: (q) => ownerOfSocket({ helper: h, peer: q.peer }),
+    factsOf: (pid) => factsOfPid(pid, { helper: h, ...(psTimeoutMs ? { psTimeoutMs } : {}) }),
+    routes: () => ({ 'claude-code.settings': { g: 'claude-code.settings', entry: 'auto', on: true, upstream: { kind: 'direct', source: 'direct' }, bypass: [] } }),
+    ingress: () => ({ enginePort: 17990, groupPorts: { 'claude-code.settings': 17991 }, ingressToken: 'i'.repeat(32), listenerToken: 't' }),
+  })
+  return r
+}
+const ask = (r, port) => r.lookupIngress({ peer: { address: '127.0.0.1', port }, user: 'claude-code.settings', target: { address: 'api.anthropic.com', port: 443 } })
+
+test('A through the door: four staggered connections of one agent while a cold ps (300 ms) is out — every one is the agent\'s pid, none spliced', async (t) => {
+  const pid = 4121, ports = [5010, 5011, 5012, 5013]
+  const r = await doorOver(t, { verbs: { ps: { delayMs: 300, data: { sessionId: 1, procs: [proc(pid, { exe: CC_IMG, name: 'claude.exe', cmdline: 'claude' })] } }, 'tcp-table': { data: { rows: ports.map((p) => trow(pid, p)) } } } })
+  const metas = []
+  for (const p of ports) { metas.push(ask(r, p)); await later(10) }
+  const got = await Promise.all(metas)
+  assert.deepEqual(got.map((m) => [m.pid, m.agent, m.skip?.reason ?? null]), ports.map(() => [pid, 'claude-code', null]))
+})
+
+test('B through the door: a ps that never answers splices with facts-unavailable (facts not asked), never as not an agent', async (t) => {
+  const r = await doorOver(t, { verbs: { ps: { hang: true }, 'tcp-table': { data: { rows: [trow(4121, 5010)] } } } }, { psTimeoutMs: 80 })
+  const m = await ask(r, 5010)
+  assert.equal(m.pid, 4121)
+  assert.deepEqual(m.skip, { not_captured: 'untracked', reason: 'facts-unavailable' })
 })
