@@ -22,7 +22,7 @@ import { newReceipt, EXIT } from './schema.mjs'
 import { collectorDir, stateFile, opLockFile } from './paths.mjs'
 import { readStateFile, setDesired, writeStateAtomic, emptyState } from './state.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
-import { readManifest, refuseOldManifest, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
+import { readManifest, refuseOldManifest, unknownItems, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
 import { undoHarnesses } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
@@ -359,6 +359,22 @@ export function flowWriter(w, run, notes, { event = EVENT_OFF_NOTE, where = WHER
   }
 }
 
+// a manifest holding an item of a kind this build does not know was written by a newer asight. Undoing the rest would turn the routing off and stop
+// the daemon while that item stays, half an off: the whole off is refused instead, before the desired state and the routing (step 2 / 3) — the receipt
+// names each such item and kind and says which asight-off undoes it. → true when it refused (receipt filled), false otherwise.
+function refuseUnknownKinds(manifest, receipt, standalone) {
+  const unknown = manifest && !manifest.unsupported ? unknownItems(manifest) : []
+  if (!unknown.length) return false
+  const kinds = [...new Set(unknown.map((u) => JSON.stringify(u.kind)))].join(', ')
+  // the copy sends the person to `asight off` (the asight that wrote the manifest); `asight off` itself cannot send anyone to itself (V35)
+  const who = standalone ? 'run `asight off`, from the asight that wrote it' : 'use the asight-off of the newer asight that wrote it'
+  receipt.left.push(...unknown.map((u) => ({ path: u.path ?? null, result: 'unknown-kind', reason: `an item of kind ${JSON.stringify(u.kind)}, which this asight-off does not know: ${who}` })))
+  receipt.problems.push(`the install manifest holds ${unknown.length} item(s) of a kind this asight-off (version ${OFF_VERSION}) does not know (${kinds}): a newer asight wrote it, and only a newer asight-off can undo it — ${who}. Nothing was changed: the routing is as it was, the daemon was not asked to stop`)
+  receipt.ok = false
+  receipt.log = null
+  return true
+}
+
 /** `asight off [harness…]` (1.6 §1.1, §1.4, §1.5): see the header. `ids`: harness code ids, or null for every one; `now`: cut the connections still relayed (`--now`);
  *  `yes` / `interactive` / `io`: the one confirmation, for undoing by marks when the manifest is lost (R6); `say`: where the list goes before the question.
  *  → `{ receipt, exit }`; the receipt is src/off/schema.mjs's plus `harnesses` · `routing` · `daemon` · `autostart` · `still_trusting` · `kept_backups` · `kept_bundles` ·
@@ -399,6 +415,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     return { receipt, exit: EXIT.ok }
   }
 
+  if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt, exit: EXIT.incomplete } // before the lock, the desired state and the routing
   // 1 · the lock, off first: the desired state is written before the wait when the lock is held, so an `on` that is mid-way stops (R12)
   const tryOff = () => { try { return { r: desiredOff(w, ids, installed), error: null } } catch (e) { return { r: null, error: e } } }
   let early = null
@@ -414,6 +431,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   }
   try {
     ({ manifest, manifestError } = read()); installed = harnessIdsOf(manifest)
+    if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt, exit: EXIT.incomplete } // read again under the lock: a newer asight may have written since (the lock is released by finally)
     if (ids === null) receipt.harnesses = installed
     // 2 · the desired state
     const again = tryOff()

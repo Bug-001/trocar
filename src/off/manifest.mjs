@@ -184,7 +184,7 @@ export function parseManifest(text, name = MANIFEST) {
 }
 
 /** Every command that can write (on, off, uninstall, the standalone asight-off, install) asks this BEFORE ANY write (4.11 ⑰, CM29): null, or — for a manifest
- *  of version 1 or 2 — `{ code: 'manifest-v2', version, message }`, the command then exits 1 having written nothing (not even ~/.asight/bin/asight-off). The
+ *  of version 1 or 2 — `{ version, message }`, the command then exits 1 having written nothing (not even ~/.asight/bin/asight-off). The
  *  message names the tools that undo it, in order: the asight from main before the collector model, then the standalone copy (`node "<path>"` on Windows,
  *  ). A manifest that cannot be read is not this refusal's: null, and the command's own read says it. */
 export function refuseOldManifest({ home = nodeOs.homedir(), platform = process.platform, fs = nodeFs } = {}) {
@@ -198,7 +198,7 @@ export function refuseOldManifest({ home = nodeOs.homedir(), platform = process.
     `  2. without that build, the standalone copy it left: ${platform === 'win32' ? `node "${copy}"` : shellWord(copy)}`,
     'then run asight install.',
   ].join('\n')
-  return { code: 'manifest-v2', version: m.version, message }
+  return { version: m.version, message }
 }
 
 /** The manifest in the file `file` (the install manifest, or the old capture's ledger ~/.asight/legacy-manifest.json: the same format), or null when there is none. Never writes. */

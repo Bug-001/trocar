@@ -462,8 +462,8 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
 
 // the old capture's own status test went with it (D39⑥ executed 2026-10-11): status.mjs no longer has the legacy
 // branch; every platform prints the collector's status, and the VPN lines it prints are the same cells above and below.
-test('semantics 2: an install manifest that parses but is not a manifest ({"version":2}, entries as an object) is 不知道 with the file and the reason — exit 3, no stack trace, never "没有装入口" — in the text and in --json', async () => {
-  for (const body of ['{"version":2}', (m) => ({ ...m, entries: { a: 1 } })]) {
+test('semantics 2: an install manifest that parses but is not a manifest ({"version":3}, entries as an object) is 不知道 with the file and the reason — exit 3, no stack trace, never "没有装入口" — in the text and in --json', async () => {
+  for (const body of ['{"version":3}', (m) => ({ ...m, entries: { a: 1 } })]) {
     const s = await installedHome()
     const file = path.join(s.dir, 'install-manifest.json')
     fs.writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body(JSON.parse(fs.readFileSync(file, 'utf8')))))

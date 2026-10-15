@@ -277,7 +277,7 @@ test('--json: one document that validates, the verdict and its reasons, the file
 
 // the codex WebSocket cert hint (measured on a Windows test machine): on win32, doctor says — for codex, when the named cert-store opt-in is not recorded — that capturing Codex's WebSocket needs it. Never an install, and nothing to say on other platforms or once the item is in the ledger.
 const CODEX_WS_HINT = 'Windows 上采 Codex 的 WebSocket 需要点名装证书: asight on codex --opt-in cert-store-current-user(会弹 Windows 自己的确认框,不弹不装)'
-const manifestWith = (entries) => { const dir = (h) => path.join(h, '.asight', 'collector'); return (h) => { const d = dir(h); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'install-manifest.json'), JSON.stringify({ version: 2, entries, files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [], complete: true })) } }
+const manifestWith = (entries) => { const dir = (h) => path.join(h, '.asight', 'collector'); return (h) => { const d = dir(h); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'install-manifest.json'), JSON.stringify({ version: 3, entries: entries.map((e) => ({ phase: 'on', ...e })), files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [], complete: true })) } }
 test('the codex WebSocket cert hint on win32: said for codex when the cert-store opt-in is not recorded, silent once it is, silent on other platforms', async () => {
   const noRecord = plain(); manifestWith([])(noRecord.home)
   let r = await doctor(noRecord, ['codex'], { platform: 'win32' })

@@ -232,7 +232,7 @@ test('src/off carries OFF_VERSION as an integer, and the unique-name rule the ge
 
 // ── V35 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('V35: an item of a kind the copy does not know is left alone — ok:false, exit 1, the hint is `asight off`; every other entry is undone', async () => {
+test('V35 / an item of a kind the copy does not know refuses the whole off — ok:false, exit 1, the hint is `asight off`; no other entry is undone either', async () => {
   const s = await brokenAsight()
   const before = preEntries(s)
   const mystery = path.join(s.home, 'mystery.cfg')
@@ -247,9 +247,8 @@ test('V35: an item of a kind the copy does not know is left alone — ok:false, 
   const left = out.left.find((l) => l.path === mystery)
   assert.ok(left && /asight off/.test(left.reason) && /mystery/.test(left.reason), `the item and the hint: ${JSON.stringify(out.left)}`)
   assert.equal(fs.readFileSync(mystery, 'utf8'), 'x', 'the item was not touched')
-  assert.deepEqual(backToBefore(before), [], 'the entries it does know are back as they were')
-  assert.deepEqual(readManifest(s.dir).entries.map((e) => e.kind), ['mystery'], 'and the manifest keeps the one it left, for the asight that knows it')
-  assert.equal(flowEvents(s.dir).at(-1).outcome, 'left')
+  assert.ok(backToBefore(before).length > 0, 'the entries it does know are not undone: half an off would leave routing off with the item still in place')
+  assert.deepEqual(readManifest(s.dir).entries.map((e) => e.kind).filter((k) => k === 'mystery'), ['mystery'], 'and the manifest is as it was, for the asight that knows it')
   // `asight off` itself says the same thing with its own words: it IS the asight, so it cannot send anyone to itself
   const t = await brokenAsight()
   const mt = readManifest(t.dir); const myst2 = path.join(t.home, 'mystery.cfg'); fs.writeFileSync(myst2, 'x')

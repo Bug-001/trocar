@@ -87,6 +87,6 @@ test('CM29 parseManifest of a version below 3 is { unsupported: "v2", version, t
   assert.deepEqual([later.unsupported, later.version], [true, 4])
   const home = v2Home(2)
   const r = refuseOldManifest({ home, platform: 'win32' })
-  assert.deepEqual([r.code, r.version], ['manifest-v2', 2])
+  assert.equal(r.version, 2)
   assert.equal(refuseOldManifest({ home: tmpDir('asight-v2-none-'), platform: 'linux' }), null, 'no manifest: nothing to refuse')
 })

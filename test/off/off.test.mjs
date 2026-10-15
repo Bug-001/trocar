@@ -823,3 +823,26 @@ test('off on Linux: an OS bundle that is there but unreadable ahead of a good on
   assert.match(k.os_roots_missing, /^the OS trust bundle cannot be read \(\/etc\/ssl\/certs\/ca-certificates\.crt: EACCES/)
   assert.equal(certBlocks(fs.readFileSync(bundle, 'utf8')).some((c) => c.fp === certBlocks(later.certPem)[0].fp), false, 'not built from the later file')
 })
+
+// an off of an older build over a manifest a newer build wrote. The 10-12 main-Mac off half-failed (bootout EIO, then unknown-kind at the launcher):
+// a kind this build does not know refuses the WHOLE off before step 2 / 3 — exit 1, the receipt names the kind and says a newer asight-off must undo it —
+// with no routing change, no daemon asked, no OS tool run (no bootout), no file of the agents' touched, state.json as it was.
+for (const where of ['entries', 'files']) {
+ test(`an unknown kind in ${where}: the whole off is refused before the routing — nothing asked of the daemon, no OS tool, no file touched`, async () => {
+    const s = await installedHome({ names: ['claude-code', 'codex'] })
+    const file = path.join(s.dir, 'install-manifest.json')
+    const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+    m[where].push({ kind: 'from-the-future', phase: 'on', harness: 'codex', path: path.join(s.home, '.codex', 'future.toml') })
+    fs.writeFileSync(file, JSON.stringify(m, null, 2))
+    const files = s.userFiles(), state = fs.readFileSync(path.join(s.dir, 'state.json')), manifest = fs.readFileSync(file)
+    const asked = [], ran = []
+    const r = await s.off({ deps: { request: (...a) => { asked.push(a); return s.sys.daemon.request(...a) }, exec: (...a) => { ran.push(a); return s.sys.exec.run(...a) } } })
+    assert.equal(r.exit, 1)
+    assert.deepEqual([asked, ran], [[], []], 'no routing change, no daemon stop, no bootout')
+    assert.deepEqual([s.userFiles(), fs.readFileSync(path.join(s.dir, 'state.json')), fs.readFileSync(file)], [files, state, manifest], 'nothing undone, nothing written')
+    assert.match(r.receipt.problems.join('\n'), /from-the-future.*newer asight-off/s)
+    assert.deepEqual(r.receipt.left.map((l) => [l.result, l.path]), [['unknown-kind', path.join(s.home, '.codex', 'future.toml')]])
+    assert.deepEqual(validateReceipt(r.receipt), [])
+    assert.ok(s.sys.daemon.isRecording('claude-code'), 'the daemon still records')
+  })
+}
