@@ -85,6 +85,7 @@ test('W1 reg-read: only the allowed keys and their names go through, checked in 
   const log = path.join(tmpDir('asight-helper-'), 'in.log')
   const h = started(t, { log, verbs: { 'reg-read': { data: { keyExists: true, values: {} } } } })
   const IS = 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
+  const POL_IS = 'Software\\Policies\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
   const SAC = 'SYSTEM\\CurrentControlSet\\Control\\CI\\Policy'
   const SME = 'SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'
   const ok = [
@@ -96,6 +97,10 @@ test('W1 reg-read: only the allowed keys and their names go through, checked in 
     { hive: 'HKCU', key: 'Environment', names: ['https_proxy', 'no_proxy'] }, // registry value names are not case-sensitive
     { hive: 'HKLM', key: SME, names: ['Path'] }, // the machine PATH, which Windows reads before the user's (4.8 §6.3)
     { hive: 'HKLM', key: SAC, names: ['VerifiedAndReputablePolicyState'] },
+    { hive: 'HKCU', key: IS + '\\Connections', names: ['DefaultConnectionSettings'] }, // the P7 chain's system proxy: WPAD, and the machine's settings under ProxySettingsPerUser=0
+    { hive: 'HKLM', key: IS, names: ['ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL'] },
+    { hive: 'HKLM', key: IS + '\\Connections', names: ['DefaultConnectionSettings'] },
+    { hive: 'HKLM', key: POL_IS, names: ['ProxySettingsPerUser'] },
   ]
   for (const a of ok) await h.call('reg-read', a)
   const bad = [
@@ -113,7 +118,9 @@ test('W1 reg-read: only the allowed keys and their names go through, checked in 
     { hive: 'HKLM', key: 'SYSTEM\\CurrentControlSet\\Control\\Session Manager', names: ['Path'] },
     { hive: 'HKLM', key: SME + '\\Sub', names: ['Path'] },
     { hive: 'HKCU', key: SAC, names: ['VerifiedAndReputablePolicyState'] },
-    { hive: 'HKLM', key: IS, names: ['ProxyServer'] },
+    { hive: 'HKLM', key: IS, names: ['ProxyServer', 'ProxySettingsPerUser'] }, // the policy value lives in the policy key, not here
+    { hive: 'HKLM', key: POL_IS, names: ['ProxyServer'] },
+    { hive: 'HKCU', key: POL_IS, names: ['ProxySettingsPerUser'] }, // the machine policy is HKLM's
     { hive: 'HKU', key: 'Environment', names: ['Path'] },
     { hive: 'HKCU', key: IS + '\\Connections', names: ['ProxyServer'] },
     { hive: 'HKCU', key: 'Environment\\..\\Software', names: ['Path'] },
@@ -122,7 +129,7 @@ test('W1 reg-read: only the allowed keys and their names go through, checked in 
   ]
   for (const a of bad) await rejects(h.call('reg-read', a), 'helper-forbidden-key')
   assert.equal(lines(log).filter((l) => l.verb === 'reg-read').length, ok.length, 'nothing refused was written')
-  assert.deepEqual(REG_READ_ALLOW.map((r) => `${r.hive}\\${r.key}`).sort(), ['HKCU\\Environment', `HKCU\\${IS}`, `HKLM\\${SAC}`, `HKLM\\${SME}`].sort())
+  assert.deepEqual(REG_READ_ALLOW.map((r) => `${r.hive}\\${r.key}`).sort(), ['HKCU\\Environment', `HKCU\\${IS}`, `HKCU\\${IS}\\Connections`, `HKLM\\${IS}`, `HKLM\\${IS}\\Connections`, `HKLM\\${POL_IS}`, `HKLM\\${SAC}`, `HKLM\\${SME}`].sort())
 })
 
 const POLICY = { hive: 'HKCU', key: 'SOFTWARE\\Policies\\Claude', names: ['egressProxyUrl'] } // what Claude Desktop's harness file declares (win32/claude-code.mjs)

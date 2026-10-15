@@ -257,6 +257,44 @@ export async function readHkcuEnv({ helper, timeoutMs = 2000 } = {}) {
   return { ok: true, values }
 }
 
+// ---- the system proxy for the P7 chain (spec 4.11 P7; D57 scope) ------------------------------------------------------------------------------------
+
+const PER_USER_POLICY = 'Software\\Policies\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
+const AUTO_DETECT = 0x8 // PROXY_TYPE_AUTO_DETECT in the flags DWORD at offset 8 of DefaultConnectionSettings
+
+/** readSystemProxyChain({ helper, timeoutMs }) → readSystemProxy's answer plus { hive, autoDetect }, or { ok: false, reason, detail }. The machine policy
+ *  `ProxySettingsPerUser` = DWORD 0 puts the settings in HKLM; otherwise (unset, unreadable, another value) they are the user's, as WinINET reads them.
+ *  `autoDetect` is WPAD (flag 0x8 of `Connections\DefaultConnectionSettings`); a blob that is missing or too short is no WPAD. Never throws. */
+export async function readSystemProxyChain({ helper, timeoutMs = 2000 } = {}) {
+  const read = async (hive, key, names) => { try { return valuesOf(await helper.call('reg-read', { hive, key, names }, { timeoutMs })) } catch { return null } }
+  const pol = await read('HKLM', PER_USER_POLICY, ['ProxySettingsPerUser'])
+  const hive = pol && dwordOf(pol.ProxySettingsPerUser) === 0 ? 'HKLM' : 'HKCU'
+  let answer
+  try { answer = await helper.call('reg-read', { hive, key: INTERNET_SETTINGS, names: [...SYSTEM_PROXY_NAMES] }, { timeoutMs }) } catch (e) { return { ...unreadable(e), hive } }
+  const v = valuesOf(answer)
+  if (!v) return { ok: false, reason: 'unparseable', detail: 'answer', hive }
+  const c = await read(hive, `${INTERNET_SETTINGS}\\Connections`, ['DefaultConnectionSettings'])
+  const blob = c && c.DefaultConnectionSettings && c.DefaultConnectionSettings.kind === 'REG_BINARY' ? Buffer.from(String(c.DefaultConnectionSettings.value), 'base64') : null
+  const n = dwordOf(v.ProxyEnable)
+  return { ok: true, hive, enable: n === 1 ? true : n === 0 ? false : null, server: stringOf(v.ProxyServer), override: stringOf(v.ProxyOverride), autoConfigUrl: stringOf(v.AutoConfigURL), autoDetect: !!(blob && blob.length >= 12 && blob.readUInt32LE(8) & AUTO_DETECT) }
+}
+
+/** chainSystemProxy(sp) → the chain's systemProxy: null (off, or nothing for HTTPS) · { url, bypass } · { pac: true } (an AutoConfigURL or WPAD: never
+ *  executed) · { ok: false, why } (unreadable, or a ProxyServer asight cannot dial: SOCKS-only, TLS, credentials WinINET would not send). */
+export function chainSystemProxy(sp) {
+  if (!sp || !sp.ok) return { ok: false, why: 'system-proxy-unreadable' }
+  if (text(sp.autoConfigUrl) || sp.autoDetect) return { pac: true }
+  if (sp.enable !== true) return null
+  const entry = serverEntryOf(sp.server)
+  if (entry.socks) return { ok: false, why: 'upstream-protocol' }
+  if (entry.text === undefined) return null
+  const p = parseProxyText(entry.text)
+  if (!p.ok) return { ok: false, why: p.why }
+  if (p.credentialed) return { ok: false, why: 'upstream-unparseable' }
+  const host = p.host.includes(':') ? `[${p.host}]` : p.host
+  return { url: `${p.kind}://${host}:${p.port}`, bypass: translateBypass(sp.override, 'wininet').bypass }
+}
+
 const SAME_FIELDS = Object.freeze(['enable', 'server', 'override', 'autoConfigUrl'])
 const nullish = (x) => (x === undefined ? null : x)
 
