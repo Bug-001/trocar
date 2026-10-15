@@ -5,6 +5,8 @@
 //   throws      — issueIntermediate throws (the helper crashed)
 //   keyLost     — exists() is false: the key was deleted behind asight's back
 //   wrongProfile — issueIntermediate hands back a self-signed root-shaped certificate instead
+//   wrongKey    — a well-formed intermediate for another public key than the one sent
+//   skewMs      — a well-formed intermediate whose notBefore is shifted by this much (a local-vs-UTC slip)
 import crypto from 'node:crypto'
 import { rootCertDer, intermediateCertDer } from '../../src/collector/core/tls/cert.mjs'
 
@@ -16,7 +18,7 @@ const signer = (k) => (tbs) => crypto.sign('sha256', tbs, k)
 
 export function custodyStub({ kind = 'stub', clock = () => Date.now() } = {}) {
   let keys = null, rootDer = null
-  const switches = { unavailable: false, throws: false, keyLost: false, wrongProfile: false }
+  const switches = { unavailable: false, throws: false, keyLost: false, wrongProfile: false, wrongKey: false, skewMs: 0 }
   const calls = []
   const self = {
     kind, switches, calls,
@@ -36,7 +38,8 @@ export function custodyStub({ kind = 'stub', clock = () => Date.now() } = {}) {
       if (switches.unavailable) return 'unavailable'
       if (!self.exists()) throw new Error('stub custody: no root key')
       if (switches.wrongProfile) { const k = p256(); return rootCertDer({ subject: 'not an intermediate', spkiDer: spkiOf(k.publicKey), serial, notBefore, notAfter: new Date(notBefore.getTime() + 7 * DAY), sign: signer(k.privateKey) }) }
-      return intermediateCertDer({ root: rootDer, subject: `asight intermediate ${notBefore.toISOString()}`, spkiDer, serial, notBefore, sign: signer(keys.privateKey) })
+      const nb = new Date(notBefore.getTime() + switches.skewMs)
+      return intermediateCertDer({ root: rootDer, subject: `asight intermediate ${nb.toISOString()}`, spkiDer: switches.wrongKey ? spkiOf(p256().publicKey) : spkiDer, serial, notBefore: nb, sign: signer(keys.privateKey) })
     },
     remove() { calls.push({ verb: 'remove' }); keys = null; rootDer = null },
   }

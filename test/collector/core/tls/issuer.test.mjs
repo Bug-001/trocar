@@ -19,6 +19,9 @@ import { tmpDir } from '../../../helpers/tmp.mjs'
 
 const DAY = 86400e3
 const REISSUE_AFTER_MS = 6 * DAY, RETRY_MS = 3600e3 // 4.11 P2: re-issue at 6 days, retry hourly
+const HOUR = 3600e3 // custody faults: [what, switch, value]
+const FAULTS = [['answers unavailable', 'unavailable', true], ['throws', 'throws', true], ['returns a wrong-profile certificate', 'wrongProfile', true],
+  ['certifies another key', 'wrongKey', true], ...[5 * HOUR, -5 * HOUR, -8 * DAY].map((ms) => [`slips notBefore by ${ms / HOUR} h`, 'skewMs', ms])]
 const settle = () => new Promise((r) => setImmediate(r))
 function fakeTime(start = Date.now()) {
   let now = start
@@ -134,6 +137,18 @@ test('CM6 unavailable at start: no issuer (leafFor null), one cert-intermediate-
   issuer.close()
 })
 
+for (const [what, fault, value] of FAULTS.slice(3)) {
+  test(`CM6 a custody that ${what} at start: no issuer, one cert-intermediate-unavailable record, retried hourly`, async () => {
+    const { t, stub, issuer, records } = await setup({ before: (s) => { s.switches[fault] = value } })
+    assert.equal(issuer.state(), 'unavailable')
+    assert.equal(issuer.leafFor('a.test'), null)
+    assert.deepEqual(records.map((r) => r.code), ['cert-intermediate-unavailable'])
+    await t.advance(RETRY_MS)
+    assert.equal(issues(stub), 2, 'retried after an hour')
+    issuer.close()
+  })
+}
+
 test('CM6 the key missing: state key-missing, cert-key-missing, the custody is never asked to issue', async () => {
   const { stub, issuer, records } = await setup({ before: (s) => { s.switches.keyLost = true } })
   assert.equal(issuer.state(), 'key-missing')
@@ -143,11 +158,11 @@ test('CM6 the key missing: state key-missing, cert-key-missing, the custody is n
   issuer.close()
 })
 
-for (const [what, fault] of [['answers unavailable', 'unavailable'], ['throws', 'throws'], ['returns a wrong-profile certificate', 'wrongProfile']]) {
+for (const [what, fault, value] of FAULTS) {
   test(`CM6 a re-issue that ${what}: the current intermediate is kept, retried hourly, forward-only at its expiry, back on success`, async () => {
     const { t, stub, issuer, records } = await setup()
     const before = certs(issuer.leafFor('a.test').cert)[1].fingerprint256
-    stub.switches[fault] = true
+    stub.switches[fault] = value
     await t.advance(REISSUE_AFTER_MS)
     assert.equal(issuer.state(), 'ready')
     assert.equal(certs(issuer.leafFor('a.test').cert)[1].fingerprint256, before, 'still the current intermediate')
@@ -158,7 +173,7 @@ for (const [what, fault] of [['answers unavailable', 'unavailable'], ['throws', 
     await t.advance(DAY) // past the 7-day notAfter (issued at start − 10 min)
     assert.notEqual(issuer.state(), 'ready')
     assert.equal(issuer.leafFor('a.test'), null, 'forward-only')
-    stub.switches[fault] = false
+    stub.switches[fault] = fault === 'skewMs' ? 0 : false
     await t.advance(RETRY_MS)
     assert.equal(issuer.state(), 'ready')
     assert.notEqual(certs(issuer.leafFor('a.test').cert)[1].fingerprint256, before)

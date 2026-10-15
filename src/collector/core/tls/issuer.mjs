@@ -18,6 +18,17 @@ const REISSUE_AFTER_MS = 6 * DAY // the next intermediate when the current one i
 const RETRY_MS = HOUR             // a failed issue is retried every hour
 const SKEW_MS = 10 * 60e3 // the intermediate's notBefore is backdated this much for clock skew
 
+// what the profile cannot know: the certificate is for the key we hold, and starts when we asked (to the second, the
+// DER time resolution). A backend that signs another SPKI, or slips local time against UTC, would otherwise serve leaves
+// every client refuses (a key mismatch, not yet valid) or one already expired — all silently.
+function asRequested(der, { spkiDer, notBefore }) {
+  const x = new crypto.X509Certificate(der)
+  const bad = []
+  if (!x.publicKey.export({ type: 'spki', format: 'der' }).equals(spkiDer)) bad.push('it certifies another public key than the one sent')
+  if (Math.abs(Date.parse(x.validFrom) - notBefore.getTime()) >= 1000) bad.push(`notBefore ${x.validFrom}, asked ${notBefore.toISOString()}`)
+  return bad
+}
+
 /** makeIssuer({ custody, root, clock, timers, record }) → { state(), leafFor(host), close() }. `root` is the installed root
  *  certificate (DER or PEM) every intermediate is checked against; `clock()` → ms; `record(r)` takes a D38 failure record. */
 export async function makeIssuer({ custody, root = null, clock = () => Date.now(), timers = { setTimeout, clearTimeout }, record = () => {} }) {
@@ -67,11 +78,13 @@ export async function makeIssuer({ custody, root = null, clock = () => Date.now(
       if (!(await custody.exists())) return failed(CODE.certKeyMissing, `the root key is not in its ${custody.kind} custody; run asight install`)
       const key = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }) // the intermediate key: memory only
       const serial = crypto.randomBytes(16); serial[0] &= 0x7f
-      const der = await custody.issueIntermediate({ spkiDer: key.publicKey.export({ type: 'spki', format: 'der' }), serial, notBefore: new Date(clock() - SKEW_MS) })
+      const spkiDer = key.publicKey.export({ type: 'spki', format: 'der' })
+      const notBefore = new Date(clock() - SKEW_MS)
+      const der = await custody.issueIntermediate({ spkiDer, serial, notBefore })
       if (closed) return
       if (!Buffer.isBuffer(der)) reason = `the ${custody.kind} custody answered ${JSON.stringify(der)}`
       else {
-        const bad = checkProfile(der, INTERMEDIATE, { root })
+        const bad = checkProfile(der, INTERMEDIATE, { root }).concat(asRequested(der, { spkiDer, notBefore }))
         if (!bad.length) return install(der, key)
         reason = `the ${custody.kind} custody issued a certificate that is not the intermediate profile: ${bad.join('; ')}`
       }
