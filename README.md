@@ -53,18 +53,19 @@ it through the repo (or `npx --no-install asight …`):
 
 ```sh
 git clone <this repo> && cd <the repo> && npm install
-node bin/asight.mjs on          # or: npx --no-install asight on
+node bin/asight.mjs install     # once: the certificates (or: npx --no-install asight install)
+node bin/asight.mjs on          # then start capture
 ```
 
-The first `asight on` lists the files it will touch and starts after you confirm. Then: `asight status`
-to see state, `asight off` to take every trace of asight off your agents' path.
+`asight install` lists the files it will touch and writes them after you confirm; until it has run, `asight on`
+refuses (`cert-not-installed`). Then `asight on` starts capture, `asight status` shows state, `asight off` takes
+every trace of asight off your agents' path (the certificates stay until `asight uninstall`).
 
 From a Release: not published yet.
 
 ## Uninstall
 
 ```sh
-asight install                 # once: the certificates (a root of this machine, user-level; prints the plan, asks first)
 asight uninstall               # removes all of asight's changes, keeps captures (macOS / Windows: run asight off first)
 asight uninstall --purge-data  # also deletes capture data (asks first)
 ```
@@ -156,10 +157,11 @@ website you visit cannot reach it.
 
 ### `asight on` / `off` / `status` / `uninstall`, and the per-user process collector (Linux · Windows · macOS, preview)
 
-`asight on` starts capture (the first `on` is the install); `asight off` takes every trace of asight off your
-agents' path; `asight status` says, per agent, whether it is captured and why not; `asight uninstall` also
+`asight install` puts the certificates in once; `asight on` starts capture (it refuses until install has run, and
+never writes a certificate); `asight off` takes every trace of asight off your agents' path and leaves the
+certificates (only `asight uninstall` takes them); `asight status` says, per agent, whether it is captured and why not; `asight uninstall` also
 deletes asight's own files (your captures stay). `off` works when asight itself is broken — no daemon, no source
-tree, no `node_modules`: `~/.asight/bin/asight-off` is one file that needs only `node`, and `on` writes it. Every
+tree, no `node_modules`: `~/.asight/bin/asight-off` is one file that needs only `node`, and `install` writes it. Every
 command that changes something lists what it changed (each file, its backup, how to undo it) and takes `--json`;
 before it changes a file of yours it keeps a copy in `~/.asight/backup/`. `on` never restarts an agent or a
 capture that is running: the processes that need a restart are listed. Name an agent (`asight off claude-code`)
@@ -221,13 +223,14 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | the other agents' trust entries | OpenCode: plugin `~/.config/opencode/plugins/asight-ca.js`; dsh: plugin dir `~/.asight/collector/plugins/dsh/` + a sentinel row in its patch file; Kimi Code: launch shim `~/.asight/collector/bin/kimi` + one sentinel `PATH` line after the installer's in your shell rc; Hermes / Codex: a sentinel block atop their `.env` (`SSL_CERT_FILE` → `combined-<agent>.pem`); Z-Code: `network.caCertFile` in `~/.zcode/cli/config.json` → `combined-z-code.pem`. A combined bundle = Node + OS roots + the CAs that agent already used + the collector CA (on Linux the OS roots are the first system bundle the machine has — Debian / Ubuntu, Fedora / RHEL, openSUSE, …; with none, `on` and `asight status` say the bundles carry Node's roots only; an OS root that does not parse, or a macOS keychain read that fails, is left out and said the same way) | `asight off` takes out only asight's text or key and removes asight's files (a bundle a running agent still uses is kept, without the collector CA, until the next `off` or `uninstall` — on macOS and Windows too, where `off` tells an agent's processes by the same forms the collector routes by; when it cannot tell, it keeps the bundle, says so and exits 1; one that went missing is rebuilt from this machine's own roots, read the way `on` reads them — on macOS the keychain's, never `/etc/ssl/cert.pem` — and the receipt says when they could not all be read) |
 | autostart unit (per user) | Linux: `~/.config/systemd/user/asight-collector.service`, enabled `--now` · macOS: `~/Library/LaunchAgents/com.asight.collector.plist` · Windows: the scheduled task `\asight\collector`; each runs `asight daemon`. The Linux unit and the macOS plist carry the `NODE_EXTRA_CA_CERTS` of the shell you install from, for the daemon only | `asight off` with no names disables it, `asight uninstall` removes it (`on --no-unit` skips it) |
 | install manifest | `~/.asight/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `asight uninstall` |
-| backups of your files | `~/.asight/backup/` (0700, files 0600): the file as it was before `on` changed it — API keys included | `off` drops a copy once the file is back as it was; `uninstall` deletes them all |
-| the standalone undo | `~/.asight/bin/asight-off`, rewritten by every `on`; `asight doctor` checks it is current | `asight uninstall` |
+| backups of your files | `~/.asight/backup/` (0700, files 0600): the file as it was before `install` changed it — API keys included | `off` leaves them; `uninstall` deletes them all |
+| the standalone undo | `~/.asight/bin/asight-off`, written by `install`; `asight doctor` checks it is current | `asight uninstall` |
 | captures | `~/.asight/collector/capture-<date>.ndjson`; `flows/` holds connection metadata and failure records | kept unless `asight uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
 ```sh
 sudo asight setup-helper      # once per machine (Linux)
-asight on                     # per user, no sudo; lists every file it will change and asks (not in a terminal: add --yes); starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
+asight install                # per user, no sudo, once: the certificates (a root of this machine, user-level); lists every file it will change and asks (not in a terminal: add --yes)
+asight on                     # refuses until install has run; changes no certificate; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
 asight on --no-unit           # no autostart unit: start the daemon yourself, with `asight daemon` in the foreground
 asight status                 # each agent and why it is (not) captured, and the recent failures
 asight off                    # every trace of it is off your agents' path (off claude-code: only that one)

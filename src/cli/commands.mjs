@@ -31,7 +31,7 @@ async function help(argv, c) {
 export const COMMANDS = Object.freeze([
   { name: 'on', section: 'common', mutates: true, run: via('./on.mjs', 'runOnCli'),
     usage: 'asight on [harness…] [--dry-run] [--yes] [--opt-in <形态>[,<形态>…]] [--no-autostart | --no-unit] [--json]',
-    summary: '开始采集。第一次 on 就是安装:先列出要改的每个文件,等你确认;之后的 on 只补缺的。',
+    summary: '开始采集。只接代理,不写证书;还没跑过 asight install 时拒绝(cert-not-installed)。',
     notes: ['--dry-run  只打印将要做的,什么都不写', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '--opt-in <形态>  点名影响超出这个 agent 自己的项(用户证书库、PATH 垫片、启动器…);不点名不做;计划里「要你点名的」一节印出每项的确切命令;可重复、逗号分隔,也可写那一节里的项 id', '--no-autostart  装单元但不 enable,本次只 start', '--no-unit  不装自启单元(测试用;平台自启机制见回执)', 'on 不重启任何 agent、桌面程序或在跑的采集;要重启的进程在回执里列出'] },
   { name: 'install', section: 'common', mutates: true, run: via('./install.mjs', 'runInstallCli'),
     usage: 'asight install [--dry-run] [--yes] [--json]',
