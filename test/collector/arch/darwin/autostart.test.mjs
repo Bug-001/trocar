@@ -230,7 +230,7 @@ test('W24 the plist has the fields of 4.9 §4: Label com.asight.collector, Progr
   assert.deepEqual([...inner(x, 'array').matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => m[1]), [NODE, SCRIPT, 'daemon'], 'node <asight> daemon, and nothing more')
   assert.doesNotMatch(x, /--supervise/, 'the supervisor flag went with the supervisor parent (4.9 §4)')
   assert.match(x, /<key>RunAtLoad<\/key>\s*<true\/>/, 'launchd starts the daemon at every login')
-  assert.match(x, /<key>KeepAlive<\/key>\s*<true\/>/, 'launchd brings a killed daemon back: the reason there is no supervisor, and the reason off boots the agent out first (4.9 §4)')
+  assert.match(x, /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/, 'launchd brings a crashed daemon back (no supervisor), but not one that drained after off and exited 0')
   assert.doesNotMatch(x, /EnvironmentVariables/, 'no environment needed: the daemon\'s env is empty unless install says otherwise')
   const withEnv = plistXml({ node: NODE, asight: SCRIPT, env: { NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' } })
   assert.ok(balanced(withEnv))
@@ -289,7 +289,7 @@ test('W24 enable bootstraps the job into the user\'s GUI session domain (gui/<ui
   const run = fakeTools()
   const u = installed(userUnit({ ...withHome(), run, uid: 501 }))
   assert.deepEqual(u.enable({ now: true }), { code: 0, out: '', err: '' })
-  assert.deepEqual(run.calls, [['launchctl', 'bootout', 'gui/501/com.asight.collector'], ['launchctl', 'bootstrap', 'gui/501', u.path]])
+  assert.deepEqual(run.calls, [['launchctl', 'enable', 'gui/501/com.asight.collector'], ['launchctl', 'bootout', 'gui/501/com.asight.collector'], ['launchctl', 'bootstrap', 'gui/501', u.path]], 'off disabled the job, so on enables it before the bootstrap')
   assert.deepEqual(u.enable(), { code: 0, out: '', err: '' }, 'now is the default')
   assert.equal(run.calls.filter((c) => c[1] === 'bootstrap').length, 2)
   // a bootout that answers "no such job" (a fresh install) is not a failure: the bootstrap below is the answer
@@ -301,7 +301,7 @@ test('W24 enable({ now: false }) (a daemon already answers) asks launchctl nothi
   const run = fakeTools()
   const u = installed(userUnit({ ...withHome(), run, uid: 501 }))
   assert.deepEqual(u.enable({ now: false }), { code: 0, out: '', err: '' })
-  assert.deepEqual(run.calls, [], 'no launchctl: the file is the registration, and the daemon that answers is not started a second time')
+  assert.deepEqual(run.calls, [['launchctl', 'enable', 'gui/501/com.asight.collector']], 'only enable (a job off disabled is not loaded at the next login): the daemon that answers is not started a second time')
 })
 
 test('W24 enable says why it failed, with the launchd-register-failed record (launchd is the only autostart, so on\'s receipt says it; no fallback exists to succeed through, 4.9 §12)', () => {
@@ -360,10 +360,25 @@ test('W24 a daemon started directly (start()) gets the environment a login-start
   assert.deepEqual([spawned[0].detached, spawned[0].stdio], [true, 'ignore'], 'the rest of the spawn is as before')
 })
 
-test('W24 disable (a no-argument off) and remove (an uninstall) are the same undo on darwin: the agent is booted out and the plist leaves ~/Library/LaunchAgents — the file IS the registration, there is no wants/-link to split off (the linux unit\'s file stays, 4.6; darwin\'s cannot)', () => {
+test('disable (a no-names off) is launchctl disable only — never a bootout of a draining daemon — and the plist stays (an install item); a refusal is a failure with the reason', () => {
+  const run = fakeTools()
+  const u = installed(userUnit({ ...withHome(), run, uid: 501 }))
+  assert.deepEqual(u.disable(), { code: 0, out: '', err: '', state: 'disabled' })
+  assert.deepEqual(run.calls, [['launchctl', 'disable', 'gui/501/com.asight.collector']])
+  assert.ok(fs.existsSync(u.path), 'the plist stays: the disabled job is not loaded at a login, and on enables it again')
+  const refused = fakeTools({ 'launchctl disable': { status: 5, stderr: 'nope' } })
+  assert.equal(installed(userUnit({ ...withHome(), run: refused, uid: 501 })).disable().state, 'failed')
+  for (const [answers] of [[{}], [{ 'launchctl disable': { status: 5, stderr: 'nope' } }]]) { // the standalone off makes the same call with the same answer
+    const a = fakeTools(answers), b = fakeTools(answers)
+    assert.deepEqual(offDarwin.disableAgent({ exec: b, uid: 501 }), installed(userUnit({ ...withHome(), run: a, uid: 501 })).disable())
+    assert.deepEqual(b.calls, a.calls)
+  }
+})
+
+test('W24 remove (an uninstall) is the undo: the agent is booted out and the plist leaves ~/Library/LaunchAgents — the file IS the registration, there is no wants/-link to split off (the linux unit\'s file stays, 4.6; darwin\'s cannot)', () => {
   const present = fakeTools({ 'launchctl print': { status: 0, stdout: 'com.asight.collector = {"state": "running", "pid": 4242}' } })
   const u = installed(userUnit({ ...withHome(), run: present, uid: 501 }))
-  assert.deepEqual(u.disable(), { code: 0, out: '', err: '', agent: 'booted-out', plist: 'removed' })
+  assert.deepEqual(u.remove(), { code: 0, out: '', err: '', agent: 'booted-out', plist: 'removed' })
   assert.deepEqual(present.calls, [['launchctl', 'print', 'gui/501/com.asight.collector'], ['launchctl', 'bootout', 'gui/501/com.asight.collector']])
   assert.ok(!fs.existsSync(u.path), 'the plist is gone: the next login has nothing to load')
   const again = fakeTools({ 'launchctl print': { status: 0, stdout: '' } })
@@ -375,7 +390,7 @@ test('W24 disable (a no-argument off) and remove (an uninstall) are the same und
 test('W24 an agent that is not loaded is already as asked, not an error — and the plist still leaves, or the next login would load it; a print that did not run is a failure for the launchd half, never "absent", and the file still goes (a separate part of the undo)', () => {
   const gone = fakeTools({ 'launchctl print': { status: 113, stderr: 'Could not find service "com.asight.collector" in domain for gui/501' } })
   const u = installed(userUnit({ ...withHome(), run: gone, uid: 501 }))
-  assert.deepEqual(u.disable(), { code: 0, out: '', err: '', agent: 'absent', plist: 'removed' })
+  assert.deepEqual(u.remove(), { code: 0, out: '', err: '', agent: 'absent', plist: 'removed' })
   assert.deepEqual(gone.calls.map((c) => c[1]), ['print'], 'nothing is booted out on a guess')
   const didNot = [
     ['timed out', { status: null, error: Object.assign(new Error('spawnSync launchctl ETIMEDOUT'), { code: 'ETIMEDOUT' }) }],
@@ -383,7 +398,7 @@ test('W24 an agent that is not loaded is already as asked, not an error — and 
     ['killed without a reason', { status: null }],
   ]
   for (const [what, print] of didNot) {
-    for (const verb of ['disable', 'remove']) {
+    for (const verb of ['remove']) {
       const base = fakeTools()
       const asked = (file, args) => (file === 'launchctl' && args[0] === 'print' ? { stdout: '', stderr: '', ...print } : null)
       const calls = []
@@ -400,14 +415,14 @@ test('W24 an agent that is not loaded is already as asked, not an error — and 
   }
   const nothing = fakeTools({ 'launchctl print': { status: 113, stderr: 'Could not find service' } })
   const bare = userUnit({ ...withHome(), run: nothing, uid: 501 })
-  assert.deepEqual(bare.disable(), { code: 0, out: '', err: '', agent: 'absent', plist: 'absent' }, 'nothing there at all: already as asked')
+  assert.deepEqual(bare.remove(), { code: 0, out: '', err: '', agent: 'absent', plist: 'absent' }, 'nothing there at all: already as asked')
   assert.deepEqual(nothing.calls.map((c) => c[1]), ['print'])
 })
 
 test('W24 a bootout that was refused or did not run is a failure with the reason (launchd still holds the daemon), and a plist that cannot be removed is said separately', () => {
   const stuck = fakeTools({ 'launchctl print': { status: 0 }, 'launchctl bootout': { status: 5, stderr: 'Boot-out failed: 5: Input/output error' } })
   const u = installed(userUnit({ ...withHome(), run: stuck, uid: 501 }))
-  assert.deepEqual(u.disable(), { code: 5, out: '', err: 'Boot-out failed: 5: Input/output error', agent: 'failed', plist: 'removed' }, 'the tool\'s own exit code is the answer (the win32 settle\'s rule); a caller\'s `if (r.code)` sees it')
+  assert.deepEqual(u.remove(), { code: 5, out: '', err: 'Boot-out failed: 5: Input/output error', agent: 'failed', plist: 'removed' }, 'the tool\'s own exit code is the answer (the win32 settle\'s rule); a caller\'s `if (r.code)` sees it')
   const lost = fakeTools({ 'launchctl print': { status: 0 }, 'launchctl bootout': { status: null, error: Object.assign(new Error('spawnSync launchctl ETIMEDOUT'), { code: 'ETIMEDOUT' }) } })
   const u2 = installed(userUnit({ ...withHome(), run: lost, uid: 501 }))
   const f = u2.remove()
@@ -416,7 +431,7 @@ test('W24 a bootout that was refused or did not run is a failure with the reason
   const o = withHome()
   const refusing = { ...fs, rmSync: (p, opts) => { if (p === plistPath(o.home)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); return fs.rmSync(p, opts) } }
   const u3 = installed(userUnit({ ...o, run: fakeTools({ 'launchctl print': { status: 0 } }), fs: refusing, uid: 501 }))
-  const g = u3.disable()
+  const g = u3.remove()
   assert.deepEqual([g.code, g.agent, g.plist], [1, 'booted-out', 'failed'])
   assert.match(g.err, /EACCES|plist/)
 })
@@ -426,10 +441,10 @@ test('the off order (4.9 §4, MA2\'s clause) is the undo\'s own sequence: print,
   const run = (file, args) => { order.push(args[0]); return { status: 0, stdout: '', stderr: '' } }
   const hookFs = { ...fs, rmSync: (p, opts) => { order.push(`rm ${path.basename(p)}`); return fs.rmSync(p, opts) } }
   const u = installed(userUnit({ ...withHome(), run, fs: hookFs, uid: 501 }))
-  assert.deepEqual(u.disable(), { code: 0, out: '', err: '', agent: 'booted-out', plist: 'removed' })
+  assert.deepEqual(u.remove(), { code: 0, out: '', err: '', agent: 'booted-out', plist: 'removed' })
   assert.deepEqual(order, ['print', 'bootout', `rm ${PLIST_FILE}`], 'bootout before the file, both before the caller\'s stop')
   const held = fakeTools({ 'launchctl print': { status: 0 }, 'launchctl bootout': { status: 5, stderr: 'Boot-out failed: 5: Input/output error' } })
-  const r = installed(userUnit({ ...withHome(), run: held, uid: 501 })).disable()
+  const r = installed(userUnit({ ...withHome(), run: held, uid: 501 })).remove()
   assert.equal(r.agent, 'failed', 'the caller is told launchd still holds the daemon: it must not count the autostart off')
   assert.notEqual(r.code, 0)
 })
@@ -452,7 +467,7 @@ test('the standalone undo (undoAutostart) is the same undo the arch module\'s di
     'the bootout was refused': { 'launchctl print': { status: 0 }, 'launchctl bootout': { status: 5, stderr: 'Boot-out failed: 5: Input/output error' } },
   }
   for (const [what, answers] of Object.entries(worlds)) {
-    for (const verb of ['disable', 'remove']) {
+    for (const verb of ['remove']) {
       const archRun = fakeTools(answers)
       const a = installed(userUnit({ ...withHome(), run: archRun, uid: 501 }))[verb]()
       const home = tmpDir('asight-off-')

@@ -136,6 +136,20 @@ function readSupervisorLock({ file, fs = nodeFs } = {}) {
   } catch { return null }
 }
 
+/** Invariant 5: a supervisor.lock whose holder is proven gone (`supervisorHolderAlive` false: the pid is dead, or another process now) is removed —
+ *  a supervisor killed by taskkill /F never runs its own removeLock. A holder that still runs, or one that cannot be told, keeps its lock (nothing on a
+ *  guess). `lockFile` is the daemon's lock; the supervisor's is beside it. → { removed: boolean, why? }. */
+export function clearStaleSupervisorLock({ lockFile, exec = null, env = process.env, fs = nodeFs } = {}) {
+  const file = path.join(path.dirname(lockFile), SUPERVISOR_LOCK)
+  const sup = readSupervisorLock({ file, fs })
+  if (!sup) return { removed: false }
+  let alive
+  try { alive = supervisorHolderAlive(sup, { run: exec, env }) } catch (e) { return { removed: false, why: String((e && e.message) || e) } }
+  if (alive) return { removed: false, why: `the supervisor (pid ${sup.pid}) still runs` }
+  try { const now = readSupervisorLock({ file, fs }); if (now && now.pid === sup.pid && now.startedAt === sup.startedAt) fs.rmSync(file, { force: true }) } catch (e) { return { removed: false, why: `${file} could not be removed (${(e && e.code) || e})` } }
+  return { removed: true }
+}
+
 /** The Windows half of stopping: the supervisor parent first, then the daemon, both through taskkill (see the block comment above).
  *  `exec` runs taskkill and the powershell questions (a test injects it; execTool refuses the real ones under npm test). → the same shape
  *  stopDaemon gives: `{ stopped, how: 'taskkill' | 'none', pid, helper_pid, signals, error? }`. */
@@ -172,6 +186,7 @@ async function stopDaemonWin32({ lockFile, exec = null, alive = pidAlive, identi
   }
   const daemonStill = lock != null && alive(lock.pid) && same(lock.pid) !== 'other'
   if (daemonStill) problems.push(`pid ${lock && lock.pid} is still running after ${signals.join(', ') || 'nothing was signalled'}`)
+  if (sup) { const c = clearStaleSupervisorLock({ lockFile, exec, env, fs }); if (c.removed) signals.push('supervisor-lock-removed') } // a supervisor taskkill /F ended never removes its own lock
   if (L.state === 'unknown') problems.push(`${L.error}, so which process to stop is not known`)
   const stopped = !daemonStill
   return { stopped, how, pid: lock ? lock.pid : null, helper_pid: lock && Number.isInteger(lock.helper_pid) ? lock.helper_pid : null, signals, ...(problems.length ? { error: problems.join('; ') } : {}) }
@@ -203,6 +218,9 @@ export async function stopDaemon({ lockFile, socketPath = null, exec = null, kil
     // BEFORE any signal, so what is stopped stays stopped. The plist stays in ~/Library/LaunchAgents — the next login brings the job back, the same temporary
     // stop `systemctl --user stop` is on Linux; the full undo (bootout AND the plist) is a no-names off's step 5 (src/off/darwin.mjs undoAutostart).
     const uid = typeof process.getuid === 'function' ? process.getuid() : -1
+    // `launchctl disable` first — launchd then never loads the job again (a login, a relaunch) until `on` enables it; the bootout below is only for a
+    // daemon that does not answer (this stuck path): a draining daemon is never booted out, it exits itself (KeepAlive SuccessfulExit=false keeps it out)
+    launchctl(['disable', `gui/${uid}/${AGENT_LABEL}`], { run: exec, env })
     const q = agentState({ exec, env, uid })
     if (q.state === 'present') {
       // the SLASH form (`gui/<uid>/<label>`, one argument — the rule `launchctl` in darwin.mjs carries): the two-argument

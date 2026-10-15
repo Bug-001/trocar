@@ -9,7 +9,7 @@
 //   4  the entries: by the manifest (undoHarnesses), or, with no readable manifest, by asight's own marks (planByMarker) after a yes (R3);
 //      5.1's held requests through `deps.releaseHeld` (5.1 is not built: a seam)
 //   5  with no names: the autostart is disabled and the daemon was asked to exit once drained — systemd's disable on Linux (src/off/autostart.mjs), the LaunchAgent's undo on
-//      darwin (src/off/darwin.mjs undoAutostart, 4.9 §4: bootout first, then the plist), nothing on win32 (the task and Run value are manifest entries)
+//      darwin (src/off/darwin.mjs disableAgent: launchctl disable, never a bootout of a draining daemon), nothing on win32 (the task and Run value are manifest entries)
 //   6  the receipt (R1) and the `off-note` lines of `flows/`, the last of them `kind:'result'`; exit 0 only when the routing is confirmed off and every
 //      entry is undone (connections that are still draining do not count against it)
 // Everything the world gives is a `deps` entry a test replaces (0.1 §3): `fs` `exec` `request` `socketPath` `alive` `identity` `kill` `isHelper` `sleep` `ms`
@@ -25,10 +25,10 @@ import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
 import { readManifest, refuseOldManifest, unknownItems, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
 import { undoHarnesses, undoRootKeys } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
-import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
+import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
 import { controlRequest, controlSocketPath, controlEndpointFor } from './control-client.mjs'
 import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
-import { plistFilePath, AGENT_LABEL, agentState, undoAutostart } from './darwin.mjs'
+import { plistFilePath, AGENT_LABEL, agentState, disableAgent } from './darwin.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask } from './win32.mjs'
@@ -456,6 +456,10 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     if (routing.stop) receipt.daemon_stop = { how: routing.stop.how, signals: routing.stop.signals, stopped: routing.stop.stopped }
     receipt.problems.push(...routing.problems); receipt.notes.push(...routing.notes)
     for (const ev of routing.events) put(ev)
+    if ((deps.platform || process.platform) === 'win32') { // a supervisor.lock whose holder is gone (killed: it never removed its own) does not outlive off
+      const c = clearStaleSupervisorLock({ lockFile: w.lockFile, exec: w.exec, env, fs: w.fs })
+      if (c.removed) put({ kind: 'note', reason: `removed ${path.join(w.dir, 'supervisor.lock')}: the supervisor it named is gone` })
+    }
     for (const f of routing.failures) put({ event: 'failure', ...f })
     put({ kind: 'routing', confirmed: routing.confirmed, state: routing.state, reason: `routing ${routing.confirmed ? 'off, confirmed' : 'NOT confirmed off'} (${routing.how || routing.state})` })
 
@@ -491,9 +495,9 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
           if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
         }
         else if ((deps.platform || process.platform) === 'darwin') {
-          const u = undoAutostart({ home, exec: w.exec, env, fs: w.fs })
-          receipt.autostart = { disabled: u.code === 0, removed: u.plist === 'removed' ? [plistFilePath(home)] : [], ...(u.code !== 0 ? { error: u.err || `the LaunchAgent was ${u.agent} and the plist ${u.plist}` } : {}) }
-          put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'} (launchd: agent ${u.agent}, plist ${u.plist})${u.err ? ` (${u.err})` : ''}` })
+          const u = disableAgent({ exec: w.exec, env }) // disable, never bootout — the daemon drains and exits itself; the plist stays (an install item)
+          receipt.autostart = { disabled: u.code === 0, removed: [], ...(u.code !== 0 ? { error: u.err || 'launchctl disable was refused' } : {}) }
+          put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'} (launchctl disable${u.code === 0 ? '' : `: exit ${u.code}`})${u.err ? ` (${u.err})` : ''}` })
           if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
         }
         else {

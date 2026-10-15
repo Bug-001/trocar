@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { listProcs, identityFor, procIdentity } from '../../src/off/proc.mjs'
-import { daemonState, stopDaemon, readDaemonLock, supervisorHolderAlive, SUPERVISOR_LOCK, SUPERVISOR_START_TOLERANCE_MS } from '../../src/off/daemon-stop.mjs'
+import { daemonState, stopDaemon, readDaemonLock, supervisorHolderAlive, clearStaleSupervisorLock, SUPERVISOR_LOCK, SUPERVISOR_START_TOLERANCE_MS } from '../../src/off/daemon-stop.mjs'
 import { SUPERVISOR_LOCK as ARCH_SUPERVISOR_LOCK, LOCK_START_TOLERANCE_MS as ARCH_LOCK_START_TOLERANCE_MS, lockHolderAlive } from '../../src/collector/arch/win32/autostart.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -132,6 +132,29 @@ test('a supervisor.lock that names a reused pid (its start time no longer matche
   const r2 = await stopDaemon({ lockFile: unreadable.lockFile, platform: 'win32', exec: unreadable.exec, alive: unreadable.alive, identity: identityFor({ platform: 'win32', exec: unreadable.exec }), now: () => Date.now(), fs: nodeFs })
   assert.ok(!unreadable.calls.some((c) => c.startsWith('taskkill') && c.includes('5000')), 'powershell could not tell: nothing is killed on a guess')
   assert.ok(r2.error && /supervisor|5000/.test(r2.error))
+})
+
+// Invariant 5 (a Windows test-machine run): a supervisor taskkill /F ended never runs its own removeLock, so off left
+// supervisor.lock naming a dead pid. Now: a lock whose holder is proven gone is removed; one whose holder runs or cannot be told stays.
+test('off leaves no supervisor.lock whose pid (+ start) is dead — removed after the supervisor is killed, and when it was already gone; kept while it runs or cannot be told', async () => {
+  const dying = (w) => (file, args) => { // the fake machine: a pid taskkill ended answers 'gone' to Get-Process
+    const m = file !== 'taskkill' && /Get-Process -Id (\d+)/.exec(args.join(' '))
+    if (m && !w.alive(Number(m[1]))) { w.calls.push([file, ...args].join(' ')); return { status: 0, stdout: 'gone', stderr: '' } }
+    return w.exec(file, args)
+  }
+  const killed = winWorld()
+  const r = await stopDaemon({ lockFile: killed.lockFile, platform: 'win32', exec: dying(killed), alive: killed.alive, identity: identityFor({ platform: 'win32', exec: dying(killed) }), now: () => Date.now(), fs: nodeFs })
+  assert.ok(r.stopped, r.error)
+  assert.ok(!nodeFs.existsSync(path.join(killed.dir, SUPERVISOR_LOCK)), 'the killed supervisor\'s lock is gone')
+  const dead = winWorld({ superNowAt: SUPER_AT + 999_000 }) // its pid now names another process: the supervisor is dead
+  assert.deepEqual(clearStaleSupervisorLock({ lockFile: dead.lockFile, exec: dead.exec, fs: nodeFs }), { removed: true })
+  assert.ok(!nodeFs.existsSync(path.join(dead.dir, SUPERVISOR_LOCK)))
+  const running = winWorld()
+  assert.equal(clearStaleSupervisorLock({ lockFile: running.lockFile, exec: running.exec, fs: nodeFs }).removed, false)
+  assert.ok(nodeFs.existsSync(path.join(running.dir, SUPERVISOR_LOCK)), 'a running supervisor keeps its lock')
+  const unknown = winWorld({ fail: ['Get-Process -Id 5000'] })
+  assert.equal(clearStaleSupervisorLock({ lockFile: unknown.lockFile, exec: unknown.exec, fs: nodeFs }).removed, false)
+  assert.ok(nodeFs.existsSync(path.join(unknown.dir, SUPERVISOR_LOCK)), 'nothing removed on a guess')
 })
 
 test('no supervisor.lock: straight to the daemon. A daemon whose identity no longer matches is not signalled (the same rule as the other platforms)', async () => {

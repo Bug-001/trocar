@@ -32,6 +32,7 @@ function fakeLaunchd(order = null) {
     if (file !== 'launchctl') return { status: 1, stdout: '', stderr: `not launchctl: ${cmd}` }
     const a = args.join(' ')
     if (a === `print ${DOMAIN}/${LABEL}`) return loaded ? { status: 0, stdout: '…', stderr: '' } : { status: 1, stdout: '', stderr: `Could not find service "${LABEL}" in domain for system` }
+    if (a === `disable ${DOMAIN}/${LABEL}`) return { status: 0, stdout: '', stderr: '' } // the job stays loaded; launchd only stops loading it
     if (a === `bootout ${DOMAIN}/${LABEL}`) { loaded = false; return { status: 0, stdout: '', stderr: '' } } // the slash form: the two-argument bootout answers I/O error 5 on macOS 26 (the rule darwin.mjs's launchctl carries)
     return { status: 1, stdout: '', stderr: `not in the fake: ${cmd}` }
   }
@@ -43,18 +44,41 @@ const writePlist = (home) => { const f = plistOf(home); fs.mkdirSync(path.dirnam
 // the flip checklist ① (4.9 §4 末): a no-names `off` on darwin undoes the autostart through launchd — the agent booted out, the plist gone — and
 // systemctl is never asked for anything. There is no daemon (no lock): the `unitIsUp` branch is what stops the (absent) daemon, so the arm's bootout
 // is the only thing between KeepAlive and a daemon coming back.
-test('the flip ① (4.9 §4): a no-names off on darwin boots the LaunchAgent out and removes the plist — launchd verbs only, never systemctl', async () => {
+test('the flip ① (4.9 §4) with a no-names off on darwin with no daemon stops the loaded agent (disable, then bootout: nothing drains) and keeps the plist — launchd verbs only, never systemctl', async () => {
   const home = tmpDir('asight-off-darwin-')
   const plist = writePlist(home)
   const launchd = fakeLaunchd()
   const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: { platform: 'darwin', exec: launchd.run, procs: async () => [], sleep: async () => {} } })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
-  assert.ok(launchd.has(new RegExp(`^launchctl bootout ${DOMAIN}/${LABEL}$`)), 'the agent was booted out of the session (the slash form — the two-argument form fails with I/O error 5 on macOS 26)')
-  assert.ok(!launchd.has(/systemctl/), 'no systemd verb runs on darwin — the old step-5 ran `systemctl --user disable` unconditionally (the audit 2026-10-08 note)')
-  assert.ok(!fs.existsSync(plist), 'the plist left ~/Library/LaunchAgents: launchd scans that directory at every login')
+  const at = (re) => launchd.calls.findIndex((c) => re.test(c))
+  assert.ok(at(/^launchctl disable /) >= 0 && at(/^launchctl disable /) < at(/^launchctl bootout /), `disable precedes the bootout: ${JSON.stringify(launchd.calls)}`)
+  assert.ok(launchd.has(new RegExp(`^launchctl bootout ${DOMAIN}/${LABEL}$`)), 'no daemon runs, so the loaded agent is booted out (the slash form)')
+  assert.ok(!launchd.has(/systemctl/), 'no systemd verb runs on darwin')
+  assert.ok(fs.existsSync(plist), 'the plist stays (an install item): the disabled job is not loaded at a login')
   assert.equal(receipt.autostart.disabled, true, JSON.stringify(receipt.autostart))
-  assert.deepEqual(receipt.autostart.removed, [plist])
+  assert.deepEqual(receipt.autostart.removed, [])
   assert.equal(receipt.ok, true)
+})
+
+// a daemon that answers and is draining after a no-names off is never booted out — the bootout took the daemon down mid-stream
+// while the receipt said clean. off disables the job; the daemon exits itself once drained, and KeepAlive {SuccessfulExit:false} does not relaunch it.
+test('a no-names off with a draining daemon runs launchctl disable and never a bootout before the drain', async () => {
+  const home = tmpDir('asight-off-darwin-')
+  const plist = writePlist(home)
+  const launchd = fakeLaunchd()
+  const asked = []
+  const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: {
+    platform: 'darwin', exec: launchd.run, procs: async () => [], sleep: async () => {}, socketPath: '/x/collector.sock',
+    daemonState: async () => ({ state: 'running', socket: '/x/collector.sock' }),
+    request: async (q) => { asked.push(q.body); return { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 1, waiting: 0, cut: 0 } } },
+  } })
+  assert.equal(exit, 0, JSON.stringify(receipt.problems))
+  assert.equal(asked[0].exit, true, 'the daemon is asked to exit once drained')
+  assert.ok(!launchd.has(/bootout/), `no bootout while the daemon drains: ${JSON.stringify(launchd.calls)}`)
+  assert.ok(launchd.has(new RegExp(`^launchctl disable ${DOMAIN}/${LABEL}$`)), 'disable is what keeps launchd from loading it again')
+  assert.ok(fs.existsSync(plist))
+  assert.equal(receipt.daemon.state, 'draining')
+  assert.deepEqual(receipt.autostart, { disabled: true, removed: [] })
 })
 
 // the failure half (D38): a bootout that launchctl refuses is said — the autostart row is NOT disabled, the failure record carries the closed set's
@@ -99,6 +123,7 @@ test('the flip ① (4.9 §4): a stuck daemon on darwin is stopped launchd-first 
   })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
   const bootoutAt = order.findIndex((x) => x === `launchctl bootout ${DOMAIN}/${LABEL}`)
+  assert.ok(order.indexOf(`launchctl disable ${DOMAIN}/${LABEL}`) >= 0 && order.indexOf(`launchctl disable ${DOMAIN}/${LABEL}`) < bootoutAt, 'disable first, so launchd loads it no more')
   const firstSignalAt = order.findIndex((x) => /^kill /.test(x))
   assert.ok(bootoutAt >= 0 && firstSignalAt >= 0 && bootoutAt < firstSignalAt, `the bootout precedes the first signal (4.9 §4's order): ${JSON.stringify(order)}`)
   assert.ok(!launchd.has(/systemctl/), 'and still no systemd verb')
