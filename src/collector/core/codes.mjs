@@ -68,6 +68,8 @@ export const CODE = Object.freeze({
   certNotInstalled: 'cert-not-installed', // on refused: no install record with a root — run asight install first (1.6 §1.1, D55⑥)
   installPending: 'install-pending', // on went on over an install that left an item pending or declined (the root store's prompt): the forms only the root reaches forward only, said (1.6 §1.1)
   collectorsOnline: 'collectors-online', // uninstall refused: a harness is on, or a holder may still use a door; nothing changed (1.6 §1.1, 4.11 CM24)
+  upstreamHeaderIgnored: 'upstream-header-ignored', // X-Asight-Upstream from a form whose hook does not send it: ignored, recorded without its value (4.11 P7 · ⑥)
+  holdersUnreadable: 'holders-unreadable', // the holder poll could not read the process table: the doors kept for holders stay (4.11 P12)
   pacPeerRefused: 'pac-peer-refused', // the PAC door (no credentials) refused a peer that is not this user's process, or whose user could not be told (4.11 P10)
 })
 

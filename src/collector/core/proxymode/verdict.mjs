@@ -71,7 +71,7 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   const pctx = { ...ctx, env: facts.env || {}, cwd: facts.cwd ?? undefined } // the process's env and cwd, never the daemon's
   const t = trustVerdict(form.trust !== 'root' && pm.trusts && pm.trusts[form.trust], pctx, facts, record)
   if (t) return t
-  if (!issuer || (issuer.state && issuer.state() !== 'ready')) return fwd('cert-intermediate-unavailable', 'no intermediate certificate to sign leaves with')
+  if (!issuer || (issuer.state && issuer.state() !== 'ready')) return issuer && issuer.state() === 'key-missing' ? fwd('cert-key-missing', 'the root key is not in its custody: nothing signs leaves') : fwd('cert-intermediate-unavailable', 'no intermediate certificate to sign leaves with')
   for (const b of pm.blockers || []) {
     if (b.forms && !b.forms.includes(form.id)) continue
     if (b.when) { const w = read(b.when.src, pctx, facts); if (w.error) return fwd(w.code, why(w)); if (!w.set || ('equals' in b.when && w.value !== b.when.equals)) continue }
