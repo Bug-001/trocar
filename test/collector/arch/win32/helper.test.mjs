@@ -716,6 +716,7 @@ function tableHelper(rows, { error = null, delayMs = 0 } = {}) {
     calls: [],
     async call(verb, args, opts) {
       this.calls.push({ verb, args, opts })
+      if (opts && typeof opts.onStart === 'function') opts.onStart() // an in-process helper is on the read at once
       if (delayMs) await new Promise((r) => setTimeout(r, delayMs))
       if (error) throw error
       return { rows }

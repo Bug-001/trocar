@@ -85,6 +85,11 @@ export function regKindsOf(data) {
   return { ...data, values }
 }
 
+/** The verbs that may hold the single-threaded helper for long (`ps`: a CIM query, up to its 8 s operation timeout). A queued call of any other verb
+ *  is written before them, so a socket-table read is never stuck behind a ps that was merely asked first. */
+const SLOW_VERBS = new Set(['ps'])
+/** How long a call may wait for the helper to be free before it is written: the longest a verb may hold it (procinfo's ps timeout). */
+export const HELPER_WAIT_MS = 10000
 const ABANDONED_CAP = 256
 const STDERR_TAIL = 20 // the last lines of its stderr that helper-down carries (4.6 §记录: 20, as the Linux client's)
 const normKey = (k) => trimKey(k).toLowerCase()
@@ -117,7 +122,9 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
   let exitTimer = null
   let closed = null
   const stderrTail = []
-  const pending = new Map() // id → { resolve, reject, timer, verb }
+  const pending = new Map() // id → { resolve, reject, timer, verb } of the call written to the helper (at most one: the helper answers in order, one at a time)
+  const queue = [] // the calls not written yet: { id, verb, args, timeoutMs, onStart, resolve, reject, waitTimer }
+  let busy = false // a request is out at the helper and its answer has not come (a call that timed out keeps it busy until its late answer)
   const abandoned = new Map() // id → verb of the calls that timed out and whose late answer has not come yet (capped: a helper that hangs for good must not grow it)
   let resolveReady
   let rejectReady
@@ -131,7 +138,7 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     clearTimeout(readyTimer)
     clearTimeout(exitTimer)
     const tail = stderrTail.length ? { stderr: [...stderrTail] } : {}
-    for (const p of pending.values()) { clearTimeout(p.timer); p.reject(err(`helper ${wasReady ? 'down' : 'did not start'}: ${reason}`, down.code)) }
+    for (const p of [...pending.values(), ...queue.splice(0)]) { clearTimeout(p.timer); clearTimeout(p.waitTimer); p.reject(err(`helper ${wasReady ? 'down' : 'did not start'}: ${reason}`, down.code)) }
     pending.clear()
     abandoned.clear()
     rejectReady(err(`helper did not start: ${reason}`, 'helper-start-failed'))
@@ -156,6 +163,8 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
       if (msg.native === false && !closing) onFailure({ event: 'failure', where: 'helper', code: 'helper-start-failed', reason: `the helper's native code did not compile (${msg.nativeError || 'no reason given'}): the process list, the TCP table and the token are unavailable; the registry, interface and root reads still work`, nativeError: msg.nativeError ?? null })
       return
     }
+    busy = false // the helper answers in order, one request at a time: any answer frees it
+    queueMicrotask(pump)
     const p = pending.get(msg.id)
     if (!p) { abandoned.delete(msg.id); return } // a late answer to a call that already timed out: the helper is free of it now
     pending.delete(msg.id)
@@ -183,10 +192,32 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     readyTimer.unref?.()
   }
 
-  /** call(verb, args, { timeoutMs }) → the verb's data. Rejects with error.code: helper-unknown-verb · helper-forbidden-key · helper-closed ·
-   *  helper-down · helper-start-failed (nothing written) · helper-timeout · helper-verb-error (the helper answered ok:false). The timeout
-   *  counts from the write, after the helper is ready. */
-  async function call(verb, callArgs = {}, { timeoutMs = 2000 } = {}) {
+  /** Writes the next queued call when the helper is free: the fast verbs before the slow ones, each group in the order asked. */
+  function pump() {
+    if (busy || down || closing || !queue.length) return
+    let i = queue.findIndex((q) => !SLOW_VERBS.has(q.verb))
+    if (i < 0) i = 0
+    const q = queue.splice(i, 1)[0]
+    clearTimeout(q.waitTimer)
+    busy = true
+    q.timer = setTimeout(() => {
+      pending.delete(q.id)
+      abandoned.set(q.id, q.verb)
+      if (abandoned.size > ABANDONED_CAP) abandoned.delete(abandoned.keys().next().value)
+      q.reject(err(`helper ${q.verb} timed out after ${q.timeoutMs} ms`, 'helper-timeout', { verb: q.verb }))
+    }, q.timeoutMs)
+    q.timer.unref?.()
+    pending.set(q.id, q)
+    child.stdin.write(JSON.stringify({ id: q.id, verb: q.verb, args: q.args }) + '\n')
+    if (typeof q.onStart === 'function') q.onStart()
+  }
+
+  /** call(verb, args, { timeoutMs, waitMs, onStart }) → the verb's data. Rejects with error.code: helper-unknown-verb · helper-forbidden-key ·
+   *  helper-closed · helper-down · helper-start-failed (nothing written) · helper-busy (the helper was not free within `waitMs`: nothing
+   *  written, `behind` names the verb it is working on) · helper-timeout · helper-verb-error (the helper answered ok:false). The helper is
+   *  single-threaded and answers in order, so a call is written only when the one before it is answered: `timeoutMs` counts from
+   *  that write — the time the helper spends on THIS call — and `onStart()` is told when it happens. */
+  async function call(verb, callArgs = {}, { timeoutMs = 2000, waitMs = HELPER_WAIT_MS, onStart } = {}) {
     if (typeof verb !== 'string' || !HELPER_VERBS.includes(verb)) throw err(`not a helper verb: ${JSON.stringify(verb)}`, 'helper-unknown-verb')
     if (verb === 'reg-read' && !regReadAllowed(callArgs, declared)) throw err(`reg-read outside the allow-list: ${JSON.stringify(callArgs)}`, 'helper-forbidden-key')
     if (closing) throw err('the helper was closed', 'helper-closed')
@@ -195,21 +226,22 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     if (closing) throw err('the helper was closed', 'helper-closed')
     if (down) throw err(`helper is down: ${down.reason}`, down.code)
     return new Promise((resolve, reject) => {
-      const id = ++seq
-      const timer = setTimeout(() => {
-        pending.delete(id)
-        abandoned.set(id, verb)
-        if (abandoned.size > ABANDONED_CAP) abandoned.delete(abandoned.keys().next().value)
-        reject(err(`helper ${verb} timed out after ${timeoutMs} ms`, 'helper-timeout', { verb }))
-      }, timeoutMs)
-      timer.unref?.()
-      pending.set(id, { resolve, reject, timer, verb })
-      child.stdin.write(JSON.stringify({ id, verb, args: callArgs }) + '\n')
+      const q = { id: ++seq, verb, args: callArgs, timeoutMs, onStart, resolve, reject, timer: null, waitTimer: null }
+      q.waitTimer = setTimeout(() => {
+        const i = queue.indexOf(q)
+        if (i < 0) return
+        queue.splice(i, 1)
+        const behind = [...pending.values()][0]?.verb ?? [...abandoned.values()].at(-1) ?? null
+        reject(err(`the helper was busy${behind ? ` with ${behind}` : ''} for ${waitMs} ms: ${verb} was not sent`, 'helper-busy', { verb, behind }))
+      }, waitMs)
+      q.waitTimer.unref?.()
+      queue.push(q)
+      pump()
     })
   }
 
   /** How many calls of this verb timed out and are still being worked on: the helper is single-threaded, so a request sent now waits behind them (and
-   *  their late answers are dropped). 0 when the helper is gone. A caller that polls (procinfo's `ps`) does not send another while this is above 0. */
+   *  their late answers are dropped). 0 when the helper is gone. A caller that polls (upstream's reg-read tick) does not ask again while this is above 0. */
   function abandonedCount(verb) {
     let n = 0
     for (const v of abandoned.values()) if (v === verb) n++
@@ -222,7 +254,7 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     closing = true
     abandoned.clear()
     closed = new Promise((resolve) => {
-      for (const p of pending.values()) { clearTimeout(p.timer); p.reject(err('the helper was closed', 'helper-closed')) }
+      for (const p of [...pending.values(), ...queue.splice(0)]) { clearTimeout(p.timer); clearTimeout(p.waitTimer); p.reject(err('the helper was closed', 'helper-closed')) }
       pending.clear()
       if (!child || down) { fail('closed'); return resolve() }
       let gone = false

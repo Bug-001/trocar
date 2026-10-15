@@ -8,6 +8,7 @@
 //   exitAfter: n            → exit once n requests were answered        log: '<file>' → every received line is appended
 //   noise: ['text', …]      → non-JSON lines on stdout before the ready line     native: false, nativeError: '…' → the ready line says the native code did not compile
 //   verbs: { <verb>: { data } | { seq: [data, …] } (successive answers, the last repeats) | { error } | { delayMs } | { hang } } }
+//   inOrder: true           → one request at a time, in the order received, as helper.ps1's ReadLine loop does (a delayMs then holds every later request)
 // `tcp-table` honours the same filters the real helper does (pids, remotePort, localPort, states) on `data.rows`.
 // node --test runs every file under test/: unless the driver sets ASIGHT_FAKE_HELPER=1 this exits at once.
 // a stand-in the test starts and kills must not outlive a runner that was killed: the watch of test/helpers/exit-with-parent.mjs ends this process when its parent is gone
@@ -32,6 +33,7 @@ else setTimeout(() => {
 function listen() {
   let answered = 0
   const idx = new Map() // verb → how many answers were given (for seq)
+  let chain = Promise.resolve() // inOrder: the request being worked on
   readline.createInterface({ input: process.stdin }).on('line', (line) => {
     if (!line.trim()) return
     if (fx.log) fs.appendFileSync(fx.log, line + '\n')
@@ -49,6 +51,7 @@ function listen() {
       }
       if (fx.exitAfter != null && ++answered >= fx.exitAfter) setTimeout(() => process.exit(fx.exitCode ?? 0), 5)
     }
+    if (fx.inOrder) { chain = chain.then(() => (spec && spec.hang ? new Promise(() => {}) : new Promise((r) => setTimeout(() => { reply(); r() }, (spec && spec.delayMs) || 0)))); return }
     if (spec && spec.hang) return
     if (spec && spec.delayMs) setTimeout(reply, spec.delayMs)
     else reply()

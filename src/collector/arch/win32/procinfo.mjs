@@ -19,10 +19,11 @@
 // an agent started over ssh or in another RDP session is still the user's agent); another user's process in another session is not listed.
 
 import { splitCommandLine } from '../../../off/winargv.mjs'
+import { HELPER_WAIT_MS } from './helper.mjs'
 
 /** How long one targeted ask waits: the first `ps` after the helper starts has an empty command-line cache, so more than 40 processes take a full
  *  Win32_Process enumeration through CIM (plus the module load), which on a cold or busy machine is more than the 2 s a table read gets. */
-export const PS_TIMEOUT_MS = 10000
+export const PS_TIMEOUT_MS = HELPER_WAIT_MS
 /** What a ps row's `cmdlineState` can say (helper.ps1 decides; a test keeps the two lists equal): `ok` the command line is there · `pending` asked, no
  *  answer yet · `cim-backoff` CIM failed, not asked again for 30 s · `empty` asked three times and CIM has none (a process without one, or one CIM does
  *  not show) · `not-asked` the caller said `cmdline:false`. `pending` and `cim-backoff` are NOT "no command line": it may still come — on the accept-time
