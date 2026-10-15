@@ -21,13 +21,17 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { setKey, getPath, reverseOps, parseJsonText } from '../../../off/json-text.mjs'
 import { dotenvBlock, joinDotenvBlock, insertLine, removeAsightText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
-import { sha256, readOrNull, writeDurable, missingDirs, editTarget } from '../../../off/fsutil.mjs'
+import { sha256, readOrNull, writeDurable, missingDirs, editTarget, pathKey } from '../../../off/fsutil.mjs'
 import { saveManifest, undoByHand, PHASES } from '../../../off/manifest.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
 import { backupDir } from '../../../off/paths.mjs'
 import { CODE_OFF } from '../../../off/names.mjs'
 import { describeEntry } from '../../../off/journal.mjs'
 import { decodeText, encodeText, WHY_TEXT } from '../../../off/text-codec.mjs'
+
+// One file under two spellings is one file (X18): every path the journal compares goes through pathKey (src/off/fsutil.mjs).
+const realOf = (fs) => (d) => fs.realpathSync.native(d) // the file system the journal is handed decides what a path is (pathKey)
+const samePath = (a, b, fs) => a === b || (typeof a === 'string' && typeof b === 'string' && pathKey(a, { realpath: realOf(fs) }) === pathKey(b, { realpath: realOf(fs) }))
 
 export { sha256, writeDurable, sweepTemps, missingDirs, removeEmptyDirs, editTarget } from '../../../off/fsutil.mjs'
 export { undoEntry, removeOwnedFile, describeEntry } from '../../../off/journal.mjs'
@@ -70,7 +74,7 @@ const needPhase = (what, phase) => { if (!PHASES.includes(phase)) throw new Type
 // manifest already lists is replaced, not added (a second one would be undone twice), and the directories the first attempt made stay listed.
 export function writeOwnedFile({ dir, manifest, harness = null, role, phase, file, data, sources = null, mode = 0o600, exclusive = false, extra = {}, now = new Date(), fs = nodeFs }) {
   needPhase('writeOwnedFile', phase)
-  const known = manifest.files.find((f) => f.path === file)
+  const known = manifest.files.find((f) => samePath(f.path, file, fs))
   if (exclusive && fs.existsSync(file)) throw new Error(`${file} already exists; asight will not write over it`)
   const created = [...new Set([...((known && known.created_dirs) || []), ...missingDirs(path.dirname(file), fs)])]
   const item = { kind: 'owned-file', path: file, role, harness, phase, sha256: sha256(Buffer.from(data)), mode, created_dirs: created, installed_at: now.toISOString(), ...(sources ? { sources } : {}), ...extra }
@@ -87,7 +91,7 @@ export function writeOwnedFile({ dir, manifest, harness = null, role, phase, fil
 // CA back), or `rewrite` (listed, but gone or changed since). `planned` (the sha256 of what would be written now) is for the files whose
 // content is a pure function of the plan (the unit): there the file must also equal it, else a moved script path would be kept for ever.
 export function judgeOwned({ manifest, file, planned = null, fs = nodeFs }) {
-  const rec = manifest && (manifest.files || []).find((f) => f.path === file)
+  const rec = manifest && (manifest.files || []).find((f) => samePath(f.path, file, fs))
   if (!rec) return { action: 'write', record: null }
   const cur = readOrNull(fs, file)
   const here = cur == null ? null : sha256(cur)
@@ -107,8 +111,8 @@ export function previewJsonKey({ file, keys, value, fs = nodeFs }) {
 // ── what `on` finds of one planned entry (1.6 R9) ────────────────────────────────────────────────────────────────────────────────────────
 const sameKeys = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((k, i) => k === b[i])
 const sameNames = (a, b) => !!a && !!b && JSON.stringify(Object.keys(a).sort()) === JSON.stringify(Object.keys(b).sort())
-// the manifest's entry for what is planned: same harness, file and thing (a JSON key path, a block's variables, a line)
-const entryOf = (manifest, p) => ((manifest && manifest.entries) || []).find((x) => x.harness === p.harness && x.path === p.path
+// the manifest's entry for what is planned: same harness, file (by pathKey: one file under any spelling, X18) and thing (a JSON key path, a block's variables, a line)
+const entryOf = (manifest, p, fs) => ((manifest && manifest.entries) || []).find((x) => x.harness === p.harness && samePath(x.path, p.path, fs)
   && (x.kind ?? (x.format ? 'text' : 'json-key')) === p.kind
   && (p.kind === 'json-key' ? sameKeys(x.keys, p.keys) : x.format === p.format && (p.vars ? sameNames(x.vars, p.vars) : x.line === p.line)))
 // is asight's text still in the file? a JSON key by its value, a block or line by the text it inserted (the same test undo makes of an edited file)
@@ -135,7 +139,7 @@ function writtenBy(x, text) {
  *  `entry` is the manifest's. A path that cannot be resolved (a link now dangling) is skip-user-changed with the reason. A file whose bytes are not
  *  asight's own and prove no encoding throws entry-refused with its `why` (as previewTextEntry does for a new entry), before anything is written. */
 export function judgeEntry({ manifest, planned, fs = nodeFs }) {
-  const x = entryOf(manifest, planned)
+  const x = entryOf(manifest, planned, fs)
   if (!x) return { action: 'write', entry: null }
   let cur
   try { cur = readOrNull(fs, editTarget(x.path, fs)) } catch (e) { return { action: 'skip-user-changed', entry: x, why: String((e && e.message) || e) } }
@@ -229,7 +233,7 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home
   if (j.action === 'skip-user-changed') throw refuseChanged(j)
   // `joinBlock` (text-edit.mjs joinDotenvBlock) may only join a block THIS manifest lists for the same harness: a block
   // from an install this manifest does not list is still refused, join or no join
-  const joined = edit.joinBlock === true && (manifest.entries || []).some((x) => x.harness === harness && x.path === file && x.kind === 'text' && x.format === 'dotenv-block')
+  const joined = edit.joinBlock === true && (manifest.entries || []).some((x) => x.harness === harness && samePath(x.path, file, fs) && x.kind === 'text' && x.format === 'dotenv-block')
   const real = editTarget(file, fs)
   const before = readOrNull(fs, real)
   if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry }
@@ -252,10 +256,11 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home
 // descriptor gives it, e.g. zcode:user:caCertFile), or every variable of its dotenv block; the tracker then judges
 // config-after-start against this time, not the file's mtime, so an unrelated later edit of the same file (Hermes
 // rewrites its .env when it tidies it) does not make a process that started after install look stale (review 2 #5).
-export function installedAt(manifest, layer) {
+export function installedAt(manifest, layer, { fs = nodeFs } = {}) {
   if (!manifest || !layer || !layer.file || !layer.vars) return null
+  const key = pathKey(layer.file, { realpath: realOf(fs) })
   for (const e of manifest.entries || []) {
-    if (e.path !== layer.file && e.real_path !== layer.file) continue
+    if (!(typeof e.path === 'string' && pathKey(e.path, { realpath: realOf(fs) }) === key) && !(typeof e.real_path === 'string' && pathKey(e.real_path, { realpath: realOf(fs) }) === key)) continue
     const t = Date.parse(e.installed_at)
     if (!Number.isFinite(t)) continue
     if (e.vars) { if (Object.entries(e.vars).every(([k, v]) => layer.vars[k] === v)) return t; continue } // a dotenv block

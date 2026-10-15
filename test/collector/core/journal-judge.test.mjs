@@ -5,7 +5,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { applyJsonKey, judgeEntry, judgeOwned, newManifest, saveManifest, sha256, writeOwnedFile } from '../../../src/collector/core/trust/journal.mjs'
+import { applyJsonKey, applyTextEntry, installedAt, judgeEntry, judgeOwned, newManifest, saveManifest, sha256, writeOwnedFile } from '../../../src/collector/core/trust/journal.mjs'
+import { BLOCK_BEGIN } from '../../../src/off/text-edit.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 const K = ['env', 'CA_FILE']
 const box = () => {
@@ -74,4 +76,35 @@ test('judgeOwned: unlisted → write; byte for byte what was recorded → skip-i
     assert.equal(m.files.filter((f) => f.path === file).length, 1)
     saveManifest(b.dir, m)
   } finally { b.done() }
+})
+
+// ── one file under two spellings (X18): the manifest records the path as one run's ctx spelled it; a later run (another env, a short name, a linked
+// directory) spells it otherwise. Every comparison the journal makes goes through pathKey, so the second spelling is the same entry, not a new one.
+// Does this temp file system fold case (APFS, NTFS by default)? Where it does not (most Linux), two spellings in case are two files, and the journal must say so.
+const foldsCase = (dir) => { const f = path.join(dir, 'Probe'); fs.writeFileSync(f, ''); try { return fs.existsSync(path.join(dir, 'pROBE')) } finally { fs.rmSync(f) } }
+test('X18: the trust block is written to Home/Codex/.env; the proxy block joins it under another spelling of the same file (case, a linked directory) and installedAt finds it under either', () => {
+  const run = (label, mk) => {
+    const root = fs.realpathSync(tmpDir('asight-jj18-'))
+    fs.mkdirSync(path.join(root, 'Home', 'Codex'), { recursive: true })
+    fs.symlinkSync(path.join(root, 'Home', 'Codex'), path.join(root, 'link'))
+    const dir = path.join(root, '.asight', 'collector')
+    fs.mkdirSync(dir, { recursive: true })
+    const file = path.join(root, 'Home', 'Codex', '.env')
+    fs.writeFileSync(file, 'OPENAI_API_KEY=k\n')
+    const other = mk(root)
+    const m = newManifest()
+    const trust = applyTextEntry({ phase: 'on', dir, home: root, manifest: m, harness: 'codex', file, edit: { format: 'dotenv-block', vars: { SSL_CERT_FILE: '/ca.pem' } } })
+    assert.ok(trust, label)
+    const joined = applyTextEntry({ phase: 'on', dir, home: root, manifest: m, harness: 'codex', file: other, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: 'http://127.0.0.1:1' }, joinBlock: true } })
+    assert.ok(joined, `${label}: the join is written, not refused as text from an unlisted install`)
+    const text = fs.readFileSync(file, 'utf8')
+    assert.equal(text.split(BLOCK_BEGIN).length, 2, `${label}: one block in the file`)
+    assert.match(text, /HTTPS_PROXY/, label)
+    // the planned trust entry under the other spelling is the entry the manifest has: intact, not written again
+    assert.equal(judgeEntry({ manifest: m, planned: { harness: 'codex', kind: 'text', path: other, format: 'dotenv-block', vars: { SSL_CERT_FILE: '/ca.pem' } } }).action, 'skip-intact', label)
+    assert.equal(installedAt(m, { file: other, vars: { SSL_CERT_FILE: '/ca.pem', HTTPS_PROXY: 'http://127.0.0.1:1' } }), Date.parse(trust.installed_at), `${label}: installedAt`)
+  }
+  const probe = fs.realpathSync(tmpDir('asight-jj18-'))
+  if (foldsCase(probe)) run('another case', (root) => path.join(root, 'home', 'codex', '.env'))
+  run('a linked directory', (root) => path.join(root, 'link', '.env'))
 })

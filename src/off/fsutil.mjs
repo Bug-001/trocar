@@ -15,14 +15,61 @@ export function readOrNull(fs, file) { try { return fs.readFileSync(file) } catc
 /** fsync a directory so a rename or a created file in it is durable; a filesystem that refuses it is not an error. */
 export function fsyncDir(fs, dir) { try { const fd = fs.openSync(dir, 'r'); try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) } } catch { /* a filesystem that refuses dir fsync */ } }
 
-// Atomic and durable: temp file in the same directory, fsync, rename over, fsync the directory.
+// Atomic and durable: temp file in the same directory, fsync, rename over, fsync the directory. A rename that fails because another
+// process holds the target open for a moment (Windows: an editor, a scanner, the agent itself, without FILE_SHARE_DELETE) is tried again
+// with a bounded backoff, about a second in all; which errors are retried is by errno, never by platform (X16). Whatever fails, the temp
+// file is removed before the error is thrown: a write that did not land leaves nothing next to the user's file.
 export const TMP_MARK = '.asight-tmp-'
+const RENAME_BUSY = new Set(['EBUSY', 'EPERM', 'EACCES'])
+const RENAME_WAITS = [10, 20, 40, 60, 80, 100, 120, 150, 200, 220] // ms between tries; 1 s in all
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) // a synchronous wait: every writer here is synchronous
+function renameRetrying(fs, from, to) {
+  for (let i = 0; ; i++) {
+    try { return fs.renameSync(from, to) } catch (e) {
+      if (!(e && RENAME_BUSY.has(e.code)) || i >= RENAME_WAITS.length) throw e
+      pause(RENAME_WAITS[i])
+    }
+  }
+}
 export function writeDurable(file, data, mode, fs = nodeFs) {
   const tmp = `${file}${TMP_MARK}${process.pid}`
   const fd = fs.openSync(tmp, 'w', mode)
-  try { fs.writeSync(fd, data); fs.fchmodSync(fd, mode); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
-  fs.renameSync(tmp, file)
+  try {
+    try { fs.writeSync(fd, data); fs.fchmodSync(fd, mode); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+    renameRetrying(fs, tmp, file)
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }) } catch { /* the error to report is the write's */ }
+    throw e
+  }
   fsyncDir(fs, path.dirname(file))
+}
+
+// The identity of a path (X18, RFC 4.9 route-plan row): the one key every comparison of "is this the same file" in the journal and the
+// route plans uses, so a later run that spells a recorded path otherwise (another case, an 8.3 short name, a linked directory, `\` for `/`)
+// finds the same entry. The nearest existing ancestor of the file is replaced by what the file system says it is (realpath.native: expands
+// short names, follows junctions and directory links), the rest is appended as written; win32 keys use `/`; win32 and darwin fold case
+// (NTFS / APFS are case-insensitive by default) and darwin also folds Unicode normalisation (APFS looks names up without regard to it).
+// No branch for any one spelling: the file system decides. `realpath` is how it is asked (a function of a directory; null: not at all, the key
+// is the path resolved and folded); left out, the host's realpath.native is asked only when it is the platform being keyed: a win32 path keyed on a
+// Mac is not a Mac path.
+export function pathKey(p, { platform = process.platform, realpath } = {}) {
+  const P = platform === 'win32' ? path.win32 : path.posix
+  const ask = realpath !== undefined ? realpath : platform === process.platform ? (d) => nodeFs.realpathSync.native(d) : null
+  let key = P.resolve(String(p))
+  if (ask) {
+    const rest = []
+    for (let d = P.dirname(key), b = P.basename(key); ; b = P.basename(d), d = P.dirname(d)) {
+      rest.unshift(b)
+      let real = null
+      try { real = ask(d) } catch { /* not there: try its parent */ }
+      if (real) { key = P.join(real, ...rest); break }
+      if (P.dirname(d) === d) break
+    }
+  }
+  if (platform === 'win32') key = key.replace(/\\/g, '/')
+  if (platform === 'darwin') key = key.normalize('NFC')
+  if (platform === 'win32' || platform === 'darwin') key = key.toLowerCase()
+  return key
 }
 
 // Is `p` strictly inside `root`? `..` and a symlinked parent directory are followed (a path that only looks like it is inside is not); `root` itself is not inside. What `off` /
