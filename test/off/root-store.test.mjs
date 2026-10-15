@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { rootStore, rootIdOf } from '../../src/off/root-store.mjs'
+import { rootStore, rootIdOf, CRYPT_E_NOT_FOUND } from '../../src/off/root-store.mjs'
 import { custodyStub } from '../helpers/custody-stub.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -37,7 +37,7 @@ function runner({ platform, present, files }) {
     const a = args.map((x) => (x.endsWith('root-store-tmp.pem') ? (files.push(fs.readFileSync(x, 'utf8')), FILE) : x))
     calls.push([file, a])
     if (platform === 'darwin' && args[0] === 'find-certificate') return { status: 0, stdout: `SHA-1 hash: X\n${pemOf(other.rootDer)}${present ? `SHA-1 hash: ${id.sha1}\n${pemOf(rootDer)}` : ''}` }
-    if (platform === 'win32' && args[1] === '-store') return { status: present ? 0 : 1, stdout: '' }
+    if (platform === 'win32' && args[1] === '-store') return { status: present ? 0 : CRYPT_E_NOT_FOUND, stdout: '' }
     return { status: 0, stdout: '' }
   }
   return { run, calls }
@@ -76,4 +76,25 @@ test('CM7 a failing tool is a reason, never a throw; Linux has no user root stor
   assert.equal(rootStore({ platform: 'win32', run, home }).add(rootDer).ok, false)
   assert.throws(() => rootStore({ platform: 'linux', run, home }), /no user root store/)
   assert.throws(() => rootStore({ platform: 'win32', run, home }).has({ fp256: id.fp256 }), /thumbprint/)
+})
+
+// win32: only certutil's not-found exit (read signed or unsigned) is "absent"; a spawn failure / timeout (status null), an
+// unexpected exit, or a failing find under remove is an error — remove never claims "already gone" and never runs -delstore
+for (const [what, status] of [['a spawn failure or timeout', null], ['an unexpected exit', 5], ['access denied', 0x80070005], ['access denied, signed', 0x80070005 | 0]]) {
+  test(`CM7 win32 has / remove with ${what}: an error, never "absent"`, () => {
+    const home = tmpDir('asight-rs-')
+    const calls = []
+    const run = (file, args) => { calls.push(args[1]); return { status, stderr: 'boom' } }
+    const store = rootStore({ platform: 'win32', run, home })
+    assert.match(store.has(id).error, /certutil -user -store failed/)
+    const out = store.remove(id)
+    assert.equal(out.ok, false); assert.match(out.reason, /certutil -user -store failed/)
+    assert.ok(!calls.includes('-delstore'))
+  })
+}
+test('CM7 win32 not-found read as a signed exit is still "absent"', () => {
+  const run = () => ({ status: CRYPT_E_NOT_FOUND | 0 })
+  const store = rootStore({ platform: 'win32', run, home: tmpDir('asight-rs-') })
+  assert.deepEqual(store.has(id), { present: false })
+  assert.deepEqual(store.remove(id), { ok: true, absent: true })
 })

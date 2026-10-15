@@ -21,6 +21,9 @@ export function rootIdOf(cert) {
   return { fp256: x.fingerprint256, sha1: x.fingerprint.replace(/:/g, '') }
 }
 
+/** certutil's exit when the store has no such certificate: CRYPT_E_NOT_FOUND. */
+export const CRYPT_E_NOT_FOUND = 0x80092004
+
 const rsTool = (r, what) => (r.code === 0 ? null : `${what} failed (exit ${r.code ?? 'none'}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`)
 
 /** rootStore({ platform, run, home, env, fs }) → { add(rootDer), has(id), remove(id) }. add / remove → { ok: true, absent? } |
@@ -66,15 +69,24 @@ export function rootStore({ platform, run = null, home, env = process.env, fs = 
   }
   if (platform === 'win32') {
     const thumb = (id) => { if (!id || !id.sha1) throw new Error('the Windows root store looks a certificate up by its SHA-1 thumbprint: pass rootIdOf(der)'); return id.sha1 }
+    // only certutil's not-found exit is "absent"; a spawn failure, a timeout (code null) or any other exit is an error,
+    // never a silent "already gone" (D38). The exit is the HRESULT; `>>> 0` reads it signed or unsigned alike.
+    const find = (id) => {
+      const r = execTool('certutil', ['-user', '-store', 'Root', thumb(id)], opts)
+      if (r.code === 0) return { present: true }
+      if (r.code !== null && r.code >>> 0 === CRYPT_E_NOT_FOUND) return { present: false }
+      return { error: rsTool(r, 'certutil -user -store') }
+    }
     return {
       add: (rootDer) => withFile(pemOf(rootDer), (f) => {
         const why = rsTool(execTool('certutil', ['-user', '-addstore', 'Root', f], opts), 'certutil -user -addstore')
         return why ? { ok: false, reason: why } : { ok: true }
       }),
-      // certutil exits non-zero for "not found" and for a store it cannot read alike: both are "not present" here
-      has: (id) => ({ present: execTool('certutil', ['-user', '-store', 'Root', thumb(id)], opts).code === 0 }),
+      has: (id) => { const f = find(id); return f.error ? { error: f.error } : { present: f.present } },
       remove: (id) => {
-        if (execTool('certutil', ['-user', '-store', 'Root', thumb(id)], opts).code !== 0) return { ok: true, absent: true }
+        const f = find(id)
+        if (f.error) return { ok: false, reason: f.error }
+        if (!f.present) return { ok: true, absent: true }
         const why = rsTool(execTool('certutil', ['-user', '-delstore', 'Root', thumb(id)], opts), 'certutil -user -delstore')
         return why ? { ok: false, reason: why } : { ok: true }
       },
