@@ -122,20 +122,22 @@ function cached(cache, kind, pid, startedAt, read) {
 
 /** envOf(pid, names, { startedAt, exec, procenvPath, cache }) → { <name>: value } for the `names` set in the process's LAUNCH
  *  environment (procenv: sysctl KERN_PROCARGS2, M2; same user only), or null when it cannot be read. Names compare exactly (macOS
- *  environment names are case-sensitive). Later setenv() calls in the process do not show: launch values only. */
+ *  environment names are case-sensitive). Later setenv() calls in the process do not show: launch values only. Only the named
+ *  variables are asked for, returned and cached (RFC 4.9 §5.2): the cache key carries the name set, the rest never enters memory. */
 export function envOf(pid, names, { startedAt = null, exec = null, env = process.env, procenvPath = nativePath(NATIVE.procenv), cache = procCache, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
-  const all = cached(cache, 'env', pid, startedAt, () => {
-    const r = execTool(procenvPath, [String(pid)], { run: exec, env, timeoutMs: psTimeoutMs, maxBuffer: 8 << 20 })
+  const want = [...new Set(names)].sort()
+  if (!want.length) return {}
+  return cached(cache, `env:${want.join('\0')}`, pid, startedAt, () => {
+    const r = execTool(procenvPath, [String(pid), ...want], { run: exec, env, timeoutMs: psTimeoutMs, maxBuffer: 8 << 20 })
     if (r.code !== 0) return null
-    const m = new Map()
+    const o = {}
     for (const entry of String(r.out).split('\0')) {
       const eq = entry.indexOf('=')
-      if (eq > 0 && !m.has(entry.slice(0, eq))) m.set(entry.slice(0, eq), entry.slice(eq + 1)) // the first wins, as getenv
+      const n = entry.slice(0, eq)
+      if (eq > 0 && want.includes(n) && !Object.hasOwn(o, n)) o[n] = entry.slice(eq + 1) // the first wins, as getenv
     }
-    return m
+    return o
   })
-  if (!all) return null
-  return Object.fromEntries([...names].filter((n) => all.has(n)).map((n) => [n, all.get(n)]))
 }
 
 /** cwdOf(pid, { startedAt, exec }) → the process's current directory (`lsof -a -p <pid> -d cwd -Fn`), or null. */

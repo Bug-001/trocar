@@ -36,19 +36,30 @@ test('CM7: the darwin root store adds to the LOGIN keychain with trustRoot and n
   assert.ok(calls.every((x) => !x.args.some((a) => /System\.keychain/.test(a))), 'never the System keychain')
 })
 
-test('proc readers: envOf filters names from procenv\'s NUL list, exact case, the first entry winning; one read per pid + start', () => {
-  const { run, calls } = runner({ procenv: { out: 'HTTPS_PROXY=http://a:1\0https_proxy=lower\0PATH=/bin\0HTTPS_PROXY=second\0EMPTY=\0junk\0' } })
+test('proc readers: envOf asks procenv for the named variables only, keeps nothing else, exact case, the first entry winning; one read per pid + start + name set', () => {
+  // The stub answers MORE than was asked (secrets included): nothing unrequested may come back or sit in the cache.
+  const extra = 'ANTHROPIC_API_KEY=sk-secret\0OPENAI_API_KEY=sk-other\0'
+  const { run, calls } = runner({ procenv: { out: `HTTPS_PROXY=http://a:1\0https_proxy=lower\0${extra}PATH=/bin\0HTTPS_PROXY=second\0EMPTY=\0junk\0` } })
   const cache = new Map()
   const o = { exec: run, cache, startedAt: 1700000000000, procenvPath: '/pkg/native/procenv' }
-  assert.deepEqual(envOf(42, ['HTTPS_PROXY', 'EMPTY', 'NO_PROXY'], o), { HTTPS_PROXY: 'http://a:1', EMPTY: '' })
-  assert.deepEqual(envOf(42, ['https_proxy'], o), { https_proxy: 'lower' }, 'another name set: the same read')
-  assert.equal(calls.length, 1, 'cache hit: one read for pid + start')
-  assert.deepEqual(calls[0].args, ['42'])
+  const sets = [['HTTPS_PROXY', 'EMPTY', 'NO_PROXY'], ['https_proxy'], ['NO_PROXY', 'EMPTY', 'HTTPS_PROXY', 'EMPTY']]
+  const want = { HTTPS_PROXY: 'http://a:1', https_proxy: 'lower', EMPTY: '' }
+  for (const names of sets) {
+    const got = envOf(42, names, o)
+    assert.deepEqual(got, Object.fromEntries(names.filter((n) => n in want).map((n) => [n, want[n]])), names.join())
+  }
+  assert.equal(calls.length, 2, 'the same name set (any order, duplicates) is a cache hit; another set is another read')
+  assert.deepEqual(calls[0].args, ['42', 'EMPTY', 'HTTPS_PROXY', 'NO_PROXY'], 'the names ride on argv: procenv answers only them')
+  assert.deepEqual(calls[1].args, ['42', 'https_proxy'])
   assert.equal(calls[0].file, '/pkg/native/procenv')
+  const held = JSON.stringify([...cache.entries()])
+  for (const secret of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'sk-secret', 'PATH', '/bin']) assert.ok(!held.includes(secret), `cache holds no ${secret}`)
+  assert.deepEqual(envOf(42, [], o), {}, 'no names: no read')
+  assert.equal(calls.length, 2)
   envOf(42, ['PATH'], { ...o, startedAt: 1700000009000 }) // the pid reused by another process life
-  assert.equal(calls.length, 2, 'another start time: read again')
+  assert.equal(calls.length, 3, 'another start time: read again')
   envOf(42, ['PATH'], { ...o, startedAt: null }); envOf(42, ['PATH'], { ...o, startedAt: null })
-  assert.equal(calls.length, 4, 'no start time: never cached')
+  assert.equal(calls.length, 5, 'no start time: never cached')
   const failing = runner({})
   assert.equal(envOf(7, ['PATH'], { exec: failing.run, cache, startedAt: 1 }), null)
   envOf(7, ['PATH'], { exec: failing.run, cache, startedAt: 1 })
