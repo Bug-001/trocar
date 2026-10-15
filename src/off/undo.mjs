@@ -24,8 +24,8 @@
 // Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { undoEntry, removeOwnedFile, describeEntry } from './journal.mjs'
-import { saveManifest, KNOWN_KINDS, NO_UNDO_YET, FILE_ENTRY_KINDS, undoByHand, restoreByHand } from './manifest.mjs'
+import { undoEntry, removeOwnedFile, undoWrapper, describeEntry } from './journal.mjs'
+import { saveManifest, KNOWN_KINDS, FILE_ENTRY_KINDS, undoByHand, restoreByHand } from './manifest.mjs'
 import { undoRunKey, undoScheduledTask } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, asightHome } from './paths.mjs'
@@ -46,7 +46,8 @@ const KEPT_BECAUSE = {
 }
 const UNTIL_VALUES = ['restart', 'next-connection', 'next-handshake', 'session-end']
 
-const known = (item) => KNOWN_KINDS.includes(item.kind) && !NO_UNDO_YET.includes(item.kind) // a kind with no undo yet is listed as left, never skipped silently (D38)
+const known = (item) => KNOWN_KINDS.includes(item.kind)
+const REMOVED_ROLES = ['plugin', 'shim', 'switch', 'config-entry'] // step 4's owned files: removed whatever their content (a changed one is said)
 const isMap = (v) => v instanceof Map
 const processEnv = (p) => { try { const e = typeof p.env === 'function' ? p.env() : p.env; return isMap(e) ? e : null } catch { return null } } // gone, or not ours to read
 const errText = (e) => String((e && e.code) || (e && e.message) || e)
@@ -92,7 +93,7 @@ const removeKernelCopy = (exe, fs) => {
   }
 }
 
-async function undoInto({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, fs = nodeFs, exec = null, env = process.env }, out) {
+async function undoInto({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, custody = null, fs = nodeFs, exec = null, env = process.env }, out) {
   if (manifest.unsupported) throw new Error(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; nothing was changed`)
   const inScope = (h) => typeof h === 'string' && (ids == null || ids.includes(h))
   const liveness = manifest.liveness && typeof manifest.liveness === 'object' ? manifest.liveness : (manifest.liveness = {})
@@ -307,10 +308,11 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   // ── 4: rc lines and patch rows, then plugins and the shim ─────────────────────────────────────────────────────────────────────────
   for (const e of entries) if (!config(e)) undoOne(e)
   removeEmptyDirs([backupDir(home)], fs) // the last backup is gone (rmdir leaves a directory that still holds one)
-  for (const f of [...manifest.files].reverse().filter((x) => (x.role === 'plugin' || x.role === 'shim') && inScope(x.harness) && known(x))) {
+  for (const f of [...manifest.files].reverse().filter((x) => (REMOVED_ROLES.includes(x.role) || (x.role === 'wrapper' && dropCa)) && inScope(x.harness) && known(x))) {
     try {
-      const r = removeOwnedFile(f, fs)
-      if (r.result === 'removed') out.removed.push(f.path)
+      const r = f.role === 'wrapper' ? undoWrapper(f, fs) : removeOwnedFile(f, fs)
+      if (r.result === 'error') { fail(f, r.reason); continue }
+      if (r.result === 'removed') out.removed.push(r.path)
       if (r.changed) out.changed.push({ harness: f.harness, path: f.path, role: f.role }) // not what asight wrote: removed all the same, and said
       without(manifest.files, f)
     } catch (err) { fail(f, `${f.path}, asight's ${f.role}, could not be removed: ${String((err && err.message) || err)}`) }
@@ -331,6 +333,17 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
       if (l.until_environ && p.envRead !== false) { const v = (processEnv(p) || new Map()).get(l.until_environ); if (!(typeof v === 'string' && v.startsWith(dir + path.sep))) continue }
       out.still_trusting.push({ pid: p.pid, harness: h, until: UNTIL_VALUES.includes(l.until) ? l.until : 'restart' })
     }
+  }
+
+  // ── last: the root's private key (4.11 P13 `root-key`), by `uninstall` only, through the custody backend handed in; `off` never touches an install item
+  for (const k of manifest.entries.filter((e) => e.kind === 'root-key' && ids == null)) {
+    const where = k.path ?? `${(k.custody && k.custody.kind) || 'custody'}:${(k.custody && k.custody.id) || '?'}`
+    if (!dropCa) { out.notes.push(`${where}: the asight root's private key stays — off never touches what install wrote; asight uninstall removes it`); continue }
+    try {
+      if (!custody || typeof custody.remove !== 'function') throw new Error('this asight has no custody backend to remove it with')
+      await custody.remove(k.custody)
+      without(manifest.entries, k); out.removed.push(where)
+    } catch (e) { fail({ ...k, path: where }, `${where}, the asight root's private key, could not be removed (${errText(e)}); by hand: ${undoByHand(k)}`) }
   }
 
   // a harness with nothing left in the manifest needs no liveness and no watched path any more

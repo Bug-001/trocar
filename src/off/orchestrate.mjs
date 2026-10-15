@@ -245,7 +245,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     let out, stopped = null
     try {
       const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? () => rebuildRoots(w) : null)
-      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, fs: w.fs, exec: w.exec, env: w.env })
+      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, custody: w.deps.custody || null, fs: w.fs, exec: w.exec, env: w.env })
     } catch (e) {
       if (!e || !e.partial) { // it stopped before one entry was touched
         u.stopped = true; u.problems.push(`undoing the entries stopped: ${errMessage(e)}`); u.failures.push({ code: 'entry-not-undone', reason: errMessage(e) })

@@ -3,6 +3,7 @@
 // The install half (applyJsonKey, applyTextEntry, writeOwnedFile) stays in src/collector/core/trust/journal.mjs; this half is here so
 // `asight off` and the standalone `~/.asight/bin/asight-off` can run it from node:* alone (0.1 §2).
 import nodeFs from 'node:fs'
+import path from 'node:path'
 import { setKey, removeKey, removeItem, reverseOps, getPath, parseJsonText, unreadableJson } from './json-text.mjs'
 import { removeAsightText, asightResidue, onlySkeleton } from './text-edit.mjs'
 import { sha256, readOrNull, writeDurable, removeEmptyDirs, sweepTemps } from './fsutil.mjs'
@@ -17,6 +18,22 @@ export function removeOwnedFile(item, fs = nodeFs) {
   fs.rmSync(item.path, { force: true })
   removeEmptyDirs(item.created_dirs, fs)
   return { path: item.path, result: 'removed', ...(item.sha256 && sha256(cur) !== item.sha256 ? { changed: true } : {}) }
+}
+
+// Undo a P8 install-folder wrapper (owned-file role `wrapper`): while the file at `path` is still asight's wrapper (`sha256`), the real program moved to
+// `real` is put back by a same-volume rename over it; otherwise the agent's update replaced the wrapper by name, and only the moved copy goes. Then the
+// copy's directory, when empty. → { path, result: 'restored' | 'removed' | 'already-removed' | 'error', reason? }
+export function undoWrapper(item, fs = nodeFs) {
+  const cur = readOrNull(fs, item.path), real = readOrNull(fs, item.real)
+  const dirGone = () => { try { fs.rmdirSync(path.dirname(item.real)) } catch { /* not empty, or gone */ } }
+  if (cur != null && sha256(cur) === item.sha256) {
+    if (real == null) return { path: item.path, result: 'error', reason: `${item.path} is still asight's wrapper, but the real program it runs (${item.real}) is gone; asight left the wrapper: reinstall the agent` }
+    fs.renameSync(item.real, item.path); dirGone()
+    return { path: item.path, result: 'restored' }
+  }
+  if (real == null) { dirGone(); return { path: item.path, result: 'already-removed' } }
+  fs.rmSync(item.real, { force: true }); dirGone()
+  return { path: item.real, result: 'removed', changed: true }
 }
 
 // What an entry put where, for messages: the key and value of a JSON entry, the variables of a block, the line; the Windows collector's

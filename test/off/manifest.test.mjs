@@ -300,13 +300,19 @@ test('D55 save refuses a v3 item whose phase is missing or not install | on — 
   }
 })
 
-test('D55 the new kinds: known, each with a sentence of undo by hand; OFF_VERSION is past 10', () => {
-  assert.ok(OFF_VERSION >= 11); for (const k of ['system-root', 'login-env', 'json-array-item']) assert.ok(KNOWN_KINDS.includes(k), k)
+test('D55 / 4.11 P13 the new kinds: known, each with a sentence of undo by hand; login-env is gone', () => {
+  for (const k of ['system-root', 'json-array-item', 'root-key']) assert.ok(KNOWN_KINDS.includes(k), k)
+  assert.ok(!KNOWN_KINDS.includes('login-env'), 'never emitted, and no undo: not a kind (4.11 P13)')
   assert.equal(undoByHand({ kind: 'system-root', store: 'win-currentuser-root', thumbprint: 'AB12' }), 'run: certutil -user -delstore Root AB12')
   assert.equal(undoByHand({ kind: 'system-root', store: 'darwin-user-trust', fp256: 'AA:BB', thumbprint: 'CC', cert_file: '/h/.asight/collector/ca/asight-ca.pem' }), 'run: security remove-trusted-cert /h/.asight/collector/ca/asight-ca.pem, then security delete-certificate -Z CC (the certificate with SHA-256 AA:BB)')
-  const env = undoByHand({ kind: 'login-env', name: 'NODE_EXTRA_CA_CERTS', value: '/x.pem', prior_value: '/corp.pem', carriers: [{ kind: 'text', path: '/h/.zshenv' }, { kind: 'reg-value', hive: 'HKCU', key: 'Environment', name: 'NODE_EXTRA_CA_CERTS' }] })
-  assert.ok(env.includes('NODE_EXTRA_CA_CERTS') && env.includes('/h/.zshenv') && env.includes('HKCU\\Environment\\NODE_EXTRA_CA_CERTS') && env.includes('"/corp.pem"'), env)
   assert.equal(undoByHand({ kind: 'json-array-item', path: '/s.json', keys: ['settingsSync.ignoredSettings'], item: 'http.proxy', created_array: true }), 'edit /s.json: remove "http.proxy" from the list settingsSync.ignoredSettings, then delete the list if it is now empty (asight created it)')
+  const key = (kind, id) => undoByHand({ kind: 'root-key', custody: { kind, id }, fp256: 'AA:BB' })
+  assert.match(key('file', '/h/.asight/collector/ca/root.key'), /^rm \/h\/\.asight\/collector\/ca\/root\.key \(.*SHA-256 AA:BB/)
+  assert.match(key('cng', 'asight-root'), /certutil -user -csp "Microsoft Software Key Storage Provider" -delkey "asight-root"/)
+  assert.match(key('keychain', 'asight-root'), /login keychain/)
+  assert.match(undoByHand({ kind: 'text', format: 'pem-block', path: '/h/my.pem' }), /^edit \/h\/my\.pem: delete the lines from "# >>> asight collector >>>.*" to "# <<< asight collector <<<" at its end/)
+  assert.equal(undoByHand({ kind: 'owned-file', role: 'wrapper', path: '/h/bin/kimi', real: '/h/bin/.asight-real/kimi', sha256: 'ab' }), 'if sha256 of /h/bin/kimi is still ab: mv /h/bin/.asight-real/kimi /h/bin/kimi; otherwise: rm /h/bin/.asight-real/kimi (the program was updated over the wrapper)')
+  for (const role of ['switch', 'config-entry']) assert.equal(undoByHand({ kind: 'owned-file', role, path: '/h/x y' }), "rm '/h/x y'")
 })
 
 // T10 (plan §E.5 #1): the undo decodes a user's file by the entry's `charset` (text-codec.mjs; absent = utf8). A copy of asight-off written before

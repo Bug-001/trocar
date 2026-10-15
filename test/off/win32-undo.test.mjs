@@ -51,7 +51,7 @@ const execOf = (...tools) => (file, args) => { const t = tools.find((x) => x.han
 
 test('the kinds are known, the file rule takes proxy-entry and trust-entry, and OFF_VERSION is bumped past 2 (a version-2 copy leaves the collector items)', () => {
   for (const k of ['proxy-entry', 'trust-entry', 'forwarder-binary', 'scheduled-task', 'run-key']) assert.ok(KNOWN_KINDS.includes(k), k)
-  assert.deepEqual(FILE_ENTRY_KINDS, ['json-key', 'text', 'proxy-entry', 'trust-entry'])
+  assert.deepEqual(FILE_ENTRY_KINDS, ['json-key', 'text', 'proxy-entry', 'trust-entry', 'json-array-item'])
   assert.ok(OFF_VERSION >= 3, 'the bump is the point: doctor compares the copy\'s line with this')
   for (const k of ['run-key', 'scheduled-task', 'forwarder-binary', 'proxy-entry', 'trust-entry']) assert.ok(undoByHand({ kind: k, path: 'C:/x' }), `${k} says what to do by hand`)
 })

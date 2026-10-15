@@ -18,7 +18,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { readOrNull, writeDurable } from './fsutil.mjs'
-import { SENTINEL, OFF_PREFIX } from './text-edit.mjs'
+import { SENTINEL, OFF_PREFIX, BLOCK_BEGIN, BLOCK_END } from './text-edit.mjs'
 import { TASK_NAME, RUN_KEY } from './win32.mjs' // the undo-by-hand sentences name the same task and Run value the undo touches (the equality is test/off/win32.test.mjs's)
 
 export const MANIFEST = 'install-manifest.json'
@@ -45,9 +45,9 @@ export const KNOWN_KINDS = Object.freeze(['json-key', 'text', 'owned-file', 'leg
   'proxy-entry', 'trust-entry', 'forwarder-binary', 'scheduled-task', 'run-key',
   'optin-user-path', 'optin-shortcut', 'optin-cert-user', 'optin-vscode', 'optin-zcode', 'optin-claude-policy', 'optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine',
   'optin-rc-path', 'optin-keychain-cert', 'optin-desktop-launcher',
-  'system-root', 'login-env', 'json-array-item']) // D55: the CA in the user's OS store (by fingerprint), NODE_EXTRA_CA_CERTS in the login environment (per carrier), one element asight added to a JSON array (P5). Before them: the darwin opt-in kinds (4.9 §2.4): the rc PATH line + the launch shim (reference-counted), the login-keychain certificate (by SHA-256 fingerprint), and the Claude Desktop launcher of §6.4 — undone inline by src/off/darwin-optin.mjs's DARWIN_UNDO_BY_KIND
+  'system-root', 'json-array-item', 'root-key']) // D55: the CA in the user's OS store (by fingerprint), one element asight added to a JSON array (P5), the root's private key in its custody backend (4.11 P13: `custody` {kind: 'keychain' | 'cng' | 'file', id} and `fp256`; uninstall takes it out last, through the injected custody's remove). Before them: the darwin opt-in kinds (4.9 §2.4): the rc PATH line + the launch shim (reference-counted), the login-keychain certificate (by SHA-256 fingerprint), and the Claude Desktop launcher of §6.4 — undone inline by src/off/darwin-optin.mjs's DARWIN_UNDO_BY_KIND
 /** The kinds undone by the file rule (journal.mjs undoEntry): they carry the same shape as json-key / text (path, pre_sha256, ops). */
-export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry', 'trust-entry'])
+export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry', 'trust-entry', 'json-array-item'])
 /** The opt-in kinds alone (4.8 §2.4): ledgered with `scope` ('user' | 'machine'); the undo of each is UNDO_BY_KIND's, and `undo_by_hand` never
  *  names a per-entry command — the agent's switch is the only undo there is (1.6 §1.7, V64). The machine-level three (4.8 §2.4's last column)
  *  are the ones whose undo is an elevated step, never inline. */
@@ -56,8 +56,9 @@ export const OPTIN_MACHINE_KINDS = Object.freeze(['optin-machine-path', 'optin-m
 /** Each OS store a system-root sits in → the v2 certificate opt-in kind whose undo takes it out (by its fingerprint / thumbprint, the same record values).
  *  classifyV2 folds the opt-ins into system-roots by this map, and the opt-in undo loops route a system-root back through it until the D55 apply/undo lands. */
 export const ROOT_STORE_KIND = Object.freeze({ 'darwin-user-trust': 'optin-keychain-cert', 'win-currentuser-root': 'optin-cert-user', 'win-localmachine-root': 'optin-cert-machine' })
-/** Known kinds no undo of this build takes out yet: `off` / `uninstall` list them as left, with their undo_by_hand, and keep the manifest (D38) — never skip them silently. */
-export const NO_UNDO_YET = Object.freeze(['login-env', 'json-array-item'])
+// The `owned-file` roles 4.11 P13 adds: `switch` (the route switch file) and `config-entry` (a config-library entry asight created) are removed like a plugin;
+// a `wrapper` (P8: `real` is where the real program was moved, `sha256` the wrapper's, `real_sha256` the program's) is undone by `uninstall` only, by putting
+// the program back while the wrapper is still asight's, else by deleting only the moved copy (undo.mjs undoWrapper).
 
 export const newManifest = (now = new Date()) => ({ version: MANIFEST_VERSION, created_at: now.toISOString(), install: null, ca: null, engine_port: null, planned: [], confirmed_paths: [], kept_backups: [], liveness: {}, dirs: [], files: [], entries: [] })
 
@@ -85,18 +86,21 @@ export function undoByHand(e) {
   if (e.kind === 'text' && e.vars) {
     return `edit ${where}: delete the lines from "# >>> ${SENTINEL} >>>" to "# <<< ${SENTINEL} <<<", then remove the prefix "${OFF_PREFIX}" from any line that has it${created}`
   }
+  if (e.kind === 'text' && e.format === 'pem-block') return `edit ${where}: delete the lines from "${BLOCK_BEGIN}" to "${BLOCK_END}" at its end, and nothing else`
   if (e.kind === 'text') {
     return `edit ${where}: delete the line ${JSON.stringify(e.line)}${e.format === 'yaml-list' ? ' (write [] after the key if the list is empty then)' : ''}${created}`
   }
+  if (e.kind === 'owned-file' && e.role === 'wrapper') return `if sha256 of ${shellWord(where)} is still ${e.sha256 ?? "asight's wrapper"}: mv ${shellWord(String(e.real))} ${shellWord(where)}; otherwise: rm ${shellWord(String(e.real))} (the program was updated over the wrapper)`
   if (e.kind === 'owned-file') return `rm ${shellWord(where)}`
   if (e.kind === 'system-root') {
     if (e.store === 'win-currentuser-root') return `run: certutil -user -delstore Root ${e.thumbprint ?? '<thumbprint of the asight CA>'}`
     if (e.store === 'win-localmachine-root') return `run as administrator: certutil -delstore Root ${e.thumbprint ?? '<thumbprint of the asight CA>'}`
     return `run: security remove-trusted-cert ${e.cert_file ? shellWord(e.cert_file) : '<the asight CA file>'}, then security delete-certificate -Z ${e.thumbprint ?? '<SHA-1 of the asight CA>'} (the certificate with SHA-256 ${e.fp256 ?? 'unknown'})`
   }
-  if (e.kind === 'login-env') {
-    const at = (Array.isArray(e.carriers) ? e.carriers : []).map((c) => (c && c.path) || (c && [c.hive, c.key, c.name].filter(Boolean).join('\\')) || '?').join(', ')
-    return `remove ${e.name ?? 'the variable'} from your login environment (${at || 'no carrier recorded'})${e.prior_value != null ? `, and set it back to ${JSON.stringify(e.prior_value)}` : ''}`
+  if (e.kind === 'root-key') {
+    const c = isPlainObject(e.custody) ? e.custody : {}
+    const how = c.kind === 'file' ? `rm ${shellWord(String(c.id))}` : c.kind === 'cng' ? `run: certutil -user -csp "Microsoft Software Key Storage Provider" -delkey ${JSON.stringify(String(c.id))}` : `open Keychain Access and delete the private key ${JSON.stringify(String(c.id ?? 'asight'))} from your login keychain`
+    return `${how} (the private key of the asight root with SHA-256 ${e.fp256 ?? 'unknown'}; remove the root from your trust store first)`
   }
   if (e.kind === 'json-array-item') return `edit ${where}: remove ${JSON.stringify(e.item)} from the list ${(e.keys || []).join('.')}${e.created_array ? ', then delete the list if it is now empty (asight created it)' : ''}`
   if (e.kind === 'run-key') {

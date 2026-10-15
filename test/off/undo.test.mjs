@@ -122,13 +122,56 @@ test('backups (R2): dropped when the file is back at its pre_sha256, kept and li
   assert.deepEqual([fs.existsSync(aa.backup), u.manifest.kept_backups.map((k) => k.backup), fs.existsSync(bbBackup)], [true, [aa.backup], false])
 })
 
-test('D55 kinds this build has no undo for yet (login-env, json-array-item) are listed as left with their undo_by_hand, never skipped silently (D38)', async () => {
+// 4.11 P13: the kinds the collector model adds. A json-array-item is a file entry (step 1); `switch` and `config-entry` files go with the plugins; a
+// `wrapper` and the `root-key` are install items: only uninstall (dropCa) undoes them, the key last, through the custody handed in.
+test('P13 json-array-item, switch and config-entry are undone by off; wrapper and root-key stay for off (the key is listed) and go with uninstall, the key last through custody.remove', async () => {
   const s = await setup((b) => [repH(b, 'aa')])
   const m = readManifest(s.b.dir)
-  m.entries.push({ phase: 'install', kind: 'login-env', harness: null, path: 'login-env:NODE_EXTRA_CA_CERTS', name: 'NODE_EXTRA_CA_CERTS', carriers: [{ path: '/p' }] }, { phase: 'install', kind: 'json-array-item', harness: 'aa', path: path.join(s.b.home, 'a.json'), keys: ['k'], item: 'x' })
-  const r = await s.run({ manifest: m })
-  assert.deepEqual(r.left.map((l) => [l.path, l.result]), [['login-env:NODE_EXTRA_CA_CERTS', 'unknown-kind'], [path.join(s.b.home, 'a.json'), 'unknown-kind']])
-  for (const l of r.left) assert.match(l.reason, /by hand: /)
+  const arr = write(s.b, '.aa/settings.json', '{\n  "list": [\n    "u",\n    "http.proxy"\n  ]\n}\n')
+  const sw = write(s.b, '.asight/collector/switch/aa', 'http://127.0.0.1:47011\n'), cfg = write(s.b, '.aa/library/asight.json', '{}\n')
+  const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.asight-real/aa', 'REAL PROGRAM')
+  const at = new Date(0).toISOString()
+  m.entries.push({ phase: 'on', kind: 'json-array-item', harness: 'aa', path: arr, keys: ['list'], item: 'http.proxy', created_array: false, existed_before: true, mode: 0o644, pre_sha256: 'x', post_sha256: 'y', ops: [], backup: null, installed_at: at },
+    { phase: 'install', kind: 'root-key', harness: null, path: 'keychain:asight-root', custody: { kind: 'keychain', id: 'asight-root' }, fp256: 'AB:CD', installed_at: at })
+  m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: 'aa', path: sw }, { phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg },
+    { phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
+  const removed = []
+  const off = await s.run({ manifest: m, custody: { remove: async (h) => removed.push(h) } })
+  assert.deepEqual(off.left, [])
+  assert.equal(fs.readFileSync(arr, 'utf8'), '{\n  "list": [\n    "u"\n  ]\n}\n', 'only asight\'s element left the list')
+  assert.deepEqual([fs.existsSync(sw), fs.existsSync(cfg), fs.readFileSync(bin, 'utf8'), fs.existsSync(real), removed], [false, false, '#!/bin/dash\nexec real\n', true, []], 'off keeps the wrapper and the key')
+  assert.ok(off.notes.some((n) => n.startsWith('keychain:asight-root: ') && /asight uninstall removes it/.test(n)), 'off lists the key')
+  const kept = readManifest(s.b.dir)
+  assert.deepEqual([kept.entries.map((e) => e.kind), kept.files.map((f) => f.role).filter((r) => !r.startsWith('ca-'))], [['root-key'], ['wrapper']])
+  const order = []
+  const un = await s.run({ manifest: kept, dropCa: true, custody: { remove: async (h) => { order.push(['key', fs.existsSync(real)]); removed.push(h) } } })
+  assert.deepEqual([un.left, removed, order], [[], [{ kind: 'keychain', id: 'asight-root' }], [['key', false]]], 'the key goes last, after the wrapper')
+  assert.deepEqual([fs.readFileSync(bin, 'utf8'), fs.existsSync(path.dirname(real))], ['REAL PROGRAM', false], 'the real program is back under its name')
+  assert.deepEqual(readManifest(s.b.dir).entries, [])
+})
+
+test('P13 uninstall: a wrapper the agent updated over is left in place and only the moved copy goes; a key with no custody backend is left, with how to remove it by hand', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  const bin = write(s.b, 'bin/aa', '#!/bin/dash\nexec real\n'), real = write(s.b, 'bin/.asight-real/aa', 'OLD PROGRAM')
+  m.files.push({ phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
+  m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'file:/k', custody: { kind: 'file', id: '/k' }, fp256: 'AB' })
+  fs.writeFileSync(bin, 'NEW PROGRAM') // the agent's update replaced it by name
+  const r = await s.run({ manifest: m, dropCa: true })
+  assert.deepEqual([fs.readFileSync(bin, 'utf8'), fs.existsSync(real), r.removed.includes(real)], ['NEW PROGRAM', false, true])
+  assert.deepEqual(r.left.map((l) => [l.path, l.result]), [['file:/k', 'error']])
+  assert.match(r.left[0].reason, /no custody backend.*by hand: rm \/k/)
+})
+
+test('P13 liveness.<h> may carry on_at / off_at or not: the judgement is the same and the fields are kept', async () => {
+  const pick = (b) => [repH(b, 'aa'), repH(b, 'bb')]
+  const s = await setup(pick), plain = await setup(pick)
+  const m = readManifest(s.b.dir)
+  m.liveness.bb = { ...(m.liveness.bb || {}), on_at: '2026-10-15T00:00:00.000Z', off_at: null }
+  const without = await plain.run({ ids: ['aa'] })
+  const r = await s.run({ manifest: m, ids: ['aa'] })
+  assert.deepEqual(r.results.map((x) => x.result), without.results.map((x) => x.result))
+  assert.deepEqual(readManifest(s.b.dir).liveness.bb.on_at, '2026-10-15T00:00:00.000Z')
 })
 
 test('an entry of a kind this build does not know is left alone, and so is a manifest of a version it does not read (R3)', async () => {
