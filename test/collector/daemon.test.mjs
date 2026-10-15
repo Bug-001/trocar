@@ -406,7 +406,7 @@ test('daemon: the install-time engine port held by another process → start fai
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => squat.address().port })
     const { arch, clients } = fakeArch(p)
     await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered, agent connections go direct\. Free the port, or run "asight uninstall" and "asight on" to pick a new one$/)
-    assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'start' && /held by another process/.test(f.reason)), 'the refusal to start is recorded (D38)')
+    assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'start' && f.code === 'engine-port-taken' && /held by another process/.test(f.reason)), 'the refusal to start is recorded under engine-port-taken (D38); the daemon picks no other port')
     assert.equal(clients.length, 0, 'the helper was never spawned, so no connection is redirected')
     assert.ok(!fs.existsSync(path.join(s.collector, 'lock')))
     squat.close()

@@ -60,7 +60,7 @@ test('uninstall --dry-run writes nothing and asks the daemon nothing: the same r
   assert.ok(json.removed.includes(standalonePath(s.home)) && json.removed.includes(path.join(s.dir, 'install-manifest.json')))
 })
 
-test('R6: --purge-data takes the collector machine with the data — kernel/, kernel-archive/, forwarder/ and control.json / ingress.json (the pinned kernel copy and cache, the kernel config with its secret, the daemon control endpoint) — while a plain uninstall leaves them for the next on', async () => {
+test('R6: --purge-data takes the collector machine with the data — kernel/, kernel-archive/, forwarder/ and control.json / ingress.json (the pinned kernel copy and cache, the kernel config with its secret, the daemon control endpoint) — while a plain uninstall leaves them for the next on, except ingress.json (uninstall deletes it, so the next install chooses its ports again)', async () => {
   const leftovers = (s) => { for (const k of ['kernel/asight-forwarder.exe', 'kernel-archive/mihomo.zip', 'forwarder/config.json', 'forwarder/home/db.sql', 'control.json', 'ingress.json']) { const f = path.join(s.dir, k); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '{"left":true}\n') } }
   const names = ['kernel', 'kernel-archive', 'forwarder', 'control.json', 'ingress.json']
   const there = (s) => names.map((n) => fs.existsSync(path.join(s.dir, n)))
@@ -71,7 +71,7 @@ test('R6: --purge-data takes the collector machine with the data — kernel/, ke
   const plain = await installedHome({ names: ['claude-code'] }); keep(plain); leftovers(plain)
   const p = await cli(plain, ['--yes'])
   assert.equal(p.exit, 0, p.io.text())
-  assert.deepEqual(there(plain), [true, true, true, true, true], 'a plain uninstall keeps them (the kernel may be draining; the next on reuses the cache)')
+  assert.deepEqual(there(plain), [true, true, true, true, false], 'a plain uninstall keeps them (the kernel may be draining; the next on reuses the cache), but not ingress.json')
 })
 
 test('R6: --purge-data deletes what nothing brings back, so a yes is asked for — no terminal and no --yes prints the plan and exits 2 with nothing done; a terminal asks once (n: nothing, exit 1); --yes goes; a plain uninstall never asks', async () => {

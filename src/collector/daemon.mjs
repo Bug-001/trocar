@@ -386,7 +386,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       // (the helper is not spawned yet), so the agents' connections stay direct; say so, and how to get a new port.
       if (e.code === 'EADDRINUSE') throw Object.assign(new Error(macIng
         ? `the engine's proxy ingress port 127.0.0.1:${macIng.enginePort} (ingress.json) is held by another process; nothing is steered, agent connections go direct. Free the port and start the daemon again`
-        : `the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight uninstall" and "asight on" to pick a new one`), { code: 'EADDRINUSE' })
+        : `the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight uninstall" and "asight on" to pick a new one`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
       throw e
     })
     const port = macIng ? first.ingressPort ?? null : first.port

@@ -23,6 +23,7 @@ import { execTool } from '../off/exec.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
+import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask } from '../off/win32.mjs'
 
 const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
@@ -214,16 +215,19 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       removeEmptyDirs([path.join(w.dir, 'logs')], fs)
       for (const p of [path.join(w.dir, 'run'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home)]) if (p) rm(p)
       removeEmptyDirs([path.dirname(standalonePath(home))], fs)
+      // the door ports and their tokens (decision #16): the next install and on choose them again
+      const ing = removeIngressConfig({ dir: w.dir, fs })
+      if (!ing.removed) noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: path.join(w.dir, 'ingress.json'), reason: `${path.join(w.dir, 'ingress.json')} could not be removed (${ing.reason}); remove it by hand` })
     }
     for (const n of noted) if (!receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
     // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind. `--purge-data` is "nothing of the captures stays", so the
     // collector's own machine goes with it: the kernel's copy (kernel/) and its verified-archive cache (kernel-archive/), the kernel's config and home with the controller
-    // secret and tokens (forwarder/), and the two endpoint files (control.json: the daemon's control endpoint; ingress.json: the ingress ports and tokens) — a plain uninstall
+    // secret and tokens (forwarder/), and the endpoint file control.json (the daemon's control endpoint; ingress.json went above, with every uninstall) — a plain uninstall
     // keeps them (a kernel may still be draining; the next on reuses the cache), the purge leaves the collector directory empty of everything asight can rebuild nothing of.
     if (purgeData) {
       for (const n of (() => { try { return fs.readdirSync(w.dir) } catch { return [] } })()) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(w.dir, n))
       for (const sub of ['flows', 'audit', 'replays', 'kernel', 'kernel-archive', 'forwarder']) rm(path.join(w.dir, sub))
-      for (const f of ['control.json', 'ingress.json']) rm(path.join(w.dir, f))
+      rm(path.join(w.dir, 'control.json'))
     }
     // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is said in the output, never dropped, and never stops the uninstall
     for (const f of failed) put({ event: 'failure', ...f })
