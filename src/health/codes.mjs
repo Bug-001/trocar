@@ -83,7 +83,7 @@ export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat
 // src/off/names.mjs holds the same names (src/off may import nothing outside itself); test/health/codes.test.mjs holds the two equal.
 export const OFF_WHERE = Object.freeze(['off'])
 export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
-export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker'])
+export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker', 'entry-refused'])
 
 // What the Windows collector writes (RFC 4.8 §12; the kernel-era rows retired with the kernel — D47's darwin conversion and its win32 twin: the forwarder-* family, the download pair,
 // the probe refresh and the fallback verdict have no producer on any arch now) and the names it shares with the netenv side (4.7 §5, D41; read-only since D43) and the CLI (1.6 §9.7).

@@ -1,9 +1,9 @@
 // test/off/text-edit.test.mjs — the sentinel block and sentinel line asight writes into comment-capable
-// files (RFC 4.6 §身份与信任「标记与安装」「同名键」, §安装清单与卸载「撤一个文件的规则」; T10 / T11 text parts).
+// files (RFC 4.6 §身份与信任「标记与安装」「名字族」, §安装清单与卸载「撤一个文件的规则」; T10 / T11 text parts).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { applyOps, reverseOps } from '../../src/off/json-text.mjs'
-import { dotenvBlock, insertLine, removeAsightText, asightResidue, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
+import { dotenvBlock, joinDotenvBlock, insertLine, removeAsightText, asightResidue, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
 import { parseDotenv } from '../../src/collector/core/config-read.mjs'
 
 const B = '/h/.asight/collector/ca/combined-x.pem'
@@ -196,4 +196,30 @@ test('text-edit: the sentinel text written into users\' files is exactly what ea
   assert.equal(BLOCK_END, '# <<< asight collector <<<')
   assert.equal(OFF_PREFIX, '#asight-collector-off# ')
   assert.equal(lineComment('Kimi shim'), '# asight collector: Kimi shim (`asight collector uninstall` removes this line)')
+})
+
+test('text-edit X6: a byte-order mark (U+FEFF at offset 0) stays first — the block goes after it, a key on the first line is read after it and put out of effect after it; undo gives the text back', () => {
+  const user = '\uFEFFSSL_CERT_FILE=/corp/ca.pem\r\nOTHER=1\r\n'
+  const r = dotenvBlock(user, { SSL_CERT_FILE: B })
+  assert.ok(r.text.startsWith(`\uFEFF${BLOCK_BEGIN}\r\n`), JSON.stringify(r.text.slice(0, 80)))
+  assert.ok(r.text.includes(`\r\n${OFF_PREFIX}SSL_CERT_FILE=/corp/ca.pem\r\n`), 'the first line\'s key is out of effect, the mark not moved')
+  assert.equal((r.text.match(/\uFEFF/g) || []).length, 1)
+  assert.deepEqual(r.prior, { SSL_CERT_FILE: '/corp/ca.pem' })
+  assert.equal(reverseOps(r.text, r.ops), user)
+  assert.equal(removeAsightText(r.text, r.ops).text, user)
+  const j = joinDotenvBlock(r.text, { HTTPS_PROXY: 'http://127.0.0.1:1' })
+  assert.ok(j.text.startsWith(`\uFEFF${BLOCK_BEGIN}\r\n`) && j.text.includes(`HTTPS_PROXY=http://127.0.0.1:1\r\n${BLOCK_END}`))
+  const y = insertLine('\uFEFF', { line: `- r ${lineComment('x')}`, format: 'yaml-list' })
+  assert.equal(y.text, `\uFEFF- r ${lineComment('x')}\n`, 'a file holding only the mark is an empty list: no blank line before the row')
+})
+
+test('text-edit ③: one eolOf decides every insert — CRLF when CRLF outnumbers bare LF, else LF, LF for an empty or new file; rc and YAML rows follow it', () => {
+  const eolOf = (t) => (/\r\n$/.test(insertLine(t, { line: `x ${lineComment('k')}` }).text) ? '\r\n' : '\n') // what an rc line ends with
+  assert.deepEqual([eolOf(null), eolOf(''), eolOf('a'), eolOf('a\r\nb\n'), eolOf('a\r\nb\r\nc\n'), eolOf('a\nb\n')], ['\n', '\n', '\n', '\n', '\r\n', '\n'])
+  const rc = insertLine('export A=1\r\nalias x=y', { line: `export PATH=p ${lineComment('k')}` })
+  assert.equal(rc.text, `export A=1\r\nalias x=y\r\nexport PATH=p ${lineComment('k')}\r\n`)
+  const after = insertLine('export PATH=/kimi/bin\r\nB=2\r\n', { line: `export PATH=p ${lineComment('k')}`, after: '^export PATH=/kimi/bin$' })
+  assert.equal(after.text, `export PATH=/kimi/bin\r\nexport PATH=p ${lineComment('k')}\r\nB=2\r\n`, 'a line\'s own \\r is not part of what `after` matches')
+  const yml = insertLine('- a\r\n# note\r\n', { line: `- r ${lineComment('x')}`, format: 'yaml-list' })
+  assert.equal(yml.text, `- a\r\n# note\r\n- r ${lineComment('x')}\r\n`, 'a CRLF comment line is still a comment line')
 })

@@ -9,7 +9,7 @@ import { applyOps } from './json-text.mjs'
 export const SENTINEL = 'asight collector'
 export const BLOCK_BEGIN = `# >>> ${SENTINEL} >>> written by \`asight collector install\`; \`asight collector uninstall\` removes this block`
 export const BLOCK_END = `# <<< ${SENTINEL} <<<`
-// A user's line with the same key, put out of effect by asight (4.6「同名键」): uninstall strips exactly this prefix.
+// A user's line with the same key, put out of effect by asight (4.6 §身份与信任「名字族」): uninstall strips exactly this prefix.
 export const OFF_PREFIX = `#${SENTINEL.replace(' ', '-')}-off# `
 export const lineComment = (what) => `# ${SENTINEL}: ${what} (\`asight collector uninstall\` removes this line)`
 
@@ -20,6 +20,21 @@ const QUOTABLE_VALUE = /^[^"`$\\\r\n]+$/
 const CANNOT_QUOTE = '; this value cannot be written even in double quotes (it holds a double quote, a dollar sign, a backtick, a backslash or a line break)'
 const lineStarts = (text) => { const out = [0]; for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) if (i + 1 < text.length) out.push(i + 1); return out }
 const unquote = (v) => { const t = v.trim(); const m = /^(["'])(.*)\1/.exec(t); return m ? m[2] : t.replace(/\s+#.*$/, '') }
+
+/** The line ending asight writes into a file (4.6「文件的编码」: the line ending follows the file): CRLF when the file has more CRLF than bare LF,
+ *  else LF — and LF for an empty or new file. One place decides it for every insert (a dotenv block, a joined line, an rc line, a YAML row). */
+const eolOf = (text) => { const t = text == null ? '' : text; const crlf = (t.match(/\r\n/g) || []).length; return crlf > (t.match(/\n/g) || []).length - crlf ? '\r\n' : '\n' }
+// A byte-order mark is U+FEFF at offset 0 of the text (text-codec.mjs keeps it there): it is before the first line, not part of it. asight's
+// text goes after it, and the first line's key is read after it.
+const markLen = (text) => (text.startsWith('\uFEFF') ? 1 : 0)
+// the dotenv assignment a line holds: { at, key, value } (`at`: where a prefix goes, after a mark on the first line), or null
+const ASSIGN = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/
+function assignmentAt(src, at) {
+  const e = src.indexOf('\n', at)
+  const from = at === 0 ? markLen(src) : at
+  const m = ASSIGN.exec(src.slice(from, e < 0 ? src.length : e).replace(/\r$/, ''))
+  return m ? { at: from, key: m[1], value: m[2] } : null
+}
 
 // The block at offset 0 with every `vars` key; each user line assigning one of them (export or not) gets OFF_PREFIX.
 // prior = the value the agent used to read (the last assignment wins in dotenvy and python-dotenv), or null.
@@ -38,20 +53,18 @@ const shownVars = (vars, quote) => {
 export function dotenvBlock(text, vars, { quote = false } = {}) {
   const shown = shownVars(vars, quote)
   const src = text == null ? '' : text
-  const crlf = (src.match(/\r\n/g) || []).length
-  const eol = crlf > (src.match(/\n/g) || []).length - crlf ? '\r\n' : '\n'
+  const eol = eolOf(src)
   const ops = []
   const prior = {}
   const starts = lineStarts(src)
   for (const at of [...starts].reverse()) { // highest offset first: earlier offsets stay valid as the ops apply in order
-    const line = src.slice(at, src.indexOf('\n', at) < 0 ? src.length : src.indexOf('\n', at)).replace(/\r$/, '')
-    const m = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/.exec(line)
-    if (!m || !(m[1] in vars)) continue
-    if (!(m[1] in prior)) prior[m[1]] = unquote(m[2])
-    ops.push({ offset: at, removed: '', inserted: OFF_PREFIX })
+    const a = assignmentAt(src, at)
+    if (!a || !(a.key in vars)) continue
+    if (!(a.key in prior)) prior[a.key] = unquote(a.value)
+    ops.push({ offset: a.at, removed: '', inserted: OFF_PREFIX })
   }
   const block = [BLOCK_BEGIN, ...Object.entries(shown).map(([k, v]) => `${k}=${v}`), BLOCK_END].join(eol) + eol
-  ops.push({ offset: 0, removed: '', inserted: block })
+  ops.push({ offset: markLen(src), removed: '', inserted: block }) // after the mark: the file still starts with it
   return { text: applyOps(src, ops), ops, prior: Object.keys(prior).length ? prior : null }
 }
 
@@ -66,20 +79,17 @@ export function joinDotenvBlock(text, vars, { quote = false } = {}) {
   const begin = text.indexOf(BLOCK_BEGIN)
   const end = text.indexOf(BLOCK_END)
   if (begin < 0 || end < begin) throw new Error('there is no asight block to join')
-  const crlf = (text.match(/\r\n/g) || []).length
-  const eol = crlf > (text.match(/\n/g) || []).length - crlf ? '\r\n' : '\n'
+  const eol = eolOf(text)
   const atEnd = text.lastIndexOf('\n', end) + 1 // the start of the block's end-marker line: the new lines go right before it
   const insideBlock = (at) => at >= begin && at < end + BLOCK_END.length
   const prior = {}
   const ops = []
   for (const at of lineStarts(text)) {
     if (insideBlock(at)) continue
-    const e = text.indexOf('\n', at)
-    const line = text.slice(at, e < 0 ? text.length : e).replace(/\r$/, '')
-    const m = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/.exec(line)
-    if (!m || !(m[1] in vars)) continue
-    if (!(m[1] in prior)) prior[m[1]] = unquote(m[2])
-    ops.push({ offset: at, removed: '', inserted: OFF_PREFIX })
+    const a = assignmentAt(text, at)
+    if (!a || !(a.key in vars)) continue
+    if (!(a.key in prior)) prior[a.key] = unquote(a.value)
+    ops.push({ offset: a.at, removed: '', inserted: OFF_PREFIX })
   }
   ops.push({ offset: atEnd, removed: '', inserted: Object.entries(shown).map(([k, v]) => `${k}=${v}`).join(eol) + eol, asight: true }) // `asight`: these lines are asight's without carrying the sentinel, so removeAsightText takes them out too
   ops.sort((a, b) => b.offset - a.offset) // pure insertions: highest offset first, the lower ones stay valid (dotenvBlock's order)
@@ -93,27 +103,28 @@ export function joinDotenvBlock(text, vars, { quote = false } = {}) {
 export function insertLine(text, { line, after = null, format = 'lines' }) {
   if (/\n/.test(line) || !line.includes(SENTINEL)) throw new Error('an inserted line is one line carrying the asight sentinel')
   const src = text == null ? '' : text
+  const eol = eolOf(src), mark = markLen(src)
+  const openLine = (at) => at > mark && src[at - 1] !== '\n' // the text before `at` ends inside a line: the new line starts with a line end
   if (format === 'yaml-list') {
-    const content = src.split('\n').map((l) => l.replace(/(^|\s)#.*$/, '').trimEnd()).filter((l) => l.trim() !== '')
-    if (content.length === 0) { const pre = src === '' || src.endsWith('\n') ? '' : '\n'; return one(src, src.length, `${pre}${line}\n`) }
+    // a line's own \r is its line end, not content (a CRLF file's comment line is still a comment line); the mark is before the first line
+    const content = src.slice(mark).split('\n').map((l) => l.replace(/\r$/, '').replace(/(^|\s)#.*$/, '').trimEnd()).filter((l) => l.trim() !== '')
+    if (content.length === 0) return one(src, src.length, `${openLine(src.length) ? eol : ''}${line}${eol}`)
     if (content.length === 1 && content[0].trim() === '[]') {
       const at = src.search(/\[\]/)
       return { text: applyOps(src, [{ offset: at, removed: '[]', inserted: line }]), ops: [{ offset: at, removed: '[]', inserted: line }] }
     }
     if (!content.every((l) => /^(- |-$|\s)/.test(l))) throw new Error('the file is not a block-style YAML list; asight will not rewrite it')
-    const pre = src.endsWith('\n') ? '' : '\n'
-    return one(src, src.length, `${pre}${line}\n`)
+    return one(src, src.length, `${openLine(src.length) ? eol : ''}${line}${eol}`)
   }
   const re = after ? new RegExp(after) : null
   let at = -1
   for (const s of lineStarts(src)) {
     const e = src.indexOf('\n', s)
-    if (re && re.test(src.slice(s, e < 0 ? src.length : e))) at = e < 0 ? src.length : e + 1
+    if (re && re.test(src.slice(s === 0 ? mark : s, e < 0 ? src.length : e).replace(/\r$/, ''))) at = e < 0 ? src.length : e + 1 // the line without its own \r (or the mark)
   }
   if (re && at < 0) throw new Error(`no line matches ${after}`)
   if (!re) at = src.length
-  const pre = at > 0 && src[at - 1] !== '\n' ? '\n' : ''
-  return one(src, at, `${pre}${line}\n`)
+  return one(src, at, `${openLine(at) ? eol : ''}${line}${eol}`)
 }
 const one = (src, offset, inserted) => ({ text: applyOps(src, [{ offset, removed: '', inserted }]), ops: [{ offset, removed: '', inserted }] })
 

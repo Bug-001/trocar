@@ -12,5 +12,7 @@ export const EVENT_OFF_NOTE = 'off-note'
 /** `code` of an off-note or of a failure of an `off` run, RFC 1.6 R2 / R3:
  *  backupFailed     the backup could not be written, so the user's file was left as it was (a `failure` event);
  *  backupKept       the user changed the file after asight did: only asight's part was undone, the backup is kept and listed;
- *  undoneByMarker   there was no usable manifest: the entry was found and undone by asight's own marker. */
-export const CODE_OFF = Object.freeze({ backupFailed: 'backup-failed', backupKept: 'backup-kept', undoneByMarker: 'undone-by-marker' })
+ *  undoneByMarker   there was no usable manifest: the entry was found and undone by asight's own marker;
+ *  entryRefused     `on` could not change a harness's entry file (its bytes prove no encoding — `why`, 4.6「文件的编码」 — and the other refusals of
+ *                   4.6「逐 harness 跳过」): not a byte of it was written, that harness is skipped. */
+export const CODE_OFF = Object.freeze({ backupFailed: 'backup-failed', backupKept: 'backup-kept', undoneByMarker: 'undone-by-marker', entryRefused: 'entry-refused' })

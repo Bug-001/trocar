@@ -18,6 +18,7 @@ import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.
 import { backupsOf } from './backup.mjs'
 import { asightHome } from './paths.mjs'
 import { CODE_OFF } from './names.mjs'
+import { decodeText, encodeText, CHARSETS, WHY_TEXT } from './text-codec.mjs'
 
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin'] // where the Kimi installer's PATH line, and so asight's, can be
 const PLUGIN_MANIFEST = '{"type":"module"}\n' // the anonymous package.json of asight's dsh plugin directory (collector/harness/_plugins.mjs: ANONYMOUS_MODULE_MANIFEST)
@@ -38,11 +39,17 @@ const BLOCK_OPEN = `# >>> ${SENTINEL} >>>`
 const BLOCK_CLOSE = `# <<< ${SENTINEL} <<<`
 const LINE_MARK = `# ${SENTINEL}: `
 const under = (v, root) => typeof v === 'string' && v.startsWith(root + path.sep)
-const utf8Of = (b) => (b == null ? null : b.toString('utf8'))
-const stripOffPrefix = (t) => t.split('\n').map((l) => (l.startsWith(OFF_PREFIX) ? l.slice(OFF_PREFIX.length) : l)).join('\n') // only at a line start, where asight put it
+// The text of a file by what its bytes prove (4.6「文件的编码」, text-codec.mjs): { text, charset } | { why }. A U+FEFF at offset 0 (the mark) is
+// before the first line, not part of it: linesOf starts after it, so a block or a line at the top of a marked file is found and the mark stays.
+const readText = (b) => { const d = decodeText(b); return d.ok ? { text: d.text, charset: d.charset } : { why: d.why } }
+const bomOf = (t) => (t.startsWith('\uFEFF') ? 1 : 0)
+// whether asight's sentinel is in bytes that prove no form: looked for as each form asight writes would hold it, so a file the user saved in another
+// encoding after `on` is still said (left-unreadable), not passed over as clean
+const markedIn = (b) => CHARSETS.some((cs) => b.includes(encodeText(SENTINEL, cs)))
+const stripOffPrefix = (t) => { const b = bomOf(t); return t.slice(0, b) + t.slice(b).split('\n').map((l) => (l.startsWith(OFF_PREFIX) ? l.slice(OFF_PREFIX.length) : l)).join('\n') } // only at a line start, where asight put it
 
 // the lines of `t` with their offsets: [{ at, line, next }] (next = the offset after the line's own newline)
-function linesOf(t) { const out = []; for (let at = 0; at < t.length;) { const e = t.indexOf('\n', at); const end = e < 0 ? t.length : e; out.push({ at, line: t.slice(at, end), next: e < 0 ? t.length : e + 1 }); at = e < 0 ? t.length : e + 1 } return out }
+function linesOf(t) { const out = []; for (let at = bomOf(t); at < t.length;) { const e = t.indexOf('\n', at); const end = e < 0 ? t.length : e; out.push({ at, line: t.slice(at, end), next: e < 0 ? t.length : e + 1 }); at = e < 0 ? t.length : e + 1 } return out }
 
 // asight's block in a dotenv text: from its open line to its close line; a block whose close line the user deleted ends at the last variable line under
 // asight's home that follows the open line directly. → [{ from, to }] offsets
@@ -80,12 +87,15 @@ export function planByMarker({ home, ids = null, fs = nodeFs }) {
   for (const harness of Object.keys(MARKER_PATHS)) {
     if (ids && !ids.includes(harness)) continue
     for (const { file, spec } of candidates(home, harness, fs)) {
-      let t
-      try { t = utf8Of(readOrNull(fs, file)) } catch { continue }
-      if (t == null) continue
+      let b
+      try { b = readOrNull(fs, file) } catch { continue }
+      if (b == null) continue
       const add = (detail) => plan.push({ harness, path: file, how: spec.how, detail })
+      const read = readText(b)
+      if (read.why) { if (markedIn(b)) add({ unreadable: read.why }); continue }
+      const t = read.text
       if (spec.how === 'block') {
-        const commented = t.split('\n').filter((l) => l.startsWith(OFF_PREFIX)).length
+        const commented = linesOf(t).filter((l) => l.line.startsWith(OFF_PREFIX)).length
         const blocks = blocksIn(t, root)
         if (blocks.length || commented) add({ blocks: blocks.length, commented })
       } else if (spec.how === 'line') {
@@ -102,7 +112,7 @@ export function planByMarker({ home, ids = null, fs = nodeFs }) {
   return plan.sort((a, b) => rank[a.how] - rank[b.how])
 }
 
-// one plan item undone; → { result, ...what happened } (result: undone-by-marker | already-clean | left-unparsable | error)
+// one plan item undone; → { result, ...what happened } (result: undone-by-marker | already-clean | left-unparsable | left-unreadable | error)
 function undoOne(item, home, fs) {
   const root = asightHome(home)
   const done = (extra = {}) => ({ result: CODE_OFF.undoneByMarker, ...extra })
@@ -110,8 +120,10 @@ function undoOne(item, home, fs) {
   try { file = editTarget(item.path, fs) } catch (e) { return { result: 'error', reason: String((e && e.message) || e) } }
   const buf = readOrNull(fs, file)
   if (buf == null) return { result: 'already-clean' }
-  const t = buf.toString('utf8'), mode = fs.statSync(file).mode & 0o777
-  const put = (out) => writeDurable(file, out, mode, fs)
+  const read = readText(buf)
+  if (read.why) return markedIn(buf) ? { result: 'left-unreadable', why: read.why, reason: `${item.path} can no longer be read as text asight may write back: ${WHY_TEXT[read.why]} (${read.why}); asight did not touch it, and its mark is still in it` } : { result: 'already-clean' }
+  const t = read.text, mode = fs.statSync(file).mode & 0o777
+  const put = (out) => writeDurable(file, encodeText(out, read.charset), mode, fs) // in the form the file has
   if (item.how === 'owned-file') {
     if (!((item.detail || {}).exact ? t === item.detail.exact : t.includes(SENTINEL))) return { result: 'already-clean' } // not asight's (any more): a plan is never trusted over the file
     fs.rmSync(file, { force: true })
@@ -146,13 +158,13 @@ function undoOne(item, home, fs) {
   if (!under(getPath(doc, keys), root)) return { result: 'already-clean' }
   const saved = backupsOf({ home, file: item.path, fs }).at(-1) || null
   let prior = null
-  if (saved) { try { const v = getPath(JSON.parse(readOrNull(fs, saved).toString('utf8')), keys); if (typeof v === 'string' && !under(v, root)) prior = v } catch { /* a backup that is not JSON holds no value */ } }
+  if (saved) { try { const s = readText(readOrNull(fs, saved)); const v = s.why ? undefined : getPath(JSON.parse(s.text), keys); if (typeof v === 'string' && !under(v, root)) prior = v } catch { /* a backup that is not JSON holds no value */ } }
   put(prior != null ? setKey(t, keys, prior).text : removeKey(t, keys).text)
   return done(prior != null ? { restored_from: saved, value: prior } : { removed: true, ...(saved ? { backup: saved } : {}) })
 }
 
 /** Undoes a plan from planByMarker, item by item; one that fails does not stop the rest. → [{ harness, path, how, result, … }] with `result`
- *  `undone-by-marker` (the code), `already-clean` (nothing of asight's was there any more), `left-unparsable` (a JSON file that no longer parses: untouched) or
+ *  `undone-by-marker` (the code), `already-clean` (nothing of asight's was there any more), `left-unparsable` (a JSON file that no longer parses: untouched), `left-unreadable` (a marked file whose bytes prove no encoding: untouched) or
  *  `error` (+ `reason`). Backups are left where they are: whether to remove them is `off`'s call (R2). */
 export function undoByMarker(plan, { home, fs = nodeFs }) {
   return plan.map((item) => {

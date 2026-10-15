@@ -3,7 +3,7 @@
 //   dirs     directories asight created (removed at the end of uninstall if empty)
 //   files    files asight owns (CA, extra trust files) — deleted on uninstall
 //   entries  every user file asight changed: {kind, harness, path, existed_before, mode, pre_sha256, post_sha256, backup,
-//            undo_by_hand, ops, prior_value, installed_at, created_dirs} + per kind: `json-key` (no kind on version 1
+//            undo_by_hand, ops, prior_value, installed_at, created_dirs, charset?} + per kind: `json-key` (no kind on version 1
 //            manifests) {keys, value, existing_depth}; `text` {format, vars | line} (text-edit.mjs: a dotenv block, a
 //            shell-rc line, a YAML list row). ops are splices {offset, removed, inserted}; `removed` is only ever the value
 //            asight replaced (a path, or a YAML `[]`, never a secret). The user's file is NEVER copied INTO the manifest
@@ -27,6 +27,7 @@ import { writeBackup } from '../../../off/backup.mjs'
 import { backupDir } from '../../../off/paths.mjs'
 import { CODE_OFF } from '../../../off/names.mjs'
 import { describeEntry } from '../../../off/journal.mjs'
+import { decodeText, encodeText, WHY_TEXT } from '../../../off/text-codec.mjs'
 
 export { sha256, writeDurable, sweepTemps, missingDirs, removeEmptyDirs, editTarget } from '../../../off/fsutil.mjs'
 export { undoEntry, removeOwnedFile, describeEntry } from '../../../off/journal.mjs'
@@ -40,6 +41,14 @@ function backupFirst({ home, file, before, now, fs }) {
   try { return writeBackup({ home, file, data: before, now, fs }) } catch (e) {
     throw Object.assign(new Error(`${file} was not changed: asight saves a copy of a file before it changes it (1.6 R2) and the copy could not be written to ${backupDir(home)} (${e.code ? `${e.code}: ` : ''}${(e && e.message) || e}); make that directory writable, then install again`), { code: CODE_OFF.backupFailed, path: file, errno: e && e.code })
   }
+}
+// The text of a user's file by what its bytes prove (4.6「文件的编码」, text-codec.mjs): { text (null: not there), charset }. Bytes that prove no form
+// are not edited: the throw carries code `entry-refused`, the `why` of the closed set and the path, raised before anything is written, so the caller
+// skips that harness only (4.6 §身份与信任「逐 harness 跳过」).
+function readUserText(file, bytes) {
+  const d = decodeText(bytes)
+  if (d.ok) return d
+  throw Object.assign(new Error(`${file} was not changed: asight cannot tell how it is encoded — ${WHY_TEXT[d.why]} (${d.why}); asight edits only UTF-8, or UTF-16 with a byte-order mark. Save it as UTF-8, then run "asight on" again`), { code: CODE_OFF.entryRefused, why: d.why, path: file })
 }
 const needHome = (what, home) => { if (!home) throw new TypeError(`${what}: home is required (backups go to <home>/.asight/backup, 1.6 R2)`) }
 // D55①: every item says which command wrote it — `off` undoes phase 'on', `uninstall` the rest; a writer that forgets fails here, before anything is written
@@ -83,8 +92,7 @@ export function judgeOwned({ manifest, file, planned = null, fs = nodeFs }) {
 // anything. Returns the file that would change (`real_path` when `file` is a link) and whether it would change.
 export function previewJsonKey({ file, keys, value, fs = nodeFs }) {
   const real = editTarget(file, fs)
-  const before = readOrNull(fs, real)
-  const res = setKey(before == null ? null : before.toString('utf8'), keys, value)
+  const res = setKey(readUserText(file, readOrNull(fs, real)).text, keys, value)
   return { path: file, ...(real !== file ? { real_path: real } : {}), changes: res.prior !== value, prior: res.prior }
 }
 
@@ -96,17 +104,16 @@ const entryOf = (manifest, p) => ((manifest && manifest.entries) || []).find((x)
   && (x.kind ?? (x.format ? 'text' : 'json-key')) === p.kind
   && (p.kind === 'json-key' ? sameKeys(x.keys, p.keys) : x.format === p.format && (p.vars ? sameNames(x.vars, p.vars) : x.line === p.line)))
 // is asight's text still in the file? a JSON key by its value, a block or line by the text it inserted (the same test undo makes of an edited file)
-function holds(x, cur) {
-  if (cur == null) return false
-  const text = cur.toString('utf8')
+function holds(x, text) {
+  if (text == null) return false
   if (x.kind === 'text') return removeAsightText(text, x.ops || []).found
   try { return getPath(JSON.parse(text), x.keys) === x.value } catch { return false }
 }
 // the file is what asight's ops made of the file it recorded (an intent whose write finished and whose `post_sha256` did not): undo reads it the same way
-function writtenBy(x, cur) {
-  if (cur == null) return false
-  const back = reverseOps(cur.toString('utf8'), x.ops || [])
-  return back != null && (x.existed_before ? sha256(Buffer.from(back)) === x.pre_sha256 : back === '')
+function writtenBy(x, text) {
+  if (text == null) return false
+  const back = reverseOps(text, x.ops || [])
+  return back != null && (x.existed_before ? sha256(encodeText(back, x.charset || 'utf8')) === x.pre_sha256 : back === '')
 }
 
 /** `planned` = { harness, kind: 'json-key'|'text', path, keys | format + (vars | line) } → what `on` does with it, from the manifest and the disk:
@@ -117,33 +124,41 @@ function writtenBy(x, cur) {
  *                        before, or already written (`adopt`: only `post_sha256` is missing)
  *    skip-user-changed   it has, but the key or block is gone or holds another value, or the intent cannot be told from a user's edit: the user
  *                        changed it after asight did. Reported, left (`asight off`, then `asight on`, writes it again)
- *  `entry` is the manifest's. A path that cannot be resolved (a link now dangling) is skip-user-changed with the reason. */
+ *  `entry` is the manifest's. A path that cannot be resolved (a link now dangling) is skip-user-changed with the reason. A file whose bytes are not
+ *  asight's own and prove no encoding throws entry-refused with its `why` (as previewTextEntry does for a new entry), before anything is written. */
 export function judgeEntry({ manifest, planned, fs = nodeFs }) {
   const x = entryOf(manifest, planned)
   if (!x) return { action: 'write', entry: null }
   let cur
   try { cur = readOrNull(fs, editTarget(x.path, fs)) } catch (e) { return { action: 'skip-user-changed', entry: x, why: String((e && e.message) || e) } }
+  if (x.post_sha256 != null && sha256(cur) === x.post_sha256) return { action: 'skip-intact', entry: x }
+  // past the byte checks, what is in the file is read as text: bytes that prove no encoding are refused with their why (4.6:216, entry-refused),
+  // never judged as "the user changed it" — the block may well still be there, in bytes asight cannot read back
+  const text = readUserText(x.path, cur).text
   if (x.post_sha256 != null) {
-    if (sha256(cur) === x.post_sha256) return { action: 'skip-intact', entry: x }
-    return holds(x, cur) ? { action: 'skip-intact', entry: x, edited: true } : { action: 'skip-user-changed', entry: x, why: `${x.path} no longer holds what asight wrote there (${describeEntry(x)})` }
+    return holds(x, text) ? { action: 'skip-intact', entry: x, edited: true } : { action: 'skip-user-changed', entry: x, why: `${x.path} no longer holds what asight wrote there (${describeEntry(x)})` }
   }
   if (x.existed_before ? sha256(cur) === x.pre_sha256 : cur == null) return { action: 'resume', entry: x }
-  if (writtenBy(x, cur)) return { action: 'resume', entry: x, adopt: true }
+  if (writtenBy(x, text)) return { action: 'resume', entry: x, adopt: true }
   return { action: 'skip-user-changed', entry: x, why: `${x.path} changed after an earlier run recorded its intent to change it, and is not what that run would have written` }
 }
 const refuseChanged = (j) => new Error(`${j.entry.path}: ${j.why}; asight leaves it as it is — run "asight off", then "asight on", to write the entry again`)
 const makeDirs = (entry, fs) => { for (const d of entry.created_dirs) if (!fs.existsSync(d)) fs.mkdirSync(d, { mode: 0o700 }) }
 
 // the part of applyJsonKey / applyTextEntry after the edit is decided: the backup (kept from the intent a crashed run left, if it is still there),
-// the record before the write, the write, the record after it — `resumed` is that crashed run's entry, finished in place
-function commit({ dir, manifest, fresh, resumed, before, res, backup, real, now, fs }) {
+// the record before the write, the write, the record after it — `resumed` is that crashed run's entry, finished in place. The text is written in the
+// file's own form (`charset`: recorded on the entry only when it is not utf8, 4.6 日志), and post_sha256 is of the bytes written.
+function commit({ dir, manifest, fresh, resumed, before, res, backup, real, charset, now, fs }) {
+  if (charset !== 'utf8') fresh.charset = charset
+  else if (resumed) delete resumed.charset
   const entry = resumed ? Object.assign(resumed, { ...fresh, created_dirs: [...new Set([...(resumed.created_dirs || []), ...fresh.created_dirs])], backup: resumed.backup && fs.existsSync(resumed.backup) ? resumed.backup : backup(), existed_before: resumed.existed_before, mode: resumed.mode, pre_sha256: resumed.pre_sha256 }) : { ...fresh, backup: backup() }
   entry.undo_by_hand = undoByHand(entry)
   if (!resumed) manifest.entries.push(entry)
   saveManifest(dir, manifest, fs) // the intent is durable before the user's file changes
   makeDirs(entry, fs)
-  writeDurable(real, res.text, entry.mode, fs)
-  entry.post_sha256 = sha256(Buffer.from(res.text))
+  const bytes = encodeText(res.text, charset)
+  writeDurable(real, bytes, entry.mode, fs)
+  entry.post_sha256 = sha256(bytes)
   saveManifest(dir, manifest, fs)
   return entry
 }
@@ -159,7 +174,8 @@ export function applyJsonKey({ dir, manifest, harness, phase, file, keys, value,
   const real = editTarget(file, fs)
   const before = readOrNull(fs, real)
   if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry } // the file was written; only the record of it was not
-  const res = setKey(before == null ? null : before.toString('utf8'), keys, value) // parse-checked before any write
+  const read = readUserText(file, before)
+  const res = setKey(read.text, keys, value) // parse-checked before any write
   if (res.prior === value) return null
   const resumed = j.action === 'resume' ? j.entry : null
   const fresh = {
@@ -168,7 +184,7 @@ export function applyJsonKey({ dir, manifest, harness, phase, file, keys, value,
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
     existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
   }
-  return commit({ dir, manifest, fresh, resumed, before, res, real, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) }) // keyed by the path the user knows (the link, for a symlinked file), holding the target's bytes
+  return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) }) // keyed by the path the user knows (the link, for a symlinked file), holding the target's bytes
 }
 
 // A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars, quote? } | { format: 'line', line, after? } |
@@ -194,8 +210,7 @@ function editText(file, text, edit, { joined = false } = {}) {
 }
 export function previewTextEntry({ file, edit, fs = nodeFs }) {
   const real = editTarget(file, fs)
-  const before = readOrNull(fs, real)
-  const res = editText(file, before == null ? null : before.toString('utf8'), edit)
+  const res = editText(file, readUserText(file, readOrNull(fs, real)).text, edit)
   return { path: file, ...(real !== file ? { real_path: real } : {}), changes: true, prior: res.prior ?? null }
 }
 export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home, now = new Date(), fs = nodeFs }) {
@@ -211,7 +226,8 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home
   const before = readOrNull(fs, real)
   if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry }
   // an intent a crashed run left, whose write never happened: the file is still as it was, so its text is not yet in it
-  const res = editText(file, before == null ? null : before.toString('utf8'), edit, { joined })
+  const read = readUserText(file, before)
+  const res = editText(file, read.text, edit, { joined })
   const resumed = j.action === 'resume' ? j.entry : null
   const fresh = {
     kind: 'text', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), format: edit.format,
@@ -220,7 +236,7 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
     created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
   }
-  return commit({ dir, manifest, fresh, resumed, before, res, real, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) })
+  return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) })
 }
 
 // When asight installed the value a config layer holds (ms), or null. A layer counts when an entry changed its file
