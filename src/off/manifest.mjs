@@ -65,8 +65,12 @@ export const newManifest = (now = new Date()) => ({ version: MANIFEST_VERSION, c
 
 /** Has `install` finished (D55: `install.state`, which replaced v2's `complete`)? */
 export const installComplete = (m) => !!(m && isPlainObject(m.install) && m.install.state === 'complete')
-/** May the daemon start on `m`? Only on an install that finished (a version 1 / 2 manifest is never read, 4.11 ⑰). */
-export const daemonMayStart = (m) => installComplete(m)
+/** Is there an install to route over (1.6 §1.1: refuse only with no usable root or no install record)? An install record — complete, or partial: a root
+ *  store that declined or left the prompt pending still leaves the root, and the forms it cannot reach go through the doors forwarding only — and a root on
+ *  record: its key in custody (`root-key`) or the CA file (`ca-cert`, Linux). A version 1 / 2 manifest is never read (4.11 ⑰). */
+export const installUsable = (m) => !!(m && isPlainObject(m.install) && typeof m.install.state === 'string' && [...(Array.isArray(m.entries) ? m.entries : []), ...(Array.isArray(m.files) ? m.files : [])].some((x) => isPlainObject(x) && x.phase === 'install' && (x.kind === 'root-key' || x.role === 'ca-cert')))
+/** May the daemon start on `m`? On an install it can route over (installUsable). */
+export const daemonMayStart = (m) => installUsable(m)
 /** The entries and files of one phase. */
 export const itemsOfPhase = (m, phase) => [...(Array.isArray(m && m.entries) ? m.entries : []), ...(Array.isArray(m && m.files) ? m.files : [])].filter((x) => isPlainObject(x) && x.phase === phase)
 

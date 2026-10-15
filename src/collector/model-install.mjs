@@ -12,7 +12,7 @@ import { caPaths } from './core/tls/ca-store.mjs'
 import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
 import { rootIdOf } from '../off/root-store.mjs'
 import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeOwned, sha256 } from './core/trust/journal.mjs'
-import { installComplete, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
+import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
 import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
@@ -54,7 +54,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
   const before = JSON.stringify(m)
-  const items = [], carriers = [], pending = [], problems = []
+  const items = [], carriers = [], pending = [], problems = [], installedHarnesses = [] // the last: read by finish(), which an install with no root reaches early
   const said = (item, state, extra = {}) => items.push({ item, state, ...extra })
   const save = () => saveManifest(dir, m, fs)
   if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); save() }
@@ -106,7 +106,6 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   said('root-store', pending.some((p) => p.item === 'root-store') ? pending.find((p) => p.item === 'root-store').state : inStore.present ? 'intact' : 'added')
 
   // c · the carriers of every present form (P4)
-  const installedHarnesses = []
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
     const pm = desc.proxyMode
     const forms = pm.forms.filter((f) => f.os.includes(os) && isPresent(f, ctx))
@@ -133,7 +132,9 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   function finish() {
     const names = [...new Set([...((m.install && m.install.harnesses) || []), ...installedHarnesses])].sort()
     const state = pending.length || problems.length || !rootDer ? 'partial' : 'complete'
-    const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names }
+    // what install placed for each harness, by kind and path: precondition ⑪ refuses a harness one of these has gone from, even when its record went with it
+    const placed = Object.fromEntries(names.map((h) => [h, itemsOfPhase(m, 'install').filter((x) => x.harness === h).map((x) => ({ kind: x.kind, path: x.path }))]))
+    const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names, items: placed }
     if (JSON.stringify(next) !== JSON.stringify(m.install)) m.install = next
     if (JSON.stringify(m) !== before) save()
     const skipped = carriers.filter((x) => x.state === 'skipped').length + items.filter((x) => x.state === 'skipped').length

@@ -8,7 +8,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
 import { readManifest, saveManifest, judgeEntry, sha256 } from './core/trust/journal.mjs'
-import { installComplete, itemsOfPhase } from '../off/manifest.mjs'
+import { installUsable, itemsOfPhase } from '../off/manifest.mjs'
 import { readOrNull } from '../off/fsutil.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { checkWrapper } from './core/proxymode/hooks/wrapper.mjs'
@@ -24,7 +24,12 @@ const groupOf = (harness, routeId) => `${harness}:${routeId}`
 /** Precondition ⑪ for one harness: → null (its install items are there and unchanged) or { reason: 'entry-missing' | 'entry-changed', path, command }. */
 export function installDrift(m, harness, fs = nodeFs) {
   if (!((m.install && m.install.harnesses) || []).includes(harness)) return { reason: 'entry-missing', path: null, command: INSTALL_HINT, why: `${harness} was not found when asight install last ran` }
-  for (const x of itemsOfPhase(m, 'install').filter((i) => i.harness === harness)) {
+  const recorded = itemsOfPhase(m, 'install').filter((i) => i.harness === harness)
+  // what install placed (m.install.items) must still be on record: an item whose record is gone is as missing as its file
+  for (const p of (m.install.items && m.install.items[harness]) || []) {
+    if (!recorded.some((x) => x.kind === p.kind && x.path === p.path)) return { reason: 'entry-missing', path: p.path, command: INSTALL_HINT, why: `${p.path}, which asight install placed for ${harness}, is no longer in the install manifest` }
+  }
+  for (const x of recorded) {
     if (x.kind === 'owned-file') {
       const d = x.role === 'wrapper' ? checkWrapper({ fs }, x) : (() => { const b = readOrNull(fs, x.path); return b == null ? { reason: 'entry-missing', path: x.path } : sha256(b) !== x.sha256 ? { reason: 'entry-changed', path: x.path } : null })()
       if (d) return { ...d, command: INSTALL_HINT }
@@ -41,7 +46,7 @@ export function installDrift(m, harness, fs = nodeFs) {
 export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined }) {
   const dir = collectorHome(path.join(home, '.asight'))
   const m = readManifest(dir, fs)
-  if (!installComplete(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`asight is not installed for this user (no complete install record): run ${INSTALL_HINT} first`], exit: 1 }
+  if (!installUsable(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`asight is not installed for this user (no install record with a root): run ${INSTALL_HINT} first`], exit: 1 }
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const wanted = ids || m.install.harnesses
   const refused = [], on = []
@@ -49,7 +54,10 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
     const d = installDrift(m, h, fs)
     if (d) refused.push({ harness: h, ...d }); else on.push(h)
   }
-  const out = { on, refused, routes: [], notes: [], problems: [], doors: {}, exit: 1 }
+  // what install left pending (the root store declined or not answered, the custody unreachable): on goes on — the forms the root cannot reach go through
+  // their doors forwarding only (D51④) — and says each one, with the command, forward only (1.6 §1.1)
+  const pending = (Array.isArray(m.install.pending) ? m.install.pending : []).map((p) => ({ harness: null, code: CODE.installPending, item: p.item, state: p.state, why: p.reason, command: INSTALL_HINT }))
+  const out = { on, refused, routes: [], notes: [...pending], problems: [], doors: {}, exit: 1 }
   if (!on.length) return out
   // desired on first (R9), then the liveness window opens: the holder judge (P12) counts from here
   const stateF = path.join(dir, 'state.json')
@@ -86,6 +94,6 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
       out.notes.push(...w.notes.map((n) => ({ harness: h, ...n })))
     }
   }
-  out.exit = !refused.length && doors && out.routes.every((r) => r.ok) && !out.problems.length ? 0 : 1
+  out.exit = !refused.length && !pending.length && doors && out.routes.every((r) => r.ok) && !out.problems.length ? 0 : 1
   return out
 }

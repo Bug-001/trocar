@@ -23,7 +23,9 @@ test('R3: a version 1 or 2 manifest on disk reads as { unsupported: "v2" } and t
     const before = fs.readFileSync(manifestPath(dir))
     const m = readManifest(dir)
     assert.deepEqual([m.unsupported, m.version, installComplete(m), daemonMayStart(m), m.entries], ['v2', doc.version ?? 1, false, false, undefined], 'a complete v2 install does not start the daemon either')
-    assert.equal(daemonMayStart({ install: { state: 'complete' } }), true); assert.equal(daemonMayStart({ install: { state: 'partial' } }), false)
+    // 1.6 §1.1: an install record (complete or partial) with a root on record; no root, no record → no
+    const root = [{ kind: 'root-key', phase: 'install' }], ca = [{ kind: 'owned-file', role: 'ca-cert', phase: 'install' }]
+    assert.deepEqual([[{ state: 'complete' }, root, []], [{ state: 'partial' }, [], ca], [{ state: 'partial' }, [], []], [null, root, ca]].map(([install, entries, files]) => daemonMayStart({ install, entries, files })), [true, true, false, false])
     assert.throws(() => saveManifest(dir, m), /will not write over it/)
     assert.deepEqual(fs.readFileSync(manifestPath(dir)), before)
   }
