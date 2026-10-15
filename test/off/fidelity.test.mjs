@@ -6,11 +6,13 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { shapeCases, decodeBytes, encodeText as shapeEncode, eolOf as shapeEol, readJsonc, userEdits, seeds } from '../helpers/file-shapes.mjs'
+import { shapeCases, decodeBytes, encodeText as shapeEncode, eolOf as shapeEol, readJsonc, readDotenv, userEdits, seeds } from '../helpers/file-shapes.mjs'
 import { applyTextEntry, applyJsonKey, undoEntry, newManifest, readManifest } from '../../src/collector/core/trust/journal.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { planByMarker, undoByMarker } from '../../src/off/marker.mjs'
-import { lineComment } from '../../src/off/text-edit.mjs'
+import { lineComment, OFF_PREFIX } from '../../src/off/text-edit.mjs'
+import { formatOffReceipt } from '../../src/off/receipt.mjs'
+import { installedHome } from './fixtures/off-ctx.mjs'
 
 const FORMATS = { dotenv: '.codex/.env', 'yaml-list': '.dsh/cordis.patch.yml', rc: '.zshrc' }
 const editFor = (format, home) => format === 'dotenv' ? { format: 'dotenv-block', vars: { SSL_CERT_FILE: `${home}/.asight/collector/ca/combined-codex.pem` }, quote: true }
@@ -209,9 +211,98 @@ test('fidelity json X4 (seed): on, then the file gains a UTF-8 mark → off take
   assert.ok(out.equals(Buffer.concat([MARK, plain])), 'every other byte is the user\'s')
 })
 
-// The undo now decodes by the entry's `charset` (above): a copy of asight-off written before that would write a UTF-16 file back as UTF-8, so the
-// version doctor compares moves past it (plan §E.5 #1: T10 bumps OFF_VERSION once; the manifest's own version stays HEAD's v3).
-test('fidelity: OFF_VERSION is 12 — the copy that undoes by `charset` is told apart from 11, which decoded every file as UTF-8; the manifest stays version 3', async () => {
-  const { OFF_VERSION, MANIFEST_VERSION } = await import('../../src/off/manifest.mjs')
-  assert.equal(OFF_VERSION, 12); assert.equal(MANIFEST_VERSION, 3)
+// ---- D48② (X8, I5): the user changes a key asight set while it is on → after off the user's new value is the one in effect ------------------------------------------
+// Codex's .env as `on` leaves it: the trust block (SSL_CERT_FILE) and the gate address joined into it (HTTPS_PROXY, 4.8 §2.3). Expectations come from the generator's
+// own reader (readDotenv), never from src/.
+const PROXY_GATE = 'http://127.0.0.1:47011'
+const caFor = (home) => `${home}/.asight/collector/ca/combined-codex.pem`
+function onDotenv(bytes, { home } = {}) {
+  const b = sandbox({ format: 'dotenv', bytes })
+  const manifest = newManifest()
+  const es = [
+    applyTextEntry({ phase: 'on', home: b.root, dir: b.dir, manifest, harness: 'codex', file: b.file, edit: { format: 'dotenv-block', vars: { SSL_CERT_FILE: caFor(home ?? b.root) }, quote: true } }),
+    applyTextEntry({ phase: 'on', home: b.root, dir: b.dir, manifest, harness: 'codex', file: b.file, edit: { format: 'dotenv-block', vars: { HTTPS_PROXY: PROXY_GATE }, quote: true, joinBlock: true } }),
+  ]
+  return { b, es, ours: { SSL_CERT_FILE: caFor(home ?? b.root), HTTPS_PROXY: PROXY_GATE } }
+}
+
+test('fidelity X8 (seed): CRLF and LF Codex .env, the user sets HTTPS_PROXY to their own value inside asight\'s block while on → off: the new value is in effect, the old line stays out of effect and is reported by line, reverted-not-identical', async () => {
+  const s = seeds.find((x) => x.id === 'seed-X8')
+  for (const eol of ['\r\n', '\n']) {
+    const text = s.text.replace(/\r\n/g, eol)
+    const { b, es } = onDotenv(Buffer.from(text))
+    const on = fs.readFileSync(b.file, 'utf8')
+    assert.ok(on.includes(`HTTPS_PROXY=${PROXY_GATE}${eol}`) && on.includes(`${OFF_PREFIX}HTTPS_PROXY=http://corp.example:8080`), JSON.stringify(on))
+    fs.writeFileSync(b.file, on.replace(`HTTPS_PROXY=${PROXY_GATE}`, 'HTTPS_PROXY=http://newcorp:3128'))
+    assert.equal(es.filter(Boolean).length, 2)
+    const rs = (await undoHarnesses({ dir: b.dir, home: b.root, manifest: readManifest(b.dir), procs: async () => [] })).results // off's undo of the whole manifest: the join first, then the block
+    assert.deepEqual(rs.map((r) => r.result), ['reverted-not-identical', 'reverted-not-identical'], JSON.stringify(rs))
+    const out = fs.readFileSync(b.file)
+    const read = readDotenv(out)
+    assert.equal(read.HTTPS_PROXY, 'http://newcorp:3128', 'the user\'s new value is in effect')
+    assert.equal(read.OPENAI_API_KEY, 'sk-x')
+    assert.equal(read.SSL_CERT_FILE, undefined, 'asight\'s CA is gone')
+    const lines = out.toString('utf8').split(eol)
+    assert.deepEqual(rs[0].prior_left, [{ key: 'HTTPS_PROXY', line: lines.indexOf(`${OFF_PREFIX}HTTPS_PROXY=http://corp.example:8080`) + 1 }], 'the line the receipt names is the old line, still out of effect')
+    assert.ok(rs[0].prior_left[0].line > 0)
+    assert.equal(out.toString('utf8'), `HTTPS_PROXY=http://newcorp:3128${eol}${text.replace('HTTPS_PROXY=', `${OFF_PREFIX}HTTPS_PROXY=`)}`, 'every other byte is the user\'s, in the file\'s line ending')
+  }
+})
+
+test('fidelity dotenv I5: along the user-edit axis (proxy / CA key in the block or outside it, unrelated lines added, changed, deleted, a mark, line endings) → off keeps every edit of the user; a key the user set reads as the user\'s value, any other key as it was before on', async () => {
+  let n = 0, bytewise = 0, kept = 0
+  for (const c of cases('dotenv')) {
+    for (const edit of userEdits('dotenv', { proxyName: 'HTTPS_PROXY', caName: 'SSL_CERT_FILE', home: c.home })) {
+      const { b, es, ours } = onDotenv(c.bytes, { home: c.home })
+      const s1 = fs.readFileSync(b.file)
+      const edited = edit.apply(s1, { before: c.bytes })
+      if (!edited) continue
+      n++
+      fs.writeFileSync(b.file, edited)
+      assert.equal(es.filter(Boolean).length, 2, tag(c))
+      const rs = (await undoHarnesses({ dir: b.dir, home: b.root, manifest: readManifest(b.dir), procs: async () => [] })).results
+      assert.equal(rs.length, 2, tag(c))
+      for (const r of rs) assert.ok(['reverted-not-identical', 'already-removed'].includes(r.result), `${edit.id} → ${r.result} ${r.reason || ''}: ${tag(c)}`)
+      const out = fs.readFileSync(b.file), d = decodeBytes(out), e = decodeBytes(edited)
+      assert.deepEqual([d.why, d.charset, d.bom], [undefined, e.charset, e.bom], `${edit.id}: the form the user left stays: ${tag(c)}`)
+      const was = readDotenv(c.bytes), now = readDotenv(edited), want = { ...now }
+      for (const [k, v] of Object.entries(ours)) {
+        if (now[k] !== v) continue // the user's own value: it stays
+        if (k in was) want[k] = was[k]; else delete want[k]
+      }
+      assert.deepEqual(readDotenv(out), want, `${edit.id}: ${tag(c)}`)
+      for (const [k, v] of Object.entries(ours)) {
+        const set = now[k] !== v && k in was // the user set K while on, and asight had put their old K out of effect
+        const left = rs.flatMap((r) => r.prior_left || []).filter((p) => p.key === k)
+        assert.equal(left.length > 0, set, `${edit.id}: ${k} reported as left out of effect iff the user set it: ${tag(c)}`)
+        const oldLine = new RegExp(`^\uFEFF?[ \t]*${OFF_PREFIX}[ \t]*(?:export[ \t]+)?${k}[ \t]*=`)
+        for (const p of left) assert.match(d.text.split('\n')[p.line - 1] ?? '', oldLine, `${edit.id}: line ${p.line} is ${k}'s old line: ${tag(c)}`)
+        if (set) kept++
+      }
+      // an edit of nothing asight set: the result is that edit made to the file as it was before on, byte for byte (when the edit finds the same place in both)
+      const plain = edit.plan(c.bytes, { before: c.bytes }), onIt = edit.plan(s1, { before: c.bytes })
+      if (!/^set-/.test(edit.id) && plain && onIt && plain.anchor === onIt.anchor) {
+        bytewise++
+        assert.ok(out.equals(edit.apply(c.bytes, { before: c.bytes })), `${edit.id}: byte for byte the user's edit of the file before on: ${tag(c)}\n${JSON.stringify(d.text)}`)
+      }
+    }
+  }
+  assert.ok(n > 300 && bytewise > 100 && kept > 10, `edits applied ${n}, compared byte for byte ${bytewise}, keys the user set over an old line ${kept}`)
+})
+
+test('fidelity X8 through asight off: the receipt names the line left out of effect and how to have the old value back; --json carries it', async () => {
+  const s = await installedHome({ names: ['codex'], seed: (home) => { fs.mkdirSync(path.join(home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\r\nSSL_CERT_FILE=/corp/ca.pem\r\n') } })
+  const file = s.manifest().entries.find((e) => e.kind === 'text').path
+  const on = fs.readFileSync(file, 'utf8')
+  fs.writeFileSync(file, on.replace(/^SSL_CERT_FILE=[^\r\n]*/m, 'SSL_CERT_FILE=/mine/ca.pem'))
+  const off = await s.off()
+  assert.equal(off.exit, 0, JSON.stringify(off.receipt.left))
+  const after = fs.readFileSync(file, 'utf8')
+  assert.equal(readDotenv(Buffer.from(after)).SSL_CERT_FILE, '/mine/ca.pem')
+  const line = after.split('\r\n').indexOf(`${OFF_PREFIX}SSL_CERT_FILE=/corp/ca.pem`) + 1
+  assert.ok(line > 0, JSON.stringify(after))
+  const row = off.receipt.changed.find((c) => c.path === file)
+  assert.deepEqual(row.prior_left, [{ key: 'SSL_CERT_FILE', line }])
+  const text = formatOffReceipt(off.receipt, { home: s.home })
+  assert.ok(text.includes(`第 ${line} 行`) && text.includes(`删掉这行开头的 \`${OFF_PREFIX}\``), text)
 })

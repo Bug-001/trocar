@@ -77,15 +77,17 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
     return done('restored')
   }
   if (entry.kind === 'text') { // edited since: only asight's block / line goes, the user's commented line comes back
-    const out = removeAsightText(text, entry.ops)
+    const out = removeAsightText(text, entry.ops, { fold: entry.fold === true })
+    // a key the user set to a value of their own while asight was on keeps it (D48②): the line asight put out of effect stays so, and the receipt says where
+    const left = out.prior_left ? { prior_left: out.prior_left } : {}
     // "already removed" is only true when nothing of asight's is left. A line that still names asight's file in a shape the removal could not read is not
     // gone: the file is not touched, and the entry stays (`left-text`), so what it points at is not taken away under it (4.6 安装 / 卸载不静默)
     const residue = asightResidue(out.text, entry, text) // numbered as the user sees them in the file
     if (residue.length) return done('left-text', { reason: `${file} still names asight's ${describeEntry(entry)} on line ${residue.join(', ')}, in a form asight cannot tell from your own text; asight did not touch the file: delete ${residue.length === 1 ? 'that line' : 'those lines'} by hand` })
     if (!out.found) return done('already-removed')
     if (!entry.existed_before && onlySkeleton(out.text, entry.format)) { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs); return done('reverted-not-identical', { deleted: true }) }
-    writeDurable(file, encodeText(out.text, read.charset), fs.statSync(file).mode & 0o777, fs)
-    return done('reverted-not-identical')
+    if (out.text !== text) writeDurable(file, encodeText(out.text, read.charset), fs.statSync(file).mode & 0o777, fs)
+    return done('reverted-not-identical', left)
   }
   let doc
   try { doc = parseJsonText(text) } catch (e) { return done('left-unparsable', { reason: unreadableJson(file, text, e, `asight's ${describeEntry(entry)}`) }) }

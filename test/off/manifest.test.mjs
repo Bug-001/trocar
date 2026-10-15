@@ -308,3 +308,9 @@ test('D55 the new kinds: known, each with a sentence of undo by hand; OFF_VERSIO
   assert.ok(env.includes('NODE_EXTRA_CA_CERTS') && env.includes('/h/.zshenv') && env.includes('HKCU\\Environment\\NODE_EXTRA_CA_CERTS') && env.includes('"/corp.pem"'), env)
   assert.equal(undoByHand({ kind: 'json-array-item', path: '/s.json', keys: ['settingsSync.ignoredSettings'], item: 'http.proxy', created_array: true }), 'edit /s.json: remove "http.proxy" from the list settingsSync.ignoredSettings, then delete the list if it is now empty (asight created it)')
 })
+
+// T10 (plan §E.5 #1): the undo decodes a user's file by the entry's `charset` (text-codec.mjs; absent = utf8). A copy of asight-off written before
+// that would write a UTF-16 file back as UTF-8, so the version doctor compares moves past it; the manifest's own version stays D55's v3.
+test('OFF_VERSION is 12 — the copy that undoes by `charset` is told apart from 11, which decoded every file as UTF-8; the manifest stays version 3', () => {
+  assert.equal(OFF_VERSION, 12); assert.equal(MANIFEST_VERSION, 3)
+})

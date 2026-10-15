@@ -125,23 +125,32 @@ const one = (src, offset, inserted) => ({ text: applyOps(src, [{ offset, removed
 
 // Undo for a file the user edited since install (4.6「撤一个文件的规则」 last case): take out only asight's text —
 // every whole line asight inserted (the block's lines, the sentinel line or row; each line once, wherever the
-// user's edits moved it, so a block whose end marker the user deleted still goes), put back what an op replaced
-// (a YAML `[]`) and strip OFF_PREFIX from the user's lines. Everything else stays byte for byte.
+// user's edits moved it, so a block whose end marker the user deleted still goes) and put back what an op replaced
+// (a YAML `[]`). Everything else stays byte for byte.
 // "A whole line" is read the way an editor leaves it: CRLF line ends, blanks before or after, and — for a dotenv
 // assignment of asight's path — `export `, blanks around `=`, quotes and a trailing comment; every such assignment
 // goes, not only the first (an agent that reads the line it finds last would still see a copy). A line asight wrote
 // that this cannot find is not "already gone": asightResidue says so (journal.mjs leaves the file alone then).
-// Returns { text, found } (found: false when none of asight's text is left — nothing was changed).
+// The user's lines asight put out of effect (OFF_PREFIX) are handled key by key (D48②): for each key K the entry's
+// block assigned (`fold`: K compared without case, 4.6「名字族」), when the file still has an assignment of K in effect
+// once asight's lines are out, that is the value the user set while asight was on — it wins, so K's prefixed lines stay
+// out of effect and are reported (`prior_left: [{ key, line }]`, line = 1-based in the returned text); else the prefix
+// comes off K's lines and the user's old value is back. A prefixed line of a key this entry did not assign is not its
+// own (another entry's, or no assignment at all) and is left as it is.
+// Returns { text, found, prior_left? } (found: false when none of asight's text is left — nothing was changed).
 const escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+// a key as a pattern: `fold` matches it in any case (character classes, so the value beside it is still compared exactly)
+const keyRe = (key, fold) => (fold ? [...key].map((c) => (/[A-Za-z]/.test(c) ? `[${c.toUpperCase()}${c.toLowerCase()}]` : escapeRe(c))).join('') : escapeRe(key))
+const sameKey = (a, b, fold) => (fold ? a.toUpperCase() === b.toUpperCase() : a === b)
 function dropLine(t, line) { // its first whole-line occurrence, with its own newline; null when absent
   const m = new RegExp(`(^\uFEFF?|\n)[ \\t]*${escapeRe(line.trim())}[ \\t]*\\r?(\n|$)`).exec(t)
   if (!m) return null
   const at = m.index + m[1].length
   return t.slice(0, at) + t.slice(m.index + m[0].length)
 }
-const assignmentRe = (key, value) => new RegExp(`^\uFEFF?[ \\t]*(?:export[ \\t]+)?${escapeRe(key)}[ \\t]*=[ \\t]*(?:"${escapeRe(value)}"|'${escapeRe(value)}'|${escapeRe(value)})[ \\t]*(?:#.*)?$`)
-function dropAssignments(t, key, value) { // every line that assigns `key` the path `value`; { text, n }
-  const re = assignmentRe(key, value)
+const assignmentRe = (key, value, fold) => new RegExp(`^\uFEFF?[ \\t]*(?:export[ \\t]+)?${keyRe(key, fold)}[ \\t]*=[ \\t]*(?:"${escapeRe(value)}"|'${escapeRe(value)}'|${escapeRe(value)})[ \\t]*(?:#.*)?$`)
+function dropAssignments(t, key, value, fold) { // every line that assigns `key` the path `value`; { text, n }
+  const re = assignmentRe(key, value, fold)
   const parts = t.split('\n')
   const kept = parts.filter((l) => !re.test(l.replace(/\r$/, '')))
   const n = parts.length - kept.length
@@ -150,9 +159,42 @@ function dropAssignments(t, key, value) { // every line that assigns `key` the p
   if (parts[0].startsWith('\uFEFF') && !kept.includes(parts[0])) kept[0] = `\uFEFF${kept[0] ?? ''}` // the BOM is the file's: it stays where it was
   return { text: kept.join('\n'), n }
 }
-export function removeAsightText(text, ops) {
+const OFF_LINE = new RegExp(`^(\uFEFF?[ \\t]*)${escapeRe(OFF_PREFIX)}`) // where asight put the prefix: at a line's start, after the mark on the first line (an editor may have indented it since)
+// the key a line assigns in effect (not a comment), or null — whatever its value holds (a stray \r an editor left is still the value's, not another line)
+const ASSIGN_KEY = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/
+const keyInEffect = (l) => { const m = ASSIGN_KEY.exec(l.replace(/^\uFEFF/, '')); return m ? m[1] : null }
+function restorePrior(t, keys, fold) { // { text, changed, prior_left }: the prefixed lines of `keys`, key by key
+  const lines = t.split('\n')
+  const ours = (k) => k != null && keys.some((K) => sameKey(K, k, fold))
+  const inEffect = new Set(lines.map(keyInEffect).filter(ours).map((k) => (fold ? k.toUpperCase() : k)))
+  const prior = []
+  let changed = false
+  lines.forEach((l, i) => {
+    const m = OFF_LINE.exec(l)
+    if (!m) return
+    const k = keyInEffect(l.slice(m[0].length))
+    if (!ours(k)) return
+    if (inEffect.has(fold ? k.toUpperCase() : k)) { prior.push({ key: k, line: i + 1 }); return }
+    lines[i] = m[1] + l.slice(m[0].length)
+    changed = true
+  })
+  return { text: changed ? lines.join('\n') : t, changed, prior_left: prior }
+}
+/** The lines (1-based) asight put out of effect that assign one of `keys` (compared exactly: the keys a `prior_left` names are the lines' own):
+ *  [{ key, line }]. undo.mjs numbers a `prior_left` again with it once every entry of the file is undone — an entry undone later may take lines out above. */
+export function offLines(text, keys) {
+  const out = []
+  String(text).split('\n').forEach((l, i) => {
+    const m = OFF_LINE.exec(l)
+    const k = m && keyInEffect(l.slice(m[0].length))
+    if (k != null && keys.includes(k)) out.push({ key: k, line: i + 1 })
+  })
+  return out
+}
+export function removeAsightText(text, ops, { fold = false } = {}) {
   let t = text
   let found = false
+  const keys = []
   for (const op of ops) {
     if (!op.inserted.includes(SENTINEL) && op.asight !== true) continue // a joined block's lines are asight's without the sentinel (joinDotenvBlock)
     if (op.removed !== '') { // a row that replaced the user's `[]`: the `[]` comes back in its place
@@ -162,13 +204,13 @@ export function removeAsightText(text, ops) {
     }
     for (const line of op.inserted.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l !== '')) { // a block written in a CRLF file ends its lines with \r\n (dotenvBlock): the \r is not part of what it assigns
       const kv = /^([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]+)"|(\S+))$/.exec(line) // a dotenv assignment of the block (a `quote` entry wrote its value in double quotes: the value is what is inside)
-      if (kv) { const r = dropAssignments(t, kv[1], kv[2] ?? kv[3]); if (r.n) { t = r.text; found = true } continue }
+      if (kv) { keys.push(kv[1]); const r = dropAssignments(t, kv[1], kv[2] ?? kv[3], fold); if (r.n) { t = r.text; found = true } continue }
       const out = dropLine(t, line)
       if (out != null) { t = out; found = true }
     }
   }
-  if (t.includes(OFF_PREFIX)) { t = t.split(OFF_PREFIX).join(''); found = true }
-  return { text: t, found }
+  const p = keys.length ? restorePrior(t, keys, fold) : { text: t, changed: false, prior_left: [] }
+  return { text: p.text, found: found || p.changed || p.prior_left.length > 0, ...(p.prior_left.length ? { prior_left: p.prior_left } : {}) }
 }
 
 // What of asight's is still in `text` once removeAsightText has run: the lines (1-based numbers) outside a comment that still hold a path the entry

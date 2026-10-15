@@ -16,6 +16,7 @@ import { undoHarnesses } from '../../src/off/undo.mjs'
 import { readManifest } from '../../src/collector/core/trust/journal.mjs'
 import { win32Routing } from '../../src/collector/arch/win32/wiring.mjs'
 import { winWorld, kernelUrl, seedSeven, helperOf, descs } from '../cli/fixtures/win-on-ctx.mjs'
+import { readDotenv } from '../helpers/file-shapes.mjs'
 
 const SYSPROXY = { ProxyEnable: { kind: 'REG_DWORD', value: 1 }, ProxyServer: { kind: 'REG_SZ', value: '127.0.0.1:7897' } }
 const PROXY_OFF = { ProxyEnable: { kind: 'REG_DWORD', value: 0 } }
@@ -95,7 +96,7 @@ test('V47(b) + W37: the user changes the entry\'s key — the real facts give pr
   assert.equal(pc.commands[0].run, 'asight on codex', 'the command that re-adopts comes first')
 })
 
-test('V48(b): `off` restores — the field still asight\'s own value → the file byte-identical to before `on` (the commented original back, the block gone); the user\'s value in the field → asight\'s part goes, the user\'s line stays untouched, the original is unmarked again (never a wholesale rollback)', async () => {
+test('V48(b): `off` restores — the field still asight\'s own value → the file byte-identical to before `on` (the commented original back, the block gone); the user\'s value in the field → asight\'s part goes, the user\'s line stays untouched and in effect, the original stays out of effect and is reported (D48②; never a wholesale rollback)', async () => {
   const w1 = winWorld(onPrior)
   const before = fs.readFileSync(w1.envFile, 'utf8')
   await w1.run(['--yes', 'codex', '--json'])
@@ -112,5 +113,9 @@ test('V48(b): `off` restores — the field still asight\'s own value → the fil
   assert.ok(!after.includes(kernelUrl('codex.env')), 'asight\'s value is gone')
   assert.ok(!/asight collector/.test(after), 'and the whole sentinel block with it')
   assert.ok(after.includes('HTTPS_PROXY=http://proxy.new:3128'), 'the user\'s line is untouched (「用户改过就不动」)')
-  assert.ok(after.includes('\nHTTPS_PROXY=http://proxy.old:3128\n') || after.endsWith('\nHTTPS_PROXY=http://proxy.old:3128'), 'the original line is unmarked and effective again')
+  // D48② (4.6「撤一个文件的规则」): the user's new value wins — the original line asight put out of effect stays so (unmarking it would make it the last
+  // assignment, which dotenvy and python-dotenv read), and the result says which line it is
+  assert.ok(after.includes('#asight-collector-off# HTTPS_PROXY=http://proxy.old:3128'), 'the original line stays out of effect')
+  assert.equal(readDotenv(Buffer.from(after)).HTTPS_PROXY, 'http://proxy.new:3128', 'the user\'s new value is the one in effect')
+  assert.ok(kept.results.some((x) => (x.prior_left || []).some((p) => p.key === 'HTTPS_PROXY' && after.split('\n')[p.line - 1].startsWith('#asight-collector-off# HTTPS_PROXY='))), 'and its line is reported')
 })

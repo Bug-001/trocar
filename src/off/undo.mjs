@@ -33,6 +33,8 @@ import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } fro
 import { harnessesOf, hasIdentity, withAgentList } from './signature.mjs'
 import { readAgentList } from './identity.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
+import { offLines } from './text-edit.mjs'
+import { decodeText } from './text-codec.mjs'
 
 const UNDO_LEFT = new Set(['left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error']) // an entry that could not be undone stays in the manifest
 const UNDO_AT_PRE = new Set(['restored', 'already-restored']) // the file is at its pre_sha256: its backup goes
@@ -166,6 +168,14 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const config = (e) => !((e.kind === 'text' || e.kind === 'trust-entry') && e.format !== 'dotenv-block') // step 1; the rest are step 4's (json-key and proxy-entry are config, a text/trust block is config only as dotenv)
   const originals = entries.filter(config) // step 1's, as they are now: undoing takes them out of the manifest, and a bundle is judged after that
   for (const e of entries) if (config(e)) undoOne(e)
+  // D48②: a key the user set while asight was on keeps the user's value, and the old line asight put out of effect stays so (journal.mjs `prior_left`).
+  // Its line number is the one in the file as step 1 leaves it: another entry of the same file, undone after it, may have taken lines out above it.
+  for (const row of out.results) {
+    if (!row.prior_left) continue
+    let read = null
+    try { read = decodeText(fs.readFileSync(row.real_path || row.path)) } catch { /* gone or unreadable: the numbers stay as the undo found them */ }
+    if (read && read.ok && read.text != null) row.prior_left = offLines(read.text, [...new Set(row.prior_left.map((p) => p.key))])
+  }
   // an item this build cannot undo is said, here and not by each caller: an entry or a file of an unknown kind (it is not touched, whatever its role),
   // or an entry that names no harness (no harness's `off` takes it). It stays in the manifest and `off` exits 1 for it (1.6 R3). The old capture's
   // ledger kinds are known: the legacy undo takes them.

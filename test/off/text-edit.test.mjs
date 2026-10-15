@@ -223,3 +223,44 @@ test('text-edit ③: one eolOf decides every insert — CRLF when CRLF outnumber
   const yml = insertLine('- a\r\n# note\r\n', { line: `- r ${lineComment('x')}`, format: 'yaml-list' })
   assert.equal(yml.text, `- a\r\n# note\r\n- r ${lineComment('x')}\r\n`, 'a CRLF comment line is still a comment line')
 })
+
+// D48② (X8): a key asight's block set that the user set to a value of their own while asight was on — inside the block or outside it — keeps the user's value after off;
+// the user's old line asight put out of effect stays out of effect and is reported by its line; a key the user did not touch gets its old line back. Key by key, not the
+// whole text: a prefixed line of a key this entry did not set is not this entry's.
+test('text-edit X8: the user\'s new value of a key asight set wins — its old line stays out of effect (prior_left, by line), another key\'s old line comes back; in either line ending', () => {
+  for (const eol of ['\n', '\r\n']) {
+    const user = ['OPENAI_API_KEY=sk-x', 'HTTPS_PROXY=http://corp:8080', 'SSL_CERT_FILE=/corp/ca.pem', ''].join(eol)
+    const r = dotenvBlock(user, { SSL_CERT_FILE: B, HTTPS_PROXY: 'http://127.0.0.1:1' })
+    const inBlock = r.text.replace('HTTPS_PROXY=http://127.0.0.1:1', 'HTTPS_PROXY=http://newcorp:3128')
+    assert.deepEqual(removeAsightText(inBlock, r.ops), {
+      text: ['HTTPS_PROXY=http://newcorp:3128', 'OPENAI_API_KEY=sk-x', `${OFF_PREFIX}HTTPS_PROXY=http://corp:8080`, 'SSL_CERT_FILE=/corp/ca.pem', ''].join(eol),
+      found: true, prior_left: [{ key: 'HTTPS_PROXY', line: 3 }],
+    }, `in the block, ${JSON.stringify(eol)}`)
+    const outside = `${r.text}export SSL_CERT_FILE = "/mine/ca.pem"${eol}`
+    const out = removeAsightText(outside, r.ops)
+    assert.deepEqual(out.prior_left, [{ key: 'SSL_CERT_FILE', line: 3 }], 'a line of its own after the block')
+    assert.equal(parseDotenv(out.text).get('SSL_CERT_FILE'), '/mine/ca.pem')
+    assert.equal(parseDotenv(out.text).get('HTTPS_PROXY'), 'http://corp:8080', 'the key the user did not touch is back to their old value')
+    assert.ok(!out.text.includes('127.0.0.1') && !out.text.includes(B) && !out.text.includes(BLOCK_BEGIN))
+  }
+  // the mark on the first line: the prefix is after it, the line number is the user's
+  const marked = dotenvBlock('﻿SSL_CERT_FILE=/corp/ca.pem\n', { SSL_CERT_FILE: B })
+  const m = removeAsightText(`${marked.text}SSL_CERT_FILE=/mine.pem\n`, marked.ops)
+  assert.deepEqual(m, { text: `﻿${OFF_PREFIX}SSL_CERT_FILE=/corp/ca.pem\nSSL_CERT_FILE=/mine.pem\n`, found: true, prior_left: [{ key: 'SSL_CERT_FILE', line: 1 }] })
+  // a prefixed line of a key this entry did not set is another entry's: it is not touched
+  const r = dotenvBlock('A=1\n', { SSL_CERT_FILE: B })
+  const other = `${OFF_PREFIX}HTTPS_PROXY=http://corp:8080\n`
+  assert.deepEqual(removeAsightText(`${r.text}${other}`, r.ops), { text: `A=1\n${other}`, found: true })
+  assert.deepEqual(removeAsightText(`A=1\n${other}`, r.ops), { text: `A=1\n${other}`, found: false }, 'nothing of this entry\'s left: nothing changes')
+})
+
+test('text-edit X8: `fold` (4.6「名字族」) compares the keys without case — a lower-case name the user set is the new value of asight\'s upper-case one; asight\'s value under another case goes too', () => {
+  const user = 'https_proxy=http://corp:8080\n'
+  const r = { ops: [{ offset: 0, removed: '', inserted: `${BLOCK_BEGIN}\nHTTPS_PROXY=http://127.0.0.1:1\n${BLOCK_END}\n` }, { offset: 0, removed: '', inserted: OFF_PREFIX }] }
+  const on = `${BLOCK_BEGIN}\nHTTPS_PROXY=http://127.0.0.1:1\n${BLOCK_END}\n${OFF_PREFIX}${user}`
+  const edited = on.replace('HTTPS_PROXY=http://127.0.0.1:1', 'https_proxy=http://newcorp:3128')
+  assert.deepEqual(removeAsightText(edited, r.ops, { fold: true }), { text: `https_proxy=http://newcorp:3128\n${OFF_PREFIX}${user}`, found: true, prior_left: [{ key: 'https_proxy', line: 2 }] })
+  assert.deepEqual(removeAsightText(on, r.ops, { fold: true }), { text: user, found: true }, 'untouched: the old line is back')
+  assert.deepEqual(removeAsightText(on.replace('HTTPS_PROXY=', 'Https_Proxy='), r.ops, { fold: true }), { text: user, found: true }, 'asight\'s value under another case is asight\'s')
+  assert.equal(removeAsightText(on.replace('HTTPS_PROXY=', 'Https_Proxy='), r.ops).text.includes('127.0.0.1'), true, 'without fold another case is another name')
+})

@@ -1,16 +1,20 @@
 // receipt.mjs (src/off) — the words `asight off` prints (RFC 1.6 §7 second example, R1): the receipt object of runOff (src/off/orchestrate.mjs; `--json` prints it as
 // it is, R5) as text for a person, in the past tense, or in the future for `--dry-run`. Pure: no disk, no clock, no process. Paths under HOME are shown as `~/…`
 // (the way the user knows them); `--json` keeps the absolute path. The undo side prints receipts too and may import nothing outside src/off (0.1 §2), so the
-// small `~` helper is written here and not taken from src/cli/receipt.mjs. Imports only node:*.
+// small `~` helper is written here and not taken from src/cli/receipt.mjs. Imports node:* and, for the prefix it tells the user to delete, src/off/text-edit.mjs.
 import path from 'node:path'
+import { OFF_PREFIX } from './text-edit.mjs'
 
 const offTilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
 const UNTIL_WORDS = { restart: '重启后不再信任', 'next-connection': '下一次新连接起不再信任', 'next-handshake': '下一次握手起不再信任', 'session-end': '当前 session 结束后不再信任' }
 const ROUTING_WORDS = { 'daemon-reply': '守护进程回复了,内核已确认', 'no-daemon': '没有守护进程在跑,它的助手也已不在', signal: '守护进程没响应,已停掉它', systemctl: '守护进程没响应,已经 systemd 停掉它' }
 
 // the status column of one changed file
+// a key the user set to a value of their own while asight was on (D48②, removeAsightText `prior_left`): their value wins, the old line asight put out of
+// effect stays so — where it is, and how to have the old value back
+const priorLeft = (c) => (c.prior_left || []).map((p) => `;${p.key} 用的是你在 on 期间设的新值,原来那行(第 ${p.line} 行)仍注释着:想用回原值,删掉这行开头的 \`${OFF_PREFIX}\``).join('')
 function rowStatus(c, t) {
-  if (c.result === 'reverted-not-identical') return `已撤销,但不逐字节相同(你之后改过这个文件:只撤了 asight 的部分${c.backup ? `,备份留在 ${t(c.backup)}` : ''})`
+  if (c.result === 'reverted-not-identical') return `已撤销,但不逐字节相同(你之后改过这个文件:只撤了 asight 的部分${c.backup ? `,备份留在 ${t(c.backup)}` : ''}${priorLeft(c)})`
   if (c.result === 'old-command') return `已撤销(旧命令装的,无备份:没有改前版本可回到)`
   if (c.result === 'undone-by-marker') return `按标记撤销(没有安装清单)${c.backup ? `;原值取自 ${t(c.backup)}` : ''}`
   return `已回到改前的样子${c.backup_dropped ? ',备份已删' : ''}`
