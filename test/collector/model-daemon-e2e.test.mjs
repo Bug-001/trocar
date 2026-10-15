@@ -14,6 +14,13 @@ import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
+import { statusRun } from '../../src/cli/status.mjs'
+import { runDoctor } from '../../src/cli/doctor.mjs'
+import { EXIT } from '../../src/cli/schema.mjs'
+
+// status reads the model daemon's reply without judging it yet (T23): a harness it cannot judge is `unknown`, the exit code status has always given
+// for that (never a false ok), and nothing throws
+const STATUS_EXIT = EXIT.unknown
 
 function fakeIo() {
   const out = [], err = []
@@ -50,6 +57,15 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(await canConnect(port), true, 'the door listens')
         assert.match(fs.readFileSync(envFile, 'utf8'), new RegExp(`127\\.0\\.0\\.1:${port}`), 'the CLI wrote the entry with the door the daemon read back')
         assert.ok(st.cert && st.cert.intermediate, 'status says the issuer state')
+        // T23 owns the full status / doctor; until then status on the model daemon's reply must not crash (1.6:404: topology_error is allowed)
+        const io3 = fakeIo()
+        const sr = await statusRun(['--json'], { io: io3, env: w.env, home: w.home, platform, deps: { platform, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) } })
+        assert.equal(sr.exit, STATUS_EXIT, io3.text())
+        const sj = JSON.parse(io3.text().slice(io3.text().indexOf('{')))
+        assert.ok(sj.topology || sj.topology_error, 'status carries a topology or says why not')
+        const io4 = fakeIo()
+        const dx = await runDoctor([], { io: io4, env: w.env, home: w.home, platform, deps: { platform, verify: () => ({ ok: true }), has: () => true, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) } })
+        assert.ok(Object.values(EXIT).includes(dx), `doctor ran to an exit code of its set: ${dx} ${io4.text().slice(0, 300)}`)
         const io2 = fakeIo()
         const off = await runOffCli([], { io: io2, home: w.home, env: w.env, platform, deps: { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: () => ({ status: 0, stdout: '', stderr: '' }) } })
         assert.equal(off, 0, io2.text())
