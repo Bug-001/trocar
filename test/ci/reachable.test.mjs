@@ -33,6 +33,8 @@ export const UNREACHED = Object.freeze({
   'src/collector/core/proxymode/sources.mjs': 'the descriptor reader lands ahead of its callers; T15 wires it in and removes this row',
   'src/collector/core/tls/issuer.mjs': 'T12 lands the intermediate issuer ahead of the daemon; it is wired into the doors next, which removes this row',
   'src/off/root-store.mjs': 'T12 lands the P3 argv (plan §E.5 #3) ahead of its callers; T13 / T14 (custody backends) and T20 (install) import it and remove this row',
+  'src/collector/arch/darwin/native.mjs': 'T13 lands the native pieces\' paths and pins ahead of procinfo\'s envOf, which imports it in the next commit and removes this row',
+  'src/collector/arch/darwin/custody.mjs': 'T13 lands the keychain custody and installHelper ahead of their callers; install and the daemon\'s issuer wire them in and remove this row',
   'src/off/clash.mjs': 'the Verge strip / reload half of that steer, reached only through src/capture/desktop-steer.mjs; same backlog items',
 })
 
