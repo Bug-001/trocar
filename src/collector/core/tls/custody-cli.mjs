@@ -1,6 +1,6 @@
 // custody-cli.mjs — the P1 key-custody interface (RFC 4.11 P1) over a one-shot native program, shared by the OS backends that keep
 // the root key outside Node: the macOS signing helper and the Windows custody script. One argv for both:
-//   create --subject <cn> → {rootDer:b64}  ·  exists → {exists}  ·  issue --spki <b64> --serial <hex> --not-before <iso> → {certDer:b64}
+//   create --subject <cn> → {rootDer:b64, provider?}  ·  exists → {exists}  ·  issue --spki <b64> --serial <hex> --not-before <iso> → {certDer:b64}
 //   remove → {removed}
 // The program BUILDS what it signs itself (CM3): the argv carries only the intermediate's public key, serial and notBefore.
 // Exit 3 (or {"error":"unavailable"}) is the VALUE 'unavailable', never a throw: create / issueIntermediate return it and the issuer
@@ -30,7 +30,9 @@ export function cliCustody({ kind, file, prefix = [], name = file, run = null, e
       const o = call(['create', '--subject', subject])
       if (o === 'unavailable') return o
       const rootDer = Buffer.from(o.rootDer, 'base64')
-      return { rootDer, fp256: new crypto.X509Certificate(rootDer).fingerprint256 }
+      // provider: where the key went (the Windows script names its CNG provider: TPM or software), passed on so install can record it
+      // and status show it (D38: a fallback is never silent); null when the program does not say
+      return { rootDer, fp256: new crypto.X509Certificate(rootDer).fingerprint256, provider: typeof o.provider === 'string' ? o.provider : null }
     },
     exists() { const o = call(['exists']); return o === 'unavailable' ? o : o.exists === true },
     issueIntermediate({ spkiDer, serial, notBefore }) {

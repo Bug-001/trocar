@@ -3,11 +3,14 @@
 # The root's P-256 private key is a CNG key with ExportPolicy None, on the Microsoft Platform Crypto Provider (the TPM) when one takes it,
 # else the Software KSP (R3-W1). It signs nothing a caller hands it: it BUILDS both certificates itself (CM3) and signs them through
 # X509SignatureGenerator (R3-W2) - the root (CA pathLen 1, KU keyCertSign|cRLSign, EKU serverAuth, SKI) and the 7-day intermediate
-# (CA pathLen 0, same KU/EKU, SKI, AKI = the root's key, issuer = the root's encoded subject, kept on the key as a persisted property).
+# (CA pathLen 0, same KU/EKU, SKI, AKI = the root's key, issuer = the root's encoded subject). The key holds nothing but itself: no
+# custom property (the TPM provider keeps only its own fixed set, so a persisted property would push every TPM machine onto the
+# software KSP). `issue` takes the issuer name from the root certificate itself, found read-only in Cert:\CurrentUser\Root (where
+# install puts it, CM7) by the key's public point, as cc-chain.ps1 took it from the root's certificate.
 # The argv is core/tls/custody-cli.mjs's, the same as the macOS helper's:
 #   create --subject <cn>                                          -> {"rootDer":b64,"provider":...}  (exit 5 + {"error":"exists"} when a key is there)
 #   exists                                                         -> {"exists":true|false}
-#   issue --spki <b64 P-256 SPKI> --serial <hex> --not-before <iso> -> {"certDer":b64}
+#   issue --spki <b64 P-256 SPKI> --serial <hex> --not-before <iso> -> {"certDer":b64}  (exit 6 + {"error":"no-root"} when the root is not in the store)
 #   remove                                                         -> {"removed":true|false}
 # No provider that opens: {"error":"unavailable"}, exit 3. No key: {"error":"no-key"}, exit 4. Bad argv: exit 2. Anything else: exit 1.
 # Windows PowerShell 5.1 on .NET Framework 4.7.2+ (CertificateRequest, X509SignatureGenerator). Never run in a test: it writes the user's key store.
@@ -15,7 +18,6 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
 $C = 'System.Security.Cryptography'; $X = 'System.Security.Cryptography.X509Certificates'
 $KeyName = 'asight root key'
-$NameProp = 'asight-root-name'
 $SpkiP256 = [Convert]::FromBase64String('MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgA=') # the 26-byte head of a P-256 SubjectPublicKeyInfo, before the 65-byte point
 
 function Emit($o, [int]$code = 0) { [Console]::Out.WriteLine((ConvertTo-Json -InputObject $o -Compress)); exit $code }
@@ -56,16 +58,14 @@ switch ($Verb) {
     if ($null -ne (Find-Key)) { Emit ([ordered]@{ error = 'exists' }) 5 }
     $name = New-Object ($X + '.X500DistinguishedName') ('CN=' + $subject.Replace('"', '').Replace(',', ' '))
     $key = $null; $prov = $null; $last = $null
-    foreach ($p in $Providers) { # the TPM first; a provider that will not create the key, or keep its property, gives way to the next
+    foreach ($p in $Providers) { # the TPM first; a provider that will not create the key gives way to the next (the provider is reported)
       try {
         $kp = New-Object ($C + '.CngKeyCreationParameters')
         $kp.Provider = $p
         $kp.ExportPolicy = [System.Security.Cryptography.CngExportPolicies]::None
         $kp.KeyUsage = [System.Security.Cryptography.CngKeyUsages]::Signing
-        $k = [System.Security.Cryptography.CngKey]::Create([System.Security.Cryptography.CngAlgorithm]::ECDsaP256, $KeyName, $kp)
-        try { $k.SetProperty((New-Object ($C + '.CngProperty') $NameProp, $name.RawData, ([System.Security.Cryptography.CngPropertyOptions]::Persist))) }
-        catch { try { $k.Delete() } catch { }; throw }
-        $key = $k; $prov = $p.Provider; break
+        $key = [System.Security.Cryptography.CngKey]::Create([System.Security.Cryptography.CngAlgorithm]::ECDsaP256, $KeyName, $kp)
+        $prov = $p.Provider; break
       } catch { $last = $_.Exception.Message }
     }
     if ($null -eq $key) { Emit ([ordered]@{ error = 'unavailable'; message = ('no provider created the key: ' + $last) }) 3 }
@@ -85,7 +85,10 @@ switch ($Verb) {
     if (-not [DateTimeOffset]::TryParse((ArgOf '--not-before'), [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$nb)) { Usage '--not-before is not an ISO 8601 time' }
     $key = Find-Key
     if ($null -eq $key) { Emit ([ordered]@{ error = 'no-key' }) 4 }
-    $issuer = New-Object ($X + '.X500DistinguishedName') (,[byte[]]$key.GetProperty($NameProp, ([System.Security.Cryptography.CngPropertyOptions]::Persist)).GetValue())
+    $point = [Convert]::ToBase64String((Point-Of $key))
+    $rootCert = Get-ChildItem Cert:\CurrentUser\Root | Where-Object { $_.PublicKey.Oid.Value -eq '1.2.840.10045.2.1' -and [Convert]::ToBase64String($_.PublicKey.EncodedKeyValue.RawData) -eq $point } | Select-Object -First 1
+    if ($null -eq $rootCert) { Emit ([ordered]@{ error = 'no-root'; message = 'no certificate of the key in Cert:\CurrentUser\Root' }) 6 }
+    $issuer = $rootCert.SubjectName
     $pub = PublicKey-Of ([byte[]]$spki[$SpkiP256.Length..($spki.Length - 1)])
     $req = Request-Of (New-Object ($X + '.X500DistinguishedName') ('CN=asight intermediate ' + $nb.UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ'))) $pub 0
     $aki = [byte[]]((0x30, 0x16, 0x80, 0x14) + (Ski-Of (PublicKey-Of (Point-Of $key))).RawData[2..21]) # AKI [0] keyIdentifier = the root's SKI (the SKI extension's value is 04 14 <20 bytes>)
