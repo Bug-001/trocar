@@ -19,6 +19,7 @@ import { newManifest, saveManifest } from '../../../../src/off/manifest.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { custodyStub } from '../../../helpers/custody-stub.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
+import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { ROOT, INSTALLED, descs, newWorld, ctxOf, worldOf, combos } from './verdict-world.mjs'
 
 const TOKEN = 'ab'.repeat(16)
@@ -70,6 +71,31 @@ for (const { d, f, os } of CASES) {
       assert.equal(meta.decrypt, want.decrypt, `${f.id} · ${os} · ${JSON.stringify(over)}: ${JSON.stringify(want)}`)
     }
     for (const r of Object.values(rigs)) { for (const x of r.records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x)); r.c.close() }
+  })
+}
+
+// The descriptors as they ship, every form on each route: a process of a verified form decrypts although an unmeasured or out-of-scope sibling form
+// shares its route (D51 names a harness, not a form); the door's answer is every verified candidate's verdict, or not-verified when none is.
+const real = new Set((await loadHarnesses()).map((d) => d.name))
+for (const d of descs) for (const os of ['darwin', 'win32']) {
+  test(`CM22 at the door · ${d.name} · ${os}, unmodified descriptor: the verified forms of the route decide, an unverified sibling does not veto`, async () => {
+    const r = await rig({ desc: d, os })
+    const routes = [...new Set(d.proxyMode.forms.filter((f) => f.os.includes(os)).map((f) => f.route))]
+    await r.c.on({ harnesses: [d.name], groups: Object.fromEntries(routes.map((rt, i) => [`${d.name}:${rt}`, 18300 + i])) })
+    let decrypted = 0
+    for (const rt of routes) {
+      const all = d.proxyMode.forms.filter((f) => f.os.includes(os) && f.route === rt), ok = all.filter((f) => f.verified[os] === true)
+      const { c: cs, w, facts } = worldOf(d, ok[0] || all[0], os, {})
+      const base = ctxOf(w)
+      Object.assign(r.w, { pid: ++pid, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, hostSet: cs.hostSet, ctx: { ...base, readFile: (p) => base.readFile(p).replace(ROOT.pem, STUB_PEM) } })
+      const meta = await r.c.lookupIngress({ peer: PEER, user: `${d.name}:${rt}`, target: { address: cs.host, port: 443 } })
+      const v = (f) => verdictOf({ desc: d, form: f, facts: { ...facts, pid }, record: { carrierInstalledAt: INSTALLED, rootFp256: STUB_FP }, issuer: ready, host: cs.host, hostSet: cs.hostSet, ctx: r.w.ctx }).decrypt
+      assert.equal(meta.decrypt, (ok.length ? ok : all).every(v), `${d.name}:${rt} · ${os}`)
+      if (real.has(d.name) && ok.length) assert.equal(meta.decrypt, v(ok[0]), `${d.name}:${rt} · ${os}: a process of ${ok[0].id} gets its form's verdict`)
+      if (meta.decrypt) decrypted++
+    }
+    if (real.has(d.name) && d.proxyMode.forms.some((f) => f.verified[os] === true)) assert.ok(decrypted > 0, `${d.name} · ${os}: some route decrypts`)
+    r.c.close()
   })
 }
 
@@ -143,7 +169,8 @@ test('CM23 · an idle holder keeps the door forward-only; mayExit stays false un
   const { c, w } = await rig({ desc: d, timers, opened, w: { pid: 4242, facts: { agent: d.name, startedAt: INSTALLED + 1 }, env: {}, procs: [{ pid: 4242, startedAt: INSTALLED + 1 }] } })
   await c.on({ harnesses: [d.name], groups: { [g]: 18104 } })
   await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
-  w.manifest = manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(INSTALLED), off_at: iso(INSTALLED + 10) } } })
+  w.manifest = manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(INSTALLED) } } }) // POST /off comes before the CLI writes off_at (orchestrate step 3 < 4)
+  w.now = INSTALLED + 10
   const reply = await c.off({ harnesses: [d.name] })
   assert.equal(reply.actual, 'off'); assert.equal(reply.confirmed, true); assert.equal(reply.holders, 1)
   assert.deepEqual(c.doors(), { [g]: 18104 }, 'the door stays while its holder lives, with no connection open')
@@ -176,6 +203,47 @@ for (const [what, custody, code] of [['custody unavailable', 'unavailable', 'cer
     c.close()
   })
 }
+
+test('CM6 · a forward-only verdict on the issuer\'s state is not kept: once the issuer is ready the same pid decrypts', async () => {
+  const { d, f, os } = rootForm
+  const pending = []
+  const timers = { setTimeout: (fn) => { pending.push(fn); return pending.length }, clearTimeout: () => {} }
+  const g = `${d.name}:${f.route}`
+  stub.switches.keyLost = true // the shared custody, whose root the rig installs: its key goes missing, then comes back
+  try {
+    const { c, records } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, timers, w: { pid: ++pid, facts: { agent: d.name, uid: 501, startedAt: INSTALLED + 1 }, env: {}, cwd: '/' } })
+    await c.on({ harnesses: [d.name], groups: { [g]: 18106 } })
+    const ask = async () => (await c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })).decrypt
+    assert.equal(await ask(), false); assert.equal(await ask(), false)
+    assert.equal(records.filter((r) => r.code === 'cert-key-missing' && r.pid === pid).length, 1, 'recorded once per pid + host')
+    stub.switches.keyLost = false
+    for (const fn of pending.splice(0)) await fn() // the issuer's hourly retry, once: it signs a new intermediate
+    assert.equal(c.issuer.state(), 'ready')
+    assert.equal(await ask(), true)
+    c.close()
+  } finally { stub.switches.keyLost = false }
+})
+
+test('CM23 · on → off → on → off: a live process the door recognised in the second on window holds the door at the second off', async () => {
+  const pending = []
+  const timers = { setTimeout: (fn) => { pending.push(fn); return pending.length }, clearTimeout: () => {} }
+  const d = descs[0], f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`
+  const T1 = INSTALLED + 100, T2 = INSTALLED + 1000
+  const { c, w } = await rig({ desc: d, timers, w: { pid: 4343, facts: { agent: d.name, startedAt: T1 + 1 }, env: {}, procs: [{ pid: 4343, startedAt: T1 + 1 }] } })
+  const live = (on) => { w.manifest = manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(on) } } }) }
+  const connect = () => c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  live(T1); w.now = T1; await c.on({ harnesses: [d.name], groups: { [g]: 18107 } })
+  w.now = T1 + 2; await connect()
+  w.now = T1 + 10; assert.equal((await c.off({ harnesses: [d.name] })).holders, 1)
+  w.now = T1 + 20; await connect() // through the door kept for it, while off: not a sighting of an on window
+  live(T2); w.now = T2; await c.on({ harnesses: [d.name], groups: { [g]: 18107 } })
+  w.now = T2 + 1; await connect()
+  w.now = T2 + 10
+  const reply = await c.off({ harnesses: [d.name] })
+  assert.equal(reply.holders, 1, 'seen during on #2: a holder at off #2')
+  assert.deepEqual(c.doors(), { [g]: 18107 }, 'its door stays')
+  c.close()
+})
 
 // ---- ① / G4: no writes; the recorded ports; a taken port ----------------------------------------------------------------------------------------
 test('4.11 ① · on / off / restore / lookup write nothing: a recording fs over the real state, ingress and manifest files sees zero writes', async () => {

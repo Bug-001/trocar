@@ -27,6 +27,7 @@ const msOf = (t) => (t == null ? NaN : typeof t === 'number' ? t : Date.parse(t)
 const untracked = (reason) => ({ not_captured: 'untracked', reason })
 const split = (g) => { const i = String(g).lastIndexOf(':'); return { harness: g.slice(0, i), routeId: g.slice(i + 1) } }
 const safe = async (f) => { try { return (await f()) ?? null } catch { return null } }
+const ISSUER_CODES = new Set([CODE.certIntermediateUnavailable, CODE.certKeyMissing]) // verdicts on the issuer's state, which changes (P2)
 const isLoop = (a) => a === '127.0.0.1' || a === 'localhost' || a === '::1'
 /** Every env name a descriptor's proxy-mode data reads (trust sources, blockers, directory overrides), its proxy variables and the hook's: what
  *  `proc.envOf` is asked for — never the whole environment (4.9 §5.2). */
@@ -92,22 +93,26 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     return of(p, start)
   }
 
-  /** P11 for one process at one host, judged once per pid + start + host: every form the process may be (its harness's forms on this OS; on its own
-   *  harness's door, those of that route) must decrypt; the first that does not gives the code (D38, recorded once). */
+  /** P11 for one process at one host, judged once per pid + start + host: every form the process may be must decrypt; the first that does not gives
+   *  the code (D38, recorded once). The forms it may be: its harness's forms on this OS (on its own harness's door, those of that route), and of
+   *  those only the ones verified here when any is — D51 names a harness, not a form, and an unmeasured or out-of-scope sibling cannot be told apart
+   *  by name, so it must not veto the verified ones; with none verified the answer is the first one's `not-verified`. A verdict that hangs on the
+   *  issuer's state (it changes: retries, rotation, expiry; P2) is not cached, so the process decrypts once a new intermediate is signed. */
   async function judge(id, d, host) {
     const k = `${id.pid}\0${id.facts.startedAt ?? ''}\0${d.g}\0${host}`
     if (vcache.has(k)) return vcache.get(k)
     const desc = byName.get(id.agent)
     const pf = await procFacts(id.pid, id.facts.startedAt ?? null, desc)
     const facts = { name: id.agent, pid: id.pid, startedAt: id.facts.startedAt ?? null, env: pf.env, cwd: pf.cwd }
-    const forms = formsOn(desc, id.agent === d.harness ? d.routeId : null)
+    const all = formsOn(desc, id.agent === d.harness ? d.routeId : null), ok = all.filter((f) => f.verified && f.verified[ctx.os] === true)
+    const forms = ok.length ? ok : all
     let v = forms.length ? { decrypt: true } : { decrypt: false, code: 'not-verified', detail: `${id.agent} has no form on ${ctx.os}` }
     for (const f of forms) {
       const r = verdictOf({ desc, form: f, facts, record: { carrierInstalledAt: carrierAt(desc, f), rootFp256 }, issuer: iss ? issuer : null, host, hostSet: hostsOf(f) || undefined, ctx })
       if (!r.decrypt) { v = r; break }
     }
-    if (!v.decrypt) fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g })
-    vcache.set(k, v)
+    if (!v.decrypt && !said.has(`${k}\0${v.code}`)) { said.add(`${k}\0${v.code}`); fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g }) }
+    if (!ISSUER_CODES.has(v.code)) vcache.set(k, v)
     return v
   }
 
@@ -118,7 +123,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const id = await ident.identityOf({ peer, door: doorOf(d), target })
     if (!d.auth && !peerAllowed({ ...(id.facts || {}), pid: id.pid }, self, { record }).ok) return null // the PAC door takes no credentials: this user's processes only
     const known = !id.why && byName.has(id.agent)
-    if (known) seen.add({ harness: id.agent, pid: id.pid, start: id.facts.startedAt ?? null })
+    if (known && onSet.has(id.agent)) seen.add({ harness: id.agent, pid: id.pid, start: id.facts.startedAt ?? null })
     const desc = byName.get(d.harness) // the upstream is the door group's (4.8 §5.3, D51⑥)
     const pf = known ? await procFacts(id.pid, id.facts.startedAt ?? null, desc) : null
     const own = known ? formsOn(byName.get(id.agent), id.agent === d.harness ? d.routeId : null) : []
@@ -147,7 +152,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const facts = q != null ? await ident.factsCached(q) : null
     if (!peerAllowed({ ...(facts || {}), pid: q }, self, { record }).ok) return null
     const m = identify(facts) || {}
-    if (m.reason === 'match' && byName.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
+    if (m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
     const sp = systemProxy()
     const fixed = sp && !sp.pac && sp.ok !== false && sp.url ? sp.url : null
     let res = { status: 404, headers: {}, body: '' }
@@ -174,7 +179,15 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   }
   const tokenOf = () => { const c = readIng(); if (!c || c.error || c.missing) throw Object.assign(new Error(`ingress.json is not readable (${(c && c.error) || 'missing'}): asight on writes it before it asks`), { status: 409 }); return c }
 
-  const holdersNow = async () => holdersOf({ manifest: manifest(true), procs: await procTable(), doorSeen: seen.list(), agentList: agentList() })
+  /** The off time the daemon knows (§3 ②): `off` reaches the daemon before the CLI writes the manifest's `off_at` (orchestrate's step 3 before
+   *  undo), so a harness turned off here whose liveness has `on_at` and no `off_at` yet is judged with this time; once the CLI's own lands it rules. */
+  const offAt = new Map()
+  const withOffAt = (m) => {
+    if (!m || !m.liveness || !offAt.size) return m
+    const lv = Object.fromEntries(Object.entries(m.liveness).map(([h, l]) => [h, l && l.on_at != null && l.off_at == null && offAt.has(h) ? { ...l, off_at: offAt.get(h) } : l]))
+    return { ...m, liveness: lv }
+  }
+  const holdersNow = async () => holdersOf({ manifest: withOffAt(manifest(true)), procs: await procTable(), doorSeen: seen.list(), agentList: agentList() })
   const kept = () => [...doors.values()].filter((d) => !onSet.has(d.harness))
   /** Doors of harnesses that are off: closed once no holder of theirs lives (P12); the poll stops when none is left. */
   async function settle(rows) {
@@ -224,7 +237,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     async on({ harnesses: hs = [], groups = {} } = {}) {
       if (!bound) throw new TypeError('on: bindDoors first (the engine\'s door half)')
       const ing = tokenOf()
-      for (const h of hs) if (byName.has(h)) onSet.add(h)
+      for (const h of hs) if (byName.has(h)) { onSet.add(h); offAt.delete(h) }
       const out = {}, skipped = []
       for (const [g, port] of Object.entries(groups)) { const r = await openDoor(g, port, ing.listenerToken); if (r.door) out[g] = r.door.url; else skipped.push({ g, reason: r.reason }) }
       return { doors: out, ...(skipped.length ? { skipped } : {}) }
@@ -232,7 +245,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     /** off (§3 ②): the harnesses leave the on set; a door with a holder stays forward-only, the others close; the poll watches what is kept. */
     async off({ harnesses: hs = null, now = false, exit = false } = {}) {
       const ids = exit || !hs || !hs.length ? [...onSet] : hs
-      for (const h of ids) onSet.delete(h)
+      for (const h of ids) { if (onSet.delete(h)) offAt.set(h, clock()) }
       let rows = null
       try { rows = await holdersNow() } catch { rows = null } // unreadable: unknown, every door stays
       if (rows) await settle(rows)

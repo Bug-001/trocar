@@ -42,12 +42,12 @@ test('a table that cannot be read keeps the last answer (never "nobody holds")',
   poll.stop()
 })
 
-test('doorSeen records pid + start at accept, once, and holdersOf counts it within the on window', () => {
+test('doorSeen records pid + start at accept, once per process with its latest sighting, and holdersOf counts it within the on window', () => {
   let now = ON + 50
   const seen = createDoorSeen({ clock: () => now })
   seen.add({ harness: 'agentx', pid: 20, start: ON - 100 }); now = ON + 60; seen.add({ harness: 'agentx', pid: 20, start: ON - 100 })
   seen.add({ harness: 'agentx', pid: 'x' })
-  assert.deepEqual(seen.list(), [{ harness: 'agentx', pid: 20, start: ON - 100, at: ON + 50 }])
+  assert.deepEqual(seen.list(), [{ harness: 'agentx', pid: 20, start: ON - 100, at: ON + 60 }])
   const rows = holdersOf({ manifest: { liveness }, procs: [proc(20, ON - 100, 'helper')], doorSeen: seen.list() })
   assert.deepEqual(rows.map((r) => [r.pid, r.why]), [[20, 'door-seen']])
 })

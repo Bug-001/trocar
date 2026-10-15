@@ -33,11 +33,12 @@ export function createHolderPoll({ list, every = HOLDER_POLL_MS, timers = global
   }
 }
 
-/** The processes the door identified at accept (pid + start time), with the harness the D51 lookup named and when — holdersOf's `doorSeen`. */
+/** The processes the door identified at accept (pid + start time), with the harness the D51 lookup named and the LATEST time it did — holdersOf's
+ *  `doorSeen`. The latest, not the first: a process seen in on window 1 and again in window 2 must fall inside window 2 when off #2 judges it (P12). */
 export function createDoorSeen({ clock = Date.now } = {}) {
   const seen = new Map()
   return {
-    add({ harness, pid, start = null }) { if (typeof harness === 'string' && Number.isInteger(pid)) { const k = `${harness}\0${pid}\0${start ?? ''}`; if (!seen.has(k)) seen.set(k, { harness, pid, start, at: clock() }) } },
+    add({ harness, pid, start = null }) { if (typeof harness === 'string' && Number.isInteger(pid)) { seen.set(`${harness}\0${pid}\0${start ?? ''}`, { harness, pid, start, at: clock() }) } },
     list: () => [...seen.values()],
   }
 }
