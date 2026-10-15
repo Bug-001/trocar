@@ -9,7 +9,7 @@ import { CODE } from '../codes.mjs'
 const SCHEME_WORD = { http: ['PROXY', 80], https: ['HTTPS', 443], socks: ['SOCKS', 1080], socks4: ['SOCKS', 1080], socks5: ['SOCKS5', 1080], socks5h: ['SOCKS5', 1080] }
 
 /** One PAC proxy word for an address (`host:port` or a URL); credentials never reach the text (a PAC cannot carry them, and the PAC door lends none). */
-export function pacProxy(addr) {
+function pacProxy(addr) {
   if (addr == null || addr === '') return 'DIRECT'
   const s = String(addr)
   const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `http://${s}`)

@@ -3,8 +3,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import vm from 'node:vm'
-import { pacText, pacHandler, pacProxy, peerAllowed } from '../../../../src/collector/core/proxymode/pac.mjs'
+import { pacText, pacHandler, peerAllowed } from '../../../../src/collector/core/proxymode/pac.mjs'
 import { PAC_PATH, LOOPBACK } from '../../../../src/collector/core/proxymode/entries.mjs'
+import { checkRecord } from '../../../../src/health/codes.mjs'
 
 const glob = (s, p) => new RegExp(`^${p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`).test(s)
 const run = (text, host) => { const ctx = vm.createContext({ shExpMatch: glob, isPlainHostName: (h) => !h.includes('.') }); vm.runInContext(text, ctx); return ctx.FindProxyForURL(`https://${host}/`, host) }
@@ -28,9 +29,9 @@ for (const bypass of BYPASS) for (const [legName, ownLeg, legWord] of LEGS) for 
   })
 }
 
-test('pacProxy: a scheme with no PAC word is refused, never guessed', () => {
-  assert.equal(pacProxy('https://p:443'), 'HTTPS p:443')
-  assert.throws(() => pacProxy('ftp://p:21'), /no PAC word/)
+test('an own leg keeps its scheme\'s default port; a scheme with no PAC word is refused, never guessed', () => {
+  assert.equal(run(pacText({ door: null, ownLeg: 'https://p' }), 'x.example'), 'HTTPS p:443')
+  assert.throws(() => pacText({ door: null, ownLeg: 'ftp://p:21' }), /no PAC word/)
 })
 
 test('pacHandler serves GET /asight.pac from state() per request, and leaves every other request to the door', () => {
@@ -63,6 +64,6 @@ for (const [name, peer, self, ok] of PEERS) {
     const r = peerAllowed(peer, self, { record: (e) => recs.push(e) })
     assert.equal(r.ok, ok)
     assert.equal(recs.length, ok ? 0 : 1)
-    if (!ok) { assert.equal(r.code, 'pac-peer-refused'); assert.equal(recs[0].code, 'pac-peer-refused'); assert.equal(recs[0].event, 'failure') }
+    if (!ok) { assert.equal(r.code, 'pac-peer-refused'); assert.equal(recs[0].code, 'pac-peer-refused'); assert.equal(recs[0].event, 'failure'); assert.doesNotThrow(() => checkRecord({ ...recs[0], ts: new Date().toISOString() })) }
   })
 }
