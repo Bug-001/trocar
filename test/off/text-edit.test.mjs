@@ -2,11 +2,11 @@
 // files (RFC 4.6 §身份与信任「标记与安装」「名字族」, §安装清单与卸载「撤一个文件的规则」; T10 / T11 text parts).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyOps, reverseOps } from '../../src/off/json-text.mjs'
+import { applyOps, reverseOps, eolOf } from '../../src/off/json-text.mjs'
 import { dotenvBlock, joinDotenvBlock, insertLine, removeAsightText, asightResidue, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
 import { parseDotenv } from '../../src/collector/core/config-read.mjs'
 import { foldsEnvNames } from '../../src/off/env-names.mjs'
-import { seeds, readDotenv } from '../helpers/file-shapes.mjs'
+import { seeds, readDotenv, shapeCases } from '../helpers/file-shapes.mjs'
 
 const B = '/h/.asight/collector/ca/combined-x.pem'
 
@@ -313,4 +313,29 @@ test('text-edit: a twin line the user set again while asight was on keeps its ol
   const j = joinDotenvBlock(dotenvBlock('Ssl_Cert_File=/c\nHttps_Proxy=http://x:1\n', { SSL_CERT_FILE: '/b' }, { fold: true }).text, { HTTPS_PROXY: GATE }, { fold: true })
   assert.match(j.text, new RegExp(`\\n${OFF_PREFIX}Ssl_Cert_File=/c\\n${OFF_PREFIX}Https_Proxy=http://x:1\\n$`), 'folding: any spelling of a block name is that name')
   assert.deepEqual(j.prior, { HTTPS_PROXY: 'http://x:1' })
+})
+
+test('text-edit 4.11 ruling ④: `at: \'end\'` puts the block after the user\'s last line — every user line of the same names stays byte for byte, none put out of effect, the block wins, prior = what was read before; along the dotenv / rc shape axes and the seeds', () => {
+  const vars = { SSL_CERT_FILE: B, HTTPS_PROXY: 'http://127.0.0.1:47011' }
+  const texts = [...['dotenv', 'rc'].flatMap((format) => shapeCases({ format, budget: 60 }).filter((c) => c.determinable)), ...seeds.filter((s) => s.format === 'dotenv')]
+  assert.ok(texts.some((c) => /^\s*(export\s+)?(SSL_CERT_FILE|HTTPS_PROXY)\s*=/im.test(c.text)), 'the axes hold user lines of the same names')
+  for (const c of [{ text: '', describe: 'empty' }, { text: null, describe: 'missing' }, ...texts]) {
+    for (const fold of [false, true]) {
+      const src = c.text ?? ''
+      const r = dotenvBlock(c.text, vars, { at: 'end', fold, neutralize: ['https_proxy', 'ssl_cert_file'] })
+      const lead = src === '' || src.endsWith('\n') ? '' : eolOf(src)
+      const where = `${c.describe} fold=${fold}`
+      assert.equal(r.text.slice(0, src.length + lead.length), src + lead, `${where}: the user's bytes come first, untouched`)
+      assert.equal(r.text.slice(src.length + lead.length), [BLOCK_BEGIN, `SSL_CERT_FILE=${B}`, `HTTPS_PROXY=${vars.HTTPS_PROXY}`, BLOCK_END].join(eolOf(src)) + eolOf(src), `${where}: the block in the file's line ending is last`)
+      assert.equal(r.ops.length, 1, `${where}: one insertion, no op on a user line`)
+      assert.equal(r.text.split(OFF_PREFIX).length, src.split(OFF_PREFIX).length, `${where}: nothing put out of effect`)
+      const after = readDotenv(r.text, { fold }), before = readDotenv(src, { fold }), id = (k) => (fold ? k.toUpperCase() : k)
+      for (const [k, v] of Object.entries(vars)) assert.equal(after[id(k)], v, `${where}: ${k} — the block's assignment is the last, so it wins`)
+      const want = Object.fromEntries(['SSL_CERT_FILE', 'HTTPS_PROXY', 'https_proxy', 'ssl_cert_file'].filter((k) => before[id(k)] !== undefined).map((k) => [k, before[id(k)]]))
+      assert.deepEqual(r.prior ?? {}, want, `${where}: prior is what the agent read before`)
+      assert.equal(reverseOps(r.text, r.ops), src, `${where}: untouched → byte-identical undo`)
+      if (lead === '') assert.equal(removeAsightText(r.text, r.ops, { fold }).text, src, `${where}: removing asight's lines gives the user's file back`)
+    }
+  }
+  assert.throws(() => dotenvBlock('', vars, { at: 'middle' }), /'top' or 'end'/)
 })

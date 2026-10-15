@@ -1,5 +1,5 @@
 // text-edit.mjs — the trust entries asight writes into text files that can hold comments (RFC 4.6 §身份与信任「标记与
-// 安装」, §安装清单与卸载「撤一个文件的规则」, D37④, 1.6 R2): a sentinel-marked block at the top of a dotenv file
+// 安装」, §安装清单与卸载「撤一个文件的规则」, D37④, 1.6 R2): a sentinel-marked block at the top of a dotenv file, or after its last line (`at: 'end'`)
 // (Codex, Hermes), and one sentinel-marked line in a shell rc (the Kimi shim's PATH line) or a YAML list (the dsh
 // plugin row). Pure functions over the file text; every change is a list of splices {offset, removed, inserted}
 // applied in order (json-text.mjs applyOps / reverseOps), so an untouched file is restored byte for byte and nothing
@@ -63,13 +63,21 @@ function putOutOfEffect(src, names, fold, skip = () => false) {
   }
   return { ops, prior }
 }
-export function dotenvBlock(text, vars, { quote = false, neutralize = [], fold = false } = {}) {
+// `at: 'end'` (4.11 kind `dotenv-block`, ruling ④): the block goes after the user's last line instead — the last assignment wins, so the user's
+// lines of the same names stay in the file byte for byte and none is put out of effect; `prior` is still what the agent read before (the last
+// assignment of each name). A file whose last line has no line ending gets one ahead of the block (the only byte of the user's line that moves).
+export function dotenvBlock(text, vars, { quote = false, neutralize = [], fold = false, at = 'top' } = {}) {
   const shown = shownVars(vars, quote)
   const src = text == null ? '' : text
   const eol = eolOf(src)
-  const { ops, prior } = putOutOfEffect(src, familyOf(vars, neutralize), fold)
+  const end = at === 'end'
+  if (!end && at !== 'top') throw new Error(`a dotenv block goes at 'top' or 'end', not ${at}`)
+  const found = putOutOfEffect(src, familyOf(vars, neutralize), fold)
+  const ops = end ? [] : found.ops
+  const prior = found.prior
   const block = [BLOCK_BEGIN, ...Object.entries(shown).map(([k, v]) => `${k}=${v}`), BLOCK_END].join(eol) + eol
-  ops.push({ offset: markLen(src), removed: '', inserted: block }) // after the mark: the file still starts with it
+  if (end) ops.push({ offset: src.length, removed: '', inserted: (src === '' || src.endsWith('\n') ? '' : eol) + block })
+  else ops.push({ offset: markLen(src), removed: '', inserted: block }) // after the mark: the file still starts with it
   return { text: applyOps(src, ops), ops, prior: Object.keys(prior).length ? prior : null }
 }
 
