@@ -34,7 +34,7 @@ export const TRUST_REASON = Object.freeze({
   'no-marker': 'the trust plugin did not report adding the asight CA for this process, and no known reason explains why (plugin file missing, or the process predates it)',
   'config-unreadable': 'a configuration file of this agent exists but cannot be read',
   'not-verified': 'this process, its form on this OS, or this host is not verified for decryption on this platform; forwarded only',
-  'not-agent-host': 'a host program carrying the agent talked to a host that is not the agent\'s; forwarded only',
+  'outside-host-set': 'a host program carrying the agent talked to a host outside the form\'s host set; forwarded only',
 })
 
 // asight-named failure / note codes (`code` of failure, install-note and uninstall-note events).

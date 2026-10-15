@@ -1,9 +1,12 @@
 // verdict.mjs — P11, the proxy-mode decrypt verdict (spec 4.11 P11, ⑧⑨⑩⑫⑲; plan P11): one connection of one process through a form's door is
 // decrypted only when every rule below holds; otherwise it is forwarded with a closed code and a reason (D38). Data only from the descriptor; no OS
 // literal, no harness id. D51④'s `trust-rejected` (the client refused the leaf) stays the backstop elsewhere.
-//   facts  = { name: the harness the D51 lookup named for this process (null: none), pid, startedAt (ms or ISO), env (the PROCESS's env; null =
+//   facts  = { name: the harness the D51 lookup named for this process with the host-tree rule applied first (host-agent.mjs whoseWithHosts: an
+//            editor carrying the harness's extension is named as that harness; null: none), pid, startedAt (ms or ISO), env (the PROCESS's env; null =
 //            unreadable), cwd (the process's; null = unknown) } — never the daemon's own env or cwd.
 //   record = { carrierInstalledAt (ms or ISO) of the form's carrier, rootFp256 of the asight root }
+//   hostSet = for a hostTree form, the host set the door built once at on / status (route-plan hostSetOf().hosts: the default hosts, the base-URL
+//            hosts in the extension's own settings, the operator's extra_hosts; 4.8 OPEN 22); absent → desc.hosts.
 //   issuer = makeIssuer()'s object, or null; ctx = the sources.mjs ctx (os, home, dirs, readFile, readdir, policy, join).
 import path from 'node:path'
 import { readSrc } from './sources.mjs'
@@ -53,14 +56,14 @@ function trustVerdict(t, ctx, facts, record) {
 }
 
 /** → { decrypt: true } | { decrypt: false, code, detail, at? }. */
-export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, ctx }) {
+export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, hostSet, ctx }) {
   const pm = desc.proxyMode
   const h = String(host || '').toLowerCase()
   if (facts.name !== desc.name) return fwd('not-verified', `the agent list does not name this process as ${desc.name}`)
   const v = form.verified && form.verified[ctx.os]
   if (v !== true) return fwd('not-verified', `${form.id} is not verified on ${ctx.os}${v && v.reason ? `: ${v.reason}` : ''}`)
   if ((form.forwardOnlyHosts || []).some((x) => x.toLowerCase() === h)) return fwd('not-verified', `${host} is forward-only for ${form.id} until it is verified there`)
-  if (form.hostTree && !(desc.hosts || []).some((x) => x.toLowerCase() === h)) return fwd('not-agent-host', `${host} is not a ${desc.name} host; ${form.id} carries the whole host program, the rest is forwarded`)
+  if (form.hostTree && !(hostSet || desc.hosts || []).some((x) => x.toLowerCase() === h)) return fwd('outside-host-set', `${host} is outside ${form.id}'s host set; the host program's other connections are forwarded`)
   const started = ms(facts.startedAt), installed = ms(record.carrierInstalledAt)
   if (Number.isNaN(installed)) return fwd('not-routed', `${form.id} has no carrier installed`)
   if (Number.isNaN(started)) return fwd('start-time-unknown', `the start time of pid ${facts.pid} could not be read`)

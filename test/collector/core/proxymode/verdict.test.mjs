@@ -56,6 +56,7 @@ function ctxOf(w) {
   return {
     ...rctx(w),
     env: { DAEMON_ONLY: 'the daemon\'s own env must never be read' },
+    cwd: '/daemon', // the daemon's own cwd, never the process's: a relative path resolved here would miss
     readFile: (p) => {
       if (w.unreadable.has(p) || w.ca[p] === 'unreadable') fail('EACCES')
       if (w.broken.has(p)) return '{ "broken": '
@@ -92,7 +93,7 @@ function expected(c, d, f, w) {
   if (!c.known) return 'not-verified'
   if (c.verified !== true) return 'not-verified'
   if ((f.forwardOnlyHosts || []).includes(c.host)) return 'not-verified'
-  if (f.hostTree && !d.hosts.includes(c.host)) return 'not-agent-host'
+  if (f.hostTree && !(c.hostSet || d.hosts).includes(c.host)) return 'outside-host-set'
   if (c.start === 'unknown') return 'start-time-unknown'
   if (c.start === 'before') return 'config-after-start'
   const t = f.trust !== 'root' && d.proxyMode.trusts[f.trust]
@@ -139,7 +140,7 @@ function run(d, f, os, over) {
   if (c.cwdNull) w.cwd = null
   const form = { ...f, verified: { ...f.verified, [os]: c.verified } }
   const facts = { name: c.known ? d.name : null, pid: 4242, startedAt: { before: INSTALLED - 1, after: INSTALLED + 1, unknown: null }[c.start], env: w.env, cwd: w.cwd }
-  const got = verdictOf({ desc: d, form, facts, record: RECORD, issuer: c.issuer ? ISSUER : null, host: c.host, ctx: ctxOf(w) })
+  const got = verdictOf({ desc: d, form, facts, record: RECORD, issuer: c.issuer ? ISSUER : null, host: c.host, hostSet: c.hostSet, ctx: ctxOf(w) })
   const want = expected(c, d, form, w)
   const label = `${f.id} · ${os} · ${JSON.stringify(over)}`
   assert.equal(got.decrypt, want === null, `${label}: ${JSON.stringify(got)} (want ${want})`)
@@ -177,6 +178,12 @@ for (const { d, f, os } of CASES) {
     for (const h of f.forwardOnlyHosts || []) assert.match(run(d, f, os, { host: h }).detail, new RegExp(h.replace(/\./g, '\\.')))
     run(d, f, os, { host: 'telemetry.unrelated.example' }) // out of desc.hosts: forwarded only for a hostTree form
     for (const h of d.hosts) run(d, f, os, { host: h })
+    // the door's host set (4.8 OPEN 22): defaults + a relay base-URL host from the extension's settings + the operator's extra_hosts
+    const hostSet = [...d.hosts, 'relay.corp.example', 'extra.corp.example']
+    for (const host of ['relay.corp.example', 'extra.corp.example', 'telemetry.unrelated.example', d.hosts[0]]) {
+      const got = run(d, f, os, { host, hostSet })
+      if (f.hostTree && host !== 'telemetry.unrelated.example') assert.equal(got.decrypt, true, `${host} is in the door's host set`)
+    }
     run(d, f, os, { start: 'before' })
     run(d, f, os, { start: 'unknown' })
     run(d, f, os, { issuer: false }) // CM6, verdict side
