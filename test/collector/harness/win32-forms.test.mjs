@@ -7,6 +7,7 @@ import path from 'node:path'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { entryGate } from '../../../src/collector/arch/win32/forms.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
+import eighth from './fixtures/eighth.mjs'
 
 const raw = String.raw
 const U = raw`C:\Users\u`
@@ -60,7 +61,7 @@ test('loadHarnesses attaches win32/<name>.mjs as desc.win32, skips the win32 dir
   fs.mkdirSync(path.join(dir, 'win32'))
   // a descriptor owes `asight status` / `doctor` its `proxy` export (1.6 §9.7): loadHarnesses checks the shape, so a stub has one
   const proxy = { env: ['HTTPS_PROXY'], files: [], systemProxy: { http: false, ws: false }, schemes: ['http'], unsupported: {}, branches: ['all'], measured: { win32: 'inferred', linux: 'inferred', darwin: 'inferred' }, restart: { hint: 'restart it', processes: 'the stub' } }
-  const desc = (n) => `export default { name: ${JSON.stringify(n)}, proxy: ${JSON.stringify(proxy)} }\n`
+  const desc = (n) => `export default { name: ${JSON.stringify(n)}, proxy: ${JSON.stringify(proxy)}, proxyMode: ${JSON.stringify(eighth.proxyMode)} }\n` // and its proxyMode (spec 4.11 §2.3): CM27's data-only fixture
   for (const n of ['one', 'two']) fs.writeFileSync(path.join(dir, `${n}.mjs`), desc(n))
   fs.writeFileSync(path.join(dir, 'win32', 'one.mjs'), 'export default { forms: [] }\n')
   fs.writeFileSync(path.join(dir, 'win32', '_paths.mjs'), 'export default { notAHarness: true }\n')

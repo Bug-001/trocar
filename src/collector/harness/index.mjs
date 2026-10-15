@@ -157,7 +157,7 @@ export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
     const d = (await import(new URL(n, dirUrl).href)).default
     const bad = proxyProblems(d && d.proxy)
     if (bad.length) throw new Error(`harness ${n}: its proxy export is wrong (RFC 1.6 §9.7): ${bad.join('; ')}`)
-    const pmBad = d.proxyMode === undefined ? [] : proxyModeProblems(d.proxyMode)
+    const pmBad = d.proxyMode === undefined ? ['shape: no proxyMode (every harness says how proxy mode reaches it, spec 4.11 §2.4)'] : proxyModeProblems(d.proxyMode)
     if (pmBad.length) throw new Error(`harness ${d.name || n} (${n}): its proxyMode is wrong (spec 4.11 §2.3): ${pmBad.join('; ')}`)
     let withOs = d
     if (win.has(n)) withOs = { ...withOs, win32: (await import(new URL(`win32/${n}`, dirUrl).href)).default }

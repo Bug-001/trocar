@@ -29,7 +29,7 @@ import { CODE } from '../core/codes.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
 import { normalizeName } from '../../off/identity.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
-import { envValues, envProxies } from './_common.mjs'
+import { envValues, envProxies, perOs } from './_common.mjs'
 import { renderShim } from './_plugins.mjs'
 
 const CA_VAR = 'NODE_EXTRA_CA_CERTS'
@@ -96,6 +96,34 @@ const proxy = {
   restart: { hint: '退出这个 kimi,在新开的终端里以 `kimi` 重新启动(经 asight 的启动脚本,在那里读代理环境变量)', processes: processes.names[0].name },
 }
 
+// Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts — the CLI forms through the install-folder
+// wrapper (D56④: the real binary moves aside, the wrapper reads the switch file and adds NODE_EXTRA_CA_CERTS only when unset); the VS Code extension runs in
+// the editor's extension host: http.proxy in the user settings, kept out of Settings Sync, the root, and only Kimi's hosts decrypted (hostTree).
+const NATIVE = perOs({ darwin: { base: 'home', path: '.kimi-code/bin/kimi' }, win32: { base: 'home', path: '.kimi-code/bin/kimi.exe' } })
+const both = { darwin: true, win32: true }
+const proxyMode = {
+  forms: [
+    { id: 'kimi-code.cli', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: both },
+    { id: 'kimi-code.acp', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: both },
+    { id: 'kimi-code.web', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', present: [NATIVE], verified: { darwin: true, win32: { reason: 'not-measured' } } },
+    { id: 'kimi-code.vscode', os: ['darwin', 'win32'], route: 'vscode', cert: 'root', trust: 'root', present: [{ base: 'home', path: '.vscode/extensions', glob: 'moonshot-ai.kimi-code-*' }], verified: both, hostTree: true },
+    { id: 'kimi-code.desktop', os: ['darwin', 'win32'], route: 'switch', cert: 'wrapper', trust: 'node', // D56⑥: out of scope (no door within D43)
+      present: [perOs({ darwin: { base: 'abs', path: '/Applications/Kimi Code.app' }, win32: { base: 'localAppData', path: 'Programs/Kimi' } })], verified: { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } } },
+  ],
+  routes: {
+    switch: { kind: 'switch-file', absent: 'create', takesEffect: '下次启动 kimi 时生效' },
+    vscode: { kind: 'json-key', file: { base: 'appSupport', path: 'Code/User/settings.json' }, format: 'jsonc', proxyKeys: [['http.proxy']], arrayItems: [{ keys: ['settingsSync.ignoredSettings'], value: 'http.proxy' }], value: 'door-url', absent: 'create', takesEffect: '未实测(按模型推断):重新加载 VS Code 窗口后生效' },
+  },
+  certs: {
+    wrapper: { kind: 'wrapper', command: 'kimi', binDir: { base: 'home', path: '.kimi-code/bin' }, certVar: CA_VAR, layout: 'native-binary' },
+  },
+  trusts: {
+    node: { base: 'node', sources: [{ from: { env: CA_VAR }, semantics: 'add', required: true }] },
+  },
+  userCertFiles: [{ env: CA_VAR }],
+  blockers: [],
+}
+
 export default {
   name: 'kimi-code',
   runtime: 'node',
@@ -104,6 +132,7 @@ export default {
   // lab's run 2026-10-12: every kimi row degraded to its known hosts); nothing here is a layer.
   layers: () => [],
   processes,
+  proxyMode,
   hosts: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'],
   proxy,
   configHosts,

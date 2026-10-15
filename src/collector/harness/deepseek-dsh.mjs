@@ -16,7 +16,7 @@ import path from 'node:path'
 import { hostOf, expandHome, versionAtLeast } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
-import { envValues, envProxies, argAfter, dotenvLayer } from './_common.mjs'
+import { envValues, envProxies, argAfter, dotenvLayer, perOs } from './_common.mjs'
 import { renderPlugin, ANONYMOUS_MODULE_MANIFEST } from './_plugins.mjs'
 
 const ENTRY = /(^|\/)dsh$|\/@deepseek-ai\/dsh\/lib\/bin\.js$/
@@ -77,6 +77,33 @@ const proxy = {
   restart: { hint: '退出这个 dsh(含 web / acp),再重新启动(它只在启动时读一次代理设置)', processes: 'dsh' },
 }
 
+// Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts — a plugin loaded by one
+// cordis.patch.yml row wraps dsh's own dispatcher and reads the switch file per request (live), and adds the CA in process (R3-M6, R3-W3); every form.
+const DSH = (path) => ({ base: 'home', dir: '.dsh', env: 'DSH_HOME', path })
+const DESKTOP = perOs({ darwin: { base: 'abs', path: '/Applications/DeepSeek Harness.app' } })
+const form = (id, present) => ({ id, os: ['darwin', 'win32'], route: 'switch', cert: 'plugin', trust: 'node', present: [...present, DSH()], verified: { darwin: true, win32: true } })
+const proxyMode = {
+  forms: [
+    form('deepseek-dsh.cli', [{ command: 'dsh' }]),
+    form('deepseek-dsh.acp', [{ command: 'dsh' }]),
+    form('deepseek-dsh.web', [{ command: 'dsh' }]),
+    form('deepseek-dsh.npx', []),
+    form('deepseek-dsh.desktop', [DESKTOP]),
+    form('deepseek-dsh.desktop-cli', [DESKTOP]),
+  ],
+  routes: {
+    switch: { kind: 'switch-file', absent: 'create', takesEffect: '下一个请求生效,不用重启' },
+  },
+  certs: {
+    plugin: { kind: 'plugin', template: 'cordis-plugin', dir: DSH(), loader: { file: DSH('cordis.patch.yml'), format: 'yaml', keys: ['*', 'insert'] } },
+  },
+  trusts: {
+    node: { base: 'node', sources: [] }, // the plugin carries the CA in process; carrier time = the plugin's installed_at
+  },
+  userCertFiles: [],
+  blockers: [],
+}
+
 export default {
   name: 'deepseek-dsh',
   runtime: 'node',
@@ -89,6 +116,7 @@ export default {
   },
   hosts: ['api.deepseek.com'],
   proxy,
+  proxyMode,
   layers,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']),

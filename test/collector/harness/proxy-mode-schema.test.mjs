@@ -8,11 +8,12 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
+import { resolveLoc, holds } from '../../../src/collector/core/proxymode/sources.mjs'
 
 const FIXTURES = new URL('./fixtures/', import.meta.url)
 const real = await loadHarnesses()
 const [eighth] = await loadHarnesses(FIXTURES)
-const subjects = [...real.filter((d) => d.proxyMode), eighth]
+const subjects = [...real, eighth]
 
 const firstRoute = (pm) => Object.keys(pm.routes)[0]
 // rule → mutation of a deep copy of proxyMode (one axis each)
@@ -49,6 +50,12 @@ test('CM27 (validation half): the eighth harness is data only and loads through 
   assert.equal((await loadOne({ ...eighth })).length, 1)
 })
 
+test('every real descriptor carries proxyMode and loads; one without it is refused', async () => {
+  assert.deepEqual(real.filter((d) => !d.proxyMode).map((d) => d.name), [])
+  const { proxyMode, ...bare } = eighth
+  await assert.rejects(loadOne(bare), /harness eighth .*shape: no proxyMode/)
+})
+
 for (const d of subjects) {
   test(`${d.name}: the descriptor as it is loads`, async () => { assert.equal((await loadOne({ ...d, proxyMode: structuredClone(d.proxyMode) })).length, 1) })
   for (const [rule, mutate] of Object.entries(MUTATIONS)) {
@@ -63,3 +70,41 @@ for (const d of subjects) {
     })
   }
 }
+
+// The data read back through the one reader (core/proxymode/sources.mjs), as T15–T20 will read it.
+const WRITES = (pm) => [
+  ...Object.values(pm.routes).flatMap((r) => [r.file, r.dir, r.select && r.select.dir]),
+  ...Object.values(pm.certs).flatMap((c) => [c.file, c.binDir, c.dir, c.loader && c.loader.file]),
+].filter(Boolean)
+
+test('every write target of every descriptor resolves under the home, appSupport or localAppData on each OS', () => {
+  const ctx = (os) => ({ os, home: path.join('/', 'h'), cwd: path.join('/', 'c'), env: {}, dirs: { appSupport: path.join('/', 'as'), localAppData: path.join('/', 'la') }, readdir: () => [] })
+  const outside = []
+  for (const d of subjects) for (const os of ['darwin', 'win32']) {
+    const c = ctx(os)
+    for (const loc of WRITES(d.proxyMode)) for (const p of resolveLoc(loc, c)) if (![c.home, c.dirs.appSupport, c.dirs.localAppData].some((r) => p.startsWith(r + path.sep))) outside.push(`${d.name} ${os}: ${p}`)
+  }
+  assert.deepEqual(outside, [])
+})
+
+test("claude-code: CLAUDE_CODE_CERT_STORE is read in Claude Code's own precedence (project-local, project, user settings env, process env; ruling ⑧)", () => {
+  const cc = real.find((d) => d.name === 'claude-code').proxyMode
+  const root = tmpDir('asight-pm-')
+  const home = path.join(root, 'home'), cwd = path.join(root, 'proj')
+  const put = (f, store) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify({ env: { CLAUDE_CODE_CERT_STORE: store } })) }
+  const ctx = (env) => ({ os: 'darwin', home, cwd, env, dirs: {}, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p) })
+  const when = cc.trusts.bundled.when
+  assert.deepEqual(when, cc.certs.bundled.when, 'the cert carrier and the trust share one condition')
+  assert.equal(holds(when, ctx({ CLAUDE_CODE_CERT_STORE: 'bundled' })), true, 'process env alone')
+  put(path.join(home, '.claude', 'settings.json'), 'system')
+  assert.equal(holds(when, ctx({ CLAUDE_CODE_CERT_STORE: 'bundled' })), false, 'user settings env over the process env')
+  put(path.join(cwd, '.claude', 'settings.json'), 'bundled')
+  assert.equal(holds(when, ctx({})), true, 'project settings over user settings')
+  put(path.join(cwd, '.claude', 'settings.local.json'), 'system')
+  assert.equal(holds(when, ctx({})), false, 'project-local settings first')
+  const custom = path.join(root, 'cfg')
+  put(path.join(custom, 'settings.json'), 'bundled')
+  fs.rmSync(path.join(cwd, '.claude'), { recursive: true })
+  assert.equal(holds(when, ctx({ CLAUDE_CONFIG_DIR: custom })), true, 'CLAUDE_CONFIG_DIR moves the user settings')
+  assert.deepEqual(cc.trusts.bundled.sources.map((s) => s.from.env || s.from.file.base), ['cwd', 'cwd', 'home', 'NODE_EXTRA_CA_CERTS'])
+})

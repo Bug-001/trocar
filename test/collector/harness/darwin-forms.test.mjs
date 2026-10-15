@@ -8,6 +8,7 @@ import path from 'node:path'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { entryGate } from '../../../src/collector/arch/darwin/forms.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
+import eighth from './fixtures/eighth.mjs'
 
 const ALL = await loadHarnesses()
 const MAC = Object.fromEntries(ALL.filter((d) => d.darwin).map((d) => [d.name, d.darwin]))
@@ -59,7 +60,7 @@ test('loadHarnesses attaches darwin/<name>.mjs as desc.darwin, skips the darwin 
   fs.mkdirSync(path.join(dir, 'darwin'))
   // a descriptor owes `asight status` / `doctor` its `proxy` export (1.6 §9.7): loadHarnesses checks the shape, so a stub has one
   const proxy = { env: ['HTTPS_PROXY'], files: [], systemProxy: { http: false, ws: false }, schemes: ['http'], unsupported: {}, branches: ['all'], measured: { win32: 'inferred', linux: 'inferred', darwin: 'inferred' }, restart: { hint: 'restart it', processes: 'the stub' } }
-  const desc = (n) => `export default { name: ${JSON.stringify(n)}, proxy: ${JSON.stringify(proxy)} }\n`
+  const desc = (n) => `export default { name: ${JSON.stringify(n)}, proxy: ${JSON.stringify(proxy)}, proxyMode: ${JSON.stringify(eighth.proxyMode)} }\n` // and its proxyMode (spec 4.11 §2.3): CM27's data-only fixture
   for (const n of ['one', 'two']) fs.writeFileSync(path.join(dir, `${n}.mjs`), desc(n))
   fs.writeFileSync(path.join(dir, 'darwin', 'one.mjs'), 'export default { forms: [] }\n')
   fs.writeFileSync(path.join(dir, 'darwin', '_paths.mjs'), 'export default { notAHarness: true }\n')
