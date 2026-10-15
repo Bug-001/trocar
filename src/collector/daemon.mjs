@@ -30,9 +30,8 @@ import { appendEvent, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 import { procIdentity, captureHealth } from '../health/read.mjs'
 import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
-import { createRetention, retentionFile } from '../capture/retention.mjs'
-import { endpointClass } from '../capture/envelope.mjs'
-import { makeClassifier, harnessIdOfAgent } from '../dissect/traffic.mjs'
+import { retentionFile } from '../capture/retention.mjs'
+import { retentionHook, wsTerminalHook } from './engine-data.mjs'
 import { isModelOs, backendsFor, doorPartsFor, sourcesCtx } from './arch/model-backends.mjs'
 import { createModelCollector } from './core/proxymode/collector.mjs'
 import { TEMPLATES } from './harness/templates/index.mjs'
@@ -158,7 +157,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
-  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model })
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows })
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
   const ca = daemonMayStart(manifest) ? readCa({ dir: P.caDir }) : null
@@ -213,16 +212,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       failure.write({ event: 'ca-ok', file: caState.file, reason: 'the collector CA is usable again: leaves are signed with it and agents are judged against it from now on' })
     }, caCheckMs)
     caTimer.unref()
-    // D40 (4.6 §记录「保存级别」): which traffic class a call is and how much of it to keep. The settings file is read by the
-    // engine at the start of every request (re-checked at most once a second, no restart) and a problem with it is a failure event
-    // here (flows/, folded) — the call is kept in full meanwhile. The class patterns are the read-side harness table's data
-    // (src/dissect), handed in as a function: the core names no harness (D20, 0.1 §5).
-    const keep = createRetention({
-      file: retentionPath || retentionFile(path.dirname(P.dir)),
-      classify: makeClassifier({ endpointClass, rows: trafficRows, onInvalid: (b) => failure.event({ where: 'retention', code: 'pattern-invalid', reason: `a traffic pattern of ${b.harness} is skipped (${b.reason}): ${JSON.stringify(b.entry)}` }) }),
-      onFailure: (rec) => failure.event(rec),
-      onOk: (rec) => failure.write(rec),
-    })
+    const retention = retentionHook({ file: retentionPath || retentionFile(path.dirname(P.dir)), rows: trafficRows, failure }) // D40, engine-data.mjs
     const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
@@ -380,7 +370,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       ...(macIng ? { ingressToken: macIng.ingressToken } : {}), // win32: the kernel's CONNECT authenticates to the ingress with of.<form>:this token (4.8 §3); darwin: the doors' own token is each group's listener token, this one the ingress's (D47); listen({ingress}) refuses without it
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: (meta) => sw.isRecording(meta && meta.agent), // sampled per request, per harness (4.6 §开关): a request after off is never recorded
-      retention: (meta, host, method, path) => keep.decide({ harness: harnessIdOfAgent(meta && meta.agent), host, method, endpoint: path }), // sampled with it (D40)
+      retention, // sampled with it (D40)
       onFailure: (rec) => failure.event(rec), // the engine's and the WebSocket recorder's failures: flows/, folded
       onError: (e) => log('engine', e), // stderr only: every one of them is also a record through onFailure
     })
@@ -677,7 +667,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
 // writes them after POST /on opened the doors and read them back; the daemon opens doors, judges at the door, signs leaves through the custody, keeps
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape } — the endpoint, the control server and the engine are always the real ones.
-async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model }) {
+async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows }) {
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
@@ -695,6 +685,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     issuer: { secureContextFor: (h) => collector.issuer.secureContextFor(h), issue: (h) => collector.issuer.issue(h) }, store, upstreamCa,
     ingressToken: crypto.randomBytes(24).toString('hex'), // the model listens on no shared ingress: each door carries its group's token (ingress.json's), this one guards nothing
     isRecording: (meta) => (desired()[meta && meta.agent] || {}).desired === 'on',
+    retention: retentionHook({ file: retentionPath || retentionFile(path.dirname(P.dir)), rows: trafficRows, failure }), describe: wsTerminalHook(list), // D40 and the WebSocket turn edge, as on Linux (engine-data.mjs)
     onFailure: (rec) => failure.event(rec), onError: (e) => log('engine', e),
   })
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
