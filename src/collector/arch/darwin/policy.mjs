@@ -32,6 +32,7 @@ export function policyReader({ user = os.userInfo().username, run = null, env = 
  *  real path), and macOS has no persistent user environment to read (ruling ⑤: no launchctl setenv / login-profile reading). */
 export const platformFacts = Object.freeze({
   envCaseInsensitive: false,
+  exeSuffix: '', // a command's program file name (4.11 P8)
   pathKey: (p) => pathKey(p, { platform: 'darwin' }),
   persistentEnv: () => ({}),
 })
