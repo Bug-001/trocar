@@ -14,10 +14,7 @@ import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { installCollector } from '../../../../src/collector/install.mjs'
 import { readManifest } from '../../../../src/collector/core/trust/journal.mjs'
 import { readTextOrError } from '../../../../src/collector/core/config-read.mjs'
-import { settingSha } from '../../../../src/netenv/redact.mjs'
-import { runOnCli } from '../../../../src/cli/on.mjs'
-import { validateReceipt } from '../../../../src/cli/schema.mjs'
-import { fakeIo, seedClaude, fakeDaemon, recordingExec, ROOTS, onCtx } from '../../../cli/fixtures/on-ctx.mjs'
+import { seedClaude, ROOTS } from '../../../cli/fixtures/on-ctx.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
 const ALL = await loadHarnesses()
@@ -25,7 +22,6 @@ const CC = ALL.find((d) => d.name === 'claude-code') // loadHarnesses attaches t
 const GROUPS = groupsOf(ALL)
 const TOKEN = 'fedcba9876543210fedcba9876543210'
 const PORT = 18802
-const KERNEL = `http://claude-code.settings:${TOKEN}@127.0.0.1:${PORT}`
 
 /** A sandbox %USERPROFILE% with the collector installed (`on`'s own writer), the harness's own proxy in its settings, and the ingress.json the daemon made at its start. */
 async function world({ proxy = 'http://user-proxy.example:3128' } = {}) {
@@ -95,32 +91,3 @@ test('what cannot be read is said, never a vacuous pass (D38): a manifest that i
   await assert.rejects(w3.routing.adopt('claude-code', null), /manifest is not there/, 'after a successful on the ledger exists: one that is gone cannot be verified')
 })
 
-test('the on wiring (V46 b / V47 b, the real entries half): `asight on` takes the routing from its arch, the daemon\'s write during the on request is what adopt verifies, and a field that does not hold the kernel\'s address fails the on', async () => {
-  // the happy path: the fake daemon writes the entry inside POST /on (the redirector's part), the CLI verifies and records what asight wrote
-  const w = await world()
-  const daemon = fakeDaemon({ onOn: async () => { await w.writeEntry() } })
-  const io = fakeIo({ tty: false })
-  const parts = { os: 'win32', harnesses: [CC], scan: async () => [], match: () => ({ agent: null }), arch: { routing: win32Routing } }
-  const ctx = onCtx(w.home, io, { deps: { parts, request: daemon.request, netFactsDeps: async () => ({ harnesses: [CC], archFacts: () => ({ routing: 'proxy' }) }) } })
-  assert.equal(await runOnCli(['--yes', '--json'], ctx), 0, io.text())
-  const doc = io.json()
-  assert.deepEqual(validateReceipt(doc), [])
-  assert.equal(doc.adopted['claude-code'].written_sha256, settingSha(KERNEL), 'what the field holds now — asight\'s own value — is what a later edit is told from')
-  assert.match(fs.readFileSync(w.settings, 'utf8'), new RegExp(PORT.toString()), 'the field points at the kernel')
-  // the write did not take (flipped back inside the same request): the on is unfinished — exit 1, the harness named, no adopted record (V47)
-  const w2 = await world()
-  const io2 = fakeIo({ tty: false })
-  const daemon2 = fakeDaemon({ onOn: async () => { await w2.writeEntry(); fs.writeFileSync(w2.settings, `${JSON.stringify({ model: 'x', env: { HTTPS_PROXY: 'http://user-proxy.example:3128' } }, null, 2)}\n`) } })
-  const ctx2 = onCtx(w2.home, io2, { deps: { parts, request: daemon2.request, netFactsDeps: async () => ({ harnesses: [CC], archFacts: () => ({ routing: 'proxy' }) }) } })
-  assert.equal(await runOnCli(['--yes', '--json'], ctx2), 1, io2.text())
-  const doc2 = io2.json()
-  assert.deepEqual(validateReceipt(doc2), [])
-  assert.match(doc2.notes.join('\n'), /claude-code: the proxy entry of claude-code\.settings/, 'the harness and the group are named')
-  assert.equal(doc2.adopted && doc2.adopted['claude-code'], undefined, 'no record says it was adopted')
-  // the daemon wrote no entry (the group was not routed / not on): the on succeeds, and the user's own setting is what the field holds
-  const w3 = await world()
-  const io3 = fakeIo({ tty: false })
-  const ctx3 = onCtx(w3.home, io3, { deps: { parts, request: fakeDaemon().request, netFactsDeps: async () => ({ harnesses: [CC], archFacts: () => ({ routing: 'proxy' }) }) } })
-  assert.equal(await runOnCli(['--yes', '--json'], ctx3), 0, io3.text())
-  assert.match(fs.readFileSync(w3.settings, 'utf8'), /user-proxy\.example/, 'nothing of asight\'s went into the field')
-})

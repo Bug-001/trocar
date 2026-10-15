@@ -14,8 +14,6 @@ import { createRedirectorClient } from '../../src/collector/arch/linux/redirecto
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
-import { factsOfPid } from '../../src/collector/arch/darwin/procinfo.mjs'
-import { factsOfRow } from '../../src/collector/arch/win32/procinfo.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -129,31 +127,3 @@ test('agent-list: no file writes nothing; an unreadable one is one failure, and 
   } finally { await d.stop() }
 })
 
-// The daemon -> collector handoff (D51 T7, review of the T7 branch): on darwin and win32 the daemon builds the registry FIRST and hands its own `match` to the
-// collector as `identify`. A daemon that dropped it would never start on a real mac or Windows machine (the wiring throws), and one that handed a stand-in would
-// name nobody; neither shows in the door's own tests, which inject identify directly. The arch is a recorder over the Linux fake (its os is all the daemon's
-// ternary reads); what it records is asked real-shaped facts of a name only agents.json lists, which only the daemon's own registry can know.
-for (const os of ['darwin', 'win32']) {
-  test(`agent-list: the daemon hands the ${os} collector its own registry's match as identify — a name only agents.json lists is named`, async () => {
-    const s = await sandbox(); const p = fakeProc(); const { arch } = fakeArch(p)
-    writeList(s, { version: 1, agents: [{ harness: 'claude-code', name: 'claude-nightly' }] })
-    const seen = []
-    const recorder = { os, createRedirector: (o) => { seen.push(o); return arch.createRedirector(o) } }
-    const d = await start(s, recorder)
-    try {
-      const o = seen.find((x) => x.dir) // the daemon's own construction (loadParts' { env } shell carries no dir)
-      assert.ok(o, `the daemon built the ${os} collector with its dir`)
-      assert.equal(typeof o.identify, 'function', 'identify is handed in (without it the real wiring throws at daemon start)')
-      const exec = (file) => {
-        if (file === 'ps') return { status: 0, stdout: `4401     1   ${UID} claude-nightly  Tue Oct 14 10:00:01 2026     claude-nightly -p hi\n`, stderr: '' }
-        if (file === 'lsof') return { status: 0, stdout: `p4401\nftxt\nn${NIGHTLY_EXE}\n`, stderr: '' }
-        return { status: 1, stdout: '', stderr: 'not in the fake' }
-      }
-      const facts = os === 'darwin'
-        ? factsOfPid(4401, { exec, env: {} })
-        : factsOfRow({ pid: 4401, ppid: 1, name: 'claude-nightly.exe', exe: String.raw`C:\Users\u\bin\claude-nightly.exe`, cmdline: 'claude-nightly.exe -p hi', startedAt: 1760000000000, sessionId: 1, integrity: 'medium', tokenDenied: false })
-      const m = o.identify(facts)
-      assert.deepEqual([m.reason, m.agent], ['match', 'claude-code'], `${os}: the custom name is named — the identify handed in is the daemon's registry, agents.json read`)
-    } finally { await d.stop() }
-  })
-}

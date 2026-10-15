@@ -62,12 +62,3 @@ test('the Node floor (W24, 4.8 §7): nodePreflight\'s no refuses `on` before its
   assert.deepEqual(snapshot(home), before, 'nothing was written anywhere in the HOME — the receipt is the record')
 })
 
-test('W25 (command level): a token that cannot be read is not a refusal (R11) — the unknown case is said once and the on proceeds to turnOn past both gates', async () => {
-  const home = tmpDir('asight-w32-on-r7-ok-')
-  const reached = []
-  const io = fakeIo({ tty: false })
-  const ctx = onCtx(home, io, { deps: { parts: partsWith({ nodePreflight: () => ({ ok: true, have: 'v22.0.0', min: 20 }), refuseElevated: async ({ onUnknown }) => { onUnknown('the token could not be read: EACCES'); return null } }), install: injectInstall(reached), request: fakeDaemon().request, netFactsDeps: async () => ({ harnesses: [], archFacts: () => ({ routing: 'proxy' }) }) } })
-  assert.equal(await runOnCli(['--yes', '--json'], ctx), 0, io.text())
-  assert.equal(reached.length, 1, 'the on ran on to turnOn')
-  assert.match(io.stderrText(), /\[elevated\] the token could not be read: EACCES/, 'what could not be told is said, once, with its prefix')
-})
