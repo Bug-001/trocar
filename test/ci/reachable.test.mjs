@@ -31,6 +31,7 @@ export const UNREACHED = Object.freeze({
   'src/query/index.mjs': 'spec 3.5:44 names runNamed as the server\'s only entry, but src/server.mjs does not use it',
   'src/capture/desktop-steer.mjs': 'old CC-Desktop Clash Verge steer; only src/netenv/clash.mjs reached it (for socket discovery), and D49 deleted that. Removal waits on the backlog',
   'src/collector/core/proxymode/chain.mjs': 'T15 lands the P7 upstream chain beside the arch upstreamFor trunks; the doors move onto it, the twins are deleted, and that wiring removes this row',
+  'src/collector/core/proxymode/verdict.mjs': 'T18 lands the P11 decrypt verdict beside the mac/win layers() / tracker paths; the doors ask it next, and that wiring removes this row',
   'src/collector/core/proxymode/entries.mjs': 'T16 lands the P5 route writers beside the arch entries twins; turnOnModel calls them and removes this row, and on / off move onto them',
   'src/collector/core/proxymode/hooks/wrapper.mjs': 'T17 lands the P8 install-folder wrapper (preconditions, place, undo, status) ahead of its caller; T20 install places it and removes this row',
   'src/collector/core/proxymode/hooks/render.mjs': 'T17 lands the hook template renderer; T20 install renders the wrapper and the plugin templates through it and removes this row',
