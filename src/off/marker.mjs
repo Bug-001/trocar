@@ -2,7 +2,7 @@
 // With a manifest, `off` undoes what the manifest lists. Without one it must still work, so it finds asight's changes by asight's own marks, at the
 // places each harness's entry lives (MARKER_PATHS, data), and undoes only those:
 //   block        a sentinel block `# >>> asight collector >>> … # <<< asight collector <<<` in a dotenv file; the user's lines asight put out of effect
-//                with `#asight-collector-off# ` come back
+//                with `#asight-collector-off# ` come back key by key, as the journal's undo does (D48②: a key the user set while on keeps their value)
 //   line         a line with the sentinel comment `# asight collector: …` that points under ~/.asight (the Kimi PATH line, the dsh patch row)
 //   json-value   a JSON string that points under ~/.asight (a CC / Z-Code trust key): the value asight replaced comes back from the NEWEST backup of that
 //                file (R2), one key at a time — never the whole file (1.6 R2); no value in the backup, the key goes
@@ -12,7 +12,8 @@
 // CA), and a harness at a home the default places do not name (CODEX_HOME, XDG_CONFIG_HOME …). Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { SENTINEL, OFF_PREFIX } from './text-edit.mjs'
+import { SENTINEL, restoreOffLines } from './text-edit.mjs'
+import { foldsEnvNames } from './env-names.mjs'
 import { getPath, setKey, removeKey, parseJsonText, unreadableJson, markLen } from './json-text.mjs'
 import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.mjs'
 import { backupsOf } from './backup.mjs'
@@ -45,7 +46,6 @@ const readText = (b) => { const d = decodeText(b); return d.ok ? { text: d.text,
 // whether asight's sentinel is in bytes that prove no form: looked for as each form asight writes would hold it, so a file the user saved in another
 // encoding after `on` is still said (left-unreadable), not passed over as clean
 const markedIn = (b) => CHARSETS.some((cs) => b.includes(encodeText(SENTINEL, cs)))
-const stripOffPrefix = (t) => { const b = markLen(t); return t.slice(0, b) + t.slice(b).split('\n').map((l) => (l.startsWith(OFF_PREFIX) ? l.slice(OFF_PREFIX.length) : l)).join('\n') } // only at a line start, where asight put it
 
 // the lines of `t` with their offsets: [{ at, line, next }] (next = the offset after the line's own newline)
 function linesOf(t) { const out = []; for (let at = markLen(t); at < t.length;) { const e = t.indexOf('\n', at); const end = e < 0 ? t.length : e; out.push({ at, line: t.slice(at, end), next: e < 0 ? t.length : e + 1 }); at = e < 0 ? t.length : e + 1 } return out }
@@ -94,7 +94,8 @@ export function planByMarker({ home, ids = null, fs = nodeFs }) {
       if (read.why) { if (markedIn(b)) add({ unreadable: read.why }); continue }
       const t = read.text
       if (spec.how === 'block') {
-        const commented = linesOf(t).filter((l) => l.line.startsWith(OFF_PREFIX)).length
+        const off = restoreOffLines(t, null, foldsEnvNames(process.platform)) // the user's lines asight put out of effect, read as the undo reads them
+        const commented = off.restored + off.prior_left.length
         const blocks = blocksIn(t, root)
         if (blocks.length || commented) add({ blocks: blocks.length, commented })
       } else if (spec.how === 'line') {
@@ -135,11 +136,12 @@ function undoOne(item, home, fs) {
     let out = t
     const blocks = blocksIn(t, root)
     for (const b of blocks.reverse()) out = out.slice(0, b.from) + out.slice(b.to)
-    const restored = out.split('\n').filter((l) => l.startsWith(OFF_PREFIX)).length
-    out = stripOffPrefix(out)
-    if (out === t) return { result: 'already-clean' }
-    put(out)
-    return done({ blocks: blocks.length, restored })
+    // the user's lines asight put out of effect, key by key as the journal's undo does (D48②): a key the user set while on keeps their value
+    const r = restoreOffLines(out, null, foldsEnvNames(process.platform))
+    out = r.text
+    if (out === t && !r.prior_left.length) return { result: 'already-clean' }
+    if (out !== t) put(out)
+    return done({ blocks: blocks.length, restored: r.restored, ...(r.prior_left.length ? { prior_left: r.prior_left } : {}) })
   }
   if (item.how === 'line') {
     const hits = lineHits(t, root).reverse()

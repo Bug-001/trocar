@@ -119,3 +119,20 @@ test('a block whose close line the user deleted still goes (its variables under 
   assert.equal(ANONYMOUS_MODULE_MANIFEST, '{"type":"module"}\n', 'src/off keeps its own copy of asight\'s plugin manifest text; this is what keeps it equal')
   assert.ok(MARKER_PATHS['deepseek-dsh'].some((p) => p.exact === ANONYMOUS_MODULE_MANIFEST))
 })
+
+test('D48② with no manifest: a key the user set while on keeps the user\'s value — its old line stays out of effect and is reported (prior_left); a key the user did not set comes back, also on line 1 after a mark and when an editor indented the prefix', async () => {
+  const { OFF_PREFIX, BLOCK_BEGIN, BLOCK_END } = await import('../../src/off/text-edit.mjs')
+  const home = tmpDir('asight-marker-d48-')
+  const f = path.join(home, '.codex', '.env')
+  fs.mkdirSync(path.dirname(f), { recursive: true })
+  const ca = path.join(home, '.asight', 'collector', 'ca', 'combined-codex.pem')
+  const block = `${BLOCK_BEGIN}\nSSL_CERT_FILE=${ca}\n${BLOCK_END}\n`
+  // the user set SSL_CERT_FILE again while on (below asight's block); HTTPS_PROXY and NO_PROXY they left alone
+  fs.writeFileSync(f, `﻿${OFF_PREFIX}HTTPS_PROXY=http://corp.example:8080\n${block}SSL_CERT_FILE=/mine/ca.pem\n${OFF_PREFIX}SSL_CERT_FILE=/corp/ca.pem\n  ${OFF_PREFIX}NO_PROXY=localhost\nOPENAI_API_KEY=sk-x\n`)
+  const [r] = undoByMarker(planByMarker({ home, ids: ['codex'] }), { home })
+  assert.equal(r.result, 'undone-by-marker')
+  const out = read(f)
+  assert.equal(out, `﻿HTTPS_PROXY=http://corp.example:8080\nSSL_CERT_FILE=/mine/ca.pem\n${OFF_PREFIX}SSL_CERT_FILE=/corp/ca.pem\n  NO_PROXY=localhost\nOPENAI_API_KEY=sk-x\n`, 'the block goes; the user\'s new value wins, the old line stays out of effect; the others come back')
+  assert.equal(r.restored, 2, 'the lines that came back are counted, line 1 after the mark among them')
+  assert.deepEqual(r.prior_left, [{ key: 'SSL_CERT_FILE', line: 3 }], 'the old line left out of effect is reported by line, as the journal path reports it')
+})

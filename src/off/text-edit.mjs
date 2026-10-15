@@ -165,13 +165,18 @@ const OFF_LINE = new RegExp(`^(\uFEFF?[ \\t]*)${escapeRe(OFF_PREFIX)}`) // where
 // the key a line assigns in effect (not a comment), or null — whatever its value holds (a stray \r an editor left is still the value's, not another line)
 const ASSIGN_KEY = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/
 const keyInEffect = (l) => { const m = ASSIGN_KEY.exec(l.replace(/^\uFEFF/, '')); return m ? m[1] : null }
-function restorePrior(t, keys, fold) { // { text, changed, prior_left }: the prefixed lines of `keys`, key by key
+/** restoreOffLines(text, keys, fold) → { text, changed, restored, prior_left }: the user's lines asight put out of effect (OFF_PREFIX at a line's start,
+ *  after a mark on line 1, or indented by an editor since), key by key (D48②): a key that still has an assignment in effect is the value the user set
+ *  while on — it wins, its prefixed lines stay and are reported (`prior_left: [{ key, line }]`, 1-based); every other key's lines come back (`restored`
+ *  of them). `keys`: the keys this undo owns (`fold`: compared without case); null = every key a prefixed line assigns (the marker undo, with no
+ *  manifest to say whose they are). The one implementation for the journal's undo (removeAsightText) and the marker's (marker.mjs). */
+export function restoreOffLines(t, keys, fold = false) {
   const lines = t.split('\n')
-  const ours = (k) => k != null && keys.some((K) => sameEnvName(K, k, fold))
+  const ours = (k) => k != null && (keys == null || keys.some((K) => sameEnvName(K, k, fold)))
   const id = (k) => (fold ? foldEnvName(k) : k)
   const inEffect = new Set(lines.map(keyInEffect).filter(ours).map(id))
   const prior = []
-  let changed = false
+  let restored = 0
   lines.forEach((l, i) => {
     const m = OFF_LINE.exec(l)
     if (!m) return
@@ -179,9 +184,9 @@ function restorePrior(t, keys, fold) { // { text, changed, prior_left }: the pre
     if (!ours(k)) return
     if (inEffect.has(id(k))) { prior.push({ key: k, line: i + 1 }); return }
     lines[i] = m[1] + l.slice(m[0].length)
-    changed = true
+    restored++
   })
-  return { text: changed ? lines.join('\n') : t, changed, prior_left: prior }
+  return { text: restored ? lines.join('\n') : t, changed: restored > 0, restored, prior_left: prior }
 }
 /** The lines (1-based) asight put out of effect that assign one of `keys` (compared exactly: the keys a `prior_left` names are the lines' own):
  *  [{ key, line }]. undo.mjs numbers a `prior_left` again with it once every entry of the file is undone — an entry undone later may take lines out above. */
@@ -213,7 +218,7 @@ export function removeAsightText(text, ops, { fold = false } = {}) {
       if (out != null) { t = out; found = true }
     }
   }
-  const p = keys.length ? restorePrior(t, keys, fold) : { text: t, changed: false, prior_left: [] }
+  const p = keys.length ? restoreOffLines(t, keys, fold) : { text: t, changed: false, prior_left: [] }
   return { text: p.text, found: found || p.changed || p.prior_left.length > 0, ...(p.prior_left.length ? { prior_left: p.prior_left } : {}) }
 }
 
