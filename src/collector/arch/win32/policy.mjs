@@ -11,7 +11,6 @@ import { POLICY_KEY_PATTERN, POLICY_NAME_PATTERN } from './helper.mjs'
 const HIVES = { HKCU: 'HKCU', HKEY_CURRENT_USER: 'HKCU', HKLM: 'HKLM', HKEY_LOCAL_MACHINE: 'HKLM' }
 /** The persistent environment: the user's, then the machine's (the user's wins for the same name, as Windows builds a new process's environment). */
 export const ENV_KEYS = Object.freeze(['HKCU\\Environment', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'])
-const NOT_FOUND = /unable to find the specified registry key or value/i
 
 /** parseRegQuery(text) → { <value name>: { kind, value } }: the value lines of `reg query` (four spaces, name, four spaces, REG_*, four
  *  spaces, data). A DWORD / QWORD is a number; REG_MULTI_SZ a list (reg.exe prints its separators as `\0`); the rest is the text as printed. */
@@ -35,14 +34,18 @@ const splitKey = (full) => {
 
 /** policyReader({ run, env }) → read({ key, value }) → { set:true, value, where } | { set:false } | { error, where }. `key` is the
  *  descriptor's full key (`HKCU\SOFTWARE\Policies\…`); anything outside Software\Policies, or a value name that is not plain, is refused
- *  without a read. */
+ *  without a read. The whole key is read (no /v) and the name looked up in it, so an absent value is never told by reg.exe's message
+ *  (localized, in the console code page): a key that reads without the name is {set:false}, and so is a reg.exe that ran and failed —
+ *  Users can read every key under Software\Policies, so a failed query there means the key is absent. Only a reg.exe that did not run
+ *  to an exit (not started, timed out) is an error. */
 export function policyReader({ run = null, env = process.env } = {}) {
   return function read({ key, value }) {
     const k = splitKey(key)
     if (!k || !new RegExp(POLICY_KEY_PATTERN, 'i').test(k.key) || typeof value !== 'string' || !new RegExp(POLICY_NAME_PATTERN).test(value)) return { error: `not a declared policy value: ${JSON.stringify({ key, value })}`, where: String(key) }
     const where = `${k.hive}\\${k.key}`
-    const r = execTool('reg.exe', ['query', where, '/v', value], { run, env })
-    if (r.code !== 0) return NOT_FOUND.test(`${r.err} ${r.out}`) ? { set: false } : { error: `reg query ${where} /v ${value} failed (exit ${r.code ?? 'none'}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`, where }
+    const r = execTool('reg.exe', ['query', where], { run, env })
+    if (r.code == null) return { error: `reg query ${where} did not run to an exit${r.err ? `: ${r.err.slice(0, 200)}` : ''}`, where }
+    if (r.code !== 0) return { set: false }
     const hit = Object.entries(parseRegQuery(r.out)).find(([n]) => n.toLowerCase() === value.toLowerCase())
     return hit ? { set: true, value: hit[1].value, where } : { set: false }
   }

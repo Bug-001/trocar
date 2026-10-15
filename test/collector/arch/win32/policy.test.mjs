@@ -32,15 +32,26 @@ test('parseRegQuery: reg.exe\'s value lines, a DWORD as a number, names with spa
   assert.deepEqual(parseRegQuery('HKEY_CURRENT_USER\\Environment\r\n'), {})
 })
 
-test('policy read: argv is reg.exe query <declared key> /v <declared value>; set, absent, a failing read', () => {
+test('policy read: argv is reg.exe query <declared key> (the whole key, the name looked up in it); set, absent, a reg.exe that did not run', () => {
   const { run, calls } = regRunner({ [CLAUDE]: [['egressProxyUrl', 'REG_SZ', 'http://proxy.corp:8080']] })
   const read = policyReader({ run })
   assert.deepEqual(read({ key: CLAUDE, value: 'egressProxyUrl' }), { set: true, value: 'http://proxy.corp:8080', where: CLAUDE })
   assert.deepEqual(read({ key: CLAUDE, value: 'other' }), { set: false })
   assert.deepEqual(read({ key: 'HKCU\\SOFTWARE\\Policies\\Nobody', value: 'x' }), { set: false })
-  assert.deepEqual(calls[0], ['reg.exe', 'query', CLAUDE, '/v', 'egressProxyUrl'])
-  const broken = policyReader({ run: () => ({ status: 5, stdout: '', stderr: 'ERROR: Access is denied.' }) })({ key: CLAUDE, value: 'egressProxyUrl' })
-  assert.match(broken.error, /exit 5: ERROR: Access is denied/)
+  assert.deepEqual(calls[0], ['reg.exe', 'query', CLAUDE])
+  for (const r of [{ status: null, stdout: '', stderr: '', error: new Error('spawn reg.exe ENOENT') }, { status: null, stdout: '', stderr: '', error: new Error('spawnSync reg.exe ETIMEDOUT') }]) {
+    const broken = policyReader({ run: () => r })({ key: CLAUDE, value: 'egressProxyUrl' })
+    assert.match(broken.error, /did not run to an exit: spawn/, 'a reg.exe that never answered is an error, not an absent value')
+  }
+})
+
+test('policy read: an absent key is {set:false} whatever language and code page reg.exe speaks (no message is matched)', () => {
+  const messages = ['ERROR: The system was unable to find the specified registry key or value.', '错误: 系统找不到指定的注册表项或值。',
+    Buffer.from('错误: 系统找不到指定的注册表项或值。', 'utf8').toString('latin1'), Buffer.from([0xb4, 0xed, 0xce, 0xf3, 0x3a]).toString('utf8'),
+    'FEHLER: Der angegebene Registrierungsschlüssel bzw. Wert wurde nicht gefunden.', '']
+  for (const stderr of messages) for (const stdout of ['', stderr]) {
+    assert.deepEqual(policyReader({ run: () => ({ status: 1, stdout, stderr }) })({ key: CLAUDE, value: 'egressProxyUrl' }), { set: false }, JSON.stringify(stderr))
+  }
 })
 
 test('policy read: only a declared policy value is read — outside Software\\Policies, a bad hive or a value name that is not plain is refused without a run', () => {
