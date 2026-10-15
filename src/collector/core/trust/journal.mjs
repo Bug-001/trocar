@@ -19,7 +19,7 @@
 // and the standalone asight-off run without the repo); they are re-exported below so every importer of this module keeps working.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { setKey, getPath, reverseOps } from '../../../off/json-text.mjs'
+import { setKey, getPath, reverseOps, parseJsonText } from '../../../off/json-text.mjs'
 import { dotenvBlock, joinDotenvBlock, insertLine, removeAsightText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
 import { sha256, readOrNull, writeDurable, missingDirs, editTarget } from '../../../off/fsutil.mjs'
 import { saveManifest, undoByHand, PHASES } from '../../../off/manifest.mjs'
@@ -49,6 +49,14 @@ function readUserText(file, bytes) {
   const d = decodeText(bytes)
   if (d.ok) return d
   throw Object.assign(new Error(`${file} was not changed: asight cannot tell how it is encoded — ${WHY_TEXT[d.why]} (${d.why}); asight edits only UTF-8, or UTF-16 with a byte-order mark. Save it as UTF-8, then run "asight on" again`), { code: CODE_OFF.entryRefused, why: d.why, path: file })
+}
+// setKey on a user's file: a file asight cannot edit (not JSON / JSONC, not an object, a parent that is not an object, a key holding an object) is
+// refused with code `entry-refused`, its `why` and the path, before anything is written (4.6「逐 harness 跳过」; the fix is in the message).
+function setUserKey(file, text, keys, value) {
+  try { return setKey(text, keys, value) } catch (e) {
+    if (!e || !e.why) throw e
+    throw Object.assign(new Error(`${file} was not changed: ${e.message.replace(/^setKey: /, '')}`), { code: CODE_OFF.entryRefused, why: e.why, path: file, ...(e.offset != null ? { offset: e.offset } : {}) })
+  }
 }
 const needHome = (what, home) => { if (!home) throw new TypeError(`${what}: home is required (backups go to <home>/.asight/backup, 1.6 R2)`) }
 // D55①: every item says which command wrote it — `off` undoes phase 'on', `uninstall` the rest; a writer that forgets fails here, before anything is written
@@ -92,7 +100,7 @@ export function judgeOwned({ manifest, file, planned = null, fs = nodeFs }) {
 // anything. Returns the file that would change (`real_path` when `file` is a link) and whether it would change.
 export function previewJsonKey({ file, keys, value, fs = nodeFs }) {
   const real = editTarget(file, fs)
-  const res = setKey(readUserText(file, readOrNull(fs, real)).text, keys, value)
+  const res = setUserKey(file, readUserText(file, readOrNull(fs, real)).text, keys, value)
   return { path: file, ...(real !== file ? { real_path: real } : {}), changes: res.prior !== value, prior: res.prior }
 }
 
@@ -107,7 +115,7 @@ const entryOf = (manifest, p) => ((manifest && manifest.entries) || []).find((x)
 function holds(x, text) {
   if (text == null) return false
   if (x.kind === 'text') return removeAsightText(text, x.ops || []).found
-  try { return getPath(JSON.parse(text), x.keys) === x.value } catch { return false }
+  try { return getPath(parseJsonText(text), x.keys) === x.value } catch { return false }
 }
 // the file is what asight's ops made of the file it recorded (an intent whose write finished and whose `post_sha256` did not): undo reads it the same way
 function writtenBy(x, text) {
@@ -175,7 +183,7 @@ export function applyJsonKey({ dir, manifest, harness, phase, file, keys, value,
   const before = readOrNull(fs, real)
   if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry } // the file was written; only the record of it was not
   const read = readUserText(file, before)
-  const res = setKey(read.text, keys, value) // parse-checked before any write
+  const res = setUserKey(file, read.text, keys, value) // parse-checked before any write
   if (res.prior === value) return null
   const resumed = j.action === 'resume' ? j.entry : null
   const fresh = {

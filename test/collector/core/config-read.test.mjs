@@ -116,3 +116,15 @@ test('config-read: the Node release of an executable is read from its embedded d
     assert.deepEqual([versionAtLeast('22.19.0', '22.19.0'), versionAtLeast('22.18.9', '22.19.0'), versionAtLeast('24.0.0', '22.19.0'), versionAtLeast(null, '1.0.0')], [true, false, true, false])
   } finally { fs.rmSync(d, { recursive: true, force: true }) }
 })
+
+test('config-read: parseJsonc reads a user\'s JSON as the writer does (json-text.mjs, 4.6「JSON 按 JSONC 读写」) — the same verdict over the json shapes; no document (empty, blank, a mark, comments only) is no data and no error; an open /* is an error', async () => {
+  const { shapeCases, seeds } = await import('../../helpers/file-shapes.mjs')
+  const { setKey } = await import('../../../src/off/json-text.mjs')
+  const writer = (t) => { try { setKey(t, ['env', 'HTTPS_PROXY'], 'http://127.0.0.1:1'); return 'ok' } catch (e) { return e.why === 'not-json' ? 'not-json' : 'ok' } }
+  const reader = (t) => (parseJsonc(t).errors ? 'not-json' : 'ok')
+  const texts = [...seeds, ...shapeCases({ format: 'json', budget: 60 })].filter((c) => c.determinable && c.format === 'json').map((c) => c.text)
+  const extra = ['', '  \r\n', '﻿', '// only a comment\n', '/* a block */', '{} /* open', '{ "a": 1 } // end', '{ /* open }', '{"a": [1,],}']
+  for (const t of [...texts, ...extra]) assert.equal(reader(t), writer(t), JSON.stringify(t))
+  for (const t of ['', ' \n', '﻿', '// c\n', '/* c */']) assert.deepEqual(parseJsonc(t), { data: null, errors: 0 }, `no document: ${JSON.stringify(t)}`)
+  assert.equal(parseJsonc('{ "a": 1 } /* open').errors, 1, 'an unterminated block comment is not JSONC')
+})

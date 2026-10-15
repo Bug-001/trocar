@@ -342,7 +342,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...withHarness(r.harness) })
       u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by asight's mark; there is no manifest to say what it was before)` })
     } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: 'asight 的标记已不在这个文件里' })
-    else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path} is no longer valid JSON; asight's value may still be in it` }) }
+    else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: asight cannot read it; asight's value may still be in it` }) }
   }
   if (u.orphan_backups.length) u.notes.push(`the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}`)
   return u

@@ -150,7 +150,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     out.results.push(row)
     if (UNDO_LEFT.has(r.result)) { // stays in the manifest, with its backup: the only copy of what the user had
       leftEntries.push(e)
-      out.left.push(leftRow(e, r.result === 'left-unparsable' ? `${e.path} is no longer valid JSON; asight's ${describeEntry(e)} may still be in it` : r.reason, r.result))
+      out.left.push(leftRow(e, r.reason || `${e.path}: asight cannot read it; asight's ${describeEntry(e)} may still be in it`, r.result))
       if (e.backup) row.backup_kept = e.backup
       return
     }

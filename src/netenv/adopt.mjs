@@ -21,7 +21,8 @@ function fromFile(file, f, fs) {
   try { text = fs.readFileSync(file, 'utf8'); mtimeMs = fs.statSync(file).mtimeMs } catch (e) { return e && e.code === 'ENOENT' ? { none: true } : unknown(e && e.code === 'EACCES' ? 'denied' : 'absent', `${file}: ${errCode(e)}`) }
   if (f.format === 'json') {
     const { data, error } = parseJsonc(text)
-    if (error || data == null) return unknown('unparseable', `${file} does not parse as JSON`)
+    if (error) return unknown('unparseable', `${file} does not parse as JSON`)
+    if (data == null) return { none: true } // no document: no proxy in it
     for (const keys of f.keys) { const v = present(dig(data, keys)); if (v) return { value: v, key: keys.join('.'), mtimeMs } }
   } else {
     const vars = parseDotenv(text)

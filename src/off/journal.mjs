@@ -3,7 +3,7 @@
 // The install half (applyJsonKey, applyTextEntry, writeOwnedFile) stays in src/collector/core/trust/journal.mjs; this half is here so
 // `asight off` and the standalone `~/.asight/bin/asight-off` can run it from node:* alone (0.1 §2).
 import nodeFs from 'node:fs'
-import { setKey, removeKey, reverseOps, getPath } from './json-text.mjs'
+import { setKey, removeKey, reverseOps, getPath, parseJsonText, unreadableJson } from './json-text.mjs'
 import { removeAsightText, asightResidue, onlySkeleton } from './text-edit.mjs'
 import { sha256, readOrNull, writeDurable, removeEmptyDirs, sweepTemps } from './fsutil.mjs'
 import { decodeText, encodeText, WHY_TEXT } from './text-codec.mjs'
@@ -88,17 +88,17 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
     return done('reverted-not-identical')
   }
   let doc
-  try { doc = JSON.parse(text) } catch { return done('left-unparsable') }
+  try { doc = parseJsonText(text) } catch (e) { return done('left-unparsable', { reason: unreadableJson(file, text, e, `asight's ${describeEntry(entry)}`) }) }
   if (getPath(doc, entry.keys) !== entry.value) return done('left-user-value')
   let out = entry.prior_value != null ? setKey(text, entry.keys, entry.prior_value).text : removeKey(text, entry.keys).text
   if (entry.prior_value == null) {
     for (let d = entry.keys.length - 1; d > entry.existing_depth; d--) { // parents this install created, now empty
-      const v = getPath(JSON.parse(out), entry.keys.slice(0, d))
+      const v = getPath(parseJsonText(out), entry.keys.slice(0, d))
       if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length) break
       out = removeKey(out, entry.keys.slice(0, d)).text
     }
   }
-  const empty = (() => { const v = JSON.parse(out); return v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0 })()
+  const empty = (() => { const v = parseJsonText(out); return v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0 })()
   if (!entry.existed_before && empty) { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs); return done('reverted-not-identical', { deleted: true }) }
   writeDurable(file, encodeText(out, read.charset), fs.statSync(file).mode & 0o777, fs)
   return done('reverted-not-identical')

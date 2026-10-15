@@ -109,7 +109,7 @@ test('backups (R2): dropped when the file is back at its pre_sha256, kept and li
   assert.deepEqual(r.manifest.kept_backups.map((k) => [k.path, k.backup, typeof k.at, /edited after asight/.test(k.reason)]), [[s.user[1], bk(1), 'string', true]])
   assert.equal(fs.readFileSync(s.user[1], 'utf8'), 'KEY_B=sk-b\nKEY_NEW=1\n', 'asight\'s block is out; the user\'s edit stays')
   assert.deepEqual([fs.existsSync(bk(2)), row(2).backup_kept, r.left.map((l) => [l.path, l.result])], [true, bk(2), [[s.user[2], 'left-unparsable']]], 'not undone: its backup stays, named')
-  assert.match(r.left[0].reason, /no longer valid JSON; asight's env\.NODE_EXTRA_CA_CERTS/)
+  assert.match(r.left[0].reason, /settings\.json: asight cannot read it \(line \d+, column \d+\); asight's env\.NODE_EXTRA_CA_CERTS/)
   assert.deepEqual(r.manifest.entries.map((e) => e.path), [s.user[2]], 'and so does its manifest entry')
   assert.equal(r.manifest.files.some((f) => f.harness === 'jj'), false, 'its extra file was removed all the same: nobody holds it')
   // restoring a missing file keeps its backup too, and a backup left when the file was already back is dropped
@@ -429,7 +429,7 @@ test('an entry that cannot be undone gives its backup and the cp command that pu
   const r = await s.run({ manifest: m })
   const l = r.left.find((x) => x.path === s.user[2])
   assert.deepEqual([l.result, l.backup, l.restore], ['left-unparsable', backup, `cp ${backup} ${s.user[2]}`])
-  assert.match(l.reason, new RegExp(`no longer valid JSON; asight's env\\.NODE_EXTRA_CA_CERTS.*kept at ${backup.replace(/[.\\]/g, '\\$&')}.*by hand: cp .*every change made to it since is lost`))
+  assert.match(l.reason, new RegExp(`asight cannot read it \\(line \\d+, column \\d+\\); asight's env\\.NODE_EXTRA_CA_CERTS.*kept at ${backup.replace(/[.\\]/g, '\\$&')}.*by hand: cp .*every change made to it since is lost`))
   // a path with a space is quoted so the line can be pasted
   const q = restoreByHand({ backup: '/h/.asight/backup/x y', path: "/h/it's here/settings.json" })
   assert.equal(q.command, `cp '/h/.asight/backup/x y' '/h/it'\\''s here/settings.json'`)

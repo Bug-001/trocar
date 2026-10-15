@@ -6,8 +6,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { shapeCases, decodeBytes, encodeText as shapeEncode, eolOf as shapeEol } from '../helpers/file-shapes.mjs'
-import { applyTextEntry, undoEntry, newManifest, readManifest } from '../../src/collector/core/trust/journal.mjs'
+import { shapeCases, decodeBytes, encodeText as shapeEncode, eolOf as shapeEol, readJsonc, userEdits, seeds } from '../helpers/file-shapes.mjs'
+import { applyTextEntry, applyJsonKey, undoEntry, newManifest, readManifest } from '../../src/collector/core/trust/journal.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { planByMarker, undoByMarker } from '../../src/off/marker.mjs'
 import { lineComment } from '../../src/off/text-edit.mjs'
@@ -123,6 +123,90 @@ test('fidelity marker: with no manifest, a marked file whose bytes prove no enco
   assert.ok(fs.readFileSync(b.file).equals(resaved))
   fs.writeFileSync(b.file, Buffer.from([0xd6, 0x41, 0x0a]))
   assert.deepEqual(planByMarker({ home: b.root, ids: ['codex'] }), [], 'no mark in it: nothing to undo')
+})
+// ---- JSON (4.6「标记与安装」: JSON 按 JSONC 读写): Claude Code's two keys in its settings.json, the gate address and the CA ---------------------
+const GATE = 'http://127.0.0.1:9'
+// the comments of a JSONC text in order, outside strings
+const commentsOf = (t) => {
+  const out = []
+  for (let i = 0; i < t.length;) {
+    if (t[i] === '"') { i++; while (i < t.length && t[i] !== '"') i += t[i] === '\\' ? 2 : 1; i++ } else if (t.startsWith('//', i)) { let e = i; while (e < t.length && t[e] !== '\n' && t[e] !== '\r') e++; out.push(t.slice(i, e)); i = e } else if (t.startsWith('/*', i)) { const e = t.indexOf('*/', i + 2) + 2; out.push(t.slice(i, e)); i = e } else i++
+  }
+  return out
+}
+const jsonSandbox = (bytes) => { const root = tmpDir('asight-fid-'), file = path.join(root, '.claude', 'settings.json'); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes, { mode: 0o600 }); return { root, dir: path.join(root, '.asight', 'collector'), file } }
+const JSON_KEYS = (b) => [[['env', 'HTTPS_PROXY'], GATE], [['env', 'NODE_EXTRA_CA_CERTS'], path.join(b.root, '.asight', 'collector', 'ca', 'asight-ca.pem')]]
+const onJson = (b, manifest = newManifest()) => JSON_KEYS(b).map(([keys, value]) => applyJsonKey({ phase: 'on', home: b.root, dir: b.dir, manifest, harness: 'claude-code', file: b.file, keys, value }))
+const offJson = (es) => [...es].reverse().map((e) => (e ? undoEntry(e).result : null))
+const jsonCases = () => shapeCases({ format: 'json', budget: BUDGET }).filter((c) => c.determinable)
+const refusedShape = (c) => c.content === 'env-null' || c.content === 'env-string'
+// what off leaves of a document: asight's keys that still hold asight's value go back to what the file had at `on` (or away), and an env that only
+// asight's keys made goes when it is empty; everything the user did stays
+function afterOff(edited, original, b) {
+  const v = structuredClone(readJsonc(edited) ?? {}), o = readJsonc(original) ?? {}
+  for (const [[, name], ours] of JSON_KEYS(b)) {
+    if (v.env?.[name] !== ours) continue
+    if (o.env && typeof o.env === 'object' && name in o.env) v.env[name] = o.env[name]; else delete v.env[name]
+  }
+  if (!o.env && v.env && !Object.keys(v.env).length) delete v.env
+  return v
+}
+
+test('fidelity json: on keeps the file\'s form and every comment; on twice is on once; off of an untouched file is byte for byte; a null or string env is refused (entry-refused, not-object, its path) before a byte is written', () => {
+  for (const c of jsonCases()) {
+    const b = jsonSandbox(c.bytes)
+    if (refusedShape(c)) {
+      assert.throws(() => onJson(b), (e) => e.code === 'entry-refused' && e.why === 'not-object' && e.path === b.file && /delete that member or make it \{\}/.test(e.message), tag(c))
+      assert.ok(fs.readFileSync(b.file).equals(c.bytes), `not a byte written: ${tag(c)}`)
+      assert.equal(readManifest(b.dir), null, tag(c))
+      continue
+    }
+    const manifest = newManifest()
+    const es = onJson(b, manifest)
+    const after = fs.readFileSync(b.file), d = decodeBytes(after)
+    assert.deepEqual([d.why, d.charset, d.bom], [undefined, c.charset, c.bom], `the form stays: ${tag(c)}`)
+    const was = readJsonc(c.text) ?? {}
+    assert.deepEqual(readJsonc(after), { ...was, env: { ...was.env, ...Object.fromEntries(JSON_KEYS(b).map(([k, v]) => [k[1], v])) } }, `only asight's two keys changed: ${tag(c)}`)
+    assert.deepEqual(commentsOf(d.text), commentsOf(c.text), `every comment kept, none written: ${tag(c)}`)
+    assert.deepEqual(onJson(b, manifest), [null, null], `on; on is on: ${tag(c)}`)
+    assert.ok(fs.readFileSync(b.file).equals(after), tag(c))
+    assert.deepEqual(offJson(es), ['restored', 'restored'], tag(c))
+    assert.ok(fs.readFileSync(b.file).equals(c.bytes), `byte for byte: ${tag(c)}`)
+  }
+})
+
+test('fidelity json: the user edits the file after on (a key, asight\'s own keys, a mark, line endings) → off takes back only what is still asight\'s; the user\'s values, comments and form stay', () => {
+  let n = 0
+  for (const c of jsonCases().filter((x) => !refusedShape(x))) {
+    for (const edit of userEdits('json', { home: c.home })) {
+      const b = jsonSandbox(c.bytes)
+      const es = onJson(b)
+      const edited = edit.apply(fs.readFileSync(b.file), { before: c.bytes })
+      if (!edited) continue
+      n++
+      fs.writeFileSync(b.file, edited)
+      const results = offJson(es)
+      for (const r of results) assert.ok(['restored', 'reverted-not-identical', 'left-user-value', 'already-restored'].includes(r), `${edit.id} → ${r}: ${tag(c)}`)
+      const out = fs.readFileSync(b.file), d = decodeBytes(out), e = decodeBytes(edited)
+      assert.deepEqual([d.why, d.charset, d.bom], [undefined, e.charset, e.bom], `${edit.id}: the form the user left stays: ${tag(c)}`)
+      assert.deepEqual(readJsonc(out) ?? {}, afterOff(edited, c.bytes, b), `${edit.id}: only asight's part goes: ${tag(c)}`)
+      assert.deepEqual(commentsOf(d.text), commentsOf(e.text), `${edit.id}: every comment stays: ${tag(c)}`)
+    }
+  }
+  assert.ok(n > 100, `edits applied: ${n}`)
+})
+
+test('fidelity json X4 (seed): on, then the file gains a UTF-8 mark → off takes back both keys of the file (the gate address and the CA), reverted-not-identical, and the mark stays first', () => {
+  const s = seeds.find((x) => x.id === 'seed-X4')
+  const plain = shapeEncode(s.text, 'utf8', false), MARK = Buffer.from([0xef, 0xbb, 0xbf])
+  const b = jsonSandbox(plain)
+  const es = onJson(b)
+  fs.writeFileSync(b.file, Buffer.concat([MARK, fs.readFileSync(b.file)]))
+  assert.deepEqual(offJson(es), ['reverted-not-identical', 'reverted-not-identical'])
+  const out = fs.readFileSync(b.file)
+  assert.ok(out.subarray(0, 3).equals(MARK), 'the mark stays first')
+  assert.deepEqual(readJsonc(out).env, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', HTTPS_PROXY: s.userValues.HTTPS_PROXY }, 'the user\'s proxy is back, asight\'s CA is gone')
+  assert.ok(out.equals(Buffer.concat([MARK, plain])), 'every other byte is the user\'s')
 })
 
 // The undo now decodes by the entry's `charset` (above): a copy of asight-off written before that would write a UTF-16 file back as UTF-8, so the

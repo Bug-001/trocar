@@ -28,7 +28,7 @@ function envBlock(ctx, file) {
   if (error) return { broken: 'settings-unreadable', error: `${error.code || 'error'}: ${error.message}` }
   if (text == null) return null
   const { data, error: bad } = parseJsonc(text)
-  if (data == null && ctx.unparsable) ctx.unparsable(file) // reported, judged as absent (D38)
+  if (bad && ctx.unparsable) ctx.unparsable(file) // reported, judged as absent (D38); no document is not a parse error
   if (bad) return { broken: 'settings-unparsable', error: bad }
   if (!data || !data.env || typeof data.env !== 'object') return null
   const vars = {}

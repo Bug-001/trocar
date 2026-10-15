@@ -248,14 +248,14 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     const { recentFailures } = await import('../../src/collector/core/events.mjs')
     const f = recentFailures(b.dir)
     assert.deepEqual(f.map((x) => [x.event, x.where]), [['failure', 'uninstall']])
-    assert.match(f[0].reason, /settings\.json is no longer valid JSON; asight's env\.NODE_EXTRA_CA_CERTS = .*asight-ca\.pem may still be in it/)
+    assert.match(f[0].reason, /settings\.json: asight cannot read it \(line 1, column \d+\); asight's env\.NODE_EXTRA_CA_CERTS = .*asight-ca\.pem may still be in it/)
     const { runCollector } = await import('../../src/collector/cli.mjs')
     const out = []; const err = []
     const code = await runCollector(['status', '--failures'], { home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux', statusDeps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test' }] }) }, out: (x) => out.push(x), err: (x) => err.push(x) })
     assert.equal(code, 1, 'a failure in the last 24 h (R4: 1; the old 3 was for "no daemon")')
     assert.match(out.join('\n'), /守护进程 没在跑/)
     assert.match(out.join('\n'), /collector: not installed — an uninstall left 1 item\(s\): .*settings\.json \(left-unparsable\)\ncapture health:/, 'the residue is said first (D-18), never plain "not installed"')
-    assert.match(out.join('\n'), /capture health: – not installed · 1 item\(s\) left behind\nrecent failures \(1 kind\(s\), last 24 h\):\n  \S+ failure \(uninstall\/left-unparsable\): .*no longer valid JSON/, 'read from disk, with no daemon')
+    assert.match(out.join('\n'), /capture health: – not installed · 1 item\(s\) left behind\nrecent failures \(1 kind\(s\), last 24 h\):\n  \S+ failure \(uninstall\/left-unparsable\): .*asight cannot read it/, 'read from disk, with no daemon')
   } finally { b.done() }
 })
 

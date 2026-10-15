@@ -35,8 +35,8 @@ const PROXY_SOURCES = [
 function jsonAt(ctx, file) {
   const text = file ? ctx.readText(file) : null
   if (text == null) return null
-  const { data } = parseJsonc(text)
-  if (data == null && ctx.unparsable) ctx.unparsable(file) // reported, judged as absent (D38)
+  const { data, errors } = parseJsonc(text)
+  if (errors && ctx.unparsable) ctx.unparsable(file) // reported, judged as absent (D38); no document is not a parse error
   return data
 }
 const desktopSettings = (env, home) => path.join(env.get('ZCODE_DESKTOP_HOME_DIR') || home, '.zcode', 'v2', 'setting.json')
