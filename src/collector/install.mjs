@@ -233,7 +233,7 @@ export async function planOn({ home = os.homedir(), env = process.env, ids = nul
 
 // A fresh liveness record with the `match` patterns of the one already recorded kept — its `identity`, or the `signature` an older asight wrote (4.6
 // 判活快照: united with what is recorded) —: each pattern once (by its JSON text), sorted by it.
-function unitedLiveness(old, fresh) {
+export function unitedLiveness(old, fresh) {
   const was = patternsOf(old)
   const prev = was && Array.isArray(was.match) ? was.match : []
   const byText = new Map([...prev, ...fresh.identity.match].map((p) => [JSON.stringify(p), p]))
@@ -648,3 +648,6 @@ export async function turnOn(opts = {}) {
 
 const UNIT_NAME_HINT = 'asight-collector.service'
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }
+
+// `asight install` on macOS and Windows (4.11 §1, plan T20): the model's install lives beside this one; Linux keeps installCollector.
+export { runInstall } from './model-install.mjs'

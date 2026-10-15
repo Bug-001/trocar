@@ -1,0 +1,217 @@
+// model-install.mjs — `asight install` on macOS and Windows (RFC 4.11 §1「install」, P1–P4, P8, P9; 1.6 §1.6; plan T20). Everything here is
+// user-level and phase 'install': the root's key in its custody, the root in the user's root store, the certificate carriers of every PRESENT form,
+// asight-ca.pem, the standalone asight-off, the autostart unit. Never a login-environment variable (CM26), never an admin step (CM25).
+// Idempotent (D54): an item already there and unchanged is not written again, the root store is read back by fingerprint before an add (no
+// prompt), so `install; install` changes no byte and makes no second key. The world is injected (0.1 §3): custody, rootStore, the sources ctx,
+// owns(), the wrapper kit, fs, now. The caller holds op.lock and has refused root and a v2 manifest.
+import nodeFs from 'node:fs'
+import path from 'node:path'
+import tls from 'node:tls'
+import { collectorHome } from '../paths.mjs'
+import { caPaths } from './core/tls/ca-store.mjs'
+import { ROOT, checkProfile, certPem, pemToDer } from './core/tls/cert.mjs'
+import { rootIdOf } from '../off/root-store.mjs'
+import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeOwned, sha256 } from './core/trust/journal.mjs'
+import { installComplete, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
+import { writeStandalone } from '../off/standalone.mjs'
+import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
+import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
+import { lineComment } from '../off/text-edit.mjs'
+import { livenessOf } from './core/registry.mjs'
+import { readAgentList } from '../off/identity.mjs'
+import { unitedLiveness } from './install.mjs'
+import { CODE } from './core/codes.mjs'
+
+const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // manifest.mjs ROOT_STORE_KIND's keys: the store the user root goes into
+const ROOT_SUBJECT = 'asight local root'
+const NOT_USERS = CODE.notUsersFile
+const errText = (e) => String((e && e.message) || e)
+const noProxyNames = (desc) => [...new Set(((desc.proxy && desc.proxy.env) || []).map((n) => (n === n.toUpperCase() ? 'NO_PROXY' : 'no_proxy')))]
+// an OS prompt that was not answered (timeout, no GUI session) is pending; one the user answered no is declined (1.6 §1.6)
+const promptState = (r) => r.state || (/time[d ]?out|no gui|interaction|session|unavailable/i.test(String(r.reason || '')) ? 'pending' : 'declined')
+
+/** Rule U (P4): may asight append its block to `file`? → null (yes) or the reason it is not this user's own file. */
+function usersFileWhy(file, { fs = nodeFs, owns }) {
+  if (typeof file !== 'string' || !path.isAbsolute(file)) return `${file} is not an absolute path`
+  let real
+  try { real = fs.realpathSync(file) } catch { return `${file} does not exist` }
+  const tree = managedTree(real)
+  if (tree) return `${real} is inside ${tree}, which a package manager or the system rewrites`
+  try { if (!fs.statSync(real).isFile()) return `${real} is not a file` } catch (e) { return `${real} cannot be read (${e.code || e.message})` }
+  const o = owns(real)
+  if (o !== true) return o === false ? `${real} belongs to another user` : `who owns ${real} cannot be told`
+  try { fs.accessSync(real, nodeFs.constants.W_OK) } catch { return `${real} is read-only for this user` }
+  return null
+}
+
+/** runInstall({ os, home, env, harnesses, custody, rootStore, ctx, owns, … }) → { manifest, fp256, items, carriers, pending, problems, exit }. See the header. */
+export async function runInstall({ os, home, env = process.env, harnesses, custody, rootStore, ctx, owns, installHelper = null, interactive = false, wrapperKit = null, renderHook = null, facts = {}, unit = null, nodeRoots = tls.rootCertificates, fs = nodeFs, now = () => new Date() }) {
+  const dir = collectorHome(path.join(home, '.asight'))
+  const ca = caPaths(path.join(dir, 'ca'))
+  const m = readManifest(dir, fs) || newManifest(now())
+  const before = JSON.stringify(m)
+  const items = [], carriers = [], pending = [], problems = []
+  const said = (item, state, extra = {}) => items.push({ item, state, ...extra })
+  const save = () => saveManifest(dir, m, fs)
+  if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); save() }
+  const stdl = writeStandalone({ home, version: OFF_VERSION, fs }) // the way back first (R3)
+  said('asight-off', stdl.written ? 'written' : 'intact', { path: stdl.path })
+  if (installHelper) { const h = installHelper(interactive); if (h && h.why && h.why !== 'same') problems.push(h.why) }
+
+  // a · the root's key (P1): created only when the custody has none; the root it returns must have the ROOT profile (T12)
+  let rootDer = null
+  const rec = m.entries.find((e) => e.kind === 'root-key')
+  const has = await custody.exists()
+  if (has === 'unavailable') { pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody is not reachable (macOS: no graphical login session); run asight install again in a terminal of that session' }) }
+  else if (rec && has === true && fs.existsSync(ca.pem)) { rootDer = pemToDer(fs.readFileSync(ca.pem, 'utf8')); said('root-key', 'intact', { fp256: rec.fp256 }) }
+  else {
+    const made = await custody.create({ subject: ROOT_SUBJECT })
+    if (made === 'unavailable') pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody could not create the key now (no graphical login session?); run asight install again there' })
+    else {
+      const bad = checkProfile(made.rootDer, ROOT)
+      if (bad.length) { problems.push(`the root the custody made does not have the root profile (${bad.join('; ')}); nothing uses it`); await custody.remove({ kind: custody.kind, id: made.fp256 }) }
+      else {
+        rootDer = made.rootDer
+        if (rec) m.entries.splice(m.entries.indexOf(rec), 1)
+        const k = { kind: 'root-key', harness: null, phase: 'install', custody: { kind: custody.kind, id: made.id || made.fp256 }, fp256: made.fp256, ...(made.provider ? { provider: made.provider } : {}), installed_at: now().toISOString() }
+        k.undo_by_hand = undoByHand(k)
+        m.entries.push(k); save()
+        said('root-key', 'created', { fp256: made.fp256 })
+      }
+    }
+  }
+  if (!rootDer) return finish()
+  const rootPem = certPem(rootDer)
+  const id = rootIdOf(rootDer)
+  owned(ca.pem, 'ca-cert', null, rootPem, 0o644)
+
+  // b · the root in the user's root store (P3): read back by fingerprint first, so a second install raises no prompt
+  const storeKind = STORE[os]
+  const inStore = await rootStore.has(id)
+  let storeRec = m.entries.find((e) => e.kind === 'system-root' && e.store === storeKind && e.fp256 === id.fp256)
+  if (inStore.error) pending.push({ item: 'root-store', state: 'pending', reason: inStore.error })
+  else if (!inStore.present) {
+    const r = await rootStore.add(rootDer)
+    if (!r.ok) pending.push({ item: 'root-store', state: promptState(r), reason: r.reason })
+  }
+  if (!inStore.error && (inStore.present || pending.every((p) => p.item !== 'root-store')) && !storeRec) {
+    storeRec = { kind: 'system-root', store: storeKind, scope: 'user', harness: null, phase: 'install', path: ca.pem, fp256: id.fp256, thumbprint: id.sha1, cert_file: ca.pem, values: { fp256: id.fp256, thumbprint: id.sha1, ...(os === 'darwin' ? { keychain: path.join(home, 'Library', 'Keychains', 'login.keychain-db') } : {}) }, installed_at: now().toISOString() }
+    storeRec.undo_by_hand = undoByHand(storeRec)
+    m.entries.push(storeRec); save()
+  }
+  said('root-store', pending.some((p) => p.item === 'root-store') ? pending.find((p) => p.item === 'root-store').state : inStore.present ? 'intact' : 'added')
+
+  // c · the carriers of every present form (P4)
+  const installedHarnesses = []
+  for (const desc of harnesses.filter((d) => d.proxyMode)) {
+    const pm = desc.proxyMode
+    const forms = pm.forms.filter((f) => f.os.includes(os) && isPresent(f, ctx))
+    if (!forms.length) continue
+    installedHarnesses.push(desc.name)
+    const done = new Map()
+    for (const f of forms) {
+      const c = f.cert === 'root' ? null : pm.certs[f.cert]
+      const when = c && c.when ? holds(c.when, ctx) : true
+      if (!c || when === false) { carriers.push({ harness: desc.name, form: f.id, carrier: 'root' }); continue }
+      if (when && when.error) { carriers.push({ harness: desc.name, form: f.id, carrier: c.kind, state: 'skipped', code: 'config-unreadable', why: `${when.where}: ${when.error}` }); continue }
+      if (!done.has(f.cert)) done.set(f.cert, await carrier(desc, c))
+      carriers.push({ harness: desc.name, form: f.id, carrier: c.kind, ...done.get(f.cert) })
+    }
+    for (const src of pm.userCertFiles || []) ruleU(desc, src)
+  }
+
+  // d · the autostart unit (inert until on enables it)
+  if (unit) { const text = unit.text({}); owned(unit.path, 'unit', null, text, 0o644) }
+  const agentList = readAgentList({ home, fs }).entries
+  for (const d of harnesses.filter((x) => installedHarnesses.includes(x.name))) m.liveness[d.name] = { ...unitedLiveness(m.liveness[d.name], livenessOf(d, { agentList })), ...pick(m.liveness[d.name], ['on_at', 'off_at']) }
+  return finish()
+
+  function finish() {
+    const names = [...new Set([...((m.install && m.install.harnesses) || []), ...installedHarnesses])].sort()
+    const state = pending.length || problems.length || !rootDer ? 'partial' : 'complete'
+    const next = { state, at: installComplete(m) && state === 'complete' ? m.install.at : now().toISOString(), pending, harnesses: names }
+    if (JSON.stringify(next) !== JSON.stringify(m.install)) m.install = next
+    if (JSON.stringify(m) !== before) save()
+    const skipped = carriers.filter((x) => x.state === 'skipped').length + items.filter((x) => x.state === 'skipped').length
+    return { manifest: m, fp256: rootDer ? rootIdOf(rootDer).fp256 : null, items, carriers, pending, problems, exit: pending.length || problems.length || skipped ? 1 : 0 }
+  }
+
+  function owned(file, role, harness, data, mode) {
+    const j = judgeOwned({ manifest: m, file, planned: sha256(Buffer.from(data)), fs })
+    if (j.action === 'skip-intact') return said(role, 'intact', { path: file, harness })
+    writeOwnedFile({ dir, manifest: m, harness, role, phase: 'install', file, data, mode, now: now(), fs })
+    said(role, 'written', { path: file, harness })
+  }
+
+  function jsonKey(desc, file, keys, value) {
+    const e = applyJsonKey({ dir, manifest: m, harness: desc.name, phase: 'install', file, keys, value, home, now: now(), fs })
+    said('config-key', e ? 'written' : 'intact', { path: file, keys, harness: desc.name })
+  }
+
+  // one carrier kind for one harness → { state, code?, why? }
+  async function carrier(desc, c) {
+    try {
+      if (c.kind === 'config-key') {
+        const at = readSrc({ file: c.file, format: c.format, keys: c.keys }, ctx)
+        if (at.error) return { state: 'skipped', code: 'config-unreadable', why: `${at.where}: ${at.error}` }
+        const inEnv = c.semantics === 'add' && readSrc({ env: c.keys.at(-1) }, ctx).set // CM10: absent in the settings AND the install env
+        const file = resolveLoc(c.file, ctx)[0]
+        if (at.set && !(m.entries.some((e) => e.kind === 'json-key' && e.phase === 'install' && e.path === file && JSON.stringify(e.keys) === JSON.stringify(c.keys)))) return { state: 'rule-u' }
+        if (inEnv) return { state: 'rule-u' }
+        if (c.semantics === 'replace') { // CM9: Node's own roots plus the asight root, no system roots
+          const bundle = path.join(dir, 'ca', `bundle-${desc.name}.pem`)
+          owned(bundle, 'bundle', desc.name, `${[...nodeRoots, rootPem].map((p) => p.trim()).join('\n')}\n`, 0o644)
+          jsonKey(desc, file, c.keys, bundle)
+        } else jsonKey(desc, file, c.keys, ca.pem)
+        return { state: 'placed' }
+      }
+      if (c.kind === 'wrapper') {
+        if (!wrapperKit) return { state: 'skipped', code: NOT_USERS, why: `this build has no wrapper for ${os}` }
+        const wctx = { ...ctx, fs, owns, facts, dir, manifest: m, harness: desc.name, switchFile: path.join(dir, 'switch', desc.name), caFile: ca.pem, proxyEnv: (desc.proxy && desc.proxy.env) || [], proxyNames: (desc.proxy && desc.proxy.env) || [], now }
+        const r = placeWrapper(wctx, c, wrapperKit)
+        return r.ok ? { state: r.result } : { state: 'skipped', code: r.code, why: r.why }
+      }
+      if (c.kind === 'plugin') {
+        const pdir = resolveLoc(c.dir, ctx)[0], loader = resolveLoc(c.loader.file, ctx)[0]
+        if (!pdir || !loader) return { state: 'skipped', code: 'not-routed', why: 'the plugin folder does not resolve here' }
+        if (!renderHook) return { state: 'skipped', code: 'not-routed', why: 'this build was given no hook renderer' }
+        const hook = await renderHook(c.template, { CA_FILE: ca.pem, SWITCH: path.join(dir, 'switch', desc.name), PROXY_ENV: (desc.proxy && desc.proxy.env) || [], NO_PROXY_ENV: noProxyNames(desc) })
+        const file = path.join(pdir, hook.name), text = hook.text
+        owned(file, 'plugin', desc.name, text, 0o644)
+        const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit: { format: 'yaml-list', line: `- ${c.loader.keys.at(-1)}: [{ name: ${JSON.stringify(file)} }] ${lineComment("loads asight's CA trust plugin")}` }, home, now: now(), fs })
+        said('plugin-loader', e ? 'written' : 'intact', { path: loader, harness: desc.name })
+        return { state: 'placed' }
+      }
+      return { state: 'skipped', code: 'not-routed', why: `no carrier kind ${c.kind}` }
+    } catch (e) { problems.push(`${desc.name}: ${errText(e)}`); return { state: 'skipped', code: e.code || 'install-error', why: errText(e) } }
+  }
+
+  // rule U: a setting that already names a certificate file → a marked block at its end, only in the user's own file
+  function ruleU(desc, src) {
+    const r = readSrc(src, ctx)
+    if (r.error || !r.set || typeof r.value !== 'string') return
+    if (m.entries.some((e) => e.kind === 'json-key' && e.phase === 'install' && e.value === r.value)) return // asight's own key, set by this install
+    const file = path.isAbsolute(r.value) ? r.value : path.resolve(home, r.value)
+    const why = usersFileWhy(file, { fs, owns })
+    if (why) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: NOT_USERS, why }); return }
+    try {
+      const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file, edit: { format: 'pem-block', pem: rootPem }, home, now: now(), fs })
+      carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: e ? 'placed' : 'intact' })
+    } catch (e) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: e.code || NOT_USERS, why: errText(e) }) }
+  }
+}
+
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] != null).map((k) => [k, o[k]]))
+
+/** What install would place, read only (the plan 1.6 §1.6 prints before it asks): one row per present form → { harness, form, carrier }. */
+export function planInstall({ os, harnesses, ctx }) {
+  const rows = []
+  for (const desc of harnesses.filter((d) => d.proxyMode)) {
+    for (const f of desc.proxyMode.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
+      const c = f.cert === 'root' ? null : desc.proxyMode.certs[f.cert]
+      const when = c && c.when ? holds(c.when, ctx) : true
+      rows.push({ harness: desc.name, form: f.id, carrier: !c || when === false ? 'root' : c.kind })
+    }
+  }
+  return rows
+}

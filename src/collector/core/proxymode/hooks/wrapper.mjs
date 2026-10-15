@@ -21,6 +21,18 @@ const SMART_APP_CONTROL = 'smart-app-control'
 // Package-manager trees: a program under any of these folders is the package manager's file, rewritten by it at every update (4.11 P8:
 // such a CLI takes `plugin` or is unsupported). Matched as whole path segments, case-folded. The one list of them.
 export const PACKAGE_MANAGER_TREES = Object.freeze(['node_modules', '.npm', '.npm-global', '.pnpm', 'pnpm', '.yarn', '.bun', '.volta', '.nvm', '.fnm', 'nvm', 'Cellar', 'Caskroom', 'homebrew', 'linuxbrew', 'scoop', 'chocolatey', 'WinGet', '.cargo', '.local/pipx', 'pipx'])
+// System trees: the OS's and the system package managers' own folders, matched as a path prefix (case-folded, either slash). A file there is never
+// this user's to edit, whoever its owner is (rule U, P8).
+export const SYSTEM_TREES = Object.freeze(['/etc', '/usr', '/bin', '/sbin', '/System', '/Library', '/private/etc', '/opt/homebrew', '/opt/local', 'C:/Windows', 'C:/Program Files', 'C:/Program Files (x86)', 'C:/ProgramData'])
+
+/** The package-manager or system tree `file` is inside, or null (one judge for the wrapper and rule U). */
+export function managedTree(file) {
+  const norm = String(file).replace(/\\/g, '/').toLowerCase()
+  const sys = SYSTEM_TREES.find((t) => norm === t.toLowerCase() || norm.startsWith(`${t.toLowerCase()}/`))
+  if (sys) return sys
+  const segs = norm.split('/')
+  return PACKAGE_MANAGER_TREES.find((p) => { const ps = p.toLowerCase().split('/'); return segs.some((_, i) => ps.every((s, j) => segs[i + j] === s)) }) || null
+}
 
 // Native executables by their first bytes: Mach-O 64-bit in either byte order, a universal (fat) Mach-O, a PE ('MZ').
 const MAGIC = [[0xfe, 0xed, 0xfa, 0xcf], [0xcf, 0xfa, 0xed, 0xfe], [0xca, 0xfe, 0xba, 0xbe], [0x4d, 0x5a]]
@@ -47,9 +59,8 @@ export function checkWrapperTarget(ctx, cert) {
   if (cert.layout !== 'native-binary') return no(`the descriptor does not declare that ${cert.command}'s updates replace one native program by name (layout ${JSON.stringify(cert.layout ?? null)})`)
   const t = targetOf(ctx, cert)
   if (!t) return no(`the folder of ${cert.command} does not resolve here`)
-  const segs = t.file.split(/[\\/]+/).map((s) => s.toLowerCase())
-  const tree = PACKAGE_MANAGER_TREES.find((p) => { const ps = p.toLowerCase().split('/'); return segs.some((_, i) => ps.every((s, j) => segs[i + j] === s)) })
-  if (tree) return no(`${t.file} is inside a package manager's tree (${tree}), which rewrites it at every update`)
+  const tree = managedTree(t.file)
+  if (tree) return no(`${t.file} is inside a package manager's or the system's tree (${tree}), which rewrites it at every update`)
   let st
   try { st = fs.lstatSync(t.file) } catch { return no(`${t.file} does not exist`) }
   if (st.isSymbolicLink()) return no(`${t.file} is a link to a program managed elsewhere`)
