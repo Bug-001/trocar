@@ -18,8 +18,9 @@
 // The undo half (undoEntry, removeOwnedFile, describeEntry) and the file primitives moved to src/off/ (D39⑤, 0.1 §2: `asight off`
 // and the standalone asight-off run without the repo); they are re-exported below so every importer of this module keeps working.
 import nodeFs from 'node:fs'
+import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
-import { setKey, getPath, reverseOps, parseJsonText } from '../../../off/json-text.mjs'
+import { setKey, addItem, getPath, reverseOps, parseJsonText } from '../../../off/json-text.mjs'
 import { dotenvBlock, joinDotenvBlock, insertLine, pemBlock, removeAsightText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
 import { sha256, readOrNull, writeDurable, missingDirs, editTarget, pathKey } from '../../../off/fsutil.mjs'
 import { saveManifest, undoByHand, PHASES } from '../../../off/manifest.mjs'
@@ -115,12 +116,12 @@ const sameNames = (a, b) => !!a && !!b && JSON.stringify(Object.keys(a).sort()) 
 // the manifest's entry for what is planned: same harness, file (by pathKey: one file under any spelling, X18) and thing (a JSON key path, a block's variables, a line)
 const entryOf = (manifest, p, fs) => ((manifest && manifest.entries) || []).find((x) => x.harness === p.harness && samePath(x.path, p.path, fs)
   && (x.kind ?? (x.format ? 'text' : 'json-key')) === p.kind
-  && (p.kind === 'json-key' ? sameKeys(x.keys, p.keys) : x.format === p.format && (p.vars ? sameNames(x.vars, p.vars) : x.line === p.line)))
+  && (p.kind === 'json-key' || p.kind === 'json-array-item' ? sameKeys(x.keys, p.keys) && (p.kind === 'json-key' || isDeepStrictEqual(x.item, p.item)) : x.format === p.format && (p.vars ? sameNames(x.vars, p.vars) : x.line === p.line)))
 // is asight's text still in the file? a JSON key by its value, a block or line by the text it inserted (the same test undo makes of an edited file)
 function holds(x, text) {
   if (text == null) return false
   if (x.kind === 'text') return removeAsightText(text, x.ops || []).found
-  try { return getPath(parseJsonText(text), x.keys) === x.value } catch { return false }
+  try { const v = getPath(parseJsonText(text), x.keys); return x.kind === 'json-array-item' ? Array.isArray(v) && v.some((e) => isDeepStrictEqual(e, x.item)) : v === x.value } catch { return false }
 }
 // the file is what asight's ops made of the file it recorded (an intent whose write finished and whose `post_sha256` did not): undo reads it the same way
 function writtenBy(x, text) {
@@ -215,6 +216,34 @@ function setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fol
   return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) }) // keyed by the path the user knows (the link, for a symlinked file), holding the target's bytes
 }
 
+// One element asight appends to a JSON array (4.11 P5 `arrayItems`, kind `json-array-item`; undone by src/off/journal.mjs undoEntry: only that element goes,
+// and the array too when asight created it and it is empty again). Judged and committed as a json-key is; an array that already holds the element is
+// left as it is (null: nothing asight added, nothing to undo).
+export function applyJsonArrayItem({ dir, manifest, harness, phase, file, keys, item, home, now = new Date(), fs = nodeFs }) {
+  needHome('applyJsonArrayItem', home)
+  needPhase('applyJsonArrayItem', phase)
+  const j = judgeEntry({ manifest, planned: { harness, kind: 'json-array-item', path: file, keys, item }, fs })
+  if (j.action === 'skip-intact') return null
+  if (j.action === 'skip-user-changed') throw refuseChanged(j)
+  const real = editTarget(file, fs)
+  const before = readOrNull(fs, real)
+  if (j.adopt) { j.entry.post_sha256 = sha256(before); saveManifest(dir, manifest, fs); return j.entry }
+  const read = readUserText(file, before)
+  let res
+  try { res = addItem(read.text, keys, item) } catch (e) {
+    if (!e || !e.why) throw e
+    throw Object.assign(new Error(`${file} was not changed: ${e.message.replace(/^(setKey|addItem): /, '')}`), { code: CODE_OFF.entryRefused, why: e.why, path: file })
+  }
+  if (res == null) return null
+  const fresh = {
+    kind: 'json-array-item', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), keys, item, created_array: res.createdArray,
+    existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : 0o600,
+    pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: null,
+    existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
+  }
+  return commit({ dir, manifest, fresh, resumed: j.action === 'resume' ? j.entry : null, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) })
+}
+
 // A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars, quote?, neutralize?, fold? } (the names put out of effect with the
 // block's own, 4.6「名字族」; recorded on the entry, `fold` as `fold: true`) | { format: 'line', line, after? } |
 // { format: 'yaml-list', line } | a dotenv-block with `joinBlock: true` (4.8 §2.3: the proxy lines of Codex and Hermes
@@ -230,7 +259,7 @@ function editText(file, text, edit, { joined = false } = {}) {
   }
   try {
     if (edit.format === 'dotenv-block') {
-      const how = { quote: edit.quote === true, neutralize: edit.neutralize || [], fold: edit.fold === true }
+      const how = { quote: edit.quote === true, neutralize: edit.neutralize || [], fold: edit.fold === true, at: edit.at || 'top' } // `at: 'end'`: 4.11 P5 dotenv-block, after the user's lines
       if (joined && text != null && text.includes(BLOCK_BEGIN)) return joinDotenvBlock(text, edit.vars, how)
       return dotenvBlock(text, edit.vars, how)
     }

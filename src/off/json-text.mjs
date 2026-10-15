@@ -275,6 +275,41 @@ export function removeItem(text, keys, item) {
   return { text: out, ops: [op] }
 }
 
+// addItem(text|null, keys, item) → { text, ops, createdArray, existingDepth } appending `item` to the array at `keys` (4.11 P5 `arrayItems`: VS Code's
+// settingsSync.ignoredSettings gets "http.proxy"), led by the white space of the element before it; a missing array is created holding only the item, as
+// setKey creates a key (same refusals). null when the array already holds an equal element (nothing to add, nothing to undo). A path that holds
+// something other than an array is refused (`not-array`). The inverse is removeItem.
+export function addItem(text, keys, item) {
+  const before = text ?? ''
+  let node = scanJson(before), d = 0
+  for (; node && node.type === 'object' && d < keys.length; d++) { const m = memberOf(node, keys[d]); if (!m) break; node = m.value }
+  let op, res
+  if (d < keys.length || node == null) {
+    const PH = '\u0000asight-item' // a placeholder no user value is; setKey places the member, the array takes its place
+    const r = setKey(text, keys, PH)
+    op = { ...r.ops[0], inserted: r.ops[0].inserted.replace(JSON.stringify(PH), `[${JSON.stringify(item)}]`) }
+    res = { createdArray: true, existingDepth: r.existingDepth }
+  } else {
+    if (node.type !== 'array') throw refusal('not-array', `addItem: ${keys.join('.')} is not an array (it is ${shown(before, node)})`)
+    if (node.items.some((n) => isDeepStrictEqual(valueOf(n), item))) return null
+    const last = node.elements.at(-1)
+    if (!last) op = { offset: node.start + 1, removed: '', inserted: JSON.stringify(item) }
+    else {
+      const prev = node.elements.at(-2)
+      const lead = before.slice(prev ? prev.comma + 1 : node.start + 1, last.value.start)
+      op = { offset: last.value.end, removed: '', inserted: `,${/^[ \t\r\n]*$/.test(lead) ? lead : ' '}${JSON.stringify(item)}` }
+    }
+    res = { createdArray: false, existingDepth: keys.length }
+  }
+  const out = applyOps(before, [op])
+  const want = parseJsonText(before) ?? {}
+  let cur = want
+  for (const k of keys.slice(0, -1)) { if (cur[k] == null || typeof cur[k] !== 'object') own(cur, k, {}); cur = cur[k] }
+  own(cur, keys.at(-1), [...(Array.isArray(cur[keys.at(-1)]) ? cur[keys.at(-1)] : []), item])
+  if (!isDeepStrictEqual(readBack(out), want)) throw new Error('addItem: the edit changed more than the element')
+  return { text: out, ops: [op], ...res }
+}
+
 // What an edit made, read the same way; a text the edit left unreadable is a failed edit, never the user's file being not JSON.
 const readBack = (text) => { try { return parseJsonText(text) } catch { return Symbol('unreadable') } }
 

@@ -3,7 +3,7 @@
 // by that generator's own JSONC reader, never by src/.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { setKey, removeKey, reverseOps, applyOps, scanJson, parseJsonText, getPath } from '../../src/off/json-text.mjs'
+import { setKey, removeKey, addItem, removeItem, reverseOps, applyOps, scanJson, parseJsonText, getPath } from '../../src/off/json-text.mjs'
 import { shapeCases, readJsonc } from '../helpers/file-shapes.mjs'
 
 const K = ['env', 'CA_FILE']
@@ -160,4 +160,25 @@ test('json-text: no document (empty, blank, a mark, comments) — the new object
 test('json-text: parseJsonText reads as JSON.parse does — duplicate keys (first place, last value), __proto__ as an own key, numbers, escapes; refuses what JSON refuses', () => {
   for (const t of ['{"__proto__": {"x": 1}, "a": 1, "b": [true, null, -0.5e3, "\\u00e9\\n"], "a": 2}', '"s"', '[]', '0']) assert.deepEqual(parseJsonText(t), JSON.parse(t), t)
   for (const t of ['{"a":01}', '{"a":.5}', '{"a":"x\ny"}', "{'a':1}", '{a:1}', '{"a":1}}', 'nul']) assert.throws(() => parseJsonText(t), (e) => e.why === 'not-json' && Number.isInteger(e.offset), t)
+})
+
+test('json-text addItem (4.11 P5 arrayItems): along the JSON axis an element is appended (the array made when missing), only it changes, every comment and the mark stay, reverseOps gives every byte back and removeItem takes it out; an equal element is not added twice; a non-array is refused', () => {
+  const keys = ['settingsSync.ignoredSettings']
+  const withItem = (v, item) => { const o = structuredClone(v ?? {}); o[keys[0]] = [...(o[keys[0]] || []), item]; return o }
+  for (const c of shapeCases({ format: 'json', budget: 150 }).filter((x) => x.determinable)) {
+    const t = (c.bom ? '﻿' : '') + c.text
+    let cur = t
+    for (const item of ['http.proxy', 'editor.fontSize']) {
+      const r = addItem(cur, keys, item)
+      assert.equal(r.createdArray, cur === t, tag(c))
+      assert.equal(reverseOps(r.text, r.ops), cur, `byte for byte back: ${tag(c)}`)
+      assert.deepEqual(meaning(r.text), withItem(meaning(cur), item), `only the element added: ${tag(c)}`)
+      assert.deepEqual(commentsOf(r.text), commentsOf(t), `every comment kept: ${tag(c)}`)
+      assert.equal(r.text.startsWith('﻿'), t.startsWith('﻿'), tag(c))
+      assert.equal(addItem(r.text, keys, item), null, `already there: nothing to add: ${tag(c)}`)
+      cur = r.text
+    }
+    assert.deepEqual(meaning(removeItem(cur, keys, 'editor.fontSize').text), withItem(meaning(t), 'http.proxy'), tag(c))
+  }
+  assert.throws(() => addItem('{"a": "x"}', ['a'], 'y'), (e) => e.why === 'not-array')
 })
