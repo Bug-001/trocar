@@ -33,6 +33,7 @@
 // locale instead, src/off/proc.mjs lsofEnv: under C it prints a non-ASCII path as `\xNN` escapes).
 import { execTool } from '../../../off/exec.mjs'
 import { lsofEnv, psArgv } from '../../../off/proc.mjs'
+import { NATIVE, nativePath } from './native.mjs'
 
 /** How long one targeted ask waits: a single-pid read is a small question on any machine — a `ps`/`lsof` that exceeds it is killed by
  *  execTool's timeout and the answer is null (fail-safe: no facts, no form, the connection is spliced untracked), never a guess. */
@@ -100,4 +101,66 @@ export function factsOfPid(pid, { exec = null, env = process.env, psTimeoutMs = 
   }
   Object.defineProperty(facts, 'envError', { enumerable: false, value: 'env-unreadable' })
   return facts
+}
+
+// ---- the launch environment, cwd and parent of a pid (RFC 4.11 P7's proc readers; the upstream chain asks them) ----------------
+// Cached by pid + start time for the life of the process: a busy agent costs one read, not one per connection. A caller that does
+// not know the start time gets no caching (a pid alone can be reused). The cache is bounded; the oldest entry goes first.
+const CACHE_MAX = 4096
+const procCache = new Map()
+function cached(cache, kind, pid, startedAt, read) {
+  if (startedAt == null) return read()
+  const key = `${kind}:${pid}:${startedAt}`
+  if (cache.has(key)) return cache.get(key)
+  const v = read()
+  if (v != null) { // a failed read is asked again next time: the process may just have been racing its own exec
+    cache.set(key, v)
+    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value)
+  }
+  return v
+}
+
+/** envOf(pid, names, { startedAt, exec, procenvPath, cache }) → { <name>: value } for the `names` set in the process's LAUNCH
+ *  environment (procenv: sysctl KERN_PROCARGS2, M2; same user only), or null when it cannot be read. Names compare exactly (macOS
+ *  environment names are case-sensitive). Later setenv() calls in the process do not show: launch values only. */
+export function envOf(pid, names, { startedAt = null, exec = null, env = process.env, procenvPath = nativePath(NATIVE.procenv), cache = procCache, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
+  const all = cached(cache, 'env', pid, startedAt, () => {
+    const r = execTool(procenvPath, [String(pid)], { run: exec, env, timeoutMs: psTimeoutMs, maxBuffer: 8 << 20 })
+    if (r.code !== 0) return null
+    const m = new Map()
+    for (const entry of String(r.out).split('\0')) {
+      const eq = entry.indexOf('=')
+      if (eq > 0 && !m.has(entry.slice(0, eq))) m.set(entry.slice(0, eq), entry.slice(eq + 1)) // the first wins, as getenv
+    }
+    return m
+  })
+  if (!all) return null
+  return Object.fromEntries([...names].filter((n) => all.has(n)).map((n) => [n, all.get(n)]))
+}
+
+/** cwdOf(pid, { startedAt, exec }) → the process's current directory (`lsof -a -p <pid> -d cwd -Fn`), or null. */
+export function cwdOf(pid, { startedAt = null, exec = null, env = process.env, cache = procCache, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
+  return cached(cache, 'cwd', pid, startedAt, () => {
+    const r = execTool('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { run: exec, env: lsofEnv(env), timeoutMs: psTimeoutMs })
+    if (r.code !== 0) return null
+    const line = String(r.out).split('\n').find((l) => l.startsWith('n/'))
+    return line ? line.slice(1) : null
+  })
+}
+
+/** parentOf(pid, { startedAt, exec }) → { ppid, startedAt } of the PARENT (its start time keys the next step up the chain), or
+ *  null when either is gone. Two `ps` asks per process life: the pid's own row, then its parent's start time. */
+export function parentOf(pid, { startedAt = null, exec = null, env = process.env, cache = procCache, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
+  const row = (p) => {
+    const r = execTool('ps', ['-p', String(p), '-o', 'ppid=,lstart='], { run: exec, env: psEnv(env), timeoutMs: psTimeoutMs })
+    const m = r.code === 0 && /^\s*(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s*$/.exec(String(r.out).split('\n')[0] || '')
+    const at = m ? new Date(m[2].replace(/\s+/g, ' ')).getTime() : NaN
+    return m && Number.isFinite(at) ? { ppid: Number(m[1]), startedAt: at } : null
+  }
+  return cached(cache, 'parent', pid, startedAt, () => {
+    const self = row(pid)
+    if (!self || self.ppid <= 0) return null
+    const up = row(self.ppid)
+    return up ? { ppid: self.ppid, startedAt: up.startedAt } : null
+  })
 }
