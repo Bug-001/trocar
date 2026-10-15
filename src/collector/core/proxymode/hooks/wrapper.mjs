@@ -75,6 +75,9 @@ export function placeWrapper(ctx, cert, { renderWrapper, compile = null, sacOn =
   if (sacOn) return { skipped: true, code: SMART_APP_CONTROL, why: 'Smart App Control is on: it would block an unsigned wrapper, so asight places none' }
   const c = checkWrapperTarget(ctx, cert)
   if (!c.ok) return { skipped: true, ...c }
+  // .asight-real/<name> is overwritten only when this target's own record names it (the installer replaced the wrapper, so the copy there is
+  // stale). Without that record it may hold the user's only real program, under a wrapper whose record is gone: never move anything onto it.
+  if (fs.existsSync(t.real) && !(rec && rec.real === t.real)) return { skipped: true, code: NOT_USERS_FILE, why: `${t.real} already holds a program asight has no record of; asight will not overwrite it` }
   const values = { REAL: t.real, SWITCH: ctx.switchFile, CA_FILE: ctx.caFile, CERT_VAR: cert.certVar, PROXY_ENV: ctx.proxyEnv || [], PROXY_NAMES: ctx.proxyNames || [] }
   const source = renderWrapper(values)
   const data = compile ? compile(source) : source // render before any move: a template error leaves the program where it was

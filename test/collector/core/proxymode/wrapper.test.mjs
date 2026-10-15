@@ -137,6 +137,40 @@ test('CM11 place: the program moves to .asight-real by rename, the wrapper is re
   assert.ok(fs.readFileSync(failing.file).equals(MACHO), 'a render failure moves nothing')
 })
 
+test('CM11 place over an existing .asight-real: with no record of it nothing moves and the real bytes stay; with its record the stale copy is replaced', () => {
+  for (const [kind, content, exeSuffix] of [['Mach-O', MACHO, ''], ['PE', PE, '.exe']]) {
+    for (const recorded of [false, true]) {
+      for (const realPresent of [false, true]) {
+        const label = `${kind} record=${recorded} .asight-real=${realPresent}`
+        const s = setup({ content, exeSuffix })
+        const real = path.join(s.dir, REAL_DIR, `tool${exeSuffix}`)
+        const REAL = Buffer.concat([content, Buffer.from('real-program')])
+        const WRAP = Buffer.concat([content, Buffer.from('earlier-wrapper')]) // an earlier wrapper; on Windows it is itself a PE
+        if (recorded) {
+          fs.writeFileSync(s.file, REAL)
+          placeWrapper(s.ctx, s.cert, { renderWrapper })
+          fs.writeFileSync(s.file, WRAP) // the installer replaced asight's wrapper
+          if (!realPresent) fs.rmSync(path.join(s.dir, REAL_DIR), { recursive: true })
+        } else {
+          fs.writeFileSync(s.file, WRAP)
+          if (realPresent) { fs.mkdirSync(path.dirname(real), { recursive: true }); fs.writeFileSync(real, REAL) }
+        }
+        const r = placeWrapper(s.ctx, s.cert, { renderWrapper })
+        if (!recorded && realPresent) {
+          assert.equal(r.code, 'not-users-file', label)
+          assert.match(r.why, /no record/, label)
+          assert.ok(fs.readFileSync(real).equals(REAL), `${label}: the real bytes are unchanged`)
+          assert.ok(fs.readFileSync(s.file).equals(WRAP), `${label}: nothing moves`)
+        } else {
+          assert.equal(r.result, 'placed', label)
+          assert.ok(fs.readFileSync(real).equals(WRAP), `${label}: the program found at the target is what .asight-real holds`)
+          assert.equal(r.record.real_sha256, sha256(WRAP), label)
+        }
+      }
+    }
+  }
+})
+
 test('CM11 undo and status: restore while the wrapper is still asight\'s; after the installer overwrote it, only .asight-real goes', () => {
   const kept = setup()
   const a = placeWrapper(kept.ctx, kept.cert, { renderWrapper }).record
