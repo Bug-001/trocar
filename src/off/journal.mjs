@@ -10,11 +10,14 @@ import { sha256, readOrNull, writeDurable, removeEmptyDirs, sweepTemps } from '.
 import { decodeText, encodeText, WHY_TEXT } from './text-codec.mjs'
 
 // Remove a file asight owns, then the directories its write created when they are empty. `changed`: the file was
-// not what asight wrote (removed all the same: it is asight's, the manifest lists it; the caller says so).
-export function removeOwnedFile(item, fs = nodeFs) {
+// not what asight wrote (removed all the same: it is asight's, the manifest lists it; the caller says so). `unlessChanged`: a file the agent itself
+// writes the user's settings into (a config-library entry, 4.11 P5 / CM18) goes only while it is byte for byte what asight wrote; otherwise it is the
+// user's now and stays (`kept-changed`) — asight's key in it is undone by its own json-key entry (D48②).
+export function removeOwnedFile(item, fs = nodeFs, { unlessChanged = false } = {}) {
   sweepTemps(item.path, fs)
   const cur = readOrNull(fs, item.path)
   if (cur == null) { removeEmptyDirs(item.created_dirs, fs); return { path: item.path, result: 'already-removed' } }
+  if (unlessChanged && sha256(cur) !== item.sha256) return { path: item.path, result: 'kept-changed' }
   fs.rmSync(item.path, { force: true })
   removeEmptyDirs(item.created_dirs, fs)
   return { path: item.path, result: 'removed', ...(item.sha256 && sha256(cur) !== item.sha256 ? { changed: true } : {}) }

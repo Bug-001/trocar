@@ -10,11 +10,12 @@ import crypto from 'node:crypto'
 import { installCollector } from '../../src/collector/install.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { readManifest, restoreByHand } from '../../src/off/manifest.mjs'
-import { undoHarnesses } from '../../src/off/undo.mjs'
+import { undoHarnesses, undoRootKeys } from '../../src/off/undo.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { certBlocks, composeBundle } from '../../src/off/pem.mjs'
 import { lineComment } from '../../src/off/text-edit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { applyTextEntry } from '../../src/collector/core/trust/journal.mjs'
 
 const ROOT = createCa({ commonName: 'undo root' }), CORP = createCa({ commonName: 'undo corp relay' }), OSROOT = createCa({ commonName: 'undo os root' })
 const roots = { node: [ROOT.certPem], osText: '' }
@@ -133,7 +134,7 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
   const at = new Date(0).toISOString()
   m.entries.push({ phase: 'on', kind: 'json-array-item', harness: 'aa', path: arr, keys: ['list'], item: 'http.proxy', created_array: false, existed_before: true, mode: 0o644, pre_sha256: 'x', post_sha256: 'y', ops: [], backup: null, installed_at: at },
     { phase: 'install', kind: 'root-key', harness: null, path: 'keychain:asight-root', custody: { kind: 'keychain', id: 'asight-root' }, fp256: 'AB:CD', installed_at: at })
-  m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: 'aa', path: sw }, { phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg },
+  m.files.push({ phase: 'on', kind: 'owned-file', role: 'switch', harness: 'aa', path: sw }, { phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg, sha256: sha(cfg) },
     { phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
   const removed = []
   const off = await s.run({ manifest: m, custody: { remove: async (h) => removed.push(h) } })
@@ -143,12 +144,44 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
   assert.ok(off.notes.some((n) => n.startsWith('keychain:asight-root: ') && /asight uninstall removes it/.test(n)), 'off lists the key')
   const kept = readManifest(s.b.dir)
   assert.deepEqual([kept.entries.map((e) => e.kind), kept.files.map((f) => f.role).filter((r) => !r.startsWith('ca-'))], [['root-key'], ['wrapper']])
-  const order = []
-  const un = await s.run({ manifest: kept, dropCa: true, custody: { remove: async (h) => { order.push(['key', fs.existsSync(real)]); removed.push(h) } } })
-  assert.deepEqual([un.left, removed, order], [[], [{ kind: 'keychain', id: 'asight-root' }], [['key', false]]], 'the key goes last, after the wrapper')
+  const un = await s.run({ manifest: kept, dropCa: true })
+  assert.deepEqual([un.left, removed, readManifest(s.b.dir).entries.map((e) => e.kind)], [[], [], ['root-key']], 'undoHarnesses never takes the key: its caller does, last (undoRootKeys)')
   assert.deepEqual([fs.readFileSync(bin, 'utf8'), fs.existsSync(path.dirname(real))], ['REAL PROGRAM', false], 'the real program is back under its name')
-  assert.deepEqual(readManifest(s.b.dir).entries, [])
+  const k = await undoRootKeys({ dir: s.b.dir, manifest: readManifest(s.b.dir), custody: { remove: async (h) => removed.push(h) } })
+  assert.deepEqual([k, removed, readManifest(s.b.dir).entries], [{ removed: ['keychain:asight-root'], left: [] }, [{ kind: 'keychain', id: 'asight-root' }], []])
 })
+
+// rule U's certificate block (phase install) in the user's own file: `off` lists it and leaves the file byte for byte; `uninstall` takes the block out
+test('P13 pem-block: off leaves the user\'s certificate file byte-identical and lists the block; uninstall takes only the block out', async () => {
+  const s = await setup((b) => [repH(b, 'aa')])
+  const m = readManifest(s.b.dir)
+  const file = write(s.b, 'certs/mine.pem', OSROOT.certPem), before = fs.readFileSync(file)
+  applyTextEntry({ dir: s.b.dir, manifest: m, harness: 'aa', phase: 'install', file, edit: { format: 'pem-block', pem: ROOT.certPem }, home: s.b.home })
+  const written = fs.readFileSync(file)
+  assert.notDeepEqual(written, before)
+  const off = await s.run({ manifest: m })
+  assert.deepEqual([fs.readFileSync(file), off.left], [written, []], 'off: byte for byte what install left')
+  assert.ok(off.notes.some((n) => n.startsWith(`${file}: `) && /asight uninstall removes it/.test(n)), 'off lists the block')
+  assert.ok(readManifest(s.b.dir).entries.some((e) => e.format === 'pem-block'), 'the entry stays for uninstall')
+  const un = await s.run({ manifest: readManifest(s.b.dir), dropCa: true })
+  assert.deepEqual([fs.readFileSync(file), un.left, readManifest(s.b.dir).entries.some((e) => e.format === 'pem-block')], [before, [], false])
+})
+
+// a config-library entry asight created (4.11 P5 / CM18): the agent writes the user's settings into it while it is the applied one, so off removes it only
+// while it is what asight wrote; edited, it is the user's and stays (D48②), said
+for (const [what, edit, gone] of [['untouched', null, true], ['edited during on', '{"egressProxyPacUrl":"x","theme":"dark"}\n', false]]) {
+  test(`P13 config-entry ${what}: off ${gone ? 'removes it' : 'keeps it and says so'}`, async () => {
+    const s = await setup((b) => [repH(b, 'aa')])
+    const m = readManifest(s.b.dir)
+    const cfg = write(s.b, 'lib/asight.json', '{"egressProxyPacUrl":"x"}\n')
+    m.files.push({ phase: 'on', kind: 'owned-file', role: 'config-entry', harness: 'aa', path: cfg, sha256: sha(cfg) })
+    if (edit) fs.writeFileSync(cfg, edit)
+    const off = await s.run({ manifest: m })
+    assert.deepEqual([fs.existsSync(cfg), off.left], [!gone, []])
+    if (!gone) assert.deepEqual([fs.readFileSync(cfg, 'utf8'), off.notes.some((n) => n.startsWith(`${cfg}, the config-entry asight created, was changed`))], [edit, true])
+    assert.ok(!readManifest(s.b.dir).files.some((f) => f.role === 'config-entry'), 'either way it leaves the manifest')
+  })
+}
 
 test('P13 uninstall: a wrapper the agent updated over is left in place and only the moved copy goes; a key with no custody backend is left, with how to remove it by hand', async () => {
   const s = await setup((b) => [repH(b, 'aa')])
@@ -158,9 +191,10 @@ test('P13 uninstall: a wrapper the agent updated over is left in place and only 
   m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'file:/k', custody: { kind: 'file', id: '/k' }, fp256: 'AB' })
   fs.writeFileSync(bin, 'NEW PROGRAM') // the agent's update replaced it by name
   const r = await s.run({ manifest: m, dropCa: true })
-  assert.deepEqual([fs.readFileSync(bin, 'utf8'), fs.existsSync(real), r.removed.includes(real)], ['NEW PROGRAM', false, true])
-  assert.deepEqual(r.left.map((l) => [l.path, l.result]), [['file:/k', 'error']])
-  assert.match(r.left[0].reason, /no custody backend.*by hand: rm \/k/)
+  assert.deepEqual([fs.readFileSync(bin, 'utf8'), fs.existsSync(real), r.removed.includes(real), r.left], ['NEW PROGRAM', false, true, []])
+  const k = await undoRootKeys({ dir: s.b.dir, manifest: readManifest(s.b.dir) })
+  assert.deepEqual(k.left.map((l) => [l.path, l.result]), [['file:/k', 'error']])
+  assert.match(k.left[0].reason, /no custody backend.*by hand: rm \/k/)
 })
 
 test('P13 liveness.<h> may carry on_at / off_at or not: the judgement is the same and the fields are kept', async () => {

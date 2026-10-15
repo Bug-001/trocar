@@ -846,3 +846,20 @@ for (const where of ['entries', 'files']) {
     assert.ok(s.sys.daemon.isRecording('claude-code'), 'the daemon still records')
   })
 }
+
+// 4.11 uninstall「撤根证书……最后删根的密钥」: the root's key goes after the trust store's root (the opt-in undo), never before it
+test('P13 uninstall: the root key is removed after the trust store\'s root; off removes neither the key nor calls custody', async () => {
+  for (const dropCa of [false, true]) {
+    const home = tmpDir('asight-off-key-'), dir = path.join(home, '.asight', 'collector'), order = []
+    const m = { version: 3, created_at: new Date(0).toISOString(), liveness: {}, kept_backups: [], files: [], entries: [
+      { kind: 'root-key', phase: 'install', harness: null, path: 'keychain:asight-root', custody: { kind: 'keychain', id: 'asight-root' }, fp256: 'AB' },
+      { kind: 'system-root', phase: 'install', harness: null, scope: 'user', path: 'login:root', store: 'login', fp256: 'AB' }] }
+    fs.mkdirSync(dir, { recursive: true }); saveManifest(dir, m)
+    const w = offWorld({ home, env: { HOME: home }, deps: { platform: 'darwin', socketPath: null, procs: async () => [],
+      undoOptIns: async () => { order.push('root'); return { results: [{ result: 'undone', path: 'login:root', kind: 'system-root', scope: 'user' }], unknown: [] } },
+      custody: { remove: async () => order.push('key') } } })
+    const u = await undoSide(w, { manifest: readManifest(dir), dropCa, yes: true })
+    assert.deepEqual([order, u.left], [dropCa ? ['root', 'key'] : ['root'], []], `dropCa ${dropCa}`)
+    assert.equal(readManifest(dir).entries.some((e) => e.kind === 'root-key'), !dropCa)
+  }
+})

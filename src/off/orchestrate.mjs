@@ -23,7 +23,7 @@ import { collectorDir, stateFile, opLockFile } from './paths.mjs'
 import { readStateFile, setDesired, writeStateAtomic, emptyState } from './state.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
 import { readManifest, refuseOldManifest, unknownItems, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
-import { undoHarnesses } from './undo.mjs'
+import { undoHarnesses, undoRootKeys } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
 import { controlRequest, controlSocketPath, controlEndpointFor } from './control-client.mjs'
@@ -245,7 +245,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     let out, stopped = null
     try {
       const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? () => rebuildRoots(w) : null)
-      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, custody: w.deps.custody || null, fs: w.fs, exec: w.exec, env: w.env })
+      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, fs: w.fs, exec: w.exec, env: w.env })
     } catch (e) {
       if (!e || !e.partial) { // it stopped before one entry was touched
         u.stopped = true; u.problems.push(`undoing the entries stopped: ${errMessage(e)}`); u.failures.push({ code: 'entry-not-undone', reason: errMessage(e) })
@@ -312,6 +312,11 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
         u.events.push({ kind: r.kind, path: r.path, scope: r.scope, ...(r.form != null && r.item != null ? { form: r.form, item: r.item } : {}), reason: `${r.path} (${r.kind}, ${r.scope}): ${r.result}${r.reason ? ` — ${r.reason}` : ''}` })
       }
       for (const x of o.unknown) u.left.push({ path: x.path, result: 'unknown-kind', reason: `${x.path} is an opt-in item of kind ${JSON.stringify(x.kind)}, which this build has no undo for; use the asight that wrote it` })
+    }
+    if (dropCa && ids == null && !stopped) { // last: the root's key, after the trust store's root above (4.11 卸载「最后删根的密钥」)
+      const k = await undoRootKeys({ dir: w.dir, manifest, custody: w.deps.custody || null, fs: w.fs })
+      u.removed.push(...k.removed)
+      for (const l of k.left) { u.left.push({ path: l.path, result: l.result, reason: l.reason }); u.failures.push({ code: 'entry-not-undone', path: l.path, reason: l.reason }) }
     }
     if (stopped) {
       u.stopped = true
