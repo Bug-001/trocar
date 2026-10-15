@@ -13,6 +13,7 @@ import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo, recordingExec, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { down, reply, asDaemon, SOCK } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { closure } from '../helpers/imports.mjs'
 
@@ -30,7 +31,7 @@ function capture(dir, { n = 1, mode = 0o600, name = 'capture.ndjson' } = {}) {
 }
 /** A HOME where asight has not been turned on: a doctor with nothing of its own to look at. */
 const plain = () => { const home = tmpDir('asight-doc-'); return { home, sh: { env: { HOME: home } }, sys: { exec: recordingExec() } } }
-const DEPS = { has: () => true, verify: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
+const DEPS = { spawn: absentSpawn, has: () => true, verify: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
 async function doctor(s, argv = [], { deps = {}, io = fakeIo(), platform = 'linux' } = {}) {
   const exit = await runDoctor(argv, { io, home: s.home, platform, env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run'), ASIGHT_SOURCE: '' }, deps: { ...DEPS, exec: s.sys.exec.run, ...deps } })
   return { exit, io, out: io.stdoutText(), err: io.stderrText(), text: io.text() }

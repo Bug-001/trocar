@@ -30,7 +30,7 @@ process.env.ASIGHT_MIHOMO_SOCK = path.join(fs.realpathSync(os.tmpdir()), 'asight
 
 // + the macOS native pieces asight ships (T13): the signing helper writes the login keychain, procenv reads another process's
 // memory, plutil reads managed preferences — a test injects a runner or a stub, never the committed binary or the real tool
-const REAL_TOOLS = new Set(['launchctl', 'systemctl', 'security', 'certutil', 'loginctl', 'asight-sign-helper', 'procenv', 'plutil'])
+const REAL_TOOLS = new Set(['launchctl', 'systemctl', 'security', 'certutil', 'loginctl', 'asight-sign-helper', 'procenv', 'plutil', 'reg', 'reg.exe', 'powershell.exe', 'csc.exe'])
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash'])
 // words that put another command after them: `sudo launchctl …`, `env X=1 security …`, `if systemctl …; then`
 const PREFIXES = new Set(['sudo', 'doas', 'env', 'command', 'exec', 'nice', 'nohup', 'time', 'timeout', 'xargs', 'arch', 'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!'])

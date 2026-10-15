@@ -8,41 +8,17 @@
 import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { execTool } from '../../../off/exec.mjs'
+import { cliCustody } from '../../core/tls/custody-cli.mjs'
 import { NATIVE, nativePath, pins, sha256 } from './native.mjs'
 
-const EXIT_UNAVAILABLE = 3
 /** The helper may show the keychain's prompt (interactive install): the same wait the root store gives the OS's own. */
 const HELPER_TIMEOUT_MS = 120000
 
 /** keychainCustody({ helperPath, run, env }) → { kind:'keychain', create, exists, issueIntermediate, remove }. `helperPath` is the
- *  INSTALLED helper (the caller resolves it); `run` is execTool's injected runner. */
-export function keychainCustody({ helperPath, run = null, env = process.env }) {
-  const call = (args) => {
-    const r = execTool(helperPath, args, { run, env, timeoutMs: HELPER_TIMEOUT_MS })
-    let o = null
-    try { o = JSON.parse(r.out) } catch { /* said below */ }
-    if (r.code === EXIT_UNAVAILABLE || (o && o.error === 'unavailable')) return 'unavailable'
-    if (r.code === 0 && o && !o.error) return o
-    const why = o && o.error ? `${o.error}${o.message ? `: ${o.message}` : ''}` : (r.err || r.out || '').slice(0, 200)
-    throw Object.assign(new Error(`${NATIVE.signHelper} ${args[0]} failed (exit ${r.code ?? 'none'}): ${why}`), { code: (o && o.error) || 'helper-failed' })
-  }
-  return {
-    kind: 'keychain',
-    create({ subject }) {
-      const o = call(['create', '--subject', subject])
-      if (o === 'unavailable') return o
-      const rootDer = Buffer.from(o.rootDer, 'base64')
-      return { rootDer, fp256: new crypto.X509Certificate(rootDer).fingerprint256 }
-    },
-    exists() { const o = call(['exists']); return o === 'unavailable' ? o : o.exists === true },
-    issueIntermediate({ spkiDer, serial, notBefore }) {
-      const o = call(['issue', '--spki', Buffer.from(spkiDer).toString('base64'), '--serial', Buffer.from(serial).toString('hex'), '--not-before', notBefore.toISOString()])
-      return o === 'unavailable' ? o : Buffer.from(o.certDer, 'base64')
-    },
-    remove() { const o = call(['remove']); return o === 'unavailable' ? o : { removed: o.removed === true } },
-  }
-}
+ *  INSTALLED helper (the caller resolves it); `run` is execTool's injected runner. The verbs, the argv and the 'unavailable' value
+ *  are core/tls/custody-cli.mjs's, shared with the Windows custody script. */
+export const keychainCustody = ({ helperPath, run = null, env = process.env }) =>
+  cliCustody({ kind: 'keychain', file: helperPath, name: NATIVE.signHelper, run, env, timeoutMs: HELPER_TIMEOUT_MS })
 
 /** installHelper({ dest, interactive, run, fs, src }) → { replaced, why? , prompted? }: puts the packaged helper at `dest` (resolved
  *  by the caller, under ~/.asight/bin). It writes `<dest>.new-<rand>` and renames it over `dest`, never an in-place overwrite (one

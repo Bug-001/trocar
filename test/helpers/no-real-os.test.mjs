@@ -17,10 +17,10 @@ const { REAL_TOOLS, realToolsIn } = createRequire(import.meta.url)('./no-real-os
 const GUARD = fileURLToPath(new URL('./no-real-os.cjs', import.meta.url))
 const HELPER = fileURLToPath(new URL('./no-real-os.mjs', import.meta.url))
 const NOOP = '--asight-test-noop'
-const TOOLS = ['launchctl', 'systemctl', 'security', 'certutil', 'loginctl', 'asight-sign-helper', 'procenv', 'plutil']
+const TOOLS = ['launchctl', 'systemctl', 'security', 'certutil', 'loginctl', 'asight-sign-helper', 'procenv', 'plutil', 'reg', 'reg.exe', 'powershell.exe', 'csc.exe']
 const stub = (dir, name, body) => fs.writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
 
-test('no-real-os: the preload is on and the guard names the tools of 0.1 §3 and the macOS native pieces', () => {
+test('no-real-os: the preload is on and the guard names the tools of 0.1 §3, the macOS native pieces and the Windows ones (reg, powershell.exe, csc.exe)', () => {
   assert.equal(process.env.ASIGHT_TEST_SANDBOX, '1')
   assert.ok(process.env.ASIGHT_MIHOMO_SOCK.startsWith(fs.realpathSync(os.tmpdir()) + path.sep), 'the VPN core\'s socket is pinned inside the temp dir: a child `asight status` never asks the developer\'s own mihomo')
   assert.deepEqual([...REAL_TOOLS].sort(), [...TOOLS].sort())

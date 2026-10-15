@@ -30,6 +30,7 @@ export const helperOf = ({ procs = [KERNEL_ROW], listen = [{ pid: 6120, state: '
     if (verb === 'ps') return { sessionId: 1, procs }
     if (verb === 'tcp-table') return { rows: [...listen, ...established].filter((r) => !args.states || args.states.includes(r.state)) }
     if (verb === 'net-if') return { interfaces: ifaces }
+    if (verb === 'token') return { pid: 1, elevated: false, elevationType: 'limited', integrity: 'medium', system: false, sessionId: 1 }
     if (verb === 'route') return { dest: '1.1.1.1', ifIndex: 12, iface: ifaces[0] || null }
     if (verb === 'reg-read') {
       if (args.key.endsWith('Internet Settings')) return { keyExists: true, values: internet }
@@ -79,7 +80,7 @@ export function winWorld({ internet = { ProxyEnable: { kind: 'REG_DWORD', value:
     readTextOrError: (f) => { try { return { text: fs.readFileSync(f, 'utf8'), error: null } } catch (e) { return { text: null, error: { code: e.code } } } },
     listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, collectorDir: dir, caPem: null })
   const writeEntry = (g) => createProxyEntries({ dir, home, groups, ctx: winCtx(), ingress: () => JSON.parse(fs.readFileSync(path.join(dir, 'ingress.json'), 'utf8')), manifest: () => readManifest(dir, fs), fs }).write([{ g, harness: (groups.find((x) => x.g === g) || {}).harness, entry: 'auto' }])
-  const parts = { os: 'win32', harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { ...arch, prepare: async () => prep, ensureKernel } }
+  const parts = { os: 'win32', harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { ...arch, prepare: async () => prep, ensureKernel, refuseElevated: (o) => arch.refuseElevated({ ...o, helper }) } }
   const deps = (over = {}) => ({
     parts, request: async (q) => { // the fake daemon: /on does the daemon's half (the real writer, the groups this world routes), the rest answers like a daemon at rest
       if (q.method === 'POST' && q.path === '/on') {

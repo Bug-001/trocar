@@ -166,6 +166,7 @@ import { runStatus, down, reply, asDaemon, claudeProc, SOCK } from './fixtures/s
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { absentSpawn } from '../helpers/no-real-os.mjs'
 
 const run = runStatus
 
@@ -336,7 +337,7 @@ test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arc
   const fresh = tmpDir('asight-fresh-')
   const asked = []
   const parts = { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: (q) => { asked.push(q); return [] } } } }
-  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
+  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice', spawn: absentSpawn }
   const io = fakeIo()
   const exit = await runStatusCli([], { io, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps })
   assert.equal(exit, 0, io.stdoutText())
@@ -354,7 +355,7 @@ test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — the darwi
   const fresh = tmpDir('asight-fresh-')
   const asked = []
   const parts = { os: 'darwin', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: (q) => { asked.push(q); return [] } } } }
-  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
+  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice', spawn: absentSpawn }
   const io = fakeIo()
   const exit = await runStatusCli([], { io, home: fresh, platform: 'darwin', env: { HOME: fresh }, deps })
   assert.equal(exit, 0, io.stdoutText())

@@ -36,6 +36,9 @@ export const UNREACHED = Object.freeze({
   'src/collector/arch/darwin/custody.mjs': 'T13 lands the keychain custody and installHelper ahead of their callers; install and the daemon\'s issuer wire them in and remove this row',
   'src/collector/arch/darwin/root-store.mjs': 'T13 binds the P3 argv to the darwin runner ahead of its caller; T20 (install) wires it in and removes this row',
   'src/collector/arch/darwin/policy.mjs': 'T13 lands the managed-preference reader and the platform facts (sources.mjs ctx.policy / dirs) ahead of their callers; T15–T20 wire them in and remove this row',
+  'src/collector/arch/win32/custody.mjs': 'T14 lands the CNG custody over custody.ps1 ahead of its callers; install and the daemon\'s issuer wire it in and remove this row',
+  'src/collector/arch/win32/root-store.mjs': 'T14 binds the P3 argv to the win32 runner ahead of its caller; T20 (install) wires it in and removes this row',
+  'src/collector/core/tls/custody-cli.mjs': 'T14: the P1 interface over a one-shot program, shared by the darwin and win32 custody backends, which are themselves ahead of their callers; it is reached when they are',
   'src/off/clash.mjs': 'the Verge strip / reload half of that steer, reached only through src/capture/desktop-steer.mjs; same backlog items',
 })
 
