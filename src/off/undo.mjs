@@ -377,7 +377,10 @@ export async function undoRootKeys({ dir, manifest, custody = null, fs = nodeFs 
     const where = keyWhere(k)
     try {
       if (!custody || typeof custody.remove !== 'function') throw new Error('this asight has no custody backend to remove it with')
-      await custody.remove(k.custody)
+      // the custody's contract (custody-cli.mjs): { removed } | 'unavailable' (no GUI session, a locked keychain). Only an answer of that shape is
+      // a removal; anything else keeps the record and says so — never a key left behind with no record and no line (invariant 5, D38)
+      const r = await custody.remove(k.custody)
+      if (!r || typeof r !== 'object' || typeof r.removed !== 'boolean') throw new Error(r === 'unavailable' ? 'the key custody is not reachable now (macOS: no graphical login session, or the keychain is locked); run asight uninstall again in a terminal of that session' : `the key custody answered ${JSON.stringify(r)}`)
       without(manifest.entries, k); out.removed.push(where)
     } catch (e) { out.left.push({ path: where, harness: null, result: 'error', reason: `${where}, the asight root's private key, could not be removed (${errText(e)}); by hand: ${undoByHand(k)}` }) }
   }

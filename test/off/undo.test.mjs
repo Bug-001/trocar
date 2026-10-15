@@ -140,7 +140,7 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
     { phase: 'install', kind: 'owned-file', role: 'wrapper', harness: 'aa', path: bin, real, sha256: sha(bin), real_sha256: sha(real) })
   const removed = [], installed = m.entries.concat(m.files).filter((x) => x.phase === 'install'), bytes = () => installed.filter((x) => x.path && fs.existsSync(x.path)).map((x) => [x.path, sha(x.path)])
   const before = bytes()
-  const off = await s.run({ manifest: m, phases: ['on'], custody: { remove: async (h) => removed.push(h) } })
+  const off = await s.run({ manifest: m, phases: ['on'], custody: { remove: async (h) => { removed.push(h); return { removed: true } } } })
   assert.deepEqual(off.left, [])
   assert.equal(fs.readFileSync(arr, 'utf8'), '{\n  "list": [\n    "u"\n  ]\n}\n', 'only asight\'s element left the list')
   assert.deepEqual([fs.existsSync(sw), fs.existsSync(cfg), fs.readFileSync(bin, 'utf8'), fs.existsSync(real), removed], [false, false, '#!/bin/dash\nexec real\n', true, []], 'off keeps the wrapper and the key')
@@ -151,7 +151,7 @@ test('P13 json-array-item, switch and config-entry are undone by off; wrapper an
   const un = await s.run({ manifest: kept, dropCa: true })
   assert.deepEqual([un.left, removed, readManifest(s.b.dir).entries.map((e) => e.kind)], [[], [], ['root-key']], 'undoHarnesses never takes the key: its caller does, last (undoRootKeys)')
   assert.deepEqual([fs.readFileSync(bin, 'utf8'), fs.existsSync(path.dirname(real))], ['REAL PROGRAM', false], 'the real program is back under its name')
-  const k = await undoRootKeys({ dir: s.b.dir, manifest: readManifest(s.b.dir), custody: { remove: async (h) => removed.push(h) } })
+  const k = await undoRootKeys({ dir: s.b.dir, manifest: readManifest(s.b.dir), custody: { remove: async (h) => { removed.push(h); return { removed: true } } } })
   assert.deepEqual([k, removed, readManifest(s.b.dir).entries], [{ removed: ['keychain:asight-root'], left: [] }, [{ kind: 'keychain', id: 'asight-root' }], []])
 })
 
@@ -518,3 +518,25 @@ test('an entry that cannot be undone gives its backup and the cp command that pu
   // through a symlink the file asight changed is the real one
   assert.equal(restoreByHand({ backup: '/b', path: '/link', real_path: '/real' }).command, 'cp /b /real')
 })
+
+// D38 · invariant 5: a custody that cannot reach the key now ('unavailable', the helper's exit 3) or answers out of its contract has not removed it —
+// the record stays and the key is listed as left with how to remove it by hand; only { removed: true | false } drops the record
+for (const [what, answer] of [['unavailable', 'unavailable'], ['no answer', undefined], ['a bare number', 1], ['an object without removed', { ok: true }]]) {
+  test(`P13 uninstall: a custody remove that answers ${what} keeps the root-key record and lists the key as left`, async () => {
+    const s = await setup((b) => [repH(b, 'aa')])
+    const m = readManifest(s.b.dir)
+    m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'keychain:asight-root', custody: { kind: 'keychain', id: 'asight-root' }, fp256: 'AB' })
+    const k = await undoRootKeys({ dir: s.b.dir, manifest: m, custody: { remove: async () => answer } })
+    assert.deepEqual([k.removed, k.left.map((l) => [l.path, l.result]), m.entries.filter((e) => e.kind === 'root-key').length], [[], [['keychain:asight-root', 'error']], 1])
+    assert.match(k.left[0].reason, /by hand/)
+  })
+}
+for (const removed of [true, false]) {
+  test(`P13 uninstall: a custody remove that answers { removed: ${removed} } drops the root-key record`, async () => {
+    const s = await setup((b) => [repH(b, 'aa')])
+    const m = readManifest(s.b.dir)
+    m.entries.push({ phase: 'install', kind: 'root-key', harness: null, path: 'keychain:asight-root', custody: { kind: 'keychain', id: 'asight-root' }, fp256: 'AB' })
+    const k = await undoRootKeys({ dir: s.b.dir, manifest: m, custody: { remove: async () => ({ removed }) } })
+    assert.deepEqual([k.removed, k.left, readManifest(s.b.dir).entries.filter((e) => e.kind === 'root-key')], [['keychain:asight-root'], [], []])
+  })
+}

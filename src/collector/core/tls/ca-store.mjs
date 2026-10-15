@@ -67,6 +67,6 @@ export function fileCustody({ dir, fs = nodeFs }) {
     },
     exists: () => fs.existsSync(p.key) && fs.existsSync(p.pem),
     read: () => readCa({ dir, fs }),
-    remove() { for (const f of [p.key, p.pem]) fs.rmSync(f, { force: true }) },
+    remove() { const had = fs.existsSync(p.key); for (const f of [p.key, p.pem]) fs.rmSync(f, { force: true }); return { removed: had } },
   }
 }
