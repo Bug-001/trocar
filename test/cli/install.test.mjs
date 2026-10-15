@@ -16,7 +16,7 @@ function fakeIo({ tty = false } = {}) {
 async function cli(argv, { tty = false, over = {} } = {}) {
   const w = await modelWorld({ commands: ['codex'] })
   const io = fakeIo({ tty })
-  const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, ...over }
+  const deps = { getuid: () => 501, modelOnWired: true, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, ...over }
   const exit = await runInstallCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps })
   return { w, io, exit }
 }
@@ -48,7 +48,7 @@ test('4.11 ⑰: a version 2 manifest is refused before any write — exit 1, the
   const f = path.join(w.home, '.asight', 'collector', 'install-manifest.json')
   fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify({ version: 2, entries: [], files: [] }))
   const io = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501 } }), 1)
+  assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501, modelOnWired: true } }), 1)
   assert.deepEqual(JSON.parse(fs.readFileSync(f, 'utf8')).version, 2)
 })
 
@@ -63,6 +63,32 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
   const again = await cli(['--yes'])
   again.w.store.answer = 'declined'
   const io2 = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], { io: io2, env: again.w.env, home: tmpHomeOf(again.w), platform: 'darwin', deps: { getuid: () => 501, backends: { custody: again.w.custody, rootStore: again.w.store, dirs: again.w.ctx.dirs }, harnesses: [], owns: again.w.owns } }), 1)
+  assert.equal(await runInstallCli(['--yes'], { io: io2, env: again.w.env, home: tmpHomeOf(again.w), platform: 'darwin', deps: { getuid: () => 501, modelOnWired: true, backends: { custody: again.w.custody, rootStore: again.w.store, dirs: again.w.ctx.dirs }, harnesses: [], owns: again.w.owns } }), 1)
 })
 const tmpHomeOf = (w) => { const h = `${w.home}-2`; fs.mkdirSync(h, { recursive: true }); return h }
+
+// the high finding of the branch review: until `asight on` on macOS / Windows is turnOnModel, install there would leave the old on unable to
+// start (its loadOrCreateCa refuses an asight-ca.pem without ca.key). So install refuses there, writes nothing, and says to run on.
+for (const platform of ['darwin', 'win32']) {
+  test(`${platform}: until the model on is wired, install refuses (exit 1), writes nothing and says to run asight on`, async () => {
+    const w = await modelWorld({ os: platform, commands: ['codex'] })
+    const io = fakeIo()
+    assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform, deps: { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, dirs: w.ctx.dirs }, harnesses: w.harnesses, owns: w.owns } }), 1)
+    assert.match(io.text(), /直接跑 asight on/)
+    assert.equal(fs.existsSync(path.join(w.home, '.asight')), false)
+    assert.deepEqual([w.custody.calls, w.store.calls], [[], []])
+  })
+  // red until on is turnOnModel: the documented order — install, then on — through the CLI. Flipping MODEL_ON_WIRED turns this into a plain test.
+  test(`${platform}: install then on through the CLI (temp HOME, stub backends) — on starts`, { todo: 'turnOnModel is not yet wired as on on macOS / Windows' }, async () => {
+    const { runOnCli } = await import('../../src/cli/on.mjs')
+    const { fakeDaemon, recordingExec, ROOTS } = await import('./fixtures/on-ctx.mjs')
+    const w = await modelWorld({ os: platform, commands: ['codex'] })
+    const deps = { getuid: () => 501, modelOnWired: true, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns }
+    const io = fakeIo()
+    assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text())
+    const io2 = fakeIo()
+    const exit = await runOnCli(['--yes'], { io: io2, env: w.env, home: w.home, platform, deps: { ...deps, exec: recordingExec().run, roots: ROOTS, parts: { os: platform, harnesses: w.harnesses.filter((d) => d.name === 'codex'), scan: async () => [], match: () => ({ agent: null }), arch: { osRoots: async () => ({ pem: ROOTS.osText }) } }, request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice' } })
+    assert.doesNotMatch(io2.text(), /ca\.key|CA is unusable/, 'the old on refusing the model install\'s root (the finding)')
+    assert.equal(exit, 0, io2.text())
+  })
+}

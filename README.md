@@ -53,12 +53,12 @@ it through the repo (or `npx --no-install asight …`):
 
 ```sh
 git clone <this repo> && cd <the repo> && npm install
-node bin/asight.mjs install     # once: the certificates (or: npx --no-install asight install)
+node bin/asight.mjs install     # Linux, once: the certificates (or: npx --no-install asight install); macOS / Windows: skip it for now
 node bin/asight.mjs on          # then start capture
 ```
 
-`asight install` lists the files it will touch and writes them after you confirm; until it has run, `asight on`
-refuses (`cert-not-installed`). Then `asight on` starts capture, `asight status` shows state, `asight off` takes
+`asight install` lists the files it will touch and writes them after you confirm; on Linux, until it has run, `asight on`
+refuses (`cert-not-installed`). On macOS / Windows `asight install` refuses for now and `asight on` still installs the certificates itself. Then `asight on` starts capture, `asight status` shows state, `asight off` takes
 every trace of asight off your agents' path (the certificates stay until `asight uninstall`).
 
 From a Release: not published yet.
@@ -157,7 +157,7 @@ website you visit cannot reach it.
 
 ### `asight on` / `off` / `status` / `uninstall`, and the per-user process collector (Linux · Windows · macOS, preview)
 
-`asight install` puts the certificates in once; `asight on` starts capture (it refuses until install has run, and
+`asight install` puts the certificates in once (Linux; on macOS / Windows it refuses for now and `on` still installs them itself); `asight on` starts capture (on Linux it refuses until install has run, and
 never writes a certificate); `asight off` takes every trace of asight off your agents' path and leaves the
 certificates (only `asight uninstall` takes them); `asight status` says, per agent, whether it is captured and why not; `asight uninstall` also
 deletes asight's own files (your captures stay). `off` works when asight itself is broken — no daemon, no source
@@ -229,8 +229,8 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 
 ```sh
 sudo asight setup-helper      # once per machine (Linux)
-asight install                # per user, no sudo, once: the certificates (a root of this machine, user-level); lists every file it will change and asks (not in a terminal: add --yes)
-asight on                     # refuses until install has run; changes no certificate; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
+asight install                # Linux, per user, no sudo, once: the certificates; lists every file it will change and asks (not in a terminal: add --yes). macOS / Windows: not yet — it refuses and changes nothing; there `asight on` still installs the certificates itself
+asight on                     # Linux: refuses until install has run and changes no certificate; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
 asight on --no-unit           # no autostart unit: start the daemon yourself, with `asight daemon` in the foreground
 asight status                 # each agent and why it is (not) captured, and the recent failures
 asight off                    # every trace of it is off your agents' path (off claude-code: only that one)
@@ -410,7 +410,7 @@ not the collector's switch; `asight off` is.
 
 ```sh
 # common
-asight install [--dry-run] [--yes] [--json]   # once: the certificates (D55); prints the plan and asks first
+asight install [--dry-run] [--yes] [--json]   # once: the certificates (D55); prints the plan and asks first (Linux; macOS / Windows: refuses for now)
 asight on [harness…] [--dry-run] [--yes] [--opt-in <form>[,<form>…]] [--no-autostart | --no-unit] [--json]
 asight off [harness…] [--now] [--dry-run] [--yes] [--json]
 asight status [harness…] [--json] [--failures]   # --failures: the whole failure wall (the plain status prints a one-screen digest)

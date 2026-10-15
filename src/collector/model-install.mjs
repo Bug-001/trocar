@@ -25,6 +25,10 @@ import { CODE } from './core/codes.mjs'
 /** The OSes the collector model (4.11) runs on — the one list `install`, `on`, `uninstall` and the arch backends ask. */
 export const MODEL_OS = Object.freeze(['darwin', 'win32'])
 export const isModelOs = (os) => MODEL_OS.includes(os)
+/** Is `asight on` on the model OSes turnOnModel yet? Until it is, the old on there installs its own CA (ca.key beside asight-ca.pem) and a
+ *  model install — whose root's key is in the custody, with no ca.key — would leave that on unable to start; so `asight install` refuses on these
+ *  OSes and the old on goes on installing there. This flips in the commit that wires turnOnModel, and is deleted with the old on. */
+export const MODEL_ON_WIRED = false
 
 const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // manifest.mjs ROOT_STORE_KIND's keys: the store the user root goes into
 const ROOT_SUBJECT = 'asight local root'
