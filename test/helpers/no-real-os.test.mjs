@@ -1,6 +1,6 @@
 // test/helpers/no-real-os.test.mjs — the preload `npm test` runs under (test/helpers/no-real-os.cjs): no test process runs a real
 // launchctl / systemctl / security / certutil / loginctl (0.1 §3 「不碰真实机器」). Every call below that the guard must refuse
-// is given a flag none of the five tools knows, so that a broken guard makes a test red without touching the machine it runs on.
+// is given a flag none of the guarded tools knows, so that a broken guard makes a test red without touching the machine it runs on.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -17,17 +17,17 @@ const { REAL_TOOLS, realToolsIn } = createRequire(import.meta.url)('./no-real-os
 const GUARD = fileURLToPath(new URL('./no-real-os.cjs', import.meta.url))
 const HELPER = fileURLToPath(new URL('./no-real-os.mjs', import.meta.url))
 const NOOP = '--asight-test-noop'
-const TOOLS = ['launchctl', 'systemctl', 'security', 'certutil', 'loginctl']
+const TOOLS = ['launchctl', 'systemctl', 'security', 'certutil', 'loginctl', 'asight-sign-helper', 'procenv', 'plutil']
 const stub = (dir, name, body) => fs.writeFileSync(path.join(dir, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
 
-test('no-real-os: the preload is on and the guard names the five tools of 0.1 §3', () => {
+test('no-real-os: the preload is on and the guard names the tools of 0.1 §3 and the macOS native pieces', () => {
   assert.equal(process.env.ASIGHT_TEST_SANDBOX, '1')
   assert.ok(process.env.ASIGHT_MIHOMO_SOCK.startsWith(fs.realpathSync(os.tmpdir()) + path.sep), 'the VPN core\'s socket is pinned inside the temp dir: a child `asight status` never asks the developer\'s own mihomo')
   assert.deepEqual([...REAL_TOOLS].sort(), [...TOOLS].sort())
   assert.deepEqual(takeRefusals(), [])
 })
 
-test('no-real-os: every way node:child_process runs a command refuses each of the five tools, the promisified ones included', async () => {
+test('no-real-os: every way node:child_process runs a command refuses each guarded tool, the promisified ones included', async () => {
   const calls = {
     spawn: (t) => spawn(t, [NOOP]),
     spawnSync: (t) => spawnSync(t, [NOOP]),
@@ -50,6 +50,17 @@ test('no-real-os: every way node:child_process runs a command refuses each of th
   assert.equal(got.length, n, 'every refusal is in the ledger')
   assert.deepEqual([...new Set(got.map((r) => r.tool))].sort(), [...TOOLS].sort())
   assert.ok(got.every((r) => /npm test/.test(r.message) && r.command.includes(r.tool)))
+})
+
+test('no-real-os: the committed macOS native binaries are refused by their real paths (the helper would write the login keychain)', () => {
+  const native = fileURLToPath(new URL('../../src/collector/arch/darwin/native/', import.meta.url))
+  for (const name of ['asight-sign-helper', 'procenv']) {
+    assert.ok(fs.existsSync(path.join(native, name)), `${name} is committed`)
+    assert.throws(() => spawnSync(path.join(native, name), ['exists']), { code: 'ESANDBOX' }, name)
+    assert.throws(() => execFileSync('sh', ['-c', `'${path.join(native, name)}' ${NOOP}`]), { code: 'ESANDBOX' }, `${name} behind sh -c`)
+  }
+  assert.throws(() => spawnSync('/usr/bin/plutil', ['-extract', 'k', 'json', '-o', '-', '/nonexistent']), { code: 'ESANDBOX' })
+  assert.equal(takeRefusals().length, 5)
 })
 
 test('no-real-os: an absolute path to a tool, and a tool behind env / sh -c / bash -lc, is refused', () => {
