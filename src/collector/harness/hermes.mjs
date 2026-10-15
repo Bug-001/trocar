@@ -163,8 +163,9 @@ const proxyMode = {
   },
   certs: {},
   trusts: {},
-  // rule U: a CA file the user already named (a route's own ssl_ca_cert replaces the roots for that route; SSL_CERT_FILE for the rest)
-  userCertFiles: [{ file: HOME('config.yaml'), format: 'yaml', keys: ['routes', '*', 'ssl_ca_cert'] }, { file: HOME('.env'), format: 'dotenv', keys: ['SSL_CERT_FILE'] }, { env: 'SSL_CERT_FILE' }],
+  // rule U: a CA file the user already named (a route's own ssl_ca_cert replaces the roots for that route: the providers map, the custom_providers
+  // list and the inline model block, as the Linux reader above; SSL_CERT_FILE for the rest)
+  userCertFiles: [...[['providers', '*', 'ssl_ca_cert'], ['custom_providers', '*', 'ssl_ca_cert'], ['model', 'ssl_ca_cert']].map((keys) => ({ file: HOME('config.yaml'), format: 'yaml', keys })), { file: HOME('.env'), format: 'dotenv', keys: ['SSL_CERT_FILE'] }, { env: 'SSL_CERT_FILE' }],
   blockers: [],
 }
 
@@ -178,8 +179,10 @@ export default {
   // python is not Hermes, its package-manager workers (`hermes-agent/pm/worker.py`) included: they are forwarded.
   processes: {
     names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', entry: '/hermes(-acp)?\\.exe$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe(?![\\w.-])' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' },
-      // the gateway service and the desktop backend run the CLI module; the desktop source build on win runs a base64 bootstrap with `serve`
-      { name: 'python', args: '(^| )-m hermes_cli\\.main( |$)' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bb64decode\\b[\\s\\S]* serve( |$)' }],
+      // the measured shapes only: the gateway service runs the CLI module with `gateway run` (the same
+      // agent on every OS: a Linux one in this shape turns from args-mismatch into hermes, Linux run UNT); the desktop source build's backend is a
+      // base64 bootstrap that hermes.cmd starts with `serve --host 127.0.0.1` (a loopback web service: any 127.x, so the guard reads no version; another b64 one-liner is not Hermes)
+      { name: 'python', args: '(^| )-m hermes_cli\\.main gateway run( |$)' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bb64decode\\b[\\s\\S]* serve --host 127\\.\\S+( |$)' }],
     longLived: [{ args: '(^| )(gateway|cron|dashboard|serve)( |$)' }],
   },
   hosts: ['openrouter.ai', 'inference-api.nousresearch.com', 'chatgpt.com', 'api.openai.com', 'api.anthropic.com', 'api.z.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com', 'api.deepseek.com', 'api.x.ai'],

@@ -100,7 +100,8 @@ const proxyMode = {
   },
   certs: {},
   trusts: {
-    os: { base: 'os', sources: [{ from: { env: 'SSL_CERT_FILE' }, semantics: 'replace' }] },
+    // $CODEX_HOME/.env is applied over the launch env (spec 4.11 ④, measured), so it answers first
+    os: { base: 'os', sources: [{ from: { file: ENV_FILE, format: 'dotenv', keys: ['SSL_CERT_FILE'] }, semantics: 'replace' }, { from: { env: 'SSL_CERT_FILE' }, semantics: 'replace' }] },
   },
   userCertFiles: [{ env: 'SSL_CERT_FILE' }, { file: ENV_FILE, format: 'dotenv', keys: ['SSL_CERT_FILE'] }],
   blockers: [],

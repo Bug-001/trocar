@@ -8,7 +8,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
-import { resolveLoc, holds } from '../../../src/collector/core/proxymode/sources.mjs'
+import { resolveLoc, holds, readSrc } from '../../../src/collector/core/proxymode/sources.mjs'
 
 const FIXTURES = new URL('./fixtures/', import.meta.url)
 const real = await loadHarnesses()
@@ -107,4 +107,38 @@ test("claude-code: CLAUDE_CODE_CERT_STORE is read in Claude Code's own precedenc
   fs.rmSync(path.join(cwd, '.claude'), { recursive: true })
   assert.equal(holds(when, ctx({ CLAUDE_CONFIG_DIR: custom })), true, 'CLAUDE_CONFIG_DIR moves the user settings')
   assert.deepEqual(cc.trusts.bundled.sources.map((s) => s.from.env || s.from.file.base), ['cwd', 'cwd', 'home', 'NODE_EXTRA_CA_CERTS'])
+})
+
+// rule U for Hermes: its own config.yaml shapes (the providers map, the custom_providers list, the inline model block), read through the
+// descriptor's own userCertFiles; a key the config does not have (`routes`) names nothing.
+test('hermes: a route CA in each of config.yaml\'s shapes is found by the descriptor\'s userCertFiles', () => {
+  const hm = real.find((d) => d.name === 'hermes').proxyMode
+  const yamlSrcs = hm.userCertFiles.filter((s) => s.format === 'yaml')
+  const DOCS = {
+    providers: 'providers:\n  corp:\n    base_url: https://llm.corp.example/v1\n    ssl_ca_cert: /etc/corp.pem\n',
+    custom_providers: 'custom_providers:\n  - name: corp\n    ssl_ca_cert: /etc/corp.pem\n',
+    model: 'model:\n  default: m\n  ssl_ca_cert: /etc/corp.pem\n',
+    routes: 'routes:\n  - ssl_ca_cert: /etc/corp.pem\n',
+  }
+  for (const os of ['darwin', 'win32']) for (const [shape, text] of Object.entries(DOCS)) {
+    const root = tmpDir('asight-pm-')
+    const ctx = { os, home: path.join(root, 'home'), cwd: root, env: {}, dirs: { localAppData: path.join(root, 'la'), appSupport: path.join(root, 'as') }, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p) }
+    const [f] = resolveLoc(yamlSrcs[0].file, ctx)
+    fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text)
+    const found = yamlSrcs.map((s) => readSrc(s, ctx)).filter((r) => r.set).map((r) => r.value)
+    assert.deepEqual(found, shape === 'routes' ? [] : ['/etc/corp.pem'], `${os} ${shape}`)
+  }
+})
+
+test("codex: SSL_CERT_FILE in $CODEX_HOME/.env beats the process env (Codex applies .env over its launch env, spec 4.11 ④)", () => {
+  const cx = real.find((d) => d.name === 'codex').proxyMode
+  const root = tmpDir('asight-pm-')
+  const home = path.join(root, 'home')
+  const ctx = (env) => ({ os: 'darwin', home, cwd: root, env, dirs: {}, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p) })
+  const first = (env) => cx.trusts.os.sources.map((s) => readSrc(s.from, ctx(env))).find((r) => r.set)?.value
+  assert.ok(cx.trusts.os.sources.every((s) => s.semantics === 'replace'))
+  assert.equal(first({ SSL_CERT_FILE: '/env/ca.pem' }), '/env/ca.pem', 'the process env alone')
+  fs.mkdirSync(path.join(home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(home, '.codex', '.env'), 'SSL_CERT_FILE=/dotenv/ca.pem\n')
+  assert.equal(first({ SSL_CERT_FILE: '/env/ca.pem' }), '/dotenv/ca.pem', '.env over the process env')
+  assert.equal(first({ CODEX_HOME: path.join(root, 'other'), SSL_CERT_FILE: '/env/ca.pem' }), '/env/ca.pem', 'CODEX_HOME moves the .env')
 })

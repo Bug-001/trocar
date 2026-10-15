@@ -85,6 +85,9 @@ export const SEEDS = [
   w(`${W}\\AppData\\Local\\hermes\\tools\\python-3.14.7+20260901-win32-x64\\python.exe`, ['-m', 'hermes_cli.main', 'gateway', 'run'], 'hermes', 'the gateway service: Hermes_Gateway.vbs, login item, scheduled task'),
   w(`${W}\\AppData\\Local\\hermes\\tools\\python-3.14.7+20260901-win32-x64\\python.exe`, ['-I', '-c', "import base64; exec(base64.b64decode('aW1wb3J0IGhlcm1lc19ib290c3RyYXA='))", 'serve', '--host', '127.0.0.1', '--port', '0'], 'hermes', 'the desktop source build: Hermes.exe → hermes.cmd serve → this python'),
   w(`${W}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe`, ['-I', '-c', "import base64; exec(base64.b64decode('cHJpbnQoMSk='))"], null, '(a base64 one-liner without the serve subcommand is not Hermes)'),
+  w(`${W}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe`, ['-I', '-c', "import base64; exec(base64.b64decode('cHJpbnQoMSk='))", 'serve', '--port', '8000'], null, 'review (a base64 one-liner serving on another address is not Hermes)'),
+  l('/home/u/.hermes/tools/python-3.12.4/bin/python3', ['python3', '-m', 'hermes_cli.main', 'gateway', 'run'], 'hermes', 'review (the win-measured gateway shape names Hermes on Linux too: D51 names have no OS; Linux run UNT)'),
+  l('/usr/bin/python3', ['python3', '-m', 'hermes_cli.main', 'serve'], null, 'review (only the measured gateway verb of the CLI module counts)'),
   w(`${W}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe`, ['-I', '-c', String.raw`import runpy; runpy.run_path('C:\\Users\\u\\AppData\\Local\\hermes\\bin\\hermes.exe.bak')`], null, 'review 2026-10-14 (a runpy of a file that only starts with hermes.exe is not Hermes)'),
   w(`${W}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe`, ['-I', `${W}\\tools\\notes.exe`], null, 'a Windows test machine, 2026-10-14 (python -I running another zip launcher is not Hermes)'),
   // ── kimi-code ──
