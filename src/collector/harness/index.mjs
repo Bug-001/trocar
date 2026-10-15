@@ -85,6 +85,7 @@ function proxyModeProblems(pm) {
     if (r.value !== undefined) oneOf(r.value, PM.value, `${at}.value`)
     if (r.value === 'pac-url' && r.auth !== false) say('pac-auth', `${at} serves a PAC url, which carries no credentials: it must say auth:false`)
     if (!nonEmpty(r.takesEffect)) say('shape', `${at}.takesEffect is not a status text`)
+    for (const k of ['rereads', 'perRequest']) if (r[k] !== undefined && typeof r[k] !== 'boolean') say('shape', `${at}.${k} is not true or false (off's holder judge reads it, holders.mjs)`)
     for (const k of ['file', 'dir']) if (r[k] !== undefined) loc(r[k], `${at}.${k}`, true)
     if (r.select !== undefined) { if (!obj(r.select)) say('shape', `${at}.select is not an object`); else loc(r.select.dir, `${at}.select.dir`, true) }
     if (r.kind === 'json-key' && r.file === undefined && r.select === undefined) say('shape', `${at} is json-key without file or select`)

@@ -52,13 +52,19 @@ export function validateDescriptor(d) {
  *  asight after `off` — the data form of `trust.afterUninstall` ('restart' when it declares none, and when it is a function of the process, which a
  *  manifest cannot hold: Hermes). With `trust.untilEnviron` (Kimi), only a process whose environment names that variable at a file of asight's is
  *  reported at all. */
-export function livenessOf(d, { agentList = [] } = {}) {
+export function livenessOf(d, { agentList = [], os = null } = {}) {
   const t = d.trust || {}
+  // proxy mode (4.11 §2.3; `os` given = the model's install): the routes of this OS's forms say it as data — a route that `rereads` is read again
+  // by a running process (any process alive at off_at may hold it); `perRequest`, read on every request (the next one after off goes direct, so
+  // none holds it) — only when EVERY form here routes that way, else one more holder, never one less (holders.mjs)
+  const pm = os && d.proxyMode ? d.proxyMode : null
+  const routes = pm ? pm.forms.filter((f) => f.os.includes(os)).map((f) => pm.routes[f.route] || {}) : []
   return {
     // `ignore` items are not applied: they stop capture, not trust — the entry is per harness, so an ignored name still loads its bundle and must
     // stay a holder for `off` (D50; off's withAgentList adds only the additions too)
     identity: serializeSignature(compileAll(new Map([[d.name, d]]), (agentList || []).filter((e) => !e.ignore)).get(d.name)),
-    rereads: !!t.rereadsEntry,
+    rereads: !!t.rereadsEntry || routes.some((r) => r.rereads === true),
+    ...(routes.length && routes.every((r) => r.perRequest === true) ? { per_request: true } : {}),
     until: typeof t.afterUninstall === 'string' ? t.afterUninstall : 'restart',
     ...(typeof t.untilEnviron === 'string' ? { until_environ: t.untilEnviron } : {}),
   }
