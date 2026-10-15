@@ -13,7 +13,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { SENTINEL, OFF_PREFIX } from './text-edit.mjs'
-import { getPath, setKey, removeKey } from './json-text.mjs'
+import { getPath, setKey, removeKey, parseJsonText, unreadableJson, markLen } from './json-text.mjs'
 import { writeDurable, editTarget, removeEmptyDirs, readOrNull } from './fsutil.mjs'
 import { backupsOf } from './backup.mjs'
 import { asightHome } from './paths.mjs'
@@ -42,14 +42,13 @@ const under = (v, root) => typeof v === 'string' && v.startsWith(root + path.sep
 // The text of a file by what its bytes prove (4.6「文件的编码」, text-codec.mjs): { text, charset } | { why }. A U+FEFF at offset 0 (the mark) is
 // before the first line, not part of it: linesOf starts after it, so a block or a line at the top of a marked file is found and the mark stays.
 const readText = (b) => { const d = decodeText(b); return d.ok ? { text: d.text, charset: d.charset } : { why: d.why } }
-const bomOf = (t) => (t.startsWith('\uFEFF') ? 1 : 0)
 // whether asight's sentinel is in bytes that prove no form: looked for as each form asight writes would hold it, so a file the user saved in another
 // encoding after `on` is still said (left-unreadable), not passed over as clean
 const markedIn = (b) => CHARSETS.some((cs) => b.includes(encodeText(SENTINEL, cs)))
-const stripOffPrefix = (t) => { const b = bomOf(t); return t.slice(0, b) + t.slice(b).split('\n').map((l) => (l.startsWith(OFF_PREFIX) ? l.slice(OFF_PREFIX.length) : l)).join('\n') } // only at a line start, where asight put it
+const stripOffPrefix = (t) => { const b = markLen(t); return t.slice(0, b) + t.slice(b).split('\n').map((l) => (l.startsWith(OFF_PREFIX) ? l.slice(OFF_PREFIX.length) : l)).join('\n') } // only at a line start, where asight put it
 
 // the lines of `t` with their offsets: [{ at, line, next }] (next = the offset after the line's own newline)
-function linesOf(t) { const out = []; for (let at = bomOf(t); at < t.length;) { const e = t.indexOf('\n', at); const end = e < 0 ? t.length : e; out.push({ at, line: t.slice(at, end), next: e < 0 ? t.length : e + 1 }); at = e < 0 ? t.length : e + 1 } return out }
+function linesOf(t) { const out = []; for (let at = markLen(t); at < t.length;) { const e = t.indexOf('\n', at); const end = e < 0 ? t.length : e; out.push({ at, line: t.slice(at, end), next: e < 0 ? t.length : e + 1 }); at = e < 0 ? t.length : e + 1 } return out }
 
 // asight's block in a dotenv text: from its open line to its close line; a block whose close line the user deleted ends at the last variable line under
 // asight's home that follows the open line directly. → [{ from, to }] offsets
@@ -103,7 +102,7 @@ export function planByMarker({ home, ids = null, fs = nodeFs }) {
         if (hits.length) add({ lines: hits.map((h) => h.line), yaml: !!spec.yaml })
       } else if (spec.how === 'json-value') {
         let v
-        try { v = getPath(JSON.parse(t), spec.keys) } catch { continue }
+        try { v = getPath(parseJsonText(t), spec.keys) } catch { continue }
         if (under(v, root)) add({ keys: spec.keys, value: v })
       } else if (spec.how === 'owned-file' && (spec.exact ? t === spec.exact : t.includes(SENTINEL))) add(spec.exact ? { exact: spec.exact } : {})
     }
@@ -154,11 +153,11 @@ function undoOne(item, home, fs) {
   // json-value: the value asight replaced comes back from the newest backup of this file, this key only; none there → the key goes
   const keys = item.detail.keys
   let doc
-  try { doc = JSON.parse(t) } catch { return { result: 'left-unparsable' } }
+  try { doc = parseJsonText(t) } catch (e) { return { result: 'left-unparsable', reason: unreadableJson(item.path, t, e, `asight's value under ${keys.join('.')}`) } }
   if (!under(getPath(doc, keys), root)) return { result: 'already-clean' }
   const saved = backupsOf({ home, file: item.path, fs }).at(-1) || null
   let prior = null
-  if (saved) { try { const s = readText(readOrNull(fs, saved)); const v = s.why ? undefined : getPath(JSON.parse(s.text), keys); if (typeof v === 'string' && !under(v, root)) prior = v } catch { /* a backup that is not JSON holds no value */ } }
+  if (saved) { try { const s = readText(readOrNull(fs, saved)); const v = s.why ? undefined : getPath(parseJsonText(s.text), keys); if (typeof v === 'string' && !under(v, root)) prior = v } catch { /* a backup that is not JSON holds no value */ } }
   put(prior != null ? setKey(t, keys, prior).text : removeKey(t, keys).text)
   return done(prior != null ? { restored_from: saved, value: prior } : { removed: true, ...(saved ? { backup: saved } : {}) })
 }

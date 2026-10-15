@@ -4,7 +4,7 @@
 // plugin row). Pure functions over the file text; every change is a list of splices {offset, removed, inserted}
 // applied in order (json-text.mjs applyOps / reverseOps), so an untouched file is restored byte for byte and nothing
 // of the user's file is ever copied: `removed` is only ever "" or a YAML `[]` asight replaced. Knows no harness.
-import { applyOps } from './json-text.mjs'
+import { applyOps, eolOf, markLen } from './json-text.mjs'
 
 export const SENTINEL = 'asight collector'
 export const BLOCK_BEGIN = `# >>> ${SENTINEL} >>> written by \`asight collector install\`; \`asight collector uninstall\` removes this block`
@@ -21,12 +21,7 @@ const CANNOT_QUOTE = '; this value cannot be written even in double quotes (it h
 const lineStarts = (text) => { const out = [0]; for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) if (i + 1 < text.length) out.push(i + 1); return out }
 const unquote = (v) => { const t = v.trim(); const m = /^(["'])(.*)\1/.exec(t); return m ? m[2] : t.replace(/\s+#.*$/, '') }
 
-/** The line ending asight writes into a file (4.6「文件的编码」: the line ending follows the file): CRLF when the file has more CRLF than bare LF,
- *  else LF — and LF for an empty or new file. One place decides it for every insert (a dotenv block, a joined line, an rc line, a YAML row). */
-const eolOf = (text) => { const t = text == null ? '' : text; const crlf = (t.match(/\r\n/g) || []).length; return crlf > (t.match(/\n/g) || []).length - crlf ? '\r\n' : '\n' }
-// A byte-order mark is U+FEFF at offset 0 of the text (text-codec.mjs keeps it there): it is before the first line, not part of it. asight's
-// text goes after it, and the first line's key is read after it.
-const markLen = (text) => (text.startsWith('\uFEFF') ? 1 : 0)
+// The line ending (eolOf) and the mark (markLen) are json-text.mjs's: asight's text goes after a mark, and the first line's key is read after it.
 // the dotenv assignment a line holds: { at, key, value } (`at`: where a prefix goes, after a mark on the first line), or null
 const ASSIGN = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/
 function assignmentAt(src, at) {
