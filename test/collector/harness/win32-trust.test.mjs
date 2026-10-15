@@ -557,3 +557,24 @@ test('W19 + W23: all seven harnesses installed together — only the automatic f
   await uninstall(b, all)
   assert.deepEqual([...b.snapshot()], [...before])
 })
+
+test('4.6「名字族」②: a dotenv trust block is planned with fold where the OS folds environment names (win32), and without it elsewhere; a JSON trust key never folds here', () => {
+  const both = { inject: () => ({ entries: [dotenv(), jsonKey()], files: [{ path: BUNDLE, bundle: true }] }) }
+  const win = plan(both, 'win32')
+  assert.deepEqual(win.entries.map((e) => [e.kind, e.fold === true]), [['text', true], ['json-key', false]])
+  const mac = planTrust({ descriptors: [{ name: 'alpha', darwin: { inject: () => ({ entries: [dotenv({ path: '/Users/u/.alpha/.env', vars: { SSL_CERT_FILE: '/Users/u/.asight/collector/ca/combined-alpha.pem' } })], files: [{ path: '/Users/u/.asight/collector/ca/combined-alpha.pem', bundle: true }] }) } }], ctxFor: () => ({ os: 'darwin', readText: () => null }), caCertPem: CA.certPem, collectorDir: '/Users/u/.asight/collector' })
+  assert.equal(mac.entries.length, 1)
+  assert.equal(mac.entries[0].fold, undefined, 'darwin names do not fold: no fold on the entry')
+})
+
+test('4.6「名字族」②: the real Codex and Hermes trust blocks, installed for win32, are recorded with fold; for darwin without it', async () => {
+  for (const osName of ['win32', 'darwin']) {
+    const home = tmpDir('asight-fold-')
+    const env = osName === 'win32' ? { HOME: home, USERPROFILE: home } : { HOME: home }
+    for (const rel of ['.codex/.env', 'AppData/Local/hermes/.env', '.hermes/.env']) { const f = path.join(home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, 'X=1\r\n') } // the harnesses are there (each OS reads its own path)
+    await installCollector({ home, env, osName, harnesses: ALL.filter((d) => ['codex', 'hermes'].includes(d.name)), freePort: async () => 47011, roots: { node: [], osText: '' } })
+    const blocks = readManifest(path.join(home, '.asight', 'collector')).entries.filter((e) => e.kind === 'text' && e.format === 'dotenv-block')
+    assert.deepEqual([...new Set(blocks.map((e) => e.harness))].sort(), ['codex', 'hermes'], `${osName}: both harnesses wrote a dotenv trust block`)
+    for (const b of blocks) assert.equal(b.fold === true, osName === 'win32', `${osName} ${b.harness}: fold is the OS's`)
+  }
+})

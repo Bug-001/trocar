@@ -5,6 +5,8 @@ import assert from 'node:assert/strict'
 import { applyOps, reverseOps } from '../../src/off/json-text.mjs'
 import { dotenvBlock, joinDotenvBlock, insertLine, removeAsightText, asightResidue, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
 import { parseDotenv } from '../../src/collector/core/config-read.mjs'
+import { foldsEnvNames } from '../../src/off/env-names.mjs'
+import { seeds, readDotenv } from '../helpers/file-shapes.mjs'
 
 const B = '/h/.asight/collector/ca/combined-x.pem'
 
@@ -263,4 +265,52 @@ test('text-edit X8: `fold` (4.6「名字族」) compares the keys without case �
   assert.deepEqual(removeAsightText(on, r.ops, { fold: true }), { text: user, found: true }, 'untouched: the old line is back')
   assert.deepEqual(removeAsightText(on.replace('HTTPS_PROXY=', 'Https_Proxy='), r.ops, { fold: true }), { text: user, found: true }, 'asight\'s value under another case is asight\'s')
   assert.equal(removeAsightText(on.replace('HTTPS_PROXY=', 'Https_Proxy='), r.ops).text.includes('127.0.0.1'), true, 'without fold another case is another name')
+})
+
+// ---- the name family (4.6「名字族」, X7): the block puts out of effect every line that would win over it, by the platform's rules ----
+// Codex's proxy names in the order the agent reads them; the lines that would win over the block are the lower-case twins of its two names. The
+// ranking itself (which names outrank which) is the route writers' (T16); here it is data, and the reader below is the test's own.
+const CODEX_NAMES = ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy']
+const OUTRANKING = ['https_proxy', 'no_proxy']
+// the value an agent reading `names` in order sees: the first name set (the last assignment of a name wins; `fold`: names compared without case)
+const firstSet = (pairs, names, fold) => { const m = new Map(); for (const [k, v] of pairs) m.set(fold ? k.toUpperCase() : k, v); for (const n of names) { const v = m.get(fold ? n.toUpperCase() : n); if (v !== undefined) return v } return undefined }
+const GATE = 'http://codex.env:a1b2c3d4e5f60718@127.0.0.1:17991'
+for (const platform of ['win32', 'darwin']) {
+  test(`text-edit X7 (${platform} rules): https_proxy and no_proxy give way to the block, the rest stays; prior is by name; the agent reads the door; off is byte for byte`, () => {
+    const fold = foldsEnvNames(platform)
+    const seed = seeds.find((s) => s.id === 'seed-X7')
+    const before = seed.bytes.toString('utf8')
+    const vars = { HTTPS_PROXY: GATE, NO_PROXY: 'localhost,127.0.0.1,::1' }
+    const r = dotenvBlock(before, vars, { neutralize: OUTRANKING, fold })
+    // prior: what the agent read before, by the same rule
+    const was = firstSet(Object.entries(r.prior), CODEX_NAMES, fold)
+    assert.equal(was, firstSet(Object.entries(readDotenv(seed.bytes, { fold })), CODEX_NAMES, fold))
+    assert.equal(was, 'http://corp.example:8080')
+    assert.equal(r.prior.no_proxy ?? r.prior.NO_PROXY, '*.anthropic.com')
+    const lines = r.text.split('\r\n')
+    for (const k of ['https_proxy', 'no_proxy']) assert.ok(lines.some((l) => l.startsWith(`${OFF_PREFIX}${k}=`)), `${k}'s line is out of effect`)
+    for (const k of ['ALL_PROXY', 'HTTP_PROXY']) assert.ok(lines.some((l) => l.startsWith(`${k}=`)), `${k} is ranked after HTTPS_PROXY: it stays`)
+    assert.ok(r.ops.filter((o) => o.inserted === OFF_PREFIX).every((o) => typeof o.key === 'string'), 'each line put out of effect names its key')
+    assert.equal((r.text.match(/(?<!\r)\n/g) || []).length, 0, 'every inserted line ends the way the file does (CRLF)')
+    // an independent reader, by the agent's order — and with the twins the other way round, since that order was never measured
+    const read = Object.entries(readDotenv(Buffer.from(r.text), { fold }))
+    const swapped = ['https_proxy', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY', 'http_proxy', 'HTTP_PROXY']
+    for (const names of [CODEX_NAMES, swapped]) assert.equal(firstSet(read, names, fold), GATE)
+    assert.equal(firstSet(read, ['no_proxy', 'NO_PROXY'], fold), 'localhost,127.0.0.1,::1')
+    const off = removeAsightText(r.text, r.ops, { fold })
+    assert.equal(off.text, before, 'off gives back the bytes')
+    assert.deepEqual(Buffer.from(off.text, 'utf8'), seed.bytes)
+  })
+}
+
+test('text-edit: a twin line the user set again while asight was on keeps its old line out of effect (D48②), the other twin comes back; a twin the entry did not put out of effect is left', () => {
+  const before = 'https_proxy=http://old:1\nno_proxy=a\n'
+  const r = dotenvBlock(before, { HTTPS_PROXY: GATE }, { neutralize: ['https_proxy'], fold: false })
+  const edited = `${r.text}https_proxy=http://new:2\n`
+  const off = removeAsightText(edited, r.ops)
+  assert.equal(off.text, `${OFF_PREFIX}https_proxy=http://old:1\nno_proxy=a\nhttps_proxy=http://new:2\n`)
+  assert.deepEqual(off.prior_left, [{ key: 'https_proxy', line: 1 }])
+  const j = joinDotenvBlock(dotenvBlock('Ssl_Cert_File=/c\nHttps_Proxy=http://x:1\n', { SSL_CERT_FILE: '/b' }, { fold: true }).text, { HTTPS_PROXY: GATE }, { fold: true })
+  assert.match(j.text, new RegExp(`\\n${OFF_PREFIX}Ssl_Cert_File=/c\\n${OFF_PREFIX}Https_Proxy=http://x:1\\n$`), 'folding: any spelling of a block name is that name')
+  assert.deepEqual(j.prior, { HTTPS_PROXY: 'http://x:1' })
 })

@@ -18,6 +18,7 @@
 // ignoring case; every path an entry writes INTO an agent's config (a key's value, a block's variables) is returned with forward slashes, because dotenvy reads a
 // backslash as an escape and silently drops the value; a dotenv block's entry also says `quote: true`, so a profile directory with a space (C:\Users\John Smith) is written in double
 // quotes instead of refused (the entry's `vars` keep the plain path). The PowerShell profile is the Windows login environment: never an entry.
+import { foldsEnvNames } from '../../../off/env-names.mjs'
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import { certsOf, composeBundle } from './bundle.mjs'
@@ -99,7 +100,9 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
           throw new Error(`${where}: a login-environment file only ever gets the launch-shim PATH line, placed after the agent installer's own (D37④)`)
         }
       } else throw new Error(`${where}: unknown entry kind ${e.kind}${e.format ? ` / format ${e.format}` : ''}`)
-      entries.push({ harness: d.name, ...forward(e) })
+      // a block's variables are environment variables: on an OS whose names fold, a user's line of any spelling of them is put out of effect too (`ssl_cert_file`, 4.6「名字族」②)
+      const folds = e.kind === 'text' && e.format === 'dotenv-block' && foldsEnvNames(ctx.os)
+      entries.push({ harness: d.name, ...forward(e), ...(folds ? { fold: true } : {}) })
     }
     for (const o of out.owned || []) {
       const where = `${d.name}: ${o.path}`

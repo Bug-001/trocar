@@ -5,11 +5,12 @@
 // applied in order (json-text.mjs applyOps / reverseOps), so an untouched file is restored byte for byte and nothing
 // of the user's file is ever copied: `removed` is only ever "" or a YAML `[]` asight replaced. Knows no harness.
 import { applyOps, eolOf, markLen } from './json-text.mjs'
+import { sameEnvName, foldEnvName } from './env-names.mjs'
 
 export const SENTINEL = 'asight collector'
 export const BLOCK_BEGIN = `# >>> ${SENTINEL} >>> written by \`asight collector install\`; \`asight collector uninstall\` removes this block`
 export const BLOCK_END = `# <<< ${SENTINEL} <<<`
-// A user's line with the same key, put out of effect by asight (4.6 §身份与信任「名字族」): uninstall strips exactly this prefix.
+// A user's line of the same name family, put out of effect by asight (4.6 §身份与信任「名字族」): uninstall strips exactly this prefix.
 export const OFF_PREFIX = `#${SENTINEL.replace(' ', '-')}-off# `
 export const lineComment = (what) => `# ${SENTINEL}: ${what} (\`asight collector uninstall\` removes this line)`
 
@@ -31,8 +32,10 @@ function assignmentAt(src, at) {
   return m ? { at: from, key: m[1], value: m[2] } : null
 }
 
-// The block at offset 0 with every `vars` key; each user line assigning one of them (export or not) gets OFF_PREFIX.
-// prior = the value the agent used to read (the last assignment wins in dotenvy and python-dotenv), or null.
+// The block at offset 0 with every `vars` key; each user line assigning one of them, or one of `neutralize` (the names that would win over
+// asight's: 4.6「名字族」, core/proxy-names.mjs outranks), export or not, gets OFF_PREFIX — `fold`: names compared without case (env-names.mjs).
+// Each such op carries the line's own name (`key`), so undo knows whose line it is. prior = by name (each name of `vars` and `neutralize` as
+// spelled there), the value the agent used to read (the last assignment wins in dotenvy and python-dotenv), or null.
 // The block ends its lines the way the file does (a .env edited on Windows is CRLF: an editor that keeps a file's line ending then never mixes them); a line's own \r is not part of
 // what it assigns. `quote`: a value that cannot stand unquoted (a space in it) is written in double quotes instead of refused; `vars` keeps the plain value, the quotes are only text.
 const shownVars = (vars, quote) => {
@@ -45,19 +48,26 @@ const shownVars = (vars, quote) => {
   }
   return shown
 }
-export function dotenvBlock(text, vars, { quote = false } = {}) {
+// the names of `vars` and `neutralize` a line's key is (several when they fold to one), and the user lines of them outside `skip`, last first
+const familyOf = (vars, neutralize) => [...new Set([...Object.keys(vars), ...(neutralize || [])])]
+function putOutOfEffect(src, names, fold, skip = () => false) {
+  const ops = []
+  const prior = {}
+  for (const at of [...lineStarts(src)].reverse()) { // highest offset first: earlier offsets stay valid as the ops apply in order
+    if (skip(at)) continue
+    const a = assignmentAt(src, at)
+    const hit = a ? names.filter((n) => sameEnvName(a.key, n, fold)) : []
+    if (!hit.length) continue
+    for (const n of hit) if (!(n in prior)) prior[n] = unquote(a.value)
+    ops.push({ offset: a.at, removed: '', inserted: OFF_PREFIX, key: a.key })
+  }
+  return { ops, prior }
+}
+export function dotenvBlock(text, vars, { quote = false, neutralize = [], fold = false } = {}) {
   const shown = shownVars(vars, quote)
   const src = text == null ? '' : text
   const eol = eolOf(src)
-  const ops = []
-  const prior = {}
-  const starts = lineStarts(src)
-  for (const at of [...starts].reverse()) { // highest offset first: earlier offsets stay valid as the ops apply in order
-    const a = assignmentAt(src, at)
-    if (!a || !(a.key in vars)) continue
-    if (!(a.key in prior)) prior[a.key] = unquote(a.value)
-    ops.push({ offset: a.at, removed: '', inserted: OFF_PREFIX })
-  }
+  const { ops, prior } = putOutOfEffect(src, familyOf(vars, neutralize), fold)
   const block = [BLOCK_BEGIN, ...Object.entries(shown).map(([k, v]) => `${k}=${v}`), BLOCK_END].join(eol) + eol
   ops.push({ offset: markLen(src), removed: '', inserted: block }) // after the mark: the file still starts with it
   return { text: applyOps(src, ops), ops, prior: Object.keys(prior).length ? prior : null }
@@ -67,8 +77,9 @@ export function dotenvBlock(text, vars, { quote = false } = {}) {
  *  lines join the trust block the trust entry wrote). Only an entry that says `joinBlock: true` reaches this, and only through a journal whose manifest
  *  lists the block for the same harness (journal.mjs); everything else keeps dotenvBlock's refusal of a second block. The file's own line ending is kept,
  *  the new lines go in before the block's end marker, and the user's lines assigning one of `vars` outside the block get OFF_PREFIX exactly as dotenvBlock's
- *  (the last assignment wins in dotenvy and python-dotenv, so what is left outside is out of effect). `prior` is the value each joined key had outside. */
-export function joinDotenvBlock(text, vars, { quote = false } = {}) {
+ *  (the last assignment wins in dotenvy and python-dotenv, so what is left outside is out of effect), and so do `neutralize`'s (`fold` as there).
+ *  `prior` is the value each joined name had outside, by name. */
+export function joinDotenvBlock(text, vars, { quote = false, neutralize = [], fold = false } = {}) {
   const shown = shownVars(vars, quote)
   if (text == null) throw new Error('there is no asight block to join')
   const begin = text.indexOf(BLOCK_BEGIN)
@@ -77,15 +88,7 @@ export function joinDotenvBlock(text, vars, { quote = false } = {}) {
   const eol = eolOf(text)
   const atEnd = text.lastIndexOf('\n', end) + 1 // the start of the block's end-marker line: the new lines go right before it
   const insideBlock = (at) => at >= begin && at < end + BLOCK_END.length
-  const prior = {}
-  const ops = []
-  for (const at of lineStarts(text)) {
-    if (insideBlock(at)) continue
-    const a = assignmentAt(text, at)
-    if (!a || !(a.key in vars)) continue
-    if (!(a.key in prior)) prior[a.key] = unquote(a.value)
-    ops.push({ offset: a.at, removed: '', inserted: OFF_PREFIX })
-  }
+  const { ops, prior } = putOutOfEffect(text, familyOf(vars, neutralize), fold, insideBlock)
   ops.push({ offset: atEnd, removed: '', inserted: Object.entries(shown).map(([k, v]) => `${k}=${v}`).join(eol) + eol, asight: true }) // `asight`: these lines are asight's without carrying the sentinel, so removeAsightText takes them out too
   ops.sort((a, b) => b.offset - a.offset) // pure insertions: highest offset first, the lower ones stay valid (dotenvBlock's order)
   return { text: applyOps(text, ops), ops, prior: Object.keys(prior).length ? prior : null }
@@ -132,7 +135,7 @@ const one = (src, offset, inserted) => ({ text: applyOps(src, [{ offset, removed
 // goes, not only the first (an agent that reads the line it finds last would still see a copy). A line asight wrote
 // that this cannot find is not "already gone": asightResidue says so (journal.mjs leaves the file alone then).
 // The user's lines asight put out of effect (OFF_PREFIX) are handled key by key (D48②): for each key K the entry's
-// block assigned (`fold`: K compared without case, 4.6「名字族」), when the file still has an assignment of K in effect
+// block assigned, or whose line an op names (`key`: a name of the family put out of effect, 4.6「名字族」) (`fold`: K compared without case, 4.6「名字族」), when the file still has an assignment of K in effect
 // once asight's lines are out, that is the value the user set while asight was on — it wins, so K's prefixed lines stay
 // out of effect and are reported (`prior_left: [{ key, line }]`, line = 1-based in the returned text); else the prefix
 // comes off K's lines and the user's old value is back. A prefixed line of a key this entry did not assign is not its
@@ -141,7 +144,6 @@ const one = (src, offset, inserted) => ({ text: applyOps(src, [{ offset, removed
 const escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 // a key as a pattern: `fold` matches it in any case (character classes, so the value beside it is still compared exactly)
 const keyRe = (key, fold) => (fold ? [...key].map((c) => (/[A-Za-z]/.test(c) ? `[${c.toUpperCase()}${c.toLowerCase()}]` : escapeRe(c))).join('') : escapeRe(key))
-const sameKey = (a, b, fold) => (fold ? a.toUpperCase() === b.toUpperCase() : a === b)
 function dropLine(t, line) { // its first whole-line occurrence, with its own newline; null when absent
   const m = new RegExp(`(^\uFEFF?|\n)[ \\t]*${escapeRe(line.trim())}[ \\t]*\\r?(\n|$)`).exec(t)
   if (!m) return null
@@ -165,8 +167,9 @@ const ASSIGN_KEY = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/
 const keyInEffect = (l) => { const m = ASSIGN_KEY.exec(l.replace(/^\uFEFF/, '')); return m ? m[1] : null }
 function restorePrior(t, keys, fold) { // { text, changed, prior_left }: the prefixed lines of `keys`, key by key
   const lines = t.split('\n')
-  const ours = (k) => k != null && keys.some((K) => sameKey(K, k, fold))
-  const inEffect = new Set(lines.map(keyInEffect).filter(ours).map((k) => (fold ? k.toUpperCase() : k)))
+  const ours = (k) => k != null && keys.some((K) => sameEnvName(K, k, fold))
+  const id = (k) => (fold ? foldEnvName(k) : k)
+  const inEffect = new Set(lines.map(keyInEffect).filter(ours).map(id))
   const prior = []
   let changed = false
   lines.forEach((l, i) => {
@@ -174,7 +177,7 @@ function restorePrior(t, keys, fold) { // { text, changed, prior_left }: the pre
     if (!m) return
     const k = keyInEffect(l.slice(m[0].length))
     if (!ours(k)) return
-    if (inEffect.has(fold ? k.toUpperCase() : k)) { prior.push({ key: k, line: i + 1 }); return }
+    if (inEffect.has(id(k))) { prior.push({ key: k, line: i + 1 }); return }
     lines[i] = m[1] + l.slice(m[0].length)
     changed = true
   })
@@ -196,6 +199,7 @@ export function removeAsightText(text, ops, { fold = false } = {}) {
   let found = false
   const keys = []
   for (const op of ops) {
+    if (op.inserted === OFF_PREFIX && typeof op.key === 'string') { keys.push(op.key); continue } // a user's line of the family the block put out of effect
     if (!op.inserted.includes(SENTINEL) && op.asight !== true) continue // a joined block's lines are asight's without the sentinel (joinDotenvBlock)
     if (op.removed !== '') { // a row that replaced the user's `[]`: the `[]` comes back in its place
       const i = t.indexOf(op.inserted)

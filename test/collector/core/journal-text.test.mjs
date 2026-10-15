@@ -5,8 +5,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { applyTextEntry, previewTextEntry, undoEntry, newManifest, readManifest, sha256, manifestPath, writeOwnedFile, removeOwnedFile, describeEntry } from '../../../src/collector/core/trust/journal.mjs'
+import { applyJsonKey, applyTextEntry, previewTextEntry, undoEntry, newManifest, readManifest, sha256, manifestPath, writeOwnedFile, removeOwnedFile, describeEntry } from '../../../src/collector/core/trust/journal.mjs'
 import { lineComment, OFF_PREFIX } from '../../../src/off/text-edit.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 
 function box() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-jt-'))
@@ -109,4 +110,37 @@ test('journal owned files: a plugin in an agent\'s directory is listed with the 
     assert.ok(!fs.existsSync(path.dirname(plug)) && fs.existsSync(path.join(b.root, '.config', 'opencode', 'opencode.json')), 'only empty dirs asight created go')
     assert.deepEqual(removeOwnedFile(item), { path: plug, result: 'already-removed' })
   } finally { b.done() }
+})
+
+// ---- the JSON form of the name family (4.6「名字族」: `alsoSet`): a member already there that would win over asight's key gets the value too ----
+for (const [platform, how] of [['win32', { fold: true }], ['darwin', { alsoSet: ['https_proxy'] }]]) {
+  test(`journal json (${platform} rules): settings.json's env.https_proxy is given the door as its own json-key entry, keyed by its own spelling; off gives back the bytes`, () => {
+    const home = tmpDir('asight-jt-family-')
+    const dir = path.join(home, '.asight', 'collector')
+    const file = path.join(home, '.claude', 'settings.json'); fs.mkdirSync(path.dirname(file))
+    const before = '{\r\n  "env": {\r\n    "https_proxy": "http://corp.example:8080",\r\n    "Other": "1"\r\n  }\r\n}\r\n'
+    fs.writeFileSync(file, before)
+    const door = 'http://claude-code.settings:a1b2c3d4e5f60718@127.0.0.1:17991'
+    const m = newManifest()
+    applyJsonKey({ phase: 'on', dir, home, manifest: m, harness: 'claude-code', file, keys: ['env', 'HTTPS_PROXY'], value: door, ...how })
+    const env = JSON.parse(fs.readFileSync(file, 'utf8')).env
+    assert.deepEqual(env, { https_proxy: door, Other: '1', HTTPS_PROXY: door }, 'the member keeps its place and its spelling; only its value changed')
+    assert.deepEqual(m.entries.map((e) => [e.kind, e.keys.join('.'), e.prior_value]), [['json-key', 'env.HTTPS_PROXY', null], ['json-key', 'env.https_proxy', 'http://corp.example:8080']])
+    assert.equal(m.entries.every((e) => e.fold === (how.fold === true ? true : undefined)), true, 'fold is recorded when names fold')
+    assert.equal(applyJsonKey({ phase: 'on', dir, home, manifest: m, harness: 'claude-code', file, keys: ['env', 'HTTPS_PROXY'], value: door, ...how }), null, 'on; on: nothing new')
+    assert.equal(m.entries.length, 2)
+    for (const e of [...m.entries].reverse()) assert.equal(undoEntry(e).result, 'restored')
+    assert.equal(fs.readFileSync(file, 'utf8'), before)
+  })
+}
+
+test('journal json: a member that is not there is never added, a config key never folds, and a member of another object is not touched', () => {
+  const home = tmpDir('asight-jt-family-')
+  const dir = path.join(home, '.asight', 'collector')
+  const file = path.join(home, 'config.json')
+  fs.writeFileSync(file, '{"network": {"HttpProxy": "x"}, "env": {"https_proxy": "y"}}\n')
+  const m = newManifest()
+  applyJsonKey({ phase: 'on', dir, home, manifest: m, harness: 'z-code', file, keys: ['network', 'httpProxy'], value: 'http://127.0.0.1:1' })
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { network: { HttpProxy: 'x', httpProxy: 'http://127.0.0.1:1' }, env: { https_proxy: 'y' } })
+  assert.equal(m.entries.length, 1)
 })

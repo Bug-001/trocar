@@ -28,6 +28,7 @@ import { backupDir } from '../../../off/paths.mjs'
 import { CODE_OFF } from '../../../off/names.mjs'
 import { describeEntry } from '../../../off/journal.mjs'
 import { decodeText, encodeText, WHY_TEXT } from '../../../off/text-codec.mjs'
+import { isAlsoSetMember } from '../../../off/env-names.mjs'
 
 // One file under two spellings is one file (X18): every path the journal compares goes through pathKey (src/off/fsutil.mjs).
 const realOf = (fs) => (d) => fs.realpathSync.native(d) // the file system the journal is handed decides what a path is (pathKey)
@@ -177,7 +178,22 @@ function commit({ dir, manifest, fresh, resumed, before, res, backup, real, char
 
 // A symlinked file is edited at its target; the entry records both (`path` the link, `real_path` the target). An entry the manifest already lists
 // is judged first (judgeEntry): intact → handed back as it is, nothing written; an intent a crash left → finished; changed by the user → refused.
-export function applyJsonKey({ dir, manifest, harness, phase, file, keys, value, home, now = new Date(), fs = nodeFs }) {
+// `alsoSet` (names) and `fold` (4.6「名字族」: the JSON form): every member of the same object that is ALREADY there and is named in `alsoSet`, or is
+// the key's own name compared without case when `fold`, gets the value too — each one its own plain json-key entry, keyed by the member's own
+// spelling, with its own prior_value (an older build undoes it as any json-key). A member is only ever given the value: never removed, moved or
+// added. `fold` is recorded on every entry it makes (`fold: true`).
+export function applyJsonKey({ dir, manifest, harness, phase, file, keys, value, home, alsoSet = [], fold = false, now = new Date(), fs = nodeFs }) {
+  const main = setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fold, now, fs })
+  const leaf = keys[keys.length - 1]
+  const named = (m) => isAlsoSetMember(m, leaf, alsoSet, fold)
+  if (!alsoSet.length && !fold) return main
+  let parent
+  try { parent = getPath(parseJsonText(readUserText(file, readOrNull(fs, editTarget(file, fs))).text), keys.slice(0, -1)) } catch { return main }
+  if (!parent || typeof parent !== 'object' || Array.isArray(parent)) return main
+  for (const m of Object.keys(parent).filter(named)) setOneKey({ dir, manifest, harness, phase, file, keys: [...keys.slice(0, -1), m], value, home, fold, now, fs })
+  return main
+}
+function setOneKey({ dir, manifest, harness, phase, file, keys, value, home, fold, now, fs }) {
   needHome('applyJsonKey', home)
   needPhase('applyJsonKey', phase)
   const j = judgeEntry({ manifest, planned: { harness, kind: 'json-key', path: file, keys }, fs })
@@ -194,12 +210,13 @@ export function applyJsonKey({ dir, manifest, harness, phase, file, keys, value,
     kind: 'json-key', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), keys, value,
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : 0o600,
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
-    existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
+    existing_depth: res.existingDepth, created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(), ...(fold ? { fold: true } : {}),
   }
   return commit({ dir, manifest, fresh, resumed, before, res, real, charset: read.charset, now, fs, backup: () => backupFirst({ home, file, before, now, fs }) }) // keyed by the path the user knows (the link, for a symlinked file), holding the target's bytes
 }
 
-// A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars, quote? } | { format: 'line', line, after? } |
+// A text entry (text-edit.mjs): edit = { format: 'dotenv-block', vars, quote?, neutralize?, fold? } (the names put out of effect with the
+// block's own, 4.6「名字族」; recorded on the entry, `fold` as `fold: true`) | { format: 'line', line, after? } |
 // { format: 'yaml-list', line } | a dotenv-block with `joinBlock: true` (4.8 §2.3: the proxy lines of Codex and Hermes
 // join the sentinel block the trust entry wrote — one block per file, entered separately). Text asight already put there
 // under an install this manifest does not list is refused: a second block or row would only be undone once. `joined` (the
@@ -213,8 +230,9 @@ function editText(file, text, edit, { joined = false } = {}) {
   }
   try {
     if (edit.format === 'dotenv-block') {
-      if (joined && text != null && text.includes(BLOCK_BEGIN)) return joinDotenvBlock(text, edit.vars, { quote: edit.quote === true })
-      return dotenvBlock(text, edit.vars, { quote: edit.quote === true })
+      const how = { quote: edit.quote === true, neutralize: edit.neutralize || [], fold: edit.fold === true }
+      if (joined && text != null && text.includes(BLOCK_BEGIN)) return joinDotenvBlock(text, edit.vars, how)
+      return dotenvBlock(text, edit.vars, how)
     }
     if (edit.format === 'line' || edit.format === 'yaml-list') return { ...insertLine(text, { line: edit.line, after: edit.after || null, format: edit.format === 'yaml-list' ? 'yaml-list' : 'lines' }), prior: null }
   } catch (e) { throw new Error(`${file}: ${e.message}`) }
@@ -244,6 +262,7 @@ export function applyTextEntry({ dir, manifest, harness, phase, file, edit, home
   const fresh = {
     kind: 'text', harness, phase, path: file, ...(real !== file ? { real_path: real } : {}), format: edit.format,
     ...(edit.vars ? { vars: edit.vars } : { line: edit.line }),
+    ...(edit.neutralize && edit.neutralize.length ? { neutralize: edit.neutralize } : {}), ...(edit.fold === true ? { fold: true } : {}),
     existed_before: before != null, mode: before != null ? fs.statSync(real).mode & 0o777 : (edit.mode || 0o600),
     pre_sha256: sha256(before), post_sha256: null, ops: res.ops, prior_value: res.prior,
     created_dirs: missingDirs(path.dirname(file), fs), installed_at: now.toISOString(),
