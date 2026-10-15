@@ -8,8 +8,9 @@ export const HOLDER_POLL_MS = 10_000
 
 const keyOf = (h) => `${h.harness}\0${h.pid}\0${h.start ?? ''}`
 
-/** The daemon exits after `off` only when no harness is on, no holder lives and no connection is open (P12). */
-export const mayExit = ({ harnessesOn = [], holders = [], openConns = 0 } = {}) => harnessesOn.length === 0 && holders.length === 0 && !(openConns > 0)
+/** The daemon exits after `off` only when no harness is on, no holder lives and no connection is open (P12). `holders` null (the poll has no readable
+ *  table yet) is unknown, so the daemon may not exit. */
+export const mayExit = ({ harnessesOn = [], holders = [], openConns = 0 } = {}) => harnessesOn.length === 0 && Array.isArray(holders) && holders.length === 0 && !(openConns > 0)
 
 /** Polls `list()` (→ holdersOf's rows; it reads the process table, never the connections) every `every` ms through injected `timers`
  *  ({ setTimeout, clearTimeout }); `onChange(rows)` when the set of (harness, pid, start) changes, the first answer included. A list that throws keeps

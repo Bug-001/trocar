@@ -18,7 +18,8 @@ export function holdersOf({ manifest, procs = [], doorSeen = [], agentList = nul
   const { liveness } = withAgentList(raw, agentList)
   const out = []
   for (const [h, l] of Object.entries(liveness)) {
-    if (!l || typeof l !== 'object' || l.per_request) continue
+    // holders exist only after off (1.6 R5): a record without on_at is not the model's (Linux, the old model), one without off_at is still on
+    if (!l || typeof l !== 'object' || l.per_request || l.on_at == null || l.off_at == null) continue
     const since = msOf(l.on_at), until = msOf(l.off_at)
     const seen = new Set()
     const add = (p, why) => { if (!seen.has(p.pid)) { seen.add(p.pid); out.push({ harness: h, pid: p.pid, start: p.startedAt ?? null, why }) } }

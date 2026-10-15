@@ -69,5 +69,6 @@ export async function startControlServer({ socketPath, routes, maxBody = 64 * 10
   }
 }
 
-/** GET /holders (4.11 P12; registered on the daemon): `holders()` → holdersOf's rows, the daemon's last poll. → { count, holders }. */
-export const holdersRoute = ({ holders }) => async () => { const rows = (await holders()) || []; return { count: rows.length, holders: rows } }
+/** GET /holders (4.11 P12; registered on the daemon): `holders()` → holdersOf's rows, the daemon's last poll. → { count, holders }; before a
+ *  first readable table (null) → { count: null, holders: null, unknown: true }: an unknown table is never "nobody holds the door". */
+export const holdersRoute = ({ holders }) => async () => { const rows = await holders(); return Array.isArray(rows) ? { count: rows.length, holders: rows } : { count: null, holders: null, unknown: true } }

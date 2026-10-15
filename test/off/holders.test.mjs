@@ -35,12 +35,20 @@ test('an idle holder needs no connection: the judge reads only the process table
   assert.deepEqual(holdersOf({ manifest: manifest({ agentx: rec('agentx') }), procs }).map((x) => x.pid), [2])
 })
 
-test('a harness still on (no off_at) counts every process started since on_at', () => {
-  const { off_at, ...open } = rec('agentx')
-  assert.equal(off_at, iso(OFF))
-  const procs = [proc(5, 'agentx', OFF + 3600_000)]
-  assert.equal(holdersOf({ manifest: manifest({ agentx: open }), procs }).length, 1)
-})
+// the record axis × procs: holders exist only after off — no on_at (Linux, the old model), on_at without off_at (still on) → none; both → the window
+const RECORDS = [['no on_at', ({ on_at, off_at, ...r }) => r, false], ['on_at without off_at', ({ off_at, ...r }) => r, false], ['no on_at, off_at set', ({ on_at, ...r }) => r, false], ['both', (r) => r, true]]
+const PROCSETS = [['inside', [proc(5, 'agentx', ON + 5)]], ['before on', [proc(5, 'agentx', ON - 5)]], ['after off', [proc(5, 'agentx', OFF + 5)]], ['start unknown', [proc(5, 'agentx', null)]], ['none', []]]
+for (const [rl, shape, windowed] of RECORDS) for (const rr of [false, true]) for (const [pl, procs] of PROCSETS) {
+  test(`record ${rl}${rr ? ' (rereads)' : ''} × process ${pl}: ${windowed ? 'the window decides' : 'no holder'}`, () => {
+    const l = shape(rec('agentx', { rereads: rr }))
+    const doorSeen = procs.filter((p) => p.startedAt == null || p.startedAt < ON + 1).map((p) => ({ harness: 'agentx', pid: p.pid, start: p.startedAt, at: ON + 1 })) // seen inside the window
+    const h = holdersOf({ manifest: manifest({ agentx: l }), procs, doorSeen })
+    if (!windowed) return assert.deepEqual(h, [])
+    const s = procs.length ? procs[0].startedAt : undefined
+    const want = s === undefined ? 0 : s == null || doorSeen.length || (rr ? s < OFF : s >= ON && s < OFF) ? 1 : 0
+    assert.equal(h.length, want)
+  })
+}
 
 test('doorSeen: a process the door identified during h\'s window holds, matched by pid AND start (a reused pid does not)', () => {
   const m = manifest({ agentx: rec('agentx') })
@@ -87,4 +95,25 @@ test('off writes liveness.<h>.off_at, keeps the model record after its items are
   assert.deepEqual(back.liveness.legacy, m.liveness.legacy, 'a record of the old model gets no off_at')
   const failing = await undoHarnesses({ dir, home, manifest: readManifest(dir), procs: async () => { throw new Error('ps died') }, now: at })
   assert.equal(failing.holders, null, 'a table that cannot be read is "not known", never "none"')
+})
+
+test('a repeated off keeps the first off_at (D54): a process started between the two offs is not a holder; an on after the off opens a new window', async () => {
+  const { tmpDir } = await import('../helpers/tmp.mjs')
+  const { newManifest, saveManifest, readManifest } = await import('../../src/off/manifest.mjs')
+  const { undoHarnesses } = await import('../../src/off/undo.mjs')
+  const dir = tmpDir('holders-reoff'), home = tmpDir('holders-reoff-home')
+  const m = newManifest()
+  const { off_at, ...open } = rec('agentx')
+  m.liveness = { agentx: open }
+  saveManifest(dir, m)
+  const between = proc(6, 'agentx', OFF + 1000)
+  await undoHarnesses({ dir, home, manifest: readManifest(dir), ids: null, procs: async () => [between], now: new Date(OFF) })
+  const second = await undoHarnesses({ dir, home, manifest: readManifest(dir), ids: null, procs: async () => [between], now: new Date(OFF + 5000) })
+  assert.equal(readManifest(dir).liveness.agentx.off_at, iso(OFF), 'the second off did not move off_at')
+  assert.deepEqual(second.holders || [], [], 'the process started after the first off went direct: not a holder')
+  const again = readManifest(dir)
+  again.liveness.agentx.on_at = iso(OFF + 10_000) // on again: on_at is past the old off_at, so the next off closes the new window
+  saveManifest(dir, again)
+  await undoHarnesses({ dir, home, manifest: readManifest(dir), ids: null, procs: async () => [], now: new Date(OFF + 20_000) })
+  assert.equal(readManifest(dir).liveness.agentx.off_at, iso(OFF + 20_000))
 })

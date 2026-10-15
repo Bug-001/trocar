@@ -346,7 +346,10 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   // P12 (4.11): a route of the collector model is off now — its record gets `off_at`, and it stays after its items are gone: the holder table
   // (the receipt's 「还剩 N 个」, status, uninstall's refusal while the daemon is down) is judged from it. A record without `on_at` is not the model's.
   const windowed = Object.keys(liveness).filter((h) => inScope(h) && liveness[h] && typeof liveness[h] === 'object' && liveness[h].on_at)
-  for (const h of windowed) liveness[h].off_at = now.toISOString()
+  for (const h of windowed) { // only a record that is on gets off_at: a repeated off keeps the first (D54), else a process started between the two would be judged a holder
+    const l = liveness[h], on = Date.parse(l.on_at), off = l.off_at == null ? NaN : Date.parse(l.off_at)
+    if (!Number.isFinite(off) || (Number.isFinite(on) && off < on)) l.off_at = now.toISOString()
+  }
   if (windowed.length) {
     const t = await table()
     out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))

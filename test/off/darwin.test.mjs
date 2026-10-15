@@ -44,14 +44,14 @@ const writePlist = (home) => { const f = plistOf(home); fs.mkdirSync(path.dirnam
 // the flip checklist ① (4.9 §4 末): a no-names `off` on darwin undoes the autostart through launchd — the agent booted out, the plist gone — and
 // systemctl is never asked for anything. There is no daemon (no lock): the `unitIsUp` branch is what stops the (absent) daemon, so the arm's bootout
 // is the only thing between KeepAlive and a daemon coming back.
-test('the flip ① (4.9 §4) with a no-names off on darwin with no daemon stops the loaded agent (disable, then bootout: nothing drains) and keeps the plist — launchd verbs only, never systemctl', async () => {
+test('the flip ① (4.9 §4) with a no-names off on darwin with no daemon stops the loaded agent (bootout: nothing drains; then the disable of step 5) and keeps the plist — launchd verbs only, never systemctl', async () => {
   const home = tmpDir('asight-off-darwin-')
   const plist = writePlist(home)
   const launchd = fakeLaunchd()
   const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: { platform: 'darwin', exec: launchd.run, procs: async () => [], sleep: async () => {} } })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
   const at = (re) => launchd.calls.findIndex((c) => re.test(c))
-  assert.ok(at(/^launchctl disable /) >= 0 && at(/^launchctl disable /) < at(/^launchctl bootout /), `disable precedes the bootout: ${JSON.stringify(launchd.calls)}`)
+  assert.ok(at(/^launchctl bootout /) >= 0 && at(/^launchctl disable /) > at(/^launchctl bootout /), `the stop boots the agent out, then step 5 disables it: ${JSON.stringify(launchd.calls)}`)
   assert.ok(launchd.has(new RegExp(`^launchctl bootout ${DOMAIN}/${LABEL}$`)), 'no daemon runs, so the loaded agent is booted out (the slash form)')
   assert.ok(!launchd.has(/systemctl/), 'no systemd verb runs on darwin')
   assert.ok(fs.existsSync(plist), 'the plist stays (an install item): the disabled job is not loaded at a login')
@@ -123,7 +123,7 @@ test('the flip ① (4.9 §4): a stuck daemon on darwin is stopped launchd-first 
   })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
   const bootoutAt = order.findIndex((x) => x === `launchctl bootout ${DOMAIN}/${LABEL}`)
-  assert.ok(order.indexOf(`launchctl disable ${DOMAIN}/${LABEL}`) >= 0 && order.indexOf(`launchctl disable ${DOMAIN}/${LABEL}`) < bootoutAt, 'disable first, so launchd loads it no more')
+  assert.ok(!launchd.has(/^launchctl disable /), `a named off never disables the autostart, even when it stops a stuck daemon (1.6 §1.4): ${JSON.stringify(order)}`)
   const firstSignalAt = order.findIndex((x) => /^kill /.test(x))
   assert.ok(bootoutAt >= 0 && firstSignalAt >= 0 && bootoutAt < firstSignalAt, `the bootout precedes the first signal (4.9 §4's order): ${JSON.stringify(order)}`)
   assert.ok(!launchd.has(/systemctl/), 'and still no systemd verb')

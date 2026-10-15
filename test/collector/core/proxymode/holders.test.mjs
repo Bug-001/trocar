@@ -55,5 +55,10 @@ test('doorSeen records pid + start at accept, once, and holdersOf counts it with
 test('GET /holders answers the count and the rows', async () => {
   const h = holdersRoute({ holders: () => [{ harness: 'agentx', pid: 1, start: 2, why: 'rereads' }] })
   assert.deepEqual(await h({}), { count: 1, holders: [{ harness: 'agentx', pid: 1, start: 2, why: 'rereads' }] })
-  assert.deepEqual(await holdersRoute({ holders: () => null })({}), { count: 0, holders: [] })
+  assert.deepEqual(await holdersRoute({ holders: () => null })({}), { count: null, holders: null, unknown: true }, 'no readable table yet: unknown, never 0')
+})
+
+test('mayExit: holders unknown (null, the poll before a first readable table) means the daemon may not exit, and never throws', () => {
+  assert.equal(mayExit({ harnessesOn: [], holders: null, openConns: 0 }), false)
+  assert.equal(mayExit({ harnessesOn: [], holders: [], openConns: 0 }), true)
 })

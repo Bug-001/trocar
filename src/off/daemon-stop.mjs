@@ -218,9 +218,8 @@ export async function stopDaemon({ lockFile, socketPath = null, exec = null, kil
     // BEFORE any signal, so what is stopped stays stopped. The plist stays in ~/Library/LaunchAgents — the next login brings the job back, the same temporary
     // stop `systemctl --user stop` is on Linux; the full undo (bootout AND the plist) is a no-names off's step 5 (src/off/darwin.mjs undoAutostart).
     const uid = typeof process.getuid === 'function' ? process.getuid() : -1
-    // `launchctl disable` first — launchd then never loads the job again (a login, a relaunch) until `on` enables it; the bootout below is only for a
-    // daemon that does not answer (this stuck path): a draining daemon is never booted out, it exits itself (KeepAlive SuccessfulExit=false keeps it out)
-    launchctl(['disable', `gui/${uid}/${AGENT_LABEL}`], { run: exec, env })
+    // no `launchctl disable` here (1.6 §1.4): this stop path serves a named off with a stuck daemon too, which must not touch the autostart; only a
+    // no-names off disables, in its step 5 (darwin.mjs disableAgent). A draining daemon never reaches this path: it exits itself.
     const q = agentState({ exec, env, uid })
     if (q.state === 'present') {
       // the SLASH form (`gui/<uid>/<label>`, one argument — the rule `launchctl` in darwin.mjs carries): the two-argument
