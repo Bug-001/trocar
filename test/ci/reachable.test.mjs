@@ -35,6 +35,7 @@ export const UNREACHED = Object.freeze({
   'src/collector/core/proxymode/hooks/wrapper.mjs': 'T17 lands the P8 install-folder wrapper (preconditions, place, undo, status) ahead of its caller; T20 install places it and removes this row',
   'src/collector/core/proxymode/hooks/render.mjs': 'T17 lands the hook template renderer; T20 install renders the wrapper and the plugin templates through it and removes this row',
   'src/collector/arch/darwin/wrapper.mjs': 'T17 lands the dash wrapper renderer; T20 install passes it to placeWrapper and removes this row',
+  'src/collector/arch/win32/wrapper.mjs': 'T17 lands the C# wrapper renderer and the csc.exe compile; T20 install passes them to placeWrapper and removes this row',
   'src/collector/core/proxymode/sources.mjs': 'the descriptor reader lands ahead of its callers; T15 wires it in and removes this row',
   'src/collector/core/tls/issuer.mjs': 'T12 lands the intermediate issuer ahead of the daemon; it is wired into the doors next, which removes this row',
   'src/off/root-store.mjs': 'T12 lands the P3 argv (plan §E.5 #3) ahead of its callers; T13 / T14 (custody backends) and T20 (install) import it and remove this row',

@@ -159,3 +159,31 @@ test('CM11 undo and status: restore while the wrapper is still asight\'s; after 
   fs.rmSync(over.file)
   assert.equal(checkWrapper(over.ctx, again.record).reason, 'entry-missing')
 })
+
+test('CM11 win wrapper.cs: rendered with C# literals, the same semantics stated in code, compiled by the inbox csc.exe (real compile + run: acceptance L4, N/A on a Mac)', async () => {
+  const { renderWrapper: renderCs, makeCompile } = await import('../../../../src/collector/arch/win32/wrapper.mjs')
+  const v = { REAL: 'C:\\Users\\u\\.tool\\bin\\.asight-real\\tool.exe', SWITCH: 'C:\\Users\\u\\.asight\\switch\\tool', CA_FILE: 'C:\\Users\\u\\é "ca".pem\u2028', CERT_VAR, PROXY_ENV, PROXY_NAMES }
+  const src = renderCs(v)
+  assert.doesNotMatch(src, /__ASIGHT_/, 'every slot filled')
+  assert.ok(src.includes('const string Real = "C:\\\\Users\\\\u\\\\.tool\\\\bin\\\\.asight-real\\\\tool.exe"'), 'a path is one escaped C# literal')
+  assert.ok(src.includes('"C:\\\\Users\\\\u\\\\é \\"ca\\".pem\\u2028"'), 'quotes and line separators escaped')
+  assert.ok(src.includes(`ProxyEnv = new string[] { ${PROXY_ENV.map((x) => JSON.stringify(x)).join(', ')} }`))
+  for (const [what, re] of [
+    ['cert var only when unset', /if \(Get\(CertVar\) == null\) Environment\.SetEnvironmentVariable\(CertVar, CaFile\)/],
+    ['the switch file decides routing', /File\.Exists\(Switch\)/],
+    ['prior = first set non-door name, else none', /if \(v != door\) \{ prior = v; break; \}[\s\S]*"none"/],
+    ['argv: the command line tail verbatim', /Tail\(Environment\.CommandLine\)/],
+    ['inherited std handles', /si\.flags = 0x100[\s\S]*GetStdHandle\(-10\)[\s\S]*CreateProcessW\(Real, new StringBuilder\(cmd, 32768\), IntPtr\.Zero, IntPtr\.Zero, true,/],
+    ["the child's exit code", /GetExitCodeProcess\(pi\.hp, out code\); return code;/],
+  ]) assert.match(src, re, what)
+  assert.equal((src.match(/\{/g) || []).length, (src.match(/\}/g) || []).length, 'braces balance')
+  const calls = [], files = new Map()
+  const fsStub = { mkdirSync() {}, writeFileSync: (f, d) => files.set(f, d), readFileSync: (f) => Buffer.from(`exe-of:${files.get(f.replace(/\.exe$/, '.cs'))}`), rmSync: (f) => files.delete(f) }
+  const compile = makeCompile({ dir: 'D', fs: fsStub, run: (file, args) => { calls.push([file, ...args]); return { status: 0, stdout: '', stderr: '' } } })
+  assert.equal(compile('SRC').toString(), 'exe-of:SRC')
+  assert.match(calls[0][0], /\\csc\.exe$/, 'the inbox compiler')
+  assert.ok(calls[0].includes('/target:exe') && calls[0].some((a) => a.startsWith('/out:')))
+  assert.equal(files.size, 0, 'the source and the build are removed')
+  const failing = makeCompile({ dir: 'D', fs: fsStub, run: () => ({ status: 1, stdout: 'error CS1002', stderr: '' }) })
+  assert.throws(() => failing('SRC'), /csc\.exe could not build the wrapper \(exit 1\): error CS1002/)
+})

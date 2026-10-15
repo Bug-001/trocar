@@ -74,6 +74,7 @@ export function persistentEnv(names, { run = null, env = process.env } = {}) {
  *  and the persistent environment is the registry's. */
 export const platformFacts = ({ run = null, env = process.env } = {}) => Object.freeze({
   envCaseInsensitive: true,
+  exeSuffix: '.exe', // a command's program file name (4.11 P8)
   pathKey: (p) => pathKey(p, { platform: 'win32' }).toLowerCase(),
   persistentEnv: (names) => persistentEnv(names, { run, env }),
 })
