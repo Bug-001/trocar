@@ -13,7 +13,7 @@
 import path from 'node:path'
 import { parseJsonc } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
-import { envProxies, urlHostsDeep, truthy } from './_common.mjs'
+import { envProxies, urlHostsDeep, truthy, perOs } from './_common.mjs'
 import { renderPlugin } from './_plugins.mjs'
 
 const MANAGED = { linux: '/etc/opencode/opencode.json', darwin: '/Library/Application Support/opencode/opencode.json' }
@@ -70,10 +70,33 @@ const proxy = {
   restart: { hint: '退出这个 OpenCode(含 serve / web),在设好代理环境变量的终端里重新启动', processes: processes.names[0].name },
 }
 
+// Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (a plugin in OpenCode's plugin folder routes
+// every form; the root alone trusts). Ruling ⑳: OpenCode 1.x installs @opencode-ai/plugin into the config dir for any plugin, which outlives `off`.
+const CONFIG = (path) => ({ base: 'home', dir: '.config', env: 'XDG_CONFIG_HOME', path: `opencode/${path}` })
+const form = (id, present) => ({ id, os: ['darwin', 'win32'], route: 'plugin', cert: 'root', trust: 'root', present, verified: { darwin: true, win32: true } })
+const proxyMode = {
+  forms: [
+    form('opencode.cli', [{ command: 'opencode' }, { base: 'home', path: '.opencode/bin' }]),
+    form('opencode.cli-v2', [{ command: 'opencode' }]),
+    form('opencode.desktop', [perOs({ darwin: { base: 'abs', path: '/Applications/OpenCode.app' }, win32: { base: 'localAppData', path: 'Programs/@opencodedesktop' } }), perOs({ darwin: { base: 'appSupport', path: 'ai.opencode.desktop' } })]),
+    form('opencode.vscode', [{ command: 'opencode' }]),
+    form('opencode.acp', [{ command: 'opencode' }]),
+  ],
+  routes: {
+    plugin: { kind: 'plugin-file', dir: CONFIG('plugins'), template: 'opencode-plugin', value: 'door-url', rereads: true, absent: 'create', takesEffect: '下一个 OpenCode 实例启动时生效;在跑的 v2 服务在下一次 run 时读到' },
+  },
+  certs: {},
+  trusts: {},
+  userCertFiles: [],
+  blockers: [],
+  effects: [{ id: 'opencode-1x-npm', paths: [CONFIG('package.json'), CONFIG('bun.lock'), CONFIG('node_modules')], when: 'OpenCode 1.x 第一次带插件运行时在配置目录装 @opencode-ai/plugin;off 只报告,不删' }],
+}
+
 export default {
   name: 'opencode',
   runtime: 'node', // Bun-compiled; NODE_EXTRA_CA_CERTS semantics
   processes,
+  proxyMode,
   hosts: ['api.anthropic.com', 'api.openai.com', 'chatgpt.com', 'api.deepseek.com', 'api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com', 'open.bigmodel.cn', 'api.z.ai', 'openrouter.ai', 'opencode.ai', 'api.minimax.io', 'api.x.ai', 'generativelanguage.googleapis.com'],
   proxy,
   configHosts: (ctx) => providerHosts(configDocs(ctx)),

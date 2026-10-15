@@ -19,7 +19,7 @@
 import path from 'node:path'
 import { parseJsonc, hostOf } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { urlHostsDeep, dotenvLayer, isOwnPath } from './_common.mjs'
+import { urlHostsDeep, dotenvLayer, isOwnPath, perOs } from './_common.mjs'
 import { NETWORK_SERVICE_ARG } from '../core/trust/chromium.mjs'
 
 const ZCJS = '/glm/zcode\\.cjs$' // the bundle, as an `entry` pattern: the program the exe runs as Node (D51)
@@ -135,6 +135,37 @@ const proxy = {
   restart: { hint: '退出这个 Z-Code(CLI 的 app-server 与桌面应用都要退),再重新启动(它只在启动时读一次代理设置)', processes: 'zcode' },
 }
 
+// Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (cli, cli-node and the desktop all read
+// ~/.zcode/cli/config.json, re-read per new session; caCertFile = the merged bundle, D56⑨, since the key replaces the roots; the desktop's app-server is the
+// `zcode` + zcode.cjs name above). Blockers (ruling ⑩): a user proxy in the desktop's v2 setting.json, ZCODE_HTTP_PROXY, ZCODE_AGENT_CA_CERT.
+const CLI_CONFIG = { base: 'home', path: '.zcode/cli/config.json' }
+const CA_KEY = { file: CLI_CONFIG, format: 'jsonc', keys: ['network', 'caCertFile'] }
+const APP = perOs({ darwin: { base: 'abs', path: '/Applications/ZCode.app' }, win32: { base: 'localAppData', path: 'Programs/ZCode' } })
+const form = (id, present, verified = { darwin: true, win32: true }) => ({ id, os: ['darwin', 'win32'], route: 'cli-config', cert: 'bundle', trust: 'node', present, verified })
+const proxyMode = {
+  forms: [
+    form('z-code.cli', [APP]),
+    form('z-code.cli-node', [{ base: 'home', path: '.zcode' }]),
+    form('z-code.desktop', [APP]),
+    form('z-code.web', [APP], { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } }), // the shipped build has no web mode
+  ],
+  routes: {
+    'cli-config': { kind: 'json-key', file: CLI_CONFIG, format: 'jsonc', proxyKeys: [['network', 'httpProxy']], value: 'door-url', rereads: true, absent: 'create', takesEffect: '下一个会话生效,不用重启' },
+  },
+  certs: {
+    bundle: { kind: 'config-key', ...CA_KEY, semantics: 'replace' },
+  },
+  trusts: {
+    node: { base: 'node', sources: [{ from: CA_KEY, semantics: 'replace', required: true }] },
+  },
+  userCertFiles: [CA_KEY],
+  blockers: [
+    { at: { file: { base: 'home', env: 'ZCODE_DESKTOP_HOME_DIR', path: '.zcode/v2/setting.json' }, format: 'json', keys: ['httpProxy'] }, forms: ['z-code.desktop'] },
+    { at: { env: 'ZCODE_HTTP_PROXY' } },
+    { at: { env: 'ZCODE_AGENT_CA_CERT' } },
+  ],
+}
+
 export default {
   name: 'z-code',
   runtime: 'node',
@@ -146,6 +177,7 @@ export default {
     exclude: [{ name: 'zcode', env: { ELECTRON_RUN_AS_NODE: null } }, { name: ['zcode', 'zcode helper', 'node'], args: '(^| )__zcode-(plugin-host|dwf-child)( |$)' }, { name: 'zcode helper', args: NETWORK_SERVICE_ARG }],
     longLived: [{ args: '(^| )(app|agent)-server( |$)' }],
   },
+  proxyMode,
   hosts: ['api.z.ai', 'open.bigmodel.cn', 'zcode.z.ai', 'api.moonshot.cn', 'api.minimaxi.com', 'api.deepseek.com', 'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com', 'api.xiaomimimo.com', 'api.openai.com', 'api.anthropic.com', 'api.x.ai', 'openrouter.ai', 'opencode.ai'],
   layers,
   configHosts,
