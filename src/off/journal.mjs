@@ -3,7 +3,7 @@
 // The install half (applyJsonKey, applyTextEntry, writeOwnedFile) stays in src/collector/core/trust/journal.mjs; this half is here so
 // `asight off` and the standalone `~/.asight/bin/asight-off` can run it from node:* alone (0.1 §2).
 import nodeFs from 'node:fs'
-import { setKey, removeKey, reverseOps, getPath, parseJsonText, unreadableJson } from './json-text.mjs'
+import { setKey, removeKey, removeItem, reverseOps, getPath, parseJsonText, unreadableJson } from './json-text.mjs'
 import { removeAsightText, asightResidue, onlySkeleton } from './text-edit.mjs'
 import { sha256, readOrNull, writeDurable, removeEmptyDirs, sweepTemps } from './fsutil.mjs'
 import { decodeText, encodeText, WHY_TEXT } from './text-codec.mjs'
@@ -26,6 +26,8 @@ export const describeEntry = (e) => {
   if (e.kind === 'run-key') return `the Run value ${e.name ?? 'asight-collector'} (${e.hive ?? 'HKCU'}\\${e.key ?? ''})`
   if (e.kind === 'scheduled-task') return `the scheduled task ${e.task ?? '\\asight\\collector'}`
   if (e.kind === 'forwarder-binary') return `the kernel's copy ${e.path ?? ''}`
+  if (e.kind === 'json-array-item') return `${JSON.stringify(e.item)} in ${e.keys.join('.')}`
+  if (e.format === 'pem-block') return 'certificate block'
   return `${e.keys.join('.')} = ${e.value}`
 }
 
@@ -91,9 +93,19 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
   }
   let doc
   try { doc = parseJsonText(text) } catch (e) { return done('left-unparsable', { reason: unreadableJson(file, text, e, `asight's ${describeEntry(entry)}`) }) }
-  if (getPath(doc, entry.keys) !== entry.value) return done('left-user-value')
-  let out = entry.prior_value != null ? setKey(text, entry.keys, entry.prior_value).text : removeKey(text, entry.keys).text
-  if (entry.prior_value == null) {
+  let out, gone = entry.prior_value == null // the key is out: its parents this install created may be empty now
+  if (entry.kind === 'json-array-item') { // only asight's element goes; the user took it out during on → nothing to do (D48②)
+    const r = removeItem(text, entry.keys, entry.item)
+    if (!r) return done('already-removed')
+    out = r.text
+    const list = getPath(parseJsonText(out), entry.keys)
+    gone = entry.created_array === true && Array.isArray(list) && !list.length
+    if (gone) out = removeKey(out, entry.keys).text // asight made the list and it is empty again
+  } else {
+    if (getPath(doc, entry.keys) !== entry.value) return done('left-user-value')
+    out = entry.prior_value != null ? setKey(text, entry.keys, entry.prior_value).text : removeKey(text, entry.keys).text
+  }
+  if (gone) {
     for (let d = entry.keys.length - 1; d > entry.existing_depth; d--) { // parents this install created, now empty
       const v = getPath(parseJsonText(out), entry.keys.slice(0, d))
       if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length) break

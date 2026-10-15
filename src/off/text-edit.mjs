@@ -134,6 +134,35 @@ export function insertLine(text, { line, after = null, format = 'lines' }) {
 }
 const one = (src, offset, inserted) => ({ text: applyOps(src, [{ offset, removed: '', inserted }]), ops: [{ offset, removed: '', inserted }] })
 
+// A marked PEM block at the END of a user's certificate file (4.11 rule U, `text` / `pem-block`): the file's own line ending, a line ending first when
+// its last line has none (the only byte added in front of the user's text). PEM readers skip text outside BEGIN / END lines, so the marks are inert.
+// The op carries `pem: true`: removeAsightText takes the block out by its marks, never line by line (a certificate line may be the user's too).
+export function pemBlock(text, pem) {
+  const src = text == null ? '' : text
+  const eol = eolOf(src)
+  const body = String(pem).split(/\r?\n/).filter((l) => l !== '')
+  if (!body.length || !/^-----BEGIN [A-Z0-9 ]+-----$/.test(body[0]) || !/^-----END [A-Z0-9 ]+-----$/.test(body.at(-1))) throw new Error('pemBlock: not a PEM block')
+  const lead = src.length > markLen(src) && !src.endsWith('\n') ? eol : ''
+  const op = { offset: src.length, removed: '', inserted: lead + [BLOCK_BEGIN, ...body, BLOCK_END].join(eol) + eol, pem: true }
+  return { text: applyOps(src, [op]), ops: [op] }
+}
+// Take one marked PEM block out of `t` → the text without it, or null when no block with the same lines is there. Only the block's bytes go (its BEGIN
+// mark's line through its END mark's line ending); the line ending asight put in front of it goes too when the block still ends the file.
+const pemLines = (x) => x.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l !== '')
+function removePemBlock(t, op) {
+  const want = pemLines(op.inserted).join('\n')
+  const re = new RegExp(`(^\uFEFF?|\n)(${escapeRe(BLOCK_BEGIN)}\r?\n[\\s\\S]*?${escapeRe(BLOCK_END)}\r?(?:\n|$))`, 'g')
+  for (let m; (m = re.exec(t));) {
+    if (pemLines(m[2]).join('\n') !== want) { re.lastIndex = m.index + m[0].length - 1; continue }
+    let from = m.index + m[1].length
+    const to = from + m[2].length
+    const lead = /^\r?\n/.exec(op.inserted)
+    if (lead && to === t.length && t.slice(from - lead[0].length, from) === lead[0]) from -= lead[0].length
+    return t.slice(0, from) + t.slice(to)
+  }
+  return null
+}
+
 // Undo for a file the user edited since install (4.6「撤一个文件的规则」 last case): take out only asight's text —
 // every whole line asight inserted (the block's lines, the sentinel line or row; each line once, wherever the
 // user's edits moved it, so a block whose end marker the user deleted still goes) and put back what an op replaced
@@ -213,6 +242,7 @@ export function removeAsightText(text, ops, { fold = false } = {}) {
   const keys = []
   for (const op of ops) {
     if (op.inserted === OFF_PREFIX && typeof op.key === 'string') { keys.push(op.key); continue } // a user's line of the family the block put out of effect
+    if (op.pem === true) { const out = removePemBlock(t, op); if (out != null) { t = out; found = true } continue }
     if (!op.inserted.includes(SENTINEL) && op.asight !== true) continue // a joined block's lines are asight's without the sentinel (joinDotenvBlock)
     if (op.removed !== '') { // a row that replaced the user's `[]`: the `[]` comes back in its place
       const i = t.indexOf(op.inserted)

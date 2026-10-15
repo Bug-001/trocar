@@ -75,7 +75,7 @@ export function scanJson(text) {
       if (text[i] === ',') { kid.comma = i++; ws() } else if (text[i] !== close) fail(`',' or '${close}'`)
     }
     i++
-    return isObject ? { type: 'object', start, end: i, members: kids } : { type: 'array', start, end: i, items: kids.map((k) => k.value) }
+    return isObject ? { type: 'object', start, end: i, members: kids } : { type: 'array', start, end: i, items: kids.map((k) => k.value), elements: kids }
   }
   ws()
   if (i >= text.length) return null
@@ -227,6 +227,15 @@ function memberCuts(text, o, k) {
   return cuts
 }
 
+// The one op that takes member (or element) k out of container o: memberCuts, and a container left with nothing but white space inside becomes `{}` / `[]`.
+function cutOne(text, o, k) {
+  let cuts = memberCuts(text, o, k).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])
+  const kept = (from, to) => { let out = '', at = from; for (const [a, b] of cuts) { if (b <= at || a >= to) continue; out += text.slice(at, Math.max(at, a)); at = Math.max(at, b) } return out + text.slice(Math.min(at, to), to) }
+  if (o.members.length === 1 && /^[ \t\r\n]*$/.test(kept(o.start + 1, o.end - 1))) cuts = [[o.start + 1, o.end - 1]]
+  const from = Math.min(...cuts.map((c) => c[0])), to = Math.max(...cuts.map((c) => c[1]))
+  return { offset: from, removed: text.slice(from, to), inserted: kept(from, to) }
+}
+
 // removeKey(text, keys) → { text, ops } removing the member, one comma and the white space of its place, in one op; null when absent.
 // An object left with nothing but white space inside becomes `{}`.
 export function removeKey(text, keys) {
@@ -239,15 +248,30 @@ export function removeKey(text, keys) {
   }
   const m = memberOf(node, keys[keys.length - 1])
   if (!m) return null
-  let cuts = memberCuts(text, node, node.members.indexOf(m)).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])
-  const kept = (from, to) => { let out = '', at = from; for (const [a, b] of cuts) { if (b <= at || a >= to) continue; out += text.slice(at, Math.max(at, a)); at = Math.max(at, b) } return out + text.slice(Math.min(at, to), to) }
-  if (node.members.length === 1 && /^[ \t\r\n]*$/.test(kept(node.start + 1, node.end - 1))) cuts = [[node.start + 1, node.end - 1]]
-  const from = Math.min(...cuts.map((c) => c[0])), to = Math.max(...cuts.map((c) => c[1]))
-  const op = { offset: from, removed: text.slice(from, to), inserted: kept(from, to) }
+  const op = cutOne(text, node, node.members.indexOf(m))
   const out = applyOps(text, [op])
   const want = parseJsonText(text)
   delete getPath(want, keys.slice(0, -1))[keys[keys.length - 1]]
   if (!isDeepStrictEqual(readBack(out), want)) throw new Error('removeKey: the edit changed more than the key')
+  return { text: out, ops: [op] }
+}
+
+// removeItem(text, keys, item) → { text, ops } taking out the LAST element of the array at `keys` that equals `item` (an element asight appended, 4.11 P13
+// `json-array-item`), with one comma and the white space of its place — the cut removeKey makes for a member, so comments stay; an array left with
+// nothing but white space inside becomes `[]`. null when the path is not an array or holds no such element (the user took it out: nothing to do, D48②).
+export function removeItem(text, keys, item) {
+  let node = scanJson(text)
+  for (const k of keys) { const m = node && node.type === 'object' ? memberOf(node, k) : null; node = m ? m.value : null }
+  if (!node || node.type !== 'array') return null
+  const els = node.elements.map((e) => ({ keyStart: e.value.start, value: e.value, comma: e.comma }))
+  let k = els.length - 1
+  while (k >= 0 && !isDeepStrictEqual(valueOf(els[k].value), item)) k--
+  if (k < 0) return null
+  const op = cutOne(text, { start: node.start, end: node.end, members: els }, k)
+  const out = applyOps(text, [op])
+  const want = parseJsonText(text), list = keys.length ? getPath(want, keys) : want
+  list.splice(k, 1)
+  if (!isDeepStrictEqual(readBack(out), want)) throw new Error('removeItem: the edit changed more than the element')
   return { text: out, ops: [op] }
 }
 

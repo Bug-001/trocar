@@ -20,7 +20,7 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { setKey, getPath, reverseOps, parseJsonText } from '../../../off/json-text.mjs'
-import { dotenvBlock, joinDotenvBlock, insertLine, removeAsightText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
+import { dotenvBlock, joinDotenvBlock, insertLine, pemBlock, removeAsightText, BLOCK_BEGIN } from '../../../off/text-edit.mjs'
 import { sha256, readOrNull, writeDurable, missingDirs, editTarget, pathKey } from '../../../off/fsutil.mjs'
 import { saveManifest, undoByHand, PHASES } from '../../../off/manifest.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
@@ -234,6 +234,7 @@ function editText(file, text, edit, { joined = false } = {}) {
       if (joined && text != null && text.includes(BLOCK_BEGIN)) return joinDotenvBlock(text, edit.vars, how)
       return dotenvBlock(text, edit.vars, how)
     }
+    if (edit.format === 'pem-block') return { ...pemBlock(text, edit.pem), prior: null } // rule U (4.11): a marked block at the end of the user's own certificate file
     if (edit.format === 'line' || edit.format === 'yaml-list') return { ...insertLine(text, { line: edit.line, after: edit.after || null, format: edit.format === 'yaml-list' ? 'yaml-list' : 'lines' }), prior: null }
   } catch (e) { throw new Error(`${file}: ${e.message}`) }
   throw new Error(`${file}: unknown text edit ${edit.format}`)
