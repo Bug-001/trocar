@@ -266,13 +266,13 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
         else u.changed.push({ path: r.path, change: offChangeText(e, r.result), backup: r.backup_kept || null, result: r.result, ...(r.backup && !r.backup_kept ? { backup_dropped: true } : {}), ...(r.result === 'reverted-not-identical' ? { not_identical: true } : {}), ...withHarness(r.harness) })
       } else if (SKIP_REASON[r.result]) u.skipped.push({ what: r.path, reason: SKIP_REASON[r.result] })
       if (r.result === 'reverted-not-identical') note('reverted-not-identical', { ...withHarness(r.harness), path: r.path }, `${r.path} was edited after install: only asight's ${r.what} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the file is not byte for byte what it was before install, the rest is as the user left it${r.backup_kept ? `; the file as it was is kept at ${r.backup_kept}` : ''}`)
-      else if (!['restored', 'left-unparsable', 'left-link', 'left-text', 'error'].includes(r.result)) note(SKIP_CODE[r.result] || 'harness-note', { ...withHarness(r.harness), path: r.path }, UNDO_NOTE[r.result] || r.result)
+      else if (!['restored', 'left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error'].includes(r.result)) note(SKIP_CODE[r.result] || 'harness-note', { ...withHarness(r.harness), path: r.path }, UNDO_NOTE[r.result] || r.result)
     }
     u.removed.push(...out.removed)
     // an item whose kind this build does not know is left alone; the copy says who knows it (R3, V35)
     const hint = w.standalone ? ` — this asight-off (version ${OFF_VERSION}) does not know that kind; run \`asight off\`, the asight that wrote the manifest, to take it out` : ''
     u.left = out.left.map((l) => ({ path: l.path, result: l.result, reason: l.result === 'unknown-kind' ? `${l.reason}${hint}` : l.reason, ...(l.backup ? { backup: l.backup, restore: l.restore } : {}), ...withHarness(l.harness) }))
-    for (const l of u.left) u.failures.push({ code: ['error', 'unknown-kind', 'left-text'].includes(l.result) ? 'entry-not-undone' : l.result, ...withHarness(l.harness), path: l.path, reason: l.reason })
+    for (const l of u.left) u.failures.push({ code: ['error', 'unknown-kind', 'left-text', 'left-unreadable'].includes(l.result) ? 'entry-not-undone' : l.result, ...withHarness(l.harness), path: l.path, reason: l.reason })
     u.kept_bundles = out.kept_bundles
     for (const k of out.kept_bundles.filter((x) => !x.holds_ca && !x.unjudged && !x.error)) {
       const entry = k.entry_left ? `${k.entry_left.join(', ')}, which could not be undone, still points at it` : null // an agent's next start reads the bundle through it

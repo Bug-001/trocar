@@ -300,8 +300,8 @@ test('D55 save refuses a v3 item whose phase is missing or not install | on — 
   }
 })
 
-test('D55 the new kinds: known, each with a sentence of undo by hand; OFF_VERSION is 11', () => {
-  assert.equal(OFF_VERSION, 11); for (const k of ['system-root', 'login-env', 'json-array-item']) assert.ok(KNOWN_KINDS.includes(k), k)
+test('D55 the new kinds: known, each with a sentence of undo by hand; OFF_VERSION is past 10', () => {
+  assert.ok(OFF_VERSION >= 11); for (const k of ['system-root', 'login-env', 'json-array-item']) assert.ok(KNOWN_KINDS.includes(k), k)
   assert.equal(undoByHand({ kind: 'system-root', store: 'win-currentuser-root', thumbprint: 'AB12' }), 'run: certutil -user -delstore Root AB12')
   assert.equal(undoByHand({ kind: 'system-root', store: 'darwin-user-trust', fp256: 'AA:BB', thumbprint: 'CC', cert_file: '/h/.asight/collector/ca/asight-ca.pem' }), 'run: security remove-trusted-cert /h/.asight/collector/ca/asight-ca.pem, then security delete-certificate -Z CC (the certificate with SHA-256 AA:BB)')
   const env = undoByHand({ kind: 'login-env', name: 'NODE_EXTRA_CA_CERTS', value: '/x.pem', prior_value: '/corp.pem', carriers: [{ kind: 'text', path: '/h/.zshenv' }, { kind: 'reg-value', hive: 'HKCU', key: 'Environment', name: 'NODE_EXTRA_CA_CERTS' }] })

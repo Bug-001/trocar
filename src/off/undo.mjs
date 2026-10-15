@@ -34,7 +34,7 @@ import { harnessesOf, hasIdentity, withAgentList } from './signature.mjs'
 import { readAgentList } from './identity.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
 
-const UNDO_LEFT = new Set(['left-unparsable', 'left-link', 'left-text', 'error']) // an entry that could not be undone stays in the manifest
+const UNDO_LEFT = new Set(['left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error']) // an entry that could not be undone stays in the manifest
 const UNDO_AT_PRE = new Set(['restored', 'already-restored']) // the file is at its pre_sha256: its backup goes
 const KEPT_BECAUSE = {
   'reverted-not-identical': (e) => `${e.path} was edited after asight changed it: only asight's ${describeEntry(e)} was taken out, so it is not what it was before; the backup is that file as it was`,

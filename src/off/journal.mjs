@@ -6,6 +6,7 @@ import nodeFs from 'node:fs'
 import { setKey, removeKey, reverseOps, getPath } from './json-text.mjs'
 import { removeAsightText, asightResidue, onlySkeleton } from './text-edit.mjs'
 import { sha256, readOrNull, writeDurable, removeEmptyDirs, sweepTemps } from './fsutil.mjs'
+import { decodeText, encodeText, WHY_TEXT } from './text-codec.mjs'
 
 // Remove a file asight owns, then the directories its write created when they are empty. `changed`: the file was
 // not what asight wrote (removed all the same: it is asight's, the manifest lists it; the caller says so).
@@ -61,11 +62,17 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
     return done('already-restored')
   }
   if (cur == null) return done('missing') // the user deleted a file that existed before: nothing of asight's left
-  const text = cur.toString('utf8')
+  // The ops are offsets in the file's TEXT (4.6「文件的编码」), so the bytes are decoded first, by what they prove of themselves. Bytes that prove no
+  // form (the user saved the file in another encoding after `on`) are not edited: the entry stays, and the receipt says which file and why.
+  const read = decodeText(cur)
+  if (!read.ok) return done('left-unreadable', { why: read.why, reason: `${file} can no longer be read as text asight may write back: ${WHY_TEXT[read.why]} (${read.why}); asight did not touch it, and its ${describeEntry(entry)} may still be in it` })
+  const text = read.text
   const asInstalled = entry.post_sha256 == null || sha256(cur) === entry.post_sha256 // intent-only: test by reversing
   const back = asInstalled ? reverseOps(text, entry.ops) : null
-  if (back != null && (entry.existed_before ? sha256(Buffer.from(back)) === entry.pre_sha256 : back === '')) {
-    if (entry.existed_before) writeDurable(file, back, entry.mode, fs)
+  // byte for byte: the text before is written in the form the file had before (`charset`, absent = utf8); an edited file keeps the form it has now
+  const before = back == null ? null : encodeText(back, entry.charset || 'utf8')
+  if (back != null && (entry.existed_before ? sha256(before) === entry.pre_sha256 : back === '')) {
+    if (entry.existed_before) writeDurable(file, before, entry.mode, fs)
     else { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs) }
     return done('restored')
   }
@@ -77,7 +84,7 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
     if (residue.length) return done('left-text', { reason: `${file} still names asight's ${describeEntry(entry)} on line ${residue.join(', ')}, in a form asight cannot tell from your own text; asight did not touch the file: delete ${residue.length === 1 ? 'that line' : 'those lines'} by hand` })
     if (!out.found) return done('already-removed')
     if (!entry.existed_before && onlySkeleton(out.text, entry.format)) { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs); return done('reverted-not-identical', { deleted: true }) }
-    writeDurable(file, out.text, fs.statSync(file).mode & 0o777, fs)
+    writeDurable(file, encodeText(out.text, read.charset), fs.statSync(file).mode & 0o777, fs)
     return done('reverted-not-identical')
   }
   let doc
@@ -93,6 +100,6 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
   }
   const empty = (() => { const v = JSON.parse(out); return v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0 })()
   if (!entry.existed_before && empty) { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs); return done('reverted-not-identical', { deleted: true }) }
-  writeDurable(file, out, fs.statSync(file).mode & 0o777, fs)
+  writeDurable(file, encodeText(out, read.charset), fs.statSync(file).mode & 0o777, fs)
   return done('reverted-not-identical')
 }
