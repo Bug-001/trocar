@@ -8,6 +8,8 @@ import { runInstallCli } from '../../src/cli/install.mjs'
 import { resolveAlias, commandNamed } from '../../src/cli/commands.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
+import { MODEL_ON_WIRED } from '../../src/collector/model-install.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 
 function fakeIo({ tty = false } = {}) {
   const out = [], err = []
@@ -65,7 +67,7 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
   const io2 = fakeIo()
   assert.equal(await runInstallCli(['--yes'], { io: io2, env: again.w.env, home: tmpHomeOf(again.w), platform: 'darwin', deps: { getuid: () => 501, modelOnWired: true, backends: { custody: again.w.custody, rootStore: again.w.store, dirs: again.w.ctx.dirs }, harnesses: [], owns: again.w.owns } }), 1)
 })
-const tmpHomeOf = (w) => { const h = `${w.home}-2`; fs.mkdirSync(h, { recursive: true }); return h }
+const tmpHomeOf = () => tmpDir('asight-model-2-') // a second HOME, made where the leak guard sweeps
 
 // the high finding of the branch review: until `asight on` on macOS / Windows is turnOnModel, install there would leave the old on unable to
 // start (its loadOrCreateCa refuses an asight-ca.pem without ca.key). So install refuses there, writes nothing, and says to run on.
@@ -78,8 +80,9 @@ for (const platform of ['darwin', 'win32']) {
     assert.equal(fs.existsSync(path.join(w.home, '.asight')), false)
     assert.deepEqual([w.custody.calls, w.store.calls], [[], []])
   })
-  // red until on is turnOnModel: the documented order — install, then on — through the CLI. Flipping MODEL_ON_WIRED turns this into a plain test.
-  test(`${platform}: install then on through the CLI (temp HOME, stub backends) — on starts`, { todo: 'turnOnModel is not yet wired as on on macOS / Windows' }, async () => {
+  // the documented order — install, then on — through the CLI, the gate forced open. While MODEL_ON_WIRED is false this pins the very failure the gate
+  // exists for (the old on refuses the model install's root); the commit that flips it makes the same test demand that on starts.
+  test(`${platform}: install then on through the CLI (temp HOME, stub backends) — ${MODEL_ON_WIRED ? 'on starts' : 'the old on cannot start over it: why install refuses'}`, async () => {
     const { runOnCli } = await import('../../src/cli/on.mjs')
     const { fakeDaemon, recordingExec, ROOTS } = await import('./fixtures/on-ctx.mjs')
     const w = await modelWorld({ os: platform, commands: ['codex'] })
@@ -88,6 +91,7 @@ for (const platform of ['darwin', 'win32']) {
     assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text())
     const io2 = fakeIo()
     const exit = await runOnCli(['--yes'], { io: io2, env: w.env, home: w.home, platform, deps: { ...deps, exec: recordingExec().run, roots: ROOTS, parts: { os: platform, harnesses: w.harnesses.filter((d) => d.name === 'codex'), scan: async () => [], match: () => ({ agent: null }), arch: { osRoots: async () => ({ pem: ROOTS.osText }) } }, request: fakeDaemon().request, helperState: () => ({ ok: true }), linger: () => true, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice' } })
+    if (!MODEL_ON_WIRED) { assert.equal(exit, 1); assert.match(io2.text(), /CA is unusable.*ca\.key/); return }
     assert.doesNotMatch(io2.text(), /ca\.key|CA is unusable/, 'the old on refusing the model install\'s root (the finding)')
     assert.equal(exit, 0, io2.text())
   })
