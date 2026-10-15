@@ -64,7 +64,8 @@ From a Release: not published yet.
 ## Uninstall
 
 ```sh
-asight uninstall               # removes all of asight's changes, keeps captures
+asight install                 # once: the certificates (a root of this machine, user-level; prints the plan, asks first)
+asight uninstall               # removes all of asight's changes, keeps captures (macOS / Windows: run asight off first)
 asight uninstall --purge-data  # also deletes capture data (asks first)
 ```
 
@@ -406,6 +407,7 @@ not the collector's switch; `asight off` is.
 
 ```sh
 # common
+asight install [--dry-run] [--yes] [--json]   # once: the certificates (D55); prints the plan and asks first
 asight on [harness…] [--dry-run] [--yes] [--opt-in <form>[,<form>…]] [--no-autostart | --no-unit] [--json]
 asight off [harness…] [--now] [--dry-run] [--yes] [--json]
 asight status [harness…] [--json] [--failures]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
