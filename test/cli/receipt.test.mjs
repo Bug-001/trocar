@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
+import { runInstallCli } from '../../src/cli/install.mjs'
 import { runUninstallCli } from '../../src/cli/uninstall.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
 import { formatOnReceipt, formatPlan } from '../../src/cli/receipt.mjs'
@@ -18,35 +19,45 @@ import codex from '../../src/collector/harness/codex.mjs'
 import * as unit from '../../src/collector/arch/linux/unit.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaemon } from './fixtures/on-ctx.mjs'
+import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaemon, installFirst } from './fixtures/on-ctx.mjs'
 import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
 import { runStatus, down, reply, asDaemon } from './fixtures/status-ctx.mjs'
 
 const settingsOf = (home) => path.join(home, '.claude', 'settings.json')
 
-test('V7: a first on outside a terminal without --yes prints the plan, writes nothing, exits 2; --dry-run writes nothing, exits 0, same receipt in the future tense; --yes writes and validates', async () => {
+// D55, override #15: the first-run plan and its confirmation are install's now (it writes the user files); on, after install, has no user file left to
+// confirm. The plan names every file, without a terminal and --yes nothing is written (exit 2), the dry run writes nothing, --yes writes.
+test('V7: a first install outside a terminal without --yes prints the plan, writes nothing, exits 2; --dry-run writes nothing, exits 0; --yes writes; the on after it changes no user file and validates', async () => {
   const home = tmpDir('asight-v7-'); seedClaude(home); const before = snapshot(home)
   const io = fakeIo({ tty: false })
-  assert.equal(await runOnCli([], onCtx(home, io)), 2)
+  assert.equal(await runInstallCli([], onCtx(home, io)), 2)
+  assert.match(io.text(), /^asight install · 将写/m, 'the plan is install\'s')
   assert.match(io.text(), /~\/\.claude\/settings\.json/, 'the plan names the file it would change, as the user knows the path')
   assert.match(io.text(), /--yes/, 'and says how to go on')
-  for (const [re, what] of [[/install manifest: ~\/\.asight\/collector\/install-manifest\.json/, 'the manifest'], [/state file[^\n]*: ~\/\.asight\/collector\/state\.json/, 'state.json, which on creates'], [/collector CA[^\n]*ca\.key/, 'the CA'], [/runtime directory[^\n]*~\/\.asight\/collector\/run\/trust\//, 'the runtime directory'], [/backups[^\n]*~\/\.asight\/backup\//, 'the backups of the files it changes (R2)']]) assert.match(io.text(), re, `the plan lists ${what}`)
+  for (const [re, what] of [[/install manifest: ~\/\.asight\/collector\/install-manifest\.json/, 'the manifest'], [/collector CA[^\n]*ca\.key/, 'the CA'], [/runtime directory[^\n]*~\/\.asight\/collector\/run\/trust\//, 'the runtime directory'], [/backups[^\n]*~\/\.asight\/backup\//, 'the backups of the files it changes (R2)']]) assert.match(io.text(), re, `the plan lists ${what}`)
   assert.deepEqual(snapshot(home), before, 'exit 2: not one byte written, no directory made')
 
   const dry = fakeIo({ tty: false })
-  assert.equal(await runOnCli(['--dry-run', '--json'], onCtx(home, dry)), 0)
+  assert.equal(await runInstallCli(['--dry-run', '--json'], onCtx(home, dry)), 0)
+  assert.equal(dry.json().dry_run, true)
   assert.deepEqual(snapshot(home), before, '--dry-run writes nothing')
 
+  const inst = fakeIo({ tty: false })
+  assert.equal(await runInstallCli(['--yes', '--json'], onCtx(home, inst)), 0)
+  assert.deepEqual(inst.json().changed.map((c) => c.path), [settingsOf(home)], 'the file that existed is changed, not created')
+  assert.equal(JSON.parse(fs.readFileSync(settingsOf(home), 'utf8')).env.NODE_EXTRA_CA_CERTS, path.join(home, '.asight', 'collector', 'ca', 'asight-ca.pem'), 'install --yes writes')
+
+  const odry = fakeIo({ tty: false })
+  assert.equal(await runOnCli(['--dry-run', '--json'], onCtx(home, odry)), 0)
   const { exec: ex, daemon } = fakeSystem()
   const real = fakeIo({ tty: false })
-  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, real, { exec: ex, daemon })), 0)
-  const a = dry.json(), b = real.json()
-  assert.deepEqual(a.changed.map((c) => [c.path, c.change]), b.changed.map((c) => [c.path, c.change]), 'the dry run lists what the real run changed, word for word')
-  assert.deepEqual(a.created.slice().sort(), b.created.slice().sort(), 'and what it created')
+  assert.equal(await runOnCli(['--json'], onCtx(home, real, { exec: ex, daemon })), 0, 'after install, on has nothing for the user to confirm: no --yes needed')
+  const a = odry.json(), b = real.json()
+  assert.deepEqual([a.changed, b.changed], [[], []], 'on changes no user file (D55 1)')
+  assert.deepEqual(a.created.slice().sort(), b.created.slice().sort(), 'the dry run lists what the real run created')
   assert.deepEqual([a.dry_run, b.dry_run ?? false], [true, false])
   assert.deepEqual(validateReceipt(b), [])
   assert.deepEqual(validateReceipt(a), [])
-  assert.equal(JSON.parse(fs.readFileSync(settingsOf(home), 'utf8')).env.NODE_EXTRA_CA_CERTS, path.join(home, '.asight', 'collector', 'ca', 'asight-ca.pem'), '--yes writes')
   assert.equal(readStateFile(path.join(home, '.asight', 'collector', 'state.json')).state.harnesses['claude-code'].desired, 'on')
   assert.ok(ex.has(/^systemctl --user enable --now asight-collector\.service$/), 'no daemon answered: the unit is enabled and started')
   assert.deepEqual(daemon.calls.filter((c) => c.startsWith('POST')), ['POST /on {"harnesses":["claude-code"]}'], 'and the daemon is asked to attach, by name')
@@ -65,7 +76,7 @@ test('the arch prepare hook — its lines print with the plan and ride in the re
   }
   // the notes (the kernel line, the Smart App Control line) print with the plan of a real on and ride in its receipt
   const notes = [`asight's kernel: found and verified (abc123def456… in C:\\npm\\asight-kernel-win32-x64)`, 'Smart App Control 开着:未签名的 asight-forwarder.exe 很可能起不来']
-  const home1 = tmpDir('asight-w27a-'); seedClaude(home1)
+  const home1 = tmpDir('asight-w27a-'); seedClaude(home1); await installFirst(home1)
   const { exec: ex, daemon } = fakeSystem()
   const ok = withPrepare({ notes })
   const io = fakeIo({ tty: false })
@@ -77,7 +88,7 @@ test('the arch prepare hook — its lines print with the plan and ride in the re
   assert.deepEqual([io.json().notes.includes(notes[0]), io.json().notes.includes(notes[1])], [true, true], 'and both are receipt notes')
 
   // a refusal on nothing-installed: exit 1 before turnOn (nothing written), the reason with the manual alternative (no reinstall commands any more), the receipt the only record
-  const home2 = tmpDir('asight-w27b-'); seedClaude(home2)
+  const home2 = tmpDir('asight-w27b-'); seedClaude(home2); await installFirst(home2)
   const before = snapshot(home2)
   const refuse = { code: 'EPRECONDITION', reason: 'a settled precondition the arch named', commands: ['把 mihomo-linux-amd64-v1.19.32.gz 放进 ~/.asight/collector/kernel-archive/ 再跑 asight on,或修好网络 / 代理(HTTPS_PROXY)后重跑'] }
   const bad = withPrepare({ refuse })
@@ -88,7 +99,8 @@ test('the arch prepare hook — its lines print with the plan and ride in the re
   assert.deepEqual(validateReceipt(doc), [])
   assert.match(doc.notes.join('\n'), /a settled precondition the arch named/)
   assert.match(doc.notes.join('\n'), /手动替代\(asight 不替你跑\): 把 mihomo-linux-amd64-v1\.19\.32\.gz 放进 ~\/\.asight\/collector\/kernel-archive\/ 再跑 asight on,或修好网络 \/ 代理\(HTTPS_PROXY\)后重跑/)
-  assert.deepEqual(snapshot(home2), before, 'a refusal writes nothing: turnOn never ran (the receipt is the record, 4.6 §记录)')
+  const noFile = (h, b) => changedFiles(b, snapshot(h)).filter((f) => !f.startsWith(path.join('.asight', 'collector', 'flows')))
+  assert.deepEqual(noFile(home2, before), [], 'a refusal writes nothing but its failure event: turnOn never ran')
 
   // a dry run over the same refusal: exit 0, the stop is `blocked` (R6, V7), nothing written
   const io3 = fakeIo({ tty: false })
@@ -96,9 +108,9 @@ test('the arch prepare hook — its lines print with the plan and ride in the re
   const dry = io3.json()
   assert.match(dry.blocked, /a settled precondition the arch named/)
   assert.match(dry.notes.join('\n'), /\(a real asight on stops there\)/)
-  assert.deepEqual(snapshot(home2), before)
+  assert.deepEqual(noFile(home2, before), [])
 
-  // with a collector directory present (a first on succeeded), the refusal is one failure event in flows/ (D38)
+  // the collector directory is there (install made it): each refusal is one failure event in flows/ (D38)
   const io4 = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, io4, { exec: ex, daemon })), 0, 'a plain on without the hook still works (the Linux arch shape)')
   const bad2 = withPrepare({ refuse: { ...refuse, code: 'EPRECONDITION', of: 'package', reason: 'a settled precondition the arch named, twice' } })
@@ -106,7 +118,7 @@ test('the arch prepare hook — its lines print with the plan and ride in the re
   assert.equal(await runOnCli(['--yes', '--json'], bad2.ctx(home2, io5, { exec: ex, daemon })), 1)
   const flows = path.join(home2, '.asight', 'collector', 'flows')
   const lines = fs.readdirSync(flows).flatMap((n) => fs.readFileSync(path.join(flows, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
-  const mine = lines.filter((l) => l.event === 'failure' && l.code === 'EPRECONDITION')
+  const mine = lines.filter((l) => l.event === 'failure' && l.code === 'EPRECONDITION' && /twice/.test(l.reason))
   assert.equal(mine.length, 1, 'one failure event, on\'s to write')
   assert.equal(mine[0].where, 'routing')
   assert.equal(mine[0].of, 'package')
@@ -114,36 +126,37 @@ test('the arch prepare hook — its lines print with the plan and ride in the re
   assert.deepEqual(checkRecord(mine[0]), [])
 
   // a hook that throws is the outer catch's: exit 1, the message, no event of it
-  const home3 = tmpDir('asight-w27c-'); seedClaude(home3)
+  const home3 = tmpDir('asight-w27c-'); seedClaude(home3); await installFirst(home3)
   const io6 = fakeIo({ tty: false })
   const boomParts = { os: 'none', harnesses: [cc], scan: async () => [], match: () => ({ agent: null }), arch: { unit, prepare: async () => { throw new Error('the helper cannot be started') } } }
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home3, io6, { exec: ex, daemon, deps: { parts: boomParts } })), 1)
   assert.match(io6.json().notes.join('\n'), /the helper cannot be started/)
 })
 
-test('V7: a terminal asks once, only the first time; "n" writes nothing and exits 1; "y" goes on; a later on that changes no new file does not ask', async () => {
+test('V7: install in a terminal asks once, only the first time; "n" writes nothing and exits 1; "y" goes on; a later install or on that changes no new file does not ask', async () => {
   const home = tmpDir('asight-v7q-'); seedClaude(home); const before = snapshot(home)
   const no = fakeIo({ tty: true, answers: ['n'] })
-  assert.equal(await runOnCli([], onCtx(home, no)), 1)
+  assert.equal(await runInstallCli([], onCtx(home, no)), 1)
   assert.equal(no.asked.length, 1)
   assert.deepEqual(snapshot(home), before, 'declined: nothing written')
 
   const yes = fakeIo({ tty: true, answers: ['y'] })
-  assert.equal(await runOnCli([], onCtx(home, yes)), 0)
+  assert.equal(await runInstallCli([], onCtx(home, yes)), 0)
   assert.equal(yes.asked.length, 1)
   assert.match(yes.stdoutText(), /asight on[\s\S]*asight off[\s\S]*asight status[\s\S]*asight uninstall/, 'the receipt names the four commands (R1, 1.6 §1.6)')
 
-  const again = fakeIo({ tty: true, answers: [] })
-  assert.equal(await runOnCli([], onCtx(home, again)), 0)
-  assert.equal(again.asked.length, 0, 'nothing new to change: no question')
+  for (const [run, what] of [[runInstallCli, 'install'], [runOnCli, 'on'], [runOnCli, 'on again']]) {
+    const again = fakeIo({ tty: true, answers: [] })
+    assert.equal(await run([], onCtx(home, again)), 0, what)
+    assert.equal(again.asked.length, 0, `${what}: nothing new to change, no question`)
+  }
 })
 
-test('V7: a later on that would change files beyond the confirmed ones lists only the new ones and asks again — no terminal, no --yes: exit 2 and nothing written; a terminal asks once; --yes writes and confirms them, so the next on asks nothing (1.6 §1.6, R6)', async () => {
+test('V7: an install that would change files beyond the confirmed ones lists only the new ones and asks again — no terminal, no --yes: exit 2 and nothing written; a terminal asks once; --yes writes and confirms them, so the next install asks nothing (1.6 §1.6, R6)', async () => {
   const home = tmpDir('asight-v7n-'); seedClaude(home)
   const dir = path.join(home, '.asight', 'collector')
-  const sys = fakeSystem()
-  const ctx = (io) => onCtx(home, io, { harnesses: [cc, codex], exec: sys.exec, daemon: sys.daemon })
-  assert.equal(await runOnCli(['--yes'], ctx(fakeIo())), 0, 'claude-code alone is installed first')
+  const ctx = (io) => onCtx(home, io, { harnesses: [cc, codex] })
+  assert.equal(await runInstallCli(['--yes'], ctx(fakeIo())), 0, 'claude-code alone is installed first')
   const before = readManifest(dir)
   assert.equal(before.entries.some((e) => e.harness === 'codex'), false)
   const codexEnv = path.join(home, '.codex', '.env')
@@ -151,35 +164,33 @@ test('V7: a later on that would change files beyond the confirmed ones lists onl
 
   const snap = snapshot(home)
   const quiet = fakeIo({ tty: false })
-  assert.equal(await runOnCli([], ctx(quiet)), 2, 'a file nobody confirmed yet, and nobody to ask')
+  assert.equal(await runInstallCli([], ctx(quiet)), 2, 'a file nobody confirmed yet, and nobody to ask')
   assert.match(quiet.text(), /~\/\.codex\/\.env/, 'the plan names what is new')
-  assert.match(quiet.text(), /install manifest: [^\n]*\n[^\n]*state file/, 'and the manifest and the state file, which this on writes again (codex turns on)')
   assert.doesNotMatch(quiet.text(), /settings\.json|collector CA \(in no trust store\)|runtime directory/, 'and nothing of what was confirmed, or is there already and is not written again')
   assert.match(quiet.text(), /--yes/)
   assert.deepEqual(snapshot(home), snap, 'exit 2: not one byte written')
 
   const no = fakeIo({ tty: true, answers: ['n'] })
-  assert.equal(await runOnCli([], ctx(no)), 1)
+  assert.equal(await runInstallCli([], ctx(no)), 1)
   assert.equal(no.asked.length, 1)
   assert.deepEqual(snapshot(home), snap, 'declined: nothing written')
 
   const yes = fakeIo({ tty: true, answers: ['y'] })
-  assert.equal(await runOnCli([], ctx(yes)), 0)
+  assert.equal(await runInstallCli([], ctx(yes)), 0)
   assert.equal(yes.asked.length, 1, 'asked exactly once')
   const m = readManifest(dir)
-  assert.ok(m.confirmed_paths.includes(codexEnv), 'what was just shown and confirmed is recorded')
-  assert.ok(m.confirmed_paths.some((p) => p === settingsOf(home)), 'and what was confirmed before is still there')
+  assert.ok(m.entries.some((e) => e.harness === 'codex'), 'codex is installed now')
   const done = fakeIo({ tty: true, answers: [] })
-  assert.equal(await runOnCli([], ctx(done)), 0)
+  assert.equal(await runInstallCli([], ctx(done)), 0)
   assert.equal(done.asked.length, 0, 'now nothing is new: no question')
 })
 
 test('V7: --json keeps stdout for the one JSON; the plan of a terminal run goes to stderr', async () => {
   const home = tmpDir('asight-v7j-'); seedClaude(home)
   const io = fakeIo({ tty: false })
-  assert.equal(await runOnCli(['--json'], onCtx(home, io)), 2)
+  assert.equal(await runInstallCli(['--json'], onCtx(home, io)), 2)
   const r = io.json() // parses: only one document on stdout
-  assert.deepEqual([r.command, r.ok, r.needs_yes, validateReceipt(r)], ['on', false, true, []])
+  assert.deepEqual([r.command, r.ok, r.needs_yes], ['install', false, true])
   assert.match(io.stderrText(), /~\/\.claude\/settings\.json/)
 })
 
@@ -195,24 +206,24 @@ test('on: usage errors exit 2 and touch nothing — an unknown harness lists the
 })
 
 test('on: refused as root (R7), with the helper missing it writes nothing and says sudo asight setup-helper', async () => {
-  const home = tmpDir('asight-on-refuse-'); seedClaude(home); const before = snapshot(home)
+  const home = tmpDir('asight-on-refuse-'); seedClaude(home); await installFirst(home); const before = snapshot(home)
   let io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { getuid: () => 0 } })), 1)
   assert.match(io.text(), /root/)
   io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { helperState: () => ({ ok: false, reason: 'no helper at /usr/local/libexec/asight/asight-redirector' }) } })), 1)
   assert.match(io.text(), /sudo asight setup-helper/)
   assert.deepEqual(snapshot(home), before, 'nothing written, not even the manifest')
-  // D39⑥ executed 2026-10-11: the legacy-on hook went with the old capture — every platform runs the NEW on: its plan, then a yes is needed; nothing is touched
+  // D39⑥ executed 2026-10-11: the legacy-on hook went with the old capture — every platform runs the NEW on: its plan (a dry run touches nothing)
   for (const platform of ['win32', 'darwin', 'freebsd']) {
     io = fakeIo(); const bare = onCtx(home, io); bare.platform = platform
-    assert.equal(await runOnCli([], bare), 2, `${platform}: ${io.text()}`)
-    assert.match(io.text(), /asight on · 将写 \d+ 个文件/, `${platform}: the new collector's plan, not a refusal`)
+    assert.equal(await runOnCli(['--dry-run'], bare), 0, `${platform}: ${io.text()}`)
+    assert.match(io.text(), /asight 将打开采集/, `${platform}: the new collector's plan, not a refusal`)
     assert.ok(!/本平台未实现|驱动旧采集/.test(io.text()), `${platform} is not told it has no collector any more`)
   }
   assert.deepEqual(snapshot(home), before)
 })
 
 test('on --no-unit with no daemon answering: everything is written and it exits 0, but the text says nothing is captured yet and how to start the daemon — never "已打开采集"', async () => {
-  const home = tmpDir('asight-on-idle-'); seedClaude(home)
+  const home = tmpDir('asight-on-idle-'); seedClaude(home); await installFirst(home)
   const io = fakeIo()
   assert.equal(await runOnCli(['--yes', '--no-unit'], onCtx(home, io, { daemon: fakeDaemon({ up: false }) })), 0)
   assert.match(io.stdoutText(), /^asight 已写好入口与期望态,但守护进程没在跑/m)
@@ -224,20 +235,24 @@ test('on --no-unit with no daemon answering: everything is written and it exits 
   assert.equal(j.json().daemon.state, 'not-running', '--json says the same, as a field')
 })
 
-test('receipt: every file the receipt lists is a file the run wrote, and every file the run wrote is listed (the on side of V3)', async () => {
-  const home = tmpDir('asight-on-v3-'); seedClaude(home); const before = snapshot(home)
-  const io = fakeIo()
-  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io)), 0)
-  const r = io.json()
-  const wrote = changedFiles(before, snapshot(home)).map((rel) => path.join(home, rel))
-  const listed = [...r.changed.map((c) => c.path), ...r.created.map((c) => (typeof c === 'string' ? c : c.path))]
-  const unlisted = wrote.filter((f) => !listed.some((l) => l === f || f.startsWith(`${l}${path.sep}`)) && !f.includes(`${path.sep}backup${path.sep}`) && !f.includes(`${path.sep}flows${path.sep}`))
-  assert.deepEqual(unlisted, [], 'a file written but not in the receipt')
-  const missing = listed.filter((l) => !fs.existsSync(l))
-  assert.deepEqual(missing, [], 'a file in the receipt that was not written')
-  assert.ok(r.changed.every((c) => c.backup === null || fs.existsSync(c.backup)), 'a backup in the receipt exists')
-  assert.equal(r.changed.find((c) => c.path === settingsOf(home)).backup !== null, true, 'settings.json existed: it was backed up first (R2)')
-  assert.ok(r.log && fs.existsSync(r.log), 'the receipt says where the record is, and it is there (R1)')
+test('receipt: every file the receipt lists is a file the run wrote, and every file the run wrote is listed — install, then on (V3)', async () => {
+  const home = tmpDir('asight-on-v3-'); seedClaude(home)
+  for (const [run, command] of [[runInstallCli, 'install'], [runOnCli, 'on']]) {
+    const before = snapshot(home)
+    const io = fakeIo()
+    assert.equal(await run(['--yes', '--json'], onCtx(home, io)), 0, command)
+    const r = io.json()
+    const wrote = changedFiles(before, snapshot(home)).map((rel) => path.join(home, rel))
+    const listed = [...r.changed.map((c) => c.path), ...r.created.map((c) => (typeof c === 'string' ? c : c.path))]
+    // on rewrites the install manifest, asight's own record of what is in place, on every run (the plan lists it); the receipt lists the files of the run's effect
+    const own = command === 'on' ? [path.join(home, '.asight', 'collector', 'install-manifest.json')] : []
+    const unlisted = wrote.filter((f) => !own.includes(f) && !listed.some((l) => l === f || f.startsWith(`${l}${path.sep}`)) && !f.includes(`${path.sep}backup${path.sep}`) && !f.includes(`${path.sep}flows${path.sep}`))
+    assert.deepEqual(unlisted, [], `${command}: a file written but not in the receipt`)
+    assert.deepEqual(listed.filter((l) => !fs.existsSync(l)), [], `${command}: a file in the receipt that was not written`)
+    assert.ok(r.changed.every((c) => c.backup === null || fs.existsSync(c.backup)), 'a backup in the receipt exists')
+    if (command === 'install') assert.notEqual(r.changed.find((c) => c.path === settingsOf(home)).backup, null, 'settings.json existed: install backed it up first (R2)')
+    else { assert.deepEqual(r.changed, [], 'on changes no user file (D55)'); assert.ok(r.log && fs.existsSync(r.log), 'the receipt says where the record is, and it is there (R1)') }
+  }
 })
 
 test('formatOnReceipt: past and future tense, the four commands, the restart list, the skipped harnesses, and the linger line only when it is not on', () => {
@@ -377,8 +392,8 @@ test('V3 (off, the install manifest cannot be saved at the end): the entries wer
   assert.deepEqual(readManifest(b.s.dir).entries, [])
 })
 
-test('V29: the first on receipt, in the text and in --json, carries the four commands and the absolute path of asight-off; every item of the manifest has a kind and an undo_by_hand; flows/ has the install-note and the off-note runs, each ending in a result line', async () => {
-  const home = tmpDir('asight-on-v29-'); seedClaude(home)
+test('V29: the on receipt after install, in the text and in --json, carries the four commands and the absolute path of asight-off; every item of the manifest has a kind and an undo_by_hand; flows/ has the install-note and the off-note runs, each ending in a result line', async () => {
+  const home = tmpDir('asight-on-v29-'); seedClaude(home); await installFirst(home)
   const io = fakeIo()
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io)), 0)
   const r = io.json()
@@ -386,8 +401,8 @@ test('V29: the first on receipt, in the text and in --json, carries the four com
   for (const c of ['asight on', 'asight off', 'asight status', 'asight uninstall']) assert.ok(everything.includes(c), `--json carries ${c}`)
   assert.ok(r.undo.includes(standalonePath(home)) && r.standalone === standalonePath(home), 'the absolute path of asight-off: the undo list and the key')
   assert.ok(path.isAbsolute(r.standalone))
-  assert.ok(fs.statSync(r.standalone).isFile() && (fs.statSync(r.standalone).mode & 0o100), 'and the path is a file asight wrote, executable (test/off/standalone.test.mjs runs it)')
-  const io2 = fakeIo(); const home2 = tmpDir('asight-on-v29b-'); seedClaude(home2)
+  assert.ok(fs.statSync(r.standalone).isFile() && (fs.statSync(r.standalone).mode & 0o100), 'and the path is a file asight wrote, executable (install wrote it; test/off/standalone.test.mjs runs it)')
+  const io2 = fakeIo(); const home2 = tmpDir('asight-on-v29b-'); seedClaude(home2); await installFirst(home2)
   assert.equal(await runOnCli(['--yes'], onCtx(home2, io2)), 0)
   for (const c of ['asight on', 'asight off', 'asight status', 'asight uninstall', standalonePath(home2)]) assert.ok(io2.stdoutText().includes(c), `the text carries ${c}`)
   const m = readManifest(path.join(home, '.asight', 'collector'))
@@ -431,15 +446,15 @@ test('V10: status says 不知道 with the reason for connections the daemon did 
 // D49 (1.6 §6): `on` looks at no VPN / proxy software — no 本机网络环境 line in the plan or the receipt, no `netenv` key in --json, and it writes no netenv.json when it has nothing to adopt (the receipt lists
 // exactly the files `on` wrote, V3; a second `on` writes nothing, R9).
 test('on prints no network-environment line and its --json receipt has no netenv key; --dry-run writes nothing', async () => {
-  const home = tmpDir('asight-ne-on-'); seedClaude(home)
+  const home = tmpDir('asight-ne-on-'); seedClaude(home); await installFirst(home)
   const io = fakeIo()
   assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: {} })), 0, io.text())
   assert.ok(!/本机网络环境/.test(io.stdoutText()), 'neither in the plan nor in the receipt')
   assert.ok(!fs.existsSync(path.join(home, '.asight', 'netenv.json')), 'on does not write the board\'s cache')
-  const j = fakeIo(); const home2 = tmpDir('asight-ne-on-'); seedClaude(home2)
+  const j = fakeIo(); const home2 = tmpDir('asight-ne-on-'); seedClaude(home2); await installFirst(home2)
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { deps: {} })), 0)
   assert.ok(!('netenv' in j.json()), 'no netenv key in the receipt')
-  const dry = fakeIo(); const home4 = tmpDir('asight-ne-on-'); seedClaude(home4); const before = snapshot(home4)
+  const dry = fakeIo(); const home4 = tmpDir('asight-ne-on-'); seedClaude(home4); await installFirst(home4); const before = snapshot(home4)
   assert.equal(await runOnCli(['--dry-run'], onCtx(home4, dry, { deps: {} })), 0)
   assert.ok(!/本机网络环境/.test(dry.stdoutText())); assert.deepEqual(changedFiles(before, snapshot(home4)), [], '--dry-run writes nothing')
 })

@@ -533,14 +533,16 @@ test('R3: a manifest this build does not read (a newer version) leaves every ent
 
 test('V34: an off that lands while `on` is writing wins — `on` exits 1, saying it was turned off; at the end desired is off, no entry is left in the manifest, the files are as they were, and the daemon is told to switch off', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
-  await s.off() // back to nothing installed by on: the second on below is the race
-  const before = s.userFiles(); const codexEnv = path.join(s.home, '.codex', '.env')
+  await s.off() // back to nothing: Linux off still undoes the certificate items, so install runs again (D55), then the on below is the race
+  const before = s.userFiles()
+  await s.install()
   let offRun = null
-  const racing = { ...fs, renameSync: (a, b) => { if (b === codexEnv && !offRun) offRun = s.off(); return fs.renameSync(a, b) } } // `off` starts when `on` is about to write the second user file
+  const racing = { ...fs, renameSync: (a, b) => { if (!offRun) offRun = s.off(); return fs.renameSync(a, b) } } // `off` starts when `on` is about to make its first write
   const on = await s.on({ fs: racing })
   const off = await offRun
-  assert.equal(on.exit, 1, JSON.stringify(on.receipt.notes))
-  assert.match(on.receipt.notes.join('\n'), /turned off while this on ran.*the off wins/)
+  // on's one write is state.json now (D55: install wrote the entries); whether on sees the off depends on whether off's desired-off lands before on's
+  // last guard — R12 below pins the case where it does. Either way the end is off's, and an on that saw it says so and exits 1.
+  if (on.exit !== 0) { assert.equal(on.exit, 1, JSON.stringify(on.receipt.notes)); assert.match(on.receipt.notes.join('\n'), /turned off while this on ran.*the off wins/) }
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'the final desired state is off')
   assert.deepEqual(readManifest(s.dir).entries, [], 'no entry is left')
@@ -549,25 +551,24 @@ test('V34: an off that lands while `on` is writing wins — `on` exits 1, saying
   assert.ok(!fs.existsSync(path.join(s.dir, 'op.lock')), 'both released the lock')
 })
 
-test('V34: whichever write of `on` the off lands in, the end is the same — off wins: desired off, no entry left, user files as before, no lock left; `on` exits 1 for every write before the last guard', async () => {
+test('V34: whichever write of `on` the off lands in, the end is the same — off wins: desired off, no entry left, user files as before, no lock left', async () => {
   const count = await installedHome({ names: ['claude-code', 'codex'] })
-  await count.off()
+  await count.off(); await count.install()
   let writes = 0
   await count.on({ fs: { ...fs, renameSync: (a, b) => { writes++; return fs.renameSync(a, b) } } })
-  assert.ok(writes >= 8, `a first on has ${writes} writes: the loop below has something to cut`)
-  const exits = []
+  assert.ok(writes >= 1, `an on has ${writes} writes: the loop below has something to cut`)
   for (let k = 1; k <= writes; k++) {
     const s = await installedHome({ names: ['claude-code', 'codex'] })
     await s.off()
     const before = s.userFiles(); let n = 0, offRun = null
+    await s.install()
     const on = await s.on({ fs: { ...fs, renameSync: (a, b) => { if (++n === k && !offRun) offRun = s.off(); return fs.renameSync(a, b) } } })
     const off = await offRun
-    exits.push(on.exit)
+    assert.ok([0, 1].includes(on.exit), `write ${k}: ${JSON.stringify(on.receipt.notes)}`)
     assert.equal(off.exit, 0, `write ${k}: ${JSON.stringify(off.receipt.problems)}`)
     assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], `write ${k}: the final desired state is off`)
     assert.deepEqual([readManifest(s.dir).entries, s.userFiles(), fs.existsSync(path.join(s.dir, 'op.lock')), [...s.sys.daemon.state.on]], [[], before, false, []], `write ${k}`)
   }
-  assert.ok(exits.filter((x) => x === 1).length >= writes - 3, `on stopped for nearly every write: ${exits.join('')}`)
 })
 
 test('V8: backups — 0700 / 0600; a file back at its pre_sha256 loses its backup; one the user edited after asight keeps it, listed in kept_backups and as a backup-kept event; the next on does not write over the kept one; a file restored by hand before off ("already restored") loses its backup', async () => {
@@ -587,9 +588,10 @@ test('V8: backups — 0700 / 0600; a file back at its pre_sha256 loses its backu
   assert.deepEqual(readManifest(s.dir).kept_backups.map((k) => [k.path, k.backup]), [[by.codex.path, by.codex.backup]], 'and in the manifest')
   assert.ok(flowEvents(s.dir).some((e) => e.code === 'backup-kept' && e.path === by.codex.path), 'the event is written')
   const kept = fs.readFileSync(by.codex.backup, 'utf8'), keptMtime = fs.statSync(by.codex.backup).mtimeMs
+  await s.install() // Linux off took the certificate items out: install writes them again (D55), then on
   const on = await s.on()
   assert.equal(on.exit, 0, JSON.stringify(on.receipt.notes))
-  assert.deepEqual([fs.readFileSync(by.codex.backup, 'utf8'), fs.statSync(by.codex.backup).mtimeMs], [kept, keptMtime], 'a second on does not write over the kept backup')
+  assert.deepEqual([fs.readFileSync(by.codex.backup, 'utf8'), fs.statSync(by.codex.backup).mtimeMs], [kept, keptMtime], 'the second install does not write over the kept backup')
   const fresh = readManifest(s.dir).entries.find((e) => e.harness === 'codex')
   assert.notEqual(fresh.backup, by.codex.backup, 'it makes a new one for its own change')
   // "already restored": the user put the file back by hand (from the backup) before off ran
@@ -602,7 +604,7 @@ test('V8: backups — 0700 / 0600; a file back at its pre_sha256 loses its backu
 
 test('R12: while `on` holds the op lock (it waits for its daemon to come up) an off writes desired off at once but touches no entry until `on` has let go — and `on` sees the off within a poll instead of after fifteen seconds', async () => {
   const s = await installedHome({ names: ['claude-code'] })
-  await s.off() // everything off; the next on is a re-on, which waits for a daemon that never comes
+  await s.off(); await s.install() // everything off, the certificate items installed again; the next on is a re-on, which waits for a daemon that never comes
   const never = async () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }
   const settings = path.join(s.home, '.claude', 'settings.json')
   let offRun = null, pauses = 0, meanwhile = null
@@ -613,7 +615,7 @@ test('R12: while `on` holds the op lock (it waits for its daemon to come up) an 
     meanwhile = { entry: fs.readFileSync(settings, 'utf8').includes('NODE_EXTRA_CA_CERTS'), desired: s.state().harnesses['claude-code'].desired, lock: fs.existsSync(path.join(s.dir, 'op.lock')) }
   }
   const on = await s.on({ request: never, sleep })
-  assert.deepEqual(meanwhile, { entry: true, desired: 'off', lock: true }, 'on had written its entry and holds the lock; off had already written desired off and had not touched the entry')
+  assert.deepEqual(meanwhile, { entry: true, desired: 'off', lock: true }, 'install had written the entry and on holds the lock; off had already written desired off and had not touched the entry')
   assert.equal(on.exit, 1); assert.match(on.receipt.notes.join('\n'), /turned off while this on ran/)
   assert.ok(pauses < 8, `on stopped at its next poll (${pauses} pauses), not after 60`)
   const off = await offRun

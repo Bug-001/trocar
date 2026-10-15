@@ -637,6 +637,7 @@ test('install: a unit whose enable() carries its own failure event — the darwi
   } finally { a.done() }
   const b = box()
   try {
+    await installCollector({ ...onBase(b), unit: null }) // D55: on writes no certificate, install comes first
     const r = await turnOn(onBase(b, { unit: unit(b), request: fakeDaemon({ up: false }).request }))
     assert.equal(r.exit, 1, 'a not-done on: the autostart would not register')
     const f = recentFailures(b.dir).find((x) => x.event === 'failure')
@@ -954,6 +955,7 @@ test('V33: on --no-autostart writes the unit and starts it without enable, the d
   const b = box()
   try {
     const sys = fakeSystem()
+    await installCollector({ ...onBase(b), unit: null }) // D55: on writes no certificate, install comes first
     const r = await turnOn(onBase(b, { unit: unitOf(b, sys.exec.run), request: sys.daemon.request, autostart: false }))
     assert.equal(r.exit, 0)
     const unitFile = path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service')
@@ -966,6 +968,7 @@ test('V33: on --no-autostart writes the unit and starts it without enable, the d
   const c = box()
   try {
     const ex = recordingExec()
+    await installCollector({ ...onBase(c), unit: null })
     const r = await turnOn(onBase(c, { unit: null, request: fakeDaemon({ up: false }).request }))
     assert.equal(r.exit, 0)
     assert.ok(!fs.existsSync(path.join(c.home, '.config')), '--no-unit writes no unit')
@@ -1016,7 +1019,8 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
   fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}` } }, null, 2)) // the user's own relay: its host is in the decrypt policy
   let d = null
   try {
-    // the first on: the entry is written, no daemon answers (no unit), so nothing is asked of one
+    // install writes the entry (D55); the first on: no daemon answers (no unit), so nothing is asked of one
+    await installCollector({ ...onBase(b), unit: null })
     const first = await on()
     assert.deepEqual([first.exit, first.receipt.daemon.state], [0, 'not-running'])
     d = await startDaemon({ dir: b.dir, socketPath: sock, arch, harnesses: [cc], env: { ...process.env, HOME: home }, upstreamCa: up.ca.certPem }) // restores the desired state: attached
@@ -1030,8 +1034,9 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     await pause(30)
     await start(4343) // started while it is off
     await pause(40)
-    // on again: the entry is written now, so both processes are older than it
-    const again = await on({ confirm: async () => { throw new Error('nothing new to confirm: the settings file was confirmed by the first on') } })
+    // Linux off still takes the certificate entry out (the handoff's open item (a)), so install writes it again, and on: both processes are older than it
+    await installCollector({ ...onBase(b), unit: null })
+    const again = await on({ confirm: async () => { throw new Error('nothing new to confirm: the settings file was confirmed by install') } })
     assert.equal(again.exit, 0, JSON.stringify(again.receipt.notes))
     assert.deepEqual(again.receipt.restart.map((x) => [x.harness, x.pid, x.reason]).sort((x, y) => x[1] - y[1]), [['claude-code', 4242, 'config-after-start'], ['claude-code', 4343, 'config-after-start']], 'the receipt says which processes capture waits for a restart of')
     const row = await agentOf(4343)

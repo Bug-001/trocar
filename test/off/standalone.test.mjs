@@ -4,6 +4,7 @@
 // handed a copy in a directory of its own (no relative import could find the repo), a PATH of stubs (the sandbox guard allows those, and nothing else), and no NODE_PATH.
 // Nothing here runs a real OS tool or touches a real process.
 import test from 'node:test'
+import { runInstallCli } from '../../src/cli/install.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -360,16 +361,16 @@ test('V35: every `on` writes the copy again — after the first on it is what sr
 
 // ── the receipt and the plan ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('the first on names the copy, lists it among what it created and in the plan it prints, and the file is there and runs; the dry run lists it too', async () => {
+test('install names the copy, lists it among what it created and in the plan it prints, and the file is there and runs; the dry run lists it too (D55: asight-off is install\'s)', async () => {
   const home = tmpDir('asight-on-std-'); seedClaude(home)
   const io = fakeIo()
-  assert.equal(await runOnCli(['--dry-run', '--json'], onCtx(home, io)), 0)
+  assert.equal(await runInstallCli(['--dry-run', '--json'], onCtx(home, io)), 0)
   const dry = io.json()
   assert.ok(dry.created.includes(standalonePath(home)) && !fs.existsSync(standalonePath(home)), 'the dry run says it will be written, and writes nothing')
   const io2 = fakeIo()
-  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io2)), 0)
+  assert.equal(await runInstallCli(['--yes', '--json'], onCtx(home, io2)), 0)
   const r = io2.json()
-  assert.ok(r.created.includes(standalonePath(home)) && r.standalone === standalonePath(home) && r.undo.includes(standalonePath(home)))
+  assert.ok(r.created.includes(standalonePath(home)) && r.standalone === standalonePath(home))
   assert.match(io2.stderrText(), /asight-off/, 'the plan printed before the first write names it')
   assert.deepEqual(r.created.slice().sort(), dry.created.slice().sort(), 'the dry run and the run list the same files')
   const run = spawnSync(process.execPath, [standalonePath(home), '--bogus'], { env: { ...process.env, NODE_PATH: '' }, cwd: path.dirname(standalonePath(home)), encoding: 'utf8' })
@@ -377,12 +378,12 @@ test('the first on names the copy, lists it among what it created and in the pla
   assert.match(formatPlan({ first: true, files: [], entries: [], standalone: '/home/a/.asight/bin/asight-off' }, { home: '/home/a' }), /~\/\.asight\/bin\/asight-off/)
 })
 
-test('a copy that cannot be written stops the on before one file of the agents\' is touched, says why, exits 1 and leaves a failure line in flows/ (R3, R11)', async () => {
+test('a copy that cannot be written stops the install before one file of the agents\' is touched, says why, exits 1 and leaves a failure line in flows/ (R3, R11)', async () => {
   const home = tmpDir('asight-on-nostd-'); const settings = seedClaude(home)
   const refuses = new Proxy(fs, { get: (t, k) => (k === 'openSync' ? (p, ...a) => { if (String(p).includes('asight-off')) throw Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' }); return t.openSync(p, ...a) } : typeof t[k] === 'function' ? t[k].bind(t) : t[k]) })
   const before = fs.readFileSync(settings, 'utf8')
   const io = fakeIo()
-  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, io, { deps: { fs: refuses } })), 1)
+  assert.equal(await runInstallCli(['--yes', '--json'], onCtx(home, io, { deps: { fs: refuses } })), 1)
   const r = io.json()
   assert.equal(r.ok, false)
   assert.match(r.notes.join('\n'), /asight-off[^\n]*the undo that works without the source tree, could not be written \(EACCES[^\n]*no file of the agents' was changed/)
@@ -391,7 +392,7 @@ test('a copy that cannot be written stops the on before one file of the agents\'
   const failure = flowEvents(path.join(home, '.asight', 'collector')).find((e) => e.event === 'failure' && /asight-off/.test(e.reason))
   assert.ok(failure && failure.where === 'install' && failure.code === 'EACCES', JSON.stringify(failure))
   const retry = fakeIo()
-  assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, retry)), 0, 'and once that is put right, the same on finishes')
+  assert.equal(await runInstallCli(['--yes', '--json'], onCtx(home, retry)), 0, 'and once that is put right, the same install finishes')
 })
 
 // ── the old capture: the copy takes it out too, with the repository out of reach ────────────

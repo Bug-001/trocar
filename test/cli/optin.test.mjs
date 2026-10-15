@@ -8,11 +8,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { runOnCli } from '../../src/cli/on.mjs'
-import { turnOn } from '../../src/collector/install.mjs'
+import { turnOn, installCollector } from '../../src/collector/install.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
-import { fakeIo, onCtx, seedClaude, snapshot, fakeSystem, ROOTS } from './fixtures/on-ctx.mjs'
+import { fakeIo, onCtx, seedClaude, snapshot, fakeSystem, ROOTS, installFirst } from './fixtures/on-ctx.mjs'
 
 const SOCK = '/x/collector.sock'
 
@@ -38,7 +38,7 @@ function fakeOptIn(out = { state: 'done' }, extraItems = []) {
 }
 
 test('the flag: repeatable, comma-separated and `--opt-in=a,b`; a name the platform does not offer is a usage error that lists them; a valueless flag is too', async () => {
-  const home = tmpDir('asight-optin-flag-'); seedClaude(home)
+  const home = tmpDir('asight-optin-flag-'); seedClaude(home); await installFirst(home)
   const f = fakeOptIn()
   const cases = [
     [['--opt-in', 'x.two-items'], ['x.two-items']],
@@ -68,28 +68,28 @@ test('the flag: repeatable, comma-separated and `--opt-in=a,b`; a name the platf
 })
 
 test('V56 (the plan half): without --opt-in nothing is applied and the plan carries 「要你点名的(默认不做)」 — one line per item with its 影响, admin where it is, and the exact command; --yes does not stand in for the naming', async () => {
-  const home = tmpDir('asight-optin-plan-'); seedClaude(home); const before = snapshot(home)
+  const home = tmpDir('asight-optin-plan-'); seedClaude(home); await installFirst(home); const before = snapshot(home)
   const f = fakeOptIn()
-  // not in a terminal and no --yes: the plan is all there is (R6) — it carries the opt-in section, and nothing is written
+  // after install a bare on has nothing to confirm (D55): its plan carries the opt-in section, it turns on, and no user file is written
   const io = fakeIo({ tty: false })
-  assert.equal(await runOnCli([], onCtx(home, io, { deps: { optIn: f.hooks } })), 2)
+  assert.equal(await runOnCli([], onCtx(home, io, { deps: { optIn: f.hooks } })), 0)
   const text = io.text()
   assert.match(text, /要你点名的\(默认不做/)
   for (const line of [/x\.two-items: shim-dir — 本用户所有程序看到的 PATH 顺序变了/, /x\.two-items: shortcuts — 你的快捷方式经 asight 启动/, /x\.machine-item: dispatcher\(要管理员\) — 本机所有用户的命令查找都先到这个目录;要管理员权限/]) assert.match(text, line)
   for (const cmd of [/点名: asight on x --opt-in x\.two-items/g, /点名: asight on x --opt-in x\.machine-item/]) assert.match(text, cmd)
   assert.equal((text.match(/点名: /g) || []).length, 3, 'one command per offered item, including the machine one')
   assert.deepEqual(f.applied, [], 'no --opt-in: nothing is applied')
-  assert.deepEqual(snapshot(home), before, 'and nothing is written')
-  // a real run with --yes and no --opt-in: the section is still there, and the apply is never called (the default is not-doing, W63)
+  const mine = (k) => k.startsWith('.asight') || k.startsWith('.config')
+  assert.deepEqual(Object.entries(snapshot(home)).filter(([k]) => !mine(k)), Object.entries(before).filter(([k]) => !mine(k)), 'and no user file is written')
+  // a real run with --yes and no --opt-in: the apply is never called (the default is not-doing, W63)
   const real = fakeIo({ tty: true, answers: ['y'] })
   assert.equal(await runOnCli(['--yes'], onCtx(home, real, { deps: { optIn: f.hooks } })), 0)
-  assert.match(real.text(), /要你点名的\(默认不做/)
   assert.deepEqual(f.applied, [], '--yes alone opts nothing in')
 })
 
 test('the apply plumbing of turnOn: chosen rows are applied once each, the receipt carries opt_in, a pending-admin or needs-admin outcome fails the run with its note, and the elevated command is printed only in the fallback', async () => {
   const run = async (f, args, { tty = true, answers = ['y'] } = {}) => {
-    const home = tmpDir('asight-optin-on-'); seedClaude(home)
+    const home = tmpDir('asight-optin-on-'); seedClaude(home); await installFirst(home)
     const { exec, daemon } = fakeSystem()
     const io = fakeIo({ tty, answers })
     const exit = await runOnCli(args, onCtx(home, io, { exec, daemon, deps: { optIn: f.hooks } }))
@@ -139,6 +139,7 @@ test('turnOn (the library form, V56\'s re-run rule): an on without --opt-in afte
   const f = fakeOptIn({ state: 'done' })
   const { exec, daemon } = fakeSystem()
   const base = { home, env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run') }, osName: 'linux', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, confirm: async () => true, request: daemon.request, socketPath: SOCK, sleep: async () => {}, linger: () => true, user: 'alice', optInHooks: f.hooks }
+  await installCollector({ home, env: base.env, osName: 'linux', harnesses: [cc], freePort: base.freePort, roots: ROOTS, unit: null }) // D55: install first
   const first = await turnOn({ ...base, optIn: ['x.two-items'] })
   assert.equal(first.exit, 0, JSON.stringify(first.receipt.notes))
   assert.equal(f.applied.length, 2)
@@ -255,7 +256,7 @@ test('validateOptIn rejects the shapes §9.4 does not allow (the check can fail:
 })
 
 test('an ITEM id the plan prints names its form: one carrier expands to it, one several forms share is the user\'s to disambiguate', async () => {
-  const home = tmpDir('asight-optin-item-'); seedClaude(home)
+  const home = tmpDir('asight-optin-item-'); seedClaude(home); await installFirst(home)
   const f = fakeOptIn()
   const io = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--opt-in', 'shim-dir', '--yes'], onCtx(home, io, { deps: { optIn: f.hooks } })), 0, io.text())
@@ -269,7 +270,7 @@ test('an ITEM id the plan prints names its form: one carrier expands to it, one 
 })
 
 test('a named opt-in turns its harness ON in the same run — the desired state flips with the naming (kimi-gap 第 2 条)', async () => {
-  const home = tmpDir('asight-optin-desired-'); seedClaude(home)
+  const home = tmpDir('asight-optin-desired-'); seedClaude(home); await installFirst(home)
   const f = fakeOptIn()
   const io = fakeIo({ tty: false })
   assert.equal(await runOnCli(['--opt-in', 'x.two-items', '--yes'], onCtx(home, io, { deps: { optIn: f.hooks } })), 0, io.text())
