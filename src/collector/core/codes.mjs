@@ -65,6 +65,8 @@ export const CODE = Object.freeze({
   enginePortTaken: 'engine-port-taken', // the engine's recorded port is held by another socket at daemon start: recorded, no other port picked (decision #16)
   priorProxyUnknown: 'prior-proxy-unknown', // a door's upstream: the proxy the agent had in its process env could not be recovered (parent gone, env unreadable): the system proxy, else direct (4.11 P7)
   notUsersFile: 'not-users-file', // install skipped a P8 install-folder wrapper: the target is not one native program in a folder this user owns, outside package-manager trees, with the layout declared (4.11 P8)
+  certNotInstalled: 'cert-not-installed', // on refused: no complete install record — run asight install first (1.6 §1.1, D55⑥)
+  collectorsOnline: 'collectors-online', // uninstall refused: a harness is on, or a holder may still use a door; nothing changed (1.6 §1.1, 4.11 CM24)
   pacPeerRefused: 'pac-peer-refused', // the PAC door (no credentials) refused a peer that is not this user's process, or whose user could not be told (4.11 P10)
 })
 

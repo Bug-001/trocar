@@ -25,6 +25,34 @@ import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask } from '../off/win32.mjs'
+import { holdersOf } from '../off/holders.mjs'
+import { readStateFile } from '../off/state.mjs'
+import { readAgentList } from '../off/identity.mjs'
+
+// macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
+const MODEL_OS = new Set(['darwin', 'win32'])
+
+/** Is capture online (1.6 §1.1 「下线」)? → null when offline, else { on, holders, unknown } — `on`: harnesses whose desired state is on or that still have
+ *  phase-on items; `holders`: P12's table, from the daemon (GET /holders) when it answers, else judged here from the manifest's liveness and the
+ *  process table (src/off/holders.mjs, the same judge); `unknown`: why the holders could not be told (a daemon that does not answer, an unreadable
+ *  table) — never read as "nobody". */
+async function captureOnline(w, m) {
+  let st = null
+  try { st = readStateFile(w.stateF, { fs: w.fs, installed: harnessIdsOf(m), now: w.clock() }).state } catch { st = null }
+  const on = [...new Set([...Object.entries((st && st.harnesses) || {}).filter(([, v]) => v && v.desired === 'on').map(([h]) => h),
+    ...[...((m && m.entries) || []), ...((m && m.files) || [])].filter((x) => x.phase === 'on' && typeof x.harness === 'string').map((x) => x.harness)])].sort()
+  let holders = null, unknown = null
+  try {
+    if (!w.socketPath) throw Object.assign(new Error('no endpoint'), { code: 'ENOENT' })
+    const r = await w.request({ socketPath: w.socketPath, method: 'GET', path: '/holders', timeoutMs: 2000 })
+    if (r && Array.isArray(r.holders)) holders = r.holders; else unknown = 'the daemon does not know its holders yet'
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) { // the daemon is down: the CLI judges, by the same rule
+      try { holders = holdersOf({ manifest: m, procs: await w.procs(), agentList: readAgentList({ home: w.home, fs: w.fs }) }) } catch (t) { unknown = `the process table could not be read (${errText(t)})` }
+    } else unknown = `a daemon holds the control endpoint but did not answer (${errText(e)})`
+  }
+  return on.length || unknown || (holders && holders.length) ? { on, holders: holders || [], unknown } : null
+}
 
 const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -92,7 +120,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const tryOff = () => { try { return { r: desiredOff(w, null, harnessIdsOf(m)), error: null } } catch (e) { return { r: null, error: e } } }
   let early = null, lock = null
   if (fs.existsSync(w.dir)) {
-    try { lock = await acquireOpLock({ file: opLockFile(home), identity: w.identity, alive: w.alive, waitMs: deps.lockWaitMs ?? OFF_LOCK_WAIT_MS, offFirst: () => { early = tryOff() }, fs, now: w.ms, sleep: w.sleep }) } catch (e) {
+    const model = MODEL_OS.has(w.platform)
+    try { lock = await acquireOpLock({ file: opLockFile(home), identity: w.identity, alive: w.alive, waitMs: deps.lockWaitMs ?? OFF_LOCK_WAIT_MS, offFirst: model ? null : () => { early = tryOff() }, fs, now: w.ms, sleep: w.sleep }) } catch (e) {
       if (!e || e.code !== LOCK_BUSY) throw e
       receipt.ok = false; receipt.problems.push(`${errText(e)}. ${early && early.error ? `The desired state could not be written either (${errText(early.error)})` : 'The desired state is already off for every harness'}; run asight uninstall again afterwards`)
       put({ kind: 'result', outcome: 'failed', reason: `uninstall could not get the op lock: ${errText(e)}` })
@@ -104,6 +133,15 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   try {
     ;({ m, merr } = read()) // read AGAIN under the lock: an `on` that held it has written to the manifest since
     receipt.harnesses = harnessIdsOf(m)
+    // CM24: on macOS / Windows uninstall never does off — capture online (a harness on, a holder, or not knowable) is named and nothing changes
+    const online = MODEL_OS.has(w.platform) && m && !m.unsupported ? await captureOnline(w, m) : null
+    if (online) {
+      receipt.ok = false; receipt.code = 'collectors-online'
+      receipt.problems.push([online.on.length ? `还开着: ${online.on.join(', ')}` : null, online.holders.length ? `还有持有者: ${online.holders.map((x) => `pid ${x.pid} (${x.harness})`).join(', ')}` : null, online.unknown ? `不知道有没有持有者: ${online.unknown}` : null].filter(Boolean).join(';') + '。什么都没改;先 asight off,等持有者退出后再 asight uninstall(uninstall 从不代做 off)')
+      put({ event: 'failure', code: 'collectors-online', reason: receipt.problems.at(-1) })
+      put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${receipt.problems.at(-1)}` })
+      return { receipt, exit: EXIT.incomplete }
+    }
     // 1 · the desired state
     const again = tryOff()
     const wrote = [early && early.r, again.r].find((x) => x && x.wrote) || null
@@ -282,6 +320,8 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
   if ((deps.getuid || processUid)() === 0) { io.err('asight uninstall: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
   try {
     // a platform without a collector reaches runUninstall the same way and finds nothing to undo (D39⑥ executed 2026-10-11: the old capture's own uninstall went with it)
+    // the root's key goes last through its custody (4.11 P13): the platform's backend unless a test hands one in
+    if (deps.custody === undefined && MODEL_OS.has(platform)) deps = { ...deps, custody: (await (await import('../collector/arch/model-backends.mjs')).backendsFor({ os: platform, home, run: deps.exec || null, env })).custody }
     const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say: json ? io.err : io.out, deps: { platform, ...deps } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.needs_yes || receipt.declined) { io.out(formatUninstallReceipt({ ...receipt, notes: [] }, { home, tense: 'future' })); for (const n of receipt.notes) io.err(n) } // the plan, then why nothing was done (R6)

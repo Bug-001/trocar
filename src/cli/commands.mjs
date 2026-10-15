@@ -47,7 +47,7 @@ export const COMMANDS = Object.freeze([
     notes: ['退出码:0 都在被采集 · 1 有的没有 · 3 读不到、无法判定', '不带名字是一屏摘要(失败只印条数与最新一条);点名 harness 看它的明细;--failures 印完整失败墙'] },
   { name: 'uninstall', section: 'common', mutates: true, run: via('./uninstall.mjs', 'runUninstallCli'),
     usage: 'asight uninstall [--purge-data] [--dry-run] [--yes] [--json]',
-    summary: '先做 off 的全部,再删 asight 自己的文件(CA、清单、备份、单元)。采集数据留着,--purge-data 才删(要确认)。' },
+    summary: '撤 install 装的一切(根、证书载体、清单、备份、单元),根的密钥最后删。macOS / Windows 上采集还开着或还有持有者时拒绝(先 asight off);Linux 先做 off 的全部。采集数据留着,--purge-data 才删(要确认)。' },
   { name: 'doctor', section: 'common', mutates: false, run: doctor,
     usage: 'asight doctor [harness…] [--source <ndjson|dir>] [--json]',
     summary: '自检:是否真在抓、抓得对不对、凭据没漏、没弱化全机 TLS、采集文件仅属主可读;核对 asight-off 副本。',

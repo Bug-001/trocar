@@ -15,8 +15,8 @@ import { checkWrapper } from './core/proxymode/hooks/wrapper.mjs'
 import { planRoutes, writeRoutes } from './core/proxymode/entries.mjs'
 import { loadIngressConfig, rebindTaken, freeOnLoopback } from './core/ingress-config.mjs'
 import { controlEndpointFor } from './core/control.mjs'
+import { CODE } from './core/codes.mjs'
 
-export const CERT_NOT_INSTALLED = 'cert-not-installed'
 const INSTALL_HINT = 'asight install'
 const errText = (e) => String((e && e.message) || e)
 const groupOf = (harness, routeId) => `${harness}:${routeId}`
@@ -41,7 +41,7 @@ export function installDrift(m, harness, fs = nodeFs) {
 export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined }) {
   const dir = collectorHome(path.join(home, '.asight'))
   const m = readManifest(dir, fs)
-  if (!installComplete(m)) return { code: CERT_NOT_INSTALLED, on: [], refused: [], routes: [], notes: [], problems: [`asight is not installed for this user (no complete install record): run ${INSTALL_HINT} first`], exit: 1 }
+  if (!installComplete(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`asight is not installed for this user (no complete install record): run ${INSTALL_HINT} first`], exit: 1 }
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const wanted = ids || m.install.harnesses
   const refused = [], on = []
