@@ -18,10 +18,13 @@ const FILE = '<file>'
 
 // what each (platform, op) runs, with the store holding the root (present) or not
 const KC = (home) => path.join(home, 'Library', 'Keychains', 'login.keychain-db')
+const TRUST = (home) => path.join(home, '.asight', 'collector', 'root-store-trust.plist')
+// the user trust domain as `security trust-settings-export` writes it: trustList keyed by SHA-1; `deny` sets kSecTrustSettingsResult 3 (Deny)
+const trustPlist = (sha1s, { deny = [] } = {}) => `<?xml version="1.0"?>\n<plist version="1.0"><dict><key>trustList</key><dict>${sha1s.map((h) => `<key>${h.toUpperCase()}</key><dict><key>issuerName</key><data>AA==</data><key>trustSettings</key>${deny.includes(h) ? '<array><dict><key>kSecTrustSettingsResult</key><integer>3</integer></dict></array>' : '<array/>'}</dict>`).join('')}</dict><key>trustVersion</key><integer>1</integer></dict></plist>\n`
 const expected = {
   darwin: {
     add: (home) => [['security', ['add-trusted-cert', '-r', 'trustRoot', '-k', KC(home), FILE]]],
-    has: (home) => [['security', ['find-certificate', '-a', '-Z', '-p', KC(home)]]],
+    has: (home, present) => [['security', ['find-certificate', '-a', '-Z', '-p', KC(home)]], ...(present ? [['security', ['trust-settings-export', TRUST(home)]]] : [])],
     remove: (home, present) => [['security', ['find-certificate', '-a', '-Z', '-p', KC(home)]],
       ...(present ? [['security', ['remove-trusted-cert', FILE]], ['security', ['delete-certificate', '-Z', id.sha1, KC(home)]]] : [])],
   },
@@ -37,6 +40,7 @@ function runner({ platform, present, files }) {
   const run = (file, args) => {
     const a = args.map((x) => (x.endsWith('root-store-tmp.pem') ? (files.push(fs.readFileSync(x, 'utf8')), FILE) : x))
     calls.push([file, a])
+    if (platform === 'darwin' && args[0] === 'trust-settings-export') { fs.writeFileSync(args[1], trustPlist([id.sha1])); return { status: 0, stdout: '' } }
     if (platform === 'darwin' && args[0] === 'find-certificate') return { status: 0, stdout: `SHA-1 hash: X\n${pemOf(other.rootDer)}${present ? `SHA-1 hash: ${id.sha1}\n${pemOf(rootDer)}` : ''}` }
     if (platform === 'win32' && args[1] === '-store') return { status: present ? 0 : CRYPT_E_NOT_FOUND, stdout: '' }
     return { status: 0, stdout: '' }
@@ -61,6 +65,7 @@ for (const platform of ['darwin', 'win32']) {
         }
         for (const f of files) assert.equal(f, pemOf(rootDer), 'the file handed over is the root')
         assert.ok(!fs.existsSync(path.join(home, '.asight', 'collector', 'root-store-tmp.pem')), 'the temp file is gone')
+        assert.ok(!fs.existsSync(TRUST(home)), 'the exported trust settings are gone')
         if (op === 'has') assert.deepEqual(out, { present })
         else if (op === 'remove' && !present) assert.deepEqual(out, { ok: true, absent: true })
         else assert.deepEqual(out, { ok: true })
@@ -98,4 +103,32 @@ test('CM7 win32 not-found read as a signed exit is still "absent"', () => {
   const store = rootStore({ platform: 'win32', run, home: tmpDir('asight-rs-') })
   assert.deepEqual(store.has(id), { present: false })
   assert.deepEqual(store.remove(id), { ok: true, absent: true })
+})
+
+// D38 · CM7: on macOS `present` means TRUSTED. add-trusted-cert imports the certificate before it asks; a declined or ignored prompt leaves it in the
+// login keychain with no trust setting, and an install that read that as present would record the root and never ask again (every root-only
+// form then fails its handshake). Generated over the trust domain's states; only a setting for this SHA-1 that is not Deny is present.
+const TRUST_AXIS = [
+  ['a setting for it', { status: 0, sha1s: () => [id.sha1] }, { present: true }],
+  ['a setting for it, lower-case key', { status: 0, sha1s: () => [id.sha1.toLowerCase()] }, { present: true }],
+  ['no user trust settings at all', { status: 1, stderr: 'SecTrustSettingsCreateExternalRepresentation: No Trust Settings were found.' }, { present: false }],
+  ['settings for other certificates only', { status: 0, sha1s: () => ['0'.repeat(40), rootIdOf(other.rootDer).sha1] }, { present: false }],
+  ['a Deny setting for it', { status: 0, sha1s: () => [id.sha1], deny: () => [id.sha1] }, { present: false }],
+  ['a Deny setting for the next one only', { status: 0, sha1s: () => [id.sha1, '0'.repeat(40)], deny: () => ['0'.repeat(40)] }, { present: true }],
+]
+for (const [label, ans, want] of TRUST_AXIS) {
+  test(`CM7 darwin has, imported with ${label} → ${JSON.stringify(want)}`, () => {
+    const home = tmpDir('asight-rs-')
+    const run = (file, args) => {
+      if (args[0] === 'find-certificate') return { status: 0, stdout: `SHA-1 hash: ${id.sha1}\n${pemOf(rootDer)}` }
+      if (args[0] === 'trust-settings-export') { if (ans.status === 0) fs.writeFileSync(args[1], trustPlist(ans.sha1s(), { deny: ans.deny ? ans.deny() : [] })); return { status: ans.status, stdout: '', stderr: ans.stderr || '' } }
+      throw new Error(`unexpected ${args.join(' ')}`)
+    }
+    assert.deepEqual(rootStore({ platform: 'darwin', run, home }).has(id), want)
+    assert.ok(!fs.existsSync(TRUST(home)))
+  })
+}
+test('CM7 darwin has: a trust export that fails for another reason is an error, never "absent" (D38)', () => {
+  const run = (file, args) => (args[0] === 'find-certificate' ? { status: 0, stdout: pemOf(rootDer) } : { status: 36, stderr: 'interaction not allowed' })
+  assert.match(rootStore({ platform: 'darwin', run, home: tmpDir('asight-rs-') }).has(id).error, /trust-settings-export failed \(exit 36/)
 })

@@ -2,7 +2,9 @@
 // OSes; the collector's install and the standalone uninstall import it (node:* and src/off only). Always the user's store: the
 // login keychain on macOS, CurrentUser\Root on Windows — a machine store is never written. The OS prompt is the consent.
 //   darwin  add     security add-trusted-cert -r trustRoot -k <login keychain> <file>   (no -p: unrestricted, M7 / M8)
-//           has     security find-certificate -a -Z -p <login keychain>, matched by SHA-256
+//           has     security find-certificate -a -Z -p <login keychain>, matched by SHA-256, AND a user trust setting for it:
+//                   security trust-settings-export <file> (the user domain), its trustList keyed by SHA-1, not Deny — an import whose
+//                   prompt was declined or ignored is in the keychain without trust, and must read as absent so the next add asks again
 //           remove  security remove-trusted-cert <file>, then security delete-certificate -Z <sha1> <login keychain>
 //   win32   add     certutil -user -addstore Root <file>
 //           has     certutil -user -store Root <thumbprint>
@@ -47,12 +49,33 @@ export function rootStore({ platform, run = null, home, env = process.env, fs = 
       if (r.code !== 0) return { error: rsTool(r, 'security find-certificate') }
       return { block: certBlocks(r.out).find((c) => c.fp === fp256) || null }
     }
+    // does the user trust domain hold a setting for this SHA-1 that is not Deny (kSecTrustSettingsResult 3)? → true | false | { error }
+    const trusted = (sha1) => {
+      const out = path.join(path.dirname(tmp), 'root-store-trust.plist')
+      try {
+        fs.mkdirSync(path.dirname(out), { recursive: true, mode: 0o700 })
+        const r = execTool('security', ['trust-settings-export', out], opts)
+        if (r.code !== 0) return /no trust settings/i.test(`${r.err || ''}${r.out || ''}`) ? false : { error: rsTool(r, 'security trust-settings-export') }
+        const plist = fs.readFileSync(out, 'utf8')
+        const at = plist.toUpperCase().indexOf(`<KEY>${sha1.toUpperCase()}</KEY>`)
+        if (at < 0) return false
+        const rest = plist.slice(at + sha1.length + 11)
+        const next = rest.search(/<key>[0-9A-Fa-f]{40}<\/key>/)
+        return !/<key>kSecTrustSettingsResult<\/key>\s*<integer>3<\/integer>/.test(next < 0 ? rest : rest.slice(0, next))
+      } catch (e) { return { error: `the user trust settings could not be read (${(e && e.message) || e})` } } finally { try { fs.rmSync(out, { force: true }) } catch { /* the next run's export replaces it */ } }
+    }
     return {
       add: (rootDer) => withFile(pemOf(rootDer), (f) => {
         const why = rsTool(execTool('security', ['add-trusted-cert', '-r', 'trustRoot', '-k', kc, f], opts), 'security add-trusted-cert')
         return why ? { ok: false, reason: why } : { ok: true }
       }),
-      has: ({ fp256 }) => { const f = find(fp256); return f.error ? { error: f.error } : { present: !!f.block } },
+      has: ({ fp256 }) => {
+        const f = find(fp256)
+        if (f.error) return { error: f.error }
+        if (!f.block) return { present: false }
+        const t = trusted(rootIdOf(f.block.pem).sha1)
+        return t && t.error ? { error: t.error } : { present: t === true }
+      },
       remove: ({ fp256 }) => {
         const f = find(fp256)
         if (f.error) return { ok: false, reason: f.error }
