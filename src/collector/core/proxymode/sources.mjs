@@ -97,8 +97,8 @@ export function isPresent(form, ctx) {
   })
 }
 
-// The smallest YAML reader for the key paths descriptors declare: block maps and lists (of scalars or of maps), plain / single- / double-quoted
-// scalars kept as strings, comments, one leading `---`. Anything else (flow collections, block scalars, anchors, tags, tabs in indentation) throws,
+// The smallest YAML reader for the key paths descriptors declare: block maps and lists (of scalars or of maps), one-line flow
+// collections, plain / single- / double-quoted scalars kept as strings, comments, one leading `---`. Anything else (multi-line flow, block scalars, anchors, tags, tabs in indentation) throws,
 // so readSrc reports { error } rather than guessing.
 function parseYaml(text) {
   const lines = []
@@ -116,9 +116,8 @@ function parseYaml(text) {
   const scalar = (v) => {
     if (/^"/.test(v)) { if (!/^"(?:[^"\\]|\\.)*"$/.test(v)) throw new Error(`bad scalar ${v}`); return JSON.parse(v) }
     if (/^'/.test(v)) { if (!/^'(?:[^']|'')*'$/.test(v)) throw new Error(`bad scalar ${v}`); return v.slice(1, -1).replace(/''/g, "'") }
-    if (v === '[]') return []
-    if (v === '{}') return {}
-    if (/^[[{|>&*!%@`]/.test(v)) throw new Error(`unsupported YAML: ${v}`)
+    if (/^[[{]/.test(v)) return flow(v)
+    if (/^[|>&*!%@`]/.test(v)) throw new Error(`unsupported YAML: ${v}`)
     return v
   }
   const key = (k) => (/^["']/.test(k) ? scalar(k) : k)
@@ -151,6 +150,52 @@ function parseYaml(text) {
   const doc = block(lines[0].ind)
   if (i < lines.length) throw new Error(`bad indentation: ${lines[i].text}`)
   return doc
+}
+
+/** A one-line flow collection: `[a, 'b', {k: v}]` / `{k: [x]}` of plain or quoted scalars; anchors, tags, aliases and a trailing rest throw. */
+function flow(v) {
+  let k = 0
+  const ws = () => { while (v[k] === ' ') k++ }
+  const quoted = () => {
+    const m = (v[k] === '"' ? /^"(?:[^"\\]|\\.)*"/ : /^'(?:[^']|'')*'/).exec(v.slice(k))
+    if (!m) throw new Error(`bad scalar ${v}`)
+    k += m[0].length
+    return v[k - m[0].length] === '"' ? JSON.parse(m[0]) : m[0].slice(1, -1).replace(/''/g, "'")
+  }
+  const plain = (stop) => {
+    const m = stop.exec(v.slice(k))
+    const t = m ? m[0].trim() : ''
+    if (t === '' || /^[&*!|>%@`]/.test(t)) throw new Error(`unsupported YAML: ${v}`)
+    k += m[0].length
+    return t
+  }
+  const node = (stop) => {
+    ws()
+    if (v[k] === '[' || v[k] === '{') return coll()
+    return v[k] === '"' || v[k] === "'" ? quoted() : plain(stop)
+  }
+  function coll() {
+    const close = v[k] === '[' ? ']' : '}'
+    const out = close === ']' ? [] : {}
+    k++; ws()
+    if (v[k] === close) { k++; return out }
+    for (;;) {
+      if (close === ']') out.push(node(/^[^,\]]*/))
+      else {
+        const key = node(/^[^,:}]*?(?=:(?:\s|[,}]|$))/)
+        ws()
+        if (v[k++] !== ':') throw new Error(`not a key: ${v}`)
+        out[key] = node(/^[^,}]*/)
+      }
+      ws()
+      if (v[k] === ',') { k++; continue }
+      if (v[k++] === close) return out
+      throw new Error(`unsupported YAML: ${v}`)
+    }
+  }
+  const out = coll()
+  if (v.slice(k).trim() !== '') throw new Error(`unsupported YAML: ${v}`)
+  return out
 }
 
 /** A line without its comment: '#' at the start or after whitespace, outside quotes. */

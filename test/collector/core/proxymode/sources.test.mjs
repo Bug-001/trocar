@@ -122,7 +122,28 @@ test('yaml · the smallest reader: comments, quotes, nested maps, lists of scala
   assert.deepEqual(read(doc, ['routes', '*', 'name']).all.map((x) => x.value), ['r1', 'r2'])
   assert.equal(read(doc, ['routes', '*', 'ssl_ca_cert']).value, '/x/ca.pem')
   assert.deepEqual(read('', ['a']), { set: false })
-  for (const bad of ['a: {b: 1}\n', 'a: |\n  text\n', 'a: &x 1\n', 'a:\n\tb: 1\n', 'a: 1\n  b: 2\n', 'a: 1\nb\n', '- a\nb: 1\n']) {
+  for (const bad of ['a: [1,\n  2]\n', 'a: [&x 1]\n', 'a: {b: *x}\n', 'a: [x] rest\n', 'a: {b}\n', 'a: |\n  text\n', 'a: &x 1\n', 'a:\n\tb: 1\n', 'a: 1\n  b: 2\n', 'a: 1\nb\n', '- a\nb: 1\n']) {
     assert.ok(read(bad, ['a']).error, `not read as YAML this reader knows: ${JSON.stringify(bad)}`)
   }
 })
+
+// flow leaves: one-line flow collections × where they sit (a top-level list item, a map value) × read through '*'; the measured seed is the row
+// asight itself writes into dsh's cordis.patch.yml (src/collector/harness/win32/deepseek-dsh.mjs inject), comment and all.
+const FLOWS = [
+  ['[{id: asight-ca, name: ./asight-ca.mjs}]', [{ id: 'asight-ca', name: './asight-ca.mjs' }]],
+  ['[a, "b, c", \'d\'\'e\']', ['a', 'b, c', "d'e"]],
+  ['{k: [x, {y: "}"}], z: w}', { k: ['x', { y: '}' }], z: 'w' }],
+  ['[ ]', []],
+  ['{}', {}],
+]
+for (const [flowText, want] of FLOWS) for (const at of ['list', 'map']) {
+  test(`yaml · flow leaf ${flowText} · under a ${at} · '*' key path`, () => {
+    const root = tmpDir('asight-src-')
+    const ctx = ctxOf(root, 'darwin')
+    const f = path.join(ctx.home, 'c.yml')
+    put(f, at === 'list' ? `- other: 1\n- insert: ${flowText} # asight: a comment\n` : `p0:\n  other: 1\np1:\n  insert: ${flowText}\n`)
+    const r = readSrc({ file: { base: 'home', path: 'c.yml' }, format: 'yaml', keys: ['*', 'insert'] }, ctx)
+    assert.equal(r.error, undefined)
+    assert.deepEqual(r.value, want)
+  })
+}
