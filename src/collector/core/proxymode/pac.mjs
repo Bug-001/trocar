@@ -5,6 +5,7 @@
 // conditions of ruling ③) is entries.mjs's pacGate, not this file's. The handler is registered on the door.
 import { LOOPBACK, PAC_PATH } from './entries.mjs'
 import { CODE } from '../codes.mjs'
+import { bypassRuleOf } from '../upstream-shape.mjs'
 
 const SCHEME_WORD = { http: ['PROXY', 80], https: ['HTTPS', 443], socks: ['SOCKS', 1080], socks4: ['SOCKS', 1080], socks5: ['SOCKS5', 1080], socks5h: ['SOCKS5', 1080] }
 
@@ -18,24 +19,27 @@ function pacProxy(addr) {
   return `${w[0]} ${u.hostname}:${u.port || w[1]}` // the URL parser drops a scheme's default port; a PAC word needs it
 }
 
-// a bypass item as one PAC test: `<local>` (WinINet) = a plain host name; `.x` / `*.x` = the domain and below; a pattern with `*` = shExpMatch; else the host
-const bypassTest = (b) => {
-  const v = String(b).trim().toLowerCase()
-  if (!v) return null
-  if (v === '<local>') return 'isPlainHostName(host)'
-  const glob = v.startsWith('.') ? `*${v}` : v
-  return glob.includes('*') ? `shExpMatch(host, ${JSON.stringify(glob)})` : `host === ${JSON.stringify(glob)}`
+const maskOf = (bits) => { const m = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0; return [24, 16, 8, 0].map((k) => (m >>> k) & 255).join('.') }
+// one bypass row (the chain's rows, bypassRuleOf's shape) as one PAC test, saying what upstream-shape.mjs bypassHit — the door's own matcher — says
+const bypassTest = (row) => {
+  bypassRuleOf(row) // a row the matcher cannot meet is refused, never guessed into a test
+  const v = row.value
+  if (row.kind === 'local') return '(host.indexOf(".") < 0 && host.indexOf(":") < 0)'
+  if (row.kind === 'domain') return `host === ${JSON.stringify(v)}`
+  if (row.kind === 'domain-suffix') return `(host === ${JSON.stringify(v)} || dnsDomainIs(host, ${JSON.stringify(`.${v}`)}))`
+  const [net, bits] = v.split('/')
+  return `(/^\\d{1,3}(\\.\\d{1,3}){3}$/.test(host) && isInNet(host, ${JSON.stringify(net)}, ${JSON.stringify(maskOf(Number(bits)))}))` // IPv4 literals only: no lookup
 }
 
 /** The PAC text (P10). `door`: the door's address (null after `off`); `ownLeg`: the user's fixed system proxy, or null for DIRECT; `bypass`: the
- *  user's bypass list (strings). */
+ *  user's bypass rows (`{ kind: 'local' | 'domain' | 'domain-suffix' | 'ip-cidr', value }`, the chain's), matched as bypassHit matches them. */
 export function pacText({ door = null, ownLeg = null, bypass = [] } = {}) {
   const own = pacProxy(ownLeg)
   const ret = door == null ? own : `${pacProxy(door)}; ${own}`
-  const tests = [...LOOPBACK.map((h) => `host === ${JSON.stringify(h)}`), ...(bypass || []).map(bypassTest).filter(Boolean)]
+  const tests = [...LOOPBACK.map((h) => `host === ${JSON.stringify(h)}`), ...(bypass || []).map(bypassTest)]
   return [
     'function FindProxyForURL(url, host) {',
-    '  host = String(host).toLowerCase();',
+    '  host = String(host).toLowerCase().replace(/^\\[|\\]$/g, "").replace(/\\.$/, "");',
     `  if (${[...new Set(tests)].join(' ||\n      ')}) return "DIRECT";`,
     `  return ${JSON.stringify(ret)};`,
     '}',

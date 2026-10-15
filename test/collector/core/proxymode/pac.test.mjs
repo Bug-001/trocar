@@ -1,4 +1,4 @@
-// test/collector/core/proxymode/pac.test.mjs — CM19 (4.11 P10): the PAC text, generated over bypass lists × own leg (set / none / credentialed) ×
+// test/collector/core/proxymode/pac.test.mjs — CM19 (4.11 P10): the PAC text, generated over bypass rows (each kind; verdict = bypassHit's) × own leg (set / none / credentialed) ×
 // on vs after off, evaluated in a sandbox with the PAC builtins it uses; and CM33: peerAllowed over same / other uid and SID.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -6,28 +6,35 @@ import vm from 'node:vm'
 import { pacText, pacHandler, peerAllowed } from '../../../../src/collector/core/proxymode/pac.mjs'
 import { PAC_PATH, LOOPBACK } from '../../../../src/collector/core/proxymode/entries.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
+import { bypassHit } from '../../../../src/collector/core/upstream-shape.mjs'
 
-const glob = (s, p) => new RegExp(`^${p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`).test(s)
-const run = (text, host) => { const ctx = vm.createContext({ shExpMatch: glob, isPlainHostName: (h) => !h.includes('.') }); vm.runInContext(text, ctx); return ctx.FindProxyForURL(`https://${host}/`, host) }
+// the PAC builtins the text uses, as the PAC spec defines them (isInNet on an address literal: no lookup)
+const ip4 = (a) => a.split('.').reduce((n, o) => ((n << 8) | Number(o)) >>> 0, 0)
+const PAC_ENV = { dnsDomainIs: (h, d) => h.length >= d.length && h.slice(-d.length) === d, isInNet: (h, net, mask) => ((ip4(h) & ip4(mask)) >>> 0) === ((ip4(net) & ip4(mask)) >>> 0) }
+const run = (text, host) => { const ctx = vm.createContext({ ...PAC_ENV }); vm.runInContext(text, ctx); return ctx.FindProxyForURL(`https://${host}/`, host) }
 
-const BYPASS = [[], ['<local>'], ['.corp.example', 'build.internal'], ['*.lan', '10.*', 'we"ird\\host'], ['  ', 'UPPER.Example']]
+// the bypass axis: rows of each kind the chain carries (translateBypass's output), alone and mixed, incl. macOS's default 169.254/16
+const ROWS = { local: { kind: 'local' }, domain: { kind: 'domain', value: 'build.internal' }, suffix: { kind: 'domain-suffix', value: 'corp.example' }, cidr: { kind: 'ip-cidr', value: '169.254.0.0/16' }, cidr8: { kind: 'ip-cidr', value: '10.0.0.0/8' }, all: { kind: 'ip-cidr', value: '0.0.0.0/0' } }
+const BYPASS = [[], [ROWS.local], [ROWS.domain], [ROWS.suffix], [ROWS.cidr], [ROWS.suffix, ROWS.cidr8, ROWS.local], [ROWS.all], Object.values(ROWS)]
+// sample hosts that probe each kind's edges: the domain itself, a subdomain, a lookalike, plain names, addresses in and out of each range, case, a trailing dot, IPv6
+const HOSTS = ['api.anthropic.com', 'intranet', 'INTRANET', 'build.internal', 'x.build.internal', 'corp.example', 'a.corp.example', 'A.Corp.Example.', 'notcorp.example', 'corp.example.evil', '169.254.1.2', '169.255.0.1', '10.9.9.9', '11.0.0.1', '[2001:db8::1]', 'fe80::1']
 const LEGS = [['none', null, 'DIRECT'], ['set', 'http://proxy.corp:3128', 'PROXY proxy.corp:3128'], ['credentialed', 'http://alice:s3cret@proxy.corp:3128', 'PROXY proxy.corp:3128'], ['socks', 'socks5://127.0.0.2:1080', 'SOCKS5 127.0.0.2:1080']]
 const DOORS = [['on', '127.0.0.1:47001'], ['after-off', null]]
 
 for (const bypass of BYPASS) for (const [legName, ownLeg, legWord] of LEGS) for (const [phase, door] of DOORS) {
-  test(`CM19 PAC: bypass ${JSON.stringify(bypass)} · own leg ${legName} · ${phase}`, () => {
+  test(`CM19 PAC: bypass ${JSON.stringify(bypass.map((r) => r.value || r.kind))} · own leg ${legName} · ${phase}`, () => {
     const text = pacText({ door, ownLeg, bypass })
     assert.ok(!/alice|s3cret/.test(text), 'credentials never reach the PAC')
     for (const h of LOOPBACK) assert.equal(run(text, h), 'DIRECT', `loopback ${h} is direct`)
     const want = door ? `PROXY ${door}; ${legWord}` : legWord
-    assert.equal(run(text, 'api.anthropic.com'), want)
-    for (const b of bypass.map((x) => x.trim().toLowerCase()).filter(Boolean)) {
-      const sample = b === '<local>' ? 'intranet' : b.startsWith('.') ? `a${b}` : b.replace(/\*/g, 'x')
-      assert.equal(run(text, sample), 'DIRECT', `${sample} is bypassed by ${b}`)
-    }
+    for (const h of HOSTS) assert.equal(run(text, h), bypassHit(bypass, h) ? 'DIRECT' : want, `${h}: the PAC says what the door's own matcher (bypassHit) says`)
     if (door == null) assert.ok(!text.includes('47001'), 'after off the door is gone from the PAC')
   })
 }
+
+test('a bypass row the matcher cannot meet is refused, never guessed into a test (a raw string, an unknown kind, a bad range)', () => {
+  for (const bad of ['*.lan', { kind: 'glob', value: '*.lan' }, { kind: 'ip-cidr', value: '169.254/16' }]) assert.throws(() => pacText({ door: null, bypass: [bad] }), TypeError)
+})
 
 test('an own leg keeps its scheme\'s default port; a scheme with no PAC word is refused, never guessed', () => {
   assert.equal(run(pacText({ door: null, ownLeg: 'https://p' }), 'x.example'), 'HTTPS p:443')
