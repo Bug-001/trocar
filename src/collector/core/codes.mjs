@@ -60,6 +60,7 @@ export const CODE = Object.freeze({
   describeError: 'describe-error', // the daemon could not describe a process to the engine (the engine's own record has the same name)
   certKeyMissing: 'cert-key-missing', // the root key is not in its custody backend: no issuer, doors forward only (4.11 P2)
   certIntermediateUnavailable: 'cert-intermediate-unavailable', // the custody backend did not issue an intermediate: once per failure streak, retried hourly (4.11 P2)
+  priorProxyUnknown: 'prior-proxy-unknown', // a door's upstream: the proxy the agent had in its process env could not be recovered (parent gone, env unreadable): the system proxy, else direct (4.11 P7)
 })
 
 export const trustReasonText = (code) => TRUST_REASON[code] || null
