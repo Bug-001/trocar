@@ -21,7 +21,7 @@
 import path from 'node:path'
 import { hostOf, expandHome, parseDotenv } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { envProxies, argAfter, dotenvLayer } from './_common.mjs'
+import { envProxies, argAfter, dotenvLayer, perOs } from './_common.mjs'
 
 const MANAGED = { linux: '/etc/hermes' }
 const FALSEY = /^(false|0|no|off)$/i
@@ -145,6 +145,29 @@ const proxy = {
   restart: { hint: '退出这个 Hermes(含 gateway),再重新启动;在它 /reload 之前,.env 里改的代理它已读过的不会变', processes: 'hermes' },
 }
 
+// Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (the .env block routes every form; the root
+// alone trusts; asight writes no SSL_CERT_FILE and no ssl_ca_cert). The block is written only into a Hermes home that exists.
+const HOME = (path) => perOs({ darwin: { base: 'home', dir: '.hermes', env: 'HERMES_HOME', path }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path } })
+const form = (id, present, verified = { darwin: true, win32: true }) => ({ id, os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'root', present: [...present, HOME()], verified })
+const proxyMode = {
+  forms: [
+    form('hermes.cli', [{ command: 'hermes' }]),
+    form('hermes.acp', [{ command: 'hermes-acp' }]),
+    form('hermes.gateway', []),
+    form('hermes.dashboard', []),
+    form('hermes.desktop', []), // the source build (D51② names above); the prebuilt DMG and MSIX are the next form
+    form('hermes.desktop-prebuilt', [], { darwin: { reason: 'not-measured' }, win32: { reason: 'not-measured' } }),
+  ],
+  routes: {
+    env: { kind: 'dotenv-block', file: HOME('.env'), proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'not-routed', takesEffect: '重启 Hermes 后生效;gateway 与 dashboard 也要重启' },
+  },
+  certs: {},
+  trusts: {},
+  // rule U: a CA file the user already named (a route's own ssl_ca_cert replaces the roots for that route; SSL_CERT_FILE for the rest)
+  userCertFiles: [{ file: HOME('config.yaml'), format: 'yaml', keys: ['routes', '*', 'ssl_ca_cert'] }, { file: HOME('.env'), format: 'dotenv', keys: ['SSL_CERT_FILE'] }, { env: 'SSL_CERT_FILE' }],
+  blockers: [],
+}
+
 export default {
   name: 'hermes',
   runtime: 'python',
@@ -154,11 +177,14 @@ export default {
   // again as `-I -c "import sys, runpy; …; runpy.run_path('<that exe>', …)"`; measured win 2026-10-14), or its TUI gateway module. Other
   // python is not Hermes, its package-manager workers (`hermes-agent/pm/worker.py`) included: they are forwarded.
   processes: {
-    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', entry: '/hermes(-acp)?\\.exe$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe(?![\\w.-])' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' }],
+    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', entry: '/hermes(-acp)?\\.exe$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe(?![\\w.-])' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' },
+      // the gateway service and the desktop backend run the CLI module; the desktop source build on win runs a base64 bootstrap with `serve`
+      { name: 'python', args: '(^| )-m hermes_cli\\.main( |$)' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bb64decode\\b[\\s\\S]* serve( |$)' }],
     longLived: [{ args: '(^| )(gateway|cron|dashboard|serve)( |$)' }],
   },
   hosts: ['openrouter.ai', 'inference-api.nousresearch.com', 'chatgpt.com', 'api.openai.com', 'api.anthropic.com', 'api.z.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com', 'api.deepseek.com', 'api.x.ai'],
   proxy,
+  proxyMode,
   layers,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']),
