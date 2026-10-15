@@ -22,7 +22,7 @@ import { newReceipt, EXIT } from './schema.mjs'
 import { collectorDir, stateFile, opLockFile } from './paths.mjs'
 import { readStateFile, setDesired, writeStateAtomic, emptyState } from './state.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
-import { readManifest, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
+import { readManifest, refuseOldManifest, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
 import { undoHarnesses } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
@@ -368,6 +368,9 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   const run = w.clock().toISOString()
   const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, now, undo: ['asight on'], log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], user_processes: [], notes: [], problems: [] }
   const put = flowWriter(w, run, receipt.notes)
+  // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write — no lock, no state, no flows record; the receipt names the tools that undo it
+  const old = refuseOldManifest({ home, platform: w.platform, fs: w.fs })
+  if (old) { receipt.problems.push(old.message); receipt.ok = false; receipt.log = null; return { receipt, exit: EXIT.incomplete } }
   // R7 on Windows (4.8 §7): off never runs with an elevated token — asked before anything is touched, and a token that cannot be read is
   // not a refusal (an undo that stopped on a broken whoami is not an undo).
   if ((deps.platform || process.platform) === 'win32') {

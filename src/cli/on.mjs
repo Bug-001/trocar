@@ -18,6 +18,7 @@ import { renderCompact } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
+import { refuseOldManifest } from '../off/manifest.mjs'
 
 const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--opt-in <形态>[,<形态>…]] [--no-autostart | --no-unit] [--json]'
 const FLAGS = new Set(['--dry-run', '--yes', '--no-autostart', '--no-unit', '--json'])
@@ -62,6 +63,13 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5); warnings and the plan go to stderr
   const c = json ? noColor() : colors(io) // --json never colours (D46); a non-TTY or NO_COLOR run colours nothing anywhere
   if ((deps.getuid || processUid)() === 0) { io.err('asight on: 用你自己的账号跑,不要用 root / sudo(D36;只有 `sudo asight setup-helper` 要 root)'); return EXIT.incomplete }
+  // 4.11 ⑰: a manifest of version 1 / 2 is refused before anything else, before any write — the standalone copy is not rewritten either
+  const old = refuseOldManifest({ home, platform, fs: deps.fs || nodeFs })
+  if (old) {
+    const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [old.message] }
+    if (json) io.out(JSON.stringify(receipt, null, 2)); else io.err(`asight on: ${old.message}`)
+    return EXIT.incomplete
+  }
   try {
     // the name list in effect (D51③): the presets plus ~/.asight/agents.json, as the daemon and `status` judge — the running processes the plan restarts and whose CAs it carries
     const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env, agentList: readAgentList({ home, fs: deps.fs || nodeFs }).entries })
