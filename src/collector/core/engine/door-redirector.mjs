@@ -22,15 +22,13 @@
 // are the only places that do. Node built-ins and the injected questions only; nothing here execs anything itself.
 import { EventEmitter } from 'node:events'
 import { bypassHit } from '../upstream-shape.mjs'
-import { processNames, WIDE } from '../../../off/identity.mjs'
+import { processNames } from '../../../off/identity.mjs'
 import { UNTRACKED_REASONS } from '../../../health/codes.mjs'
 import { whoseBy } from '../registry.mjs'
-import { hostFormOf } from '../host-agent.mjs'
+import { createDoorIdentity } from './door-identity.mjs'
 
 /** The row's code for a connection whose process is not one the table can vouch for; the reason is one of the closed set (a typo is a throw, not a new code). */
 const untracked = (reason) => { if (!UNTRACKED_REASONS.includes(reason)) throw new Error(`untracked reason ${reason} is not in UNTRACKED_REASONS`); return { not_captured: 'untracked', reason } }
-// registry.match's reasons that are not a harness (4.8 §5.3, 4.6 §识别进程) → the door's untracked reason; args-mismatch / no-match are `not-an-agent`
-const UNMATCHED = Object.freeze({ excluded: 'agent-helper', pending: 'cmdline-pending', ambiguous: 'ambiguous' })
 const msgOf = (e) => String((e && e.message) || e)
 
 /** How long a lookup waits for the tracker's verdict of a pid it just met: the judge is file reads (fast); the cap only bites when the judge never answers
@@ -98,27 +96,11 @@ export function createDoorRedirector({ groups, ownerOf = null, factsOf = null, r
   let info = { pid: null, proto: null, build: null } // the companion's ready line (a resident helper's pid, protocol, build), or the all-null answer of an arch without one; set by start()
 
   // ---- identity: the socket at accept time (D47) ------------------------------------------------------------------------------------------------------
-  const factsCache = new Map() // pid → { startedAt, facts, door, host } — the last life this pid was met in, the door group it last came through and the harness a host-tree door gave it (for scan() and procs()); nothing sweeps
-  const unknownSaid = new Set() // `${door group}\0${name}`: process-unknown is written once per (door group, name) in this life — bounded
-  const factsInflight = new Map() // pid → Promise<facts | null> — concurrent lookups of one new pid share the ask
+  const ident = createDoorIdentity({ ownerOf, factsOf, identify, ownUid, hostsOf, onFailure, onEvent }) // the identity half (door-identity.mjs): owner, facts by pid + start, this user, host tree, name list
+  const factsCache = ident.cache // pid → { startedAt, facts, door, host } — the last life this pid was met in (for scan() and procs())
   const verdicts = new Map() // pid → { decrypt, agent, startedAt }: what the tracker judged (4.8 §5.4), keyed to the life it judged; a process it has not judged has none, which is "not trusted"
   const waiting = new Map() // pid → { promise, answer(v) } — the lookups waiting for the tracker's watch() of a pid just met
   const doorsOpen = new Set() // the group ids whose door the engine holds
-
-  /** The facts of one pid, asked TARGETED every time (the arch backend's ask — nothing sweeps the machine): the answer is what THIS connection's process is,
-   *  never a cached row a wrapped pid could have left behind (a wrong pid must never happen, 4.8 W4 — the start time in the fresh answer is what keys the
-   *  verdict to the life it belongs to). Concurrent lookups of the same pid share the one ask. */
-  function factsCached(pid) {
-    if (factsInflight.has(pid)) return factsInflight.get(pid)
-    const ask = Promise.resolve().then(() => (typeof factsOf === 'function' ? factsOf(pid) : null)).then((facts) => {
-      const prev = factsCache.get(pid)
-      const startedAt = facts && facts.startedAt != null ? facts.startedAt : null
-      factsCache.set(pid, { door: prev ? prev.door : null, host: prev && prev.startedAt === startedAt ? prev.host : null, startedAt, facts }) // a host-tree door's harness is this life's
-      return facts
-    }).finally(() => { factsInflight.delete(pid) })
-    factsInflight.set(pid, ask)
-    return ask
-  }
 
   /** The tracker's verdict of a pid, announced and waited for: a life the verdict table does not hold (never met, or the pid wrapped into a new life — another
    *  start time) is told as 'exec' (the daemon's tracker judges — the registry's name list, the trust layers — and answers through `watch(pid, …)`); this lookup waits
@@ -151,35 +133,6 @@ export function createDoorRedirector({ groups, ownerOf = null, factsOf = null, r
     const out = { kind: up.kind, host: up.host, port: up.port }
     if (up.credentialed) out.auth = loginOf(g, up, authOf)
     return out
-  }
-
-  /** The owner of the connection the engine just accepted, read from the socket itself (the arch socktable, targeted): never wrong — no row, several rows, a
-   *  slow or unreadable table all give null, and the connection is judged untracked and spliced (4.8 W4). */
-  async function owningPid(peer) {
-    const none = { pid: null, source: null, ms: null }
-    if (!ownerOf) return none
-    try {
-      const r = await ownerOf({ peer })
-      return { pid: r && r.pid != null ? r.pid : null, source: (r && r.source) || null, ms: r && r.ms != null ? r.ms : null }
-    } catch (e) {
-      onFailure({ event: 'failure', where: 'helper', code: 'socktable-unavailable', reason: `the owner of a connection could not be asked for (${msgOf(e)}); the connection is spliced untracked` })
-      return none
-    }
-  }
-
-  /** process-unknown (4.6 §记录, a state event, expected): a process no item of the name list claims used the door — once per (door group, name) in this
-   *  life, with its first name, whether that name is one of the wide ones (an interpreter: the user's entry would need an args pattern), and `named`:
-   *  the name IS on a list, but only on items with an `args` pattern its arguments missed (`args-mismatch`: the Z Code GUI main without zcode.cjs, a
-   *  non-network `claude helper`) — a bare `{harness, name}` line would claim every process of that name and undo that pattern, so doctor gives none.
-   *  Never its command line. */
-  function said(door, facts, pid, named) {
-    const name = processNames(facts)[0] ?? null
-    const key = `${door.g}\0${name}`
-    if (unknownSaid.has(key)) return
-    unknownSaid.add(key)
-    try { onEvent({ event: 'process-unknown', where: 'engine', harness: door.harness, door: door.g, name, wide: name != null && WIDE.has(name), named, pid, reason: named
-      ? `${name ?? 'a process'} (pid ${pid}) used the ${door.g} door; its name is listed only with an args pattern its arguments do not match: its connections are forwarded, not captured; to capture it, add an item with "args" to ~/.asight/agents.json`
-      : `${name ?? 'a process'} (pid ${pid}) used the ${door.g} door but is on no name list: its connections are forwarded, not captured; add it to ~/.asight/agents.json to capture it` }) } catch { /* the sink's own failure is the sink's */ }
   }
 
   const entryOf = (g) => ({ g, harness: byGroup.get(g).harness, entry: ((routes() || {})[g] || {}).entry ?? null })
@@ -231,35 +184,13 @@ export function createDoorRedirector({ groups, ownerOf = null, factsOf = null, r
         return { pid: null, agent: door.harness, decrypt: false, capture: 'proxy', door: door.g, exe: null, upstream: upstreamFor(door.g, route, target.address), pid_source: null, pid_ms: null, negKey: door.g, skip: untracked('group-off') }
       }
       const upstream = upstreamFor(door.g, route, target.address) // before the identity is asked: a connection that cannot be dialled should not wait on it (and one with nothing to dial is refused with its own why)
-      const { pid, source, ms } = await owningPid(peer)
+      const id = await ident.identityOf({ peer, door, target })
+      const { pid, exe } = id
       // the meta every answer shares: the door's group, its upstream (the one this process would use without asight), the door's harness until the name list says otherwise
-      const base = { pid, agent: door.harness, decrypt: false, capture: 'proxy', door: door.g, exe: null, upstream, pid_source: source, pid_ms: ms, negKey: pid != null ? String(pid) : door.g }
+      const base = { pid, agent: door.harness, decrypt: false, capture: 'proxy', door: door.g, exe: null, upstream, pid_source: id.source, pid_ms: id.ms, negKey: pid != null ? String(pid) : door.g }
       const spliced = (why, over = {}) => ({ ...base, ...over, skip: untracked(why) })
-      if (pid == null) return spliced('pid-unresolved') // never a guessed pid (4.8 W4)
-      const facts = await factsCached(pid)
-      if (!facts) return spliced('facts-unavailable') // gone between the accept and the ask, or unreadable: not the same as "not an agent" (4.8 §5.3)
-      const exe = facts.exe ?? null // the row says whose connection it was, whichever way it is judged
-      const held = factsCache.get(pid)
-      if (held) held.door = door.g
-      if (facts.uid != null && ownUid != null && facts.uid !== ownUid) return spliced('other-user', { exe }) // another user's process (the facts' uid, where the OS gives one): never judged, never decrypted
-      let agent = null
-      let hosted = false
-      const hostForm = (hostFormOf([door], facts) || {}).form // a host-tree group (4.8 §3, the one rule: core/host-agent.mjs): the host program itself is the door harness's carrier, but only for the targets on the applied host set
-      if (hostForm) {
-        const set = hostsOf(hostForm)
-        const host = String(target.address || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-        const hit = Array.isArray(set) && set.some((h) => typeof h === 'string' && (host === h || host.endsWith(`.${h}`)))
-        if (!hit) return spliced('outside-host-set', { exe })
-        agent = door.harness
-        hosted = true
-        if (held) held.host = agent // a rescan re-tells it as the host's, never re-asks the name list
-      }
-      if (!agent) {
-        const m = identify(facts) || {}
-        if (m.reason === 'match' && m.agent) agent = m.agent
-        else if (UNMATCHED[m.reason]) return spliced(UNMATCHED[m.reason], { exe }) // pending is not cached anywhere: the next connection asks again (W78)
-        else { said(door, facts, pid, m.reason === 'args-mismatch'); return spliced('not-an-agent', { exe }) }
-      }
+      if (id.why) return spliced(id.why, id.facts ? { exe } : {})
+      const { agent, hosted, facts } = id
       if (!isOn(agent)) return spliced('harness-off', { agent, exe })
       const v = await verdictOf(pid, hosted ? { ...facts, hostAgent: agent } : facts)
       // a process this list names but whose trust is not confirmed is spliced with the tracker's own reason (the engine's policy arm, flow.mjs skipOf)
