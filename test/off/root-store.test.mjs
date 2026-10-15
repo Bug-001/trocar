@@ -5,10 +5,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { rootStore, rootIdOf, CRYPT_E_NOT_FOUND } from '../../src/off/root-store.mjs'
+import { rootStore, rootIdOf } from '../../src/off/root-store.mjs'
 import { custodyStub } from '../helpers/custody-stub.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
+const CRYPT_E_NOT_FOUND = 0x80092004 // certutil's not-found exit, the fact root-store.mjs reads (black-box here)
 const stub = custodyStub(); const { rootDer } = stub.create()
 const id = rootIdOf(rootDer)
 const pemOf = (der) => `-----BEGIN CERTIFICATE-----\n${der.toString('base64').match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----\n`

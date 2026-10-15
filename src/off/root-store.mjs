@@ -22,7 +22,7 @@ export function rootIdOf(cert) {
 }
 
 /** certutil's exit when the store has no such certificate: CRYPT_E_NOT_FOUND. */
-export const CRYPT_E_NOT_FOUND = 0x80092004
+const CRYPT_E_NOT_FOUND = 0x80092004
 
 const rsTool = (r, what) => (r.code === 0 ? null : `${what} failed (exit ${r.code ?? 'none'}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`)
 
