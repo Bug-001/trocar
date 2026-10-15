@@ -35,7 +35,7 @@ export function mergeNoProxy({ userValues = [], persistent = {} } = {}) {
 
 const notRouted = (reason, at) => ({ code: 'not-routed', reason, ...(at ? { at } : {}) })
 const readText = (ctx, f) => { try { const d = decodeText(ctx.fs.readFileSync(f)); return d.ok ? d.text : undefined } catch (e) { if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null; throw e } }
-const parse = (t) => { try { return t == null ? {} : parseJsonText(t) ?? {} } catch { return undefined } }
+const parse = (t) => { if (t === undefined) return undefined; try { return t === null ? {} : parseJsonText(t) ?? {} } catch { return undefined } } // undefined: undecodable or unparsable
 const isSet = (v) => v !== undefined && v !== null && v !== ''
 const where = (file, keys) => `${file}#${keys.join('.')}`
 const base = (ctx) => ({ dir: ctx.dir, manifest: ctx.manifest, harness: ctx.harness, phase: 'on', home: ctx.home, now: ctx.now ? ctx.now() : new Date(), fs: ctx.fs })
@@ -156,8 +156,13 @@ export function routeEntry(kind) {
     write(ctx, door) {
       const old = recordsOf(ctx.manifest, ctx.harness, ctx.routeId)
       if (old.some((x) => x.door !== door)) undo(ctx, old)
-      const res = w(ctx, door)
-      if (!res.ok) return res
+      // all or nothing: a route refused partway (its last key or item, the select meta) takes back what this call already wrote, so no record without
+      // a route tag is left for off to miss (invariant 5)
+      const m = ctx.manifest, had = new Set([...m.entries, ...m.files])
+      const takeBack = () => { const added = [...m.entries, ...m.files].filter((x) => !had.has(x)); if (added.length) undo(ctx, added) }
+      let res
+      try { res = w(ctx, door) } catch (e) { takeBack(); throw e }
+      if (!res.ok) { takeBack(); return res }
       for (const x of res.records) if (x) Object.assign(x, { route: ctx.routeId, door })
       saveManifest(ctx.dir, ctx.manifest, ctx.fs)
       return { ok: true, records: recordsOf(ctx.manifest, ctx.harness, ctx.routeId) }
