@@ -63,7 +63,7 @@ export const FINDINGS_WIN32 = {
     },
     verify: (c) => `asight status ${c.h}:那一支「在路径上 · 是」`,
   },
-  'entry-changed': { commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` },
+  'entry-changed': { commands: (c) => [asight(c, (c.fm && c.fm.certificate && c.fm.certificate.command) || `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` }, // a drifted install item (row 31) names its own command
   'egress-differs': { commands: (c) => [asight(c, `asight off ${c.h}`)], verify: () => '—' },
   'elevated-agent': {
     commands: (c) => [gui(`关掉它,不用「以管理员身份运行」重新打开 ${c.h}`), ps('whoami /groups | findstr /i "Mandatory"')],

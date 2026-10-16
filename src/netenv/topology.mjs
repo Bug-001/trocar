@@ -168,10 +168,11 @@ function formVerdict(F, h, hf, fm, fwf) {
   // the plan gated off still has its ledger records, and the entry edge they give it (`intact` unknown until checkEntries lands, Task 14) would mask the verdict the same way the entry checks used to
   // mask the drain window — through the real facts path the form-unsupported verdict was unreachable and `doctor` could never emit its row.
   if (fm.route && fm.route.reason === 'form-unsupported') return none(false, false, 'form-unsupported')
+  if (fm.hook) return none(false, false, fm.hook) // the wrapper / plugin that applies the route was replaced or is gone: the agent runs without it (1.6 §9.3 row 31; its command is `asight install`)
   if (!fm.entry) return none(false, false, 'not-routed') // anything else the plan left unwired is not-routed, the why on the form's `route`
   if (fm.entry.intact === null) return none(null, null, null)
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
-  if (!F.forwarder || F.forwarder.up === false || !fwf) return none(true, false, 'forwarder-down')
+  if (!F.forwarder || F.forwarder.up === false || !fwf || fwf.down) return none(true, false, 'forwarder-down')
   if (main) return none(true, false, 'elevated-agent')
   if (F.daemon.state === 'not-running' || F.daemon.state === 'not-responding') return none(true, false, `daemon-${F.daemon.state}`)
   if (fwf.upstream_error) return { on: true, captured: false, reason: 'upstream-unreachable', engine: true } // the engine could not dial the upstream (the platform's last 60 s of it)
@@ -198,7 +199,7 @@ function proxyTopology(F, h, hf) {
     // file is the user's own again — the agent's live connection to the group's port (row k). In the drain the edge names no entry: the file no longer points here; the agent holds the address it
     // read at startup, and the note says what restart ends it.
     const wired = !!(fwf
-      && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : fm.entry && fm.entry.intact === true))
+      && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : !fm.hook && fm.entry && fm.entry.intact === true))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
     if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`还有 ${fwf.clients.length} 个 agent 连着 asight 的门,重启它们之后 asight 就完全退出`)

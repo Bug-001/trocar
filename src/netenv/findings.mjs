@@ -15,6 +15,8 @@ const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 
 // ── what a command is ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const asight = (ctx, run) => ({ run, shell: ctx.sh })
+/** An install item of the form that drifted (proxy mode: the carrier, a wrapper or a plugin; 1.6 §9.3 row 31): the command its `certificate` names, `asight install`. */
+const installFix = (c) => (c.fm && c.fm.certificate && c.fm.certificate.command ? [asight(c, c.fm.certificate.command)] : null)
 const os = (ctx, byPlatform) => ({ run: byPlatform[ctx.platform] || byPlatform.linux, shell: ctx.platform === 'win32' ? 'powershell' : 'sh' })
 const gui = (run) => ({ run, shell: 'gui' })
 const unknownValue = (what, reason) => `不知道 · ${reason}(${what})`
@@ -80,8 +82,8 @@ export const FINDINGS = {
   'daemon-not-responding': { cls: 'failure', asightFirst: true, what: () => '守护进程在跑但没响应', why: () => '心跳过期,新连接已因此直连;它卡住了', commands: (c) => [asight(c, 'asight off'), asight(c, `asight on ${c.h}`)], verify: () => 'asight status:守护进程「在跑」' },
   'helper-missing': { cls: 'failure', asightFirst: false, what: () => '能力助手缺失或版本不对', why: () => '没有它就挂不上内核里的驱动', commands: (c) => [{ run: 'sudo asight setup-helper', shell: 'sh' }, asight(c, `asight on ${c.h}`)], verify: () => 'asight status:link 已挂' },
   'link-missing': { cls: 'failure', asightFirst: true, what: () => '期望开,但内核里没有本实例的 link', why: () => '驱动没挂上,新连接直连', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: () => 'asight status:link 已挂' },
-  'entry-missing': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口不在了`, why: () => '入口(asight 写进它配置的那一项)被删了或还没写', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
-  'entry-changed': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口被改成了别的`, why: () => '你或别的程序改了 asight 写的那一项', commands: (c) => [asight(c, `asight off ${c.h}`), asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
+  'entry-missing': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口不在了`, why: () => '入口(asight 写进它配置的那一项)被删了或还没写', commands: (c) => installFix(c) || [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
+  'entry-changed': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口被改成了别的`, why: () => '你或别的程序改了 asight 写的那一项', commands: (c) => installFix(c) || [asight(c, `asight off ${c.h}`), asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
   'negative-cache': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的进程拒绝了 asight 的证书,那个 host 之后透传`, why: () => '这个形态不认 asight 的信任入口;(pid, host) 随进程记着', commands: (c) => [asight(c, `asight status ${c.h}`), ...restartSteps(c)], verify: (c) => `重启后 asight status ${c.h}:「是」` },
   'not-routed': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 的新连接不经过 asight`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `asight status ${c.h}:该支「在路径上 · 是」` },
   'route-loop': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的上游又是 asight 自己`, why: () => '算出的上游是 asight 自己的端口:代理字段的原值就是 asight 的门端口,或系统代理指着它;on 因此不接这个形态', commands: (c) => [asight(c, `asight off ${c.h}`), gui(`把 ${c.h} 的代理改回你原来的:${setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('原来的代理', 'absent'))}`), asight(c, `asight on ${c.h}`)], verify: () => 'asight doctor:不再报' },
@@ -192,6 +194,8 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     const drifts = F.desired[h] === 'off' ? [] : detectDrift({ adopted, h, setting: hf.fileSetting || hf.setting, routing: F.routing, scope: 'files' })
     if (F.routing === 'driver' && drifts.some((d) => d.code === 'proxy-changed')) add('proxy-changed')
     for (const fm of hf.forms || []) { const fwf = F.forwarder && F.forwarder.forms && F.forwarder.forms[fm.id]; if (fwf && fwf.source === 'unknown') add('prior-proxy-unknown', { pids: fm.procs.map((p) => p.pid) }) }
+    // the certificate axis of each form (proxy mode, 1.6 §9.4): one that is not in effect gives its own code, with the form's command (4.11 §3 ⑱)
+    for (const fm of hf.forms || []) { const k = fm.certificate; if (k && !k.in_effect && k.code && FINDINGS[k.code]) add(k.code, { fm }) }
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
     const listPath = F.agentList ? F.agentList.path : null

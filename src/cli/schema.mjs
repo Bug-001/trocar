@@ -73,6 +73,7 @@ export function validateReceipt(r) {
   if ('agent_list' in r) bad.push(...validateAgentList(r.agent_list))
   if (Array.isArray(r.harnesses)) r.harnesses.forEach((h, i) => { if (isObject(h) && h.identity !== undefined) bad.push(...validateIdentity(h.identity).map((x) => `harnesses[${i}].${x}`)) })
   if ('install' in r || 'cert' in r) bad.push(...validateInstallCert(r))
+  if ('forms' in r) bad.push(...validateForms(r.forms))
   checkHarnessIds(r, '', bad, new WeakSet())
   return bad
 }
@@ -127,6 +128,23 @@ function validateInstallCert({ install: i, cert: c }) {
   if (!isObject(c.key) || !KEY_STATES.includes(c.key.state) || !isCodeOrNull(c.key.code) || (c.key.state === 'unknown' && !isId(c.key.reason))) bad.push(`cert.key: state ${JSON.stringify(c.key && c.key.state)} is not in ${KEY_STATES.join('|')}, or unknown without a reason`)
   if (!(c.intermediate === null || (isObject(c.intermediate) && INTERMEDIATE_STATES.includes(c.intermediate.state) && isCodeOrNull(c.intermediate.code) && (c.intermediate.state !== 'unknown' || isId(c.intermediate.reason))))) bad.push('cert.intermediate: not null or {state ∈ current|unavailable|unknown (with a reason), code}')
   if (!Array.isArray(c.bundles)) bad.push('cert.bundles: not a list')
+  return bad
+}
+
+const CARRIERS = Object.freeze(['root', 'config-key', 'wrapper', 'plugin', null])
+const USER_FILE_STATES = Object.freeze(['intact', 'changed', 'not-users-file'])
+const UPSTREAM_SOURCES = Object.freeze(['hook', 'config-prior', 'process-env', 'system-proxy', 'direct', 'unknown'])
+const redacted = (v) => v === null || (typeof v === 'string' && !/\/\/[^/@]*:(?!\*\*\*@)[^/@]*@/.test(v) && !/\/\/(?!\*\*\*@)[^/:@]+@/.test(v)) // no user or password left in a URL
+/** status --json `forms` (1.6 §9.4): per harness, per form, `certificate` and `proxy` with their closed sets; every URL redacted. */
+function validateForms(forms) {
+  if (!isObject(forms)) return ['forms: not an object']
+  const bad = []
+  for (const [h, list] of Object.entries(forms)) (Array.isArray(list) ? list : [null]).forEach((x, i) => {
+    const at = `forms.${h}[${i}]`, c = x && x.certificate, p = x && x.proxy, u = p && p.upstream
+    if (!isObject(x) || !isId(x.form)) return bad.push(`${at}: not {form, certificate, proxy}`)
+    if (!isObject(c) || typeof c.in_effect !== 'boolean' || !CARRIERS.includes(c.carrier) || !isCodeOrNull(c.code) || (c.in_effect === false && !isId(c.command)) || !(c.user_file === null || (isObject(c.user_file) && USER_FILE_STATES.includes(c.user_file.state)))) bad.push(`${at}.certificate: not in the closed sets`)
+    if (!isObject(p) || !['connected', 'entry_intact', 'door_up'].every((k) => typeof p[k] === 'boolean') || !isObject(u) || !UPSTREAM_SOURCES.includes(u.source) || ![u.url_redacted, p.written, p.prior].every(redacted)) bad.push(`${at}.proxy: not in the closed sets, or a URL not redacted`)
+  })
   return bad
 }
 
