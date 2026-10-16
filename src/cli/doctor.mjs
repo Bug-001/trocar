@@ -24,7 +24,7 @@ import { exportFiles } from '../raw/export.mjs'
 import { listSources, sealedUnder } from '../raw/discover.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { formatInstallNotes } from '../collector/cli.mjs'
-import { asightHome, backupDir, collectorDir } from '../off/paths.mjs'
+import { asightHome, backupDir, collectorDir, standaloneCommand } from '../off/paths.mjs'
 import { orphanBackups } from '../off/backup.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { checkStandalone } from '../off/standalone.mjs'
@@ -173,7 +173,7 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   else for (const l of notes) io.out(indent(l))
   // 1.6 R3 / V35: the copy of the undo side that needs no source tree is the version this asight writes (read only; `asight on` writes it again)
   if (standalone.error) io.out(indent(`⚠ asight-off 副本无法核对: ${standalone.error}`))
-  else io.out(indent(standalone.ok ? `✓ asight-off(不依赖源码的撤销副本): ${standalone.path} · 版本 ${standalone.found},与当前一致` : `⚠ asight-off(不依赖源码的撤销副本)不是当前版本: ${standalone.reason}`))
+  else io.out(indent(standalone.ok ? `✓ asight-off(不依赖源码的撤销副本): ${standaloneCommand(standalone.path, platform)} · 版本 ${standalone.found},与当前一致` : `⚠ asight-off(不依赖源码的撤销副本)不是当前版本: ${standalone.reason}`))
   if (orphansError) io.out(indent(`备份: 不知道(${orphansError})`))
   else if (orphans.length) io.out(indent(`⚠ ${orphans.length} 个备份没有任何清单条目认领(改文件改到一半断了留下的;留着或不要了就删,asight uninstall 会清掉): ${orphans.join(', ')}`))
   if (res.failed) {

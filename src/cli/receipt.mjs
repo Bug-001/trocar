@@ -4,6 +4,7 @@
 // shown as `~/…` (the way the user knows them); `--json` keeps the absolute path.
 import path from 'node:path'
 import { formatOffReceipt } from '../off/receipt.mjs'
+import { standaloneCommand } from '../off/paths.mjs'
 import { noColor } from './color.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
 
@@ -122,7 +123,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
     const isProblem = problemNotes ? problemNotes.has(n) : r.ok === false && past
     lines.push(`${isProblem ? '问题' : '说明'}: ${n}`)
   }
-  lines.push(`撤销: asight off${r.standalone ? ` · asight 坏了也能用: ${c.dim(r.standalone)}` : ''} · 回执: --json`) // `standalone`: the single-file asight-off, once the run has written it (Task 8) — the ABSOLUTE path (R3: the undo works without the source tree)
+  lines.push(`撤销: asight off${r.standalone ? ` · asight 坏了也能用: ${c.dim(standaloneCommand(r.standalone, platform))}` : ''} · 回执: --json`) // `standalone`: the single-file asight-off, once the run has written it (Task 8) — the ABSOLUTE path (R3: the undo works without the source tree)
   lines.push(c.dim(`开采集  asight on      看状态  asight status      完全删掉 asight uninstall(采集数据默认保留)${r.log ? `      记录: 看板「采集健康」 / ${t(r.log)}${/\.\w+$/.test(path.basename(r.log)) ? '' : '/'}` : ''}`)) // the new collector's log is a directory (flows/); the old capture's is one file (mitm-events.ndjson)
   return lines.join('\n')
 }

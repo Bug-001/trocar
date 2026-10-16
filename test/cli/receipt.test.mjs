@@ -389,3 +389,16 @@ test('on prints no network-environment line and its --json receipt has no netenv
   assert.equal(await runOnCli(['--dry-run'], onCtx(home4, dry, { deps: {} })), 0)
   assert.ok(!/本机网络环境/.test(dry.stdoutText())); assert.deepEqual(changedFiles(before, snapshot(home4)), [], '--dry-run writes nothing')
 })
+
+// Windows ignores the shebang, so the bare path of asight-off runs nothing there; every place that prints it as a command says `node "<path>"` on win32.
+test('the standalone asight-off is printed as a runnable command: node "<path>" on win32, the path elsewhere (receipt, --json undo, doctor)', async () => {
+  const { standaloneCommand } = await import('../../src/off/paths.mjs')
+  const win = 'C:\\Users\\a\\.asight\\bin\\asight-off', posix = '/home/a/.asight/bin/asight-off'
+  assert.equal(standaloneCommand(win, 'win32'), `node "${win}"`)
+  for (const p of ['darwin', 'linux']) assert.equal(standaloneCommand(posix, p), posix)
+  const r = { ...newReceipt('on'), ok: true, standalone: win }
+  assert.ok(formatOnReceipt(r, { platform: 'win32' }).includes(`node "${win}"`), 'the receipt line runs on Windows')
+  assert.ok(!formatOnReceipt({ ...r, standalone: posix }, { platform: 'darwin' }).includes('node "'))
+  const src = (f) => fs.readFileSync(new URL(`../../src/${f}`, import.meta.url), 'utf8')
+  for (const f of ['collector/install.mjs', 'cli/doctor.mjs']) assert.match(src(f), /standaloneCommand\(/, `${f} prints the command, not the bare path`)
+})
