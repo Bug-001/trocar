@@ -46,14 +46,10 @@ export { loadArch } // the CLI reaches arch only through this file (layering rul
 export async function loadParts({ arch = null, harnesses = null, env = process.env, agentList = [], platform = process.platform } = {}) {
   const A = arch || (await loadArch(platform)) // the CLI's platform (V14: a platform with no collector is refused here, by loadArch's own error)
   const list = harnesses || (await loadHarnesses())
-  // The darwin collector's LAZY construction (4.9 §1 接线) makes building one here safe: with { env, harnesses } only, it is the shell — a watcher `scan` can use, no
-  // ingress.json created, nothing started. Linux ignores the extra argument; the win32 collector's construction is the win line's own open seam (it wants the dir), so on win32
-  // NO redirector is built here at all (arch/index.mjs's win32 arm says the same: loadParts makes no redirector on win32) and this parts view answers an empty process table —
-  // the CLI's `on` plan and `status` read paths work without a collector dir; the daemon itself builds the real one with the dir. Measured on a Windows test machine: without
-  // this, `asight on --yes` on Windows died at once with createWin32Collector's "needs the collector dir (~/.asight/collector)".
+  // darwin / win32 run the collector model (runModelDaemon): no redirector here, and this parts view answers an empty process table
   // the registry judges by name on every OS (D51) and is built FIRST: the doors ask it (identify), the redirector does not feed it
   const registry = createRegistry(list, { agentList }) // agentList: readAgentList's entries (the user's ~/.asight/agents.json, D51③); the daemon swaps them in place
-  const redirector = isModelOs(A.os) ? null : await A.createRedirector({ env, harnesses: list, identify: registry.match }) // the await is the point: darwin's collector is async (4.9 §1), and without it `redirector` here is a Promise — `scan()` throws TypeError (review F1, reproduced on the real call before this line); Linux's and win32's sync returns pass through the await untouched
+  const redirector = isModelOs(A.os) ? null : await A.createRedirector({ env }) // awaited: a test's arch may answer async
   // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `asight on` says so (1.6 §1.1), it never enables it (R8)
   return { arch: A, os: A.os, harnesses: list, registry, scan: () => (redirector ? redirector.scan() : []), match: (f) => registry.match(f), linger: () => (redirector && typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (redirector && typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
 }
@@ -224,16 +220,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
 
     const nextAgentList = agentListWatch({ home: netHome, write: (rec) => failure.write(rec) }) // at start here, then on every 5 s check
     const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch: A0 ?? arch, harnesses, env, agentList: (nextAgentList() || { entries: [] }).entries })
-    // 4.9 §1 wiring: the darwin collector needs the collector dir and this daemon's sinks, so it is built here with them (started below; the kernel itself
-    // comes with the first attach, 4.8 §4.1) — `desired` reads state.json as it is NOW: the switch changes it while this daemon runs. The win32 collector needs
-    // exactly the same shape (createWin32Collector({ env, dir, home, harnesses, failure, event, manifest, desired }) — wiring.mjs), so it joins this arm: with
-    // only { env } it THREW "needs the collector dir" and the daemon crash-looped (on a Windows test machine: `asight daemon --supervise` exited 70 with that
-    // TypeError — the comment below used to claim the construction lived elsewhere; it does not, this ternary is the only construction the daemon has).
-    // Linux keeps the plain core redirector.
-    redirector = A.os === 'darwin' || A.os === 'win32'
-      ? await A.createRedirector({ env, dir, home: netHome, harnesses: harnessList, failure, event, identify: registry.match, manifest: () => readManifest(P.dir), desired: () => { const st = readState(P.state, () => {}, {}); return st.harnesses || {} } })
-      : A.createRedirector({ env })
-    const bag = redirector && ((typeof redirector.darwin === 'object' && redirector.darwin) || (typeof redirector.win32 === 'object' && redirector.win32) || null) // the arch bag (darwin's or win32's wiring): what only the daemon reaches
+    redirector = A.createRedirector({ env }) // Linux's core redirector: darwin / win32 never reach here (runModelDaemon above)
     // D38: one `agent-untrusted` per pid and reason (code = the resolver's reason, reason = what to do about it); a pid
     // recorded so gets `agent-trusted` once it is trusted and `agent-exit` when it exits, so the condition can clear.
     const recordedUntrusted = new Map() // pid → the reason code last recorded
@@ -326,8 +313,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     // plugins (dsh, OpenCode) write their per-pid marker here; it exists while the daemon runs (0700, the operator's)
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
     const tracker = createTracker({ redirector, registry, trust, onVerdict, markerDir: P.markers, caPem: ca.paths.pem, collectorDir: P.dir,
-      osLayers: bag ? bag.osLayers : null, // the arch bag (4.9 §1 / 4.8 §1): a harness's own per-OS layers, judged by them (4.8 §5.4's shape; win32's bag carries the same key, wiring.mjs)
-      markerToleranceMs: bag && bag.markerToleranceMs || 0, // the bag again (review F4): the plugin writes performance.timeOrigin (sub-millisecond) against ps's second-granular lstart — without the fixed tolerance every dsh/opencode marker reads stale and is never decrypted; 0 stays the Linux byte-exact rule
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
       onGone: (row, via) => { // D-24, D-12: the agent and every condition it held are gone; so are its negative-cache entries
         const last = recordedUntrusted.get(row.pid); recordedUntrusted.delete(row.pid) // the reason it was recorded untrusted for ends here
@@ -347,8 +332,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     let helperDown = null
     let sw = null
 
-    // the arch bag (the wiring's, `bag` above): the proxy ingress's port and its token are the engine's own listen arguments on darwin AND win32 — both are proxy mode only, the engine's one door is the ingress (4.8 §5.1, carried by 4.9 §5; win32's bag carries the same ingress() over ingress.json's enginePort, wiring.mjs)
-    const macIng = bag && typeof bag.ingress === 'function' ? bag.ingress() : null
     engine = createEngine({
       redirector: {
         // the transparent `lookup` exists only when the redirector has one (Linux): without it the engine gets no transparent listener (core/redirector.mjs) — darwin is proxy mode only (4.9 §5), its door is the ingress below
@@ -370,40 +353,26 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         }
       },
       issuer, store, upstreamCa,
-      ...(macIng ? { ingressToken: macIng.ingressToken } : {}), // win32: the kernel's CONNECT authenticates to the ingress with of.<form>:this token (4.8 §3); darwin: the doors' own token is each group's listener token, this one the ingress's (D47); listen({ingress}) refuses without it
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: (meta) => sw.isRecording(meta && meta.agent), // sampled per request, per harness (4.6 §开关): a request after off is never recorded
       retention, // sampled with it (D40)
       onFailure: (rec) => failure.event(rec), // the engine's and the WebSocket recorder's failures: flows/, folded
       onError: (e) => log('engine', e), // stderr only: every one of them is also a record through onFailure
     })
-    // The engine's doors (4.8 §5.1): Linux listens transparently on the port the install recorded; darwin has no transparent listener at all — its one door is the proxy ingress on
-    // ingress.json's enginePort, the port the kernel's config names (a transparent listener bound on that port made every kernel CONNECT a lookup-miss — the CONNECT carries a destination,
-    // not an original one to look up — and every form read back 'fallback'; found live by the lab smoke, 2026-10-09). `port` is whichever door this platform has: darwin's engine port IS the ingress's.
+    // The engine's door (4.8 §5.1): Linux listens transparently on the port the install recorded.
     const want = enginePort ?? manifest.engine_port ?? 0
-    const first = await engine.listen({ port: want, hosts: ['127.0.0.1'], ...(macIng ? { ingress: { port: macIng.enginePort } } : {}) }).catch((e) => {
-      // G3: the port is squatted (Linux: chosen at install; darwin: ingress.json's, chosen at daemon start). Nothing is steered
+    const first = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
+      // G3: the port is squatted (chosen at install). Nothing is steered
       // (the helper is not spawned yet), so the agents' connections stay direct; say so, and how to get a new port.
-      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(macIng
-        ? `the engine's proxy ingress port 127.0.0.1:${macIng.enginePort} (ingress.json) is held by another process; nothing is steered, agent connections go direct. Free the port and start the daemon again`
-        : `the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight uninstall" and "asight on" to pick a new one`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
+      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight uninstall" and "asight on" to pick a new one`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
       throw e
     })
-    const port = macIng ? first.ingressPort ?? null : first.port
-    // D47 (4.9 §3): the darwin engine's own per-group doors — the daemon binds the wiring's slot to the engine the moment both exist, so
-    // the redirector's attach()/detach() can open and close the doors the plan (or the carried set) asks for. `open` is listen({groups})
-    // (idempotent per group id), `close` is closeGroups (stop accepting; in-flight connections drain).
-    if (bag && typeof bag.bindDoors === 'function') {
-      bag.bindDoors({
-        open: (list) => engine.listen({ groups: list }),
-        close: (ids) => Promise.resolve(engine.closeGroups(ids)),
-      })
-    }
+    const port = first.port
     let v6Held = null // the helper steers IPv6 agent connections to [::1]:port: never attach while someone else holds it (M8; darwin has no helper — its agents point at 127.0.0.1 by the entry)
     let v6Error = null // any [::1] failure: status never reports [::1] as listening then (D-10)
     try { await engine.listen({ port: first.port, hosts: ['::1'], ...(first.ingressPort ? { ingress: { port: first.ingressPort } } : {}) }) } catch (e) {
       v6Error = `[::1]:${port}: ${errText(e)}`
-      if (!macIng && e.code === 'EADDRINUSE') v6Held = `[::1]:${port} is held by another process`
+      if (e.code === 'EADDRINUSE') v6Held = `[::1]:${port} is held by another process`
       failure('engine', Object.assign(new Error(`[::1]:${port} unavailable: ${errText(e)}; ${v6Held ? 'on will refuse to attach (M8)' : 'IPv6 agent connections go direct'}`), { code: e.code }))
     }
     async function ensureReady() {
@@ -520,12 +489,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       // D51③: agents.json changed — the new list judges every row again (one it no longer names leaves, agent-exit via 'list') and the rescan judges the rest, no restart
       const list = nextAgentList()
       if (list) { registry.replaceAgentList(list.entries); await tracker.rejudgeAll('list'); await tracker.rescan() }
-      // 4.9 §6.4's wiring arm, second half (found live on a test machine): the plan a proxy-mode collector runs is a function of the MANIFEST too —
-      // an opt-in's ledger entry names a group — and nothing else re-computes it for a harness that is already on: the switch's `on` answers noop (no attach),
-      // so a launcher applied to a live install pointed at a port no listener was on until the next system-proxy move. The 5 s check re-plans, and when the
-      // plan MOVED it brings the kernel to it — the netenv watcher's own move rule (replan reloads nothing when nothing moved). Darwin's bag carries `replan`;
-      // the win32 twin of this arm is the win line's follow-up (4.9 §6.4's note), so it is scoped to darwin here.
-      if (A.os === 'darwin' && bag && typeof bag.replan === 'function') { try { await bag.replan({ reload: true }) } catch (e) { failure('netenv', e) } }
       // §9.5: the files each harness reads its proxy from, against what `on` found: a change is one `netenv-change` (and one failure when it leaves a harness that is on uncaptured). Read-only: only the operator's
       // `on` writes an agent's setting (D30). No VPN / proxy software is read here or anywhere (D49): `status` and `doctor` compare the same files live.
       driftCheck({ home: netHome, env, harnesses: harnessList, desired: (h) => (sw.state().harnesses[h] || {}).desired ?? null, appendEvent: (rec) => failure.write(rec), state: drift })
@@ -572,9 +535,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
         agents, running_untrusted: agents.filter((a) => !a.trusted && !a.off).length,
         unjudged: { count: unjudged.length, sample: unjudged.slice(0, 10).map((u) => ({ pid: u.pid, comm: u.comm, errno: u.errno })) },
-        // the host sets the plan last applied per host-tree form (4.8 §3, W69): the reply is where `status`'s facts reach them (the wiring's win32 bag keeps them);
-        // `status` compares them with a fresh read and says when the kernel's set is old — read-only, a platform without the bag (Linux) simply says nothing here
-        ...(redirector.win32 && typeof redirector.win32.appliedHosts === 'function' ? { applied_hosts: redirector.win32.appliedHosts() } : {}),
         health: healthOnDisk(P.dir),
         events: failure.health(), // event lines lost (D-1): stderr had each, the next written line is a log-gap
       }
@@ -677,7 +637,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const registry = createRegistry(list, { agentList: agents })
   const event = (rec) => failure.write(rec)
   const b = model.backends || (await backendsFor({ os: A.os, home, env }))
-  const parts = model.parts || (await doorPartsFor({ os: A.os, env, harnesses: list, event, failure }))
+  const parts = model.parts || (await doorPartsFor({ os: A.os, env, event, failure }))
   let rootPem = null
   try { rootPem = fs.readFileSync(path.join(P.caDir, 'asight-ca.pem'), 'utf8') } catch { /* no root: the issuer says so, every door forwards only */ }
   const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
