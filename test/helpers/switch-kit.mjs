@@ -149,6 +149,7 @@ export async function run(spec, harnesses) {
   const c = { home: w.home, file: file && rel(file), format, routePaths, ownKeys, effects: (desc.proxyMode.effects || []).flatMap((e) => e.paths.flatMap((l) => resolveLoc(l, w.ctx))).map(rel) }
   return (async () => {
     const bad = (phase) => spec.bad && spec.bad(phase, w, c)
+    if (spec.world) spec.world(w) // the test's own furniture of the machine (a VPN / proxy product's data directories), before the first snapshot
     const s0 = snapshot(w)
     const ins = await w.cmd.install()
     bad('install')
