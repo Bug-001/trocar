@@ -331,9 +331,9 @@ test('status changes nothing in the HOME but ~/.asight/netenv.json (the board\'s
   assert.equal(f, 0); assert.deepEqual(fs.readdirSync(fresh), [], 'on a machine with nothing installed it prints so, exits 0, and creates nothing')
 })
 
-// every platform prints the collector's status (the old-capture branch went with it, D39⑥ executed 2026-10-11): the win32 arm of
-// gatherStatus asks the arch's opt-in hook, and a harness name other than claude-code is a harness like any other.
-test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arch hooks are asked, the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
+// every platform prints the collector's status (the old-capture branch went with it, D39⑥ executed 2026-10-11), and a harness name other than
+// claude-code is a harness like any other. D57 (4.11 ⑱, CM25): no named item on macOS / Windows, so status asks no opt-in hook even when one is there.
+test('the flip (9(b), 1.6 §4): win32 status is the NEW status — no opt-in hook is asked (D57), the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
   const fresh = tmpDir('asight-fresh-')
   const asked = []
   const parts = { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: (q) => { asked.push(q); return [] } } } }
@@ -341,7 +341,9 @@ test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arc
   const io = fakeIo()
   const exit = await runStatusCli([], { io, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps })
   assert.equal(exit, 0, io.stdoutText())
-  assert.equal(asked.length, 1, 'the win32 arch\'s opt-in hook was asked (gatherStatus\'s win32 arm)')
+  assert.equal(asked.length, 0, 'D57: no opt-in hook is asked on win32 (4.11 ⑱)')
+  const j = fakeIo(); await runStatusCli(['--json'], { io: j, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps })
+  assert.ok(!('opt_in' in JSON.parse(j.stdoutText())), 'status --json carries no opt_in (D57)')
   assert.ok(!/还没有新采集器|旧采集/.test(io.stdoutText()), 'not the only-claude-code old-capture branch')
   const named = fakeIo()
   assert.equal(await runStatusCli(['codex'], { io: named, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps }), 0, named.stdoutText() + named.stderrText())
@@ -349,9 +351,8 @@ test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arc
   assert.deepEqual(fs.readdirSync(fresh), [], 'read-only: nothing created')
 })
 
-// a Mac's status is the collector's status (the old-capture branch went with it, D39⑥ executed 2026-10-11): the darwin arm of
-// gatherStatus asks its arch's opt-in hook (the plan half; the check half is MA4's row and stays away).
-test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — the darwin arch hooks are asked, the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
+// a Mac's status is the collector's status (the old-capture branch went with it, D39⑥ executed 2026-10-11); no opt-in hook is asked (D57).
+test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — no opt-in hook is asked (D57), the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
   const fresh = tmpDir('asight-fresh-')
   const asked = []
   const parts = { os: 'darwin', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: (q) => { asked.push(q); return [] } } } }
@@ -359,7 +360,7 @@ test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — the darwi
   const io = fakeIo()
   const exit = await runStatusCli([], { io, home: fresh, platform: 'darwin', env: { HOME: fresh }, deps })
   assert.equal(exit, 0, io.stdoutText())
-  assert.equal(asked.length, 1, 'the darwin arch\'s opt-in hook was asked (gatherStatus\'s darwin arm, the same ask win32 gets)')
+  assert.equal(asked.length, 0, 'D57: no opt-in hook is asked on darwin (4.11 ⑱)')
   assert.ok(!/还没有新采集器|旧采集/.test(io.stdoutText()), 'not the only-claude-code old-capture branch')
   const named = fakeIo()
   assert.equal(await runStatusCli(['codex'], { io: named, home: fresh, platform: 'darwin', env: { HOME: fresh }, deps }), 0, named.stdoutText() + named.stderrText())

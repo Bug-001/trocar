@@ -464,7 +464,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       dropsBase = { ...lastDrops }; dropsAt = Date.now()
     }
     const drift = newDriftState()
-    const entrySeen = { seen: new Set() } // the entry check's once-per-occurrence memory (driftCheck's state.seen shape): in memory, so a daemon restart says a still-broken entry again once
     async function check() {
       if (sw.busy()) return
       const reloaded = await reload() // without a heartbeat running (nothing attached) this is what notices that the file turned something off
@@ -492,22 +491,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       // §9.5: the files each harness reads its proxy from, against what `on` found: a change is one `netenv-change` (and one failure when it leaves a harness that is on uncaptured). Read-only: only the operator's
       // `on` writes an agent's setting (D30). No VPN / proxy software is read here or anywhere (D49): `status` and `doctor` compare the same files live.
       driftCheck({ home: netHome, env, harnesses: harnessList, desired: (h) => (sw.state().harnesses[h] || {}).desired ?? null, appendEvent: (rec) => failure.write(rec), state: drift })
-      // 4.8 §2.4「入口还有没有效」+ W68, the daemon's half of the same check: nobody has to run `status` for a displaced shim or an agent started around
-      // the entry to reach flows/ (the 5 s check's own rule). The same check status folds into its rows, through the same arch hook — the manifest as the
-      // disk has it NOW (an `off` that ran under this daemon undid entries; the copy read at start is stale), and the process table this collector itself
-      // lists (parents included: the check's agents half matches them to the forms itself). Only a manifest that holds opt-in entries pays for the scan — a
-      // machine that never named one checks nothing; `record` keeps a finding once per occurrence (driftCheck's state shape) and writes only §9.7's netenv
-      // failure codes (shim-not-on-path, not-via-entry) — an entry-changed or could-not-tell finding reaches status / doctor's rows alone, not the event
-      // log. A platform with no opt-in half (Linux) checks nothing, and a manifest that cannot be read leaves nothing in effect to check (the daemon's own
-      // reload paths say why when they need the manifest). A thrown check lands in the timer's own catch, like every other step of check().
-      const optHook = A.optIn
-      if (optHook && typeof optHook.check === 'function' && typeof optHook.record === 'function') {
-        let m = null
-        try { m = readManifest(P.dir) } catch { /* no entries can be known: nothing is in effect to check */ }
-        if (m && Array.isArray(m.entries) && m.entries.some((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-'))) {
-          optHook.record({ findings: await optHook.check({ harnesses: harnessList, manifest: m, procs: await redirector.scan(), identify: registry.match }), state: entrySeen, appendEvent: (rec) => failure.write(rec) })
-        }
-      }
     }
     const checkTimer = setInterval(() => { check().catch((e) => failure('daemon', coded(e, 'check-error'))) }, checkMs)
     checkTimer.unref()

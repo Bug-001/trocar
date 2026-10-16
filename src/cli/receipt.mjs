@@ -32,8 +32,7 @@ export const tilde = (p, home) => (home && typeof p === 'string' && (p === home 
  *  autostart line names the real mechanism of `platform` (launchd on darwin, systemd --user on linux; the hardcoded systemd wording went). */
 export function formatPlan(p, { home = null, autostart = true, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
-  const count = (p.manifest ? 1 : 0) + (p.state ? 1 : 0) + (p.standalone ? 1 : 0) + ((p.ca || []).length) + ((p.files || []).length) + ((p.owned || []).length) + ((p.entries || []).length)
-    + ((p.optIn || []).filter((x) => x.chosen && x.applicable && x.state === 'needed').length) + (p.unit ? 1 : 0) + ((p.logs || []).length) + (p.records || p.events ? 1 : 0)
+  const count = (p.manifest ? 1 : 0) + (p.state ? 1 : 0) + (p.standalone ? 1 : 0) + ((p.ca || []).length) + ((p.files || []).length) + ((p.owned || []).length) + ((p.entries || []).length) + (p.unit ? 1 : 0) + ((p.logs || []).length) + (p.records || p.events ? 1 : 0)
   const unitWord = platform === 'darwin'
     ? `autostart unit (launchd, RunAtLoad + KeepAlive)` // launchd is the only autostart there (4.9 §4): a LaunchAgent plist, never a systemd unit
     : `autostart unit (systemd --user, ${autostart ? 'enabled --now' : 'started, not enabled'})`
@@ -47,8 +46,6 @@ export function formatPlan(p, { home = null, autostart = true, platform = 'linux
     ...p.files.map((f) => `  ${f.harness}: ${t(f.path)} = ${f.sources.length ? `the certificates of ${f.sources.map(t).join(', ')} + ` : ''}the collector CA`),
     ...(p.owned || []).map((o) => `  ${o.harness}: ${t(o.path)} (asight's ${o.role})`),
     ...p.entries.map((e) => `  ${e.harness}: ${t(e.path)}${e.real_path ? ` → ${t(e.real_path)}` : ''} ${e.what || `${e.keys.join('.')} = ${t(e.value)}`}`),
-    // the named opt-in items are part of what this run changes (1.6 §1.7): each with its one 「影响」 line, admin said where it is needed
-    ...(p.optIn || []).filter((x) => x.chosen && x.applicable && x.state === 'needed').map((x) => `  ${x.form} (你点名的${x.scope === 'machine' ? ',要管理员,Windows 会弹它自己的提权框' : ''}): ${x.item} — 影响: ${x.impact}`),
     ...(p.backups ? [`  backups, a copy of each of those files that exists, made before it is changed: ${t(p.backups)}/`] : []),
     ...(p.unit ? [`  ${unitWord}: ${t(p.unit.path)}${Object.keys(p.unit.env).length ? ` with ${Object.entries(p.unit.env).map(([k, v]) => `${k}=${v}`).join(' ')} for the daemon alone (it checks a relay's certificate with it)` : ''}`,
       ...(autostart && platform !== 'darwin' ? p.unit.links.map((l) => `  autostart link (made by systemctl --user enable): ${t(l)}`) : [])] : []),
@@ -56,18 +53,6 @@ export function formatPlan(p, { home = null, autostart = true, platform = 'linux
     ...((p.logs || []).length ? [`  daemon logs (created once, never rewritten): ${(p.logs).map(t).join(', ')}`] : []),
     ...watchLines(p.watch, t).map((l) => `  ${l}`),
     ...(p.skipped && p.skipped.length ? [`跳过: ${p.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`] : []),
-    // 「要你点名的(默认不做)」(1.6 §1.7): every applicable item this run is NOT doing, one line each — what it implies, whether it needs the
-    // administrator, and the exact command that names it. The list is what `status`'s `opt-in-needed` rows say; `--yes` never stands in for it.
-    ...((p.optIn || []).some((x) => x.applicable && !x.chosen && x.state !== 'done') ? [
-      '要你点名的(默认不做;点名了才做,off 时一起撤掉):',
-      ...(p.optIn || []).filter((x) => x.applicable && !x.chosen && x.state !== 'done').map((x) => `  ${x.form}: ${x.item}${x.scope === 'machine' ? '(要管理员)' : ''} — ${x.impact}`),
-      ...(p.optIn || []).filter((x) => x.applicable && !x.chosen && x.state !== 'done').map((x) => `    点名: ${x.command}`),
-    ] : []),
-    // 「点名也不做」(1.6 §1.7): a form's data may declare that its capture would additionally need one of these; the plan says WHY asight
-    // never does it (an explanation only — no command, not nameable, zero writes)
-    ...((p.optIn || []).some((x) => x.state === 'never') ? [
-      ...(p.optIn || []).filter((x) => x.state === 'never').map((x) => `  ${x.form}: ${x.item} 点名也不做 — ${x.note}`),
-    ] : []),
     ...(p.edited || []).map((e) => `你改过的代理设置: ${e.harness} 的 ${e.where || '代理字段'} 现在是 ${e.now ?? '空'}(asight 上次接上时是 ${e.was ?? '空'});继续会把它接成新的上游,再指回 asight`),
     ...(p.adopted || []).filter(saysSomething).map((x) => adoptedLine(x.harness, x)), // §9.5: where a new connection of the agent goes once asight is on, credentials masked — only when the chain says something (D46)
     ...(p.restart && p.restart.length ? [`正在跑的 ${p.restart.map((x) => `${x.harness}(pid ${x.pid})`).join('、')} 重启后才会被采集;在那之前照常直连`] : []),
