@@ -10,7 +10,7 @@
 const U = '/Users/u'
 const W = String.raw`C:\Users\u`
 const S46 = 'spec 4.6:132-138 (按 harness 预设名单)'
-const DF = 'test/collector/harness/darwin-forms.test.mjs:24-145'
+const DF = 'test/collector/harness/darwin-forms.test.mjs:24-145 at 839ee1e5 (retired with the macOS form tables)'
 const WF = 'test/collector/harness/win32-forms.test.mjs:21-102'
 const P = 'plan 2026-10-14-d51-name-allowlist §4 (P:162-189)'
 
