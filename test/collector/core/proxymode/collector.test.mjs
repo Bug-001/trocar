@@ -35,10 +35,10 @@ const ready = { state: () => 'ready' }
 const manifestOf = (h, { on = [], liveness = {} } = {}) => ({ ...newManifest(), entries: [{ phase: 'install', harness: h, kind: 'json-key', path: '/x', installed_at: iso(INSTALLED) }, { phase: 'install', harness: null, kind: 'system-root', installed_at: iso(INSTALLED) }, ...on], liveness })
 
 /** One collector over one harness: `w` is what the injected readers answer now (facts, env, cwd, verdict ctx, manifest, process table). */
-async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null } = {}) {
+async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null, others = [] } = {}) {
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
   w.ctx ||= ctxOf(newWorld(os))
-  const c = createModelCollector({ harnesses: [desc], dir: '/nowhere', ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
+  const c = createModelCollector({ harnesses: [desc, ...others], dir: '/nowhere', ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
     identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => ({ pid: w.pid, source: 'socket-table', ms: 1 }), factsOf: async () => w.facts,
     proc: { envOf: async (_, names) => (w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async () => w.cwd ?? null, parentOf: async () => null }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
     readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => w.manifest || manifestOf(desc.name), procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5 })
@@ -183,6 +183,20 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   const after = await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' })
   assert.match(after.body, /return "PROXY sys\.corp:8080"/, 'after off only the app\'s own way')
   assert.equal((await c.servePac({ peer: PEER, user: pacG, path: '/other' })).status, 404)
+  c.close()
+})
+
+// D51⑥ at the door: a process the name list names for a harness that is off, at the door of one that is on, is forwarded `harness-off` and never judged
+test('harness-off · another harness\'s agent at an on harness\'s door, its own harness off: forwarded with its harness named, never judged', async () => {
+  const [d, other] = descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin')))
+  const f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`
+  const { c } = await rig({ desc: d, others: [other], w: { pid: 4343, facts: { agent: other.name, startedAt: INSTALLED + 1 }, env: {} } })
+  await c.on({ harnesses: [d.name], groups: { [g]: 18105 } })
+  const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.deepEqual([meta.agent, meta.door, meta.decrypt, meta.skip], [other.name, g, false, { not_captured: 'untracked', reason: 'harness-off' }])
+  await c.on({ harnesses: [other.name], groups: { [g]: 18105 } })
+  const after = await c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  assert.notEqual(after.skip && after.skip.reason, 'harness-off', 'its harness on: it is judged')
   c.close()
 })
 
