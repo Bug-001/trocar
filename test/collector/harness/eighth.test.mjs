@@ -34,7 +34,6 @@ const walk = (d) => fs.readdirSync(path.join(ROOT, d), { withFileTypes: true }).
 const OLD_WIN = 'the old win32 collector, deleted as one with the W69 guard (spec 0.1:161)'
 const CM27_EXEMPT = [
   { file: 'src/collector/arch/win32/optin.mjs', kind: 'harness', reason: OLD_WIN },
-  { file: 'src/collector/core/trust/plan.mjs', kind: 'os', reason: `its Windows inject arm belongs to ${OLD_WIN}` },
 ]
 function cm27Findings(files, ids, read, exemptions = CM27_EXEMPT) {
   const exempt = (file, kind) => exemptions.some((x) => x.file === file && x.kind === kind)

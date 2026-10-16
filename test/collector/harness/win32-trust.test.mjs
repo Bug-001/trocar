@@ -1,17 +1,11 @@
-// test/collector/harness/win32-trust.test.mjs — the Windows trust entries (RFC 4.8 §6.1 · §6.2; acceptance W19, W20, W22, and W23's "zero writes" half). Two halves: planTrust in its Windows mode
-// on made-up Windows paths (the checks that only a `C:\…` path can hit), and the real install / uninstall of the harnesses' win32 data in a sandbox HOME laid out like %USERPROFILE%.
-// A proxy entry is data written after the kernel's read-back (Task 8): the plan holds trust entries only, which this file asserts.
+// test/collector/harness/win32-trust.test.mjs — what is left of the old Windows trust entries (RFC 4.8 §6.1 · §6.2; acceptance W19, W20, W22): the harnesses' win32 data read directly
+// (the overlays are gone), `isOwnPath`, and the Windows roots readers. planTrust's Windows arm and the win32 install through it are gone (D57): Windows certificates are 4.11's `install`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
-import { planTrust } from '../../../src/collector/core/trust/plan.mjs'
-import { installCollector } from '../../../src/collector/install.mjs'
-import { uninstallCollector } from '../../helpers/uninstall.mjs'
-import { readManifest, installedAt } from '../../../src/collector/core/trust/journal.mjs'
-import { parseDotenv } from '../../../src/collector/core/config-read.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
@@ -19,59 +13,6 @@ const raw = String.raw
 const CA = createCa({ commonName: 'asight collector CA' })
 const ALL = await loadHarnesses()
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex')
-
-// ── planTrust on Windows paths ──
-const DIR = raw`C:\Users\u\.asight\collector`
-const BUNDLE = raw`C:\Users\u\.asight\collector\ca\combined-alpha.pem`
-const plan = (win32, os = 'win32', extra = {}) => planTrust({ descriptors: [{ name: 'alpha', win32, ...extra }], ctxFor: () => ({ os, readText: () => null }), caCertPem: CA.certPem, collectorDir: DIR })
-const dotenv = (o = {}) => ({ kind: 'text', format: 'dotenv-block', path: raw`C:\Users\u\.alpha\.env`, vars: { SSL_CERT_FILE: BUNDLE }, semantic: 'replace', ...o })
-const jsonKey = (o = {}) => ({ kind: 'json-key', path: raw`C:\Users\u\.alpha\settings.json`, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: raw`C:\Users\u\.asight\collector\ca\asight-ca.pem`, semantic: 'append', ...o })
-
-test('W19 plan: every path an entry writes into an agent config has forward slashes, the file locations stay as they are, and the checks read Windows paths (either slash, any case)', () => {
-  const p = plan({ inject: () => ({ entries: [dotenv(), jsonKey()], files: [{ path: BUNDLE, bundle: true }] }) })
-  assert.deepEqual(p.entries.map((e) => e.vars ? e.vars.SSL_CERT_FILE : e.value), ['C:/Users/u/.asight/collector/ca/combined-alpha.pem', 'C:/Users/u/.asight/collector/ca/asight-ca.pem'], 'dotenvy reads a backslash as an escape and drops the value')
-  assert.deepEqual(p.entries.map((e) => e.path), [raw`C:\Users\u\.alpha\.env`, raw`C:\Users\u\.alpha\settings.json`], 'where the file is: untouched')
-  assert.deepEqual(p.files.map((f) => f.path), [BUNDLE])
-  assert.equal(plan({ inject: () => ({ entries: [jsonKey({ value: 'c:/USERS/U/.ASIGHT/Collector/ca/x.pem' })] }) }).entries[0].value, 'c:/USERS/U/.ASIGHT/Collector/ca/x.pem', 'Windows paths compare ignoring case')
-  assert.throws(() => plan({ inject: () => ({ entries: [jsonKey({ value: raw`C:\Users\u\other\x.pem` })] }) }), /must be a file under/)
-  assert.throws(() => plan({ inject: () => ({ entries: [jsonKey({ value: raw`ca\x.pem` })] }) }), /must be absolute/)
-  assert.throws(() => plan({ inject: () => ({ entries: [jsonKey({ path: 'settings.json' })] }) }), /must be absolute/)
-  assert.throws(() => plan({ inject: () => ({ entries: [dotenv()] }) }), /does not declare as its combined bundle/, 'a replace entry still needs its own declared bundle')
-  assert.throws(() => plan({ inject: () => ({ entries: [dotenv({ vars: { SSL_CERT_FILE: raw`C:\Users\u\.asight\collector\ca\combined-beta.pem` } })], files: [{ path: BUNDLE, bundle: true }] }) }), /combined-alpha\.pem/)
-  assert.throws(() => plan({ inject: () => ({ entries: [jsonKey({ keys: ['env', 'NODE_OPTIONS'] })] }) }), /never written/)
-})
-
-test('W19 plan: a dotenv block entry on Windows asks to be written quoted when its value needs it (a profile with a space); on Linux it does not, so the unquoted-only rule stays', () => {
-  const p = plan({ inject: () => ({ entries: [dotenv()], files: [{ path: BUNDLE, bundle: true }] }) })
-  assert.deepEqual([p.entries[0].quote, p.entries[0].vars.SSL_CERT_FILE], [true, 'C:/Users/u/.asight/collector/ca/combined-alpha.pem'], 'the plain forward-slash path stays the entry\'s value')
-  assert.equal(plan({ inject: () => ({ entries: [jsonKey()] }) }).entries[0].quote, undefined, 'a JSON key has no quotes to choose')
-  const lin = planTrust({ descriptors: [{ name: 'alpha', inject: () => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: '/h/.alpha/.env', vars: { SSL_CERT_FILE: '/h/.asight/collector/ca/combined-alpha.pem' }, semantic: 'replace' }], files: [{ path: '/h/.asight/collector/ca/combined-alpha.pem', bundle: true }] }) }], ctxFor: () => ({ os: 'linux', readText: () => null }), caCertPem: CA.certPem, collectorDir: '/h/.asight/collector' })
-  assert.equal(lin.entries[0].quote, undefined)
-})
-
-test('W19 plan: the PowerShell profile is the Windows login environment and is never an entry; a shim lives in the collector\'s bin directory and nowhere else', () => {
-  for (const bad of [raw`C:\Users\u\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1`, raw`C:\Users\u\Documents\PowerShell\profile.ps1`, 'C:/Users/u/Documents/PowerShell/Microsoft.VSCode_profile.ps1']) {
-    assert.throws(() => plan({ inject: () => ({ entries: [jsonKey({ path: bad })] }) }), /login-environment/, bad)
-    assert.throws(() => plan({ inject: () => ({ owned: [{ path: bad, role: 'plugin', data: '// asight collector' }] }) }), /login-environment/, bad)
-  }
-  const shim = (p) => plan({ inject: () => ({ owned: [{ path: p, role: 'shim', data: '@echo off' }] }) })
-  assert.equal(shim(raw`C:\Users\u\.asight\collector\bin\kimi.cmd`).owned.length, 1)
-  assert.throws(() => shim(raw`C:\Users\u\bin\kimi.cmd`), /shim directory/)
-  assert.throws(() => plan({ inject: () => ({ owned: [{ path: raw`C:\Users\u\.asight\collector\bin\x.js`, role: 'plugin', data: '// asight collector' }] }) }), /holds launch shims only/)
-  assert.throws(() => plan({ inject: () => ({ owned: [{ path: raw`C:\Users\u\.config\opencode\plugins\p.js`, role: 'plugin', data: '// asight collector' }] }) }), /"asight" in its name/)
-  assert.equal(plan({ inject: () => ({ owned: [{ path: raw`C:\Users\u\.config\opencode\plugins\asight-ca.js`, role: 'plugin', data: '// asight collector: x' }] }) }).owned.length, 1)
-})
-
-test('W19 plan: only the OS the entries are for is asked — a harness without Windows data writes nothing on Windows, and Windows data is never read for another OS', () => {
-  let called = []
-  const d = { name: 'alpha', win32: { inject: () => { called.push('win32'); return { entries: [jsonKey()] } } }, inject: () => { called.push('linux'); return { entries: [jsonKey({ path: '/h/.alpha/settings.json', value: '/h/.asight/collector/ca/asight-ca.pem' })] } } }
-  const win = planTrust({ descriptors: [d], ctxFor: () => ({ os: 'win32' }), caCertPem: CA.certPem, collectorDir: DIR })
-  assert.deepEqual([called, win.entries.length], [['win32'], 1])
-  called = []
-  const lin = planTrust({ descriptors: [d], ctxFor: () => ({ os: 'linux' }), caCertPem: CA.certPem, collectorDir: '/h/.asight/collector' })
-  assert.deepEqual([called, lin.entries.length], [['linux'], 1])
-  assert.deepEqual(planTrust({ descriptors: [{ name: 'only-linux', inject: () => ({ entries: [jsonKey()] }) }], ctxFor: () => ({ os: 'win32' }), caCertPem: CA.certPem, collectorDir: DIR }).paths, [])
-})
 
 // ── the real data in a sandbox HOME laid out like %USERPROFILE% ──
 function box(...sub) { // `sub`: segments under the temp directory, e.g. a profile directory with a space in it
@@ -81,67 +22,7 @@ function box(...sub) { // `sub`: segments under the temp directory, e.g. a profi
   const snapshot = () => { const out = new Map(); const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (f === path.join(home, '.asight')) continue; if (e.isDirectory()) walk(f); else out.set(f, sha(fs.readFileSync(f))) } }; walk(home); return out }
   return { home, dir: path.join(home, '.asight', 'collector'), put, snapshot }
 }
-const names = ['claude-code', 'codex', 'kimi-code', 'z-code']
-const install = (b, over = {}) => installCollector({ home: b.home, env: { HOME: b.home, USERPROFILE: b.home }, osName: 'win32', harnesses: ALL.filter((d) => names.includes(d.name)), freePort: async () => 47011, roots: { node: [], osText: '' }, ...over })
-const uninstall = (b, harnesses = ALL.filter((d) => names.includes(d.name))) => uninstallCollector({ home: b.home, env: {}, stop: async () => 'none', harnesses, roots: { node: [], osText: '' } })
-
-test('W19: on writes each automatic trust entry and off puts every file back to its pre_sha256; nothing outside the plan is touched, nothing a user has to name is written', async () => {
-  const b = box()
-  const corp = createCa({ commonName: 'corp relay CA' })
-  const claude = b.put('.claude/settings.json', '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://relay.example.com"\n  },\n  "theme": "dark"\n}\n')
-  const codex = b.put('.codex/.env', 'OPENAI_API_KEY=sk-secret\nHTTPS_PROXY=http://corp-proxy:3128\n# a comment\n')
-  b.put('.zcode/cli/config.json', '{"network": {"proxy": "none"}}\n') // Z-Code ran once: its home exists, the key is added inside the user's own object
-  b.put('.kimi-code/bin/kimi.exe', 'MZ')
-  b.put('AppData/Roaming/Code/User/settings.json', '{"editor.fontSize": 12}\n')
-  b.put('AppData/Local/OpenAI/Codex/bin/0123/codex.exe', 'MZ')
-  const corpFile = b.put('corp.pem', corp.certPem)
-  const before = b.snapshot()
-  const r = await install(b, { env: { HOME: b.home, USERPROFILE: b.home, NODE_EXTRA_CA_CERTS: corpFile } })
-  const m = readManifest(b.dir)
-  assert.equal(m.install?.state, 'complete')
-  const zconf = path.join(b.home, '.zcode', 'cli', 'config.json')
-  // trust entries only: the CA keys and the one block of SSL_CERT_FILE, whose paths are forward-slashed; no proxy key anywhere (that entry is Task 8's, after the read-back)
-  const holding = (re) => [...b.snapshot().keys()].filter((f) => re.test(fs.readFileSync(f, 'utf8')))
-  assert.deepEqual(holding(/httpProxy|NO_PROXY|"HTTPS_PROXY"/), [], 'no proxy entry in anything the plan wrote')
-  assert.equal(fs.readFileSync(codex, 'utf8').match(/HTTPS_PROXY=/g).length, 1, 'Codex\'s .env still has only the user\'s own HTTPS_PROXY line')
-  assert.equal(JSON.parse(fs.readFileSync(claude, 'utf8')).env.NODE_EXTRA_CA_CERTS, path.join(b.dir, 'ca', 'extra-cc.pem'), 'the corp CA of the shell is carried into extra-cc.pem')
-  assert.match(fs.readFileSync(codex, 'utf8'), /SSL_CERT_FILE=\S+combined-codex\.pem\n/)
-  assert.equal(JSON.parse(fs.readFileSync(zconf, 'utf8')).network.caCertFile, path.join(b.dir, 'ca', 'combined-z-code.pem'))
-  for (const e of m.entries) assert.ok(!/\\/.test(e.value || Object.values(e.vars).join('')), `${e.path}: forward slashes in what is written`)
-  // the plan is exactly the automatic set: no Kimi shim, no VS Code setting, no Z-Code Desktop setting, no launcher, no registry
-  assert.deepEqual([...m.planned].sort(), [claude, codex, zconf, path.join(b.dir, 'ca', 'combined-codex.pem'), path.join(b.dir, 'ca', 'combined-z-code.pem'), path.join(b.dir, 'ca', 'extra-cc.pem')].sort())
-  const after = b.snapshot()
-  const changed = [...after].filter(([f, h]) => before.get(f) !== h).map(([f]) => f)
-  assert.deepEqual(changed.sort(), [claude, codex, zconf].sort(), 'every other file of the user\'s is byte for byte as it was')
-  for (const e of m.entries) assert.ok(e.pre_sha256 || !e.existed_before, `${e.path}: its pre_sha256 is recorded`)
-  assert.ok(r.plan.paths.every((p) => !/Code[\\/]User|v2[\\/]setting|Start Menu|\.lnk$|\.cmd$|\.kimi-code/.test(p)), 'an opt-in item writes nothing until it is named')
-  await uninstall(b)
-  assert.deepEqual([...b.snapshot()], [...before], 'the user\'s files are back to the bytes they had (their pre_sha256)')
-  assert.deepEqual(fs.readdirSync(b.dir), ['flows'], 'only the records of what install and uninstall said remain of the collector directory')
-})
-
 const only = (name) => ALL.filter((d) => d.name === name)
-test('W19: Hermes — the block goes into the .env of %LOCALAPPDATA%\\hermes and of each profile, with HERMES_CA_BUNDLE for a release up to v2026.9.24, the user\'s CA is carried into the bundle, and off restores every byte', async () => {
-  const b = box()
-  const corp = createCa({ commonName: 'corp relay CA' })
-  const corpFile = b.put('corp.pem', corp.certPem)
-  const rootEnv = b.put('AppData/Local/hermes/.env', `OPENROUTER_API_KEY=sk-secret\nSSL_CERT_FILE=${corpFile}\n`)
-  b.put('AppData/Local/hermes/hermes-agent/install-stamp.json', '{"tag":"v2026.9.20"}')
-  b.put('AppData/Local/hermes/hermes-agent/.env', 'FOO=1\n')
-  b.put('AppData/Local/hermes/profiles/work/config.yaml', 'model: x\n')
-  const before = b.snapshot()
-  const r = await install(b, { harnesses: only('hermes') })
-  const profileEnv = path.join(b.home, 'AppData', 'Local', 'hermes', 'profiles', 'work', '.env')
-  const bundle = path.join(b.dir, 'ca', 'combined-hermes.pem')
-  assert.deepEqual([...readManifest(b.dir).planned].sort(), [bundle, profileEnv, rootEnv].sort())
-  for (const f of [rootEnv, profileEnv]) assert.match(fs.readFileSync(f, 'utf8'), new RegExp(`SSL_CERT_FILE=${bundle.replace(/[.\\]/g, '\\$&')}\\nHERMES_CA_BUNDLE=${bundle.replace(/[.\\]/g, '\\$&')}\\n`), `${f}: both variables (a release of that date reads the first of HERMES_CA_BUNDLE / SSL_CERT_FILE)`)
-  assert.match(fs.readFileSync(rootEnv, 'utf8'), /OPENROUTER_API_KEY=sk-secret/, 'the user\'s other lines are untouched')
-  assert.ok(fs.readFileSync(bundle, 'utf8').includes(corp.certPem.trim()), 'the CA the user\'s SSL_CERT_FILE named is carried into the bundle')
-  assert.ok(r.plan.notes.some((n) => /does not exist, so asight creates it.*as a fill instead of an override/.test(n)), 'creating the profile\'s .env turns the checkout .env into a fill: said')
-  await uninstall(b, only('hermes'))
-  assert.deepEqual([...b.snapshot()], [...before])
-})
-
 test('W19: Hermes — no %LOCALAPPDATA%\\hermes means no entry and a note; HERMES_HOME naming a profile finds the root above it; a newer release gets only SSL_CERT_FILE', () => {
   const hermes = only('hermes')[0].win32
   const b = box()
@@ -159,53 +40,6 @@ test('W19: Hermes — no %LOCALAPPDATA%\\hermes means no entry and a note; HERME
 
 // ── W19 in the profiles Windows users really have: a space in the profile directory, and files that an editor there wrote with CRLF ──
 // Every harness's user files as one user has them; `eol` is the line ending of the files, `corp` a corporate CA the user's own SSL_CERT_FILE / NODE_EXTRA_CA_CERTS lines name.
-function seedAll(b, eol, corp) {
-  const nl = (t) => t.replace(/\n/g, eol)
-  const corpFile = b.put('corp.pem', corp.certPem)
-  b.put('.claude/settings.json', nl('{\n  "env": {\n    "NODE_EXTRA_CA_CERTS": "' + corpFile.replace(/\\/g, '/') + '"\n  },\n  "theme": "dark"\n}\n'))
-  b.put('.codex/.env', nl(`OPENAI_API_KEY=sk-secret\nSSL_CERT_FILE=${corpFile}\nHTTPS_PROXY=http://corp:3128\n# a comment\n`))
-  b.put('.zcode/cli/config.json', nl('{\n  "network": {\n    "caCertFile": "' + corpFile.replace(/\\/g, '/') + '"\n  }\n}\n'))
-  b.put('.dsh/cordis.patch.yml', nl('- insert: [{ name: other-plugin }]\n'))
-  b.put('.dsh/.env', nl('DEEPSEEK_API_KEY=sk-secret\n'))
-  b.put('AppData/Local/hermes/.env', nl(`OPENROUTER_API_KEY=sk-secret\nSSL_CERT_FILE=${corpFile}\nHTTPS_PROXY=http://corp:3128\n`))
-  b.put('AppData/Local/hermes/hermes-agent/install-stamp.json', '{"tag":"v2026.9.20"}')
-  b.put('.kimi-code/bin/kimi.exe', 'MZ')
-  return corpFile
-}
-const PROFILES = [{ label: 'C:\\Users\\John Smith', sub: ['John Smith'] }, { label: 'OneDrive - Contoso\\John Smith', sub: ['OneDrive - Contoso', 'John Smith'] }]
-const SETS = [['claude-code'], ['codex'], ['hermes'], ['z-code'], ['claude-code', 'codex'], 'all']
-
-for (const eol of ['\n', '\r\n']) for (const prof of PROFILES) {
-  test(`W19 (${eol === '\n' ? 'LF' : 'CRLF'} files, profile ${prof.label}): every harness — alone, Claude Code with Codex, and all seven together — installs, the paths with a space are double-quoted in the .env blocks and read back whole, the user's own same-key lines are out of effect with their prior recorded, and off restores every byte`, async () => {
-    for (const set of SETS) {
-      const b = box(...prof.sub)
-      const corp = createCa({ commonName: 'corp relay CA' })
-      const corpFile = seedAll(b, eol, corp)
-      const before = b.snapshot()
-      const harnesses = set === 'all' ? ALL : ALL.filter((d) => set.includes(d.name))
-      const label = `${set === 'all' ? 'all seven' : set.join('+')}`
-      await install(b, { harnesses })
-      const m = readManifest(b.dir)
-      assert.equal(m.install?.state, 'complete', label)
-      for (const e of m.entries) assert.ok(!/\\/.test(e.value || Object.values(e.vars || {}).join('')), `${label}: ${e.path}: forward slashes, and the plain path (no quotes) is what the manifest holds`)
-      for (const [name, rel, bundle] of [['codex', '.codex/.env', 'combined-codex.pem'], ['hermes', 'AppData/Local/hermes/.env', 'combined-hermes.pem']].filter(([n]) => set === 'all' || set.includes(n))) {
-        const text = fs.readFileSync(path.join(b.home, rel), 'utf8')
-        const want = path.join(b.dir, 'ca', bundle)
-        assert.ok(text.includes(`SSL_CERT_FILE="${want}"`), `${label}: the value with spaces is written in double quotes: ${text.split(/\r?\n/).slice(0, 4).join(' | ')}`)
-        assert.equal(parseDotenv(text).get('SSL_CERT_FILE'), want, `${label}: what Codex (dotenvy) and Hermes (python-dotenv) read is the whole path`)
-        assert.deepEqual([...parseDotenv(text)].filter(([k]) => k === 'SSL_CERT_FILE').length, 1, `${label}: the user's own SSL_CERT_FILE line is out of effect, not shadowed by order`)
-        if (eol === '\r\n') assert.ok(!/[^\r]\n/.test(text), `${label}: ${name}'s .env stays CRLF`)
-        const entry = m.entries.find((e) => e.path === path.join(b.home, rel))
-        assert.equal(installedAt(m, { file: entry.path, vars: Object.fromEntries(parseDotenv(text)) }), Date.parse(entry.installed_at), `${label}: ${name}: the tracker still recognises asight's own block (the manifest's plain path equals what the reader gets from the quoted one)`)
-        assert.deepEqual(entry.prior_value, { SSL_CERT_FILE: corpFile }, `${label}: ${name}: the user's value is recorded, to be carried into the bundle and put back by off`)
-        assert.ok(fs.readFileSync(want, 'utf8').includes(corp.certPem.trim()), `${label}: ${name}: the CA the user's line named is in the combined bundle`)
-      }
-      await uninstall(b, harnesses)
-      assert.deepEqual([...b.snapshot()], [...before], `${label}: every byte of the user's files is back`)
-    }
-  })
-}
-
 test('W19: Hermes — a HERMES_MANAGED_DIR .env that sets SSL_CERT_FILE or HERMES_CA_BUNDLE wins over asight\'s block (Hermes reads it last), and the install says so; without it, no note', () => {
   const hermes = only('hermes')[0].win32
   const b = box('John Smith')
@@ -317,88 +151,7 @@ test('W20: the Windows reader reads no file at all — never the macOS cert.pem 
   assert.deepEqual(reads, [])
 })
 
-test('W20: the combined bundle is Node\'s roots, the Windows roots, the user\'s CAs and the asight CA, each once; a new Windows root rebuilds it atomically, an unchanged set leaves it alone', async () => {
-  const b = box()
-  const corp = createCa({ commonName: 'corp relay CA' })
-  b.put('.codex/.env', `SSL_CERT_FILE=${b.put('corp.pem', corp.certPem)}\n`)
-  const node = [R[2]] // stands in for tls.rootCertificates; one of the Windows roots is also a Node root
-  const win1 = await windowsRoots({ tls: { getCACertificates: () => [R[0], R[2], BROKEN] } })
-  await install(b, { harnesses: only('codex'), roots: { node, osText: win1.pem } })
-  const bundle = path.join(b.dir, 'ca', 'combined-codex.pem')
-  const certs = (text) => text.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g).map(fp)
-  const asight = fp(fs.readFileSync(path.join(b.dir, 'ca', 'asight-ca.pem'), 'utf8'))
-  assert.deepEqual(certs(fs.readFileSync(bundle, 'utf8')).sort(), [fp(R[2]), fp(R[0]), fp(corp.certPem), asight].sort(), 'Node roots ∪ Windows roots ∪ the user\'s CA ∪ the asight CA, the shared one once')
-  assert.ok(!fs.readFileSync(bundle, 'utf8').includes('bm90IGEg'), 'the certificate that does not parse never reached the bundle')
-  const m = readManifest(b.dir)
-  const writes = []
-  const recording = { ...nodeFs, renameSync: (a, c) => { writes.push(['rename', a, c]); return nodeFs.renameSync(a, c) }, openSync: (f, ...rest) => { writes.push(['open', f]); return nodeFs.openSync(f, ...rest) } }
-  const caPem = fs.readFileSync(path.join(b.dir, 'ca', 'asight-ca.pem'), 'utf8')
-  assert.deepEqual(rewriteBundles({ dir: b.dir, manifest: m, nodeRoots: node, osRootsText: win1.pem, caPem, fs: recording }), [], 'the same Windows roots: nothing to rebuild')
-  assert.deepEqual(writes, [])
-  const win2 = await windowsRoots({ tls: { getCACertificates: () => [R[0], R[1], R[2]] } })
-  assert.notEqual(win2.fingerprint, win1.fingerprint)
-  assert.deepEqual(rewriteBundles({ dir: b.dir, manifest: m, nodeRoots: node, osRootsText: win2.pem, caPem, fs: recording }), [bundle])
-  const temp = writes.find((w) => w[0] === 'open' && w[1].startsWith(bundle + '.asight-tmp-'))
-  assert.ok(temp, 'written to a temp file beside the bundle…')
-  assert.deepEqual(writes.find((w) => w[0] === 'rename' && w[2] === bundle), ['rename', temp[1], bundle], '…and renamed over it: a reader sees the old bundle or the new, never half')
-  assert.deepEqual(certs(fs.readFileSync(bundle, 'utf8')).sort(), [fp(R[2]), fp(R[0]), fp(R[1]), fp(corp.certPem), asight].sort())
-  assert.deepEqual(fs.readdirSync(path.join(b.dir, 'ca')).filter((n) => n.includes('tmp')), [], 'no temp file left')
-  assert.equal(readManifest(b.dir).files.find((f) => f.role === 'bundle').sha256, crypto.createHash('sha256').update(fs.readFileSync(bundle)).digest('hex'), 'the manifest names the new bytes')
-})
-
-// ── W19, the proxy half: each automatic proxy entry (data) written through the journal and undone to the byte ──
 // ── W22: dsh and OpenCode (the plugin sources themselves: win32-plugins.test.mjs) ──
-const ROW = '- insert: [{id: asight-ca, name: ./asight-ca.mjs}]'
-const fwdJson = (p) => JSON.stringify(p.replace(/\\/g, '/')) // a path as the plugin source holds it: a string literal with forward slashes
-test('W22 dsh: the patch row is the one lab L1 measured, with the sentinel comment; the plugin file sits beside cordis.patch.yml; off takes the row and the file out (the patch file asight created goes with them)', async () => {
-  for (const existing of [true, false]) {
-    const b = box()
-    const patch = path.join(b.home, '.dsh', 'cordis.patch.yml')
-    if (existing) b.put('.dsh/cordis.patch.yml', '- insert: [{ name: other-plugin }]\n')
-    b.put('.dsh/.env', 'DEEPSEEK_API_KEY=sk\n')
-    const before = b.snapshot()
-    await install(b, { harnesses: only('deepseek-dsh') })
-    const plugin = path.join(b.home, '.dsh', 'asight-ca.mjs')
-    const rows = fs.readFileSync(patch, 'utf8').split('\n').filter((l) => l.includes('asight-ca'))
-    assert.equal(rows.length, 1)
-    assert.ok(rows[0].startsWith(`${ROW} # asight collector: `), `the row, then the sentinel comment: ${rows[0]}`)
-    assert.ok(!/\\/.test(rows[0]), 'a relative path with forward slashes: the form that loaded on Windows')
-    assert.equal(path.dirname(plugin), path.dirname(patch), 'beside the patch file: a relative name finds it')
-    const text = fs.readFileSync(plugin, 'utf8')
-    assert.ok(text.startsWith('// asight collector: trust plugin for DeepSeek dsh on Windows') && text.includes(fwdJson(path.join(b.dir, 'ca', 'asight-ca.pem'))), 'the plugin with this user\'s CA file filled in')
-    assert.deepEqual(readManifest(b.dir).files.filter((f) => f.role === 'plugin').map((f) => f.path), [plugin], 'ledgered, so off removes it')
-    assert.deepEqual(readManifest(b.dir).entries.map((e) => [e.path, e.line.startsWith(ROW)]), [[patch, true]])
-    await uninstall(b, only('deepseek-dsh'))
-    assert.deepEqual([...b.snapshot()], [...before], `${existing ? 'the user\'s patch file' : 'no patch file'} and no plugin after off`)
-  }
-})
-
-test('W22 dsh: DSH_HOME moves both the patch file and the plugin, and a patch file that is not a list is refused before anything is written', async () => {
-  const b = box()
-  b.put('D/dsh/cordis.patch.yml', 'name: not a list\n')
-  await assert.rejects(install(b, { harnesses: only('deepseek-dsh'), env: { HOME: b.home, USERPROFILE: b.home, DSH_HOME: path.join(b.home, 'D', 'dsh') } }), /not a block-style YAML list/)
-  assert.ok(!fs.existsSync(path.join(b.home, 'D', 'dsh', 'asight-ca.mjs')), 'nothing was written')
-  fs.writeFileSync(path.join(b.home, 'D', 'dsh', 'cordis.patch.yml'), '')
-  await install(b, { harnesses: only('deepseek-dsh'), env: { HOME: b.home, USERPROFILE: b.home, DSH_HOME: path.join(b.home, 'D', 'dsh') } })
-  assert.ok(fs.existsSync(path.join(b.home, 'D', 'dsh', 'asight-ca.mjs')) && fs.readFileSync(path.join(b.home, 'D', 'dsh', 'cordis.patch.yml'), 'utf8').includes(ROW))
-})
-
-test('W22 OpenCode: the plugin is OpenCode\'s own asight-ca.js with the Windows source (a Node sidecar or Bun), the watch list and notes of the Linux harness stay, and off removes the file and the directories asight made', async () => {
-  const b = box()
-  const dir = path.join(b.home, '.config', 'opencode')
-  const before = b.snapshot()
-  const r = await install(b, { harnesses: only('opencode') })
-  const plugin = path.join(dir, 'plugins', 'asight-ca.js')
-  const text = fs.readFileSync(plugin, 'utf8')
-  assert.ok(text.startsWith('// asight collector: trust plugin for OpenCode on Windows') && text.includes('tls.setDefaultCACertificates') && text.includes('globalThis.fetch'), 'both ways in the one file')
-  assert.ok(text.includes(fwdJson(path.join(b.dir, 'ca', 'asight-ca.pem'))) && text.includes(fwdJson(path.join(b.dir, 'run', 'trust'))), 'this user\'s CA file and marker directory')
-  assert.deepEqual(readManifest(b.dir).planned, [plugin], 'the plugin is the only automatic item of an opt-in harness: no shim, no launcher, no PATH')
-  assert.ok(r.plan.notes.some((n) => /@opencode-ai\/plugin/.test(n)), 'the note about its first run stays')
-  await uninstall(b, only('opencode'))
-  assert.deepEqual([...b.snapshot()], [...before])
-  assert.ok(!fs.existsSync(dir), 'the plugins directory asight created is gone')
-})
-
 test('W22: the paths a plugin file holds are forward-slashed whatever the host\'s separator (a Windows collector directory), for dsh and for OpenCode alike', () => {
   const ctx = { os: 'win32', home: raw`C:\Users\u`, env: new Map(), running: [], collectorDir: raw`C:\Users\u\.asight\collector`, caPem: raw`C:\Users\u\.asight\collector\ca\asight-ca.pem`, readText: () => null, listDir: () => [] }
   for (const h of ['deepseek-dsh', 'opencode']) {
@@ -407,23 +160,4 @@ test('W22: the paths a plugin file holds are forward-slashed whatever the host\'
     assert.match(plugin.data, /const MARKER_DIR = "C:\/Users\/u\/\.asight\/collector\/run\/trust"/, h)
     assert.ok(!/\\\\/.test(plugin.data.split('\n').filter((l) => /^const (CA_FILE|MARKER_DIR)/.test(l)).join('\n')), `${h}: no backslash in the two literals`)
   }
-})
-
-test('W19 + W23: all seven harnesses installed together — only the automatic files change, every file an opt-in item owns stays byte for byte, and off puts everything back', async () => {
-  const b = box()
-  const owned = [ // what a user has and an opt-in item would change: nothing here may move
-    b.put('.kimi-code/bin/kimi.exe', 'MZ'), b.put('AppData/Roaming/Code/User/settings.json', '{"http.proxy": "http://corp:3128"}\n'), b.put('.zcode/v2/setting.json', '{"httpProxy": ""}\n'),
-    b.put('AppData/Roaming/Microsoft/Windows/Start Menu/Programs/OpenCode.lnk', 'LNK'), b.put('AppData/Local/Programs/@opencode-aidesktop/OpenCode.exe', 'MZ'),
-  ]
-  const user = [b.put('.claude/settings.json', '{"env": {}}\n'), b.put('.codex/.env', 'K=1\n'), b.put('.zcode/cli/config.json', '{}\n'), b.put('.dsh/cordis.patch.yml', '- insert: [{ name: p }]\n'), b.put('.dsh/.env', 'K=1\n'), b.put('AppData/Local/hermes/.env', 'K=1\n')]
-  const before = b.snapshot()
-  const all = ALL
-  await install(b, { harnesses: all })
-  const changed = [...b.snapshot()].filter(([f, h]) => before.get(f) !== h).map(([f]) => f)
-  const planned = readManifest(b.dir).planned.filter((p) => !p.startsWith(b.dir))
-  assert.deepEqual(changed.sort(), [user[0], user[1], user[2], user[3], user[5], path.join(b.home, '.dsh', 'asight-ca.mjs'), path.join(b.home, '.config', 'opencode', 'plugins', 'asight-ca.js')].sort(), 'the trust entries and the two plugins; .dsh/.env waits for the proxy entry (Task 8)')
-  assert.deepEqual([...planned].sort(), changed.sort(), 'the manifest lists exactly what changed')
-  for (const f of owned) assert.equal(b.snapshot().get(f), before.get(f), `${path.relative(b.home, f)} is untouched`)
-  await uninstall(b, all)
-  assert.deepEqual([...b.snapshot()], [...before])
 })
