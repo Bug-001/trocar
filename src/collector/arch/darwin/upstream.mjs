@@ -1,20 +1,9 @@
-// upstream.mjs — what a group's upstream is: the hop its agent would have used without asight (RFC 4.9 §1 · §2.2; the rule and its reasons are 4.8 §2.2's, acceptance W72 and MA6). Pure functions of data plus one
-// read-only CLI — `scutil --proxy`, run through execTool, the runner arriving as a parameter: nothing here writes, opens a socket or reads a file, and it names no harness (the data it is given says what each group does).
-//
-// This is the darwin port of `arch/win32/upstream.mjs`, not a platform-free copy like ingress-config.mjs: the trunk — the rule's order, the protocol allowlist, the route-loop check, `bypassHit`, the tick shape of
-// `watchSystemProxy` — is that file's, carried verbatim (a change to the trunk there is a change here too); the reader and the login environment are darwin's own half, the two deltas 4.9 §1 · §2.2 name:
-//   · `readSystemProxy` = `scutil --proxy`, the system's own proxy dictionary, read as the eleven keys the rule needs. `HTTPSEnable` with `HTTPSProxy` and `HTTPSPort` is the https upstream; `HTTPEnable` with `HTTPProxy`
-//     and `HTTPPort` the http one, kept apart as 4.8 §2.2 keeps `https=` apart from `http=` (asight dials what an HTTPS request takes; the http one alone sends HTTPS direct, as WinINET's `http=` does).
-//     `ProxyAutoConfigEnable` is PAC's own flag (scutil has one: none of Windows' OPEN 27 type ambiguity — a script address left in the dictionary with the flag off is not a PAC), and `ExceptionsList` is the bypass
-//     table's dialect.
-//   · `readHkcuEnv` is deleted: darwin has no login-environment registry. The agent's own proxy is its entry's prior value, the only proxy asight can see; one set only in the user's terminal is invisible and gets the
-//     same cannot-read-your-terminal hint 4.8 §2.2 has (`envUnreadable`, the plan's and `status <h>`'s 「读不到你终端里的 HTTPS_PROXY」 line) — on darwin there is not even a registry to try.
-//
-// The rule, in order, per GROUP (one entry file, one port, one upstream, one bypass table):
-//   1. the agent's own proxy: the value its entry held before `on` (the manifest's `prior_value`);
-//   2. else, for a group that follows the system proxy and with it on: the `HTTPS*` keys of the scutil dictionary, with `ExceptionsList` as the bypass table; a PAC is not followed (`not-routed`);
-//   3. else direct (a TUN or another layer-3 VPN carries it as it did).
-// What the agent reached directly before asight (the system proxy's `ExceptionsList`, the agent's own `NO_PROXY`) is the group's bypass table, so it still is.
+// upstream.mjs — the darwin readers of the user's proxy settings (RFC 4.9 §1 · §2.2; 4.8 §2.2's translation and its reasons, acceptance W72 and MA6). Pure functions of data plus one read-only CLI —
+// `scutil --proxy`, run through execTool, the runner arriving as a parameter: nothing here writes, opens a socket or reads a file, and it names no harness. What a connection's upstream IS lives in one place,
+// the P7 chain (core/proxymode/chain.mjs, spec 4.11); this file only reads and translates what the chain and the topology take:
+//   · `readSystemProxy` = `scutil --proxy`, the system's own proxy dictionary, read as the eleven keys the chain needs. `ProxyAutoConfigEnable` is PAC's own flag (a script address left in the dictionary with
+//     the flag off is not a PAC), and `ExceptionsList` is the bypass table's dialect; `watchSystemProxy` polls it and says when it changed.
+//   · `translateBypass`, `parseProxyText`, `proxyAuthOf`: the proxy-text and bypass-table readers, the twin of arch/win32/upstream.mjs's (a change to one is a change to both).
 import { execTool } from '../../../off/exec.mjs'
 import { bypassHit, bypassRuleOf, upstreamOf } from '../../core/upstream-shape.mjs'
 
@@ -145,79 +134,6 @@ export function proxyAuthOf(text) {
   return { username: r.username, password: r.password }
 }
 
-const isLoopback = (host) => host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
-
-// ---- the rule (4.8 §2.2, the darwin reading of 4.9 §2.2) -------------------------------------------------------------------------------------------------
-
-const text = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
-const reasonOf = (r) => (r && typeof r.reason === 'string' && r.reason !== '' ? r.reason : 'absent')
-
-/** The scutil dictionary → the entry an HTTPS request takes: `HTTPSEnable` with `HTTPSProxy` (and `HTTPSPort`) is that entry — the port is a key of its own, so a host without one is a bare host, an HTTP proxy at 80. Without
- *  it, `SOCKSEnable` alone is `socks` (the system would send the connection through the SOCKS proxy: how is unmeasured, v1 does not follow it, as WinINET's `socks=` entry, 4.8 §2.2); `HTTPEnable` alone — or anything else —
- *  is `none` (macOS sends an HTTPS request through the secure web proxy, not the web one, exactly as WinINET proxies no HTTPS over `http=`: neither do we). */
-function httpsEntryOf(sp) {
-  if (sp.HTTPSEnable === true && text(sp.HTTPSProxy)) {
-    const port = sp.HTTPSPort
-    return { text: port == null ? sp.HTTPSProxy : `${sp.HTTPSProxy}:${port}` } // a port that is not a number stays in the text, and `parseProxyText` refuses it
-  }
-  return sp.SOCKSEnable === true ? { socks: true } : { none: true }
-}
-
-/**
- * upstreamFor({ group, prior, noProxy, systemProxy, ownPorts, branches, last }) → the upstream of one group (4.8 §2.2; the darwin deltas of 4.9 §1 · §2.2):
- *   { kind: 'direct' | 'http' | 'socks5', host?, port?, credentialed?, auth_ref?, source: 'agent' | 'system-proxy' | 'direct', egressDiffers?, hint?,
- *     reason?: 'not-routed' | 'route-loop', why?, protocol?, detail?, bypass: [row], untranslated: n, envUnreadable: bool }
- * Not routed (`reason`) has no `kind`: nothing to dial. `credentialed` is set only when true, and `auth_ref` names where the login lives (`prior:<group>`: the manifest's prior_value of the group's entry — on darwin the
- * entry is the only place, there being no login-environment registry); the login itself is in no answer: `proxyAuthOf` of the resolved text reads it.
- *   group        { g, followsSystemProxy: { http, ws } }: a proxy-mode group of the old route plan (that plan and its group table are gone);
- *   prior        the value the group's entry held before `on` (the manifest's prior_value), or null · noProxy the same entry's NO_PROXY, when the harness file names one;
- *   systemProxy  readSystemProxy()'s answer (the scutil dictionary);
- *   ownPorts     asight's own ports (the kernel's listeners, the engine's): an upstream on one is `route-loop`;
- *   branches     the harness's `proxy.branches` (a `ws` branch is what `egressDiffers` is about; the group's own data does not say);
- *   last         the group's answer before, once it is on: a system proxy that turned PAC or cannot be read leaves the group on it, with `hint` (4.8 OPEN 17); with none, such a group is not routed.
- * `envUnreadable` is true unless the upstream is the agent's own proxy: a proxy set only in the user's terminal is invisible (4.8 §2.2, OPEN 20), and on darwin there is no login environment to read either (4.9 §1).
- */
-export function upstreamFor({ group, prior = null, noProxy = null, systemProxy = null, ownPorts = [], branches = [], last = null } = {}) {
-  if (!group || typeof group !== 'object' || typeof group.g !== 'string') throw new TypeError('upstreamFor needs the group')
-  const follows = !!(group.followsSystemProxy && group.followsSystemProxy.http)
-  const finish = (source, o) => ({ ...o, source, ...(Object.hasOwn(o, 'bypass') ? {} : { bypass: [], untranslated: 0 }), envUnreadable: source !== 'agent' })
-  const refuse = (source, o) => finish(source, { reason: 'not-routed', ...o })
-  const loops = (p) => isLoopback(p.host) && ownPorts.includes(p.port)
-  const dial = (p, source, ref, table) => finish(source, { kind: p.kind, host: p.host, port: p.port, ...(p.credentialed ? { credentialed: true, auth_ref: ref } : {}), ...table })
-
-  // 1. the agent's own proxy: its entry's value — the only proxy asight can see on darwin (one set only in the user's terminal is invisible, 4.8 §2.2 OPEN 20)
-  const own = text(prior)
-  const ref = `prior:${group.g}`
-  const ownNoProxy = text(noProxy)
-  if (own) {
-    const p = parseProxyText(own)
-    if (!p.ok) return refuse('agent', { why: p.why, ...(p.protocol ? { protocol: p.protocol } : {}) })
-    if (loops(p)) return finish('agent', { reason: 'route-loop', host: p.host, port: p.port })
-    return dial(p, 'agent', ref, translateBypass(ownNoProxy, 'no-proxy'))
-  }
-
-  // 2. a group that follows the system proxy, with it on
-  if (follows) {
-    const keep = (why, extra = {}) => (last && last.kind ? { ...Object.fromEntries(Object.entries(last).filter(([k]) => k !== 'hint')), hint: why } : refuse('system-proxy', { why, ...extra }))
-    const sp = systemProxy
-    if (!sp || !sp.ok) return keep('system-proxy-unreadable', { detail: reasonOf(sp) })
-    if (sp.ProxyAutoConfigEnable === true) return keep('system-proxy-pac') // asight does not run a PAC script (4.8 §2.2); scutil has PAC's own flag, so a script address with the flag off is none of it (no OPEN 27 here)
-    const entry = httpsEntryOf(sp)
-    if (entry.socks) return refuse('system-proxy', { why: 'upstream-protocol', protocol: 'socks' })
-    if (entry.text !== undefined) {
-      const p = parseProxyText(entry.text)
-      if (!p.ok) return refuse('system-proxy', { why: p.why, ...(p.protocol ? { protocol: p.protocol } : {}) })
-      if (p.credentialed) return refuse('system-proxy', { why: 'upstream-unparseable', detail: 'credentials-in-system-proxy' }) // scutil holds no credentials in these keys: a client that read them is not the one that ran before asight
-      if (loops(p)) return finish('system-proxy', { reason: 'route-loop', host: p.host, port: p.port })
-      const differs = group.followsSystemProxy.ws === false && (branches || []).includes('ws')
-      return dial(p, 'system-proxy', null, { ...translateBypass(sp.ExceptionsList, 'scutil'), ...(differs ? { egressDiffers: true } : {}) })
-    }
-  }
-
-  // 3. direct: a TUN or another layer-3 VPN carries it as it did
-  return finish('direct', { kind: 'direct' })
-}
-
 // ---- reading scutil, and watching the system proxy (4.9 §1 · §2.2 · 4.8 §9; W71 → MA6) --------------------------------------------------------------------
 
 /** A `scutil` that did not answer, as the closed set of 1.6 §9.4 says it: killed by the timeout (`timeout`), not on the machine (`absent`), or failed (`denied`) — the darwin shape of the helper's code map on Windows. */
@@ -293,8 +209,8 @@ export function sameSystemProxy(a, b) {
 /**
  * watchSystemProxy({ exec, everyMs = 5000, initial, read, onError, timers }) → { on('change', fn), off, stop(), poll(), ready, last() }
  * Reads the system proxy at once (the baseline: no event) and every `everyMs`; a change of any of the eleven scutil keys — `ExceptionsList` by its content, only it having moved is one — or a turn to or from unreadable,
- * is one `change` event `{ before, after, changed: [scutil keys] }` (unreadable: all eleven). The daemon recomputes the followers' upstream with `upstreamFor({ systemProxy: after, last })` and reloads the kernel
- * (4.8 §2.2); this file writes nothing. `initial`: an answer the caller already has, so a change between its read and the first tick is not taken into the baseline. A read still running when the next tick comes is
+ * is one `change` event `{ before, after, changed: [scutil keys] }` (unreadable: all eleven). The model's door (arch/model-backends.mjs) hands `after` to the P7
+ * chain; this file writes nothing. `initial`: an answer the caller already has, so a change between its read and the first tick is not taken into the baseline. A read still running when the next tick comes is
  * waited for, not repeated (the CLI read is synchronous, so with the real reader it cannot overlap; the guard stays for an injected `read` that is not). 4.8 §1's helper-serial skip is not carried — darwin has no
  * resident helper (4.9 §1): `scutil` is one process per read, so a read that timed out holds nothing back and the next tick reads again (a read that does time out is still one `change` to unreadable, and the way back
  * one more: the daemon reloads the kernel only when the recomputed answers differ from `last`, 4.8 §2.2). A listener that throws costs the others nothing and is handed to `onError`; what the read itself throws is

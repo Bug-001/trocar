@@ -124,7 +124,7 @@ test('D38 the collector name maps and every harness trust reason are in the clos
 // goes is deleted from the table in the same change — this test turns red until it is.
 const LISTS_ONLY = /src\/(health\/codes|netenv\/findings[^/]*|cli\/schema|cli\/words|collector\/core\/codes)\.mjs$/
 const READER_ONLY = closedSets.CODES_BY_PART.legacy // old records still read (4.8 §12); no writer
-const DOCTOR_DERIVED = ['proxy-dead', 'proxy-unsupported', 'egress-differs', 'linger-off', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown'] // diagnose derives them from the facts (1.6 §9.6); src/netenv/findings.mjs is their producer (proxy-unsupported: from the setting's scheme and the harness's behaviour data, findings.mjs; its other writer, the old route plan, is gone)
+const DOCTOR_DERIVED = ['proxy-dead', 'proxy-unsupported', 'egress-differs', 'linger-off', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'system-proxy-pac'] // diagnose derives them from the facts (1.6 §9.6); src/netenv/findings.mjs is their producer (proxy-unsupported: from the setting's scheme and the harness's behaviour data, findings.mjs; its other writer, the old route plan, is gone)
 // 4.11 §3 ⑱ retires these on macOS / Windows; the macOS producers are gone (earlier work), the old win32 collector that still writes them goes once W69's guard (spec 0.1:161) moves.
 // Each must still have a producer: when the last one goes, this list and the table lose the code together.
 // 1.6 §9.5 (D49 ⑤): the system-proxy watcher's event code. Its last producer was the old win32 wiring; the model's doors watch the
