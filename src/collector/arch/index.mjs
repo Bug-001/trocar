@@ -16,33 +16,15 @@ export async function loadArch(platform = process.platform) {
     // download and the forwarder went with the kernel). The autostart unit is the scheduled-task module (Task 9(a)); the OS roots are read (windowsRoots through osRootsFor, 4.8 §6.2);
     // netFacts is this platform's part of the network facts (1.6 §9.7, 4.8 §10.1, Task 10): status / doctor / on's adopt reach it through
     // src/netenv/facts.mjs, and it reads the resident helper — no second daemon API. No createRedirector: the daemon runs the collector model on win32
-    // (runModelDaemon, doorPartsFor in model-backends.mjs), as on darwin;
-    // optIn is 4.8 §2.4's half the CLI and the daemon reach (1.6 §1.7): `forms` (what --opt-in may name), `plan` (the rows of the plan's 「要你点名的」
-    // section), `apply` (one named item, ledgered) and `check` (W68: the read-only re-check that the entries are still the ones used — status folds its
-    // findings into the same rows). `procs` is the caller's process table (listProcs' rows or the redirector's scan: the check judges them by the name list,
-    // `identify`). `record` is what the daemon's 5 s check does with the findings (once per occurrence, only §9.7's netenv failure codes) — on the arch object
-    // so the daemon, the one file allowed to wire arch in, stays platform-neutral about it. netFacts (Task 10(a)) is this platform's half of the network
-    // facts: topology rows, doctor findings, the §11 plan and the drift checks all draw from it through src/netenv/facts.mjs.
-    const [unit, { controlEndpoint }, { osRootsFor }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn, checkEntries, recordEntryFindings, groupsOf }, { gatherWin32Facts }] = await Promise.all([import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('../../off/os-roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
-    const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
+    // (runModelDaemon, doorPartsFor in model-backends.mjs), as on darwin.
+    // No opt-in half: the collector model (4.11) has no item the user names and none that needs an administrator (D57, CM25).
+    const [unit, { controlEndpoint }, { osRootsFor }, { gatherWin32Facts }] = await Promise.all([import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('../../off/os-roots.mjs'), import('./win32/netfacts.mjs')])
     return {
       os: 'win32', install: null, unit,
       controlEndpoint,
       refuseElevated: unit.refuseElevated, nodePreflight: unit.nodePreflight, runSupervisor: unit.runSupervisor,
       osRoots: ({ helper = null } = {}) => osRootsFor('win32')({ helper }),
       netFacts: gatherWin32Facts,
-      optIn: {
-        forms: ({ harnesses: h, ids = null } = {}) => optinFormsOf(of(h, ids)),
-        itemForms: ({ harnesses: h, ids = null } = {}) => optinItemForms(of(h, ids)),
-        plan: ({ harnesses: h, ids = null, optIn = [], manifest = null, resolve = null } = {}) => planOptIns({ groups: of(h, ids), optIns: optIn, manifest, resolve }),
-        apply: ({ harnesses: h, ids = null, ...rest }) => applyOptIn({ ...rest, groups: of(h, ids) }),
-        // `identify`: the caller's registry.match (the user's agents.json in it, D51) — required: a judge built here would silently drop that list
-        check: ({ harnesses: h, ids = null, procs = [], identify = null, ...rest }) => {
-          if (typeof identify !== 'function') throw new TypeError('optIn.check needs identify (registry.match): who a process is comes from the D51 name list the caller built')
-          return checkEntries({ ...rest, procs, identify, groups: of(h, ids) })
-        },
-        record: recordEntryFindings,
-      },
     }
   }
   if (platform === 'darwin') {

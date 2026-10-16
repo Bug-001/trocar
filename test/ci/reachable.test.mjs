@@ -31,6 +31,11 @@ export const UNREACHED = Object.freeze({
   'src/query/index.mjs': 'spec 3.5:44 names runNamed as the server\'s only entry, but src/server.mjs does not use it',
   'src/capture/desktop-steer.mjs': 'old CC-Desktop Clash Verge steer; only src/netenv/clash.mjs reached it (for socket discovery), and D49 deleted that. Removal waits on the backlog',
   'src/off/clash.mjs': 'the Verge strip / reload half of that steer, reached only through src/capture/desktop-steer.mjs; same backlog items',
+  // unwired with the Windows opt-in family (D57, 4.11 ⑱); deleted over the next commits, which take these lines out again
+  'src/collector/arch/win32/optin.mjs': 'the Windows opt-in items, deleted next (D57: no named item on macOS / Windows)',
+  'src/collector/arch/win32/elevate.mjs': 'the machine-level items\' elevation, deleted next (CM25: no admin step on macOS / Windows)',
+  'src/collector/arch/win32/shims.mjs': 'the .cmd shims and launchers of the opt-in items, deleted next (D57; the model\'s wrapper is wrapper.cs)',
+  'src/collector/arch/win32/userpath.mjs': 'the user PATH entry of the opt-in shim, deleted next (D57)',
 })
 
 const walk = (dir) => fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]) : []

@@ -130,7 +130,9 @@ const DOCTOR_DERIVED = ['proxy-dead', 'proxy-unsupported', 'egress-differs', 'li
 // 1.6 §9.5 (D49 ⑤): the system-proxy watcher's event code. Its last producer was the old win32 wiring; the model's doors watch the
 // system proxy (doorPartsFor) but do not record the change yet — the model gets that producer next, and this row goes with it.
 const MODEL_PENDING = ['netenv-changed']
-const WIN32_OLD = ['opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'needs-admin', 'win-doors-rejected', 'env-unreadable-fill', 'form-unsupported']
+// 4.11 §3 ⑱ codes whose last producer went with the Windows opt-in family; they leave the closed table next, and this list with them.
+const TABLE_PENDING = ['not-via-entry']
+const WIN32_OLD = ['opt-in-needed', 'shim-not-on-path', 'needs-admin', 'win-doors-rejected', 'env-unreadable-fill', 'form-unsupported']
 const RETIRED = ['cert-env-not-inherited', 'route-without-ca', 'upstream-ca-unreadable', 'optin-not-undone'] // 4.11 §3 ⑱, 4.6 (trust-store-error only)
 function producers() {
   const keyOf = new Map(Object.entries(CODE).map(([k, v]) => [v, k]))
@@ -140,7 +142,8 @@ function producers() {
 test('4.11 §3 ⑱ every code of the closed table has a producer in src/, or is named as reader-only / doctor-derived; the retired ones are in no writer list', () => {
   const has = producers()
   const all = [...new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS])]
-  assert.deepEqual(all.filter((c) => !has(c) && !READER_ONLY.includes(c) && !DOCTOR_DERIVED.includes(c) && !MODEL_PENDING.includes(c)), [], 'a code nothing writes: delete it from src/health/codes.mjs (and its finding), or name why it stays')
+  assert.deepEqual(all.filter((c) => !has(c) && !READER_ONLY.includes(c) && !DOCTOR_DERIVED.includes(c) && !MODEL_PENDING.includes(c) && !TABLE_PENDING.includes(c)), [], 'a code nothing writes: delete it from src/health/codes.mjs (and its finding), or name why it stays')
+  assert.deepEqual(TABLE_PENDING.filter((c) => has(c)), [], 'a pending code has a producer again: take it off TABLE_PENDING')
   assert.deepEqual(WIN32_OLD.filter((c) => !has(c)), [], 'the old win32 producer of this code is gone: drop the code from the table, the findings and this list (4.11 §3 ⑱)')
   const writers = new Set([...CODES.filter((c) => !READER_ONLY.includes(c)), ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS, ...TRUST_REASONS, ...Object.values(CODE), ...Object.keys(TRUST_REASON)])
   assert.deepEqual(RETIRED.filter((c) => writers.has(c)), [])
