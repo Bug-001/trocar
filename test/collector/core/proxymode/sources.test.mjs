@@ -128,7 +128,7 @@ test('yaml · the smallest reader: comments, quotes, nested maps, lists of scala
 })
 
 // flow leaves: one-line flow collections × where they sit (a top-level list item, a map value) × read through '*'; the measured seed is the row
-// asight itself writes into dsh's cordis.patch.yml (src/collector/harness/win32/deepseek-dsh.mjs inject), comment and all.
+// asight itself writes into dsh's cordis.patch.yml (the Windows overlay's inject at 60c8d165, since deleted; the Linux descriptor's inject writes the same flow form), comment and all.
 const FLOWS = [
   ['[{id: asight-ca, name: ./asight-ca.mjs}]', [{ id: 'asight-ca', name: './asight-ca.mjs' }]],
   ['[a, "b, c", \'d\'\'e\']', ['a', 'b, c', "d'e"]],

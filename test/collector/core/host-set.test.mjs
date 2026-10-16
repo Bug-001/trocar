@@ -11,6 +11,7 @@ import { tmpDir } from '../../helpers/tmp.mjs'
 import { hostSetOf } from '../../../src/collector/core/host-agent.mjs'
 import { bypassRuleOf } from '../../../src/collector/core/upstream-shape.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
+import { hostOf } from '../../../src/collector/core/config-read.mjs'
 
 const src = (rel) => fs.readFileSync(fileURLToPath(new URL(`../../../src/collector/${rel}`, import.meta.url)), 'utf8')
 const ALL = await loadHarnesses()
@@ -38,7 +39,14 @@ function box() {
 
 // ---------- hostSetOf: the hosts a host-tree form hands to the engine (4.8 §3.5, OPEN 22; W69 config half) ----------
 
-const KIMI_VSCODE = ALL.find((d) => d.name === 'kimi-code').win32.forms.find((f) => f.id === 'kimi-code.vscode') // the host set's data (hostSetOf becomes the model's default for a hostTree form)
+// The host set's data: the base descriptor's Kimi hosts and its hostTree form, with a relay reader of the shape the model wires (config.toml's base URLs,
+// as kimi-code.mjs reads them); hostSetOf becomes the model's default for a hostTree form.
+const KIMI = ALL.find((d) => d.name === 'kimi-code')
+const TOML_URL = /(?:^|[{,])[ \t]*(base_url|[A-Z][A-Z0-9_]*_BASE_URL)[ \t]*=[ \t]*(["'])([^"'\n]+)\2/gm
+const KIMI_VSCODE = {
+  ...KIMI.proxyMode.forms.find((f) => f.id === 'kimi-code.vscode'),
+  hosts: { defaults: [...KIMI.hosts], settings: { file: (ctx) => path.join(ctx.home, '.kimi-code', 'config.toml'), hostsOf: (text) => [...String(text).matchAll(TOML_URL)].map((m) => hostOf(m[3])).filter(Boolean) } },
+}
 const KIMI_DEFAULTS = ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn']
 /** `readSettings` the way the daemon gives it: the form's settings file, read through the ctx (`{ text, error }`). */
 const settingsOf = (ctx) => () => ctx.readTextOrError(KIMI_VSCODE.hosts.settings.file(ctx))
