@@ -50,3 +50,22 @@ for (const platform of ['darwin', 'win32']) {
     })
   }
 }
+
+// A second start while the first daemon lives: the lock it reads is a live daemon's, not a leftover. The control server refuses the start, and no
+// unclean-stop names a daemon still running (the read comes only after this process owns the collector, as runDaemon's order).
+for (const platform of ['darwin', 'win32']) {
+  test(`${platform}: a second model daemon while the first lives is refused and writes no unclean-stop`, { timeout: 20_000 }, async () => {
+    const w = await modelWorld({ os: platform, commands: ['codex'] })
+    fs.mkdirSync(w.dir, { recursive: true })
+    const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
+    await withScratchCwd(platform, async () => {
+      const start = () => startDaemon({ dir: w.dir, env: w.env, home: w.home, arch: { os: platform, controlEndpoint }, harnesses: w.harnesses, getuid: () => 501,
+        identity: () => ({ start_time: '111', boot_id: 'boot-1' }), model: { backends: { custody: w.custody, dirs: w.ctx.dirs }, parts: NOBODY } })
+      const a = await start()
+      try {
+        await assert.rejects(start(), 'the second start is refused while the first answers')
+        assert.deepEqual(flowsOf(w.dir).filter((l) => l.code === 'unclean-stop'), [], 'no unclean-stop names the live daemon')
+      } finally { await a.stop({ reason: 'test' }) }
+    })
+  })
+}

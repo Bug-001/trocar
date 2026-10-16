@@ -138,7 +138,8 @@ function agentListWatch({ home, write }) {
 }
 
 /** The previous run's lock, read before this start writes its own (4.6 §事件与码, D38): a lock still there means that daemon never finished its stop
- *  (doStop removes it last), so it is said as `failure {where:'daemon', code:'unclean-stop'}` — this start's first line. No lock: a clean stop. */
+ *  (doStop removes it last), so it is said as `failure {where:'daemon', code:'unclean-stop'}` before daemon-start. Called only after startControlServer claimed the
+ *  collector: before that the lock may be a live daemon's. No lock: a clean stop. */
 function noteUncleanStop(lock, failure) {
   let stale = null
   let unreadable = false
@@ -621,7 +622,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
 // engine are always the real ones.
 async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows }) {
-  noteUncleanStop(P.lock, failure) // first: the previous run's unclean stop is this start's first line, as on Linux
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
@@ -670,6 +670,8 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       return r
     }),
   } })
+  // only now: the control server refuses a start while another daemon answers, so a lock read before it may be a live daemon's (runDaemon's order)
+  noteUncleanStop(P.lock, failure)
   try {
     await collector.start()
     markReady()
