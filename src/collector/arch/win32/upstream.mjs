@@ -220,7 +220,7 @@ const CHANGED_NAMES = Object.freeze({ enable: 'ProxyEnable', server: 'ProxyServe
 /**
  * watchSystemProxy({ helper, everyMs = 5000, initial, read, onError, timers }) → { on('change', fn), off, stop(), poll(), ready, last() }
  * Reads the system proxy at once (the baseline: no event) and every `everyMs`; a change of `ProxyEnable`, `ProxyServer`, `ProxyOverride` or `AutoConfigURL`, or a turn to or from unreadable, is one `change` event
- * `{ before, after, changed: [registry value names] }` (unreadable: all four). The model's door (arch/model-backends.mjs) hands `after` to the P7 chain; this file writes nothing.
+ * `{ before, after, changed: [registry value names] }` (unreadable: all four). The model's door (arch/model-backends.mjs systemProxyWatch, over readSystemProxyChain) hands the P7 chain `chainSystemProxy(last())`; this file writes nothing.
  * `initial`: an answer the caller already has, so a change between its read and the first tick is not taken into the baseline. A read still running when the next tick comes is waited for, not repeated, and a tick is skipped while a `reg-read`
  * that timed out is still out at the helper (`helper.abandoned('reg-read')`, 4.8 §1): nothing is read, so nothing is said, and the first tick after the late answer reads again (a read that does time out is still one `change` to unreadable, and the way back one more: the
  * daemon reloads the kernel only when the recomputed answers differ from `last`, 4.8 §2.2). A listener that throws costs the others

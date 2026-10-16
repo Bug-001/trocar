@@ -60,6 +60,14 @@ export async function backendsFor({ os, home, run = null, env = process.env, fs 
   throw new Error(`the collector model runs on macOS and Windows, not ${os}`)
 }
 
+/** The system proxy the door hands the P7 chain (4.11 P7; D49): the arch's watcher over `read`, each answer put in the chain's shape by the arch's own
+ *  `chainSystemProxy` ({ url, bypass } · { pac } · { ok: false, why } · null) — the one place a raw reader answer (the scutil dictionary, the registry values)
+ *  becomes what core/proxymode/chain.mjs reads; the chain never sees a raw answer. `io`: what `read` needs ({ helper } on win32). → { now(), stop() }. */
+export async function systemProxyWatch({ up, read, io = {}, failure = () => {} }) {
+  const watch = up.watchSystemProxy({ ...io, read, initial: await read(io).catch(() => null), onError: failure })
+  return { now: () => up.chainSystemProxy(watch.last()), stop: () => watch.stop() }
+}
+
 /** The door's readers of the world for the model collector (4.11 §1, createModelCollector): who owns a socket and that pid's facts, its env / cwd /
  *  parent (P7), how a proxy address is dialled, the system proxy now (a watcher's last read), the process table (P12). → { ownerOf, factsOf, proc,
  *  proxyOf, systemProxy, procTable, close }. Read-only, as the arch's own modules are; a test passes its own parts to the daemon instead. */
@@ -75,14 +83,14 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
     const execOf = (file, args, o = {}) => execTool(file, args, { ...o, run: runAsync })
     const run = { exec: runAsync }
     parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, run), proc: { envOf: (p, n) => pi.envOf(p, n, run), cwdOf: (p) => pi.cwdOf(p, run), parentOf: (p) => pi.parentOf(p, run) }, close: () => {} }
-    watch = up.watchSystemProxy({ initial: await up.readSystemProxy().catch(() => null), onError: (e) => failure('netenv', e) })
+    watch = await systemProxyWatch({ up, read: up.readSystemProxy, failure: (e) => failure('netenv', e) })
   } else {
     // no declared registry keys (plan §E.7 ruling 4): the model reads a policy value through policy.mjs (reg.exe), not this helper
     const [{ ownerOfSocket }, pi, { startHelper }] = await Promise.all([import('./win32/socktable.mjs'), import('./win32/procinfo.mjs'), import('./win32/helper.mjs')])
     const helper = startHelper({ env, onFailure: event })
     const r = pi.procReaders({ helper })
     parts = { ownerOf: (q) => ownerOfSocket({ helper, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, { helper }), proc: r, close: () => helper.close() }
-    watch = up.watchSystemProxy({ helper, initial: await up.readSystemProxy({ helper }).catch(() => null), onError: (e) => failure('helper', e) })
+    watch = await systemProxyWatch({ up, read: up.readSystemProxyChain, io: { helper }, failure: (e) => failure('helper', e) })
   }
-  return { ...parts, proxyOf, systemProxy: () => watch.last(), procTable: () => listProcs({ platform: os, env }), close: () => { watch.stop(); parts.close() } }
+  return { ...parts, proxyOf, systemProxy: watch.now, procTable: () => listProcs({ platform: os, env }), close: () => { watch.stop(); parts.close() } }
 }

@@ -1,8 +1,9 @@
 // upstream.mjs — the darwin readers of the user's proxy settings (RFC 4.9 §1 · §2.2; 4.8 §2.2's translation and its reasons, acceptance W72 and MA6). Pure functions of data plus one read-only CLI —
 // `scutil --proxy`, run through execTool, the runner arriving as a parameter: nothing here writes, opens a socket or reads a file, and it names no harness. What a connection's upstream IS lives in one place,
-// the P7 chain (core/proxymode/chain.mjs, spec 4.11); this file only reads and translates what the chain and the topology take:
-//   · `readSystemProxy` = `scutil --proxy`, the system's own proxy dictionary, read as the eleven keys the chain needs. `ProxyAutoConfigEnable` is PAC's own flag (a script address left in the dictionary with
+// the P7 chain (core/proxymode/chain.mjs, spec 4.11); this file reads the system proxy and puts it in the shape that chain takes:
+//   · `readSystemProxy` = `scutil --proxy`, the system's own proxy dictionary, read as eleven keys. `ProxyAutoConfigEnable` is PAC's own flag (a script address left in the dictionary with
 //     the flag off is not a PAC), and `ExceptionsList` is the bypass table's dialect; `watchSystemProxy` polls it and says when it changed.
+//   · `chainSystemProxy` = that dictionary in the chain's shape, the twin of arch/win32/upstream.mjs's: the model's door (arch/model-backends.mjs systemProxyWatch) hands the chain nothing else.
 //   · `translateBypass`, `parseProxyText`, `proxyAuthOf`: the proxy-text and bypass-table readers, the twin of arch/win32/upstream.mjs's (a change to one is a change to both).
 import { execTool } from '../../../off/exec.mjs'
 import { bypassHit, bypassRuleOf, upstreamOf } from '../../core/upstream-shape.mjs'
@@ -134,6 +135,23 @@ export function proxyAuthOf(text) {
   return { username: r.username, password: r.password }
 }
 
+const text = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
+
+/** chainSystemProxy(sp) → the chain's systemProxy, the twin of win32's: null (no proxy an HTTPS request takes) · { url, bypass } · { pac: true } (never executed) ·
+ *  { ok: false, why } (unreadable, or an entry asight cannot dial). The entry is the one an HTTPS request takes: `HTTPSEnable` with `HTTPSProxy` (and `HTTPSPort`,
+ *  a key of its own — a host without one is a bare host); `HTTPEnable` alone is none (macOS sends HTTPS through the secure web proxy, as WinINET proxies no HTTPS
+ *  over `http=`); `SOCKSEnable` alone is `upstream-protocol` (not followed, as WinINET's `socks=`); credentials are refused as on Windows. */
+export function chainSystemProxy(sp) {
+  if (!sp || !sp.ok) return { ok: false, why: 'system-proxy-unreadable' }
+  if (sp.ProxyAutoConfigEnable === true) return { pac: true }
+  if (sp.HTTPSEnable !== true || text(sp.HTTPSProxy) === null) return sp.SOCKSEnable === true ? { ok: false, why: 'upstream-protocol' } : null
+  const p = parseProxyText(sp.HTTPSPort == null ? sp.HTTPSProxy : `${sp.HTTPSProxy}:${sp.HTTPSPort}`) // a port that is not a number stays in the text, and parseProxyText refuses it
+  if (!p.ok) return { ok: false, why: p.why }
+  if (p.credentialed) return { ok: false, why: 'upstream-unparseable' }
+  const host = p.host.includes(':') ? `[${p.host}]` : p.host
+  return { url: `${p.kind}://${host}:${p.port}`, bypass: translateBypass(sp.ExceptionsList, 'scutil').bypass }
+}
+
 // ---- reading scutil, and watching the system proxy (4.9 §1 · §2.2 · 4.8 §9; W71 → MA6) --------------------------------------------------------------------
 
 /** A `scutil` that did not answer, as the closed set of 1.6 §9.4 says it: killed by the timeout (`timeout`), not on the machine (`absent`), or failed (`denied`) — the darwin shape of the helper's code map on Windows. */
@@ -209,8 +227,8 @@ export function sameSystemProxy(a, b) {
 /**
  * watchSystemProxy({ exec, everyMs = 5000, initial, read, onError, timers }) → { on('change', fn), off, stop(), poll(), ready, last() }
  * Reads the system proxy at once (the baseline: no event) and every `everyMs`; a change of any of the eleven scutil keys — `ExceptionsList` by its content, only it having moved is one — or a turn to or from unreadable,
- * is one `change` event `{ before, after, changed: [scutil keys] }` (unreadable: all eleven). The model's door (arch/model-backends.mjs) hands `after` to the P7
- * chain; this file writes nothing. `initial`: an answer the caller already has, so a change between its read and the first tick is not taken into the baseline. A read still running when the next tick comes is
+ * is one `change` event `{ before, after, changed: [scutil keys] }` (unreadable: all eleven). The model's door (arch/model-backends.mjs systemProxyWatch) hands the P7
+ * chain `chainSystemProxy(last())`; this file writes nothing. `initial`: an answer the caller already has, so a change between its read and the first tick is not taken into the baseline. A read still running when the next tick comes is
  * waited for, not repeated (the CLI read is synchronous, so with the real reader it cannot overlap; the guard stays for an injected `read` that is not). 4.8 §1's helper-serial skip is not carried — darwin has no
  * resident helper (4.9 §1): `scutil` is one process per read, so a read that timed out holds nothing back and the next tick reads again (a read that does time out is still one `change` to unreadable, and the way back
  * one more: the daemon reloads the kernel only when the recomputed answers differ from `last`, 4.8 §2.2). A listener that throws costs the others nothing and is handed to `onError`; what the read itself throws is
