@@ -10,8 +10,8 @@
 //   · `bypassRuleOf(e)` — is a bypass row one of the four kinds with a well-formed value? Both arches' `translateBypass` ask it of every row before it enters
 //     a table (so an entry that cannot be matched is counted `untranslated`, never written), and `host-agent.mjs`'s `hostSetOf` asks it of a host-tree
 //     name (a name the matcher cannot meet is `dropped`, never a line that looks like capture and is none).
-//   · `bypassHit(bypass, host)` — the one matcher: does a CONNECT target hit one of the group's bypass rows? The door redirector's own dial decision
-//     (core/engine/door-redirector.mjs) and both arches' tests read the same answer, so the rule and its test can never drift apart.
+//   · `bypassHit(bypass, host)` — the one matcher: does a CONNECT target hit one of the group's bypass rows? The model door's own dial decision
+//     (core/proxymode/collector.mjs) and both arches' tests read the same answer, so the rule and its test can never drift apart.
 // Node built-ins only; imports nothing of asight.
 
 const HOST_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$/
@@ -67,7 +67,7 @@ const normHost = (host) => String(host).trim().toLowerCase().replace(/^\[|\]$/g,
 
 /**
  * bypassHit(bypass, host) → boolean: does the CONNECT target `host` (a name or an address literal, no port) hit one of the group's bypass rows? The one
- * matcher the door redirector's dial decision reads (4.8 §5.2), and the one `bypassRuleOf`'s row shape says the same as. `<local>` is a name without a dot;
+ * matcher the model door's dial decision reads (4.8 §5.2), and the one `bypassRuleOf`'s row shape says the same as. `<local>` is a name without a dot;
  * a suffix is the name and its subdomains on a dot boundary; a range holds only IPv4 literals.
  */
 export function bypassHit(bypass, host) {

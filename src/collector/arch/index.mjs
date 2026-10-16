@@ -49,8 +49,7 @@ export async function loadArch(platform = process.platform) {
     // 4.9 §1 (as D47 rewrote it): no machine-wide helper either (install: null — nothing on darwin needs privilege: ps / lsof / scutil / security are plain CLIs, run on demand);
     // no kernel to download or verify either — the ENGINE is the only local proxy (its per-group doors), so `on` has no prepare / ensureKernel arms at all (the win32 twin keeps
     // its own). The autostart unit is the launchd module (§4); the OS roots are read (darwinRoots through osRootsFor: the keychain-administered anchors + bundled + SystemRootCertificates, 4.9 §6.2);
-    // netFacts is darwinNetFacts (1.6 §9.7's archFacts). createRedirector is the whole darwin collector (wiring.mjs) — built lazy (4.9 §1 接线): the
-    // daemon's construction (with dir and the sinks) builds everything and starts nothing, loadParts' {env}-only one gets the shell.
+    // netFacts is darwinNetFacts (1.6 §9.7's archFacts). No createRedirector: the daemon runs the collector model (runModelDaemon).
     // No opt-in half: the collector model (4.11) has no item the user names and none that needs an administrator (CM25).
     const [unit, { controlEndpoint }, { osRootsFor }, { darwinNetFacts }] = await Promise.all([import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('../../off/os-roots.mjs'), import('./darwin/netfacts.mjs')])
     return {

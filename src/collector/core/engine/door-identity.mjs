@@ -2,8 +2,8 @@
 // peer 4-tuple IS the agent's outbound socket, so ONE targeted owner question (`ownerOf`) answers its pid and ONE targeted facts question (`factsOf`) that
 // pid's facts, cached by pid + start time (a wrapped pid is a new life, asked again). Then, in order: this user (`uid`) → the host tree (a form whose
 // `hosts.processes` names the host program: its connections are the door harness's only for the targets on the applied host set) → the D51 name list
-// (`identify`, registry.match), with `process-unknown` said once per (door group, name). The old door redirector and the collector model's daemon half
-// both ask this; neither keeps its own copy. Names no harness and no OS; execs nothing itself.
+// (`identify`, registry.match), with `process-unknown` said once per (door group, name). The collector model's doors
+// (core/proxymode/collector.mjs) ask this; nothing keeps its own copy. Names no harness and no OS; execs nothing itself.
 import { processNames, WIDE } from '../../../off/identity.mjs'
 import { hostFormOf } from '../host-agent.mjs'
 
