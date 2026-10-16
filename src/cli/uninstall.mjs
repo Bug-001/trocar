@@ -31,6 +31,7 @@ import { readStateFile } from '../off/state.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { signHelperPath } from '../collector/arch/model-backends.mjs'
 import { NATIVE } from '../collector/arch/darwin/native.mjs'
+import { daemonLogPaths } from '../collector/arch/daemon-logs.mjs'
 import { isModelOs } from '../collector/model-install.mjs' // macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
 
 /** Is capture online (1.6 §1.1 「下线」)? → null when offline, else { on, holders, unknown } — `on`: harnesses whose desired state is on or that still have
@@ -249,10 +250,10 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       if (!m) rm(path.join(w.dir, 'ca'))
       const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
       // `netenv.json` is the adopted records and the topology, for the board: asight's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)
-      // `logs/` is the daemon's own console (D46): asight's own file, removed with the rest of it — by its manifest entries (role 'daemon-log'), so the receipt names the files; the directory follows when empty (or whole, when there is no manifest to name them)
+      // `logs/` is the daemon's own console (D46, 0.2:130): asight's own, removed whole now that the daemon has stopped — its manifest entries (role 'daemon-log', Linux)
+      // first so the receipt names the files, then the directory, which on macOS no entry names (launchd writes the LaunchAgent's StandardOutPath / StandardErrorPath itself)
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'daemon-log') : []) rm(f.path)
-      if (!m || m.unsupported) rm(path.join(w.dir, 'logs'))
-      removeEmptyDirs([path.join(w.dir, 'logs')], fs)
+      rm(daemonLogPaths(home).dir)
       // the darwin key custody's signing helper (install put it there, 4.11 P1): it goes once no root key is left for it to remove — after undoRootKeys, which needs it
       const helper = w.platform === 'darwin' && !(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) ? signHelperPath(home, NATIVE.signHelper) : null
       for (const p of [path.join(w.dir, 'run'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p)

@@ -124,3 +124,34 @@ test('invariant 5 · D38: a key the custody cannot reach now stays recorded, lis
   assert.equal(fs.existsSync(helper), true)
   assert.ok(readManifest(w.dir).entries.some((e) => e.kind === 'root-key'))
 })
+
+// 0.2:130 (D46): the daemon's console logs, which launchd writes (the LaunchAgent's StandardOutPath / StandardErrorPath, 4.9) and which no manifest
+// entry names on the model path, go with uninstall once the daemon has stopped; the user's files stay byte for byte; a refused uninstall leaves them
+const userTree = (home) => Object.fromEntries(Object.entries(tree(home)).filter(([p]) => !p.startsWith(path.join(home, '.asight'))).map(([p, b]) => [path.relative(home, p), b]))
+const withLogs = (w) => {
+  const logs = path.join(w.dir, 'logs')
+  fs.mkdirSync(logs, { recursive: true })
+  for (const n of ['daemon-out.log', 'daemon-err.log']) fs.writeFileSync(path.join(logs, n), `${n}: what launchd caught\n`)
+  return logs
+}
+test('0.2:130 · offline uninstall removes ~/.asight/collector/logs (daemon-out / daemon-err) — the user\'s files byte for byte', async () => {
+  const w = await installed()
+  const twin = await installed() // the same uninstall with no logs: what it leaves of the user's is the yardstick
+  const logs = withLogs(w)
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.equal(fs.existsSync(logs), false, `the daemon's logs are gone: ${leftUnder(w.home).join(', ')}`)
+  assert.ok(receipt.removed.includes(logs), 'the receipt names them')
+  assert.equal((await uninstall(twin)).exit, 0)
+  assert.deepEqual(userTree(w.home), userTree(twin.home), 'outside ~/.asight the user\'s files are byte for byte what the same uninstall leaves without logs')
+})
+test('0.2:130 · a refused uninstall (collectors-online) leaves the daemon\'s logs', async () => {
+  const w = await installed()
+  const logs = withLogs(w)
+  fs.writeFileSync(path.join(w.dir, 'state.json'), JSON.stringify({ version: 2, updated_at: null, harnesses: { codex: { desired: 'on', since: new Date().toISOString() } } }))
+  const before = tree(w.home)
+  const { receipt, exit } = await uninstall(w)
+  assert.deepEqual([exit, receipt.code], [1, 'collectors-online'])
+  assert.deepEqual(fs.readdirSync(logs).sort(), ['daemon-err.log', 'daemon-out.log'])
+  assert.deepEqual(tree(w.home), before)
+})
