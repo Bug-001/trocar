@@ -132,7 +132,9 @@ const DOCTOR_DERIVED = ['proxy-dead', 'proxy-unsupported', 'egress-differs', 'li
 const MODEL_PENDING = ['netenv-changed']
 // 4.11 §3 ⑱ codes whose last producer went with the Windows opt-in family; they leave the closed table next, and this list with them.
 const TABLE_PENDING = ['not-via-entry', 'optin-failed', 'needs-admin']
-const WIN32_OLD = ['opt-in-needed', 'shim-not-on-path', 'win-doors-rejected', 'env-unreadable-fill', 'form-unsupported']
+// shim-not-on-path is not here: Linux's launch shim (harness/kimi-code.mjs inject) is its producer, and kimi's trust refine names it only
+// where that shim exists (not on an OS its proxyMode forms cover) — guarded in test/collector/harness/kimi-code.test.mjs.
+const WIN32_OLD = ['opt-in-needed', 'win-doors-rejected', 'env-unreadable-fill', 'form-unsupported']
 const RETIRED = ['cert-env-not-inherited', 'route-without-ca', 'upstream-ca-unreadable', 'optin-not-undone'] // 4.11 §3 ⑱, 4.6 (trust-store-error only)
 function producers() {
   const keyOf = new Map(Object.entries(CODE).map(([k, v]) => [v, k]))

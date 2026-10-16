@@ -142,7 +142,7 @@ const A = (run) => cmd(run) // asight's own, in the platform's shell
 
 test('W36 one entry per code row of §10.4 — no more, no less — and each entry\'s own output is a finding the schema accepts (a win-only code defines every field; no run holds a placeholder)', () => {
   assert.deepEqual(Object.keys(FINDINGS_WIN32), [
-    'not-routed', 'shim-not-on-path', 'entry-changed', 'egress-differs', 'elevated-agent', 'proxy-dead',
+    'not-routed', 'entry-changed', 'egress-differs', 'elevated-agent', 'proxy-dead',
     'upstream-unreachable', 'engine-port-taken', 'forwarder-down', 'form-unsupported', 'proxy-unsupported',
     'system-proxy-pac', 'other-redirector', 'socktable-unavailable', 'cause-unknown',
   ])
@@ -184,8 +184,6 @@ const LITERALS = {
       why: '这个形态没有 asight 能用的入口',
       commands: [cmd('kimi-code 的这个形态没有入口:改用它的 CLI 形态', 'gui'), A('asight status kimi-code')] },
   },
-  'shim-not-on-path': { ctx: CTX({ h: 'kimi-code', fm: { entryPlace: { kind: 'shim', command: 'kimi' } } }),
-    commands: [cmd('where.exe kimi'), A('asight install'), cmd('或卸掉机器级的那一份,改用用户级安装', 'gui')], verify: 'where.exe kimi 第一个是 asight 的 shim' },
   'entry-changed': { ctx: CTX({ h: 'z-code' }), commands: [A('asight on z-code')], verify: 'asight status z-code' },
   'egress-differs': { ctx: CTX({ h: 'codex' }), commands: [A('asight off codex')], verify: '—' },
   'fallback-active': { ctx: CTX({ h: 'codex', enginePort: 17990 }),

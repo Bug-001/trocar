@@ -43,7 +43,7 @@ export function judge(descriptor, ctx, { markerDir = null, caPem = null, runtime
   const layers = (descriptor.layers ? descriptor.layers(ctx) : []).filter(Boolean)
   const marker = markerDir && caPem ? markerLayer({ dir: markerDir, pid: ctx.pid, startTicks: ctx.startTicks, caPem, readText: (f) => readText(f) }) : null
   if (marker) layers.push(marker)
-  const trust = createTrustChecker({ caCertPem }).check(descriptor.trust, { environ: ctx.environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion, readText: ctx.readText, collectorDir, exe } })
+  const trust = createTrustChecker({ caCertPem }).check(descriptor.trust, { environ: ctx.environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion, readText: ctx.readText, collectorDir, exe, os: ctx.os } })
   const live = { ...ctx, env: effectiveEnv(ctx.environ, layers.filter((l) => !l.ignored)).env }
   const proxyEntries = descriptor.proxies ? descriptor.proxies(live) : []
   return { trust, layers, hosts: descriptor.configHosts ? descriptor.configHosts(live) : [], proxies: proxyEntries.map((p) => p.url), proxyEntries }

@@ -65,13 +65,6 @@ export const FINDINGS_WIN32 = {
     },
     verify: (c) => `asight status ${c.h}:那一支「在路径上 · 是」`,
   },
-  'shim-not-on-path': {
-    commands: (c) => {
-      const command = c.fm && c.fm.entryPlace && c.fm.entryPlace.command
-      return [...(command ? [ps(`where.exe ${command}`)] : []), asight(c, 'asight install'), gui('或卸掉机器级的那一份,改用用户级安装')]
-    },
-    verify: (c) => (c.fm && c.fm.entryPlace && c.fm.entryPlace.command ? `where.exe ${c.fm.entryPlace.command} 第一个是 asight 的 shim` : `asight status ${c.h}`),
-  },
   'entry-changed': { commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` },
   'egress-differs': { commands: (c) => [asight(c, `asight off ${c.h}`)], verify: () => '—' },
   'elevated-agent': {

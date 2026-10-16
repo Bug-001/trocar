@@ -92,6 +92,29 @@ test('kimi-code: the shim-set NODE_EXTRA_CA_CERTS trusts; without it the reason 
   } finally { s.done() }
 })
 
+// 4.11 §3 ⑱ / 1.6:517: an OS the proxy model covers (the OSes of kimi's own proxyMode forms) has no launch shim, so no reason names one there —
+// a missing shim file is not news, a leftover one is not a door; the untrusted kimi keeps the generic reason (var-missing / ca-not-in-file / …).
+test('kimi-code: on a proxy-model OS the reason never names a launch shim, with or without a shim file; the npm build is still told apart', () => {
+  const s = sandbox()
+  try {
+    const dir = path.join(s.home, '.asight', 'collector')
+    s.put('.asight/collector/ca/asight-ca.pem', CA.certPem)
+    const proxyOs = [...new Set(kimi.proxyMode.forms.flatMap((f) => f.os))]
+    assert.ok(proxyOs.length > 0)
+    const userCa = s.put('corp.pem', OTHER.certPem)
+    for (const os of proxyOs) {
+      const why = (env, { exe = SEA, argv = ['kimi-code'] } = {}) => judge(kimi, ctxFor({ home: s.home, env, argv, os }), { exe, collectorDir: dir }).trust
+      for (const shim of [null, 'kimi', 'kimi.cmd']) {
+        fs.rmSync(path.join(dir, 'bin'), { recursive: true, force: true })
+        if (shim) s.put(`.asight/collector/bin/${shim}`, 'x\n')
+        assert.equal(why({}).reason, 'var-missing', `${os}, shim file ${shim}`)
+        assert.equal(why({ NODE_EXTRA_CA_CERTS: userCa }).reason, 'ca-not-in-file', `${os}, shim file ${shim}, the user's own CA file`)
+        assert.equal(why({}, { exe: '/usr/bin/node', argv: ['node', '/usr/local/bin/kimi'] }).reason, 'kimi-npm-no-shim', `${os}: the npm build`)
+      }
+    }
+  } finally { s.done() }
+})
+
 test('kimi-code inject: a 0755 shim in the collector bin dir and one sentinel PATH line after the installer\'s in each rc that has it; nothing without the binary or that line (T10)', () => {
   const s = sandbox()
   try {

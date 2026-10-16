@@ -144,7 +144,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     if (marker) layers.push(marker)
     // what a harness's refine may look at besides argv and env: the exe's runtime release (lazily), its own files
     // (through the same reader, so an unreadable one is reported) and asight's collector dir (a launch shim lives there)
-    let t = envUnreadable ? { trusted: false, reason: 'environ-unreadable', var: null, via: facts.envError ?? null } : trust.check(d.trust, { environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null } })
+    let t = envUnreadable ? { trusted: false, reason: 'environ-unreadable', var: null, via: facts.envError ?? null } : trust.check(d.trust, { environ, layers, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null, os: facts.os ?? null } })
     if (!t.trusted && t.reason === 'var-missing' && registry.isLongLived(d, facts)) t = { ...t, reason: 'env-frozen' }
     // The launch environment is never read on this OS (envRead: false, 4.8 §5.4's decision): a fill-mode layer only fills
     // names the process's own environment lacks, and whether it lacks them cannot be seen, so a trust that needs a fill
@@ -153,7 +153,7 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     // a broken connection.
     if (facts.env === null && facts.envRead === false && t.trusted) {
       const solid = layers.filter((l) => !l || l.mode !== 'fill')
-      if (solid.length !== layers.length && !trust.check(d.trust, { environ, layers: solid, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null } }).trusted) {
+      if (solid.length !== layers.length && !trust.check(d.trust, { environ, layers: solid, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null, os: facts.os ?? null } }).trusted) {
         t = { trusted: false, reason: 'env-unreadable-fill', var: null, via: null, file: null }
       }
     }

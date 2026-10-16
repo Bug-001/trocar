@@ -125,6 +125,8 @@ const proxyMode = {
   blockers: [],
 }
 
+const PROXY_MODEL_OS = new Set(proxyMode.forms.flatMap((f) => f.os)) // the OSes with no launch shim (refine below)
+
 export default {
   name: 'kimi-code',
   runtime: 'node',
@@ -145,13 +147,13 @@ export default {
     chain: [{ var: MARKER_VAR, semantic: 'append' }, { var: CA_VAR, semantic: 'append' }],
     // the reason a kimi does not trust asight: the npm build has no shim entry; no shim was installed (install said
     // why); else it did not start through the shim. A CA file of asight's own that is gone keeps the generic reason.
-    // The shim file is `bin/kimi` on POSIX and `bin\kimi.cmd` on Windows (arch/win32's opt-in item) — both are
-    // looked for on every OS, so the reason does not name a door that is really there (a Windows test machine measured the
-    // mislabel live: flows rows said shim-not-on-path while the shim resolved first on the session PATH).
-    refine: (r, env, { argv = [], exe = null, readText = () => null, collectorDir = null }) => {
+    // The launch shim exists only off the proxy model (Linux): on an OS kimi's proxyMode forms cover (4.11 §3 ⑱) the reason never names a
+    // shim — a missing shim file is not news there and a leftover one is not a door — and stays the generic one (var-missing / ca-not-in-file / …).
+    refine: (r, env, { argv = [], exe = null, readText = () => null, collectorDir = null, os = null }) => {
       if (r.var === MARKER_VAR || !['var-missing', 'ca-not-in-file', 'file-unreadable'].includes(r.reason)) return null
       if (r.reason !== 'var-missing' && collectorDir && String(r.file || '').startsWith(collectorDir + path.sep)) return null
       if (normalizeName(exe || argv[0]) === 'node') return 'kimi-npm-no-shim' // the npm build on every OS: node's name, not a POSIX path (node.exe, node22)
+      if (PROXY_MODEL_OS.has(os)) return null
       const shim = collectorDir && (readText(path.join(collectorDir, 'bin', 'kimi')) != null || readText(path.join(collectorDir, 'bin', 'kimi.cmd')) != null)
       return collectorDir && !shim ? 'shim-not-on-path' : 'kimi-not-via-shim'
     },
