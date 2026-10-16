@@ -27,7 +27,7 @@ import { CODE } from './core/codes.mjs'
 export const MODEL_OS = Object.freeze(['darwin', 'win32'])
 export const isModelOs = (os) => MODEL_OS.includes(os)
 
-const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // manifest.mjs ROOT_STORE_KIND's keys: the store the user root goes into
+const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // the store the user root goes into (src/off/root-store.mjs removes it on uninstall)
 const ROOT_SUBJECT = 'asight local root'
 const NOT_USERS = CODE.notUsersFile
 const errText = (e) => String((e && e.message) || e)

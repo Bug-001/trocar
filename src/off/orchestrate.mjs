@@ -32,8 +32,7 @@ import { plistFilePath, AGENT_LABEL, agentState, disableAgent } from './darwin.m
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask } from './win32.mjs'
-import { undoOptIns } from './win32-optin.mjs'
-import { undoDarwinOptIns } from './darwin-optin.mjs'
+import { rootStore } from './root-store.mjs'
 import { runEventWriter } from './events.mjs'
 import { confirm } from './io.mjs'
 import { describeEntry } from './journal.mjs'
@@ -294,25 +293,18 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     for (const k of u.kept_backups.filter((x) => x.at === at.toISOString())) note(CODE_OFF.backupKept, { path: k.path, backup: k.backup }, `${k.path}: ${k.reason}`)
     u.orphan_backups = orphanBackups({ home: w.home, manifest, fs: w.fs })
     if (u.orphan_backups.length) u.notes.push(`backups that no manifest entry names (leave them, or delete them if you do not need them): ${u.orphan_backups.join(', ')}`)
-    // the opt-in items (4.8 §2.4): user-level ones undone inline by kind (win32-optin.mjs's registry), machine-level ones named for the
-    // operator — asight never elevates on its own, and an item left is a not-done off (1.6 R3)
-    if (manifest.entries.some((e) => e && e.scope && e.scope !== 'agent')) {
-      const o = await (w.deps.undoOptIns || (w.platform === 'darwin' ? undoDarwinOptIns : undoOptIns))({ manifest, ids, exec: w.exec, env: w.env, fs: w.fs, home: w.home })
-      for (const r of o.results) {
-        if (r.result === 'needs-admin') { u.left.push({ path: r.path, result: 'needs-admin', reason: `${r.reason}${r.command ? `: ${r.command}` : ''}` }); u.failures.push({ code: 'needs-admin', path: r.path, reason: r.reason }) }
-        else if (r.result === 'undone') {
-          u.changed.push({ path: r.path, change: `点名项(${r.kind})已撤`, result: 'restored' })
-          // the removal is a state change, not only an install-note: the §12 twin of the apply side's optin-applied (optin.mjs), so a surface
-          // that watches state events sees the item go — an opt-in item's removal must not be silent anywhere (D38; 4.8 §12's optin-removed {form, item, scope})
-          u.events.push({ event: 'optin-removed', where: 'optin', ...(r.form != null && r.item != null ? { form: r.form, item: r.item } : {}), scope: r.scope })
-        }
-        else if (r.result === 'absent') u.skipped.push({ what: r.path, reason: `点名项(${r.kind})已不在` })
-        else { u.left.push({ path: r.path, result: r.result, reason: r.reason || r.result }); u.failures.push({ code: 'optin-not-undone', path: r.path, reason: r.reason || r.result }) }
-        // the off-note of a row: no `code` — there is no registered code for "an opt-in item's undo went" (D38: the closed sets are the only codes; the
-        // row's kind, path, form/item and reason say it, and the failures above carry the registered codes where one exists, optin-not-undone / needs-admin)
-        u.events.push({ kind: r.kind, path: r.path, scope: r.scope, ...(r.form != null && r.item != null ? { form: r.form, item: r.item } : {}), reason: `${r.path} (${r.kind}, ${r.scope}): ${r.result}${r.reason ? ` — ${r.reason}` : ''}` })
+    // the root in the user's OS store (D55, 4.11 P3): only a whole-machine uninstall takes it out, by its fingerprint — `off` never touches a
+    // certificate (1.6 §1.1). It goes before the root's key below (4.11 卸载「最后删根的密钥」); one that could not be removed is a left item (D38)
+    const roots = dropCa && ids == null ? manifest.entries.filter((e) => e && e.kind === 'system-root') : []
+    if (roots.length) {
+      const store = w.deps.rootStore || rootStore({ platform: w.platform, run: w.exec, home: w.home, env: w.env, fs: w.fs })
+      for (const e of roots) {
+        let r
+        try { r = await store.remove({ fp256: e.fp256, sha1: e.thumbprint }) } catch (err) { r = { ok: false, reason: String((err && err.message) || err) } }
+        if (r.ok && r.absent) u.skipped.push({ what: e.path, reason: '根证书已不在信任库里' })
+        else if (r.ok) u.changed.push({ path: e.path, change: '根证书已从信任库撤下', result: 'restored' })
+        else { u.left.push({ path: e.path, result: 'failed', reason: r.reason }); u.failures.push({ code: 'entry-not-undone', path: e.path, reason: r.reason }) }
       }
-      for (const x of o.unknown) u.left.push({ path: x.path, result: 'unknown-kind', reason: `${x.path} is an opt-in item of kind ${JSON.stringify(x.kind)}, which this build has no undo for; use the asight that wrote it` })
     }
     if (dropCa && ids == null && !stopped) { // last: the root's key, after the trust store's root above (4.11 卸载「最后删根的密钥」)
       const k = await undoRootKeys({ dir: w.dir, manifest, custody: w.deps.custody || null, fs: w.fs })

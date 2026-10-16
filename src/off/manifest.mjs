@@ -39,14 +39,14 @@ export const OFF_VERSION = 14 // 14: the copy's off spares every item of phase i
  *    run-key                     the HKCU Run fallback: undone by the reg dance (src/off/win32.mjs undoRunKey)
  *    scheduled-task              the \asight\collector task: disabled by `off`, deleted by `uninstall` (undoScheduledTask)
  *    forwarder-binary            the copied kernel exe: kept while it drains (`off`), removed by `uninstall`
- *  The `optin-*` ones are the Windows opt-in items of 4.8 §2.4, written by applyOptIn with `scope`, undone inline by
- *  src/off/win32-optin.mjs's UNDO_BY_KIND — except the machine-level ones: their undo is the elevated step, `off` hands back the command.
+ *  The `optin-*` ones are the Windows opt-in items of 4.8 §2.4, kept only so a manifest that holds one
+ *  parses; nothing writes or undoes them any more (D57), so `off` lists such an item as left.
  *  An item of any other kind is left alone by `off` and listed (unknownItems). No vpn-* kinds (D43). */
 export const KNOWN_KINDS = Object.freeze(['json-key', 'text', 'owned-file', 'legacy-clash-block', 'legacy-launch-agent', 'legacy-env', 'legacy-ca', 'legacy-cc-steer',
   'proxy-entry', 'trust-entry', 'forwarder-binary', 'scheduled-task', 'run-key',
   'optin-user-path', 'optin-shortcut', 'optin-cert-user', 'optin-vscode', 'optin-zcode', 'optin-claude-policy', 'optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine',
   'optin-rc-path', 'optin-keychain-cert', 'optin-desktop-launcher',
-  'system-root', 'json-array-item', 'root-key']) // D55: the CA in the user's OS store (by fingerprint), one element asight added to a JSON array (P5), the root's private key in its custody backend (4.11 P13: `custody` {kind: 'keychain' | 'cng' | 'file', id} and `fp256`; uninstall takes it out last, through the injected custody's remove). Before them: the darwin opt-in kinds (4.9 §2.4): the rc PATH line + the launch shim (reference-counted), the login-keychain certificate (by SHA-256 fingerprint), and the Claude Desktop launcher of §6.4 — undone inline by src/off/darwin-optin.mjs's DARWIN_UNDO_BY_KIND
+  'system-root', 'json-array-item', 'root-key']) // D55: the CA in the user's OS store (by fingerprint), one element asight added to a JSON array (P5), the root's private key in its custody backend (4.11 P13: `custody` {kind: 'keychain' | 'cng' | 'file', id} and `fp256`; uninstall takes it out last, through the injected custody's remove).
 /** The kinds undone by the file rule (journal.mjs undoEntry): they carry the same shape as json-key / text (path, pre_sha256, ops). */
 export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry', 'trust-entry', 'json-array-item'])
 /** The opt-in kinds alone (4.8 §2.4): ledgered with `scope` ('user' | 'machine'); the undo of each is UNDO_BY_KIND's, and `undo_by_hand` never
@@ -54,9 +54,6 @@ export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry'
  *  are the ones whose undo is an elevated step, never inline. */
 export const OPTIN_KINDS = Object.freeze(KNOWN_KINDS.filter((k) => k.startsWith('optin-')))
 export const OPTIN_MACHINE_KINDS = Object.freeze(['optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine'])
-/** Each OS store a system-root sits in → the certificate opt-in kind whose undo takes it out (by its fingerprint / thumbprint, the same record values): the opt-in
- *  undo loops route a system-root through it until the D55 apply/undo lands (T12–T14). */
-export const ROOT_STORE_KIND = Object.freeze({ 'darwin-user-trust': 'optin-keychain-cert', 'win-currentuser-root': 'optin-cert-user', 'win-localmachine-root': 'optin-cert-machine' })
 // The `owned-file` roles 4.11 P13 adds: `switch` (the route switch file) and `config-entry` (a config-library entry asight created) are removed like a plugin;
 // a `wrapper` (P8: `real` is where the real program was moved, `sha256` the wrapper's, `real_sha256` the program's) is undone by `uninstall` only, by putting
 // the program back while the wrapper is still asight's, else by deleting only the moved copy (undo.mjs undoWrapper).
