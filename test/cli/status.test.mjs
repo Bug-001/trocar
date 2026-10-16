@@ -500,3 +500,15 @@ test('R11: with no daemon and no install manifest the asight processes the user 
   assert.match(named.text, /codex\s+没有: desired-off[^\n]*信任入口: 不知道\(no install manifest in /)
   assert.match(named.text, /你自己起的 asight 进程仍在跑: asight serve\(pid 7001,/)
 })
+
+// Accepted, not undone (D43⑦ · D47): in proxy mode the agents' proxy entries name asight's door, and the door lives in the daemon. With the daemon
+// down while the harness is desired on, status says the entries point at a dead door — forwarder-down, and the command that brings it back.
+test('proxy mode, daemon down, desired on: the reason is forwarder-down (the entries point at a dead door) with asight on; Linux keeps daemon-not-running', async () => {
+  assert.equal(judgeHarness({ desired: 'on', daemon: 'not-running', deadDoor: true, procs: [{ pid: 3, trusted: true }] }).rows[0].reason, 'forwarder-down')
+  assert.equal(judgeHarness({ desired: 'off', daemon: 'not-running', deadDoor: true }).rows[0].reason, 'desired-off', 'an off harness has no entry pointing anywhere')
+  assert.equal(judgeHarness({ desired: 'on', daemon: 'not-running' }).rows[0].reason, 'daemon-not-running')
+  const s = await installedHome()
+  const io = fakeIo()
+  await runStatusCli(['claude-code'], { io, home: s.home, platform: 'darwin', env: { ...s.sh.env }, deps: { request: down(), socketPath: SOCK, procs: async () => [], lingerRead: () => ({ state: true }), exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: { arch: {}, harnesses: [] } } })
+  assert.match(io.stdoutText(), /claude-code\s+没有: forwarder-down[^\n]*asight on/)
+})

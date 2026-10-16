@@ -149,7 +149,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     } else if (table && whose) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
     else { procs = []; why.push(`the processes could not be listed (${matchError})`) }
     const installedAt = m ? installedAtOf(m, id) : null
-    const judged = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', linkAttached: f.link.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt })
+    const judged = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', linkAttached: f.link.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: platform === 'darwin' || platform === 'win32' })
     if (merged) judged.rows = judged.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
     if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && f.link.attached === null) why.push(f.link.reason) // the link is what the verdict waits for, and the daemon could not say
@@ -253,6 +253,7 @@ const REASON_TEXT = {
   'link-missing': '期望开,内核里没有本实例的 link(asight on)', 'daemon-not-running': '守护进程没在跑(asight on)', 'daemon-not-responding': '守护进程没响应',
   'helper-missing': '能力助手缺失或版本不对(sudo asight setup-helper)', 'negative-cache': '进程拒绝了 asight 的证书,那个 host 之后透传(重启这个 agent 再试)',
   'config-after-start': '它在信任入口写好之前就启动了,重启后才会被采集',
+  'forwarder-down': 'agent 的代理入口指着 asight 的门,门随守护进程一起没了,连不上(asight on 拉起它;马上要用:asight off <harness>)',
 }
 const reasonText = (r, hint) => REASON_TEXT[r] || hint || trustReasonText(r) || ''
 const reasonOf = (j) => (j.rows.find((r) => r.reason) || {}).reason ?? null // the harness's own reason: the first one a row has
