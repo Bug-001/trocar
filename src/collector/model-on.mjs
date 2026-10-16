@@ -70,9 +70,13 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const stateF = path.join(dir, 'state.json')
   let st
   try { st = readStateFile(stateF, { fs, installed: on, now: now() }).state } catch { st = null }
-  writeStateAtomic(stateF, setDesired(st || { version: 2, updated_at: null, harnesses: {} }, on, 'on', now()), { fs })
-  for (const h of on) { const l = { ...(m.liveness[h] || {}), on_at: now().toISOString() }; delete l.off_at; m.liveness[h] = l }
-  saveManifest(dir, m, fs)
+  // D54: a harness already on keeps its state and its window — a later on_at would drop a holder started in between
+  const fresh = on.filter((h) => !(st && st.harnesses[h] && st.harnesses[h].desired === 'on' && m.liveness[h] && m.liveness[h].on_at && !m.liveness[h].off_at))
+  if (fresh.length) {
+    writeStateAtomic(stateF, setDesired(st || { version: 2, updated_at: null, harnesses: {} }, fresh, 'on', now()), { fs })
+    for (const h of fresh) { const l = { ...(m.liveness[h] || {}), on_at: now().toISOString() }; delete l.off_at; m.liveness[h] = l }
+    saveManifest(dir, m, fs)
+  }
 
   const groups = planned.flatMap(({ h, plan }) => plan.routes.map((r) => groupOf(h, r.id)))
   const ep = controlEndpointFor({ platform: os, dir, env, fs })
