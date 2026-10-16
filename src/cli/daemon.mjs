@@ -51,7 +51,7 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   const foreground = !env.INVOCATION_ID && !!(proc.stdin && proc.stdin.isTTY) // not under systemd, at a terminal: closing it stops the daemon
   const D = await (deps.daemon || import('../collector/daemon.mjs'))
   // V14: a platform with no collector is refused before anything starts or is written — loadArch's own error, so the CLI holds no platform list
-  try { await D.loadArch(platform) } catch (e) { io.err(`asight daemon: ${e.message}`); return EXIT.incomplete }
+  if (typeof D.loadArch === 'function') { try { await D.loadArch(platform) } catch (e) { io.err(`asight daemon: ${e.message}`); return EXIT.incomplete } } // an injected daemon without one answers for the platform itself
   const start = deps.startDaemon || D.startDaemon
   let d
   try { d = await start({ dir, env, foreground, log: (where, e) => io.err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) { io.err(`asight daemon: ${e.message}`); return EXIT.incomplete }
