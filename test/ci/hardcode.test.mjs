@@ -159,7 +159,7 @@ export function testOnlyExports() {
 }
 // The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
 // It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
-const TEST_ONLY_EXPORTS_CEILING = 356 // (+11, for the length of the task): the unlinked old win32 cluster's exports that wiring.mjs used are test-only until the next commits delete those files
+const TEST_ONLY_EXPORTS_CEILING = 357 // (+12, for the length of the task): the unlinked old win32 cluster's exports that wiring.mjs used are test-only until the next commits delete those files
 
 test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
   const n = testOnlyExports().length
