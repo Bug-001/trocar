@@ -50,7 +50,7 @@ function envNamesOf(desc) {
  *   proxyOf    (proxy text) → { kind: 'http' | 'socks5', host, port, auth? } | null: the arch's reading of a proxy address (parseProxyText + proxyAuthOf)
  *   templates  the hook templates (harness/templates TEMPLATES): a form whose cert's template says `sendsUpstreamHeader` may send X-Asight-Upstream
  *   custody    the key custody, or 'unavailable' (no backend): then no issuer, every verdict forward-only (P2)
- * → { bindDoors, start, restore, on, off, lookupIngress, servePac, issuer, holders, mayExit, doors }
+ * → { bindDoors, start, restore, on, off, lookupIngress, servePac, issuer, holders, mayExit, doors, attached }
  */
 export function createModelCollector({ harnesses, dir, identify, ownerOf = null, factsOf = null, proc = {}, ctx, systemProxy = () => null, custody = null, rootPem = null,
   procTable = async () => [], record = () => {}, event = () => {}, clock = Date.now, timers = globalThis, readState = null, readIngress = null, readManifest = null,
@@ -210,6 +210,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const contexts = new Map()
   const issuer = {
     state: () => (iss ? iss.state() : 'unavailable'),
+    expires: () => (iss && iss.expires ? iss.expires() : null),
     issue: (host) => (iss ? iss.leafFor(host) : null),
     secureContextFor(host) {
       const c = iss && iss.leafFor(host)
@@ -226,6 +227,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     bindDoors(b) { bound = b },
     issuer,
     doors: () => Object.fromEntries([...doors.values()].map((d) => [d.g, d.port])),
+    /** Is `h`'s path into asight up (1.6 V32 `attached`)? Every group ingress.json records for it has its door listening; none recorded = no; unreadable = null. */
+    attached(h) { let g; try { g = Object.keys(tokenOf().groupPorts || {}).filter((k) => split(k).harness === h) } catch { return null } return g.length > 0 && g.every((k) => doors.has(k)) },
     async start() {
       if (!custody || custody === 'unavailable' || custody.kind === 'unavailable') fail(CODE.certIntermediateUnavailable, 'no key custody answers: no issuer, every door forwards only')
       else iss = await makeIssuer({ custody, root: rootPem, clock, timers, record })

@@ -72,6 +72,7 @@ export function validateReceipt(r) {
   if ('linger' in r && !(r.linger === true || r.linger === false || r.linger === 'unknown')) bad.push('linger: not true, false or "unknown"')
   if ('agent_list' in r) bad.push(...validateAgentList(r.agent_list))
   if (Array.isArray(r.harnesses)) r.harnesses.forEach((h, i) => { if (isObject(h) && h.identity !== undefined) bad.push(...validateIdentity(h.identity).map((x) => `harnesses[${i}].${x}`)) })
+  if ('install' in r || 'cert' in r) bad.push(...validateInstallCert(r))
   checkHarnessIds(r, '', bad, new WeakSet())
   return bad
 }
@@ -108,6 +109,24 @@ function validateIdentity(x) {
   else x.unknown.forEach((u, i) => {
     if (!isObject(u) || !(u.name === null || isId(u.name)) || typeof u.wide !== 'boolean' || typeof u.named !== 'boolean' || !(u.pid === null || Number.isInteger(u.pid)) || !(u.door === null || isId(u.door))) bad.push(`identity.unknown[${i}]: needs name, wide, named, pid and door`)
   })
+  return bad
+}
+
+// ── `install` and `cert` (RFC 1.6 §9.4, D55): the closed sets of the certificate axis ──────────────────────────────────────────────────────────────────────────
+const INSTALL_STATES = Object.freeze(['complete', 'partial', null])
+const ROOT_STATES = Object.freeze(['in-place', 'pending', 'declined', 'missing', 'orphan', 'none'])
+const KEY_STATES = Object.freeze(['present', 'missing', 'unavailable', 'unknown'])
+const INTERMEDIATE_STATES = Object.freeze(['current', 'unavailable', 'unknown'])
+const isCodeOrNull = (c) => c === null || isId(c)
+function validateInstallCert({ install: i, cert: c }) {
+  const bad = []
+  if (!isObject(i) || !INSTALL_STATES.includes(i.state) || !Array.isArray(i.harnesses) || !Array.isArray(i.pending) || !(i.at === null || isId(i.at))) bad.push('install: not {state ∈ complete|partial|null, at, harnesses[], pending[]}')
+  if (!isObject(c)) return [...bad, 'cert: not an object']
+  if (!(c.fp256 === null || isId(c.fp256))) bad.push('cert.fp256: neither a fingerprint nor null')
+  if (!isObject(c.root) || !ROOT_STATES.includes(c.root.state) || !isCodeOrNull(c.root.code)) bad.push(`cert.root: state ${JSON.stringify(c.root && c.root.state)} is not in ${ROOT_STATES.join('|')}, or a bad code`)
+  if (!isObject(c.key) || !KEY_STATES.includes(c.key.state) || !isCodeOrNull(c.key.code) || (c.key.state === 'unknown' && !isId(c.key.reason))) bad.push(`cert.key: state ${JSON.stringify(c.key && c.key.state)} is not in ${KEY_STATES.join('|')}, or unknown without a reason`)
+  if (!(c.intermediate === null || (isObject(c.intermediate) && INTERMEDIATE_STATES.includes(c.intermediate.state) && isCodeOrNull(c.intermediate.code) && (c.intermediate.state !== 'unknown' || isId(c.intermediate.reason))))) bad.push('cert.intermediate: not null or {state ∈ current|unavailable|unknown (with a reason), code}')
+  if (!Array.isArray(c.bundles)) bad.push('cert.bundles: not a list')
   return bad
 }
 

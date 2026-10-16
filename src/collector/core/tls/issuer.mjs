@@ -96,6 +96,7 @@ export async function makeIssuer({ custody, root = null, clock = () => Date.now(
   const live = () => (current && clock() < current.notAfter ? current : null)
   return {
     state: () => (live() ? 'ready' : failState || 'unavailable'),
+    expires: () => { const c = live(); return c ? new Date(c.notAfter).toISOString() : null }, // the current intermediate's notAfter (1.6 §9.4 cert.intermediate.expires)
     leafFor: (host) => { const c = live(); return c ? c.leaves.chainFor(host) : null },
     close() { closed = true; for (const t of [next, expiry]) if (t) timers.clearTimeout(t) },
   }

@@ -8,16 +8,17 @@ const verdict = (captured, reason = null) => ({ captured, reason })
  * The verdict on one harness (V32), pure. Inputs, every one of them `null` / 'unknown' when it could not be read:
  *   desired      'on' | 'off'
  *   entryIntact  true | false | null — the trust entry asight wrote is still there; `entryWhy` says what is wrong with it when false ('entry-missing' | 'entry-changed')
- *   linkAttached true | false | null — the kernel has this instance's link (read back by the daemon); `helper` 'missing' says the capability helper is absent or the wrong version
+ *   attached     true | false | null — this harness's path into asight is up: Linux, the kernel has this instance's link (read back by the daemon); proxy mode, every door group `on`
+ *                recorded for it listens (a missing door with the daemon running is forwarder-down). `helper` 'missing' says the capability helper is absent or the wrong version
  *   daemon       'running' | 'not-running' | 'not-responding' | 'unknown'
- *   deadDoor     proxy mode (macOS, Windows): the agents' proxy entries name asight's door, which lives in the daemon — a daemon that is not running is a dead door (forwarder-down)
+ *   deadDoor     proxy mode (macOS, Windows): the agents' proxy entries name asight's door, which lives in the daemon — a daemon that is not running, or a door it does not hold, is a dead door (forwarder-down)
  *   procs        [{ pid, startedAt (ms or ISO), trusted: true | false | null, reason, negative }] — the harness's processes that send requests. `trusted` is the daemon's verdict when it answered;
  *                null = not judged: then the start time against the entry's `installedAt` decides (a process older than its entry never read it: config-after-start, 4.6 §确认信任)
  * → { captured: true | false | null, rows: [{ pid?, captured, reason }] }; `reason` is one of STATUS_REASONS, null when captured or not known. With no process the one row has no pid and is
  * the harness's own: 「link 已挂且入口完好」(§1.5). The order of the reasons: desired off · the daemon · the helper · the link · (a process: its own verdict, else the entry, then its start time).
  * The harness is captured when every row is, not captured when any row is not, else not known.
  */
-export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-missing', linkAttached = null, helper = 'ok', daemon = 'unknown', procs = [], installedAt = null, deadDoor = false }) {
+export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-missing', attached = null, helper = 'ok', daemon = 'unknown', procs = [], installedAt = null, deadDoor = false }) {
   const world = (() => {
     if (desired === 'off') return verdict(false, 'desired-off')
     if (desired !== 'on') return verdict(null)
@@ -25,8 +26,8 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
     if (daemon === 'not-responding') return verdict(false, 'daemon-not-responding')
     if (daemon !== 'running') return verdict(null)
     if (helper === 'missing') return verdict(false, 'helper-missing')
-    if (linkAttached === false) return verdict(false, 'link-missing')
-    if (linkAttached !== true) return verdict(null)
+    if (attached === false) return verdict(false, deadDoor ? 'forwarder-down' : 'link-missing')
+    if (attached !== true) return verdict(null)
     return null // nothing in the way
   })()
   const entry = entryIntact === true ? null : entryIntact === false ? verdict(false, entryWhy) : verdict(null)
