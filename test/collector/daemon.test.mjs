@@ -47,8 +47,16 @@ const CODEX_EXE = '/home/u/.local/bin/codex'
 const fileRoots = (file) => () => osBundleRoots({ files: [file] })
 function fakeArch(p, extraEnv = {}, clientOpts = {}) {
   const clients = []
-  const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0, ...clientOpts }); clients.push(c); return c }
-  return { clients, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) } }
+  // gates.hold() parks every beat gate that has not started and resolves once none is running; gates.release() lets them go. A test that changes
+  // state.json between the two knows no gate read the old file and beats after its mark (V30: the flake was a gate in flight over the change)
+  const gates = { held: false, running: 0, waiters: [], async hold() { this.held = true; await until(() => this.running === 0) }, release() { this.held = false; this.waiters.splice(0).forEach((r) => r()) } }
+  const holdable = (fn) => fn && (async () => { while (gates.held) await new Promise((r) => gates.waiters.push(r)); gates.running++; try { return await fn() } finally { gates.running-- } })
+  const makeClient = () => {
+    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0, ...clientOpts })
+    const set = c.setBeatGate; c.setBeatGate = (fn) => set(holdable(fn))
+    clients.push(c); return c
+  }
+  return { clients, gates, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) } }
 }
 function sandbox() {
   const root = tmpDir('as-d-') // short: unix socket paths are length-limited
@@ -1253,7 +1261,7 @@ const watched = async (c) => (await c.raw({ op: '__watched' })).watch // the ker
 test('V30 unit half: a 3 s event-loop stall while state.json turns a harness off — after it the table is reconciled before the next heartbeat, nothing is attached by the file, and no agent-untrusted is written for the harness that is off', { timeout: 60000 }, async () => {
   const s = sandbox(); const p = fakeProc()
   await installBoth(s)
-  const { arch, clients } = fakeArch(p, {}, { autoHeartbeatMs: 100 })
+  const { arch, clients, gates } = fakeArch(p, {}, { autoHeartbeatMs: 100 })
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home }, checkMs: 150 })
   try {
     const on = await req(s.sock, 'POST', '/on', {})
@@ -1267,9 +1275,11 @@ test('V30 unit half: a 3 s event-loop stall while state.json turns a harness off
     assert.deepEqual(untrustedLines(s).map((l) => [l.pid, l.agent]), [[4343, 'claude-code'], [4545, 'codex']])
 
     // the operator's CLI writes claude-code off; the daemon's event loop is stalled over the next 3 s
+    await gates.hold() // no gate is past its read of state.json: none that read the old file can beat after the mark
     await clients[0].raw({ op: '__mark', name: 'stall' })
     rewriteState(s, (st) => { st.harnesses['claude-code'].desired = 'off' })
     const end = Date.now() + 3000; while (Date.now() < end) { /* the stall: no timer, no socket runs */ }
+    gates.release()
     const after = await until(async () => { const a = await afterMark(clients[0], 'stall'); return a.includes('heartbeat') && a })
     assert.deepEqual(after.slice(0, 2), ['unwatch 4242', 'unwatch 4343'], 'the table is reconciled first, before any heartbeat')
     assert.ok(after.indexOf('heartbeat') > 1 && !after.includes('detach'), 'codex is still on: the links stay, the beat resumes after the unwatches')
