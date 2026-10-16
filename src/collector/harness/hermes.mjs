@@ -25,9 +25,9 @@ import { envProxies, argAfter, dotenvLayer, perOs } from './_common.mjs'
 
 const MANAGED = { linux: '/etc/hermes' }
 const FALSEY = /^(false|0|no|off)$/i
-export const OLD_RELEASE = 'hermes:release-ca-bundle' // pseudo-variable: this process may be a release ≤ LAST_CA_BUNDLE_RELEASE
+const OLD_RELEASE = 'hermes:release-ca-bundle' // pseudo-variable: this process may be a release ≤ LAST_CA_BUNDLE_RELEASE
 /** The last release that reads HERMES_CA_BUNDLE first (the plan's research; lab ③). */
-export const LAST_CA_BUNDLE_RELEASE = 'v2026.9.24'
+const LAST_CA_BUNDLE_RELEASE = 'v2026.9.24'
 /** A release tag (`v2026.9.24`, `2026.09.24`) as a number that orders by date; null when it is not one. */
 const releaseDay = (tag) => { const m = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(tag)); return m ? Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) : null }
 const CUTOFF = releaseDay(LAST_CA_BUNDLE_RELEASE)
@@ -39,7 +39,7 @@ function hermesRoot(env, home) {
   if (!h) return path.join(home, '.hermes')
   return path.basename(path.dirname(h)) === 'profiles' ? path.dirname(path.dirname(h)) : h
 }
-export function hermesHome(ctx) {
+function hermesHome(ctx) {
   const envHome = expandHome(ctx.environ.get('HERMES_HOME') || '', ctx.home)
   const root = hermesRoot(ctx.environ, ctx.home)
   const at = (name) => (name === 'default' ? root : path.join(root, 'profiles', name))
@@ -55,7 +55,7 @@ function checkout(ctx) {
   return m ? m[2] : ctx.environ.get('HERMES_PYTHON_SRC_ROOT') || path.join(ctx.home, '.hermes', 'hermes-agent')
 }
 // A release dated LAST_CA_BUNDLE_RELEASE or earlier, by the checkout's install stamp; null when there is no readable stamp.
-export function oldRelease(readText, dir) {
+function oldRelease(readText, dir) {
   let stamp
   try { stamp = JSON.parse(readText(path.join(dir, 'install-stamp.json'))) } catch { return null }
   if (!stamp || typeof stamp !== 'object') return null

@@ -64,7 +64,7 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     })()
 
     // which harness each process is: the name list's word (D51), with the host-tree rule first (a form's hosts.processes → its harness)
-    const hostGroups = harnesses.map((d) => ({ harness: d.name, forms: (d.win32 && d.win32.forms) || [] }))
+    const hostGroups = harnesses.map((d) => ({ harness: d.name, forms: ((d.proxyMode && d.proxyMode.forms) || []).filter((f) => (f.os || []).includes('win32')) }))
     const whose = whoseWithHosts(D.identify || createRegistry(harnesses, { agentList: readAgentList({ home, fs }).entries }).match, hostGroups)
     const harnessOf = new Map((psRows || []).map((r) => [r.pid, (whose({ os: 'win32', exe: r.exe ?? null, argv: r.cmdline ? splitCommandLine(r.cmdline) : null, cmdlineState: r.cmdlineState }) || {}).agent]))
     // the processes of each harness, with the daemon's word on them where it answered
