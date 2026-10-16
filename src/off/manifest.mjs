@@ -39,21 +39,12 @@ export const OFF_VERSION = 14 // 14: the copy's off spares every item of phase i
  *    run-key                     the HKCU Run fallback: undone by the reg dance (src/off/win32.mjs undoRunKey)
  *    scheduled-task              the \asight\collector task: disabled by `off`, deleted by `uninstall` (undoScheduledTask)
  *    forwarder-binary            the copied kernel exe: kept while it drains (`off`), removed by `uninstall`
- *  The `optin-*` ones are the Windows opt-in items of 4.8 §2.4, kept only so a manifest that holds one
- *  parses; nothing writes or undoes them any more (D57), so `off` lists such an item as left.
  *  An item of any other kind is left alone by `off` and listed (unknownItems). No vpn-* kinds (D43). */
 export const KNOWN_KINDS = Object.freeze(['json-key', 'text', 'owned-file', 'legacy-clash-block', 'legacy-launch-agent', 'legacy-env', 'legacy-ca', 'legacy-cc-steer',
   'proxy-entry', 'trust-entry', 'forwarder-binary', 'scheduled-task', 'run-key',
-  'optin-user-path', 'optin-shortcut', 'optin-cert-user', 'optin-vscode', 'optin-zcode', 'optin-claude-policy', 'optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine',
-  'optin-rc-path', 'optin-keychain-cert', 'optin-desktop-launcher',
   'system-root', 'json-array-item', 'root-key']) // D55: the CA in the user's OS store (by fingerprint), one element asight added to a JSON array (P5), the root's private key in its custody backend (4.11 P13: `custody` {kind: 'keychain' | 'cng' | 'file', id} and `fp256`; uninstall takes it out last, through the injected custody's remove).
 /** The kinds undone by the file rule (journal.mjs undoEntry): they carry the same shape as json-key / text (path, pre_sha256, ops). */
 export const FILE_ENTRY_KINDS = Object.freeze(['json-key', 'text', 'proxy-entry', 'trust-entry', 'json-array-item'])
-/** The opt-in kinds alone (4.8 §2.4): ledgered with `scope` ('user' | 'machine'); the undo of each is UNDO_BY_KIND's, and `undo_by_hand` never
- *  names a per-entry command — the agent's switch is the only undo there is (1.6 §1.7, V64). The machine-level three (4.8 §2.4's last column)
- *  are the ones whose undo is an elevated step, never inline. */
-export const OPTIN_KINDS = Object.freeze(KNOWN_KINDS.filter((k) => k.startsWith('optin-')))
-export const OPTIN_MACHINE_KINDS = Object.freeze(['optin-machine-path', 'optin-machine-shortcut', 'optin-cert-machine'])
 // The `owned-file` roles 4.11 P13 adds: `switch` (the route switch file) and `config-entry` (a config-library entry asight created) are removed like a plugin;
 // a `wrapper` (P8: `real` is where the real program was moved, `sha256` the wrapper's, `real_sha256` the program's) is undone by `uninstall` only, by putting
 // the program back while the wrapper is still asight's, else by deleting only the moved copy (undo.mjs undoWrapper).
@@ -111,7 +102,6 @@ export function undoByHand(e) {
   }
   if (e.kind === 'scheduled-task') return `run: schtasks /Change /TN ${TASK_NAME} /DISABLE (an uninstall deletes it: schtasks /Delete /TN ${TASK_NAME} /F)`
   if (e.kind === 'forwarder-binary') return `rm ${shellWord(where)} (a kernel still draining holds it: it goes when the drain ends; stop it with asight off --now)`
-  if (OPTIN_KINDS.includes(e.kind)) return `${where}: an opt-in item (${e.kind}); the undo is the agent's switch — "asight off ${e.harness ?? '<harness>'}" takes it out (there is no per-entry undo, 1.6 §1.7)`
   if (typeof e.undo_by_hand === 'string' && e.undo_by_hand) return e.undo_by_hand
   if (KNOWN_KINDS.includes(e.kind)) return `${where}: change asight made for the old capture (${e.kind}); undo it with "asight off"`
   return `${where}: this item is of kind ${JSON.stringify(e.kind ?? null)}, which this build does not know; use the asight that wrote it ("asight off"), or look at ${where} and the manifest's entry for it`
@@ -136,7 +126,7 @@ function completeManifest(m) {
     if (!isPlainObject(e)) continue
     if (e.kind == null) e.kind = e.format ? 'text' : 'json-key' // a writer that pushed an entry without its kind (saveManifestAt fills it)
     if (e.backup === undefined) e.backup = null
-    if (e.scope === undefined) e.scope = OPTIN_KINDS.includes(e.kind) ? (OPTIN_MACHINE_KINDS.includes(e.kind) ? 'machine' : 'user') : 'agent' // 1.6 §1.7: what the item reaches — a manifest of before the field reads everything automatic as 'agent' (the opt-in kinds only ever came with it)
+    if (e.scope === undefined) e.scope = 'agent' // 1.6 §1.7: what the item reaches — a manifest of before the field reads every item as 'agent'
     if (!e.undo_by_hand) e.undo_by_hand = undoByHand(e)
   }
   for (const f of Array.isArray(m.files) ? m.files : []) {

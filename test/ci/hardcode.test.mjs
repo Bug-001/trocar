@@ -159,7 +159,7 @@ export function testOnlyExports() {
 }
 // The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
 // It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
-const TEST_ONLY_EXPORTS_CEILING = 329 // (-20, measured): schema validateOptIn / OPTIN_STATES, then the Windows opt-in family (optin.mjs, userpath.mjs, shims.mjs, elevate.mjs) deleted. (-1, measured): the upstream trunks and readHkcuEnv deleted. (+6, measured, not new): the deleted old win32 collector was the only src file naming helper HELPER_PROTO, upstream readHkcuEnv (deleted next), ingress-config ENGINE_RANGE / GROUP_RANGE / INGRESS_FILE, proxymode/entries recordsOf, confirm MARKER_TOLERANCE_MS and codes UNTRACKED_REASONS; netfacts entryPlaceOf, helper declaredRegAllow and policyAllowOf left
+const TEST_ONLY_EXPORTS_CEILING = 327 // (-22, measured): schema validateOptIn / OPTIN_STATES, the Windows opt-in family (optin.mjs, userpath.mjs, shims.mjs, elevate.mjs), then manifest OPTIN_KINDS / OPTIN_MACHINE_KINDS deleted. (-1, measured): the upstream trunks and readHkcuEnv deleted. (+6, measured, not new): the deleted old win32 collector was the only src file naming helper HELPER_PROTO, upstream readHkcuEnv (deleted next), ingress-config ENGINE_RANGE / GROUP_RANGE / INGRESS_FILE, proxymode/entries recordsOf, confirm MARKER_TOLERANCE_MS and codes UNTRACKED_REASONS; netfacts entryPlaceOf, helper declaredRegAllow and policyAllowOf left
 
 test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
   const n = testOnlyExports().length

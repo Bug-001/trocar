@@ -824,12 +824,13 @@ test('uninstall on Linux: an OS bundle that is there but unreadable ahead of a g
 // an off of an older build over a manifest a newer build wrote. The 10-12 main-Mac off half-failed (bootout EIO, then unknown-kind at the launcher):
 // a kind this build does not know refuses the WHOLE off before step 2 / 3 — exit 1, the receipt names the kind and says a newer asight-off must undo it —
 // with no routing change, no daemon asked, no OS tool run (no bootout), no file of the agents' touched, state.json as it was.
-for (const where of ['entries', 'files']) {
- test(`an unknown kind in ${where}: the whole off is refused before the routing — nothing asked of the daemon, no OS tool, no file touched`, async () => {
+// D57 (4.11 ⑱): the Windows opt-in kinds (optin-*) are no longer known either; one in a v3 manifest is refused like any other unknown kind (V35).
+for (const [where, kind] of [['entries', 'from-the-future'], ['files', 'from-the-future'], ['entries', 'optin-user-path']]) {
+  test(`an unknown kind (${kind}) in ${where}: the whole off is refused before the routing — nothing asked of the daemon, no OS tool, no file touched`, async () => {
     const s = await installedHome({ names: ['claude-code', 'codex'] })
     const file = path.join(s.dir, 'install-manifest.json')
     const m = JSON.parse(fs.readFileSync(file, 'utf8'))
-    m[where].push({ kind: 'from-the-future', phase: 'on', harness: 'codex', path: path.join(s.home, '.codex', 'future.toml') })
+    m[where].push({ kind, phase: 'on', harness: 'codex', path: path.join(s.home, '.codex', 'future.toml') })
     fs.writeFileSync(file, JSON.stringify(m, null, 2))
     const files = s.userFiles(), state = fs.readFileSync(path.join(s.dir, 'state.json')), manifest = fs.readFileSync(file)
     const asked = [], ran = []
@@ -837,7 +838,7 @@ for (const where of ['entries', 'files']) {
     assert.equal(r.exit, 1)
     assert.deepEqual([asked, ran], [[], []], 'no routing change, no daemon stop, no bootout')
     assert.deepEqual([s.userFiles(), fs.readFileSync(path.join(s.dir, 'state.json')), fs.readFileSync(file)], [files, state, manifest], 'nothing undone, nothing written')
-    assert.match(r.receipt.problems.join('\n'), /from-the-future.*newer asight-off/s)
+    assert.match(r.receipt.problems.join('\n'), new RegExp(`${kind}.*newer asight-off`, 's'))
     assert.deepEqual(r.receipt.left.map((l) => [l.result, l.path]), [['unknown-kind', path.join(s.home, '.codex', 'future.toml')]])
     assert.deepEqual(validateReceipt(r.receipt), [])
     assert.ok(s.sys.daemon.isRecording('claude-code'), 'the daemon still records')
