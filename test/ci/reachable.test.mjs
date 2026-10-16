@@ -10,7 +10,7 @@
 //   - `new URL('./x.mjs', import.meta.url)`            a file;   `new URL('./dir/', import.meta.url)`   every file under that dir
 //   - `via('./x.mjs', …)`                               src/cli/commands.mjs's lazy command bodies
 //   - `r('src', 'etl', 'cli.mjs')`                      src/cli/legacy-commands.mjs's `r = (...p) => path.join(ROOT, ...p)`
-//   - the harness loader (src/collector/harness/index.mjs): every harness/*.mjs but index.mjs and _*, and its same-named twin in win32/
+//   - the harness loader (src/collector/harness/index.mjs): every harness/*.mjs but index.mjs and _* (no subdirectory: the per-OS overlays are gone)
 // A comment that quotes one of these counts as an edge too (the scan is text, not a parse); that can only hide a dead module, never invent one.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -49,7 +49,7 @@ function edgesOf(file, text, root) {
   }
   if (file === path.join(root, 'src/collector/harness/index.mjs') && /loadHarnesses/.test(text)) {
     for (const n of fs.readdirSync(dir).filter((n) => n.endsWith('.mjs') && n !== 'index.mjs' && !n.startsWith('_'))) {
-      out.push(path.join(dir, n), path.join(dir, 'win32', n))
+      out.push(path.join(dir, n))
     }
   }
   return out
@@ -78,10 +78,10 @@ test('self-check: the analysis reports an orphan and follows via(), directory UR
   put('src/collector/harness/index.mjs', 'export function loadHarnesses() {}\n')
   put('src/b.mjs', 'export {}\n') // the orphan
   assert.deepEqual(unreachable(root), ['src/b.mjs', 'src/collector/harness/index.mjs'])
-  // the loader: a harness file is reached only through index.mjs, which here nothing imports; once a.mjs imports it, its twins follow
+  // the loader: a harness file is reached only through index.mjs, which here nothing imports; once a.mjs imports it, every top-level harness file follows
   put('src/a.mjs', fs.readFileSync(path.join(root, 'src/a.mjs'), 'utf8') + "import './collector/harness/index.mjs'\n")
-  put('src/collector/harness/x.mjs', 'export {}\n'); put('src/collector/harness/_h.mjs', 'export {}\n'); put('src/collector/harness/win32/x.mjs', 'export {}\n'); put('src/collector/harness/other/y.mjs', 'export {}\n') // a subdirectory that is not win32/ is no overlay (darwin's is gone): a file there is reached by nothing
-  assert.deepEqual(unreachable(root), ['src/b.mjs', 'src/collector/harness/_h.mjs', 'src/collector/harness/other/y.mjs'])
+  put('src/collector/harness/x.mjs', 'export {}\n'); put('src/collector/harness/_h.mjs', 'export {}\n'); put('src/collector/harness/win32/x.mjs', 'export {}\n') // no subdirectory is an overlay any more (darwin's and win32's are gone): a file there is reached by nothing
+  assert.deepEqual(unreachable(root), ['src/b.mjs', 'src/collector/harness/_h.mjs', 'src/collector/harness/win32/x.mjs'])
 })
 
 test('every src module is reachable from bin/asight.mjs or src/off/main.mjs, except the shrink-only list', () => {

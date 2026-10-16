@@ -24,7 +24,7 @@ const ENTRY = /(^|\/)dsh$|\/@deepseek-ai\/dsh\/lib\/bin\.js$/
 const BOOTSTRAP = new Set(['PATH', 'HOME', 'USERPROFILE', 'SHELL', 'NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'PERL5OPT', 'PERL5LIB', 'PYTHONSTARTUP', 'PYTHONPATH', 'RUBYOPT', 'RUBYLIB', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'PYTHONHOME', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_EXTERNAL_DIFF', 'GIT_PAGER', 'GIT_EDITOR', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_COUNT', 'EDITOR', 'VISUAL', 'PAGER', 'BROWSER', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_SEARCH_BASE_URL', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE', 'NODE_TLS_REJECT_UNAUTHORIZED'])
 const PROXY_NAMES = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'])
 const bootstrapOnly = (k) => { const u = k.toUpperCase(); return BOOTSTRAP.has(u) || ['DSH_', 'XDG_', 'DYLD_', 'BASH_FUNC_'].some((p) => u.startsWith(p)) }
-export const MIN_NODE = '22.19.0' // tls.setDefaultCACertificates
+const MIN_NODE = '22.19.0' // tls.setDefaultCACertificates
 
 const dshHome = (env, home) => expandHome(env.get('DSH_HOME'), home) || path.join(home, '.dsh')
 function profileOf(argv) {
