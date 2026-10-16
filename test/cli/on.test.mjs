@@ -281,10 +281,10 @@ test('on: a unit systemd refuses to enable, a daemon that never answers, a kerne
   r = await silent.run({ request: dead.request })
   assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /no daemon answers on \/x\/collector\.sock/)
 
-  const noKernel = await sandbox(); const sys2 = fakeSystem({ actual: 'off' })
-  r = await noKernel.run({ unit: userUnit({ home: noKernel.home, node: '/n', script: '/s', run: sys2.exec.run }), request: sys2.daemon.request })
-  assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /the kernel does not confirm the links/)
-  const flows = fs.readdirSync(path.join(noKernel.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(noKernel.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+  const notOn = await sandbox(); const sys2 = fakeSystem({ actual: 'off' })
+  r = await notOn.run({ unit: userUnit({ home: notOn.home, node: '/n', script: '/s', run: sys2.exec.run }), request: sys2.daemon.request })
+  assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /the daemon did not reach on/)
+  const flows = fs.readdirSync(path.join(notOn.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(notOn.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
   assert.ok(flows.some((f) => f.event === 'failure' && f.where === 'switch'), 'recorded where the board looks (D38)')
 })
 

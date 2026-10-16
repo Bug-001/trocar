@@ -507,7 +507,7 @@ export async function turnOn(opts = {}) {
     const pid = readLockPid(dir, fs)
     receipt.daemon = { state: up ? 'running' : 'not-running', started, ...(pid ? { pid } : {}) }
     receipt.unit = unit ? { path: unit.path, written: written.unit || false, autostart, enabled: autostart && !unitFailed } : null
-    // the links last: the daemon attaches on this request, and answers with what the kernel confirms
+    // the links last: the daemon attaches on this request, and answers with the state it reached
     if (up && !halt) checked(() => guard())
     if (up && !halt) {
       let status = null
@@ -521,7 +521,7 @@ export async function turnOn(opts = {}) {
         if (status.actual !== 'on') {
           const why = status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo asight setup-helper`
             : status.degraded ? `the helper is down (${status.degraded.reason}); nothing is steered, agents connect directly`
-              : status.ca && status.ca.ok === false ? `the collector CA is unusable (${status.ca.which}: ${status.ca.reason}); nothing is steered` : `the kernel does not confirm the links (actual: ${status.actual}); nothing is steered, agents connect directly`
+              : status.ca && status.ca.ok === false ? `the collector CA is unusable (${status.ca.which}: ${status.ca.reason}); nothing is steered` : `the daemon did not reach on (actual: ${status.actual}); nothing is steered, agents connect directly`
           problems.push(why); put({ event: EVENT.failure, where: 'switch', code: 'state-mismatch', reason: why })
         }
       }
