@@ -1,15 +1,16 @@
 // test/collector/arch/darwin/netfacts.test.mjs — macOS's part of the network facts (RFC 4.9 §10, 1.6 §9.7; the assertions are the linux twin's, test/collector/arch/linux/netfacts.test.mjs, adapted where 4.9 §10 names
-// a darwin row): the processes of each harness with the watch table's verdict, the proxy each was started with and whether it runs as root (euid/root), the listeners of this user, the OS proxy with PAC's own scutil
-// flag. Everything is injected: a fake `lsof` / `scutil` / `ps` runner; nothing reads the machine and nothing is spawned.
+// a darwin row): the processes of each harness with the watch table's verdict, whether it runs as root (euid/root), the listeners of this user, the OS proxy with PAC's own scutil
+// flag; the per-form half (certificate, proxy, the doors) is the model's (core/proxymode/status-facts.mjs). Everything is injected: a fake `lsof` / `scutil` / `ps` runner; nothing reads the machine and nothing is spawned.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { darwinNetFacts, parseLsof, processName, versionOf } from '../../../../src/collector/arch/darwin/netfacts.mjs'
+import { darwinNetFacts as gather, parseLsof, processName, versionOf } from '../../../../src/collector/arch/darwin/netfacts.mjs'
 import { settingSha } from '../../../../src/netenv/redact.mjs'
-import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
+import { tmpDir } from '../../../helpers/tmp.mjs'
 import { buildTopology, renderCompact } from '../../../../src/netenv/topology.mjs'
 import { facts } from '../../../netenv/fixtures/rows.mjs'
 
-const descs = await loadHarnesses() // the keys a process's proxy is read from are each harness's own (`proxy.env`)
+const HOME = tmpDir('darwin-netfacts') // an empty HOME: nothing installed, so the per-form half (core/proxymode/status-facts.mjs) has no form to read
+const darwinNetFacts = (ctx, deps) => gather({ home: HOME, ...ctx }, deps)
 
 const LSOF = [
   'mihomo   777 user    7u  IPv4 0x2fa994562d6e90a6      0t0  TCP 127.0.0.1:7890 (LISTEN)',
@@ -91,7 +92,7 @@ test('darwinNetFacts: a process carries the watch table\'s verdict (decrypt / no
   const matched = (pid) => [{ h: 'claude-code', p: { pid, exe, argv: ['claude'], uid: 501, startedAt: Date.parse('2026-10-07T09:30:00Z'), env: () => new Map() } }]
   const ask = (rows, reply, m) => darwinNetFacts({ status: statusOf(rows, reply, m), settings: { 'claude-code': current() } }, { exec: runner(TABLE) })
   const one = (await ask([row(4121)], { agents: [{ pid: 4121, decrypt: true }] }, matched(4121))).procs['claude-code'][0]
-  assert.deepEqual([one.pid, one.name, one.version, one.startedAt, one.watched, one.trusted, one.negative, one.startSetting], [4121, 'claude', '2.1.291', '2026-10-07T09:30:00.000Z', 'decrypt', true, false, null])
+  assert.deepEqual([one.pid, one.name, one.version, one.startedAt, one.watched, one.trusted, one.negative], [4121, 'claude', '2.1.291', '2026-10-07T09:30:00.000Z', 'decrypt', true, false])
   assert.equal((await ask([row(4121)], { agents: [{ pid: 4121 }] }, matched(4121))).procs['claude-code'][0].watched, 'no-decrypt')
   assert.equal((await ask([row(4121)], { agents: [{ pid: 4121, off: true }] }, matched(4121))).procs['claude-code'][0].watched, 'absent', 'asight let it go (off)')
   assert.equal((await ask([row(4121)], { agents: [] }, matched(4121))).procs['claude-code'][0].watched, 'absent', 'not in the table')
@@ -112,79 +113,6 @@ test('darwinNetFacts: a harness that is off — the daemon lists its agent as `o
   // and it is that name the topology draws for the harness that is off
   const t = buildTopology(facts('claude-code', { desired: { 'claude-code': 'off' } }, { procs: [{ ...unnamed, trusted: false }] }))['claude-code']
   assert.match(renderCompact(t)[0], /^claude-code 4121 → /)
-})
-
-test('darwinNetFacts: the proxy a process was started with is read from its environment and compared with what a new one reads now — the same is null, another is redacted with a hash, none is a null value; an environment that is not there is darwin\'s own answer, env-unreadable (never read, not linux\'s "denied")', async () => {
-  const exe = '/Users/u/.local/share/claude/versions/2.1.291', startedAt = Date.parse('2026-10-07T09:30:00Z')
-  const startOf = async (envMap, cur) => {
-    const m = [{ h: 'claude-code', p: { pid: 4121, exe, argv: ['claude'], uid: 501, startedAt, env: () => envMap } }]
-    return (await darwinNetFacts({ status: statusOf([row(4121)], undefined, m), settings: { 'claude-code': cur }, harnesses: descs }, { exec: runner(TABLE) })).procs['claude-code'][0].startSetting
-  }
-  const now = current('http://127.0.0.1:7890')
-  assert.equal(await startOf(new Map([['HTTPS_PROXY', 'http://127.0.0.1:7890']]), now), null, 'started with what a new process reads now')
-  const old = await startOf(new Map([['HTTPS_PROXY', 'http://alice:pw@old.corp:3128']]), now)
-  assert.deepEqual([old.value, old.host, old.port, old.sha256, old.source], ['http://***@old.corp:3128', 'old.corp', 3128, settingSha('http://alice:pw@old.corp:3128'), [{ kind: 'env', where: 'HTTPS_PROXY' }]])
-  assert.ok(!/alice|pw@/.test(JSON.stringify(old)))
-  const none = await startOf(new Map(), now)
-  assert.deepEqual([none.value, none.sha256], [null, null], 'started with none, a new one reads one')
-  assert.equal((await startOf(null, now)).unknown.reason, 'env-unreadable', 'the environment of another process is never read on macOS (4.9 §5.4, the same rule as Windows): what production answers for every env-sourced setting')
-  assert.equal((await startOf(new Map([['HTTPS_PROXY', 'not a url s3cr3t']]), now)).unknown.reason, 'unparseable')
-  assert.ok(!/s3cr3t/.test(JSON.stringify(await startOf(new Map([['HTTPS_PROXY', 'not a url s3cr3t']]), now))))
-  assert.equal(await startOf(new Map([['HTTPS_PROXY', 'x']]), { unknown: { reason: 'denied', detail: 'd' } }), null, 'when what a new one reads is not known there is nothing to compare')
-})
-
-test('darwinNetFacts: a setting from a FILE that changed after the process started leaves the process on the value it had — only `adopted` remembers it; without that, not known', async () => {
-  const exe = '/Users/u/claude', startedAt = Date.parse('2026-10-07T09:30:00Z')
-  const m = [{ h: 'claude-code', p: { pid: 4121, exe, argv: ['claude'], uid: 501, startedAt, env: () => new Map() } }]
-  const file = { kind: 'file', where: '/Users/u/.claude/settings.json', key: 'env.HTTPS_PROXY' }
-  const after = current('http://127.0.0.1:7890', { source: [file], changedAt: '2026-10-07T09:45:00.000Z' })
-  const ask = async (cur, adopted) => (await darwinNetFacts({ status: statusOf([row(4121)], undefined, m), settings: { 'claude-code': cur }, adopted, harnesses: descs }, { exec: runner(TABLE) })).procs['claude-code'][0].startSetting
-  assert.deepEqual((await ask(after, null)).unknown.reason, 'absent')
-  const had = await ask(after, { 'claude-code': { proxy: 'http://***@old.corp:3128', source: [file], sha256: 'abc' } })
-  assert.deepEqual([had.value, had.host, had.inferred, had.sha256], ['http://***@old.corp:3128', 'old.corp', true, 'abc'])
-  const hadNone = await ask(after, { 'claude-code': { proxy: null, source: [], sha256: null } })
-  assert.deepEqual([hadNone.value, hadNone.inferred], [null, true], 'it had none when `on` looked')
-  assert.equal(await ask(current('http://127.0.0.1:7890', { source: [file], changedAt: '2026-10-07T09:00:00.000Z' }), null), null, 'a file older than the process: the process read it')
-})
-
-test('darwinNetFacts: a process\'s start-time proxy is read from the keys ITS harness reads (`proxy.env`, in its order) and from no other — ALL_PROXY is nothing to claude-code, HTTPS_PROXY nothing to z-code', async () => {
-  const startedAt = Date.parse('2026-10-07T09:30:00Z')
-  const ask = async (h, envMap, cur = current()) => {
-    const m = [{ h, p: { pid: 4121, exe: `/Users/u/bin/${h}`, argv: [h], uid: 501, startedAt, env: () => envMap } }]
-    const status = { daemon: { state: 'running', reply: { agents: [{ pid: 4121, decrypt: true }] } }, harnesses: [{ id: h, procs: [row(4121)] }], matched: m }
-    return (await darwinNetFacts({ status, settings: { [h]: cur }, harnesses: descs }, { exec: runner(TABLE) })).procs[h][0].startSetting
-  }
-  const only = (k, v) => new Map([[k, v]])
-  // claude-code reads HTTPS_PROXY, https_proxy, HTTP_PROXY, http_proxy — not ALL_PROXY: a process that has only that was started with no proxy, and a new one reads none: the same
-  assert.equal(await ask('claude-code', only('ALL_PROXY', 'socks5://127.0.0.1:1080')), null, 'ALL_PROXY is not a setting of claude-code')
-  assert.equal(await ask('claude-code', only('all_proxy', 'socks5://127.0.0.1:1080')), null)
-  assert.equal(await ask('claude-code', only('NO_PROXY', 'api.anthropic.com')), null)
-  // its own keys are, in the descriptor's order: HTTPS_PROXY wins over HTTP_PROXY, the lower-case spelling comes after
-  const both = new Map([['HTTP_PROXY', 'http://h.corp:1'], ['HTTPS_PROXY', 'http://s.corp:2']])
-  assert.deepEqual([(await ask('claude-code', both)).host, (await ask('claude-code', both)).source], ['s.corp', [{ kind: 'env', where: 'HTTPS_PROXY' }]])
-  assert.equal((await ask('claude-code', only('http_proxy', 'http://l.corp:3'))).host, 'l.corp')
-  // the same process with a proxy that a new one reads now: not a difference
-  assert.equal(await ask('claude-code', new Map([['ALL_PROXY', 'socks5://127.0.0.1:1080'], ['HTTPS_PROXY', 'http://127.0.0.1:7890']]), current('http://127.0.0.1:7890')), null)
-  // z-code reads ZCODE_HTTP_PROXY alone: a process with HTTPS_PROXY was started with none
-  assert.equal(await ask('z-code', only('HTTPS_PROXY', 'http://127.0.0.1:7890')), null, 'HTTPS_PROXY is nothing to z-code')
-  assert.equal((await ask('z-code', only('ZCODE_HTTP_PROXY', 'socks5h://127.0.0.1:1080'))).host, '127.0.0.1')
-  // codex does read ALL_PROXY (after HTTPS_PROXY)
-  assert.equal((await ask('codex', only('ALL_PROXY', 'socks5://127.0.0.1:1080'))).scheme, 'socks5')
-  // no descriptor for the harness → the keys are not known: no claim about what the process was started with
-  assert.equal((await darwinNetFacts({ status: { daemon: { state: 'running', reply: { agents: [] } }, harnesses: [{ id: 'claude-code', procs: [row(4121)] }], matched: [{ h: 'claude-code', p: { pid: 4121, exe: '/Users/u/claude', argv: ['claude'], uid: 501, startedAt, env: () => only('HTTPS_PROXY', 'http://a:1') } }] }, settings: { 'claude-code': current() }, harnesses: [] }, { exec: runner(TABLE) })).procs['claude-code'][0].startSetting, null)
-})
-
-test('darwinNetFacts: a process carries which of its harness\'s API hosts its own NO_PROXY covers — [] when none, null when its environment cannot be read (on darwin: the table never carries one, so production answers null)', async () => {
-  const startedAt = Date.parse('2026-10-07T09:30:00Z')
-  const ask = async (envMap) => {
-    const m = [{ h: 'claude-code', p: { pid: 4121, exe: '/Users/u/claude', argv: ['claude'], uid: 501, startedAt, env: () => envMap } }]
-    return (await darwinNetFacts({ status: statusOf([row(4121)], undefined, m), settings: { 'claude-code': current() }, harnesses: descs }, { exec: runner(TABLE) })).procs['claude-code'][0].noProxy
-  }
-  assert.deepEqual(await ask(new Map([['NO_PROXY', 'localhost,.anthropic.com']])), ['api.anthropic.com'])
-  assert.deepEqual(await ask(new Map([['no_proxy', 'api.anthropic.com']])), ['api.anthropic.com'])
-  assert.deepEqual(await ask(new Map([['NO_PROXY', 'example.com']])), [])
-  assert.deepEqual(await ask(new Map()), [])
-  assert.equal(await ask(null), null, 'an environment is never read on darwin: not known (not "none")')
 })
 
 test('darwinNetFacts: elevation is euid/root — the process table\'s uid answers it (0 is root); a process only the daemon listed (another user\'s, the case that makes it matter) is asked of ps once; a ps that does not answer leaves it not-known', async () => {

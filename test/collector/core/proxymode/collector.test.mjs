@@ -138,6 +138,7 @@ test('CM20 · meta.upstream equals upstreamFor over env × system proxy × prior
       const want = await upstreamFor({ desc: d, facts: known ? { pid, start: INSTALLED + 1, env, parentOf: async () => null } : null, recordedPrior: prior, systemProxy: sp })
       assert.deepEqual(meta.upstream, dialOf(want, 'api.example'), `${d.name} known=${known} env=${JSON.stringify(env)} sp=${!!sp} prior=${prior}`)
       if (!known) assert.notEqual(meta.upstream.host, 'env.corp', 'step 3 never runs without an identity')
+      assert.deepEqual(c.upstreams()[g] || [], known ? [{ pid, source: want.source, url_redacted: want.url }] : [], 'status reads the door\'s own answer per process (1.6 §9.4); none for a peer it could not tell')
       c.close()
     }
   }

@@ -644,7 +644,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const status = async () => {
     const st = collector.issuer.state()
     const hs = Object.fromEntries(Object.entries(desired()).map(([h, e]) => [h, { ...e, attached: collector.attached(h) }])) // per harness: its doors listen (status's `attached`, 1.6 V32)
-    return { pid: process.pid, doors: collector.doors(), harnesses: hs, holders: (await collector.holders()).count ?? null, cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: (await collector.holders()).count ?? null, cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   let stop = null, markReady

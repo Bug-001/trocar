@@ -23,6 +23,7 @@ import { makeIssuer } from '../tls/issuer.mjs'
 import { bypassHit } from '../upstream-shape.mjs'
 import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
+import { redactProxyUrl } from '../../../netenv/redact.mjs'
 
 const msOf = (t) => (t == null ? NaN : typeof t === 'number' ? t : Date.parse(t))
 const untracked = (reason) => ({ not_captured: 'untracked', reason })
@@ -69,6 +70,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const ident = createDoorIdentity({ ownerOf, factsOf, identify, ownUid, hostsOf: hostSetOf, onFailure: record, onEvent: event })
   const seen = createDoorSeen({ clock })
   const pcache = new Map(), vcache = new Map(), said = new Set()
+  const answers = new Map() // door → Map(pid → { pid, source, url_redacted }): the upstream the door chose per process, status's per-form `proxy.upstream` (1.6 §9.4)
+  const answered = (g, pid, up) => { const a = answers.get(g) || new Map(); a.delete(pid); a.set(pid, { pid, source: up.source, url_redacted: up.url ? redactProxyUrl(up.url) : null }); if (a.size > 32) a.delete(a.keys().next().value); answers.set(g, a) }
   const rootFp256 = rootPem ? new crypto.X509Certificate(rootPem).fingerprint256 : null
   const agentTrust = upstreamRoots ? createAgentTrust({ roots: upstreamRoots, rootFp256, readFile: ctx.readFile }) : null
   const fail = (code, reason, extra = {}) => record({ event: 'failure', where: 'engine', code, ...extra, reason })
@@ -138,6 +141,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const allowed = own.length > 0 && own.every((f) => sendsHeader(byName.get(id.agent), f)) // only a form whose hook sends the header (P7 step 1)
     const ports = [...doors.values()].map((x) => x.port)
     const up = await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isAsightDoor: (v) => isAsightDoorUrl(v, { ports }) })
+    if (known) answered(d.g, id.pid, up)
     if ((up.notes || []).some((n) => n.note === 'header-ignored')) fail(CODE.upstreamHeaderIgnored, `pid ${id.pid ?? '?'} sent X-Asight-Upstream at the ${d.g} door, but no hook of its form sends it: ignored (its value is not recorded)`, { door: d.g, pid: id.pid })
     if (up.code && !said.has(`${up.code}\0${id.pid}\0${d.g}`)) { said.add(`${up.code}\0${id.pid}\0${d.g}`); fail(up.code, `the proxy pid ${id.pid ?? '?'} would have used without asight could not be recovered; the door dials ${up.url ? 'the system proxy' : 'direct'}`, { door: d.g, pid: id.pid }) }
     let dial = { kind: 'direct' }
@@ -227,6 +231,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     bindDoors(b) { bound = b },
     issuer,
     doors: () => Object.fromEntries([...doors.values()].map((d) => [d.g, d.port])),
+    /** The door's upstream per process, latest last: { '<h>:<route>': [{ pid, source, url_redacted }] } (status's per-form `proxy.upstream`). */
+    upstreams: () => Object.fromEntries([...answers].filter(([g]) => doors.has(g)).map(([g, a]) => [g, [...a.values()]])),
     /** Is `h`'s path into asight up (1.6 V32 `attached`)? Every group ingress.json records for it has its door listening; none recorded = no; unreadable = null. */
     attached(h) { let g; try { g = Object.keys(tokenOf().groupPorts || {}).filter((k) => split(k).harness === h) } catch { return null } return g.length > 0 && g.every((k) => doors.has(k)) },
     async start() {

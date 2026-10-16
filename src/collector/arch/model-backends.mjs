@@ -94,3 +94,15 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
   }
   return { ...parts, proxyOf, systemProxy: watch.now, procTable: () => listProcs({ platform: os, env }), close: () => { watch.stop(); parts.close() } }
 }
+
+/** The proxy-mode half of status's facts on macOS / Windows (1.6 §9.7, 4.11 CM21): the model's per-form reader over this user's install manifest, the daemon's
+ *  reply and `chainSp` (the arch's system proxy in the chain's shape) → { forms, forwarder } for gatherNetFacts. Read-only: the manifest is read, nothing written. */
+export async function modelNetForms({ os, home, env = process.env, status, settings = {}, harnesses, procs, systemProxy, chainSp, dirs, fs = nodeFs }) {
+  const [{ readManifest }, { modelFormFacts, netFormsOf }, { installDrift }, { collectorHome }] = await Promise.all([
+    import('../core/trust/journal.mjs'), import('../core/proxymode/status-facts.mjs'), import('../model-on.mjs'), import('../../paths.mjs')])
+  let m = null
+  try { m = readManifest(collectorHome(path.join(home, '.asight')), fs) } catch (e) { if (e && e.code === 'ESANDBOX') throw e } // unreadable: no installed harness to draw
+  const ctx = sourcesCtx({ os, home, env, dirs, fs })
+  const model = await modelFormFacts({ harnesses, os, manifest: m, reply: status.daemon && status.daemon.reply, root: status.cert && status.cert.root, systemProxy: chainSp, ctx, fs, drift: (h) => installDrift(m, h, fs) })
+  return netFormsOf({ model, status, procs, systemProxy, settings })
+}

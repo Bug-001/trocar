@@ -109,7 +109,7 @@ test('a helper that cannot be started, and one that answers nothing: every read 
 })
 
 
-test('the win32 facts are darwin\'s shape (routing proxy, the processes by the name list, the listeners, the OS proxy) and carry no forms or forwarder half, so the topology says it could not be worked out until it is drawn from the model', async () => {
+test('plan §E.7 ruling 2: the win32 facts are darwin\'s shape (routing proxy, the processes by the name list, the listeners, the OS proxy); the per-form half is the model\'s, so with nothing installed there is no form to draw and the topology says so', async () => {
   const home = tmpDir('asight-wf-shape-')
   const helper = { close: async () => {}, call: async (verb) => {
     if (verb === 'ps') return { procs: [{ pid: 4242, name: 'claude.exe', exe: 'C:\\Users\\u\\.local\\bin\\claude.exe', cmdline: 'claude', cmdlineState: 'ok' },
@@ -119,7 +119,7 @@ test('the win32 facts are darwin\'s shape (routing proxy, the processes by the n
   } }
   const f = await gather(home, { helper, ids: ['claude-code', 'kimi-code'], agents: [{ pid: 4242, decrypt: true, trusted: true }] })
   assert.equal(f.routing, 'proxy')
-  assert.equal(f.forwarder, null, 'no forwarder half')
+  assert.deepEqual(f.forwarder.forms, {}, 'no door of an installed form')
   assert.deepEqual(f.harnesses['claude-code'].forms || [], [], 'no forms half')
   assert.deepEqual(f.harnesses['claude-code'].procs.map((p) => [p.pid, p.watched]), [[4242, 'decrypt']], 'the process is judged by the name list, with the daemon\'s word on it')
   assert.deepEqual(f.harnesses['kimi-code'].procs.map((p) => p.pid), [5151], 'the host program (VS Code) is the harness of its hostTree form: the base descriptor\'s win32 proxyMode.forms hosts.processes')

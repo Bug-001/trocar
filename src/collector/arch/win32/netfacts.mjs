@@ -1,8 +1,8 @@
 // netfacts.mjs (arch/win32) — Windows's part of the network facts (1.6 §9.7's `archFacts`, RFC 4.8 §10.1), read-only. `status`, `doctor` and `on`'s adopt reach it
 // through src/netenv/facts.mjs (gatherNetFacts's `archFacts` = loadArch('win32').netFacts); what the daemon's /status reply says (each agent's watch verdict, the
 // negatives) is taken from `ctx.status`. The shape is darwin's (arch/darwin/netfacts.mjs): routing 'proxy', the processes of each harness, the listeners, the OS
-// proxy and the unknowns. The per-form half (the entry edge, the forms' upstreams, the doors' forwarder) went with the old win32 collector
-// Until the collector model draws it, a topology drawn from these facts says it could not be worked out, as on darwin.
+// proxy, the unknowns, and the per-form half (each form's certificate and proxy, the doors as `forwarder.forms`) from the collector model's one OS-neutral
+// reader (core/proxymode/status-facts.mjs through model-backends.mjs modelNetForms).
 //
 //   · the processes: the helper's `ps` rows judged by the name list (D51: the presets plus ~/.asight/agents.json), the host-tree rule first (core/host-agent.mjs,
 //     a form's hosts.processes), each with the elevated verdict of `elevationOf` (integrity ≥ High, or a token that will not open — the latter marked inferred);
@@ -14,7 +14,9 @@
 import nodeFs from 'node:fs'
 import { startHelper } from './helper.mjs'
 import { elevationOf, splitCommandLine } from './procinfo.mjs'
-import { readSystemProxy, proxyAddress } from './upstream.mjs'
+import { readSystemProxy, proxyAddress, chainSystemProxy } from './upstream.mjs'
+import { dirsOf } from './policy.mjs'
+import { modelNetForms } from '../model-backends.mjs'
 import { createRegistry } from '../../core/registry.mjs'
 import { whoseWithHosts } from '../../core/host-agent.mjs'
 import { readAgentList } from '../../../off/identity.mjs'
@@ -84,7 +86,10 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const procs = {}
     for (const h of status.harnesses || []) procs[h.id] = (psRows || []).filter((r) => harnessOf.get(r.pid) === h.id).map(procFacts)
     const listeners = (listenRows || []).map((r) => ({ addr: r.localAddr, port: r.localPort, pid: r.pid, exe: (psByPid.get(r.pid) || {}).exe ?? null }))
-    return { routing: 'proxy', listeners, procs, systemProxy: sysFact, unknowns }
+    let chainSp = { ok: false }
+    try { chainSp = sp && sp.ok ? chainSystemProxy(sp) : { ok: false } } catch { chainSp = { ok: false } }
+    const model = await modelNetForms({ os: 'win32', home, env, status, settings: ctx.settings || {}, harnesses, procs, systemProxy: sysFact, chainSp, dirs: dirsOf(home, env), fs })
+    return { routing: 'proxy', listeners, procs, systemProxy: sysFact, ...model, unknowns }
   } finally {
     if (own && helper) await helper.close()
   }
