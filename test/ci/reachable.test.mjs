@@ -31,9 +31,6 @@ export const UNREACHED = Object.freeze({
   'src/query/index.mjs': 'spec 3.5:44 names runNamed as the server\'s only entry, but src/server.mjs does not use it',
   'src/capture/desktop-steer.mjs': 'old CC-Desktop Clash Verge steer; only src/netenv/clash.mjs reached it (for socket discovery), and D49 deleted that. Removal waits on the backlog',
   'src/off/clash.mjs': 'the Verge strip / reload half of that steer, reached only through src/capture/desktop-steer.mjs; same backlog items',
- 'src/collector/arch/win32/entries.mjs': 'the old win32 door cluster, unlinked; its deletion is the next commits of (each ≤ 400 lines), which take this row out',
- 'src/collector/arch/win32/forms.mjs': 'the old win32 door cluster, unlinked; its deletion is the next commits of (each ≤ 400 lines), which take this row out',
- 'src/collector/arch/win32/route-plan.mjs': 'the old win32 door cluster, unlinked; its deletion is the next commits of (each ≤ 400 lines), which take this row out',
  'src/collector/core/route-plan.mjs': 'the old win32 door cluster, unlinked; its deletion is the next commits of (each ≤ 400 lines), which take this row out',
 })
 

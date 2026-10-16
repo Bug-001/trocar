@@ -90,7 +90,7 @@ test('every win32 data file has the shape the later tasks read: groups, forms, t
       assert.equal(typeof g.auth, 'boolean', `${g.g}: auth`)
       assert.ok(g.followsSystemProxy && typeof g.followsSystemProxy.http === 'boolean' && typeof g.followsSystemProxy.ws === 'boolean', `${g.g}: followsSystemProxy`)
       const automatic = g.proxyEntry.kind === 'file'
-      if (automatic) { // what proxyEntries() reads: the files the agent reads, and either one JSON key or the variables of a dotenv block
+      if (automatic) { // what an automatic proxy entry reads: the files the agent reads, and either one JSON key or the variables of a dotenv block
         assert.equal(typeof g.proxyEntry.files, 'function', `${g.g}: files(ctx)`)
         if (g.proxyEntry.format === 'json-key') assert.ok(Array.isArray(g.proxyEntry.key) && g.proxyEntry.key.every((k) => typeof k === 'string'), `${g.g}: key`)
         else assert.deepEqual([g.proxyEntry.format, typeof g.proxyEntry.block.urlVar, typeof g.proxyEntry.block.fixed], ['dotenv-block', 'string', 'object'], `${g.g}: block`)
