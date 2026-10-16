@@ -20,6 +20,12 @@ import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { statusRun } from '../../src/cli/status.mjs'
 import { runDoctor } from '../../src/cli/doctor.mjs'
 import { EXIT, validateReceipt } from '../../src/cli/schema.mjs'
+import { darwinNetFacts } from '../../src/collector/arch/darwin/netfacts.mjs'
+import { gatherWin32Facts } from '../../src/collector/arch/win32/netfacts.mjs'
+
+/** The platform's real netfacts over the real daemon's reply; only the OS tools are fakes (darwin: lsof / scutil answer nothing; win32: a helper with no rows). */
+const HELPER = { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; if (verb === 'tcp-table') return { rows: [] }; throw Object.assign(new Error('not in this fake'), { code: 'helper-forbidden-key' }) } }
+const archOf = (platform) => (platform === 'darwin' ? darwinNetFacts : (ctx) => gatherWin32Facts({ ...ctx, deps: { ...ctx.deps, helper: HELPER } }))
 
 // status judges the model daemon: codex's door listens and its entry is intact, so it is captured and status exits by the judgement (1.6 R4)
 const STATUS_EXIT = EXIT.ok
@@ -53,7 +59,7 @@ for (const platform of ['darwin', 'win32']) {
         assert.ok(st.cert && st.cert.intermediate, 'status says the issuer state')
         // status on the model daemon's reply, through the real endpoint: attached by the doors, the install and cert blocks (1.6 §9.4); topology_error is allowed (1.6:404)
         const io3 = fakeIo()
-        const sr = await statusRun(['--json'], { io: io3, env: w.env, home: w.home, platform, deps: { platform, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }), rootStore: w.store } })
+        const sr = await statusRun(['--json'], { io: io3, env: w.env, home: w.home, platform, deps: { platform, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: archOf(platform) }), rootStore: w.store } })
         assert.equal(sr.exit, STATUS_EXIT, io3.text())
         const sj = JSON.parse(io3.text().slice(io3.text().indexOf('{')))
         assert.deepEqual(validateReceipt(sj), [], 'status --json validates')
@@ -62,7 +68,20 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(sj.install.state, 'complete')
         assert.equal(sj.cert.root.state, 'in-place', 'the root read back from the store install put it in')
         assert.deepEqual(sj.holders, [], 'the daemon\'s holder poll (GET /holders): none while on')
-        assert.ok(sj.topology || sj.topology_error, 'status carries a topology or says why not')
+        // CM21 through the real endpoint: the per-form facts and the chain are the daemon's doors and the entry the CLI wrote
+        const cf = (sj.forms || {}).codex || []
+        assert.ok(cf.length > 0, `status --json has codex's forms: ${JSON.stringify(sj.forms)} ${sj.topology_error || ''}`)
+        assert.equal(cf[0].proxy.connected, true, JSON.stringify(cf[0]))
+        assert.ok(['hook', 'config-prior', 'process-env', 'system-proxy', 'direct', 'unknown'].includes(cf[0].proxy.upstream.source), cf[0].proxy.upstream.source)
+        assert.match(cf[0].proxy.written, new RegExp(`^http://\\*\\*\\*@127\\.0\\.0\\.1:${port}$`), 'what asight wrote, redacted')
+        assert.ok(sj.topology.codex.nodes.some((n) => n.kind === 'asight-forwarder' && n.port === port), `the chain is drawn through the door: ${JSON.stringify(sj.topology.codex.notes)}`)
+        const io5 = fakeIo()
+        await statusRun(['codex'], { io: io5, env: w.env, home: w.home, platform, deps: { platform, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: archOf(platform) }), rootStore: w.store } })
+        assert.ok(io5.text().includes(`asight 写的: http://***@127.0.0.1:${port}   你原来的: ${cf[0].proxy.prior ?? '没有'}`), `status codex prints written and prior side by side (V70): ${io5.text()}`)
+        assert.match(io5.text(), new RegExp(`  ${cf[0].form}\\n    certificate: [^\\n]+\\n    proxy: 接上`), 'the two axes, one line each (V32)')
+        // the model daemon runs no driftCheck, so the entry the CLI wrote is never read back as the user's change
+        const log = fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : ''
+        assert.ok(!/"code":"proxy-changed"|"event":"netenv-change"/.test(log), 'no proxy-changed / netenv-change after on')
         const io4 = fakeIo()
         const dx = await runDoctor([], { io: io4, env: w.env, home: w.home, platform, deps: { platform, verify: () => ({ ok: true }), has: () => true, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) } })
         assert.ok(Object.values(EXIT).includes(dx), `doctor ran to an exit code of its set: ${dx} ${io4.text().slice(0, 300)}`)

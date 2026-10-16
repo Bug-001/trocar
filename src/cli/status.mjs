@@ -289,6 +289,26 @@ const userProcsText = (u) => (u.error ? [`你自己起的 asight 进程: 不知�
 
 /** The lines of `asight status <harness…>` — the detail view: every named harness's own row, its pid rows, its path detail. `colors` is the TTY palette
  *  (src/cli/color.mjs); the pure call keeps it off. The unnamed `asight status` prints `renderStatusDigest` instead (D46). */
+/** 1.6 §9.4: each form's `certificate` and `proxy` (proxy mode), as the facts the topology was drawn from carry them (core/proxymode/status-facts.mjs); `notes` = its
+ *  harness-notes (4.11 CM31 / CM32). null where no form has them (Linux, nothing installed). */
+function formsOf(f) {
+  const out = {}
+  for (const [h, hf] of Object.entries((f.facts && f.facts.harnesses) || {})) {
+    const l = (hf.forms || []).filter((x) => x.certificate && x.proxy)
+    if (l.length) out[h] = l.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy, ...(x.notes && x.notes.length ? { notes: x.notes } : {}) }))
+  }
+  return Object.keys(out).length ? out : null
+}
+
+/** `status <h>`'s per-form lines, rendered from the JSON (V43): the two axes apart (V32), what asight wrote beside what the user had (CM21, V70). */
+function formLines(forms, h) {
+  return ((forms && forms[h]) || []).flatMap(({ form, certificate: c, proxy: p, notes = [] }) => [`  ${form}`,
+    `    certificate: ${c.in_effect ? `生效 · ${c.carrier}${c.since ? ` · 自 ${c.since}` : ''}` : `不生效 · ${c.code} — 跑 ${c.command}`}${c.user_file ? ` · 你的证书文件 ${c.user_file.path}(${c.user_file.state})` : ''}`,
+    `    proxy: ${p.connected ? '接上' : '没接上'} · 入口${p.entry_intact ? '完好' : '不完好'} · 门${p.door_up ? '在听' : '没在听'} · 上游 ${p.upstream.url_redacted ?? '直连'}(${p.upstream.source}${p.upstream.code ? ` · ${p.upstream.code}` : ''})`,
+    `    asight 写的: ${p.written ?? '没有'}   你原来的: ${p.prior ?? '没有'}`,
+    ...notes.map((n) => `    ${n.code}: ${n.text}`)])
+}
+
 export function renderStatus(f, { home = null, detail = [], now = null, colors: c = noColor() } = {}) {
   const d = f.daemon, lines = [c.bold(`asight 状态(本用户 ${f.user})`)]
   lines.push(d.state === 'running' ? `守护进程: 在跑${d.pid ? `(pid ${d.pid})` : ''}${f.daemon.reply && f.daemon.reply.helper ? (f.link.helper === 'missing' ? `;助手有问题: ${f.link.helper_reason}` : `;助手 pid ${f.daemon.reply.helper.pid}`) : ''}`
@@ -310,7 +330,7 @@ export function renderStatus(f, { home = null, detail = [], now = null, colors: 
     lines.push(...identityLines(f, h.id))
   }
   lines.push(...listProblemLines(f))
-  if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id), now }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id], { now })]))
+  if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id), now }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id], { now }), ...formLines(formsOf(f), id)]))
   else if (f.topology_error) lines.push(`各 harness 的路: 不知道(${f.topology_error})`)
   lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvWriteText(f), ...userProcsText(f.userProcs))
   const holders = f.holders || []
@@ -475,6 +495,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   const restart = restartOf(f)
   if (json) {
     const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows, ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}) })), agent_list: f.agent_list, ...(f.identity_error ? { identity_error: f.identity_error } : {}), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), ...(f.netenv_write_error ? { netenv_write_error: f.netenv_write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, critical: criticalOf(f), log: path.join(f.dir, 'flows') }
+    const forms = formsOf(f); if (forms) r.forms = forms // 1.6 §9.4: per form, the certificate and the proxy apart
     r.install = f.install; r.cert = f.cert // 1.6 §9.4 (D55): the certificate axis, apart from the harnesses' verdicts
     r.holders = f.holders // P12: 「还剩 N 个」, with pids (null: the table or the manifest could not be read)
     io.out(JSON.stringify(r, null, 2))
