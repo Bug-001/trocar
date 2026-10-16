@@ -103,6 +103,28 @@ for (const d of descs) for (const os of ['darwin', 'win32']) {
   })
 }
 
+// CM22 at the door, the host tree (4.8 §3, W69): for every shipped hostTree form, a process named only by the form's hosts.processes (on no name list) is
+// its harness's at a host of the harness's own set — the door's decrypt is then that form's verdict — and forwarded `outside-host-set` anywhere else.
+// No hostsOf answer is injected: the set is the collector's own default (the descriptor's hosts), the product path.
+for (const d of descs) for (const f of d.proxyMode.forms.filter((x) => x.hostTree)) for (const os of f.os) for (const name of (f.hosts && f.hosts.processes) || []) {
+  test(`CM22 at the door · host tree · ${f.id} · ${os} · host program "${name}": its harness's hosts are judged, every other host is forwarded`, async () => {
+    const r = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, upstreamRoots: { os: async () => STUB_PEM, node: [STUB_PEM], extra: [] } })
+    await r.c.on({ harnesses: [d.name], groups: { [`${d.name}:${f.route}`]: 18400 } })
+    const { w, facts } = worldOf(d, f, os, {})
+    const base = ctxOf(w)
+    for (const [host, inSet] of [...d.hosts.map((h) => [h, true]), ['telemetry.unrelated.example', false]]) {
+      Object.assign(r.w, { pid: ++pid, facts: { exe: `/apps/${name}`, uid: 501, agent: null, startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile: (p) => base.readFile(p).replace(ROOT.pem, STUB_PEM) } })
+      const meta = await r.c.lookupIngress({ peer: PEER, user: `${d.name}:${f.route}`, target: { address: host, port: 443 } })
+      if (!inSet) { assert.deepEqual([meta.decrypt, meta.skip && meta.skip.reason], [false, 'outside-host-set'], `${host} is outside ${f.id}'s set`); continue }
+      const want = verdictOf({ desc: d, form: f, facts: { ...facts, name: d.name, pid }, record: { carrierInstalledAt: INSTALLED, rootFp256: STUB_FP }, issuer: ready, host, ctx: r.w.ctx })
+      assert.equal(meta.skip, undefined, `${host}: the host program is ${d.name}'s here`)
+      assert.equal(meta.decrypt, want.decrypt, `${f.id} · ${os} · ${host}: ${JSON.stringify(want)}`)
+      if (f.verified[os] === true) assert.equal(meta.decrypt, true, `${f.id} is verified on ${os}: its host program's connection to ${host} is decrypted`)
+    }
+    r.c.close()
+  })
+}
+
 // ---- CM20 / ⑥: the upstream per connection --------------------------------------------------------------------------------------------------------
 test('CM20 · meta.upstream equals upstreamFor over env × system proxy × prior × identified; an unidentified peer uses steps 2, 4, 5 only', async () => {
   for (const d of descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin')))) {

@@ -63,7 +63,10 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const doors = new Map() // g → { g, harness, routeId, port, auth, url }
   const onSet = new Set()
   let bound = null, iss = null
-  const ident = createDoorIdentity({ ownerOf, factsOf, identify, ownUid, hostsOf, onFailure: record, onEvent: event })
+  // a hostTree form's host set: the injected reader's, else its harness's own hosts (the descriptor's data; 4.8 §3) — never none, which would forward every host
+  const hostsOfForm = new Map(harnesses.flatMap((d) => d.proxyMode.forms.filter((f) => f.hostTree).map((f) => [f, d.hosts || []])))
+  const hostSetOf = (f) => hostsOf(f) || hostsOfForm.get(f) || null
+  const ident = createDoorIdentity({ ownerOf, factsOf, identify, ownUid, hostsOf: hostSetOf, onFailure: record, onEvent: event })
   const seen = createDoorSeen({ clock })
   const pcache = new Map(), vcache = new Map(), said = new Set()
   const rootFp256 = rootPem ? new crypto.X509Certificate(rootPem).fingerprint256 : null
@@ -112,7 +115,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const forms = ok.length ? ok : all
     let v = forms.length ? { decrypt: true } : { decrypt: false, code: 'not-verified', detail: `${id.agent} has no form on ${ctx.os}` }
     for (const f of forms) {
-      const r = verdictOf({ desc, form: f, facts, record: { carrierInstalledAt: carrierAt(desc, f), rootFp256 }, issuer: iss ? issuer : null, host, hostSet: hostsOf(f) || undefined, ctx })
+      const r = verdictOf({ desc, form: f, facts, record: { carrierInstalledAt: carrierAt(desc, f), rootFp256 }, issuer: iss ? issuer : null, host, hostSet: hostSetOf(f) || undefined, ctx })
       if (!r.decrypt) { v = r; break }
     }
     if (!v.decrypt && !said.has(`${k}\0${v.code}`)) { said.add(`${k}\0${v.code}`); fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g }) }

@@ -20,7 +20,7 @@ export default {
     forms: [
       { id: 'eighth.cli', os: ['darwin', 'win32'], route: 'settings', cert: 'bundle', trust: 'node', present: [{ command: 'eighth' }, { base: 'home', path: '.eighth' }], verified: { darwin: true, win32: { reason: 'not-measured' } } },
       { id: 'eighth.desktop', os: ['darwin', 'win32'], route: 'library', cert: 'root', trust: 'root', present: [{ perOs: { darwin: { base: 'abs', path: '/Applications/Eighth.app' }, win32: { base: 'localAppData', path: 'Programs/Eighth' } } }], verified: { darwin: true, win32: true }, forwardOnlyHosts: ['login.eighth.example'] },
-      { id: 'eighth.editor', os: ['darwin', 'win32'], route: 'editor', cert: 'root', trust: 'root', present: [{ base: 'home', path: '.vscode/extensions', glob: 'eighth.eighth-*' }], verified: { darwin: true, win32: true }, hostTree: true },
+      { id: 'eighth.editor', os: ['darwin', 'win32'], route: 'editor', cert: 'root', trust: 'root', present: [{ base: 'home', path: '.vscode/extensions', glob: 'eighth.eighth-*' }], verified: { darwin: true, win32: true }, hostTree: true, hosts: { processes: ['eighth-editor'] } },
       { id: 'eighth.env', os: ['darwin'], route: 'dotenv', cert: 'root', trust: 'root', present: [{ base: 'home', dir: '.eighth-env', env: 'EIGHTH_ENV_HOME' }], verified: { darwin: true } },
       { id: 'eighth.native', os: ['darwin', 'win32'], route: 'switch', cert: 'wrap', trust: 'node', present: [{ base: 'home', path: '.eighth/bin/eighth' }], verified: { darwin: true, win32: true } },
       { id: 'eighth.plugin', os: ['win32'], route: 'switch', cert: 'hook', trust: 'root', present: [{ base: 'home', path: '.eighth/plugins' }], verified: { win32: true } },

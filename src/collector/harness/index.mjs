@@ -127,6 +127,7 @@ function proxyModeProblems(pm) {
       if (v !== true && !(obj(v) && nonEmpty(v.reason))) say('verified', `${at}.verified.${os} is neither true nor { reason }`)
     }
     if (f.hostTree !== undefined && f.hostTree !== true) say('shape', `${at}.hostTree is not true`)
+    if (f.hostTree && !(obj(f.hosts) && Array.isArray(f.hosts.processes) && f.hosts.processes.length && f.hosts.processes.every(nonEmpty))) say('shape', `${at} is a hostTree form without hosts.processes: the door could not tell its host program (4.8 §3)`)
     if (f.forwardOnlyHosts !== undefined && !(Array.isArray(f.forwardOnlyHosts) && f.forwardOnlyHosts.every(nonEmpty))) say('shape', `${at}.forwardOnlyHosts is not a list of hosts`)
   }
   for (const [id, r] of Object.entries(routes)) {
