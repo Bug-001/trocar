@@ -32,9 +32,14 @@ export function factsOf(text) {
   return out
 }
 
-test('1 · each external fact is written once in src/: a second copy is an import away', () => {
+// The end-to-end suite (T26) is held to the same rule over src/ ∪ the suite: a suite file that repeats a path, port or version src/ owns
+// imports it, and one fact of the suite's own is written once. Empty until the suite exists; the rule covers it the day it appears.
+const SUITE_DIR = path.join('test', 'lab', 'suite')
+export const suiteFiles = (root = ROOT) => (fs.existsSync(path.join(root, SUITE_DIR)) ? walk(SUITE_DIR) : [])
+
+test('1 · each external fact is written once in src/ and the end-to-end suite: a second copy is an import away', () => {
   const where = new Map()
-  for (const f of SRC) for (const fact of factsOf(code(read(f)))) where.set(fact, [...(where.get(fact) || []), f])
+  for (const f of [...SRC, ...suiteFiles()]) for (const fact of factsOf(code(read(f)))) where.set(fact, [...(where.get(fact) || []), f])
   const twice = [...where].filter(([, fs_]) => fs_.length > 1).map(([fact, fs_]) => `${fact}: ${fs_.join(', ')}`)
   assert.deepEqual(twice, [], 'move the fact into the module that owns it and import it')
 })
