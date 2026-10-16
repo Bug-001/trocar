@@ -15,7 +15,7 @@ import { readStateFile } from '../off/state.mjs'
 import { readManifest } from '../off/manifest.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
-import { controlRequest, controlSocketPath, controlEndpointFor } from '../off/control-client.mjs'
+import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
 import { listProcs, procIdentity, pidAlive } from '../off/proc.mjs'
 import { createRegistry } from '../collector/core/registry.mjs'
 import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
@@ -84,7 +84,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   // $XDG_RUNTIME_DIR unix socket, which the file modes keep to the operator (no token).
   const endpoint = deps.socketPath === undefined ? controlEndpointFor({ platform, dir, env, fs }) : null
   const request = deps.request || (endpoint && endpoint.request) || controlRequest
-  const socketPath = deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || (() => { try { return controlSocketPath({ env }) } catch { return null } })()
+  const socketPath = deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || null
   const f = { at: new Date(ms()).toISOString(), platform, user: deps.user || (() => { try { return nodeOs.userInfo().username } catch { return String(env.USER || '') } })(), dir, daemon: { state: 'unknown', pid: null, reason: null, socket: null, reply: null }, harnesses: [] }
   // the daemon: judged the way `off` judges it (its lock, then whether the control socket answers), then asked for its status
   const st = await daemonState({ lockFile: path.join(dir, 'lock'), socketPath, request, identity, alive, now: ms, fs, timeoutMs: deps.timeoutMs || 5000, platform })

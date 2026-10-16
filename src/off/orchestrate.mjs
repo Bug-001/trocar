@@ -26,7 +26,7 @@ import { readManifest, refuseOldManifest, unknownItems, MANIFEST_VERSION, OFF_VE
 import { undoHarnesses, undoRootKeys } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
-import { controlRequest, controlSocketPath, controlEndpointFor } from './control-client.mjs'
+import { controlRequest, controlEndpointFor } from './control-client.mjs'
 import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { plistFilePath, AGENT_LABEL, agentState, disableAgent } from './darwin.mjs'
 import { execTool } from './exec.mjs'
@@ -60,7 +60,7 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
     clock: deps.now || (() => new Date()), ms: deps.ms || Date.now, sleep: deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     alive: deps.alive || pidAlive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
     lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps, standalone: deps.standalone === true, // the single-file asight-off passes `standalone`: it words what it cannot do as "run asight off" (R3, V35)
-    socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || (() => { try { return controlSocketPath({ env }) } catch { return null } })(),
+    socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || null,
   }
   const once = (fn) => { let p; return () => p || (p = Promise.resolve().then(fn)) } // the process table is read once per run
   w.procs = once(deps.procs || (() => listProcs({ exec: w.exec, platform, env })))
