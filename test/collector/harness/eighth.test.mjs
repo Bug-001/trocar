@@ -31,10 +31,7 @@ it('CM27: the eighth descriptor holds no function, and no file of src/ names it'
 // Exceptions are data, each with its reason; an entry that no longer matches anything is itself a finding (the list only shrinks).
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const walk = (d) => fs.readdirSync(path.join(ROOT, d), { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : /\.(mjs|cjs|js)$/.test(e.name) ? [path.join(d, e.name).split(path.sep).join('/')] : [])
-const OLD_WIN = 'the old win32 collector, deleted as one with the W69 guard (spec 0.1:161)'
-const CM27_EXEMPT = [
-  { file: 'src/collector/arch/win32/optin.mjs', kind: 'harness', reason: OLD_WIN },
-]
+const CM27_EXEMPT = []
 function cm27Findings(files, ids, read, exemptions = CM27_EXEMPT) {
   const exempt = (file, kind) => exemptions.some((x) => x.file === file && x.kind === kind)
   const idRe = new RegExp(`(?<![\\w-])(${ids.map((x) => x.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')).join('|')})(?![\\w-])`, 'g')
