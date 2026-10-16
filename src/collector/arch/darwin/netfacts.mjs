@@ -12,7 +12,7 @@
 //     dial): the `HTTPS*` keys are the hop an HTTPS request takes (the `HTTP*` ones alone send HTTPS direct, WinINET's own rule, kept apart there as here), `ProxyAutoConfigEnable` is PAC's own flag — the g row of
 //     1.6 §9.7's shape table, with none of Windows' OPEN 27 type ambiguity;
 // Routing is `proxy` (D43: macOS has proxy mode only). This file is NOT a near-verbatim copy of a win32 one — Windows' netFacts is that line's open task; the shape donor is arch/linux/netfacts.mjs, and what
-// darwin replaces is the fact sources (lsof / scutil / route / ifconfig / the euid's ps) and the rows 4.9 §10 names: elevation (linux answers null), and the machine-PATH rows (n / o of 1.6 §9.7's Windows table),
+// darwin replaces is the fact sources (lsof / scutil / the euid's ps; no route or interface reader, D49) and the rows 4.9 §10 names: elevation (linux answers null), and the machine-PATH rows (n / o of 1.6 §9.7's Windows table),
 // which have no darwin counterpart at all (macOS has no machine-before-user PATH order) and so are read by nothing here. What darwin cannot do that linux does: another process's environment is NEVER read (no
 // privilege to, and `ps` has no such column; 4.9 §5.4, the same rule as Windows' 4.8 §10.1) — the start-time proxy is known from a file the harness reads at start (which `adopted` remembers) or not at all, and
 // an environment variable as the source of it is the `env-unreadable` unknown, not linux's `denied`: the closed set of 1.6 §9.4 has the word for exactly this. `launchctl` and `security`, listed among 4.9 §10's
@@ -78,7 +78,7 @@ function startSettingOf({ proc, current, adopted, startedAt, keys }) {
 }
 
 /**
- * macOS's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of `lsof`, `scutil`, `route`, `ifconfig` and the euid's `ps`:
+ * macOS's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of `lsof`, `scutil` and the euid's `ps`:
  * spawnSync-shaped; execTool refuses a real one under npm test — `procRoot` is accepted by the shared call and unused, there is no /proc to point at on darwin, the process table arrives in `status`).
  * → { routing: 'proxy', listeners, procs: { <h>: [proc] }, systemProxy, unknowns }.
  */
