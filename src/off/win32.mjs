@@ -17,7 +17,25 @@ export function elevationByWhoami({ run = null, env = process.env } = {}) {
   const rids = [...r.out.matchAll(/\bS-1-16-(\d+)\b/g)].map((m) => Number(m[1]))
   if (/\bS-1-5-18\b/.test(r.out)) return { elevated: true, why: 'system' }
   if (!rids.length) return { elevated: null, reason: 'whoami /groups gave no mandatory label (S-1-16-…)' }
-  return Math.max(...rids) >= HIGH_RID ? { elevated: true, why: 'high-integrity' } : { elevated: false }
+  if (Math.max(...rids) < HIGH_RID) return { elevated: false }
+  return unsplitByReg({ run, env }) ? { elevated: false, why: 'unsplit' } : { elevated: true, why: 'high-integrity' }
+}
+
+// R7's unsplit-token exception (1.6 R7, D53③): with no split token every shell of the account is High, so `on` and `off` share one token. whoami cannot see a
+// linked token, so the two settings that make one are read: UAC off (EnableLUA = 0), or the built-in Administrator (user RID 500) without Admin Approval
+// Mode (FilterAdministratorToken absent or 0). A setting that cannot be read is not known to be off: the token stays refused.
+const UAC_KEY = 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System'
+const regDword = (name, { run, env }) => {
+  const r = execTool('reg', ['query', UAC_KEY, '/v', name], { run, env })
+  const m = r.code === 0 && new RegExp(`\\b${name}\\s+REG_DWORD\\s+0x([0-9a-f]+)`, 'i').exec(r.out)
+  return m ? parseInt(m[1], 16) : r.code === 1 ? 'absent' : null
+}
+function unsplitByReg({ run, env }) {
+  if (regDword('EnableLUA', { run, env }) === 0) return true
+  const u = execTool('whoami', ['/user', '/fo', 'csv', '/nh'], { run, env })
+  if (u.code !== 0 || !/"S-1-5-21-[\d-]+-500"/.test(u.out)) return false
+  const f = regDword('FilterAdministratorToken', { run, env })
+  return f === 0 || f === 'absent'
 }
 
 /** → null (go on) or `{ code: 'elevated-token', reason }`. A token that cannot be read is not a refusal: an undo that stops on a broken `whoami` is not an undo. */

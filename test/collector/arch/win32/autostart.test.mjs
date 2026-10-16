@@ -1043,3 +1043,34 @@ test('W24 runSupervisor is what `asight daemon --supervise` calls: it supervises
   assert.deepEqual(['SIGHUP', 'SIGINT', 'SIGTERM'].map((s) => proc.listenerCount(s)), [0, 0, 0])
   await assert.rejects(async () => runSupervisor({ node: NODE, dir, proc }), TypeError, 'without the script it would supervise nothing')
 })
+
+// R7's unsplit-token exception (1.6 R7, D53③): an account with no split token — UAC off (EnableLUA = 0), or the built-in Administrator
+// (RID 500) with FilterAdministratorToken not 1 — runs every shell at High, and `on` and `off` use the same token, so the risk R7 guards (a root-written
+// item a user-level `off` cannot undo) is not there: its High token is let through. A split token's elevated half and SYSTEM are still refused.
+const REG = (name, v) => `\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\r\n    ${name}    REG_DWORD    ${v}\r\n\r\n`
+const answers = (map, calls = []) => (file, args) => { calls.push([file, ...args]); const k = Object.keys(map).find((x) => [file, ...args].join(' ').includes(x)); return k ? (typeof map[k] === 'string' ? { status: 0, stdout: map[k], stderr: '' } : map[k]) : { status: 1, stdout: '', stderr: 'ERROR: The system was unable to find the specified registry key or value.' } }
+const HIGH = WHOAMI('Mandatory Label\\High Mandatory Level')
+const USER = (rid) => `"pc\\\\me","S-1-5-21-1-2-3-${rid}"\r\n`
+
+test('R7 unsplit token (off / uninstall, whoami): High with EnableLUA = 0, or the built-in Administrator with FilterAdministratorToken not 1, is let through; a split token\'s High and SYSTEM are not', () => {
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x0'), '/user': USER(1001) }) }), null, 'UAC off: every token is unsplit')
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500) }) }), null, 'the built-in Administrator, FilterAdministratorToken absent (its default, 0)')
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500), FilterAdministratorToken: REG('FilterAdministratorToken', '0x0') }) }), null)
+  for (const [why, map] of [
+    ['a split token run as administrator', { '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(1001) }],
+    ['the built-in Administrator under Admin Approval Mode', { '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500), FilterAdministratorToken: REG('FilterAdministratorToken', '0x1') }],
+    ['EnableLUA unreadable: not known to be unsplit', { '/groups': HIGH, '/user': USER(1001) }],
+    ['SYSTEM, whatever UAC says', { '/groups': WHOAMI('Mandatory Label\\System Mandatory Level', '"NT AUTHORITY\\SYSTEM","User","S-1-5-18",""\n'), EnableLUA: REG('EnableLUA', '0x0'), '/user': USER(1001) }],
+  ]) assert.equal(refuseElevatedByWhoami({ run: answers(map) })?.code, 'elevated-token', why)
+  const calls = []
+  refuseElevatedByWhoami({ run: answers({ '/groups': WHOAMI('Mandatory Label\\Medium Mandatory Level') }, calls) })
+  assert.deepEqual(calls.map((c) => c[0]), ['whoami'], 'a Medium token asks nothing more')
+})
+
+test('R7 unsplit token (on / daemon, the helper): elevationType default is let through; full and SYSTEM are refused', async () => {
+  const ask = (t) => refuseElevated({ helper: { call: async () => t } })
+  assert.equal(await ask({ elevated: true, system: false, elevationType: 'default', integrity: 'High' }), null)
+  assert.equal((await ask({ elevated: true, system: false, elevationType: 'full', integrity: 'High' }))?.code, 'elevated-token')
+  assert.equal((await ask({ elevated: true, system: true, elevationType: 'default', integrity: 'System' }))?.code, 'elevated-token')
+  assert.equal((await ask({ elevated: true, system: false, integrity: 'High' }))?.code, 'elevated-token', 'no elevationType: not known to be unsplit')
+})

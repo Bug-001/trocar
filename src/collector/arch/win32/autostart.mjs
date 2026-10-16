@@ -48,6 +48,7 @@ export async function refuseElevated({ helper = null, start = startHelper, env =
     try { t = await h.call('token') } catch (e) { onUnknown(`the token could not be read: ${(e && e.code) || ''} ${(e && e.message) || e}`.replace(/\s+/g, ' ').trim()); return null }
     if (!t || typeof t !== 'object' || typeof t.elevated !== 'boolean' || typeof t.system !== 'boolean') { onUnknown(`the token answer is not {elevated, system} booleans: ${JSON.stringify(t)}`.slice(0, 300)); return null }
     if (!t.elevated && !t.system) return null
+    if (!t.system && t.elevationType === 'default') return null // R7 (D53③): no split token — every shell of this account is High, on and off share it
     return {
       code: 'elevated-token',
       reason: `用你自己的账号跑,不要「以管理员身份运行」,也不要用 SYSTEM(R7:asight 不以提升的令牌运行;这个令牌是${t.system ? ' SYSTEM' : '高完整性级别'})`,
