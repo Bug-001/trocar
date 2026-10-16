@@ -45,7 +45,7 @@ export async function backendsFor({ os, home, run = null, env = process.env, fs 
     return {
       custody: keychainCustody({ helperPath, run, env }), rootStore: userRootStore({ home, run, env, fs }),
       installHelper: (interactive) => installHelper({ dest: helperPath, interactive, run, env, fs }),
-      wrapperKit: { renderWrapper }, facts: pol.platformFacts, dirs: pol.dirsOf(home), policy: (spec) => pol.policyReader({ run, env }).read(spec),
+      wrapperKit: { renderWrapper }, facts: pol.platformFacts, dirs: pol.dirsOf(home), policy: pol.policyReader({ run, env }),
     }
   }
   if (os === 'win32') {
@@ -54,7 +54,7 @@ export async function backendsFor({ os, home, run = null, env = process.env, fs 
     return {
       custody: cngCustody({ run, env }), rootStore: userRootStore({ home, run, env, fs }), installHelper: null,
       wrapperKit: { renderWrapper, compile: makeCompile({ dir: path.join(home, '.asight', 'collector'), run, fs }) },
-      facts: pol.platformFacts({ run, env }), dirs: pol.dirsOf(home, env), policy: (spec) => pol.policyReader({ run, env }).read(spec),
+      facts: pol.platformFacts({ run, env }), dirs: pol.dirsOf(home, env), policy: pol.policyReader({ run, env }),
     }
   }
   throw new Error(`the collector model runs on macOS and Windows, not ${os}`)
