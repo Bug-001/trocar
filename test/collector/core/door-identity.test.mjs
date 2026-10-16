@@ -10,7 +10,6 @@ import { createDoorRedirector } from '../../../src/collector/core/engine/door-re
 import { createRegistry } from '../../../src/collector/core/registry.mjs'
 import { createTracker } from '../../../src/collector/core/tracker.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
-import { groupsOf as darwinGroupsOf } from '../../../src/collector/arch/darwin/route-plan.mjs'
 import { groupsOf as win32GroupsOf } from '../../../src/collector/arch/win32/route-plan.mjs'
 import { factsOfPid } from '../../../src/collector/arch/darwin/procinfo.mjs'
 import { factsOfRow } from '../../../src/collector/arch/win32/procinfo.mjs'
@@ -43,7 +42,7 @@ const target = (address = 'api.anthropic.com') => ({ address, port: 443 })
 
 /** A door core over the given OS's real groups, every group on, the peer owned by whatever pid `owner.pid` says, the facts from `store`. */
 function door(os, { store = new Map(), identify = REG.match, isOn = () => true, ownUid = OWN_UID, routes = null, hostsOf = () => null, verdictWaitMs = 60 } = {}) {
-  const groups = os === 'darwin' ? darwinGroupsOf(ALL) : win32GroupsOf(ALL)
+  const groups = win32GroupsOf(ALL) // the door core is OS-free; darwin's own group table went with its overlays, so both OSes' facts meet the win32 groups
   const owner = { pid: null }
   const events = []
   const execs = []
@@ -61,7 +60,7 @@ function door(os, { store = new Map(), identify = REG.match, isOn = () => true, 
 }
 
 test('the door needs identify and isOn: who a process is and whether its harness is on have no default answer', () => {
-  const groups = darwinGroupsOf(ALL)
+  const groups = win32GroupsOf(ALL)
   assert.throws(() => createDoorRedirector({ groups, isOn: () => true, directCount: async () => ({}) }), /identify/)
   assert.throws(() => createDoorRedirector({ groups, identify: REG.match, directCount: async () => ({}) }), /isOn/)
 })
@@ -100,7 +99,7 @@ test('W78 a win32 command line still pending is `cmdline-pending`, not cached an
 
 test('W79 an agent on the list at another harness\'s door is its own harness (D51⑥): codex at the claude door is codex, judged by codex\'s verdict, through the claude group\'s upstream', async () => {
   const facts = darwinFacts(31, { exe: '/Users/u/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex', cmdline: 'codex exec hi' })
-  const groups = darwinGroupsOf(ALL)
+  const groups = win32GroupsOf(ALL)
   const routes = Object.fromEntries(groups.map((x) => [x.g, { g: x.g, ...ROUTE }]))
   routes['claude-code.settings'] = { ...ROUTE, upstream: { kind: 'http', host: 'corp.proxy', port: 3128, source: 'agent' } }
   const d = door('darwin', { store: new Map([[31, facts]]), routes })
@@ -291,7 +290,7 @@ test('item 7 wired: every untracked why the door gives lands on the flows/ row t
   expect(await viaWin(101, 'kimi-code.vscode', 'marketplace.visualstudio.com'), 'outside-host-set', 'off the host set: the door\'s why for this connection, not the row the pid has from another')
 
   // ambiguous: no two presets overlap today, so a name list that answers it stands in; group-off: the plan has the group off while a connection still arrives
-  const groups = darwinGroupsOf(ALL)
+  const groups = win32GroupsOf(ALL)
   const routes = Object.fromEntries(groups.map((x) => [x.g, { g: x.g, ...ROUTE }]))
   routes['codex.env'] = { ...ROUTE, on: false }
   const odd = door('darwin', { routes, identify: () => ({ reason: 'ambiguous', agent: null }), store: new Map([[131, darwinFacts(131, { exe: '/Users/u/bin/both', cmdline: 'both' })]]) })

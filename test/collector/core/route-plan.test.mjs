@@ -1,6 +1,6 @@
 // test/collector/core/route-plan.test.mjs — the one copy the two proxy-mode arches share (core/route-plan.mjs · core/entry-forms.mjs · core/proxy-wiring.mjs),
-// and the guard that keeps it one: the arch files (arch/{darwin,win32}/{forms,route-plan,wiring}.mjs) define none of the lifted pieces again. The behaviour of
-// the plan itself is pinned per arch, through the arch's own exports (test/collector/arch/<os>/route-plan.test.mjs, forms.test.mjs, wiring.test.mjs).
+// and the guard that keeps it one: the arch files (arch/win32/{forms,route-plan,wiring}.mjs; darwin's twins went with its overlays) define none of the
+// lifted pieces again. The behaviour of the plan itself is pinned through the arch's own exports (test/collector/arch/win32/route-plan.test.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -10,9 +10,7 @@ import * as core from '../../../src/collector/core/route-plan.mjs'
 import * as entryForms from '../../../src/collector/core/entry-forms.mjs'
 import { identifyOf, desktopDoorOf } from '../../../src/collector/core/proxy-wiring.mjs'
 import * as winForms from '../../../src/collector/arch/win32/forms.mjs'
-import * as macForms from '../../../src/collector/arch/darwin/forms.mjs'
 import * as winPlan from '../../../src/collector/arch/win32/route-plan.mjs'
-import * as macPlan from '../../../src/collector/arch/darwin/route-plan.mjs'
 
 const src = (rel) => fs.readFileSync(fileURLToPath(new URL(`../../../src/collector/${rel}`, import.meta.url)), 'utf8')
 
@@ -21,7 +19,7 @@ const src = (rel) => fs.readFileSync(fileURLToPath(new URL(`../../../src/collect
 /** Each piece lifted out of the arch twins (review R4 · R7 · R8, 2026-10-14). A name here declared again in an arch file is a twin coming back. */
 const LIFTED = ['entryGate', 'proxyUrl', 'proxyEntries', 'groupsOf', 'priorOf', 'proxyRecordsOf', 'resolveLogin', 'planRoutes', 'hostSetOf', 'observe', 'recordsOf', 'readLive', 'fromRecord',
   'isProxyRecord', 'dialOf', 'matchable', 'norm', 'wanted', 'movedRoute', 'optinRecordsOf', 'isDesiredOn', 'optedInOf', 'identifyOf', 'desktopDoorOf']
-const ARCH_FILES = [...['forms', 'route-plan'].flatMap((f) => ['darwin', 'win32'].map((os) => `arch/${os}/${f}.mjs`)), 'arch/win32/wiring.mjs']
+const ARCH_FILES = [...['forms', 'route-plan'].map((f) => `arch/win32/${f}.mjs`), 'arch/win32/wiring.mjs']
 const declared = (code, name) => new RegExp(`\\b(function\\*?|const|let|var|class)\\s+${name}\\b`).test(code)
 
 test('the arch twins declare none of the lifted pieces, and the desired-state rule and the no-door identity stand-in are written nowhere but core', () => {
@@ -36,9 +34,8 @@ test('the arch twins declare none of the lifted pieces, and the desired-state ru
 })
 
 test('the arch exports are the core functions themselves where nothing differs per OS', () => {
-  for (const m of [winForms, macForms]) for (const n of ['entryGate', 'proxyUrl', 'proxyEntries']) assert.equal(m[n], entryForms[n], n)
-  for (const n of ['proxyRecordsOf', 'hostSetOf']) assert.equal(winPlan[n], macPlan[n], n)
-  for (const m of [winPlan, macPlan]) assert.deepEqual(Object.keys(m).sort(), ['groupsOf', 'hostSetOf', 'planRoutes', 'priorOf', 'proxyRecordsOf', 'resolveLogin'])
+  for (const n of ['entryGate', 'proxyUrl', 'proxyEntries']) assert.equal(winForms[n], entryForms[n], n)
+  assert.deepEqual(Object.keys(winPlan).sort(), ['groupsOf', 'hostSetOf', 'planRoutes', 'priorOf', 'proxyRecordsOf', 'resolveLogin'])
 })
 
 test('the shared modules touch no OS, name no harness and import only core', () => {
