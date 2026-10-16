@@ -14,7 +14,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { buildStandalone, writeStandalone, checkStandalone, STANDALONE_ENTRY } from '../../src/off/standalone.mjs'
-import { OFF_VERSION, MANIFEST_VERSION, readManifest, saveManifest, manifestPath } from '../../src/off/manifest.mjs'
+import { OFF_VERSION, MANIFEST_VERSION, readManifest, saveManifest, manifestPath, KNOWN_KINDS, FILE_ENTRY_KINDS } from '../../src/off/manifest.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
@@ -229,6 +229,14 @@ test('the generator refuses what would make a wrong file: a duplicate top-level 
 test('src/off carries OFF_VERSION as an integer, and the unique-name rule the generator needs holds over the real directory (it builds)', () => {
   assert.ok(Number.isInteger(OFF_VERSION) && OFF_VERSION >= 1)
   assert.ok(buildStandalone({ version: OFF_VERSION }).length > 20_000)
+})
+
+// The kinds the copy undoes, and how (the file rule's kinds), pinned to the OFF_VERSION that ships them: a change to either list
+// without a bump (and a row here) is red, so doctor's version line tells an old copy from one that knows the new rules.
+const KINDS_AT = { 15: 'e3c392509cb0c538' }
+test('OFF_VERSION moves with the undo rules: the known kinds and the file-rule kinds are the ones this version ships', () => {
+  const fp = sha256(Buffer.from(JSON.stringify([KNOWN_KINDS, FILE_ENTRY_KINDS]))).slice(0, 16)
+  assert.equal(KINDS_AT[OFF_VERSION], fp, `KNOWN_KINDS / FILE_ENTRY_KINDS changed: bump OFF_VERSION with its reason line (src/off/manifest.mjs) and add { ${OFF_VERSION + 1}: '${fp}' } here`)
 })
 
 // ── V35 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
