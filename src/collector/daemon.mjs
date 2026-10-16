@@ -137,6 +137,16 @@ function agentListWatch({ home, write }) {
   }
 }
 
+/** The previous run's lock, read before this start writes its own (4.6 §事件与码, D38): a lock still there means that daemon never finished its stop
+ *  (doStop removes it last), so it is said as `failure {where:'daemon', code:'unclean-stop'}` — this start's first line. No lock: a clean stop. */
+function noteUncleanStop(lock, failure) {
+  let stale = null
+  let unreadable = false
+  try { stale = JSON.parse(fs.readFileSync(lock, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true } // ENOENT: the last daemon stopped cleanly
+  if (stale && stale.pid) failure('daemon', coded(new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it, and connections then in flight through its engine were cut (how many is not known)`), 'unclean-stop'))
+  else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
+}
+
 async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {} }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
@@ -177,11 +187,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   try {
     // First the previous run (4.6 §事件与码): an unclean stop is the first line of this start; readers take this start's
     // lines from here on as this run's, up to and past daemon-start — the CA check below included.
-    let stale = null
-    let unreadable = false
-    try { stale = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true } // ENOENT: the last daemon stopped cleanly
-    if (stale && stale.pid) failure('daemon', coded(new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it, and connections then in flight through its engine were cut (how many is not known)`), 'unclean-stop'))
-    else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
+    noteUncleanStop(P.lock, failure)
     // The CA is checked at start and once a day (D-4, 4.6 §身份与信任「CA」): both files readable, a pair, inside its
     // validity. Unusable → this daemon never hooks (agents go direct, zero errors) and says "CA unusable" — not
     // "not installed" — in flows/ (ca-invalid: which part, which file, the errno) and in status.
@@ -615,6 +621,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
 // engine are always the real ones.
 async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows }) {
+  noteUncleanStop(P.lock, failure) // first: the previous run's unclean stop is this start's first line, as on Linux
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
