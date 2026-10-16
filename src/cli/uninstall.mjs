@@ -137,7 +137,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // CM24: on macOS / Windows uninstall never does off — capture online (a harness on, a holder, or not knowable) is named and nothing changes
     const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m) : null
     if (online) {
-      receipt.ok = false; receipt.code = 'collectors-online'
+      receipt.ok = false; receipt.code = 'collectors-online'; receipt.purge_data = false; receipt.kept_captures = true // nothing changed: --purge-data deleted nothing either
       receipt.problems.push([online.on.length ? `还开着: ${online.on.join(', ')}` : null, online.holders.length ? `还有持有者: ${online.holders.map((x) => `pid ${x.pid} (${x.harness})`).join(', ')}` : null, online.unknown ? `不知道有没有持有者: ${online.unknown}` : null].filter(Boolean).join(';') + '。什么都没改;先 asight off,等持有者退出后再 asight uninstall(uninstall 从不代做 off)')
       receipt.problems.push(`先跑 ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(',再 ')}`) // the doctor's own steps for the code (1.6 §9.6)
       put({ event: 'failure', code: 'collectors-online', reason: receipt.problems.at(-2) })

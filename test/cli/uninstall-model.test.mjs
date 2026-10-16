@@ -10,6 +10,7 @@ import tls from 'node:tls'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
+import { formatUninstallReceipt } from '../../src/cli/receipt.mjs'
 import { startControlServer } from '../../src/collector/core/control.mjs'
 import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { recordingExec } from './fixtures/on-ctx.mjs'
@@ -31,10 +32,10 @@ async function installed() {
   return { ...w, kimi }
 }
 const seq = []
-function uninstall(w, deps = {}) {
+function uninstall(w, deps = {}, opts = {}) {
   const custody = { kind: w.custody.kind, remove: (id) => { seq.push('custody:remove'); return w.custody.remove(id) } }
   const exec = recordingExec({ onRun: (cmd) => seq.push(`exec:${cmd.split(' ').slice(0, 2).join(' ')}`) })
-  return runUninstall({ home: w.home, env: w.env, yes: true, deps: { platform: 'darwin', exec: exec.run, custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, ...deps } })
+  return runUninstall({ home: w.home, env: w.env, yes: true, ...opts, deps: { platform: 'darwin', exec: exec.run, custody, procs: async () => [], sleep: async () => {}, drainMs: 0, getuid: () => 501, ...deps } })
 }
 async function daemonAnswering(w, holders) {
   const sock = path.join(w.home, 'c.sock')
@@ -52,6 +53,9 @@ test('CM24 · daemon up: a holder the daemon names (GET /holders over its real e
     assert.ok(receipt.problems.some((p) => p.includes('asight off') && p.includes('asight uninstall')), 'the refusal gives the steps: asight off, then asight uninstall (1.6 §9.6 collectors-online)')
     assert.match(receipt.problems.join('\n'), /pid 4242 \(codex\)/)
     assert.deepEqual(tree(w.home), before, 'not one file changed')
+    const purged = await uninstall(w, {}, { purgeData: true }) // the receipt of a refused --purge-data says the captures stay (it said 「采集数据已删」)
+    assert.deepEqual([purged.exit, purged.receipt.code, tree(w.home)], [1, 'collectors-online', before])
+    assert.doesNotMatch(formatUninstallReceipt(purged.receipt), /采集数据已删/)
   } finally { await server.close() }
 })
 
