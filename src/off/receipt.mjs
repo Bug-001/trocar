@@ -7,7 +7,7 @@ import { OFF_PREFIX } from './text-edit.mjs'
 
 const offTilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
 const UNTIL_WORDS = { restart: '重启后不再信任', 'next-connection': '下一次新连接起不再信任', 'next-handshake': '下一次握手起不再信任', 'session-end': '当前 session 结束后不再信任' }
-const ROUTING_WORDS = { 'daemon-reply': '守护进程回复了,内核已确认', 'no-daemon': '没有守护进程在跑,它的助手也已不在', signal: '守护进程没响应,已停掉它', systemctl: '守护进程没响应,已经 systemd 停掉它' }
+const ROUTING_WORDS = { 'daemon-reply': '守护进程回复了,已确认', 'no-daemon': '没有守护进程在跑,它的助手也已不在', signal: '守护进程没响应,已停掉它', systemctl: '守护进程没响应,已经 systemd 停掉它' }
 
 // the status column of one changed file
 // a key the user set to a value of their own while asight was on (D48②, removeAsightText `prior_left`): their value wins, the old line asight put out of

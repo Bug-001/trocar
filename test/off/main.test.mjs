@@ -90,7 +90,7 @@ test('1.6 §7: the receipt text of an off with no names — no certificate item 
   assert.match(out, /自启已停用;守护进程仍在排空:pid 4242,还剩 1 条等它们自己关闭;asight off --now 立即切断: 2 条连接仍经 asight 中转,本次响应\(或本轮\)结束后关闭;其中 1 条是透传连接或看不到终止消息的 WebSocket/)
   assert.doesNotMatch(out, /重启前仍信任 asight CA/, 'off took no trust away, so it names no one as still trusting it')
   assert.match(out, /你自己起的 asight 进程仍在跑: asight serve\(pid 5310,只读看板,不在 agent 路径上\)/)
-  assert.match(out, /引流: 已摘\(守护进程回复了,内核已确认\)/)
+  assert.match(out, /引流: 已摘\(守护进程回复了,已确认\)/)
   assert.ok(out.trimEnd().endsWith('再开  asight on'), 'the last line says how to turn it back on')
   const bad = formatOffReceipt({ ok: false, all: true, harnesses: [], routing: { confirmed: true }, daemon: { pid: 9, state: 'unresponsive' }, relayed: 'unknown', relayed_reason: 'the daemon does not answer', changed: [], removed: [], skipped: [], left: [{ path: '/h/.codex/.env', result: 'left-unparsable', reason: 'is no longer valid JSON' }], problems: ['x'], notes: [] }, { home: '/h' })
   assert.match(bad, /^asight 没有做完\(引流已摘,其余原因在下面\)。/m)
