@@ -30,13 +30,11 @@ function whyOf(c) {
 
 /** The 「把 <h> 的代理设成 <value>」 step of the not-routed rows (4.8 §10.4 row 1: 按 harness 文件的 `proxyEntry` 生成,值已填), from the form's group's entry place as the facts carry it
  *  (`entryPlace`): a JSON file is opened in 记事本 and its key written (never a PowerShell line that would reorder the user's JSON), a dotenv file gets its line, the policy value and the app's
- *  setting name their place; a shim or a launcher has no place of the user's own to write a proxy in — said, not invented. */
+ *  setting name their place (the shim and launcher places went with D52 / D57: mac / win write no shim or launcher). */
 function setProxyText(h, place, value) {
   if (!place) return `把 ${h} 的代理设成 ${value}(这个形态的入口位置读不到)`
   if (place.kind === 'file') return place.format === 'json' ? `用记事本打开 ${place.file},把 ${place.key} 写成 "${value}"` : `${place.file} 里写一行 ${place.key}=${value}`
   if (place.kind === 'policy') return `在注册表策略 ${place.path} 里把 ${place.name} 写成 ${value}(regedit)`
-  if (place.kind === 'shim') return `${place.command} 的代理入口是 asight 的 shim(${place.command}.cmd 设 HTTPS_PROXY):没有你可以改的自己的代理项`
-  if (place.kind === 'launcher') return '这个形态的代理入口是 asight 的启动器:没有你可以改的自己的代理项(不经它启动的连接 asight 不在路径上)'
   return `把 ${h} 的代理设成 ${value}`
 }
 

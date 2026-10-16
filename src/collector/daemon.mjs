@@ -342,7 +342,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
             return m && x ? { ...m, ...x, agent: m.agent ?? x.agent } : m
           },
         } : {}),
-        // the proxy ingress's own answer (4.8 §5.1): win32's kernel CONNECT arrives with of.<form> as the user, darwin's door lookup with the group id (D47) — the redirector's lookupIngress resolves it (a flow's meta, a health probe, or null = refused)
+        // the proxy ingress's own answer (4.8 §5.1): a door's CONNECT arrives with the group id as the user (D47) — the redirector's lookupIngress resolves it (a flow's meta, a health probe, or null = refused)
         ...(typeof redirector.lookupIngress === 'function' ? { lookupIngress: (q) => redirector.lookupIngress(q) } : {}),
       },
       // FlowExtras (plan 3c §2): the harness's WebSocket terminators and this process's own proxies. A throw: the

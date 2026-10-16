@@ -73,11 +73,11 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   // an on that wrote everything but has no daemon to hang the links (--no-unit, nothing answering) is done and exits 0, but captures nothing yet: the header says so
   const idle = past && r.ok !== false && r.daemon && r.daemon.state !== 'running'
   const daemonBit = r.daemon && r.daemon.state === 'running' ? `守护进程在跑${r.daemon.pid ? `(pid ${r.daemon.pid})` : ''}${r.daemon.started ? ',这次拉起的' : ''}` : null
-  const kernelBit = r.capture && r.capture.actual === 'on' ? ' · 采集已接上' : '' // the capture switch's attached bit: the doors of the on groups are open (the engine is the proxy)
+  const doorsBit = r.capture && r.capture.actual === 'on' ? ' · 采集已接上' : '' // the capture switch's attached bit: the doors of the on groups are open (the engine is the proxy)
   const lines = [
     r.ok === false && past ? `${c.red('✗')} asight 没有做完(原因在下面)。`
       : idle ? 'asight 已写好入口与期望态,但守护进程没在跑:在它跑起来之前什么都不会被采集(本用户,未用 sudo)。'
-        : past ? `${c.green('✔')} 入口已写 · ${daemonBit || '守护进程: 不知道'}${kernelBit}`
+        : past ? `${c.green('✔')} 入口已写 · ${daemonBit || '守护进程: 不知道'}${doorsBit}`
           : 'asight 将打开采集(本用户,不用 sudo)。',
   ]
   if (r.changed.length) {
@@ -97,14 +97,13 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   if (r.restart.length) lines.push(`  ${c.yellow('⚠')} 重启后才被采: ${r.restart.map((x) => `${x.harness}(pid ${x.pid},启动早于信任入口)`).join('、')};在那之前照常直连`)
   const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length
   // A note is a 问题 exactly when the run's own `problems` list names it — never merely because the whole run failed: a failed first
-  // install otherwise labelled its own SUCCESS line ("the kernel was downloaded and both digests verified") as a problem
-  // (seen on a macOS test machine, 2026-10-11). turnOn sets receipt.problems since that run; older / synthetic receipts without it keep the
-  // outcome-based label (their notes carry no kernel success lines).
+  // install otherwise labelled its own success lines as problems (seen on a macOS test machine, 2026-10-11). turnOn sets receipt.problems
+  // since that run; older / synthetic receipts without it keep the outcome-based label.
   const problemNotes = r.problems ? new Set(r.problems) : null
   for (const n of r.notes || []) {
     const h = HARNESS_IDS.find((id) => n.startsWith(`${id}: `))
     if (h && fresh && !fresh.has(h)) continue // the one-time note of a harness wired before (D46): doctor and --json carry it from here
-    if (!h && nothingNew) continue // a machine-level note with nothing new done (the kernel's "found and verified" on an idempotent on)
+    if (!h && nothingNew) continue // a machine-level note with nothing new done (an idempotent on repeats it)
     const isProblem = problemNotes ? problemNotes.has(n) : r.ok === false && past
     lines.push(`${isProblem ? '问题' : '说明'}: ${n}`)
   }

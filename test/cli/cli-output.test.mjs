@@ -126,11 +126,11 @@ test('D46: a chain that is the harness itself is not printed as a adopted line �
 
 // the one-time harness notes: printed when THIS run wires the harness, relocated to doctor / --json afterwards (D46); the receipt object is untouched
 test('D46: a harness one-time note prints on its first wiring only; an idempotent on prints none', () => {
-  const r = { changed: [], created: [], skipped: [], restart: [], log: null, notes: ['claude-code: a NODE_EXTRA_CA_CERTS exported only in a shell asight did not see no longer reaches Claude Code', 'codex: something about codex', "asight's kernel: found and verified (94a386ec…) in kernel/"] }
+  const r = { changed: [], created: [], skipped: [], restart: [], log: null, notes: ['claude-code: a NODE_EXTRA_CA_CERTS exported only in a shell asight did not see no longer reaches Claude Code', 'codex: something about codex', 'install: the collector CA is in the user trust store'] }
   const first = formatOnReceipt({ ...r, created: ['x'] }, { fresh: new Set(['claude-code']) })
   assert.match(first, /说明: claude-code: a NODE_EXTRA_CA_CERTS/)
   assert.doesNotMatch(first, /说明: codex:/, 'codex was wired before: its note lives in doctor and --json')
-  assert.match(first, /说明: asight's kernel: found and verified/, 'a real install still says where the kernel came from')
+  assert.match(first, /说明: install: the collector CA/, 'a machine-level note still prints when this run did something new')
   const idempotent = formatOnReceipt({ ...r }, { fresh: new Set() })
   assert.doesNotMatch(idempotent, /说明: /, 'an idempotent on prints no note at all')
   assert.match(formatOnReceipt({ ...r, created: ['x'] }, { fresh: new Set(['codex']) }), /说明: codex: something/, 'codex own first wiring prints its note')

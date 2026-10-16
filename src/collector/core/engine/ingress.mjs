@@ -1,11 +1,11 @@
 // ingress.mjs — the engine's proxy ingress (RFC 4.8 §5.1, §5.2). Where the transparent listener takes connections a
-// kernel steered, this takes the ones a proxy client hands over on purpose: asight's own forwarder (the kernel, D43 — the
-// user's VPN is never pointed here) sends each agent connection as `CONNECT host:port` with `Proxy-Authorization: Basic <of.<form>>:<token>`,
-// or as a SOCKS5 CONNECT with RFC 1929 credentials. The ingress answers like the proxy it is, dials the upstream,
+// kernel steered (Linux eBPF), this takes the ones a proxy client hands over on purpose: on macOS / Windows the agent itself, through
+// the proxy entry asight wrote (D47: the engine is the proxy, one door per group; the user's VPN is never pointed here), sends each
+// connection as `CONNECT host:port` with `Proxy-Authorization: Basic <group>:<token>`, or as a SOCKS5 CONNECT with RFC 1929 credentials. The ingress answers like the proxy it is, dials the upstream,
 // and only then says yes; the bytes after that are an agent's, and go to handleFlow exactly as a transparent flow's do.
 //
 // Order per connection (§5.1):
-//   1. read the opener — CONNECT or SOCKS5; anything else (an absolute-URI GET included, mihomo never probes that way) is closed,
+//   1. read the opener — CONNECT or SOCKS5; anything else (an absolute-URI GET included) is closed,
 //      `ingress-unknown`;
 //   2. check the token, in constant time — 407 / SOCKS auth failure and `ingress-auth-failed`, zero upstream connections;
 //   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or null (an unknown user: also an auth failure);
@@ -383,7 +383,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     } finally { if (slow) clearTimeout(slow) }
   }
 
-  // a health probe tunnel (4.8 §5.1): the group's own re-entry point, answered with what mihomo's http / socks5 outbound looks for
+  // a health probe tunnel (4.8 §5.1): the group's own re-entry point, answered with what an http / socks5 proxy client's health check looks for
   // an origin-form GET (4.11 P10): only on an auth:false door, answered by `servePac({ peer, user, path })` → { status, headers, body } | null (not the
   // PAC: closed). On any other door, or with no server, it is closed and `ingress-unknown`, as every opener that is not CONNECT or SOCKS5 is.
   async function servePacGet(socket, r, peer, say, unknown, door, deadline) {

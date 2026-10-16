@@ -59,14 +59,9 @@ row({ n: 'h', title: 'the agent runs elevated: the kernel cannot tell the proces
   kinds: [['agent', 'asight-forwarder', 'upstream']], forms: ['claude-code.cli'], names: ['all'], on_path: true, captured: false, reason: 'elevated-agent',
   compact: ['claude 7712(提权) → [settings env.HTTPS_PROXY · asight 写的] asight 本地代理 :17991(只转发) → api.anthropic.com:443(直连)'] })
 
-row({ n: 'i', title: 'the engine is gone: the kernel falls back to the upstream and only forwards', h: 'codex',
-  facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), { daemon: { state: 'not-running', pid: null, enginePort: null }, ...viaSystemProxy() }),
-  kinds: [['agent', 'asight-forwarder', 'proxy', 'egress'], ['agent', 'asight-forwarder', 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: false, reason: 'daemon-not-running',
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(只转发) → [系统代理] verge-mihomo.exe :7897 → 出口'] })
-
-row({ n: 'j', title: 'the kernel is not running: nobody listens on the port the entry points at', h: 'codex',
-  facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)] }), fwForm(17992), { forwarder: { pid: null, up: false, forms: { 'codex.app': fwForm(17992) } } }),
-  kinds: [['agent', 'asight-forwarder']], forms: ['codex.app'], names: ['all'], on_path: true, captured: false, reason: 'forwarder-down',
+row({ n: 'i', title: 'the engine is gone: nobody listens on the door the entry points at (no kernel to fall back to, D47)', h: 'codex',
+  facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)] }), fwForm(17992), { daemon: { state: 'not-running', pid: null, enginePort: null }, forwarder: { pid: null, up: false, forms: { 'codex.app': fwForm(17992) } } }),
+  kinds: [['agent', 'asight-forwarder']], forms: ['codex.app'], names: ['all'], on_path: true, captured: false, reason: 'forwarder-down', // 4.8 §12: forwarder-down is「引擎 / 门不在,§10.2 行 i」(the §10.2 table's daemon-not-running for row i)
   compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(没人在听)'] })
 
 // row k's facts are the shape a REAL `off` leaves: the entry record is gone from the manifest (undo.mjs takes it out) and the file holds the user's own value again, so `entry` is null — what says
