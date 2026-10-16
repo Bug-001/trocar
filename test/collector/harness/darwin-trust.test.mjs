@@ -1,6 +1,6 @@
 // test/collector/harness/darwin-trust.test.mjs — the macOS root readers (RFC 4.9 §6.2, acceptance W20; spec 4.6:419 names this file for the
 // system-roots-unparsable / system-roots-partial half on macOS) and isOwnPath's macOS rule. The macOS trust entries of the old per-OS overlays
-// (W19 / W22) retired with src/collector/harness/darwin/; the model's entries are test/collector/core/proxymode/entries*.test.mjs.
+// (W19 / W22) retired with the darwin descriptor overlays; the model's entries are test/collector/core/proxymode/entries*.test.mjs.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'

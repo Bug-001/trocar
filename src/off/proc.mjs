@@ -163,7 +163,7 @@ function procsOfLinux({ uid, root }) {
 // the same failure as a localized `ps`, whatever else changes the format).
 const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(\S.*)$/
 // The executable of each process is not in that line: `ps` repeats the command as invoked — a bare word for an agent started through PATH, a path cut at its
-// first space under `ZCode Helper.app` — and the macOS form tables (src/collector/harness/darwin/) are measured against the real one, the first `txt` record
+// first space under `ZCode Helper.app` — and the descriptors' process names (D51, the `processes` of src/collector/harness/<name>.mjs) are measured against the real one, the first `txt` record
 // of `lsof` (the collector's own source, arch/darwin/procinfo.mjs realExeOf). One `lsof … -d txt -Fpn` answers it for every process of the user: `p<pid>`,
 // then `f<fd>` / `n<name>` pairs; the first txt name that is a path is the executable. It runs AFTER `ps`, so a row it does not name is a process that ended
 // between the two (its `ps` word is kept). An lsof that did not finish (code null: killed by its timeout, more output than TABLE_MAX_BUFFER, or never

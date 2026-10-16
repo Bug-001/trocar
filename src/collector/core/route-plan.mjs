@@ -1,6 +1,6 @@
 // route-plan.mjs — which groups get a proxy entry, and what each one's upstream and bypass table are (RFC 4.8 §2.2 · §2.3 · §3, carried by 4.9 §1 · §2.1 · §2.2;
 // acceptance W5, W72, MA6's plan half). The one copy for both proxy-mode arches: `arch/<os>/route-plan.mjs` is `routePlanOf` called with what its OS has —
-//   os           the descriptor field its data is under (`d.win32` · `d.darwin`, which the loader attaches)
+//   os           the descriptor field its data is under (`d.win32`, which the loader attaches; macOS has no overlay)
 //   norm         when two spellings are the same path (Windows: either slash, any case; darwin: any case — APFS is case-insensitive by default): the journal records
 //                the path as `files(ctx)` gave it at install, and a later ctx may spell it otherwise
 //   upstreamFor  its upstream rule (`arch/<os>/upstream.mjs`): what it reads of the network is its own (Windows' login environment; darwin has none — a proxy set only

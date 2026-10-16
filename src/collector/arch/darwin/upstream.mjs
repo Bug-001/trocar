@@ -169,7 +169,7 @@ function httpsEntryOf(sp) {
  *     reason?: 'not-routed' | 'route-loop', why?, protocol?, detail?, bypass: [row], untranslated: n, envUnreadable: bool }
  * Not routed (`reason`) has no `kind`: nothing to dial. `credentialed` is set only when true, and `auth_ref` names where the login lives (`prior:<group>`: the manifest's prior_value of the group's entry — on darwin the
  * entry is the only place, there being no login-environment registry); the login itself is in no answer: `proxyAuthOf` of the resolved text reads it.
- *   group        { g, followsSystemProxy: { http, ws } }: the harness file's group (`desc.darwin.groups[]`);
+ *   group        { g, followsSystemProxy: { http, ws } }: a proxy-mode group of the old route plan (that plan and its group table are gone);
  *   prior        the value the group's entry held before `on` (the manifest's prior_value), or null · noProxy the same entry's NO_PROXY, when the harness file names one;
  *   systemProxy  readSystemProxy()'s answer (the scutil dictionary);
  *   ownPorts     asight's own ports (the kernel's listeners, the engine's): an upstream on one is `route-loop`;
