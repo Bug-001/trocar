@@ -17,14 +17,13 @@ export async function loadArch(platform = process.platform) {
     // netFacts is this platform's part of the network facts (1.6 §9.7, 4.8 §10.1, Task 10): status / doctor / on's adopt reach it through
     // src/netenv/facts.mjs, and it reads the collector dir's files and the resident helper — no second daemon API. createRedirector is the whole Windows collector (wiring.mjs): it needs the collector dir and the daemon's sinks, so only
     // daemon.mjs calls it (loadParts makes no redirector on win32);
-    // routing is the proxy-mode routing object 1.6 §9.5's `on` consumes (Task 8(c)): a FACTORY runOnCli builds with its own shell's environment.
     // optIn is 4.8 §2.4's half the CLI and the daemon reach (1.6 §1.7): `forms` (what --opt-in may name), `plan` (the rows of the plan's 「要你点名的」
     // section), `apply` (one named item, ledgered) and `check` (W68: the read-only re-check that the entries are still the ones used — status folds its
     // findings into the same rows). `procs` is the caller's process table (listProcs' rows or the redirector's scan: the check judges them by the name list,
     // `identify`). `record` is what the daemon's 5 s check does with the findings (once per occurrence, only §9.7's netenv failure codes) — on the arch object
     // so the daemon, the one file allowed to wire arch in, stays platform-neutral about it. netFacts (Task 10(a)) is this platform's half of the network
     // facts: topology rows, doctor findings, the §11 plan and the drift checks all draw from it through src/netenv/facts.mjs.
-    const [{ createWin32Collector, win32Routing }, unit, { controlEndpoint }, { osRootsFor }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn, checkEntries, recordEntryFindings }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('../../off/os-roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
+    const [{ createWin32Collector }, unit, { controlEndpoint }, { osRootsFor }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn, checkEntries, recordEntryFindings }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('../../off/os-roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
     const { groupsOf } = await import('./win32/route-plan.mjs')
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
@@ -33,7 +32,6 @@ export async function loadArch(platform = process.platform) {
       refuseElevated: unit.refuseElevated, nodePreflight: unit.nodePreflight, runSupervisor: unit.runSupervisor,
       osRoots: ({ helper = null } = {}) => osRootsFor('win32')({ helper }),
       createRedirector: (opts = {}) => createWin32Collector(opts),
-      routing: win32Routing,
       netFacts: gatherWin32Facts,
       optIn: {
         forms: ({ harnesses: h, ids = null } = {}) => optinFormsOf(of(h, ids)),

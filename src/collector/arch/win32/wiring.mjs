@@ -22,7 +22,7 @@ import { startHelper, policyAllowOf } from './helper.mjs'
 import { factsOfPid } from './procinfo.mjs'
 import { ownerOfSocket as askOwnerOfSocket } from './socktable.mjs'
 import { loadIngressConfig, freeOnLoopback } from './ingress-config.mjs'
-import { groupsOf, planRoutes, resolveLogin, hostSetOf, proxyRecordsOf } from './route-plan.mjs'
+import { groupsOf, planRoutes, resolveLogin, hostSetOf } from './route-plan.mjs'
 import { isDesiredOn, movedRoute, optedInOf, carriedOf as carriedGroupsOf } from '../../core/route-plan.mjs'
 import { identifyOf, desktopDoorOf } from '../../core/proxy-wiring.mjs'
 import { createWin32Redirector } from './redirector.mjs'
@@ -31,7 +31,6 @@ import { readSystemProxy, readHkcuEnv, watchSystemProxy } from './upstream.mjs'
 import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { MARKER_TOLERANCE_MS } from '../../core/trust/confirm.mjs'
-import { collectorDir } from '../../../off/paths.mjs'
 
 /** The gate `attach()` asks before it writes a group's proxy entry (4.8 W19; the Task 8(b) review made it the redirector's required argument): Codex's and
  *  Hermes's lines join a block their trust entry wrote, and may not be written before the journal's four W19 conditions hold. They hold (landed with the
@@ -202,54 +201,4 @@ export async function createWin32Collector({ env = process.env, dir, home = env.
     close: () => { if (netenvWatcher) netenvWatcher.stop() }, // the helper and the watcher stop with the redirector's own close()
   }
   return redirector
-}
-
-/**
- * win32Routing({ harnesses, home, env, fs }) → `{ ownsProxyField(h), fieldOf(h), adopt(h, setting) }` — the routing object of 1.6 §9.5's contract, what
- * `asight on` consumes in proxy mode (plan Task 8(c)); it sits beside nothing else in loadArch's win32 arm now that `prepare` and `ensureKernel` are gone
- * (the engine IS the proxy, D47: `on` downloads nothing, the first write is the CA), and runOnCli builds it with ITS environment (the same shell that
- * names CLAUDE_CONFIG_DIR and CODEX_HOME). On Windows both halves of the contract are the daemon's, done inside the very `on` request this follows: the
- * door's upstream comes out of the daemon's own read of the same files (`priorOf`, before the entry replaced the value), and the field is written through
- * the same journal `off` undoes by (`createProxyEntries`, the redirector's writer). So this side's `adopt` is the VERIFIER of that write — a group whose
- * entry is in the ledger must hold the engine door's address (ingress.json's group port), or the on did not finish (a throw is exit 1, the harness named,
- * no adopted record, V47); `setting` is not re-handed (the door already has it from the same read). A group with no record is the user's own field as it
- * was: nothing to verify, and no second writer lives here.
- */
-export function win32Routing({ harnesses = [], home, env = process.env, fs = nodeFs } = {}) {
-  if (!home) throw new TypeError('win32Routing needs the HOME the entries were written into')
-  const groups = groupsOf(harnesses)
-  const dir = collectorDir(home)
-  const ctx = { // the CLI's own ctx, the same shape the daemon's wiring builds: its env is the shell that ran on
-    os: 'win32', home, env: new Map(Object.entries(env || {}).filter(([, v]) => typeof v === 'string')), running: [],
-    readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, collectorDir: dir, caPem: null,
-  }
-  const fileGroupsOf = (h) => groups.filter((x) => x.harness === h && x.group.proxyEntry && x.group.proxyEntry.kind === 'file')
-  return {
-    ownsProxyField: () => true, // proxy mode always owns the entry (1.6 §9.5; the engine's door is the only route)
-    /** The harness's first file entry as a place to name (the 「你改过的代理设置」 line): the first of the group's files that is there, else the first listed; null where it has no file. */
-    fieldOf: (h) => {
-      const xs = fileGroupsOf(h)
-      if (!xs.length) return null
-      const e = xs[0].group.proxyEntry
-      const files = e.files(ctx)
-      const file = files.find((f) => { const r = ctx.readTextOrError(f); return r.error == null && r.text != null }) || files[0]
-      return file ? { path: file, key: e.format === 'json-key' ? e.key.join('.') : e.block.urlVar } : null
-    },
-    /** Verifies the daemon's half of the on: every group of `h` whose entry is in the ledger holds the engine door's address. Rejects (never a vacuous pass, D38) when what that needs cannot be read. */
-    adopt: async (h, _setting) => {
-      const xs = fileGroupsOf(h)
-      if (!xs.length) return // the entry is a policy value or a shim: no file of the agent's is asight's to point
-      let manifest = null
-      try { manifest = readManifest(dir, fs) } catch (e) { throw new Error(`the install manifest could not be read (${String((e && e.message) || e)}): whether ${h}'s field is asight's cannot be told`) }
-      if (!manifest) throw new Error(`the install manifest is not there, so whether ${h}'s field is asight's cannot be told`)
-      const onRecord = xs.filter((x) => proxyRecordsOf(manifest, x.group, h).length > 0)
-      if (!onRecord.length) return // asight wrote no field of this harness (the group was not routed, or not on): the user's own setting is correct as it is
-      let ing = null
-      try { ing = JSON.parse(fs.readFileSync(path.join(dir, 'ingress.json'), 'utf8')) } catch (e) { throw new Error(`ingress.json could not be read (${(e && e.code) || 'unreadable'}): the engine doors' ports are not known, so ${h}'s field cannot be verified`) }
-      if (!ing || typeof ing !== 'object' || !onRecord.every((x) => Number.isInteger((ing.groupPorts || {})[x.g]))) throw new Error(`ingress.json holds no port for ${onRecord.map((x) => x.g).join(', ')}: the engine door's address cannot be named, so ${h}'s field cannot be verified`)
-      const checker = createProxyEntries({ dir, home, groups, ctx, ingress: () => ing, manifest: () => manifest, fs })
-      const bad = checker.check(onRecord.map((x) => ({ g: x.g, harness: h, entry: 'auto' }))).filter((r) => r && r.ok === false)
-      if (bad.length) throw new Error(`the proxy entry of ${bad.map((r) => r.g).join(', ')} is in the ledger but the field does not hold the engine door's address: the on that wrote it did not finish (run asight doctor ${h})`)
-    },
-  }
 }
