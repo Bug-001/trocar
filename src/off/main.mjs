@@ -9,6 +9,8 @@ import { runOff } from './orchestrate.mjs'
 import { formatOffReceipt } from './receipt.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, makeIo } from './io.mjs'
+import { readManifest } from './manifest.mjs'
+import { collectorDir } from './paths.mjs'
 
 /** 1.6 §3: the harness code ids (in the order commands list them) and the short names accepted as input. A copy of src/cli/harness-names.mjs. */
 export const OFF_NAMES = Object.freeze({
@@ -20,18 +22,28 @@ const OFF_USAGE = 'usage: asight off [harness…] [--now] [--dry-run] [--yes] [-
 const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--json', '--remove-ca'])
 const REMOVE_CA_NOTE = '--remove-ca 照收,已没有作用:off 不再动旧采集的 CA(旧采集已退役,D39⑥;它留在机器上的东西按 README 手动清理)'
 
-/** `[harness…]` as typed → `{ ok: true, ids }` (null = none named = all; else code ids in table order, a repeat once) or `{ ok: false, unknown, known }`. Case is not folded. */
-export function resolveOffNames(names) {
+/** `[harness…]` as typed → `{ ok: true, ids }` (null = none named = all; else code ids in table order, a repeat once) or `{ ok: false, unknown, known }`. Case is not folded.
+ *  `installed`: the harness ids the install manifest names; each is a name too, so a harness added as descriptor data alone can be turned off (CM27). */
+export function resolveOffNames(names, installed = []) {
   if (!names || names.length === 0) return { ok: true, ids: null }
   const chosen = new Set(), unknown = []
   for (const raw of names) {
     const name = String(raw)
-    const id = Object.hasOwn(OFF_NAMES.aliases, name) ? OFF_NAMES.aliases[name] : OFF_NAMES.ids.includes(name) ? name : null
+    const id = Object.hasOwn(OFF_NAMES.aliases, name) ? OFF_NAMES.aliases[name] : OFF_NAMES.ids.includes(name) || installed.includes(name) ? name : null
     if (id) chosen.add(id)
     else if (!unknown.includes(name)) unknown.push(name)
   }
-  if (unknown.length) return { ok: false, unknown, known: [...OFF_NAMES.ids, ...Object.keys(OFF_NAMES.aliases)] }
-  return { ok: true, ids: OFF_NAMES.ids.filter((id) => chosen.has(id)) }
+  const extra = [...new Set(installed)].filter((id) => !OFF_NAMES.ids.includes(id))
+  if (unknown.length) return { ok: false, unknown, known: [...OFF_NAMES.ids, ...extra, ...Object.keys(OFF_NAMES.aliases)] }
+  return { ok: true, ids: [...OFF_NAMES.ids, ...extra].filter((id) => chosen.has(id)) }
+}
+
+/** The harness ids the install manifest names (install's list and the entries' owners); [] when there is none or it cannot be read (the fixed names still work). */
+function installedIds(home) {
+  try {
+    const m = readManifest(collectorDir(home))
+    return m ? [...((m.install && m.install.harnesses) || []), ...(m.entries || []).map((e) => e && e.harness)].filter((x) => typeof x === 'string' && x) : []
+  } catch { return [] }
 }
 
 /** → the exit code. `argv` is what follows `off`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo; the process's own streams when none is given, which is how the
@@ -45,7 +57,7 @@ export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdo
       flags.add(a)
     } else names.push(a)
   }
-  const named = resolveOffNames(names)
+  const named = resolveOffNames(names, names.length ? installedIds(home) : [])
   if (!named.ok) { io.err(`asight off: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5): the list and the question go to stderr
