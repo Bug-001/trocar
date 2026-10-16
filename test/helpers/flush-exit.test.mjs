@@ -68,9 +68,9 @@ test('flush-exit: `--require` puts the deferred exit in the runner\'s process as
   assert.deepEqual(fs.readFileSync(seen, 'utf8').trim().split('\n').sort(), ['file:true', 'runner:true'])
 })
 
-test('flush-exit: npm test and npm run lab load the preload, and npm test the leak guard (the wiring the tests above do not cover)', () => {
+test('flush-exit: npm test and npm run lab:linux load the preload, and npm test the leak guard (the wiring the tests above do not cover)', () => {
   const scripts = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')).scripts
-  for (const name of ['test', 'lab']) assert.match(scripts[name], /(^| )--require \.\/test\/helpers\/flush-exit\.cjs( |$)/, `npm run ${name}`)
+  for (const name of ['test', 'lab:linux']) assert.match(scripts[name], /(^| )--require \.\/test\/helpers\/flush-exit\.cjs( |$)/, `npm run ${name}`)
   assert.match(scripts.test, /(^| )--require \.\/test\/helpers\/leak-guard\.cjs( |$)/)
   assert.match(scripts.test, /(^| )--test-force-exit( |$)/)
 })
