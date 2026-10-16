@@ -14,6 +14,7 @@ import { rootIdOf } from '../off/root-store.mjs'
 import { readManifest, saveManifest, newManifest, applyJsonKey, applyTextEntry, writeOwnedFile, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/manifest.mjs'
 import { writeStandalone } from '../off/standalone.mjs'
+import { missingDirs } from '../off/fsutil.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
 import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
 import { lineComment, removeAsightText } from '../off/text-edit.mjs'
@@ -106,6 +107,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const rootPem = certPem(rootDer)
   const rootBody = rootPem.replace(/-----[A-Z ]+-----|\s/g, '') // the base64 of the root: how a pem-block of this root is told from one of an older root
   const id = rootIdOf(rootDer)
+  m.dirs.push(...missingDirs(ca.dir, fs).filter((d) => !m.dirs.includes(d))) // CM32: uninstall takes ca/ away once its files are gone
   owned(ca.pem, 'ca-cert', null, rootPem, 0o644)
 
   // b · the root in the user's root store (P3): read back by fingerprint first, so a second install raises no prompt
