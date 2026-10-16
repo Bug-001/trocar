@@ -1,42 +1,21 @@
-// test/collector/core/route-plan.test.mjs — the one copy the two proxy-mode arches share (core/route-plan.mjs · core/entry-forms.mjs · core/proxy-wiring.mjs),
-// and the guard that keeps it one: the arch files (arch/win32/{forms,route-plan,wiring}.mjs; darwin's twins went with its overlays) define none of the
-// lifted pieces again. The behaviour of the plan itself is pinned through the arch's own exports (test/collector/arch/win32/route-plan.test.mjs).
+// test/collector/core/route-plan.test.mjs — the shared route-plan pieces (core/route-plan.mjs · core/entry-forms.mjs · core/proxy-wiring.mjs) and
+// hostSetOf, the host set of a host-tree form (4.8 §3.5, OPEN 22). The arch twins' guard went with the old win32 collector's tests (D57);
+// The old plan is deleted next and hostSetOf moves to core/host-agent.mjs, with its import here.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments, specsOf } from '../../helpers/imports.mjs'
+import { tmpDir } from '../../helpers/tmp.mjs'
 import * as core from '../../../src/collector/core/route-plan.mjs'
-import * as entryForms from '../../../src/collector/core/entry-forms.mjs'
 import { identifyOf, desktopDoorOf } from '../../../src/collector/core/proxy-wiring.mjs'
-import * as winForms from '../../../src/collector/arch/win32/forms.mjs'
-import * as winPlan from '../../../src/collector/arch/win32/route-plan.mjs'
+import { hostSetOf } from '../../../src/collector/arch/win32/route-plan.mjs'
+import { bypassRuleOf } from '../../../src/collector/core/upstream-shape.mjs'
+import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 
 const src = (rel) => fs.readFileSync(fileURLToPath(new URL(`../../../src/collector/${rel}`, import.meta.url)), 'utf8')
-
-// ---------- the guard: one copy ----------
-
-/** Each piece lifted out of the arch twins (review R4 · R7 · R8, 2026-10-14). A name here declared again in an arch file is a twin coming back. */
-const LIFTED = ['entryGate', 'proxyUrl', 'proxyEntries', 'groupsOf', 'priorOf', 'proxyRecordsOf', 'resolveLogin', 'planRoutes', 'hostSetOf', 'observe', 'recordsOf', 'readLive', 'fromRecord',
-  'isProxyRecord', 'dialOf', 'matchable', 'norm', 'wanted', 'movedRoute', 'optinRecordsOf', 'isDesiredOn', 'optedInOf', 'identifyOf', 'desktopDoorOf']
-const ARCH_FILES = [...['forms', 'route-plan'].map((f) => `arch/win32/${f}.mjs`), 'arch/win32/wiring.mjs']
-const declared = (code, name) => new RegExp(`\\b(function\\*?|const|let|var|class)\\s+${name}\\b`).test(code)
-
-test('the arch twins declare none of the lifted pieces, and the desired-state rule and the no-door identity stand-in are written nowhere but core', () => {
-  for (const rel of ARCH_FILES) {
-    const code = stripComments(src(rel))
-    assert.deepEqual(LIFTED.filter((n) => declared(code, n)), [], `${rel} declares a piece core already holds`)
-    assert.doesNotMatch(code, /\.desired\)\s*===\s*'on'/, `${rel} writes the desired-state rule again (core/route-plan.mjs isDesiredOn)`)
-    assert.doesNotMatch(code, /reason:\s*'no-match'/, `${rel} writes the no-door identity stand-in again (core/proxy-wiring.mjs identifyOf)`)
-    assert.doesNotMatch(code, /\.installed_at\b/, `${rel} walks the manifest for a desktop door itself (core/proxy-wiring.mjs desktopDoorOf)`)
-  }
-  assert.ok(declared('const norm = (p) => p', 'norm') && !declared('const normal = 1', 'norm') && declared(stripComments(src('core/route-plan.mjs')), 'planRoutes'), 'the scan can fail')
-})
-
-test('the arch exports are the core functions themselves where nothing differs per OS', () => {
-  for (const n of ['entryGate', 'proxyUrl', 'proxyEntries']) assert.equal(winForms[n], entryForms[n], n)
-  assert.deepEqual(Object.keys(winPlan).sort(), ['groupsOf', 'hostSetOf', 'planRoutes', 'priorOf', 'proxyRecordsOf', 'resolveLogin'])
-})
+const ALL = await loadHarnesses()
 
 test('the shared modules touch no OS, name no harness and import only core', () => {
   for (const rel of ['core/route-plan.mjs', 'core/entry-forms.mjs', 'core/proxy-wiring.mjs']) {
@@ -91,4 +70,88 @@ test('movedRoute · optedInOf · carriedOf: what a re-plan reloads for, and whic
   assert.deepEqual(core.optedInOf(groups, m), ['a.desk', 'a.desktop'])
   assert.deepEqual([...core.carriedOf(groups, m)].sort(), ['a.cli', 'a.desk'])
   assert.deepEqual(core.optedInOf(groups, null), [])
+})
+
+/** A sandbox profile: files go in under it; `ctx` is what a harness's `file(ctx)` reads paths from, its reads `{ text, error }` the daemon's way. */
+function box() {
+  const home = tmpDir('asight-hosts-')
+  const put = (rel, text) => { const f = path.join(home, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); return f }
+  const ctx = () => ({
+    os: 'win32', home, env: new Map([['USERPROFILE', home]]),
+    readTextOrError: (f) => { try { return { text: fs.readFileSync(f, 'utf8'), error: null } } catch (e) { return { text: null, error: e.code === 'ENOENT' || e.code === 'ENOTDIR' ? null : { code: e.code, message: e.message } } } },
+  })
+  return { home, put, ctx }
+}
+
+// ---------- hostSetOf: the hosts a host-tree form hands to the engine (4.8 §3.5, OPEN 22; W69 config half) ----------
+
+const KIMI_VSCODE = ALL.find((d) => d.name === 'kimi-code').win32.forms.find((f) => f.id === 'kimi-code.vscode') // the host set's data (hostSetOf becomes the model's default for a hostTree form)
+const KIMI_DEFAULTS = ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn']
+/** `readSettings` the way the daemon gives it: the form's settings file, read through the ctx (`{ text, error }`). */
+const settingsOf = (ctx) => () => ctx.readTextOrError(KIMI_VSCODE.hosts.settings.file(ctx))
+
+test('W69 hostSetOf: the host set is the default hosts, then the base URLs of the extension\'s own settings, then the operator\'s extra_hosts — three sources, one injected each, in that order, each name once', () => {
+  const b = box()
+  const ctx = b.ctx()
+  const only = hostSetOf({ form: KIMI_VSCODE, readSettings: settingsOf(ctx) })
+  assert.deepEqual(only, { hosts: KIMI_DEFAULTS, settings: 'absent', dropped: [] }, 'no settings file: nothing configured, which is not a failure; the relay is not in the set')
+  b.put('.kimi-code/config.toml', '[providers.relay]\nbase_url = "https://relay.example.com/v1"\napi_key = "sk-secret"\n')
+  const withRelay = hostSetOf({ form: KIMI_VSCODE, readSettings: settingsOf(ctx) })
+  assert.deepEqual(withRelay, { hosts: [...KIMI_DEFAULTS, 'relay.example.com'], settings: 'read', dropped: [] }, 'the relay in Kimi\'s settings is in the set: a connection through it is captured without anyone writing a list')
+  assert.equal(JSON.stringify(withRelay).includes('sk-secret'), false)
+  const extra = hostSetOf({ form: KIMI_VSCODE, readSettings: settingsOf(box().ctx()), extraHosts: ['gateway.corp.example'] })
+  assert.deepEqual(extra.hosts, [...KIMI_DEFAULTS, 'gateway.corp.example'], 'extra_hosts is the third source')
+  const all = hostSetOf({ form: KIMI_VSCODE, readSettings: settingsOf(ctx), extraHosts: ['gateway.corp.example', 'API.Moonshot.cn', 'relay.example.com'] })
+  assert.deepEqual(all.hosts, [...KIMI_DEFAULTS, 'relay.example.com', 'gateway.corp.example'], 'in this order, and a name that is in the set already (in any case) is not there twice')
+  b.put('.kimi-code/config.toml', '')
+  assert.deepEqual(hostSetOf({ form: KIMI_VSCODE, readSettings: settingsOf(ctx) }), { hosts: KIMI_DEFAULTS, settings: 'read', dropped: [] }, 'an empty file is read: it names no relay')
+  assert.deepEqual(KIMI_VSCODE.hosts.defaults, KIMI_DEFAULTS, 'the form\'s data is not changed')
+})
+
+test('W69 hostSetOf: a settings file that cannot be read or understood is 「不知道」 with a reason from the closed set — the set is then the defaults and extra_hosts, and the caller says so — and a file that is not there is not that', () => {
+  const read = (r) => hostSetOf({ form: KIMI_VSCODE, readSettings: () => r, extraHosts: ['x.example'] })
+  const denied = read({ text: null, error: { code: 'EACCES', message: 'permission denied, open C:\\Users\\alice\\.kimi-code\\config.toml' } })
+  assert.deepEqual(denied, { hosts: [...KIMI_DEFAULTS, 'x.example'], settings: { unreadable: { reason: 'denied', detail: 'EACCES' } }, dropped: [] }, 'the errno, no path (a user name may be in it)')
+  assert.deepEqual(read({ text: null, error: { message: 'x' } }).settings, { unreadable: { reason: 'denied' } })
+  assert.deepEqual(hostSetOf({ form: KIMI_VSCODE, readSettings: () => { throw Object.assign(new Error('boom'), { code: 'EIO' }) } }).settings, { unreadable: { reason: 'denied', detail: 'EIO' } }, 'a reader that throws is a read that failed, not a throw out of `on`')
+  assert.equal(read({ text: null, error: null }).settings, 'absent')
+  const odd = { ...KIMI_VSCODE, hosts: { ...KIMI_VSCODE.hosts, settings: { ...KIMI_VSCODE.hosts.settings, hostsOf: () => { throw new Error('this is not TOML') } } } }
+  assert.deepEqual(hostSetOf({ form: odd, readSettings: () => ({ text: 'x = [', error: null }) }), { hosts: KIMI_DEFAULTS, settings: { unreadable: { reason: 'unparseable' } }, dropped: [] }, 'a file the reader cannot parse says so, and quotes nothing')
+  const notAList = { ...odd, hosts: { ...odd.hosts, settings: { ...odd.hosts.settings, hostsOf: () => 'api.x.com' } } }
+  assert.deepEqual(hostSetOf({ form: notAList, readSettings: () => ({ text: 'x', error: null }) }).settings, { unreadable: { reason: 'unparseable' } })
+  const none = { ...KIMI_VSCODE, hosts: { defaults: ['a.example'] } }
+  assert.deepEqual(hostSetOf({ form: none }), { hosts: ['a.example'], settings: 'absent', dropped: [] }, 'a form with no settings reader has no settings to read')
+})
+
+test('W69 hostSetOf: only a name the kernel\'s DOMAIN-SUFFIX rule can match is in the set — an address literal, a wildcard, a name the generator refuses are said (`dropped`), never written and never thrown; and what is in the set is what the generator accepts', () => {
+  const b = box()
+  b.put('.kimi-code/config.toml', 'base_url = "http://10.0.0.5:8080"\nOTHER_BASE_URL = "https://[::1]:9/v1"\n')
+  const r = hostSetOf({ form: KIMI_VSCODE, readSettings: settingsOf(b.ctx()), extraHosts: ['*.corp.example', 'host:443', '', '  Spaced.Example  ', 'a,b', 'ünï.example'] })
+  assert.deepEqual(r.hosts, [...KIMI_DEFAULTS, 'spaced.example'])
+  assert.deepEqual(r.dropped, ['10.0.0.5', '::1', '*.corp.example', 'host:443', 'a,b', 'ünï.example'], 'a relay by address cannot be matched by a domain rule: it is said, not silently left out')
+  // the rule that is applied is the generator\'s own: a table of candidates, judged by the generator and by hostSetOf
+  const candidates = ['api.kimi.com', 'a-b.c_d.example', '1.example.com', 'x'.repeat(253), 'x'.repeat(254), 'a,b', 'a b', '*.corp.com', '-x.com', '.x.com', 'a..b', 'ünï.com', '10.0.0.5', '1.2.3.4', '999.1.1.1', 'localhost', 'Mixed.Case.Example', 'a\nb', 'a\u0000b', 'a*b.com', 'a:80', 'a/b', 'a+b.com', 'a\\b', 'a=b', 'a;b', 'a@b.com', 'a_b-c.d']
+  for (const c of candidates) {
+    const accepted = (() => { try { bypassRuleOf({ kind: 'domain-suffix', value: c.toLowerCase() }); return true } catch { return false } })()
+    const inSet = hostSetOf({ form: { hosts: { defaults: [] } }, extraHosts: [c] }).hosts.length === 1
+    assert.equal(inSet, accepted && !/^\d+(\.\d+){3}$/.test(c) && c !== 'localhost', `${JSON.stringify(c)}: in the set ${inSet}, generator accepts ${accepted}; an address literal and the name \`localhost\` are the two the generator takes and the rule never meets`)
+  }
+  for (const h of r.hosts) assert.doesNotThrow(() => bypassRuleOf({ kind: 'domain-suffix', value: h }), `whatever the user wrote, \`on\` gets a set the matcher accepts: ${h}`)
+})
+
+test('W69 / OPEN 28 hostSetOf: the name `localhost` is said, not counted as captured — the kernel\'s own hosts table has made it 127.0.0.1 before the rules run, so DOMAIN-SUFFIX,localhost never meets it (a relay on this machine by name)', () => {
+  const b = box()
+  b.put('.kimi-code/config.toml', 'base_url = "http://localhost:8080/v1"\n')
+  const r = hostSetOf({ form: KIMI_VSCODE, readSettings: settingsOf(b.ctx()), extraHosts: ['LocalHost', 'localhost.', 'relay.localhost', 'localhost.example', 'mylocalhost'] })
+  assert.deepEqual(r.hosts, [...KIMI_DEFAULTS, 'relay.localhost', 'localhost.example', 'mylocalhost'], 'only the exact name is the one the hosts table turns into an address: a name under it, or beside it, is a name')
+  assert.deepEqual(r.dropped, ['localhost', 'localhost.'], 'the name from Kimi\'s settings, said once; the root-dot spelling of it too')
+  for (const h of r.hosts) assert.doesNotThrow(() => bypassRuleOf({ kind: 'domain-suffix', value: h }))
+  assert.deepEqual(hostSetOf({ form: { hosts: { defaults: ['localhost', 'a.example'] } } }), { hosts: ['a.example'], settings: 'absent', dropped: ['localhost'] }, 'a default host is judged the same way')
+})
+
+test('hostSetOf wants a form with a host set, and a reader when the form has settings to read', () => {
+  assert.throws(() => hostSetOf({}), TypeError)
+  assert.throws(() => hostSetOf({ form: { id: 'x' } }), TypeError, 'a form with no host set is not a host tree')
+  assert.throws(() => hostSetOf({ form: { hosts: { defaults: 'a.example' } } }), TypeError)
+  assert.throws(() => hostSetOf({ form: KIMI_VSCODE }), { name: 'TypeError', message: /readSettings/ }, 'a missing reader is not an absent file')
 })
