@@ -1074,3 +1074,20 @@ test('R7 unsplit token (on / daemon, the helper): elevationType default is let t
   assert.equal((await ask({ elevated: true, system: true, elevationType: 'default', integrity: 'System' }))?.code, 'elevated-token')
   assert.equal((await ask({ elevated: true, system: false, integrity: 'High' }))?.code, 'elevated-token', 'no elevationType: not known to be unsplit')
 })
+
+// W39 (moved from the old wiring.test.mjs, which went with the old win32 collector): the arch the CLI and daemon reach through loadArch.
+import { loadArch } from '../../../../src/collector/arch/index.mjs'
+test('W39 loadArch("win32") returns the Windows arch on any OS (imported and built here off Windows: no top-level Windows call), with the pieces the CLI and daemon reach', async () => {
+  const A = await loadArch('win32')
+  assert.equal(A.os, 'win32')
+  assert.equal(A.install, null, 'the machine-wide helper is a Linux thing; Windows needs none')
+  assert.equal(A.unit.userUnit, userUnit, 'the autostart unit is this module')
+  assert.equal(A.controlEndpoint, controlEndpoint)
+  assert.equal(A.refuseElevated, refuseElevated)
+  assert.equal(A.nodePreflight, nodePreflight)
+  assert.equal(A.runSupervisor, runSupervisor)
+  assert.equal(A.prepare, undefined, 'no preflight: the engine is the only local proxy, `on` downloads nothing')
+  assert.equal(A.ensureKernel, undefined, 'no kernel to ensure either')
+  assert.equal(typeof A.osRoots, 'function', 'the Windows roots are read (4.8 §6.2)')
+  assert.equal(typeof A.netFacts, 'function', 'the platform\'s part of the network facts (1.6 §9.7): gatherNetFacts reaches it as archFacts')
+})
