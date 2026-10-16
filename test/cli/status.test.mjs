@@ -541,7 +541,7 @@ const CERT = [ // the issuer's key · its state · the root in the user's store 
   'present ready       in  | -                | -                             | -',
   'missing key-missing in  | cert-key-missing | cert-intermediate-unavailable | -',
   'unknown unavailable in  | -                | cert-intermediate-unavailable | -',
-  'present ready       out | -                | -                             | cert-not-installed',
+  'present ready       out | -                | -                             | cert-root-missing',
 ]
 const code = (c) => (c === '-' ? null : c)
 const modelProc = { pid: 4242, holders: [{ harness: 'codex', pid: 4242, start: '111', why: 'started-while-on' }] }
@@ -593,12 +593,33 @@ test('V26 proxy mode: status exits by the judgement — 0 with the door up, 1 wi
   const base = { desired: 'on', daemon: 'running', key: 'present', st: 'ready', root: 'in' }
   assert.equal((await modelStatus(w, { ...base, door: 'up' })).exit, EXIT.ok)
   assert.equal((await modelStatus(w, { ...base, door: 'missing' })).exit, EXIT.incomplete)
-  assert.equal((await modelStatus(w, { ...base, door: 'up', key: 'missing', st: 'key-missing', root: 'out' })).exit, EXIT.ok, 'the certificate axis does not move the exit: the harness\'s verdict does')
+  for (const [cert, exit] of [[{ key: 'missing', st: 'key-missing' }, EXIT.incomplete], [{ root: 'out' }, EXIT.incomplete], [{ st: 'unavailable', key: 'unknown' }, EXIT.ok]]) {
+    const r = await modelStatus(w, { ...base, door: 'up', ...cert })
+    assert.equal(r.exit, exit, `1.6 §9.7 / R4: a certificate state the user must act on exits 1, the verdict stays the proxy axis's: ${JSON.stringify(cert)}`)
+    assert.equal(r.j.harnesses.find((x) => x.harness === 'codex').captured, true, JSON.stringify(cert))
+  }
   const r = await modelStatus(w, { ...base, door: 'unknown' })
   assert.equal(r.exit, EXIT.unknown)
   const h = r.j.harnesses.find((x) => x.harness === 'codex')
   assert.equal(h.captured, null)
   assert.ok(h.why.some((x) => /doors listen/.test(x)), `不知道 says why: ${JSON.stringify(h.why)}`)
+})
+
+test('1.6 §9.4 / §9.6 cert.root: the code follows the state — pending / declined (install\'s pending root-store item) and installed-but-gone exit 1 with their own codes; never installed is cert-not-installed (V32, R4)', async () => {
+  const w = await modelOn()
+  const mf = path.join(w.dir, 'install-manifest.json'), m0 = JSON.parse(fs.readFileSync(mf, 'utf8'))
+  const base = { desired: 'on', daemon: 'running', door: 'up', key: 'present', st: 'ready', root: 'out' }
+  for (const [install, state, code, exit] of [
+    [{ ...m0.install, state: 'partial', pending: [{ item: 'root-store', state: 'pending', reason: 'no GUI session' }] }, 'pending', 'cert-root-pending', EXIT.incomplete],
+    [{ ...m0.install, state: 'partial', pending: [{ item: 'root-store', state: 'declined', reason: 'the user said no' }] }, 'declined', 'cert-root-declined', EXIT.incomplete],
+    [m0.install, 'missing', 'cert-root-missing', EXIT.incomplete],
+    [undefined, 'missing', 'cert-not-installed', EXIT.ok],
+  ]) {
+    fs.writeFileSync(mf, JSON.stringify({ ...m0, install }))
+    const r = await modelStatus(w, base)
+    assert.deepEqual([r.j.cert.root.state, r.j.cert.root.code, r.exit], [state, code, exit], code)
+    assert.deepEqual(validateReceipt(r.j), [], code)
+  }
 })
 
 test('CM23 status half: the holders\' pids — from the daemon\'s poll (GET /holders) when it answers, from the manifest\'s liveness and the process table when it does not', async () => {

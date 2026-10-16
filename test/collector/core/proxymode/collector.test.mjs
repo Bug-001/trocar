@@ -345,3 +345,22 @@ test('① / G4 · restore reopens the desired harnesses on ingress.json\'s recor
   assert.equal(url, d.proxyMode.routes[routes[0]].auth === false ? 'http://127.0.0.1:18250' : `http://${encodeURIComponent(first)}:${TOKEN}@127.0.0.1:18250`)
   c.close()
 })
+
+test('1.6 V32 `attached` · the daemon\'s own answer: every group ingress.json records for the harness listens → true; one recorded group without its door, or none recorded → false; ingress.json unreadable → null', async () => {
+  const d = descs[0], routes = Object.keys(d.proxyMode.routes)
+  const groups = Object.fromEntries(routes.map((r, i) => [`${d.name}:${r}`, 18300 + i]))
+  const on = { state: { harnesses: { [d.name]: { desired: 'on' } } } }
+  const all = await rig({ desc: d, ingress: { groupPorts: groups, listenerToken: TOKEN }, w: { ...on } })
+  assert.equal(all.c.attached(d.name), true, 'every recorded group has its door')
+  assert.equal(all.c.attached('someone-else'), false, 'a harness with no recorded group is not attached')
+  all.c.close()
+  const oneShut = await rig({ desc: d, ingress: { groupPorts: groups, listenerToken: TOKEN }, taken: new Set([18300]), w: { ...on } })
+  assert.equal(oneShut.c.attached(d.name), false, 'one recorded group without a listening door: the path in is not up')
+  oneShut.c.close()
+  const none = await rig({ desc: d, ingress: { groupPorts: {}, listenerToken: TOKEN }, w: { ...on } })
+  assert.equal(none.c.attached(d.name), false, 'nothing recorded for it')
+  none.c.close()
+  const unread = await rig({ desc: d, ingress: { error: 'EACCES' }, w: { ...on } })
+  assert.equal(unread.c.attached(d.name), null, 'ingress.json unreadable: not known')
+  unread.c.close()
+})

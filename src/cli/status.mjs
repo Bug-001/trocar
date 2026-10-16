@@ -178,6 +178,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   return f
 }
 
+/** 1.6 §9.7 / R4: certificate states the user must act on (root pending, declined or gone; key gone) also exit 1, once something was installed; the verdicts stay the proxy axis's (V32). */
+const certNeedsUser = (f) => !!(f.install && f.install.state && f.cert && (['cert-root-pending', 'cert-root-declined', 'cert-root-missing'].includes(f.cert.root.code) || f.cert.key.state === 'missing'))
+
 /** 1.6 §9.4 `install` and `cert` (D55): the install record from the manifest; the root from asight-ca.pem, read back from the user's store through the injected reader
  *  (backendsFor().rootStore: never `security` / `certutil` in a test); the key and the intermediate from the daemon's issuer (unknown, with a reason, without one). The certificate
  *  axis only: nothing here changes a harness's verdict (V32). Linux: no user root step (`none`), the key is the file `install` made, no intermediate. */
@@ -187,13 +190,13 @@ async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
   let x = null
   try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'))) } catch (e) { rethrowSandbox(e) }
   const fp256 = x ? x.fingerprint256 : null, items = m ? [...(m.entries || []), ...(m.files || [])] : []
-  const notInstalled = { state: 'missing', code: 'cert-not-installed', command: 'asight install' }
-  let root = model ? { store: null, ...notInstalled } : { store: null, state: 'none', code: null, command: null }
+  const notInstalled = { state: 'missing', code: rec && rec.state ? 'cert-root-missing' : 'cert-not-installed', command: 'asight install' } // §9.6: installed and gone from the store vs never installed
+  let root = model ? { store: null, ...notInstalled, code: 'cert-not-installed' } : { store: null, state: 'none', code: null, command: null }
   if (model && fp256) {
     let has
     try { has = await (deps.rootStore || (deps.backends && deps.backends.rootStore) || (await (await import('../collector/arch/model-backends.mjs')).backendsFor({ os: platform, home, run: deps.exec || null, env, fs })).rootStore).has({ fp256, sha1: x.fingerprint.replace(/:/g, '') }) } catch (e) { rethrowSandbox(e); has = { error: errText(e) } }
     const p = (rec && rec.pending || []).find((q) => q.item === 'root-store'), store = (items.find((e) => e.kind === 'system-root' && e.fp256 === fp256) || {}).store || null
-    root = has && has.present ? { store, state: 'in-place', code: null, command: null } : p || (has && has.error) ? { store, state: p && p.state === 'declined' ? 'declined' : 'pending', code: null, command: 'asight install', reason: (has && has.error) || p.reason || null } : { store, ...notInstalled }
+    root = has && has.present ? { store, state: 'in-place', code: null, command: null } : p || (has && has.error) ? { store, state: p && p.state === 'declined' ? 'declined' : 'pending', code: p ? `cert-root-${p.state === 'declined' ? 'declined' : 'pending'}` : null, command: 'asight install', reason: (has && has.error) || p.reason || null } : { store, ...notInstalled }
   }
   const down = reply && reply.cert ? null : f.daemon.state === 'running' ? 'the daemon\'s reply has no issuer block' : `the daemon is ${f.daemon.state}${f.daemon.reason ? ` (${f.daemon.reason})` : ''}: only it holds the issuer`
   const custody = model ? ((items.find((e) => e.kind === 'root-key') || {}).custody || {}).kind || null : 'file'
@@ -467,7 +470,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   recordNetenv(f, { home, deps })
   const wanted = f.harnesses.filter((h) => h.desired === 'on')
   const unreadable = f.harnesses.some((h) => h.judged.captured === null) || !!(f.state && f.state.error) || !!f.manifest.error || !!f.health_error
-  const failing = wanted.some((h) => h.judged.captured === false) || failedIn24h(f.health)
+  const failing = wanted.some((h) => h.judged.captured === false) || failedIn24h(f.health) || certNeedsUser(f)
   const exit = unreadable ? EXIT.unknown : failing ? EXIT.incomplete : EXIT.ok
   const restart = restartOf(f)
   if (json) {
