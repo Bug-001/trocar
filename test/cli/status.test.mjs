@@ -568,7 +568,7 @@ async function modelStatus(w, { desired, daemon, door, key, st, root }) {
   const r = { pid: 99, doors: door === 'up' ? { 'codex:all': 17995 } : {}, harnesses: { codex: { desired, attached: door === 'unknown' ? null : door === 'up' } }, holders: 1, cert: { key, intermediate: st, expires: st === 'ready' ? '2026-10-22T09:00:02Z' : null }, engine: {} }
   const request = daemon === 'running' ? async (q) => (q.path === '/status' ? r : q.path === '/holders' ? { count: 1, holders: modelProc.holders } : assert.fail(q.path)) : down(daemon === 'noresp' ? 'ETIMEDOUT' : 'ECONNREFUSED')
   const io = fakeIo()
-  const exit = await runStatusCli(['--json'], { io, home: w.home, platform: 'darwin', env: w.env, deps: { request, socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: root === 'in' ? w.store : rootStoreStub(), user: 'alice' } })
+  const exit = await runStatusCli(['--json'], { io, home: w.home, platform: 'darwin', env: w.env, deps: { request, socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: root === 'in' ? w.store : root === 'throws' ? { has: async () => { throw Object.assign(new Error('trustd did not answer'), { code: 'EIO' }) } } : rootStoreStub(), user: 'alice' } })
   return { exit, j: JSON.parse(io.stdoutText()) }
 }
 
@@ -646,6 +646,27 @@ test('1.6 §9.4 / §9.6 cert.root: the code follows the state — pending / decl
     assert.deepEqual([h.captured, h.reason], want, `V32: the harness verdict carries the root's code: ${code}`)
     assert.deepEqual(validateReceipt(r.j), [], code)
   }
+})
+
+test('1.6 §9.4 cert.root: what cannot be read is unknown with its reason (store, certificate file), never pending or not-installed; an installed root whose certificate file is gone is cert-not-installed and exits 1', async () => {
+  const w = await modelOn()
+  const base = { desired: 'on', daemon: 'running', door: 'up', key: 'present', st: 'ready', root: 'throws' }
+  const store = await modelStatus(w, base)
+  assert.deepEqual([store.j.cert.root.state, store.j.cert.root.code, store.exit], ['unknown', null, EXIT.unknown], 'a store read that failed, no pending item')
+  assert.match(store.j.cert.root.reason, /root store could not be read.*EIO/)
+  assert.deepEqual(validateReceipt(store.j), [])
+  const pem = path.join(w.dir, 'ca', 'asight-ca.pem'), bytes = fs.readFileSync(pem)
+  try {
+    fs.rmSync(pem); fs.mkdirSync(pem) // there, and not readable as a file
+    const odd = await modelStatus(w, { ...base, root: 'in' })
+    assert.deepEqual([odd.j.cert.root.state, odd.j.cert.root.code, odd.exit], ['unknown', null, EXIT.unknown], 'a certificate file that cannot be read')
+    assert.match(odd.j.cert.root.reason, /asight-ca\.pem cannot be read/)
+    assert.deepEqual(validateReceipt(odd.j), [])
+    fs.rmdirSync(pem)
+    const gone = await modelStatus(w, { ...base, desired: 'off', root: 'in' })
+    assert.deepEqual([gone.j.cert.root.state, gone.j.cert.root.code, gone.exit], ['missing', 'cert-not-installed', EXIT.incomplete], 'installed, the certificate file gone: on refuses, so the user must act — even with nothing on')
+    assert.deepEqual(validateReceipt(gone.j), [])
+  } finally { if (!fs.existsSync(pem)) fs.writeFileSync(pem, bytes) }
 })
 
 test('CM23 status half: the holders\' pids — from the daemon\'s poll (GET /holders) when it answers, from the manifest\'s liveness and the process table when it does not', async () => {

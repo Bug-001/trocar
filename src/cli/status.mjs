@@ -193,7 +193,7 @@ function judgeCertificates(f) {
 }
 
 /** 1.6 §9.7 / R4: certificate states the user must act on (root pending, declined or gone; key gone) also exit 1, once something was installed — also where no agent runs that would show it. */
-const certNeedsUser = (f) => !!(f.install && f.install.state && f.cert && (['cert-root-pending', 'cert-root-declined', 'cert-root-missing'].includes(f.cert.root.code) || f.cert.key.state === 'missing'))
+const certNeedsUser = (f) => !!(f.install && f.install.state && f.cert && (['cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-not-installed'].includes(f.cert.root.code) || f.cert.key.state === 'missing')) // installed and cert-not-installed: the certificate file is gone
 
 /** 1.6 §9.4 `install` and `cert` (D55): the install record from the manifest; the root from asight-ca.pem, read back from the user's store through the injected reader
  *  (backendsFor().rootStore: never `security` / `certutil` in a test); the key and the intermediate from the daemon's issuer (unknown, with a reason, without one). The certificate
@@ -201,16 +201,22 @@ const certNeedsUser = (f) => !!(f.install && f.install.state && f.cert && (['cer
 async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
   const rec = m && m.install ? m.install : null, model = platform === 'darwin' || platform === 'win32', reply = f.daemon.reply
   const install = { state: rec ? rec.state ?? null : null, at: rec ? rec.at ?? null : null, harnesses: rec ? rec.harnesses || [] : [], pending: rec ? (rec.pending || []).map((p) => p.item) : [] }
-  let x = null
-  try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'))) } catch (e) { rethrowSandbox(e) }
+  let x = null, pemWhy = null // pemWhy: the certificate is there and cannot be read — not known, never "not installed"
+  try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'))) } catch (e) { rethrowSandbox(e); if (!(e && e.code === 'ENOENT')) pemWhy = `asight-ca.pem cannot be read (${errText(e)})` }
   const fp256 = x ? x.fingerprint256 : null, items = m ? [...(m.entries || []), ...(m.files || [])] : []
   const notInstalled = { state: 'missing', code: rec && rec.state ? 'cert-root-missing' : 'cert-not-installed', command: 'asight install' } // §9.6: installed and gone from the store vs never installed
-  let root = model ? { store: null, ...notInstalled, code: 'cert-not-installed' } : { store: null, state: 'none', code: null, command: null }
+  const unknown = (reason) => ({ state: 'unknown', code: null, command: null, reason })
+  // no certificate file: no usable root, so `on` refuses cert-not-installed (1.6 §1.1) — installed or not; one that cannot be read: not known
+  let root = !model ? { store: null, state: 'none', code: null, command: null }
+    : pemWhy ? { store: null, ...unknown(pemWhy) }
+      : { store: null, ...notInstalled, code: 'cert-not-installed', ...(rec && rec.state ? { reason: 'install recorded a root and its certificate asight-ca.pem is gone' } : {}) }
   if (model && fp256) {
     let has
     try { has = await (deps.rootStore || (deps.backends && deps.backends.rootStore) || (await (await import('../collector/arch/model-backends.mjs')).backendsFor({ os: platform, home, run: deps.exec || null, env, fs })).rootStore).has({ fp256, sha1: x.fingerprint.replace(/:/g, '') }) } catch (e) { rethrowSandbox(e); has = { error: errText(e) } }
     const p = (rec && rec.pending || []).find((q) => q.item === 'root-store'), store = (items.find((e) => e.kind === 'system-root' && e.fp256 === fp256) || {}).store || null
-    root = has && has.present ? { store, state: 'in-place', code: null, command: null } : p || (has && has.error) ? { store, state: p && p.state === 'declined' ? 'declined' : 'pending', code: p ? `cert-root-${p.state === 'declined' ? 'declined' : 'pending'}` : null, command: 'asight install', reason: (has && has.error) || p.reason || null } : { store, ...notInstalled }
+    root = has && has.present ? { store, state: 'in-place', code: null, command: null }
+      : p ? { store, state: p.state === 'declined' ? 'declined' : 'pending', code: `cert-root-${p.state === 'declined' ? 'declined' : 'pending'}`, command: 'asight install', reason: (has && has.error) || p.reason || null }
+        : has && has.error ? { store, ...unknown(`the root store could not be read (${has.error})`) } : { store, ...notInstalled }
   }
   const down = reply && reply.cert ? null : f.daemon.state === 'running' ? 'the daemon\'s reply has no issuer block' : `the daemon is ${f.daemon.state}${f.daemon.reason ? ` (${f.daemon.reason})` : ''}: only it holds the issuer`
   const custody = model ? ((items.find((e) => e.kind === 'root-key') || {}).custody || {}).kind || null : 'file'
