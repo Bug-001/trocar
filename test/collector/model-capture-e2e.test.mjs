@@ -152,6 +152,12 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(got.length, 2); assert.equal(got[1].toString('latin1'), REQ)
         await two.end()
 
+        // with no connection open, the holder alone keeps the daemon and its door up past the exit tick (CM23)
+        const held = await Promise.race([box.daemon.exited.then(() => 'exited'), new Promise((r) => setTimeout(() => r('up'), 1000))])
+        assert.equal(held, 'up', 'the daemon stayed up while its holder lives, no connection open')
+        const probe = net.connect({ port: door, host: '127.0.0.1' }); open.push(probe)
+        await onceWithin(probe, 'connect'); probe.destroy()
+
         // the holder leaves the process table: the daemon drains and exits (CM23)
         a.alive = false; win?.write()
         assert.ok(await within(box.daemon.exited.then(() => true), 20_000, 'the daemon exited once its holder was gone'))
