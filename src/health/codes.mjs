@@ -6,7 +6,7 @@
 // listed, never ⚠. A Node errno (ENOSPC, EACCES, ERR_SSL_…) goes into `code` unchanged; free text only in `reason`.
 
 /** not_captured on a connection row — capture went wrong. */
-export const NOT_CAPTURED_FAILURE = Object.freeze(['untrusted', 'untracked', 'client-rejected-leaf', 'negative-cache', 'upstream-cert', 'upstream-handshake', 'leaf-error', 'h2', 'malformed-hello', 'ws-not-recorded'])
+export const NOT_CAPTURED_FAILURE = Object.freeze(['untrusted', 'untracked', 'client-rejected-leaf', 'negative-cache', 'upstream-cert', 'upstream-handshake', 'leaf-error', 'h2', 'malformed-hello'])
 /** not_captured on a connection row — not captured by design. */
 export const NOT_CAPTURED_EXPECTED = Object.freeze(['policy', 'not-trust-path', 'https-proxy', 'proxy-refused', 'upstream-first', 'unknown-protocol', 'upgrade-not-followed', 'error'])
 
@@ -47,7 +47,7 @@ export const TRUST_REASONS = Object.freeze([
   // a harness's own
   'settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
   'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override',
-  'route-without-ca', 'win-doors-rejected', // hermes: darwin's active route has no asight ssl_ca_cert; win32's client refuses the .env entry
+  'win-doors-rejected', // hermes: win32's client refuses the .env entry; goes with the old win32 collector (4.11 §3 ⑱)
 ])
 
 /** Codes asight names itself, by part (the grouping is documentation; the set is flat). */
@@ -62,7 +62,7 @@ export const CODES_BY_PART = Object.freeze({
   bundle: ['roots-changed', 'missing', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial'], // the last three: the bundles of the harnesses that are on were (re)built with no OS root, without OS roots that did not parse, without a roots source whose read failed (4.6 「合并包」)
   note: ['ok'], // the code of an agent-trusted line
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
-  engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'upstream-ca-unreadable', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response', 'prior-proxy-unknown',
+  engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response', 'prior-proxy-unknown',
     'trust-rejected', 'pac-peer-refused', 'upstream-header-ignored', 'holders-unreadable'], // the last two (4.11 P7 · P12): X-Asight-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused asight's leaf: level 'critical', one per (pid, host) (D51④)
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
   // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
@@ -72,8 +72,9 @@ export const CODES_BY_PART = Object.freeze({
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
   ca: ['ca-invalid', 'cert-key-missing', 'cert-intermediate-unavailable'], // the last two: the issuer's (4.11 P2, ⑱): the root key is not in its custody; the custody did not issue an intermediate
-  install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'optin-not-undone', 'needs-admin', 'not-users-file', 'cert-not-installed', 'install-pending', 'collectors-online'], // not-users-file: install skipped a P8 install-folder wrapper, the program is not this user's one native file (4.11 P8); the two before it: the Windows collector's off-side — an opt-in item that could not be undone, a machine-level item left for the operator's elevated command (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
-  legacy: ['tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
+  install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'needs-admin', 'not-users-file', 'cert-not-installed', 'install-pending', 'collectors-online'], // not-users-file: install skipped a P8 install-folder wrapper, the program is not this user's one native file (4.11 P8); needs-admin: the Windows opt-in's machine-level item left for the operator's elevated command, goes with the old win32 collector (4.11 §3 ⑱) (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
+  // names no writer produces any more, kept so old records still read (4.8 §12 「旧 flows/ 行照读」): the old MITM's, and macOS Hermes' route-without-ca (4.11 §3 ⑱)
+  legacy: ['route-without-ca', 'tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
 

@@ -32,8 +32,8 @@ export const LAST_CA_BUNDLE_RELEASE = 'v2026.9.24'
 const releaseDay = (tag) => { const m = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(tag)); return m ? Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) : null }
 const CUTOFF = releaseDay(LAST_CA_BUNDLE_RELEASE)
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what asight's block sets over the launch env and the user's lines
-/** Pseudo-variable an OS file's layers set when that OS's trust doors cannot grant: its value is the `agent-untrusted` reason (darwin
- *  `route-without-ca`, win32 `win-doors-rejected`); refine names it in place of the generic var-missing (D51④). */
+/** Pseudo-variable an OS file's layers set when that OS's trust doors cannot grant: its value is the `agent-untrusted` reason (win32
+ *  `win-doors-rejected`); refine names it in place of the generic var-missing (D51④). */
 export const DOORS_SHUT = 'hermes:doors-shut'
 
 // The root of the Hermes data dirs (HERMES_HOME may name a profile under it) and the active home of this process.
@@ -215,7 +215,6 @@ export default {
       shadowed: 'HERMES_CA_BUNDLE names a bundle without the asight CA, and this Hermes may be a release build that reads it first',
       'replace-without-ca': 'a provider ssl_ca_cert in config.yaml names a bundle without the asight CA; that route trusts only that file',
       'verify-disabled': 'a provider in config.yaml sets ssl_verify: false',
-      'route-without-ca': 'macOS Hermes trusts only the ssl_ca_cert of the route it uses; the route in use (or the built-in provider) has no ssl_ca_cert line written by asight, so it is forwarded without capture',
       'win-doors-rejected': 'on Windows Hermes refuses the certificate entry asight writes into its .env (measured on a Windows test machine), so it is forwarded without capture until the system trust root of D55 covers it',
     },
   },

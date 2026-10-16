@@ -119,6 +119,36 @@ test('D38 the collector name maps and every harness trust reason are in the clos
   for (const r of [...TRUST_REASONS, ...ROUTE_TRUST_REASONS]) assert.ok(isCode(r), r)
 })
 
+// 4.11 §3 ⑱ / 1.6 §9.7: the code table is closed both ways. Every code is written by some module of src/ (a quoted literal, or CODE.<key> of the
+// collector's map), outside the files that only list or word them; the exceptions are named here with their reason. A code whose last producer
+// goes is deleted from the table in the same change — this test turns red until it is.
+const LISTS_ONLY = /src\/(health\/codes|netenv\/findings[^/]*|cli\/schema|cli\/words|collector\/core\/codes)\.mjs$/
+const READER_ONLY = closedSets.CODES_BY_PART.legacy // old records still read (4.8 §12); no writer
+const DOCTOR_DERIVED = ['proxy-dead', 'egress-differs', 'linger-off', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown'] // diagnose derives them from the facts (1.6 §9.6); src/netenv/findings.mjs is their producer
+// 4.11 §3 ⑱ retires these on macOS / Windows; the macOS producers are gone (earlier work), the old win32 collector that still writes them goes once W69's guard (spec 0.1:161) moves.
+// Each must still have a producer: when the last one goes, this list and the table lose the code together.
+const WIN32_OLD = ['opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'needs-admin', 'win-doors-rejected', 'env-unreadable-fill', 'form-unsupported']
+const RETIRED = ['cert-env-not-inherited', 'route-without-ca', 'upstream-ca-unreadable', 'optin-not-undone'] // 4.11 §3 ⑱, 4.6 (trust-store-error only)
+function producers() {
+  const keyOf = new Map(Object.entries(CODE).map(([k, v]) => [v, k]))
+  const files = walk(path.join(REPO, 'src')).filter((f) => !LISTS_ONLY.test(f)).map((f) => fs.readFileSync(f, 'utf8'))
+  return (c) => files.some((t) => t.includes(`'${c}'`) || t.includes(`"${c}"`) || (keyOf.has(c) && new RegExp(`CODE\\.${keyOf.get(c)}\\b`).test(t)))
+}
+test('4.11 §3 ⑱ every code of the closed table has a producer in src/, or is named as reader-only / doctor-derived; the retired ones are in no writer list', () => {
+  const has = producers()
+  const all = [...new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS])]
+  assert.deepEqual(all.filter((c) => !has(c) && !READER_ONLY.includes(c) && !DOCTOR_DERIVED.includes(c)), [], 'a code nothing writes: delete it from src/health/codes.mjs (and its finding), or name why it stays')
+  assert.deepEqual(WIN32_OLD.filter((c) => !has(c)), [], 'the old win32 producer of this code is gone: drop the code from the table, the findings and this list (4.11 §3 ⑱)')
+  const writers = new Set([...CODES.filter((c) => !READER_ONLY.includes(c)), ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS, ...TRUST_REASONS, ...Object.values(CODE), ...Object.keys(TRUST_REASON)])
+  assert.deepEqual(RETIRED.filter((c) => writers.has(c)), [])
+  assert.ok(!NOT_CAPTURED_FAILURE.includes('ws-not-recorded'), '4.6 no longer lists it and nothing writes it')
+})
+test('4.11 §3 ⑱ the producer scan can fail: a planted code with no writer is reported', () => {
+  const has = producers()
+  assert.equal(has('no-such-code-anywhere'), false)
+  assert.equal(has('cert-key-missing'), true)
+})
+
 // D39⑦ (RFC 1.6 §涉及源文件与接口「闭集」): the names `asight off` writes. src/off may import nothing outside itself (0.1 §2), so
 // it keeps its own copy (src/off/names.mjs); this is what keeps the two copies the same list.
 test('D39 the off names (where off, event off-note, codes backup-failed / backup-kept / undone-by-marker) are in the closed sets', () => {

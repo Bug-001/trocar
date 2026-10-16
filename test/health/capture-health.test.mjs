@@ -256,9 +256,9 @@ test('only metadata leaves: a WebSocket row\'s tail_raw and an envelope-looking 
   const b = home()
   try {
     installed(b); b.lock(); b.state('on', at(H))
-    b.flows([{ ts: at(H / 2), flow_id: 'f', pid: 3, agent: 'codex', decision: 'decrypt', not_captured: 'ws-not-recorded', ws: { tail_raw: 'U0VDUkVU', failures: 1 }, prelude: 'CONNECT x Proxy-Authorization: Basic c2VjcmV0', req_body: 'secret' }])
+    b.flows([{ ts: at(H / 2), flow_id: 'f', pid: 3, agent: 'codex', decision: 'decrypt', not_captured: 'malformed-hello', ws: { tail_raw: 'U0VDUkVU', failures: 1 }, prelude: 'CONNECT x Proxy-Authorization: Basic c2VjcmV0', req_body: 'secret' }])
     const s = JSON.stringify(b.health())
-    assert.ok(s.includes('ws-not-recorded'))
+    assert.ok(s.includes('malformed-hello'))
     assert.doesNotMatch(s, /U0VDUkVU|c2VjcmV0|secret|Proxy-Authorization/)
   } finally { b.done() }
 })

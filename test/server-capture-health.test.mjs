@@ -67,17 +67,17 @@ test('/api/capture-health: unreadable flows/ → 503 with the reason; nothing in
 
 test('/api/capture-health: metadata only (no ws.tail_raw, prelude or body); the Host / Origin gate applies (4.4 #8, #14)', async () => {
   const b = sandbox()
-  b.put([{ flow_id: 'f1', pid: 3, agent: 'codex', decision: 'decrypt', not_captured: 'ws-not-recorded', ws: { tail_raw: 'VEFJTA==', failures: 0 }, prelude: 'Proxy-Authorization: Basic c2VjcmV0', req_body: 'body-bytes' }])
+  b.put([{ flow_id: 'f1', pid: 3, agent: 'codex', decision: 'decrypt', not_captured: 'malformed-hello', ws: { tail_raw: 'VEFJTA==', failures: 0 }, prelude: 'Proxy-Authorization: Basic c2VjcmV0', req_body: 'body-bytes' }])
   const { server, port } = await serve({ healthHome: b.h })
   try {
     const r = await get(port, '/api/capture-health')
     assert.equal(r.status, 200)
-    assert.match(r.body, /ws-not-recorded/)
+    assert.match(r.body, /malformed-hello/)
     assert.doesNotMatch(r.body, /VEFJTA|c2VjcmV0|Proxy-Authorization|body-bytes/)
     for (const h of [{ host: 'evil.example.com' }, { origin: 'https://evil.example.com' }]) {
       const x = await get(port, '/api/capture-health', h)
       assert.equal(x.status, 403, JSON.stringify(h))
-      assert.doesNotMatch(x.body, /ws-not-recorded|codex/)
+      assert.doesNotMatch(x.body, /malformed-hello|codex/)
     }
   } finally { server.close(); b.done() }
 })
