@@ -8,7 +8,7 @@
 //     the user's can make an `on` or a re-plan throw. The name it answers with is historical (the kernel config's own name for the hop); callers use the
 //     throw, not the value.
 //   · `bypassRuleOf(e)` — is a bypass row one of the four kinds with a well-formed value? Both arches' `translateBypass` ask it of every row before it enters
-//     a table (so an entry that cannot be matched is counted `untranslated`, never written), and both `route-plan.mjs`'s `hostSetOf` ask it of a host-tree
+//     a table (so an entry that cannot be matched is counted `untranslated`, never written), and `host-agent.mjs`'s `hostSetOf` asks it of a host-tree
 //     name (a name the matcher cannot meet is `dropped`, never a line that looks like capture and is none).
 //   · `bypassHit(bypass, host)` — the one matcher: does a CONNECT target hit one of the group's bypass rows? The door redirector's own dial decision
 //     (core/engine/door-redirector.mjs) and both arches' tests read the same answer, so the rule and its test can never drift apart.

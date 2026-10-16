@@ -4,6 +4,6 @@
 import { routePlanOf } from '../../core/route-plan.mjs'
 import { proxyAuthOf, upstreamFor } from './upstream.mjs'
 
-export const { groupsOf, priorOf, proxyRecordsOf, resolveLogin, planRoutes, hostSetOf } = routePlanOf({
+export const { groupsOf, priorOf, proxyRecordsOf, resolveLogin, planRoutes } = routePlanOf({
   os: 'win32', norm: (p) => String(p).replace(/\\/g, '/').toLowerCase(), upstreamFor, proxyAuthOf,
 })

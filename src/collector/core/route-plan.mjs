@@ -13,10 +13,9 @@
 // through the ctx it is given, the files the agents read; it writes nothing, opens no socket and names no harness or OS: the groups and forms it is given are the harness
 // files' data (the daemon hands them in). Beside the plan sit the four small rules both wirings ask of it (`isDesiredOn` · `movedRoute` · `optedInOf` · `carriedOf`).
 import { parseDotenv, parseJsonc } from './config-read.mjs'
-import { bypassRuleOf } from './upstream-shape.mjs'
 import { entryGate } from './entry-forms.mjs'
 
-/** routePlanOf({ os, norm, upstreamFor, proxyAuthOf }) → `{ groupsOf, priorOf, proxyRecordsOf, resolveLogin, planRoutes, hostSetOf }`, the arch's route-plan (the header). */
+/** routePlanOf({ os, norm, upstreamFor, proxyAuthOf }) → `{ groupsOf, priorOf, proxyRecordsOf, resolveLogin, planRoutes }`, the arch's route-plan (the header). */
 export function routePlanOf(arch) {
   const { os, norm, upstreamFor, proxyAuthOf } = arch || {}
   if (typeof os !== 'string' || typeof norm !== 'function' || typeof upstreamFor !== 'function' || typeof proxyAuthOf !== 'function') throw new TypeError('routePlanOf needs the arch\'s os, norm, upstreamFor and proxyAuthOf')
@@ -25,7 +24,7 @@ export function routePlanOf(arch) {
     priorOf: (o) => priorOf(o, arch),
     resolveLogin: (ref, o) => resolveLogin(ref, o, arch),
     planRoutes: (o) => planRoutes(o, arch),
-    proxyRecordsOf, hostSetOf,
+    proxyRecordsOf,
   }
 }
 
@@ -246,54 +245,4 @@ function planRoutes({ netenv, groups, desired = null, optIns = [], manifest = nu
     }
   }
   return out
-}
-
-// ---- the host set of a host-tree form (4.8 §3, OPEN 22) -------------------------------------------------------------------------------------------------
-
-// What the kernel's rule `DOMAIN-SUFFIX,<host>` can meet. Three kinds of name cannot: a name the generator refuses (its own check, asked through `bypassRuleOf`, so there is no copy of its pattern here); a numeric dotted quad (an address,
-// or something that cannot be a name): the rule never matches a connection to an address literal; and the name `localhost`: the kernel's own hosts table has made it 127.0.0.1 by the time its rules run, so the name is gone (4.8 §3 末,
-// measured on the re-entry path; OPEN 28). Each of them would be a line that looks like capture and is none, so each is said (`dropped`) and not written.
-const NUMERIC_QUAD = /^\d+(\.\d+){3}$/
-function matchable(name) {
-  if (NUMERIC_QUAD.test(name) || name.replace(/\.$/, '') === 'localhost') return false
-  try { bypassRuleOf({ kind: 'domain', value: name }); return true } catch { return false }
-}
-
-/**
- * hostSetOf({ form, readSettings, extraHosts }) → { hosts: [name], settings: 'read' | 'absent' | { unreadable: { reason, detail? } }, dropped: [name] }
- * The hosts whose connections a host-tree form (an editor that carries many extensions, whose proxy setting sends them all to the form's port) hands to the engine; every other connection of the editor is only forwarded (4.8 §3).
- * The set is the form's default hosts (its harness file), then the base-URL hosts found in the extension's own settings (`form.hosts.settings.hostsOf` over the text `readSettings()` gives: `{ text, error }`, the shape of the
- * ctx's `readTextOrError`; read-only, `on` and `status` both call this), then `extraHosts` (the operator's, state.json): each name once, lower case, in that order. A settings file that is not there is `'absent'` (nothing configured: not a failure);
- * one that cannot be read or parsed is `{ unreadable: { reason } }` (`denied` · `unparseable`, 1.6 §9.4; `detail` the errno, never a path) and the set is then the other two sources, which the caller says (D38).
- * `dropped` are the names the kernel's rule cannot meet or the generator refuses (an address literal, the name `localhost`, a wildcard, a port, a character the generator refuses): said, never written, never thrown — no input of the user's makes `on` fail.
- * A relay on this machine, configured by an address or by `localhost`, is therefore not captured by this form (4.8 OPEN 28): `dropped` and `status` are the label that says so.
- */
-function hostSetOf({ form, readSettings, extraHosts = [] } = {}) {
-  const spec = form && form.hosts
-  if (!spec || !Array.isArray(spec.defaults)) throw new TypeError('hostSetOf needs a form with a host set (hosts.defaults)')
-  if (spec.settings && typeof readSettings !== 'function') throw new TypeError('hostSetOf needs readSettings for a form whose own settings it reads')
-  let settings = 'absent'
-  let found = []
-  if (spec.settings) {
-    let r
-    try { r = readSettings() } catch (e) { r = { text: null, error: { code: e && e.code } } }
-    if (r && r.error) settings = { unreadable: { reason: 'denied', ...(r.error.code ? { detail: String(r.error.code) } : {}) } }
-    else if (r && typeof r.text === 'string') {
-      try {
-        const list = spec.settings.hostsOf(r.text)
-        if (!Array.isArray(list)) throw new TypeError('hostsOf gave no list')
-        found = list
-        settings = 'read'
-      } catch { settings = { unreadable: { reason: 'unparseable' } } }
-    }
-  }
-  const hosts = []
-  const dropped = []
-  for (const h of [...spec.defaults, ...found, ...(extraHosts || [])]) {
-    const name = typeof h === 'string' ? h.trim().toLowerCase() : ''
-    if (name === '') continue
-    const into = matchable(name) ? hosts : dropped
-    if (!into.includes(name)) into.push(name)
-  }
-  return { hosts, settings, dropped }
 }

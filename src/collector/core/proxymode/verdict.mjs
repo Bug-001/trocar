@@ -5,7 +5,7 @@
 //            editor carrying the harness's extension is named as that harness; null: none), pid, startedAt (ms or ISO), env (the PROCESS's env; null =
 //            unreadable), cwd (the process's; null = unknown) } — never the daemon's own env or cwd.
 //   record = { carrierInstalledAt (ms or ISO) of the form's carrier, rootFp256 of the asight root }
-//   hostSet = for a hostTree form, the host set the door built once at on / status (route-plan hostSetOf().hosts: the default hosts, the base-URL
+//   hostSet = for a hostTree form, the host set the door built once at on / status (host-agent hostSetOf().hosts: the default hosts, the base-URL
 //            hosts in the extension's own settings, the operator's extra_hosts; 4.8 OPEN 22); absent → desc.hosts.
 //   issuer = makeIssuer()'s object, or null; ctx = the sources.mjs ctx (os, home, dirs, readFile, readdir, policy, join).
 import path from 'node:path'

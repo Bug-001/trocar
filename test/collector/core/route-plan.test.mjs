@@ -10,7 +10,7 @@ import { stripComments, specsOf } from '../../helpers/imports.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import * as core from '../../../src/collector/core/route-plan.mjs'
 import { identifyOf, desktopDoorOf } from '../../../src/collector/core/proxy-wiring.mjs'
-import { hostSetOf } from '../../../src/collector/arch/win32/route-plan.mjs'
+import { hostSetOf } from '../../../src/collector/core/host-agent.mjs'
 import { bypassRuleOf } from '../../../src/collector/core/upstream-shape.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 
