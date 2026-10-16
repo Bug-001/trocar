@@ -131,7 +131,7 @@ export default {
   name: 'kimi-code',
   runtime: 'node',
   // No file-borne trust variables: kimi reads its CA from the environment only. The empty function is the contract
-  // (darwin's osLayers calls it — a descriptor without it throws "own is not a function" in the live judge, the mac
+  // (the tracker calls it — a descriptor without it throws "own is not a function" in the live judge, the mac
   // lab's run 2026-10-12: every kimi row degraded to its known hosts); nothing here is a layer.
   layers: () => [],
   processes,

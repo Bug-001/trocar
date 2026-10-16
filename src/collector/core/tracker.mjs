@@ -78,12 +78,7 @@ const statKeyOf = (f) => { try { const st = fs.statSync(f); return `${st.ino}:${
 // readFile: how config files are read; an error other than "absent" is kept on the row (readErrors) for the daemon.
 // recheck() (the daemon's 5 s check, D-26) judges again every trusted agent whose trust file changed since it was
 // judged; the row then carries cause 'entry-changed'. It only ever takes trust away: an untrusted row is never rechecked.
-export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, statKey = statKeyOf, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, onGone = () => {}, onOff = () => {}, onUnmatched = () => {}, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive,
-  // osLayers[os](descriptor) → the layer function to judge that OS's processes by (4.8 §5.4): the daemon hands the win32
-  // one, which prefers the descriptor's `win32.layers` (Hermes keeps its .env under %LOCALAPPDATA%, not ~/.hermes); without
-  // an entry for the OS the descriptor's own `layers` run. markerToleranceMs (0 = byte-exact, the Linux /proc rule) is the
-  // fixed tolerance the Windows plugin markers are compared with (confirm.mjs MARKER_TOLERANCE_MS).
-  osLayers = null, markerToleranceMs = 0 }) {
+export function createTracker({ redirector, registry, trust, home = os.homedir(), readFile = (f) => fs.readFileSync(f, 'utf8'), mtimeOf = mtimeOfFile, listDir = listDirNames, statKey = statKeyOf, now = () => Date.now(), onVerdict = () => {}, onError = () => {}, installedAt = () => null, onGone = () => {}, onOff = () => {}, onUnmatched = () => {}, markerDir = null, caPem = null, watchDir = watchDirNames, markerGraceMs = 10_000, setTimer = setTimeout, runtimeVersion = nodeReleaseVersion, collectorDir = null, alive = pidAlive }) {
   const table = new Map() // pid → AgentRow (agents only)
   const ambiguous = new Map() // pid → {pid, exe, candidates}
   const factsOf = new Map() // pid → the ProcFacts it was judged on (re-judged when its marker appears or its grace ends)
@@ -137,10 +132,9 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     const readTextOrError = (f) => { try { return { text: readFile(f), error: null } } catch (e) { return NOT_THERE.has(e && e.code) ? { text: null, error: null } : { text: null, error: { code: (e && e.code) || null, message: String((e && e.message) || e) } } } }
     const ctx = { os: facts.os, environ, env: environ, home: environ.get('HOME') || home, cwd: facts.cwd || '/', argv: facts.argv || [], startedAt: facts.startedAt ?? null, readText, readTextOrError, mtimeOf, listDir, unparsable }
     factsOf.set(facts.pid, facts)
-    const layerFn = osLayers && typeof osLayers[facts.os] === 'function' ? osLayers[facts.os](d) : d.layers
-    const layers = call(layerFn, ctx, row).filter(Boolean)
+    const layers = call(d.layers, ctx, row).filter(Boolean)
     for (const l of layers) if (l.live === false) { const t = installedAt(l); if (t != null) l.since = t } // review 2 #5
-    const marker = usesMarker(d) && markerDir && caPem ? markerLayer({ dir: markerDir, pid: facts.pid, startTicks: facts.startTicks ?? null, caPem, readText, toleranceMs: markerToleranceMs }) : null
+    const marker = usesMarker(d) && markerDir && caPem ? markerLayer({ dir: markerDir, pid: facts.pid, startTicks: facts.startTicks ?? null, caPem, readText }) : null
     if (marker) layers.push(marker)
     // what a harness's refine may look at besides argv and env: the exe's runtime release (lazily), its own files
     // (through the same reader, so an unreadable one is reported) and asight's collector dir (a launch shim lives there)

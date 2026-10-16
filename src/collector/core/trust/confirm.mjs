@@ -28,19 +28,14 @@ const FALSEY = /^(false|0|no|off)$/i
 // earlier process with the same pid: ignored (`marker-stale`), so a reused pid is never decrypted on a dead process's
 // word (T7). The layer names the asight CA file under the pseudo-variable `asight:marker`, so trust is still confirmed
 // by fingerprint: a marker next to a CA file that lost the asight CA does not trust.
-// `toleranceMs` (0 = byte-exact, the Linux /proc rule): the Windows plugin writes Math.round(performance.timeOrigin)
-// and the helper answers startedAt in ms from another source, so the two never agree to the digit; the wiring passes
-// this fixed tolerance there (4.8 §6.1, plan Task 8(v)).
+// The comparison is byte-exact (the Linux /proc rule).
 export const MARKER_VAR = 'asight:marker'
-export const MARKER_TOLERANCE_MS = 2000
-export function markerLayer({ dir, pid, startTicks, caPem, readText, toleranceMs = 0 }) {
+export function markerLayer({ dir, pid, startTicks, caPem, readText }) {
   const text = readText(path.join(dir, String(pid)))
   if (text == null) return null
   const layer = { name: 'plugin marker', file: path.join(dir, String(pid)), mode: 'override', vars: { [MARKER_VAR]: caPem }, live: true }
   const marker = String(text).trim()
-  const fresh = startTicks != null && (toleranceMs > 0
-    ? marker !== '' && Number.isFinite(Number(marker)) && Number.isFinite(Number(startTicks)) && Math.abs(Number(marker) - Number(startTicks)) <= toleranceMs
-    : marker === String(startTicks))
+  const fresh = startTicks != null && marker === String(startTicks)
   return fresh ? layer : { ...layer, ignored: 'marker-stale' }
 }
 

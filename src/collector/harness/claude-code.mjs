@@ -37,16 +37,11 @@ function envBlock(ctx, file) {
 }
 
 // The layers by Chromium role (D51④, plan §2.5): Claude Desktop's network service owns the model sockets and reads no settings env (4.9 §6.4's
-// measured verdict; win F9) — its one door is the desktop trust item the arch injects as `ctx.desktopDoor` ({ since, name }: darwin's confirmed
-// login-keychain item, win32's confirmed CurrentUser\Root item, either only while its fingerprint is this build's CA). That door becomes ONE synthetic
-// layer pointing NODE_EXTRA_CA_CERTS at `ctx.caFile` (evaluate() reads it back), `live:false` + `since` = the item's installed_at (config-after-start),
-// `mode:'override'` (solid to the tracker's env-unreadable arm). Another Chromium child is never trusted (core/trust/confirm.mjs: chromium-child). A process with no
-// --type= — the CLI, the Desktop-bundled CC (mac F1), Desktop's own main process — keeps the settings layers.
+// measured verdict; win F9), so no settings layer is its door and the tracker gives it none: proxy mode judges it by the root (4.11 P11, core/proxymode/verdict.mjs).
+// Another Chromium child is never trusted (core/trust/confirm.mjs: chromium-child). A process with no --type= — the CLI, the Desktop-bundled CC (mac F1),
+// Desktop's own main process — keeps the settings layers.
 function layers(ctx) {
-  if (chromiumRole(ctx.argv) === 'network-service') {
-    const door = ctx.desktopDoor
-    return door && ctx.caFile ? [{ name: door.name || 'desktop trust item', mode: 'override', vars: { NODE_EXTRA_CA_CERTS: ctx.caFile }, live: false, since: door.since }] : []
-  }
+  if (chromiumRole(ctx.argv) === 'network-service') return []
   return settingsLayers(ctx)
 }
 
