@@ -175,7 +175,8 @@ connections — agent → door → upstream, and where the upstream comes from: 
 direct connection, with the value asight wrote beside your own. A certificate block says whether the root is installed,
 its key is still in custody and the daemon could make its intermediate (`cert-not-installed`, `cert-key-missing`,
 `cert-intermediate-unavailable`), and which certificate files asight did not append to because they are not yours
-(`not-users-file`). asight only reads your proxy settings and never writes anything into a VPN.
+(`not-users-file`). `asight status <harness>` prints these per form (a `certificate:` and a `proxy:` line, then asight's value beside
+yours); `status --json` has them under `forms`. asight only reads your proxy settings and never writes anything into a VPN.
 
 The collector has descriptors for seven harnesses (D37) — `claude-code`, `codex` (its WebSocket transport is recorded
 call by call), `opencode`, `deepseek-dsh`, `kimi-code`, `hermes` and `z-code` — on all three platforms. Which form of
