@@ -249,7 +249,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     /** The door's upstream per process, latest last: { '<h>:<route>': [{ pid, source, url_redacted }] } (status's per-form `proxy.upstream`). */
     upstreams: () => Object.fromEntries([...answers].filter(([g]) => doors.has(g)).map(([g, a]) => [g, [...a.values()]])),
     /** Is `h`'s path into asight up (1.6 V32 `attached`)? Every group ingress.json records for it has its door listening; none recorded = no; unreadable = null. */
-    attached(h) { let g; try { g = Object.keys(tokenOf().groupPorts || {}).filter((k) => split(k).harness === h) } catch { return null } return g.length > 0 && g.every((k) => doors.has(k)) },
+    attached(h) { const c = readIng(); if (!c || c.error) return null; const g = Object.keys((!c.missing && c.groupPorts) || {}).filter((k) => split(k).harness === h); return g.length > 0 && g.every((k) => doors.has(k)) }, // no ingress.json: nothing recorded, so no
     async start() {
       if (!custody || custody === 'unavailable' || custody.kind === 'unavailable') fail(CODE.certIntermediateUnavailable, 'no key custody answers: no issuer, every door forwards only')
       else iss = await makeIssuer({ custody, root: rootPem, clock, timers, record })

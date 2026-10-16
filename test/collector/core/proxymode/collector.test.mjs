@@ -408,4 +408,7 @@ test('1.6 V32 `attached` · the daemon\'s own answer: every group ingress.json r
   const unread = await rig({ desc: d, ingress: { error: 'EACCES' }, w: { ...on } })
   assert.equal(unread.c.attached(d.name), null, 'ingress.json unreadable: not known')
   unread.c.close()
+  const absent = await rig({ desc: d, ingress: { missing: true }, w: { ...on } })
+  assert.equal(absent.c.attached(d.name), false, 'no ingress.json: nothing recorded for it, so no (not 不知道)')
+  absent.c.close()
 })
