@@ -612,7 +612,8 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
 // The collector model's daemon (4.11 §1 on / off, §3 ① ②): macOS and Windows. It writes no agent file and no ingress.json — `asight on`
 // writes them after POST /on opened the doors and read them back; the daemon opens doors, judges at the door, signs leaves through the custody, keeps
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
-// { backends: { custody, dirs, policy }, parts: doorPartsFor's shape } — the endpoint, the control server and the engine are always the real ones.
+// { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
+// engine are always the real ones.
 async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows }) {
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
@@ -620,7 +621,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const registry = createRegistry(list, { agentList: agents })
   const event = (rec) => failure.write(rec)
   const b = model.backends || (await backendsFor({ os: A.os, home, env }))
-  const parts = model.parts || (await doorPartsFor({ os: A.os, env, event, failure }))
+  const parts = model.parts || (await doorPartsFor({ os: A.os, env, event, failure, io: model.io || {} }))
   let rootPem = null
   try { rootPem = fs.readFileSync(path.join(P.caDir, 'asight-ca.pem'), 'utf8') } catch { /* no root: the issuer says so, every door forwards only */ }
   const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })

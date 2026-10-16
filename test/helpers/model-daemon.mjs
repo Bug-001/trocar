@@ -10,13 +10,14 @@ import { tmpDir } from './tmp.mjs'
 
 const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {} }
 
-export async function liveUnit({ w, platform }) {
+/** io: doorPartsFor's OS readers (its `io`), for a daemon whose door parts are the arch's own; without it the door parts are NOBODY. */
+export async function liveUnit({ w, platform, io = null }) {
   const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
   const arch = { os: platform, controlEndpoint }
   const box = { daemon: null, starting: null, enabled: [] }
   const start = (custody = w.custody) => {
     box.starting = startDaemon({ dir: w.dir, env: w.env, home: w.home, arch, harnesses: w.harnesses, getuid: () => 501, identity: () => ({ start_time: '111', boot_id: 'boot-1' }),
-      model: { backends: { custody, dirs: w.ctx.dirs }, parts: NOBODY } }).then((d) => { box.daemon = d; return d })
+      model: { backends: { custody, dirs: w.ctx.dirs }, ...(io ? { io } : { parts: NOBODY }) } }).then((d) => { box.daemon = d; return d })
     box.starting.catch(() => {})
   }
   box.unit = {

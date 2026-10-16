@@ -70,8 +70,10 @@ export async function systemProxyWatch({ up, read, io = {}, failure = () => {} }
 
 /** The door's readers of the world for the model collector (4.11 §1, createModelCollector): who owns a socket and that pid's facts, its env / cwd /
  *  parent (P7), how a proxy address is dialled, the system proxy now (a watcher's last read), the process table (P12). → { ownerOf, factsOf, proc,
- *  proxyOf, systemProxy, procTable, close }. Read-only, as the arch's own modules are; a test passes its own parts to the daemon instead. */
-export async function doorPartsFor({ os, env = process.env, event = () => {}, failure = () => {} }) {
+ *  proxyOf, systemProxy, procTable, close }. Read-only, as the arch's own modules are. `io`: the OS readers only (a test's seam, 0.1 §3; the daemon's
+ *  `model.io`) — `exec`, a spawnSync-shaped runner of lsof / ps / procenv (darwin) and of the process table (both); `helper`, startHelper's
+ *  { spawn, exe, args } (win32). Everything above them stays this function's own. */
+export async function doorPartsFor({ os, env = process.env, event = () => {}, failure = () => {}, io = {} }) {
   if (!isModelOs(os)) throw new Error(`the collector model runs on macOS and Windows, not ${os}`)
   const [up, { listProcs }] = await Promise.all([import(`./${os}/upstream.mjs`), import('../../off/proc.mjs')])
   const proxyOf = (text) => { const p = up.parseProxyText(text); return p && p.ok ? { kind: p.kind, host: p.host, port: p.port, ...(p.credentialed ? { auth: up.proxyAuthOf(text) } : {}) } : null }
@@ -80,19 +82,20 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
     const [{ ownerOfSocket }, pi, { execTool, runAsync }] = await Promise.all([import('./darwin/socktable.mjs'), import('./darwin/procinfo.mjs'), import('../../off/exec.mjs')])
     // every lsof / ps of the accept path runs through execFile (runAsync), never spawnSync — socktable's 250 ms budget can only win a race
     // the event loop is free to run, and one slow lsof must not hold another door's connection (nor the lock refresh off reads)
-    const execOf = (file, args, o = {}) => execTool(file, args, { ...o, run: runAsync })
-    const run = { exec: runAsync }
+    const runner = io.exec || runAsync
+    const execOf = (file, args, o = {}) => Promise.resolve(execTool(file, args, { ...o, run: runner })) // socktable races it: always a promise
+    const run = { exec: runner }
     parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, run), proc: { envOf: (p, n) => pi.envOf(p, n, run), cwdOf: (p) => pi.cwdOf(p, run), parentOf: (p) => pi.parentOf(p, run) }, close: () => {} }
-    watch = await systemProxyWatch({ up, read: up.readSystemProxy, failure: (e) => failure('netenv', e) })
+    watch = await systemProxyWatch({ up, read: up.readSystemProxy, io: io.exec ? { exec: io.exec } : {}, failure: (e) => failure('netenv', e) })
   } else {
     // no declared registry keys (plan §E.7 ruling 4): the model reads a policy value through policy.mjs (reg.exe), not this helper
     const [{ ownerOfSocket }, pi, { startHelper }] = await Promise.all([import('./win32/socktable.mjs'), import('./win32/procinfo.mjs'), import('./win32/helper.mjs')])
-    const helper = startHelper({ env, onFailure: event })
+    const helper = startHelper({ env, onFailure: event, ...(io.helper || {}) })
     const r = pi.procReaders({ helper })
     parts = { ownerOf: (q) => ownerOfSocket({ helper, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, { helper }), proc: r, close: () => helper.close() }
     watch = await systemProxyWatch({ up, read: up.readSystemProxyChain, io: { helper }, failure: (e) => failure('helper', e) })
   }
-  return { ...parts, proxyOf, systemProxy: watch.now, procTable: () => listProcs({ platform: os, env }), close: () => { watch.stop(); parts.close() } }
+  return { ...parts, proxyOf, systemProxy: watch.now, procTable: () => listProcs({ platform: os, env, exec: io.exec || null }), close: () => { watch.stop(); parts.close() } }
 }
 
 /** The proxy-mode half of status's facts on macOS / Windows (1.6 §9.7, 4.11 CM21): the model's per-form reader over this user's install manifest, the daemon's
