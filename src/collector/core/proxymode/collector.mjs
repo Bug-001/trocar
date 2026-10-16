@@ -21,6 +21,7 @@ import { readIngressConfig } from '../ingress-config.mjs'
 import { holdersRoute } from '../control.mjs'
 import { makeIssuer } from '../tls/issuer.mjs'
 import { bypassHit } from '../upstream-shape.mjs'
+import { hostSetOf } from '../host-agent.mjs'
 import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
 import { redactProxyUrl } from '../../../netenv/redact.mjs'
@@ -64,10 +65,24 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const doors = new Map() // g → { g, harness, routeId, port, auth, url }
   const onSet = new Set()
   let bound = null, iss = null
-  // a hostTree form's host set: the injected reader's, else its harness's own hosts (the descriptor's data; 4.8 §3) — never none, which would forward every host
-  const hostsOfForm = new Map(harnesses.flatMap((d) => d.proxyMode.forms.filter((f) => f.hostTree).map((f) => [f, d.hosts || []])))
-  const hostSetOf = (f) => hostsOf(f) || hostsOfForm.get(f) || null
-  const ident = createDoorIdentity({ ownerOf, factsOf, identify, ownUid, hostsOf: hostSetOf, onFailure: record, onEvent: event })
+  // a hostTree form's host set (4.8 §3 OPEN 22, 4.11 ⑫): the injected reader's, else host-agent's hostSetOf over the harness's hosts, the base URLs its own
+  // settings name (the descriptor's configHosts over the sources ctx: files only, never the daemon's env) and the operator's extra_hosts. Settings there but
+  // unreadable leave the other two and are said once (D38) — never none, which would forward every host. Read at most once a second, like the manifest.
+  const treeOf = new Map(harnesses.flatMap((d) => d.proxyMode.forms.filter((f) => f.hostTree).map((f) => [f, { d, at: -Infinity, hosts: null }])))
+  const treeHosts = (f) => {
+    const t = treeOf.get(f)
+    if (!t || clock() - t.at <= 1000) return t ? t.hosts : null
+    const errs = [], readText = (p) => { try { return ctx.readFile(p) } catch (e) { if (!['ENOENT', 'ENOTDIR'].includes(e && e.code)) errs.push(`${p}: ${(e && e.code) || e}`); return null } }
+    let found = []
+    try { found = (t.d.configHosts && t.d.configHosts({ ...ctx, env: new Map(), readText, listDir: (p) => { try { return ctx.readdir(p) } catch { return [] } } })) || [] } catch (e) { errs.push(String((e && e.message) || e)) }
+    let extra = []
+    try { extra = ((readSt().harnesses || {})[t.d.name] || {}).extra_hosts || [] } catch { /* no state: no extra hosts */ }
+    if (errs.length && !said.has(`config-unreadable\0${f.id}`)) { said.add(`config-unreadable\0${f.id}`); record({ event: 'failure', where: 'harness', code: CODE.configUnreadable, harness: t.d.name, form: f.id, reason: `${f.id}'s own settings could not be read (${errs.join('; ')}); its host set is ${t.d.name}'s hosts and the extra hosts only, so a relay they name is forwarded, not decrypted` }) }
+    Object.assign(t, { at: clock(), hosts: hostSetOf({ form: { hosts: { defaults: [...(t.d.hosts || []), ...(errs.length ? [] : found)] } }, extraHosts: extra }).hosts })
+    return t.hosts
+  }
+  const hostSetFor = (f) => hostsOf(f) || treeHosts(f)
+  const ident = createDoorIdentity({ ownerOf, factsOf, identify, ownUid, hostsOf: hostSetFor, onFailure: record, onEvent: event })
   const seen = createDoorSeen({ clock })
   const pcache = new Map(), vcache = new Map(), said = new Set()
   const answers = new Map() // door → Map(pid → { pid, source, url_redacted }): the upstream the door chose per process, status's per-form `proxy.upstream` (1.6 §9.4)
@@ -118,7 +133,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const forms = ok.length ? ok : all
     let v = forms.length ? { decrypt: true } : { decrypt: false, code: 'not-verified', detail: `${id.agent} has no form on ${ctx.os}` }
     for (const f of forms) {
-      const r = verdictOf({ desc, form: f, facts, record: { carrierInstalledAt: carrierAt(desc, f), rootFp256 }, issuer: iss ? issuer : null, host, hostSet: hostSetOf(f) || undefined, ctx })
+      const r = verdictOf({ desc, form: f, facts, record: { carrierInstalledAt: carrierAt(desc, f), rootFp256 }, issuer: iss ? issuer : null, host, hostSet: hostSetFor(f) || undefined, ctx })
       if (!r.decrypt) { v = r; break }
     }
     if (!v.decrypt && !said.has(`${k}\0${v.code}`)) { said.add(`${k}\0${v.code}`); fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g }) }

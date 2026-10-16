@@ -39,8 +39,8 @@ function box() {
 
 // ---------- hostSetOf: the hosts a host-tree form hands to the engine (4.8 §3.5, OPEN 22; W69 config half) ----------
 
-// The host set's data: the base descriptor's Kimi hosts and its hostTree form, with a relay reader of the shape the model wires (config.toml's base URLs,
-// as kimi-code.mjs reads them); hostSetOf becomes the model's default for a hostTree form.
+// The host set's data: the base descriptor's Kimi hosts and its hostTree form, with a test-local relay reader (config.toml's base URLs,
+// as kimi-code.mjs reads them); the model's default for a hostTree form (over the descriptor's configHosts) is pinned in proxymode/collector.test.mjs.
 const KIMI = ALL.find((d) => d.name === 'kimi-code')
 const TOML_URL = /(?:^|[{,])[ \t]*(base_url|[A-Z][A-Z0-9_]*_BASE_URL)[ \t]*=[ \t]*(["'])([^"'\n]+)\2/gm
 const KIMI_VSCODE = {

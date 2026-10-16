@@ -4,7 +4,7 @@
 // (only for the door the connection came through, with the door's own host-set check on top), the win32 entry check and the win32 network facts.
 // It names no harness and no OS: the groups (`[{ harness, forms: [{ hosts? }] }]`, the arch's groupsOf, or one door) are handed in.
 // Beside it, hostSetOf: WHICH hosts of such a form's connections are the harness's (4.8 §3, OPEN 22's set, 4.11 ⑫), moved here verbatim from the deleted
-// core/route-plan.mjs; it is the model collector's default host set for a hostTree form.
+// core/route-plan.mjs; the model collector's default host set for a hostTree form (core/proxymode/collector.mjs, over the descriptor's configHosts).
 import { normalizeName, processNames } from '../../off/identity.mjs'
 import { whoseBy } from './registry.mjs'
 import { bypassRuleOf } from './upstream-shape.mjs'

@@ -125,6 +125,50 @@ for (const d of descs) for (const f of d.proxyMode.forms.filter((x) => x.hostTre
   })
 }
 
+// CM22 at the door, the host tree's own settings (4.8 §3 OPEN 22, 4.11 ⑫, W69): the collector's default set is host-agent's hostSetOf over the harness's
+// hosts, the base URLs the harness's own settings name (its descriptor's configHosts, read through the sources ctx) and the operator's extra hosts. The
+// settings are found by asking the descriptor which files it reads (a probe ctx), and each is served one format-level seed (TOML, JSON) — the first whose
+// reading by the descriptor names the relay. Axes: settings naming a relay → the relay is judged like the harness's hosts; the same files unreadable →
+// the relay is outside the set (forwarded outside-host-set), the harness's hosts are still judged, one config-unreadable record says why (D38).
+const RELAY = 'relay.corp.example'
+const SEEDS = [`base_url = "https://${RELAY}/v1"\n`, JSON.stringify({ baseURL: `https://${RELAY}/v1`, base_url: `https://${RELAY}/v1` })]
+function settingsWorld(d) {
+  const read = []
+  try { d.configHosts && d.configHosts({ os: 'darwin', home: '/h', env: new Map(), dirs: { appSupport: '/as', localAppData: '/la' }, readText: (p) => { read.push(p); return null }, readTextOrError: (p) => { read.push(p); return { text: null, error: null } }, listDir: () => [], readdir: () => [], join: path.posix.join }) } catch { /* a reader that needs more than a probe gives none */ }
+  for (const seed of SEEDS) {
+    const served = Object.fromEntries(read.map((p) => [p, seed]))
+    const ctx = { os: 'darwin', home: '/h', env: new Map(), dirs: { appSupport: '/as', localAppData: '/la' }, readText: (p) => served[p] ?? null, readTextOrError: (p) => ({ text: served[p] ?? null, error: null }), listDir: () => [], readdir: () => [], join: path.posix.join }
+    let hosts = []; try { hosts = d.configHosts(ctx) || [] } catch { hosts = [] }
+    if (hosts.includes(RELAY)) return served
+  }
+  return null
+}
+for (const d of descs) for (const f of d.proxyMode.forms.filter((x) => x.hostTree)) for (const os of f.os) for (const name of (f.hosts && f.hosts.processes) || []) {
+  const served = settingsWorld(d)
+  test(`CM22 at the door · host tree · ${f.id} · ${os} · host program "${name}": a base-URL host from the harness's own settings is judged; unreadable settings leave it out, said once`, async () => { // a harness whose settings name no relay in either seed (the eighth's): the relay stays outside and nothing is said
+    for (const unreadable of [false, true]) {
+      const r = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, upstreamRoots: { os: async () => STUB_PEM, node: [STUB_PEM], extra: [] } })
+      await r.c.on({ harnesses: [d.name], groups: { [`${d.name}:${f.route}`]: 18400 } })
+      const { w, facts } = worldOf(d, f, os, {})
+      const base = ctxOf(w)
+      const readFile = (p) => { if (served && p in served) { if (unreadable) throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); return served[p] } return base.readFile(p).replace(ROOT.pem, STUB_PEM) }
+      for (const [host, inSet] of [[RELAY, !!served && !unreadable], [d.hosts[0], true], ['telemetry.unrelated.example', false]]) {
+        Object.assign(r.w, { pid: ++pid, facts: { exe: `/apps/${name}`, uid: 501, agent: null, startedAt: facts.startedAt }, env: w.env, cwd: w.cwd, ctx: { ...base, readFile } })
+        const meta = await r.c.lookupIngress({ peer: PEER, user: `${d.name}:${f.route}`, target: { address: host, port: 443 } })
+        if (!inSet) { assert.deepEqual([meta.decrypt, meta.skip && meta.skip.reason], [false, 'outside-host-set'], `${host} is outside ${f.id}'s set (settings ${unreadable ? 'unreadable' : 'read'})`); continue }
+        assert.equal(meta.skip, undefined, `${host}: the host program is ${d.name}'s here`)
+        const want = verdictOf({ desc: d, form: f, facts: { ...facts, name: d.name, pid }, record: { carrierInstalledAt: INSTALLED, rootFp256: STUB_FP }, issuer: ready, host, hostSet: [...d.hosts, RELAY], ctx: r.w.ctx })
+        assert.equal(meta.decrypt, want.decrypt, `${f.id} · ${os} · ${host}: ${JSON.stringify(want)}`)
+        if (f.verified[os] === true) assert.equal(meta.decrypt, true, `${f.id} is verified on ${os}: its host program's connection to ${host} is decrypted`)
+      }
+      for (const x of r.records) assert.deepEqual(checkRecord(x), [], JSON.stringify(x))
+      const said = r.records.filter((x) => x.code === 'config-unreadable')
+      assert.equal(said.length, served && unreadable ? 1 : 0, `settings ${unreadable ? 'unreadable: said once' : 'read: nothing said'} (${JSON.stringify(said)})`)
+      r.c.close()
+    }
+  })
+}
+
 // ---- CM20 / ⑥: the upstream per connection --------------------------------------------------------------------------------------------------------
 test('CM20 · meta.upstream equals upstreamFor over env × system proxy × prior × identified; an unidentified peer uses steps 2, 4, 5 only', async () => {
   for (const d of descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin')))) {
