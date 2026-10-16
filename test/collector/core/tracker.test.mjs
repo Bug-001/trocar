@@ -354,7 +354,7 @@ test('tracker: envRead:false says the OS never reads another process\'s environm
   assert.deepEqual([override.tracker.describe(400).trusted, override.tracker.describe(400).reason], [true, 'ok'], 'an override layer — what every Windows trust entry is (the agent applies the file over its launch env) — judges as on Linux')
   const fill = rigLayer('fill')
   fill.redirector.emit('exec', facts(401, { env: null, envRead: false })); await settle()
-  assert.deepEqual([fill.tracker.describe(401).trusted, fill.tracker.describe(401).decrypt, fill.tracker.describe(401).reason], [false, false, 'env-unreadable-fill'], 'a fill layer\'s value cannot be told from "in effect": not trusted, so the cost is capture, never a broken connection')
+  assert.deepEqual([fill.tracker.describe(401).trusted, fill.tracker.describe(401).decrypt, fill.tracker.describe(401).reason], [false, false, 'environ-unreadable'], 'a fill layer\'s value cannot be told from "in effect": not trusted, so the cost is capture, never a broken connection (the generic reason: 4.11 §3 ⑱ retired env-unreadable-fill)')
   const linuxFill = rigLayer('fill')
   linuxFill.redirector.emit('exec', facts(402, { env: new Map([['EXTRA_CA', '/own/ca.pem']]) })); await settle()
   assert.equal(linuxFill.tracker.describe(402).trusted, false, 'on Linux the same fill is checked against the environ that was read: the var the process holds wins, ca-not-in-file')

@@ -81,9 +81,8 @@ for (const [code, set] of Object.entries(SETS)) {
 test('V49 both directions: every code of the closed sets (§9.7 net codes, the status reasons §9.6 uses) has a fact set, and the catalogue defines no code outside them', () => {
   const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE, ...IDENTITY_CODES, ...CERT_CODES])
   const EVENT_ONLY = ['netenv-changed'] // D49: the system-proxy watcher's event code, not a finding: diagnose never gives it
-  const CODE_PENDING = ['opt-in-needed', 'needs-admin', 'not-via-entry'] // D57 (4.11 §3 ⑱): no named items, so no finding gives them; their closed-set entries leave health/codes.mjs next
-  for (const code of closed) if (!EVENT_ONLY.includes(code) && !CODE_PENDING.includes(code) && !(TRUST_REASONS.includes(code) && !FINDINGS[code])) assert.ok(SETS[code], `${code} has a fact set`)
-  for (const code of CODE_PENDING) assert.ok(!FINDINGS[code] && !FINDINGS_WIN32[code], `${code}: pending removal from the closed sets, no finding defines it`)
+  for (const code of closed) if (!EVENT_ONLY.includes(code) && !(TRUST_REASONS.includes(code) && !FINDINGS[code])) assert.ok(SETS[code], `${code} has a fact set`)
+  for (const code of ['opt-in-needed', 'needs-admin', 'not-via-entry']) assert.ok(!closed.has(code) && !FINDINGS[code] && !FINDINGS_WIN32[code], `${code} went with named items (D57, 4.11 §3 ⑱)`)
   for (const code of EVENT_ONLY) assert.ok(!FINDINGS[code] && !SETS[code], `${code} is no finding`)
   for (const code of Object.keys(FINDINGS)) assert.ok(closed.has(code) || TRUST_REASONS.includes(code) || REFUSAL_CODES.includes(code), `${code} is in a closed set`)
   assert.deepEqual(Object.keys(SETS).filter((c) => !closed.has(c)), [], 'and no fact set is for a code nobody defined')
@@ -99,18 +98,17 @@ test('V49 both directions, the Windows half: FINDINGS_WIN32 defines no code outs
   assert.deepEqual([...FINDING_CODES].sort(), [...new Set([...Object.keys(FINDINGS), ...Object.keys(FINDINGS_WIN32), ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])].sort(), 'the union, nothing defined that the doctor cannot name')
 })
 
-// 4.8 §5.4's fill-layer verdict (`env-unreadable-fill`) is a trust reason the Windows tracker can really set — a form's every connection judged by a layer whose value Windows cannot tell from
-// 「in effect」. Its verdict must be a status reason and its finding must be inside the code list the schema checks: the verdict landed with 8(v), its ROUTE_TRUST_REASONS entry lands here
-// (Task 10(b)); before it, `status --json` would reject both and a throwing `make` would take `doctor` down with the state.
-test('V49 the Windows trust reasons the tracker can set are findings and status reasons the schema accepts (env-unreadable-fill, 4.8 §5.4 fill layer)', () => {
-  const F = pfacts('hermes', form('hermes.cli', { procs: [proc(8121, { trusted: false, reason: 'env-unreadable-fill', hint: 'the trust would rest on a fill layer, which Windows cannot tell from「in effect」' })] }), fwForm(17993))
-  const t = buildTopology(F)['hermes']
-  assert.equal(t.reason, 'env-unreadable-fill', 'the branch carries the verdict (judgeHarness passes an untrusted proc\'s reason through)')
-  assert.deepEqual(validateTopology({ hermes: t }), [], 'and the schema knows it as a status reason')
-  const found = diagnose({ facts: F, topology: { hermes: t }, harnesses: ['hermes'], user: 'u' }).find((f) => f.code === 'env-unreadable-fill')
+// The proxy mode's own trust reason (ROUTE_TRUST_REASONS: `smart-app-control`, 4.11 ⑯ · ⑱) is a status reason and a finding inside the code list the schema checks;
+// a throwing `make` would take `doctor` down with the state.
+test('V49 the proxy mode\'s own trust reasons are findings and status reasons the schema accepts (smart-app-control, 4.11 ⑯)', () => {
+  const F = pfacts('kimi-code', form('kimi-code.cli', { procs: [proc(8121, { trusted: false, reason: 'smart-app-control', hint: 'Smart App Control is on, so install placed no wrapper' })] }), fwForm(17993))
+  const t = buildTopology(F)['kimi-code']
+  assert.equal(t.reason, 'smart-app-control', 'the branch carries the verdict (judgeHarness passes an untrusted proc\'s reason through)')
+  assert.deepEqual(validateTopology({ 'kimi-code': t }), [], 'and the schema knows it as a status reason')
+  const found = diagnose({ facts: F, topology: { 'kimi-code': t }, harnesses: ['kimi-code'], user: 'u' }).find((f) => f.code === 'smart-app-control')
   assert.ok(found, 'the finding exists (the trust entry renders it)')
   assert.equal(found.class, 'failure')
-  assert.match(found.what, /没被信任:env-unreadable-fill/)
+  assert.match(found.what, /没被信任:smart-app-control/)
   assert.deepEqual(validateFinding(found), [], 'the schema accepts it')
 })
 

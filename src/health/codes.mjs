@@ -47,7 +47,6 @@ export const TRUST_REASONS = Object.freeze([
   // a harness's own
   'settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
   'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override',
-  'win-doors-rejected', // hermes: win32's client refuses the .env entry; goes with the old win32 collector (4.11 §3 ⑱)
 ])
 
 /** Codes asight names itself, by part (the grouping is documentation; the set is flat). */
@@ -72,7 +71,7 @@ export const CODES_BY_PART = Object.freeze({
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
   ca: ['ca-invalid', 'cert-key-missing', 'cert-intermediate-unavailable'], // the last two: the issuer's (4.11 P2, ⑱): the root key is not in its custody; the custody did not issue an intermediate
-  install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'needs-admin', 'not-users-file', 'cert-not-installed', 'install-pending', 'collectors-online'], // not-users-file: install skipped a P8 install-folder wrapper, the program is not this user's one native file (4.11 P8); needs-admin: the Windows opt-in's machine-level item left for the operator's elevated command, goes with the old win32 collector (4.11 §3 ⑱) (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
+  install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'not-users-file', 'cert-not-installed', 'install-pending', 'collectors-online'], // not-users-file: install skipped a P8 install-folder wrapper, the program is not this user's one native file (4.11 P8) (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
   // names no writer produces any more, kept so old records still read (4.8 §12 「旧 flows/ 行照读」): the old MITM's, and macOS Hermes' route-without-ca (4.11 §3 ⑱)
   legacy: ['route-without-ca', 'tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
 })
@@ -92,12 +91,11 @@ export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-
 // Blocks of their own, below OFF_*, for the reason OFF_* is: D40 edits WHERE / STATE_EVENTS / CODES_BY_PART, and the lists that
 // another branch appends to stay edit-free here; `sets` below adds the blocks. test/health/codes.test.mjs holds each against the
 // RFC's table written out by hand (W38).
-export const ROUTE_WHERE = Object.freeze(['routing', 'ingress', 'optin']) // the choice and effect of a routing · the engine's proxy ingress (its per-group doors are the only local proxy) · the doing of an opt-in item
-export const ROUTE_EVENTS = Object.freeze(['route-applied', 'optin-applied', 'optin-removed']) // state changes, not failures
+export const ROUTE_WHERE = Object.freeze(['routing', 'ingress']) // the choice and effect of a routing · the engine's proxy ingress (its per-group doors are the only local proxy)
+export const ROUTE_EVENTS = Object.freeze(['route-applied']) // a state change, not a failure
 /** `code` of a failure event, by the `where` the §12 table gives it. Every row of the table is the class 失败, so the next list is this one. */
 export const ROUTE_CODES = Object.freeze([
   'ingress-auth-failed', 'ingress-unknown', 'engine-port-taken', 'upstream-unavailable', // ingress (`upstream-unavailable`: the group's upstream cannot be dialled at all, no login to dial it with or none to dial: the lookup refused, the agent got a 502)
-  'optin-failed', // optin: an item the user named was not done (a refused prompt, a script error); a refused UAC is not this: it is `pending-admin` (1.6 §1.7)
   'socktable-unavailable', 'helper-start-failed', // helper
   'task-register-failed', // install: `on` still succeeds, through the HKCU Run fallback (4.8 §7)
   'launchd-register-failed', // install, darwin: the LaunchAgent would not register (4.9 §4) — launchd is the only autostart, so `on`'s receipt says it; no fallback exists to succeed through
@@ -106,15 +104,14 @@ export const ROUTE_CODES = Object.freeze([
 ])
 /** The codes of ROUTE_CODES a writer puts on a `failure` event. Today that is all of them; a later notice-class code goes into ROUTE_CODES only. */
 export const ROUTE_FAILURE_CODES = Object.freeze([...ROUTE_CODES])
-/** Reasons a running agent is not trusted that the Windows collector adds (4.8 §5.4, §6.3): the `code` of `agent-untrusted`, as TRUST_REASONS' are. `env-unreadable-fill` is the tracker's fill-layer
- *  verdict of 4.8 §5.4 (landed with 8(v) without its list entry; named here by Task 10(b), whose finding-code list and status reasons both read this block); `smart-app-control` is the
- *  opt-in shim step's own refusal (4.8 §6.3, fail-closed).
+/** Reasons a running agent is not trusted that the proxy mode adds (4.8 §6.3, 4.11 §3 ⑱): the `code` of `agent-untrusted`, as TRUST_REASONS' are. `smart-app-control`: install
+ *  placed no install-folder wrapper because Smart App Control is on (4.11 ⑯). The tracker's fill-layer verdict says the generic `environ-unreadable` (⑱ retired `env-unreadable-fill`).
  *  Listed apart from TRUST_REASONS (a list D40's neighbours read); test/health/codes.test.mjs counts both when it checks a harness's own. */
-export const ROUTE_TRUST_REASONS = Object.freeze(['smart-app-control', 'env-unreadable-fill'])
+export const ROUTE_TRUST_REASONS = Object.freeze(['smart-app-control'])
 /** What `status` says when a form is not captured, that the Windows collector adds (4.8 §2.3, §12). The status reason set itself is the CLI's
  *  (1.6 §2); its list takes these in. */
 export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported'])
-/** The envelope's `capture`: how the call reached the engine (4.1 信封表, 4.8 §5.6): `transparent` (Linux, and the other per-process captures) or `proxy` (Windows: the call came through asight's own kernel, D43). */
+/** The envelope's `capture`: how the call reached the engine (4.1 信封表, 4.8 §5.6): `transparent` (Linux, and the other per-process captures) or `proxy` (macOS / Windows: the call came through the engine's own door, D47). */
 export const CAPTURE_KINDS = Object.freeze(['transparent', 'proxy'])
 
 // What the network topology and `asight doctor` write and say (RFC 1.6 §9.7, D39⑩, D43). A block of its own, like the ones above (they stay apart from WHERE / STATE_EVENTS / CODES_BY_PART for the same reason); `sets` below adds it.
@@ -124,11 +121,11 @@ export const CAPTURE_KINDS = Object.freeze(['transparent', 'proxy'])
 export const NET_WHERE = Object.freeze(['netenv'])
 export const NET_EVENTS = Object.freeze(['netenv-change'])
 const ROUTE_LOOP = 'route-loop', FORWARDER_DOWN = 'forwarder-down', EGRESS_DIFFERS = 'egress-differs' // the names shared with 4.7 / 4.8: written once, used by name below
-const NET_FAILURE_OWN = ['not-routed', 'proxy-dead', 'proxy-unsupported', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path', 'not-via-entry']
-export const NET_CODES = Object.freeze([...NET_FAILURE_OWN, 'proxy-changed', 'netenv-changed', 'opt-in-needed', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'prior-proxy-unknown', 'not-verified', ROUTE_LOOP, FORWARDER_DOWN, EGRESS_DIFFERS]) // the last two before the shared ones: 1.6 §9.7's net group (4.11 §3 ⑱)
+const NET_FAILURE_OWN = ['not-routed', 'proxy-dead', 'proxy-unsupported', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path']
+export const NET_CODES = Object.freeze([...NET_FAILURE_OWN, 'proxy-changed', 'netenv-changed', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'prior-proxy-unknown', 'not-verified', ROUTE_LOOP, FORWARDER_DOWN, EGRESS_DIFFERS]) // the last two before the shared ones: 1.6 §9.7's net group (4.11 §3 ⑱)
 export const NET_FAILURE_CODES = Object.freeze([...NET_FAILURE_OWN, ROUTE_LOOP, FORWARDER_DOWN])
 // the net names `status` gives as the reason an agent is not captured (1.6 §9.7); the proxy-mode reasons of 4.8 §12 (`form-unsupported`) is ROUTE_STATUS_REASONS above; a process on no name list is `process-unknown` (a state event, D51⑥), not a status reason
-const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', ROUTE_LOOP, FORWARDER_DOWN])
+const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path', ROUTE_LOOP, FORWARDER_DOWN])
 
 // What `asight status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. asight's own, then every trust
 // reason above (the resolver's and the harnesses' own). A block of its own, as the ones above are. The Windows collector's reasons (ROUTE_STATUS_REASONS: what a form that is not captured says; ROUTE_TRUST_REASONS: why a running agent is not trusted) are part of it. `negative-cache` is also a code of the engine.

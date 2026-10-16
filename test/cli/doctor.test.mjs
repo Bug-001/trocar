@@ -277,7 +277,7 @@ test('--json: one document that validates, the verdict and its reasons, the file
 
 
 // D57: no named items, so doctor names no `--opt-in` (the codex WebSocket and Claude Desktop launcher hints went with them; the Windows
-// opt-in-needed / not-via-entry / needs-admin rows with them).
+// opt-in-needed / not-via-entry / needs-admin rows and their codes left the closed sets with them).
 test('D57 / V72: doctor prints no --opt-in line on darwin, linux or win32, for every harness and none', async () => {
   const s = plain()
   for (const platform of ['darwin', 'linux', 'win32']) for (const names of [[], ['codex'], ['claude-code']]) {

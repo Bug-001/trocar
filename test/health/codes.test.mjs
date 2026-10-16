@@ -130,12 +130,13 @@ const DOCTOR_DERIVED = ['proxy-dead', 'proxy-unsupported', 'egress-differs', 'li
 // 1.6 §9.5 (D49 ⑤): the system-proxy watcher's event code. Its last producer was the old win32 wiring; the model's doors watch the
 // system proxy (doorPartsFor) but do not record the change yet — the model gets that producer next, and this row goes with it.
 const MODEL_PENDING = ['netenv-changed']
-// 4.11 §3 ⑱ codes whose last producer went with the Windows opt-in family; they leave the closed table next, and this list with them.
-const TABLE_PENDING = ['not-via-entry', 'optin-failed', 'needs-admin']
 // shim-not-on-path is not here: Linux's launch shim (harness/kimi-code.mjs inject) is its producer, and kimi's trust refine names it only
 // where that shim exists (not on an OS its proxyMode forms cover) — guarded in test/collector/harness/kimi-code.test.mjs.
-const WIN32_OLD = ['opt-in-needed', 'win-doors-rejected', 'env-unreadable-fill', 'form-unsupported']
+const WIN32_OLD = ['form-unsupported']
 const RETIRED = ['cert-env-not-inherited', 'route-without-ca', 'upstream-ca-unreadable', 'optin-not-undone'] // 4.11 §3 ⑱, 4.6 (trust-store-error only)
+// 4.11 §3 ⑱ / 1.6 §9.7 (D57): the named-item codes went with named items (their producers and their table rows are gone), and the Windows-only
+// fill-layer reason became the generic environ-unreadable; Windows Hermes' door refusal went with its overlay layer (D55's user root trusts it, 4.11): no closed set holds one
+const GONE = ['opt-in-needed', 'not-via-entry', 'needs-admin', 'optin-failed', 'env-unreadable-fill', 'win-doors-rejected']
 function producers() {
   const keyOf = new Map(Object.entries(CODE).map(([k, v]) => [v, k]))
   const files = walk(path.join(REPO, 'src')).filter((f) => !LISTS_ONLY.test(f)).map((f) => fs.readFileSync(f, 'utf8'))
@@ -144,11 +145,11 @@ function producers() {
 test('4.11 §3 ⑱ every code of the closed table has a producer in src/, or is named as reader-only / doctor-derived; the retired ones are in no writer list', () => {
   const has = producers()
   const all = [...new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS])]
-  assert.deepEqual(all.filter((c) => !has(c) && !READER_ONLY.includes(c) && !DOCTOR_DERIVED.includes(c) && !MODEL_PENDING.includes(c) && !TABLE_PENDING.includes(c)), [], 'a code nothing writes: delete it from src/health/codes.mjs (and its finding), or name why it stays')
-  assert.deepEqual(TABLE_PENDING.filter((c) => has(c)), [], 'a pending code has a producer again: take it off TABLE_PENDING')
+  assert.deepEqual(all.filter((c) => !has(c) && !READER_ONLY.includes(c) && !DOCTOR_DERIVED.includes(c) && !MODEL_PENDING.includes(c)), [], 'a code nothing writes: delete it from src/health/codes.mjs (and its finding), or name why it stays')
   assert.deepEqual(WIN32_OLD.filter((c) => !has(c)), [], 'the old win32 producer of this code is gone: drop the code from the table, the findings and this list (4.11 §3 ⑱)')
   const writers = new Set([...CODES.filter((c) => !READER_ONLY.includes(c)), ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS, ...TRUST_REASONS, ...Object.values(CODE), ...Object.keys(TRUST_REASON)])
   assert.deepEqual(RETIRED.filter((c) => writers.has(c)), [])
+  assert.deepEqual(GONE.filter((c) => isCode(c) || writers.has(c) || has(c)), [], 'a named-item code is back in a closed set or a writer (D57)')
   assert.ok(!NOT_CAPTURED_FAILURE.includes('ws-not-recorded'), '4.6 no longer lists it and nothing writes it')
 })
 test('4.11 §3 ⑱ the producer scan can fail: a planted code with no writer is reported', () => {
@@ -191,7 +192,6 @@ test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot i
 const SPEC_12_FAILURES = [
   ['ingress-auth-failed', 'ingress'], ['ingress-unknown', 'ingress'], ['engine-port-taken', 'ingress'], ['upstream-unavailable', 'ingress'],
   // the kernel family (fallback-active, forwarder-*) retired with the kernel on both arches (D47 and its win32 twin): no producer anywhere
-  ['optin-failed', 'optin'],
   ['socktable-unavailable', 'helper'], ['helper-start-failed', 'helper'],
   ['task-register-failed', 'install'], ['launchd-register-failed', 'install'], // the darwin autostart (4.9 §11)
   ['elevated-token', 'start'], ['root-token', 'start'], // elevated-token's darwin name (4.9 §11)
@@ -226,9 +226,10 @@ test('W38 every §12 code is a code, and a failure event naming it with its wher
 })
 
 test('W38 the where / state events / trust reasons / status reasons / capture kinds are the §12 lists', () => {
-  assert.deepEqual(ROUTE_WHERE, ['routing', 'ingress', 'optin'])
-  assert.deepEqual(ROUTE_EVENTS, ['route-applied', 'optin-applied', 'optin-removed'])
-  assert.deepEqual(ROUTE_TRUST_REASONS, ['smart-app-control', 'env-unreadable-fill'])
+  assert.deepEqual(ROUTE_WHERE, ['routing', 'ingress'])
+  assert.deepEqual(ROUTE_EVENTS, ['route-applied'])
+  for (const gone of ['optin', 'optin-applied', 'optin-removed']) assert.ok(!isWhere(gone) && !isEvent(gone), `${gone} went with named items (D57)`)
+  assert.deepEqual(ROUTE_TRUST_REASONS, ['smart-app-control'])
   assert.deepEqual(ROUTE_STATUS_REASONS, ['form-unsupported']) // form-path-unknown retired: the name list decides who a process is (D51; 4.8 §2.2), and a process on no list is the state event process-unknown
   assert.deepEqual(CAPTURE_KINDS, ['transparent', 'proxy'], 'the envelope `capture` closed set (4.8 §5.6, 4.1 信封表): Windows has the one proxy mode (D43)')
   for (const l of [ROUTE_WHERE, ROUTE_EVENTS, ROUTE_CODES, ROUTE_FAILURE_CODES, ROUTE_TRUST_REASONS, ROUTE_STATUS_REASONS, CAPTURE_KINDS, NET_WHERE, NET_CODES, NET_FAILURE_CODES]) assert.ok(Object.isFrozen(l))
@@ -243,8 +244,6 @@ test('W38 the where / state events / trust reasons / status reasons / capture ki
 test('W38 the route events are state changes: they pass checkRecord with their fields and never turn the indicator', () => {
   const recs = [
     { event: 'route-applied', where: 'routing', form: 'claude-code.cli', upstream_kind: 'user-proxy', verified: true },
-    { event: 'optin-applied', where: 'optin', form: 'codex.app', item: 'cert-store', scope: 'user' },
-    { event: 'optin-removed', where: 'optin', form: 'codex.app', item: 'cert-store', scope: 'user' },
   ]
   assert.deepEqual(recs.map((r) => r.event), ROUTE_EVENTS)
   for (const r of recs) {
@@ -296,7 +295,7 @@ test('W38: STATUS_REASONS includes the Windows status reasons and trust reasons'
 })
 
 // D39⑩ / D43 (RFC 1.6 §9.7, V53): the names the network topology and `doctor` use. A block of its own, like OFF_* and ROUTE_*.
-const NET_LIST = ['not-routed', 'proxy-changed', 'proxy-dead', 'proxy-unsupported', 'netenv-changed', 'elevated-agent', 'forwarder-down', 'upstream-unreachable', 'egress-differs', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'route-loop', 'prior-proxy-unknown', 'not-verified']
+const NET_LIST = ['not-routed', 'proxy-changed', 'proxy-dead', 'proxy-unsupported', 'netenv-changed', 'elevated-agent', 'forwarder-down', 'upstream-unreachable', 'egress-differs', 'shim-not-on-path', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'route-loop', 'prior-proxy-unknown', 'not-verified']
 test('V53: the net names are the 1.6 §9.7 list (route-loop, shared with 4.7, once), isCode knows each, and the records they go on pass checkRecord', () => {
   assert.deepEqual(NET_WHERE, ['netenv'])
   assert.deepEqual(NET_EVENTS, ['netenv-change'])
@@ -306,15 +305,15 @@ test('V53: the net names are the 1.6 §9.7 list (route-loop, shared with 4.7, on
     assert.deepEqual(checkRecord({ event: 'netenv-change', where: 'netenv', harness: 'codex', code: c, from: 'a', to: 'b' }), [], c)
   }
   for (const c of NET_FAILURE_CODES) assert.deepEqual(checkRecord({ event: 'failure', where: 'netenv', code: c, reason: 'x' }), [], c)
-  assert.deepEqual([...NET_FAILURE_CODES].sort(), ['elevated-agent', 'forwarder-down', 'not-routed', 'not-via-entry', 'proxy-dead', 'proxy-unsupported', 'route-loop', 'shim-not-on-path', 'upstream-unreachable'])
+  assert.deepEqual([...NET_FAILURE_CODES].sort(), ['elevated-agent', 'forwarder-down', 'not-routed', 'proxy-dead', 'proxy-unsupported', 'route-loop', 'shim-not-on-path', 'upstream-unreachable'])
   for (const c of NET_FAILURE_CODES) assert.ok(NET_CODES.includes(c), `${c} is a net code`)
   assert.equal(isFailure({ event: 'netenv-change', where: 'netenv', code: 'proxy-changed' }), false, 'a netenv-change is a state change: the indicator turns on a failure event only')
   assert.ok(!FAILURE_EVENTS.includes('netenv-change'))
   assert.deepEqual(checkRecord({ event: 'netenv-chang', where: 'netenvv', code: 'proxy-lost' }), ['event "netenv-chang"', 'where "netenvv"', 'code "proxy-lost"'], 'the check can still fail')
 })
 
-test('V53: the status reasons gain the nine 1.6 §9.7 names (the proxy-mode ones are the Windows branch\'s)', () => {
-  for (const r of ['not-routed', 'proxy-changed', 'elevated-agent', 'forwarder-down', 'upstream-unreachable', 'route-loop', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry']) assert.ok(STATUS_REASONS.includes(r), r)
+test('V53: the status reasons gain the 1.6 §9.7 names (the proxy-mode ones are the Windows branch\'s)', () => {
+  for (const r of ['not-routed', 'proxy-changed', 'elevated-agent', 'forwarder-down', 'upstream-unreachable', 'route-loop', 'shim-not-on-path']) assert.ok(STATUS_REASONS.includes(r), r)
   for (const r of ['desired-off', 'config-after-start', 'negative-cache']) assert.ok(STATUS_REASONS.includes(r), `${r} is still one`)
 })
 

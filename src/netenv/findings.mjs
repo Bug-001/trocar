@@ -139,7 +139,7 @@ export const FINDING_CODES = Object.freeze([...new Set([...Object.keys(FINDINGS)
 // ── which of them the facts call for ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** One finding: on win32 the Windows table (4.8 §10.4) takes precedence, field by field — an entry there may override only the commands (or the why), and one for a code the cross-platform catalogue
  *  does not have defines every field itself. A code neither catalogue names falls to the trust entry: the reasons the tracker can set are data, not caller bugs (the closed sets live in
- *  health/codes.mjs, held by its tests — a runtime throw here would take `doctor` down with a Windows state like `env-unreadable-fill`). */
+ *  health/codes.mjs, held by its tests — a runtime throw here would take `doctor` down with a proxy-mode state like `smart-app-control`). */
 function make(code, ctx) {
   const w = ctx.platform === 'win32' ? FINDINGS_WIN32[code] : null
   const def = FINDINGS[code] || TRUST

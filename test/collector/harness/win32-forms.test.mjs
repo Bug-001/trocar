@@ -153,13 +153,11 @@ test('only the Kimi extension has a host set, and its settings reader finds the 
   assert.deepEqual(hosts.settings.hostsOf(''), [])
 })
 
-test('W23: a form that needs naming has an opt-in item and no automatic entry; Claude Desktop takes no credentialed upstream', () => {
+test('W23: Claude Desktop takes no credentialed upstream; no form waits for naming (D57)', () => {
   const desktop = groupsOf().find((g) => g.g === 'claude-code.desktop')
-  assert.deepEqual(entryGate(desktop), { ok: false, reason: 'opt-in-needed' })
-  assert.deepEqual(entryGate(desktop, { optedIn: true }), { ok: true })
-  assert.deepEqual(entryGate(desktop, { optedIn: true, upstreamCredentialed: true }), { ok: false, reason: 'form-unsupported' }, 'its entry takes no credentials, so its port is open to every process of the machine')
+  assert.deepEqual(entryGate(desktop, { upstreamCredentialed: true }), { ok: false, reason: 'form-unsupported' }, 'its entry takes no credentials, so its port is open to every process of the machine')
   assert.equal(desktop.auth, false)
-  for (const g of groupsOf().filter((x) => !(x.optIn && x.optIn.length))) assert.deepEqual(entryGate(g), { ok: true }, g.g)
+  for (const g of groupsOf()) assert.deepEqual(entryGate(g), { ok: true }, g.g)
 })
 
 // ── the data Tasks 6b, 8 and 10 read, pinned to 4.8 §2.3 (the 「跟随系统代理」 column, the entry column) and §2.4 (the opt-in items) and to the CLI plan's proxy table (T13, 1.6 §9.7) ──

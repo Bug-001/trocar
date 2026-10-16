@@ -150,11 +150,11 @@ export function createTracker({ redirector, registry, trust, home = os.homedir()
     // names the process's own environment lacks, and whether it lacks them cannot be seen, so a trust that needs a fill
     // layer to be in effect is a guess — untrusted. Every Windows trust entry is an override/block write (the agent applies
     // the file over its launch env), so this costs nothing today; it is the fail-safe answer where the cost is capture, never
-    // a broken connection.
+    // a broken connection. Its reason is the generic environ-unreadable (4.11 §3 ⑱ retired the Windows-only env-unreadable-fill).
     if (facts.env === null && facts.envRead === false && t.trusted) {
       const solid = layers.filter((l) => !l || l.mode !== 'fill')
       if (solid.length !== layers.length && !trust.check(d.trust, { environ, layers: solid, cwd: ctx.cwd, startedAt: ctx.startedAt, argv: ctx.argv, extra: { runtimeVersion: () => runtimeVersion(facts.exe), readText, collectorDir, exe: facts.exe ?? null, os: facts.os ?? null } }).trusted) {
-        t = { trusted: false, reason: 'env-unreadable-fill', var: null, via: null, file: null }
+        t = { trusted: false, reason: 'environ-unreadable', var: null, via: 'fill-layer', file: null }
       }
     }
     // a plugin reports after exec: until its marker appears, at most markerGraceMs from start, the process is pending
