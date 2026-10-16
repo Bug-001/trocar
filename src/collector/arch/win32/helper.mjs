@@ -22,7 +22,7 @@ export const HELPER_PROTO = 1
 export const HELPER_PS1 = fileURLToPath(new URL('./helper.ps1', import.meta.url))
 /** The closed verb set (4.8 §1). Every one only reads: no registry write, no process control, no file write, no network. */
 export const HELPER_VERBS = Object.freeze(['ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'version', 'proc-env'])
-/** What reg-read may read, besides the keys a harness file declares (below): the Internet Settings proxy values (4.7 §3, 4.8 §2.2), the user's Path and the proxy variables of the login environment
+/** What reg-read may read (the whole list: the model reads a policy value through policy.mjs, reg.exe, not here): the Internet Settings proxy values (4.7 §3, 4.8 §2.2), the user's Path and the proxy variables of the login environment
  *  (`HKCU\Environment`: the agent's own proxy when no file names one, 4.8 §2.2; asight reads them and never writes one, D43), the machine PATH (the Kimi and OpenCode shims, 4.8 §6.3)
  *  and the Smart App Control policy state (4.8 §6.3); for the P7 chain's system proxy, WPAD's `DefaultConnectionSettings` and, under the machine policy
  *  `ProxySettingsPerUser=0`, the same values in HKLM. Hive and key compare case-insensitively with `/` taken as `\` and no trailing `\`; names compare case-insensitively (a registry value name is
@@ -38,45 +38,11 @@ export const REG_READ_ALLOW = Object.freeze([
   { hive: 'HKLM', key: 'SYSTEM\\CurrentControlSet\\Control\\CI\\Policy', names: Object.freeze(['VerifiedAndReputablePolicyState']) },
 ].map(Object.freeze))
 
-/** The shape of a key a harness file may declare (a policy value is the one proxy door that is a registry value, 4.8 §2.4: Claude Desktop's `egressProxyUrl`): under `Software\Policies`, every
- *  segment starting with a letter or digit (so no `..`). helper.ps1 applies the same two texts to what it is handed, with `-match`. */
+/** The shape of a policy key (a policy value is the one proxy door that is a registry value, 4.8 §2.4: Claude Desktop's `egressProxyUrl`): under `Software\Policies`, every
+ *  segment starting with a letter or digit (so no `..`); and of a value name. policy.mjs checks what it reads and writes with these two texts. */
 export const POLICY_KEY_PATTERN = '^Software\\\\Policies(\\\\[A-Za-z0-9][A-Za-z0-9 _.-]*)+$'
 export const POLICY_NAME_PATTERN = '^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$'
-const MAX_DECLARED = 16
 const trimKey = (k) => String(k).replaceAll('/', '\\').replace(/\\+$/, '')
-
-/** The declared keys, checked: `[{ hive: 'HKCU'|'HKLM', key, names }]` → the same, hive upper-cased and the key with backslashes and none at the end. Anything that is not a key under `Software\Policies`
- *  with plain value names is a TypeError: a declaration cannot widen what the helper reads beyond the policy keys (W1). `undefined` is no declaration. */
-export function declaredRegAllow(list) {
-  if (list == null) return []
-  if (!Array.isArray(list)) throw new TypeError('regAllow is a list of { hive, key, names }')
-  if (list.length > MAX_DECLARED) throw new TypeError(`regAllow has at most ${MAX_DECLARED} entries`)
-  const keyRe = new RegExp(POLICY_KEY_PATTERN, 'i')
-  const nameRe = new RegExp(POLICY_NAME_PATTERN)
-  return Object.freeze(list.map((e) => {
-    if (!e || typeof e !== 'object') throw new TypeError('a regAllow entry is { hive, key, names }')
-    const hive = typeof e.hive === 'string' ? e.hive.toUpperCase() : ''
-    if (hive !== 'HKCU' && hive !== 'HKLM') throw new TypeError(`a declared registry key is in HKCU or HKLM, got ${JSON.stringify(e.hive)}`)
-    const key = typeof e.key === 'string' ? trimKey(e.key) : ''
-    if (!keyRe.test(key)) throw new TypeError(`a declared registry key is under Software\\Policies, got ${JSON.stringify(e.key)}`)
-    if (!Array.isArray(e.names) || e.names.length === 0 || e.names.length > MAX_DECLARED || e.names.some((n) => typeof n !== 'string' || !nameRe.test(n))) throw new TypeError(`the value names of ${key} are 1 to ${MAX_DECLARED} plain names`)
-    return Object.freeze({ hive, key, names: Object.freeze([...e.names]) })
-  }))
-}
-
-/** The registry values the groups' proxy entries of kind `policy` live in, as `startHelper({ regAllow })` takes them (the daemon passes harness data through this; this file knows no harness). Two names of one key are one entry. */
-export function policyAllowOf(groups) {
-  const byKey = new Map()
-  for (const g of groups || []) {
-    const e = g && g.proxyEntry
-    if (!e || e.kind !== 'policy') continue
-    const id = `${String(e.hive).toUpperCase()}\\${trimKey(e.key).toLowerCase()}`
-    if (!byKey.has(id)) byKey.set(id, { hive: e.hive, key: e.key, names: [] })
-    const entry = byKey.get(id)
-    if (!entry.names.includes(e.name)) entry.names.push(e.name)
-  }
-  return [...byKey.values()]
-}
 
 /** The value kinds of a reg-read answer, in the registry's own names. helper.ps1 gives .NET's `RegistryValueKind` (`GetValueKind().ToString()`: `DWord`, `String`, `ExpandString`, ...); 4.8 §1 says `kind` is given as it is
  *  (`REG_EXPAND_SZ` stays that, §6.3) and every reader (a DWORD `ProxyEnable`, §2.2; the Smart App Control state, §8; the PATH type a write must keep, §6.3) is written against these names, as are the fakes of the tests. */
@@ -99,10 +65,10 @@ const ABANDONED_CAP = 256
 const STDERR_TAIL = 20 // the last lines of its stderr that helper-down carries (4.6 §记录: 20, as the Linux client's)
 const normKey = (k) => trimKey(k).toLowerCase()
 
-/** The allow-list entry a reg-read request falls under (in the fixed list, or in `extra`, the keys a harness declared), or null. A request with no names asks for everything: refused. */
-export function regReadAllowed(args, extra = []) {
+/** The allow-list entry a reg-read request falls under, or null. A request with no names asks for everything: refused. */
+export function regReadAllowed(args) {
   if (!args || typeof args !== 'object' || !Array.isArray(args.names) || args.names.length === 0) return null
-  const rule = [...REG_READ_ALLOW, ...extra].find((r) => r.hive.toLowerCase() === String(args.hive).toLowerCase() && normKey(r.key) === normKey(args.key))
+  const rule = REG_READ_ALLOW.find((r) => r.hive.toLowerCase() === String(args.hive).toLowerCase() && normKey(r.key) === normKey(args.key))
   if (!rule) return null
   const ok = new Set(rule.names.map((n) => n.toLowerCase()))
   return args.names.every((n) => typeof n === 'string' && ok.has(n.toLowerCase())) ? rule : null
@@ -110,14 +76,10 @@ export function regReadAllowed(args, extra = []) {
 
 const err = (message, code, extra = {}) => Object.assign(new Error(message), { code }, extra)
 
-/** startHelper({ spawn, exe, args, env, regAllow, onExit, onFailure, readyTimeoutMs }) → { call(verb, args, { timeoutMs = 2000 }), abandoned(verb), close(), pid, ready }
- *  `regAllow`: the registry keys the harness files declare (policyAllowOf), which `reg-read` may read beyond REG_READ_ALLOW. Checked by declaredRegAllow before a process starts (a TypeError for anything that is not a key under
- *  Software\Policies), checked again by every call, and handed to helper.ps1 as `-ExtraRegAllowB64 <base64 of the JSON>`, the last pair of its arguments, which the script checks once more.
+/** startHelper({ spawn, exe, args, env, onExit, onFailure, readyTimeoutMs }) → { call(verb, args, { timeoutMs = 2000 }), abandoned(verb), close(), pid, ready }
  *  `ready` resolves with the helper's ready line, or rejects when it never starts. `onExit({ reason, exit?, stderr?, ready, closed })` is
  *  told once when the helper is gone, however it went. */
-export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1], env = process.env, regAllow, onExit = () => {}, onFailure = () => {}, readyTimeoutMs = 15000 } = {}) {
-  const declared = declaredRegAllow(regAllow)
-  if (declared.length > 0) args = [...args, '-ExtraRegAllowB64', Buffer.from(JSON.stringify(declared), 'utf8').toString('base64')]
+export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1], env = process.env, onExit = () => {}, onFailure = () => {}, readyTimeoutMs = 15000 } = {}) {
   let child = null
   let readyInfo = null
   let down = null // { code, reason } once the helper is gone
@@ -224,7 +186,7 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
    *  that write — the time the helper spends on THIS call — and `onStart()` is told when it happens. */
   async function call(verb, callArgs = {}, { timeoutMs = 2000, waitMs = HELPER_WAIT_MS, onStart } = {}) {
     if (typeof verb !== 'string' || !HELPER_VERBS.includes(verb)) throw err(`not a helper verb: ${JSON.stringify(verb)}`, 'helper-unknown-verb')
-    if (verb === 'reg-read' && !regReadAllowed(callArgs, declared)) throw err(`reg-read outside the allow-list: ${JSON.stringify(callArgs)}`, 'helper-forbidden-key')
+    if (verb === 'reg-read' && !regReadAllowed(callArgs)) throw err(`reg-read outside the allow-list: ${JSON.stringify(callArgs)}`, 'helper-forbidden-key')
     if (closing) throw err('the helper was closed', 'helper-closed')
     if (down) throw err(`helper ${down.code === 'helper-down' ? 'is down' : 'did not start'}: ${down.reason}`, down.code)
     try { await ready } catch (e) { throw closing ? err('the helper was closed', 'helper-closed') : e }

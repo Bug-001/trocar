@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_KIND_NAMES, REG_READ_ALLOW, POLICY_KEY_PATTERN, POLICY_NAME_PATTERN, declaredRegAllow, policyAllowOf, regKindsOf, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
+import { HELPER_PROTO, HELPER_VERBS, HELPER_PS1, REG_KIND_NAMES, REG_READ_ALLOW, POLICY_KEY_PATTERN, POLICY_NAME_PATTERN, regKindsOf, startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
 import { readSystemProxy } from '../../../../src/collector/arch/win32/upstream.mjs'
 import { CMDLINE_STATES, PS_TIMEOUT_MS, elevationOf, factsOfPid, splitCommandLine } from '../../../../src/collector/arch/win32/procinfo.mjs'
 import { ownerOfSocket } from '../../../../src/collector/arch/win32/socktable.mjs'
@@ -124,7 +124,7 @@ test('W1 reg-read: only the allowed keys and their names go through, checked in 
     { hive: 'HKU', key: 'Environment', names: ['Path'] },
     { hive: 'HKCU', key: IS + '\\Connections', names: ['ProxyServer'] },
     { hive: 'HKCU', key: 'Environment\\..\\Software', names: ['Path'] },
-    { hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['egressProxyUrl'] }, // a policy key is readable only when a harness file declared it (below)
+    { hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['egressProxyUrl'] }, // a policy key is not on the list: policy.mjs reads it through reg.exe (plan §E.7 ruling 4)
     {}, null, undefined,
   ]
   for (const a of bad) await rejects(h.call('reg-read', a), 'helper-forbidden-key')
@@ -134,78 +134,12 @@ test('W1 reg-read: only the allowed keys and their names go through, checked in 
 
 const POLICY = { hive: 'HKCU', key: 'SOFTWARE\\Policies\\Claude', names: ['egressProxyUrl'] } // what Claude Desktop's harness file declares (win32/claude-code.mjs)
 
-test('W1 a policy key a harness file declares is readable, and only that key and name: checked in JS before any write, and handed to the script', async (t) => {
-  const log = path.join(tmpDir('asight-helper-'), 'in.log')
-  const spawned = []
-  const h = started(t, { log, verbs: { 'reg-read': { data: { keyExists: true, values: {} } } } }, { regAllow: [POLICY], spawn: (exe, args, opts) => { spawned.push(args); return fakeSpawn({ log, verbs: { 'reg-read': { data: { keyExists: true, values: {} } } } })(exe, args, opts) } })
-  await h.call('reg-read', POLICY)
-  await h.call('reg-read', { hive: 'hkcu', key: 'software/policies/claude/', names: ['EGRESSPROXYURL'] }) // case, slashes and a trailing backslash are not a way round it
-  for (const a of [
-    { hive: 'HKCU', key: POLICY.key, names: ['egressProxyUrl', 'other'] },
-    { hive: 'HKCU', key: POLICY.key, names: ['other'] },
-    { hive: 'HKCU', key: 'SOFTWARE\\Policies\\Other', names: ['egressProxyUrl'] },
-    { hive: 'HKCU', key: 'SOFTWARE\\Policies', names: ['egressProxyUrl'] },
-    { hive: 'HKCU', key: POLICY.key + '\\Sub', names: ['egressProxyUrl'] },
-    { hive: 'HKLM', key: POLICY.key, names: ['egressProxyUrl'] }, // the hive is part of the declaration
-    { hive: 'HKCU', key: POLICY.key, names: [] },
-  ]) await rejects(h.call('reg-read', a), 'helper-forbidden-key')
-  assert.equal(lines(log).filter((l) => l.verb === 'reg-read').length, 2, 'only the two declared reads were written')
-  // the script gets the same declaration, base64 of JSON, as the one parameter it takes; it checks it again (below)
-  assert.equal(spawned.length, 1)
-  const i = spawned[0].indexOf('-ExtraRegAllowB64')
-  assert.ok(i > 0 && i === spawned[0].length - 2, 'the parameter is the last pair: -ExtraRegAllowB64 <base64>')
-  assert.deepEqual(JSON.parse(Buffer.from(spawned[0][i + 1], 'base64').toString('utf8')), [{ hive: 'HKCU', key: 'SOFTWARE\\Policies\\Claude', names: ['egressProxyUrl'] }])
-  assert.deepEqual(spawned[0].slice(0, i), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1], 'the rest of the command line is what it was')
-})
-
-test('W1 without a declaration the helper is started as it was: no extra parameter, nothing beyond the list', async (t) => {
+test('W1 the helper is started with the fixed command line and no parameter; a policy key is not readable through it (plan §E.7 ruling 4: policy.mjs reads it through reg.exe)', async (t) => {
   const spawned = []
   const h = started(t, { verbs: { 'reg-read': { data: { keyExists: true, values: {} } } } }, { spawn: (exe, args, opts) => { spawned.push(args); return fakeSpawn({})(exe, args, opts) } })
   await h.call('version')
-  assert.ok(!spawned[0].includes('-ExtraRegAllowB64'))
+  assert.deepEqual(spawned[0], ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1])
   await rejects(h.call('reg-read', POLICY), 'helper-forbidden-key')
-})
-
-test('W1 a declaration that is not a policy key is refused when the helper is started, before any process: the declaration cannot widen what the helper reads', () => {
-  const spawned = []
-  const spawn = () => { spawned.push(1); throw new Error('must not start') }
-  const bad = {
-    'a key that is not under Policies': [{ hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', names: ['x'] }],
-    'the login environment': [{ hive: 'HKCU', key: 'Environment', names: ['NODE_EXTRA_CA_CERTS'] }],
-    'a parent of Policies': [{ hive: 'HKCU', key: 'Software', names: ['Policies'] }],
-    'Policies itself': [{ hive: 'HKCU', key: 'Software\\Policies', names: ['x'] }],
-    'a dot-dot segment': [{ hive: 'HKCU', key: 'Software\\Policies\\..\\..\\Microsoft', names: ['x'] }],
-    'a dot segment': [{ hive: 'HKCU', key: 'Software\\Policies\\.', names: ['x'] }],
-    'another hive': [{ hive: 'HKU', key: 'Software\\Policies\\Claude', names: ['x'] }],
-    'a class root': [{ hive: 'HKCR', key: 'Software\\Policies\\Claude', names: ['x'] }],
-    'no names': [{ hive: 'HKCU', key: 'Software\\Policies\\Claude', names: [] }],
-    'a name with a backslash': [{ hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['a\\b'] }],
-    'a name with a quote': [{ hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['a"b'] }],
-    'an empty name': [{ hive: 'HKCU', key: 'Software\\Policies\\Claude', names: [''] }],
-    'a name that is not a string': [{ hive: 'HKCU', key: 'Software\\Policies\\Claude', names: [7] }],
-    'a key with a control character': [{ hive: 'HKCU', key: 'Software\\Policies\\Cla\nude', names: ['x'] }],
-    'not a list': { hive: 'HKCU', key: 'Software\\Policies\\Claude', names: ['x'] },
-    'an entry that is not an object': ['HKCU'],
-    'more entries than any harness has': Array.from({ length: 17 }, (_, i) => ({ hive: 'HKCU', key: `Software\\Policies\\V${i}`, names: ['x'] })),
-  }
-  for (const [what, list] of Object.entries(bad)) {
-    assert.throws(() => startHelper({ spawn, regAllow: list }), TypeError, what)
-    assert.throws(() => declaredRegAllow(list), TypeError, what)
-  }
-  assert.equal(spawned.length, 0, 'none of them started a process')
-  assert.deepEqual(declaredRegAllow(undefined), [])
-  assert.deepEqual(declaredRegAllow([]), [])
-  const good = declaredRegAllow([{ hive: 'hkcu', key: 'software/policies/Claude Desktop/', names: ['egressProxyUrl'] }, { hive: 'HKLM', key: 'SOFTWARE\\Policies\\Kimi\\Code', names: ['a', 'B_c-1.2'] }])
-  assert.deepEqual(good, [{ hive: 'HKCU', key: 'software\\policies\\Claude Desktop', names: ['egressProxyUrl'] }, { hive: 'HKLM', key: 'SOFTWARE\\Policies\\Kimi\\Code', names: ['a', 'B_c-1.2'] }], 'hive upper-cased, key with backslashes and no trailing one, names as given')
-})
-
-test('W1 the policy keys the harness files declare (their proxyEntry of kind policy) are what policyAllowOf gives, and the helper accepts them', async () => {
-  const { default: claude } = await import('../../../../src/collector/harness/win32/claude-code.mjs')
-  const { default: codex } = await import('../../../../src/collector/harness/win32/codex.mjs')
-  assert.deepEqual(policyAllowOf([...claude.groups, ...codex.groups]), [{ hive: 'HKCU', key: 'SOFTWARE\\Policies\\Claude', names: ['egressProxyUrl'] }], 'the groups that keep their entry in a file declare nothing')
-  assert.deepEqual(policyAllowOf([]), [])
-  assert.deepEqual(policyAllowOf([{ proxyEntry: { kind: 'policy', hive: 'HKCU', key: 'SOFTWARE\\Policies\\A', name: 'x' } }, { proxyEntry: { kind: 'policy', hive: 'HKCU', key: 'SOFTWARE\\Policies\\A', name: 'y' } }]), [{ hive: 'HKCU', key: 'SOFTWARE\\Policies\\A', names: ['x', 'y'] }], 'two names of one key are one entry')
-  assert.doesNotThrow(() => declaredRegAllow(policyAllowOf([...claude.groups]))) // the real declaration passes the same check the helper applies
 })
 
 test('W1 a reply is matched to its request by id, whatever the order it comes back in', async (t) => {
@@ -516,23 +450,11 @@ test('W1 helper.ps1 answers exactly the verbs the JS side allows, and reads exac
   assert.deepEqual(JSON.parse(m[1]), JSON.parse(JSON.stringify(REG_READ_ALLOW)))
 })
 
-test('W1 helper.ps1 takes the declared policy keys as its one parameter, first, checks each against the same patterns as helper.mjs, and refuses to start on one that fails', () => {
+test('W1 helper.ps1 takes no parameter and its reg-read list is the fixed one alone: one line appends to it, the load of that list', () => {
   const code = PS.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
-  assert.ok(/^\s*param\(\[string\]\$ExtraRegAllowB64 = ''\)\s*$/m.test(code), 'the parameter')
-  assert.ok(code.indexOf('param(') < code.indexOf('$ErrorActionPreference'), 'a param block must be the first statement of a script')
-  assert.equal((code.match(/\$ExtraRegAllowB64/g) || []).length, 3, 'the parameter is declared, tested and decoded, and used nowhere else')
-  // the patterns the script checks with are the ones helper.mjs exports: one text, so the two cannot drift
-  assert.ok(PS.includes(`$PolicyKeyPattern = '${POLICY_KEY_PATTERN}'`), 'the key pattern of the script is POLICY_KEY_PATTERN')
-  assert.ok(PS.includes(`$PolicyNamePattern = '${POLICY_NAME_PATTERN}'`), 'the name pattern of the script is POLICY_NAME_PATTERN')
-  assert.ok(/-match \$PolicyKeyPattern/.test(code) && /-match \$PolicyNamePattern|-notmatch \$PolicyNamePattern/.test(code), 'both patterns are applied')
-  assert.ok(/\(\$eh -ieq 'HKCU'\) -or \(\$eh -ieq 'HKLM'\)/.test(code), 'only the two hives')
-  assert.ok(/throw \('extra reg-read entry refused/.test(code), 'an entry that fails is a start failure, never silently dropped or accepted')
-  // the extra entries join the list only through that check: of the two lines that append to it, the first loads the fixed list, and the second is inside the check
-  assert.ok(!/\$script:RegAllow\s*\+=/.test(code), 'no `+=`: it would need the list to be an array, and the list is a List')
-  const adds = code.split('\n').filter((l) => /\$script:RegAllow\.Add\(/.test(l))
-  assert.equal(adds.length, 2)
-  assert.ok(code.indexOf(adds[0]) < code.indexOf('$PolicyKeyPattern ='), 'the first loads the fixed list')
-  assert.ok(code.indexOf(adds[1]) > code.indexOf('-match $PolicyKeyPattern'), 'the second is after the check')
+  assert.ok(!/^\s*param\(/m.test(code), 'no param block')
+  assert.ok(!/\$script:RegAllow\s*\+=/.test(code), 'no `+=`: the list is a List')
+  assert.deepEqual(code.split('\n').filter((l) => /\$script:RegAllow\.Add\(/.test(l)).map((l) => l.trim()), ['foreach ($r in (ConvertFrom-Json -InputObject $RegAllowJson)) { [void]$script:RegAllow.Add($r) }'])
 })
 
 /** Every place the script turns JSON into a list must enumerate it the way that holds in Windows PowerShell 5.1 AND in PowerShell 7. 5.1 sends an array out of ConvertFrom-Json as ONE object (7 enumerates it), and
@@ -550,7 +472,7 @@ function jsonListViolations(text) {
 test('W1 helper.ps1 enumerates every JSON list through a foreach over the parenthesised call, never through @( ) (Windows PowerShell 5.1 sends an array out as one object); the scan can fail', () => {
   assert.deepEqual(jsonListViolations(PS), [])
   const uses = PS.split('\n').filter((x) => !/^\s*#/.test(x) && /ConvertFrom-Json/.test(x))
-  assert.equal(uses.length, 3, 'the fixed list, the declared keys and the request line: a new use has to be looked at')
+  assert.equal(uses.length, 2, 'the fixed list and the request line: a new use has to be looked at')
   // what it was: a list of one list under 5.1, which let a request the JS side refuses pass the script's own check, and made two declared keys throw
   assert.equal(jsonListViolations('$script:RegAllow = @(ConvertFrom-Json -InputObject $RegAllowJson)').length, 1)
   assert.equal(jsonListViolations('  $extra = @(ConvertFrom-Json -InputObject ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ExtraRegAllowB64))))').length, 1)
@@ -559,25 +481,12 @@ test('W1 helper.ps1 enumerates every JSON list through a foreach over the parent
   assert.deepEqual(jsonListViolations('foreach ($e in (ConvertFrom-Json -InputObject $extraJson)) {'), [])
 })
 
-test('W1 helper.ps1 refuses a declared key AND each declared value name that holds a control character: .NET\'s `$` also matches before a final line feed, JavaScript\'s does not, so the pattern alone is not the same check', () => {
-  const code = PS.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
-  assert.ok(/\$ek -notmatch '\[\\x00-\\x1f\]'/.test(code), 'the key')
-  assert.ok(/foreach \(\$n in \$en\) \{ if \(\(\$n -notmatch \$PolicyNamePattern\) -or \(\$n -match '\[\\x00-\\x1f\]'\)\) \{ \$namesOk = \$false \} \}/.test(code), 'each name, in the same test as its pattern')
-  // the JavaScript side: a trailing line feed is no declaration (so the lines above stay unreachable from helper.mjs, and the script is only the second check)
-  for (const bad of [{ key: 'Software\\Policies\\Claude\n', names: ['x'] }, { key: 'Software\\Policies\\Claude', names: ['x\n'] }, { key: 'Software\\Policies\\Claude', names: ['x', 'y\u0001'] }]) {
-    assert.throws(() => declaredRegAllow([{ hive: 'HKCU', ...bad }]), TypeError, JSON.stringify(bad))
-  }
-})
-
-test('W1 the policy key pattern: helper.mjs accepts exactly what the table says (the script carries the same text; that .NET reads it the same way, trailing line feed aside, is checked on a real PowerShell in Task 11)', () => {
+test('W1 the policy key and name patterns (policy.mjs checks with them) accept exactly what the table says', () => {
   const key = new RegExp(POLICY_KEY_PATTERN, 'i')
   const name = new RegExp(POLICY_NAME_PATTERN)
   const keys = { 'Software\\Policies\\Claude': true, 'SOFTWARE\\Policies\\Claude\\Sub Key': true, 'software\\policies\\A.B-C_D': true, 'Software\\Policies': false, 'Software': false, 'Software\\Policies\\': false, 'Software\\Policies\\..': false, 'Software\\Policies\\.x': false, 'Software\\PoliciesX\\a': false, 'Software\\Microsoft\\Run': false, 'Environment': false, '': false, 'Software\\Policies\\a\\\\b': false, 'Software\\Policies\\a\nb': false, 'Software\\Policies\\a\n': false }
   for (const [k, want] of Object.entries(keys)) {
     assert.equal(key.test(k), want, JSON.stringify(k))
-    let accepted = true
-    try { declaredRegAllow([{ hive: 'HKCU', key: k, names: ['x'] }]) } catch { accepted = false }
-    assert.equal(accepted, want, `declaredRegAllow: ${JSON.stringify(k)}`)
   }
   const names = { egressProxyUrl: true, 'a b': true, 'A_b-1.2': true, '': false, '.x': false, 'a\\b': false, 'a"b': false, 'a\nb': false, 'a\n': false, [`x${'y'.repeat(64)}`]: false }
   for (const [n, want] of Object.entries(names)) assert.equal(name.test(n), want, JSON.stringify(n))
