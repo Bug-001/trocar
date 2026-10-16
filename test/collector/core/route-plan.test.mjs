@@ -1,4 +1,4 @@
-// test/collector/core/route-plan.test.mjs — the shared route-plan pieces (core/route-plan.mjs · core/entry-forms.mjs · core/proxy-wiring.mjs) and
+// test/collector/core/route-plan.test.mjs — the shared route-plan pieces (core/route-plan.mjs · core/entry-forms.mjs) and
 // hostSetOf, the host set of a host-tree form (4.8 §3.5, OPEN 22). The arch twins' guard went with the old win32 collector's tests (D57);
 // The old plan is deleted next and hostSetOf moves to core/host-agent.mjs, with its import here.
 import test from 'node:test'
@@ -9,7 +9,6 @@ import { fileURLToPath } from 'node:url'
 import { stripComments, specsOf } from '../../helpers/imports.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import * as core from '../../../src/collector/core/route-plan.mjs'
-import { identifyOf, desktopDoorOf } from '../../../src/collector/core/proxy-wiring.mjs'
 import { hostSetOf } from '../../../src/collector/core/host-agent.mjs'
 import { bypassRuleOf } from '../../../src/collector/core/upstream-shape.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
@@ -18,7 +17,7 @@ const src = (rel) => fs.readFileSync(fileURLToPath(new URL(`../../../src/collect
 const ALL = await loadHarnesses()
 
 test('the shared modules touch no OS, name no harness and import only core', () => {
-  for (const rel of ['core/route-plan.mjs', 'core/entry-forms.mjs', 'core/proxy-wiring.mjs']) {
+  for (const rel of ['core/route-plan.mjs', 'core/entry-forms.mjs']) {
     const text = src(rel)
     const code = stripComments(text)
     assert.deepEqual(specsOf(text).filter((s) => !/^\.\/(config-read|upstream-shape|entry-forms)\.mjs$/.test(s)), [], `${rel} imports only its core neighbours`)
@@ -41,23 +40,6 @@ test('isDesiredOn: on only when the harness says on, as the object or the bare s
   assert.equal(core.isDesiredOn({ a: { desired: 'on' } }, 'a'), true)
   assert.equal(core.isDesiredOn({ a: 'on' }, 'a'), true)
   for (const d of [null, {}, { a: { desired: 'off' } }, { a: 'off' }, { b: 'on' }]) assert.equal(core.isDesiredOn(d, 'a'), false, JSON.stringify(d))
-})
-
-test('identifyOf: the given function; with a dir and none it throws; the no-dir shell names nobody', () => {
-  const f = () => ({ agent: 'a' })
-  assert.equal(identifyOf(f, '/d'), f)
-  assert.throws(() => identifyOf(null, '/d'), { name: 'TypeError', message: /registry\.match/ })
-  assert.deepEqual(identifyOf(null, null)({ pid: 1 }), { agent: null, descriptor: null, reason: 'no-match' })
-})
-
-test('desktopDoorOf: the newest confirmed entry of that harness whose kind is named and whose namer answers; pending, unconfirmed, untimed and refused entries open nothing', () => {
-  const at = (iso, o = {}) => ({ kind: 'k', harness: 'a', confirmed: true, installed_at: iso, ...o })
-  const kinds = { k: (e) => (e.ok === false ? null : `door ${e.installed_at}`), z: () => 'zz' }
-  assert.equal(desktopDoorOf(null, 'a', kinds), null)
-  assert.equal(desktopDoorOf({ entries: [at('2026-10-01T00:00:00Z', { harness: 'b' }), at('2026-10-01T00:00:00Z', { kind: 'other' }), at('2026-10-01T00:00:00Z', { confirmed: false }),
-    at('2026-10-01T00:00:00Z', { pending_admin: true }), at('never'), at('2026-10-01T00:00:00Z', { ok: false }), null] }, 'a', kinds), null)
-  assert.deepEqual(desktopDoorOf({ entries: [at('2026-10-02T00:00:00Z'), at('2026-10-03T00:00:00Z', { kind: 'z' }), at('2026-10-01T00:00:00Z'), at('2026-10-04T00:00:00Z', { ok: false })] }, 'a', kinds),
-    { since: Date.parse('2026-10-03T00:00:00Z'), name: 'zz' }, 'a re-install supersedes; a newer entry whose CA is not this build\'s does not')
 })
 
 test('movedRoute · optedInOf · carriedOf: what a re-plan reloads for, and which groups the manifest says are named or carried', () => {
