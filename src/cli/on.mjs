@@ -56,7 +56,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   }
   try {
     // the name list in effect (D51③): the presets plus ~/.asight/agents.json, as the daemon and `status` judge — the running processes the plan restarts and whose CAs it carries
-    const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env, agentList: readAgentList({ home, fs: deps.fs || nodeFs }).entries })
+    const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env, platform, agentList: readAgentList({ home, fs: deps.fs || nodeFs }).entries })
     const install = deps.install || await import('../collector/install.mjs')
     const model = isModelOs(parts.os) // macOS / Windows: the collector model's on (on-model.mjs); none of the old adoption / routing code runs there
     const fs = deps.fs || nodeFs

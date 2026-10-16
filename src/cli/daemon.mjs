@@ -49,7 +49,10 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   }
   proc.on('uncaughtException', crash); proc.on('unhandledRejection', crash)
   const foreground = !env.INVOCATION_ID && !!(proc.stdin && proc.stdin.isTTY) // not under systemd, at a terminal: closing it stops the daemon
-  const start = deps.startDaemon || (await (deps.daemon || import('../collector/daemon.mjs'))).startDaemon
+  const D = await (deps.daemon || import('../collector/daemon.mjs'))
+  // V14: a platform with no collector is refused before anything starts or is written — loadArch's own error, so the CLI holds no platform list
+  try { await D.loadArch(platform) } catch (e) { io.err(`asight daemon: ${e.message}`); return EXIT.incomplete }
+  const start = deps.startDaemon || D.startDaemon
   let d
   try { d = await start({ dir, env, foreground, log: (where, e) => io.err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) { io.err(`asight daemon: ${e.message}`); return EXIT.incomplete }
   io.out(`asight collector: engine 127.0.0.1:${d.port}, control ${d.socketPath}`) // this line is the daemon's readiness signal (the script that starts the daemon waits for it)

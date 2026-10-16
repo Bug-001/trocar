@@ -43,8 +43,8 @@ export { loadArch } // the CLI reaches arch only through this file (layering rul
 
 // What install / uninstall need from arch and harness, without starting anything: the descriptors, the OS key,
 // and the process table (`scan` reads /proc; it does not need the helper).
-export async function loadParts({ arch = null, harnesses = null, env = process.env, agentList = [] } = {}) {
-  const A = arch || (await loadArch())
+export async function loadParts({ arch = null, harnesses = null, env = process.env, agentList = [], platform = process.platform } = {}) {
+  const A = arch || (await loadArch(platform)) // the CLI's platform (V14: a platform with no collector is refused here, by loadArch's own error)
   const list = harnesses || (await loadHarnesses())
   // The darwin collector's LAZY construction (4.9 §1 接线) makes building one here safe: with { env, harnesses } only, it is the shell — a watcher `scan` can use, no
   // ingress.json created, nothing started. Linux ignores the extra argument; the win32 collector's construction is the win line's own open seam (it wants the dir), so on win32
