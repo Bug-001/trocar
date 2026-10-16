@@ -262,15 +262,15 @@ test('W69 the operator\'s extra_hosts reach the set through the REAL facts path 
 test('W69 the host-set lines of `status` (4.8 §3): the host program\'s other connections only forward and only the form\'s host set reaches the engine; settings that cannot be read leave the set at the defaults and extra_hosts, said with the reason and the hosts that are still captured; a fresh read that differs from the applied set says the kernel\'s is old and names the command — three notes of the detail view, none when the set is current and reads', () => {
   const hostForm = (hosts) => form('kimi-code.vscode', { entry: { where: 'settings.json http.proxy', asight: true, opt_in: true, intact: true }, optIn: { state: 'done' }, procs: [proc(8100, { name: 'Code', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', version: null })], hosts })
   const DEFAULTS = ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn']
-  const tree = 'VS Code 别的连接经 asight 的内核(只转发),只有到 Kimi 的 host 集的连接进引擎'
+  const tree = 'VS Code 别的连接经 asight 的门(只转发),只有到 Kimi 的 host 集的连接进引擎'
   // a read that agrees with the applied set: only the host-tree line
   const current = buildTopology(pfacts('kimi-code', hostForm({ program: 'VS Code', extension: 'Kimi', defaults: [...DEFAULTS], hosts: [...DEFAULTS, 'relay.corp.example'], settings: 'read', dropped: [], applied: [...DEFAULTS, 'relay.corp.example'] }), fwForm(17995)))['kimi-code']
   assert.deepEqual(current.notes, [tree], 'the set is current: no line of「旧的」')
   // the settings changed after `on`: the kernel's set is old, the command that recomputes it is named — `status` itself changes nothing
   const stale = buildTopology(pfacts('kimi-code', hostForm({ program: 'VS Code', extension: 'Kimi', defaults: [...DEFAULTS], hosts: [...DEFAULTS, 'relay.corp.example'], settings: 'read', dropped: [], applied: [...DEFAULTS] }), fwForm(17995)))['kimi-code']
-  assert.deepEqual(stale.notes, [tree, '内核里的 host 集是旧的(你 on 之后改过 Kimi 的设置): 跑 asight on kimi-code 重算集、重载内核;status 只读,不改任何东西'])
+  assert.deepEqual(stale.notes, [tree, '门里的 host 集是旧的(你 on 之后改过 Kimi 的设置): 跑 asight on kimi-code 重算集;status 只读,不改任何东西'])
   const staleDetail = renderDetail(stale, { now: NOW }).join('\n')
-  assert.ok(staleDetail.includes('内核里的 host 集是旧的') && staleDetail.includes('asight on kimi-code'), 'the detail view prints it, with the command')
+  assert.ok(staleDetail.includes('门里的 host 集是旧的') && staleDetail.includes('asight on kimi-code'), 'the detail view prints it, with the command')
   // the settings cannot be read: only the defaults and extra_hosts are captured — said with the reason and the hosts that are, never silent
   const unreadable = buildTopology(pfacts('kimi-code', hostForm({ program: 'VS Code', extension: 'Kimi', defaults: [...DEFAULTS], hosts: [...DEFAULTS, 'relay.extra.example'], settings: { unreadable: { reason: 'denied', detail: 'EACCES' } }, dropped: [] }), fwForm(17995)))['kimi-code']
   assert.deepEqual(unreadable.notes, [tree, `读不到 Kimi 扩展的设置(denied:EACCES):只采默认 host(${DEFAULTS.join('、')})与 extra_hosts;到你在那里配的中转站 host 的连接不采`])

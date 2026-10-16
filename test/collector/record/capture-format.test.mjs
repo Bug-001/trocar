@@ -176,7 +176,7 @@ test('W18 the read side of both capture kinds: a pid-null proxy envelope ETLs to
   const routing = (rec) => captureLabelsOf(rec).find((l) => l.id === 'capture-routing') || null
   const label = routing(envelopeOf('proxy', null))
   assert.ok(label, 'a proxy call carries the routing label')
-  assert.equal(label.label, '经 asight 内核(代理模式)')
-  assert.ok(/kernel/.test(label.text), 'the label says what it means, not only the name')
+  assert.ok(/门/.test(label.label) && /door/.test(label.text), 'the label names the entity the call came through: asight\'s door (D47), not only the name')
+  assert.ok(!/内核|kernel/.test(label.label + label.text), 'macOS and Windows have no kernel since D47')
   assert.equal(routing(envelopeOf('transparent', 4242)), null, 'the transparent default carries no routing label')
 })

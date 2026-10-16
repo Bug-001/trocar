@@ -457,7 +457,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
 
     // 4 · the entries — only when the routing is confirmed (or the daemon could not be stopped)
     let outcome = 'off'
-    if ((deps.platform || process.platform) === 'win32' && routing.state !== 'running') receipt.notes.push('没有守护进程替它排空:内核自己等到最后一条连接结束才退;要现在断,跑 asight off --now')
+    if ((deps.platform || process.platform) === 'win32' && routing.state !== 'running') receipt.notes.push('没有守护进程在跑:门随它一起没了,没有连接要排空')
     if (routing.confirmed || routing.unstoppable) {
       const u = await undoSide(w, { ids, manifest, manifestError, yes, interactive, io, say })
       for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
