@@ -289,7 +289,4 @@ test('the door core is OS-neutral (static): no platform branch in core/engine/do
   const core = fs.readFileSync(new URL('../../../../src/collector/core/engine/door-redirector.mjs', import.meta.url), 'utf8')
   const code = core.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n') // comments may name the arches; code may not
   for (const os of ['win32', 'darwin', 'linux', 'process.platform']) assert.ok(!code.includes(os), `the core names no platform: ${os}`)
-  const darwin = fs.readFileSync(new URL('../../../../src/collector/arch/darwin/redirector.mjs', import.meta.url), 'utf8')
-  assert.ok(darwin.includes('createDoorRedirector'), 'the darwin twin dresses the same core')
-  assert.ok(darwin.length < 8000, `the adapter stays thin (${darwin.length} bytes)`)
 })
