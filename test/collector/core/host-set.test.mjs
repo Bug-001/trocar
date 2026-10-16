@@ -1,6 +1,6 @@
-// test/collector/core/route-plan.test.mjs — the shared route-plan pieces (core/route-plan.mjs · core/entry-forms.mjs) and
-// hostSetOf, the host set of a host-tree form (4.8 §3.5, OPEN 22). The arch twins' guard went with the old win32 collector's tests (D57);
-// The old plan is deleted next and hostSetOf moves to core/host-agent.mjs, with its import here.
+// test/collector/core/host-set.test.mjs — hostSetOf, the host set of a host-tree form (4.8 §3.5, OPEN 22; core/host-agent.mjs, moved there from the
+// deleted core/route-plan.mjs), and the purity scan of core/entry-forms.mjs (entryGate). The other route-plan pieces went with the old win32
+// collector.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -8,7 +8,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripComments, specsOf } from '../../helpers/imports.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
-import * as core from '../../../src/collector/core/route-plan.mjs'
 import { hostSetOf } from '../../../src/collector/core/host-agent.mjs'
 import { bypassRuleOf } from '../../../src/collector/core/upstream-shape.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
@@ -16,42 +15,14 @@ import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 const src = (rel) => fs.readFileSync(fileURLToPath(new URL(`../../../src/collector/${rel}`, import.meta.url)), 'utf8')
 const ALL = await loadHarnesses()
 
-test('the shared modules touch no OS, name no harness and import only core', () => {
-  for (const rel of ['core/route-plan.mjs', 'core/entry-forms.mjs']) {
+test('core/entry-forms.mjs touches no OS, names no harness and imports nothing', () => {
+  for (const rel of ['core/entry-forms.mjs']) {
     const text = src(rel)
     const code = stripComments(text)
     assert.deepEqual(specsOf(text).filter((s) => !/^\.\/(config-read|upstream-shape|entry-forms)\.mjs$/.test(s)), [], `${rel} imports only its core neighbours`)
     assert.doesNotMatch(code, /\brequire\s*\(|\bfetch\s*\(|\bprocess\s*\.|\bchild_process\b|\bwriteFile|\breadFile|\bspawn\s*\(|(?<!\.)\bexec(File)?(Sync)?\s*\(/, `${rel} reaches the OS itself`)
     assert.doesNotMatch(code, /\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code|win32|darwin)\b/i, `${rel} names a harness or an OS`)
   }
-})
-
-// ---------- the pieces ----------
-
-test('routePlanOf wants every part of the arch, and groupsOf reads the descriptor field it was given', () => {
-  const arch = { os: 'x', norm: String, upstreamFor: () => ({}), proxyAuthOf: () => null }
-  for (const k of Object.keys(arch)) assert.throws(() => core.routePlanOf({ ...arch, [k]: undefined }), TypeError, k)
-  const g = { g: 'a.cli', proxyEntry: { kind: 'file' } }
-  assert.deepEqual(core.routePlanOf(arch).groupsOf([{ name: 'a', x: { groups: [g], forms: [{ id: 'a.cli', g: 'a.cli' }] } }, { name: 'b', y: { groups: [g] } }]),
-    [{ g: 'a.cli', harness: 'a', group: g, forms: [{ id: 'a.cli', g: 'a.cli' }], proxy: undefined }])
-})
-
-test('isDesiredOn: on only when the harness says on, as the object or the bare string', () => {
-  assert.equal(core.isDesiredOn({ a: { desired: 'on' } }, 'a'), true)
-  assert.equal(core.isDesiredOn({ a: 'on' }, 'a'), true)
-  for (const d of [null, {}, { a: { desired: 'off' } }, { a: 'off' }, { b: 'on' }]) assert.equal(core.isDesiredOn(d, 'a'), false, JSON.stringify(d))
-})
-
-test('movedRoute · optedInOf · carriedOf: what a re-plan reloads for, and which groups the manifest says are named or carried', () => {
-  const r = { on: true, upstream: { kind: 'direct' }, bypass: [] }
-  assert.equal(core.movedRoute(r, { ...r }), false)
-  for (const b of [null, { ...r, on: false }, { ...r, upstream: { kind: 'http' } }, { ...r, bypass: [{ kind: 'local' }] }]) assert.equal(core.movedRoute(r, b), true)
-  const groups = [{ g: 'a.desk', harness: 'a', group: { proxyEntry: { kind: 'policy' } }, forms: [{ id: 'a.desktop' }] },
-    { g: 'a.cli', harness: 'a', group: { proxyEntry: { kind: 'file', format: 'json-key', key: ['env', 'P'] } }, forms: [{ id: 'a.cli' }] }]
-  const m = { entries: [{ kind: 'optin-launcher', harness: 'a', form: 'a.desktop' }, { kind: 'optin-launcher', harness: 'a', form: 'a.cli', confirmed: false }, { harness: 'a', path: '/s.json', keys: ['env', 'P'] }] }
-  assert.deepEqual(core.optedInOf(groups, m), ['a.desk', 'a.desktop'])
-  assert.deepEqual([...core.carriedOf(groups, m)].sort(), ['a.cli', 'a.desk'])
-  assert.deepEqual(core.optedInOf(groups, null), [])
 })
 
 /** A sandbox profile: files go in under it; `ctx` is what a harness's `file(ctx)` reads paths from, its reads `{ text, error }` the daemon's way. */
