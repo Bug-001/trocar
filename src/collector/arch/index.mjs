@@ -58,7 +58,7 @@ export async function loadArch(platform = process.platform) {
     // optIn is 4.9 §2.4's half the CLI and status reach (1.6 §1.7; the flip checklist ④, the win32 twin's shape): `forms` (what --opt-in may name), `plan` (the rows of the plan's
     // 「要你点名的」 section) and `apply` (one named item, ledgered with scope). The check half (the read-only re-check that the entries are still the ones used, W68) is the
     // status-side work of MA4's row — not this arm; the daemon's own opt-in check is guarded by the hook's absence and checks nothing.
-    const [{ createDarwinCollector }, unit, { controlEndpoint }, { osRootsFor }, { darwinNetFacts }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn }] = await Promise.all([import('./darwin/wiring.mjs'), import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('../../off/os-roots.mjs'), import('./darwin/netfacts.mjs'), import('./darwin/optin.mjs')])
+    const [unit, { controlEndpoint }, { osRootsFor }, { darwinNetFacts }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn }] = await Promise.all([import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('../../off/os-roots.mjs'), import('./darwin/netfacts.mjs'), import('./darwin/optin.mjs')])
     const { groupsOf } = await import('./darwin/route-plan.mjs')
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
@@ -67,7 +67,6 @@ export async function loadArch(platform = process.platform) {
       refuseElevated: unit.refuseElevated, nodePreflight: unit.nodePreflight,
       osRoots: () => osRootsFor('darwin')(),
       netFacts: darwinNetFacts,
-      createRedirector: (opts = {}) => createDarwinCollector(opts),
       optIn: {
         forms: ({ harnesses: h, ids = null } = {}) => optinFormsOf(of(h, ids)),
         itemForms: ({ harnesses: h, ids = null } = {}) => optinItemForms(of(h, ids)),

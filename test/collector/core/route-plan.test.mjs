@@ -21,7 +21,7 @@ const src = (rel) => fs.readFileSync(fileURLToPath(new URL(`../../../src/collect
 /** Each piece lifted out of the arch twins (review R4 · R7 · R8, 2026-10-14). A name here declared again in an arch file is a twin coming back. */
 const LIFTED = ['entryGate', 'proxyUrl', 'proxyEntries', 'groupsOf', 'priorOf', 'proxyRecordsOf', 'resolveLogin', 'planRoutes', 'hostSetOf', 'observe', 'recordsOf', 'readLive', 'fromRecord',
   'isProxyRecord', 'dialOf', 'matchable', 'norm', 'wanted', 'movedRoute', 'optinRecordsOf', 'isDesiredOn', 'optedInOf', 'identifyOf', 'desktopDoorOf']
-const ARCH_FILES = ['forms', 'route-plan', 'wiring'].flatMap((f) => ['darwin', 'win32'].map((os) => `arch/${os}/${f}.mjs`))
+const ARCH_FILES = [...['forms', 'route-plan'].flatMap((f) => ['darwin', 'win32'].map((os) => `arch/${os}/${f}.mjs`)), 'arch/win32/wiring.mjs']
 const declared = (code, name) => new RegExp(`\\b(function\\*?|const|let|var|class)\\s+${name}\\b`).test(code)
 
 test('the arch twins declare none of the lifted pieces, and the desired-state rule and the no-door identity stand-in are written nowhere but core', () => {
