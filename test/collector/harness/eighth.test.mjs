@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { OSES, ASIGHT, invariants, casesFor, run, editKept, diff, label } from '../../helpers/switch-kit.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
+import { TEMPLATES } from '../../../src/collector/harness/templates/index.mjs'
+import { findIn } from '../../helpers/code-text.mjs'
 
 const FIXTURES = new URL('./fixtures/', import.meta.url)
 const SRC = fileURLToPath(new URL('../../../src/', import.meta.url))
@@ -23,6 +25,49 @@ it('CM27: the eighth descriptor holds no function, and no file of src/ names it'
   assert.deepEqual(fns, [])
   const named = fs.readdirSync(SRC, { recursive: true }).filter((f) => /\.(mjs|cjs|js|tmpl|ps1)$/.test(f) && /\beighth\b/i.test(fs.readFileSync(path.join(SRC, f), 'utf8')))
   assert.deepEqual(named, [], 'code that knows the eighth harness by name: it must work from its data alone')
+})
+
+// CM27's static half (4.11 §1 table, row 操作系统后端): core/ and arch/ know no harness, core/ knows no OS — in code; a comment may name either.
+// Exceptions are data, each with its reason; an entry that no longer matches anything is itself a finding (the list only shrinks).
+const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
+const walk = (d) => fs.readdirSync(path.join(ROOT, d), { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : /\.(mjs|cjs|js)$/.test(e.name) ? [path.join(d, e.name).split(path.sep).join('/')] : [])
+const OLD_WIN = 'the old win32 collector, deleted as one with the W69 guard (spec 0.1:161)'
+const CM27_EXEMPT = [
+  { file: 'src/collector/arch/win32/optin.mjs', kind: 'harness', reason: OLD_WIN },
+  { file: 'src/collector/core/trust/plan.mjs', kind: 'os', reason: `its Windows inject arm belongs to ${OLD_WIN}` },
+]
+function cm27Findings(files, ids, read, exemptions = CM27_EXEMPT) {
+  const exempt = (file, kind) => exemptions.some((x) => x.file === file && x.kind === kind)
+  const idRe = new RegExp(`(?<![\\w-])(${ids.map((x) => x.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')).join('|')})(?![\\w-])`, 'g')
+  const out = []
+  for (const f of files) {
+    const text = read(f)
+    if (/^src\/collector\/(core|arch)\//.test(f) && !exempt(f, 'harness')) for (const h of findIn(text, idRe)) out.push(`${f}:${h.line} harness id ${h.text}`)
+    if (/^src\/collector\/core\//.test(f) && !exempt(f, 'os')) for (const h of findIn(text, /(['"`])(darwin|win32|linux)\1/g)) out.push(`${f}:${h.line} OS literal ${h.text}`)
+  }
+  return out
+}
+
+it('CM27: no harness id in the code of core/ and arch/, no OS literal in the code of core/ (comments excluded)', async () => {
+  const files = [...walk('src/collector/core'), ...walk('src/collector/arch')]
+  const ids = (await loadHarnesses()).map((h) => h.name)
+  assert.deepEqual(cm27Findings(files, ids, (f) => fs.readFileSync(path.join(ROOT, f), 'utf8')), [], 'a harness is data in its descriptor; a platform fact comes from arch/<os>/ (4.11 §1)')
+  const stale = CM27_EXEMPT.filter((x) => !files.includes(x.file) || !cm27Findings([x.file], ids, (f) => fs.readFileSync(path.join(ROOT, f), 'utf8'), []).some((s) => s.includes(x.kind === 'os' ? 'OS literal' : 'harness id')))
+  assert.deepEqual(stale, [], 'an exemption that excuses nothing any more: delete its row')
+})
+
+it('CM27: the guard goes red on a seeded bad input, and a comment or a longer word is not a finding', () => {
+  const seeded = { 'src/collector/core/x.mjs': "// claude-code on 'darwin'\nconst a = 'claude-code'\nif (os === 'win32') a()\nconst b = '.codex-x'; /* 'linux' */ const c = `//${'codex'}`",
+    'src/collector/arch/darwin/y.mjs': "const z = 'darwin'; const h = 'z-code'" }
+  assert.deepEqual(cm27Findings(Object.keys(seeded), ['claude-code', 'codex', 'z-code'], (f) => seeded[f]),
+    ["src/collector/core/x.mjs:2 harness id claude-code", "src/collector/core/x.mjs:4 harness id codex", "src/collector/core/x.mjs:3 OS literal 'win32'", "src/collector/arch/darwin/y.mjs:1 harness id z-code"])
+})
+
+it('CM27: every template a descriptor names is a file in src/collector/harness/templates/', async () => {
+  const named = []
+  ;(function walkT(v) { if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) k === 'template' && typeof x === 'string' ? named.push(x) : walkT(x) })([...(await loadHarnesses()), eighth].map((h) => h.proxyMode))
+  assert.ok(named.length > 0)
+  for (const id of named) assert.ok(Object.hasOwn(TEMPLATES, id) && fs.existsSync(path.join(ROOT, 'src/collector/harness/templates', TEMPLATES[id].file)), `template ${id}`)
 })
 
 process.chdir(tmpDir('asight-pipes-')) // a win32 control endpoint is a pipe name, served as a socket path relative to the cwd (switch-contract.test.mjs)
