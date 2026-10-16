@@ -14,15 +14,37 @@ import { fileURLToPath } from 'node:url'
 import { execTool } from '../../../off/exec.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
 import { setKey, getPath } from '../../../off/json-text.mjs'
-import { proxyUrl } from './forms.mjs'
 import { splitCommandLine } from './procinfo.mjs'
 import { whoseWithHosts } from '../../core/host-agent.mjs'
 import { renderCmdTemplate, markerScript } from './shims.mjs'
-import { readIngressConfig } from './ingress-config.mjs'
+import { readIngressConfig } from '../../core/ingress-config.mjs'
 import { readUserPath, prependUserPath, resolveCommand, sacOf, sacBlocksShims, readShortcutTarget, shortcutPlaces } from './userpath.mjs'
 import { readMachinePath, MACHINE_BIN } from './elevate.mjs'
 
 const nodeFs = fs
+
+/** The opt-in's groups of the harness descriptors, flat: `[{ g, harness, group, forms, proxy }]` from each one's `win32` data (the overlay the loader
+ *  attaches); a form with no group is in none. Moved here from the deleted arch/win32/route-plan.mjs: the opt-in half is its last reader. */
+export function groupsOf(descriptors) {
+  const out = []
+  for (const d of descriptors || []) {
+    const w = d && d.win32
+    if (!w) continue
+    for (const group of w.groups || []) out.push({ g: group.g, harness: d.name, group, forms: (w.forms || []).filter((f) => f.g === group.g), proxy: w.proxy })
+  }
+  return out
+}
+
+const PORT = (n) => Number.isInteger(n) && n >= 1 && n <= 65535
+const TOKEN = /^[A-Za-z0-9_-]{16,128}$/
+/** The value a group's proxy entry holds: its id and the listener token as the Basic credentials of the group's loopback port (ingress.json);
+ *  a group whose entry takes no credentials (`auth:false`) holds the address alone. Moved here from the deleted core/entry-forms.mjs half. */
+function proxyUrl(group, { port, listenerToken } = {}) {
+  if (!PORT(port)) throw new TypeError(`the kernel port of ${group.g} must be a TCP port, got ${typeof port === 'number' ? port : typeof port}`)
+  if (!group.auth) return `http://127.0.0.1:${port}`
+  if (typeof listenerToken !== 'string' || !TOKEN.test(listenerToken)) throw new TypeError('the listener token is 16..128 characters of letters, digits, - and _')
+  return `http://${group.g}:${listenerToken}@127.0.0.1:${port}`
+}
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 /** Where the fixed scripts live (arch/win32/optin/*.ps1); `applyOptIn` names them by file, never by a path a caller gives. */
 export const SCRIPTS_DIR = path.join(HERE, 'optin')
@@ -57,7 +79,7 @@ export const optinItemIds = () => Object.keys(OPTIN_ITEMS)
 /** Whether `kind` is one of this module's (the manifest's KNOWN_KINDS is the wider truth: it also holds the non-opt-in kinds). */
 export const isOptinKind = (kind) => Object.values(OPTIN_ITEMS).some((x) => x.parts.some((p) => p.kind === kind)) || OPTIN_MACHINE_KINDS.includes(kind)
 
-/** The opt-in rows of `groups` (route-plan's `groupsOf` shape): one row per (form, item), carrying what the plan prints and what `--opt-in` names.
+/** The opt-in rows of `groups` (`groupsOf`'s shape, above): one row per (form, item), carrying what the plan prints and what `--opt-in` names.
  *   groups   groupsOf(descriptors) — the items live on the group; every form of the group shares them (a form's items all go together, 1.6 §1.7)
  *   optIns   the form ids the user named on this `on` (`--opt-in`, repeatable and comma-separated)
  *   manifest the install manifest as it is now (null: none) — an item with a ledger entry is `done` (or `pending-admin`), never re-offered as needed

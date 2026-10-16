@@ -23,8 +23,7 @@ export async function loadArch(platform = process.platform) {
     // `identify`). `record` is what the daemon's 5 s check does with the findings (once per occurrence, only §9.7's netenv failure codes) — on the arch object
     // so the daemon, the one file allowed to wire arch in, stays platform-neutral about it. netFacts (Task 10(a)) is this platform's half of the network
     // facts: topology rows, doctor findings, the §11 plan and the drift checks all draw from it through src/netenv/facts.mjs.
-    const [{ createWin32Collector }, unit, { controlEndpoint }, { osRootsFor }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn, checkEntries, recordEntryFindings }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('../../off/os-roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
-    const { groupsOf } = await import('./win32/route-plan.mjs')
+    const [{ createWin32Collector }, unit, { controlEndpoint }, { osRootsFor }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn, checkEntries, recordEntryFindings, groupsOf }, { gatherWin32Facts }] = await Promise.all([import('./win32/wiring.mjs'), import('./win32/autostart.mjs'), import('./win32/control-path.mjs'), import('../../off/os-roots.mjs'), import('./win32/optin.mjs'), import('./win32/netfacts.mjs')])
     const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
     return {
       os: 'win32', install: null, unit,

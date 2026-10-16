@@ -7,14 +7,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { loadIngressConfig } from '../../../../../src/collector/arch/win32/ingress-config.mjs'
+import { loadIngressConfig } from '../../../../../src/collector/core/ingress-config.mjs'
 import { loadHarnesses } from '../../../../../src/collector/harness/index.mjs'
-import { groupsOf } from '../../../../../src/collector/arch/win32/route-plan.mjs'
 import { MACHINE_PATH_KEY } from '../../../../../src/collector/arch/win32/elevate.mjs'
 import { SAC_KEY } from '../../../../../src/collector/arch/win32/userpath.mjs'
 import { createRegistry } from '../../../../../src/collector/core/registry.mjs'
 import { createCa } from '../../../../../src/collector/core/tls/ca.mjs'
-import { applyOptIn, checkEntries } from '../../../../../src/collector/arch/win32/optin.mjs'
+import { applyOptIn, checkEntries, groupsOf } from '../../../../../src/collector/arch/win32/optin.mjs'
 import { tmpDir } from '../../../../helpers/tmp.mjs'
 
 const HARNESSES = await loadHarnesses()

@@ -22,7 +22,7 @@ test('V56/V64: status --json carries opt_in — every field of §9.4, the states
   writeDurable(manifestPath(s.dir), JSON.stringify(manifest, null, 2), 0o600)
   // the arch hook is injected: status renders what it is given (the rows are planOptIns' own)
   const { planOptIns } = await import('../../src/collector/arch/win32/optin.mjs')
-  const { groupsOf } = await import('../../src/collector/arch/win32/route-plan.mjs')
+  const { groupsOf } = await import('../../src/collector/arch/win32/optin.mjs')
   const rows = planOptIns({ groups: groupsOf(DESCS.filter((d) => d.name === 'kimi-code')), manifest: readManifest(s.dir) })
   const parts = { os: 'win32', harnesses: DESCS.filter((d) => d.name === 'kimi-code'), arch: { optIn: { plan: () => rows } } }
   const r = await runStatus(s, ['--json'], { deps: { parts } })
@@ -53,7 +53,7 @@ test('W68 / §1.7「入口还有没有效」: status folds the entry check\'s fi
   const { manifestPath } = await import('../../src/off/manifest.mjs')
   writeDurable(manifestPath(s.dir), JSON.stringify(manifest, null, 2), 0o600)
   const { planOptIns } = await import('../../src/collector/arch/win32/optin.mjs')
-  const { groupsOf } = await import('../../src/collector/arch/win32/route-plan.mjs')
+  const { groupsOf } = await import('../../src/collector/arch/win32/optin.mjs')
   const rows = planOptIns({ groups: groupsOf(DESCS.filter((d) => d.name === 'kimi-code')), manifest: readManifest(s.dir) })
   const checked = [], planned = []
   const parts = { os: 'win32', harnesses: DESCS.filter((d) => d.name === 'kimi-code'), arch: { optIn: { plan: (q) => { planned.push(q); return rows }, check: (q) => {

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
-import { entryGate } from '../../../src/collector/arch/win32/forms.mjs'
+import { entryGate } from '../../../src/collector/core/entry-forms.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import eighth from './fixtures/eighth.mjs'
 

@@ -8,9 +8,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { SCRIPTS_DIR, OPTIN_ITEMS } from '../../../../src/collector/arch/win32/optin.mjs'
+import { SCRIPTS_DIR, OPTIN_ITEMS, groupsOf } from '../../../../src/collector/arch/win32/optin.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
-import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
 
 const GROUPS = groupsOf(await loadHarnesses())
 const textOf = (f) => fs.readFileSync(path.join(SCRIPTS_DIR, f), 'utf8')
