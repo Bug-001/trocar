@@ -1016,12 +1016,14 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
   const start = async (pid) => { p.add(pid, { uid: process.getuid(), exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: root, env: { HOME: home }, startTicks: ticks() }); await clients[0].raw({ op: '__emit', ev: 'exec', tgid: pid, pid, comm: 'claude', filename: CC_EXE, ts_ns: pid }) }
   const ask = (method, path_, body) => controlRequest({ socketPath: sock, method, path: path_, body })
   const agentOf = async (pid) => (await ask('GET', '/status')).agents.find((a) => a.pid === pid)
-  const on = (o = {}) => turnOn(onBase(b, { socketPath: sock, request: controlRequest, unit: null, ...o }))
+  // the daemon below really binds the manifest's engine port: a free one, not onBase's fixed 47011 (two full runs at once collided there)
+  const port = await freeEnginePort(); const freePort = async () => port
+  const on = (o = {}) => turnOn(onBase(b, { socketPath: sock, request: controlRequest, unit: null, freePort, ...o }))
   fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}` } }, null, 2)) // the user's own relay: its host is in the decrypt policy
   let d = null
   try {
     // install writes the entry (D55); the first on: no daemon answers (no unit), so nothing is asked of one
-    await installCollector({ ...onBase(b), unit: null })
+    await installCollector({ ...onBase(b, { freePort }), unit: null })
     const first = await on()
     assert.deepEqual([first.exit, first.receipt.daemon.state], [0, 'not-running'])
     d = await startDaemon({ dir: b.dir, socketPath: sock, arch, harnesses: [cc], env: { ...process.env, HOME: home }, upstreamCa: up.ca.certPem }) // restores the desired state: attached
