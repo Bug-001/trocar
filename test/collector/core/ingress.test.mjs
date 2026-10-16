@@ -256,8 +256,22 @@ test('W13 an upstream that cannot be reached is a 502, never a 200 first; the ro
   await L.settled(1)
   const [row] = L.flows
   assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.pid, row.ingress], ['error', 'error', 'ECONNREFUSED', 'upstream', 4242, { route: 'of', group: 'spike' }])
-  assert.equal(L.envelopes.length, 0); assert.deepEqual(L.failures, [], 'a row, not an event: the row is the record')
+  assert.equal(L.envelopes.length, 0)
+  assert.deepEqual(L.failures.map((f) => [f.where, f.code, f.group]), [['netenv', 'upstream-unreachable', 'spike']], 'the row, and one upstream-unreachable event (1.6 §9.7)')
   assert.equal(L.engine.stats().ingress.unreachable, 1)
+})
+
+test('upstream-unreachable is written at most once per form (door group) per 60 s (1.6 §9.7), whatever the number of connections', T, async (t) => {
+  let now = 1_000_000
+  const L = await lab(t, { timing: { now: () => now } })
+  const dead = await new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
+  const once = async () => { const c = L.client(); c.write(connectHead(`127.0.0.1:${dead}`)); await c.head(); await c.closed() }
+  for (let i = 0; i < 3; i++) await once()
+  now += 59_999; await once()
+  now += 1; await once()
+  await L.settled(5)
+  assert.equal(L.failures.filter((f) => f.code === 'upstream-unreachable').length, 2)
+  assert.equal(L.engine.stats().ingress.unreachable, 5)
 })
 
 test('W13 a lookup that throws is a 502 and a loader-down record, not a hang; a SOCKS5 client gets a failure reply, not a success', T, async (t) => {

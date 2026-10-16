@@ -219,6 +219,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   const shownUser = (u) => (u === '' ? '' : ROUTE_NAME.test(u) && !u.includes(token) ? printable(u) : '(not a route name)')
   const openerMs = timing.ingressOpenerMs ?? 10_000, healthIdleMs = timing.ingressHealthIdleMs ?? 30_000
   const counters = { connections: 0, flows: 0, health: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 }
+  const now = timing.now || Date.now, lastUnreachable = new Map() // door group → when its upstream-unreachable event was written (1.6 §9.7: at most one per form per 60 s)
   const idle = new Set() // sockets that are not a flow: still in the handshake, or a health tunnel (closeIdle ends them; flows finish on their own)
 
   async function handle(socket, door = null) {
@@ -334,6 +335,8 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       r.detach()
       if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason }); return o.refusedBy(d) }
       counters.unreachable++
+      const at = now(), last = lastUnreachable.get(group)
+      if (last === undefined || at - last >= 60_000) { lastUnreachable.set(group, at); failure({ where: 'netenv', code: 'upstream-unreachable', group, upstream: shown, reason: `the upstream of ${group || 'this door'} cannot be dialled (${d.error.type}: ${d.error.message}); its agents get 502 until it is back (one event per 60 s)` }) }
       refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error: { type: d.error.type, message: d.error.message, side: 'upstream' } })
       return o.badGateway(d.error.type)
     }
