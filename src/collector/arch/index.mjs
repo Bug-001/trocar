@@ -53,24 +53,14 @@ export async function loadArch(platform = process.platform) {
     // its own). The autostart unit is the launchd module (§4); the OS roots are read (darwinRoots through osRootsFor: the keychain-administered anchors + bundled + SystemRootCertificates, 4.9 §6.2);
     // netFacts is darwinNetFacts (1.6 §9.7's archFacts). createRedirector is the whole darwin collector (wiring.mjs) — built lazy (4.9 §1 接线): the
     // daemon's construction (with dir and the sinks) builds everything and starts nothing, loadParts' {env}-only one gets the shell.
-    // optIn is 4.9 §2.4's half the CLI and status reach (1.6 §1.7; the flip checklist ④, the win32 twin's shape): `forms` (what --opt-in may name), `plan` (the rows of the plan's
-    // 「要你点名的」 section) and `apply` (one named item, ledgered with scope). The check half (the read-only re-check that the entries are still the ones used, W68) is the
-    // status-side work of MA4's row — not this arm; the daemon's own opt-in check is guarded by the hook's absence and checks nothing.
-    const [unit, { controlEndpoint }, { osRootsFor }, { darwinNetFacts }, { planOptIns, optinFormsOf, optinItemForms, applyOptIn }] = await Promise.all([import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('../../off/os-roots.mjs'), import('./darwin/netfacts.mjs'), import('./darwin/optin.mjs')])
-    const { groupsOf } = await import('./darwin/route-plan.mjs')
-    const of = (harnesses, ids = null) => groupsOf(harnesses).filter((x) => !ids || ids.includes(x.harness))
+    // No opt-in half: the collector model (4.11) has no item the user names and none that needs an administrator (CM25).
+    const [unit, { controlEndpoint }, { osRootsFor }, { darwinNetFacts }] = await Promise.all([import('./darwin/autostart.mjs'), import('./darwin/control-path.mjs'), import('../../off/os-roots.mjs'), import('./darwin/netfacts.mjs')])
     return {
       os: 'darwin', install: null, unit,
       controlEndpoint,
       refuseElevated: unit.refuseElevated, nodePreflight: unit.nodePreflight,
       osRoots: () => osRootsFor('darwin')(),
       netFacts: darwinNetFacts,
-      optIn: {
-        forms: ({ harnesses: h, ids = null } = {}) => optinFormsOf(of(h, ids)),
-        itemForms: ({ harnesses: h, ids = null } = {}) => optinItemForms(of(h, ids)),
-        plan: ({ harnesses: h, ids = null, optIn = [], manifest = null } = {}) => planOptIns({ groups: of(h, ids), optIns: optIn, manifest }),
-        apply: ({ harnesses: h, ids = null, ...rest }) => applyOptIn({ ...rest, groups: of(h, ids) }),
-      },
     }
   }
   throw new Error(`asight collector: ${platform} is not supported yet (Linux first; RFC 4.6 §结构)`)
