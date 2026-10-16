@@ -691,7 +691,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
     record: event, event, proxyOf: parts.proxyOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
-    drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }), ...(model.fs ? { fs: model.fs } : {}) })
+    drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }) })
   collector.bindDoors({ open: (l) => engine.listen({ groups: l }), close: (ids) => Promise.resolve(engine.closeGroups(ids)) })
   let exitAsked = 0, exitTimer = null
   const status = async () => {
@@ -699,19 +699,24 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     return { pid: process.pid, doors: collector.doors(), harnesses: desired(), holders: (await collector.holders()).count ?? null, cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
-  let stop = null
+  let stop = null, markReady
+  // restore() first (runDaemon's `ready` gate): a request that arrives while it reopens the recorded doors waits for it, so an `on` racing a restart
+  // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
+  const ready = new Promise((r) => { markReady = r })
+  const gate = (fn) => async (q) => { await ready; return fn(q) }
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: {
-    'GET /status': status,
-    'GET /holders': () => collector.holders(),
-    'POST /on': async (q) => { exitAsked++; clearInterval(exitTimer); return collector.on(body(q)) },
-    'POST /off': async (q) => {
+    'GET /status': gate(status),
+    'GET /holders': gate(() => collector.holders()),
+    'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); return collector.on(body(q)) }),
+    'POST /off': gate(async (q) => {
       const r = await collector.off(body(q))
       if (body(q).exit === true) { const mine = ++exitAsked; clearInterval(exitTimer); exitTimer = setInterval(() => { if (mine === exitAsked && collector.mayExit()) { clearInterval(exitTimer); stop({ reason: 'off' }) } }, 250) }
       return r
-    },
+    }),
   } })
   try {
     await collector.start()
+    markReady()
     const me = identity(process.pid)
     fs.writeFileSync(`${P.lock}.tmp-${process.pid}`, JSON.stringify({ pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }) + '\n', { mode: 0o600 })
     fs.renameSync(`${P.lock}.tmp-${process.pid}`, P.lock)
