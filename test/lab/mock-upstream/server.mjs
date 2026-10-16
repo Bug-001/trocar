@@ -130,7 +130,8 @@ async function handle(conn, req, raw, seq, state, record) {
     reset() { conn.ended = true; conn.raw.resetAndDestroy() }, // RST on the TCP socket, under any TLS
   }
   let meta
-  try { meta = await dispatch(req, io, state) } catch (e) { meta = { error: String(e?.stack || e), complete: false }; conn.raw.destroy() }
+  state.inflight = (state.inflight || 0) + 1 // GET /__mock/state says how many replies are still being written (a test acts mid-stream)
+  try { meta = await dispatch(req, io, state) } catch (e) { meta = { error: String(e?.stack || e), complete: false }; conn.raw.destroy() } finally { state.inflight-- }
   const { complete, upgrade, ...rest } = meta
   record({
     type: 'request', ts, conn_id: conn.id, seq, ...rest, method: req.method, path: req.target, status: io.status,
@@ -149,7 +150,7 @@ function adminServer(state, logFile) {
     const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
     const route = `${req.method} ${req.url.split('?')[0]}`
     const body = parseJson(await readAll(req))
-    if (route === 'GET /__mock/state') return send(200, { queue: state.queue, config: state.cfg, scenarios: Object.keys(SCENARIOS), cache: cacheState(state.cache) })
+    if (route === 'GET /__mock/state') return send(200, { queue: state.queue, inflight: state.inflight || 0, config: state.cfg, scenarios: Object.keys(SCENARIOS), cache: cacheState(state.cache) })
     if (route === 'POST /__mock/cache') return send(200, cacheAdmin(state.cache, body))
     if (route === 'POST /__mock/config') {
       for (const [k, v] of Object.entries(body)) if (Object.hasOwn(state.cfg, k) && Number.isFinite(v) && v >= 0) state.cfg[k] = v
