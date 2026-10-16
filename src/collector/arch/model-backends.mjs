@@ -69,9 +69,12 @@ export async function doorPartsFor({ os, env = process.env, harnesses = [], even
   const proxyOf = (text) => { const p = up.parseProxyText(text); return p && p.ok ? { kind: p.kind, host: p.host, port: p.port, ...(p.credentialed ? { auth: up.proxyAuthOf(text) } : {}) } : null }
   let parts, watch
   if (os === 'darwin') {
-    const [{ ownerOfSocket }, pi, { execTool }] = await Promise.all([import('./darwin/socktable.mjs'), import('./darwin/procinfo.mjs'), import('../../off/exec.mjs')])
-    const execOf = async (file, args, o = {}) => execTool(file, args, o)
-    parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid), proc: { envOf: (p, n) => pi.envOf(p, n), cwdOf: (p) => pi.cwdOf(p), parentOf: (p) => pi.parentOf(p) }, close: () => {} }
+    const [{ ownerOfSocket }, pi, { execTool, runAsync }] = await Promise.all([import('./darwin/socktable.mjs'), import('./darwin/procinfo.mjs'), import('../../off/exec.mjs')])
+    // every lsof / ps of the accept path runs through execFile (runAsync), never spawnSync — socktable's 250 ms budget can only win a race
+    // the event loop is free to run, and one slow lsof must not hold another door's connection (nor the lock refresh off reads)
+    const execOf = (file, args, o = {}) => execTool(file, args, { ...o, run: runAsync })
+    const run = { exec: runAsync }
+    parts = { ownerOf: (q) => ownerOfSocket({ exec: execOf, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, run), proc: { envOf: (p, n) => pi.envOf(p, n, run), cwdOf: (p) => pi.cwdOf(p, run), parentOf: (p) => pi.parentOf(p, run) }, close: () => {} }
     watch = up.watchSystemProxy({ initial: await up.readSystemProxy().catch(() => null), onError: (e) => failure('netenv', e) })
   } else {
     const [{ ownerOfSocket }, pi, { startHelper, policyAllowOf }, { groupsOf }] = await Promise.all([import('./win32/socktable.mjs'), import('./win32/procinfo.mjs'), import('./win32/helper.mjs'), import('./win32/route-plan.mjs')])
