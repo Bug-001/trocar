@@ -69,7 +69,7 @@ test('a no-names off with a draining daemon runs launchctl disable and never a b
   const asked = []
   const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: {
     platform: 'darwin', exec: launchd.run, procs: async () => [], sleep: async () => {}, socketPath: '/x/collector.sock',
-    daemonState: async () => ({ state: 'running', socket: '/x/collector.sock' }),
+    daemonState: async () => ({ state: 'running', socket: '/t/asight-0123456789abcdef.sock' }),
     request: async (q) => { asked.push(q.body); return { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 1, waiting: 0, cut: 0 } } },
   } })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
@@ -107,7 +107,8 @@ test('the flip ① (4.9 §4): a stuck daemon on darwin is stopped launchd-first 
   const dir = path.join(home, '.asight', 'collector')
   fs.mkdirSync(dir, { recursive: true })
   writePlist(home)
-  fs.writeFileSync(path.join(dir, 'lock'), `${JSON.stringify({ pid: 4242, start_time: '111', boot_id: 'boot-1', helper_pid: 4243, socket: '/x/collector.sock', engine_port: 47011 })}\n`)
+  // the lock as a darwin daemon writes it (psIdentity's lstart + kern.boottime seconds; the socket in $TMPDIR, 4.9 §7)
+  fs.writeFileSync(path.join(dir, 'lock'), `${JSON.stringify({ pid: 4242, start_time: 'Wed Oct 7 04:27:00 2026', boot_id: '1760000000', helper_pid: 4243, socket: '/t/asight-0123456789abcdef.sock', engine_port: 47011 })}\n`)
   const order = []
   const launchd = fakeLaunchd(order)
   const signals = []
@@ -116,7 +117,7 @@ test('the flip ① (4.9 §4): a stuck daemon on darwin is stopped launchd-first 
     home, env: { HOME: home }, ids: ['claude-code'],
     deps: {
       platform: 'darwin', exec: launchd.run, procs: async () => [],
-      alive: (pid) => live.has(pid), identity: (pid) => (pid === 4242 ? { start_time: '111', boot_id: 'boot-1' } : { start_time: null, boot_id: null }),
+      alive: (pid) => live.has(pid), identity: (pid) => (pid === 4242 ? { start_time: 'Wed Oct 7 04:27:00 2026', boot_id: '1760000000' } : { start_time: null, boot_id: null }),
       isHelper: (pid) => pid === 4243, kill: (pid, sig) => { order.push(`kill ${pid} ${sig}`); signals.push([pid, sig]); live.delete(pid) },
       sleep: async () => {},
     },

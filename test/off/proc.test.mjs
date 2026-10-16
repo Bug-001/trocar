@@ -123,13 +123,16 @@ test('listProcs on macOS: a ps whose lines cannot be read is an error that says 
   assert.deepEqual(other, [], 'rows that parse but belong to another user are a table with no row of this user\'s, not a failure')
 })
 
-test('psIdentity: the start time of a pid from `ps -o lstart= -p` in the C locale, blanks collapsed; null for a pid ps does not know; no boot id; identityFor picks /proc or ps by platform', () => {
+test('psIdentity: the start time of a pid from `ps -o lstart= -p` in the C locale, blanks collapsed, and the seconds of kern.boottime as the boot id; nulls for a pid ps does not know; identityFor picks it on darwin', () => {
   const calls = []
-  const exec = (file, args, opts) => { calls.push([file, ...args, opts.env.LC_ALL]); return args.includes('4242') ? { status: 0, stdout: 'Wed Oct  7 04:27:00 2026\n', stderr: '' } : { status: 1, stdout: '', stderr: '' } }
-  assert.deepEqual(psIdentity(4242, { exec }), { start_time: 'Wed Oct 7 04:27:00 2026', boot_id: null })
+  const BOOT = '{ sec = 1760000000, usec = 123456 } Thu Oct  9 08:53:20 2025\n' // `sysctl -n kern.boottime` as macOS prints it
+  const exec = (file, args, opts) => { calls.push([file, ...args, opts.env.LC_ALL]); if (file === 'sysctl') return { status: 0, stdout: BOOT, stderr: '' }; return args.includes('4242') ? { status: 0, stdout: 'Wed Oct  7 04:27:00 2026\n', stderr: '' } : { status: 1, stdout: '', stderr: '' } }
+  const ID = { start_time: 'Wed Oct 7 04:27:00 2026', boot_id: '1760000000' }
+  assert.deepEqual(psIdentity(4242, { exec }), ID)
   assert.deepEqual(psIdentity(1, { exec }), { start_time: null, boot_id: null })
-  assert.deepEqual(calls, [['ps', '-o', 'lstart=', '-p', '4242', 'C'], ['ps', '-o', 'lstart=', '-p', '1', 'C']])
-  assert.deepEqual(identityFor({ platform: 'darwin', exec })(4242), { start_time: 'Wed Oct 7 04:27:00 2026', boot_id: null })
+  assert.deepEqual(calls, [['ps', '-o', 'lstart=', '-p', '4242', 'C'], ['sysctl', '-n', 'kern.boottime', 'C'], ['ps', '-o', 'lstart=', '-p', '1', 'C']])
+  assert.deepEqual(identityFor({ platform: 'darwin', exec })(4242), ID)
+  assert.deepEqual(psIdentity(4242, { exec: (file, args, o) => (file === 'sysctl' ? { status: 1, stdout: '', stderr: '' } : exec(file, args, o)) }).boot_id, null, 'an unreadable boot time is not known, never a guess')
   const before = calls.length
   const p = fakeProc()
   try {

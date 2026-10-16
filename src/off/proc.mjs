@@ -123,11 +123,15 @@ const psEnv = (env = process.env) => ({ ...env, LC_ALL: 'C' })
  *  other category stays C. */
 export const lsofEnv = (env = process.env) => ({ ...env, LC_ALL: 'UTF-8' })
 
-/** {start_time, boot_id} of a live process where there is no /proc (macOS): `ps -o lstart= -p <pid>` in the C locale, the blanks collapsed ("Wed Oct 7 04:27:00 2026");
- *  null when `ps` does not know the pid. No boot id: the start time of a pid that is reused after a reboot differs all the same. `exec` is the injected runner (execTool). */
+/** {start_time, boot_id} of a live process where there is no /proc (macOS): `ps -o lstart= -p <pid>` in the C locale, the blanks collapsed ("Wed Oct 7 04:27:00 2026"),
+ *  and the seconds of `sysctl -n kern.boottime` as the boot id (lstart has a one-second grain, the boot time tells a reboot apart); both null when `ps`
+ *  does not know the pid, boot_id null when sysctl does not answer. `exec` is the injected runner (execTool). */
 export function psIdentity(pid, { exec = null, env = process.env } = {}) {
   const r = execTool('ps', ['-o', 'lstart=', '-p', String(pid)], { run: exec, env: psEnv(env) })
-  return { start_time: r.code === 0 && /\S/.test(r.out) ? r.out.replace(/\s+/g, ' ').trim() : null, boot_id: null }
+  if (!(r.code === 0 && /\S/.test(r.out))) return { start_time: null, boot_id: null }
+  const b = execTool('sysctl', ['-n', 'kern.boottime'], { run: exec, env: psEnv(env) })
+  const sec = b.code === 0 && /\bsec\s*=\s*(\d+)/.exec(b.out)
+  return { start_time: r.out.replace(/\s+/g, ' ').trim(), boot_id: sec ? sec[1] : null }
 }
 
 /** The reader of a process's identity for a platform: /proc on Linux, `ps` on macOS, one Get-CimInstance question on Windows. Without one a
@@ -135,7 +139,7 @@ export function psIdentity(pid, { exec = null, env = process.env } = {}) {
  *  running — which blocked `asight off`, the way out, for as long as that other process lived (audit rule-b 3). */
 export function identityFor({ platform = process.platform, exec = null, env = process.env, root = '/proc', fs = nodeFs } = {}) {
   if (platform === 'win32') return (pid) => winIdentity(pid, { run: exec, env })
-  return platform === 'darwin' ? (pid) => psIdentity(pid, { exec, env }) : (pid) => procIdentity(pid, { root, fs })
+  return platform === 'darwin' ? (pid) => psIdentity(pid, { exec, env }) : (pid) => procIdentity(pid, { root, fs, platform })
 }
 
 /** Is the pid a process (signal 0): EPERM is a process of another user. */

@@ -8,6 +8,7 @@ import path from 'node:path'
 import { daemonState, stopDaemon, helperGone, readDaemonLock, DAEMON_LOCK_FRESH_MS } from '../../src/off/daemon-stop.mjs'
 import { lockState, LOCK_FRESH_MS } from '../../src/health/read.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { psIdentity, identityFor } from '../../src/off/proc.mjs'
 
 const BOOT = 'boot-1'
 const clock = () => { let t = 10_000_000; return { now: () => t, sleep: async (ms) => { t += ms }, advance: (ms) => { t += ms } } }
@@ -179,4 +180,18 @@ test('② the cannot-tell reason is the platform\'s own: /proc only on Linux (da
     assert.match(r.error, /pid 4242\b/, platform)
     assert.equal(/\/proc/.test(r.error), platform === 'linux', `${platform}: ${r.error}`)
   }
+})
+
+// the lock a darwin daemon writes carries {start_time, boot_id} from ps lstart and kern.boottime (psIdentity); off's identity check reads the
+// same shapes: the same process is running, a pid another process took since is stale, and so is the lock from before a reboot.
+test('on darwin shapes the daemon lock is verified — same process running, a reused pid or a reboot is stale', () => {
+  const home = tmpDir('asight-p260-'), file = path.join(home, 'lock')
+  const ps = (lstart, sec) => (f, args) => (f === 'sysctl' ? { status: 0, stdout: `{ sec = ${sec}, usec = 0 } Thu Oct  9 08:53:20 2025\n`, stderr: '' } : { status: 0, stdout: `${lstart}\n`, stderr: '' })
+  const mine = psIdentity(4242, { exec: ps('Wed Oct  7 04:27:00 2026', 1760000000) })
+  fs.writeFileSync(file, JSON.stringify({ pid: 4242, ...mine, socket: '/t/asight-0.sock' }))
+  const read = (exec) => readDaemonLock({ file, alive: () => true, identity: identityFor({ platform: 'darwin', exec }) })
+  const same = read(ps('Wed Oct  7 04:27:00 2026', 1760000000))
+  assert.equal(same.state, 'running'); assert.equal(same.verified, undefined, 'verified, not the unverified fallback')
+  assert.equal(read(ps('Thu Oct  8 09:00:00 2026', 1760000000)).state, 'stale', 'a reused pid is not reported as running')
+  assert.equal(read(ps('Wed Oct  7 04:27:00 2026', 1760100000)).state, 'stale', 'a reboot since')
 })

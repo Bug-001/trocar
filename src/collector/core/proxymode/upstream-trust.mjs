@@ -14,7 +14,7 @@ import { readSrc } from './sources.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
 
 /** The certificate variables of a process that add roots in the runtimes the seven harnesses use (OpenSSL / rustls, Node). */
-export const CERT_VARS = Object.freeze(['SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'])
+const CERT_VARS = Object.freeze(['SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'])
 const isAbs = (p) => path.posix.isAbsolute(p) || path.win32.isAbsolute(p)
 const hex = (fp) => String(fp || '').replace(/:/g, '').toLowerCase()
 

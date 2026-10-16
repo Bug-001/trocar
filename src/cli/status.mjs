@@ -16,7 +16,7 @@ import { readManifest } from '../off/manifest.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
-import { listProcs, procIdentity, pidAlive } from '../off/proc.mjs'
+import { listProcs, identityFor, pidAlive } from '../off/proc.mjs'
 import { createRegistry } from '../collector/core/registry.mjs'
 import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
@@ -77,7 +77,7 @@ const installedAtOf = (m, id) => { const t = [...(m.entries || []).filter((e) =>
  *  installedAt, procs, judged: { captured, rows }, why: [] } ], link, relayed, health }. Anything that could not be read is `null` / `unknown` and says why; nothing is thrown for it. */
 export async function gatherStatus({ home = nodeOs.homedir(), env = process.env, deps = {}, names = null } = {}) {
   const fs = deps.fs || nodeFs, platform = deps.platform || process.platform
-  const ms = deps.ms || Date.now, alive = deps.alive || pidAlive, identity = deps.identity || procIdentity
+  const ms = deps.ms || Date.now, alive = deps.alive || pidAlive, identity = deps.identity || identityFor({ platform, exec: deps.exec || null, env }) // ps on darwin, as off reads it
   const dir = collectorDir(home), stateF = stateFile(home)
   // the daemon's endpoint, resolved the one way every caller resolves it (controlEndpointFor): win32/darwin name it in control.json
   // (socket/pipe path + the token every request must carry — on darwin a random socket under $TMPDIR, 4.9 §7); Linux keeps the

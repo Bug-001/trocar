@@ -30,6 +30,7 @@ import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 import { procIdentity, captureHealth } from '../health/read.mjs'
+import { identityFor } from '../off/proc.mjs'
 import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
 import { retentionFile } from '../capture/retention.mjs'
 import { retentionHook, wsTerminalHook } from './engine-data.mjs'
@@ -140,7 +141,7 @@ function agentListWatch({ home, write }) {
   }
 }
 
-async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {} }) {
+async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {} }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
@@ -158,7 +159,8 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
-  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows })
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env }) /* darwin = ps lstart + kern.boottime */, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows })
+  identity = identity || procIdentity
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
   const ca = daemonMayStart(manifest) ? readCa({ dir: P.caDir }) : null
