@@ -155,7 +155,7 @@ export function testOnlyExports() {
 }
 // The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
 // It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
-const TEST_ONLY_EXPORTS_CEILING = 345 // formatWinPlan went with on's Windows plan branch, and with it winShown (test-only before)
+const TEST_ONLY_EXPORTS_CEILING = 344 // winShown went with formatWinPlan, renderShTemplate with arch/darwin/shims.mjs (both test-only before)
 
 test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
   const n = testOnlyExports().length

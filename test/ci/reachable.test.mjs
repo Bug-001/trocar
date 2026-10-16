@@ -30,7 +30,6 @@ export const UNREACHED = Object.freeze({
   'src/collector/core/engine/codes.mjs': 'regrouping of src/health/codes.mjs that only tests use',
   'src/query/index.mjs': 'spec 3.5:44 names runNamed as the server\'s only entry, but src/server.mjs does not use it',
   'src/capture/desktop-steer.mjs': 'old CC-Desktop Clash Verge steer; only src/netenv/clash.mjs reached it (for socket discovery), and D49 deleted that. Removal waits on the backlog',
-  'src/collector/arch/darwin/shims.mjs': 'darwin/optin.mjs, its last importer, is deleted; the shim family goes with it',
   'src/collector/arch/darwin/forms.mjs': 'darwin/optin.mjs, its last importer, is deleted; deleted outright with the old route plan (plan §D.1)',
   'src/collector/arch/darwin/route-plan.mjs': 'darwin/optin.mjs, its last importer, is deleted; deleted outright with the old route plan (plan §D.1)',
   'src/collector/arch/darwin/ingress-config.mjs': 'darwin/optin.mjs, its last importer, is deleted; the arch twin of core/ingress-config.mjs, deleted with it (plan §D.1)',
