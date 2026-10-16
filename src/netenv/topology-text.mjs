@@ -101,7 +101,7 @@ export const hopKey = (n) => (n ? [n.kind, n.addr ?? '', n.port ?? '', n.name].j
 const CHANGE = {
   driver: (h) => `要换代理: 照常改 ${h} 的设置(或你的 VPN);新启动的进程按新设置走,asight 不用做什么`,
   proxy: (h) => `要换代理: 照常改 ${h} 的设置,再跑 asight on ${h},把 asight 接在新代理前面;系统代理变了不用做什么`,
-  legacy: () => '要换代理: 照常改你的代理软件;旧采集的路由跟着它的 Clash 配置,asight 不用做什么',
+  legacy: () => '要换代理: 照常改你的代理软件;旧采集的路由跟着它的配置,asight 不用做什么',
   none: (h) => `要换代理: 照常改 ${h} 的设置(或你的 VPN);asight 现在不在路径上`,
   unknown: (h) => `要换代理: 照常改 ${h} 的设置`,
 }
