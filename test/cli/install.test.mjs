@@ -8,7 +8,6 @@ import { runInstallCli } from '../../src/cli/install.mjs'
 import { resolveAlias, commandNamed } from '../../src/cli/commands.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
-import { MODEL_ON_WIRED } from '../../src/collector/model-install.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 function fakeIo({ tty = false } = {}) {
@@ -18,7 +17,7 @@ function fakeIo({ tty = false } = {}) {
 async function cli(argv, { tty = false, over = {} } = {}) {
   const w = await modelWorld({ commands: ['codex'] })
   const io = fakeIo({ tty })
-  const deps = { getuid: () => 501, modelOnWired: true, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, ...over }
+  const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, ...over }
   const exit = await runInstallCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps })
   return { w, io, exit }
 }
@@ -50,7 +49,7 @@ test('4.11 ⑰: a version 2 manifest is refused before any write — exit 1, the
   const f = path.join(w.home, '.asight', 'collector', 'install-manifest.json')
   fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify({ version: 2, entries: [], files: [] }))
   const io = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501, modelOnWired: true } }), 1)
+  assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501 } }), 1)
   assert.deepEqual(JSON.parse(fs.readFileSync(f, 'utf8')).version, 2)
 })
 
@@ -65,17 +64,16 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
   const again = await cli(['--yes'])
   again.w.store.answer = 'declined'
   const io2 = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], { io: io2, env: again.w.env, home: tmpHomeOf(again.w), platform: 'darwin', deps: { getuid: () => 501, modelOnWired: true, backends: { custody: again.w.custody, rootStore: again.w.store, dirs: again.w.ctx.dirs }, harnesses: [], owns: again.w.owns } }), 1)
+  assert.equal(await runInstallCli(['--yes'], { io: io2, env: again.w.env, home: tmpHomeOf(again.w), platform: 'darwin', deps: { getuid: () => 501, backends: { custody: again.w.custody, rootStore: again.w.store, dirs: again.w.ctx.dirs }, harnesses: [], owns: again.w.owns } }), 1)
 })
 const tmpHomeOf = () => tmpDir('asight-model-2-') // a second HOME, made where the leak guard sweeps
 
-// the documented order — install, then on — through the CLI (MODEL_ON_WIRED flipped with the switch): install writes the root, its carriers and
+// the documented order — install, then on — through the CLI: install writes the root, its carriers and
 // the inert autostart unit; on enables the unit, which starts the REAL daemon (test/helpers/model-daemon.mjs), asks it for the doors and writes the entries.
 for (const platform of ['darwin', 'win32']) {
   test(`${platform}: install then on through the CLI (temp HOME, stub backends) — on starts: exit 0, the doors' entries written`, { timeout: 30_000 }, async () => {
     const { runOnCli } = await import('../../src/cli/on.mjs')
     const { liveUnit, withScratchCwd } = await import('../helpers/model-daemon.mjs')
-    assert.equal(MODEL_ON_WIRED, true)
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     const box = await liveUnit({ w, platform })
     const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: box.unit }

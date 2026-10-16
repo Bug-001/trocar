@@ -36,13 +36,8 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
   const fs = deps.fs || nodeFs
   const old = refuseOldManifest({ home, platform, fs })
   if (old) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [old.message] }, null, 2)); else io.err(`asight install: ${old.message}`); return EXIT.incomplete }
-  const { isModelOs, MODEL_ON_WIRED } = await import('../collector/model-install.mjs')
+  const { isModelOs } = await import('../collector/model-install.mjs')
   const model = isModelOs(platform)
-  if (model && !(deps.modelOnWired ?? MODEL_ON_WIRED)) { // macOS / Windows: the on that pairs with this install is not wired yet (model-install.mjs MODEL_ON_WIRED)
-    const note = '在 macOS / Windows 上 asight install 暂不可用:这一版的 asight on 在这两个系统上还自己装证书,先装了新的根反而让 on 起不来。现在直接跑 asight on。什么都没改'
-    if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [note] }, null, 2)); else io.err(`asight install: ${note}`)
-    return EXIT.incomplete
-  }
   // R12: the writes run under op.lock, taken after the yes (a plan that is only printed takes nothing and writes nothing)
   const locked = async (fn) => {
     let lock
