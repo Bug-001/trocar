@@ -171,3 +171,12 @@ test('0.1 §3: stopDaemon without an injected `kill` refuses to signal under npm
   const t = table(UP); const c = clock()
   await assert.rejects(stopDaemon({ lockFile: lockAt(DAEMON), alive: t.alive, identity: t.identity, isHelper: t.isHelper, now: c.now, sleep: c.sleep }), (e) => e.code === 'ESANDBOX')
 })
+
+test('② the cannot-tell reason is the platform\'s own: /proc only on Linux (darwin\'s lock has no start time)', async () => {
+  for (const platform of ['darwin', 'linux']) {
+    const t = table(UP); const c = clock()
+    const r = await stopDaemon({ lockFile: lockAt({ pid: 4242, helper_pid: 4243 }), kill: t.kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, now: c.now, sleep: c.sleep, platform, exec: () => ({ status: 0, stdout: '', stderr: '' }) })
+    assert.match(r.error, /pid 4242\b/, platform)
+    assert.equal(/\/proc/.test(r.error), platform === 'linux', `${platform}: ${r.error}`)
+  }
+})

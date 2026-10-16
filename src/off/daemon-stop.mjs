@@ -235,7 +235,7 @@ export async function stopDaemon({ lockFile, socketPath = null, exec = null, kil
     signals.push('systemctl-stop'); how = 'systemctl'
   }
   if (daemonUp()) {
-    if (same(lock.pid) === 'unknown') problems.push(`pid ${lock.pid} cannot be told from another process (the lock has no start time, or /proc cannot be read), so it is not signalled`)
+    if (same(lock.pid) === 'unknown') problems.push(`pid ${lock.pid} cannot be told from another process (the lock has no start time${platform === 'linux' ? ', or /proc cannot be read' : ''}), so it is not signalled`)
     else {
       how = 'signal'
       send(lock.pid, 'SIGTERM')

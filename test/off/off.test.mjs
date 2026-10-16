@@ -876,3 +876,10 @@ for (const [what, o] of [['off', () => ({})], ['off --now', () => ({ now: true }
     assert.deepEqual([s.installItems(), s.userFiles()], [installed, files], 'and on wrote no certificate either')
   })
 }
+
+test('① a file is listed once: restored, not also skipped as already restored', async () => {
+  const { formatOffReceipt } = await import('../../src/off/receipt.mjs')
+  const text = formatOffReceipt({ ok: true, all: true, changed: [{ path: '/h/.claude/settings.json', change: 'env.NODE_EXTRA_CA_CERTS', result: 'restored' }], removed: [], skipped: [{ what: '/h/.claude/settings.json', reason: '早已是安装前的样子' }, { what: '/h/.codex/.env', reason: '早已是安装前的样子' }] })
+  assert.equal(text.split('/h/.claude/settings.json').length - 1, 1, text)
+  assert.ok(text.includes('/h/.codex/.env'), 'another file that was skipped stays')
+})
