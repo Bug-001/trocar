@@ -48,14 +48,3 @@ export function failureBrief(g) {
   return [head || String(l.event || g.key || '记录'), reason].filter(Boolean).join(' ') // a row the fold knows only by its key still says which it was (R11)
 }
 
-/** The codex WebSocket hint (measured on a Windows test machine): Codex's WebSocket client on Windows does not read the `.env` block's `SSL_CERT_FILE`, so the
- *  WebSocket's TLS is not decrypted through the block asight writes — the door that works is the NAMED `cert-store-current-user` item (the CA into `CurrentUser\\Root`, Windows's own confirm
- *  dialog, never installed without the name). `on`'s plan and `doctor` print this line exactly while codex is a target on win32 and the item is not in the ledger; NOTHING is ever installed by it. */
-export const CODEX_WS_CERT_HINT = 'Windows 上采 Codex 的 WebSocket 需要点名装证书: asight on codex --opt-in cert-store-current-user(会弹 Windows 自己的确认框,不弹不装)'
-
-/** The Claude Desktop steering hint (measured on a macOS test machine): Desktop's model traffic lives in the Chromium
- *  network service, which ignores every proxy env var — the door that works is the NAMED `desktop-launcher` item (a launcher at ~/.asight/collector/bin/claude-desktop-asight that starts
- *  the real app with Chromium's --proxy-server at asight's loopback listener; the system proxy is never touched, D43⑥). `on`'s plan and `doctor` print this line exactly while claude-code
- *  is a target on darwin and the item is not in the ledger; NOTHING is ever installed by it. The needs_restart honesty rides in the line itself: only instances started through the
- *  launcher are steered, a running Desktop is untouched. */
-export const DESKTOP_LAUNCHER_HINT = 'macOS 上采 Claude Desktop 需要点名建启动器: asight on claude-code --opt-in claude-code.desktop(写 ~/.asight/collector/bin/claude-desktop-asight;只有经它启动的 Desktop 才被引流,已在跑的 Desktop 不受影响——先退出再用它启动)'
