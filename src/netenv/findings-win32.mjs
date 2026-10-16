@@ -102,7 +102,7 @@ export const FINDINGS_WIN32 = {
   'engine-port-taken': {
     cls: 'failure', asightFirst: false,
     what: () => '引擎的入口端口被别的进程占了',
-    why: () => '引擎因此起不来;asight on 会重选端口、重载内核配置',
+    why: () => '这扇门因此开不了;asight off 再 asight on 会重选端口',
     commands: (c) => [netstat(c.enginePort), asight(c, 'asight off'), asight(c, 'asight on')],
     verify: () => 'asight status:引擎「在跑」',
   },

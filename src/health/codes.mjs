@@ -125,14 +125,15 @@ export const NET_WHERE = Object.freeze(['netenv'])
 export const NET_EVENTS = Object.freeze(['netenv-change'])
 const ROUTE_LOOP = 'route-loop', FORWARDER_DOWN = 'forwarder-down', EGRESS_DIFFERS = 'egress-differs' // the names shared with 4.7 / 4.8: written once, used by name below
 const NET_FAILURE_OWN = ['not-routed', 'proxy-dead', 'proxy-unsupported', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path', 'not-via-entry']
-export const NET_CODES = Object.freeze([...NET_FAILURE_OWN, 'proxy-changed', 'netenv-changed', 'opt-in-needed', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', ROUTE_LOOP, FORWARDER_DOWN, EGRESS_DIFFERS])
+export const NET_CODES = Object.freeze([...NET_FAILURE_OWN, 'proxy-changed', 'netenv-changed', 'opt-in-needed', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'prior-proxy-unknown', 'not-verified', ROUTE_LOOP, FORWARDER_DOWN, EGRESS_DIFFERS]) // the last two before the shared ones: 1.6 §9.7's net group (4.11 §3 ⑱)
 export const NET_FAILURE_CODES = Object.freeze([...NET_FAILURE_OWN, ROUTE_LOOP, FORWARDER_DOWN])
 // the net names `status` gives as the reason an agent is not captured (1.6 §9.7); the proxy-mode reasons of 4.8 §12 (`form-unsupported`) is ROUTE_STATUS_REASONS above; a process on no name list is `process-unknown` (a state event, D51⑥), not a status reason
 const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', ROUTE_LOOP, FORWARDER_DOWN])
 
 // What `asight status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. asight's own, then every trust
 // reason above (the resolver's and the harnesses' own). A block of its own, as the ones above are. The Windows collector's reasons (ROUTE_STATUS_REASONS: what a form that is not captured says; ROUTE_TRUST_REASONS: why a running agent is not trusted) are part of it. `negative-cache` is also a code of the engine.
-export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache'])
+export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache',
+  'cert-not-installed', 'cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file']) // the cert group's status reasons that have a producer (1.6 §9.7, 4.11 §3 ⑱)
 export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...ROUTE_STATUS_REASONS, ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), written as they are

@@ -54,6 +54,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     linger: status.linger && typeof status.linger.linger === 'boolean' ? status.linger.linger : null, otherRedirector: typeof part.otherRedirector === 'boolean' ? part.otherRedirector : null,
     identity: status.identity || null, // the name list per harness (status's `identity`, D51③⑤): the doctor's process-unknown reads it
     agentList: status.agent_list || null, // agents.json itself (status's `agent_list`): the doctor's agent-list-invalid, and the path process-unknown's line names
+    cert: reply && reply.cert && typeof reply.cert === 'object' ? reply.cert : null, // the daemon's issuer (proxy mode, 4.11 P2): { key, intermediate } — doctor's cert-key-missing / cert-intermediate-unavailable
     reinstall: part.reinstall || null, // always null: no platform part sets it (test/netenv/topology-win32.test.mjs pins that)
   }
   for (const h of status.harnesses) {

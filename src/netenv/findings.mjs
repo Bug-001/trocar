@@ -59,6 +59,20 @@ function restartSteps(ctx) {
 const settingOf = (hf) => (hf.setting && !hf.setting.unknown && hf.setting.value ? hf.setting : ((hf.forms || []).map((f) => f.setting).find((s) => s && s.value) || null))
 const deadProxy = (t) => t.nodes.find((n) => n.kind === 'proxy' && n.down === true) || null
 
+/** not-routed, by the reason the model's route plan gave the form (`fm.route.reason`, src/collector/core/proxymode/entries.mjs; 4.11 §3 ③ ⑦ ⑩ ㉑, 1.6 §9.6): the why, and the steps
+ *  (the place the plan named in `at`, else 「不知道」). A PAC the facts see and no reason of the plan's is the PAC row; nothing known is the generic row. */
+function notRoutedOf(c) {
+  const r = (c.fm && c.fm.route) || {}, at = r.at || unknownValue('那一处', 'absent'), on = asight(c, `asight on ${c.h}`)
+  if (r.reason === 'system-pac' || (!r.reason && c.pac)) return { why: '它跟随的系统代理是 PAC,asight 不执行 PAC', commands: [gui(`把 ${c.h} 的代理设成一个具体地址:${setAt(c.h, placeOf(c.hf, c.setting), unknownValue('你的代理地址', 'pac'))}`), on] }
+  if (r.reason === 'blocker' || r.reason === 'own-egress') return { why: `你的一处设置让 ${c.h} 不走 asight 能接的入口(${at})`, commands: [gui(`删掉 ${at} 这一处设置`), on] }
+  if (r.reason === 'blocker-unreadable' || r.reason === 'unreadable') return { why: `asight 读不出 ${at},不知道它会不会拦住采集,所以没接`, commands: [gui(`让 ${at} 可读(或改好它)`), on] }
+  if (r.reason === 'absent') return { why: `${c.h} 的入口文件 ${at} 不在;asight 不新建它(建了会改变别处设置的优先级)`, commands: [gui(`先跑 ${c.h} 自己的设置,让它建出 ${at}`), on] }
+  if (r.reason === 'credentialed-own-leg') return { why: '这个形态的入口没有口令,asight 不把带用户名口令的上游接给它', commands: [gui(`把 ${c.h} 的上游换成不带口令的代理,或改用它的 CLI 形态`), on] }
+  if (r.reason === 'no-path' || r.reason === 'no-applied-entry') return { why: `asight 找不到 ${c.h} 这个形态的入口${r.at ? `(${r.at})` : ''}`, commands: [gui(`先启动一次 ${c.h},让它建出自己的设置`), on] }
+  if (r.reason === 'no-carrier') return { why: '这个形态的证书还没装', commands: [asight(c, 'asight install'), on] }
+  return { why: '这个形态没有 asight 能用的入口', commands: [gui(`${c.h} 的这个形态没有入口:改用它的 CLI 形态`), asight(c, `asight status ${c.h}`)] }
+}
+
 /** The catalogue. `applies` is `diagnose`'s business; each entry says what it is. `cls` is the class, or a function of the context where it depends (§9.6: `proxy-changed`). */
 export const FINDINGS = {
   'desired-off': { cls: 'expected', asightFirst: true, what: (c) => `${c.h} 现在是关着的(期望态 off)`, why: () => '你(或 asight off)把它关了:asight 不在它的路径上,它直连或走自己的代理', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:被采集「是」` },
@@ -69,16 +83,15 @@ export const FINDINGS = {
   'entry-missing': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口不在了`, why: () => '入口(asight 写进它配置的那一项)被删了或还没写', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
   'entry-changed': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口被改成了别的`, why: () => '你或别的程序改了 asight 写的那一项', commands: (c) => [asight(c, `asight off ${c.h}`), asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
   'negative-cache': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的进程拒绝了 asight 的证书,那个 host 之后透传`, why: () => '这个形态不认 asight 的信任入口;(pid, host) 随进程记着', commands: (c) => [asight(c, `asight status ${c.h}`), ...restartSteps(c)], verify: (c) => `重启后 asight status ${c.h}:「是」` },
-  'not-routed': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 的新连接不经过 asight`, why: (c) => (c.pac ? '它跟随的系统代理是 PAC,asight 不执行 PAC' : '这个形态没有 asight 能用的入口'),
-    commands: (c) => (c.pac ? [gui(`把 ${c.h} 的代理设成一个具体地址:${setAt(c.h, placeOf(c.hf, c.setting), unknownValue('你的代理地址', 'pac'))}`), asight(c, `asight on ${c.h}`)] : [gui(`${c.h} 的这个形态没有入口:改用它的 CLI 形态`), asight(c, `asight status ${c.h}`)]), verify: (c) => `asight status ${c.h}:该支「在路径上 · 是」` },
-  'route-loop': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的上游又是 asight 自己`, why: () => '算出的上游是 asight 自己的端口:代理字段的原值就是内核端口,或系统代理指着它;on 因此不接这个形态', commands: (c) => [asight(c, `asight off ${c.h}`), gui(`把 ${c.h} 的代理改回你原来的:${setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('原来的代理', 'absent'))}`), asight(c, `asight on ${c.h}`)], verify: () => 'asight doctor:不再报' },
+  'not-routed': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 的新连接不经过 asight`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `asight status ${c.h}:该支「在路径上 · 是」` },
+  'route-loop': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的上游又是 asight 自己`, why: () => '算出的上游是 asight 自己的端口:代理字段的原值就是 asight 的门端口,或系统代理指着它;on 因此不接这个形态', commands: (c) => [asight(c, `asight off ${c.h}`), gui(`把 ${c.h} 的代理改回你原来的:${setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('原来的代理', 'absent'))}`), asight(c, `asight on ${c.h}`)], verify: () => 'asight doctor:不再报' },
   'proxy-dead': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 配的代理 ${c.dead.addr}:${c.dead.port} 没人在听`, why: () => '你的代理软件没开;这个设置不是 asight 写的',
     commands: (c) => [gui(`打开你的代理软件(它应该监听 ${c.dead.addr}:${c.dead.port})`), gui(`或者删掉这个设置:${c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('这个设置', 'absent')}`), portCheck(c, c.dead.port)], verify: (c) => `同一条命令看到监听;asight status ${c.h} 那一跳有属主` },
   'proxy-unsupported': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 配了它不支持的代理协议(${c.setting.scheme})`, why: (c) => (c.silent ? `${c.h} 不支持 ${c.setting.scheme},会静默直连,代理形同虚设` : `${c.h} 不支持 ${c.setting.scheme}`),
     commands: (c) => [gui(`把它改成 HTTP 代理:${setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('代理地址', 'absent'))}`)], verify: (c) => `asight status ${c.h}:那条边是 proxy-http` },
   'proxy-changed': { cls: (c) => (c.F.routing === 'proxy' ? 'failure' : 'expected'), asightFirst: true, what: (c) => `${c.h} 的代理设置与上次 on 接上的不同`, why: () => '你改了它',
     commands: (c) => (c.F.routing === 'proxy' ? [asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)] : [gui(`无需操作:${c.h} 在跑的进程仍按启动时的设置,重启后按新设置走;新启动的进程照常被采`)]), verify: (c) => `asight status ${c.h}` },
-  'elevated-agent': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 以管理员权限运行`, why: () => '自带内核按进程认 agent,看不到提权进程的名字,只转发', commands: (c) => [gui(`关掉它,以普通权限重新启动 ${c.h}(不用「以管理员身份运行」)`)], verify: (c) => `asight status ${c.h}` },
+  'elevated-agent': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 以管理员权限运行`, why: () => '提权的进程 asight 不解密(保守规则),只转发', commands: (c) => [gui(`关掉它,以普通权限重新启动 ${c.h}(不用「以管理员身份运行」)`)], verify: (c) => `asight status ${c.h}` },
   'forwarder-down': { cls: 'failure', asightFirst: true, what: () => 'asight 的本地代理(引擎的门)没在跑,入口指向它的 agent 连不上', why: () => '引擎死了或没起来;asight 的自启单元会把它拉起来', commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`)], verify: () => 'asight status:引擎「在跑」' },
   'upstream-unreachable': { cls: 'failure', asightFirst: false, what: (c) => `asight 给 ${c.h} 接的上游连不上`, why: () => '你的代理软件退出了而系统代理还指着它,或你配的代理不通;没有 asight 时同样连不上',
     commands: (c) => [gui('打开你的代理软件,或关掉指着它的系统代理'), ...(c.upPort ? [portCheck(c, c.upPort)] : [])], verify: (c) => `asight status ${c.h}:那一跳有属主` },
@@ -104,6 +117,18 @@ export const FINDINGS = {
       : `把 ${JSON.stringify({ harness: c.h, name: c.u.name })} 加进 ${c.listPath} 的 agents(文件不在就新建为 {"version":1,"agents":[…]}),不用重启`)], verify: (c) => `asight status ${c.h}:该 pid 带上命中的名字` },
   'agent-list-invalid': { cls: 'failure', asightFirst: false, what: (c) => `${c.file.path} ${{ unreadable: '读不出', unparsable: '解析不了或版本不对' }[c.file.state] || '有坏项'}`, why: (c) => (c.file.state === 'ok' ? '坏项不生效,其余照用' : '整个文件不生效,只用预设的名字'),
     commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `改好 ${c.file.path}` : `改好或删掉 ${c.file.path} 的第 ${p.index + 1} 项(agents[${p.index}])`}:${p.code} — ${p.detail};不用重启`)), verify: () => 'asight status:不再列' },
+  // 4.11 §3 ⑱ / 1.6 §9.6: the issuer, the files install leaves alone, the forms and hosts not verified, the window's proxy that could not be recovered, and uninstall's refusal
+  'cert-key-missing': { cls: 'failure', asightFirst: true, what: () => '根的密钥不在了,门只转发', why: () => '登录钥匙串里的密钥或 Windows 的 CNG 密钥被删了;守护进程每次启动核对', commands: (c) => [asight(c, 'asight install')], verify: () => 'asight status:密钥「在」' },
+  'cert-intermediate-unavailable': { cls: 'failure', asightFirst: false, what: () => '签不出中间证书,门只转发', why: () => '没有图形登录会话(只有 ssh 登录)或钥匙串锁着;手里那张还没到期时照用,守护进程每小时重试',
+    commands: (c) => [gui('在这台机器上登录图形会话、解锁钥匙串'), asight(c, 'asight status')], verify: () => 'asight status:中间证书「当前」' },
+  'not-users-file': { cls: 'expected', asightFirst: false, what: (c) => `${c.h} 的设置指向的证书文件或程序不是你自己的,asight 没往里加`, why: () => 'install 只在你自己能写的文件末尾追加;包装只用于描述符写明 native-binary 的命令行',
+    commands: (c) => [gui(`要采它:把 ${c.h} 的证书设置指向你自己的一份证书文件`), asight(c, 'asight install')], verify: (c) => `asight status ${c.h}:证书「生效」` },
+  'not-verified': { cls: 'expected', asightFirst: false, what: (c) => `${c.h} 的这个形态,或它连的这个主机,还没在实验室验过信任,只转发`, why: () => 'asight 只解密验过的形态(D51④)',
+    commands: (c) => [gui(`无需操作:${c.h} 照常工作,这些连接不经解密`)], verify: (c) => `asight status ${c.h}` },
+  'prior-proxy-unknown': { cls: 'hint', asightFirst: false, what: (c) => `窗口里的代理没接上:${c.h}${c.pids && c.pids.length ? `(pid ${c.pids.join(', ')})` : ''}启动时的代理找不回,门改用系统代理,没有就直连`,
+    why: () => '创建它的进程已退出,或中间隔着 Git Bash', commands: (c) => [gui(`要用窗口里的代理:把它写进 ${c.h} 自己的设置(${setAt(c.h, placeOf(c.hf, null), unknownValue('你的代理地址', 'env-unreadable'))})`), asight(c, `asight on ${c.h}`), gui(`重启 ${c.h}`)],
+    verify: (c) => `asight status ${c.h}:上游的来源不是「不知道」` },
+  'collectors-online': { cls: 'failure', asightFirst: true, what: (c) => `uninstall 拒绝:采集没有全部下线${c.online ? `(${c.online})` : ''}`, why: () => 'uninstall 从不代做 off', commands: (c) => [asight(c, 'asight off'), asight(c, 'asight uninstall')], verify: () => 'asight status:全部 off' },
   // The user named the harness (§9.1: the symptom is said by agent), and nothing in the facts explains it. asight has no fact that says an agent cannot connect, so this does not claim it: a condition, a hint.
   'cause-unknown': { cls: 'hint', asightFirst: true, what: (c) => `如果 ${c.h} 仍连不上:asight 这边没找到具体原因`, why: () => 'asight 读到的(期望态、进程、信任入口、代理设置)里没有哪一项能解释它;你点名了它,所以给出怎样把 asight 排除在外',
     commands: (c) => [asight(c, `asight off ${c.h}`), gui(`再试 ${c.h}:仍连不上 → 与 asight 无关;连得上 → ${`asight on ${c.h}`},再跑 asight doctor ${c.h} --json,并看看板「采集健康」里那段时间的失败`)], verify: (c) => `再试 ${c.h}:仍连不上 → 与 asight 无关` },
@@ -127,6 +152,9 @@ function make(code, ctx) {
   const at = (f) => (w && w[f] ? w[f](c) : def[f](c))
   return { code, class: w && w.cls !== undefined ? clsOf(w) : clsOf(def), ...(ctx.h ? { harness: ctx.h } : {}), what: at('what'), why: at('why'), commands: at('commands'), verify: at('verify') }
 }
+
+/** One finding outside `diagnose`, for a command that refuses with a catalogued code (uninstall's collectors-online). */
+export const findingFor = (code, { platform = process.platform, h = null, ...rest } = {}) => make(code, { platform, h, sh: platform === 'win32' ? 'powershell' : 'sh', ...rest })
 
 /** Does what the path depends on come from behaviour data that was measured on another platform? Only where the data decides the path: the agent has a proxy of its own, or follows an OS proxy that is there. */
 function inferred(F, hf) {
@@ -170,6 +198,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     // drift is what the user changed in the files, not what this shell happens to export; and a harness that is off has no drift to report (asight is not on its path)
     const drifts = F.desired[h] === 'off' ? [] : detectDrift({ adopted, h, setting: hf.fileSetting || hf.setting, routing: F.routing, scope: 'files' })
     if (F.routing === 'driver' && drifts.some((d) => d.code === 'proxy-changed')) add('proxy-changed')
+    for (const fm of hf.forms || []) { const fwf = F.forwarder && F.forwarder.forms && F.forwarder.forms[fm.id]; if (fwf && fwf.source === 'unknown') add('prior-proxy-unknown', { pids: fm.procs.map((p) => p.pid) }) }
     if (hf.fakeIp === true) add('fake-ip')
     if (inferred(F, hf)) add('inferred-behaviour')
     const listPath = F.agentList ? F.agentList.path : null
@@ -180,6 +209,8 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
   if (!named) {
     const host = { F, h: null, hf: null, t: null, user, sh, platform: F.platform }
     if (F.linger === false) out.push(make('linger-off', host))
+    if (F.cert && F.cert.key === 'missing') out.push(make('cert-key-missing', host)) // the daemon's issuer (its /status `cert`, 4.11 P2): the key first, it explains the intermediate
+    else if (F.cert && F.cert.intermediate === 'unavailable') out.push(make('cert-intermediate-unavailable', host))
     if (F.otherRedirector === true) out.push(make('other-redirector', host))
     const file = F.agentList
     if (file && file.problems.length) out.push(make('agent-list-invalid', { ...host, file }))

@@ -288,7 +288,7 @@ test('W38: STATUS_REASONS includes the Windows status reasons and trust reasons'
 })
 
 // D39⑩ / D43 (RFC 1.6 §9.7, V53): the names the network topology and `doctor` use. A block of its own, like OFF_* and ROUTE_*.
-const NET_LIST = ['not-routed', 'proxy-changed', 'proxy-dead', 'proxy-unsupported', 'netenv-changed', 'elevated-agent', 'forwarder-down', 'upstream-unreachable', 'egress-differs', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'route-loop']
+const NET_LIST = ['not-routed', 'proxy-changed', 'proxy-dead', 'proxy-unsupported', 'netenv-changed', 'elevated-agent', 'forwarder-down', 'upstream-unreachable', 'egress-differs', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'route-loop', 'prior-proxy-unknown', 'not-verified']
 test('V53: the net names are the 1.6 §9.7 list (route-loop, shared with 4.7, once), isCode knows each, and the records they go on pass checkRecord', () => {
   assert.deepEqual(NET_WHERE, ['netenv'])
   assert.deepEqual(NET_EVENTS, ['netenv-change'])
