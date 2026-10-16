@@ -191,3 +191,25 @@ test('engine: a lookup that timed out is loader-timeout; the helper\'s own errno
   }
   assert.deepEqual(failures.map((f) => [f.code, /\(([^)]*)\); the steered/.exec(f.reason)[1]]), [['loader-timeout', 'no answer in 2000 ms'], ['loader-down', 'EPIPE: write EPIPE']])
 })
+
+// 4.11 §3 ⑭ at the engine: a door's meta carries the agent's own upstream set, and the upstream is verified with it, not with the engine's union.
+test('engine: meta.upstreamTrust is the set an upstream is verified with — its CA decrypts, a context without it steps aside although the union holds it (4.11 §3 ⑭)', T, async () => {
+  const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
+  const up = tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); s.on('data', () => s.end('x')) })
+  await new Promise((r) => up.listen(0, '127.0.0.1', r))
+  const asightCa = createCa()
+  const run = async (upstreamTrust, upstreamCa) => {
+    const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 7, agent: 'x', decrypt: true, ...(upstreamTrust ? { upstreamTrust } : {}) })
+    const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa, store: { envelope() {}, flow() {} }, onFailure: () => {} })
+    const { port } = await engine.listen({})
+    const issuer = await new Promise((resolve) => {
+      const c = tls.connect({ port, host: '127.0.0.1', servername: 'relay.test', ca: [asightCa.certPem, upCa.certPem] }, () => { const i = c.getPeerX509Certificate().issuer; c.on('end', () => resolve(i)); c.resume(); c.write('x') })
+      c.on('error', (e) => resolve(`error ${e.code}`))
+    })
+    await closeWithin(engine)
+    return issuer
+  }
+  assert.match(await run({ secureContext: tls.createSecureContext({ ca: [upCa.certPem] }) }), /asight collector CA/, 'the agent\'s own set holds the relay CA: decrypted')
+  assert.match(await run({ secureContext: tls.createSecureContext({ ca: [] }) }, upCa.certPem), /upstream test CA/, 'the union holds it, the agent\'s set does not: stepped aside')
+  up.close()
+})

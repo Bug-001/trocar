@@ -34,10 +34,10 @@ const ready = { state: () => 'ready' }
 const manifestOf = (h, { on = [], liveness = {} } = {}) => ({ ...newManifest(), entries: [{ phase: 'install', harness: h, kind: 'json-key', path: '/x', installed_at: iso(INSTALLED) }, { phase: 'install', harness: null, kind: 'system-root', installed_at: iso(INSTALLED) }, ...on], liveness })
 
 /** One collector over one harness: `w` is what the injected readers answer now (facts, env, cwd, verdict ctx, manifest, process table). */
-async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress } = {}) {
+async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w = {}, opened = [], taken = new Set(), timers, ingress, upstreamRoots = null } = {}) {
   const records = [], ctx = { os, home: '/h', dirs: {}, join: path.posix.join, readFile: (p) => w.ctx.readFile(p), readdir: (d) => w.ctx.readdir(d), exists: (p) => w.ctx.exists(p), policy: (s) => w.ctx.policy(s) }
   w.ctx ||= ctxOf(newWorld(os))
-  const c = createModelCollector({ harnesses: [desc], dir: '/nowhere', ctx, custody, rootPem, proxyOf, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
+  const c = createModelCollector({ harnesses: [desc], dir: '/nowhere', ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
     identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => ({ pid: w.pid, source: 'socket-table', ms: 1 }), factsOf: async () => w.facts,
     proc: { envOf: async () => w.env ?? null, cwdOf: async () => w.cwd ?? null, parentOf: async () => null }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
     readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => w.manifest || manifestOf(desc.name), procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5 })
@@ -79,7 +79,7 @@ for (const { d, f, os } of CASES) {
 const real = new Set((await loadHarnesses()).map((d) => d.name))
 for (const d of descs) for (const os of ['darwin', 'win32']) {
   test(`CM22 at the door · ${d.name} · ${os}, unmodified descriptor: the verified forms of the route decide, an unverified sibling does not veto`, async () => {
-    const r = await rig({ desc: d, os })
+    const r = await rig({ desc: d, os, upstreamRoots: { os: async () => STUB_PEM, node: [STUB_PEM], extra: [] } })
     const routes = [...new Set(d.proxyMode.forms.filter((f) => f.os.includes(os)).map((f) => f.route))]
     await r.c.on({ harnesses: [d.name], groups: Object.fromEntries(routes.map((rt, i) => [`${d.name}:${rt}`, 18300 + i])) })
     let decrypted = 0
@@ -92,6 +92,9 @@ for (const d of descs) for (const os of ['darwin', 'win32']) {
       const v = (f) => verdictOf({ desc: d, form: f, facts: { ...facts, pid }, record: { carrierInstalledAt: INSTALLED, rootFp256: STUB_FP }, issuer: ready, host: cs.host, hostSet: cs.hostSet, ctx: r.w.ctx }).decrypt
       assert.equal(meta.decrypt, (ok.length ? ok : all).every(v), `${d.name}:${rt} · ${os}`)
       if (real.has(d.name) && ok.length) assert.equal(meta.decrypt, v(ok[0]), `${d.name}:${rt} · ${os}: a process of ${ok[0].id} gets its form's verdict`)
+      // 4.11 §3 ⑭ wiring: a decrypted connection carries its agent's own upstream set (what is in it: upstream-trust.test.mjs)
+      if (meta.decrypt) assert.ok(meta.upstreamTrust && meta.upstreamTrust.secureContext, `${d.name}:${rt} · ${os}: a decrypted connection carries its own upstream set`)
+      else assert.equal(meta.upstreamTrust, undefined)
       if (meta.decrypt) decrypted++
     }
     if (real.has(d.name) && d.proxyMode.forms.some((f) => f.verified[os] === true)) assert.ok(decrypted > 0, `${d.name} · ${os}: some route decrypts`)

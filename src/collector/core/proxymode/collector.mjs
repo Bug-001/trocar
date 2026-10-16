@@ -22,6 +22,7 @@ import { holdersRoute } from '../control.mjs'
 import { makeIssuer } from '../tls/issuer.mjs'
 import { bypassHit } from '../upstream-shape.mjs'
 import { CODE } from '../codes.mjs'
+import { agentTrustSet, createAgentTrust } from './upstream-trust.mjs'
 
 const msOf = (t) => (t == null ? NaN : typeof t === 'number' ? t : Date.parse(t))
 const untracked = (reason) => ({ not_captured: 'untracked', reason })
@@ -40,7 +41,8 @@ function envNamesOf(desc) {
 
 /**
  * createModelCollector({ harnesses, dir, identify, ownerOf, factsOf, proc, ctx, systemProxy, custody, rootPem, procTable, record, event, clock, timers,
- *   readState, readIngress, readManifest, proxyOf, templates, hostsOf, ownUid, ownSid, agentList, openConns, drain, pid, fs })
+ *   readState, readIngress, readManifest, proxyOf, templates, hostsOf, ownUid, ownSid, agentList, openConns, drain, pid, fs, upstreamRoots })
+ *   upstreamRoots = { os: async () => PEM, node: PEM[], extra: PEM[] }: the bases the door verifies an upstream with (4.11 §3 ⑭; upstream-trust.mjs); absent → the engine's own union
  *   readState / readIngress / readManifest  default: state.json, ingress.json and the install manifest in `dir`, read through `fs` — never written
  *   proc       { envOf(pid, names) → {} | null, cwdOf(pid) → text | null, parentOf(pid) → { ppid, startedAt } | null }: read once per pid + start (P7)
  *   ctx        sources.mjs's ctx for the verdict (os, home, dirs, readFile, readdir, policy, join)
@@ -51,7 +53,7 @@ function envNamesOf(desc) {
  */
 export function createModelCollector({ harnesses, dir, identify, ownerOf = null, factsOf = null, proc = {}, ctx, systemProxy = () => null, custody = null, rootPem = null,
   procTable = async () => [], record = () => {}, event = () => {}, clock = Date.now, timers = globalThis, readState = null, readIngress = null, readManifest = null,
-  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs } = {}) {
+  proxyOf, templates = {}, hostsOf = () => null, ownUid = process.getuid?.() ?? null, ownSid = null, agentList = () => null, openConns = () => 0, drain = null, pid = process.pid, fs = nodeFs, upstreamRoots = null } = {}) {
   if (typeof proxyOf !== 'function') throw new TypeError('createModelCollector needs proxyOf: how a proxy address is dialled is the arch\'s reading')
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const readSt = readState || (() => readStateFile(path.join(dir, 'state.json'), { fs }).state)
@@ -64,6 +66,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const seen = createDoorSeen({ clock })
   const pcache = new Map(), vcache = new Map(), said = new Set()
   const rootFp256 = rootPem ? new crypto.X509Certificate(rootPem).fingerprint256 : null
+  const agentTrust = upstreamRoots ? createAgentTrust({ roots: upstreamRoots, rootFp256, readFile: ctx.readFile }) : null
   const fail = (code, reason, extra = {}) => record({ event: 'failure', where: 'engine', code, ...extra, reason })
   let man = { at: -Infinity, m: null }
   const manifest = (fresh = false) => { if (fresh || clock() - man.at > 1000) { let m = null; try { m = readMan() } catch { m = null } man = { at: clock(), m } } return man.m } // the CLI writes it; read at most once a second
@@ -112,6 +115,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       if (!r.decrypt) { v = r; break }
     }
     if (!v.decrypt && !said.has(`${k}\0${v.code}`)) { said.add(`${k}\0${v.code}`); fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g }) }
+    if (v.decrypt && agentTrust) { const f0 = forms[0], t = f0.trust !== 'root' && desc.proxyMode.trusts && desc.proxyMode.trusts[f0.trust]; v = { ...v, upstreamTrust: await agentTrust.contextFor(agentTrustSet({ trust: t || null, ctx, facts })) } } // ⑭: this agent's own set, minus the asight root
     if (!ISSUER_CODES.has(v.code)) vcache.set(k, v)
     return v
   }
@@ -141,7 +145,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (!known) return { ...base, skip: untracked(id.why || 'not-an-agent') }
     if (!onSet.has(d.harness)) return { ...base, skip: untracked('group-off') } // a door kept for its holders: forward only
     if (!onSet.has(id.agent)) return { ...base, skip: untracked('harness-off') }
-    return { ...base, decrypt: (await judge(id, d, String(target.address).toLowerCase())).decrypt === true }
+    const v = await judge(id, d, String(target.address).toLowerCase())
+    return { ...base, decrypt: v.decrypt === true, ...(v.upstreamTrust ? { upstreamTrust: v.upstreamTrust } : {}) }
   }
 
   /** GET /asight.pac on the auth:false door (P10): this user's processes only; the door leg while its harness is on, then only the app's own way. */

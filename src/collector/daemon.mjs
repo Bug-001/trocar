@@ -5,6 +5,7 @@
 // connections, never broken ones. It never mints the CA: `asight on` does, inside the manifest.
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 import { asightHome, collectorHome } from '../paths.mjs'
@@ -691,7 +692,8 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
     ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
     record: event, event, proxyOf: parts.proxyOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
-    drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }) })
+    drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }),
+    upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }) })
   collector.bindDoors({ open: (l) => engine.listen({ groups: l }), close: (ids) => Promise.resolve(engine.closeGroups(ids)) })
   let exitAsked = 0, exitTimer = null
   const status = async () => {
@@ -743,5 +745,21 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   } catch (e) {
     failure.flush(); await control.close(); collector.close(); if (parts.close) parts.close()
     throw e
+  }
+}
+
+/** The bases the doors verify an upstream with (4.11 §3 ⑭): the OS roots through the one resolver (tls/roots.mjs bundleRoots → the arch's osRoots,
+ *  4.9 §5.4 / 4.8 §6.4), Node's bundled roots, and the daemon's own extra (NODE_EXTRA_CA_CERTS, the upstreamCa test seam) for the union. An OS read
+ *  that fails is recorded (D38) and the base is then empty — never a fixed bundle path. */
+function upstreamRootsOf({ A, env, upstreamCa, event }) {
+  const extra = [].concat(upstreamCa || []).map(String)
+  if (env.NODE_EXTRA_CA_CERTS) { try { extra.push(fs.readFileSync(env.NODE_EXTRA_CA_CERTS, 'utf8')) } catch (e) { event({ event: 'failure', where: 'engine', code: 'trust-store-error', reason: `NODE_EXTRA_CA_CERTS ${env.NODE_EXTRA_CA_CERTS}: ${e.code || e.message}` }) } }
+  return {
+    node: tls.rootCertificates, extra,
+    os: async () => {
+      try { const r = await bundleRoots(A); for (const x of rootsLeftOut(r, ['the doors\' upstream trust'])) event({ event: 'failure', where: 'engine', ...x }); return r.osText } catch (e) {
+        event({ event: 'failure', where: 'engine', code: 'system-roots-unavailable', reason: `the OS roots could not be read for the doors' upstream trust (${e.message || e})` }); return ''
+      }
+    },
   }
 }
