@@ -48,10 +48,7 @@ const SETS = {
   'elevated-agent': { h: 'claude-code', facts: row(19).facts, codes: row(19).findings },
   'forwarder-down': { h: 'codex', facts: row(13).facts, codes: row(13).findings },
   'upstream-unreachable': { h: 'codex', facts: pfacts('codex', form('codex.cli', { setting: proxyOf('http://proxy.corp:8080'), procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent', upstream_error: 'ECONNREFUSED' })), codes: ['upstream-unreachable'] },
-  'opt-in-needed': { h: 'kimi-code', facts: row(15).facts, codes: row(15).findings },
-  'shim-not-on-path': { h: 'kimi-code', facts: row(16).facts, codes: row(16).findings },
-  'not-via-entry': { h: 'kimi-code', facts: pfacts('kimi-code', form('kimi-code.cli', { entry: null, optIn: { state: 'broken', code: 'not-via-entry', enable: 'asight on kimi-code --opt-in kimi-code.cli' }, procs: [proc(7001, { name: 'kimi' })] }), fwForm(17993)), codes: ['not-via-entry'] },
-  'needs-admin': { h: 'kimi-code', facts: pfacts('kimi-code', form('kimi-code.cli', { entry: null, optIn: { state: 'pending-admin', code: 'needs-admin', enable: 'asight on kimi-code --opt-in kimi-code.machine', elevated: 'Start-Process powershell -Verb RunAs -ArgumentList "asight-admin.ps1"' }, procs: [proc(7001, { name: 'kimi' })] }), fwForm(17993)), codes: ['needs-admin'] },
+  'shim-not-on-path': { h: 'kimi-code', facts: facts('kimi-code', {}, { procs: [proc(7001, { name: 'kimi', trusted: false, reason: 'shim-not-on-path' })] }), codes: ['shim-not-on-path'] }, // kimi's own trust reason (harness/kimi-code.mjs refine): no launch shim was installed
   'egress-differs': { h: 'codex', facts: row(9).facts, codes: row(9).findings },
   'linger-off': { h: null, facts: facts('claude-code', { linger: false }), codes: ['linger-off'] },
   'other-redirector': { h: null, facts: facts('claude-code', { otherRedirector: true }), codes: ['other-redirector'] },
@@ -84,7 +81,9 @@ for (const [code, set] of Object.entries(SETS)) {
 test('V49 both directions: every code of the closed sets (§9.7 net codes, the status reasons §9.6 uses) has a fact set, and the catalogue defines no code outside them', () => {
   const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE, ...IDENTITY_CODES, ...CERT_CODES])
   const EVENT_ONLY = ['netenv-changed'] // D49: the system-proxy watcher's event code, not a finding: diagnose never gives it
-  for (const code of closed) if (!EVENT_ONLY.includes(code) && !(TRUST_REASONS.includes(code) && !FINDINGS[code])) assert.ok(SETS[code], `${code} has a fact set`)
+  const CODE_PENDING = ['opt-in-needed', 'needs-admin', 'not-via-entry'] // D57 (4.11 §3 ⑱): no named items, so no finding gives them; their closed-set entries leave health/codes.mjs next
+  for (const code of closed) if (!EVENT_ONLY.includes(code) && !CODE_PENDING.includes(code) && !(TRUST_REASONS.includes(code) && !FINDINGS[code])) assert.ok(SETS[code], `${code} has a fact set`)
+  for (const code of CODE_PENDING) assert.ok(!FINDINGS[code] && !FINDINGS_WIN32[code], `${code}: pending removal from the closed sets, no finding defines it`)
   for (const code of EVENT_ONLY) assert.ok(!FINDINGS[code] && !SETS[code], `${code} is no finding`)
   for (const code of Object.keys(FINDINGS)) assert.ok(closed.has(code) || TRUST_REASONS.includes(code) || REFUSAL_CODES.includes(code), `${code} is in a closed set`)
   assert.deepEqual(Object.keys(SETS).filter((c) => !closed.has(c)), [], 'and no fact set is for a code nobody defined')
@@ -95,7 +94,7 @@ test('V49 both directions: every code of the closed sets (§9.7 net codes, the s
 // schema.mjs checks a finding against, is exactly the union of the two catalogues and the trust reasons (the literal per-row shape of FINDINGS_WIN32 is held by topology-win32.test.mjs, W36).
 test('V49 both directions, the Windows half: FINDINGS_WIN32 defines no code outside the closed sets (net codes, status reasons, route codes, trust reasons), and FINDING_CODES is exactly FINDINGS ∪ FINDINGS_WIN32 ∪ the trust reasons (the Windows collector\'s own trust reasons included)', () => {
   const closed = new Set([...NET_CODES, ...STATUS_REASONS, ...ROUTE_CODES, ...TRUST_REASONS])
-  assert.ok(Object.keys(FINDINGS_WIN32).length === 18, 'the §10.4 rows (held row-by-row by topology-win32.test.mjs; the forwarder-* family retired with the kernel, D47 twin)')
+  assert.ok(Object.keys(FINDINGS_WIN32).length === 15, 'the §10.4 rows (held row-by-row by topology-win32.test.mjs; the forwarder-* family retired with the kernel, D47 twin)')
   for (const code of Object.keys(FINDINGS_WIN32)) assert.ok(closed.has(code), `${code} is in a closed set`)
   assert.deepEqual([...FINDING_CODES].sort(), [...new Set([...Object.keys(FINDINGS), ...Object.keys(FINDINGS_WIN32), ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])].sort(), 'the union, nothing defined that the doctor cannot name')
 })
@@ -154,10 +153,6 @@ test('V49 the commands are filled with the values of the facts: the port to look
   assert.equal(findingsOf(SETS['linger-off'].facts)[0].commands[0].run, 'loginctl enable-linger alice')
   const nameless = diagnose({ facts: SETS['linger-off'].facts, topology: buildTopology(SETS['linger-off'].facts), harnesses: null, user: null })[0]
   assert.equal(nameless.commands[0].run, 'loginctl enable-linger "$(id -un)"', 'a name that is not known is read by the shell, not left as a placeholder')
-  const admin = findingsOf(SETS['needs-admin'].facts).find((f) => f.code === 'needs-admin')
-  assert.equal(admin.commands[0].shell, 'gui', 'on Windows the normal path comes first: UAC, not a pasted admin line')
-  assert.equal(admin.commands[1].run, 'Start-Process powershell -Verb RunAs -ArgumentList "asight-admin.ps1"', 'the elevated line is still there, verbatim')
-  assert.equal(admin.commands[1].shell, 'powershell')
   const pac = findingsOf(SETS['not-routed'].facts).find((f) => f.code === 'not-routed')
   assert.ok(pac.commands.some((c) => c.run.includes('不知道 · pac')), 'the PAC\'s address is not known: said, not guessed')
   const bpf = findingsOf(SETS['other-redirector'].facts)[0]

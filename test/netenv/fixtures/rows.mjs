@@ -142,16 +142,6 @@ row({ n: 14, title: 'proxy mode: after `off`, an agent started while it was on i
   compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(只转发) → [系统代理] verge-mihomo.exe :7897 → 出口'], findings: ['desired-off', 'egress-differs'],
   notes: ['还有 1 个 agent 连着 asight 的门,重启它们之后 asight 就完全退出'] })
 
-row({ n: 15, title: 'proxy mode: a form that has to be named (Kimi CLI\'s shim on PATH) and was not: asight is not wired in', h: 'kimi-code',
-  facts: pfacts('kimi-code', form('kimi-code.cli', { entry: null, optIn: { state: 'needed', code: 'opt-in-needed', enable: 'asight on kimi-code --opt-in kimi-code.cli' }, procs: [proc(7001, { name: 'kimi', version: '1.4.0' })] }), fwForm(17993)),
-  kinds: [['agent', 'upstream']], on_path: false, captured: false, reason: 'opt-in-needed',
-  compact: ['kimi 7001 → api.moonshot.cn:443(直连)'], findings: ['opt-in-needed'], notes: ['要采它: asight on kimi-code --opt-in kimi-code.cli'] })
-
-row({ n: 16, title: 'proxy mode: the entry is bypassed (a same-named command on the machine PATH comes first)', h: 'kimi-code',
-  facts: pfacts('kimi-code', form('kimi-code.cli', { entry: null, optIn: { state: 'broken', code: 'shim-not-on-path', enable: 'asight on kimi-code --opt-in kimi-code.cli' }, procs: [proc(7001, { name: 'kimi', version: '1.4.0' })] }), fwForm(17993)),
-  kinds: [['agent', 'upstream']], on_path: false, captured: false, reason: 'shim-not-on-path',
-  compact: ['kimi 7001 → api.moonshot.cn:443(直连)'], findings: ['shim-not-on-path'] })
-
 row({ n: 17, title: 'proxy mode: the user changed the agent\'s own proxy: it no longer points at the kernel and goes where the setting says', h: 'codex',
   facts: pfacts('codex', codexForm({ setting: proxyOf('http://proxy.new:3128', [{ kind: 'file', where: 'C:\\Users\\u\\.codex\\.env', key: 'HTTPS_PROXY' }]), entry: { where: ENV, asight: true, opt_in: false, intact: false } }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent' })),
   kinds: [['agent', 'proxy', 'egress']], on_path: false, captured: false, reason: 'proxy-changed',

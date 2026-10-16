@@ -152,19 +152,14 @@ function driverTopology(F, h, hf) {
 
 // ── proxy mode (D43; 4.8 §10): agent → [its proxy entry, written by asight] asight's own kernel → asight's engine → the upstream the agent would have had without asight ─────────────────────────────────────────────
 // A form is one way of running a harness (codex.cli, claude-code.vscode, …). Per form the facts say: `setting` (the proxy the agent would use without asight, as of now), `systemProxy`, the `entry` it was
-// wired through ({ where, asight, opt_in, intact }) or null when it is not, `optIn` (§1.7: { state, code, enable }), `procs`, `route` (the group's own plan: why it was left unwired — `form-unsupported`
+// wired through ({ where, asight, intact }) or null when it is not, `procs`, `route` (the group's own plan: why it was left unwired — `form-unsupported`
 // is a verdict of its own, 4.8 §2.2) and `entryPlace` (where the entry lives, filled in — the doctor's commands that name the place read it, 4.8 §10.4); and the kernel's own `forwarder.forms[id]` ({ port, state: 'on' | 'forward-only',
 // upstream, source, clients, upstream_error? }) and `routeLoop` on a form it refused to wire. The upstream is what the kernel and the engine dial: the agent's own proxy, else the OS proxy a form that follows it has, else the API host direct (4.8 §2.2).
-const NOT_ROUTED = { needed: 'opt-in-needed', 'pending-admin': 'not-routed', 'needs-admin': 'not-routed' } // an opt-in waiting for the user's administrator rights leaves the form not routed; `needs-admin` is the finding that says what to run
 
 /** The verdict on one form: [on_path, captured, reason, engine] — `engine`: whether the engine is on the path (the kernel only forwards for a process it cannot tell, for an agent that is off or when the engine is gone). */
 function formVerdict(F, h, hf, fm, fwf) {
   const none = (on, captured, reason) => ({ on, captured, reason, engine: false })
   const main = fm.procs.find((p) => p.elevated === true) || null
-  if (fm.optIn && fm.optIn.state !== 'done') {
-    if (fm.optIn.state === 'unknown') return none(null, null, null)
-    return none(false, false, fm.optIn.state === 'broken' ? fm.optIn.code : NOT_ROUTED[fm.optIn.state])
-  }
   if (fm.routeLoop === true) return none(false, false, 'route-loop') // the platform refused to wire a form whose upstream would be asight itself (4.8 §2.2)
   // before the entry checks, like judgeHarness's own order: after a real `off` the entry record is gone from the manifest and the file holds the user's own value again, so the entry checks would
   // answer not-routed and the drain window would never be drawn (4.8 §10.2 row k / 1.6 §9.3 row 14) — what says the agent is still on the kernel is its live connection to the group's port.
@@ -202,12 +197,11 @@ function proxyTopology(F, h, hf) {
     // what wires the kernel hop: the entry holding the kernel's address (the form is on), or — in the post-off drain window, where a real `off` has taken the record out of the manifest and the
     // file is the user's own again — the agent's live connection to the group's port (row k). In the drain the edge names no entry: the file no longer points here; the agent holds the address it
     // read at startup, and the note says what restart ends it.
-    const wired = !!(fwf && (!fm.optIn || fm.optIn.state === 'done')
+    const wired = !!(fwf
       && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : fm.entry && fm.entry.intact === true))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
     if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`还有 ${fwf.clients.length} 个 agent 连着 asight 的门,重启它们之后 asight 就完全退出`)
-    if (fm.optIn && fm.optIn.state === 'needed' && fm.optIn.enable) notes.push(`要采它: ${fm.optIn.enable}`)
     if (fm.hosts && wired) {
       // the host-tree lines of 4.8 §3 (W69): the host program's other connections only forward, only the form's host set reaches the engine; the extension's own settings, when they
       // cannot be read, leave the set at the defaults and extra_hosts (said, never silent); and a fresh read that differs from what the daemon reports as applied means the door's

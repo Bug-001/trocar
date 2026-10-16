@@ -142,7 +142,7 @@ const A = (run) => cmd(run) // asight's own, in the platform's shell
 
 test('W36 one entry per code row of §10.4 — no more, no less — and each entry\'s own output is a finding the schema accepts (a win-only code defines every field; no run holds a placeholder)', () => {
   assert.deepEqual(Object.keys(FINDINGS_WIN32), [
-    'not-routed', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'entry-changed', 'needs-admin', 'egress-differs', 'elevated-agent', 'proxy-dead',
+    'not-routed', 'shim-not-on-path', 'entry-changed', 'egress-differs', 'elevated-agent', 'proxy-dead',
     'upstream-unreachable', 'engine-port-taken', 'forwarder-down', 'form-unsupported', 'proxy-unsupported',
     'system-proxy-pac', 'other-redirector', 'socktable-unavailable', 'cause-unknown',
   ])
@@ -184,15 +184,9 @@ const LITERALS = {
       why: '这个形态没有 asight 能用的入口',
       commands: [cmd('kimi-code 的这个形态没有入口:改用它的 CLI 形态', 'gui'), A('asight status kimi-code')] },
   },
-  'opt-in-needed': { ctx: CTX({ h: 'kimi-code', form: 'kimi-code.cli', enable: 'asight on kimi-code --opt-in kimi-code.cli' }),
-    commands: [A('asight on kimi-code --opt-in kimi-code.cli')], verify: 'asight status kimi-code:该支「是」' },
-  'shim-not-on-path': { ctx: CTX({ h: 'kimi-code', form: 'kimi-code.cli', enable: 'asight on kimi-code --opt-in kimi-code.machine', fm: { entryPlace: { kind: 'shim', command: 'kimi' } } }),
-    commands: [cmd('where.exe kimi'), A('asight on kimi-code --opt-in kimi-code.machine'), cmd('或卸掉机器级的那一份,改用用户级安装', 'gui')], verify: 'where.exe kimi 第一个是 asight 的 shim' },
-  'not-via-entry': { ctx: CTX({ h: 'opencode' }),
-    commands: [cmd('退出它,从开始菜单(asight 改过的快捷方式)或新开的终端启动', 'gui'), cmd('任务栏固定的:取消固定,再从开始菜单固定一次', 'gui')], verify: 'asight status opencode:新 pid「是」' },
+  'shim-not-on-path': { ctx: CTX({ h: 'kimi-code', fm: { entryPlace: { kind: 'shim', command: 'kimi' } } }),
+    commands: [cmd('where.exe kimi'), A('asight install'), cmd('或卸掉机器级的那一份,改用用户级安装', 'gui')], verify: 'where.exe kimi 第一个是 asight 的 shim' },
   'entry-changed': { ctx: CTX({ h: 'z-code' }), commands: [A('asight on z-code')], verify: 'asight status z-code' },
-  'needs-admin': { ctx: CTX({ h: 'kimi-code', elevated: 'Start-Process powershell -Verb RunAs -ArgumentList "…"' }),
-    commands: [cmd('正常路径:asight 先确认、再弹 UAC,你点「是」;没有提示可弹时才用下面那一整行,在你自己开的管理员 PowerShell 里跑', 'gui'), A('Start-Process powershell -Verb RunAs -ArgumentList "…"')], verify: 'asight status:不再列' },
   'egress-differs': { ctx: CTX({ h: 'codex' }), commands: [A('asight off codex')], verify: '—' },
   'fallback-active': { ctx: CTX({ h: 'codex', enginePort: 17990 }),
     what: '引擎不在,内核把 agent 的连接只转发到上游(回退)', why: '引擎死了或没起来;内核自己活着,连接不断但不再被采集',

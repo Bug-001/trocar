@@ -87,21 +87,6 @@ row({ n: 'm', title: 'the system proxy changed its port: the kernel was reloaded
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress'], [...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: true, reason: null,
   compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992 → asight 引擎 :17990 → [系统代理] verge-mihomo.exe :7898 → 出口'] })
 
-row({ n: 'n', title: 'an opt-in form that was not named (Kimi CLI\'s shim on the PATH): asight is not wired in', h: 'kimi-code',
-  facts: pfacts('kimi-code', form('kimi-code.cli', { entry: null, optIn: { state: 'needed', code: 'opt-in-needed', enable: 'asight on kimi-code --opt-in kimi-code.cli' }, procs: [proc(7001, { name: 'kimi', exe: 'C:\\Users\\u\\.kimi-code\\bin\\kimi.exe', version: '1.4.0' })] }), fwForm(17993)),
-  kinds: [['agent', 'upstream']], forms: ['kimi-code.cli'], names: ['all'], on_path: false, captured: false, reason: 'opt-in-needed',
-  compact: ['kimi 7001 → api.moonshot.cn:443(直连)'], notes: ['要采它: asight on kimi-code --opt-in kimi-code.cli'] })
-
-row({ n: 'o', title: 'the entry is bypassed: the machine PATH\'s same-named command comes first', h: 'kimi-code',
-  facts: pfacts('kimi-code', form('kimi-code.cli', { entry: null, optIn: { state: 'broken', code: 'shim-not-on-path', enable: 'asight on kimi-code --opt-in kimi-code.cli' }, procs: [proc(7001, { name: 'kimi', exe: 'C:\\Program Files\\kimi\\kimi.exe', version: '1.4.0' })] }), fwForm(17993)),
-  kinds: [['agent', 'upstream']], forms: ['kimi-code.cli'], names: ['all'], on_path: false, captured: false, reason: 'shim-not-on-path',
-  compact: ['kimi 7001 → api.moonshot.cn:443(直连)'] })
-
-row({ n: 'p', title: 'OpenCode Desktop started from a taskbar pin: not through asight\'s launcher', h: 'opencode',
-  facts: pfacts('opencode', form('opencode.desktop', { entry: null, optIn: { state: 'broken', code: 'not-via-entry' }, procs: [proc(9100, { name: 'OpenCode', exe: 'C:\\Users\\u\\AppData\\Local\\Programs\\opencode\\OpenCode.exe', version: '0.9.1' })] }), fwForm(17994)),
-  kinds: [['agent', 'upstream']], forms: ['opencode.desktop'], names: ['all'], on_path: false, captured: false, reason: 'not-via-entry',
-  compact: ['OpenCode 9100 → api.anthropic.com:443(直连)'] })
-
 row({ n: 'q', title: 'Kimi\'s VS Code extension, named: the editor\'s setting points at the kernel, only Kimi\'s host set goes to the engine', h: 'kimi-code',
   facts: pfacts('kimi-code', form('kimi-code.vscode', { entry: { where: VSCODE, asight: true, opt_in: true, intact: true }, optIn: { state: 'done' }, procs: [proc(8100, { name: 'Code', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', version: null })], hosts: { program: 'VS Code', extension: 'Kimi', defaults: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'], hosts: ['api.moonshot.cn', 'relay.corp.example'], settings: 'read', dropped: [] } }), fwForm(17995)),
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], forms: ['kimi-code.vscode'], names: ['all'], on_path: true, captured: true, reason: null,

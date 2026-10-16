@@ -95,12 +95,8 @@ export const FINDINGS = {
   'forwarder-down': { cls: 'failure', asightFirst: true, what: () => 'asight 的本地代理(引擎的门)没在跑,入口指向它的 agent 连不上', why: () => '引擎死了或没起来;asight 的自启单元会把它拉起来', commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`)], verify: () => 'asight status:引擎「在跑」' },
   'upstream-unreachable': { cls: 'failure', asightFirst: false, what: (c) => `asight 给 ${c.h} 接的上游连不上`, why: () => '你的代理软件退出了而系统代理还指着它,或你配的代理不通;没有 asight 时同样连不上',
     commands: (c) => [gui('打开你的代理软件,或关掉指着它的系统代理'), ...(c.upPort ? [portCheck(c, c.upPort)] : [])], verify: (c) => `asight status ${c.h}:那一跳有属主` },
-  'opt-in-needed': { cls: 'expected', asightFirst: true, what: (c) => `${c.h} 的这个形态要你点名才能采`, why: () => '它的入口改的东西影响超出这个 agent(§1.7)', commands: (c) => [asight(c, c.enable || `asight on ${c.h} --opt-in ${c.form || c.h}`)], verify: (c) => `asight status ${c.h}:该支「是」` },
   'shim-not-on-path': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的入口(shim)没被用上`, why: () => '机器 PATH 里的同名命令排在用户 PATH 前面,或 agent 不是经入口启动的',
-    commands: (c) => [asight(c, c.enable || `asight on ${c.h} --opt-in ${c.form || c.h}`), gui('不是经入口启动的:退出它,从 asight 的入口或新开的终端启动')], verify: (c) => `asight status ${c.h}` },
-  'not-via-entry': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 不是经 asight 的入口启动的`, why: () => '任务栏固定、登录自启、IDE 按绝对路径、改 PATH 之前开的终端',
-    commands: (c) => [asight(c, c.enable || `asight status ${c.h}`), gui('退出它,从 asight 的入口或新开的终端启动')], verify: (c) => `asight status ${c.h}` },
-  'needs-admin': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 点名的机器级项还没做,或 off 之后还没撤`, why: () => '要管理员权限,asight 不自己提权(§1.7)', commands: (c) => [{ run: c.elevated || unknownValue('提权命令', 'absent'), shell: c.sh }], verify: () => 'asight status:不再列' },
+    commands: (c) => [asight(c, 'asight install'), gui('不是经入口启动的:退出它,从 asight 的入口或新开的终端启动')], verify: (c) => `asight status ${c.h}` },
   'egress-differs': { cls: 'hint', asightFirst: false, what: (c) => `asight 接上后,${c.h} 的一部分连接出口与原来不同`, why: () => '代理模式下一个形态只有一个上游:原本分两路的(如 HTTP 跟随系统代理、WebSocket 直连),接上后都走那一个', commands: (c) => [asight(c, `asight off ${c.h}`)], verify: () => '—' },
   'linger-off': { cls: 'hint', asightFirst: false, what: () => '登出后停采(未开 linger)', why: () => '用户登出后 systemd 会停掉你的服务,守护进程也在其中', commands: (c) => [{ run: `loginctl enable-linger ${c.user || '"$(id -un)"'}`, shell: 'sh' }], verify: () => 'asight status:不再印这一行' },
   'system-proxy-pac': { cls: 'hint', asightFirst: false, what: () => '系统代理是 PAC', why: () => 'asight 不执行 PAC,下一跳不知道', commands: (c) => [os(c, { win32: "Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL", darwin: 'scutil --proxy', linux: 'gsettings get org.gnome.system.proxy autoconfig-url' })], verify: () => '—' },
@@ -180,15 +176,12 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     const formOf = (r) => { const b = (t.branches || []).find((x) => x.reason === r); return (b && (hf.forms || []).find((f) => f.id === b.form)) || null } // the form facts of the branch that carries the reason (its route / entryPlace, the doctor's Windows rows read them, 4.8 §10.4)
     const reasons = [...new Set([t.reason, ...t.branches.map((b) => b.reason)].filter(Boolean))]
     const row = hf.procs.find((p) => p.reason && reasons.includes(p.reason))
-    const optIn = (hf.forms || []).map((f) => f.optIn).find((o) => o && o.state !== 'done' && o.state !== 'unknown')
     const sysPac = !!((hf.systemProxy && hf.systemProxy.pac) || (hf.forms || []).some((f) => f.systemProxy && f.systemProxy.pac))
-    const adminOpt = optIn && ['pending-admin', 'needs-admin'].includes(optIn.state)
     const upstream = Object.values((F.forwarder && F.forwarder.forms) || {}).map((x) => x.upstream).find((u) => u && u !== 'DIRECT')
     // the doctor's own name for a protocol the upstream cannot take replaces the branch's not-routed (4.8 §10.4: upstream-protocol sits on the proxy-unsupported row)
     const protoForm = (hf.forms || []).find((f) => f.route && f.route.code === 'proxy-unsupported') || null
-    for (const r of reasons.filter((x) => !((adminOpt || (protoForm && x === 'not-routed')) && x === 'not-routed'))) add(r, { upPort: upstream ? (parseProxyUrl(upstream) || {}).port : undefined, hint: row && row.reason === r ? row.hint : undefined, pac: sysPac, enable: optIn && optIn.enable, form: optIn && optIn.form, fm: formOf(r) })
+    for (const r of reasons.filter((x) => !(protoForm && x === 'not-routed'))) add(r, { upPort: upstream ? (parseProxyUrl(upstream) || {}).port : undefined, hint: row && row.reason === r ? row.hint : undefined, pac: sysPac, fm: formOf(r) })
     if (protoForm) add('proxy-unsupported', { protocol: protoForm.route.protocol, fm: protoForm })
-    if (adminOpt) add('needs-admin', { elevated: optIn.elevated })
     const dead = deadProxy(t)
     if (dead) add('proxy-dead', { dead })
     const s = base.setting

@@ -65,27 +65,14 @@ export const FINDINGS_WIN32 = {
     },
     verify: (c) => `asight status ${c.h}:那一支「在路径上 · 是」`,
   },
-  'opt-in-needed': {
-    why: () => '它的入口改的东西影响超出这个 agent(§1.7);点名时 asight 先印「影响」,你确认了才做',
-    commands: (c) => [asight(c, c.enable || `asight on ${c.h} --opt-in ${c.form || c.h}`)],
-    verify: (c) => `asight status ${c.h}:该支「是」`,
-  },
   'shim-not-on-path': {
     commands: (c) => {
       const command = c.fm && c.fm.entryPlace && c.fm.entryPlace.command
-      return [...(command ? [ps(`where.exe ${command}`)] : []), asight(c, c.enable || `asight on ${c.h} --opt-in ${c.form || c.h}`), gui('或卸掉机器级的那一份,改用用户级安装')]
+      return [...(command ? [ps(`where.exe ${command}`)] : []), asight(c, 'asight install'), gui('或卸掉机器级的那一份,改用用户级安装')]
     },
     verify: (c) => (c.fm && c.fm.entryPlace && c.fm.entryPlace.command ? `where.exe ${c.fm.entryPlace.command} 第一个是 asight 的 shim` : `asight status ${c.h}`),
   },
-  'not-via-entry': {
-    commands: () => [gui('退出它,从开始菜单(asight 改过的快捷方式)或新开的终端启动'), gui('任务栏固定的:取消固定,再从开始菜单固定一次')],
-    verify: (c) => `asight status ${c.h}:新 pid「是」`,
-  },
   'entry-changed': { commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` },
-  'needs-admin': {
-    commands: (c) => [gui('正常路径:asight 先确认、再弹 UAC,你点「是」;没有提示可弹时才用下面那一整行,在你自己开的管理员 PowerShell 里跑'), ...(c.elevated ? [{ run: c.elevated, shell: c.sh }] : [])],
-    verify: () => 'asight status:不再列',
-  },
   'egress-differs': { commands: (c) => [asight(c, `asight off ${c.h}`)], verify: () => '—' },
   'elevated-agent': {
     commands: (c) => [gui(`关掉它,不用「以管理员身份运行」重新打开 ${c.h}`), ps('whoami /groups | findstr /i "Mandatory"')],

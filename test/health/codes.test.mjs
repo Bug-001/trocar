@@ -131,8 +131,8 @@ const DOCTOR_DERIVED = ['proxy-dead', 'proxy-unsupported', 'egress-differs', 'li
 // system proxy (doorPartsFor) but do not record the change yet — the model gets that producer next, and this row goes with it.
 const MODEL_PENDING = ['netenv-changed']
 // 4.11 §3 ⑱ codes whose last producer went with the Windows opt-in family; they leave the closed table next, and this list with them.
-const TABLE_PENDING = ['not-via-entry', 'optin-failed']
-const WIN32_OLD = ['opt-in-needed', 'shim-not-on-path', 'needs-admin', 'win-doors-rejected', 'env-unreadable-fill', 'form-unsupported']
+const TABLE_PENDING = ['not-via-entry', 'optin-failed', 'needs-admin']
+const WIN32_OLD = ['opt-in-needed', 'shim-not-on-path', 'win-doors-rejected', 'env-unreadable-fill', 'form-unsupported']
 const RETIRED = ['cert-env-not-inherited', 'route-without-ca', 'upstream-ca-unreadable', 'optin-not-undone'] // 4.11 §3 ⑱, 4.6 (trust-store-error only)
 function producers() {
   const keyOf = new Map(Object.entries(CODE).map(([k, v]) => [v, k]))
