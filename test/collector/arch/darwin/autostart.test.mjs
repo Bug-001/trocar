@@ -13,7 +13,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
-import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, plistXml, plistPath, userUnit, directStartEnv, AGENT_LABEL, PLIST_FILE } from '../../../../src/collector/arch/darwin/autostart.mjs'
+import { refuseElevated, nodePreflight, plistXml, plistPath, userUnit, directStartEnv, AGENT_LABEL, PLIST_FILE } from '../../../../src/collector/arch/darwin/autostart.mjs'
 import { daemonLogPaths } from '../../../../src/collector/arch/daemon-logs.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, SOCKET_PREFIX, SOCKET_SUFFIX } from '../../../../src/collector/arch/darwin/control-path.mjs'
 import * as offDarwin from '../../../../src/off/darwin.mjs'
@@ -183,20 +183,22 @@ test('W25 off and uninstall (no source tree, no helper): the standalone check of
 
 // ---- the Node preflight (4.8 §7) ----------------------------------------------------------------------------------------------------------------
 
-test('W24 `on` refuses a Node below the minimum with a doctor line that says what was found and what is needed; the minimum is the one package.json promises (launchd starts the daemon with the Node that is installed, so an old one dies at every login)', () => {
+test('W24 `on` on darwin refuses a Node below 22.15 (4.9 §7, MA5: a root added in the keychain is only in getCACertificates(\'system\')) with a doctor line that says what was found and what is needed; package.json engines stays the floor Linux / Windows keep', () => {
+  const NODE_MIN = '22.15' // 4.9 §7's number, asserted against the answer's own `min` below
+  assert.equal(nodePreflight({ versions: { node: '24.0.0' } }).min, NODE_MIN)
   const engines = JSON.parse(fs.readFileSync(new URL('../../../../package.json', import.meta.url), 'utf8')).engines.node
-  assert.equal(`>=${NODE_MIN_MAJOR}`, engines, 'the preflight and the engines field are one number')
-  for (const v of ['20.0.0', '20.19.5', '22.23.1', '24.1.0']) assert.deepEqual(nodePreflight({ versions: { node: v } }), { ok: true, have: v, min: NODE_MIN_MAJOR }, v)
-  for (const v of ['18.20.4', '19.9.0', '16.0.0']) {
+  assert.equal(engines, '>=20', 'engines unchanged: Linux and Windows still accept 20 (the win32 test holds its preflight to it)')
+  for (const v of ['22.15.0', '22.23.1', '23.0.0', '24.1.0']) assert.deepEqual(nodePreflight({ versions: { node: v } }), { ok: true, have: v, min: NODE_MIN }, v)
+  for (const v of ['22.14.0', '22.0.0', '20.19.5', '20.0.0', '18.20.4', '16.0.0']) {
     const r = nodePreflight({ versions: { node: v } })
     assert.equal(r.ok, false, v)
     assert.equal(r.have, v)
     assert.match(r.doctor, new RegExp(v.replaceAll('.', '\\.')), 'the doctor line names the version found')
-    assert.match(r.doctor, new RegExp(`${NODE_MIN_MAJOR}`), '... and the one needed')
+    assert.match(r.doctor, new RegExp(NODE_MIN.replaceAll('.', '\\.')), '... and the one needed')
     assert.match(r.doctor, /launchd/, '... and who starts the daemon with it')
   }
-  assert.equal(nodePreflight().ok, true, 'the default is this process\'s own Node')
-  for (const v of [undefined, '', 'twenty', null]) {
+  assert.equal(nodePreflight({ versions: { node: '22.15.0' } }).ok, true)
+  for (const v of [undefined, '', 'twenty', null, '22']) {
     const r = nodePreflight({ versions: { node: v } })
     assert.equal(r.ok, false, `an unreadable version (${JSON.stringify(v)}) is not a pass`)
     assert.match(r.doctor, /Node/)

@@ -18,19 +18,22 @@ export const PLIST_FILE = 'com.asight.collector.plist' // the plist's name in th
 /** ~/Library/LaunchAgents/com.asight.collector.plist — launchd scans this directory at every login, so the file IS the registration: `enable`'s bootstrap starts the job now, and the undo takes the file out again or the next login brings the agent back. */
 export const plistPath = (home) => path.join(home, 'Library', 'LaunchAgents', PLIST_FILE)
 
-/** The oldest Node `on` accepts (package.json `engines`; a test holds the two equal). Older than that and the daemon would exit at every login with an error nobody sees (4.8 §7, the same reason on darwin: launchd starts it with the Node that is installed). */
-export const NODE_MIN_MAJOR = 20
+/** The oldest Node `on` accepts on macOS (4.9 §7, MA5): 22.15 — below it a root the user added in the keychain is not in
+ *  `tls.getCACertificates('system')`, and the doors would refuse an upstream the agent trusts. package.json `engines` stays the floor Linux and
+ *  Windows keep (>=20). Older than this and the daemon would also be the one launchd starts at every login with an error nobody sees (4.8 §7). */
+const NODE_MIN = '22.15'
 
 /**
  * The Node preflight of `on` (4.8 §7): → `{ ok: true, have, min }` or `{ ok: false, have, min, doctor }`. `doctor` is the line to print: what was found and what is needed. A version that
- * cannot be read is not a pass (it names itself as such): a daemon on an unknown Node is the one that exits at login. `versions` is `process.versions`.
+ * cannot be read (no major.minor) is not a pass (it names itself as such): a daemon on an unknown Node is the one that exits at login. `versions` is `process.versions`.
  */
 export function nodePreflight({ versions = process.versions } = {}) {
   const have = versions && versions.node
-  const major = typeof have === 'string' && /^\d+(\.|$)/.test(have) ? Number(have.split('.')[0]) : null
-  if (major === null) return { ok: false, have: have ?? null, min: NODE_MIN_MAJOR, doctor: `读不到 Node 的版本(${JSON.stringify(have ?? null)}):asight 在 macOS 上要 Node ≥ ${NODE_MIN_MAJOR}。确认 \`node --version\` 之后再 asight on` }
-  if (major < NODE_MIN_MAJOR) return { ok: false, have, min: NODE_MIN_MAJOR, doctor: `Node ${have} 太旧:asight 在 macOS 上要 Node ≥ ${NODE_MIN_MAJOR}(守护进程每次登录都由 launchd 用这个 Node 拉起,更老的版本起不来)。升级 Node 之后再 asight on` }
-  return { ok: true, have, min: NODE_MIN_MAJOR }
+  const m = typeof have === 'string' && /^(\d+)\.(\d+)(\.|$)/.exec(have)
+  if (!m) return { ok: false, have: have ?? null, min: NODE_MIN, doctor: `读不到 Node 的版本(${JSON.stringify(have ?? null)}):asight 在 macOS 上要 Node ≥ ${NODE_MIN}。确认 \`node --version\` 之后再 asight on` }
+  const [maj, min] = NODE_MIN.split('.').map(Number)
+  if (Number(m[1]) < maj || (Number(m[1]) === maj && Number(m[2]) < min)) return { ok: false, have, min: NODE_MIN, doctor: `Node ${have} 太旧:asight 在 macOS 上要 Node ≥ ${NODE_MIN}(守护进程每次登录都由 launchd 用这个 Node 拉起;更老的 Node 读不到钥匙串里另加的根)。升级 Node 之后再 asight on` }
+  return { ok: true, have, min: NODE_MIN }
 }
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1) // -1: a platform without getuid (a test on Windows) — never 0, so never a refusal; that platform's own check is the win32 helper's
