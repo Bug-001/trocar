@@ -1,6 +1,6 @@
 // test/collector/core/entry-forms.test.mjs — entryGate (core/entry-forms.mjs) on made-up groups: an entry that takes no credentials never gets an
 // upstream that needs them, and a group that once wanted naming (D57: no named items any more) is not held back by it. The model's entries (core/proxymode/entries.mjs) ask it for the
-// credentialed-own-leg rule; the real forms of the harnesses are held to it in test/collector/harness/win32-forms.test.mjs.
+// credentialed-own-leg rule; the real routes are held to it in test/collector/core/proxymode/entries-select.test.mjs (Claude Desktop's auth:false route).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { entryGate } from '../../../src/collector/core/entry-forms.mjs'

@@ -108,7 +108,6 @@ const COUNT_PINS = {
   'test/collector/arch/win32/helper.test.mjs': 1,
   'test/collector/core/socks.test.mjs': 1,
   'test/collector/core/tls-ca.test.mjs': 1,
-  'test/collector/harness/win32-forms.test.mjs': 1,
   'test/dissect/request-body.test.mjs': 1,
   'test/query/source-refresh.test.mjs': 2,
   'test/raw/seal-locks.test.mjs': 1,

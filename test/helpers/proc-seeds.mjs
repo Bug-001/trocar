@@ -6,12 +6,12 @@
 //
 // Shape: { os, exe, argv, cmdline?, cmdlineState?, env?, harness, source }. `argv` is the process's logical argv (what Linux /proc gives and
 // what CommandLineToArgvW gives on Windows); `cmdline` is the raw command line where the source had one. The shapes of the samples taken from
-// test/collector/harness/{darwin,win32}-forms.test.mjs are copied, not imported: those tests go with the form tables (T10).
+// test/collector/harness/{darwin,win32}-forms.test.mjs (both retired) are copied, not imported.
 const U = '/Users/u'
 const W = String.raw`C:\Users\u`
 const S46 = 'spec 4.6:132-138 (按 harness 预设名单)'
 const DF = 'test/collector/harness/darwin-forms.test.mjs:24-145 at 839ee1e5 (retired with the macOS form tables)'
-const WF = 'test/collector/harness/win32-forms.test.mjs:21-102'
+const WF = 'test/collector/harness/win32-forms.test.mjs:21-102 at 60c8d165 (retired with the Windows overlays; the forms now live in proxyMode.forms of the base descriptors)'
 const P = 'plan 2026-10-14-d51-name-allowlist §4 (P:162-189)'
 
 const winCmd = (argv) => argv.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ')
