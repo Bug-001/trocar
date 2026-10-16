@@ -20,8 +20,7 @@ const noteLine = (n) => (n.code === 'install-pending' ? `  · ${n.item}: ${n.sta
 const refusedLine = (r) => `  · ${r.harness} 没开:${r.reason}${r.path ? ` ${r.path}` : ''};再跑一次 ${r.command}`
 
 /** → the exit code. `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
-export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, json, optIn }) {
-  if (optIn.length) { io.err('asight on: --opt-in 在 macOS / Windows 上还没接上集中模型;什么都没改'); return EXIT.usage }
+export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, json }) {
   const fs = deps.fs || nodeFs
   const say = json ? io.err : io.out
   const dir = path.join(home, '.asight', 'collector')

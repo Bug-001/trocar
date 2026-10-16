@@ -4,10 +4,8 @@
 // shown as `~/…` (the way the user knows them); `--json` keeps the absolute path.
 import path from 'node:path'
 import { formatOffReceipt } from '../off/receipt.mjs'
-import { collectorDir } from '../off/paths.mjs'
 import { noColor } from './color.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
-import { CODEX_WS_CERT_HINT } from './words.mjs'
 
 /** One harness's chain after `on` (§9.5): where a new connection goes, then the proxy setting it was drawn from (credentials masked: the record holds the redacted value) and the file or variable that setting is in. */
 const adoptedLine = (h, x) => `接上后 ${h} 的路: ${x.chain}${x.proxy ? `(它的代理设置 ${x.proxy},读自 ${(x.source || []).map((s) => (s.kind === 'file' ? `${s.where}${s.key ? ` ${s.key}` : ''}` : s.where)).join('、') || '它的设置'})` : ''}`
@@ -26,141 +24,6 @@ function watchLines(watch, t) {
 
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
 export const tilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
-
-/** The Windows display form of a path under the user's home — the way the plan of 4.8 §11 names places: `%USERPROFILE%\…`, `%LOCALAPPDATA%` / `%APPDATA%` for the two AppData
- *  roots, backslashes whatever separators the path itself was joined with. A path under none of them is given back as it is. Pure text: nothing of the disk is asked. */
-export function winShown(p, home) {
-  if (typeof p !== 'string' || !p || !home) return p
-  const shown = (root, name) => { const rel = path.win32.relative(root, p); return rel && !rel.startsWith('..') && !path.win32.isAbsolute(rel) ? `%${name}%\\${rel.replace(/\//g, '\\')}` : null }
-  return shown(path.join(home, 'AppData', 'Local'), 'LOCALAPPDATA') || shown(path.join(home, 'AppData', 'Roaming'), 'APPDATA') || shown(home, 'USERPROFILE') || p
-}
-
-// ── the Windows plan of 4.8 §11 (proxy mode) ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-// The same plan formatPlan draws (1.6 §1.6: every file to change, what asight builds itself, the skipped, the machine's network, what to restart), in the shape §11 gives it: the kernel
-// first, then one row per entry group — its forms together, the file it lives in shown the Windows way, what goes into it, and the upstream the kernel will dial for it (4.8 §2.2) with the
-// 「读不到你终端里的 HTTPS_PROXY」 note where §2.2 says (every upstream worked out by rule 2 or 3, not the agent's own proxy) — then the named opt-in items of this run, the items that wait
-// for a naming, Smart App Control, the autostart and the one line about the drain after `off`, closed by what asight never does. The per-form facts (the upstream, its two flags, the group)
-// come from `adoption` (the real gatherWin32Facts the same `on` ran); the kernel line and the Smart App Control line from `prep` (the arch hook's data). `on` prints this in place of
-// formatPlan on win32; the receipt keeps its own shape.
-const ENV_NOTE = '读不到你终端里的 HTTPS_PROXY'
-const PROXY_VARS = ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'] // §2.2's family: what a terminal of the user's may set
-
-/** The upstream a group's row names, from the facts' own plan read (§2.2): the agent's own proxy (the address; its credentials are not in the facts), the system proxy it follows, or direct —
- *  or the plan's own word for why it is left unwired. */
-function upstreamText(fm) {
-  const u = fm.upstream
-  if (!u) return fm.route ? `不接(${fm.route.code || fm.route.reason})` : '不知道'
-  const base = u.source === 'system-proxy' ? `系统代理 ${u.host}:${u.port}` : u.source === 'agent' ? `${u.host}:${u.port}(你原来的代理)` : '直连'
-  return fm.envUnreadable ? `${base}(${ENV_NOTE})` : base
-}
-
-/** One row per entry group of the harnesses this `on` turns on: the group's forms together, the file its entry lives in (shown the Windows way), what goes into it — the proxy key and the trust
- *  keys, or the one sentinel block that carries both; only the trust keys when the plan left the group unwired (its proxy key is not written then) — and the upstream. A group that waits for a
- *  naming says nothing here (its line is 「要你点名的」's); a group named on THIS command line is the run's change (1.6 §1.7「计划把点名的项列进要改的」) and goes to the chosen rows with its
- *  「影响」. A further file of the same harness (a Hermes profile, a second Codex home) is listed too: every file, 1.6 §1.6. */
-function winGroupRows(p, facts, t) {
-  const rows = [], chosen = [], more = []
-  const targets = new Set(p.targets || [])
-  const optRows = p.optIn || []
-  const trustOf = (h, file) => (p.entries || []).filter((e) => e.harness === h && (!file || e.path === file)).map((e) => (e.kind === 'text' ? null : (e.keys || []).join('.'))).filter(Boolean)
-  const filesOf = (h) => new Set((p.entries || []).filter((e) => e.harness === h).map((e) => e.path))
-  const chosenRow = (x) => { // the item the user named for this group is a change of THIS run (§11 「你点名的(这次做)」), its 影响 carried along
-    const named = optRows.find((o) => o.chosen && o.applicable && x.forms.includes(o.form)) || null
-    if (!named) return false
-    chosen.push(`    ${x.forms.join(' · ')}  ${named.item}${named.scope === 'machine' ? '(要管理员)' : ''}    影响: ${named.impact}`)
-    return true
-  }
-  for (const [h, hf] of Object.entries((facts && facts.harnesses) || {})) {
-    const groups = new Map()
-    for (const fm of hf.forms || []) {
-      const g = fm.g || fm.id
-      if (!groups.has(g)) groups.set(g, { g, harness: h, forms: [], fm: null })
-      const x = groups.get(g)
-      x.forms.push(fm.id)
-      if (!x.fm) x.fm = fm
-    }
-    if (!targets.has(h)) { for (const x of groups.values()) chosenRow(x); continue } // a harness this on does not touch (skipped: nothing of its own to change) still shows the item the user named — `on` does that item regardless
-    const shown = new Set()
-    const mark = rows.length
-    for (const x of groups.values()) {
-      const fm = x.fm, place = fm.entryPlace || {}
-      if (chosenRow(x)) continue // this run's opt-in: a change, not an offer
-      if (fm.route && fm.route.reason === 'opt-in-needed') continue // unnamed and unrecorded: its line waits in 「要你点名的」
-      const file = place.kind === 'file' ? place.file : null
-      if (file) shown.add(file)
-      const wired = !(fm.route && fm.route.reason) // the plan connected the group: its proxy key is written beside the trust keys
-      const what = place.kind === 'file' && place.format === 'dotenv' ? '顶部 asight 哨兵块' : [wired ? place.key : null, ...trustOf(h, file)].filter(Boolean).join(' · ')
-      rows.push(`    ${x.forms.join(' · ')}${fm.optIn ? '(你点名的)' : ''}  ${file ? t(file) : ''}  ${what}  上游: ${upstreamText(fm)}`.replace(/ {2,}/g, '  ').trimEnd())
-      if (wired && fm.egressDiffers) rows.push(`      WebSocket 原本直连,之后也经${fm.upstream && fm.upstream.source === 'system-proxy' ? '系统代理' : '同一个上游'}`)
-    }
-    // 1.6 §1.6: every file, even one whose group has no row — under the harness's own row when it has one, else at the end of the block
-    const extra = [...filesOf(h)].filter((f) => !shown.has(f)).map((f) => `      ${t(f)} ${((p.entries || []).find((e) => e.harness === h && e.path === f) || {}).what || ''}`.trimEnd())
-    ;(rows.length > mark ? rows : more).push(...extra)
-  }
-  return { rows, chosen, more, known: !!(facts && facts.harnesses && Object.keys(facts.harnesses).some((h) => targets.has(h))) }
-}
-
-/**
- * The plan `asight on` prints on Windows (4.8 §11): one row per entry group with the upstream the engine's door will dial for it, the named opt-in items, the items that wait for a naming,
- * the autostart and the drain note, closed by what asight never does — around them the same things every plan carries (1.6 §1.6: every file, what asight builds itself, the skipped, the edited
- * proxy fields, the machine's network, what to restart). There is no kernel line (D47's twin: the engine is the only local proxy, `on` downloads nothing); `adoption` = what prepareAdoption
- * returned (the facts, with each form's group plan), `prep` = the arch hook's answer when an arch has one (none does today). Pure: everything is handed in.
- */
-export function formatWinPlan(p, { home = null, autostart = true, env = process.env, adoption = null, prep = null, colors: c = noColor() } = {}) {
-  const t = (x) => winShown(x, home)
-  const lines = [c.bold('asight 要做的(本用户,不需要管理员):')]
-  if (prep && prep.refuse) {
-    lines.push('  自带内核  没拿到:下载失败或摘要不符(原因与手动替代见回执),所以 on 不开始')
-    if (Array.isArray(prep.refuse.commands) && prep.refuse.commands.length) lines.push(`    手动替代(asight 不替你跑):${prep.refuse.commands.join(' 或 ')}`)
-    return lines.join('\n')
-  }
-  // the kernel line's shapes: ready (the run location holds the pinned one — or the verified archive cache does, and it will be placed
-  // from there, no network) or will-download (the plan's download line: version, the archive's size, the pinned sha256, the url's host — the download itself
-  // happens only after the confirmation, in the write phase, and never in a dry run)
-  if (prep && prep.kernel && home) {
-    const k = prep.kernel
-    if (k.state === 'will-download') lines.push(`  自带内核  将下载内核 mihomo ${k.version}(压缩包 ${(k.size / 1048576).toFixed(1)} MB,sha256 钉死,来自 ${k.host}),确认后开始`)
-    else lines.push(`  自带内核  ${t(path.join(collectorDir(home), 'kernel', k.exe))}(mihomo ${k.version};${k.at === 'cache' ? '将从缓存就位' : '已就位'},sha256 已核对;只听 127.0.0.1,不开 TUN,不当系统代理)`)
-  }
-  const facts = adoption && !adoption.error ? adoption.facts : null
-  // what asight builds or changes itself (1.6 §1.6): the manifest and the CA on the first on, the bundles it writes for a harness, the undo copy, the plugins' directory, the notes
-  const own = [
-    ...(p.manifest ? [`install manifest: ${t(p.manifest)}`] : []),
-    ...(p.state ? [`state file (which agents are on): ${t(p.state)}`] : []),
-    ...(p.standalone ? [`asight-off, the undo that works without the source tree or the daemon: ${t(p.standalone)}`] : []),
-    ...(p.ca && p.ca.length ? [`collector CA (in no trust store): ${p.ca.map(t).join(', ')}`] : []),
-    ...(p.files || []).map((f) => `${f.harness}: ${t(f.path)} = ${f.sources.length ? `the certificates of ${f.sources.map(t).join(', ')} + ` : ''}the collector CA`),
-    ...(p.run ? [`runtime directory (the plugins' trust markers): ${t(p.run)}/`] : []),
-    ...(p.owned || []).map((o) => `${o.harness}: ${t(o.path)} (asight's ${o.role})`),
-    ...(p.backups ? [`backups, a copy of each of those files that exists, made before it is changed: ${t(p.backups)}/`] : []),
-    ...(p.records ? [`install notes (event log): ${t(p.records)}/`] : []),
-    ...watchLines(p.watch, t),
-  ]
-  if (own.length) lines.push('  asight 自己建或改的:', ...own.map((l) => `    ${l}`))
-  lines.push('  各形态(代理入口与信任入口;只改 agent 自己的文件,原值记下,off 时还原)')
-  const groups = winGroupRows(p, facts, t)
-  lines.push(...(groups.rows.length ? groups.rows : groups.known ? [] : ['    (各形态的上游不知道:这一次读不到网络设置,原因在回执里)']))
-  lines.push(...groups.more)
-  if (groups.chosen.length) lines.push('  你点名的(这次做,off 时一起撤掉):', ...groups.chosen)
-  if (groups.rows.some((r) => r.includes(ENV_NOTE))) lines.push(`  (标「${ENV_NOTE}」的形态:你若在终端里设了代理再从那个终端起它,它原本走的是那个代理)`)
-  // the codex WebSocket hint (measured on a Windows test machine): the WS client does not read the .env block's SSL_CERT_FILE, so the WS's TLS needs the NAMED cert-store item — said exactly while
-  // codex is a target and the item is not in the ledger (an optIn row with state 'done'); nothing is ever installed by a hint
-  if ((p.targets || []).includes('codex') && !(p.optIn || []).some((x) => x && x.item === 'cert-store-current-user' && x.state === 'done')) lines.push(`  ${CODEX_WS_CERT_HINT}`)
-  const inShell = PROXY_VARS.flatMap((n) => [n, n.toLowerCase()]).filter((n) => typeof env[n] === 'string' && env[n].trim() !== '')
-  if (inShell.length) lines.push(`  (这个终端里设了 ${inShell.join('、')}(值打码):agent 若从这个终端起,它的上游可能不是下面写的)`)
-  const offered = (p.optIn || []).filter((x) => x.applicable && !x.chosen && x.state !== 'done')
-  if (offered.length) {
-    lines.push('  要你点名的(默认不做;点名: asight on <harness> --opt-in <形态>)')
-    for (const x of offered) lines.push(`    ${x.form}  ${x.item}${x.scope === 'machine' ? '(要管理员)' : ''}    影响: ${x.impact}`)
-  }
-  if (p.unit) lines.push(`  自启: 计划任务 \\asight\\collector(本用户,${autostart ? '登录时' : '本次启动,登录时不自动起'})`)
-  if (p.skipped && p.skipped.length) lines.push(`  跳过: ${p.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
-  lines.push(...(p.edited || []).map((e) => `  你改过的代理设置: ${e.harness} 的 ${e.where || '代理字段'} 现在是 ${e.now ?? '空'}(asight 上次接上时是 ${e.was ?? '空'});继续会把它接成新的上游,再指回 asight`))
-  lines.push('  注意: on 期间启动的 agent,off 之后、重启之前仍连着 asight 的门(只转发)')
-  if (p.restart && p.restart.length) lines.push(`  正在跑的 ${p.restart.map((x) => `${x.harness}(pid ${x.pid})`).join('、')} 重启后才会被采集;在那之前照常直连`)
-  lines.push('asight 不会: 开 TUN、改系统代理、往你的 VPN 里写东西、往登录环境写代理变量')
-  return lines.join('\n')
-}
 
 /** Every file `on` would write or change, before it writes any (4.6; 1.6 §1.6). `p` = what planOn returns (its `files` / `owned` /
  *  `entries` / `unit` are only what would be written, so a later `on` lists only what is new), or what an `onPlan` of the legacy install is handed.

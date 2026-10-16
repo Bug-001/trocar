@@ -15,7 +15,8 @@ import { certBlocks } from '../../src/off/pem.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sevenHomes } from '../off/fixtures/seven-homes.mjs'
-import { snapshot, fakeSystem, recordingExec, fakeDaemon, ROOTS } from './fixtures/on-ctx.mjs'
+import { runOnCli } from '../../src/cli/on.mjs'
+import { snapshot, fakeSystem, recordingExec, fakeDaemon, fakeIo, onCtx, seedClaude, ROOTS } from './fixtures/on-ctx.mjs'
 
 // a JSON key; the three that replace the system roots and so name a combined bundle (codex and hermes by a dotenv block, z-code by a JSON key); a plugin
 // directory and a YAML row
@@ -430,5 +431,26 @@ test('R13 V65 on, on again and off leave agents.json byte for byte unchanged (a 
     same('a second on')
     assert.equal((await s.off()).exit, 0, `${label}: off`)
     same('off')
+  }
+})
+
+test('V72 (1.6 §2, D57): `on --opt-in <any value>` and `--opt-in=<x>` exit 2 saying 「D57 起没有点名项」; HOME byte for byte unchanged, zero OS tools, zero daemon calls, on every platform', async () => {
+  const shapes = [['--opt-in', 'kimi-code.cli'], ['--opt-in=codex.machine'], ['codex', '--opt-in', 'a,b', '--yes'], ['--yes', '--opt-in='], ['--opt-in']]
+  for (const platform of ['linux', 'darwin', 'win32']) for (const argv of shapes) {
+    const home = tmpDir('asight-v72-')
+    seedClaude(home)
+    const before = snapshot(home)
+    const exec = recordingExec(), daemon = fakeDaemon(), io = fakeIo()
+    const ctx = onCtx(home, io, { exec, daemon })
+    let partsRead = 0
+    ctx.deps.parts = new Proxy(ctx.deps.parts, { get: (t, k) => { partsRead++; return t[k] } }) // asked for nothing: the flag is refused before the platform is loaded
+    const exit = await runOnCli(argv, { ...ctx, platform })
+    const label = `${platform} ${argv.join(' ')}`
+    assert.equal(exit, 2, `${label}: ${io.text()}`)
+    assert.match(io.stderrText(), /D57 起没有点名项/, label)
+    assert.deepEqual(snapshot(home), before, `${label}: HOME byte for byte unchanged`)
+    assert.deepEqual(exec.calls, [], `${label}: no OS tool`)
+    assert.deepEqual(daemon.calls, [], `${label}: no daemon request`)
+    assert.equal(partsRead, 0, `${label}: the platform is not even loaded`)
   }
 })
