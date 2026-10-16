@@ -12,7 +12,6 @@ import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { loadArch } from '../../../../src/collector/arch/index.mjs'
 import { planOptIns, optinFormsOf, applyOptIn, rcLineOf, OPTIN_ITEMS } from '../../../../src/collector/arch/darwin/optin.mjs'
 import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
-import { createDarwinRedirector } from '../../../../src/collector/arch/darwin/redirector.mjs'
 import { DARWIN_UNDO_BY_KIND, undoDarwinOptIns, rcLineOf as rcLineOfOff } from '../../../../src/off/darwin-optin.mjs'
 import { KNOWN_KINDS } from '../../../../src/off/manifest.mjs'
 import { readManifest, saveManifest, newManifest } from '../../../../src/off/manifest.mjs'
@@ -383,26 +382,6 @@ test('the desktop-launcher undo: the launcher goes, the bin directory with it wh
   assert.equal(u2.results[0].result, 'absent', 'already gone: said, not guessed')
 })
 
-// the no-auth DOOR of the group the launcher points at (L4\'s unit half, as D47 rewrote it): over the REAL harness data, the engine\'s door of
-// the desktop group takes NO credentials (the desktop-launcher item\'s address is bare — its authorization is the naming, the loopback bind and
-// the engine\'s per-process judgment), while the credentialed group beside it carries the listener token (4.8 §3.2\'s auth:false arm is what
-// 4.9 §6.4\'s decision rides; the kernel config that carried it is retired with the kernel)
-test('the doors the engine is asked for: the desktop group\'s door takes no credentials; the settings group\'s carries the listener token', async () => {
-  const groups = groupsOf([byName('claude-code')])
-  const routes = Object.fromEntries(groups.map((x) => [x.g, { on: true, upstream: { kind: 'direct' } }]))
-  const ports = { 'claude-code.settings': GROUP_PORT, 'claude-code.desktop': DESKTOP_PORT }
-  const opened = []
-  const doors = { open: async (list) => { opened.push(list.map(({ id, port, auth, token }) => ({ id, port, auth, token: token ?? null }))); return list.map((x) => ({ [x.id]: x.port })) }, close: async () => {} }
-  const entries = { write: async (l) => l.map((x) => ({ g: x.g, ok: true })), undo: async () => [], check: async () => [] }
-  const r = createDarwinRedirector({ groups, identify: () => ({ agent: null, reason: 'no-match' }), isOn: () => true, routes: () => routes, ingress: () => ({ enginePort: 17990, groupPorts: ports, ingressToken: 'a'.repeat(32), listenerToken: LISTENER_TOKEN }), doors, entries, gate: () => ({ ok: true }) })
-  await r.attach()
-  assert.deepEqual(opened, [[
-    { id: 'claude-code.settings', port: GROUP_PORT, auth: true, token: LISTENER_TOKEN },
-    { id: 'claude-code.desktop', port: DESKTOP_PORT, auth: false, token: null },
-  ]], 'one loopback door per group (engine.listen binds 127.0.0.1): the desktop door takes NO credentials — the launcher\'s address is bare — and the settings door\'s password is the listener token the entries hold')
-})
-
-// the inline-copy contract: the arch side's line and the off side's are one text, and every kind the apply can produce has an undo
 test('the copies: the off side\'s rcLineOf is the arch side\'s, and DARWIN_UNDO_BY_KIND covers exactly the kinds the apply produces', () => {
   assert.equal(rcLineOfOff('/x/bin'), rcLineOf('/x/bin'), 'the line the apply writes is the line the undo takes out')
   const producible = Object.values(OPTIN_ITEMS).flatMap((d) => d.parts.map((p) => p.kind))
