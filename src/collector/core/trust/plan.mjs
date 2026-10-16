@@ -56,8 +56,8 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
   for (const d of descriptors) {
     const ctx = ctxFor(d)
     const win = ctx.os === 'win32'
-    const mac = ctx.os === 'darwin' // 4.9 §1: the darwin data hangs as d.darwin (harness/index.mjs attaches it); without this arm the base — Linux — inject would run on macOS (the wrong plugin, the wrong entries)
-    const inject = win ? d.win32 && d.win32.inject : mac ? d.darwin && d.darwin.inject : d.inject
+    // macOS has no trust plan here: its trust is the model's (spec 4.11, core/proxymode/); the base — Linux — inject must never run there (the wrong plugin, the wrong entries)
+    const inject = win ? d.win32 && d.win32.inject : ctx.os === 'darwin' ? null : d.inject
     if (typeof inject !== 'function') continue
     // the path rules of the OS the entries are for: Windows paths are absolute with either slash, compare ignoring case, and are written with forward slashes
     const isAbs = win ? (p) => path.win32.isAbsolute(p) : (p) => path.isAbsolute(p)
@@ -67,8 +67,8 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
     const inBin = (p) => (win ? slash(p).split('/').slice(0, -1).join('/').toLowerCase() === binDir.toLowerCase() : path.dirname(p) === binDir)
     const sameFile = (a, b) => (win ? slash(a).toLowerCase() === slash(b).toLowerCase() : a === b)
     const loginEnv = (p) => (win ? WIN_LOGIN_ENV.some((re) => re.test(slash(p))) : LOGIN_ENV.some((re) => re.test(p)))
-    // a profile directory on Windows often has a space (C:\Users\John Smith) — and on macOS too (/Users/John Smith): the block may then write its value in double quotes (`quote`, text-edit.mjs); the entry keeps the plain path (the slash conversion is a no-op on POSIX — the quote is what the darwin arm is here for)
-    const forward = (e) => (!win && !mac ? e : { ...e, ...(typeof e.value === 'string' ? { value: slash(e.value) } : {}), ...(e.vars ? { vars: Object.fromEntries(Object.entries(e.vars).map(([k, v]) => [k, slash(v)])), ...(e.format === 'dotenv-block' ? { quote: true } : {}) } : {}) })
+    // a profile directory on Windows often has a space (C:\Users\John Smith): the block may then write its value in double quotes (`quote`, text-edit.mjs); the entry keeps the plain path
+    const forward = (e) => (!win ? e : { ...e, ...(typeof e.value === 'string' ? { value: slash(e.value) } : {}), ...(e.vars ? { vars: Object.fromEntries(Object.entries(e.vars).map(([k, v]) => [k, slash(v)])), ...(e.format === 'dotenv-block' ? { quote: true } : {}) } : {}) })
     const out = inject(ctx) || {}
     // one variable set to one value: the checks every CA setting asight writes must pass (key or block variable)
     const checkVar = (where, key, value, semantic) => {

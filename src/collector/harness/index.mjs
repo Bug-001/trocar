@@ -2,7 +2,7 @@
 // only harness/). Each <name>.mjs default-exports one descriptor; files starting with '_' are helpers.
 // A harness that runs on Windows has its Windows data in win32/<name>.mjs (4.8 §2.3: forms, proxy entries, trust
 // entries; the `win32` directory is no harness and its helpers start with '_'): it is attached as `desc.win32`.
-// The macOS data lives the same way in darwin/<name>.mjs and is attached as `desc.darwin` (4.9 §2.3).
+// macOS has no such overlay: its data is the base descriptor's `proxyMode` (spec 4.11 §2.3), as Windows' will be.
 // The registry (core) validates them; this file never imports core/engine or arch/. It also checks the one export
 // every descriptor owes `asight status` and `asight doctor` (RFC 1.6 §9.7): `proxy`, how its agent reads a proxy.
 import fs from 'node:fs'
@@ -152,7 +152,6 @@ export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
   const dir = fileURLToPath(dirUrl)
   const names = fs.readdirSync(dir).filter((n) => n.endsWith('.mjs') && n !== 'index.mjs' && !n.startsWith('_')).sort()
   const win = new Set(fs.existsSync(new URL('win32/', dirUrl)) ? fs.readdirSync(fileURLToPath(new URL('win32/', dirUrl))) : [])
-  const mac = new Set(fs.existsSync(new URL('darwin/', dirUrl)) ? fs.readdirSync(fileURLToPath(new URL('darwin/', dirUrl))) : [])
   const out = []
   for (const n of names) {
     const d = (await import(new URL(n, dirUrl).href)).default
@@ -162,7 +161,6 @@ export async function loadHarnesses(dirUrl = new URL('./', import.meta.url)) {
     if (pmBad.length) throw new Error(`harness ${d.name || n} (${n}): its proxyMode is wrong (spec 4.11 §2.3): ${pmBad.join('; ')}`)
     let withOs = d
     if (win.has(n)) withOs = { ...withOs, win32: (await import(new URL(`win32/${n}`, dirUrl).href)).default }
-    if (mac.has(n)) withOs = { ...withOs, darwin: (await import(new URL(`darwin/${n}`, dirUrl).href)).default }
     out.push(withOs)
   }
   return out

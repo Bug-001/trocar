@@ -46,7 +46,11 @@ test('differential: for every process seed and its variants, matchHarness over t
 })
 
 // ── on: the snapshot written ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
-async function codexBox(osName = 'darwin') {
+// The install side writes the snapshot the same on every OS (the header): macOS's old trust plan went with its descriptor overlays, so a darwin box
+// is installed by the Linux plan and judged by `off` against macOS's process tables — the half of these tests that stays (plan 2026-10-15 §A.6, P12).
+const installOs = (osName) => (osName === 'darwin' ? 'linux' : osName)
+async function codexBox(asked = 'darwin') {
+  const osName = installOs(asked)
   const home = tmpDir('asight-liveness-identity-')
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
   fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\n')
@@ -54,7 +58,8 @@ async function codexBox(osName = 'darwin') {
   const arch = await loadArch(osName)
   const install = () => installCollector({ home, env: { HOME: home }, ids: ['codex'], osName, arch, harnesses: HARNESSES, freePort: async () => 47011, scan: async () => [], roots })
   const sys = fakeSystem()
-  const on = async () => { const r = await turnOn({ home, env: { HOME: home }, ids: ['codex'], osName, arch, harnesses: HARNESSES, freePort: async () => 47011, roots, confirm: async () => true, unit: null, autostart: false, request: sys.daemon.request, socketPath: path.join(home, 'collector.sock'), sleep: async () => {} }); assert.equal(r.exit, 0, JSON.stringify(r.problems)); return r }
+  const on = async () => { if (!fs.existsSync(manifestFile)) await install() // the Linux plan's on wants install's certificate first (D55⑥)
+    const r = await turnOn({ home, env: { HOME: home }, ids: ['codex'], osName, arch, harnesses: HARNESSES, freePort: async () => 47011, roots, confirm: async () => true, unit: null, autostart: false, request: sys.daemon.request, socketPath: path.join(home, 'collector.sock'), sleep: async () => {} }); assert.equal(r.exit, 0, JSON.stringify(r.problems)); return r }
   const manifestFile = path.join(dir, 'install-manifest.json')
   const agents = (list) => { fs.mkdirSync(path.join(home, '.asight'), { recursive: true }); fs.writeFileSync(path.join(home, '.asight', 'agents.json'), typeof list === 'string' ? list : JSON.stringify({ version: 1, agents: list })) }
   return { home, dir, arch, install, on, manifestFile, agents, bundle: path.join(dir, 'ca', 'combined-codex.pem'), caFp: () => certBlocks(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8'))[0].fp }
@@ -182,7 +187,8 @@ for (const osName of Object.keys(OS)) {
   test(`${osName}: a record with no identity (an older asight's on) is not known — the bundle kept without the CA, an item left, step 5 says it cannot tell — and the next on fills it in`, async () => {
     const s = await codexBox(osName)
     const sys = fakeSystem()
-    const on = () => turnOn({ home: s.home, env: { HOME: s.home }, ids: ['codex'], osName, arch: s.arch, harnesses: HARNESSES, freePort: async () => 47011, roots, confirm: async () => true, unit: null, autostart: false, request: sys.daemon.request, socketPath: path.join(s.home, 'collector.sock'), sleep: async () => {} })
+    await s.install()
+    const on = () => turnOn({ home: s.home, env: { HOME: s.home }, ids: ['codex'], osName: installOs(osName), arch: s.arch, harnesses: HARNESSES, freePort: async () => 47011, roots, confirm: async () => true, unit: null, autostart: false, request: sys.daemon.request, socketPath: path.join(s.home, 'collector.sock'), sleep: async () => {} })
     assert.equal((await on()).exit, 0)
     const m = readManifest(s.dir)
     const compiled = m.liveness.codex.identity
@@ -193,6 +199,7 @@ for (const osName of Object.keys(OS)) {
     assert.deepEqual(r.kept_bundles.map((k) => [path.basename(k.path), k.unjudged, /no process identity for codex/.test(k.error)]), [['combined-codex.pem', true, true]], 'not known is not "nobody": kept')
     assert.ok(!certBlocks(fs.readFileSync(s.bundle, 'utf8')).some((c) => c.fp === s.caFp()), 'without the asight CA')
     assert.deepEqual([r.left.map((l) => path.basename(l.path)), r.trust_unknown.map((x) => [x.harness, /no process identity for codex/.test(x.why)]), r.still_trusting], [['combined-codex.pem'], [['codex', true]], []], 'an item left (exit 1); who still trusts asight is said to be unknown, not none, and why')
+    await s.install() // on Linux off took the certificate items back; on does not write them (D55①)
     assert.equal((await on()).exit, 0)
     assert.deepEqual(readManifest(s.dir).liveness.codex.identity, compiled, 'the next on records the identity')
     const judged = await offWith(s, osName, table)
@@ -213,7 +220,7 @@ for (const osName of Object.keys(CLAUDE)) {
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{\n  "model": "x"\n}\n')
     const env = { HOME: home, USERPROFILE: home, NODE_EXTRA_CA_CERTS: path.join(home, 'relay-ca.pem') } // the user's own CA: Claude Code gets an extra-cc.pem
-    await installCollector({ home, env, ids: ['claude-code'], osName, arch: await loadArch(osName), harnesses: HARNESSES, freePort: async () => 47011, scan: async () => [], roots })
+    await installCollector({ home, env, ids: ['claude-code'], osName: installOs(osName), arch: await loadArch(installOs(osName)), harnesses: HARNESSES, freePort: async () => 47011, scan: async () => [], roots })
     const dir = path.join(home, '.asight', 'collector'), extra = path.join(dir, 'ca', 'extra-cc.pem')
     assert.ok(fs.existsSync(extra), 'the user\'s own CA made an extra-cc.pem')
     const table = CLAUDE[osName](home, new Date(Date.now() + 60_000))
