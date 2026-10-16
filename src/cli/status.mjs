@@ -25,7 +25,7 @@ import { getPath } from '../off/json-text.mjs'
 import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
 import { userProcessesOf } from '../off/orchestrate.mjs'
 import { netenvFile, writeNetenv } from '../netenv/index.mjs'
-import { judgeHarness } from '../netenv/verdict.mjs'
+import { judgeHarness, certOfForms } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
 import { buildTopology, renderPathBlock, renderDetail } from '../netenv/topology.mjs'
@@ -154,11 +154,16 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     // this harness's path into asight (V32 `attached`), one resolver: the proxy-mode daemon answers it per harness (its doors listen), Linux's is the instance's link
     const own = fromReply && fromReply[id] && 'attached' in fromReply[id]
     const att = own ? { attached: [true, false].includes(fromReply[id].attached) ? fromReply[id].attached : null, reason: `the daemon could not tell whether ${id}'s doors listen (ingress.json unreadable)` } : { attached: f.link.attached, reason: f.link.reason }
-    const judged = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: platform === 'darwin' || platform === 'win32' })
-    if (merged) judged.rows = judged.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
+    // `judge(cert)`: the verdict again once the forms' certificates are read (judgeCertificates, after the topology's facts): V32 puts the certificate between the entry and the start time
+    const judge = (cert = true) => {
+      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: platform === 'darwin' || platform === 'win32', cert })
+      if (merged) j.rows = j.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
+      return j
+    }
+    const judged = judge()
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
     if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && att.attached === null) why.push(att.reason) // the path in is what the verdict waits for, and the daemon could not say
-    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, judged, why: [...new Set(why.filter(Boolean))] })
+    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, judged, judge, why: [...new Set(why.filter(Boolean))] })
   }
   // how many connections are still relayed after an off (§1.3): the daemon says; with no daemon there is no engine, so none; with one that does not answer or does not say, not known
   const rc = reply && reply.relayed
@@ -178,12 +183,21 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   return f
 }
 
-/** 1.6 §9.7 / R4: certificate states the user must act on (root pending, declined or gone; key gone) also exit 1, once something was installed; the verdicts stay the proxy axis's (V32). */
+/** V32: the certificate step of each harness's verdict, from the per-form `certificate` the topology's facts carry (proxy mode, 1.6 §9.4); a harness with no forms there keeps its verdict
+ *  (Linux: the daemon judges the trust itself). The per-form `certificate:` / `proxy:` lines are not touched: only the harness's verdict reads both axes. */
+function judgeCertificates(f) {
+  for (const h of f.harnesses) {
+    const forms = f.facts && f.facts.harnesses && f.facts.harnesses[h.id] && f.facts.harnesses[h.id].forms
+    if (forms && forms.length && h.judge) h.judged = h.judge(certOfForms(forms))
+  }
+}
+
+/** 1.6 §9.7 / R4: certificate states the user must act on (root pending, declined or gone; key gone) also exit 1, once something was installed — also where no agent runs that would show it. */
 const certNeedsUser = (f) => !!(f.install && f.install.state && f.cert && (['cert-root-pending', 'cert-root-declined', 'cert-root-missing'].includes(f.cert.root.code) || f.cert.key.state === 'missing'))
 
 /** 1.6 §9.4 `install` and `cert` (D55): the install record from the manifest; the root from asight-ca.pem, read back from the user's store through the injected reader
  *  (backendsFor().rootStore: never `security` / `certutil` in a test); the key and the intermediate from the daemon's issuer (unknown, with a reason, without one). The certificate
- *  axis only: nothing here changes a harness's verdict (V32). Linux: no user root step (`none`), the key is the file `install` made, no intermediate. */
+ *  axis only: nothing here judges a harness; the forms' `certificate` built from `cert.root` is the certificate step of the verdict (judgeCertificates, V32). Linux: no user root step (`none`), the key is the file `install` made, no intermediate. */
 async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
   const rec = m && m.install ? m.install : null, model = platform === 'darwin' || platform === 'win32', reply = f.daemon.reply
   const install = { state: rec ? rec.state ?? null : null, at: rec ? rec.at ?? null : null, harnesses: rec ? rec.harnesses || [] : [], pending: rec ? (rec.pending || []).map((p) => p.item) : [] }
@@ -273,6 +287,8 @@ const REASON_TEXT = {
   'helper-missing': '能力助手缺失或版本不对(sudo asight setup-helper)', 'negative-cache': '进程拒绝了 asight 的证书,那个 host 之后透传(重启这个 agent 再试)',
   'config-after-start': '它在信任入口写好之前就启动了,重启后才会被采集',
   'forwarder-down': 'agent 的代理入口指着 asight 的门,门随守护进程一起没了,连不上(asight on 拉起它;马上要用:asight off <harness>)',
+  'cert-not-installed': 'asight 的根证书没装,agent 不认 asight 的证书(asight install)', 'cert-root-missing': 'asight 的根证书装过、已不在你的证书库里(asight install)',
+  'cert-root-pending': 'asight 的根证书还等你在系统弹窗里确认(asight install)', 'cert-root-declined': '你拒绝了把 asight 的根证书放进证书库(asight install 再来一次)',
 }
 const reasonText = (r, hint) => REASON_TEXT[r] || hint || trustReasonText(r) || ''
 const reasonOf = (j) => (j.rows.find((r) => r.reason) || {}).reason ?? null // the harness's own reason: the first one a row has
@@ -303,7 +319,7 @@ function formsOf(f) {
 /** `status <h>`'s per-form lines, rendered from the JSON (V43): the two axes apart (V32), what asight wrote beside what the user had (CM21, V70). */
 function formLines(forms, h) {
   return ((forms && forms[h]) || []).flatMap(({ form, certificate: c, proxy: p, notes = [] }) => [`  ${form}`,
-    `    certificate: ${c.in_effect ? `生效 · ${c.carrier}${c.since ? ` · 自 ${c.since}` : ''}` : `不生效 · ${c.code} — 跑 ${c.command}`}${c.user_file ? ` · 你的证书文件 ${c.user_file.path}(${c.user_file.state})` : ''}`,
+    `    certificate: ${c.in_effect ? `生效 · ${c.carrier}${c.since ? ` · 自 ${c.since}` : ''}` : `不生效 · ${c.code || '不知道(读不到你的根证书库)'} — 跑 ${c.command}`}${c.user_file ? ` · 你的证书文件 ${c.user_file.path}(${c.user_file.state})` : ''}`,
     `    proxy: ${p.connected ? '接上' : '没接上'} · 入口${p.entry_intact ? '完好' : '不完好'} · 门${p.door_up ? '在听' : '没在听'} · 上游 ${p.upstream.url_redacted ?? '直连'}(${p.upstream.source}${p.upstream.code ? ` · ${p.upstream.code}` : ''})`,
     `    asight 写的: ${p.written ?? '没有'}   你原来的: ${p.prior ?? '没有'}`,
     ...notes.map((n) => `    ${n.code}: ${n.text}`)])
@@ -487,6 +503,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   if (!named.ok) { io.err(`asight status: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return { exit: EXIT.usage, f: null } }
   const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names: named.ids })
   Object.assign(f, await gatherTopology(f, { home, env, platform, deps }))
+  judgeCertificates(f)
   recordNetenv(f, { home, deps })
   const wanted = f.harnesses.filter((h) => h.desired === 'on')
   const unreadable = f.harnesses.some((h) => h.judged.captured === null) || !!(f.state && f.state.error) || !!f.manifest.error || !!f.health_error

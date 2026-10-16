@@ -4,7 +4,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { judgeHarness, STATUS_REASONS } from '../../src/cli/status.mjs'
+import { certOfForms } from '../../src/netenv/verdict.mjs'
 import { TRUST_REASONS } from '../../src/health/codes.mjs'
+import { darwinNetFacts } from '../../src/collector/arch/darwin/netfacts.mjs'
 
 // ── V32: the judgement, over every combination of desired state × entry × link × daemon × (no process | one that started before the entry was written | one after) ──────────────────────
 // Columns: desired · entry intact (T / F / N = unknown) · link attached (T / F / N) · daemon · what is said with no process | with a process older than installed_at | with a newer one.
@@ -147,6 +149,21 @@ test('the order of the reasons is off · daemon · helper · link: a missing hel
   assert.equal(why({ daemon: 'not-responding', attached: false }), 'daemon-not-responding')
   assert.deepEqual(j({ daemon: 'unknown', attached: false, procs: [] }), { captured: null, rows: [{ captured: null, reason: null }] }, 'a daemon that is not known: the helper it reports is not known either')
   assert.equal(judgeHarness({ ...ready, attached: false, procs: [{ pid: 3, trusted: true }] }).rows[0].reason, 'link-missing', 'with a helper that is there, the link is what is missing')
+})
+
+test('V32 the certificate step: after the world and the entry, before the start time; a process the daemon judged is not overruled; the harness\'s own row too — over every cert × entry × process kind', () => {
+  const kinds = { none: [], judged: [{ pid: 1, trusted: true }], refused: [{ pid: 1, trusted: false, reason: 'var-missing' }], before: [{ pid: 1, trusted: null, startedAt: INSTALLED_AT - 1 }], after: [{ pid: 1, trusted: null, startedAt: INSTALLED_AT + 1 }], nostart: [{ pid: 1, trusted: null, startedAt: null }] }
+  for (const cert of [true, null, 'cert-root-missing', 'cert-not-installed', 'entry-changed']) for (const entryIntact of [true, false, null]) for (const [k, procs] of Object.entries(kinds)) {
+    const base = judgeHarness({ ...ready, entryIntact, procs }), got = judgeHarness({ ...ready, entryIntact, procs, cert }), at = `${cert} × ${entryIntact} × ${k}`
+    if (cert === true || k === 'judged' || k === 'refused' || entryIntact !== true) { assert.deepEqual(got, base, `${at}: the certificate does not decide`); continue }
+    assert.deepEqual(got.rows.map((r) => [r.captured, r.reason]), [[cert === null ? null : false, cert === null ? null : cert]], `${at}: the certificate decides, before the start time`)
+    for (const world of [{ desired: 'off' }, { daemon: 'not-running' }, { attached: false }]) assert.deepEqual(judgeHarness({ ...ready, entryIntact, procs, cert, ...world }), judgeHarness({ ...ready, entryIntact, procs, ...world }), `${at} ${JSON.stringify(world)}: the world comes first`)
+  }
+  assert.equal(certOfForms([]), true); assert.equal(certOfForms(undefined), true)
+  const form = (in_effect, code = null, carrier = 'root') => ({ certificate: { in_effect, carrier, code } })
+  assert.equal(certOfForms([form(true, null, 'config-key'), form(true)]), true)
+  assert.equal(certOfForms([form(true, null, 'config-key'), form(false, 'cert-root-pending')]), 'cert-root-pending', 'one form whose certificate is not in effect is enough')
+  assert.equal(certOfForms([form(false, null)]), null, 'not in effect with no code (the root store unreadable): not known')
 })
 
 test('a process the daemon has not judged: no start time is start-time-unknown, no installed_at to compare with is 不知道, an entry that is not intact comes first (a restart would not help)', () => {
@@ -551,21 +568,25 @@ async function modelStatus(w, { desired, daemon, door, key, st, root }) {
   const r = { pid: 99, doors: door === 'up' ? { 'codex:all': 17995 } : {}, harnesses: { codex: { desired, attached: door === 'unknown' ? null : door === 'up' } }, holders: 1, cert: { key, intermediate: st, expires: st === 'ready' ? '2026-10-22T09:00:02Z' : null }, engine: {} }
   const request = daemon === 'running' ? async (q) => (q.path === '/status' ? r : q.path === '/holders' ? { count: 1, holders: modelProc.holders } : assert.fail(q.path)) : down(daemon === 'noresp' ? 'ETIMEDOUT' : 'ECONNREFUSED')
   const io = fakeIo()
-  const exit = await runStatusCli(['--json'], { io, home: w.home, platform: 'darwin', env: w.env, deps: { request, socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }), rootStore: root === 'in' ? w.store : rootStoreStub(), user: 'alice' } })
+  const exit = await runStatusCli(['--json'], { io, home: w.home, platform: 'darwin', env: w.env, deps: { request, socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: root === 'in' ? w.store : rootStoreStub(), user: 'alice' } })
   return { exit, j: JSON.parse(io.stdoutText()) }
 }
 
-test('V32 proxy mode: desired × daemon × door × certificate state — the verdict is the proxy axis\'s literal, the cert codes the certificate axis\'s, neither moves the other; every output validates (V9)', async () => {
+test('V32 proxy mode: desired × daemon × door × certificate state — the verdict is the proxy axis\'s literal until the proxy path is clear, then the certificate\'s (codex\'s forms carry the root: root out is cert-root-missing); the per-form certificate: / proxy: lines do not move each other; every output validates (V9)', async () => {
   const w = await modelOn()
   for (const pl of PROXY) {
     const [pk, pcell] = pl.split('|').map((x) => x.trim()); const [desired, daemon, door] = pk.split(/\s+/)
+    const proxies = new Set()
     for (const cl of CERT) {
       const [ck, ...codes] = cl.split('|').map((x) => x.trim()); const [key, st, root] = ck.split(/\s+/)
       const { j } = await modelStatus(w, { desired, daemon, door, key, st, root })
       const at = `${pk} × ${ck}`
       assert.deepEqual(validateReceipt(j), [], at)
       const h = j.harnesses.find((x) => x.harness === 'codex')
-      assert.deepEqual({ captured: h.captured, reason: h.reason }, said(pcell), at)
+      assert.deepEqual({ captured: h.captured, reason: h.reason }, pcell === 'T' && root === 'out' ? { captured: false, reason: 'cert-root-missing' } : said(pcell), at)
+      assert.ok(j.forms && j.forms.codex.length, `${at}: codex's forms are read`)
+      for (const x of j.forms.codex) assert.deepEqual([x.certificate.carrier, x.certificate.in_effect, x.certificate.code], ['root', root === 'in', root === 'in' ? null : 'cert-root-missing'], `${at} ${x.form}`)
+      proxies.add(JSON.stringify(j.forms.codex.map((x) => x.proxy)))
       const up = daemon === 'running'
       assert.deepEqual([j.cert.key.code, j.cert.intermediate.code, j.cert.root.code], up ? codes.map(code) : [null, null, code(codes[2])], at)
       assert.equal(j.cert.key.state, up ? { present: 'present', missing: 'missing', unknown: 'unknown' }[key] : 'unknown', at)
@@ -575,6 +596,7 @@ test('V32 proxy mode: desired × daemon × door × certificate state — the ver
       assert.equal(j.install.state, 'complete', at)
       assert.equal(j.cert.key.custody, w.custody.kind, `${at}: the custody install recorded`)
     }
+    assert.equal(proxies.size, 1, `${pk}: the certificate axis does not move the proxy: lines`)
   }
 })
 
@@ -593,10 +615,11 @@ test('V26 proxy mode: status exits by the judgement — 0 with the door up, 1 wi
   const base = { desired: 'on', daemon: 'running', key: 'present', st: 'ready', root: 'in' }
   assert.equal((await modelStatus(w, { ...base, door: 'up' })).exit, EXIT.ok)
   assert.equal((await modelStatus(w, { ...base, door: 'missing' })).exit, EXIT.incomplete)
-  for (const [cert, exit] of [[{ key: 'missing', st: 'key-missing' }, EXIT.incomplete], [{ root: 'out' }, EXIT.incomplete], [{ st: 'unavailable', key: 'unknown' }, EXIT.ok]]) {
+  for (const [cert, exit, said] of [[{ key: 'missing', st: 'key-missing' }, EXIT.incomplete, [true, null]], [{ root: 'out' }, EXIT.incomplete, [false, 'cert-root-missing']], [{ st: 'unavailable', key: 'unknown' }, EXIT.ok, [true, null]]]) {
     const r = await modelStatus(w, { ...base, door: 'up', ...cert })
-    assert.equal(r.exit, exit, `1.6 §9.7 / R4: a certificate state the user must act on exits 1, the verdict stays the proxy axis's: ${JSON.stringify(cert)}`)
-    assert.equal(r.j.harnesses.find((x) => x.harness === 'codex').captured, true, JSON.stringify(cert))
+    assert.equal(r.exit, exit, `1.6 §9.7 / R4: a certificate state the user must act on exits 1: ${JSON.stringify(cert)}`)
+    const h = r.j.harnesses.find((x) => x.harness === 'codex')
+    assert.deepEqual([h.captured, h.reason], said, `V32: a root-carrier form with the root out is not captured; the issuer's key is the doors', not the agent's trust: ${JSON.stringify(cert)}`)
   }
   const r = await modelStatus(w, { ...base, door: 'unknown' })
   assert.equal(r.exit, EXIT.unknown)
@@ -618,6 +641,9 @@ test('1.6 §9.4 / §9.6 cert.root: the code follows the state — pending / decl
     fs.writeFileSync(mf, JSON.stringify({ ...m0, install }))
     const r = await modelStatus(w, base)
     assert.deepEqual([r.j.cert.root.state, r.j.cert.root.code, r.exit], [state, code, exit], code)
+    const h = r.j.harnesses.find((x) => x.harness === 'codex') // the topology's per-form verdict on the same facts: test/netenv/model-rows.test.mjs (V32 rows)
+    const want = install ? [false, code] : [true, null] // never installed: no install record, no forms to carry a root (the cert block says cert-not-installed)
+    assert.deepEqual([h.captured, h.reason], want, `V32: the harness verdict carries the root's code: ${code}`)
     assert.deepEqual(validateReceipt(r.j), [], code)
   }
 })

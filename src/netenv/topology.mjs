@@ -9,7 +9,7 @@
 // Driver mode (Linux eBPF) is `driverTopology`; proxy mode (4.8 §10: the agent's proxy entry points at asight's own kernel, one branch per form) is `proxyTopology`, from the facts the Windows branch's
 // archFacts gives (`harnesses[h].forms`, `forwarder`); the macOS old capture (§4) is `legacyTopology`.
 //
-import { judgeHarness } from './verdict.mjs'
+import { judgeHarness, certOfForms } from './verdict.mjs'
 import { parseProxyUrl } from './redact.mjs'
 
 export { renderCompact, renderDetail, renderPathBlock, verdictText, firstHopAfterAsight, firstHopOff, hopKey, ROUTING_TEXT } from './topology-text.mjs' // the words of the topology, rendered from the object below
@@ -176,7 +176,7 @@ function formVerdict(F, h, hf, fm, fwf) {
   if (main) return none(true, false, 'elevated-agent')
   if (F.daemon.state === 'not-running' || F.daemon.state === 'not-responding') return none(true, false, `daemon-${F.daemon.state}`)
   if (fwf.upstream_error) return { on: true, captured: false, reason: 'upstream-unreachable', engine: true } // the engine could not dial the upstream (the platform's last 60 s of it)
-  const j = judgeHarness({ desired: 'on', entryIntact: entryIntact(hf), entryWhy: 'entry-missing', attached: fwf.state === 'on', helper: 'ok', daemon: F.daemon.state, procs: fm.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative })), installedAt: hf.installedAt })
+  const j = judgeHarness({ desired: 'on', entryIntact: entryIntact(hf), entryWhy: 'entry-missing', attached: fwf.state === 'on', helper: 'ok', daemon: F.daemon.state, procs: fm.procs.map((p) => ({ pid: p.pid, startedAt: p.startedAt, trusted: p.trusted, reason: p.reason, negative: p.negative })), installedAt: hf.installedAt, cert: certOfForms([fm]) })
   return { on: true, captured: j.captured, reason: (j.rows.find((r) => r.reason) || {}).reason ?? null, engine: true }
 }
 

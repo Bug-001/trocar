@@ -63,12 +63,26 @@ for (const os of OSES) {
         assert.equal(found.some((f) => f.code === 'prior-proxy-unknown'), source === 'unknown')
       }
     })
+    test(`V32 ${os} ${desc.name}: the certificate step — with the root not in effect a form whose carrier is the root is not captured (the root\'s code), a form with its own carrier keeps the proxy axis\'s verdict; the proxy facts do not move`, async () => {
+      const ok = await draw({ os, desc })
+      for (const root of [{ state: 'missing', code: 'cert-root-missing', command: 'asight install' }, { state: 'declined', code: 'cert-root-declined', command: 'asight install' }, { state: 'pending', code: null, command: 'asight install', reason: 'store unreadable' }]) {
+        const { F, t } = await draw({ os, desc, root })
+        const fx = F.harnesses[desc.name].forms
+        for (const b of t.branches) {
+          const x = fx.find((y) => y.id === b.form), want = x.certificate.carrier === 'root' ? (root.code ? [true, false, root.code] : [true, null, null]) : [true, true, null]
+          assert.deepEqual([b.on_path, b.captured, b.reason], want, `${b.form} ${root.state}`)
+        }
+        assert.deepEqual(fx.map((y) => y.proxy), ok.F.harnesses[desc.name].forms.map((y) => y.proxy), `${root.state}: the certificate axis does not move the proxy facts`)
+      }
+    })
     test(`V41 ${os} ${desc.name} row 31 and not-routed: a hook carrier that drifted takes the form off the path (entry-changed → asight install); a form with no entry is not-routed`, async () => {
       const drift = () => ({ reason: 'entry-changed', path: '/x', command: 'asight install' })
       const { F, t, found } = await draw({ os, desc, drift })
       const hooked = F.harnesses[desc.name].forms.filter((x) => x.hook).map((x) => x.id)
       assert.equal(hooked.length > 0, HOOKED(desc) && F.harnesses[desc.name].forms.some((x) => x.certificate.carrier !== 'root'))
-      for (const b of t.branches) assert.deepEqual([b.on_path, b.captured, b.reason], hooked.includes(b.form) ? [false, false, 'entry-changed'] : [true, true, null], b.form)
+      const cert = (id) => F.harnesses[desc.name].forms.find((x) => x.id === id).certificate
+      // a carrier that is not a hook stays on the path, but its certificate is not in effect: not captured, its code (V32's certificate step)
+      for (const b of t.branches) assert.deepEqual([b.on_path, b.captured, b.reason], hooked.includes(b.form) ? [false, false, 'entry-changed'] : cert(b.form).in_effect ? [true, true, null] : [true, false, cert(b.form).code], b.form)
       if (hooked.length) assert.deepEqual(found.find((f) => f.code === 'entry-changed').commands.map((c) => c.run), ['asight install'])
       const bare = await draw({ os, desc, on: false })
       assert.deepEqual(verdicts(bare.t), Array(n(bare.t)).fill([false, false, 'not-routed']))

@@ -60,7 +60,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
       const carrier = !c || (c.when && holds(c.when, ctx) === false) ? 'root' : CARRIER[c.kind] ?? null
       const r = root || {}
-      const bad = carrier === 'root' ? (r.state === 'in-place' ? null : { reason: r.code || CODE.certNotInstalled, command: r.command || INSTALL })
+      const bad = carrier === 'root' ? (r.state === 'in-place' ? null : { reason: root ? r.code ?? null : CODE.certNotInstalled, command: r.command || INSTALL }) // a root status could not read (no code): not known, never a made-up code
         : d || (own.length ? null : { reason: 'entry-missing', command: INSTALL })
       const certificate = { in_effect: !bad, carrier, user_file: carrier === 'root' ? null : uf, since: latest(carrier === 'root' ? inst.filter((i) => i.kind === 'system-root') : own), code: bad ? bad.reason : null, command: bad ? bad.command || INSTALL : null }
       if (certificate.in_effect && uf && uf.state !== 'intact' && carrier !== 'root') Object.assign(certificate, { in_effect: false, code: uf.state === 'changed' ? 'entry-changed' : CODE.notUsersFile, command: INSTALL })

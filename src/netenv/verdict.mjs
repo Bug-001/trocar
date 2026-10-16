@@ -13,12 +13,14 @@ const verdict = (captured, reason = null) => ({ captured, reason })
  *   daemon       'running' | 'not-running' | 'not-responding' | 'unknown'
  *   deadDoor     proxy mode (macOS, Windows): the agents' proxy entries name asight's door, which lives in the daemon — a daemon that is not running, or a door it does not hold, is a dead door (forwarder-down)
  *   procs        [{ pid, startedAt (ms or ISO), trusted: true | false | null, reason, negative }] — the harness's processes that send requests. `trusted` is the daemon's verdict when it answered;
- *                null = not judged: then the start time against the entry's `installedAt` decides (a process older than its entry never read it: config-after-start, 4.6 §确认信任)
+ *                null = not judged: then the entry, then the certificate, then the start time against the entry's `installedAt` decides (a process older than its entry never read it: config-after-start, 4.6 §确认信任)
+ *   cert         true | null | a code — the certificate the harness's agents check asight's leaves with is in effect (true; also where nothing says otherwise, Linux), not known (null), or not
+ *                in effect and why (the 1.6 §9.6 `cert-*` code of the form's `certificate`, certOfForms below). Like the entry, it decides only a process the daemon has not judged, and the harness's own row
  * → { captured: true | false | null, rows: [{ pid?, captured, reason }] }; `reason` is one of STATUS_REASONS, null when captured or not known. With no process the one row has no pid and is
- * the harness's own: 「link 已挂且入口完好」(§1.5). The order of the reasons: desired off · the daemon · the helper · the link · (a process: its own verdict, else the entry, then its start time).
+ * the harness's own: 「link 已挂、入口完好且证书生效」(§1.5, V32). The order of the reasons: desired off · the daemon · the helper · the link · (a process: its own verdict, else the entry, then the certificate, then its start time).
  * The harness is captured when every row is, not captured when any row is not, else not known.
  */
-export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-missing', attached = null, helper = 'ok', daemon = 'unknown', procs = [], installedAt = null, deadDoor = false }) {
+export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-missing', attached = null, helper = 'ok', daemon = 'unknown', procs = [], installedAt = null, deadDoor = false, cert = true }) {
   const world = (() => {
     if (desired === 'off') return verdict(false, 'desired-off')
     if (desired !== 'on') return verdict(null)
@@ -31,8 +33,9 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
     return null // nothing in the way
   })()
   const entry = entryIntact === true ? null : entryIntact === false ? verdict(false, entryWhy) : verdict(null)
+  const certificate = cert === true ? null : verdict(cert === null ? null : false, cert) // V32: after the entry (a broken entry is fixed first), before the start time (a restart does not bring a certificate)
   if (!procs.length) {
-    const v = world || entry || verdict(true)
+    const v = world || entry || certificate || verdict(true)
     return { captured: v.captured, rows: [v] }
   }
   const installed = at(installedAt)
@@ -42,6 +45,7 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
     if (p.trusted === false) return row(verdict(false, p.reason === 'off' ? 'desired-off' : p.reason ?? null))
     if (p.trusted === true) return row(p.negative ? verdict(false, 'negative-cache') : verdict(true))
     if (entry) return row(entry)
+    if (certificate) return row(certificate)
     const started = at(p.startedAt)
     if (started == null || Number.isNaN(started)) return row(verdict(false, 'start-time-unknown'))
     if (installed == null || Number.isNaN(installed)) return row(verdict(null))
@@ -49,4 +53,11 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
   })
   const captured = rows.some((r) => r.captured === false) ? false : rows.some((r) => r.captured === null) ? null : true
   return { captured, rows }
+}
+
+/** A harness's `cert` for judgeHarness (V32) from its forms' `certificate` (1.6 §9.4, proxy mode): true when every present form's is in effect (or none says), else the first one that is not —
+ *  its code, or null (not known) when it has none (the user's root store could not be read). */
+export function certOfForms(forms) {
+  const bad = (forms || []).find((x) => x.certificate && x.certificate.in_effect === false)
+  return bad ? bad.certificate.code ?? null : true
 }
