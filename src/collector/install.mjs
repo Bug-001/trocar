@@ -27,7 +27,7 @@ import { backupDir, opLockFile, standalonePath } from '../off/paths.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readStateFile, emptyState, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { newReceipt } from '../off/schema.mjs'
-import { OFF_VERSION, undoByHand, installComplete } from '../off/manifest.mjs'
+import { OFF_VERSION, installComplete } from '../off/manifest.mjs'
 import { writeStandalone, checkStandalone } from '../off/standalone.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -392,7 +392,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *    arch       the arch, asked for the combined bundles' OS roots (planOn)   roots  overrides them
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, afterConfirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
@@ -444,26 +444,6 @@ export async function turnOn(opts = {}) {
       if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'] }, manifest: plan._.prior, plan, exit: 2 }
       if (verdict === false) return { receipt: { ...r, ok: false, planned: true, declined: true, notes: [...r.notes, '没有确认:什么都没改'] }, manifest: plan._.prior, plan, exit: 1 }
     }
-    // The kernel's download, verify and placement, the CLI's one online step, is the FIRST write-phase action: after the confirmation (the plan already
-    // showed the download line), before the op lock and any agent file — a failed download leaves zero agent files written (the precondition's nature
-    // unchanged). `null` = the arch has no kernel to ensure (Linux's driver mode). A not-ok answer stops the run here with an unwritten receipt
-    // (exit 1); the hook's own records (the download's started / ok / failed, the missing / mismatch failures) are already in flows/ by the time it answers
-    // (R11 — `recorded` writes nothing for a clean answer, and a stop here is not a throw). The hook runs before the lock on purpose: the download can take
-    // a while, and `off` / `uninstall` must not wait behind it (the kernel is asight's own file; concurrent `on`s each verify their own copy).
-    let kernelLedger = null // the afterConfirm hook's kernel answer, ledgered into the manifest inside the lock (below): the kernel is on disk before the manifest exists
-    if (afterConfirm) {
-      const k = await afterConfirm()
-      if (!k || k.ok === false) return { receipt: unwritten({ ...r, ok: false, notes: [...r.notes, (k && k.reason) || 'the kernel could not be ensured; nothing was changed'] }), manifest: plan._.prior, plan, exit: 1 }
-      if (k.note) {
-        r.notes.push(k.note) // the receipt's own line of where the kernel came from (downloaded / from the cache)
-        // …and the plan's own kernel line goes: it describes the pre-run state ("not there yet — will be downloaded … once you confirm" /
-        // "found and verified"), and kept beside the outcome it contradicts it — a failed first install printed BOTH as problems
-        // (seen on a macOS test machine, 2026-10-11). The plan view (--dry-run, the confirm prompt) still shows it; only the outcome receipt drops it.
-        const at = r.notes.findIndex((n, i) => i < r.notes.length - 1 && typeof n === 'string' && n.startsWith("asight's kernel: "))
-        if (at >= 0) r.notes.splice(at, 1)
-      }
-      kernelLedger = k.ledger || null
-    }
 
     // ── confirmed: from here on, writes — one state-changing command at a time (R12): the lock is held to the end of this callback (the try below), and
     // the desired state is read again under it, so what an `off` that has just finished left is the base of what is written, not the read of a minute ago
@@ -474,18 +454,6 @@ export async function turnOn(opts = {}) {
     }
     try {
     const m = openManifest({ dir, plan, now, fs })
-    // the kernel this run placed (4.8 §8): ledgered as asight's own file the moment the manifest exists, so an `uninstall` — this run's or a
-    // later one's — removes the exe, the licence and source beside it, the kernel directory and the verified-archive cache (undo.mjs's forwarder-binary
-    // role). `off` never removes it: a kernel that is draining stays (the undo's note says so). A kernel this run did not place needs no entry: the on
-    // that placed it wrote one, and it survives every undo but uninstall's.
-    if (kernelLedger) {
-      const have = m.files.find((f) => f.role === 'forwarder-binary' && f.path === kernelLedger.path)
-      const item = { kind: 'owned-file', path: kernelLedger.path, role: 'forwarder-binary', harness: null, phase: 'on', sha256: kernelLedger.sha256, mode: 0o755, created_dirs: [...new Set([...((have && have.created_dirs) || []), kernelLedger.dir])], installed_at: now().toISOString() }
-      item.undo_by_hand = undoByHand(item)
-      if (have) m.files[m.files.indexOf(have)] = item
-      else m.files.push(item)
-      saveManifest(dir, m, fs)
-    }
     // the desired state goes first (R9, R12): an `off` that lands meanwhile writes the same file, and every write below reads it again
     const locked = (() => { try { return readState() } catch { return stateRead } })()
     const needNow = plan.targets.filter((id) => !(locked.state.harnesses[id] && locked.state.harnesses[id].desired === 'on'))

@@ -101,46 +101,19 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     }
     const adoption = await prepareAdoption({ home, env, platform, deps, parts, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once asight is on
     const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32, Task 8(c)); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
-    // The arch's read-only preflight (historically the Windows kernel line and the Smart App Control line), run BEFORE turnOn so a
-    // refusal stops `on` before its first write — a settled precondition with nothing to roll back. No arch carries one since the engines became the
-    // proxies (D47 and its win32 twin: darwin never had one, win32's went with the kernel — wiring.mjs exports neither `prepare` nor `ensureKernel`);
-    // the seam stays because a future arch's settled precondition belongs exactly here, and with no collector directory yet (nothing installed) the
-    // receipt is the record (4.6 §记录).
-    const archPrepare = parts.arch && typeof parts.arch.prepare === 'function' ? parts.arch.prepare : null
-    const prep = archPrepare ? await archPrepare({ env, home }) : null
-    const afterConfirm = null // the kernel-ensure hook retired with the kernel: no arch's first write-phase step downloads anything now (the engine IS the proxy, and its first write is the CA)
     const planText = (raw) => {
       const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })).filter((x) => /\s→\s/.test(x.chain) || false) : [] // D46: the degenerate one-hop chain says nothing and is not printed
-      return [formatPlan({ ...raw, adopted }, { home, autostart, platform, colors: c }), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
-    }
-    if (prep && prep.refuse) {
-      const rf = prep.refuse
-      const line = `${rf.reason}${Array.isArray(rf.commands) && rf.commands.length ? `。手动替代(asight 不替你跑): ${rf.commands.join(' 或 ')}` : ''}`
-      if (!flags.has('--dry-run')) {
-        const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [line] }
-        const cdir = path.join(home, '.asight', 'collector')
-        try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'routing', code: rf.code, ...(rf.of ? { of: rf.of } : {}), reason: line }) } catch { /* the receipt is the record then (R11) */ }
-        if (json) io.out(JSON.stringify(receipt, null, 2))
-        else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
-        return EXIT.incomplete
-      }
-      // a dry run prints the plan and exits 0; the stop a real run would meet is in the receipt (R6, V7)
-      prep.blocked = line
+      return formatPlan({ ...raw, adopted }, { home, autostart, platform, colors: c })
     }
     // The combined bundles' OS roots are the arch's (the flip checklist ②, 4.9 §4 末): the plan asks it through the one resolver (tls/roots.mjs bundleRoots), so the FIRST
     // install's bundles carry them — not only the daemon's next rebuild — and a read that fails stops the on before one file of the agents' is touched (D38); `deps.roots` overrides them.
     let { receipt, exit, plan } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null,
       roots: deps.roots || null, unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
-      afterConfirm,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (p) => say(planText(p)),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
-    // the preflight's lines ride along (the plan showed them above). No arch carries a preflight today (the kernel line went with the kernel, D47's twin);
-    // a future one that does keeps this append as its own.
-    if (prep && prep.notes && prep.notes.length) receipt.notes.push(...prep.notes)
-    if (prep && prep.blocked) { receipt.blocked = prep.blocked; receipt.notes.push(`${prep.blocked} (a real asight on stops there)`) }
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
     else if (adoption && receipt.harnesses && receipt.harnesses.length && receipt.ok !== false && !receipt.dry_run && !receipt.planned && !receipt.declined) {
       const rec = await recordAdoption({ adoption, routing, targets: receipt.harnesses, home, env, now: deps.now ? () => deps.now().getTime() : Date.now, fs: deps.fs })
