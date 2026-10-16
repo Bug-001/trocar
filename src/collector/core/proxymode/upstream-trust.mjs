@@ -4,7 +4,7 @@
 // literal lives here.
 //   trust stated, first set source `replace` (SSL_CERT_FILE, caCertFile) → only that file
 //   trust stated otherwise                                               → the stated base + the files of the set `add` sources
-//   no trust stated                                                      → the union: OS roots ∪ Node's ∪ the daemon's extra ∪ the files the
+//   no trust stated, or its `when` does not hold                        → the union: OS roots ∪ Node's ∪ the daemon's extra ∪ the files the
 //                                                                          process's certificate variables name
 // The asight root is dropped from every set: an upstream never verifies through it (an agent that trusts it does so only to talk to the door).
 import path from 'node:path'
@@ -14,7 +14,7 @@ import { readSrc } from './sources.mjs'
 import { certBlocks } from '../../../off/pem.mjs'
 
 /** The certificate variables of a process that add roots in the runtimes the seven harnesses use (OpenSSL / rustls, Node). */
-const CERT_VARS = Object.freeze(['SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'])
+export const CERT_VARS = Object.freeze(['SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'])
 const isAbs = (p) => path.posix.isAbsolute(p) || path.win32.isAbsolute(p)
 const hex = (fp) => String(fp || '').replace(/:/g, '').toLowerCase()
 
@@ -23,11 +23,12 @@ export function agentTrustSet({ trust, ctx, facts = {} }) {
   const pctx = { ...ctx, env: facts.env || {}, cwd: facts.cwd ?? undefined }
   const fileOf = (v) => (isAbs(v) ? v : facts.cwd != null ? (ctx.join || path.join)(facts.cwd, v) : null)
   const read = (src) => { try { const r = readSrc(src, pctx); return r.error || !r.set ? null : fileOf(String(r.value)) } catch { return null } }
-  if (!trust) return { base: 'union', files: CERT_VARS.map((k) => facts.env && facts.env[k]).filter(Boolean).map(String).map(fileOf).filter(Boolean) }
-  if (trust.when) {
+  const union = { base: 'union', files: CERT_VARS.map((k) => facts.env && facts.env[k]).filter(Boolean).map(String).map(fileOf).filter(Boolean) }
+  if (!trust) return union
+  if (trust.when) { // a statement whose `when` does not hold states nothing about this process: the union, like no statement
     let r = null
     try { r = readSrc(trust.when.src, pctx) } catch { r = null }
-    if (!r || r.error || !r.set || ('equals' in trust.when && r.value !== trust.when.equals)) return { base: trust.base, files: [] }
+    if (!r || r.error || !r.set || ('equals' in trust.when && r.value !== trust.when.equals)) return union
   }
   const set = (trust.sources || []).map((s) => ({ s, file: read(s.from) })).filter((x) => x.file)
   if (set.length && set[0].s.semantics === 'replace') return { base: null, files: [set[0].file] }

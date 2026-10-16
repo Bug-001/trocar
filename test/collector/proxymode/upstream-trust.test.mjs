@@ -1,5 +1,5 @@
 // test/collector/proxymode/upstream-trust.test.mjs — 4.11 §3 ⑭: the door verifies an upstream with the agent's own trust set minus the asight root.
-// Generated over the trust axes (stated base os | node, source env | dotenv file; or no trust stated) × the process's state (a replace source set,
+// Generated over the trust axes (stated base os | node, source env | dotenv file, its `when` absent | holding | failing; or no trust stated) × the process's state (a replace source set,
 // an add source set, none set), each verified for real: a TLS server per CA (a relay CA only in the agent's file, an OS-only CA, a Node-only CA, the
 // daemon's extra CA, the asight root) and a handshake through the context the door would use.
 import { test, before, after } from 'node:test'
@@ -12,6 +12,7 @@ import { tmpDir } from '../../helpers/tmp.mjs'
 import { createCa, loadCa } from '../../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../../src/collector/core/tls/leaf.mjs'
 import { agentTrustSet, createAgentTrust } from '../../../src/collector/core/proxymode/upstream-trust.mjs'
+import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 
 const HOST = 'up.test'
 const CAS = ['relay', 'os', 'node', 'extra', 'asight']
@@ -44,25 +45,41 @@ const trust = createAgentTrust({ roots, rootFp256, readFile: ctx.readFile })
 
 const FROM = { env: (v) => ({ env: v }), file: () => ({ file: { base: 'home', path: '.env' }, format: 'dotenv', keys: ['SSL_CERT_FILE'] }) }
 const cases = []
-for (const base of ['os', 'node']) for (const via of Object.keys(FROM)) for (const state of ['replace', 'add', 'none']) cases.push({ base, via, state })
-cases.push({ base: null, via: 'env', state: 'unstated' })
+for (const base of ['os', 'node']) for (const via of Object.keys(FROM)) for (const state of ['replace', 'add', 'none']) for (const when of ['none', 'holds', 'fails']) cases.push({ base, via, state, when })
+cases.push({ base: null, via: 'env', state: 'unstated', when: 'none' })
+const GATE = { src: { env: 'GATE' }, equals: 'on' }
 
 for (const c of cases) {
-  test(`⑭ base ${c.base ?? '—'} · source ${c.via} · ${c.state}`, async () => {
+  test(`⑭ base ${c.base ?? '—'} · source ${c.via} · ${c.state} · when ${c.when}`, async () => {
     const semantics = c.state === 'add' ? 'add' : 'replace'
-    const stated = c.state === 'unstated' ? null : { base: c.base, sources: [{ from: FROM[c.via]('AGENT_CA'), semantics }] }
-    const env = c.state === 'none' ? {} : c.state === 'unstated' ? { SSL_CERT_FILE: agentFile } : { AGENT_CA: agentFile }
+    const stated = c.state === 'unstated' ? null : { base: c.base, ...(c.when !== 'none' && { when: GATE }), sources: [{ from: FROM[c.via]('AGENT_CA'), semantics }] }
+    // the process's certificate variable names the agent's file too: read by the union alone (a statement that holds names its own sources)
+    const env = { NODE_EXTRA_CA_CERTS: agentFile, ...(c.state === 'none' ? {} : c.state === 'unstated' ? { SSL_CERT_FILE: agentFile } : { AGENT_CA: agentFile }), ...(c.when === 'holds' && { GATE: 'on' }) }
+    const union = c.state === 'unstated' || c.when === 'fails' // a `when` that does not hold states nothing: the union
     if (c.via === 'file' && c.state === 'none') fs.renameSync(path.join(home, '.env'), path.join(home, '.env.off'))
     try {
       const { secureContext } = await trust.contextFor(agentTrustSet({ trust: stated, ctx, facts: { env, cwd: home } }))
       const want = {
-        relay: c.state !== 'none', // a relay CA only in the agent's file verifies whenever the file is in the set
-        os: c.state === 'unstated' || (c.state !== 'replace' && c.base === 'os'), // only in the union / an os base, never beside a replace file
-        node: c.state === 'unstated' || (c.state !== 'replace' && c.base === 'node'),
-        extra: c.state === 'unstated', // the daemon's own extra CA belongs to the union alone
+        relay: union || c.state !== 'none', // a relay CA only in the agent's file verifies whenever the file is in the set
+        os: union || (c.state !== 'replace' && c.base === 'os'), // only in the union / an os base, never beside a replace file
+        node: union || (c.state !== 'replace' && c.base === 'node'),
+        extra: union, // the daemon's own extra CA belongs to the union alone
         asight: false, // never trusted upstream
       }
       for (const n of CAS) assert.equal(await verifies(n, secureContext), want[n], `${n}-signed upstream`)
     } finally { if (c.via === 'file' && c.state === 'none') fs.renameSync(path.join(home, '.env.off'), path.join(home, '.env')) }
   })
 }
+
+// Regression seed (T24 review): the shipped claude-code descriptor states only `bundled` (when CLAUDE_CODE_CERT_STORE=bundled). A default CC — no
+// CLAUDE_CODE_CERT_STORE — gets the union, so a relay CA it trusts through NODE_EXTRA_CA_CERTS or the OS store verifies at the door.
+test('⑭ seed · claude-code default (no CLAUDE_CODE_CERT_STORE): a relay CA in NODE_EXTRA_CA_CERTS and an OS-store CA verify', async () => {
+  const cc = (await loadHarnesses()).find((d) => d.name === 'claude-code')
+  const t = cc.proxyMode.trusts.bundled
+  assert.ok(t && t.when, 'claude-code states its bundled trust under a `when`')
+  const set = agentTrustSet({ trust: t, ctx, facts: { env: { NODE_EXTRA_CA_CERTS: agentFile }, cwd: home } })
+  assert.equal(set.base, 'union')
+  const { secureContext } = await trust.contextFor(set)
+  for (const n of ['relay', 'os', 'node']) assert.equal(await verifies(n, secureContext), true, `${n}-signed upstream`)
+  assert.equal(await verifies('asight', secureContext), false)
+})

@@ -22,7 +22,7 @@ import { holdersRoute } from '../control.mjs'
 import { makeIssuer } from '../tls/issuer.mjs'
 import { bypassHit } from '../upstream-shape.mjs'
 import { CODE } from '../codes.mjs'
-import { agentTrustSet, createAgentTrust } from './upstream-trust.mjs'
+import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
 
 const msOf = (t) => (t == null ? NaN : typeof t === 'number' ? t : Date.parse(t))
 const untracked = (reason) => ({ not_captured: 'untracked', reason })
@@ -30,10 +30,11 @@ const split = (g) => { const i = String(g).lastIndexOf(':'); return { harness: g
 const safe = async (f) => { try { return (await f()) ?? null } catch { return null } }
 const ISSUER_CODES = new Set([CODE.certIntermediateUnavailable, CODE.certKeyMissing]) // verdicts on the issuer's state, which changes (P2)
 const isLoop = (a) => a === '127.0.0.1' || a === 'localhost' || a === '::1'
-/** Every env name a descriptor's proxy-mode data reads (trust sources, blockers, directory overrides), its proxy variables and the hook's: what
+/** Every env name a descriptor's proxy-mode data reads (trust sources, blockers, directory overrides), its proxy variables, the hook's and the
+ *  certificate variables the union reads (⑭, CERT_VARS): what
  *  `proc.envOf` is asked for — never the whole environment (4.9 §5.2). */
 function envNamesOf(desc) {
-  const out = new Set([...((desc.proxy && desc.proxy.env) || []), HOOK_ENV])
+  const out = new Set([...((desc.proxy && desc.proxy.env) || []), HOOK_ENV, ...CERT_VARS])
   const walk = (v) => { if (Array.isArray(v)) v.forEach(walk); else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) (k === 'env' && typeof x === 'string' ? out.add(x) : walk(x)) }
   walk(desc.proxyMode)
   return [...out]

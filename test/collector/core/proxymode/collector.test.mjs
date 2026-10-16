@@ -20,7 +20,8 @@ import { checkRecord } from '../../../../src/health/codes.mjs'
 import { custodyStub } from '../../../helpers/custody-stub.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
-import { ROOT, INSTALLED, descs, newWorld, ctxOf, worldOf, combos } from './verdict-world.mjs'
+import { ROOT, INSTALLED, descs, newWorld, ctxOf, worldOf, combos, makeRoot } from './verdict-world.mjs'
+import { CERT_VARS } from '../../../../src/collector/core/proxymode/upstream-trust.mjs'
 
 const TOKEN = 'ab'.repeat(16)
 const iso = (ms) => new Date(ms).toISOString()
@@ -39,7 +40,7 @@ async function rig({ desc, os = 'darwin', custody = stub, rootPem = STUB_PEM, w 
   w.ctx ||= ctxOf(newWorld(os))
   const c = createModelCollector({ harnesses: [desc], dir: '/nowhere', ctx, custody, rootPem, proxyOf, upstreamRoots, templates: TEMPLATES, ownUid: 501, timers, record: (r) => records.push(r),
     identify: (f) => (f.agent ? { reason: 'match', agent: f.agent } : { reason: 'no-match' }), ownerOf: async () => ({ pid: w.pid, source: 'socket-table', ms: 1 }), factsOf: async () => w.facts,
-    proc: { envOf: async () => w.env ?? null, cwdOf: async () => w.cwd ?? null, parentOf: async () => null }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
+    proc: { envOf: async (_, names) => (w.env == null ? null : (w.asked && w.asked.push(...names), Object.fromEntries(Object.entries(w.env).filter(([k]) => names.includes(k))))), cwdOf: async () => w.cwd ?? null, parentOf: async () => null }, systemProxy: () => w.sp ?? null, hostsOf: () => w.hostSet ?? null,
     readState: () => w.state, readIngress: () => ingress || { groupPorts: {}, listenerToken: TOKEN }, readManifest: () => w.manifest || manifestOf(desc.name), procTable: async () => w.procs || [], clock: () => w.now ?? INSTALLED + 5 })
   c.bindDoors({ open: async (l) => { for (const x of l) { if (taken.has(x.port)) throw Object.assign(new Error('listen EADDRINUSE'), { code: 'EADDRINUSE' }); opened.push(x) } }, close: async (ids) => { opened.push(...ids.map((id) => ({ closed: id }))) } })
   await c.start()
@@ -206,6 +207,28 @@ for (const [what, custody, code] of [['custody unavailable', 'unavailable', 'cer
     c.close()
   })
 }
+
+// ⑭ wiring (T24 review): the union reads the files the process's certificate variables name, so `proc.envOf` is asked for them whatever the
+// descriptor walks; an env reader that answers only the names asked shows the relay CA of a trust:'root' process reaching meta.upstreamTrust.
+test('⑭ · a trust:\'root\' process: proc.envOf is asked for every CERT_VARS name and a relay CA in NODE_EXTRA_CA_CERTS joins its upstream set', async () => {
+  const { d, f, os } = rootForm
+  const g = `${d.name}:${f.route}`, relay = makeRoot('relay test CA').pem
+  const counts = []
+  for (const env of [{}, { NODE_EXTRA_CA_CERTS: '/relay.pem' }]) {
+    const asked = [], { w, facts } = worldOf(d, f, os, {}), base = ctxOf(w)
+    assert.equal(f.trust, 'root')
+    const { c } = await rig({ desc: { ...d, proxyMode: { ...d.proxyMode, forms: [f] } }, os, upstreamRoots: { os: async () => '', node: [], extra: [] },
+      w: { pid: ++pid, facts: { exe: '/bin/x', uid: 501, agent: d.name, startedAt: facts.startedAt }, env: { ...w.env, ...env }, cwd: w.cwd, asked,
+        ctx: { ...base, readFile: (p) => (p === '/relay.pem' ? relay : base.readFile(p).replace(ROOT.pem, STUB_PEM)) } } })
+    await c.on({ harnesses: [d.name], groups: { [g]: 18106 } })
+    const meta = await c.lookupIngress({ peer: PEER, user: g, target: { address: d.hosts[0], port: 443 } })
+    assert.equal(meta.decrypt, true, JSON.stringify(meta))
+    counts.push(meta.upstreamTrust.count)
+    for (const k of CERT_VARS) assert.ok(asked.includes(k), `proc.envOf asked for ${k}: ${asked}`)
+    c.close()
+  }
+  assert.equal(counts[1], counts[0] + 1, `the relay CA joins the set: ${counts}`)
+})
 
 test('CM6 · a forward-only verdict on the issuer\'s state is not kept: once the issuer is ready the same pid decrypts', async () => {
   const { d, f, os } = rootForm
