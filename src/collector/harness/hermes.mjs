@@ -199,9 +199,8 @@ export default {
       { name: 'routes with their own ssl_ca_cert', when: 'hermes:ssl_ca_cert', chain: [{ var: 'hermes:ssl_ca_cert', semantic: 'replace', list: true }] },
     ],
     disable: ['hermes:ssl_verify'],
-    // an OS whose doors cannot grant (DOORS_SHUT above): win32's always wins (its client refuses the entry asight writes, whatever a file says);
-    // darwin's only replaces var-missing (an asight route line written after start stays config-after-start)
-    refine: (r, env) => { const shut = env.get(DOORS_SHUT) || ''; return shut === 'win-doors-rejected' || (shut && r.reason === 'var-missing') ? shut : null },
+    // an OS whose doors cannot grant (DOORS_SHUT above, only the win32 overlay sets it): it always wins (its client refuses the entry asight writes, whatever a file says)
+    refine: (r, env) => (env.get(DOORS_SHUT) === 'win-doors-rejected' ? 'win-doors-rejected' : null),
     rereadsEntry: true, // the CLI on /reload and a gateway that does not multiplex read .env again while running
     // uninstall step 5: Linux main reads the bundle again at each new TLS context; a release build (or one without a
     // readable stamp) and macOS are not shown to, so they are reported as trusting until restart
