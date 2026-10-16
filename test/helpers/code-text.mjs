@@ -6,7 +6,8 @@ import { views } from '../netenv/fixtures/write-scan.mjs'
 /** The source with every comment blanked (same length, newlines kept). */
 export const stripComments = (src) => views(src).nc
 
-/** Each match of `re` (global) in the comment-free text → { line, text } with the source line's number. */
-export function findIn(src, re) {
-  return stripComments(src).split('\n').flatMap((l, k) => [...l.matchAll(re)].map((m) => ({ line: k + 1, text: m[0] })))
+/** Each match of `re` (global) in the comment-free text → { line, text } with the source line's number. `strings: false` also blanks string, template
+ *  and regex text (a call, not a name: W2's timer, not a message that mentions it). */
+export function findIn(src, re, { strings = true } = {}) {
+  return (strings ? stripComments(src) : views(src).code).split('\n').flatMap((l, k) => [...l.matchAll(re)].map((m) => ({ line: k + 1, text: m[0] })))
 }
