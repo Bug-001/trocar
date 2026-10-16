@@ -49,6 +49,7 @@ test('CM24 · daemon up: a holder the daemon names (GET /holders over its real e
     const before = tree(w.home)
     const { receipt, exit } = await uninstall(w)
     assert.deepEqual([exit, receipt.code], [1, 'collectors-online'])
+    assert.ok(receipt.problems.some((p) => p.includes('asight off') && p.includes('asight uninstall')), 'the refusal gives the steps: asight off, then asight uninstall (1.6 §9.6 collectors-online)')
     assert.match(receipt.problems.join('\n'), /pid 4242 \(codex\)/)
     assert.deepEqual(tree(w.home), before, 'not one file changed')
   } finally { await server.close() }

@@ -14,6 +14,7 @@ import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readManifest, saveManifest, manifestPath, refuseOldManifest } from '../off/manifest.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
+import { findingFor } from '../netenv/findings.mjs'
 import { standalonePath, backupDir, opLockFile, asightHome } from '../off/paths.mjs'
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -138,8 +139,9 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (online) {
       receipt.ok = false; receipt.code = 'collectors-online'
       receipt.problems.push([online.on.length ? `还开着: ${online.on.join(', ')}` : null, online.holders.length ? `还有持有者: ${online.holders.map((x) => `pid ${x.pid} (${x.harness})`).join(', ')}` : null, online.unknown ? `不知道有没有持有者: ${online.unknown}` : null].filter(Boolean).join(';') + '。什么都没改;先 asight off,等持有者退出后再 asight uninstall(uninstall 从不代做 off)')
-      put({ event: 'failure', code: 'collectors-online', reason: receipt.problems.at(-1) })
-      put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${receipt.problems.at(-1)}` })
+      receipt.problems.push(`先跑 ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(',再 ')}`) // the doctor's own steps for the code (1.6 §9.6)
+      put({ event: 'failure', code: 'collectors-online', reason: receipt.problems.at(-2) })
+      put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${receipt.problems.at(-2)}` })
       return { receipt, exit: EXIT.incomplete }
     }
     // 1 · the desired state
