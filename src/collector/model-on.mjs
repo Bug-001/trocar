@@ -17,6 +17,7 @@ import { resolveLoc } from './core/proxymode/sources.mjs'
 import { loadIngressConfig, rebindTaken, freeOnLoopback } from './core/ingress-config.mjs'
 import { controlEndpointFor } from './core/control.mjs'
 import { CODE } from './core/codes.mjs'
+import { appendEvent } from './core/events.mjs'
 
 const INSTALL_HINT = 'asight install'
 const errText = (e) => String((e && e.message) || e)
@@ -83,7 +84,15 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const ask = request || ep.request
   let doorsNow = {}
   try { doorsNow = ep.socketPath ? ((await ask({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).doors || {}) : {} } catch { doorsNow = {} }
-  const cfg = await rebindTaken(await loadIngressConfig({ dir, groups, isFree, fs }), async (port, g) => doorsNow[g] === port || isFree(port), { dir, isFree, fs })
+  const was = await loadIngressConfig({ dir, groups, isFree, fs })
+  const cfg = await rebindTaken(was, async (port, g) => doorsNow[g] === port || isFree(port), { dir, isFree, fs })
+  // §3 ①: a group port another socket holds is engine-port-taken — said in the receipt and recorded (D38), then the group's entries follow the new door
+  for (const g of cfg.rebound) {
+    const [from, to] = [was.groupPorts[g], cfg.config.groupPorts[g]]
+    const reason = `the door of ${g} could not use its recorded port ${from}: another program holds it; asight on moved the door to ${to} and rewrites its entries`
+    try { appendEvent(dir, { event: 'failure', where: 'ingress', code: CODE.enginePortTaken, door: g, port: from, moved_to: to, reason }) } catch { /* the receipt's note carries it (R11) */ }
+    out.notes.push({ harness: g.slice(0, g.indexOf(':')), code: CODE.enginePortTaken, text: `${CODE.enginePortTaken}: 门 ${g} 原来的端口 ${from} 被别的程序占了,换到 ${to},入口跟着改写` })
+  }
   let doors = null
   if (!ep.socketPath) out.problems.push(`no daemon to ask: ${ep.why || 'no control endpoint'}; start it (asight daemon), then run asight on again`)
   else {
