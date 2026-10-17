@@ -31,7 +31,12 @@ const MAX_DEPTH = 64 // a parent chain longer than this is a loop in the reader,
 
 const textOf = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
 const envGet = (env, name) => (env instanceof Map ? env.get(name) : env[name])
-const isLoopback = (host) => host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+/** Loopback, as the door and the PAC judge it (4.11 P10): `localhost` and every `*.localhost` name, 127.0.0.0/8, `::1`; case, IPv6 brackets and a
+ *  trailing dot as a host may carry them. pac.mjs writes this same test as PAC text, so what the PAC sends DIRECT is what the door calls loopback. */
+export const isLoopbackHost = (host) => {
+  const h = String(host).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
+  return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)
+}
 
 /** Is a proxy text one of asight's doors? A loopback address with asight's credentials (a user and a hex token: the door URL `on` writes, and the
  *  steer value of an older asight), or a loopback address on one of `ports` (an open door, e.g. a PAC-served one, carries no credentials). */
@@ -41,7 +46,7 @@ export function isAsightDoorUrl(text, { ports = [] } = {}) {
   let u
   try { u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `http://${t}`) } catch { return false }
   const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase()
-  if (!isLoopback(host)) return false
+  if (!isLoopbackHost(host)) return false
   if (u.port !== '' && ports.includes(Number(u.port))) return true
   let pass = ''
   try { pass = decodeURIComponent(u.password) } catch { return false }

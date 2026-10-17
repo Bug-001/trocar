@@ -149,6 +149,7 @@ test('an old steer value as recordedPrior is skipped (never an upstream), noted,
   assert.equal(isAsightDoorUrl(DOOR), true)
   for (const v of [CORP, 'http://u:secret@127.0.0.1:7890', 'http://127.0.0.1:7897', `http://of.cli:${TOKEN}@10.0.0.1:47011`, '', 'not a url', null]) assert.equal(isAsightDoorUrl(v), false, String(v))
   assert.equal(isAsightDoorUrl(OPEN_DOOR, { ports: [47012] }), true, 'an open door is one of asight\'s ports')
+  for (const host of ['door.localhost', '127.0.0.2', 'LOCALHOST']) assert.equal(isAsightDoorUrl(`http://${host}:47012`, { ports: [47012] }), true, `${host} is loopback (isLoopbackHost: *.localhost, 127.0.0.0/8)`)
   const throwing = await upstreamFor({ desc: descs[0], facts: null, recordedPrior: CORP, isAsightDoor: () => { throw new Error('x') } })
   assert.equal(throwing.url, null, 'a judge that throws never lets a value through')
 })

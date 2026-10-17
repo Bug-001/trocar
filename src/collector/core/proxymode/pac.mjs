@@ -1,10 +1,10 @@
 // pac.mjs (core/proxymode) — P10, the PAC the daemon serves for a route whose value is `pac-url` (RFC 4.11 P10): on the PAC group's door
-// (auth:false) at GET /asight.pac. Loopback goes DIRECT; the user's bypass list `PROXY <door>; DIRECT` (the door dials it direct: bypassHit, as for
+// (auth:false) at GET /asight.pac. Loopback (chain.mjs isLoopbackHost: localhost, *.localhost, 127.0.0.0/8, ::1) goes DIRECT; the user's bypass list `PROXY <door>; DIRECT` (the door dials it direct: bypassHit, as for
 // the env routes — 2026-10-17 a bypass-list host went DIRECT and Claude Desktop's turns were never seen); everything else `PROXY <door>; <own leg>`,
 // the own leg being the app's way without asight (the user's fixed system proxy, else DIRECT); after `off` (door null) only the app's own way. The PAC door takes no
 // credentials, so at accept it forwards only a peer of this user (peerAllowed). When a PAC route is not written at all (the four not-routed
 // conditions of ruling ③) is entries.mjs's pacGate, not this file's. The handler is registered on the door.
-import { LOOPBACK, PAC_PATH } from './entries.mjs'
+import { PAC_PATH } from './entries.mjs'
 import { CODE } from '../codes.mjs'
 import { bypassRuleOf } from '../upstream-shape.mjs'
 
@@ -20,6 +20,8 @@ function pacProxy(addr) {
   return `${w[0]} ${u.hostname}:${u.port || w[1]}` // the URL parser drops a scheme's default port; a PAC word needs it
 }
 
+// chain.mjs isLoopbackHost as PAC text, over the host the PAC's first line normalised: what the door calls loopback is what the PAC sends DIRECT
+const LOOPBACK_TEST = 'host === "localhost" || dnsDomainIs(host, ".localhost") || host === "::1" || /^127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$/.test(host)'
 const maskOf = (bits) => { const m = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0; return [24, 16, 8, 0].map((k) => (m >>> k) & 255).join('.') }
 // one bypass row (the chain's rows, bypassRuleOf's shape) as one PAC test, saying what upstream-shape.mjs bypassHit — the door's own matcher — says
 const bypassTest = (row) => {
@@ -36,11 +38,11 @@ const bypassTest = (row) => {
  *  user's bypass rows (`{ kind: 'local' | 'domain' | 'domain-suffix' | 'ip-cidr', value }`, the chain's), matched as bypassHit matches them. */
 export function pacText({ door = null, ownLeg = null, bypass = [] } = {}) {
   const lead = (leg) => (door == null ? leg : `${pacProxy(door)}; ${leg}`)
-  const loop = LOOPBACK.map((h) => `host === ${JSON.stringify(h)}`), byp = [...new Set((bypass || []).map(bypassTest))]
+  const byp = [...new Set((bypass || []).map(bypassTest))]
   return [
     'function FindProxyForURL(url, host) {',
     '  host = String(host).toLowerCase().replace(/^\\[|\\]$/g, "").replace(/\\.$/, "");',
-    `  if (${loop.join(' || ')}) return "DIRECT";`,
+    `  if (${LOOPBACK_TEST}) return "DIRECT";`,
     ...(byp.length ? [`  if (${byp.join(' ||\n      ')}) return ${JSON.stringify(lead('DIRECT'))};`] : []),
     `  return ${JSON.stringify(lead(pacProxy(ownLeg)))};`,
     '}',

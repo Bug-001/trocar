@@ -214,6 +214,7 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   const { doors } = await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18103 } })
   assert.equal(doors[pacG], 'http://127.0.0.1:18103', 'an auth:false door takes no credentials')
   assert.equal(opened[0].auth, false); assert.equal('token' in opened[0], false)
+  for (const address of ['127.0.0.1', 'LocalHost', 'door.localhost', '127.0.0.2', '::1']) assert.equal(await c.lookupIngress({ peer: PEER, user: pacG, target: { address, port: 18103 } }), null, `${address}: a loop through the door (chain.mjs isLoopbackHost), not a flow`)
   const on = await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' })
   assert.equal(on.status, 200); assert.match(on.body, /PROXY 127\.0\.0\.1:18103; PROXY sys\.corp:8080/)
   w.facts = { uid: 502, startedAt: INSTALLED + 1 }

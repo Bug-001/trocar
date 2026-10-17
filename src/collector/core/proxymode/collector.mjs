@@ -11,7 +11,7 @@ import path from 'node:path'
 import tls from 'node:tls'
 import { createDoorIdentity } from '../engine/door-identity.mjs'
 import { verdictOf } from './verdict.mjs'
-import { upstreamFor, isAsightDoorUrl, HOOK_ENV } from './chain.mjs'
+import { upstreamFor, isAsightDoorUrl, isLoopbackHost, HOOK_ENV } from './chain.mjs'
 import { pacHandler, peerAllowed } from './pac.mjs'
 import { createDoorSeen, createHolderPoll, mayExit } from './holders.mjs'
 import { holdersOf } from '../../../off/holders.mjs'
@@ -31,7 +31,6 @@ const untracked = (reason) => ({ not_captured: 'untracked', reason })
 const split = (g) => { const i = String(g).lastIndexOf(':'); return { harness: g.slice(0, i), routeId: g.slice(i + 1) } }
 const safe = async (f) => { try { return (await f()) ?? null } catch { return null } }
 const ISSUER_CODES = new Set([CODE.certIntermediateUnavailable, CODE.certKeyMissing]) // verdicts on the issuer's state, which changes (P2)
-const isLoop = (a) => a === '127.0.0.1' || a === 'localhost' || a === '::1'
 /** Every env name a descriptor's proxy-mode data reads (trust sources, blockers, directory overrides), its proxy variables, the hook's and the
  *  certificate variables the union reads (⑭, CERT_VARS): what
  *  `proc.envOf` is asked for — never the whole environment (4.9 §5.2). */
@@ -145,7 +144,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   async function lookupIngress({ peer, user, target, header = null }) {
     const d = doors.get(user)
     if (!d || !target) return null
-    if (isLoop(target.address) && target.port === d.port) return null // a loop through the door, not a flow
+    if (isLoopbackHost(target.address) && target.port === d.port) return null // a loop through the door, not a flow
     const id = await ident.identityOf({ peer, door: doorOf(d), target })
     if (!d.auth && !peerAllowed({ ...(id.facts || {}), pid: id.pid }, self, { record }).ok) return null // the PAC door takes no credentials: this user's processes only
     const known = !id.why && byName.has(id.agent)
