@@ -58,15 +58,15 @@ async function boardOver(sourcePath) {
   return { sessions: (JSON.parse(r.body).projects || []).flatMap((p) => p.sessions || []) };
 }
 
-test('the CLI resolves a default source instead of passing null', async () => {
-  const src = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'cli', 'legacy-commands.mjs'), 'utf8');
-  const serveVerb = src.slice(src.indexOf("case 'serve'"), src.indexOf("case 'monitor'"));
-  assert.doesNotMatch(serveVerb, /sourcePath:\s*flag\('--source',\s*process\.env\.ASIGHT_SOURCE\s*\|\|\s*null\)/,
+test('the CLI resolves a default source instead of passing null', () => {
+  const src = fs.readFileSync(path.join(import.meta.dirname, '..', 'src', 'cli', 'serve.mjs'), 'utf8');
+  assert.doesNotMatch(src, /sourcePath:\s*null/,
     'serve passed a bare null as the source default, so `asight serve` read nothing at all while '
     + 'README promises it reads the capture directory');
-  assert.match(serveVerb, /serveSource\(\)/,
+  assert.match(src, /serveSource\(\)/,
     'the default must come from src/paths.mjs — the module that exists to keep what capture WRITES '
     + 'and what serve READS in agreement');
+  assert.doesNotMatch(src, /ASIGHT_(PORT|DB|SOURCE|CONTROL)/, 'and there is no environment variable behind the user\'s back (1.6 §1.8)');
 });
 
 test('a board over MULTIPLE roots lists the sessions of every root', async () => {
