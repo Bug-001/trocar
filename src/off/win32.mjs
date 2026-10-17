@@ -1,8 +1,8 @@
 // win32.mjs (src/off) — what `asight off` and `asight uninstall` do on Windows that no other OS needs (RFC 4.8 §4.2, §7; 1.6 R3, R7). It imports Node's own modules and files of src/off and nothing else: the standalone `asight-off`
 // is made of the files of this directory alone, so it cannot reach the helper, the collector or the source tree (0.1 §2). Today this file holds the elevation check; the Windows undo (`undoWin32`, plan Task 9(b)) joins it.
 //
-// R7 on Windows (4.8 §7): asight never runs with an elevated token or as SYSTEM, so `on`, `daemon`, `off` and `uninstall` refuse to. `on` and `daemon` ask the helper (arch/win32/autostart.mjs `refuseElevated`); `off` and
-// `uninstall` cannot start a helper (the standalone has none, and `off` has to work when asight is broken), so they ask `whoami /groups` through execTool. The SIDs are the same in every language of Windows, so the check reads
+// R7 on Windows (4.8 §7): asight never runs with an elevated token or as SYSTEM, so `on`, `daemon`, `off` and `uninstall` refuse to. All four ask `whoami /groups` through execTool (`on` and `daemon`
+// by arch/win32/autostart.mjs `refuseElevated`, which calls elevationByWhoami): a helper started for the question cost on 1.2 s (2026-10-17), and off has to work when asight is broken. The SIDs are the same in every language of Windows, so the check reads
 // SIDs, never group names: the integrity label is `S-1-16-<rid>` (High is 12288, System 16384) and SYSTEM is `S-1-5-18`.
 import nodeFs from 'node:fs'
 import nodePath from 'node:path'
@@ -41,9 +41,10 @@ function unsplitByReg({ run, env }) {
 /** → null (go on) or `{ code: 'elevated-token', reason }`. A token that cannot be read is not a refusal: an undo that stops on a broken `whoami` is not an undo. */
 export function refuseElevatedByWhoami(opts = {}) {
   const e = elevationByWhoami(opts)
-  if (e.elevated !== true) return null
-  return { code: 'elevated-token', reason: `用你自己的账号跑,不要「以管理员身份运行」,也不要用 SYSTEM(R7:asight 不以提升的令牌运行;这个令牌是${e.why === 'system' ? ' SYSTEM' : '高完整性级别'})` }
+  return e.elevated === true ? elevatedRefusal(e.why === 'system') : null
 }
+/** The refusal of an elevated (`system` false) or SYSTEM token, the same words for every command (R7). */
+export const elevatedRefusal = (system) => ({ code: 'elevated-token', reason: `用你自己的账号跑,不要「以管理员身份运行」,也不要用 SYSTEM(R7:asight 不以提升的令牌运行;这个令牌是${system ? ' SYSTEM' : '高完整性级别'})` })
 
 // ── the collector's undo pieces (plan Task 9(b); RFC 4.8 §4.2, §7) ───────────────────────────────────────────────────────────
 // src/off cannot import arch/, so the task and Run-value undo are inlined here with the SAME fixed questions, the SAME verbs and the
