@@ -9,6 +9,7 @@ import * as darwin from '../../../src/collector/arch/darwin/upstream.mjs'
 import * as win32 from '../../../src/collector/arch/win32/upstream.mjs'
 import { upstreamFor } from '../../../src/collector/core/proxymode/chain.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
+import { checkRecord } from '../../../src/health/codes.mjs'
 
 const IS = 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
 const sz = (value) => ({ kind: 'REG_SZ', value })
@@ -68,5 +69,27 @@ test('the door hands the P7 chain the system proxy in its shape: on darwin and w
       if (want.unreadable) assert.equal(r.unreadable, true, at)
       if (want.notDirect) assert.notEqual(r.source, 'direct', at)
     } finally { w.stop() }
+  }
+})
+
+// 1.6 §9.5 (D49 ⑤): the model daemon's producer of `netenv-changed`. A change of the system proxy (on, off, another port, PAC, unreadable) is one
+// `netenv-change` event of the closed set (captured: the doors follow it), zero `failure`; the baseline read and an unchanged read write nothing.
+test('a system proxy change is one netenv-change (netenv-changed, captured), never a failure; no change writes nothing — darwin and win32', async () => {
+  const steps = [{ on: true, host: '127.0.0.1', port: 7897 }, { on: true, host: '127.0.0.1', port: 7897 }, { on: true, host: '10.1.2.3', port: 3128 }, { on: false }, { on: true, pac: true }, null, { on: true, host: '127.0.0.1', port: 7897 }]
+  for (const os of Object.keys(OS)) {
+    const box = { s: steps[0] }, events = [], failures = []
+    const w = await systemProxyWatch({ up: OS[os](null).up, read: () => { const f = OS[os](box.s); return f.read(f.io) }, failure: (e) => failures.push(e), event: (r) => events.push(r) })
+    try {
+      for (const s of steps.slice(1)) { box.s = s; await w.poll() }
+    } finally { w.stop() }
+    assert.deepEqual(failures, [], os)
+    assert.ok(events.every((e) => checkRecord(e).length === 0), `${os}: ${JSON.stringify(events.map(checkRecord))}`)
+    assert.deepEqual(events.map((e) => [e.event, e.code, e.captured, e.from, e.to]), [
+      ['netenv-change', 'netenv-changed', true, 'http://127.0.0.1:7897', 'http://10.1.2.3:3128'],
+      ['netenv-change', 'netenv-changed', true, 'http://10.1.2.3:3128', 'off'],
+      ['netenv-change', 'netenv-changed', true, 'off', 'pac'],
+      ['netenv-change', 'netenv-changed', true, 'pac', 'system-proxy-unreadable'],
+      ['netenv-change', 'netenv-changed', true, 'system-proxy-unreadable', 'http://127.0.0.1:7897'],
+    ], os)
   }
 })

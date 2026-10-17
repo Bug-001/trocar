@@ -127,9 +127,6 @@ const READER_ONLY = closedSets.CODES_BY_PART.legacy // old records still read (4
 const DOCTOR_DERIVED = ['proxy-dead', 'proxy-unsupported', 'egress-differs', 'linger-off', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', 'system-proxy-pac'] // diagnose derives them from the facts (1.6 §9.6); src/netenv/findings.mjs is their producer (proxy-unsupported: from the setting's scheme and the harness's behaviour data, findings.mjs; its other writer, the old route plan, is gone)
 // 4.11 §3 ⑱ retires these on macOS / Windows; the macOS producers are gone (earlier work), the old win32 collector that still writes them goes once W69's guard (spec 0.1:161) moves.
 // Each must still have a producer: when the last one goes, this list and the table lose the code together.
-// 1.6 §9.5 (D49 ⑤): the system-proxy watcher's event code. Its last producer was the old win32 wiring; the model's doors watch the
-// system proxy (doorPartsFor) but do not record the change yet — the model gets that producer next, and this row goes with it.
-const MODEL_PENDING = ['netenv-changed']
 // shim-not-on-path is not here: Linux's launch shim (harness/kimi-code.mjs inject) is its producer, and kimi's trust refine names it only
 // where that shim exists (not on an OS its proxyMode forms cover) — guarded in test/collector/harness/kimi-code.test.mjs.
 const WIN32_OLD = ['form-unsupported']
@@ -145,7 +142,7 @@ function producers() {
 test('4.11 §3 ⑱ every code of the closed table has a producer in src/, or is named as reader-only / doctor-derived; the retired ones are in no writer list', () => {
   const has = producers()
   const all = [...new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS])]
-  assert.deepEqual(all.filter((c) => !has(c) && !READER_ONLY.includes(c) && !DOCTOR_DERIVED.includes(c) && !MODEL_PENDING.includes(c)), [], 'a code nothing writes: delete it from src/health/codes.mjs (and its finding), or name why it stays')
+  assert.deepEqual(all.filter((c) => !has(c) && !READER_ONLY.includes(c) && !DOCTOR_DERIVED.includes(c)), [], 'a code nothing writes: delete it from src/health/codes.mjs (and its finding), or name why it stays')
   assert.deepEqual(WIN32_OLD.filter((c) => !has(c)), [], 'the old win32 producer of this code is gone: drop the code from the table, the findings and this list (4.11 §3 ⑱)')
   const writers = new Set([...CODES.filter((c) => !READER_ONLY.includes(c)), ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS, ...TRUST_REASONS, ...Object.values(CODE), ...Object.keys(TRUST_REASON)])
   assert.deepEqual(RETIRED.filter((c) => writers.has(c)), [])
