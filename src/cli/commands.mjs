@@ -12,7 +12,7 @@
 //     run         gets the argv after the name and the context of runCli: { io, env, home, platform, uid, args: { positionals, flags }, deps }.
 //   helpText    the help, made from the table: the three sections, or one command when named.
 import { optionsOf } from './args.mjs'
-import { columns, wrap } from './text.mjs'
+import { wrap, WIDTH } from './text.mjs'
 
 export const GROUPS = Object.freeze(['Capture', 'Data', 'Maintenance'])
 const via = (file, fn) => async (argv, c) => (await import(file))[fn](argv, c)
@@ -126,11 +126,26 @@ const split = (line) => {
   return at < 0 ? [line, ''] : [line.slice(0, at), line.slice(at + 1)]
 }
 
-/** The listed usage lines of the three sections, aligned on one column (the `sudo` line is longer than the rest and keeps one space, §2). */
+/** The listed usage lines of the three sections, aligned on one column (the `sudo` line is longer than the rest and keeps one space, §2).
+ *  A line that would pass 80 columns goes on as a second line indented to that column, never ragged at the margin (§1.1⑥). */
 function listing() {
   const rows = COMMANDS.filter((c) => c.group).flatMap((c) => c.usage.split('\n').map((l) => [c.group, ...split(l)]))
   const width = Math.max(...rows.filter(([, head]) => !head.startsWith('sudo')).map(([, head]) => head.length))
-  return (group) => rows.filter((r) => r[0] === group).map(([, head, rest]) => `  ${head.padEnd(width)} ${rest}`.trimEnd())
+  const hang = ' '.repeat(width + 3)
+  return (group) => rows.filter((r) => r[0] === group).flatMap(([, head, rest]) => {
+    const [first = '', ...more] = wrap(rest, WIDTH - hang.length)
+    return [`  ${head.padEnd(width)} ${first}`.trimEnd(), ...more.map((l) => hang + l)]
+  })
+}
+
+/** An indented two-column block (`  --json  what it does`) whose second column folds under itself instead of passing 80 columns (§1.1⑥). */
+const block = (rows) => {
+  const head = Math.max(0, ...rows.map(([h]) => h.length))
+  const hang = ' '.repeat(head + 4)
+  return rows.flatMap(([h, text]) => {
+    const [first = '', ...more] = wrap(text, WIDTH - hang.length)
+    return [`  ${h.padEnd(head)}  ${first}`.trimEnd(), ...more.map((l) => hang + l)]
+  })
 }
 
 /** The help (§2, §5.4): the three sections, or `helpText('on')` for one command. A name that is no command throws. */
@@ -138,10 +153,10 @@ export function helpText(name) {
   if (name !== undefined) {
     const cmd = commandNamed(name)
     if (!cmd) throw new RangeError(`no command named ${name}`)
-    const out = [...cmd.usage.split('\n'), '', ...wrap(cmd.summary)]
+    const out = [...cmd.usage.split('\n').flatMap((l) => wrap(l, WIDTH, '  ')), '', ...wrap(cmd.summary)]
     const options = [...optionsOf(cmd).values()]
-    if (options.length) out.push('', 'Options', ...columns(options.map((o) => ['', o.value ? `${o.name} <${o.value}>` : o.name, o.help])))
-    out.push('', 'Exit codes', ...columns(cmd.exits.map(([code, what]) => ['', String(code), what])))
+    if (options.length) out.push('', 'Options', ...block(options.map((o) => [o.value ? `${o.name} <${o.value}>` : o.name, o.help])))
+    out.push('', 'Exit codes', ...block(cmd.exits.map(([c, what]) => [String(c), what])))
     return out.join('\n')
   }
   const out = [...wrap('asight - see every byte your agents really send to a model: captured as it is, replayed and taken apart'), '']

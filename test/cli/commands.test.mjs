@@ -54,7 +54,7 @@ test('§1.1: help is laid out for 80 columns, in the three groups in order, and 
   assert.match(text.split('\n').at(-1), /^asight help \[<command>\] {3}asight <command> --help {3}asight --version$/, 'help itself is the trailer (§2)')
   const at = GROUPS.map((g) => text.split('\n').findIndex((l) => l === g))
   assert.ok(at.every((i) => i > 0) && [...at].sort((a, b) => a - b).join() === at.join(), `the three groups in order: ${at}`)
-  for (const line of text.split('\n')) assert.ok(line.length <= WIDTH || /^ {2}(sudo )?asight /.test(line), `${line.length} columns: ${line}`) // a usage line is one value: it goes whole, unbroken (§1.1⑥)
+  for (const line of text.split('\n')) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`) // §1.1⑥: a long usage line folds under its own column, it does not pass 80
   const group = (i) => commandsOf(text.split('\n').slice(at[i], at[i + 1] === undefined ? undefined : at[i + 1]).join('\n'))
   assert.deepEqual([...group(0)].sort(), ['doctor', 'install', 'off', 'on', 'status', 'uninstall'])
   assert.deepEqual([...group(1)].sort(), ['classes', 'query', 'serve'])
@@ -63,7 +63,8 @@ test('§1.1: help is laid out for 80 columns, in the three groups in order, and 
 
 test('§5.4: one command\'s help is its usage, its summary, its options with a line each, and its exit codes; a name that is no command throws', () => {
   const one = helpText('on')
-  assert.equal(one.split('\n')[0], 'asight on [<harness>...] [--no-autostart] [--no-unit] [--yes] [--dry-run] [--json]')
+  assert.equal(one.split('\n').slice(0, 2).join(' ').replace(/ +/g, ' '), 'asight on [<harness>...] [--no-autostart] [--no-unit] [--yes] [--dry-run] [--json]')
+  for (const text of [one, helpText(), helpText('classes')]) for (const line of text.split('\n')) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`)
   assert.match(one, /\nOptions\n/); assert.match(one, /\nExit codes\n/)
   for (const o of optionsOf(commandNamed('on')).keys()) assert.match(one, new RegExp(`^ {2}${o}\\b`, 'm'), `${o} has its own line`)
   for (const [code] of commandNamed('on').exits) assert.match(one, new RegExp(`^ {2}${code} {2}\\S`, 'm'), `exit ${code} is explained`)

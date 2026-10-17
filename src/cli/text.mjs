@@ -75,11 +75,11 @@ export function ago(at, now = Date.now()) {
 }
 
 /** `text` broken into lines of at most `width` columns, on spaces (§1.1⑥); a word longer than the line keeps its own line, unbroken. */
-export function wrap(text, width = WIDTH) {
+export function wrap(text, width = WIDTH, hang = '') {
   const out = []
   for (const word of String(text).split(/\s+/).filter(Boolean)) {
     if (out.length && out[out.length - 1].length + 1 + word.length <= width) out[out.length - 1] += ` ${word}`
-    else out.push(word)
+    else out.push((out.length ? hang : '') + word)
   }
   return out
 }
