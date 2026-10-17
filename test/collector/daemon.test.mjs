@@ -34,8 +34,7 @@ import { checkRecord } from '../../src/health/codes.mjs'
 import { failureBrief } from '../../src/cli/words.mjs'
 import { writeNetenv } from '../../src/netenv/index.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
-import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
-import { recordEntryFindings } from '../../src/collector/arch/win32/optin.mjs'
+import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
@@ -47,8 +46,16 @@ const CODEX_EXE = '/home/u/.local/bin/codex'
 const fileRoots = (file) => () => osBundleRoots({ files: [file] })
 function fakeArch(p, extraEnv = {}, clientOpts = {}) {
   const clients = []
-  const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0, ...clientOpts }); clients.push(c); return c }
-  return { clients, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) } }
+  // gates.hold() parks every beat gate that has not started and resolves once none is running; gates.release() lets them go. A test that changes
+  // state.json between the two knows no gate read the old file and beats after its mark (V30: the flake was a gate in flight over the change)
+  const gates = { held: false, running: 0, waiters: [], async hold() { this.held = true; await until(() => this.running === 0) }, release() { this.held = false; this.waiters.splice(0).forEach((r) => r()) } }
+  const holdable = (fn) => fn && (async () => { while (gates.held) await new Promise((r) => gates.waiters.push(r)); gates.running++; try { return await fn() } finally { gates.running-- } })
+  const makeClient = () => {
+    const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0, ...clientOpts })
+    const set = c.setBeatGate; c.setBeatGate = (fn) => set(holdable(fn))
+    clients.push(c); return c
+  }
+  return { clients, gates, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) } }
 }
 function sandbox() {
   const root = tmpDir('as-d-') // short: unix socket paths are length-limited
@@ -225,30 +232,6 @@ test('daemon: status awaits the redirector\'s directCount — an arch whose answ
 })
 
 
-// 4.8 §3 (W69): the daemon's /status reply carries the host sets the plan last applied per host-tree form (`applied_hosts`, the wiring's win32 bag),
-// which is where `status`'s facts reach them to compare with a fresh read and say when the kernel's set is old. A platform whose redirector has no
-// `win32` bag (Linux) simply says nothing there — no key, never a vacuous one.
-test('daemon: /status relays the win32 bag\'s applied host sets; a redirector without the bag carries no applied_hosts key', async () => {
-  const s = sandbox(); const p = fakeProc()
-  await install(s)
-  const { arch } = fakeArch(p)
-  const APPLIED = { 'kimi-code.vscode': { hosts: ['api.moonshot.cn', 'relay.corp.example'], settings: 'read', dropped: [] } }
-  const withBag = { os: arch.os, createRedirector: (o) => { const r = arch.createRedirector(o); r.win32 = { appliedHosts: () => APPLIED }; return r } }
-  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: withBag, harnesses: [cc], env: { ...process.env, HOME: s.home } })
-  try {
-    const st = await req(s.sock, 'GET', '/status')
-    assert.deepEqual(st.applied_hosts, APPLIED, 'the applied sets, as the wiring keeps them')
-  } finally { await d.stop(); p.done(); s.done() }
-  const s2 = sandbox(); const p2 = fakeProc()
-  await install(s2)
-  const plain = fakeArch(p2)
-  const d2 = await startDaemon({ dir: s2.collector, socketPath: s2.sock, arch: plain.arch, harnesses: [cc], env: { ...process.env, HOME: s2.home } })
-  try {
-    const st = await req(s2.sock, 'GET', '/status')
-    assert.equal('applied_hosts' in st, false, 'no bag, no key: a Linux reply is exactly what it was')
-  } finally { await d2.stop(); p2.done(); s2.done() }
-})
-
 // Review B-4(a) (4.6 子进程与嵌套 agent): "嵌套关系记在 flows/ 的 parent_pid / parent_agent 里" — the engine's rows and the
 // metadata row of a connection that went direct carry them, and status lists them with the agent.
 test('daemon: an agent started by another agent is recorded with parent_pid and parent_agent in flows/ and status (B-4a)', async () => {
@@ -406,7 +389,7 @@ test('daemon: the install-time engine port held by another process → start fai
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [cc], freePort: async () => squat.address().port })
     const { arch, clients } = fakeArch(p)
     await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), /recorded at install is held by another process; nothing is steered, agent connections go direct\. Free the port, or run "asight uninstall" and "asight on" to pick a new one$/)
-    assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'start' && /held by another process/.test(f.reason)), 'the refusal to start is recorded (D38)')
+    assert.ok(flowsOf(s).some((f) => f.event === 'failure' && f.where === 'start' && f.code === 'engine-port-taken' && /held by another process/.test(f.reason)), 'the refusal to start is recorded under engine-port-taken (D38); the daemon picks no other port')
     assert.equal(clients.length, 0, 'the helper was never spawned, so no connection is redirected')
     assert.ok(!fs.existsSync(path.join(s.collector, 'lock')))
     squat.close()
@@ -793,7 +776,7 @@ test('daemon: the daily bundle rebuild never writes the asight CA back into a bu
   const d = await startDaemon({ dir, socketPath: s.sock, arch: { ...arch, osRoots: fileRoots(osRoots) }, harnesses: list, bundleMs: 30 })
   try {
     // `asight off gone`, while the daemon runs: its entry out, its bundle removed (nobody holds it), the manifest saved
-    const off = await undoHarnesses({ dir, home: s.home, manifest: readManifest(dir), ids: ['gone'], procs: async () => [], roots: { node: tlsMod.rootCertificates, osText: '' } })
+    const off = await undoHarnesses({ dir, home: s.home, phases: PHASES, manifest: readManifest(dir), ids: ['gone'], procs: async () => [], roots: { node: tlsMod.rootCertificates, osText: '' } })
     writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['stay'], 'on'))
     assert.deepEqual([off.results.map((r) => r.result), fs.existsSync(bundle('gone'))], [['restored'], false])
     const saved = fs.readFileSync(path.join(dir, 'install-manifest.json'), 'utf8')
@@ -961,6 +944,21 @@ test('daemon: started where asight is not installed, or where the manifest canno
     fs.mkdirSync(s.collector, { recursive: true }); fs.writeFileSync(path.join(s.collector, 'install-manifest.json'), '{not json')
     await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc] }), (e) => e.code === 'manifest-unreadable' && /is unreadable \(.*\); run "asight uninstall", then "asight on"$/.test(e.message))
   } finally { s.done() }
+})
+
+// 4.11 ⑰: a v2 manifest is not read by this build — complete or not, the daemon is not-installed; the asight that wrote it undoes it (plan decision #11).
+test('daemon: on a v2 manifest, complete or not, it is not-installed (4.11 ⑰)', async () => {
+  const s = sandbox(); const p = fakeProc()
+  await install(s)
+  const file = path.join(s.collector, 'install-manifest.json')
+  const v3 = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const asV2 = (complete) => { const { install: _i, ca: _c, ...rest } = v3; const strip = (x) => { const { phase: _p, ...y } = x; return y }; fs.writeFileSync(file, JSON.stringify({ ...rest, version: 2, complete, entries: rest.entries.map(strip), files: rest.files.map(strip) })) }
+  try {
+    for (const complete of [true, false]) {
+      asV2(complete)
+      await assert.rejects(startDaemon({ dir: s.collector, socketPath: s.sock, arch: { os: 'linux', createRedirector: () => { throw new Error('must not get this far') } }, harnesses: [cc] }), (e) => e.code === 'not-installed')
+    }
+  } finally { p.done(); s.done() }
 })
 
 // D-31: started as root (sudo -E), it refuses before writing anything else, and the refusal it records in the user's
@@ -1238,7 +1236,7 @@ const watched = async (c) => (await c.raw({ op: '__watched' })).watch // the ker
 test('V30 unit half: a 3 s event-loop stall while state.json turns a harness off — after it the table is reconciled before the next heartbeat, nothing is attached by the file, and no agent-untrusted is written for the harness that is off', { timeout: 60000 }, async () => {
   const s = sandbox(); const p = fakeProc()
   await installBoth(s)
-  const { arch, clients } = fakeArch(p, {}, { autoHeartbeatMs: 100 })
+  const { arch, clients, gates } = fakeArch(p, {}, { autoHeartbeatMs: 100 })
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc, codex], env: { ...process.env, HOME: s.home }, checkMs: 150 })
   try {
     const on = await req(s.sock, 'POST', '/on', {})
@@ -1252,9 +1250,11 @@ test('V30 unit half: a 3 s event-loop stall while state.json turns a harness off
     assert.deepEqual(untrustedLines(s).map((l) => [l.pid, l.agent]), [[4343, 'claude-code'], [4545, 'codex']])
 
     // the operator's CLI writes claude-code off; the daemon's event loop is stalled over the next 3 s
+    await gates.hold() // no gate is past its read of state.json: none that read the old file can beat after the mark
     await clients[0].raw({ op: '__mark', name: 'stall' })
     rewriteState(s, (st) => { st.harnesses['claude-code'].desired = 'off' })
     const end = Date.now() + 3000; while (Date.now() < end) { /* the stall: no timer, no socket runs */ }
+    gates.release()
     const after = await until(async () => { const a = await afterMark(clients[0], 'stall'); return a.includes('heartbeat') && a })
     assert.deepEqual(after.slice(0, 2), ['unwatch 4242', 'unwatch 4343'], 'the table is reconciled first, before any heartbeat')
     assert.ok(after.indexOf('heartbeat') > 1 && !after.includes('detach'), 'codex is still on: the links stay, the beat resumes after the unwatches')
@@ -1662,63 +1662,5 @@ test('daemon: the 5 s check takes a proxy-mode record\'s own semantics — the f
     const lines = flowsOf(s).filter((f) => f.where === 'netenv' || f.event === 'netenv-change')
     assert.deepEqual(lines.map((f) => [f.event, f.where, f.code, f.harness, f.captured]), [['netenv-change', 'netenv', 'proxy-changed', 'claude-code', false], ['failure', 'netenv', 'proxy-changed', 'claude-code', undefined]])
     assert.deepEqual(fs.readFileSync(file), bytes)
-  } finally { await d.stop(); p.done(); s.done() }
-})
-
-// 4.8 §2.4「入口还有没有效」+ W68, the daemon's half: the 5 s check runs the same arch hook status folds into its rows. The check itself has
-// its own cells over the real Windows world (optin-check.test.mjs); what is pinned here is the WIRING — the manifest read as the disk has it
-// on every tick (an entry added after the start is seen: the copy read at start is not the truth), the process table of this collector's own
-// scan (a parent row included), the real record (once per occurrence, only §9.7's netenv failure codes — entry-changed is no event), and a
-// manifest without opt-in entries paying for none of it (no check, no scan).
-test('daemon: the 5 s check re-verifies the opt-in entries (W68) — the fresh manifest and the scan\'s own table into the arch hook\'s check, one netenv failure per finding, entry-changed no event, and no check at all without opt-in entries', async () => {
-  const s = sandbox(); const p = fakeProc()
-  await install(s)
-  p.add(600, { uid: UID, ppid: 599, exe: '/opt/tools/launcher.exe', argv: ['/opt/tools/launcher.exe'] }) // not an agent: the table's rows are the check's to match, not the tracker's
-  const { arch: base } = fakeArch(p)
-  const asked = []
-  let scans = 0
-  let answer = []
-  const arch = {
-    os: base.os,
-    createRedirector: (o) => { const r = base.createRedirector(o); const real = r.scan.bind(r); r.scan = async (...a) => { scans++; return real(...a) }; return r },
-    optIn: { check: (q) => { asked.push(q); return answer }, record: recordEntryFindings },
-  }
-  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, checkMs: 20 })
-  try {
-    await req(s.sock, 'POST', '/on', {})
-    await new Promise((r) => setTimeout(r, 150))
-    assert.equal(asked.length, 0, 'the install manifest holds no opt-in entry: the check does not run')
-    const scansBefore = scans
-    // what `on --opt-in` leaves behind: the manifest on disk gains the entry while this daemon runs — the copy read at start never knew it
-    const m = readManifest(s.collector)
-    m.entries.push({ kind: 'optin-user-path', harness: 'claude-code', form: 'claude-code.cli', item: 'user-path-shim', scope: 'user', confirmed: true, values: { command: 'claude', binDir: 'C:\\b', realBinary: 'C:\\r.exe' } })
-    saveManifest(s.collector, m)
-    answer = [
-      { form: 'claude-code.cli', item: 'user-path-shim', harness: 'claude-code', code: 'shim-not-on-path', detail: 'claude resolves first to C:\\npm\\claude.cmd — the machine PATH\'s C:\\npm' },
-      { form: 'claude-code.cli', item: 'user-path-shim', harness: 'claude-code', code: 'entry-changed', detail: 'the real binary the dispatcher falls back to (C:\\r.exe) is gone' },
-      { form: 'claude-code.cli', item: 'user-path-shim', harness: 'claude-code', code: 'not-via-entry', detail: '1 running claude-code process(es) were not started through the entry' },
-    ]
-    await until(() => asked.length > 0)
-    assert.equal(asked[0].manifest.entries.filter((e) => e.kind === 'optin-user-path').length, 1, 'the manifest as the disk has it NOW, not the copy read at start')
-    assert.deepEqual(asked[0].harnesses, [cc], 'the same harness list the plan is asked of')
-    assert.ok(asked[0].procs.some((x) => x.pid === 600 && x.ppid === 599), 'the process table of this collector\'s own scan, a parent row included')
-    assert.ok(scans > scansBefore, 'the scan is paid for only now that there is an entry in effect')
-    await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'netenv'))
-    await new Promise((r) => setTimeout(r, 200)) // more checks than one
-    const netFailures = () => flowsOf(s).filter((f) => f.event === 'failure' && f.where === 'netenv')
-    assert.deepEqual(netFailures().map((f) => [f.code, f.harness, f.form, f.item]), [['shim-not-on-path', 'claude-code', 'claude-code.cli', 'user-path-shim'], ['not-via-entry', 'claude-code', 'claude-code.cli', 'user-path-shim']], 'one line per coded finding however many checks ran; entry-changed is no event')
-    assert.ok(asked.length > 3, `the check ran on many ticks (${asked.length})`)
-    // the same finding moved fires once more; the unchanged one stays at one line (recordEntryFindings' own rule, through the daemon's state)
-    answer = [{ ...answer[0], detail: 'claude resolves first to D:\\tools\\claude.cmd — the machine PATH\'s D:\\tools' }]
-    await until(() => netFailures().length === 3)
-    await new Promise((r) => setTimeout(r, 120))
-    assert.equal(netFailures().length, 3, 'a changed finding fires once more, the unchanged ones stay at their one line')
-    // the entry undone on disk (what `off` leaves behind): nothing in effect any more, so no check and no scan
-    const m2 = readManifest(s.collector)
-    m2.entries = m2.entries.filter((e) => e.kind !== 'optin-user-path')
-    saveManifest(s.collector, m2)
-    const askedAt = asked.length; const scansAt = scans
-    await new Promise((r) => setTimeout(r, 200))
-    assert.deepEqual([asked.length, scans], [askedAt, scansAt], 'no opt-in entry in effect any more: neither the check nor the scan runs')
   } finally { await d.stop(); p.done(); s.done() }
 })

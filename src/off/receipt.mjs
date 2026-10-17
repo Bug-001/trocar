@@ -1,16 +1,20 @@
 // receipt.mjs (src/off) — the words `asight off` prints (RFC 1.6 §7 second example, R1): the receipt object of runOff (src/off/orchestrate.mjs; `--json` prints it as
 // it is, R5) as text for a person, in the past tense, or in the future for `--dry-run`. Pure: no disk, no clock, no process. Paths under HOME are shown as `~/…`
 // (the way the user knows them); `--json` keeps the absolute path. The undo side prints receipts too and may import nothing outside src/off (0.1 §2), so the
-// small `~` helper is written here and not taken from src/cli/receipt.mjs. Imports only node:*.
+// small `~` helper is written here and not taken from src/cli/receipt.mjs. Imports node:* and, for the prefix it tells the user to delete, src/off/text-edit.mjs.
 import path from 'node:path'
+import { OFF_PREFIX } from './text-edit.mjs'
 
 const offTilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
 const UNTIL_WORDS = { restart: '重启后不再信任', 'next-connection': '下一次新连接起不再信任', 'next-handshake': '下一次握手起不再信任', 'session-end': '当前 session 结束后不再信任' }
-const ROUTING_WORDS = { 'daemon-reply': '守护进程回复了,内核已确认', 'no-daemon': '没有守护进程在跑,它的助手也已不在', signal: '守护进程没响应,已停掉它', systemctl: '守护进程没响应,已经 systemd 停掉它' }
+const ROUTING_WORDS = { 'daemon-reply': '守护进程回复了,已确认', 'no-daemon': '没有守护进程在跑,它的助手也已不在', signal: '守护进程没响应,已停掉它', systemctl: '守护进程没响应,已经 systemd 停掉它' }
 
 // the status column of one changed file
+// a key the user set to a value of their own while asight was on (D48②, removeAsightText `prior_left`): their value wins, the old line asight put out of
+// effect stays so — where it is, and how to have the old value back
+const priorLeft = (c) => (c.prior_left || []).map((p) => `;${p.key} 用的是你在 on 期间设的新值,原来那行(第 ${p.line} 行)仍注释着:想用回原值,删掉这行开头的 \`${OFF_PREFIX}\``).join('')
 function rowStatus(c, t) {
-  if (c.result === 'reverted-not-identical') return `已撤销,但不逐字节相同(你之后改过这个文件:只撤了 asight 的部分${c.backup ? `,备份留在 ${t(c.backup)}` : ''})`
+  if (c.result === 'reverted-not-identical') return `已撤销,但不逐字节相同(你之后改过这个文件:只撤了 asight 的部分${c.backup ? `,备份留在 ${t(c.backup)}` : ''}${priorLeft(c)})`
   if (c.result === 'old-command') return `已撤销(旧命令装的,无备份:没有改前版本可回到)`
   if (c.result === 'undone-by-marker') return `按标记撤销(没有安装清单)${c.backup ? `;原值取自 ${t(c.backup)}` : ''}`
   return `已回到改前的样子${c.backup_dropped ? ',备份已删' : ''}`
@@ -61,10 +65,13 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     const w = Math.max(...changed.map((c) => t(c.path).length)), v = Math.max(...changed.map((c) => c.change.length))
     for (const c of changed) lines.push(`  ${t(c.path).padEnd(w)}  ${c.change.padEnd(v)}  ${past ? rowStatus(c, t) : c.backup ? `改前副本 ${t(c.backup)}` : ''}`.trimEnd())
   } else lines.push(past ? '没有改任何用户文件。' : '不会改任何用户文件。')
-  if (removed.length) lines.push(`${past ? 'asight 自己建的,删了' : 'asight 自己建的,将删'}: ${removed.map((p) => t(typeof p === 'string' ? p : p.path)).join('  ')}`)
-  if ((r.skipped || []).length) lines.push(`跳过: ${r.skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
+  if (removed.length) lines.push(`${past ? 'asight 自己建的,删了' : 'asight 自己建的,将删'}: ${[...new Set(removed.map((p) => t(typeof p === 'string' ? p : p.path)))].join('  ')}`) // a file is said once: several entries of one file (json keys) are one removal
+  const listed = new Set(changed.map((c) => c.path)), skipped = (r.skipped || []).filter((s) => !listed.has(s.what)) // a file is said once: what was undone is not also 「早已是安装前的样子」
+  if (skipped.length) lines.push(`跳过: ${skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
   if (past && r.routing) lines.push(`引流: ${r.routing.confirmed ? '已摘' : '没有确认摘掉'}(${ROUTING_WORDS[r.routing.how] || r.routing.state || '不知道'})`)
   lines.push(...daemonLines(r, past, cutNote))
+  if (r.holders === null) lines.push('还剩几个进程可能还在用门:不知道(进程表读不到)')
+  else if ((r.holders || []).length) lines.push(`还剩 ${new Set(r.holders.map((x) => x.pid)).size} 个进程可能还在用门(守护进程等它们退出后才退): ${r.holders.map((x) => `${x.harness} pid ${x.pid}`).join('、')}`)
   if ((r.still_trusting || []).length) lines.push(`重启前仍信任 asight CA(不经 asight,只是还信任): ${r.still_trusting.map((p) => `${p.harness} pid ${p.pid}(${UNTIL_WORDS[p.until] || UNTIL_WORDS.restart})`).join('、')}`)
   for (const k of r.kept_bundles || []) {
     const who = k.pids && k.pids.length ? `pid ${k.pids.join(', ')} 可能加载过它,它们退出后再跑 asight off` : ''

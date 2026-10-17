@@ -21,57 +21,28 @@ import { fileURLToPath } from 'node:url'
 export const HELPER_PROTO = 1
 export const HELPER_PS1 = fileURLToPath(new URL('./helper.ps1', import.meta.url))
 /** The closed verb set (4.8 §1). Every one only reads: no registry write, no process control, no file write, no network. */
-export const HELPER_VERBS = Object.freeze(['ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'version'])
-/** What reg-read may read, besides the keys a harness file declares (below): the Internet Settings proxy values (4.7 §3, 4.8 §2.2), the user's Path and the proxy variables of the login environment
+export const HELPER_VERBS = Object.freeze(['ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'version', 'proc-env'])
+/** What reg-read may read (the whole list: the model reads a policy value through policy.mjs, reg.exe, not here): the Internet Settings proxy values (4.7 §3, 4.8 §2.2), the user's Path and the proxy variables of the login environment
  *  (`HKCU\Environment`: the agent's own proxy when no file names one, 4.8 §2.2; asight reads them and never writes one, D43), the machine PATH (the Kimi and OpenCode shims, 4.8 §6.3)
- *  and the Smart App Control policy state (4.8 §6.3). Hive and key compare case-insensitively with `/` taken as `\` and no trailing `\`; names compare case-insensitively (a registry value name is
+ *  and the Smart App Control policy state (4.8 §6.3); for the P7 chain's system proxy, WPAD's `DefaultConnectionSettings` and, under the machine policy
+ *  `ProxySettingsPerUser=0`, the same values in HKLM. Hive and key compare case-insensitively with `/` taken as `\` and no trailing `\`; names compare case-insensitively (a registry value name is
  *  not case-sensitive, so `https_proxy` is read as `HTTPS_PROXY`). helper.ps1 carries the same list as one JSON literal. */
 export const REG_READ_ALLOW = Object.freeze([
   { hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', names: Object.freeze(['ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL']) },
+  { hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\Connections', names: Object.freeze(['DefaultConnectionSettings']) }, // WPAD's AutoDetect flag
+  { hive: 'HKLM', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', names: Object.freeze(['ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL']) }, // read only under ProxySettingsPerUser=0
+  { hive: 'HKLM', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\Connections', names: Object.freeze(['DefaultConnectionSettings']) },
+  { hive: 'HKLM', key: 'Software\\Policies\\Microsoft\\Windows\\CurrentVersion\\Internet Settings', names: Object.freeze(['ProxySettingsPerUser']) },
   { hive: 'HKCU', key: 'Environment', names: Object.freeze(['Path', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY']) },
   { hive: 'HKLM', key: 'SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment', names: Object.freeze(['Path']) },
   { hive: 'HKLM', key: 'SYSTEM\\CurrentControlSet\\Control\\CI\\Policy', names: Object.freeze(['VerifiedAndReputablePolicyState']) },
 ].map(Object.freeze))
 
-/** The shape of a key a harness file may declare (a policy value is the one proxy door that is a registry value, 4.8 §2.4: Claude Desktop's `egressProxyUrl`): under `Software\Policies`, every
- *  segment starting with a letter or digit (so no `..`). helper.ps1 applies the same two texts to what it is handed, with `-match`. */
+/** The shape of a policy key (a policy value is the one proxy door that is a registry value, 4.8 §2.4: Claude Desktop's `egressProxyUrl`): under `Software\Policies`, every
+ *  segment starting with a letter or digit (so no `..`); and of a value name. policy.mjs checks what it reads and writes with these two texts. */
 export const POLICY_KEY_PATTERN = '^Software\\\\Policies(\\\\[A-Za-z0-9][A-Za-z0-9 _.-]*)+$'
 export const POLICY_NAME_PATTERN = '^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$'
-const MAX_DECLARED = 16
 const trimKey = (k) => String(k).replaceAll('/', '\\').replace(/\\+$/, '')
-
-/** The declared keys, checked: `[{ hive: 'HKCU'|'HKLM', key, names }]` → the same, hive upper-cased and the key with backslashes and none at the end. Anything that is not a key under `Software\Policies`
- *  with plain value names is a TypeError: a declaration cannot widen what the helper reads beyond the policy keys (W1). `undefined` is no declaration. */
-export function declaredRegAllow(list) {
-  if (list == null) return []
-  if (!Array.isArray(list)) throw new TypeError('regAllow is a list of { hive, key, names }')
-  if (list.length > MAX_DECLARED) throw new TypeError(`regAllow has at most ${MAX_DECLARED} entries`)
-  const keyRe = new RegExp(POLICY_KEY_PATTERN, 'i')
-  const nameRe = new RegExp(POLICY_NAME_PATTERN)
-  return Object.freeze(list.map((e) => {
-    if (!e || typeof e !== 'object') throw new TypeError('a regAllow entry is { hive, key, names }')
-    const hive = typeof e.hive === 'string' ? e.hive.toUpperCase() : ''
-    if (hive !== 'HKCU' && hive !== 'HKLM') throw new TypeError(`a declared registry key is in HKCU or HKLM, got ${JSON.stringify(e.hive)}`)
-    const key = typeof e.key === 'string' ? trimKey(e.key) : ''
-    if (!keyRe.test(key)) throw new TypeError(`a declared registry key is under Software\\Policies, got ${JSON.stringify(e.key)}`)
-    if (!Array.isArray(e.names) || e.names.length === 0 || e.names.length > MAX_DECLARED || e.names.some((n) => typeof n !== 'string' || !nameRe.test(n))) throw new TypeError(`the value names of ${key} are 1 to ${MAX_DECLARED} plain names`)
-    return Object.freeze({ hive, key, names: Object.freeze([...e.names]) })
-  }))
-}
-
-/** The registry values the groups' proxy entries of kind `policy` live in, as `startHelper({ regAllow })` takes them (the daemon passes harness data through this; this file knows no harness). Two names of one key are one entry. */
-export function policyAllowOf(groups) {
-  const byKey = new Map()
-  for (const g of groups || []) {
-    const e = g && g.proxyEntry
-    if (!e || e.kind !== 'policy') continue
-    const id = `${String(e.hive).toUpperCase()}\\${trimKey(e.key).toLowerCase()}`
-    if (!byKey.has(id)) byKey.set(id, { hive: e.hive, key: e.key, names: [] })
-    const entry = byKey.get(id)
-    if (!entry.names.includes(e.name)) entry.names.push(e.name)
-  }
-  return [...byKey.values()]
-}
 
 /** The value kinds of a reg-read answer, in the registry's own names. helper.ps1 gives .NET's `RegistryValueKind` (`GetValueKind().ToString()`: `DWord`, `String`, `ExpandString`, ...); 4.8 §1 says `kind` is given as it is
  *  (`REG_EXPAND_SZ` stays that, §6.3) and every reader (a DWORD `ProxyEnable`, §2.2; the Smart App Control state, §8; the PATH type a write must keep, §6.3) is written against these names, as are the fakes of the tests. */
@@ -85,14 +56,19 @@ export function regKindsOf(data) {
   return { ...data, values }
 }
 
+/** The verbs that may hold the single-threaded helper for long (`ps`: a CIM query, up to its 8 s operation timeout). A queued call of any other verb
+ *  is written before them, so a socket-table read is never stuck behind a ps that was merely asked first. */
+const SLOW_VERBS = new Set(['ps'])
+/** How long a call may wait for the helper to be free before it is written: the longest a verb may hold it (procinfo's ps timeout). */
+export const HELPER_WAIT_MS = 10000
 const ABANDONED_CAP = 256
 const STDERR_TAIL = 20 // the last lines of its stderr that helper-down carries (4.6 §记录: 20, as the Linux client's)
 const normKey = (k) => trimKey(k).toLowerCase()
 
-/** The allow-list entry a reg-read request falls under (in the fixed list, or in `extra`, the keys a harness declared), or null. A request with no names asks for everything: refused. */
-export function regReadAllowed(args, extra = []) {
+/** The allow-list entry a reg-read request falls under, or null. A request with no names asks for everything: refused. */
+export function regReadAllowed(args) {
   if (!args || typeof args !== 'object' || !Array.isArray(args.names) || args.names.length === 0) return null
-  const rule = [...REG_READ_ALLOW, ...extra].find((r) => r.hive.toLowerCase() === String(args.hive).toLowerCase() && normKey(r.key) === normKey(args.key))
+  const rule = REG_READ_ALLOW.find((r) => r.hive.toLowerCase() === String(args.hive).toLowerCase() && normKey(r.key) === normKey(args.key))
   if (!rule) return null
   const ok = new Set(rule.names.map((n) => n.toLowerCase()))
   return args.names.every((n) => typeof n === 'string' && ok.has(n.toLowerCase())) ? rule : null
@@ -100,14 +76,10 @@ export function regReadAllowed(args, extra = []) {
 
 const err = (message, code, extra = {}) => Object.assign(new Error(message), { code }, extra)
 
-/** startHelper({ spawn, exe, args, env, regAllow, onExit, onFailure, readyTimeoutMs }) → { call(verb, args, { timeoutMs = 2000 }), abandoned(verb), close(), pid, ready }
- *  `regAllow`: the registry keys the harness files declare (policyAllowOf), which `reg-read` may read beyond REG_READ_ALLOW. Checked by declaredRegAllow before a process starts (a TypeError for anything that is not a key under
- *  Software\Policies), checked again by every call, and handed to helper.ps1 as `-ExtraRegAllowB64 <base64 of the JSON>`, the last pair of its arguments, which the script checks once more.
+/** startHelper({ spawn, exe, args, env, onExit, onFailure, readyTimeoutMs }) → { call(verb, args, { timeoutMs = 2000 }), abandoned(verb), close(), pid, ready }
  *  `ready` resolves with the helper's ready line, or rejects when it never starts. `onExit({ reason, exit?, stderr?, ready, closed })` is
  *  told once when the helper is gone, however it went. */
-export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1], env = process.env, regAllow, onExit = () => {}, onFailure = () => {}, readyTimeoutMs = 15000 } = {}) {
-  const declared = declaredRegAllow(regAllow)
-  if (declared.length > 0) args = [...args, '-ExtraRegAllowB64', Buffer.from(JSON.stringify(declared), 'utf8').toString('base64')]
+export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1], env = process.env, onExit = () => {}, onFailure = () => {}, readyTimeoutMs = 15000 } = {}) {
   let child = null
   let readyInfo = null
   let down = null // { code, reason } once the helper is gone
@@ -117,7 +89,9 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
   let exitTimer = null
   let closed = null
   const stderrTail = []
-  const pending = new Map() // id → { resolve, reject, timer, verb }
+  const pending = new Map() // id → { resolve, reject, timer, verb } of the call written to the helper (at most one: the helper answers in order, one at a time)
+  const queue = [] // the calls not written yet: { id, verb, args, timeoutMs, onStart, resolve, reject, waitTimer }
+  let busy = false // a request is out at the helper and its answer has not come (a call that timed out keeps it busy until its late answer)
   const abandoned = new Map() // id → verb of the calls that timed out and whose late answer has not come yet (capped: a helper that hangs for good must not grow it)
   let resolveReady
   let rejectReady
@@ -131,7 +105,7 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     clearTimeout(readyTimer)
     clearTimeout(exitTimer)
     const tail = stderrTail.length ? { stderr: [...stderrTail] } : {}
-    for (const p of pending.values()) { clearTimeout(p.timer); p.reject(err(`helper ${wasReady ? 'down' : 'did not start'}: ${reason}`, down.code)) }
+    for (const p of [...pending.values(), ...queue.splice(0)]) { clearTimeout(p.timer); clearTimeout(p.waitTimer); p.reject(err(`helper ${wasReady ? 'down' : 'did not start'}: ${reason}`, down.code)) }
     pending.clear()
     abandoned.clear()
     rejectReady(err(`helper did not start: ${reason}`, 'helper-start-failed'))
@@ -156,6 +130,8 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
       if (msg.native === false && !closing) onFailure({ event: 'failure', where: 'helper', code: 'helper-start-failed', reason: `the helper's native code did not compile (${msg.nativeError || 'no reason given'}): the process list, the TCP table and the token are unavailable; the registry, interface and root reads still work`, nativeError: msg.nativeError ?? null })
       return
     }
+    busy = false // the helper answers in order, one request at a time: any answer frees it
+    queueMicrotask(pump)
     const p = pending.get(msg.id)
     if (!p) { abandoned.delete(msg.id); return } // a late answer to a call that already timed out: the helper is free of it now
     pending.delete(msg.id)
@@ -183,33 +159,56 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     readyTimer.unref?.()
   }
 
-  /** call(verb, args, { timeoutMs }) → the verb's data. Rejects with error.code: helper-unknown-verb · helper-forbidden-key · helper-closed ·
-   *  helper-down · helper-start-failed (nothing written) · helper-timeout · helper-verb-error (the helper answered ok:false). The timeout
-   *  counts from the write, after the helper is ready. */
-  async function call(verb, callArgs = {}, { timeoutMs = 2000 } = {}) {
+  /** Writes the next queued call when the helper is free: the fast verbs before the slow ones, each group in the order asked. */
+  function pump() {
+    if (busy || down || closing || !queue.length) return
+    let i = queue.findIndex((q) => !SLOW_VERBS.has(q.verb))
+    if (i < 0) i = 0
+    const q = queue.splice(i, 1)[0]
+    clearTimeout(q.waitTimer)
+    busy = true
+    q.timer = setTimeout(() => {
+      pending.delete(q.id)
+      abandoned.set(q.id, q.verb)
+      if (abandoned.size > ABANDONED_CAP) abandoned.delete(abandoned.keys().next().value)
+      q.reject(err(`helper ${q.verb} timed out after ${q.timeoutMs} ms`, 'helper-timeout', { verb: q.verb }))
+    }, q.timeoutMs)
+    q.timer.unref?.()
+    pending.set(q.id, q)
+    child.stdin.write(JSON.stringify({ id: q.id, verb: q.verb, args: q.args }) + '\n')
+    if (typeof q.onStart === 'function') q.onStart()
+  }
+
+  /** call(verb, args, { timeoutMs, waitMs, onStart }) → the verb's data. Rejects with error.code: helper-unknown-verb · helper-forbidden-key ·
+   *  helper-closed · helper-down · helper-start-failed (nothing written) · helper-busy (the helper was not free within `waitMs`: nothing
+   *  written, `behind` names the verb it is working on) · helper-timeout · helper-verb-error (the helper answered ok:false). The helper is
+   *  single-threaded and answers in order, so a call is written only when the one before it is answered: `timeoutMs` counts from
+   *  that write — the time the helper spends on THIS call — and `onStart()` is told when it happens. */
+  async function call(verb, callArgs = {}, { timeoutMs = 2000, waitMs = HELPER_WAIT_MS, onStart } = {}) {
     if (typeof verb !== 'string' || !HELPER_VERBS.includes(verb)) throw err(`not a helper verb: ${JSON.stringify(verb)}`, 'helper-unknown-verb')
-    if (verb === 'reg-read' && !regReadAllowed(callArgs, declared)) throw err(`reg-read outside the allow-list: ${JSON.stringify(callArgs)}`, 'helper-forbidden-key')
+    if (verb === 'reg-read' && !regReadAllowed(callArgs)) throw err(`reg-read outside the allow-list: ${JSON.stringify(callArgs)}`, 'helper-forbidden-key')
     if (closing) throw err('the helper was closed', 'helper-closed')
     if (down) throw err(`helper ${down.code === 'helper-down' ? 'is down' : 'did not start'}: ${down.reason}`, down.code)
     try { await ready } catch (e) { throw closing ? err('the helper was closed', 'helper-closed') : e }
     if (closing) throw err('the helper was closed', 'helper-closed')
     if (down) throw err(`helper is down: ${down.reason}`, down.code)
     return new Promise((resolve, reject) => {
-      const id = ++seq
-      const timer = setTimeout(() => {
-        pending.delete(id)
-        abandoned.set(id, verb)
-        if (abandoned.size > ABANDONED_CAP) abandoned.delete(abandoned.keys().next().value)
-        reject(err(`helper ${verb} timed out after ${timeoutMs} ms`, 'helper-timeout', { verb }))
-      }, timeoutMs)
-      timer.unref?.()
-      pending.set(id, { resolve, reject, timer, verb })
-      child.stdin.write(JSON.stringify({ id, verb, args: callArgs }) + '\n')
+      const q = { id: ++seq, verb, args: callArgs, timeoutMs, onStart, resolve, reject, timer: null, waitTimer: null }
+      q.waitTimer = setTimeout(() => {
+        const i = queue.indexOf(q)
+        if (i < 0) return
+        queue.splice(i, 1)
+        const behind = [...pending.values()][0]?.verb ?? [...abandoned.values()].at(-1) ?? null
+        reject(err(`the helper was busy${behind ? ` with ${behind}` : ''} for ${waitMs} ms: ${verb} was not sent`, 'helper-busy', { verb, behind }))
+      }, waitMs)
+      q.waitTimer.unref?.()
+      queue.push(q)
+      pump()
     })
   }
 
   /** How many calls of this verb timed out and are still being worked on: the helper is single-threaded, so a request sent now waits behind them (and
-   *  their late answers are dropped). 0 when the helper is gone. A caller that polls (procinfo's `ps`) does not send another while this is above 0. */
+   *  their late answers are dropped). 0 when the helper is gone. A caller that polls (upstream's reg-read tick) does not ask again while this is above 0. */
   function abandonedCount(verb) {
     let n = 0
     for (const v of abandoned.values()) if (v === verb) n++
@@ -222,7 +221,7 @@ export function startHelper({ spawn = nodeSpawn, exe = 'powershell.exe', args = 
     closing = true
     abandoned.clear()
     closed = new Promise((resolve) => {
-      for (const p of pending.values()) { clearTimeout(p.timer); p.reject(err('the helper was closed', 'helper-closed')) }
+      for (const p of [...pending.values(), ...queue.splice(0)]) { clearTimeout(p.timer); clearTimeout(p.waitTimer); p.reject(err('the helper was closed', 'helper-closed')) }
       pending.clear()
       if (!child || down) { fail('closed'); return resolve() }
       let gone = false

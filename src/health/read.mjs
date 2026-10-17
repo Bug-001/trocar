@@ -15,6 +15,9 @@ import { procIdentity, pidAlive } from '../off/proc.mjs'
 import { readFlows, readDay, foldFlows, pick, groupKey, lastRun, WINDOW_MS, HealthUnreadable } from './flows.mjs'
 import { isFailure } from './codes.mjs'
 
+// Has `install` finished? The same reading as src/off/manifest.mjs installComplete (D55: `install.state`, which replaced v2's `complete`); src/health imports no manifest code (0.1 §2)
+const installComplete = (m) => !!(m && m.install && m.install.state === 'complete')
+
 export { HealthUnreadable, procIdentity }
 
 export const LOCK_FRESH_MS = 5000
@@ -98,7 +101,7 @@ function notesOf(dir, fold, m, fs, read) {
     return lastRun(out.map(pick))
   }
   return {
-    install: fold.install.install.length ? fold.install.install : at(m && m.complete ? m.created_at : null, 'install-note'),
+    install: fold.install.install.length ? fold.install.install : at(installComplete(m) ? (m.install.at || m.created_at) : null, 'install-note'),
     uninstall: fold.install.uninstall.length ? fold.install.uninstall : at(m && m.uninstalled_at, 'uninstall-note'),
   }
 }
@@ -126,9 +129,9 @@ function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
   const man = readJson(path.join(dir, 'install-manifest.json'), fs)
   if (man.error) read.errors.push({ file: path.join(dir, 'install-manifest.json'), error: man.error })
   const m = man.value && typeof man.value === 'object' ? man.value : null
-  const installed = man.error ? null : !!(m && m.complete)
+  const installed = man.error ? null : installComplete(m)
   // what an uninstall could not undo (D-18), or what a crashed install left
-  const residue = !m || m.complete ? [] : Array.isArray(m.uninstall_left) && m.uninstall_left.length
+  const residue = !m || installComplete(m) ? [] : Array.isArray(m.uninstall_left) && m.uninstall_left.length
     ? m.uninstall_left.map((l) => ({ path: l.path, harness: l.harness ?? null, result: l.result }))
     : [...(m.entries || []).map((e) => ({ path: e.path, harness: e.harness ?? null, result: 'install did not finish' })), ...(m.files || []).map((f) => ({ path: f.path, harness: f.harness ?? null, result: 'install did not finish' }))]
   const ls = lockState({ file: path.join(dir, 'lock'), now, alive, identity, fs })

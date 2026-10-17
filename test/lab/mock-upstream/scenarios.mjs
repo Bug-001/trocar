@@ -25,6 +25,7 @@ export const SCENARIOS = {
   'headers-then-reset': { fault: 'headers-reset' },
   'long-stream': { extra: () => Array.from({ length: 200 }, (_, i) => ` w${i}`) },
   'slow-drip': { drip: true },
+  'long-drip': { extra: () => Array.from({ length: 120 }, (_, i) => ` d${i}`), drip: true }, // a stream that lasts 120 × dripMs (the end-to-end suite's G items act across it)
   'unicode-split': { extra: () => [' 你好🙂', ' 你好🙂'], splitUtf8: true },
   'big-response': { extra: () => Array.from({ length: 128 }, (_, i) => `\n[block ${i}] `.padEnd(16384, 'abcdefghijklmnopqrstuvwxyz0123456789')) },
   gzip: { encoding: 'gzip' },

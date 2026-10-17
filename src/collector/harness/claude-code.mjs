@@ -14,7 +14,7 @@
 // over into extra-cc.pem (its certificate blocks + the asight CA); with none, the key points at asight-ca.pem.
 import path from 'node:path'
 import { parseJsonc } from '../core/config-read.mjs'
-import { envHosts, argAfter, isOwnPath } from './_common.mjs'
+import { envHosts, argAfter, isOwnPath, perOs } from './_common.mjs'
 import { chromiumRole, NETWORK_SERVICE_ARG } from '../core/trust/chromium.mjs'
 
 const BASE_URL_KEYS = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL', 'ANTHROPIC_FOUNDRY_BASE_URL', 'ANTHROPIC_BEDROCK_MANTLE_BASE_URL']
@@ -28,7 +28,7 @@ function envBlock(ctx, file) {
   if (error) return { broken: 'settings-unreadable', error: `${error.code || 'error'}: ${error.message}` }
   if (text == null) return null
   const { data, error: bad } = parseJsonc(text)
-  if (data == null && ctx.unparsable) ctx.unparsable(file) // reported, judged as absent (D38)
+  if (bad && ctx.unparsable) ctx.unparsable(file) // reported, judged as absent (D38); no document is not a parse error
   if (bad) return { broken: 'settings-unparsable', error: bad }
   if (!data || !data.env || typeof data.env !== 'object') return null
   const vars = {}
@@ -37,16 +37,11 @@ function envBlock(ctx, file) {
 }
 
 // The layers by Chromium role (D51④, plan §2.5): Claude Desktop's network service owns the model sockets and reads no settings env (4.9 §6.4's
-// measured verdict; win F9) — its one door is the desktop trust item the arch injects as `ctx.desktopDoor` ({ since, name }: darwin's confirmed
-// login-keychain item, win32's confirmed CurrentUser\Root item, either only while its fingerprint is this build's CA). That door becomes ONE synthetic
-// layer pointing NODE_EXTRA_CA_CERTS at `ctx.caFile` (evaluate() reads it back), `live:false` + `since` = the item's installed_at (config-after-start),
-// `mode:'override'` (solid to the tracker's env-unreadable arm). Another Chromium child is never trusted (core/trust/confirm.mjs: chromium-child). A process with no
-// --type= — the CLI, the Desktop-bundled CC (mac F1), Desktop's own main process — keeps the settings layers.
+// measured verdict; win F9), so no settings layer is its door and the tracker gives it none: proxy mode judges it by the root (4.11 P11, core/proxymode/verdict.mjs).
+// Another Chromium child is never trusted (core/trust/confirm.mjs: chromium-child). A process with no --type= — the CLI, the Desktop-bundled CC (mac F1),
+// Desktop's own main process — keeps the settings layers.
 function layers(ctx) {
-  if (chromiumRole(ctx.argv) === 'network-service') {
-    const door = ctx.desktopDoor
-    return door && ctx.caFile ? [{ name: door.name || 'desktop trust item', mode: 'override', vars: { NODE_EXTRA_CA_CERTS: ctx.caFile }, live: false, since: door.since }] : []
-  }
+  if (chromiumRole(ctx.argv) === 'network-service') return []
   return settingsLayers(ctx)
 }
 
@@ -155,12 +150,56 @@ const proxy = {
   restart: { hint: '退出这个 Claude Code,再重新启动(它只在启动时读一次代理设置)', processes: processes.names[0].name },
 }
 
+// Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Facts: measured, plus a census of the Desktop app.
+// The settings file CLAUDE_CONFIG_DIR moves; trust sources are in Claude Code's own precedence
+// (project-local settings, project settings, user settings env, then the process env: settings env is applied over the process env).
+const SETTINGS = { base: 'home', dir: '.claude', env: 'CLAUDE_CONFIG_DIR', path: 'settings.json' }
+const PROJECT_LOCAL = { base: 'cwd', path: '.claude/settings.local.json' }
+const PROJECT = { base: 'cwd', path: '.claude/settings.json' }
+const settingsEnv = (file, name) => ({ file, format: 'json', keys: ['env', name] })
+const inPrecedence = (name) => [settingsEnv(PROJECT_LOCAL, name), settingsEnv(PROJECT, name), settingsEnv(SETTINGS, name), { env: name }]
+const BUNDLED = { src: inPrecedence('CLAUDE_CODE_CERT_STORE'), equals: 'bundled' }
+const managedAt = (rest) => perOs({ darwin: { base: 'abs', dir: MANAGED_DIR.darwin, ...rest }, win32: { base: 'abs', dir: 'C:/ProgramData/ClaudeCode', ...rest } })
+const managedFiles = [managedAt({ path: 'managed-settings.json' }), managedAt({ path: 'managed-settings.d', glob: '*.json' })] // read only: may be anywhere
+const CLI_FORMS = ['claude-code.cli', 'claude-code.vscode']
+const DESKTOP_POLICY = (key) => ({ policy: { darwin: { domain: 'com.anthropic.claudefordesktop', key }, win32: { key: 'HKCU\\SOFTWARE\\Policies\\Claude', value: key } } })
+const proxyMode = {
+  forms: [
+    { id: 'claude-code.cli', os: ['darwin', 'win32'], route: 'settings', cert: 'bundled', trust: 'bundled', present: [{ command: 'claude' }, perOs({ darwin: { base: 'home', path: '.local/bin/claude' }, win32: { base: 'home', path: '.local/bin/claude.exe' } })], verified: { darwin: true, win32: true } },
+    { id: 'claude-code.vscode', os: ['darwin', 'win32'], route: 'settings', cert: 'bundled', trust: 'bundled', present: [{ base: 'home', path: '.vscode/extensions', glob: 'anthropic.claude-code-*' }], verified: { darwin: true, win32: true } },
+    // the app with its Code tab (the bundled `claude` takes HTTPS_PROXY from the PAC's first PROXY); verified in 3p mode (R4-M, R4-W); its own first-party
+    // hosts stay forward-only until a logged-in cell passes (ruling ⑲): sign-in, the updater and the Code-tab engine download
+    { id: 'claude-code.desktop', os: ['darwin', 'win32'], route: 'library', cert: 'root', trust: 'root',
+      present: [perOs({ darwin: { base: 'abs', path: '/Applications/Claude.app' }, win32: { base: 'localAppData', path: 'AnthropicClaude' } }), perOs({ darwin: { base: 'home', path: 'Applications/Claude.app' }, win32: { base: 'localAppData', path: 'Packages', glob: 'Claude_*' } })],
+      verified: { darwin: true, win32: true }, forwardOnlyHosts: ['claude.ai', 'accounts.google.com', 'downloads.claude.ai'] },
+  ],
+  routes: {
+    settings: { kind: 'json-key', file: SETTINGS, format: 'json', proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy']], noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']], value: 'door-url', absent: 'create', takesEffect: '下次启动 claude 时生效(它只在启动时读一次代理设置)' },
+    library: { kind: 'json-key', select: { dir: perOs({ darwin: { base: 'appSupport', path: 'Claude-3p/configLibrary' }, win32: { base: 'localAppData', path: 'Claude-3p/configLibrary' } }), meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, format: 'json', proxyKeys: [['egressProxyPacUrl']], ownKeys: [['egressProxyUrl'], ['egressProxyPacUrl']], value: 'pac-url', auth: false, absent: 'create', takesEffect: '下次启动 Claude 桌面版时生效;不需要管理员' },
+  },
+  certs: {
+    // only when CLAUDE_CODE_CERT_STORE=bundled is set (then the root is hidden): asight-ca.pem into the settings env, if neither the settings nor the install env set it
+    bundled: { kind: 'config-key', file: SETTINGS, format: 'json', keys: ['env', 'NODE_EXTRA_CA_CERTS'], semantics: 'add', when: BUNDLED },
+  },
+  trusts: {
+    // without bundled the root (`when` does not hold)
+    bundled: { base: 'node', when: BUNDLED, sources: inPrecedence('NODE_EXTRA_CA_CERTS').map((from) => ({ from, semantics: 'add' })) },
+  },
+  userCertFiles: [settingsEnv(SETTINGS, 'NODE_EXTRA_CA_CERTS'), { env: 'NODE_EXTRA_CA_CERTS' }],
+  blockers: [
+    ...managedFiles.flatMap((file) => ['HTTPS_PROXY', 'https_proxy'].map((name) => ({ at: settingsEnv(file, name), forms: CLI_FORMS }))),
+    { at: DESKTOP_POLICY('egressProxyUrl'), forms: ['claude-code.desktop'] },
+    { at: DESKTOP_POLICY('egressProxyPacUrl'), forms: ['claude-code.desktop'] },
+  ],
+}
+
 export default {
   name: 'claude-code',
   runtime: 'node', // Bun standalone; NODE_EXTRA_CA_CERTS semantics
   processes,
   hosts: ['api.anthropic.com'],
   proxy,
+  proxyMode,
   layers,
   inject,
   configHosts: (ctx) => envHosts(ctx.env, BASE_URL_KEYS),

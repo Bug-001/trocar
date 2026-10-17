@@ -73,3 +73,11 @@ export function undoAutostart({ home, exec = null, env = process.env, fs = nodeF
   } catch (e) { p = { code: 1, out: '', err: `the plist ${file} could not be removed (${(e && e.code) || (e && e.message) || e})`, state: 'failed' } }
   return settle(a, p)
 }
+
+/** A no-names `off` on macOS (4.11 P12): `launchctl disable gui/<uid>/com.asight.collector` — never a bootout, which would take a draining daemon down
+ *  mid-stream. The daemon exits itself once drained (exit 0: KeepAlive's SuccessfulExit=false does not relaunch it) and launchd never loads the disabled job
+ *  again, at a login either, until `on` enables it; the plist stays (an install item). → { code, out, err, state: 'disabled' | 'failed' }. */
+export function disableAgent({ exec = null, env = process.env, uid = null } = {}) {
+  const r = launchctl(['disable', `gui/${uid ?? processUid()}/${AGENT_LABEL}`], { run: exec, env })
+  return { ...r, code: r.code ?? 1, state: r.code === 0 ? 'disabled' : 'failed' }
+}

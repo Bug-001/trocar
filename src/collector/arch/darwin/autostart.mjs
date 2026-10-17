@@ -18,19 +18,22 @@ export const PLIST_FILE = 'com.asight.collector.plist' // the plist's name in th
 /** ~/Library/LaunchAgents/com.asight.collector.plist — launchd scans this directory at every login, so the file IS the registration: `enable`'s bootstrap starts the job now, and the undo takes the file out again or the next login brings the agent back. */
 export const plistPath = (home) => path.join(home, 'Library', 'LaunchAgents', PLIST_FILE)
 
-/** The oldest Node `on` accepts (package.json `engines`; a test holds the two equal). Older than that and the daemon would exit at every login with an error nobody sees (4.8 §7, the same reason on darwin: launchd starts it with the Node that is installed). */
-export const NODE_MIN_MAJOR = 20
+/** The oldest Node `on` accepts on macOS (4.9 §7, MA5): 22.15 — below it a root the user added in the keychain is not in
+ *  `tls.getCACertificates('system')`, and the doors would refuse an upstream the agent trusts. package.json `engines` stays the floor Linux and
+ *  Windows keep (>=20). Older than this and the daemon would also be the one launchd starts at every login with an error nobody sees (4.8 §7). */
+const NODE_MIN = '22.15'
 
 /**
  * The Node preflight of `on` (4.8 §7): → `{ ok: true, have, min }` or `{ ok: false, have, min, doctor }`. `doctor` is the line to print: what was found and what is needed. A version that
- * cannot be read is not a pass (it names itself as such): a daemon on an unknown Node is the one that exits at login. `versions` is `process.versions`.
+ * cannot be read (no major.minor) is not a pass (it names itself as such): a daemon on an unknown Node is the one that exits at login. `versions` is `process.versions`.
  */
 export function nodePreflight({ versions = process.versions } = {}) {
   const have = versions && versions.node
-  const major = typeof have === 'string' && /^\d+(\.|$)/.test(have) ? Number(have.split('.')[0]) : null
-  if (major === null) return { ok: false, have: have ?? null, min: NODE_MIN_MAJOR, doctor: `读不到 Node 的版本(${JSON.stringify(have ?? null)}):asight 在 macOS 上要 Node ≥ ${NODE_MIN_MAJOR}。确认 \`node --version\` 之后再 asight on` }
-  if (major < NODE_MIN_MAJOR) return { ok: false, have, min: NODE_MIN_MAJOR, doctor: `Node ${have} 太旧:asight 在 macOS 上要 Node ≥ ${NODE_MIN_MAJOR}(守护进程每次登录都由 launchd 用这个 Node 拉起,更老的版本起不来)。升级 Node 之后再 asight on` }
-  return { ok: true, have, min: NODE_MIN_MAJOR }
+  const m = typeof have === 'string' && /^(\d+)\.(\d+)(\.|$)/.exec(have)
+  if (!m) return { ok: false, have: have ?? null, min: NODE_MIN, doctor: `读不到 Node 的版本(${JSON.stringify(have ?? null)}):asight 在 macOS 上要 Node ≥ ${NODE_MIN}。确认 \`node --version\` 之后再 asight on` }
+  const [maj, min] = NODE_MIN.split('.').map(Number)
+  if (Number(m[1]) < maj || (Number(m[1]) === maj && Number(m[2]) < min)) return { ok: false, have, min: NODE_MIN, doctor: `Node ${have} 太旧:asight 在 macOS 上要 Node ≥ ${NODE_MIN}(守护进程每次登录都由 launchd 用这个 Node 拉起;更老的 Node 读不到钥匙串里另加的根)。升级 Node 之后再 asight on` }
+  return { ok: true, have, min: NODE_MIN }
 }
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1) // -1: a platform without getuid (a test on Windows) — never 0, so never a refusal; that platform's own check is the win32 helper's
@@ -61,7 +64,7 @@ const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>
 
 /**
  * The LaunchAgent plist (4.9 §4). Label com.asight.collector; ProgramArguments = `node <asight> daemon` and nothing more — no `--supervise`, that flag went with the supervisor parent;
- * RunAtLoad + KeepAlive both true, and KeepAlive is the reason there is no supervisor (launchd brings a killed daemon back) and the reason `off` boots the agent out BEFORE it stops the
+ * RunAtLoad true and KeepAlive {SuccessfulExit: false} (a crash is relaunched, a drained daemon's exit 0 is not), and KeepAlive is the reason there is no supervisor (launchd brings a killed daemon back) and the reason `off` boots the agent out BEFORE it stops the
  * daemon. `env` is the daemon's own environment (install's daemonEnv: NODE_EXTRA_CA_CERTS of the install shell, an absolute path), written as EnvironmentVariables — a launchd job starts
  * with none of the shell's exports, so what install wants the daemon to have must be in the plist (the linux unit's `Environment=`, 4.6 §引擎 5; a Windows task cannot carry any, 4.8 §7).
  * `logs` (D46, given by userUnit) adds StandardOutPath / StandardErrorPath under ~/.asight/collector/logs/ — the daemon's own stdout / stderr, a launchd-started daemon's only console:
@@ -95,8 +98,11 @@ export function plistXml({ node, asight, env = {}, logs = null } = {}) {
     ...sinks.flatMap(([key, file]) => ['  <key>' + key + '</key>', `  <string>${xmlText(file)}</string>`]),
     '  <key>RunAtLoad</key>',
     '  <true/>',
-    '  <key>KeepAlive</key>',
-    '  <true/>',
+    '  <key>KeepAlive</key>', // relaunched only after an exit that is not clean — a daemon that drained after `off` exits 0 and stays down
+    '  <dict>',
+    '    <key>SuccessfulExit</key>',
+    '    <false/>',
+    '  </dict>',
     '</dict>',
     '</plist>',
     '',
@@ -154,8 +160,8 @@ const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist
  *                    detached, with the environment of `directStartEnv(env)` (the shell's, without the trust and proxy variables a login-started daemon would not have) and no
  *                    supervisor flag (launchd is the restart; a `--no-autostart` daemon is not under it and dies when it dies).
  *   reload()         nothing to do: a rewritten plist is replaced by the next `enable` (bootout + bootstrap).
- *   disable()        a no-argument `off` — and remove(), an `uninstall`: on darwin the two are the same undo, because the file IS the registration (the linux unit file stays and only the
- *   remove()         wants/ link goes; darwin has no link to split off). The undo, in its order: **`launchctl bootout` FIRST** (the autostart off the hook, so KeepAlive does not pull the
+ *   disable()        a no-argument `off`: `launchctl disable gui/<uid>/<label>` only — the draining daemon exits itself and launchd loads the job no more until `enable`.
+ *   remove()         an `uninstall`. The undo, in its order: **`launchctl bootout` FIRST** (the autostart off the hook, so KeepAlive does not pull the
  *                    daemon back — the caller stops the daemon process after this verb returns, never before, 4.9 §4), then the plist leaves ~/Library/LaunchAgents (launchd scans that
  *                    directory at every login: a file left there brings the agent back at the next one, which would undo the off, D39). → `{ code, out, err, agent: 'booted-out' |
  *                    'absent' | 'failed', plist: 'removed' | 'absent' | 'failed' }`. An agent that is not there is already as asked, not an error (found with `launchctl print`, never by
@@ -195,6 +201,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     enable({ now = true } = {}) {
       if (!fs.existsSync(file)) return { code: null, out: '', err: `the plist ${file} is not there: launchd is not asked (install writes it first)`, precondition: true } // not a refusal of launchctl: nothing was asked of it
       this.ensureLogs() // the sinks the plist names exist whatever wrote the plist (one upgraded from before D46 included)
+      launchctl(['enable', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools) // `off` disabled the job; a disabled job is neither bootstrapped now nor loaded at the next login
       if (!now) return { ...ok }
       launchctl(['bootout', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools) // an earlier copy of the job goes out first (the /F analog); a job that is not loaded answers with an error that is not ours to fail on — the bootstrap below is the answer
       const r = launchctl(['bootstrap', domainOf(tools.uid), file], tools)
@@ -203,7 +210,8 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     },
     start: startDirect,
     reload: () => ({ ...ok }),
-    disable: undo,
+    // a no-names off: launchctl disable, never a bootout of a draining daemon — the same call as src/off/darwin.mjs disableAgent; the plist stays
+    disable: () => { const r = launchctl(['disable', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools); return { ...r, code: r.code ?? 1, state: r.code === 0 ? 'disabled' : 'failed' } },
     remove: undo,
   }
 }

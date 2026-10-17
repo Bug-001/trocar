@@ -8,9 +8,7 @@ import http from 'node:http'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
-import { startHelper } from '../../../../src/collector/arch/win32/helper.mjs'
 import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userUnit, directStartEnv, register, daemonCommandLine, readRunValue, runKeyFallback, removeRunValue, TASK_NAME, TASK_FILE, RUN_KEY, superviseChild, runSupervisor, lockHolderAlive, supervisorBackoff, SUPERVISOR_LOCK, SUPERVISE_CAP_MS, SUPERVISE_STABLE_MS } from '../../../../src/collector/arch/win32/autostart.mjs'
 import { elevationByWhoami, refuseElevatedByWhoami } from '../../../../src/off/win32.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
@@ -137,38 +135,6 @@ test('W26 a second server on a live endpoint is refused, and the first one is no
 
 // ---- W25: refuse an elevated or SYSTEM token ---------------------------------------------------------------------------------------------------
 
-const FAKE = fileURLToPath(new URL('./fixtures/fake-helper.mjs', import.meta.url))
-/** The real helper client over the fake helper process, so `token` goes through the line protocol as it does on Windows. */
-function helperWith(t, verbs) {
-  const h = startHelper({ spawn: (exe, args, opts) => spawn(process.execPath, [FAKE, JSON.stringify({ verbs })], { ...opts, env: { ...process.env, ASIGHT_FAKE_HELPER: '1' } }) })
-  t.after(() => h.close())
-  return h
-}
-const TOKEN = (over = {}) => ({ pid: 4242, elevated: false, elevationType: 'limited', integrity: 'medium', system: false, sessionId: 2, ...over })
-
-test('W25 an elevated token and a SYSTEM token are refused by the daemon\'s check, each with the closed-set code, and a plain Medium token is not', async (t) => {
-  const cases = [
-    ['elevated (the Administrator token, UAC accepted)', TOKEN({ elevated: true, elevationType: 'full', integrity: 'high' }), true],
-    ['SYSTEM', TOKEN({ elevated: true, integrity: 'system', system: true, elevationType: 'default' }), true],
-    ['SYSTEM whose elevated flag is not set: the SYSTEM flag alone refuses', TOKEN({ system: true, integrity: 'system' }), true],
-    ['the filtered token of an administrator account at Medium (what a test machine runs as)', TOKEN(), false],
-    ['a standard user', TOKEN({ elevationType: 'default' }), false],
-  ]
-  for (const [what, data, refused] of cases) {
-    const unknown = []
-    const real = helperWith(t, { token: { data } })
-    const asked = [] // what the check asks the helper: the one read-only verb, nothing else (the helper's verbs are a closed read-only set, W1; this is the check's side of it)
-    const r = await refuseElevated({ helper: { call: (...a) => { asked.push(a); return real.call(...a) } }, onUnknown: (why) => unknown.push(why) })
-    assert.deepEqual(asked, [['token']], `${what}: one question, the token verb, no arguments`)
-    if (!refused) { assert.equal(r, null, what); continue }
-    assert.equal(r.code, 'elevated-token', what)
-    assert.match(r.reason, /R7/, 'the reason names the rule')
-    assert.deepEqual(r.token, { elevated: data.elevated, system: data.system, integrity: data.integrity }, 'what it saw, without the pid and the session')
-    assert.deepEqual(checkRecord({ event: 'failure', where: 'start', code: r.code, reason: r.reason }), [], 'a failure record the closed set takes')
-    assert.deepEqual(unknown, [])
-  }
-})
-
 // W25's command halves are all LANDED now (the todo pins that lived here — each ending in assert.fail so it could not go green by accident — became
 // pointers as the commands got their wiring): on is on-elevated.test.mjs's (2026-10-10, Task 8(c) 收尾), the daemon's is daemon.test.mjs's (Task 8(c)),
 // off / uninstall's is win32-kernel.test.mjs's (Task 9(b), lane B).
@@ -190,33 +156,6 @@ test('W25 an elevated token and a SYSTEM token are refused by the daemon\'s chec
 // W24's undoWin32-equality half is LANDED (Task 9(b), lane B): src/off/win32.mjs carries its own taskState/undoScheduledTask/undoRunValue beside this
 // module's — 已由 test/off/win32-undo.test.mjs::`the names the undo touches are the arch module's own (the inlined pieces cannot drift)` 覆盖: TASK_NAME and
 // RUN_KEY equal this module's exports, the shape Linux's unit.mjs ↔ src/off/autostart.mjs test has; each side's call sequence is its own file's tests.
-
-test('W25 refuseElevated starts its own helper when none is given and closes it after — the daemon has none at its entry (4.8 §7; a helper that cannot start is the unknown case, not a refusal)', async () => {
-  const events = []
-  const fake = (answer, broken = false) => ({ call: async (verb) => { events.push(`ask:${verb}`); if (broken) throw Object.assign(new Error('native-unavailable'), { code: 'native-unavailable' }); return answer }, close: () => events.push('close') })
-  const start = (o) => { events.push(`start:${o && o.env && o.env.ASIGHT_TEST ? 'env' : 'no-env'}`); return fake(TOKEN({ elevated: true, elevationType: 'full', integrity: 'high' })) }
-  const r = await refuseElevated({ start, env: { ASIGHT_TEST: '1' } })
-  assert.equal(r && r.code, 'elevated-token', 'the question went through the helper it started')
-  assert.deepEqual(events, ['start:env', 'ask:token', 'close'], 'started with the environment, one question, closed after')
-  // a helper that cannot start is the unknown case: said, not a refusal (an unreadable token must not stop an undo-able daemon, R11)
-  const unknown = []
-  const r2 = await refuseElevated({ start: () => { throw Object.assign(new Error('powershell.exe not found'), { code: 'ENOENT' }) }, onUnknown: (why) => unknown.push(why) })
-  assert.equal(r2, null)
-  assert.match(unknown.join('\n'), /could not be started/)
-})
-
-test('W25 a token that cannot be read is not a refusal and not a silence: the caller is told why it is unknown (R11)', async (t) => {
-  const unknown = []
-  const note = (why) => unknown.push(why)
-  assert.equal(await refuseElevated({ helper: helperWith(t, { token: { error: 'native-unavailable' } }), onUnknown: note }), null)
-  assert.equal(await refuseElevated({ helper: helperWith(t, { token: { data: 'garbage' } }), onUnknown: note }), null)
-  assert.equal(await refuseElevated({ helper: helperWith(t, { token: { data: { elevated: 'yes', system: null } } }), onUnknown: note }), null, 'fields that are not booleans are not an answer')
-  assert.equal(await refuseElevated({ helper: { call: async () => { throw Object.assign(new Error('helper is down: gone'), { code: 'helper-down' }) } }, onUnknown: note }), null)
-  assert.equal(unknown.length, 4)
-  assert.match(unknown[0], /native-unavailable/)
-  assert.match(unknown[3], /helper-down/)
-  assert.equal(await refuseElevated({ helper: { call: async () => { throw new Error('x') } } }), null, 'onUnknown is optional')
-})
 
 // whoami /groups lists the token's groups with their SIDs; the integrity level is the one `S-1-16-<rid>` (Mandatory Label), and SYSTEM is S-1-5-18. The SIDs are the same in every language, so the check reads SIDs, not names.
 const WHOAMI = (label, extra = '') => `"Everyone","Well-known group","S-1-1-0","Mandatory group, Enabled by default, Enabled group"\n"BUILTIN\\Users","Alias","S-1-5-32-545","Mandatory group, Enabled by default, Enabled group"\n${extra}"${label}","Label","S-1-16-${{ medium: 8192, high: 12288, system: 16384, low: 4096 }[label.split('\\')[1].split(' ')[0].toLowerCase()] ?? 8192}",""\n`
@@ -249,6 +188,30 @@ test('W25 off and uninstall never block on a token they cannot read: whoami fail
     assert.match(e.reason, why, what)
     assert.equal(refuseElevatedByWhoami({ run }), null, `${what}: not refused`)
   }
+})
+
+test('W25 on and the daemon ask the same `whoami /groups` as off and uninstall (one question, no helper: its C# compile cost on 1.2 s, Windows test machine 2026-10-17): High or SYSTEM refuses with the closed-set record, Medium and Low do not, an unreadable token is said and not refused', async () => {
+  for (const [what, out, refused, token] of [
+    ['elevated (the Administrator token, UAC accepted)', WHOAMI('Mandatory Label\\High Mandatory Level'), true, { elevated: true, system: false, integrity: 'high' }],
+    ['SYSTEM', WHOAMI('Mandatory Label\\System Mandatory Level', '"NT AUTHORITY\\SYSTEM","User","S-1-5-18","Mandatory group, Enabled by default, Enabled group"\n'), true, { elevated: true, system: true, integrity: 'system' }],
+    ['the filtered token of an administrator account at Medium (what a test machine runs as)', WHOAMI('Mandatory Label\\Medium Mandatory Level'), false],
+    ['a standard user at Low', WHOAMI('Mandatory Label\\Low Mandatory Level'), false],
+  ]) {
+    const calls = [], unknown = []
+    const r = await refuseElevated({ run: runner(out, 0, calls), onUnknown: (why) => unknown.push(why) })
+    assert.deepEqual(calls[0], ['whoami', '/groups', '/fo', 'csv', '/nh'], `${what}: whoami first`)
+    assert.ok(calls.every(([f]) => f === 'whoami' || f === 'reg'), `${what}: whoami and the UAC settings only, nothing started: ${JSON.stringify(calls)}`)
+    assert.deepEqual(unknown, [])
+    if (!refused) { assert.equal(r, null, what); continue }
+    assert.equal(r.code, 'elevated-token', what)
+    assert.equal(r.reason, refuseElevatedByWhoami({ run: runner(out) }).reason, 'the same words as off and uninstall')
+    assert.deepEqual(r.token, token, what)
+    assert.deepEqual(checkRecord({ event: 'failure', where: 'start', code: r.code, reason: r.reason }), [], 'a failure record the closed set takes')
+  }
+  const unknown = []
+  assert.equal(await refuseElevated({ run: runner('', 1), onUnknown: (why) => unknown.push(why) }), null, 'whoami failing is not a refusal')
+  assert.match(unknown.join('\n'), /whoami \/groups failed \(exit 1\)/)
+  assert.equal(await refuseElevated({ run: runner('<html>') }), null, 'onUnknown is optional')
 })
 
 // ---- the Node preflight (4.8 §7) -------------------------------------------------------------------------------------------------------------------
@@ -1042,4 +1005,60 @@ test('W24 runSupervisor is what `asight daemon --supervise` calls: it supervises
   assert.equal(spawn.kills.length, 1)
   assert.deepEqual(['SIGHUP', 'SIGINT', 'SIGTERM'].map((s) => proc.listenerCount(s)), [0, 0, 0])
   await assert.rejects(async () => runSupervisor({ node: NODE, dir, proc }), TypeError, 'without the script it would supervise nothing')
+})
+
+// R7's unsplit-token exception (1.6 R7, D53③): an account with no split token — UAC off (EnableLUA = 0), or the built-in Administrator
+// (RID 500) with FilterAdministratorToken not 1 — runs every shell at High, and `on` and `off` use the same token, so the risk R7 guards (a root-written
+// item a user-level `off` cannot undo) is not there: its High token is let through. A split token's elevated half and SYSTEM are still refused.
+const REG = (name, v) => `\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\r\n    ${name}    REG_DWORD    ${v}\r\n\r\n`
+const answers = (map, calls = []) => (file, args) => { calls.push([file, ...args]); const k = Object.keys(map).find((x) => [file, ...args].join(' ').includes(x)); return k ? (typeof map[k] === 'string' ? { status: 0, stdout: map[k], stderr: '' } : map[k]) : { status: 1, stdout: '', stderr: 'ERROR: The system was unable to find the specified registry key or value.' } }
+const HIGH = WHOAMI('Mandatory Label\\High Mandatory Level')
+const USER = (rid) => `"pc\\\\me","S-1-5-21-1-2-3-${rid}"\r\n`
+
+test('R7 unsplit token (off / uninstall, whoami): High with EnableLUA = 0, or the built-in Administrator with FilterAdministratorToken not 1, is let through; a split token\'s High and SYSTEM are not', () => {
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x0'), '/user': USER(1001) }) }), null, 'UAC off: every token is unsplit')
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500) }) }), null, 'the built-in Administrator, FilterAdministratorToken absent (its default, 0)')
+  assert.equal(refuseElevatedByWhoami({ run: answers({ '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500), FilterAdministratorToken: REG('FilterAdministratorToken', '0x0') }) }), null)
+  for (const [why, map] of [
+    ['a split token run as administrator', { '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(1001) }],
+    ['the built-in Administrator under Admin Approval Mode', { '/groups': HIGH, EnableLUA: REG('EnableLUA', '0x1'), '/user': USER(500), FilterAdministratorToken: REG('FilterAdministratorToken', '0x1') }],
+    ['EnableLUA unreadable: not known to be unsplit', { '/groups': HIGH, '/user': USER(1001) }],
+    ['SYSTEM, whatever UAC says', { '/groups': WHOAMI('Mandatory Label\\System Mandatory Level', '"NT AUTHORITY\\SYSTEM","User","S-1-5-18",""\n'), EnableLUA: REG('EnableLUA', '0x0'), '/user': USER(1001) }],
+  ]) assert.equal(refuseElevatedByWhoami({ run: answers(map) })?.code, 'elevated-token', why)
+  const calls = []
+  refuseElevatedByWhoami({ run: answers({ '/groups': WHOAMI('Mandatory Label\\Medium Mandatory Level') }, calls) })
+  assert.deepEqual(calls.map((c) => c[0]), ['whoami'], 'a Medium token asks nothing more')
+})
+
+test('R7 unsplit token (on / daemon, whoami as off): High with UAC off or the built-in Administrator unfiltered is let through; High otherwise and SYSTEM are refused (D53③)', async () => {
+  const world = ({ label, system = false, lua = '0x1', user = 'S-1-5-21-1-2-3-1001', filter = null }) => (file, args) => {
+    if (file === 'whoami' && args[0] === '/groups') return { status: 0, stdout: WHOAMI(label, system ? '"NT AUTHORITY\\SYSTEM","User","S-1-5-18","x"\n' : ''), stderr: '' }
+    if (file === 'whoami' && args[0] === '/user') return { status: 0, stdout: `"pc\\u","${user}"\n`, stderr: '' }
+    const v = args.at(-1) === 'EnableLUA' ? lua : filter
+    return v == null ? { status: 1, stdout: '', stderr: '' } : { status: 0, stdout: `    ${args.at(-1)}    REG_DWORD    ${v}\n`, stderr: '' }
+  }
+  const ask = (w) => refuseElevated({ run: world(w) })
+  const HIGH = 'Mandatory Label\\High Mandatory Level'
+  assert.equal(await ask({ label: HIGH, lua: '0x0' }), null, 'UAC off: every shell is High')
+  assert.equal(await ask({ label: HIGH, user: 'S-1-5-21-1-2-3-500' }), null, 'the built-in Administrator, FilterAdministratorToken absent')
+  assert.equal((await ask({ label: HIGH, user: 'S-1-5-21-1-2-3-500', filter: '0x1' }))?.code, 'elevated-token', 'Admin Approval Mode on: split')
+  assert.equal((await ask({ label: HIGH }))?.code, 'elevated-token', 'an elevated shell of a split account')
+  assert.equal((await ask({ label: 'Mandatory Label\\System Mandatory Level', system: true, lua: '0x0' }))?.code, 'elevated-token', 'SYSTEM is refused whatever UAC says')
+})
+
+// W39 (moved from the old wiring.test.mjs, which went with the old win32 collector): the arch the CLI and daemon reach through loadArch.
+import { loadArch } from '../../../../src/collector/arch/index.mjs'
+test('W39 loadArch("win32") returns the Windows arch on any OS (imported and built here off Windows: no top-level Windows call), with the pieces the CLI and daemon reach', async () => {
+  const A = await loadArch('win32')
+  assert.equal(A.os, 'win32')
+  assert.equal(A.install, null, 'the machine-wide helper is a Linux thing; Windows needs none')
+  assert.equal(A.unit.userUnit, userUnit, 'the autostart unit is this module')
+  assert.equal(A.controlEndpoint, controlEndpoint)
+  assert.equal(A.refuseElevated, refuseElevated)
+  assert.equal(A.nodePreflight, nodePreflight)
+  assert.equal(A.runSupervisor, runSupervisor)
+  assert.equal(A.prepare, undefined, 'no preflight: the engine is the only local proxy, `on` downloads nothing')
+  assert.equal(A.ensureKernel, undefined, 'no kernel to ensure either')
+  assert.equal(typeof A.osRoots, 'function', 'the Windows roots are read (4.8 §6.2)')
+  assert.equal(typeof A.netFacts, 'function', 'the platform\'s part of the network facts (1.6 §9.7): gatherNetFacts reaches it as archFacts')
 })

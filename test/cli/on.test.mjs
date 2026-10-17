@@ -5,17 +5,18 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { turnOn } from '../../src/collector/install.mjs'
+import { turnOn, installCollector } from '../../src/collector/install.mjs'
 import { userUnit } from '../../src/collector/arch/linux/unit.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
-import { readManifest } from '../../src/off/manifest.mjs'
+import { readManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sevenHomes } from '../off/fixtures/seven-homes.mjs'
-import { snapshot, fakeSystem, recordingExec, fakeDaemon, ROOTS } from './fixtures/on-ctx.mjs'
+import { runOnCli } from '../../src/cli/on.mjs'
+import { snapshot, fakeSystem, recordingExec, fakeDaemon, fakeIo, onCtx, seedClaude, ROOTS } from './fixtures/on-ctx.mjs'
 
 // a JSON key; the three that replace the system roots and so name a combined bundle (codex and hermes by a dotenv block, z-code by a JSON key); a plugin
 // directory and a YAML row
@@ -23,15 +24,20 @@ const NAMES = ['claude-code', 'codex', 'hermes', 'z-code', 'opencode', 'deepseek
 const descs = (await loadHarnesses()).filter((d) => NAMES.includes(d.name))
 const SOCK = '/x/collector.sock'
 
-// a sandbox HOME with the user's files of the seven-homes fixture, and everything a run needs; `run` is one `asight on`
-function sandbox() {
+// a sandbox HOME with the user's files of the seven-homes fixture, and everything a run needs; `run` is one `asight on`. D55 / override #15: on never writes a
+// certificate, so the sandbox has had `asight install` (installCollector, no unit) unless `installed: false` — then the first `run` installs first, so a crash
+// test cuts the install's writes too
+async function sandbox({ installed = true } = {}) {
   const home = tmpDir('asight-on-')
   const sh = sevenHomes(home)
   const dir = path.join(home, '.asight', 'collector')
   const sys = fakeSystem()
   const unit = (script = '/repo/bin/asight.mjs') => userUnit({ home, node: '/usr/bin/node', script, run: sys.exec.run })
-  const run = (o = {}) => turnOn({ home, env: sh.env, osName: 'linux', harnesses: descs, freePort: async () => 47011, roots: ROOTS, confirm: async () => true, unit: unit(), request: sys.daemon.request, socketPath: SOCK, sleep: async () => {}, linger: () => true, user: 'alice', ...o })
-  return { home, sh, dir, sys, run, unit }
+  const opts = (o = {}) => ({ home, env: sh.env, osName: 'linux', harnesses: descs, freePort: async () => 47011, roots: ROOTS, confirm: async () => true, unit: unit(), request: sys.daemon.request, socketPath: SOCK, sleep: async () => {}, linger: () => true, user: 'alice', ...o })
+  const install = async (o = {}) => { await installCollector({ ...opts(o), unit: null }); installed = true }
+  const run = async (o = {}) => { if (!installed) await install(o); return turnOn(opts(o)) }
+  if (installed) await install()
+  return { home, sh, dir, sys, run, unit, install }
 }
 const asightOnly = (rel) => rel.startsWith('.asight') || rel.startsWith(path.join('.config', 'systemd'))
 const userView = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([rel]) => !asightOnly(rel)))
@@ -64,13 +70,13 @@ function bundlesAreValid(s) {
 const entryStats = (s) => readManifest(s.dir).entries.map((e) => ({ path: e.path, installed_at: e.installed_at, ino: fs.statSync(e.real_path || e.path).ino, mtimeMs: fs.statSync(e.real_path || e.path).mtimeMs }))
 
 test('R9: a crash at every one of the writes of a first on is finished by the next on; at every point an entry that exists points at a valid bundle; the user files come back byte for byte', async () => {
-  const counter = sandbox()
+  const counter = await sandbox({ installed: false })
   let writes = 0
   const count = { ...fs, renameSync: (a, b) => { writes++; return fs.renameSync(a, b) } }
   assert.equal((await counter.run({ fs: count })).exit, 0)
   assert.ok(writes >= 20, `the clean run has ${writes} writes: the loop below has something to cut`)
   for (let k = 1; k <= writes; k++) {
-    const s = sandbox()
+    const s = await sandbox({ installed: false })
     const before = userView(s.home)
     let i = 0
     const crashing = { ...fs, renameSync: (a, b) => { if (++i === k) throw Object.assign(new Error(`crash at write ${k}`), { code: 'ECRASH' }); return fs.renameSync(a, b) } }
@@ -80,7 +86,7 @@ test('R9: a crash at every one of the writes of a first on is finished by the ne
     assert.equal(done.exit, 0, `after a crash at write ${k}: ${JSON.stringify(done.receipt.notes)}`)
     assert.deepEqual(validateReceipt(done.receipt), [])
     const m = readManifest(s.dir)
-    assert.equal(m.complete, true, `complete after resuming write ${k}`)
+    assert.equal(m.install?.state, 'complete', `complete after resuming write ${k}`)
     assert.deepEqual([...new Set([...m.entries, ...m.files].map((x) => x.harness).filter(Boolean))].sort(), [...NAMES].sort(), `every harness has an entry or a file after resuming write ${k}`)
     assert.equal(m.entries.every((e) => e.post_sha256 != null), true, 'every entry is finished')
     assert.equal(bundlesAreValid(s).length, 3, 'codex\'s, hermes\'s and z-code\'s entries point at a bundle that holds both kinds of roots')
@@ -92,17 +98,17 @@ test('R9: a crash at every one of the writes of a first on is finished by the ne
     assert.equal(fs.readFileSync(path.join(s.dir, 'install-manifest.json'), 'utf8'), manifestBytes, 'the manifest is not rewritten')
     assert.equal(fs.readFileSync(path.join(s.dir, 'state.json'), 'utf8'), state, 'nor the desired state')
     // and off takes everything out, whichever way it got in
-    const out = await undoHarnesses({ dir: s.dir, home: s.home, manifest: readManifest(s.dir), ids: null, procs: async () => [], roots: ROOTS })
+    const out = await undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: null, procs: async () => [], roots: ROOTS })
     assert.deepEqual(out.left, [], `off leaves nothing after resuming write ${k}`)
     assert.deepEqual(userView(s.home), before, `the user's files are byte for byte what they were, after a crash at write ${k}`)
   }
 })
 
 test('R9: a second on on a complete install leaves installed_at, inode and mtime of every entry unchanged, rewrites neither the manifest nor the state, and says what it left alone', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   const first = await s.run()
   assert.equal(first.exit, 0)
-  assert.ok(first.receipt.changed.length >= 3 && first.receipt.changed.every((c) => c.change.length > 0))
+  assert.deepEqual(first.receipt.changed, [], 'every user file asight changes is install\'s: the on after it changes none (D55①)')
   const stat = entryStats(s); const mtime = (f) => fs.statSync(f).mtimeMs
   const files = [path.join(s.dir, 'install-manifest.json'), path.join(s.dir, 'state.json'), ...readManifest(s.dir).files.map((f) => f.path)]
   const marks = files.map((f) => [f, fs.statSync(f).ino, mtime(f)])
@@ -118,7 +124,7 @@ test('R9: a second on on a complete install leaves installed_at, inode and mtime
 })
 
 test('R9: an entry the operator changed after asight wrote it is reported and left; on never overwrites it, and off then on writes it again', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   await s.run()
   const settings = path.join(s.home, '.claude', 'settings.json')
   const mine = '{ "model": "mine", "env": { "NODE_EXTRA_CA_CERTS": "/my/own-ca.pem" } }\n'
@@ -128,15 +134,16 @@ test('R9: an entry the operator changed after asight wrote it is reported and le
   assert.deepEqual([r.exit, r.receipt.ok], [1, false], 'an entry that is not in effect is not "done"')
   assert.match(JSON.stringify(r.receipt.skipped), /settings\.json[\s\S]*asight off[\s\S]*asight on/, 'the receipt says which file and what to do')
   // off takes asight's part out (there is none left: the user's own value stays), and on writes the entry again
-  const out = await undoHarnesses({ dir: s.dir, home: s.home, manifest: readManifest(s.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
+  const out = await undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: ['claude-code'], procs: async () => [], roots: ROOTS })
   assert.deepEqual(out.results.map((x) => x.result), ['left-user-value'])
+  await s.install() // the entry is a certificate item: install writes it again, never on (D55⑥)
   const back = await s.run()
   assert.equal(back.exit, 0)
   assert.equal(JSON.parse(fs.readFileSync(settings, 'utf8')).env.NODE_EXTRA_CA_CERTS, path.join(s.dir, 'ca', 'extra-cc.pem'), 'asight\'s entry again — now through the merge path, since a CA of the user\'s is named in the file')
 })
 
 test('R9: an edit of the settings file elsewhere (Claude Code rewrites it) is not a change to the entry: it stays intact and is not written again', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   await s.run()
   const settings = path.join(s.home, '.claude', 'settings.json')
   const doc = JSON.parse(fs.readFileSync(settings, 'utf8')); doc.theme = 'dark'
@@ -148,17 +155,18 @@ test('R9: an edit of the settings file elsewhere (Claude Code rewrites it) is no
 })
 
 test('R9: on after off writes the entries again with a new installed_at; a bundle off kept without the CA for a live process gets the CA back and loses its without_ca mark (4.6 「合并包」)', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   await s.run()
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   const caFp = certBlocks(fs.readFileSync(path.join(s.dir, 'ca', 'asight-ca.pem'), 'utf8'))[0].fp
   assert.ok(certBlocks(fs.readFileSync(bundle, 'utf8')).some((b) => b.fp === caFp))
   const was = readManifest(s.dir).entries.find((e) => e.harness === 'codex').installed_at
   const codex = { pid: 4242, exe: '/home/u/.local/bin/codex', argv: ['codex'], startedAt: Date.now() + 5000, env: () => new Map() } // started after install: it may have loaded the bundle
-  const out = await undoHarnesses({ dir: s.dir, home: s.home, manifest: readManifest(s.dir), ids: ['codex'], procs: async () => [codex], roots: ROOTS })
+  const out = await undoHarnesses({ dir: s.dir, home: s.home, phases: PHASES, manifest: readManifest(s.dir), ids: ['codex'], procs: async () => [codex], roots: ROOTS })
   assert.deepEqual(out.kept_bundles.map((k) => k.pids), [[4242]])
   assert.equal(readManifest(s.dir).files.find((f) => f.path === bundle).without_ca, true)
   await new Promise((r) => setTimeout(r, 15))
+  await s.install() // the bundle and the entry are certificate items: install puts them back, never on (D55⑥)
   const r = await s.run()
   assert.equal(r.exit, 0)
   const m = readManifest(s.dir)
@@ -169,7 +177,7 @@ test('R9: on after off writes the entries again with a new installed_at; a bundl
 })
 
 test('R9: a manifest an older asight wrote has no liveness for some harness: on adds it, and rewrites the others from the descriptors (identity united with what was recorded, 4.6 「判活快照」)', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   await s.run()
   const file = path.join(s.dir, 'install-manifest.json')
   const m = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -186,7 +194,7 @@ test('R9: a manifest an older asight wrote has no liveness for some harness: on 
 })
 
 test('R9: the unit file is written again when what it would say changed (the repo moved); a daemon-reload comes first, and the unit is enabled', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   await s.run()
   const unitFile = path.join(s.home, '.config', 'systemd', 'user', 'asight-collector.service')
   assert.match(fs.readFileSync(unitFile, 'utf8'), /"\/repo\/bin\/asight\.mjs" daemon$/m)
@@ -199,11 +207,11 @@ test('R9: the unit file is written again when what it would say changed (the rep
 })
 
 test('R12: on reads state.json before each write and stops, exit 1, when it says off for a harness it is turning on; what it wrote is a resumable install', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   let writes = 0
   const stateFile = path.join(s.dir, 'state.json')
   const racing = { ...fs, renameSync: (a, b) => {
-    if (++writes === 12) { // an `off` lands between two writes of this on
+    if (++writes === 2) { // an `off` lands between two writes of this on (its first is state.json)
       const { state } = readStateFile(stateFile); writeStateAtomic(stateFile, setDesired(state, ['codex'], 'off', new Date()))
     }
     return fs.renameSync(a, b)
@@ -213,9 +221,7 @@ test('R12: on reads state.json before each write and stops, exit 1, when it says
   assert.match(r.receipt.notes.join('\n'), /codex was turned off while this on ran[\s\S]*the off wins/)
   assert.equal(readStateFile(stateFile).state.harnesses.codex.desired, 'off', 'the on does not turn it back on')
   assert.equal(s.sys.daemon.calls.filter((c) => c.startsWith('POST /on')).length, 0, 'and attaches nothing')
-  const m = readManifest(s.dir)
-  assert.notEqual(m.complete, true, 'the install is not complete')
-  assert.ok(m.entries.some((e) => e.post_sha256 != null) || m.files.length > 0, 'part of it is written')
+  assert.equal(readManifest(s.dir).install?.state, 'complete', 'install\'s record is install\'s: an on that stopped does not undo it')
   const flows = fs.readdirSync(path.join(s.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(s.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
   assert.ok(flows.some((f) => f.event === 'failure' && /turned off while this on ran/.test(f.reason)), 'the stop is recorded (D38)')
   assert.equal(flows.at(-1).kind, 'result')
@@ -224,7 +230,7 @@ test('R12: on reads state.json before each write and stops, exit 1, when it says
 test('R12: a state.json a version 1 collector wrote (desired on or off) is read for the installed harnesses and written as version 2 by on, which then goes through; the guard reads it the same way (the upgrade path)', async () => {
   const stamp = '2026-10-01T00:00:00.000Z'
   for (const desired of ['on', 'off']) for (const ids of [null, ['codex']]) {
-    const s = sandbox()
+    const s = await sandbox()
     assert.equal((await s.run()).exit, 0)
     const stateFile = path.join(s.dir, 'state.json')
     fs.writeFileSync(stateFile, JSON.stringify({ version: 1, desired, policy: 'auto', extra_hosts: [], updated_at: stamp })) // what `collector on|off` wrote before D39
@@ -246,7 +252,7 @@ test('R12: a state.json a version 1 collector wrote (desired on or off) is read 
 })
 
 test('on: with no daemon answering and no unit (--no-unit) it writes everything, exits 0 and says how to start the daemon; with a unit it starts one (--no-autostart: start only, never enable)', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   const down = fakeDaemon({ up: false })
   const bare = await s.run({ unit: null, request: down.request })
   assert.deepEqual([bare.exit, bare.receipt.daemon.state, bare.receipt.unit], [0, 'not-running', null])
@@ -255,7 +261,7 @@ test('on: with no daemon answering and no unit (--no-unit) it writes everything,
   assert.ok(!fs.existsSync(path.join(s.home, '.config', 'systemd')), 'and no unit file')
   assert.deepEqual(readManifest(s.dir).files.filter((f) => f.role === 'unit'), [])
 
-  const t = sandbox()
+  const t = await sandbox()
   const sys = fakeSystem()
   const r = await t.run({ unit: userUnit({ home: t.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run: sys.exec.run }), request: sys.daemon.request, autostart: false })
   assert.equal(r.exit, 0)
@@ -264,26 +270,26 @@ test('on: with no daemon answering and no unit (--no-unit) it writes everything,
 })
 
 test('on: a unit systemd refuses to enable, a daemon that never answers, a kernel that does not confirm — each exit 1 with the reason, recorded; the attach is not asked when the unit failed', async () => {
-  const refused = sandbox()
+  const refused = await sandbox()
   const sys = fakeSystem()
   const ex = recordingExec({ fail: (cmd) => (/enable/.test(cmd) ? { status: 1, stderr: 'Failed to connect to bus' } : null) })
   let r = await refused.run({ unit: userUnit({ home: refused.home, node: '/n', script: '/s', run: ex.run }), request: sys.daemon.request })
   assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /"systemctl --user enable --now" failed \(Failed to connect to bus\)/)
-  assert.equal(readManifest(refused.dir).complete, true, 'the install itself is complete; only the autostart is not')
+  assert.equal(readManifest(refused.dir).install?.state, 'complete', 'the install itself is complete; only the autostart is not')
 
-  const silent = sandbox(); const dead = fakeDaemon({ up: false })
+  const silent = await sandbox(); const dead = fakeDaemon({ up: false })
   r = await silent.run({ request: dead.request })
   assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /no daemon answers on \/x\/collector\.sock/)
 
-  const noKernel = sandbox(); const sys2 = fakeSystem({ actual: 'off' })
-  r = await noKernel.run({ unit: userUnit({ home: noKernel.home, node: '/n', script: '/s', run: sys2.exec.run }), request: sys2.daemon.request })
-  assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /the kernel does not confirm the links/)
-  const flows = fs.readdirSync(path.join(noKernel.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(noKernel.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
+  const notOn = await sandbox(); const sys2 = fakeSystem({ actual: 'off' })
+  r = await notOn.run({ unit: userUnit({ home: notOn.home, node: '/n', script: '/s', run: sys2.exec.run }), request: sys2.daemon.request })
+  assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /the daemon did not reach on/)
+  const flows = fs.readdirSync(path.join(notOn.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(notOn.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
   assert.ok(flows.some((f) => f.event === 'failure' && f.where === 'switch'), 'recorded where the board looks (D38)')
 })
 
 test('on: the processes the daemon says are not captured yet are the restart list (config-after-start, env-frozen, no-marker, kimi-not-via-shim), by pid and harness; trusted ones and the other harnesses\' are not', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   const sys = fakeSystem({ agents: [
     { pid: 4121, agent: 'claude-code', trusted: false, reason: 'config-after-start' },
     { pid: 4122, agent: 'claude-code', trusted: true, reason: 'ok' },
@@ -298,18 +304,18 @@ test('on: the processes the daemon says are not captured yet are the restart lis
 })
 
 test('on: the linger line — false says how to enable it and never runs loginctl, true says nothing, unreadable says 不知道 and never "已开" (1.6 §1.1, V39 on side)', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   const r = await s.run({ linger: () => false })
   assert.deepEqual([r.receipt.linger, s.sys.exec.calls.some((c) => /loginctl/.test(c))], [false, false])
-  assert.equal((await sandbox().run({ linger: () => true })).receipt.linger, true)
-  const u = await sandbox().run({ linger: () => null })
+  assert.equal((await (await sandbox()).run({ linger: () => true })).receipt.linger, true)
+  const u = await (await sandbox()).run({ linger: () => null })
   assert.deepEqual([u.receipt.linger, typeof u.receipt.linger_reason], ['unknown', 'string'])
-  assert.equal((await sandbox().run({ linger: () => { throw new Error('EACCES') } })).receipt.linger, 'unknown')
+  assert.equal((await (await sandbox()).run({ linger: () => { throw new Error('EACCES') } })).receipt.linger, 'unknown')
 })
 
 test('on: named harnesses only — on codex writes codex\'s files and turns on codex alone; a named harness with nothing to install is skipped with the descriptor\'s reason and is not "done"', async () => {
   const all = await loadHarnesses()
-  const s = sandbox(); fs.rmSync(path.join(s.home, '.hermes'), { recursive: true }) // Hermes is not installed here
+  const s = await sandbox({ installed: false }); fs.rmSync(path.join(s.home, '.hermes'), { recursive: true }) // Hermes is not installed here; the first run installs what it names
   const r = await s.run({ ids: ['codex', 'hermes'], harnesses: all })
   assert.equal(JSON.parse(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8')).env, undefined, 'claude-code is not touched')
   assert.deepEqual(r.receipt.harnesses, ['codex'])
@@ -318,14 +324,14 @@ test('on: named harnesses only — on codex writes codex\'s files and turns on c
   assert.equal(r.exit, 1, 'a harness that was asked for and could not be done: not done')
   assert.deepEqual(Object.keys(readStateFile(path.join(s.dir, 'state.json')).state.harnesses), ['codex'])
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /on')), ['POST /on {"harnesses":["codex"]}'])
-  const t = sandbox(); fs.rmSync(path.join(t.home, '.hermes'), { recursive: true }); const before = snapshot(t.home)
+  const t = await sandbox({ installed: false }); fs.rmSync(path.join(t.home, '.hermes'), { recursive: true }); await t.install(); const before = snapshot(t.home)
   const none = await t.run({ ids: ['hermes'], harnesses: all })
   assert.deepEqual([none.exit, none.receipt.ok], [1, false])
   assert.deepEqual(snapshot(t.home), before, 'nothing to turn on: nothing written, not even the manifest')
 })
 
 test('on: root is refused by the library too (R7), and a missing helper stops it before anything is written', async () => {
-  const s = sandbox(); const before = snapshot(s.home)
+  const s = await sandbox(); const before = snapshot(s.home)
   await assert.rejects(s.run({ getuid: () => 0 }), /not as root/)
   const r = await s.run({ helperState: () => ({ ok: false, reason: 'no helper' }) })
   assert.deepEqual([r.exit, r.receipt.ok], [1, false]); assert.match(r.receipt.notes.join(' '), /sudo asight setup-helper/)
@@ -336,7 +342,7 @@ test('on: root is refused by the library too (R7), and a missing helper stops it
 // missing exited 1 with no plan, so the plan could not be read before deciding to `sudo asight setup-helper` — V7 says a dry run exits 0.
 test('R1 / R6: an `on` that stopped before writing anything says so — no change, nothing made, no undo and no log to point at, no asight-off path (helper missing, no agent found, the lock held)', async () => {
   const noHelper = () => ({ ok: false, reason: 'no helper' })
-  const s = sandbox(); const before = snapshot(s.home)
+  const s = await sandbox(); const before = snapshot(s.home)
   const r = await s.run({ helperState: noHelper })
   const bare = (x) => [x.exit, x.receipt.ok, x.receipt.changed, x.receipt.created, x.receipt.undo, x.receipt.log, 'standalone' in x.receipt]
   assert.deepEqual(bare(r), [1, false, [], [], [], null, false])
@@ -344,26 +350,27 @@ test('R1 / R6: an `on` that stopped before writing anything says so — no chang
   assert.ok(!JSON.stringify(r.receipt).includes('asight-off') && !JSON.stringify(r.receipt).includes('flows'), 'neither the undo program nor the log is named: neither is there')
   assert.deepEqual(snapshot(s.home), before)
   // no agent to capture
-  const empty = sandbox(); fs.rmSync(path.join(empty.home, '.claude'), { recursive: true, force: true })
+  const empty = await sandbox(); fs.rmSync(path.join(empty.home, '.claude'), { recursive: true, force: true })
   const none = await empty.run({ ids: ['claude-code'], harnesses: [] })
   assert.deepEqual(bare(none), [1, false, [], [], [], null, false])
   // another command holds the lock (a live pid, a lock written just now): `on` waits, gives up, and has written nothing — its receipt lists no change it did not make
-  const held = sandbox()
+  const held = await sandbox()
+  const settingsBefore = fs.readFileSync(path.join(held.home, '.claude', 'settings.json'), 'utf8')
   fs.mkdirSync(held.dir, { recursive: true }); fs.writeFileSync(path.join(held.dir, 'op.lock'), JSON.stringify({ pid: process.pid, start_time: null, boot_id: null }) + '\n')
   const busy = await held.run({ lockWaitMs: 30 })
   assert.equal(busy.exit, 1)
   assert.match(busy.receipt.notes.join(' '), /another asight command \(pid \d+\) holds/)
   assert.deepEqual([busy.receipt.changed, busy.receipt.created, busy.receipt.undo, busy.receipt.log], [[], [], [], null], 'the plan listed changes and files; none was made, so none is claimed')
-  assert.ok(!fs.existsSync(path.join(held.home, '.claude', 'settings.json')) || !fs.readFileSync(path.join(held.home, '.claude', 'settings.json'), 'utf8').includes('asight'), 'and none was')
+  assert.equal(fs.readFileSync(path.join(held.home, '.claude', 'settings.json'), 'utf8'), settingsBefore, 'and none was')
 })
 
 test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and exits 0 — the stop a real run would meet is in the receipt (`blocked`, a note) — and writes nothing; the real run exits 1', async () => {
-  const s = sandbox(); const before = snapshot(s.home)
+  const s = await sandbox(); const before = snapshot(s.home)
   const ok = await s.run({ dryRun: true })
   const dry = await s.run({ dryRun: true, helperState: () => ({ ok: false, reason: 'no helper' }) })
   assert.deepEqual([dry.exit, dry.receipt.ok, dry.receipt.dry_run], [0, true, true])
   assert.deepEqual([dry.receipt.changed, dry.receipt.created], [ok.receipt.changed, ok.receipt.created], 'the plan is the one a user with a helper would get')
-  assert.ok(dry.receipt.changed.length > 0 && dry.receipt.created.length > 0, 'and it is a real plan')
+  assert.ok(dry.receipt.created.length > 0, 'and it is a real plan (the unit; every certificate item is install\'s)')
   assert.match(dry.receipt.blocked, /capability helper is missing.*sudo asight setup-helper/)
   assert.match(dry.receipt.notes.join('\n'), /sudo asight setup-helper.*a real asight on stops there/)
   assert.deepEqual(validateReceipt(dry.receipt), [])
@@ -373,7 +380,7 @@ test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and 
 
 // audit rule-b 9 (R11): the lines of an `on` go through the same writer as `off`'s — a line that cannot be written reaches stderr first and the receipt's notes, and does not stop the install.
 test('R11: with flows/ unwritable `on` still installs (exit 0); stderr and the receipt say each line that could not be recorded', async () => {
-  const s = sandbox()
+  const s = await sandbox()
   const err = []
   const flaky = new Proxy(fs, { get: (o, k) => (k === 'appendFileSync' ? () => { throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) } : o[k]) })
   const r = await s.run({ fs: flaky, log: (m) => err.push(m) })
@@ -383,11 +390,13 @@ test('R11: with flows/ unwritable `on` still installs (exit 0); stderr and the r
   assert.ok(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'the install itself was done')
 })
 
-// R21 (D51③, 1.6 V65): `on` judges the running processes with the name list in effect — the presets plus ~/.asight/agents.json — the one the daemon and `status`
+// R21 (D51③, 1.6 V65): the plan judges the running processes with the name list in effect — the presets plus ~/.asight/agents.json — the one the daemon and `status`
 // judge with. Through the real loadParts (the registry it builds), only the arch's process table faked: a custom name running before its entry is a process to restart.
-test('R21 `on` reads agents.json: a running agent of a custom name (claude-nightly) is judged as the harness\'s — it is on the restart list of the plan', async () => {
-  const { runOnCli } = await import('../../src/cli/on.mjs')
+// Since D55 the entry is install's, so the plan that names it is `asight install`'s (the same planOn `on` printed before).
+test('R21 the plan reads agents.json: a running agent of a custom name (claude-nightly) is judged as the harness\'s — it is on the restart list of the plan', async () => {
+  const { runInstallCli } = await import('../../src/cli/install.mjs')
   const { loadParts } = await import('../../src/collector/daemon.mjs')
+  const { readAgentList } = await import('../../src/off/identity.mjs')
   const { onCtx, fakeIo, seedClaude } = await import('./fixtures/on-ctx.mjs')
   const unit = await import('../../src/collector/arch/linux/unit.mjs')
   const cc = descs.find((d) => d.name === 'claude-code')
@@ -396,12 +405,10 @@ test('R21 `on` reads agents.json: a running agent of a custom name (claude-night
   fs.writeFileSync(path.join(home, '.asight', 'agents.json'), JSON.stringify({ version: 1, agents: [{ harness: 'claude-code', name: 'claude-nightly' }] }))
   const nightly = { pid: 7100, ppid: 1, uid: 1000, startedAt: 1, exe: '/home/u/.local/bin/claude-nightly', argv: ['claude-nightly'], env: new Map() }
   const arch = { os: 'none', unit, createRedirector: async () => ({ scan: () => [nightly] }) }
+  const parts = await loadParts({ env: { HOME: home }, agentList: readAgentList({ home, fs }).entries, arch, harnesses: [cc] })
   const io = fakeIo()
-  const ctx = onCtx(home, io, { deps: { parts: undefined, daemon: { loadParts: (o) => loadParts({ ...o, arch, harnesses: [cc] }) } } })
-  const code = await runOnCli(['claude-code', '--dry-run', '--json'], ctx)
-  assert.equal(code, 0, io.stdoutText())
-  const receipt = JSON.parse(io.stdoutText())
-  assert.deepEqual(receipt.restart.map((x) => [x.harness, x.pid]), [['claude-code', 7100]], 'the custom name is claude-code\'s, as the daemon will judge it')
+  assert.equal(await runInstallCli(['--dry-run'], { ...onCtx(home, io, { deps: { parts } }), platform: 'linux' }), 0, io.text())
+  assert.match(io.text(), /7100/, 'the custom name is claude-code\'s, as the daemon will judge it: its pid is on the restart list')
 })
 
 // R13 (1.6 V65, D48): the list file belongs to the user — `on`, a second `on`, and `off` leave ~/.asight/agents.json byte for byte and untouched (mtime), whether it
@@ -424,5 +431,26 @@ test('R13 V65 on, on again and off leave agents.json byte for byte unchanged (a 
     same('a second on')
     assert.equal((await s.off()).exit, 0, `${label}: off`)
     same('off')
+  }
+})
+
+test('V72 (1.6 §2, D57): `on --opt-in <any value>` and `--opt-in=<x>` exit 2 saying 「D57 起没有点名项」; HOME byte for byte unchanged, zero OS tools, zero daemon calls, on every platform', async () => {
+  const shapes = [['--opt-in', 'kimi-code.cli'], ['--opt-in=codex.machine'], ['codex', '--opt-in', 'a,b', '--yes'], ['--yes', '--opt-in='], ['--opt-in']]
+  for (const platform of ['linux', 'darwin', 'win32']) for (const argv of shapes) {
+    const home = tmpDir('asight-v72-')
+    seedClaude(home)
+    const before = snapshot(home)
+    const exec = recordingExec(), daemon = fakeDaemon(), io = fakeIo()
+    const ctx = onCtx(home, io, { exec, daemon })
+    let partsRead = 0
+    ctx.deps.parts = new Proxy(ctx.deps.parts, { get: (t, k) => { partsRead++; return t[k] } }) // asked for nothing: the flag is refused before the platform is loaded
+    const exit = await runOnCli(argv, { ...ctx, platform })
+    const label = `${platform} ${argv.join(' ')}`
+    assert.equal(exit, 2, `${label}: ${io.text()}`)
+    assert.match(io.stderrText(), /D57 起没有点名项/, label)
+    assert.deepEqual(snapshot(home), before, `${label}: HOME byte for byte unchanged`)
+    assert.deepEqual(exec.calls, [], `${label}: no OS tool`)
+    assert.deepEqual(daemon.calls, [], `${label}: no daemon request`)
+    assert.equal(partsRead, 0, `${label}: the platform is not even loaded`)
   }
 })

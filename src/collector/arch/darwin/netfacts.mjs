@@ -11,19 +11,15 @@
 //   · the OS proxy and PAC: `scutil --proxy` through the same reader the upstream rule uses (./upstream.mjs `readSystemProxy`, 4.9 §2.2 — one reader of one fact, so the topology cannot disagree with the kernel's
 //     dial): the `HTTPS*` keys are the hop an HTTPS request takes (the `HTTP*` ones alone send HTTPS direct, WinINET's own rule, kept apart there as here), `ProxyAutoConfigEnable` is PAC's own flag — the g row of
 //     1.6 §9.7's shape table, with none of Windows' OPEN 27 type ambiguity;
-// Routing is `proxy` (D43: macOS has proxy mode only). This file is NOT a near-verbatim copy of a win32 one — Windows' netFacts is that line's open task; the shape donor is arch/linux/netfacts.mjs, and what
-// darwin replaces is the fact sources (lsof / scutil / route / ifconfig / the euid's ps) and the rows 4.9 §10 names: elevation (linux answers null), and the machine-PATH rows (n / o of 1.6 §9.7's Windows table),
-// which have no darwin counterpart at all (macOS has no machine-before-user PATH order) and so are read by nothing here. What darwin cannot do that linux does: another process's environment is NEVER read (no
-// privilege to, and `ps` has no such column; 4.9 §5.4, the same rule as Windows' 4.8 §10.1) — the start-time proxy is known from a file the harness reads at start (which `adopted` remembers) or not at all, and
-// an environment variable as the source of it is the `env-unreadable` unknown, not linux's `denied`: the closed set of 1.6 §9.4 has the word for exactly this. `launchctl` and `security`, listed among 4.9 §10's
-// fact sources, feed no field of this shape: the old capture's facts (launchctl reads) were deferred by 1.6 §9.7's implementation status and are not among 4.9 §10's named rows, and the keychain question is a
-// command `doctor` gives the user, not a fact of the path. The proxy-mode fields 4.8 §10.1 adds on top of this shape (`forwarder`, the per-form facts) are not the linux shape either and are not here: until they
-// land, a topology drawn from these facts says it could not be worked out, rather than drawing a chain it does not know.
+// Routing is `proxy` (D43: macOS has proxy mode only). The per-form half — each form's certificate and proxy, the doors as `forwarder.forms` — is the collector
+// model's one OS-neutral reader (core/proxymode/status-facts.mjs, through model-backends.mjs modelNetForms); this file only supplies what darwin reads: the
+// process table, lsof's listeners and scutil's proxy. Another process's environment is never read here (4.9 §5.4): the start-time proxy of a running process is
+// a driver-mode fact (Linux), and the door's per-process answer is the daemon's.
 // Imports no harness: the descriptors arrive in `ctx.harnesses` (their `proxy.env` names the keys of a process's environment that count) and their data in `settings` and in `status`.
 import { execTool } from '../../../off/exec.mjs'
-import { settingSha, redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
-import { noProxyNames } from '../../../netenv/noproxy.mjs'
-import { readSystemProxy } from './upstream.mjs'
+import { readSystemProxy, chainSystemProxy } from './upstream.mjs'
+import { dirsOf } from './policy.mjs'
+import { modelNetForms } from '../model-backends.mjs'
 
 const GENERIC = /^(node|python3?|bun|deno|ruby)$/
 const VERSIONED = /^v?\d+(\.\d+)+([-+.].*)?$/ // the native Claude Code is a file named for its version (`…/claude/versions/2.1.289`): that is not the name of a program
@@ -53,39 +49,13 @@ export function parseLsof(text) {
   return out
 }
 
-/** What a process was started with, set against what a new one reads now → null (the same), or the setting it has instead (`inferred` when it is the one `on` found), or unknown. `keys` = the environment
- *  variables ITS harness reads for a proxy (`proxy.env` of the descriptor, in its order): another variable of the process is nothing to that agent (ALL_PROXY to claude-code, HTTPS_PROXY to z-code), and a harness
- *  whose keys are not known has no claim made about it. `file`: the current setting comes from a file the process cannot have re-read (settings are read at start): a change of the file after it started leaves it
- *  on the value it had, which only `adopted` remembers. An environment that is not there is not linux's `denied` on darwin: another process's environment is never read at all (4.9 §5.4, the same rule as Windows)
- *  — `env-unreadable`, the word the closed set has for exactly this. */
-function startSettingOf({ proc, current, adopted, startedAt, keys }) {
-  if (!keys || (current && current.unknown)) return null
-  if (current && current.source && current.source.some((s) => s.kind === 'file')) {
-    const changed = Date.parse(current.changedAt), started = Date.parse(startedAt)
-    if (!(Number.isFinite(changed) && Number.isFinite(started) && changed > started)) return null
-    if (!adopted) return { unknown: { reason: 'absent', detail: 'the value the file held when this process started is not known' } }
-    const u = adopted.proxy ? parseProxyUrl(adopted.proxy) : null
-    return adopted.proxy && u ? { value: adopted.proxy, ...u, source: adopted.source || [], sha256: adopted.sha256, inferred: true } : { value: null, scheme: null, host: null, port: null, source: [], sha256: null, inferred: true }
-  }
-  const env = proc && typeof proc.env === 'function' ? proc.env() : null
-  if (!env) return { unknown: { reason: 'env-unreadable', detail: 'the environment of another process is never read on macOS (no privilege to, and ps has no such column); a start-time proxy is known from a file the harness reads at start, or not at all' } }
-  const key = keys.find((k) => (env.get(k) || '').trim() !== '')
-  const raw = key ? env.get(key).trim() : null
-  if ((raw ? settingSha(raw) : null) === ((current && current.sha256) || null)) return null
-  const u = raw ? parseProxyUrl(raw) : null
-  if (raw && !u) return { unknown: { reason: 'unparseable', detail: `${key} of the process is not a proxy URL` } }
-  return raw ? { value: redactProxyUrl(raw), ...u, source: [{ kind: 'env', where: key }], sha256: settingSha(raw) } : { value: null, scheme: null, host: null, port: null, source: [], sha256: null }
-}
-
 /**
- * macOS's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of `lsof`, `scutil`, `route`, `ifconfig` and the euid's `ps`:
+ * macOS's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of `lsof`, `scutil` and the euid's `ps`:
  * spawnSync-shaped; execTool refuses a real one under npm test — `procRoot` is accepted by the shared call and unused, there is no /proc to point at on darwin, the process table arrives in `status`).
- * → { routing: 'proxy', listeners, procs: { <h>: [proc] }, systemProxy, unknowns }.
+ * → { routing: 'proxy', listeners, procs: { <h>: [proc] }, systemProxy, forms, forwarder, unknowns }.
  */
 export async function darwinNetFacts(ctx, deps = {}) {
-  const { status, settings = {}, adopted = null, env = process.env, harnesses = [] } = ctx
-  const keysOf = (id) => { const d = harnesses.find((x) => x.name === id); return d && d.proxy && Array.isArray(d.proxy.env) ? d.proxy.env : null }
-  const hostsOf = (id) => { const d = harnesses.find((x) => x.name === id); return d && Array.isArray(d.hosts) ? d.hosts : [] }
+  const { status, settings = {}, env = process.env, harnesses = [], home = env.HOME } = ctx
   const exec = deps.exec || (ctx.deps && ctx.deps.exec) || null
   const unknowns = [], reply = status.daemon.reply
   const rows = reply && Array.isArray(reply.agents) ? reply.agents : null
@@ -105,14 +75,11 @@ export async function darwinNetFacts(ctx, deps = {}) {
       const p = m ? m.p : null, agent = rows ? rows.find((a) => a.pid === row.pid) : null
       const startedAt = iso(p ? p.startedAt : row.startedAt)
       const exe = (p && p.exe) || (agent && agent.exe) || null
-      const penv = p && typeof p.env === 'function' ? p.env() : null // darwin's table never carries one (env-unreadable, 4.9 §5.4); read where a row does, for the trunk is the linux one
       const uid = euidOf(p, agent)
       return {
         pid: row.pid, name: processName(p && p.argv, exe, h.id), exe, version: versionOf(exe), startedAt,
         watched: !rows ? 'unknown' : agent ? (agent.off === true ? 'absent' : agent.decrypt === true ? 'decrypt' : 'no-decrypt') : 'absent',
         trusted: row.trusted === undefined ? null : row.trusted, reason: row.reason ?? null, negative: row.negative === true,
-        noProxy: penv ? noProxyNames(penv.get('NO_PROXY') || penv.get('no_proxy'), hostsOf(h.id)) : null, // which of the harness's API hosts its own NO_PROXY covers; null: its environment cannot be read (always, on darwin)
-        startSetting: startSettingOf({ proc: p, current: settings[h.id], adopted: adopted && adopted[h.id], startedAt, keys: keysOf(h.id) }),
         elevated: uid != null ? uid === 0 : null, // elevation = euid/root (4.9 §10's h row): a process of another user is not in the table, so its uid is asked of ps when the daemon listed it
       }
     })
@@ -127,5 +94,6 @@ export async function darwinNetFacts(ctx, deps = {}) {
     // the `HTTPS*` keys are the hop an HTTPS request takes (the `HTTP*` ones alone send HTTPS direct, WinINET's own rule); the value is kept beside the PAC flag, and the topology prefers the flag
     systemProxy = { value: scutil.HTTPSEnable === true && scutil.HTTPSProxy ? `http://${scutil.HTTPSProxy}${scutil.HTTPSPort != null && scutil.HTTPSPort !== '' ? `:${scutil.HTTPSPort}` : ''}` : null, pac: scutil.ProxyAutoConfigEnable === true }
   } else { systemProxy = { unknown: { reason: scutil.reason, detail: `scutil --proxy: ${scutil.detail}` } }; unknowns.push({ fact: 'systemProxy', reason: scutil.reason, detail: `scutil --proxy: ${scutil.detail}` }) }
-  return { routing: 'proxy', listeners, procs, systemProxy, unknowns }
+  const model = await modelNetForms({ os: 'darwin', home, env, status, settings, harnesses, procs, systemProxy, chainSp: scutil.ok ? chainSystemProxy(scutil) : { ok: false }, dirs: dirsOf(home), fs: deps.fs })
+  return { routing: 'proxy', listeners, procs, systemProxy, ...model, unknowns }
 }

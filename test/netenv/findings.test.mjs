@@ -48,10 +48,7 @@ const SETS = {
   'elevated-agent': { h: 'claude-code', facts: row(19).facts, codes: row(19).findings },
   'forwarder-down': { h: 'codex', facts: row(13).facts, codes: row(13).findings },
   'upstream-unreachable': { h: 'codex', facts: pfacts('codex', form('codex.cli', { setting: proxyOf('http://proxy.corp:8080'), procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent', upstream_error: 'ECONNREFUSED' })), codes: ['upstream-unreachable'] },
-  'opt-in-needed': { h: 'kimi-code', facts: row(15).facts, codes: row(15).findings },
-  'shim-not-on-path': { h: 'kimi-code', facts: row(16).facts, codes: row(16).findings },
-  'not-via-entry': { h: 'kimi-code', facts: pfacts('kimi-code', form('kimi-code.cli', { entry: null, optIn: { state: 'broken', code: 'not-via-entry', enable: 'asight on kimi-code --opt-in kimi-code.cli' }, procs: [proc(7001, { name: 'kimi' })] }), fwForm(17993)), codes: ['not-via-entry'] },
-  'needs-admin': { h: 'kimi-code', facts: pfacts('kimi-code', form('kimi-code.cli', { entry: null, optIn: { state: 'pending-admin', code: 'needs-admin', enable: 'asight on kimi-code --opt-in kimi-code.machine', elevated: 'Start-Process powershell -Verb RunAs -ArgumentList "asight-admin.ps1"' }, procs: [proc(7001, { name: 'kimi' })] }), fwForm(17993)), codes: ['needs-admin'] },
+  'shim-not-on-path': { h: 'kimi-code', facts: facts('kimi-code', {}, { procs: [proc(7001, { name: 'kimi', trusted: false, reason: 'shim-not-on-path' })] }), codes: ['shim-not-on-path'] }, // kimi's own trust reason (harness/kimi-code.mjs refine): no launch shim was installed
   'egress-differs': { h: 'codex', facts: row(9).facts, codes: row(9).findings },
   'linger-off': { h: null, facts: facts('claude-code', { linger: false }), codes: ['linger-off'] },
   'other-redirector': { h: null, facts: facts('claude-code', { otherRedirector: true }), codes: ['other-redirector'] },
@@ -59,10 +56,18 @@ const SETS = {
   'inferred-behaviour': { h: 'hermes', facts: row(21).facts, codes: row(21).findings }, // hermes on Linux: inferred from the Windows measurements (claude-code's proxy path is measured there: V54)
   'cause-unknown': { h: 'claude-code', facts: facts('claude-code'), names: ['claude-code'], codes: ['cause-unknown'] },
   'process-unknown': { h: 'claude-code', facts: facts('claude-code', { identity: idOf('claude-code', { unknown: [{ name: 'claude-canary', wide: false, pid: 7002, door: 'claude-code.settings' }] }) }), codes: ['process-unknown'] },
+  // 4.11 §3 ⑱: the issuer from the daemon's /status `cert`, the trust verdicts the proxy-mode verdict gives a process, the window's proxy the door could not recover (the forwarder form's source)
+  'cert-key-missing': { h: null, facts: facts('claude-code', { cert: { key: 'missing', intermediate: 'key-missing' } }), codes: ['cert-key-missing'] },
+  'cert-intermediate-unavailable': { h: null, facts: facts('claude-code', { cert: { key: 'unknown', intermediate: 'unavailable' } }), codes: ['cert-intermediate-unavailable'] },
+  'not-users-file': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server', trusted: false, reason: 'not-users-file' })] }), fwForm(17992)), codes: ['not-users-file'] },
+  'not-verified': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server', trusted: false, reason: 'not-verified' })] }), fwForm(17992)), codes: ['not-verified'] },
+  'prior-proxy-unknown': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { source: 'unknown' })), codes: ['prior-proxy-unknown'] },
   'agent-list-invalid': { h: null, facts: facts('claude-code', { agentList: { path: LIST, state: 'ok', problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'agents[1]: node is an interpreter name; add "args"' }] } }), codes: ['agent-list-invalid'] },
 }
 // D51③⑤ (1.6 §9.6): the name list's two findings — a state event of the door and a failure code of the harness part, both in health/codes.mjs's closed sets
 const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
+const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file'] // 1.6 §9.7's cert group, as findings
+const REFUSAL_CODES = ['collectors-online'] // a command's refusal (uninstall), rendered by findingFor, not by diagnose
 const STATUS_REASONS_IN_CATALOGUE = ['config-after-start', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'link-missing', 'entry-missing', 'entry-changed', 'desired-off', 'negative-cache']
 
 for (const [code, set] of Object.entries(SETS)) {
@@ -74,11 +79,12 @@ for (const [code, set] of Object.entries(SETS)) {
 }
 
 test('V49 both directions: every code of the closed sets (§9.7 net codes, the status reasons §9.6 uses) has a fact set, and the catalogue defines no code outside them', () => {
-  const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE, ...IDENTITY_CODES])
+  const closed = new Set([...NET_CODES, ...STATUS_REASONS_IN_CATALOGUE, ...IDENTITY_CODES, ...CERT_CODES])
   const EVENT_ONLY = ['netenv-changed'] // D49: the system-proxy watcher's event code, not a finding: diagnose never gives it
-  for (const code of closed) if (!EVENT_ONLY.includes(code)) assert.ok(SETS[code], `${code} has a fact set`)
+  for (const code of closed) if (!EVENT_ONLY.includes(code) && !(TRUST_REASONS.includes(code) && !FINDINGS[code])) assert.ok(SETS[code], `${code} has a fact set`)
+  for (const code of ['opt-in-needed', 'needs-admin', 'not-via-entry']) assert.ok(!closed.has(code) && !FINDINGS[code] && !FINDINGS_WIN32[code], `${code} went with named items (D57, 4.11 §3 ⑱)`)
   for (const code of EVENT_ONLY) assert.ok(!FINDINGS[code] && !SETS[code], `${code} is no finding`)
-  for (const code of Object.keys(FINDINGS)) assert.ok(closed.has(code) || TRUST_REASONS.includes(code), `${code} is in a closed set`)
+  for (const code of Object.keys(FINDINGS)) assert.ok(closed.has(code) || TRUST_REASONS.includes(code) || REFUSAL_CODES.includes(code), `${code} is in a closed set`)
   assert.deepEqual(Object.keys(SETS).filter((c) => !closed.has(c)), [], 'and no fact set is for a code nobody defined')
 })
 
@@ -87,23 +93,22 @@ test('V49 both directions: every code of the closed sets (§9.7 net codes, the s
 // schema.mjs checks a finding against, is exactly the union of the two catalogues and the trust reasons (the literal per-row shape of FINDINGS_WIN32 is held by topology-win32.test.mjs, W36).
 test('V49 both directions, the Windows half: FINDINGS_WIN32 defines no code outside the closed sets (net codes, status reasons, route codes, trust reasons), and FINDING_CODES is exactly FINDINGS ∪ FINDINGS_WIN32 ∪ the trust reasons (the Windows collector\'s own trust reasons included)', () => {
   const closed = new Set([...NET_CODES, ...STATUS_REASONS, ...ROUTE_CODES, ...TRUST_REASONS])
-  assert.ok(Object.keys(FINDINGS_WIN32).length === 18, 'the §10.4 rows (held row-by-row by topology-win32.test.mjs; the forwarder-* family retired with the kernel, D47 twin)')
+  assert.ok(Object.keys(FINDINGS_WIN32).length === 14, 'the §10.4 rows (held row-by-row by topology-win32.test.mjs; the forwarder-* family retired with the kernel, D47 twin)')
   for (const code of Object.keys(FINDINGS_WIN32)) assert.ok(closed.has(code), `${code} is in a closed set`)
   assert.deepEqual([...FINDING_CODES].sort(), [...new Set([...Object.keys(FINDINGS), ...Object.keys(FINDINGS_WIN32), ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])].sort(), 'the union, nothing defined that the doctor cannot name')
 })
 
-// 4.8 §5.4's fill-layer verdict (`env-unreadable-fill`) is a trust reason the Windows tracker can really set — a form's every connection judged by a layer whose value Windows cannot tell from
-// 「in effect」. Its verdict must be a status reason and its finding must be inside the code list the schema checks: the verdict landed with 8(v), its ROUTE_TRUST_REASONS entry lands here
-// (Task 10(b)); before it, `status --json` would reject both and a throwing `make` would take `doctor` down with the state.
-test('V49 the Windows trust reasons the tracker can set are findings and status reasons the schema accepts (env-unreadable-fill, 4.8 §5.4 fill layer)', () => {
-  const F = pfacts('hermes', form('hermes.cli', { procs: [proc(8121, { trusted: false, reason: 'env-unreadable-fill', hint: 'the trust would rest on a fill layer, which Windows cannot tell from「in effect」' })] }), fwForm(17993))
-  const t = buildTopology(F)['hermes']
-  assert.equal(t.reason, 'env-unreadable-fill', 'the branch carries the verdict (judgeHarness passes an untrusted proc\'s reason through)')
-  assert.deepEqual(validateTopology({ hermes: t }), [], 'and the schema knows it as a status reason')
-  const found = diagnose({ facts: F, topology: { hermes: t }, harnesses: ['hermes'], user: 'u' }).find((f) => f.code === 'env-unreadable-fill')
+// The proxy mode's own trust reason (ROUTE_TRUST_REASONS: `smart-app-control`, 4.11 ⑯ · ⑱) is a status reason and a finding inside the code list the schema checks;
+// a throwing `make` would take `doctor` down with the state.
+test('V49 the proxy mode\'s own trust reasons are findings and status reasons the schema accepts (smart-app-control, 4.11 ⑯)', () => {
+  const F = pfacts('kimi-code', form('kimi-code.cli', { procs: [proc(8121, { trusted: false, reason: 'smart-app-control', hint: 'Smart App Control is on, so install placed no wrapper' })] }), fwForm(17993))
+  const t = buildTopology(F)['kimi-code']
+  assert.equal(t.reason, 'smart-app-control', 'the branch carries the verdict (judgeHarness passes an untrusted proc\'s reason through)')
+  assert.deepEqual(validateTopology({ 'kimi-code': t }), [], 'and the schema knows it as a status reason')
+  const found = diagnose({ facts: F, topology: { 'kimi-code': t }, harnesses: ['kimi-code'], user: 'u' }).find((f) => f.code === 'smart-app-control')
   assert.ok(found, 'the finding exists (the trust entry renders it)')
   assert.equal(found.class, 'failure')
-  assert.match(found.what, /没被信任:env-unreadable-fill/)
+  assert.match(found.what, /没被信任:smart-app-control/)
   assert.deepEqual(validateFinding(found), [], 'the schema accepts it')
 })
 
@@ -113,7 +118,8 @@ test('V49 every trust reason is a finding (the restart ones expected, the rest f
     const found = findingsOf(f).filter((x) => x.code === reason)
     assert.equal(found.length, 1, reason)
     const restart = ['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim'].includes(reason)
-    if (reason !== 'shim-not-on-path') assert.equal(found[0].class, restart ? 'expected' : 'failure', reason)
+    if (!FINDINGS[reason]) assert.equal(found[0].class, restart ? 'expected' : 'failure', reason)
+    else assert.equal(found[0].class, typeof FINDINGS[reason].cls === 'string' ? FINDINGS[reason].cls : found[0].class, `${reason}: its own catalogue entry decides the class (not-verified is expected, 1.6 §9.6)`)
     assert.deepEqual(validateFinding(found[0]), [], reason)
   }
 })
@@ -131,7 +137,7 @@ test('V49 each finding: what, why and verify say something; a failure or an expe
     if (FINDINGS[f.code] && f.class === 'failure' && !FINDINGS[f.code].asightFirst) assert.ok(f.commands.length >= 1)
     seen.add(f.code)
   }
-  for (const code of Object.keys(FINDINGS)) assert.ok(seen.has(code), `${code} was produced by some fact set`)
+  for (const code of Object.keys(FINDINGS)) if (!REFUSAL_CODES.includes(code)) assert.ok(seen.has(code), `${code} was produced by some fact set`)
   assert.ok(FINDING_CODES.length >= Object.keys(FINDINGS).length)
 })
 
@@ -145,10 +151,6 @@ test('V49 the commands are filled with the values of the facts: the port to look
   assert.equal(findingsOf(SETS['linger-off'].facts)[0].commands[0].run, 'loginctl enable-linger alice')
   const nameless = diagnose({ facts: SETS['linger-off'].facts, topology: buildTopology(SETS['linger-off'].facts), harnesses: null, user: null })[0]
   assert.equal(nameless.commands[0].run, 'loginctl enable-linger "$(id -un)"', 'a name that is not known is read by the shell, not left as a placeholder')
-  const admin = findingsOf(SETS['needs-admin'].facts).find((f) => f.code === 'needs-admin')
-  assert.equal(admin.commands[0].shell, 'gui', 'on Windows the normal path comes first: UAC, not a pasted admin line')
-  assert.equal(admin.commands[1].run, 'Start-Process powershell -Verb RunAs -ArgumentList "asight-admin.ps1"', 'the elevated line is still there, verbatim')
-  assert.equal(admin.commands[1].shell, 'powershell')
   const pac = findingsOf(SETS['not-routed'].facts).find((f) => f.code === 'not-routed')
   assert.ok(pac.commands.some((c) => c.run.includes('不知道 · pac')), 'the PAC\'s address is not known: said, not guessed')
   const bpf = findingsOf(SETS['other-redirector'].facts)[0]
@@ -360,4 +362,18 @@ test('V66 process-unknown `named` (a preset name whose args missed, e.g. the Z C
   assert.match(f.commands[0].run, /"args"/)
   assert.match(f.what, /名字在名单上、但参数没对上/)
   assert.doesNotMatch(f.what, /不在名单上/)
+})
+
+test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the route record\'s reason and place), and uninstall\'s collectors-online gives asight off then asight uninstall', async () => {
+  const { findingFor } = await import('../../src/netenv/findings.mjs')
+  const nr = (reason, at) => findingsOf(pfacts('hermes', form('hermes.cli', { entry: null, route: { code: 'not-routed', reason, ...(at ? { at } : {}) }, procs: [] }), fwForm(17993), { platform: 'darwin' }), ['hermes']).find((f) => f.code === 'not-routed')
+  const absent = nr('absent', '/Users/a/.hermes/.env')
+  assert.ok(absent.commands.some((c) => c.run.includes('/Users/a/.hermes/.env')) && absent.commands.at(-1).run === 'asight on hermes', 'Hermes: its own setup first, then asight on')
+  const blocker = nr('blocker', '/Users/a/Library/x.json#proxy')
+  assert.ok(blocker.commands[0].run.includes('/Users/a/Library/x.json#proxy') && blocker.why.includes('/Users/a/Library/x.json#proxy'))
+  const reasons = ['system-pac', 'blocker', 'own-egress', 'blocker-unreadable', 'unreadable', 'absent', 'credentialed-own-leg', 'no-path', 'no-applied-entry']
+  assert.equal(new Set(reasons.map((r) => nr(r, '/x').why)).size >= 6, true, 'the reasons are told apart')
+  for (const r of reasons) assert.deepEqual(validateFinding(nr(r, '/x')), [], r)
+  const refused = findingFor('collectors-online', { platform: 'darwin', online: '还开着: codex' })
+  assert.deepEqual([refused.class, refused.commands.map((c) => c.run)], ['failure', ['asight off', 'asight uninstall']])
 })

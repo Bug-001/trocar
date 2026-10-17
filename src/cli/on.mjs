@@ -11,44 +11,29 @@ import path from 'node:path'
 import { resolveHarnesses } from './harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
-import { formatOnReceipt, formatPlan, formatWinPlan } from './receipt.mjs'
+import { formatOnReceipt, formatPlan } from './receipt.mjs'
 import { colors, noColor } from './color.mjs'
-import { DESKTOP_LAUNCHER_HINT } from './words.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
+import { refuseOldManifest } from '../off/manifest.mjs'
+import { isModelOs } from '../collector/model-install.mjs'
+import { runModelOn } from './on-model.mjs'
 
-const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--opt-in <形态>[,<形态>…]] [--no-autostart | --no-unit] [--json]'
+const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]'
 const FLAGS = new Set(['--dry-run', '--yes', '--no-autostart', '--no-unit', '--json'])
+const OPT_IN_HINT = 'asight on 不认 --opt-in:D57 起没有点名项(各形态的证书由 asight install 装,引流随 on / off)'
 const PROXY_HINT = 'asight on 不认 --proxy:按进程采集器不需要它(D39 之前的 --proxy 是旧 CC-CLI steer 的口子,已随旧采集退役,D39⑥)'
 const chainText = (t) => renderCompact(t).join(' ; ')
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
-/** The forms of `--opt-in` out of `argv`: repeatable, comma-separated, `--opt-in a` and `--opt-in=a,b` both read (1.6 §1.7). → { optIn, rest } —
- *  `rest` is argv without the flag and its values, so the plain flag loop never sees a form id; a `--opt-in` without a value is a usage error. */
-function splitOptIn(argv) {
-  const optIn = [], rest = []
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (a === '--opt-in') {
-      if (i + 1 >= argv.length) return { error: '--opt-in needs a form id after it (repeatable, comma-separated)' }
-      for (const f of String(argv[++i]).split(',')) if (f !== '') optIn.push(f)
-    } else if (a.startsWith('--opt-in=')) { for (const f of a.slice('--opt-in='.length).split(',')) if (f !== '') optIn.push(f) }
-    else rest.push(a)
-  }
-  return { optIn, rest }
-}
-
 /** → the exit code. `argv` is what follows `on`. `io` = { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo). */
 export async function runOnCli(argv, { io, env = process.env, home = os.homedir(), platform = process.platform, deps = {} } = {}) {
-  const picked = splitOptIn(argv)
-  if (picked.error) { io.err(`asight on: ${picked.error}\n${USAGE}`); return EXIT.usage }
-  let { optIn } = picked
-  argv = picked.rest
   const flags = new Set(), names = []
   for (const a of argv) {
     if (a === '--proxy' || a.startsWith('--proxy=')) { io.err(`asight on: ${PROXY_HINT}`); return EXIT.usage }
+    if (a === '--opt-in' || a.startsWith('--opt-in=')) { io.err(`asight on: ${OPT_IN_HINT}`); return EXIT.usage } // V72: before anything is read or written
     if (a.startsWith('-')) {
       if (!FLAGS.has(a)) { io.err(`asight on: unknown option ${a}\n${USAGE}`); return EXIT.usage }
       flags.add(a)
@@ -62,34 +47,18 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5); warnings and the plan go to stderr
   const c = json ? noColor() : colors(io) // --json never colours (D46); a non-TTY or NO_COLOR run colours nothing anywhere
   if ((deps.getuid || processUid)() === 0) { io.err('asight on: 用你自己的账号跑,不要用 root / sudo(D36;只有 `sudo asight setup-helper` 要 root)'); return EXIT.incomplete }
+  // 4.11 ⑰: a manifest of version 1 / 2 is refused before anything else, before any write — the standalone copy is not rewritten either
+  const old = refuseOldManifest({ home, platform, fs: deps.fs || nodeFs })
+  if (old) {
+    const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [old.message] }
+    if (json) io.out(JSON.stringify(receipt, null, 2)); else io.err(`asight on: ${old.message}`)
+    return EXIT.incomplete
+  }
   try {
     // the name list in effect (D51③): the presets plus ~/.asight/agents.json, as the daemon and `status` judge — the running processes the plan restarts and whose CAs it carries
-    const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env, agentList: readAgentList({ home, fs: deps.fs || nodeFs }).entries })
+    const parts = deps.parts || await (await (deps.daemon || import('../collector/daemon.mjs'))).loadParts({ env, platform, agentList: readAgentList({ home, fs: deps.fs || nodeFs }).entries })
     const install = deps.install || await import('../collector/install.mjs')
-    // the opt-in half (1.6 §1.7): the arch that has opt-in items (Windows, 4.8 §2.4) hands `forms` (the ids --opt-in may name), `plan` (the rows)
-    // and `apply`; an arch with none (Linux today) makes every --opt-in name a usage error, never a silent skip
-    const optInHooks = deps.optIn || (parts.arch && parts.arch.optIn) || null
-    if (optIn.length) {
-      const known = optInHooks && typeof optInHooks.forms === 'function' ? optInHooks.forms({ harnesses: parts.harnesses, ids: named.ids }) : []
-      // an ITEM id the plan's「要你点名的」section prints names its form (1.6 §1.7: what the plan shows is what the user copies) — one carrier
-      // expands to that form; an item several forms share is the user's to disambiguate, by naming the form itself
-      const items = optInHooks && typeof optInHooks.itemForms === 'function' ? optInHooks.itemForms({ harnesses: parts.harnesses, ids: named.ids }) : []
-      const expanded = [], unknown = []
-      for (const name of [...new Set(optIn)]) {
-        if (known.includes(name)) { expanded.push(name); continue }
-        const carriers = [...new Set(items.filter((x) => x.item === name).flatMap((x) => x.forms))]
-        if (carriers.length === 1) expanded.push(carriers[0])
-        else if (carriers.length > 1) {
-          io.err(`asight on: --opt-in 的 ${name} 是多个形态共有的点名项(${carriers.join(', ')});点名形态本身,如 --opt-in ${carriers[0]}`)
-          return EXIT.usage
-        } else unknown.push(name)
-      }
-      if (unknown.length) {
-        io.err(`asight on: --opt-in 名了不认识的形态 ${unknown.join(', ')}${known.length ? `;可以点名的形态是: ${known.join(', ')}` : ';这个平台没有要点名的形态(1.6 §1.7)'}`)
-        return EXIT.usage
-      }
-      optIn = expanded
-    }
+    const model = isModelOs(parts.os) // macOS / Windows: the collector model's on (on-model.mjs); none of the old adoption / routing code runs there
     const fs = deps.fs || nodeFs
     // The Node floor (4.8 §7, W24: the daemon is pulled up by THIS Node at every login, so an older one cannot run the collector): the arch's own read of
     // process.versions, asked first because it is free — ok:false refuses with the doctor line, before anything is touched. No flows record: the receipt
@@ -119,6 +88,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
         return EXIT.incomplete
       }
     }
+    if (model) return await runModelOn({ io, env, home, os: parts.os, deps, parts, flags, ids: named.ids, json })
     const script = deps.script || process.argv[1]
     const unit = flags.has('--no-unit') || !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script, run: deps.exec || null, env })
     const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)
@@ -127,65 +97,23 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const confirm = async (plan) => {
       if (yes) return true
       if (!isInteractive(io)) return null // not a terminal: the plan is all we print (R6)
-      // the one confirmation of an admin-level opt-in item names what changes and why it needs the administrator (V63): after this yes, the OS's own
-      // prompt (UAC) carries the step — asight never draws a password field of its own
-      const admin = ((plan && plan.optIn) || []).filter((r) => r.chosen && r.applicable && r.scope === 'machine')
-      const prompt = admin.length
-        ? `asight 将按上面的清单写或改这些文件,并做 ${admin.length} 个你点名的机器级改动(要管理员权限;你确认后 Windows 弹它自己的提权框,密码只进那个框)。继续?`
-        : 'asight 将按上面的清单写或改这些文件。继续?'
-      return ask({ ...io, prompt: json ? io.stderr : io.stdout }, prompt)
+      return ask({ ...io, prompt: json ? io.stderr : io.stdout }, 'asight 将按上面的清单写或改这些文件。继续?')
     }
     const adoption = await prepareAdoption({ home, env, platform, deps, parts, now: deps.now ? () => deps.now().getTime() : Date.now }) // §9.5: the proxy each agent already uses, and the chain once asight is on
     const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32, Task 8(c)); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
-    // The arch's read-only preflight (historically the Windows kernel line and the Smart App Control line), run BEFORE turnOn so a
-    // refusal stops `on` before its first write — a settled precondition with nothing to roll back. No arch carries one since the engines became the
-    // proxies (D47 and its win32 twin: darwin never had one, win32's went with the kernel — wiring.mjs exports neither `prepare` nor `ensureKernel`);
-    // the seam stays because a future arch's settled precondition belongs exactly here, and with no collector directory yet (nothing installed) the
-    // receipt is the record (4.6 §记录).
-    const archPrepare = parts.arch && typeof parts.arch.prepare === 'function' ? parts.arch.prepare : null
-    const prep = archPrepare ? await archPrepare({ env, home }) : null
-    const afterConfirm = null // the kernel-ensure hook retired with the kernel: no arch's first write-phase step downloads anything now (the engine IS the proxy, and its first write is the CA)
-    // the plan of 4.8 §11: Windows draws its own (one row per entry group with the upstream, the named opt-in items, the drain note) — fed by the same
-    // `on`'s facts (adoption). The Linux plan and the hook's own notes stay as they are.
-    const winPlan = parts.os === 'win32'
     const planText = (raw) => {
       const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })).filter((x) => /\s→\s/.test(x.chain) || false) : [] // D46: the degenerate one-hop chain says nothing and is not printed
-      // the Claude Desktop steering hint (measured on a macOS test machine): Desktop's Chromium network service ignores every proxy env var, so the
-      // door that works is the NAMED desktop-launcher item — said exactly while claude-code is a target on darwin and the item is not in the
-      // ledger (an optIn row with state 'done'); nothing is ever installed by a hint (the win plan's codex twin, formatWinPlan's own line)
-      const desktopHint = platform === 'darwin' && (raw.targets || []).includes('claude-code') && !(raw.optIn || []).some((x) => x && x.item === 'desktop-launcher' && x.state === 'done')
-      return winPlan
-        ? formatWinPlan(raw, { home, autostart, env, adoption: adoption && !adoption.error ? adoption : null, prep, colors: c })
-        : [formatPlan({ ...raw, adopted }, { home, autostart, platform, colors: c }), ...(desktopHint ? ['', DESKTOP_LAUNCHER_HINT] : []), ...(prep && prep.notes && prep.notes.length ? ['', ...prep.notes] : [])].join('\n')
-    }
-    if (prep && prep.refuse) {
-      const rf = prep.refuse
-      const line = `${rf.reason}${Array.isArray(rf.commands) && rf.commands.length ? `。手动替代(asight 不替你跑): ${rf.commands.join(' 或 ')}` : ''}`
-      if (!flags.has('--dry-run')) {
-        const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [line] }
-        const cdir = path.join(home, '.asight', 'collector')
-        try { if (fs.existsSync(cdir)) appendEvent(cdir, { event: 'failure', where: 'routing', code: rf.code, ...(rf.of ? { of: rf.of } : {}), reason: line }) } catch { /* the receipt is the record then (R11) */ }
-        if (json) io.out(JSON.stringify(receipt, null, 2))
-        else io.out(formatOnReceipt(receipt, { tense: 'past', home }))
-        return EXIT.incomplete
-      }
-      // a dry run prints the plan and exits 0; the stop a real run would meet is in the receipt (R6, V7)
-      prep.blocked = line
+      return formatPlan({ ...raw, adopted }, { home, autostart, platform, colors: c })
     }
     // The combined bundles' OS roots are the arch's (the flip checklist ②, 4.9 §4 末): the plan asks it through the one resolver (tls/roots.mjs bundleRoots), so the FIRST
     // install's bundles carry them — not only the daemon's next rebuild — and a read that fails stops the on before one file of the agents' is touched (D38); `deps.roots` overrides them.
     let { receipt, exit, plan } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null,
       roots: deps.roots || null, unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
-      optIn, optInHooks, afterConfirm,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (p) => say(planText(p)),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,
     })
-    // the preflight's lines ride along (the plan showed them above). No arch carries a preflight today (the kernel line went with the kernel, D47's twin);
-    // a future one that does keeps this append as its own.
-    if (prep && prep.notes && prep.notes.length) receipt.notes.push(...prep.notes)
-    if (prep && prep.blocked) { receipt.blocked = prep.blocked; receipt.notes.push(`${prep.blocked} (a real asight on stops there)`) }
     if (adoption && adoption.error) receipt.notes.push(adoption.error)
     else if (adoption && receipt.harnesses && receipt.harnesses.length && receipt.ok !== false && !receipt.dry_run && !receipt.planned && !receipt.declined) {
       const rec = await recordAdoption({ adoption, routing, targets: receipt.harnesses, home, env, now: deps.now ? () => deps.now().getTime() : Date.now, fs: deps.fs })
@@ -197,7 +125,6 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     } else if (adoption && receipt.dry_run) receipt.adopted = Object.fromEntries(Object.entries(adoption.chains(receipt.harnesses || [])).filter(([h]) => (receipt.harnesses || []).includes(h)).map(([h, t]) => [h, { chain: chainText(t), dry_run: true }]))
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.planned) for (const n of receipt.notes) io.err(n) // the plan was printed; what is left to say is why nothing was done (R6)
-    else if (winPlan && receipt.dry_run && plan) io.out(`${planText(plan)}\n\n${formatOnReceipt(receipt, { tense: 'future', home, platform, colors: c })}`) // a Windows dry run prints the §11 plan as well: it is what a user reads before deciding (turnOn's onPlan does not run for one)
     else {
       // D46: the harnesses THIS run newly wired (their one-time 说明 notes print; a harness wired before keeps its notes in doctor and --json — the receipt object is untouched, R5/R11)
       const fresh = plan ? new Set((plan.targets || []).filter((id) => !(plan.installed || []).includes(id))) : null

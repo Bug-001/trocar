@@ -102,7 +102,7 @@ test('1.6 §9.7: status reads agents.json itself — with no harness installed o
   const home = tmpDir('asight-list-only-')
   fs.mkdirSync(path.join(home, '.asight'), { recursive: true })
   fs.writeFileSync(path.join(home, '.asight', 'agents.json'), '{ not json')
-  const parts = { os: 'darwin', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: () => [] } } }
+  const parts = { os: 'darwin', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: {} }
   const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
   const human = fakeIo()
   await runStatusCli([], { io: human, home, platform: 'darwin', env: { HOME: home }, deps })

@@ -21,20 +21,17 @@
 import path from 'node:path'
 import { hostOf, expandHome, parseDotenv } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { envProxies, argAfter, dotenvLayer } from './_common.mjs'
+import { envProxies, argAfter, dotenvLayer, perOs } from './_common.mjs'
 
 const MANAGED = { linux: '/etc/hermes' }
 const FALSEY = /^(false|0|no|off)$/i
-export const OLD_RELEASE = 'hermes:release-ca-bundle' // pseudo-variable: this process may be a release ≤ LAST_CA_BUNDLE_RELEASE
+const OLD_RELEASE = 'hermes:release-ca-bundle' // pseudo-variable: this process may be a release ≤ LAST_CA_BUNDLE_RELEASE
 /** The last release that reads HERMES_CA_BUNDLE first (the plan's research; lab ③). */
-export const LAST_CA_BUNDLE_RELEASE = 'v2026.9.24'
+const LAST_CA_BUNDLE_RELEASE = 'v2026.9.24'
 /** A release tag (`v2026.9.24`, `2026.09.24`) as a number that orders by date; null when it is not one. */
 const releaseDay = (tag) => { const m = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})$/.exec(String(tag)); return m ? Number(m[1]) * 10000 + Number(m[2]) * 100 + Number(m[3]) : null }
 const CUTOFF = releaseDay(LAST_CA_BUNDLE_RELEASE)
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what asight's block sets over the launch env and the user's lines
-/** Pseudo-variable an OS file's layers set when that OS's trust doors cannot grant: its value is the `agent-untrusted` reason (darwin
- *  `route-without-ca`, win32 `win-doors-rejected`); refine names it in place of the generic var-missing (D51④). */
-export const DOORS_SHUT = 'hermes:doors-shut'
 
 // The root of the Hermes data dirs (HERMES_HOME may name a profile under it) and the active home of this process.
 function hermesRoot(env, home) {
@@ -42,7 +39,7 @@ function hermesRoot(env, home) {
   if (!h) return path.join(home, '.hermes')
   return path.basename(path.dirname(h)) === 'profiles' ? path.dirname(path.dirname(h)) : h
 }
-export function hermesHome(ctx) {
+function hermesHome(ctx) {
   const envHome = expandHome(ctx.environ.get('HERMES_HOME') || '', ctx.home)
   const root = hermesRoot(ctx.environ, ctx.home)
   const at = (name) => (name === 'default' ? root : path.join(root, 'profiles', name))
@@ -58,7 +55,7 @@ function checkout(ctx) {
   return m ? m[2] : ctx.environ.get('HERMES_PYTHON_SRC_ROOT') || path.join(ctx.home, '.hermes', 'hermes-agent')
 }
 // A release dated LAST_CA_BUNDLE_RELEASE or earlier, by the checkout's install stamp; null when there is no readable stamp.
-export function oldRelease(readText, dir) {
+function oldRelease(readText, dir) {
   let stamp
   try { stamp = JSON.parse(readText(path.join(dir, 'install-stamp.json'))) } catch { return null }
   if (!stamp || typeof stamp !== 'object') return null
@@ -145,6 +142,30 @@ const proxy = {
   restart: { hint: '退出这个 Hermes(含 gateway),再重新启动;在它 /reload 之前,.env 里改的代理它已读过的不会变', processes: 'hermes' },
 }
 
+// Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (the .env block routes every form; the root
+// alone trusts; asight writes no SSL_CERT_FILE and no ssl_ca_cert). The block is written only into a Hermes home that exists.
+const HOME = (path) => perOs({ darwin: { base: 'home', dir: '.hermes', env: 'HERMES_HOME', path }, win32: { base: 'localAppData', dir: 'hermes', env: 'HERMES_HOME', path } })
+const form = (id, present, verified = { darwin: true, win32: true }) => ({ id, os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'root', present: [...present, HOME()], verified })
+const proxyMode = {
+  forms: [
+    form('hermes.cli', [{ command: 'hermes' }]),
+    form('hermes.acp', [{ command: 'hermes-acp' }]),
+    form('hermes.gateway', []),
+    form('hermes.dashboard', []),
+    form('hermes.desktop', []), // the source build (D51② names above); the prebuilt DMG and MSIX are the next form
+    form('hermes.desktop-prebuilt', [], { darwin: { reason: 'not-measured' }, win32: { reason: 'not-measured' } }),
+  ],
+  routes: {
+    env: { kind: 'dotenv-block', file: HOME('.env'), proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'not-routed', takesEffect: '重启 Hermes 后生效;gateway 与 dashboard 也要重启' },
+  },
+  certs: {},
+  trusts: {},
+  // rule U: a CA file the user already named (a route's own ssl_ca_cert replaces the roots for that route: the providers map, the custom_providers
+  // list and the inline model block, as the Linux reader above; SSL_CERT_FILE for the rest)
+  userCertFiles: [...[['providers', '*', 'ssl_ca_cert'], ['custom_providers', '*', 'ssl_ca_cert'], ['model', 'ssl_ca_cert']].map((keys) => ({ file: HOME('config.yaml'), format: 'yaml', keys })), { file: HOME('.env'), format: 'dotenv', keys: ['SSL_CERT_FILE'] }, { env: 'SSL_CERT_FILE' }],
+  blockers: [],
+}
+
 export default {
   name: 'hermes',
   runtime: 'python',
@@ -154,11 +175,16 @@ export default {
   // again as `-I -c "import sys, runpy; …; runpy.run_path('<that exe>', …)"`; measured win 2026-10-14), or its TUI gateway module. Other
   // python is not Hermes, its package-manager workers (`hermes-agent/pm/worker.py`) included: they are forwarded.
   processes: {
-    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', entry: '/hermes(-acp)?\\.exe$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe(?![\\w.-])' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' }],
+    names: [{ name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bhermes_bootstrap\\b[\\s\\S]*\\b(hermes_cli\\.main|acp_adapter\\.entry)\\b' }, { name: 'python', entry: '/hermes(-acp)?\\.exe$' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\brunpy\\.run_path\\(\\s*[\'"]?[^\'",)]*/hermes(-acp)?\\.exe(?![\\w.-])' }, { name: 'python', args: '(^| )-m tui_gateway\\.(entry|slash_worker)( |$)' },
+      // the measured shapes only: the gateway service runs the CLI module with `gateway run` (the same
+      // agent on every OS: a Linux one in this shape turns from args-mismatch into hermes, Linux run UNT); the desktop source build's backend is a
+      // base64 bootstrap that hermes.cmd starts with `serve --host 127.0.0.1` (a loopback web service: any 127.x, so the guard reads no version; another b64 one-liner is not Hermes)
+      { name: 'python', args: '(^| )-m hermes_cli\\.main gateway run( |$)' }, { name: 'python', args: '(^| )-I( -\\S+)* -c [\\s\\S]*\\bb64decode\\b[\\s\\S]* serve --host 127\\.\\S+( |$)' }],
     longLived: [{ args: '(^| )(gateway|cron|dashboard|serve)( |$)' }],
   },
   hosts: ['openrouter.ai', 'inference-api.nousresearch.com', 'chatgpt.com', 'api.openai.com', 'api.anthropic.com', 'api.z.ai', 'api.moonshot.ai', 'api.moonshot.cn', 'api.kimi.com', 'api.deepseek.com', 'api.x.ai'],
   proxy,
+  proxyMode,
   layers,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']),
@@ -170,9 +196,6 @@ export default {
       { name: 'routes with their own ssl_ca_cert', when: 'hermes:ssl_ca_cert', chain: [{ var: 'hermes:ssl_ca_cert', semantic: 'replace', list: true }] },
     ],
     disable: ['hermes:ssl_verify'],
-    // an OS whose doors cannot grant (DOORS_SHUT above): win32's always wins (its client refuses the entry asight writes, whatever a file says);
-    // darwin's only replaces var-missing (an asight route line written after start stays config-after-start)
-    refine: (r, env) => { const shut = env.get(DOORS_SHUT) || ''; return shut === 'win-doors-rejected' || (shut && r.reason === 'var-missing') ? shut : null },
     rereadsEntry: true, // the CLI on /reload and a gateway that does not multiplex read .env again while running
     // uninstall step 5: Linux main reads the bundle again at each new TLS context; a release build (or one without a
     // readable stamp) and macOS are not shown to, so they are reported as trusting until restart
@@ -186,8 +209,6 @@ export default {
       shadowed: 'HERMES_CA_BUNDLE names a bundle without the asight CA, and this Hermes may be a release build that reads it first',
       'replace-without-ca': 'a provider ssl_ca_cert in config.yaml names a bundle without the asight CA; that route trusts only that file',
       'verify-disabled': 'a provider in config.yaml sets ssl_verify: false',
-      'route-without-ca': 'macOS Hermes trusts only the ssl_ca_cert of the route it uses; the route in use (or the built-in provider) has no ssl_ca_cert line written by asight, so it is forwarded without capture',
-      'win-doors-rejected': 'on Windows Hermes refuses the certificate entry asight writes into its .env (measured on a Windows test machine), so it is forwarded without capture until the system trust root of D55 covers it',
     },
   },
 }

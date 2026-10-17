@@ -9,7 +9,7 @@ import crypto from 'node:crypto'
 import { installCollector } from '../../src/collector/install.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
-import { readManifest, saveManifest } from '../../src/off/manifest.mjs'
+import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { undoSide, offWorld, runOff } from '../../src/off/orchestrate.mjs'
 import { formatOffReceipt } from '../../src/off/receipt.mjs'
@@ -38,11 +38,12 @@ async function sevenInstalled() {
   await installCollector({ home, env: sh.env, osName: 'linux', harnesses: await loadHarnesses(), freePort: async () => 47011, scan: async () => [], roots })
   const dir = path.join(home, '.asight', 'collector')
   const ca = (n) => path.join(dir, 'ca', n)
-  const run = (o = {}) => undoHarnesses({ dir, home, manifest: readManifest(dir), ids: null, procs: async () => [], roots, ...o })
+  // install wrote every item here (phase install), which off spares (D55①): V15 / V25 drive the undo rules over both phases, as uninstall runs them
+  const run = (o = {}) => undoHarnesses({ dir, home, manifest: readManifest(dir), ids: null, procs: async () => [], roots, phases: PHASES, ...o })
   return { home, sh, before, beforeDirs, dir, ca, run }
 }
 
-test('V15: seven harnesses have an entry after install, and off undoes each by 4.6: the user files byte for byte; a bundle a live process loaded is kept without the CA, a missing one a rereading process uses is rebuilt, an unused one is removed; extra files; plugins, shims and rc lines are gone', async () => {
+test('V15: seven harnesses have an entry after install, and the undo (uninstall\'s, both phases) takes each by 4.6: the user files byte for byte; a bundle a live process loaded is kept without the CA, a missing one a rereading process uses is rebuilt, an unused one is removed; extra files; plugins, shims and rc lines are gone', async () => {
   const s = await sevenInstalled()
   const m = readManifest(s.dir)
   assert.deepEqual([...new Set([...m.entries, ...m.files].map((e) => e.harness).filter(Boolean))].sort(), [...HARNESS_IDS].sort(), 'every harness has an entry — OpenCode\'s is its plugin file, a file asight owns')
@@ -78,11 +79,11 @@ test('V15: seven harnesses have an entry after install, and off undoes each by 4
   for (const p of [plugin, path.join(s.dir, 'bin'), path.join(s.dir, 'plugins')]) assert.ok(!fs.existsSync(p), `${p} is gone`)
   assert.ok(!/asight collector/.test(fs.readFileSync(path.join(s.home, '.bashrc'), 'utf8')) && !fs.readFileSync(path.join(s.home, '.dsh', 'cordis.patch.yml'), 'utf8').includes('asight'))
   assert.deepEqual(r.results.map((x) => x.result).filter((x) => x !== 'restored'), [], 'every entry came back byte for byte')
-  assert.ok(fs.existsSync(s.ca('asight-ca.pem')) && fs.existsSync(s.ca('ca.key')), 'off keeps the CA')
+  assert.ok(fs.existsSync(s.ca('asight-ca.pem')) && fs.existsSync(s.ca('ca.key')), 'without dropCa the CA stays')
   assert.deepEqual(r.still_trusting.map((x) => [x.pid, x.harness, x.until]).sort(), [[4242, 'codex', 'next-connection'], [4343, 'z-code', 'session-end'], [4545, 'kimi-code', 'restart']], 'a kimi by its absolute path (4546) never trusted asight: not reported')
 })
 
-test('V25: off codex undoes ~/.codex/.env and its bundle and nothing else — asight-ca.pem, every other entry and bundle byte for byte; a live codex keeps combined-codex.pem, without the CA', async () => {
+test('V25: the undo of codex alone (both phases) takes ~/.codex/.env and its bundle and nothing else — asight-ca.pem, every other entry and bundle byte for byte; a live codex keeps combined-codex.pem, without the CA', async () => {
   const s = await sevenInstalled()
   const everything = () => snapshot(s.home, ['.asight/collector/install-manifest.json', '.asight/collector/flows']) // the manifest is rewritten by design
   const before = everything()
@@ -109,23 +110,23 @@ test('V25: off codex undoes ~/.codex/.env and its bundle and nothing else — as
 const shaOf = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex')
 const execFrom = (s, from) => s.sys.exec.calls.slice(from)
 
-test('V1: off with the daemon gone (its lock left, its helper dead): every entry of all seven harnesses is back at its pre_sha256, exit 0, and nothing starts a daemon', async () => {
+test('V1: off with the daemon gone (its lock left, its helper dead): every certificate item install wrote for all seven harnesses stays byte for byte (D55①), exit 0, and nothing starts a daemon', async () => {
   const s = await installedHome({ names: ALL_HARNESSES })
-  const entries = s.manifest().entries
-  assert.ok(entries.length >= 5, 'seven harnesses have entries to undo')
+  const entries = s.manifest().entries, installed = s.installItems()
+  assert.ok(entries.length >= 5, 'seven harnesses have install entries off must spare')
   s.sys.daemon.state.up = false // killed: nothing answers
   writeDaemonLock(s) // and its lock is left behind, naming a pid that is gone
   const calls = s.sys.exec.calls.length, asked = s.sys.daemon.calls.length
   const { receipt, exit } = await s.off({ deps: { alive: () => false } })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
   assert.deepEqual(validateReceipt(receipt), [])
-  for (const e of entries) assert.equal(e.existed_before ? shaOf(e.path) : fs.existsSync(e.path), e.existed_before ? e.pre_sha256 : false, `${e.path} is back as it was before asight`)
+  assert.deepEqual(s.installItems(), installed, 'every phase-install item: still in the manifest, its file byte for byte')
   assert.deepEqual(receipt.routing, { confirmed: true, state: 'stale', how: 'no-daemon' })
   assert.deepEqual([receipt.daemon, receipt.relayed], [{ pid: null, state: 'none' }, { closing: 0, waiting: 0, cut: 0 }], 'no daemon: nothing is relayed, said as a fact')
   assert.deepEqual(execFrom(s, calls), ['systemctl --user is-active asight-collector.service', 'systemctl --user disable asight-collector.service'], 'the only OS tools run are the question whether systemd is about to restart the daemon (it says inactive here) and the autostart disable: no start, no stop, no restart')
   assert.deepEqual(s.sys.daemon.calls.slice(asked).filter((c) => c.startsWith('POST')), [], 'and no daemon was asked for anything, let alone started')
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ALL_HARNESSES.map(() => 'off'), 'every harness is off in state.json')
-  assert.equal(readManifest(s.dir).entries.length, 0, 'and out of the manifest')
+  assert.deepEqual(readManifest(s.dir).entries, entries, 'and the manifest keeps them for uninstall')
 })
 
 // a systemd that answers like the real one for a daemon that was killed: `activating` (auto-restart) until `stop` is run, then `inactive`; `stubborn` keeps it activating
@@ -140,8 +141,8 @@ function restartingSystemd(s, { stubborn = false } = {}) {
   return { run, state }
 }
 
-test('semantics 4 / 1.6 §1.4: a killed daemon that systemd is about to restart (Restart=on-failure) is stopped by an off with no names — stop, reset-failed, is-active BEFORE the entries are undone, so no daemon comes back; nothing is relayed, exit 0', async () => {
-  const s = await installedHome({ names: ['claude-code', 'codex'] })
+test('semantics 4 / 1.6 §1.4: a killed daemon that systemd is about to restart (Restart=on-failure) is stopped by an off with no names — stop, reset-failed, is-active, so no daemon comes back; nothing is relayed, exit 0', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] }), installed = s.installItems()
   s.sys.daemon.state.up = false
   writeDaemonLock(s)
   const sd = restartingSystemd(s)
@@ -155,19 +156,19 @@ test('semantics 4 / 1.6 §1.4: a killed daemon that systemd is about to restart 
   assert.deepEqual(receipt.daemon, { pid: null, state: 'none' })
   assert.equal(receipt.routing.confirmed, true)
   assert.deepEqual(validateReceipt(receipt), [])
-  assert.equal(readManifest(s.dir).entries.length, 0, 'and the entries are undone')
+  assert.deepEqual(s.installItems(), installed, 'and every certificate item stays (D55①)')
   const events = flowEvents(s.dir)
   assert.ok(events.some((e) => e.kind === 'daemon-stop' && e.stopped === true && /about to restart/.test(e.reason)), 'the stop is on the record')
 })
 
-test('semantics 4: a unit systemd keeps up after the stop is not "off": exit 1 with the command to run, and the entries are undone all the same', async () => {
-  const s = await installedHome({ names: ['claude-code'] })
+test('semantics 4: a unit systemd keeps up after the stop is not "off": exit 1 with the command to run, and the certificate items stay all the same', async () => {
+  const s = await installedHome({ names: ['claude-code'] }), installed = s.installItems()
   s.sys.daemon.state.up = false
   const sd = restartingSystemd(s, { stubborn: true })
   const { receipt, exit } = await s.off({ deps: { alive: () => false, exec: sd.run } })
   assert.equal(exit, 1)
   assert.match(receipt.problems.join('\n'), /systemctl --user stop asight-collector\.service/)
-  assert.equal(readManifest(s.dir).entries.length, 0, 'the entries are undone: a daemon that comes back has nothing attached (desired is off)')
+  assert.deepEqual(s.installItems(), installed, 'off never touches a certificate item (D55①); desired is off, so a daemon that comes back attaches nothing')
 })
 
 test('semantics 4: off with names does not touch the unit — only an off with no names takes the daemon away', async () => {
@@ -201,7 +202,7 @@ function victims(s) {
   return { dirV, fileV, keyV, intact: () => [fs.readFileSync(path.join(dirV, 'thesis.txt'), 'utf8'), fs.readFileSync(fileV, 'utf8'), fs.readFileSync(keyV, 'utf8')] }
 }
 
-test('semantics 6: a manifest that names a path outside ~/.asight as a bundle, the CA certificate or the CA key is not followed — off and uninstall leave that path alone, say why, exit 1', async () => {
+test('semantics 6: a manifest that names a path outside ~/.asight as a bundle, the CA certificate or the CA key is not followed — off never reads those items, uninstall leaves that path alone, says why, exit 1', async () => {
   const s = await installedHome({ names: ['codex'] })
   const v = victims(s), before = v.intact()
   const m = s.manifest()
@@ -210,10 +211,9 @@ test('semantics 6: a manifest that names a path outside ~/.asight as a bundle, t
   m.files.find((f) => f.role === 'ca-key').path = v.keyV
   saveManifest(s.dir, m)
   const off = await s.off()
-  assert.equal(off.exit, 1)
-  assert.deepEqual(v.intact(), before, 'off removed, rewrote and rebuilt nothing outside ~/.asight')
+  assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
+  assert.deepEqual(v.intact(), before, 'off takes no bundle and no CA (D55①), so it follows none of those paths')
   assert.ok(fs.existsSync(path.join(v.dirV, 'thesis.txt')))
-  assert.match(off.receipt.left.map((l) => l.reason).join('\n'), /is not inside .*\.asight.*not asight's to remove/s)
   const un = await s.uninstall({ yes: true })
   assert.equal(un.exit, 1)
   assert.deepEqual(v.intact(), before, 'uninstall too: the CA certificate and the CA key it was told to remove are not those files')
@@ -252,26 +252,26 @@ test('semantics 7: off on a machine asight was never installed on says so first 
   assert.equal(again.receipt.nothing_installed, undefined)
 })
 
-test('V5: off claude-code undoes only Claude Code: the other harness\'s file is byte for byte, it stays on in state.json and attached in the daemon, /off was posted with the name only and no exit', async () => {
+test('V5: off claude-code takes only Claude Code\'s routing: no certificate item of either harness moves (D55①), it stays on in state.json and attached in the daemon, /off was posted with the name only and no exit', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const codexEnv = path.join(s.home, '.codex', '.env'), settings = path.join(s.home, '.claude', 'settings.json')
-  const codexBefore = shaOf(codexEnv)
+  const codexBefore = shaOf(codexEnv), settingsBefore = shaOf(settings)
   assert.deepEqual([...s.sys.daemon.state.on].sort(), ['claude-code', 'codex'])
   const { receipt, exit } = await s.off({ ids: ['claude-code'] })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
   assert.deepEqual(validateReceipt(receipt), [])
   assert.equal(shaOf(codexEnv), codexBefore, 'codex\'s .env byte for byte')
-  assert.ok(!fs.readFileSync(settings, 'utf8').includes('asight'), 'claude-code\'s entry is out')
+  assert.equal(shaOf(settings), settingsBefore, 'claude-code\'s certificate entry, written by install, is byte for byte too')
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"harnesses":["claude-code"]}'], 'by name; no exit: the daemon stays for codex')
   assert.deepEqual([s.state().harnesses['claude-code'].desired, s.state().harnesses.codex.desired], ['off', 'on'])
   assert.deepEqual([s.sys.daemon.isRecording('claude-code'), s.sys.daemon.isRecording('codex')], [false, true], 'the daemon still has codex attached')
   assert.deepEqual([receipt.harnesses, receipt.all, receipt.daemon.state], [['claude-code'], false, 'running'])
-  assert.deepEqual(receipt.changed.map((c) => [path.relative(s.home, c.path), c.harness]).concat(receipt.removed.map((p) => [path.relative(s.home, p), null])), [['.claude/settings.json', 'claude-code']].concat(receipt.removed.map((p) => [path.relative(s.home, p), null])))
+  assert.deepEqual(receipt.changed, [], 'off changed no file of the user')
   assert.ok(s.sys.exec.calls.every((c) => !/disable/.test(c)), 'a named off leaves the autostart alone')
-  assert.ok(readManifest(s.dir).entries.some((e) => e.harness === 'codex'), 'codex is still installed')
+  assert.ok(['codex', 'claude-code'].every((h) => readManifest(s.dir).entries.some((e) => e.harness === h)), 'both are still installed')
 })
 
-test('V21: off,off changes nothing — the second run leaves state.json, the manifest and every user file as they were; per-harness: the daemon unwatches the harness before its bundle is rewritten', async () => {
+test('V21: off,off changes nothing — the second run leaves state.json, the manifest and every user file as they were; per-harness: the bundle install wrote stays, CA and all, and so does the .env naming it', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   const caFp = certBlocks(fs.readFileSync(path.join(s.dir, 'ca', 'asight-ca.pem'), 'utf8'))[0].fp
@@ -281,7 +281,7 @@ test('V21: off,off changes nothing — the second run leaves state.json, the man
   assert.equal(first.exit, 0, JSON.stringify(first.receipt.problems))
   assert.equal(seen.bundle, beforeBundle, 'when the daemon was asked to unwatch codex, its bundle still held the CA and its .env still named it')
   assert.ok(certBlocks(seen.bundle).some((c) => c.fp === caFp) && /asight collector/.test(seen.env))
-  assert.ok(!fs.existsSync(bundle) || !certBlocks(fs.readFileSync(bundle, 'utf8')).some((c) => c.fp === caFp), 'afterwards the bundle is gone, or without the CA')
+  assert.equal(fs.readFileSync(bundle, 'utf8'), beforeBundle, 'afterwards too: off never rewrites a bundle (D55①)')
   const after = () => ({ user: s.userFiles(), manifest: fs.readFileSync(path.join(s.dir, 'install-manifest.json'), 'utf8'), state: fs.readFileSync(path.join(s.dir, 'state.json'), 'utf8') })
   const all = await s.off()
   assert.equal(all.exit, 0, JSON.stringify(all.receipt.problems))
@@ -291,7 +291,7 @@ test('V21: off,off changes nothing — the second run leaves state.json, the man
   assert.deepEqual(after(), snap, 'a second off: not one byte of state.json, the manifest or a user file moves')
   assert.deepEqual([again.receipt.changed, again.receipt.removed], [[], []])
   const second = await s.off({ ids: ['codex'] })
-  assert.deepEqual([second.exit, second.receipt.changed, second.receipt.skipped.map((x) => x.what)], [0, [], ['codex']], 'off codex again: nothing to do, and it says so')
+  assert.deepEqual([second.exit, second.receipt.changed, second.receipt.removed], [0, [], []], 'off codex again: nothing to do (its certificate items are install\'s, D55①)')
 })
 
 test('1.6 §1.5: the routing is confirmed BEFORE one entry is touched — a daemon that does not confirm leaves every entry and bundle as it is, exit 1, and a state.json that already says off', async () => {
@@ -330,7 +330,7 @@ test('1.6 §1.4 第 2 步: an off with no names asks the daemon to exit once dra
 })
 
 // a fake process table: pid → identity; `ignore`: signals a pid survives (a stopped or wedged process); every signal is recorded
-test('1.6 §1.4 第 2 / 5 步 · 「守护进程卡死」: a stuck daemon is stopped FIRST (systemctl stop, then SIGTERM), its helper with it, and only then is the first entry undone; the receipt says so', async () => {
+test('1.6 §1.4 第 2 / 5 步 · 「守护进程卡死」: a stuck daemon is stopped FIRST (systemctl stop, then SIGTERM), its helper with it, and the certificate entry stays throughout; the receipt says so', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   writeDaemonLock(s)
   const t = procTable(DAEMON_ROWS, { survives: { 4242: ['SIGTERM'] } }); const c = fakeClock()
@@ -342,7 +342,7 @@ test('1.6 §1.4 第 2 / 5 步 · 「守护进程卡死」: a stuck daemon is sto
   assert.deepEqual(t.sent, [[4242, 'SIGTERM'], [4242, 'SIGKILL'], [4243, 'SIGTERM']], 'SIGTERM, then SIGKILL after the wait; the helper after the daemon; nothing else is signalled')
   assert.deepEqual([r.receipt.routing.state, r.receipt.routing.how, r.receipt.daemon.state, r.receipt.relayed], ['unresponsive', 'signal', 'stopped', 'unknown'])
   assert.match(r.receipt.relayed_reason, /could not say how many connections/)
-  assert.ok(!fs.readFileSync(settings, 'utf8').includes('asight'), 'and the entry is out after it')
+  assert.ok(fs.readFileSync(settings, 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'and after it: off never takes what install wrote (D55①)')
   const stop = flowEvents(s.dir).find((e) => e.kind === 'daemon-stop')
   assert.deepEqual([stop.event, stop.where, stop.signals], ['off-note', 'off', ['systemctl-stop', 'SIGTERM', 'SIGKILL', 'SIGTERM']], 'the stop is on record (V30\'s stop event)')
 })
@@ -359,7 +359,7 @@ test('a stuck daemon and `off codex`: it is stopped all the same (the others wer
   assert.ok(s.sys.exec.calls.every((c2) => !/disable/.test(c2)), 'a named off never disables the autostart')
 })
 
-test('a daemon that cannot be stopped: the entries are undone all the same, exit 1, and the receipt gives the pid and kill -9; one that is only starting is stopped like a stuck one', async () => {
+test('a daemon that cannot be stopped: the certificate items stay as they are, exit 1, and the receipt gives the pid and kill -9; one that is only starting is stopped like a stuck one', async () => {
   const s = await installedHome({ names: ['claude-code'] })
   writeDaemonLock(s)
   const t = procTable(DAEMON_ROWS, { survives: { 4242: ['SIGTERM', 'SIGKILL'] } }); const c = fakeClock()
@@ -367,7 +367,7 @@ test('a daemon that cannot be stopped: the entries are undone all the same, exit
   assert.equal(r.exit, 1)
   assert.match(r.receipt.problems.join('\n'), /pid 4242.*could not be stopped.*kill -9 4242/)
   assert.deepEqual([r.receipt.daemon.state, r.receipt.routing.confirmed], ['unresponsive', false])
-  assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight'), 'the entry is out all the same')
+  assert.ok(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'the certificate entry stays (D55①)')
   assert.deepEqual(flowEvents(s.dir).filter((e) => e.event === 'failure').map((e) => [e.where, e.code]), [['off', 'stop-failed']])
   const starting = await installedHome({ names: ['claude-code'] }); writeDaemonLock(starting)
   const t2 = procTable(DAEMON_ROWS); const c2 = fakeClock()
@@ -376,7 +376,7 @@ test('a daemon that cannot be stopped: the entries are undone all the same, exit
   assert.deepEqual([r2.exit, r2.receipt.routing.state, r2.receipt.daemon.state], [0, 'starting', 'stopped'])
 })
 
-test('a lock cut short (empty or garbage) and nothing listening on the control socket is the last lock of a daemon that is gone: off goes on, undoes the entries, says so, and a second off does too; a stale lock with a live helper has the helper stopped', async () => {
+test('a lock cut short (empty or garbage) and nothing listening on the control socket is the last lock of a daemon that is gone: off goes on, takes the routing off, says so, and a second off does too; a stale lock with a live helper has the helper stopped', async () => {
   const refusing = (s) => async (q) => { if (q.path === '/status') throw Object.assign(new Error('connect ENOENT'), { code: 'ENOENT' }); return s.sys.daemon.request(q) }
   for (const body of ['', '{"pid":']) { // empty is what a power loss leaves; the other is a write cut off half way
     const s = await installedHome({ names: ['claude-code'] }); fs.writeFileSync(path.join(s.dir, 'lock'), body)
@@ -385,7 +385,7 @@ test('a lock cut short (empty or garbage) and nothing listening on the control s
     assert.equal(r.exit, 0, `${JSON.stringify(body)}: ${JSON.stringify(r.receipt.problems)}`)
     assert.deepEqual(validateReceipt(r.receipt), [])
     assert.deepEqual([r.receipt.routing, t.sent], [{ confirmed: true, state: 'stale', how: 'no-daemon' }, []], 'nothing is stopped, nobody is signalled')
-    assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight'), 'the entry is out')
+    assert.ok(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'the certificate entry stays (D55①)')
     assert.match(r.receipt.notes.join('\n'), /nothing listens on \/x\/collector\.sock either.*ended without a clean stop/, 'and the receipt says how the lock was read')
     assert.ok(flowEvents(s.dir).some((e) => e.where === 'off' && e.kind === 'note' && /ended without a clean stop/.test(e.reason)), 'and so does flows/')
     const again = await s.off({ deps: world })
@@ -410,7 +410,7 @@ test('a lock cut short and NO control socket to ask (XDG_RUNTIME_DIR unset) is n
   fs.rmSync(lockFile) // as it says
   const followed = await s.off({ deps: world })
   assert.equal(followed.exit, 0, JSON.stringify(followed.receipt.problems))
-  assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight'))
+  assert.deepEqual(s.userFiles(), before, 'followed: the off goes through, and the certificate entry still stays (D55①)')
 })
 
 test('R12: an off that cannot get the op lock in time has written desired off first and says which command holds it; nothing else is touched, exit 1', async () => {
@@ -425,7 +425,7 @@ test('R12: an off that cannot get the op lock in time has written desired off fi
   assert.equal(fs.readFileSync(path.join(s.dir, 'op.lock'), 'utf8').includes('5555'), true, 'the holder\'s lock is not ours to remove')
 })
 
-test('V27: over on, off and a daemon that has to be stopped, nothing restarts an agent — no signal goes to a pid that is not the daemon or its helper, no systemctl restart; the agents that may still trust asight are only listed', async () => {
+test('V27: over on, off and a daemon that has to be stopped, nothing restarts an agent — no signal goes to a pid that is not the daemon or its helper, no systemctl restart; off takes no certificate, so it lists no one as still trusting it', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); writeDaemonLock(s)
   const t = procTable({ ...DAEMON_ROWS, 5000: { start_time: '5', boot_id: 'boot-1' }, 5001: { start_time: '6', boot_id: 'boot-1' } }, { survives: { 4242: ['SIGTERM'] } })
   const agents = [
@@ -444,25 +444,31 @@ test('V27: over on, off and a daemon that has to be stopped, nothing restarts an
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
   assert.ok(t.sent.every(([pid]) => pid === 4242 || pid === 4243), `signals went to the daemon and its helper only: ${JSON.stringify(t.sent)}`)
   assert.ok(execFrom(s, calls).every((c) => !/restart/.test(c)), 'no systemctl restart')
-  assert.deepEqual(r.receipt.still_trusting.map((p) => p.pid).sort(), [5000, 5001], 'the agents that may still trust asight are reported')
+  assert.deepEqual(r.receipt.still_trusting, [], 'off took no certificate item, so it has no one to report as still trusting what it took (D55①: trust stays until uninstall)')
   assert.deepEqual(r.receipt.restart, [], 'and off never lists anything to restart as a to-do of its own')
   assert.deepEqual(r.receipt.user_processes, [{ pid: 7001, command: 'asight serve', note: '只读看板,不在 agent 路径上' }, { pid: 7002, command: 'asight capture', note: '前台采集,可能正中转 agent 的流量' }], 'what the user started themselves is listed, never killed')
 })
 
-test('D38: every line off writes to flows/ is in the closed sets, every run of off ends with a result line, and a clean off writes the desired state, the routing and the autostart', async () => {
+test('D38: every line off writes to flows/ is in the closed sets, every run of off ends with a result line, and a clean off writes the desired state, the routing and the autostart — and no line about a certificate item, which uninstall writes', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EXTRA=1\n') // an edit after install: a note with a code
-  const r = await s.off({ deps: { procs: async () => [{ pid: 5001, ppid: 1, uid: 1000, startedAt: Date.now() + 5000, exe: '/home/u/.local/bin/codex', argv: ['codex'], env: () => new Map() }] } })
+  const procs = async () => [{ pid: 5001, ppid: 1, uid: 1000, startedAt: Date.now() + 5000, exe: '/home/u/.local/bin/codex', argv: ['codex'], env: () => new Map() }]
+  const r = await s.off({ deps: { procs } })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
   const mine = flowEvents(s.dir).filter((e) => e.where === 'off')
-  assert.ok(mine.length >= 5)
+  assert.ok(mine.length >= 3)
   for (const e of flowEvents(s.dir)) assert.deepEqual(checkRecord(e), [], JSON.stringify(e))
   assert.deepEqual(new Set(mine.map((e) => e.run)).size, 1, 'one run, one `run`')
-  assert.deepEqual(mine.map((e) => e.kind).filter(Boolean).slice(0, 3), ['desired-off', 'routing', 'reverted-not-identical'])
+  assert.deepEqual(mine.map((e) => e.kind).filter(Boolean).slice(0, 2), ['desired-off', 'routing'])
   assert.ok(mine.some((e) => e.kind === 'autostart'))
-  assert.ok(mine.some((e) => e.code === 'backup-kept') && mine.some((e) => e.code === 'reverted-not-identical') && mine.some((e) => e.code === 'still-trusting'))
+  assert.ok(!mine.some((e) => e.code === 'reverted-not-identical' || e.code === 'backup-kept'), 'off took no certificate item, so it wrote no line about one (D55①)')
   const last = mine.at(-1)
   assert.deepEqual([last.event, last.kind, last.outcome], ['off-note', 'result', 'off'])
+  // the lines about undoing the user's edited file are uninstall's now, in the same closed sets
+  await s.uninstall({ yes: true, deps: { procs } })
+  for (const e of flowEvents(s.dir)) assert.deepEqual(checkRecord(e), [], JSON.stringify(e))
+  const un = flowEvents(s.dir).filter((e) => e.run !== mine[0].run && e.where !== 'off')
+  assert.ok(un.some((e) => e.code === 'reverted-not-identical') && un.some((e) => e.code === 'still-trusting'), JSON.stringify(un.map((e) => [e.where, e.kind, e.code])))
 })
 
 test('V24: with the install manifest gone and no terminal, off takes the routing off, stops the daemon and leaves the files alone, lists what it found by asight\'s marks, exits 1 with outcome partial; with --yes it undoes them by those marks (undone-by-marker): the commented user line is back, the JSON value comes back from the backup', async () => {
@@ -531,78 +537,67 @@ test('R3: a manifest this build does not read (a newer version) leaves every ent
   assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight'), 'undone by the marks')
 })
 
-test('V34: an off that lands while `on` is writing wins — `on` exits 1, saying it was turned off; at the end desired is off, no entry is left in the manifest, the files are as they were, and the daemon is told to switch off', async () => {
+test('V34: an off that lands while `on` is writing wins — `on` exits 1, saying it was turned off; at the end desired is off, only the items install wrote are left, the files are as they were, and the daemon is told to switch off', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
-  await s.off() // back to nothing installed by on: the second on below is the race
-  const before = s.userFiles(); const codexEnv = path.join(s.home, '.codex', '.env')
+  await s.off() // off spares what install wrote (D55①): the on below is a re-on with no install between, and it is the race
+  const before = s.userFiles(), installed = s.installItems()
   let offRun = null
-  const racing = { ...fs, renameSync: (a, b) => { if (b === codexEnv && !offRun) offRun = s.off(); return fs.renameSync(a, b) } } // `off` starts when `on` is about to write the second user file
+  const racing = { ...fs, renameSync: (a, b) => { if (!offRun) offRun = s.off(); return fs.renameSync(a, b) } } // `off` starts when `on` is about to make its first write
   const on = await s.on({ fs: racing })
   const off = await offRun
-  assert.equal(on.exit, 1, JSON.stringify(on.receipt.notes))
-  assert.match(on.receipt.notes.join('\n'), /turned off while this on ran.*the off wins/)
+  // on's one write is state.json now (D55: install wrote the entries); whether on sees the off depends on whether off's desired-off lands before on's
+  // last guard — R12 below pins the case where it does. Either way the end is off's, and an on that saw it says so and exits 1.
+  if (on.exit !== 0) { assert.equal(on.exit, 1, JSON.stringify(on.receipt.notes)); assert.match(on.receipt.notes.join('\n'), /turned off while this on ran.*the off wins/) }
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'the final desired state is off')
-  assert.deepEqual(readManifest(s.dir).entries, [], 'no entry is left')
+  assert.deepEqual(s.installItems(), installed, 'only install\'s items are left, each byte for byte')
   assert.deepEqual(s.userFiles(), before, 'and the user\'s files are as they were')
   assert.deepEqual([...s.sys.daemon.state.on], [], 'nothing is attached')
   assert.ok(!fs.existsSync(path.join(s.dir, 'op.lock')), 'both released the lock')
 })
 
-test('V34: whichever write of `on` the off lands in, the end is the same — off wins: desired off, no entry left, user files as before, no lock left; `on` exits 1 for every write before the last guard', async () => {
+test('V34: whichever write of `on` the off lands in, the end is the same — off wins: desired off, the items install wrote as they were, user files as before, no lock left', async () => {
   const count = await installedHome({ names: ['claude-code', 'codex'] })
   await count.off()
   let writes = 0
   await count.on({ fs: { ...fs, renameSync: (a, b) => { writes++; return fs.renameSync(a, b) } } })
-  assert.ok(writes >= 8, `a first on has ${writes} writes: the loop below has something to cut`)
-  const exits = []
+  assert.ok(writes >= 1, `an on has ${writes} writes: the loop below has something to cut`)
   for (let k = 1; k <= writes; k++) {
     const s = await installedHome({ names: ['claude-code', 'codex'] })
     await s.off()
-    const before = s.userFiles(); let n = 0, offRun = null
+    const before = s.userFiles(), installed = s.installItems(); let n = 0, offRun = null
     const on = await s.on({ fs: { ...fs, renameSync: (a, b) => { if (++n === k && !offRun) offRun = s.off(); return fs.renameSync(a, b) } } })
     const off = await offRun
-    exits.push(on.exit)
+    assert.ok([0, 1].includes(on.exit), `write ${k}: ${JSON.stringify(on.receipt.notes)}`)
     assert.equal(off.exit, 0, `write ${k}: ${JSON.stringify(off.receipt.problems)}`)
     assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], `write ${k}: the final desired state is off`)
-    assert.deepEqual([readManifest(s.dir).entries, s.userFiles(), fs.existsSync(path.join(s.dir, 'op.lock')), [...s.sys.daemon.state.on]], [[], before, false, []], `write ${k}`)
+    assert.deepEqual([s.installItems(), s.userFiles(), fs.existsSync(path.join(s.dir, 'op.lock')), [...s.sys.daemon.state.on]], [installed, before, false, []], `write ${k}`)
   }
-  assert.ok(exits.filter((x) => x === 1).length >= writes - 3, `on stopped for nearly every write: ${exits.join('')}`)
 })
 
-test('V8: backups — 0700 / 0600; a file back at its pre_sha256 loses its backup; one the user edited after asight keeps it, listed in kept_backups and as a backup-kept event; the next on does not write over the kept one; a file restored by hand before off ("already restored") loses its backup', async () => {
+test('V8: backups — 0700 / 0600; off leaves every entry and its backup as they are (D55①: the entries are install\'s), whatever the user edited; uninstall takes asight\'s part out of the edited file and keeps the user\'s line (the kept / dropped rule itself: undo.test.mjs「backups (R2)」)', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   const backupDir = path.join(s.home, '.asight', 'backup')
   assert.equal(fs.statSync(backupDir).mode & 0o777, 0o700)
   const entries = s.manifest().entries; const by = Object.fromEntries(entries.map((e) => [e.harness, e]))
   for (const e of entries) { assert.ok(fs.existsSync(e.backup), `${e.harness} has a backup`); assert.equal(fs.statSync(e.backup).mode & 0o777, 0o600) }
   fs.appendFileSync(by.codex.path, 'EXTRA=1\n') // edited after asight changed it
+  const backups = () => entries.map((e) => [e.backup, shaOf(e.backup)]), kept = backups(), edited = fs.readFileSync(by.codex.path, 'utf8'), installed = s.installItems()
   const r = await s.off()
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
-  assert.ok(!fs.existsSync(by['claude-code'].backup), 'untouched since: back at its pre_sha256, so its backup is gone')
-  assert.deepEqual(r.receipt.changed.map((c) => [c.harness, c.result, c.backup, c.backup_dropped ?? false]).sort(), [['claude-code', 'restored', null, true], ['codex', 'reverted-not-identical', by.codex.backup, false]])
-  assert.ok(fs.existsSync(by.codex.backup), 'the edited file\'s backup stays')
-  assert.equal(fs.readFileSync(by.codex.path, 'utf8'), 'OPENAI_API_KEY=sk-test\nEXTRA=1\n', 'only asight\'s part went; the user\'s line stays')
-  assert.deepEqual(r.receipt.kept_backups.map((k) => [k.path, k.backup]), [[by.codex.path, by.codex.backup]])
-  assert.deepEqual(readManifest(s.dir).kept_backups.map((k) => [k.path, k.backup]), [[by.codex.path, by.codex.backup]], 'and in the manifest')
-  assert.ok(flowEvents(s.dir).some((e) => e.code === 'backup-kept' && e.path === by.codex.path), 'the event is written')
-  const kept = fs.readFileSync(by.codex.backup, 'utf8'), keptMtime = fs.statSync(by.codex.backup).mtimeMs
-  const on = await s.on()
+  assert.deepEqual([r.receipt.changed, r.receipt.kept_backups ?? [], backups(), fs.readFileSync(by.codex.path, 'utf8'), s.installItems()], [[], [], kept, edited, installed], 'off: no entry, no backup, no byte of the edited file')
+  assert.ok(!flowEvents(s.dir).some((e) => e.code === 'backup-kept'), 'and no backup-kept line')
+  const on = await s.on() // and on again needs no install
   assert.equal(on.exit, 0, JSON.stringify(on.receipt.notes))
-  assert.deepEqual([fs.readFileSync(by.codex.backup, 'utf8'), fs.statSync(by.codex.backup).mtimeMs], [kept, keptMtime], 'a second on does not write over the kept backup')
-  const fresh = readManifest(s.dir).entries.find((e) => e.harness === 'codex')
-  assert.notEqual(fresh.backup, by.codex.backup, 'it makes a new one for its own change')
-  // "already restored": the user put the file back by hand (from the backup) before off ran
-  fs.copyFileSync(fresh.backup, fresh.path)
-  const again = await s.off({ ids: ['codex'] })
-  assert.equal(again.exit, 0, JSON.stringify(again.receipt.problems))
-  assert.ok(!fs.existsSync(fresh.backup), 'the file was already back as it was: its backup is deleted')
-  assert.deepEqual(again.receipt.skipped.map((x) => x.reason), ['早已是安装前的样子'])
+  await s.off()
+  const un = await s.uninstall({ yes: true })
+  assert.deepEqual(un.receipt.changed.filter((c) => c.path === by.codex.path).map((c) => c.result), ['reverted-not-identical'])
+  assert.equal(fs.readFileSync(by.codex.path, 'utf8'), 'OPENAI_API_KEY=sk-test\nEXTRA=1\n', 'only asight\'s part went; the user\'s line stays')
 })
 
-test('R12: while `on` holds the op lock (it waits for its daemon to come up) an off writes desired off at once but touches no entry until `on` has let go — and `on` sees the off within a poll instead of after fifteen seconds', async () => {
+test('R12: while `on` holds the op lock (it waits for its daemon to come up) an off writes desired off at once and waits for `on` to let go — and `on` sees the off within a poll instead of after fifteen seconds', async () => {
   const s = await installedHome({ names: ['claude-code'] })
-  await s.off() // everything off; the next on is a re-on, which waits for a daemon that never comes
+  await s.off() // everything off, the certificate items still in (D55①); the next on is a re-on, which waits for a daemon that never comes
   const never = async () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) }
   const settings = path.join(s.home, '.claude', 'settings.json')
   let offRun = null, pauses = 0, meanwhile = null
@@ -613,24 +608,24 @@ test('R12: while `on` holds the op lock (it waits for its daemon to come up) an 
     meanwhile = { entry: fs.readFileSync(settings, 'utf8').includes('NODE_EXTRA_CA_CERTS'), desired: s.state().harnesses['claude-code'].desired, lock: fs.existsSync(path.join(s.dir, 'op.lock')) }
   }
   const on = await s.on({ request: never, sleep })
-  assert.deepEqual(meanwhile, { entry: true, desired: 'off', lock: true }, 'on had written its entry and holds the lock; off had already written desired off and had not touched the entry')
+  assert.deepEqual(meanwhile, { entry: true, desired: 'off', lock: true }, 'the entry install wrote is there and on holds the lock; off had already written desired off')
   assert.equal(on.exit, 1); assert.match(on.receipt.notes.join('\n'), /turned off while this on ran/)
   assert.ok(pauses < 8, `on stopped at its next poll (${pauses} pauses), not after 60`)
   const off = await offRun
   assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
-  assert.ok(!fs.readFileSync(settings, 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'and then the entry is out')
+  assert.ok(fs.readFileSync(settings, 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'and after it the entry install wrote still stands (D55①)')
 })
 
 // The audit's HIGH finding (semantics 1), through the real `on` and the real `off`: Codex and Hermes read ONE trust bundle through their .env (4.6 §身份与信任, "replace"
 // semantics). A .env that still names `combined-<h>.pem` when the file is gone leaves the agent with no CA at all — it cannot reach its real upstream either.
 for (const [harness, rel] of [['codex', '.codex/.env'], ['hermes', '.hermes/.env']]) {
-  test(`V15 (semantics 1): on, then the user's editor makes ${rel} CRLF, then off — the entry is undone, the bundle is removed with it, exit 0; an entry that survives (a form the removal cannot read) keeps the bundle, exit 1, nothing dangles`, async () => {
+  test(`V15 (semantics 1): on, then the user's editor makes ${rel} CRLF, then uninstall (off spares it, D55①) — the entry is undone, the bundle is removed with it, exit 0; an entry that survives (a form the removal cannot read) keeps the bundle, exit 1, nothing dangles`, async () => {
     const s = await installedHome({ names: ['claude-code', harness] })
     s.sys.daemon.state.up = false
     const env = path.join(s.home, rel), bundle = path.join(s.dir, 'ca', `combined-${harness}.pem`)
-    assert.ok(fs.readFileSync(env, 'utf8').includes(bundle) && fs.existsSync(bundle), 'on wrote the entry and the bundle')
+    assert.ok(fs.readFileSync(env, 'utf8').includes(bundle) && fs.existsSync(bundle), 'install wrote the entry and the bundle')
     fs.writeFileSync(env, fs.readFileSync(env, 'utf8').replace(/\n/g, '\r\n'))
-    const r = await s.off()
+    const r = await s.uninstall({ yes: true })
     assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
     assert.deepEqual([fs.readFileSync(env, 'utf8').includes(`combined-${harness}.pem`), fs.existsSync(bundle)], [false, false], 'no entry names the bundle and the bundle is gone')
     assert.deepEqual(r.receipt.changed.filter((c) => c.path === env).map((c) => c.result), ['reverted-not-identical'])
@@ -641,8 +636,8 @@ for (const [harness, rel] of [['codex', '.codex/.env'], ['hermes', '.hermes/.env
     const env2 = path.join(t.home, rel), bundle2 = path.join(t.dir, 'ca', `combined-${harness}.pem`)
     const odd = fs.readFileSync(env2, 'utf8').replace(/^(SSL_CERT_FILE=.*)$/m, '$1;')
     fs.writeFileSync(env2, odd)
-    const q = await t.off()
-    assert.equal(q.exit, 1, 'an entry that is not undone is a not-done off (R3)')
+    const q = await t.uninstall({ yes: true })
+    assert.equal(q.exit, 1, 'an entry that is not undone is a not-done uninstall (R3)')
     assert.equal(fs.readFileSync(env2, 'utf8'), odd, 'the file is as the user left it')
     assert.ok(fs.existsSync(bundle2), 'and the bundle it names is still there')
     assert.deepEqual(q.receipt.left.filter((l) => l.result === 'left-text').map((l) => l.path), [env2])
@@ -655,7 +650,7 @@ for (const [harness, rel] of [['codex', '.codex/.env'], ['hermes', '.hermes/.env
 
 // The audit's MEDIUM finding (semantics 2): a manifest that parses but has another shape used to crash `off` before it did anything (routing still on, nothing undone) or half-way
 // (routing off, no receipt). Now it is as unreadable as one that does not parse: the routing is taken off, the entries are found by asight's marks after a yes (R3), and a receipt is printed.
-for (const [what, doc] of [['{"version":2}', () => ({ version: 2 })], ['entries is an object', (m) => ({ ...m, entries: { a: 1 } })], ['entries holds null', (m) => ({ ...m, entries: [...m.entries, null] })], ['files is null', (m) => ({ ...m, files: null })]]) {
+for (const [what, doc] of [['{"version":3}', () => ({ version: 3 })], ['entries is an object', (m) => ({ ...m, entries: { a: 1 } })], ['entries holds null', (m) => ({ ...m, entries: [...m.entries, null] })], ['files is null', (m) => ({ ...m, files: null })]]) {
   test(`R3 / semantics 2: an install manifest of the wrong shape (${what}) — off takes the routing off, touches no file without a yes, says why and exits 1; with --yes it undoes by the marks; a receipt either way`, async () => {
     const s = await installedHome({ names: ['claude-code', 'codex'] })
     s.sys.daemon.state.up = false
@@ -692,7 +687,7 @@ test('semantics 2: whatever throws while the entries are undone costs no receipt
   const settings = path.join(t.home, '.claude', 'settings.json')
   const real = await import('node:fs')
   const fsx = new Proxy(real.default, { get: (o, k) => (k === 'existsSync' ? (f) => { if (String(f) === settings) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return o.existsSync(f) } : o[k]) })
-  const r = await t.off({ deps: { fs: fsx } })
+  const r = await t.uninstall({ yes: true, deps: { fs: fsx } }) // the certificate entry is uninstall's to undo (off spares it, D55①)
   assert.ok(!fs.readFileSync(settings, 'utf8').includes('asight'), 'the entry had been undone before it threw')
   assert.equal(r.exit, 1)
   assert.deepEqual(validateReceipt(r.receipt), [])
@@ -704,12 +699,12 @@ test('semantics 2: whatever throws while the entries are undone costs no receipt
 // 4.6 撤销顺序 第 2 步 with the one list of OS bundles (pem.mjs SYSTEM_BUNDLES, the collector's too — off once had three of its six paths): a gone bundle a live
 // codex may use is rebuilt from Node's roots and the first OS bundle this machine has. None here: the bundle is still made (no bundle, no network), and its note
 // says it carries Node's roots only (D38), never a bundle quietly without the OS roots.
-test('off: a gone bundle rebuilt on a machine with no OS bundle says it carries Node\'s roots only (4.6 撤销顺序 第 2 步, D38)', async () => {
+test('uninstall: a gone bundle rebuilt on a machine with no OS bundle says it carries Node\'s roots only (4.6 撤销顺序 第 2 步, D38)', async () => {
   const s = await installedHome({ names: ['codex'] })
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   fs.rmSync(bundle)
   const noEtc = { ...fs, readFileSync: (f, ...a) => { if (SYSTEM_BUNDLES.includes(f)) throw Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' }); return fs.readFileSync(f, ...a) } }
-  const { receipt } = await s.off({ deps: { alive: () => false, roots: undefined, fs: noEtc, procs: async () => [proc(4242, '/home/u/.local/bin/codex', ['codex'])] } })
+  const { receipt } = await s.uninstall({ yes: true, deps: { alive: () => false, roots: undefined, fs: noEtc, procs: async () => [proc(4242, '/home/u/.local/bin/codex', ['codex'])] } })
   assert.deepEqual(receipt.kept_bundles.map((k) => [path.basename(k.path), k.rebuilt]), [['combined-codex.pem', true]])
   assert.equal(receipt.kept_bundles[0].os_roots_missing, `no OS trust bundle holds a certificate (looked at ${SYSTEM_BUNDLES.join(', ')})`, 'the Linux reader\'s own words: every path looked at (os-roots.mjs osBundleRoots, the collector\'s too)')
   assert.ok(certBlocks(fs.readFileSync(bundle, 'utf8')).length > 0, 'rebuilt: Node\'s roots are in it')
@@ -723,11 +718,13 @@ test('off: a gone bundle rebuilt on a machine with no OS bundle says it carries 
 // Mac's, whatever this machine's is (a nix-darwin Mac also has the Debian path): /etc/ssl/cert.pem holds a marker root, every other file under /etc is absent.
 // The rebuild reads what the install composed from instead (src/off/os-roots.mjs darwinRoots, through the one table): Node's set, the keychain's anchors, the
 // SystemRootCertificates export.
+// macOS uninstall refuses while a harness is on (CM24): off first (it spares the bundle, D55①), the daemon gone, then uninstall undoes it
+const darwinUninstall = async (s, o) => { await s.off(); s.sys.daemon.state.up = false; return s.uninstall({ yes: true, ...o }) }
 const enoentOf = (f) => Object.assign(new Error(`ENOENT: no such file or directory, open '${f}'`), { code: 'ENOENT' })
 const stockMacFs = (marker, opened) => ({ ...fs, readFileSync: (f, ...a) => { if (!String(f).startsWith('/etc/')) return fs.readFileSync(f, ...a); opened.push(f); if (f === '/etc/ssl/cert.pem') return marker.certPem; throw enoentOf(f) } })
 const macRoots = { bundled: createCa({ commonName: 'node bundled root' }), anchor: createCa({ commonName: 'corporate proxy CA (keychain anchor)' }), apple: createCa({ commonName: 'apple system root' }) }
 const securityOf = (s, pems, calls = []) => (file, args, opts) => { if (file !== 'security') return s.sys.exec.run(file, args, opts); calls.push(args); return pems ? { status: 0, stdout: pems.join('\n'), stderr: '' } : { status: 1, stdout: '', stderr: 'SecKeychainOpen: I/O error' } }
-test('off on darwin: a gone bundle is rebuilt without opening a static OS bundle file such as /etc/ssl/cert.pem — from the keychain\'s anchors, Node\'s set and Apple\'s export, the install\'s own reader (4.9 §6.2, 4.6 撤销顺序 第 2 步)', async () => {
+test('uninstall on darwin: a gone bundle is rebuilt without opening a static OS bundle file such as /etc/ssl/cert.pem — from the keychain\'s anchors, Node\'s set and Apple\'s export, the install\'s own reader (4.9 §6.2, 4.6 撤销顺序 第 2 步)', async () => {
   const s = await installedHome({ names: ['codex'] })
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   const asightFp = certBlocks(fs.readFileSync(path.join(s.dir, 'ca', 'asight-ca.pem'), 'utf8'))[0].fp
@@ -735,7 +732,7 @@ test('off on darwin: a gone bundle is rebuilt without opening a static OS bundle
   const marker = createCa({ commonName: 'static OS bundle root' })
   const opened = []
   const tls = { getCACertificates: (k) => (k === 'bundled' ? [macRoots.bundled.certPem] : [macRoots.anchor.certPem]) }
-  const { receipt } = await s.off({ deps: { platform: 'darwin', alive: () => false, roots: undefined, tls, exec: securityOf(s, [macRoots.apple.certPem]), fs: stockMacFs(marker, opened), procs: async () => [proc(4242, '/opt/homebrew/bin/codex', ['codex'])] } })
+  const { receipt } = await darwinUninstall(s, { deps: { platform: 'darwin', alive: () => false, roots: undefined, tls, exec: securityOf(s, [macRoots.apple.certPem]), fs: stockMacFs(marker, opened), procs: async () => [proc(4242, '/opt/homebrew/bin/codex', ['codex'])] } })
   assert.deepEqual(receipt.kept_bundles.map((k) => [path.basename(k.path), k.rebuilt, k.os_roots_missing, k.os_roots_partial]), [['combined-codex.pem', true, undefined, undefined]])
   const fps = certBlocks(fs.readFileSync(bundle, 'utf8')).map((c) => c.fp)
   assert.deepEqual([opened, fps.includes(certBlocks(marker.certPem)[0].fp)], [[], false], 'no static OS bundle is opened, and cert.pem\'s roots are not in the rebuilt bundle')
@@ -746,11 +743,11 @@ test('off on darwin: a gone bundle is rebuilt without opening a static OS bundle
 
 // D38 on a Mac: a source that could not be read is said, the rebuild still made from the rest (no bundle = no network). Node 20 has no getCACertificates —
 // the keychain's anchors, where a corporate proxy's CA lives, are then missing; the security export alone still gives Apple's standard roots.
-test('off on darwin: a gone bundle rebuilt while a source cannot be read says which (Node < 22.15: the keychain\'s anchors), in flows/ and on the receipt (D38)', async () => {
+test('uninstall on darwin: a gone bundle rebuilt while a source cannot be read says which (Node < 22.15: the keychain\'s anchors), in flows/ and on the receipt (D38)', async () => {
   const s = await installedHome({ names: ['codex'] })
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   fs.rmSync(bundle)
-  const { receipt } = await s.off({ deps: { platform: 'darwin', alive: () => false, roots: undefined, tls: {}, exec: securityOf(s, [macRoots.apple.certPem]), procs: async () => [proc(4242, '/opt/homebrew/bin/codex', ['codex'])] } })
+  const { receipt } = await darwinUninstall(s, { deps: { platform: 'darwin', alive: () => false, roots: undefined, tls: {}, exec: securityOf(s, [macRoots.apple.certPem]), procs: async () => [proc(4242, '/opt/homebrew/bin/codex', ['codex'])] } })
   const k = receipt.kept_bundles[0]
   assert.deepEqual([k.rebuilt, k.os_roots_missing, k.os_roots_partial], [true, undefined, 'getCACertificates: not available (Node ≥ 22.15 has it)'])
   assert.ok(certBlocks(fs.readFileSync(bundle, 'utf8')).some((c) => c.fp === certBlocks(macRoots.apple.certPem)[0].fp), 'what could be read is in it')
@@ -761,14 +758,14 @@ test('off on darwin: a gone bundle rebuilt while a source cannot be read says wh
   // and with no source at all: Node's roots only, said as such
   const t = await installedHome({ names: ['codex'] })
   fs.rmSync(path.join(t.dir, 'ca', 'combined-codex.pem'))
-  const none = await t.off({ deps: { platform: 'darwin', alive: () => false, roots: undefined, tls: {}, exec: securityOf(t, null), procs: async () => [proc(4242, '/opt/homebrew/bin/codex', ['codex'])] } })
+  const none = await darwinUninstall(t, { deps: { platform: 'darwin', alive: () => false, roots: undefined, tls: {}, exec: securityOf(t, null), procs: async () => [proc(4242, '/opt/homebrew/bin/codex', ['codex'])] } })
   assert.match(none.receipt.kept_bundles[0].os_roots_missing, /^the macOS root certificates could not be read \(getCACertificates: not available .*; security: SecKeychainOpen: I\/O error\)$/)
   assert.ok(certBlocks(fs.readFileSync(path.join(t.dir, 'ca', 'combined-codex.pem'), 'utf8')).length > 0, 'still rebuilt: Node\'s roots are in it')
 })
 
 // 4.8 §6.2 in `off`: the system store through Node's own read; no helper here (the standalone undo starts none, the daemon may be gone), so a Node without
 // getCACertificates rebuilds with Node's roots and says why. Driven through undoSide: the Windows half of runOff (task kill, the run key) is not this test's.
-test('off on win32: a gone bundle is rebuilt from the Windows system store; with no getCACertificates (Node < 22.15) and no helper, from Node\'s roots, said (4.8 §6.2, D38)', async () => {
+test('the bundle undo on win32: a gone bundle is rebuilt from the Windows system store; with no getCACertificates (Node < 22.15) and no helper, from Node\'s roots, said (4.8 §6.2, D38)', async () => {
   const winRoot = createCa({ commonName: 'windows store root' })
   for (const [tls, want] of [[{ getCACertificates: (k) => (k === 'system' ? [winRoot.certPem] : []) }, null], [{}, /^the Windows root certificates could not be read \(getCACertificates: not available \(Node ≥ 22\.15 has it\)\)$/]]) {
     const s = await installedHome({ names: ['codex'] })
@@ -776,7 +773,7 @@ test('off on win32: a gone bundle is rebuilt from the Windows system store; with
     fs.rmSync(bundle)
     const opened = []
     const w = offWorld({ home: s.home, env: s.sh.env, deps: s.offDeps({ platform: 'win32', roots: undefined, tls, fs: stockMacFs(createCa({ commonName: 'not a windows root' }), opened), procs: async () => [proc(4242, '/home/u/.local/bin/codex', ['codex'])] }) }) // the sandbox install is a Linux user's (its liveness signature); the platform picks the reader
-    const u = await undoSide(w, { manifest: readManifest(s.dir) })
+    const u = await undoSide(w, { manifest: readManifest(s.dir), phases: PHASES })
     const k = u.kept_bundles.find((x) => x.path === bundle)
     assert.equal(k.rebuilt, true, JSON.stringify(u.problems))
     assert.deepEqual(opened, [], 'no static PEM file on Windows either')
@@ -792,14 +789,14 @@ test('off on win32: a gone bundle is rebuilt from the Windows system store; with
 
 // Read only for a bundle that is rebuilt: the darwin read runs `security` (up to 10 s). A bundle in place is stripped, a gone one nobody uses is removed —
 // neither needs roots; two rebuilt bundles share one read.
-test('off reads the OS roots only for a bundle it rebuilds, once: in place → stripped, gone and unused → removed, neither reads; two rebuilt share one read', async () => {
+test('the bundle undo reads the OS roots only for a bundle it rebuilds, once: in place → stripped, gone and unused → removed, neither reads; two rebuilt share one read', async () => {
   const run = async (names, { gone = [], procs = [] }) => {
     const s = await installedHome({ names })
     for (const n of gone) fs.rmSync(path.join(s.dir, 'ca', `combined-${n}.pem`))
     const asked = [], ran = []
     const tls = { getCACertificates: (k) => { asked.push(k); return [macRoots.bundled.certPem] } }
     const w = offWorld({ home: s.home, env: s.sh.env, deps: s.offDeps({ platform: 'darwin', roots: undefined, tls, exec: securityOf(s, [macRoots.apple.certPem], ran), procs: async () => procs }) })
-    const u = await undoSide(w, { manifest: readManifest(s.dir) })
+    const u = await undoSide(w, { manifest: readManifest(s.dir), phases: PHASES })
     return { kept: u.kept_bundles.map((k) => [path.basename(k.path), k.rebuilt]).sort(), removed: u.removed.map((p) => path.basename(typeof p === 'string' ? p : p.path)).filter((n) => /^combined-/.test(n)), asked, ran: ran.length }
   }
   const codex = proc(4242, '/home/u/.local/bin/codex', ['codex']), zcode = proc(4343, '/opt/ZCode/zcode', ['/opt/ZCode/zcode', '/opt/ZCode/resources/glm/zcode.cjs', 'app-server', '--stdio'], { startedAt: 0, env: { ELECTRON_RUN_AS_NODE: '1' } }) // V15's shapes
@@ -811,15 +808,87 @@ test('off reads the OS roots only for a bundle it rebuilds, once: in place → s
 
 // The Linux reader's own rule in `off` too (4.6 「合并包」: an OS bundle there but unreadable before the one found is not guessed about): the rebuild is
 // made from Node's roots and says why, as `on` stops and the daemon keeps its bundles — never a bundle quietly built from a later file.
-test('off on Linux: an OS bundle that is there but unreadable ahead of a good one → the gone bundle is rebuilt from Node\'s roots, and the reason names the errno', async () => {
+test('uninstall on Linux: an OS bundle that is there but unreadable ahead of a good one → the gone bundle is rebuilt from Node\'s roots, and the reason names the errno', async () => {
   const s = await installedHome({ names: ['codex'] })
   const bundle = path.join(s.dir, 'ca', 'combined-codex.pem')
   fs.rmSync(bundle)
   const later = createCa({ commonName: 'a later OS bundle root' })
   const etc = { ...fs, readFileSync: (f, ...a) => { if (f === SYSTEM_BUNDLES[0]) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); if (f === SYSTEM_BUNDLES[1]) return later.certPem; if (SYSTEM_BUNDLES.includes(f)) throw enoentOf(f); return fs.readFileSync(f, ...a) } }
-  const { receipt } = await s.off({ deps: { alive: () => false, roots: undefined, fs: etc, procs: async () => [proc(4242, '/home/u/.local/bin/codex', ['codex'])] } })
+  const { receipt } = await s.uninstall({ yes: true, deps: { alive: () => false, roots: undefined, fs: etc, procs: async () => [proc(4242, '/home/u/.local/bin/codex', ['codex'])] } })
   const k = receipt.kept_bundles[0]
   assert.equal(k.rebuilt, true)
   assert.match(k.os_roots_missing, /^the OS trust bundle cannot be read \(\/etc\/ssl\/certs\/ca-certificates\.crt: EACCES/)
   assert.equal(certBlocks(fs.readFileSync(bundle, 'utf8')).some((c) => c.fp === certBlocks(later.certPem)[0].fp), false, 'not built from the later file')
+})
+
+// an off of an older build over a manifest a newer build wrote. The 10-12 main-Mac off half-failed (bootout EIO, then unknown-kind at the launcher):
+// a kind this build does not know refuses the WHOLE off before step 2 / 3 — exit 1, the receipt names the kind and says a newer asight-off must undo it —
+// with no routing change, no daemon asked, no OS tool run (no bootout), no file of the agents' touched, state.json as it was.
+// D57 (4.11 ⑱): the Windows opt-in kinds (optin-*) are no longer known either; one in a v3 manifest is refused like any other unknown kind (V35).
+for (const [where, kind] of [['entries', 'from-the-future'], ['files', 'from-the-future'], ['entries', 'optin-user-path']]) {
+  test(`an unknown kind (${kind}) in ${where}: the whole off is refused before the routing — nothing asked of the daemon, no OS tool, no file touched`, async () => {
+    const s = await installedHome({ names: ['claude-code', 'codex'] })
+    const file = path.join(s.dir, 'install-manifest.json')
+    const m = JSON.parse(fs.readFileSync(file, 'utf8'))
+    m[where].push({ kind, phase: 'on', harness: 'codex', path: path.join(s.home, '.codex', 'future.toml') })
+    fs.writeFileSync(file, JSON.stringify(m, null, 2))
+    const files = s.userFiles(), state = fs.readFileSync(path.join(s.dir, 'state.json')), manifest = fs.readFileSync(file)
+    const asked = [], ran = []
+    const r = await s.off({ deps: { request: (...a) => { asked.push(a); return s.sys.daemon.request(...a) }, exec: (...a) => { ran.push(a); return s.sys.exec.run(...a) } } })
+    assert.equal(r.exit, 1)
+    assert.deepEqual([asked, ran], [[], []], 'no routing change, no daemon stop, no bootout')
+    assert.deepEqual([s.userFiles(), fs.readFileSync(path.join(s.dir, 'state.json')), fs.readFileSync(file)], [files, state, manifest], 'nothing undone, nothing written')
+    assert.match(r.receipt.problems.join('\n'), new RegExp(`${kind}.*newer asight-off`, 's'))
+    assert.deepEqual(r.receipt.left.map((l) => [l.result, l.path]), [['unknown-kind', path.join(s.home, '.codex', 'future.toml')]])
+    assert.deepEqual(validateReceipt(r.receipt), [])
+    assert.ok(s.sys.daemon.isRecording('claude-code'), 'the daemon still records')
+  })
+}
+
+// 4.11 uninstall「撤根证书……最后删根的密钥」: the root's key goes after the trust store's root (root-store.mjs remove), never before it
+test('P13 uninstall: the root key is removed after the trust store\'s root; off removes neither (1.6 §1.1: off touches no certificate)', async () => {
+  for (const dropCa of [false, true]) {
+    const home = tmpDir('asight-off-key-'), dir = path.join(home, '.asight', 'collector'), order = []
+    const m = { version: 3, created_at: new Date(0).toISOString(), liveness: {}, kept_backups: [], files: [], entries: [
+      { kind: 'root-key', phase: 'install', harness: null, path: 'keychain:asight-root', custody: { kind: 'keychain', id: 'asight-root' }, fp256: 'AB' },
+      { kind: 'system-root', phase: 'install', harness: null, scope: 'user', path: 'login:root', store: 'login', fp256: 'AB' }] }
+    fs.mkdirSync(dir, { recursive: true }); saveManifest(dir, m)
+    const w = offWorld({ home, env: { HOME: home }, deps: { platform: 'darwin', socketPath: null, procs: async () => [],
+      rootStore: { remove: async (id) => { order.push(`root ${id.fp256}`); return { ok: true } } },
+      custody: { remove: async () => { order.push('key'); return { removed: true } } } } })
+    const u = await undoSide(w, { manifest: readManifest(dir), dropCa, yes: true })
+    assert.deepEqual([order, u.left], [dropCa ? ['root AB', 'key'] : [], []], `dropCa ${dropCa}`)
+    assert.equal(readManifest(dir).entries.some((e) => e.kind === 'root-key'), !dropCa)
+  }
+})
+
+// the review of T20, item 1 (D55①, 1.6 §1.1 「证书一项不碰」): over every way off is run — all, --now, and each harness by name — every item install wrote
+// is still on record and byte for byte after it, the user's files with it, and the next on turns capture back on with no install between (exit 0)
+for (const [what, o] of [['off', () => ({})], ['off --now', () => ({ now: true })], ...ALL_HARNESSES.map((h) => [`off ${h}`, () => ({ ids: [h] })])]) {
+  test(`D55① · Linux: install → on → ${what} → on — every phase-install item and every user file is as install left it, and the second on needs no install`, async () => {
+    const s = await installedHome({ names: ALL_HARNESSES })
+    const installed = s.installItems(), files = s.userFiles()
+    assert.ok(installed.length >= 10, 'install wrote the certificate items of seven harnesses')
+    const off = await s.off(o())
+    assert.equal(off.exit, 0, JSON.stringify(off.receipt.problems))
+    assert.deepEqual([s.installItems(), s.userFiles(), off.receipt.changed], [installed, files, []])
+    const on = await s.on()
+    assert.equal(on.exit, 0, JSON.stringify(on.receipt.notes))
+    assert.deepEqual([s.installItems(), s.userFiles()], [installed, files], 'and on wrote no certificate either')
+  })
+}
+
+test('① a file is listed once: restored, not also skipped as already restored', async () => {
+  const { formatOffReceipt } = await import('../../src/off/receipt.mjs')
+  const text = formatOffReceipt({ ok: true, all: true, changed: [{ path: '/h/.claude/settings.json', change: 'env.NODE_EXTRA_CA_CERTS', result: 'restored' }], removed: [], skipped: [{ what: '/h/.claude/settings.json', reason: '早已是安装前的样子' }, { what: '/h/.codex/.env', reason: '早已是安装前的样子' }] })
+  assert.equal(text.split('/h/.claude/settings.json').length - 1, 1, text)
+  assert.ok(text.includes('/h/.codex/.env'), 'another file that was skipped stays')
+})
+
+test('a file asight created is said once among the removed, however many of its entries off took out (a macOS test machine, 2026-10-17: settings.json ×4)', async () => {
+  const { formatOffReceipt } = await import('../../src/off/receipt.mjs')
+  const p = '/h/.claude/settings.json'
+  const text = formatOffReceipt({ ok: true, all: true, changed: [], removed: [p, { path: p }, p, '/h/.codex/.env'], skipped: [] })
+  assert.equal(text.split(p).length - 1, 1, text)
+  assert.ok(text.includes('/h/.codex/.env'), text)
 })

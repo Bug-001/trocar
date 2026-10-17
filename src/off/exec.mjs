@@ -13,7 +13,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawnSync, execFile } from 'node:child_process'
 
 /** The file `file` names, on `PATH` (or as given when it holds a slash): null when it is nowhere. */
 function lookupOnPath(file, PATH) {
@@ -48,5 +48,19 @@ export function execTool(file, args, { run = null, env = process.env, input = nu
   const opts = { encoding: 'utf8', env, input, timeout: timeoutMs, ...(maxBuffer ? { maxBuffer } : {}) }
   if (!run && (process.env.ASIGHT_TEST_SANDBOX === '1' || env.ASIGHT_TEST_SANDBOX === '1')) refuseRealTool(file, args, env)
   const r = (run || spawnSync)(file, args, opts)
-  return { code: r.status ?? null, out: String(r.stdout || '').trim(), err: String(r.stderr || (r.error && r.error.message) || '').trim() }
+  const shape = (x) => ({ code: x.status ?? null, out: String(x.stdout || '').trim(), err: String(x.stderr || (x.error && x.error.message) || '').trim() })
+  return r && typeof r.then === 'function' ? r.then(shape) : shape(r) // an async runner (runAsync) gives the same shape, later
+}
+
+/** spawnSync's runner shape without blocking the event loop (a daemon that serves doors must not stop for an `lsof`): `execFile`, the
+ *  same options execTool passes, resolving `{ status, stdout, stderr, error? }` — status null when it was killed (the timeout) or never started.
+ *  Pass it as execTool's `run`; it refuses a real tool under npm test the way execTool does (only a stub inside the temp dir runs). */
+export function runAsync(file, args, opts = {}) {
+  const env = opts.env || process.env
+  if (process.env.ASIGHT_TEST_SANDBOX === '1' || env.ASIGHT_TEST_SANDBOX === '1') refuseRealTool(file, args, env)
+  return new Promise((resolve) => {
+    const c = execFile(file, args, { encoding: 'utf8', env, timeout: opts.timeout, maxBuffer: opts.maxBuffer || 1024 * 1024 }, (error, stdout, stderr) =>
+      resolve({ status: error ? (Number.isInteger(error.code) ? error.code : null) : 0, stdout, stderr, ...(error && !Number.isInteger(error.code) && !stderr ? { error } : {}) }))
+    if (c.stdin) c.stdin.end(opts.input ?? undefined)
+  })
 }

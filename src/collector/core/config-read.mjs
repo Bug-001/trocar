@@ -5,6 +5,7 @@
 // degrades that agent to its known hosts (relay traffic passes through untouched) instead of crashing.
 import fs from 'node:fs'
 import path from 'node:path'
+import { parseJsonText } from '../../off/json-text.mjs'
 
 export function readText(file, { readFile = fs.readFileSync } = {}) {
   try { return readFile(file, 'utf8') } catch { return null }
@@ -164,22 +165,11 @@ export function parseTomlLite(text) {
   return { data: root, errors }
 }
 
-// ── JSONC: strip // and /* */ comments and trailing commas outside strings, then JSON.parse ──
+// ── JSONC: the one reading of a user's JSON (json-text.mjs parseJsonText, the writer's own: a mark, comments, trailing commas; 4.6「JSON 按 JSONC 读写」).
+// No document (empty, blank, a mark, comments only) is { data: null, errors: 0 } — not a parse error; what the writer refuses is { data: null, errors: 1, error }.
 export function parseJsonc(text) {
-  const s = String(text || '')
-  let out = ''
-  for (let i = 0, inStr = false; i < s.length; i++) {
-    const c = s[i]
-    if (inStr) { out += c; if (c === '\\') out += s[++i] ?? ''; else if (c === '"') inStr = false; continue }
-    if (c === '"') { inStr = true; out += c; continue }
-    if (c === '/' && s[i + 1] === '/') { while (i < s.length && s[i] !== '\n') i++; out += '\n'; continue }
-    if (c === '/' && s[i + 1] === '*') { const e = s.indexOf('*/', i + 2); i = e < 0 ? s.length : e + 1; continue }
-    if (c === ',') { let j = i + 1; while (/\s/.test(s[j] || '')) j++; if (s[j] === '}' || s[j] === ']') continue }
-    out += c
-  }
-  try { return { data: JSON.parse(out), errors: 0 } } catch (e) { return { data: null, errors: 1, error: e.message } }
+  try { return { data: parseJsonText(String(text ?? '')) ?? null, errors: 0 } } catch (e) { return { data: null, errors: 1, error: String((e && e.message) || e) } }
 }
-
 
 // The Node.js release an executable is, read from the file without running it (4.6 lab ⑤, G24): a node binary embeds
 // its own download URL `…/download/release/vX.Y.Z/…` (process.release.sourceUrl). Streamed in 1 MiB chunks, cached per

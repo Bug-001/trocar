@@ -18,7 +18,7 @@
 import path from 'node:path'
 import { parseTomlLite, parseDotenv, hostOf, dig, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
-import { envProxies, argAfter, dotenvLayer, isOwnPath } from './_common.mjs'
+import { envProxies, argAfter, dotenvLayer, isOwnPath, perOs } from './_common.mjs'
 
 const ETC_CONFIG = '/etc/codex/config.toml'
 const SYSTEM_CONFIG = { linux: ETC_CONFIG, darwin: ETC_CONFIG }
@@ -82,6 +82,31 @@ const proxy = {
   restart: { hint: '关掉所有 codex 窗口,再结束托管的 codex app-server --managed-daemon 进程(它沿用第一个 TUI 的环境),之后新开的 codex 才会重读代理设置', processes: 'codex app-server --managed-daemon', managed: true },
 }
 
+// Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (every form reads $CODEX_HOME/.env, the app's
+// embedded codex included; NO_PROXY is required on win, R3-W5). Trust is the root installed by `install` (D57): asight writes no SSL_CERT_FILE.
+const ENV_FILE = { base: 'home', dir: '.codex', env: 'CODEX_HOME', path: '.env' }
+const proxyMode = {
+  forms: [
+    { id: 'codex.cli', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },
+    { id: 'codex.cli-standalone', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },
+    { id: 'codex.vscode', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ base: 'home', path: '.vscode/extensions', glob: 'openai.chatgpt-*' }], verified: { darwin: true, win32: true } },
+    { id: 'codex.app', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os',
+      present: [perOs({ darwin: { base: 'abs', path: '/Applications', glob: 'ChatGPT.app' }, win32: { base: 'localAppData', path: 'Packages', glob: 'OpenAI.Codex_*' } }), perOs({ darwin: { base: 'abs', path: '/Applications', glob: 'Codex.app' } })],
+      verified: { darwin: true, win32: true } },
+    { id: 'codex.wsl', os: ['win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'wsl' }], verified: { win32: { reason: 'out-of-scope' } } }, // D56⑥
+  ],
+  routes: {
+    env: { kind: 'dotenv-block', file: ENV_FILE, proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'create', takesEffect: '重启 codex 和它托管的 app-server 后生效(它只在启动时读 .env)' },
+  },
+  certs: {},
+  trusts: {
+    // $CODEX_HOME/.env is applied over the launch env (spec 4.11 ④, measured), so it answers first
+    os: { base: 'os', sources: [{ from: { file: ENV_FILE, format: 'dotenv', keys: ['SSL_CERT_FILE'] }, semantics: 'replace' }, { from: { env: 'SSL_CERT_FILE' }, semantics: 'replace' }] },
+  },
+  userCertFiles: [{ env: 'SSL_CERT_FILE' }, { file: ENV_FILE, format: 'dotenv', keys: ['SSL_CERT_FILE'] }],
+  blockers: [],
+}
+
 export default {
   name: 'codex',
   runtime: 'rust',
@@ -98,6 +123,7 @@ export default {
   },
   hosts: ['api.openai.com', 'chatgpt.com'],
   proxy,
+  proxyMode,
   layers: (ctx) => [dotenvLayer(ctx, path.join(codexHome(ctx.environ, ctx.home), '.env'), { name: '$CODEX_HOME/.env', drop: (k) => /^CODEX_/.test(k), live: false })],
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy']),

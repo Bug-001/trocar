@@ -33,6 +33,11 @@
 // locale instead, src/off/proc.mjs lsofEnv: under C it prints a non-ASCII path as `\xNN` escapes).
 import { execTool } from '../../../off/exec.mjs'
 import { lsofEnv, psArgv } from '../../../off/proc.mjs'
+import { NATIVE, nativePath } from './native.mjs'
+
+// The runner may be execTool's spawnSync shape (a test's, the CLI's) or src/off/exec.mjs runAsync (the daemon's accept path: an lsof must not
+// stop the event loop that serves the other doors). `then` applies the next step at once to a plain answer and after it to a promise: the same code, sync in, sync out.
+const then = (x, f) => (x && typeof x.then === 'function' ? x.then(f) : f(x))
 
 /** How long one targeted ask waits: a single-pid read is a small question on any machine — a `ps`/`lsof` that exceeds it is killed by
  *  execTool's timeout and the answer is null (fail-safe: no facts, no form, the connection is spliced untracked), never a guess. */
@@ -50,7 +55,9 @@ const psEnv = (env) => ({ ...env, LC_ALL: 'C' })
  *  timeout, or answered no txt record that is a path (the process can be gone between the accept and this ask: that is not an error —
  *  the caller keeps ps's word, and a word that matches no pattern is the fail-safe answer, never a wrong one). */
 export function realExeOf(pid, { exec = null, env = process.env, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
-  const r = execTool('lsof', ['-p', String(pid), '-Fn'], { run: exec, env: lsofEnv(env), timeoutMs: psTimeoutMs })
+  return then(execTool('lsof', ['-p', String(pid), '-Fn'], { run: exec, env: lsofEnv(env), timeoutMs: psTimeoutMs }), firstTxt)
+}
+function firstTxt(r) {
   if (r.code !== 0) return null
   let wantName = false
   for (const line of String(r.out).split('\n')) {
@@ -78,26 +85,92 @@ export function elevationOf(row) {
  *  a living one is asked once. */
 export function factsOfPid(pid, { exec = null, env = process.env, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
   if (!Number.isInteger(pid)) throw new TypeError('factsOfPid needs the pid (an integer)')
-  const r = execTool('ps', ['-p', String(pid), '-o', 'pid=,ppid=,uid=,comm=,lstart=,args='], { run: exec, env: psEnv(env), timeoutMs: psTimeoutMs })
-  if (r.code !== 0) return null // a dead pid among them; the caller's null is the honest answer
-  const line = String(r.out).split('\n').find((l) => l.trim() !== '')
-  if (!line) return null
-  const m = PS_ROW.exec(line)
-  if (!m) return null // a localized lstart or a changed format: no facts, never a guess
-  const cmdline = m[6].trim() !== '' ? m[6].trim() : null
-  const words = psArgv(cmdline)
-  const at = new Date(m[5].replace(/\s+/g, ' ')).getTime()
-  const startedAt = Number.isFinite(at) ? at : null
-  const row = { pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), name: m[4] !== '' ? m[4] : null, exe: words.length > 0 ? words[0] : null, cmdline, startedAt, cmdlineState: cmdline != null ? 'ok' : 'empty' }
-  const real = realExeOf(pid, { exec, env, psTimeoutMs })
-  if (real != null) row.exe = real // lsof's txt record is THE executable; ps's word is the fallback
-  const argv = psArgv(cmdline, real) // split on white space, except a line that starts with the real exe keeps it whole (src/off/proc.mjs psArgv)
-  const { elevated, inferred } = elevationOf(row)
-  const facts = {
-    os: 'darwin', pid: row.pid, ppid: row.ppid, uid: Number.isInteger(row.uid) ? row.uid : null, name: row.name, exe: row.exe, argv, argvSplit: true, cmdline,
-    env: null, envRead: false, cwd: null, startedAt, startTicks: startedAt != null ? String(startedAt) : null,
-    sessionId: null, integrity: null, tokenDenied: false, elevated, elevationInferred: inferred, source: 'accept', cmdlineState: row.cmdlineState,
-  }
-  Object.defineProperty(facts, 'envError', { enumerable: false, value: 'env-unreadable' })
-  return facts
+  return then(execTool('ps', ['-p', String(pid), '-o', 'pid=,ppid=,uid=,comm=,lstart=,args='], { run: exec, env: psEnv(env), timeoutMs: psTimeoutMs }), (r) => {
+    if (r.code !== 0) return null // a dead pid among them; the caller's null is the honest answer
+    const line = String(r.out).split('\n').find((l) => l.trim() !== '')
+    if (!line) return null
+    const m = PS_ROW.exec(line)
+    if (!m) return null // a localized lstart or a changed format: no facts, never a guess
+    const cmdline = m[6].trim() !== '' ? m[6].trim() : null
+    const words = psArgv(cmdline)
+    const at = new Date(m[5].replace(/\s+/g, ' ')).getTime()
+    const startedAt = Number.isFinite(at) ? at : null
+    const row = { pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), name: m[4] !== '' ? m[4] : null, exe: words.length > 0 ? words[0] : null, cmdline, startedAt, cmdlineState: cmdline != null ? 'ok' : 'empty' }
+    return then(realExeOf(pid, { exec, env, psTimeoutMs }), (real) => {
+      if (real != null) row.exe = real // lsof's txt record is THE executable; ps's word is the fallback
+      const argv = psArgv(cmdline, real) // split on white space, except a line that starts with the real exe keeps it whole (src/off/proc.mjs psArgv)
+      const { elevated, inferred } = elevationOf(row)
+      const facts = {
+        os: 'darwin', pid: row.pid, ppid: row.ppid, uid: Number.isInteger(row.uid) ? row.uid : null, name: row.name, exe: row.exe, argv, argvSplit: true, cmdline,
+        env: null, envRead: false, cwd: null, startedAt, startTicks: startedAt != null ? String(startedAt) : null,
+        sessionId: null, integrity: null, tokenDenied: false, elevated, elevationInferred: inferred, source: 'accept', cmdlineState: row.cmdlineState,
+      }
+      Object.defineProperty(facts, 'envError', { enumerable: false, value: 'env-unreadable' })
+      return facts
+    })
+  })
+}
+
+// ---- the launch environment, cwd and parent of a pid (RFC 4.11 P7's proc readers; the upstream chain asks them) ----------------
+// Cached by pid + start time for the life of the process: a busy agent costs one read, not one per connection. A caller that does
+// not know the start time gets no caching (a pid alone can be reused). The cache is bounded; the oldest entry goes first.
+const CACHE_MAX = 4096
+const procCache = new Map()
+function cached(cache, kind, pid, startedAt, read) {
+  if (startedAt == null) return read()
+  const key = `${kind}:${pid}:${startedAt}`
+  if (cache.has(key)) return cache.get(key)
+  return then(read(), (v) => {
+    if (v != null) { // a failed read is asked again next time: the process may just have been racing its own exec
+      cache.set(key, v)
+      if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value)
+    }
+    return v
+  })
+}
+
+/** envOf(pid, names, { startedAt, exec, procenvPath, cache }) → { <name>: value } for the `names` set in the process's LAUNCH
+ *  environment (procenv: sysctl KERN_PROCARGS2, M2; same user only), or null when it cannot be read. Names compare exactly (macOS
+ *  environment names are case-sensitive). Later setenv() calls in the process do not show: launch values only. Only the named
+ *  variables are asked for, returned and cached (RFC 4.9 §5.2): the cache key carries the name set, the rest never enters memory. */
+export function envOf(pid, names, { startedAt = null, exec = null, env = process.env, procenvPath = nativePath(NATIVE.procenv), cache = procCache, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
+  const want = [...new Set(names)].sort()
+  if (!want.length) return {}
+  return cached(cache, `env:${want.join('\0')}`, pid, startedAt, () => {
+    return then(execTool(procenvPath, [String(pid), ...want], { run: exec, env, timeoutMs: psTimeoutMs, maxBuffer: 8 << 20 }), (r) => {
+    if (r.code !== 0) return null
+    const o = {}
+    for (const entry of String(r.out).split('\0')) {
+      const eq = entry.indexOf('=')
+      const n = entry.slice(0, eq)
+      if (eq > 0 && want.includes(n) && !Object.hasOwn(o, n)) o[n] = entry.slice(eq + 1) // the first wins, as getenv
+    }
+    return o
+    })
+  })
+}
+
+/** cwdOf(pid, { startedAt, exec }) → the process's current directory (`lsof -a -p <pid> -d cwd -Fn`), or null. */
+export function cwdOf(pid, { startedAt = null, exec = null, env = process.env, cache = procCache, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
+  return cached(cache, 'cwd', pid, startedAt, () => {
+    return then(execTool('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { run: exec, env: lsofEnv(env), timeoutMs: psTimeoutMs }), (r) => {
+      if (r.code !== 0) return null
+      const line = String(r.out).split('\n').find((l) => l.startsWith('n/'))
+      return line ? line.slice(1) : null
+    })
+  })
+}
+
+/** parentOf(pid, { startedAt, exec }) → { ppid, startedAt } of the PARENT (its start time keys the next step up the chain), or
+ *  null when either is gone. Two `ps` asks per process life: the pid's own row, then its parent's start time. */
+export function parentOf(pid, { startedAt = null, exec = null, env = process.env, cache = procCache, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
+  const row = (p) => then(execTool('ps', ['-p', String(p), '-o', 'ppid=,lstart='], { run: exec, env: psEnv(env), timeoutMs: psTimeoutMs }), (r) => {
+    const m = r.code === 0 && /^\s*(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s*$/.exec(String(r.out).split('\n')[0] || '')
+    const at = m ? new Date(m[2].replace(/\s+/g, ' ')).getTime() : NaN
+    return m && Number.isFinite(at) ? { ppid: Number(m[1]), startedAt: at } : null
+  })
+  return cached(cache, 'parent', pid, startedAt, () => then(row(pid), (self) => {
+    if (!self || self.ppid <= 0) return null
+    return then(row(self.ppid), (up) => (up ? { ppid: self.ppid, startedAt: up.startedAt } : null))
+  }))
 }

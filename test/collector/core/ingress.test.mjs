@@ -85,7 +85,7 @@ test('W13 CONNECT with the right credentials: the upstream is dialled, then 200;
   assert.equal('prelude' in row, false, 'the CONNECT is mihomo\'s, with asight\'s token: it is not recorded as the agent\'s prelude (invariant 4)')
   assert.deepEqual([row.bytes_up, row.bytes_down], [5, 5], 'the agent\'s own bytes: the opener and asight\'s 200 are not counted')
   assert.deepEqual(L.failures, [])
-  assert.deepEqual(L.engine.stats().ingress, { connections: 1, flows: 1, health: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 })
+  assert.deepEqual(L.engine.stats().ingress, { connections: 1, flows: 1, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 })
 })
 
 test('W13 an agent that speaks at once (its first bytes arrive with the CONNECT) loses nothing', T, async (t) => {
@@ -107,20 +107,34 @@ test('W13 the 200 waits for the upstream: nothing is said to the client until th
   c.sock.destroy(); fake.destroy()
 })
 
-test('W13 a wrong token is 407, with no upstream connection and one ingress-auth-failed that does not carry the token; no credentials at all, and an unknown user, the same', T, async (t) => {
+test('W13 a wrong token is 407, with no upstream connection and one ingress-auth-failed that does not carry the token; an unknown user the same; no credentials at all is the 407 challenge, counted, no failure line', T, async (t) => {
   const L = await lab(t)
   const target = `127.0.0.1:${L.echoPort}`
   for (const [what, head] of [['token', connectHead(target, { pass: 'f'.repeat(32) })], ['no header', connectHead(target, { auth: false })], ['unknown user', connectHead(target, { user: 'of.nobody' })]]) {
     const c = L.client(); c.write(head)
-    assert.match(await c.head(), /^HTTP\/1\.1 407 Proxy Authentication Required\r\n/, what)
+    assert.match(await c.head(), /^HTTP\/1\.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic /, what)
     await c.closed()
   }
   assert.equal(L.upConns.length, 0, 'zero upstream connections')
   assert.deepEqual(L.failures.map((f) => [f.event, f.where, f.code, f.reason]), [
-    ['failure', 'ingress', 'ingress-auth-failed', 'token mismatch'], ['failure', 'ingress', 'ingress-auth-failed', 'no Proxy-Authorization'], ['failure', 'ingress', 'ingress-auth-failed', 'unknown user']])
+    ['failure', 'ingress', 'ingress-auth-failed', 'token mismatch'], ['failure', 'ingress', 'ingress-auth-failed', 'unknown user']])
   for (const f of L.failures) assert.deepEqual(checkRecord(f), [], 'a record the closed sets accept')
   assert.equal(JSON.stringify(L.failures).includes(TOKEN) || JSON.stringify(L.failures).includes('ffffffff'), false, 'no token, wrong or right, is written')
-  assert.equal(L.flows.length, 0); assert.equal(L.engine.stats().ingress.authFailed, 3)
+  assert.equal(L.flows.length, 0)
+  assert.deepEqual([L.engine.stats().ingress.authFailed, L.engine.stats().ingress.challenged], [2, 1])
+})
+
+test('W13 the Basic challenge round trip (VS Code\'s Chromium): no credentials → 407, then the same CONNECT with the door\'s user:token → 200, and not one failure line', T, async (t) => {
+  const L = await lab(t)
+  const target = `127.0.0.1:${L.echoPort}`
+  const first = L.client(); first.write(connectHead(target, { auth: false }))
+  assert.match(await first.head(), /^HTTP\/1\.1 407 /)
+  await first.closed()
+  const again = L.client(); again.write(connectHead(target))
+  assert.match(await again.head(), /^HTTP\/1\.1 200 /)
+  again.sock.destroy()
+  assert.deepEqual(L.failures, [])
+  assert.equal(L.engine.stats().ingress.challenged, 1)
 })
 
 test('W13 no token reaches a record through the user field: the token sent as a username, or as a credential with no colon, is written as "(not a route name)"; a real route name is kept', T, async (t) => {
@@ -256,8 +270,22 @@ test('W13 an upstream that cannot be reached is a 502, never a 200 first; the ro
   await L.settled(1)
   const [row] = L.flows
   assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.pid, row.ingress], ['error', 'error', 'ECONNREFUSED', 'upstream', 4242, { route: 'of', group: 'spike' }])
-  assert.equal(L.envelopes.length, 0); assert.deepEqual(L.failures, [], 'a row, not an event: the row is the record')
+  assert.equal(L.envelopes.length, 0)
+  assert.deepEqual(L.failures.map((f) => [f.where, f.code, f.group]), [['netenv', 'upstream-unreachable', 'spike']], 'the row, and one upstream-unreachable event (1.6 §9.7)')
   assert.equal(L.engine.stats().ingress.unreachable, 1)
+})
+
+test('upstream-unreachable is written at most once per form (door group) per 60 s (1.6 §9.7), whatever the number of connections', T, async (t) => {
+  let now = 1_000_000
+  const L = await lab(t, { timing: { now: () => now } })
+  const dead = await new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
+  const once = async () => { const c = L.client(); c.write(connectHead(`127.0.0.1:${dead}`)); await c.head(); await c.closed() }
+  for (let i = 0; i < 3; i++) await once()
+  now += 59_999; await once()
+  now += 1; await once()
+  await L.settled(5)
+  assert.equal(L.failures.filter((f) => f.code === 'upstream-unreachable').length, 2)
+  assert.equal(L.engine.stats().ingress.unreachable, 5)
 })
 
 test('W13 a lookup that throws is a 502 and a loader-down record, not a hang; a SOCKS5 client gets a failure reply, not a success', T, async (t) => {
@@ -710,7 +738,7 @@ test('W17 the ingress keys a connection by its own user when the lookup gives no
 
 // ── fail-open: a client that leaves, a hold that grows, a command that is not CONNECT (4.8 §5.1) ───────────────────────────────────
 // Each is a MUST the ingress carries. Removing any one of them left the first suite green (review 2026-10-07), so each has a test that goes red without it.
-const IDLE = { connections: 1, flows: 0, health: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 } // one connection came, nothing became of it
+const IDLE = { connections: 1, flows: 0, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 } // one connection came, nothing became of it
 const socksLogin = async (c) => { c.write(Buffer.from([5, 1, 2])); await c.bytes(2); c.write(Buffer.concat([Buffer.from([1, USER.length]), Buffer.from(USER), Buffer.from([TOKEN.length]), Buffer.from(TOKEN)])); await c.bytes(2) }
 const hungSocket = () => { const s = new PassThrough(); s.connecting = true; return s } // a TCP connect that never completes; destroy() is its close
 const until = (pred, what, ms = 2000) => within((async () => { while (!pred()) await sleep(5) })(), ms, what)

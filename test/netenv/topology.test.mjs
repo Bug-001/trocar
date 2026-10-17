@@ -99,9 +99,9 @@ test('every value of the NetFacts the builder reads can be null / unknown withou
   void harness; void none
 })
 
-test('rows with a note: what the chain cannot say by itself (the agents still on the kernel after `off`, the entry to ask for, the command that re-adopts a drifted field, the filters nobody can see) is a note of the topology, rendered under 「说明」', () => {
+test('rows with a note: what the chain cannot say by itself (the agents still on the kernel after `off`, the command that re-adopts a drifted field, the filters nobody can see) is a note of the topology, rendered under 「说明」', () => {
   const noted = ROWS.filter((r) => r.notes)
-  assert.deepEqual(noted.map((r) => r.n), [14, 15, 17, 23])
+  assert.deepEqual(noted.map((r) => r.n), [14, 17, 23])
   for (const r of noted) assert.deepEqual(buildTopology(r.facts)[r.h].notes, r.notes, `row ${r.n}`)
   for (const r of ROWS.filter((x) => !x.notes)) assert.deepEqual(buildTopology(r.facts)[r.h].notes, [], `row ${r.n} has nothing to add`)
 })
@@ -147,17 +147,12 @@ test('a scheme the agent cannot speak and does not fail on (dsh, SOCKS) is a dir
   assert.deepEqual(validateTopology({ 'deepseek-dsh': t }), [])
 })
 
-test('proxy mode verdicts the platform\'s facts can ask for: a form it refused to wire (route-loop), an upstream the engine cannot dial (upstream-unreachable, asight is on the path and the connection fails), an opt-in waiting for administrator rights (not-routed: the finding `needs-admin` says what to run)', () => {
+test('proxy mode verdicts the platform\'s facts can ask for: a form it refused to wire (route-loop), an upstream the engine cannot dial (upstream-unreachable, asight is on the path and the connection fails)', () => {
   const pf = (fm, fw) => buildTopology(pfacts('codex', fm, fw)).codex
   const loop = pf(form('codex.cli', { routeLoop: true, entry: null, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992))
   assert.deepEqual([loop.on_path, loop.captured, loop.reason], [false, false, 'route-loop'])
   const up = pf(form('codex.cli', { setting: proxyOf('http://proxy.corp:8080'), procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent', upstream_error: 'ECONNREFUSED' }))
   assert.deepEqual([up.on_path, up.captured, up.reason], [true, false, 'upstream-unreachable'])
-  for (const state of ['pending-admin', 'needs-admin']) {
-    const t = pf(form('codex.cli', { entry: null, optIn: { state, code: 'needs-admin', enable: 'asight on codex --opt-in codex.machine' }, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992))
-    assert.deepEqual([t.on_path, t.captured, t.reason], [false, false, 'not-routed'], state)
-    assert.deepEqual(validateTopology({ codex: t }), [], 'a reason in the closed set of status reasons')
-  }
 })
 
 // ── what the Linux reads gave and the topology dropped (4.6 「eBPF 模式下的网络拓扑」) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

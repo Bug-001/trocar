@@ -1,11 +1,7 @@
-// upstream.mjs — what a group's upstream is: the hop its agent would have used without asight (RFC 4.8 §2.2; acceptance W5 W71 W72). Pure functions of data plus two small readers of the registry through
-// the read-only helper: nothing here writes, opens a socket or reads a file, and it names no harness (the data it is given says what each group does).
-//
-// The rule, in order, per GROUP (one entry file, one port, one upstream, one bypass table):
-//   1. the agent's own proxy: the value its entry held before `on` (the manifest's `prior_value`), else the proxy variable of the login environment it would read (`HKCU\Environment`, read-only);
-//   2. else, for a group that follows the system proxy and with the system proxy on: its `ProxyServer`, with `ProxyOverride` as the bypass table; a PAC is not followed (`not-routed`);
-//   3. else direct (a TUN or another layer-3 VPN carries it as it did).
-// What the agent reached directly before asight (the system proxy's `ProxyOverride`, the agent's own `NO_PROXY`) is the group's bypass table, so it still is.
+// upstream.mjs — the Windows readers of the user's proxy settings (RFC 4.8 §2.2 · §9; acceptance W5 W71 W72), through the read-only helper: nothing here writes, opens a socket or reads a file, and it
+// names no harness. What a connection's upstream IS lives in one place, the P7 chain (core/proxymode/chain.mjs, spec 4.11); this file only reads and translates what the chain and the topology take:
+// the system proxy (`readSystemProxy`, `readSystemProxyChain` → `chainSystemProxy`, `watchSystemProxy`), the proxy-text and bypass-table readers (`translateBypass`, `parseProxyText`, `proxyAuthOf`), and
+// the topology's system-proxy hop (`proxyAddress`). The persistent environment (4.11 ⑤) is policy.mjs `persistentEnv`, not a reader here.
 import { bypassHit, bypassRuleOf, upstreamOf } from '../../core/upstream-shape.mjs'
 
 export { bypassHit } // the one matcher (core/upstream-shape.mjs, shared with the door core and the darwin twin since the kernel config generator died with the kernel): re-exported here so the rule and its tests keep one home
@@ -129,22 +125,7 @@ export function proxyAuthOf(text) {
   return { username: r.username, password: r.password }
 }
 
-const isLoopback = (host) => host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
-
-// ---- the rule (4.8 §2.2) ---------------------------------------------------------------------------------------------------------------------------------
-
-const ENV_PROXY_NAMES = new Set(['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'])
 const text = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
-const reasonOf = (r) => (r && typeof r.reason === 'string' && r.reason !== '' ? r.reason : 'absent')
-
-/** The proxy variable of the login environment this agent would read: the first, in the order its harness file lists them, that is one asight reads (registry value names are not case-sensitive) and is set. */
-function envProxyOf(envNames, values) {
-  for (const n of envNames || []) {
-    const name = String(n).toUpperCase()
-    if (ENV_PROXY_NAMES.has(name) && text(values[name])) return { name, value: text(values[name]) }
-  }
-  return null
-}
 
 /** ProxyServer → the entry an HTTPS request takes: `https=` first, else the one with no protocol. 'none' (WinINET proxies no HTTPS here: neither do we), 'socks' (only a `socks=` entry: not followed), or the entry's text. */
 function serverEntryOf(server) {
@@ -154,76 +135,10 @@ function serverEntryOf(server) {
   return parts.some((p) => p.proto === 'socks') ? { socks: true } : { none: true }
 }
 
-/**
- * upstreamFor({ group, prior, noProxy, systemProxy, hkcuEnv, ownPorts, envNames, branches, last }) → the upstream of one group (4.8 §2.2):
- *   { kind: 'direct' | 'http' | 'socks5', host?, port?, credentialed?, auth_ref?, source: 'agent' | 'system-proxy' | 'direct', egressDiffers?, hint?,
- *     reason?: 'not-routed' | 'route-loop', why?, protocol?, detail?, bypass: [row], untranslated: n, envUnreadable: bool, unknown?: [{ what, reason, detail? }] }
- * Not routed (`reason`) has no `kind`: nothing to dial. `credentialed` is set only when true, and `auth_ref` names where the login lives (`prior:<group>`: the manifest's prior_value of the group's entry, `hkcu-env:<NAME>`);
- * the login itself is in no answer: `proxyAuthOf` of the resolved text reads it.
- *   group        { g, followsSystemProxy: { http, ws } }: the harness file's group (`desc.win32.groups[]`);
- *   prior        the value the group's entry held before `on` (the manifest's prior_value), or null · noProxy the same entry's NO_PROXY, when the harness file names one;
- *   systemProxy  readSystemProxy()'s answer · hkcuEnv readHkcuEnv()'s;
- *   ownPorts     asight's own ports (the kernel's listeners, the engine's): an upstream on one is `route-loop`;
- *   envNames     the harness's `proxy.env` (the variables it reads, in its order) · branches its `proxy.branches` (a `ws` branch is what `egressDiffers` is about; the group's own data does not say);
- *   last         the group's answer before, once it is on: a system proxy that turned PAC or cannot be read leaves the group on it, with `hint` (4.8 OPEN 17); with none, such a group is not routed.
- * `envUnreadable` is true unless the upstream is the agent's own proxy: a proxy set only in the user's terminal is invisible (4.8 §2.2, OPEN 20).
- */
-export function upstreamFor({ group, prior = null, noProxy = null, systemProxy = null, hkcuEnv = null, ownPorts = [], envNames = [], branches = [], last = null } = {}) {
-  if (!group || typeof group !== 'object' || typeof group.g !== 'string') throw new TypeError('upstreamFor needs the group')
-  const follows = !!(group.followsSystemProxy && group.followsSystemProxy.http)
-  const unknown = []
-  const finish = (source, o) => ({ ...o, source, ...(Object.hasOwn(o, 'bypass') ? {} : { bypass: [], untranslated: 0 }), envUnreadable: source !== 'agent', ...(unknown.length ? { unknown } : {}) })
-  const refuse = (source, o) => finish(source, { reason: 'not-routed', ...o })
-  const loops = (p) => isLoopback(p.host) && ownPorts.includes(p.port)
-  const dial = (p, source, ref, table) => finish(source, { kind: p.kind, host: p.host, port: p.port, ...(p.credentialed ? { credentialed: true, auth_ref: ref } : {}), ...table })
-
-  // 1. the agent's own proxy: its entry's value, else the login environment's variable it would read
-  let own = text(prior)
-  let ref = `prior:${group.g}`
-  let ownNoProxy = text(noProxy)
-  if (!own) {
-    if (hkcuEnv && hkcuEnv.ok === false) unknown.push({ what: 'login-environment', reason: reasonOf(hkcuEnv), ...(hkcuEnv.detail ? { detail: hkcuEnv.detail } : {}) })
-    else if (hkcuEnv && hkcuEnv.ok) {
-      const found = envProxyOf(envNames, hkcuEnv.values || {})
-      if (found) { own = found.value; ref = `hkcu-env:${found.name}`; ownNoProxy = ownNoProxy ?? text((hkcuEnv.values || {}).NO_PROXY) }
-    }
-  }
-  if (own) {
-    const p = parseProxyText(own)
-    if (!p.ok) return refuse('agent', { why: p.why, ...(p.protocol ? { protocol: p.protocol } : {}) })
-    if (loops(p)) return finish('agent', { reason: 'route-loop', host: p.host, port: p.port })
-    return dial(p, 'agent', ref, translateBypass(ownNoProxy, 'no-proxy'))
-  }
-
-  // 2. a group that follows the system proxy, with it on
-  if (follows) {
-    const keep = (why, extra = {}) => (last && last.kind ? { ...Object.fromEntries(Object.entries(last).filter(([k]) => k !== 'hint')), hint: why } : refuse('system-proxy', { why, ...extra }))
-    const sp = systemProxy
-    if (!sp || !sp.ok) return keep('system-proxy-unreadable', { detail: reasonOf(sp) })
-    if (text(sp.autoConfigUrl)) return keep('system-proxy-pac') // asight does not run a PAC script (4.8 §2.2)
-    if (sp.enable === true) {
-      const entry = serverEntryOf(sp.server)
-      if (entry.socks) return refuse('system-proxy', { why: 'upstream-protocol', protocol: 'socks' })
-      if (entry.text !== undefined) {
-        const p = parseProxyText(entry.text)
-        if (!p.ok) return refuse('system-proxy', { why: p.why, ...(p.protocol ? { protocol: p.protocol } : {}) })
-        if (p.credentialed) return refuse('system-proxy', { why: 'upstream-unparseable', detail: 'credentials-in-system-proxy' }) // WinINET takes none from this value: a client that read them is not the one that ran before asight
-        if (loops(p)) return finish('system-proxy', { reason: 'route-loop', host: p.host, port: p.port })
-        const differs = group.followsSystemProxy.ws === false && (branches || []).includes('ws')
-        return dial(p, 'system-proxy', null, { ...translateBypass(sp.override, 'wininet'), ...(differs ? { egressDiffers: true } : {}) })
-      }
-    }
-  }
-
-  // 3. direct: a TUN or another layer-3 VPN carries it as it did
-  return finish('direct', { kind: 'direct' })
-}
-
 // ---- reading the registry, and watching the system proxy (4.8 §1 · §2.2 · §9; W71) ------------------------------------------------------------------------
 
 const INTERNET_SETTINGS = 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
 const SYSTEM_PROXY_NAMES = Object.freeze(['ProxyEnable', 'ProxyServer', 'ProxyOverride', 'AutoConfigURL'])
-const LOGIN_ENV_NAMES = Object.freeze(['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY', 'NO_PROXY'])
 const HELPER_GONE = new Set(['helper-down', 'helper-closed', 'helper-start-failed'])
 
 /** A failed read as the closed set of 1.6 §9.4 says it: the helper timed out (`timeout`), is not there (`absent`), or refused or failed (`denied`); `detail` is the helper's error code. */
@@ -245,16 +160,51 @@ export async function readSystemProxy({ helper, timeoutMs = 2000 } = {}) {
   return { ok: true, enable: n === 1 ? true : n === 0 ? false : null, server: stringOf(v.ProxyServer), override: stringOf(v.ProxyOverride), autoConfigUrl: stringOf(v.AutoConfigURL) }
 }
 
-/** readHkcuEnv({ helper, timeoutMs }) → { ok: true, values: { HTTPS_PROXY?, HTTP_PROXY?, ALL_PROXY?, NO_PROXY? } } | { ok: false, reason, detail }: the proxy variables of the login environment (`HKCU\Environment`), read-only; asight never writes one
- *  (D43). Only a variable that is set to text is in `values`. Registry value names are not case-sensitive, so `https_proxy` is `HTTPS_PROXY`. Never throws. */
-export async function readHkcuEnv({ helper, timeoutMs = 2000 } = {}) {
+// ---- the system proxy for the P7 chain (spec 4.11 P7; D57 scope) ------------------------------------------------------------------------------------
+
+const PER_USER_POLICY = 'Software\\Policies\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
+const AUTO_DETECT = 0x8 // PROXY_TYPE_AUTO_DETECT in the flags DWORD at offset 8 of DefaultConnectionSettings
+
+/** readSystemProxyChain({ helper, timeoutMs }) → readSystemProxy's answer plus { hive, autoDetect }, or { ok: false, reason, detail }. The machine policy
+ *  `ProxySettingsPerUser` = DWORD 0 puts the settings in HKLM; otherwise (unset, unreadable, another value) they are the user's, as WinINET reads them.
+ *  `autoDetect` is WPAD (flag 0x8 of `Connections\DefaultConnectionSettings`); a blob that is missing or too short is no WPAD. Never throws. */
+export async function readSystemProxyChain({ helper, timeoutMs = 2000 } = {}) {
+  const read = async (hive, key, names) => { try { return valuesOf(await helper.call('reg-read', { hive, key, names }, { timeoutMs })) } catch { return null } }
+  const pol = await read('HKLM', PER_USER_POLICY, ['ProxySettingsPerUser'])
+  const hive = pol && dwordOf(pol.ProxySettingsPerUser) === 0 ? 'HKLM' : 'HKCU'
   let answer
-  try { answer = await helper.call('reg-read', { hive: 'HKCU', key: 'Environment', names: [...LOGIN_ENV_NAMES] }, { timeoutMs }) } catch (e) { return unreadable(e) }
+  try { answer = await helper.call('reg-read', { hive, key: INTERNET_SETTINGS, names: [...SYSTEM_PROXY_NAMES] }, { timeoutMs }) } catch (e) { return { ...unreadable(e), hive } }
   const v = valuesOf(answer)
-  if (!v) return { ok: false, reason: 'unparseable', detail: 'answer' }
-  const values = {}
-  for (const name of LOGIN_ENV_NAMES) { const t = stringOf(v[name]); if (t !== null && t.trim() !== '') values[name] = t }
-  return { ok: true, values }
+  if (!v) return { ok: false, reason: 'unparseable', detail: 'answer', hive }
+  const c = await read(hive, `${INTERNET_SETTINGS}\\Connections`, ['DefaultConnectionSettings'])
+  const blob = c && c.DefaultConnectionSettings && c.DefaultConnectionSettings.kind === 'REG_BINARY' ? Buffer.from(String(c.DefaultConnectionSettings.value), 'base64') : null
+  const n = dwordOf(v.ProxyEnable)
+  return { ok: true, hive, enable: n === 1 ? true : n === 0 ? false : null, server: stringOf(v.ProxyServer), override: stringOf(v.ProxyOverride), autoConfigUrl: stringOf(v.AutoConfigURL), autoDetect: !!(blob && blob.length >= 12 && blob.readUInt32LE(8) & AUTO_DETECT) }
+}
+
+/** chainSystemProxy(sp) → the chain's systemProxy: null (off, or nothing for HTTPS) · { url, bypass, wpad? } · { pac: true, wpad? } (an AutoConfigURL, or
+ *  WPAD with no usable manual proxy: never executed) · { ok: false, why } (unreadable, or a ProxyServer asight cannot dial: SOCKS-only, TLS, credentials
+ *  WinINET would not send). WPAD (AutoDetect) does not override an enabled manual proxy: WinINET falls back to the ProxyServer when discovery finds
+ *  nothing, and Windows ships with AutoDetect on (flags 0x09), so the manual proxy stands and `wpad: true` rides along as a hint. */
+export function chainSystemProxy(sp) {
+  if (!sp || !sp.ok) return { ok: false, why: 'system-proxy-unreadable' }
+  if (text(sp.autoConfigUrl)) return { pac: true }
+  const wpad = sp.autoDetect ? { wpad: true } : {}
+  const manual = manualOf(sp)
+  if (manual === null) return sp.autoDetect ? { pac: true, wpad: true } : null
+  return manual.url ? { ...manual, ...wpad } : manual
+}
+
+function manualOf(sp) {
+  if (sp.enable !== true) return null
+  const entry = serverEntryOf(sp.server)
+  if (entry.socks) return { ok: false, why: 'upstream-protocol' }
+  if (entry.text === undefined) return null
+  const p = parseProxyText(entry.text)
+  if (!p.ok) return { ok: false, why: p.why }
+  if (p.credentialed) return { ok: false, why: 'upstream-unparseable' }
+  const host = p.host.includes(':') ? `[${p.host}]` : p.host
+  return { url: `${p.kind}://${host}:${p.port}`, bypass: translateBypass(sp.override, 'wininet').bypass }
 }
 
 const SAME_FIELDS = Object.freeze(['enable', 'server', 'override', 'autoConfigUrl'])
@@ -270,7 +220,7 @@ const CHANGED_NAMES = Object.freeze({ enable: 'ProxyEnable', server: 'ProxyServe
 /**
  * watchSystemProxy({ helper, everyMs = 5000, initial, read, onError, timers }) → { on('change', fn), off, stop(), poll(), ready, last() }
  * Reads the system proxy at once (the baseline: no event) and every `everyMs`; a change of `ProxyEnable`, `ProxyServer`, `ProxyOverride` or `AutoConfigURL`, or a turn to or from unreadable, is one `change` event
- * `{ before, after, changed: [registry value names] }` (unreadable: all four). The daemon recomputes the followers' upstream with `upstreamFor({ systemProxy: after, last })` and reloads the kernel (4.8 §2.2); this file writes nothing.
+ * `{ before, after, changed: [registry value names] }` (unreadable: all four). The model's door (arch/model-backends.mjs systemProxyWatch, over readSystemProxyChain) hands the P7 chain `chainSystemProxy(last())`; this file writes nothing.
  * `initial`: an answer the caller already has, so a change between its read and the first tick is not taken into the baseline. A read still running when the next tick comes is waited for, not repeated, and a tick is skipped while a `reg-read`
  * that timed out is still out at the helper (`helper.abandoned('reg-read')`, 4.8 §1): nothing is read, so nothing is said, and the first tick after the late answer reads again (a read that does time out is still one `change` to unreadable, and the way back one more: the
  * daemon reloads the kernel only when the recomputed answers differ from `last`, 4.8 §2.2). A listener that throws costs the others
@@ -317,7 +267,7 @@ export function watchSystemProxy({ helper, everyMs = 5000, initial = null, read 
 }
 
 // "127.0.0.1:7897", or "http=127.0.0.1:7897;https=127.0.0.1:7897;socks=127.0.0.1:7898": the address of the entry asight dials — the same serverEntryOf pick (`https=` first, else the one with no
-// protocol) that upstreamFor uses, so the topology's system-proxy hop and the upstream cannot name two different proxies for `http=a;https=b` (4.8 §2.2 / §10.1, 4.9; D49). A SOCKS-only or empty value is no hop.
+// protocol) that chainSystemProxy uses, so the topology's system-proxy hop and the chain's upstream cannot name two different proxies for `http=a;https=b` (4.8 §2.2 / §10.1, 4.9; D49). A SOCKS-only or empty value is no hop.
 export function proxyAddress(server) {
   if (typeof server !== 'string' || server.trim() === '') return null
   const entry = serverEntryOf(server)

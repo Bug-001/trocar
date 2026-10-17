@@ -1,7 +1,7 @@
 // on-adopt.mjs (src/cli) — what `asight on` does about the proxy an agent already uses (RFC 1.6 §9.5): it reads the setting the way the agent reads it, draws where a new connection will go once asight is
 // on, prints that chain (credentials masked) in the plan and in the receipt, and records it as `adopted.<harness>` in ~/.asight/netenv.json, which is what a later drift is measured against.
 // In driver mode (Linux eBPF) asight writes no network setting at all: the kernel steers the connection and the engine hands the CONNECT on to the user's proxy as it was. A routing that owns a proxy
-// field (proxy mode: `deps.routing`, supplied by its platform) is told the setting that was there (`routing.adopt`) — the platform hands it to its kernel as the upstream and writes the field, as a manifest
+// field (proxy mode: `deps.routing`, supplied by its platform) is told the setting that was there (`routing.adopt`) — the platform hands it to the engine's door as the upstream and writes the field, as a manifest
 // entry like any other — and `on` asks first when the user edited that field since the last `on` (R6, the confirmation reason 「你改过的代理设置」). Only `on` ever writes an agent's setting (D30); this file
 // writes one file of asight's own, netenv.json, through writeNetenv.
 import { gatherNetFacts } from '../netenv/facts.mjs'
@@ -43,7 +43,7 @@ export function editedFields({ adoption, routing, targets, home, env, fs = nodeF
 }
 
 /**
- * After a successful `on`: hands each harness's setting to the routing that owns the field (it writes the field and starts its kernel), then records `adopted.<h>` — once, and only what changed (a second `on`
+ * After a successful `on`: hands each harness's setting to the routing that owns the field (it writes the field and gives the door its upstream), then records `adopted.<h>` — once, and only what changed (a second `on`
  * writes nothing, R9). → { adopted: { <h>: record }, wrote: path | null, notes: [], failed: [harness] }.
  */
 export async function recordAdoption({ adoption, routing, targets, home, env, now = Date.now, fs = nodeFs }) {

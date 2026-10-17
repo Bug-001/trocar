@@ -23,7 +23,7 @@ function home() {
   const health = (o = {}) => captureHealth({ home: h, now: NOW, alive: () => true, identity: () => ME, ...o })
   return { h, c, flows, manifest, lock, state, health, done: () => fs.rmSync(h, { recursive: true, force: true }) }
 }
-const installed = (b) => { b.manifest({ version: 1, complete: true, created_at: at(100 * H), entries: [], files: [] }); b.flows([{ ts: at(2 * H), event: 'daemon-start', pid: 4242 }]) }
+const installed = (b) => { b.manifest({ version: 3, install: { state: 'complete' }, created_at: at(100 * H), entries: [], files: [] }); b.flows([{ ts: at(2 * H), event: 'daemon-start', pid: 4242 }]) }
 
 test('not installed anywhere → installed:false and "not-installed", never "0 failures" (F9)', () => {
   const b = home()
@@ -98,7 +98,7 @@ test('the last install\'s notes come from the manifest\'s date when the window n
   const b = home()
   try {
     const created = at(100 * H)
-    b.manifest({ complete: true, created_at: created, entries: [], files: [] })
+    b.manifest({ version: 3, install: { state: 'complete' }, created_at: created, entries: [], files: [] })
     b.flows([{ ts: at(100 * H - 1000), event: 'install-note', kind: 'skipped-block', harness: 'claude-code', file: '/u/ca.der', type: 'DER', index: 0, reason: 'not a PEM block' }, { ts: at(H), event: 'daemon-start', pid: 4242 }])
     b.lock()
     const r = b.health()
@@ -196,7 +196,7 @@ test('conditions folded without the last daemon-start are partial: unknown, neve
   const b = home()
   const { formatHealth } = await import('../../src/collector/cli.mjs')
   try {
-    b.manifest({ version: 1, complete: true, created_at: at(100 * H), entries: [], files: [] }); b.lock(); b.state('on', at(72 * H))
+    b.manifest({ version: 3, install: { state: 'complete' }, created_at: at(100 * H), entries: [], files: [] }); b.lock(); b.state('on', at(72 * H))
     b.flows([{ ts: at(72 * H), event: 'daemon-start', pid: 4242 }, { ts: at(72 * H - 1000), event: 'agent-untrusted', pid: 77, agent: 'claude-code', reason: 'var-missing' }])
     const rows = []
     for (let i = 0; i < 3000; i++) rows.push({ ts: at(2 * H - i * 1000), flow_id: `flow_${i}`, decision: 'decrypt', pid: 78, agent: 'claude-code', host: 'api.anthropic.com', dst: { address: '1.2.3.4', port: 443 } })
@@ -256,9 +256,9 @@ test('only metadata leaves: a WebSocket row\'s tail_raw and an envelope-looking 
   const b = home()
   try {
     installed(b); b.lock(); b.state('on', at(H))
-    b.flows([{ ts: at(H / 2), flow_id: 'f', pid: 3, agent: 'codex', decision: 'decrypt', not_captured: 'ws-not-recorded', ws: { tail_raw: 'U0VDUkVU', failures: 1 }, prelude: 'CONNECT x Proxy-Authorization: Basic c2VjcmV0', req_body: 'secret' }])
+    b.flows([{ ts: at(H / 2), flow_id: 'f', pid: 3, agent: 'codex', decision: 'decrypt', not_captured: 'malformed-hello', ws: { tail_raw: 'U0VDUkVU', failures: 1 }, prelude: 'CONNECT x Proxy-Authorization: Basic c2VjcmV0', req_body: 'secret' }])
     const s = JSON.stringify(b.health())
-    assert.ok(s.includes('ws-not-recorded'))
+    assert.ok(s.includes('malformed-hello'))
     assert.doesNotMatch(s, /U0VDUkVU|c2VjcmV0|secret|Proxy-Authorization/)
   } finally { b.done() }
 })

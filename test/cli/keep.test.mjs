@@ -24,7 +24,7 @@ test('V59: `off` (one harness, then none) leaves the settings file and its chang
   assert.equal((await s.run(['keep', 'codex', 'llm', 'log'])).exit, 0)
   const { file, log } = files(s.home); const before = [sha(file), sha(log)]
   assert.ok(before.every(Boolean) && fs.readFileSync(log, 'utf8').trim().split('\n').length === 2)
-  for (const argv of [['off', 'claude-code'], ['off'], ['on', '--yes'], ['off', '--now']]) {
+  for (const argv of [['off', 'claude-code'], ['off'], ['install', '--yes'], ['on', '--yes'], ['off', '--now']]) { // off took the certificate items out: install writes them again, on never does (D55⑥)
     const r = await s.run(argv); assert.equal(r.exit, 0, `${argv.join(' ')}: ${r.io.text()}`)
     assert.deepEqual([sha(file), sha(log)], before, `${argv.join(' ')} did not touch the settings`)
   }

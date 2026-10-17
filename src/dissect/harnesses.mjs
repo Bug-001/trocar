@@ -22,7 +22,10 @@ export const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-
 // then `other`. A harness with no entries is not a loss: its calls are `other`, kept in full (4.1 Edge cases).
 const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [] };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
-const effect = (id, cause, what) => ({ id, captures: ['transparent', 'proxy'], cause, what }); // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one
+// 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
+// effect to the mode whose entry causes it: 'transparent' is Linux's driver mode, 'proxy' the door of macOS / Windows (D47) — what asight writes differs (4.11)
+const BOTH = ['transparent', 'proxy'], LINUX = ['transparent'], DOOR = ['proxy']
+const effect = (id, cause, what, captures = BOTH) => ({ id, captures, cause, what });
 
 export const HARNESSES = Object.freeze([
   { ...ROW, id: 'cc', agents: ['cc', 'claude-code'], ua: /claude-cli|claude-code/,
@@ -49,12 +52,15 @@ export const HARNESSES = Object.freeze([
     lane: [{ header: 'x-openai-subagent', lane: 'subagent' }],
     requestKind: { header: 'x-codex-turn-metadata', jsonKey: 'request_kind', lanes: { prewarm: 'probe' }, compaction: ['compaction'] },
     observerEffects: [effect('codex-rustls-h2', 'SSL_CERT_FILE in $CODEX_HOME/.env',
-      'model HTTP switched from native-tls to rustls; ALPN offers [h2, http/1.1]')] },
+      'model HTTP switched from native-tls to rustls; ALPN offers [h2, http/1.1]', LINUX)] }, // macOS / Windows trust the root in the store: no .env (4.11 codex forms)
   { ...ROW, id: 'opencode', agents: ['opencode'], ua: /opencode/,
     sessionKeys: [H('x-opencode-session-id'), H('session-id'), H('x-session-affinity'), H('x-session-id')],
     parentKeys: [H('x-opencode-parent-session-id')],
-    observerEffects: [effect('opencode-plugin', 'asight trust plugin',
-      'asight code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin')] },
+    observerEffects: [
+      effect('opencode-plugin', 'asight trust plugin',
+        'asight code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin', LINUX),
+      effect('opencode-route-plugin', 'asight route plugin',
+        'asight code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds one npm registry fetch of @opencode-ai/plugin', DOOR)] },
   { ...ROW, id: 'kimi', agents: ['kimi', 'kimi-code'],
     sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])],
     synth: true }, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)

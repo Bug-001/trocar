@@ -1,0 +1,177 @@
+// turnOnModel (RFC 4.11 §1 on, §3 ① ⑪; 1.6 §1.1; plan T20): no install record → cert-not-installed; CM28 / precondition ⑪ refuses only the harness
+// whose install items are gone or changed, with `asight install` (a Kimi-only machine: install placed the wrapper, on makes only the switch
+// file, exit 0); and the REAL seam: turnOnModel ↔ the daemon's POST /on over a real socket at the endpoint controlEndpointFor resolves for a tmp HOME
+// (control.json, as the darwin daemon writes it), a real startControlServer answering with stub doors — no request and no socket path injected.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { modelWorld } from '../helpers/model-world.mjs'
+import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
+import { renderHook } from '../../src/collector/harness/templates/index.mjs'
+import { turnOnModel } from '../../src/collector/model-on.mjs'
+import { startControlServer } from '../../src/collector/core/control.mjs'
+import { daemonMayStart, readManifest } from '../../src/off/manifest.mjs'
+import { undoHarnesses } from '../../src/off/undo.mjs'
+import { sha256 } from '../../src/off/fsutil.mjs'
+
+const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
+const TOKEN = 'k'.repeat(32)
+
+async function installed({ kimiOnly = false } = {}) {
+  const w = await modelWorld({ commands: kimiOnly ? [] : ['codex', 'dsh'] })
+  const kimi = path.join(w.home, '.kimi-code', 'bin', 'kimi')
+  fs.mkdirSync(path.dirname(kimi), { recursive: true }); fs.writeFileSync(kimi, MACHO)
+  if (!kimiOnly) fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
+  const r = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r.exit, 0, JSON.stringify(r.carriers))
+  return { ...w, kimi }
+}
+
+/** A real control server at the endpoint the resolver gives for this HOME: control.json names a socket in the tmp HOME, with a token. */
+async function daemon(w) {
+  const sock = path.join(w.home, 'c.sock')
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token: TOKEN }))
+  const asked = []
+  const server = await startControlServer({ socketPath: sock, token: TOKEN, routes: {
+    'GET /status': async () => ({ doors: {} }),
+    'POST /on': async ({ body }) => { asked.push(body); return { doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) } },
+  } })
+  return { asked, close: () => server.close() }
+}
+const on = (w, over = {}) => turnOnModel({ os: 'darwin', home: w.home, env: w.env, harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook, ...over })
+
+test('1.6 §1.1: on without an install record refuses with cert-not-installed, exit 1, and writes nothing', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  const r = await on(w)
+  assert.deepEqual([r.code, r.exit], ['cert-not-installed', 1])
+  assert.equal(fs.existsSync(path.join(w.home, '.asight')), false)
+})
+
+test('e2e: a Kimi-only machine — install placed the wrapper; on asks the daemon over its real socket, makes only the switch file with the door, exit 0', async () => {
+  const w = await installed({ kimiOnly: true })
+  const d = await daemon(w)
+  try {
+    const r = await on(w, { ids: ['kimi-code'] })
+    assert.equal(r.exit, 0, JSON.stringify(r))
+    assert.deepEqual(d.asked.map((b) => [b.harnesses, Object.keys(b.groups)]), [[['kimi-code'], ['kimi-code:switch']]], 'POST /on reached the daemon through control.json with its token')
+    const sw = path.join(w.dir, 'switch', 'kimi-code')
+    assert.equal(fs.readFileSync(sw, 'utf8'), r.doors['kimi-code:switch'], 'the switch file holds the door the daemon read back')
+    const state = JSON.parse(fs.readFileSync(path.join(w.dir, 'state.json'), 'utf8'))
+    assert.equal(state.harnesses['kimi-code'].desired, 'on')
+    const m = JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8'))
+    assert.ok(m.liveness['kimi-code'].on_at, 'the on window opened')
+    assert.deepEqual(m.files.filter((f) => f.phase === 'on').map((f) => f.role), ['switch'], 'on wrote the switch file only: no certificate')
+  } finally { await d.close() }
+})
+
+const DRIFTS = {
+  'the wrapper replaced by the installer': (w) => fs.writeFileSync(w.kimi, Buffer.concat([MACHO, Buffer.from('new release')])),
+  'the wrapper deleted': (w) => fs.rmSync(w.kimi),
+}
+for (const [name, drift] of Object.entries(DRIFTS)) {
+  test(`CM28 · ⑪: ${name} → only kimi-code is refused, with asight install; codex and deepseek-dsh are turned on`, async () => {
+    const w = await installed()
+    drift(w)
+    const d = await daemon(w)
+    try {
+      const r = await on(w)
+      assert.deepEqual(r.refused.map((x) => [x.harness, x.command]), [['kimi-code', 'asight install']])
+      assert.ok(['entry-changed', 'entry-missing'].includes(r.refused[0].reason))
+      assert.ok(r.on.includes('deepseek-dsh') && r.on.includes('codex') && !r.on.includes('kimi-code'))
+      assert.equal(fs.existsSync(path.join(w.dir, 'switch', 'kimi-code')), false)
+      assert.ok(fs.existsSync(path.join(w.dir, 'switch', 'deepseek-dsh')))
+      assert.equal(r.exit, 1, 'a refused harness makes the on not done')
+    } finally { await d.close() }
+  })
+}
+
+test('CM28 · ⑪: a harness install never saw is refused with asight install, the others go on', async () => {
+  const w = await installed()
+  const d = await daemon(w)
+  try {
+    const r = await on(w, { ids: ['codex', 'hermes'] })
+    assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), [['hermes', 'entry-missing', 'asight install']])
+    assert.deepEqual(r.on, ['codex'])
+  } finally { await d.close() }
+})
+
+// the review of T20, item 2: precondition ⑪ is not vacuous when install's record went too — install keeps what it placed per harness (install.items), so
+// an item gone from the manifest (with its file or without it) refuses that harness, entry-missing, like one gone from disk. Generated over every item install placed.
+test('CM28 · ⑪: every item install placed, its record dropped from the manifest (file kept, or file gone too) → only its harness is refused, entry-missing, asight install', async () => {
+  const w0 = await installed()
+  const m0 = JSON.parse(fs.readFileSync(path.join(w0.dir, 'install-manifest.json'), 'utf8'))
+  const placed = Object.entries(m0.install.items).flatMap(([h, xs]) => xs.map((x, i) => ({ h, i })))
+  assert.ok(placed.length >= 3, JSON.stringify(m0.install.items))
+  for (const { h, i } of placed) {
+    for (const fileToo of [false, true]) {
+      const w = await installed()
+      const mf = path.join(w.dir, 'install-manifest.json'), m = JSON.parse(fs.readFileSync(mf, 'utf8'))
+      const p = m.install.items[h][i]
+      const drop = (list) => list.filter((x) => !(x.harness === h && x.kind === p.kind && x.path === p.path))
+      m.entries = drop(m.entries); m.files = drop(m.files)
+      fs.writeFileSync(mf, JSON.stringify(m))
+      if (fileToo && p.path && fs.existsSync(p.path)) fs.rmSync(p.path)
+      const d = await daemon(w)
+      try {
+        const r = await on(w)
+        assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.path, x.command]), [[h, 'entry-missing', p.path, 'asight install']], `${h} ${p.kind} ${p.path} (file too: ${fileToo})`)
+        assert.ok(!r.on.includes(h) && r.on.length > 0)
+      } finally { await d.close() }
+    }
+  }
+})
+
+// the review of T20, item 3: an install whose root store was declined or left pending still has a root — on goes on for every harness, says what is pending
+// with the command, exit 1 (1.6 §1.1: refuse only with no usable root or no install record); the daemon may start on it
+for (const answer of ['declined', 'pending']) {
+  test(`1.6 §1.1: install with the root store ${answer} → on turns every installed harness on, notes install-pending with asight install, exit 1`, async () => {
+    const w = await modelWorld({ commands: ['codex', 'dsh'] })
+    fs.mkdirSync(path.join(w.home, '.dsh'), { recursive: true })
+    w.store.answer = answer
+    const ins = await w.install()
+    assert.equal(ins.exit, 1)
+    const m = JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8'))
+    assert.equal(m.install.state, 'partial')
+    assert.equal(daemonMayStart(m), true, 'the daemon may start on a partial install that has a root')
+    const d = await daemon(w)
+    try {
+      const r = await on(w)
+      assert.deepEqual([r.code, r.refused, r.on], [undefined, [], m.install.harnesses])
+      assert.deepEqual(r.notes.filter((n) => n.code === 'install-pending').map((n) => [n.item, n.state, n.command]), [['root-store', answer, 'asight install']])
+      assert.equal(r.exit, 1)
+      assert.ok(fs.existsSync(path.join(w.dir, 'switch', 'deepseek-dsh')), 'routed all the same')
+    } finally { await d.close() }
+  })
+}
+
+test('1.6 §1.1: an install record with no root on record (the custody was unreachable) → cert-not-installed, nothing routed', async () => {
+  const w = await modelWorld({ commands: ['codex'] })
+  w.custody.switches.unavailable = true
+  await w.install()
+  const m = JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8'))
+  assert.equal(m.install.state, 'partial')
+  assert.equal(daemonMayStart(m), false)
+  const r = await on(w)
+  assert.deepEqual([r.code, r.exit], ['cert-not-installed', 1])
+})
+
+// the review of T20, item 1, on the model: install, on, off (undoHarnesses as off runs it: phase on only), then on again with no install — every byte
+// install wrote is as it was, its records are all there, and the second on turns every harness on again (exit 0)
+test('D55① · model: after install → on → off, every phase-install item is byte for byte and on record, and the next on needs no install', async () => {
+  const w = await installed()
+  const mf = path.join(w.dir, 'install-manifest.json')
+  const items = () => { const m = JSON.parse(fs.readFileSync(mf, 'utf8')); return [...m.entries, ...m.files].filter((x) => x.phase === 'install').map((x) => [x.kind, x.role ?? null, x.path, x.path && fs.existsSync(x.path) && fs.statSync(x.path).isFile() ? sha256(fs.readFileSync(x.path)) : null]) }
+  const before = items()
+  const d = await daemon(w)
+  try {
+    const first = await on(w)
+    assert.equal(first.exit, 0, JSON.stringify(first))
+    const off = await undoHarnesses({ dir: w.dir, home: w.home, manifest: readManifest(w.dir), ids: null, procs: async () => [] })
+    assert.deepEqual(off.left, [])
+    assert.deepEqual(items(), before, 'off spared every item install wrote')
+    assert.equal(JSON.parse(fs.readFileSync(mf, 'utf8')).files.filter((f) => f.phase === 'on').length, 0, 'and took every item on wrote')
+    const again = await on(w)
+    assert.deepEqual([again.exit, again.refused, again.on.sort()], [0, [], [...first.on].sort()], JSON.stringify(again.refused))
+  } finally { await d.close() }
+})

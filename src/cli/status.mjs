@@ -3,6 +3,7 @@
 // the one thing it writes is ~/.asight/netenv.json (the topology it drew, the board reads it; src/netenv). Everything the world gives is a `deps` entry a test replaces (0.1 §3).
 // Exit codes (R4): 0 every harness that is on is captured and nothing failed in 24 h · 1 one is not, or something failed · 3 something that decides it could not be read — never 0: a read that
 // failed is not a good answer (R11: what could not be read is 「不知道」 with the file and the errno, never 0 and never 「无」).
+import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
@@ -13,9 +14,10 @@ import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest } from '../off/manifest.mjs'
+import { holdersOf } from '../off/holders.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
-import { controlRequest, controlSocketPath, controlEndpointFor } from '../off/control-client.mjs'
-import { listProcs, procIdentity, pidAlive } from '../off/proc.mjs'
+import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
+import { listProcs, identityFor, pidAlive } from '../off/proc.mjs'
 import { createRegistry } from '../collector/core/registry.mjs'
 import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
@@ -23,11 +25,10 @@ import { getPath } from '../off/json-text.mjs'
 import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
 import { userProcessesOf } from '../off/orchestrate.mjs'
 import { netenvFile, writeNetenv } from '../netenv/index.mjs'
-import { judgeHarness } from '../netenv/verdict.mjs'
+import { judgeHarness, certOfForms } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
 import { buildTopology, renderPathBlock, renderDetail } from '../netenv/topology.mjs'
-import { optInOf, applyEntryCheck } from './schema.mjs'
 import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
@@ -76,14 +77,14 @@ const installedAtOf = (m, id) => { const t = [...(m.entries || []).filter((e) =>
  *  installedAt, procs, judged: { captured, rows }, why: [] } ], link, relayed, health }. Anything that could not be read is `null` / `unknown` and says why; nothing is thrown for it. */
 export async function gatherStatus({ home = nodeOs.homedir(), env = process.env, deps = {}, names = null } = {}) {
   const fs = deps.fs || nodeFs, platform = deps.platform || process.platform
-  const ms = deps.ms || Date.now, alive = deps.alive || pidAlive, identity = deps.identity || procIdentity
+  const ms = deps.ms || Date.now, alive = deps.alive || pidAlive, identity = deps.identity || identityFor({ platform, exec: deps.exec || null, env }) // ps on darwin, as off reads it
   const dir = collectorDir(home), stateF = stateFile(home)
   // the daemon's endpoint, resolved the one way every caller resolves it (controlEndpointFor): win32/darwin name it in control.json
   // (socket/pipe path + the token every request must carry — on darwin a random socket under $TMPDIR, 4.9 §7); Linux keeps the
   // $XDG_RUNTIME_DIR unix socket, which the file modes keep to the operator (no token).
   const endpoint = deps.socketPath === undefined ? controlEndpointFor({ platform, dir, env, fs }) : null
   const request = deps.request || (endpoint && endpoint.request) || controlRequest
-  const socketPath = deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || (() => { try { return controlSocketPath({ env }) } catch { return null } })()
+  const socketPath = deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || null
   const f = { at: new Date(ms()).toISOString(), platform, user: deps.user || (() => { try { return nodeOs.userInfo().username } catch { return String(env.USER || '') } })(), dir, daemon: { state: 'unknown', pid: null, reason: null, socket: null, reply: null }, harnesses: [] }
   // the daemon: judged the way `off` judges it (its lock, then whether the control socket answers), then asked for its status
   const st = await daemonState({ lockFile: path.join(dir, 'lock'), socketPath, request, identity, alive, now: ms, fs, timeoutMs: deps.timeoutMs || 5000, platform })
@@ -115,6 +116,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
   const list = readAgentList({ home, fs }) // the name list (D51③⑤, 1.6 §9.7): read here, daemon or not
   f.agent_list = { path: list.path, state: list.state, problems: list.problems } // the file is one for the machine: said once, whatever harnesses there are
+  // P12: who may still use a door after off (「还剩 N 个」), [{harness, pid}]: the proxy-mode daemon's own poll (GET /holders) when it answers, else the judge off and the daemon use, over the disk
+  if (reply && 'holders' in reply) { try { const h = await request({ socketPath: st.socket, method: 'GET', path: '/holders', timeoutMs: deps.timeoutMs || 5000 }); f.holders = Array.isArray(h && h.holders) ? h.holders : null } catch { f.holders = null } }
+  else f.holders = m && table ? holdersOf({ manifest: m, procs: table, agentList: list }) : null
   // the name list in effect NOW — the descriptors' presets with the user's agents.json merged in, its `ignore` applied — built by the daemon's own primitive
   // (createRegistry, the registry the doors and the tracker judge by), so `status` names the same harness for a process with a daemon and without (1.6 V65).
   // Not the manifest's liveness: that is `off`'s holder snapshot, a union that never drops a name and never applies `ignore` (the safe direction for `off` only).
@@ -147,35 +151,24 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     } else if (table && whose) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
     else { procs = []; why.push(`the processes could not be listed (${matchError})`) }
     const installedAt = m ? installedAtOf(m, id) : null
-    const judged = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', linkAttached: f.link.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt })
-    if (merged) judged.rows = judged.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
+    // this harness's path into asight (V32 `attached`), one resolver: the proxy-mode daemon answers it per harness (its doors listen), Linux's is the instance's link
+    const own = fromReply && fromReply[id] && 'attached' in fromReply[id]
+    const att = own ? { attached: [true, false].includes(fromReply[id].attached) ? fromReply[id].attached : null, reason: `the daemon could not tell whether ${id}'s doors listen (ingress.json unreadable)` } : { attached: f.link.attached, reason: f.link.reason }
+    // `judge(cert)`: the verdict again once the forms' certificates are read (judgeCertificates, after the topology's facts): V32 puts the certificate between the entry and the start time
+    const judge = (cert = true) => {
+      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: platform === 'darwin' || platform === 'win32', cert })
+      if (merged) j.rows = j.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
+      return j
+    }
+    const judged = judge()
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
-    if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && f.link.attached === null) why.push(f.link.reason) // the link is what the verdict waits for, and the daemon could not say
-    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, judged, why: [...new Set(why.filter(Boolean))] })
+    if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && att.attached === null) why.push(att.reason) // the path in is what the verdict waits for, and the daemon could not say
+    f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, judged, judge, why: [...new Set(why.filter(Boolean))] })
   }
   // how many connections are still relayed after an off (§1.3): the daemon says; with no daemon there is no engine, so none; with one that does not answer or does not say, not known
   const rc = reply && reply.relayed
   f.relayed = d_isCounts(rc) ? { closing: rc.closing, waiting: rc.waiting, cut: 0 } : f.daemon.state === 'not-running' ? { closing: 0, waiting: 0, cut: 0 } : 'unknown'
   if (f.relayed === 'unknown') f.relayed_reason = f.daemon.state === 'running' ? 'the daemon\'s reply does not carry the connection counts' : f.daemon.state === 'not-responding' ? `the daemon does not answer (${f.daemon.reason})` : `whether a daemon runs is not known (${f.daemon.reason})`
-  // the opt-in items (1.6 §1.7, §9.4): the same rows `on`'s plan prints, from the same arch hook — `status` renders what it is given and adds no
-  // second truth. Windows always asks (its arch has the hook); another platform asks only when the manifest itself holds opt-in records (the
-  // records are the truth wherever they were written); an arch with no opt-in half (Linux today) leaves no key at all, and a parts that cannot be
-  // loaded is said (R11).
-  const hasOptinRecords = !!(m && Array.isArray(m.entries) && m.entries.some((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-')))
-  if (platform === 'win32' || platform === 'darwin' || hasOptinRecords || deps.parts) {
-    try {
-      const parts = deps.parts || await (deps.daemon || await import('../collector/daemon.mjs')).loadParts({ env, agentList: (list && list.entries) || [] })
-      const hook = parts && parts.arch && parts.arch.optIn
-      let rows = hook && typeof hook.plan === 'function' ? hook.plan({ harnesses: parts.harnesses, manifest: m }) : []
-      // 「入口还有没有效」(1.6 §1.7, W68): the same hook's check re-verifies, read-only, the entries that are in effect — its findings fold
-      // into the very same rows (a broken entry is `broken` with its code, a check that could not be told is `unknown`); the process table it
-      // sees is the one this status already read (the agents half of the check judges it by the name list).
-      if (hook && typeof hook.check === 'function' && hasOptinRecords) {
-        rows = applyEntryCheck(rows, hook.check({ harnesses: parts.harnesses, manifest: m, procs: table || [], identify: parts.match }))
-      }
-      f.optInRows = rows
-    } catch (e) { rethrowSandbox(e); f.opt_in_error = errText(e) }
-  }
   // logging out (§1.1, Linux): does the OS keep the daemon after the user's last logout? A file is looked at (`/var/lib/systemd/linger/<user>`), `loginctl` never runs (R8): asight says how, it does not do it
   if (platform === 'linux') {
     let read
@@ -186,7 +179,55 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   }
   try { f.health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   if (merged) f.identity = identityBlocks({ ids: f.harnesses.map((h) => h.id), merged, health: effectiveHealth(f).health })
+  Object.assign(f, await installCertOf({ f, m, dir, fs, platform, home, env, deps }))
   return f
+}
+
+/** V32: the certificate step of each harness's verdict, from the per-form `certificate` the topology's facts carry (proxy mode, 1.6 §9.4); a harness with no forms there keeps its verdict
+ *  (Linux: the daemon judges the trust itself). The per-form `certificate:` / `proxy:` lines are not touched: only the harness's verdict reads both axes. */
+function judgeCertificates(f) {
+  for (const h of f.harnesses) {
+    const forms = f.facts && f.facts.harnesses && f.facts.harnesses[h.id] && f.facts.harnesses[h.id].forms
+    if (forms && forms.length && h.judge) h.judged = h.judge(certOfForms(forms))
+  }
+}
+
+/** 1.6 §9.7 / R4: certificate states the user must act on (root pending, declined or gone; key gone) also exit 1, once something was installed — also where no agent runs that would show it. */
+const certNeedsUser = (f) => !!(f.install && f.install.state && f.cert && (['cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-not-installed'].includes(f.cert.root.code) || f.cert.key.state === 'missing')) // installed and cert-not-installed: the certificate file is gone
+
+/** 1.6 §9.4 `install` and `cert` (D55): the install record from the manifest; the root from asight-ca.pem, read back from the user's store through the injected reader
+ *  (backendsFor().rootStore: never `security` / `certutil` in a test); the key and the intermediate from the daemon's issuer (unknown, with a reason, without one). The certificate
+ *  axis only: nothing here judges a harness; the forms' `certificate` built from `cert.root` is the certificate step of the verdict (judgeCertificates, V32). Linux: no user root step (`none`), the key is the file `install` made, no intermediate. */
+async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
+  const rec = m && m.install ? m.install : null, model = platform === 'darwin' || platform === 'win32', reply = f.daemon.reply
+  const install = { state: rec ? rec.state ?? null : null, at: rec ? rec.at ?? null : null, harnesses: rec ? rec.harnesses || [] : [], pending: rec ? (rec.pending || []).map((p) => p.item) : [] }
+  let x = null, pemWhy = null // pemWhy: the certificate is there and cannot be read — not known, never "not installed"
+  try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'))) } catch (e) { rethrowSandbox(e); if (!(e && e.code === 'ENOENT')) pemWhy = `asight-ca.pem cannot be read (${errText(e)})` }
+  const fp256 = x ? x.fingerprint256 : null, items = m ? [...(m.entries || []), ...(m.files || [])] : []
+  const notInstalled = { state: 'missing', code: rec && rec.state ? 'cert-root-missing' : 'cert-not-installed', command: 'asight install' } // §9.6: installed and gone from the store vs never installed
+  const unknown = (reason) => ({ state: 'unknown', code: null, command: null, reason })
+  // no certificate file: no usable root, so `on` refuses cert-not-installed (1.6 §1.1) — installed or not; one that cannot be read: not known
+  let root = !model ? { store: null, state: 'none', code: null, command: null }
+    : pemWhy ? { store: null, ...unknown(pemWhy) }
+      : { store: null, ...notInstalled, code: 'cert-not-installed', ...(rec && rec.state ? { reason: 'install recorded a root and its certificate asight-ca.pem is gone' } : {}) }
+  if (model && fp256) {
+    let has
+    try { has = await (deps.rootStore || (deps.backends && deps.backends.rootStore) || (await (await import('../collector/arch/model-backends.mjs')).backendsFor({ os: platform, home, run: deps.exec || null, env, fs })).rootStore).has({ fp256, sha1: x.fingerprint.replace(/:/g, '') }) } catch (e) { rethrowSandbox(e); has = { error: errText(e) } }
+    const p = (rec && rec.pending || []).find((q) => q.item === 'root-store'), store = (items.find((e) => e.kind === 'system-root' && e.fp256 === fp256) || {}).store || null
+    root = has && has.present ? { store, state: 'in-place', code: null, command: null }
+      : p ? { store, state: p.state === 'declined' ? 'declined' : 'pending', code: `cert-root-${p.state === 'declined' ? 'declined' : 'pending'}`, command: 'asight install', reason: (has && has.error) || p.reason || null }
+        : has && has.error ? { store, ...unknown(`the root store could not be read (${has.error})`) } : { store, ...notInstalled }
+  }
+  const down = reply && reply.cert ? null : f.daemon.state === 'running' ? 'the daemon\'s reply has no issuer block' : `the daemon is ${f.daemon.state}${f.daemon.reason ? ` (${f.daemon.reason})` : ''}: only it holds the issuer`
+  const custody = model ? ((items.find((e) => e.kind === 'root-key') || {}).custody || {}).kind || null : 'file'
+  const keyFile = !model && items.find((e) => e.role === 'ca-key'), keyThere = !!keyFile && (() => { try { return fs.statSync(keyFile.path).isFile() } catch (e) { rethrowSandbox(e); return false } })()
+  const key = !model ? { custody, state: keyThere ? 'present' : 'missing', code: keyThere ? null : 'cert-key-missing' }
+    : down ? { custody, state: 'unknown', code: null, reason: down }
+      : { custody, state: reply.cert.key === 'present' ? 'present' : reply.cert.key === 'missing' ? 'missing' : 'unknown', code: reply.cert.key === 'missing' ? 'cert-key-missing' : null, ...(reply.cert.key === 'unknown' ? { reason: 'no key custody answers the daemon' } : {}) }
+  const intermediate = !model ? null : down ? { expires: null, state: 'unknown', code: null, reason: down }
+    : reply.cert.intermediate === 'ready' ? { expires: reply.cert.expires ?? null, state: 'current', code: null } : { expires: null, state: 'unavailable', code: 'cert-intermediate-unavailable' }
+  const bundles = items.filter((e) => e.role === 'bundle').map((e) => ({ path: e.path, built_at: e.installed_at ?? null }))
+  return { install, cert: { fp256, expires: x ? new Date(x.validTo).toISOString().slice(0, 10) : null, root, key, intermediate, bundles } }
 }
 
 // ── the name list (D51③⑤, 1.6 §9.7 「名单」) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -230,7 +271,7 @@ export async function gatherTopology(f, { home, env, platform, deps = {} }) {
     const mod = deps.netFactsDeps ? null : await (deps.daemon || import('../collector/daemon.mjs'))
     const nd = deps.netFactsDeps ? await deps.netFactsDeps() : mod && typeof mod.netFactsDeps === 'function' ? await mod.netFactsDeps({ platform }) : null
     if (!nd) return { topology_error: 'no reader of the network facts is wired into this build' }
-    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(deps.procRoot ? { procRoot: deps.procRoot } : {}) } })
+    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
     const topology = buildTopology(facts)
     // the codes `doctor` would give, on the topology of each harness (the board reads them there); the commands and the text are `doctor`'s
     try { const by = diagnose({ facts, topology, harnesses: null, user: f.user }); for (const h of Object.keys(topology)) topology[h].findings = [...new Set(by.filter((x) => x.harness === h).map((x) => x.code))] } catch (e) { rethrowSandbox(e) }
@@ -251,6 +292,9 @@ const REASON_TEXT = {
   'link-missing': '期望开,内核里没有本实例的 link(asight on)', 'daemon-not-running': '守护进程没在跑(asight on)', 'daemon-not-responding': '守护进程没响应',
   'helper-missing': '能力助手缺失或版本不对(sudo asight setup-helper)', 'negative-cache': '进程拒绝了 asight 的证书,那个 host 之后透传(重启这个 agent 再试)',
   'config-after-start': '它在信任入口写好之前就启动了,重启后才会被采集',
+  'forwarder-down': 'agent 的代理入口指着 asight 的门,门随守护进程一起没了,连不上(asight on 拉起它;马上要用:asight off <harness>)',
+  'cert-not-installed': 'asight 的根证书没装,agent 不认 asight 的证书(asight install)', 'cert-root-missing': 'asight 的根证书装过、已不在你的证书库里(asight install)',
+  'cert-root-pending': 'asight 的根证书还等你在系统弹窗里确认(asight install)', 'cert-root-declined': '你拒绝了把 asight 的根证书放进证书库(asight install 再来一次)',
 }
 const reasonText = (r, hint) => REASON_TEXT[r] || hint || trustReasonText(r) || ''
 const reasonOf = (j) => (j.rows.find((r) => r.reason) || {}).reason ?? null // the harness's own reason: the first one a row has
@@ -267,6 +311,26 @@ const userProcsText = (u) => (u.error ? [`你自己起的 asight 进程: 不知�
 
 /** The lines of `asight status <harness…>` — the detail view: every named harness's own row, its pid rows, its path detail. `colors` is the TTY palette
  *  (src/cli/color.mjs); the pure call keeps it off. The unnamed `asight status` prints `renderStatusDigest` instead (D46). */
+/** 1.6 §9.4: each form's `certificate` and `proxy` (proxy mode), as the facts the topology was drawn from carry them (core/proxymode/status-facts.mjs); `notes` = its
+ *  harness-notes (4.11 CM31 / CM32). null where no form has them (Linux, nothing installed). */
+function formsOf(f) {
+  const out = {}
+  for (const [h, hf] of Object.entries((f.facts && f.facts.harnesses) || {})) {
+    const l = (hf.forms || []).filter((x) => x.certificate && x.proxy)
+    if (l.length) out[h] = l.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy, ...(x.notes && x.notes.length ? { notes: x.notes } : {}) }))
+  }
+  return Object.keys(out).length ? out : null
+}
+
+/** `status <h>`'s per-form lines, rendered from the JSON (V43): the two axes apart (V32), what asight wrote beside what the user had (CM21, V70). */
+function formLines(forms, h) {
+  return ((forms && forms[h]) || []).flatMap(({ form, certificate: c, proxy: p, notes = [] }) => [`  ${form}`,
+    `    certificate: ${c.in_effect ? `生效 · ${c.carrier}${c.since ? ` · 自 ${c.since}` : ''}` : `不生效 · ${c.code || '不知道(读不到你的根证书库)'} — 跑 ${c.command}`}${c.user_file ? ` · 你的证书文件 ${c.user_file.path}(${c.user_file.state})` : ''}`,
+    `    proxy: ${p.connected ? '接上' : '没接上'} · 入口${p.entry_intact ? '完好' : '不完好'} · 门${p.door_up ? '在听' : '没在听'} · 上游 ${p.upstream.url_redacted ?? '直连'}(${p.upstream.source}${p.upstream.code ? ` · ${p.upstream.code}` : ''})`,
+    `    asight 写的: ${p.written ?? '没有'}   你原来的: ${p.prior ?? '没有'}`,
+    ...notes.map((n) => `    ${n.code}: ${n.text}`)])
+}
+
 export function renderStatus(f, { home = null, detail = [], now = null, colors: c = noColor() } = {}) {
   const d = f.daemon, lines = [c.bold(`asight 状态(本用户 ${f.user})`)]
   lines.push(d.state === 'running' ? `守护进程: 在跑${d.pid ? `(pid ${d.pid})` : ''}${f.daemon.reply && f.daemon.reply.helper ? (f.link.helper === 'missing' ? `;助手有问题: ${f.link.helper_reason}` : `;助手 pid ${f.daemon.reply.helper.pid}`) : ''}`
@@ -288,9 +352,11 @@ export function renderStatus(f, { home = null, detail = [], now = null, colors: 
     lines.push(...identityLines(f, h.id))
   }
   lines.push(...listProblemLines(f))
-  if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id), now }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id], { now })]))
+  if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id), now }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id], { now }), ...formLines(formsOf(f), id)]))
   else if (f.topology_error) lines.push(`各 harness 的路: 不知道(${f.topology_error})`)
   lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvWriteText(f), ...userProcsText(f.userProcs))
+  const holders = f.holders || []
+  if (holders.length) lines.push(`还剩 ${new Set(holders.map((x) => x.pid)).size} 个进程可能还在用门(关掉后守护进程等它们退出): ${holders.map((x) => `${x.harness} pid ${x.pid}`).join('、')}`)
   const restart = restartOf(f)
   if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
   return lines
@@ -406,6 +472,8 @@ export function renderStatusDigest(f, { home = null, now = null, colors: c = noC
   lines.push(`日志     ${c.dim(tilde(path.join(f.dir, 'logs'), home))} · 记录 ${c.dim(tilde(path.dirname(f.dir), home))} · 关闭 asight off`)
   if (f.relayed !== 'unknown' && f.relayed.closing + f.relayed.waiting > 0) lines.push(relayedText(f))
   if (f.relayed === 'unknown') lines.push(relayedText(f))
+  const holders = f.holders || []
+  if (holders.length) lines.push(`还剩 ${new Set(holders.map((x) => x.pid)).size} 个进程可能还在用门(关掉后守护进程等它们退出): ${holders.map((x) => `${x.harness} pid ${x.pid}`).join('、')}`)
   const restart = restartOf(f)
   if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
   if (f.linger && lingerText({ ...f.linger, user: f.user })) lines.push(lingerText({ ...f.linger, user: f.user }))
@@ -441,14 +509,18 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   if (!named.ok) { io.err(`asight status: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return { exit: EXIT.usage, f: null } }
   const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names: named.ids })
   Object.assign(f, await gatherTopology(f, { home, env, platform, deps }))
+  judgeCertificates(f)
   recordNetenv(f, { home, deps })
   const wanted = f.harnesses.filter((h) => h.desired === 'on')
   const unreadable = f.harnesses.some((h) => h.judged.captured === null) || !!(f.state && f.state.error) || !!f.manifest.error || !!f.health_error
-  const failing = wanted.some((h) => h.judged.captured === false) || failedIn24h(f.health)
+  const failing = wanted.some((h) => h.judged.captured === false) || failedIn24h(f.health) || certNeedsUser(f)
   const exit = unreadable ? EXIT.unknown : failing ? EXIT.incomplete : EXIT.ok
   const restart = restartOf(f)
   if (json) {
-    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows, ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}) })), agent_list: f.agent_list, ...(f.identity_error ? { identity_error: f.identity_error } : {}), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), ...(f.netenv_write_error ? { netenv_write_error: f.netenv_write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), ...(f.optInRows ? { opt_in: optInOf(f.optInRows) } : {}), ...(f.opt_in_error ? { opt_in_error: f.opt_in_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, critical: criticalOf(f), log: path.join(f.dir, 'flows') }
+    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows, ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}) })), agent_list: f.agent_list, ...(f.identity_error ? { identity_error: f.identity_error } : {}), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), ...(f.netenv_write_error ? { netenv_write_error: f.netenv_write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, critical: criticalOf(f), log: path.join(f.dir, 'flows') }
+    const forms = formsOf(f); if (forms) r.forms = forms // 1.6 §9.4: per form, the certificate and the proxy apart
+    r.install = f.install; r.cert = f.cert // 1.6 §9.4 (D55): the certificate axis, apart from the harnesses' verdicts
+    r.holders = f.holders // P12: 「还剩 N 个」, with pids (null: the table or the manifest could not be read)
     io.out(JSON.stringify(r, null, 2))
     return { exit, f }
   }

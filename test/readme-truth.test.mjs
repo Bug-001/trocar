@@ -86,15 +86,21 @@ test('the README does not promise a distribution channel that does not exist', (
   }
 });
 
-test('the README states the harnesses that actually have a dissector', () => {
-  const dissectors = ['cc', 'openai'];         // src/dissect/*.mjs
-  for (const d of dissectors) {
-    assert.ok(existsSync(path.join(ROOT, 'src', 'dissect', `${d}.mjs`)), `dissect/${d}.mjs missing`);
-  }
-  // DeepSeek is named in the spec as a v1 goal but has no dissector — the README must not imply
-  // it works today.
-  const claimsDeepSeek = /DeepSeek[- ]CLI/.test(readme)
-    && !/DeepSeek is not supported|no dissector|not yet/i.test(readme);
-  assert.equal(claimsDeepSeek, false,
-    'README lists DeepSeek-CLI as supported, but src/dissect/ has no DeepSeek dissector');
+// the two facts the README states that a reader acts on are the harnesses and the command lines. Both are read from
+// their one home (the descriptors, the table of src/cli/commands.mjs) so neither is a second copy that can drift.
+test('the README names every harness the collector has a descriptor for, by its id (D37)', async () => {
+  const { loadHarnesses } = await import('../src/collector/harness/index.mjs');
+  const ids = (await loadHarnesses()).map((d) => d.name);
+  assert.ok(ids.length > 0, 'sanity: the loader found descriptors');
+  const missing = ids.filter((id) => !readme.includes('`' + id + '`'));
+  assert.deepEqual(missing, [], 'a harness the collector has that the README does not name as `<id>`');
+});
+
+test('the README\'s Commands block is the usage lines of src/cli/commands.mjs, flags included, one for one', () => {
+  const section = readme.slice(readme.indexOf('\n## Commands'), readme.indexOf('Design authority:'));
+  const block = /```sh\n([\s\S]*?)```/.exec(section);
+  assert.ok(block, 'sanity: the Commands section holds a ```sh block');
+  const shown = block[1].split('\n').map((l) => l.replace(/\s+#\s.*$/, '').trim()).filter((l) => l && !l.startsWith('#'));
+  const table = COMMANDS.flatMap((c) => [c.usage, ...(c.also || []).map((a) => a.usage)]).flatMap((u) => u.split('\n'));
+  assert.deepEqual([...shown].sort(), [...table].sort(), 'each usage line of the table, exactly once, and nothing else');
 });

@@ -11,9 +11,10 @@ import path from 'node:path'
 import { newReceipt, EXIT } from '../off/schema.mjs'
 import { offWorld, desiredOff, switchRoutingOff, undoSide, harnessIdsOf, flowWriter, userProcessesOf, OFF_LOCK_WAIT_MS } from '../off/orchestrate.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
-import { readManifest, saveManifest, manifestPath } from '../off/manifest.mjs'
+import { readManifest, saveManifest, manifestPath, refuseOldManifest } from '../off/manifest.mjs'
 import { disableAutostart, unitFilePath, removeWantsLinks } from '../off/autostart.mjs'
 import { undoAutostart, plistFilePath } from '../off/darwin.mjs'
+import { findingFor } from '../netenv/findings.mjs'
 import { standalonePath, backupDir, opLockFile, asightHome } from '../off/paths.mjs'
 import { netenvFile } from '../netenv/index.mjs'
 import { dropBackup, orphanBackups } from '../off/backup.mjs'
@@ -23,7 +24,37 @@ import { execTool } from '../off/exec.mjs'
 import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
+import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask } from '../off/win32.mjs'
+import { holdersOf } from '../off/holders.mjs'
+import { readStateFile } from '../off/state.mjs'
+import { readAgentList } from '../off/identity.mjs'
+import { signHelperPath } from '../collector/arch/model-backends.mjs'
+import { NATIVE } from '../collector/arch/darwin/native.mjs'
+import { daemonLogPaths } from '../collector/arch/daemon-logs.mjs'
+import { isModelOs } from '../collector/model-install.mjs' // macOS / Windows run the collector model (4.11): uninstall never does off — it refuses while capture is online (1.6 §1.1, CM24)
+
+/** Is capture online (1.6 §1.1 「下线」)? → null when offline, else { on, holders, unknown } — `on`: harnesses whose desired state is on or that still have
+ *  phase-on items; `holders`: P12's table, from the daemon (GET /holders) when it answers, else judged here from the manifest's liveness and the
+ *  process table (src/off/holders.mjs, the same judge); `unknown`: why the holders could not be told (a daemon that does not answer, an unreadable
+ *  table) — never read as "nobody". */
+async function captureOnline(w, m) {
+  let st = null
+  try { st = readStateFile(w.stateF, { fs: w.fs, installed: harnessIdsOf(m), now: w.clock() }).state } catch { st = null }
+  const on = [...new Set([...Object.entries((st && st.harnesses) || {}).filter(([, v]) => v && v.desired === 'on').map(([h]) => h),
+    ...[...((m && m.entries) || []), ...((m && m.files) || [])].filter((x) => x.phase === 'on' && typeof x.harness === 'string').map((x) => x.harness)])].sort()
+  let holders = null, unknown = null
+  try {
+    if (!w.socketPath) throw Object.assign(new Error('no endpoint'), { code: 'ENOENT' })
+    const r = await w.request({ socketPath: w.socketPath, method: 'GET', path: '/holders', timeoutMs: 2000 })
+    if (r && Array.isArray(r.holders)) holders = r.holders; else unknown = 'the daemon does not know its holders yet'
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) { // the daemon is down: the CLI judges, by the same rule
+      try { holders = holdersOf({ manifest: m, procs: await w.procs(), agentList: readAgentList({ home: w.home, fs: w.fs }) }) } catch (t) { unknown = `the process table could not be read (${errText(t)})` }
+    } else unknown = `a daemon holds the control endpoint but did not answer (${errText(e)})`
+  }
+  return on.length || unknown || (holders && holders.length) ? { on, holders: holders || [], unknown } : null
+}
 
 const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
@@ -65,6 +96,9 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const run = w.clock().toISOString()
   const receipt = { ...newReceipt('uninstall'), all: true, harnesses: [], purge_data: purgeData, kept_captures: !purgeData, undo: ['asight on'], log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], dropped_backups: [], non_identical: [], entries: [], pending: [], user_processes: [], notes: [], problems: [] }
   const put = flowWriter(w, run, receipt.notes, { event: 'uninstall-note', where: 'uninstall' })
+  // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write (no lock, no state, no record); the receipt names the tools that undo it
+  const old = refuseOldManifest({ home, platform: w.platform, fs })
+  if (old) { receipt.problems.push(old.message); receipt.ok = false; receipt.log = null; return { receipt, exit: EXIT.incomplete } }
   // R7 on Windows (4.8 §7), the same refusal `off` has, before anything is touched; a token that cannot be read is not a refusal.
   if ((deps.platform || process.platform) === 'win32') {
     const refusal = refuseElevatedByWhoami({ run: w.exec, env })
@@ -88,7 +122,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const tryOff = () => { try { return { r: desiredOff(w, null, harnessIdsOf(m)), error: null } } catch (e) { return { r: null, error: e } } }
   let early = null, lock = null
   if (fs.existsSync(w.dir)) {
-    try { lock = await acquireOpLock({ file: opLockFile(home), identity: w.identity, alive: w.alive, waitMs: deps.lockWaitMs ?? OFF_LOCK_WAIT_MS, offFirst: () => { early = tryOff() }, fs, now: w.ms, sleep: w.sleep }) } catch (e) {
+    const model = isModelOs(w.platform)
+    try { lock = await acquireOpLock({ file: opLockFile(home), identity: w.identity, alive: w.alive, waitMs: deps.lockWaitMs ?? OFF_LOCK_WAIT_MS, offFirst: model ? null : () => { early = tryOff() }, fs, now: w.ms, sleep: w.sleep }) } catch (e) {
       if (!e || e.code !== LOCK_BUSY) throw e
       receipt.ok = false; receipt.problems.push(`${errText(e)}. ${early && early.error ? `The desired state could not be written either (${errText(early.error)})` : 'The desired state is already off for every harness'}; run asight uninstall again afterwards`)
       put({ kind: 'result', outcome: 'failed', reason: `uninstall could not get the op lock: ${errText(e)}` })
@@ -100,6 +135,16 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   try {
     ;({ m, merr } = read()) // read AGAIN under the lock: an `on` that held it has written to the manifest since
     receipt.harnesses = harnessIdsOf(m)
+    // CM24: on macOS / Windows uninstall never does off — capture online (a harness on, a holder, or not knowable) is named and nothing changes
+    const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m) : null
+    if (online) {
+      receipt.ok = false; receipt.code = 'collectors-online'; receipt.purge_data = false; receipt.kept_captures = true // nothing changed: --purge-data deleted nothing either
+      receipt.problems.push([online.on.length ? `还开着: ${online.on.join(', ')}` : null, online.holders.length ? `还有持有者: ${online.holders.map((x) => `pid ${x.pid} (${x.harness})`).join(', ')}` : null, online.unknown ? `不知道有没有持有者: ${online.unknown}` : null].filter(Boolean).join(';') + '。什么都没改;先 asight off,等持有者退出后再 asight uninstall(uninstall 从不代做 off)')
+      receipt.problems.push(`先跑 ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(',再 ')}`) // the doctor's own steps for the code (1.6 §9.6)
+      put({ event: 'failure', code: 'collectors-online', reason: receipt.problems.at(-2) })
+      put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${receipt.problems.at(-2)}` })
+      return { receipt, exit: EXIT.incomplete }
+    }
     // 1 · the desired state
     const again = tryOff()
     const wrote = [early && early.r, again.r].find((x) => x && x.wrote) || null
@@ -205,22 +250,31 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       if (!m) rm(path.join(w.dir, 'ca'))
       const runtime = env.XDG_RUNTIME_DIR ? path.join(env.XDG_RUNTIME_DIR, 'asight') : null
       // `netenv.json` is the adopted records and the topology, for the board: asight's own file, written outside collector/, so zero residue is not met without it (audit rule-b 8)
-      // `logs/` is the daemon's own console (D46): asight's own file, removed with the rest of it — by its manifest entries (role 'daemon-log'), so the receipt names the files; the directory follows when empty (or whole, when there is no manifest to name them)
+      // `logs/` is the daemon's own console (D46, 0.2:130): asight's own, removed whole now that the daemon has stopped — its manifest entries (role 'daemon-log', Linux)
+      // first so the receipt names the files, then the directory, which on macOS no entry names (launchd writes the LaunchAgent's StandardOutPath / StandardErrorPath itself)
       for (const f of m && !m.unsupported ? m.files.filter((x) => x.role === 'daemon-log') : []) rm(f.path)
-      if (!m || m.unsupported) rm(path.join(w.dir, 'logs'))
-      removeEmptyDirs([path.join(w.dir, 'logs')], fs)
-      for (const p of [path.join(w.dir, 'run'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home)]) if (p) rm(p)
+      rm(daemonLogPaths(home).dir)
+      // the darwin key custody's signing helper (install put it there, 4.11 P1): it goes once no root key is left for it to remove — after undoRootKeys, which needs it
+      const helper = w.platform === 'darwin' && !(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) ? signHelperPath(home, NATIVE.signHelper) : null
+      for (const p of [path.join(w.dir, 'run'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p)
       removeEmptyDirs([path.dirname(standalonePath(home))], fs)
+      // the door ports and their tokens (decision #16): the next install and on choose them again
+      const ing = removeIngressConfig({ dir: w.dir, fs })
+      if (!ing.removed) noted.push({ kind: 'residue-not-removed', code: 'residue-not-removed', path: path.join(w.dir, 'ingress.json'), reason: `${path.join(w.dir, 'ingress.json')} could not be removed (${ing.reason}); remove it by hand` })
     }
     for (const n of noted) if (!receipt.notes.includes(n.reason)) receipt.notes.push(n.reason) // the command prints every one of them
     // then the data the operator asked to drop — also after an earlier plain uninstall left the captures behind. `--purge-data` is "nothing of the captures stays", so the
     // collector's own machine goes with it: the kernel's copy (kernel/) and its verified-archive cache (kernel-archive/), the kernel's config and home with the controller
-    // secret and tokens (forwarder/), and the two endpoint files (control.json: the daemon's control endpoint; ingress.json: the ingress ports and tokens) — a plain uninstall
+    // secret and tokens (forwarder/), and the endpoint file control.json (the daemon's control endpoint; ingress.json went above, with every uninstall) — a plain uninstall
     // keeps them (a kernel may still be draining; the next on reuses the cache), the purge leaves the collector directory empty of everything asight can rebuild nothing of.
-    if (purgeData) {
+    // Only when every step above succeeded (invariant 2; 1.6 §1.1): a run that leaves an item, has a problem or a failure keeps every capture
+    // and says so — the captures are what nothing brings back, and the next uninstall can still purge them.
+    const purgeHeld = purgeData && (blocked || receipt.left.length > 0 || receipt.problems.length > 0 || failed.length > 0)
+    if (purgeHeld) { receipt.purge_data = false; receipt.kept_captures = true; receipt.notes.push('uninstall 没有全部完成:采集数据一个都没删(--purge-data 只在其余各步都成功后才删);修好上面的问题后再跑 asight uninstall --purge-data') }
+    if (purgeData && !purgeHeld) {
       for (const n of (() => { try { return fs.readdirSync(w.dir) } catch { return [] } })()) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(w.dir, n))
       for (const sub of ['flows', 'audit', 'replays', 'kernel', 'kernel-archive', 'forwarder']) rm(path.join(w.dir, sub))
-      for (const f of ['control.json', 'ingress.json']) rm(path.join(w.dir, f))
+      rm(path.join(w.dir, 'control.json'))
     }
     // after the purge, so --purge-data never deletes what this run could not undo; a line that cannot be written is said in the output, never dropped, and never stops the uninstall
     for (const f of failed) put({ event: 'failure', ...f })
@@ -228,14 +282,14 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // the outcome follows the exit code (as `off`'s does): an item that could not be undone is 'left'; any other problem — a blocked run, a state.json that could not be
     // written — is 'failed'; 'uninstalled' only when the run is clean
     const failedRun = blocked || (receipt.problems.length > 0 && !left)
-    if (!(purgeData && !left && !blocked && !receipt.problems.length)) {
+    if (!(purgeData && !purgeHeld)) { // a purge took flows/ with it: nothing to append to
       for (const n of noted) put(n)
       put({ kind: 'result', outcome: failedRun ? 'failed' : left ? 'left' : 'uninstalled', counts: { entries: (u.results || []).length, left, still_trusting: u.still_trusting.length, notes: noted.length }, reason: failedRun ? `uninstall did not finish: ${receipt.problems[0]}` : left ? `uninstalled, except ${left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${(u.results || []).length} trust entr${(u.results || []).length === 1 ? 'y' : 'ies'} undone, ${noted.length} note(s)` })
     }
     if (!blocked) {
       if (m && (left || receipt.kept_bundles.length)) { // keep exactly what is left; the next uninstall finds it (4.6: the manifest goes last)
         const files = m.files.filter((f) => f.role !== 'ca-key' && f.role !== 'ca-cert' && (f !== unitFile || unitLeft))
-        saveManifest(w.dir, { ...m, complete: false, ...(left ? { uninstall_left: receipt.left.map((l) => ({ path: l.path, harness: l.harness ?? null, result: l.result })), uninstalled_at: w.clock().toISOString() } : {}), ...(receipt.kept_bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], files }, fs)
+        saveManifest(w.dir, { ...m, install: null, ...(left ? { uninstall_left: receipt.left.map((l) => ({ path: l.path, harness: l.harness ?? null, result: l.result })), uninstalled_at: w.clock().toISOString() } : {}), ...(receipt.kept_bundles.length ? { pending_bundles: true } : {}), planned: [], watched: [], files }, fs)
       } else {
         if (lock) lock.release() // its file is in the directory that may go with the manifest
         if (m) {
@@ -275,6 +329,8 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
   if ((deps.getuid || processUid)() === 0) { io.err('asight uninstall: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
   try {
     // a platform without a collector reaches runUninstall the same way and finds nothing to undo (D39⑥ executed 2026-10-11: the old capture's own uninstall went with it)
+    // the root's key goes last through its custody (4.11 P13): the platform's backend unless a test hands one in
+    if (deps.custody === undefined && isModelOs(platform)) deps = { ...deps, custody: (await (await import('../collector/arch/model-backends.mjs')).backendsFor({ os: platform, home, run: deps.exec || null, env })).custody }
     const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say: json ? io.err : io.out, deps: { platform, ...deps } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
     if (json) io.out(JSON.stringify(receipt, null, 2))
     else if (receipt.needs_yes || receipt.declined) { io.out(formatUninstallReceipt({ ...receipt, notes: [] }, { home, tense: 'future' })); for (const n of receipt.notes) io.err(n) } // the plan, then why nothing was done (R6)

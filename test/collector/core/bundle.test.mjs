@@ -43,7 +43,7 @@ test('T14: roots that changed rebuild each bundle atomically (temp + rename) wit
     const put = (h, user) => {
       const b = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: [user.certPem], caPem: ASIGHT.certPem })
       const f = path.join(dir, 'ca', `combined-${h}.pem`); fs.writeFileSync(f, b.data)
-      m.files.push({ path: f, role: 'bundle', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp })
+      m.files.push({ path: f, role: 'bundle', phase: 'install', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp })
       return f
     }
     const a = put('alpha', CORP); const z = put('zeta', OTHER)
@@ -72,7 +72,7 @@ test('T14 / D38 F1(d): a bundle that is missing or unreadable is rebuilt from th
     const put = (h, src) => {
       const b = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: src ? [CORP.certPem] : [], caPem: ASIGHT.certPem })
       const f = path.join(ca, `combined-${h}.pem`); fs.writeFileSync(f, b.data)
-      m.files.push({ path: f, role: 'bundle', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp, ...(src ? { sources: [src] } : {}) })
+      m.files.push({ path: f, role: 'bundle', phase: 'install', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp, ...(src ? { sources: [src] } : {}) })
       return f
     }
     const a = put('alpha', corp); const z = put('zeta', null); const y = put('yota', null)
@@ -117,7 +117,7 @@ test('T14 / D38 (RV-2): uninstall step 2 skips a bundle that is gone (ENOENT), a
     const put = (h) => {
       const b = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: [CORP.certPem], caPem: ASIGHT.certPem })
       const f = path.join(ca, `combined-${h}.pem`); fs.writeFileSync(f, b.data)
-      m.files.push({ path: f, role: 'bundle', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp })
+      m.files.push({ path: f, role: 'bundle', phase: 'install', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp })
       return f
     }
     const a = put('alpha'); const z = put('zeta'); const y = put('yota')
@@ -151,7 +151,7 @@ test('T14 / D38 (RV-3): a bundle rebuilt without a user CA it held reports the l
     const put = (h, src, certs) => {
       const b = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: certs, caPem: ASIGHT.certPem })
       const f = path.join(ca, `combined-${h}.pem`); fs.writeFileSync(f, b.data)
-      m.files.push({ path: f, role: 'bundle', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp, ...(src ? { sources: [src] } : {}) })
+      m.files.push({ path: f, role: 'bundle', phase: 'install', harness: h, user_fps: b.user_fps, roots_fp: b.roots_fp, ...(src ? { sources: [src] } : {}) })
       return f
     }
     const srcs = {}; for (const h of ['moved', 'kept', 'edited', 'none']) srcs[h] = path.join(root, `${h}.pem`)
@@ -197,7 +197,7 @@ test('D39: a bundle off kept without the asight CA is not rebuilt back with it b
     const stripped = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: [CORP.certPem], caPem: null })
     const kept = path.join(dir, 'ca', 'combined-kept.pem'); fs.writeFileSync(kept, stripped.data)
     const live = path.join(dir, 'ca', 'combined-live.pem'); const lb = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: [CORP.certPem], caPem: ASIGHT.certPem }); fs.writeFileSync(live, lb.data)
-    m.files.push({ path: kept, role: 'bundle', harness: 'kept', user_fps: stripped.user_fps, roots_fp: stripped.roots_fp, without_ca: true }, { path: live, role: 'bundle', harness: 'live', user_fps: lb.user_fps, roots_fp: lb.roots_fp })
+    m.files.push({ path: kept, role: 'bundle', phase: 'install', harness: 'kept', user_fps: stripped.user_fps, roots_fp: stripped.roots_fp, without_ca: true }, { path: live, role: 'bundle', phase: 'install', harness: 'live', user_fps: lb.user_fps, roots_fp: lb.roots_fp })
     const args = { dir, manifest: m, nodeRoots: [R1.certPem, R2.certPem], osRootsText: '', caPem: ASIGHT.certPem }
     assert.deepEqual(rewriteBundles(args), [live], 'the roots changed: the bundle of a harness that is on is rebuilt, the stripped one is not')
     assert.deepEqual(fps(fs.readFileSync(kept, 'utf8')), [fp(R1), fp(CORP)], 'still without the asight CA, and with its old roots')
@@ -217,7 +217,7 @@ test('D39: only= limits the daemon\'s rebuild to the harnesses that are on — a
     const dir = path.join(root, 'collector'); fs.mkdirSync(path.join(dir, 'ca'), { recursive: true })
     const m = newManifest()
     const b = composeBundle({ nodeRoots: [R1.certPem], osRootsText: '', userCerts: [CORP.certPem], caPem: ASIGHT.certPem })
-    const put = (name, harness) => { const f = path.join(dir, 'ca', `combined-${name}.pem`); fs.writeFileSync(f, b.data); m.files.push({ path: f, role: 'bundle', ...(harness ? { harness } : {}), user_fps: b.user_fps, roots_fp: b.roots_fp }); return f }
+    const put = (name, harness) => { const f = path.join(dir, 'ca', `combined-${name}.pem`); fs.writeFileSync(f, b.data); m.files.push({ path: f, role: 'bundle', phase: 'install', ...(harness ? { harness } : {}), user_fps: b.user_fps, roots_fp: b.roots_fp }); return f }
     const [on, off, orphan] = [put('on', 'on'), put('off', 'off'), put('orphan', null)]
     const args = { dir, manifest: m, nodeRoots: [R1.certPem, R2.certPem], osRootsText: '', caPem: ASIGHT.certPem }
     assert.deepEqual(rewriteBundles({ ...args, only: new Set(['on']) }), [on, orphan], 'roots changed: the harness that is on, and the one bundle with no harness')

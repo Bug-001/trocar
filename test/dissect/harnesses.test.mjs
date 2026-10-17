@@ -116,6 +116,23 @@ test('observer effects follow the 3.1 table: five harnesses carry one, Hermes an
   for (const e of observerEffectsOf(rec({ agent: 'claude-code' }))) assert.ok(e.what && e.cause, 'each effect says what changed and why');
 });
 
+// T24: an effect belongs to the mode whose entry causes it — a macOS / Windows (door, capture 'proxy') call shows nothing only Linux's entries cause
+// (Codex's SSL_CERT_FILE .env, OpenCode's trust plugin); OpenCode's door entry is its route plugin. Over every harness of the table.
+test('observer effects by capture mode: a proxy-mode call carries no Linux-only effect; OpenCode shows its route plugin there', () => {
+  const ids = (agent, capture) => (observerEffectsOf(rec({ agent, capture })) || []).map((e) => e.id);
+  const LINUX_ONLY = new Set(['codex-rustls-h2', 'opencode-plugin'])
+  for (const row of HARNESSES) {
+    const agent = row.agents[row.agents.length - 1]
+    for (const id of ids(agent, 'proxy')) assert.ok(!LINUX_ONLY.has(id), `${agent}: ${id} is caused by a Linux entry only`)
+    for (const e of observerEffectsOf(rec({ agent, capture: 'proxy' })) || []) assert.doesNotMatch(e.cause, /\.env\b/, `${agent}: no Linux-only file in the cause`)
+  }
+  assert.deepEqual(ids('codex', 'proxy'), [])
+  assert.deepEqual(ids('opencode', 'proxy'), ['opencode-route-plugin'])
+  assert.deepEqual(ids('opencode', 'transparent'), ['opencode-plugin'])
+  assert.deepEqual(ids('claude-code', 'proxy'), ['cc-gzip-off'], 'settings env NODE_EXTRA_CA_CERTS is the door\'s entry too')
+  assert.deepEqual(ids('z-code', 'proxy'), ['zcode-node-https'], 'caCertFile is written on every OS')
+});
+
 test('headerOf is case-insensitive over both envelope header keys', () => {
   assert.equal(headerOf({ req_headers: { 'Session-Id': 'a' } }, 'session-id'), 'a');
   assert.equal(headerOf({ request_headers: { 'session-id': 'b' } }, 'Session-Id'), 'b');

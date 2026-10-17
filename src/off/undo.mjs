@@ -24,17 +24,20 @@
 // Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { undoEntry, removeOwnedFile, describeEntry } from './journal.mjs'
-import { saveManifest, KNOWN_KINDS, FILE_ENTRY_KINDS, undoByHand, restoreByHand } from './manifest.mjs'
+import { undoEntry, removeOwnedFile, undoWrapper, describeEntry } from './journal.mjs'
+import { saveManifest, KNOWN_KINDS, FILE_ENTRY_KINDS, PHASES, undoByHand, restoreByHand } from './manifest.mjs'
 import { undoRunKey, undoScheduledTask } from './win32.mjs'
 import { dropBackup } from './backup.mjs'
 import { backupDir, asightHome } from './paths.mjs'
 import { removeEmptyDirs, sweepTemps, writeDurable, sha256, strictlyInside } from './fsutil.mjs'
-import { harnessesOf, hasIdentity, withAgentList } from './signature.mjs'
+import { harnessesOf, hasIdentity, withAgentList, mayHaveRead } from './signature.mjs'
 import { readAgentList } from './identity.mjs'
+import { holdersOf } from './holders.mjs'
 import { certBlocks, stripCert, composeBundle, certsOf } from './pem.mjs'
+import { offLines } from './text-edit.mjs'
+import { decodeText } from './text-codec.mjs'
 
-const UNDO_LEFT = new Set(['left-unparsable', 'left-link', 'left-text', 'error']) // an entry that could not be undone stays in the manifest
+const UNDO_LEFT = new Set(['left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error']) // an entry that could not be undone stays in the manifest
 const UNDO_AT_PRE = new Set(['restored', 'already-restored']) // the file is at its pre_sha256: its backup goes
 const KEPT_BECAUSE = {
   'reverted-not-identical': (e) => `${e.path} was edited after asight changed it: only asight's ${describeEntry(e)} was taken out, so it is not what it was before; the backup is that file as it was`,
@@ -45,14 +48,19 @@ const KEPT_BECAUSE = {
 const UNTIL_VALUES = ['restart', 'next-connection', 'next-handshake', 'session-end']
 
 const known = (item) => KNOWN_KINDS.includes(item.kind)
+// step 4's owned files: asight-only content goes whatever it holds now (a changed one is said); a config-library entry the agent writes the user's
+// settings into goes only while unchanged (4.11 P5 / CM18, D48②); a wrapper is put back by its own rule
+const OWNED_UNDO = { plugin: removeOwnedFile, shim: removeOwnedFile, switch: removeOwnedFile, 'config-entry': (f, fs) => removeOwnedFile(f, fs, { unlessChanged: true }), wrapper: undoWrapper }
+// what `install` wrote (D55①: phase 'install' — the root's key, its CA file, the certificate carriers: config keys, bundles, pem-blocks, wrappers, plugins and
+// their loader lines): `off` lists them and leaves them (1.6 §1.1 「证书一项不碰」), `uninstall` undoes them (the key last: undoRootKeys, after the trust
+// store's root). The phase, never a list of kinds: a carrier of a new kind is spared by the same rule.
+// `phases` names the commands whose items this run undoes: `off` ['on'] (the default), `uninstall` (dropCa) both.
+const keyWhere = (k) => k.path ?? `${(k.custody && k.custody.kind) || 'custody'}:${(k.custody && k.custody.id) || '?'}`
 const isMap = (v) => v instanceof Map
 const processEnv = (p) => { try { const e = typeof p.env === 'function' ? p.env() : p.env; return isMap(e) ? e : null } catch { return null } } // gone, or not ours to read
 const errText = (e) => String((e && e.code) || (e && e.message) || e)
 const without = (list, item) => { const i = list.indexOf(item); if (i >= 0) list.splice(i, 1) }
 
-// May a live process of a harness have read asight's entry for it? It started after the harness's first install time (its entries and the files
-// asight owns for it), or the harness re-reads its entry while running (alive is enough), or its start time / the install time is unknown.
-const mayHaveRead = (p, l, since) => !!(l && l.rereads) || p.startedAt == null || since == null || p.startedAt >= since
 // A harness whose snapshot has no signature (no record: an older asight; null: none for its OS) cannot tell its processes from the others, so any live
 // process that may have read its entry may be one of them (a record that is missing says nothing of re-reading either: alive is enough). → their pids;
 // none means nobody can hold what asight wrote for it, signature or not (4.6 「判活快照」).
@@ -67,7 +75,7 @@ const unsignedWhy = (liveness, h) => (liveness[h]
  *  part-way (the last write of the manifest: ENOSPC, EACCES, a failed rename) is thrown with `partial` on it: the same object, as far as it got — the files that were
  *  changed or removed by then are in it, because a receipt that said "nothing was changed" over a settings.json that was put back would be untrue (1.6 R1, V3). */
 export async function undoHarnesses(args) {
-  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], trust_unknown: [], left: [], residue: [], changed: [], notes: [], procs_error: null, manifest: args.manifest }
+  const out = { results: [], kept_bundles: [], removed: [], still_trusting: [], holders: [], trust_unknown: [], left: [], residue: [], changed: [], notes: [], procs_error: null, manifest: args.manifest }
   try { return await undoInto(args, out) } catch (e) {
     if (e && typeof e === 'object') e.partial = out
     throw e
@@ -90,7 +98,8 @@ const removeKernelCopy = (exe, fs) => {
   }
 }
 
-async function undoInto({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, fs = nodeFs, exec = null, env = process.env }, out) {
+async function undoInto({ dir, home, manifest, ids = null, procs = async () => [], roots = null, now = new Date(), dropCa = false, phases = dropCa ? PHASES : ['on'], fs = nodeFs, exec = null, env = process.env }, out) {
+  const spared = (x) => !phases.includes(x.phase) // what this run leaves: listed, never touched
   if (manifest.unsupported) throw new Error(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; nothing was changed`)
   const inScope = (h) => typeof h === 'string' && (ids == null || ids.includes(h))
   const liveness = manifest.liveness && typeof manifest.liveness === 'object' ? manifest.liveness : (manifest.liveness = {})
@@ -106,7 +115,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     const t = Date.parse(it.installed_at)
     if (inScope(it.harness) && Number.isFinite(t)) since.set(it.harness, Math.min(since.get(it.harness) ?? Infinity, t))
   }
-  const touched = new Set([...manifest.entries, ...manifest.files].map((x) => x.harness).filter(inScope))
+  const touched = new Set([...manifest.entries, ...manifest.files].filter((x) => !spared(x)).map((x) => x.harness).filter(inScope)) // the harnesses this run takes something from
   const table = async () => { try { return { list: await procs(), error: null } } catch (e) { return { list: [], error: errText(e) } } }
   const leftEntries = [] // the entries step 1 could not undo: they stay in the manifest and still name what they named
   const rm = (p) => { sweepTemps(p, fs); if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); out.removed.push(p) } }
@@ -150,7 +159,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     out.results.push(row)
     if (UNDO_LEFT.has(r.result)) { // stays in the manifest, with its backup: the only copy of what the user had
       leftEntries.push(e)
-      out.left.push(leftRow(e, r.result === 'left-unparsable' ? `${e.path} is no longer valid JSON; asight's ${describeEntry(e)} may still be in it` : r.reason, r.result))
+      out.left.push(leftRow(e, r.reason || `${e.path}: asight cannot read it; asight's ${describeEntry(e)} may still be in it`, r.result))
       if (e.backup) row.backup_kept = e.backup
       return
     }
@@ -162,10 +171,21 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   }
   const kernelCopies = manifest.entries.filter((e) => inScope(e.harness) && e.kind === 'forwarder-binary')
   if (!dropCa && kernelCopies.length) out.notes.push(`the kernel's copy (${kernelCopies.map((e) => e.path).join(', ')}) is kept while connections drain from it: it is not undone by \`off\`, \`asight uninstall\` removes it, \`asight off --now\` stops the drain`)
-  const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && (FILE_ENTRY_KINDS.includes(e.kind) || e.kind === 'run-key' || e.kind === 'scheduled-task' || (e.kind === 'forwarder-binary' && dropCa)))
+  const kept = [...manifest.entries, ...manifest.files].filter((x) => spared(x) && (x.harness == null ? ids == null : inScope(x.harness))).map(keyWhere)
+  if (kept.length) out.notes.push(`what asight install wrote stays — off never touches it; asight uninstall removes it: ${[...new Set(kept)].join(', ')}`) // one place once, however many entries it holds
+
+  const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && !spared(e) && (FILE_ENTRY_KINDS.includes(e.kind) || e.kind === 'run-key' || e.kind === 'scheduled-task' || (e.kind === 'forwarder-binary' && dropCa)))
   const config = (e) => !((e.kind === 'text' || e.kind === 'trust-entry') && e.format !== 'dotenv-block') // step 1; the rest are step 4's (json-key and proxy-entry are config, a text/trust block is config only as dotenv)
   const originals = entries.filter(config) // step 1's, as they are now: undoing takes them out of the manifest, and a bundle is judged after that
   for (const e of entries) if (config(e)) undoOne(e)
+  // D48②: a key the user set while asight was on keeps the user's value, and the old line asight put out of effect stays so (journal.mjs `prior_left`).
+  // Its line number is the one in the file as step 1 leaves it: another entry of the same file, undone after it, may have taken lines out above it.
+  for (const row of out.results) {
+    if (!row.prior_left) continue
+    let read = null
+    try { read = decodeText(fs.readFileSync(row.real_path || row.path)) } catch { /* gone or unreadable: the numbers stay as the undo found them */ }
+    if (read && read.ok && read.text != null) row.prior_left = offLines(read.text, [...new Set(row.prior_left.map((p) => p.key))])
+  }
   // an item this build cannot undo is said, here and not by each caller: an entry or a file of an unknown kind (it is not touched, whatever its role),
   // or an entry that names no harness (no harness's `off` takes it). It stays in the manifest and `off` exits 1 for it (1.6 R3). The old capture's
   // ledger kinds are known: the legacy undo takes them.
@@ -176,8 +196,8 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   }
 
   // ── 2 and 3: bundles and extra trust files ────────────────────────────────────────────────────────────────────────────────────────
-  const bundles = manifest.files.filter((f) => f.role === 'bundle' && inScope(f.harness) && known(f))
-  const extras = manifest.files.filter((f) => f.role === 'trust-file' && inScope(f.harness) && known(f))
+  const bundles = manifest.files.filter((f) => f.role === 'bundle' && !spared(f) && inScope(f.harness) && known(f))
+  const extras = manifest.files.filter((f) => f.role === 'trust-file' && !spared(f) && inScope(f.harness) && known(f))
   if (bundles.length || extras.length) {
     const t = await table()
     const ca = (() => {
@@ -297,10 +317,12 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   // ── 4: rc lines and patch rows, then plugins and the shim ─────────────────────────────────────────────────────────────────────────
   for (const e of entries) if (!config(e)) undoOne(e)
   removeEmptyDirs([backupDir(home)], fs) // the last backup is gone (rmdir leaves a directory that still holds one)
-  for (const f of [...manifest.files].reverse().filter((x) => (x.role === 'plugin' || x.role === 'shim') && inScope(x.harness) && known(x))) {
+  for (const f of [...manifest.files].reverse().filter((x) => OWNED_UNDO[x.role] && !spared(x) && inScope(x.harness) && known(x))) {
     try {
-      const r = removeOwnedFile(f, fs)
-      if (r.result === 'removed') out.removed.push(f.path)
+      const r = OWNED_UNDO[f.role](f, fs)
+      if (r.result === 'error') { fail(f, r.reason); continue }
+      if (r.result === 'kept-changed') out.notes.push(`${f.path}, the ${f.role} asight created, was changed while asight was on: it holds the user's settings now, so it is kept (asight's own key in it was undone by its entry)`)
+      if (r.result === 'removed') out.removed.push(r.path)
       if (r.changed) out.changed.push({ harness: f.harness, path: f.path, role: f.role }) // not what asight wrote: removed all the same, and said
       without(manifest.files, f)
     } catch (err) { fail(f, `${f.path}, asight's ${f.role}, could not be removed: ${String((err && err.message) || err)}`) }
@@ -323,12 +345,45 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
     }
   }
 
-  // a harness with nothing left in the manifest needs no liveness and no watched path any more
+  // P12 (4.11): a route of the collector model is off now — its record gets `off_at`, and it stays after its items are gone: the holder table
+  // (the receipt's 「还剩 N 个」, status, uninstall's refusal while the daemon is down) is judged from it. A record without `on_at` is not the model's.
+  const windowed = Object.keys(liveness).filter((h) => inScope(h) && liveness[h] && typeof liveness[h] === 'object' && liveness[h].on_at)
+  for (const h of windowed) { // only a record that is on gets off_at: a repeated off keeps the first (D54), else a process started between the two would be judged a holder
+    const l = liveness[h], on = Date.parse(l.on_at), off = l.off_at == null ? NaN : Date.parse(l.off_at)
+    if (!Number.isFinite(off) || (Number.isFinite(on) && off < on)) l.off_at = now.toISOString()
+  }
+  if (windowed.length) {
+    const t = await table()
+    out.holders = t.error ? null : holdersOf({ manifest, procs: t.list, agentList: home ? readAgentList({ home, fs }) : null }).filter((x) => inScope(x.harness))
+    if (t.error) out.notes.push(`the process table could not be read (${t.error}), so which processes may still use a door is not known`)
+  }
+
+  // a harness with nothing left in the manifest needs no liveness and no watched path any more (a model record keeps its window, above)
   for (const h of touched) {
     if (manifest.entries.some((x) => x.harness === h) || manifest.files.some((x) => x.harness === h)) continue
-    delete liveness[h]
+    if (!windowed.includes(h)) delete liveness[h]
     if (Array.isArray(manifest.watched)) manifest.watched = manifest.watched.filter((w) => w.harness !== h)
   }
   saveManifest(dir, manifest, fs)
+  return out
+}
+
+/** `uninstall`'s last step (4.11 P13 `root-key`; 4.11 卸载「撤根证书……最后删根的密钥」): the root's private key, through the custody backend handed in, AFTER
+ *  undoHarnesses and the trust store's root (the opt-in undo) — so a key never goes while a store still trusts its root. `off` never calls it (it lists the
+ *  key: undoInto's note on what it spares). → `{ removed, left }`; the manifest is saved when a key left it. */
+export async function undoRootKeys({ dir, manifest, custody = null, fs = nodeFs }) {
+  const out = { removed: [], left: [] }
+  for (const k of manifest.entries.filter((e) => e.kind === 'root-key')) {
+    const where = keyWhere(k)
+    try {
+      if (!custody || typeof custody.remove !== 'function') throw new Error('this asight has no custody backend to remove it with')
+      // the custody's contract (custody-cli.mjs): { removed } | 'unavailable' (no GUI session, a locked keychain). Only an answer of that shape is
+      // a removal; anything else keeps the record and says so — never a key left behind with no record and no line (invariant 5, D38)
+      const r = await custody.remove(k.custody)
+      if (!r || typeof r !== 'object' || typeof r.removed !== 'boolean') throw new Error(r === 'unavailable' ? 'the key custody is not reachable now (macOS: no graphical login session, or the keychain is locked); run asight uninstall again in a terminal of that session' : `the key custody answered ${JSON.stringify(r)}`)
+      without(manifest.entries, k); out.removed.push(where)
+    } catch (e) { out.left.push({ path: where, harness: null, result: 'error', reason: `${where}, the asight root's private key, could not be removed (${errText(e)}); by hand: ${undoByHand(k)}` }) }
+  }
+  if (out.removed.length) saveManifest(dir, manifest, fs)
   return out
 }

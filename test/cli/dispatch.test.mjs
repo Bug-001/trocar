@@ -73,8 +73,8 @@ test('V19: every hidden alias dispatches to the command it claims, the rest of t
     assert.deepEqual(seen, [a.to], `${a.argv.join(' ')} runs ${a.to.join(' ')} and nothing else`)
   }
   const seen = []
-  await runCli(['collector', 'install', '--no-unit', '--yes', 'claude'], spying(seen)); await runCli(['collector', 'uninstall', '--purge-data'], spying(seen)); await runCli(['install', '--dry-run'], spying(seen))
-  assert.deepEqual(seen, [['on', '--no-unit', '--yes', 'claude'], ['uninstall', '--purge-data'], ['on', '--dry-run']], 'what follows the alias is passed on as typed')
+  await runCli(['collector', 'install', '--no-unit', '--yes', 'claude'], spying(seen)); await runCli(['collector', 'uninstall', '--purge-data'], spying(seen))
+  assert.deepEqual(seen, [['install', '--no-unit', '--yes', 'claude'], ['uninstall', '--purge-data']], 'what follows the alias is passed on as typed (`collector install` is install now)')
   for (const argv of [['collector'], ['collector', 'bogus']]) {
     const c = spying([])
     assert.equal(await runCli(argv, c), 2, argv.join(' '))
@@ -103,7 +103,7 @@ test('help through the dispatch: no command, `help`, `--help`, `help <command>` 
 test('V6: an unknown command, an unknown harness, the old --proxy flag and the gone `test` are exit 2 and the sandbox HOME is byte for byte as it was', async () => {
   for (const platform of ['linux', 'darwin']) {
     for (const argv of [['nope'], ['on', 'clade'], ['off', 'clade'], ['status', 'clade'], ['uninstall', 'claude-code'], ['on', '--proxy', 'http://127.0.0.1:8899'], ['on', '--proxy=http://127.0.0.1:8899'], ['test'], ['collector', 'bogus'], ['daemon', '--bogus']]) {
-      const s = sandbox({ platform }); const before = snapshot(s.home); const calls = s.sys.exec.calls.length
+      const s = sandbox({ platform, install: false }); const before = snapshot(s.home); const calls = s.sys.exec.calls.length
       const { exit, io } = await s.run(argv)
       assert.equal(exit, 2, `${platform}: ${argv.join(' ')}: ${io.text()}`)
       assert.deepEqual(snapshot(s.home), before, `${platform}: ${argv.join(' ')} wrote nothing`)
@@ -146,8 +146,8 @@ test('V9: status, off, on, doctor and uninstall with --json print one JSON value
     assert.equal(out.trim(), JSON.stringify(v, null, 2), `${argv.join(' ')}: stdout is that one value and nothing else`)
     assert.ok([0, 1, 3].includes(exit), `${argv.join(' ')}: exit ${exit}`)
   }
-  const plan = await sandbox().run(['on', '--json']) // not in a terminal and no --yes: the plan is stderr, stdout is still one JSON (or nothing), exit 2
-  assert.equal(plan.exit, 2); assert.match(plan.io.stderrText(), /asight on · 将写 \d+ 个文件/); assert.ok(plan.io.stdoutText() === '' || JSON.parse(plan.io.stdoutText()).command === 'on')
+  const plan = await sandbox().run(['install', '--json']) // not in a terminal and no --yes: the plan is stderr, stdout is still one JSON (or nothing), exit 2 (D55: the first plan is install's)
+  assert.equal(plan.exit, 2); assert.match(plan.io.stderrText(), /将写 \d+ 个文件/); assert.ok(plan.io.stdoutText() === '' || JSON.parse(plan.io.stdoutText()).command === 'install')
 })
 
 test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cannot judge, 70 the daemon crashed', async () => {

@@ -123,13 +123,34 @@ test('listProcs on macOS: a ps whose lines cannot be read is an error that says 
   assert.deepEqual(other, [], 'rows that parse but belong to another user are a table with no row of this user\'s, not a failure')
 })
 
-test('psIdentity: the start time of a pid from `ps -o lstart= -p` in the C locale, blanks collapsed; null for a pid ps does not know; no boot id; identityFor picks /proc or ps by platform', () => {
+// The daemon reads its own identity with an async runner (runAsync) so a PowerShell does not stop its event loop on its way to answering `on`
+// (Windows test machine 2026-10-17): the same answer, as a promise; with spawnSync's shape, at once, as before. Over both platforms' readers.
+test('identityFor with an async runner answers the same identity as a promise; with a sync one, at once', async () => {
+  const BOOT = '{ sec = 1760000000, usec = 1 } x\n'
+  const answers = {
+    darwin: (file) => (file === 'sysctl' ? { status: 0, stdout: BOOT, stderr: '' } : { status: 0, stdout: 'Wed Oct  7 04:27:00 2026\n', stderr: '' }),
+    win32: () => ({ status: 0, stdout: JSON.stringify({ s: 1760000001000, b: 1760000000000 }), stderr: '' }),
+  }
+  for (const [platform, sync] of Object.entries(answers)) {
+    const now = identityFor({ platform, exec: sync })(4242)
+    assert.equal(typeof now.then, 'undefined', `${platform}: a sync runner answers at once`)
+    assert.ok(now.start_time && now.boot_id, `${platform}: ${JSON.stringify(now)}`)
+    const later = identityFor({ platform, exec: (...a) => Promise.resolve(sync(...a)) })(4242)
+    assert.equal(typeof later.then, 'function', `${platform}: an async runner answers with a promise`)
+    assert.deepEqual(await later, now)
+  }
+})
+
+test('psIdentity: the start time of a pid from `ps -o lstart= -p` in the C locale, blanks collapsed, and the seconds of kern.boottime as the boot id; nulls for a pid ps does not know; identityFor picks it on darwin', () => {
   const calls = []
-  const exec = (file, args, opts) => { calls.push([file, ...args, opts.env.LC_ALL]); return args.includes('4242') ? { status: 0, stdout: 'Wed Oct  7 04:27:00 2026\n', stderr: '' } : { status: 1, stdout: '', stderr: '' } }
-  assert.deepEqual(psIdentity(4242, { exec }), { start_time: 'Wed Oct 7 04:27:00 2026', boot_id: null })
+  const BOOT = '{ sec = 1760000000, usec = 123456 } Thu Oct  9 08:53:20 2025\n' // `sysctl -n kern.boottime` as macOS prints it
+  const exec = (file, args, opts) => { calls.push([file, ...args, opts.env.LC_ALL]); if (file === 'sysctl') return { status: 0, stdout: BOOT, stderr: '' }; return args.includes('4242') ? { status: 0, stdout: 'Wed Oct  7 04:27:00 2026\n', stderr: '' } : { status: 1, stdout: '', stderr: '' } }
+  const ID = { start_time: 'Wed Oct 7 04:27:00 2026', boot_id: '1760000000' }
+  assert.deepEqual(psIdentity(4242, { exec }), ID)
   assert.deepEqual(psIdentity(1, { exec }), { start_time: null, boot_id: null })
-  assert.deepEqual(calls, [['ps', '-o', 'lstart=', '-p', '4242', 'C'], ['ps', '-o', 'lstart=', '-p', '1', 'C']])
-  assert.deepEqual(identityFor({ platform: 'darwin', exec })(4242), { start_time: 'Wed Oct 7 04:27:00 2026', boot_id: null })
+  assert.deepEqual(calls, [['ps', '-o', 'lstart=', '-p', '4242', 'C'], ['sysctl', '-n', 'kern.boottime', 'C'], ['ps', '-o', 'lstart=', '-p', '1', 'C']])
+  assert.deepEqual(identityFor({ platform: 'darwin', exec })(4242), ID)
+  assert.deepEqual(psIdentity(4242, { exec: (file, args, o) => (file === 'sysctl' ? { status: 1, stdout: '', stderr: '' } : exec(file, args, o)) }).boot_id, null, 'an unreadable boot time is not known, never a guess')
   const before = calls.length
   const p = fakeProc()
   try {

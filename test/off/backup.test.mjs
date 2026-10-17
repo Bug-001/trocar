@@ -105,8 +105,8 @@ test('R2: a backup that cannot be written leaves the user file byte for byte and
     put(backupDir(home), 'this is a file where the backup directory should be') // mkdir fails: EEXIST / ENOTDIR
     const m = newManifest()
     const run = () => (kind === 'text'
-      ? applyTextEntry({ home, dir, manifest: m, harness: 'codex', file: f, edit: BLOCK })
-      : applyJsonKey({ home, dir, manifest: m, harness: 'claude-code', file: f, keys: K, value: '/h/.asight/collector/ca/asight-ca.pem' }))
+      ? applyTextEntry({ phase: 'install', home, dir, manifest: m, harness: 'codex', file: f, edit: BLOCK })
+      : applyJsonKey({ phase: 'install', home, dir, manifest: m, harness: 'claude-code', file: f, keys: K, value: '/h/.asight/collector/ca/asight-ca.pem' }))
     assert.throws(run, (e) => e.code === 'backup-failed' && e.message.includes(f) && /not (changed|touched)/.test(e.message), kind)
     assert.deepEqual(fs.readFileSync(f), before, `${kind}: the user file is byte for byte`)
     assert.equal(fs.statSync(f).mtimeMs, st.mtimeMs, `${kind}: and was not even rewritten`)
@@ -126,7 +126,7 @@ test('R2: a write that fails half-way (disk full) removes the partial backup, le
     openSync: (p, ...a) => { const fd = fs.openSync(p, ...a); fdPath.set(fd, p); return fd },
     writeSync: (fd, ...a) => { if (spyOn && String(fdPath.get(fd)).startsWith(backupDir(home) + path.sep)) throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }); return fs.writeSync(fd, ...a) },
   }
-  assert.throws(() => applyJsonKey({ home, dir, manifest: newManifest(), harness: 'claude-code', file: f, keys: K, value: '/x.pem', fs: spy }), (e) => e.code === 'backup-failed' && /ENOSPC|no space/.test(e.message))
+  assert.throws(() => applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'claude-code', file: f, keys: K, value: '/x.pem', fs: spy }), (e) => e.code === 'backup-failed' && /ENOSPC|no space/.test(e.message))
   spyOn = false
   assert.deepEqual(fs.readFileSync(f), before)
   assert.deepEqual(fs.existsSync(backupDir(home)) ? fs.readdirSync(backupDir(home)) : [], [], 'no half-written backup is left to be mistaken for a good one')
@@ -134,7 +134,7 @@ test('R2: a write that fails half-way (disk full) removes the partial backup, le
 
 test('R2: an entry of an existing file carries its backup (the bytes before the change), kind, undo_by_hand and pre_sha256; the manifest holds no contents', () => {
   const { home, dir } = box(); const f = put(path.join(home, '.claude', 'settings.json'), USER_JSON, 0o640)
-  const e = applyJsonKey({ home, dir, manifest: newManifest(), harness: 'claude-code', file: f, keys: K, value: '/h/.asight/collector/ca/asight-ca.pem', now: T })
+  const e = applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'claude-code', file: f, keys: K, value: '/h/.asight/collector/ca/asight-ca.pem', now: T })
   assert.equal(e.kind, 'json-key')
   assert.equal(e.backup, path.join(backupDir(home), backupName(f, T)))
   assert.equal(fs.readFileSync(e.backup, 'utf8'), USER_JSON, 'the backup is the file as it was before the change')
@@ -146,7 +146,7 @@ test('R2: an entry of an existing file carries its backup (the bytes before the 
   assert.equal(readManifest(dir).entries[0].backup, e.backup)
 
   const env = put(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-1\n')
-  const t = applyTextEntry({ home, dir, manifest: newManifest(), harness: 'codex', file: env, edit: BLOCK, now: T })
+  const t = applyTextEntry({ phase: 'install', home, dir, manifest: newManifest(), harness: 'codex', file: env, edit: BLOCK, now: T })
   assert.equal(t.kind, 'text')
   assert.equal(fs.readFileSync(t.backup, 'utf8'), 'OPENAI_API_KEY=sk-1\n')
   assert.equal(sha256(fs.readFileSync(t.backup)), t.pre_sha256)
@@ -155,33 +155,33 @@ test('R2: an entry of an existing file carries its backup (the bytes before the 
 
 test('R2: a file asight creates is not backed up: backup null, existed_before false, and no backup directory appears', () => {
   const { home, dir } = box()
-  const e = applyJsonKey({ home, dir, manifest: newManifest(), harness: 'claude-code', file: path.join(home, '.claude', 'settings.json'), keys: K, value: '/x.pem', now: T })
+  const e = applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'claude-code', file: path.join(home, '.claude', 'settings.json'), keys: K, value: '/x.pem', now: T })
   assert.deepEqual([e.existed_before, e.backup], [false, null])
   assert.ok(e.undo_by_hand.length > 10, 'still one sentence on how to take it out by hand')
-  const t = applyTextEntry({ home, dir, manifest: newManifest(), harness: 'codex', file: path.join(home, '.codex', '.env'), edit: BLOCK, now: T })
+  const t = applyTextEntry({ phase: 'install', home, dir, manifest: newManifest(), harness: 'codex', file: path.join(home, '.codex', '.env'), edit: BLOCK, now: T })
   assert.deepEqual([t.existed_before, t.backup], [false, null])
   assert.ok(!fs.existsSync(backupDir(home)))
 })
 
 test('R2: a change that changes nothing (the key already holds asight\'s value) writes no backup', () => {
   const { home, dir } = box(); const f = put(path.join(home, 's.json'), '{"env":{"NODE_EXTRA_CA_CERTS":"/x.pem"}}')
-  assert.equal(applyJsonKey({ home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/x.pem' }), null)
+  assert.equal(applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/x.pem' }), null)
   assert.ok(!fs.existsSync(backupDir(home)))
 })
 
 test('R2: a refused change (not a JSON object, a dangling link) writes no backup and no manifest', () => {
   const { home, dir } = box(); const f = put(path.join(home, 's.json'), 'not json at all')
-  assert.throws(() => applyJsonKey({ home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/x.pem' }))
+  assert.throws(() => applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/x.pem' }))
   const link = path.join(home, 'dangling'); fs.symlinkSync(path.join(home, 'nowhere'), link)
-  assert.throws(() => applyTextEntry({ home, dir, manifest: newManifest(), harness: 'h', file: link, edit: BLOCK }), /symbolic link to a file that does not exist/)
+  assert.throws(() => applyTextEntry({ phase: 'install', home, dir, manifest: newManifest(), harness: 'h', file: link, edit: BLOCK }), /symbolic link to a file that does not exist/)
   assert.ok(!fs.existsSync(backupDir(home)) && readManifest(dir) === null)
 })
 
 test('R2: each change is its own backup: the second one keeps the first, and the first still holds the original bytes', () => {
   const { home, dir } = box(); const f = put(path.join(home, 's.json'), USER_JSON)
-  const e1 = applyJsonKey({ home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/one.pem', now: T })
+  const e1 = applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/one.pem', now: T })
   const after1 = fs.readFileSync(f, 'utf8')
-  const e2 = applyJsonKey({ home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/two.pem', now: T })
+  const e2 = applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'h', file: f, keys: K, value: '/two.pem', now: T })
   assert.notEqual(e1.backup, e2.backup)
   assert.equal(fs.readFileSync(e1.backup, 'utf8'), USER_JSON)
   assert.equal(fs.readFileSync(e2.backup, 'utf8'), after1, 'the second backup is the file as the first change left it')
@@ -191,7 +191,7 @@ test('R2: each change is its own backup: the second one keeps the first, and the
 test('R2: a symlinked file is backed up under the path the user knows (the link), holding the target\'s bytes', () => {
   const { home, dir } = box(); const target = put(path.join(home, 'dotfiles', 'settings.json'), USER_JSON)
   const link = path.join(home, '.claude', 'settings.json'); fs.mkdirSync(path.dirname(link)); fs.symlinkSync(target, link)
-  const e = applyJsonKey({ home, dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: '/x.pem', now: T })
+  const e = applyJsonKey({ phase: 'install', home, dir, manifest: newManifest(), harness: 'h', file: link, keys: K, value: '/x.pem', now: T })
   assert.equal(e.real_path, fs.realpathSync(target))
   assert.deepEqual(backupsOf({ home, file: link }), [e.backup])
   assert.deepEqual(backupsOf({ home, file: target }), [], 'keyed by the entry\'s path, as the manifest and the receipt name it')

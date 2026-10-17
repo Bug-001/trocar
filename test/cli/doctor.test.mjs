@@ -13,6 +13,7 @@ import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo, recordingExec, snapshot, changedFiles } from './fixtures/on-ctx.mjs'
 import { down, reply, asDaemon, SOCK } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { closure } from '../helpers/imports.mjs'
 
@@ -30,7 +31,7 @@ function capture(dir, { n = 1, mode = 0o600, name = 'capture.ndjson' } = {}) {
 }
 /** A HOME where asight has not been turned on: a doctor with nothing of its own to look at. */
 const plain = () => { const home = tmpDir('asight-doc-'); return { home, sh: { env: { HOME: home } }, sys: { exec: recordingExec() } } }
-const DEPS = { has: () => true, verify: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
+const DEPS = { spawn: absentSpawn, has: () => true, verify: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
 async function doctor(s, argv = [], { deps = {}, io = fakeIo(), platform = 'linux' } = {}) {
   const exit = await runDoctor(argv, { io, home: s.home, platform, env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run'), ASIGHT_SOURCE: '' }, deps: { ...DEPS, exec: s.sys.exec.run, ...deps } })
   return { exit, io, out: io.stdoutText(), err: io.stderrText(), text: io.text() }
@@ -275,41 +276,14 @@ test('--json: one document that validates, the verdict and its reasons, the file
 })
 
 
-// the codex WebSocket cert hint (measured on a Windows test machine): on win32, doctor says — for codex, when the named cert-store opt-in is not recorded — that capturing Codex's WebSocket needs it. Never an install, and nothing to say on other platforms or once the item is in the ledger.
-const CODEX_WS_HINT = 'Windows 上采 Codex 的 WebSocket 需要点名装证书: asight on codex --opt-in cert-store-current-user(会弹 Windows 自己的确认框,不弹不装)'
-const manifestWith = (entries) => { const dir = (h) => path.join(h, '.asight', 'collector'); return (h) => { const d = dir(h); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'install-manifest.json'), JSON.stringify({ version: 2, entries, files: [], liveness: {}, kept_backups: [], dirs: [], confirmed_paths: [], complete: true })) } }
-test('the codex WebSocket cert hint on win32: said for codex when the cert-store opt-in is not recorded, silent once it is, silent on other platforms', async () => {
-  const noRecord = plain(); manifestWith([])(noRecord.home)
-  let r = await doctor(noRecord, ['codex'], { platform: 'win32' })
-  assert.ok(r.out.includes(CODEX_WS_HINT), `the hint is there: ${r.out}`)
-  r = await doctor(noRecord, [], { platform: 'win32' }) // no harness named: every harness is the question
-  assert.ok(r.out.includes(CODEX_WS_HINT), 'and when nothing is named')
-  r = await doctor(noRecord, ['claude-code'], { platform: 'win32' })
-  assert.ok(!r.out.includes(CODEX_WS_HINT), 'not for another harness alone')
-  r = await doctor(noRecord, ['codex'], { platform: 'darwin' })
-  assert.ok(!r.out.includes(CODEX_WS_HINT), 'not on another platform')
-  const done = plain(); manifestWith([{ kind: 'optin-cert-user', harness: 'claude-code', form: 'claude-code.desktop', item: 'cert-store-current-user', scope: 'user', path: 'claude-code.desktop:cert-store-current-user', installed_at: '2026-10-12T00:00:00Z' }])(done.home)
-  r = await doctor(done, ['codex'], { platform: 'win32' })
-  assert.ok(!r.out.includes(CODEX_WS_HINT), 'the item in the ledger: the hint has done its job and goes')
-})
-
-// the Claude Desktop steering hint (4.9 §6.4): on darwin, doctor says — for claude-code, when the named desktop-launcher
-// opt-in is not recorded — that capturing Desktop needs the launcher, with the needs_restart honesty riding in the line. Never an install, and nothing
-// to say on other platforms or once the item is in the ledger (the codex hint's darwin twin).
-const DESKTOP_HINT = 'macOS 上采 Claude Desktop 需要点名建启动器: asight on claude-code --opt-in claude-code.desktop(写 ~/.asight/collector/bin/claude-desktop-asight;只有经它启动的 Desktop 才被引流,已在跑的 Desktop 不受影响——先退出再用它启动)'
-test('the Claude Desktop steering hint on darwin: said for claude-code when the desktop-launcher opt-in is not recorded, silent once it is, silent on other platforms', async () => {
-  const noRecord = plain(); manifestWith([])(noRecord.home)
-  let r = await doctor(noRecord, ['claude-code'], { platform: 'darwin' })
-  assert.ok(r.out.includes(DESKTOP_HINT), `the hint is there: ${r.out}`)
-  r = await doctor(noRecord, [], { platform: 'darwin' })
-  assert.ok(r.out.includes(DESKTOP_HINT), 'and when nothing is named')
-  r = await doctor(noRecord, ['codex'], { platform: 'darwin' })
-  assert.ok(!r.out.includes(DESKTOP_HINT), 'not for another harness alone')
-  r = await doctor(noRecord, ['claude-code'], { platform: 'win32' })
-  assert.ok(!r.out.includes(DESKTOP_HINT), 'not on another platform')
-  const done = plain(); manifestWith([{ kind: 'optin-desktop-launcher', harness: 'claude-code', form: 'claude-code.desktop', item: 'desktop-launcher', scope: 'user', path: '/x/bin/claude-desktop-asight', confirmed: true, installed_at: '2026-10-12T00:00:00Z' }])(done.home)
-  r = await doctor(done, ['claude-code'], { platform: 'darwin' })
-  assert.ok(!r.out.includes(DESKTOP_HINT), 'the item in the ledger: the hint has done its job and goes')
+// D57: no named items, so doctor names no `--opt-in` (the codex WebSocket and Claude Desktop launcher hints went with them; the Windows
+// opt-in-needed / not-via-entry / needs-admin rows and their codes left the closed sets with them).
+test('D57 / V72: doctor prints no --opt-in line on darwin, linux or win32, for every harness and none', async () => {
+  const s = plain()
+  for (const platform of ['darwin', 'linux', 'win32']) for (const names of [[], ['codex'], ['claude-code']]) {
+    const r = await doctor(s, names, { platform })
+    assert.ok(!/--opt-in/.test(r.out), `${platform} ${names.join(' ')}: ${r.out}`)
+  }
 })
 
 // ── V66 wired (1.6 §9.6, D51③⑤): from the flows/ a daemon wrote to the line doctor prints — no facts injected ─────────────────────────────────────────────────────

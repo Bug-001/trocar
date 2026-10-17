@@ -32,9 +32,14 @@ export function factsOf(text) {
   return out
 }
 
-test('1 · each external fact is written once in src/: a second copy is an import away', () => {
+// The end-to-end suite (T26) is held to the same rule over src/ ∪ the suite: a suite file that repeats a path, port or version src/ owns
+// imports it, and one fact of the suite's own is written once. Empty until the suite exists; the rule covers it the day it appears.
+const SUITE_DIR = path.join('test', 'lab', 'suite')
+export const suiteFiles = (root = ROOT) => (fs.existsSync(path.join(root, SUITE_DIR)) ? walk(SUITE_DIR) : [])
+
+test('1 · each external fact is written once in src/ and the end-to-end suite: a second copy is an import away', () => {
   const where = new Map()
-  for (const f of SRC) for (const fact of factsOf(code(read(f)))) where.set(fact, [...(where.get(fact) || []), f])
+  for (const f of [...SRC, ...suiteFiles()]) for (const fact of factsOf(code(read(f)))) where.set(fact, [...(where.get(fact) || []), f])
   const twice = [...where].filter(([, fs_]) => fs_.length > 1).map(([fact, fs_]) => `${fact}: ${fs_.join(', ')}`)
   assert.deepEqual(twice, [], 'move the fact into the module that owns it and import it')
 })
@@ -103,8 +108,6 @@ const COUNT_PINS = {
   'test/collector/arch/win32/helper.test.mjs': 1,
   'test/collector/core/socks.test.mjs': 1,
   'test/collector/core/tls-ca.test.mjs': 1,
-  'test/collector/harness/darwin-forms.test.mjs': 1,
-  'test/collector/harness/win32-forms.test.mjs': 1,
   'test/dissect/request-body.test.mjs': 1,
   'test/query/source-refresh.test.mjs': 2,
   'test/raw/seal-locks.test.mjs': 1,
@@ -155,7 +158,7 @@ export function testOnlyExports() {
 }
 // The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
 // It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
-const TEST_ONLY_EXPORTS_CEILING = 320 // D51 T3 raised it for src/off/identity.mjs + identityView before their callers; the registry (T4) took three of them in, the daemon's agents.json watch (T5) readAgentList; the door (T7) took WIDE in; T10 deleted the form matcher; the D51 review fixes took one more in
+const TEST_ONLY_EXPORTS_CEILING = 325 // W25 by whoami (-1, measured): src/off/win32 elevationByWhoami has a src caller now, arch/win32 refuseElevated; (-1, measured): netenv/adopt recordDrift has a src caller again, the model's system-proxy watcher (arch/model-backends.mjs); lab2/suite (+1, reason): model-install ROOT_SUBJECT, the subject the lab's reset knows asight's root by when no clean start exists yet (4.10 §7 还原; imported, never copied); (-1, measured): darwin netfacts' start-time reader went with startSetting / noProxy, which no proxy-mode reader reads; (+1, measured; reason: plugins/opencode/asight-ca.js AsightCaPlugin is the name OpenCode loads, not a src caller's, and only its deleted plugins/win32 twin named it before; deepseek-dsh MIN_NODE was unexported in the same commit); (-1, measured): confirm.mjs MARKER_TOLERANCE_MS went with the Windows plugin markers' tolerance; (-22, measured): schema validateOptIn / OPTIN_STATES, the Windows opt-in family (optin.mjs, userpath.mjs, shims.mjs, elevate.mjs), then manifest OPTIN_KINDS / OPTIN_MACHINE_KINDS deleted. (-1, measured): the upstream trunks and readHkcuEnv deleted. (+6, measured, not new): the deleted old win32 collector was the only src file naming helper HELPER_PROTO, upstream readHkcuEnv (deleted next), ingress-config ENGINE_RANGE / GROUP_RANGE / INGRESS_FILE, proxymode/entries recordsOf, confirm MARKER_TOLERANCE_MS and codes UNTRACKED_REASONS; netfacts entryPlaceOf, helper declaredRegAllow and policyAllowOf left
 
 test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
   const n = testOnlyExports().length

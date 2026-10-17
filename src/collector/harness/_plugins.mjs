@@ -1,9 +1,8 @@
 // _plugins.mjs — the in-process trust plugins (RFC 4.6 §身份与信任「进程内插件:有界例外」, D37④) and the launch shims
 // (4.6 Kimi row): their sources live in plugins/<harness>/ and shims/<command>, and install writes them with this
 // user's CA file (and the plugins' marker directory) filled in. The plugin sources are checked statically and run
-// against stubs by test/collector/harness/plugins.test.mjs (T13); the shim is run by its harness's test. The Windows
-// .cmd shims and launchers of 4.8's opt-in items (§6.3 / §2.4) used to be templates here too; they are arch/win32's
-// own (src/collector/arch/win32/shims.mjs) — the layering rules keep arch/ off harness/.
+// against stubs by test/collector/harness/plugins.test.mjs (T13); the shim is run by its harness's test. Linux only: the
+// Windows plugin sources (plugins/win32/) went with the overlays; proxy mode's plugin templates are harness/templates/ (core/proxymode/hooks/render.mjs).
 import fs from 'node:fs'
 
 export const PLUGIN_SOURCES = new URL('./plugins/', import.meta.url)

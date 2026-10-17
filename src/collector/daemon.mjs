@@ -3,7 +3,9 @@
 // before anything else (one daemon, one helper per user), spawns the capability helper through arch, serves the
 // engine on loopback, restores the desired switch state, and fails open everywhere: a dead helper means direct
 // connections, never broken ones. It never mints the CA: `asight on` does, inside the manifest.
+import crypto from 'node:crypto'
 import fs from 'node:fs'
+import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
 import { asightHome, collectorHome } from '../paths.mjs'
@@ -12,6 +14,7 @@ import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
 import { createTrustChecker } from './core/trust/confirm.mjs'
 import { readManifest, installedAt } from './core/trust/journal.mjs'
+import { daemonMayStart } from '../off/manifest.mjs'
 import { rewriteBundles } from './core/trust/bundle.mjs'
 import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
@@ -27,26 +30,27 @@ import { createEngine } from './core/engine/engine.mjs'
 import { appendEvent, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 import { procIdentity, captureHealth } from '../health/read.mjs'
+import { identityFor } from '../off/proc.mjs'
+import { runAsync } from '../off/exec.mjs'
 import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
-import { createRetention, retentionFile } from '../capture/retention.mjs'
-import { endpointClass } from '../capture/envelope.mjs'
-import { makeClassifier, harnessIdOfAgent } from '../dissect/traffic.mjs'
+import { retentionFile } from '../capture/retention.mjs'
+import { retentionHook, wsTerminalHook } from './engine-data.mjs'
+import { isModelOs, backendsFor, doorPartsFor, sourcesCtx } from './arch/model-backends.mjs'
+import { createModelCollector } from './core/proxymode/collector.mjs'
+import { TEMPLATES } from './harness/templates/index.mjs'
+import { readStateFile } from '../off/state.mjs'
 
 export { loadArch } // the CLI reaches arch only through this file (layering rule 5)
 
 // What install / uninstall need from arch and harness, without starting anything: the descriptors, the OS key,
 // and the process table (`scan` reads /proc; it does not need the helper).
-export async function loadParts({ arch = null, harnesses = null, env = process.env, agentList = [] } = {}) {
-  const A = arch || (await loadArch())
+export async function loadParts({ arch = null, harnesses = null, env = process.env, agentList = [], platform = process.platform } = {}) {
+  const A = arch || (await loadArch(platform)) // the CLI's platform (V14: a platform with no collector is refused here, by loadArch's own error)
   const list = harnesses || (await loadHarnesses())
-  // The darwin collector's LAZY construction (4.9 §1 接线) makes building one here safe: with { env, harnesses } only, it is the shell — a watcher `scan` can use, no
-  // ingress.json created, nothing started. Linux ignores the extra argument; the win32 collector's construction is the win line's own open seam (it wants the dir), so on win32
-  // NO redirector is built here at all (arch/index.mjs's win32 arm says the same: loadParts makes no redirector on win32) and this parts view answers an empty process table —
-  // the CLI's `on` plan and `status` read paths work without a collector dir; the daemon itself builds the real one with the dir. Measured on a Windows test machine: without
-  // this, `asight on --yes` on Windows died at once with createWin32Collector's "needs the collector dir (~/.asight/collector)".
+  // darwin / win32 run the collector model (runModelDaemon): no redirector here, and this parts view answers an empty process table
   // the registry judges by name on every OS (D51) and is built FIRST: the doors ask it (identify), the redirector does not feed it
   const registry = createRegistry(list, { agentList }) // agentList: readAgentList's entries (the user's ~/.asight/agents.json, D51③); the daemon swaps them in place
-  const redirector = A.os === 'win32' ? null : await A.createRedirector({ env, harnesses: list, identify: registry.match }) // the await is the point: darwin's collector is async (4.9 §1), and without it `redirector` here is a Promise — `scan()` throws TypeError (review F1, reproduced on the real call before this line); Linux's and win32's sync returns pass through the await untouched
+  const redirector = isModelOs(A.os) ? null : await A.createRedirector({ env }) // awaited: a test's arch may answer async
   // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `asight on` says so (1.6 §1.1), it never enables it (R8)
   return { arch: A, os: A.os, harnesses: list, registry, scan: () => (redirector ? redirector.scan() : []), match: (f) => registry.match(f), linger: () => (redirector && typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (redirector && typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
 }
@@ -134,14 +138,21 @@ function agentListWatch({ home, write }) {
   }
 }
 
-async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = procIdentity, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null }) {
+/** The previous run's lock, read before this start writes its own (4.6 §事件与码, D38): a lock still there means that daemon never finished its stop
+ *  (doStop removes it last), so it is said as `failure {where:'daemon', code:'unclean-stop'}` before daemon-start. Called only after startControlServer claimed the
+ *  collector: before that the lock may be a live daemon's. No lock: a clean stop. */
+function noteUncleanStop(lock, failure) {
+  let stale = null
+  let unreadable = false
+  try { stale = JSON.parse(fs.readFileSync(lock, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true } // ENOENT: the last daemon stopped cleanly
+  if (stale && stale.pid) failure('daemon', coded(new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it, and connections then in flight through its engine were cut (how many is not known)`), 'unclean-stop'))
+  else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
+}
+
+async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {} }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
-  let manifest
-  try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
-  const ca = manifest && manifest.complete ? readCa({ dir: P.caDir }) : null
-  if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight on" first'), { code: 'not-installed' })
   // The arch is loaded once, here at the entry (loadParts below takes it back): the platform's start gates and endpoint come before anything is claimed.
   // The endpoint is any arch that has one: darwin's control.json — a random name under the user's $TMPDIR, 0600, with a token every request carries
   // (arch/darwin/control-path.mjs, 4.9 §7; the same file the CLI's `off` reads; found live by a smoke run 2026-10-09: without this arm the darwin daemon
@@ -155,6 +166,13 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   }
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
+  // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows })
+  identity = identity || procIdentity
+  let manifest
+  try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
+  const ca = daemonMayStart(manifest) ? readCa({ dir: P.caDir }) : null
+  if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight on" first'), { code: 'not-installed' })
   let markReady
   const ready = new Promise((r) => { markReady = r })
   const impl = {} // filled once wiring is done; requests that arrive earlier wait for it
@@ -171,11 +189,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   try {
     // First the previous run (4.6 §事件与码): an unclean stop is the first line of this start; readers take this start's
     // lines from here on as this run's, up to and past daemon-start — the CA check below included.
-    let stale = null
-    let unreadable = false
-    try { stale = JSON.parse(fs.readFileSync(P.lock, 'utf8')) } catch (e) { if (e.code !== 'ENOENT') unreadable = true } // ENOENT: the last daemon stopped cleanly
-    if (stale && stale.pid) failure('daemon', coded(new Error(`the previous daemon (pid ${stale.pid}) ended without a clean stop (crash, kill -9 or power loss); its helper and links went with it, and connections then in flight through its engine were cut (how many is not known)`), 'unclean-stop'))
-    else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
+    noteUncleanStop(P.lock, failure)
     // The CA is checked at start and once a day (D-4, 4.6 §身份与信任「CA」): both files readable, a pair, inside its
     // validity. Unusable → this daemon never hooks (agents go direct, zero errors) and says "CA unusable" — not
     // "not installed" — in flows/ (ca-invalid: which part, which file, the errno) and in status.
@@ -205,16 +219,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       failure.write({ event: 'ca-ok', file: caState.file, reason: 'the collector CA is usable again: leaves are signed with it and agents are judged against it from now on' })
     }, caCheckMs)
     caTimer.unref()
-    // D40 (4.6 §记录「保存级别」): which traffic class a call is and how much of it to keep. The settings file is read by the
-    // engine at the start of every request (re-checked at most once a second, no restart) and a problem with it is a failure event
-    // here (flows/, folded) — the call is kept in full meanwhile. The class patterns are the read-side harness table's data
-    // (src/dissect), handed in as a function: the core names no harness (D20, 0.1 §5).
-    const keep = createRetention({
-      file: retentionPath || retentionFile(path.dirname(P.dir)),
-      classify: makeClassifier({ endpointClass, rows: trafficRows, onInvalid: (b) => failure.event({ where: 'retention', code: 'pattern-invalid', reason: `a traffic pattern of ${b.harness} is skipped (${b.reason}): ${JSON.stringify(b.entry)}` }) }),
-      onFailure: (rec) => failure.event(rec),
-      onOk: (rec) => failure.write(rec),
-    })
+    const retention = retentionHook({ file: retentionPath || retentionFile(path.dirname(P.dir)), rows: trafficRows, failure }) // D40, engine-data.mjs
     const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
@@ -223,16 +228,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
 
     const nextAgentList = agentListWatch({ home: netHome, write: (rec) => failure.write(rec) }) // at start here, then on every 5 s check
     const { registry, arch: A, harnesses: harnessList } = await loadParts({ arch: A0 ?? arch, harnesses, env, agentList: (nextAgentList() || { entries: [] }).entries })
-    // 4.9 §1 wiring: the darwin collector needs the collector dir and this daemon's sinks, so it is built here with them (started below; the kernel itself
-    // comes with the first attach, 4.8 §4.1) — `desired` reads state.json as it is NOW: the switch changes it while this daemon runs. The win32 collector needs
-    // exactly the same shape (createWin32Collector({ env, dir, home, harnesses, failure, event, manifest, desired }) — wiring.mjs), so it joins this arm: with
-    // only { env } it THREW "needs the collector dir" and the daemon crash-looped (on a Windows test machine: `asight daemon --supervise` exited 70 with that
-    // TypeError — the comment below used to claim the construction lived elsewhere; it does not, this ternary is the only construction the daemon has).
-    // Linux keeps the plain core redirector.
-    redirector = A.os === 'darwin' || A.os === 'win32'
-      ? await A.createRedirector({ env, dir, home: netHome, harnesses: harnessList, failure, event, identify: registry.match, manifest: () => readManifest(P.dir), desired: () => { const st = readState(P.state, () => {}, {}); return st.harnesses || {} } })
-      : A.createRedirector({ env })
-    const bag = redirector && ((typeof redirector.darwin === 'object' && redirector.darwin) || (typeof redirector.win32 === 'object' && redirector.win32) || null) // the arch bag (darwin's or win32's wiring): what only the daemon reaches
+    redirector = A.createRedirector({ env }) // Linux's core redirector: darwin / win32 never reach here (runModelDaemon above)
     // D38: one `agent-untrusted` per pid and reason (code = the resolver's reason, reason = what to do about it); a pid
     // recorded so gets `agent-trusted` once it is trusted and `agent-exit` when it exits, so the condition can clear.
     const recordedUntrusted = new Map() // pid → the reason code last recorded
@@ -325,8 +321,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     // plugins (dsh, OpenCode) write their per-pid marker here; it exists while the daemon runs (0700, the operator's)
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
     const tracker = createTracker({ redirector, registry, trust, onVerdict, markerDir: P.markers, caPem: ca.paths.pem, collectorDir: P.dir,
-      osLayers: bag ? bag.osLayers : null, // the arch bag (4.9 §1 / 4.8 §1): a harness's own per-OS layers, judged by them (4.8 §5.4's shape; win32's bag carries the same key, wiring.mjs)
-      markerToleranceMs: bag && bag.markerToleranceMs || 0, // the bag again (review F4): the plugin writes performance.timeOrigin (sub-millisecond) against ps's second-granular lstart — without the fixed tolerance every dsh/opencode marker reads stale and is never decrypted; 0 stays the Linux byte-exact rule
       installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
       onGone: (row, via) => { // D-24, D-12: the agent and every condition it held are gone; so are its negative-cache entries
         const last = recordedUntrusted.get(row.pid); recordedUntrusted.delete(row.pid) // the reason it was recorded untrusted for ends here
@@ -346,8 +340,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     let helperDown = null
     let sw = null
 
-    // the arch bag (the wiring's, `bag` above): the proxy ingress's port and its token are the engine's own listen arguments on darwin AND win32 — both are proxy mode only, the engine's one door is the ingress (4.8 §5.1, carried by 4.9 §5; win32's bag carries the same ingress() over ingress.json's enginePort, wiring.mjs)
-    const macIng = bag && typeof bag.ingress === 'function' ? bag.ingress() : null
     engine = createEngine({
       redirector: {
         // the transparent `lookup` exists only when the redirector has one (Linux): without it the engine gets no transparent listener (core/redirector.mjs) — darwin is proxy mode only (4.9 §5), its door is the ingress below
@@ -358,7 +350,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
             return m && x ? { ...m, ...x, agent: m.agent ?? x.agent } : m
           },
         } : {}),
-        // the proxy ingress's own answer (4.8 §5.1): win32's kernel CONNECT arrives with of.<form> as the user, darwin's door lookup with the group id (D47) — the redirector's lookupIngress resolves it (a flow's meta, a health probe, or null = refused)
+        // the proxy ingress's own answer (4.8 §5.1): a door's CONNECT arrives with the group id as the user (D47) — the redirector's lookupIngress resolves it (a flow's meta, a health probe, or null = refused)
         ...(typeof redirector.lookupIngress === 'function' ? { lookupIngress: (q) => redirector.lookupIngress(q) } : {}),
       },
       // FlowExtras (plan 3c §2): the harness's WebSocket terminators and this process's own proxies. A throw: the
@@ -369,40 +361,26 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         }
       },
       issuer, store, upstreamCa,
-      ...(macIng ? { ingressToken: macIng.ingressToken } : {}), // win32: the kernel's CONNECT authenticates to the ingress with of.<form>:this token (4.8 §3); darwin: the doors' own token is each group's listener token, this one the ingress's (D47); listen({ingress}) refuses without it
       policy: (meta, host) => tracker.policy(meta, host),
       isRecording: (meta) => sw.isRecording(meta && meta.agent), // sampled per request, per harness (4.6 §开关): a request after off is never recorded
-      retention: (meta, host, method, path) => keep.decide({ harness: harnessIdOfAgent(meta && meta.agent), host, method, endpoint: path }), // sampled with it (D40)
+      retention, // sampled with it (D40)
       onFailure: (rec) => failure.event(rec), // the engine's and the WebSocket recorder's failures: flows/, folded
       onError: (e) => log('engine', e), // stderr only: every one of them is also a record through onFailure
     })
-    // The engine's doors (4.8 §5.1): Linux listens transparently on the port the install recorded; darwin has no transparent listener at all — its one door is the proxy ingress on
-    // ingress.json's enginePort, the port the kernel's config names (a transparent listener bound on that port made every kernel CONNECT a lookup-miss — the CONNECT carries a destination,
-    // not an original one to look up — and every form read back 'fallback'; found live by the lab smoke, 2026-10-09). `port` is whichever door this platform has: darwin's engine port IS the ingress's.
+    // The engine's door (4.8 §5.1): Linux listens transparently on the port the install recorded.
     const want = enginePort ?? manifest.engine_port ?? 0
-    const first = await engine.listen({ port: want, hosts: ['127.0.0.1'], ...(macIng ? { ingress: { port: macIng.enginePort } } : {}) }).catch((e) => {
-      // G3: the port is squatted (Linux: chosen at install; darwin: ingress.json's, chosen at daemon start). Nothing is steered
+    const first = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
+      // G3: the port is squatted (chosen at install). Nothing is steered
       // (the helper is not spawned yet), so the agents' connections stay direct; say so, and how to get a new port.
-      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(macIng
-        ? `the engine's proxy ingress port 127.0.0.1:${macIng.enginePort} (ingress.json) is held by another process; nothing is steered, agent connections go direct. Free the port and start the daemon again`
-        : `the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight uninstall" and "asight on" to pick a new one`), { code: 'EADDRINUSE' })
+      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight uninstall" and "asight on" to pick a new one`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
       throw e
     })
-    const port = macIng ? first.ingressPort ?? null : first.port
-    // D47 (4.9 §3): the darwin engine's own per-group doors — the daemon binds the wiring's slot to the engine the moment both exist, so
-    // the redirector's attach()/detach() can open and close the doors the plan (or the carried set) asks for. `open` is listen({groups})
-    // (idempotent per group id), `close` is closeGroups (stop accepting; in-flight connections drain).
-    if (bag && typeof bag.bindDoors === 'function') {
-      bag.bindDoors({
-        open: (list) => engine.listen({ groups: list }),
-        close: (ids) => Promise.resolve(engine.closeGroups(ids)),
-      })
-    }
+    const port = first.port
     let v6Held = null // the helper steers IPv6 agent connections to [::1]:port: never attach while someone else holds it (M8; darwin has no helper — its agents point at 127.0.0.1 by the entry)
     let v6Error = null // any [::1] failure: status never reports [::1] as listening then (D-10)
     try { await engine.listen({ port: first.port, hosts: ['::1'], ...(first.ingressPort ? { ingress: { port: first.ingressPort } } : {}) }) } catch (e) {
       v6Error = `[::1]:${port}: ${errText(e)}`
-      if (!macIng && e.code === 'EADDRINUSE') v6Held = `[::1]:${port} is held by another process`
+      if (e.code === 'EADDRINUSE') v6Held = `[::1]:${port} is held by another process`
       failure('engine', Object.assign(new Error(`[::1]:${port} unavailable: ${errText(e)}; ${v6Held ? 'on will refuse to attach (M8)' : 'IPv6 agent connections go direct'}`), { code: e.code }))
     }
     async function ensureReady() {
@@ -435,7 +413,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     const installed = () => [...new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness).filter(Boolean))]
     // a manifest the CLI wrote since (and that this build reads, and that is complete) replaces the one read at start; one that cannot be read leaves the old one, and says so
     const reloadManifest = () => {
-      try { const fresh = readManifest(P.dir); if (fresh && !fresh.unsupported && fresh.complete) manifest = fresh } catch (e) { failure('daemon', coded(e, 'manifest-unreadable')) }
+      try { const fresh = readManifest(P.dir); if (fresh && !fresh.unsupported && daemonMayStart(fresh)) manifest = fresh } catch (e) { failure('daemon', coded(e, 'manifest-unreadable')) }
     }
     // desired state → the tracker: which harnesses are enabled, and each one's decrypt policy
     const syncTracker = () => { const st = sw.state(); tracker.setEnabled(sw.enabled()); tracker.setPolicy({ byHarness: Object.fromEntries(Object.entries(st.harnesses).map(([id, h]) => [id, { mode: h.policy, extraHosts: h.extra_hosts }])) }) }
@@ -494,7 +472,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       dropsBase = { ...lastDrops }; dropsAt = Date.now()
     }
     const drift = newDriftState()
-    const entrySeen = { seen: new Set() } // the entry check's once-per-occurrence memory (driftCheck's state.seen shape): in memory, so a daemon restart says a still-broken entry again once
     async function check() {
       if (sw.busy()) return
       const reloaded = await reload() // without a heartbeat running (nothing attached) this is what notices that the file turned something off
@@ -519,31 +496,9 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       // D51③: agents.json changed — the new list judges every row again (one it no longer names leaves, agent-exit via 'list') and the rescan judges the rest, no restart
       const list = nextAgentList()
       if (list) { registry.replaceAgentList(list.entries); await tracker.rejudgeAll('list'); await tracker.rescan() }
-      // 4.9 §6.4's wiring arm, second half (found live on a test machine): the plan a proxy-mode collector runs is a function of the MANIFEST too —
-      // an opt-in's ledger entry names a group — and nothing else re-computes it for a harness that is already on: the switch's `on` answers noop (no attach),
-      // so a launcher applied to a live install pointed at a port no listener was on until the next system-proxy move. The 5 s check re-plans, and when the
-      // plan MOVED it brings the kernel to it — the netenv watcher's own move rule (replan reloads nothing when nothing moved). Darwin's bag carries `replan`;
-      // the win32 twin of this arm is the win line's follow-up (4.9 §6.4's note), so it is scoped to darwin here.
-      if (A.os === 'darwin' && bag && typeof bag.replan === 'function') { try { await bag.replan({ reload: true }) } catch (e) { failure('netenv', e) } }
       // §9.5: the files each harness reads its proxy from, against what `on` found: a change is one `netenv-change` (and one failure when it leaves a harness that is on uncaptured). Read-only: only the operator's
       // `on` writes an agent's setting (D30). No VPN / proxy software is read here or anywhere (D49): `status` and `doctor` compare the same files live.
       driftCheck({ home: netHome, env, harnesses: harnessList, desired: (h) => (sw.state().harnesses[h] || {}).desired ?? null, appendEvent: (rec) => failure.write(rec), state: drift })
-      // 4.8 §2.4「入口还有没有效」+ W68, the daemon's half of the same check: nobody has to run `status` for a displaced shim or an agent started around
-      // the entry to reach flows/ (the 5 s check's own rule). The same check status folds into its rows, through the same arch hook — the manifest as the
-      // disk has it NOW (an `off` that ran under this daemon undid entries; the copy read at start is stale), and the process table this collector itself
-      // lists (parents included: the check's agents half matches them to the forms itself). Only a manifest that holds opt-in entries pays for the scan — a
-      // machine that never named one checks nothing; `record` keeps a finding once per occurrence (driftCheck's state shape) and writes only §9.7's netenv
-      // failure codes (shim-not-on-path, not-via-entry) — an entry-changed or could-not-tell finding reaches status / doctor's rows alone, not the event
-      // log. A platform with no opt-in half (Linux) checks nothing, and a manifest that cannot be read leaves nothing in effect to check (the daemon's own
-      // reload paths say why when they need the manifest). A thrown check lands in the timer's own catch, like every other step of check().
-      const optHook = A.optIn
-      if (optHook && typeof optHook.check === 'function' && typeof optHook.record === 'function') {
-        let m = null
-        try { m = readManifest(P.dir) } catch { /* no entries can be known: nothing is in effect to check */ }
-        if (m && Array.isArray(m.entries) && m.entries.some((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-'))) {
-          optHook.record({ findings: await optHook.check({ harnesses: harnessList, manifest: m, procs: await redirector.scan(), identify: registry.match }), state: entrySeen, appendEvent: (rec) => failure.write(rec) })
-        }
-      }
     }
     const checkTimer = setInterval(() => { check().catch((e) => failure('daemon', coded(e, 'check-error'))) }, checkMs)
     checkTimer.unref()
@@ -571,9 +526,6 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
         helper: { pid, proto, build, expected_proto: redirector.expectedProto, ok: proto === redirector.expectedProto, down: helperDown, unparsable_lines: unparsable, timeouts },
         agents, running_untrusted: agents.filter((a) => !a.trusted && !a.off).length,
         unjudged: { count: unjudged.length, sample: unjudged.slice(0, 10).map((u) => ({ pid: u.pid, comm: u.comm, errno: u.errno })) },
-        // the host sets the plan last applied per host-tree form (4.8 §3, W69): the reply is where `status`'s facts reach them (the wiring's win32 bag keeps them);
-        // `status` compares them with a fresh read and says when the kernel's set is old — read-only, a platform without the bag (Linux) simply says nothing here
-        ...(redirector.win32 && typeof redirector.win32.appliedHosts === 'function' ? { applied_hosts: redirector.win32.appliedHosts() } : {}),
         health: healthOnDisk(P.dir),
         events: failure.health(), // event lines lost (D-1): stderr had each, the next written line is a log-gap
       }
@@ -662,5 +614,109 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     await control.close()
     if (redirector) await redirector.close().catch((w) => failure('helper', w)) // the start failure itself is recorded by startDaemon
     throw e
+  }
+}
+
+// The collector model's daemon (4.11 §1 on / off, §3 ① ②): macOS and Windows. It writes no agent file and no ingress.json — `asight on`
+// writes them after POST /on opened the doors and read them back; the daemon opens doors, judges at the door, signs leaves through the custody, keeps
+// a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
+// { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
+// engine are always the real ones.
+async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows }) {
+  const list = harnesses || (await loadHarnesses())
+  const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
+  let agents = (nextAgentList() || { entries: [] }).entries
+  const registry = createRegistry(list, { agentList: agents })
+  const event = (rec) => failure.write(rec)
+  const b = model.backends || (await backendsFor({ os: A.os, home, env }))
+  const parts = model.parts || (await doorPartsFor({ os: A.os, env, event, failure, io: model.io || {} }))
+  let rootPem = null
+  try { rootPem = fs.readFileSync(path.join(P.caDir, 'asight-ca.pem'), 'utf8') } catch { /* no root: the issuer says so, every door forwards only */ }
+  const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
+  let collector = null
+  const desired = () => { try { return readStateFile(P.state).state.harnesses || {} } catch { return {} } }
+  const engine = createEngine({
+    redirector: { lookupIngress: (q) => collector.lookupIngress(q), servePac: (q) => collector.servePac(q) },
+    issuer: { secureContextFor: (h) => collector.issuer.secureContextFor(h), issue: (h) => collector.issuer.issue(h) }, store, upstreamCa,
+    ingressToken: crypto.randomBytes(24).toString('hex'), // the model listens on no shared ingress: each door carries its group's token (ingress.json's), this one guards nothing
+    isRecording: (meta) => (desired()[meta && meta.agent] || {}).desired === 'on',
+    retention: retentionHook({ file: retentionPath || retentionFile(path.dirname(P.dir)), rows: trafficRows, failure }), describe: wsTerminalHook(list), // D40 and the WebSocket turn edge, as on Linux (engine-data.mjs)
+    onFailure: (rec) => failure.event(rec), onError: (e) => log('engine', e),
+  })
+  collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
+    ctx: sourcesCtx({ os: A.os, home, env, dirs: b.dirs, policy: b.policy }), systemProxy: parts.systemProxy, custody: b.custody || 'unavailable', rootPem, procTable: parts.procTable,
+    record: event, event, proxyOf: parts.proxyOf, templates: TEMPLATES, agentList: () => ({ entries: agents }), ownSid: parts.ownSid || null, openConns: () => engine.stats().active,
+    drain: ({ harnesses: hs, now }) => engine.drain({ agents: new Set(hs), now }),
+    upstreamRoots: upstreamRootsOf({ A, env, upstreamCa, event }) })
+  collector.bindDoors({ open: (l) => engine.listen({ groups: l }), close: (ids) => Promise.resolve(engine.closeGroups(ids)) })
+  let exitAsked = 0, exitTimer = null
+  const status = async () => {
+    const st = collector.issuer.state()
+    const hs = Object.fromEntries(Object.entries(desired()).map(([h, e]) => [h, { ...e, attached: collector.attached(h) }])) // per harness: its doors listen (status's `attached`, 1.6 V32)
+    return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+  }
+  const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
+  let stop = null, markReady
+  // restore() first (runDaemon's `ready` gate): a request that arrives while it reopens the recorded doors waits for it, so an `on` racing a restart
+  // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
+  const ready = new Promise((r) => { markReady = r })
+  const gate = (fn) => async (q) => { await ready; return fn(q) }
+  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: {
+    'GET /status': gate(status),
+    'GET /holders': gate(() => collector.holders()),
+    'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); return collector.on(body(q)) }),
+    'POST /off': gate(async (q) => {
+      const r = await collector.off(body(q))
+      if (body(q).exit === true) { const mine = ++exitAsked; clearInterval(exitTimer); exitTimer = setInterval(() => { if (mine === exitAsked && collector.mayExit()) { clearInterval(exitTimer); stop({ reason: 'off' }) } }, 250) }
+      return r
+    }),
+  } })
+  // only now: the control server refuses a start while another daemon answers, so a lock read before it may be a live daemon's (runDaemon's order)
+  noteUncleanStop(P.lock, failure)
+  try {
+    await collector.start()
+    markReady()
+    const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
+    fs.writeFileSync(`${P.lock}.tmp-${process.pid}`, JSON.stringify({ pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }) + '\n', { mode: 0o600 })
+    fs.renameSync(`${P.lock}.tmp-${process.pid}`, P.lock)
+    const lockTimer = setInterval(() => { try { const t = new Date(); fs.utimesSync(P.lock, t, t) } catch (e) { failure('daemon', coded(e, 'record-error')) } }, lockRefreshMs); lockTimer.unref()
+    const listTimer = setInterval(() => { const l = nextAgentList(); if (l) { agents = l.entries; registry.replaceAgentList(agents) } }, 5000); listTimer.unref()
+    failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: VERSION, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
+    let stopping = null, markExited
+    const exited = new Promise((r) => { markExited = r })
+    const doStop = async ({ signal = null, reason = null } = {}) => {
+      clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
+      const failed = []
+      const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
+      await step('control', () => control.close())
+      await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))
+      collector.close(); await step('helper', () => parts.close && parts.close())
+      await step('record', () => store.close())
+      failure.flush()
+      failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
+      fs.rmSync(P.lock, { force: true })
+      return { failed }
+    }
+    stop = (o) => { if (!stopping) { stopping = doStop(o); stopping.then(markExited, () => markExited({ failed: ['stop'] })) } return stopping }
+    return { port: null, socketPath: sock, paths: P, stop, exited, status, engine, collector }
+  } catch (e) {
+    failure.flush(); await control.close(); collector.close(); if (parts.close) parts.close()
+    throw e
+  }
+}
+
+/** The bases the doors verify an upstream with (4.11 §3 ⑭): the OS roots through the one resolver (tls/roots.mjs bundleRoots → the arch's osRoots,
+ *  4.9 §5.4 / 4.8 §6.4), Node's bundled roots, and the daemon's own extra (NODE_EXTRA_CA_CERTS, the upstreamCa test seam) for the union. An OS read
+ *  that fails is recorded (D38) and the base is then empty — never a fixed bundle path. */
+function upstreamRootsOf({ A, env, upstreamCa, event }) {
+  const extra = [].concat(upstreamCa || []).map(String)
+  if (env.NODE_EXTRA_CA_CERTS) { try { extra.push(fs.readFileSync(env.NODE_EXTRA_CA_CERTS, 'utf8')) } catch (e) { event({ event: 'failure', where: 'engine', code: 'trust-store-error', reason: `NODE_EXTRA_CA_CERTS ${env.NODE_EXTRA_CA_CERTS}: ${e.code || e.message}` }) } }
+  return {
+    node: tls.rootCertificates, extra,
+    os: async () => {
+      try { const r = await bundleRoots(A); for (const x of rootsLeftOut(r, ['the doors\' upstream trust'])) event({ event: 'failure', where: 'engine', ...x }); return r.osText } catch (e) {
+        event({ event: 'failure', where: 'engine', code: 'system-roots-unavailable', reason: `the OS roots could not be read for the doors' upstream trust (${e.message || e})` }); return ''
+      }
+    },
   }
 }

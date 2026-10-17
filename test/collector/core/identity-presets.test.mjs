@@ -84,3 +84,48 @@ test('the user\'s list (D51③): a custom item makes a renamed build an agent; i
   reg.replaceAgentList([{ harness: 'deepseek-dsh', name: 'node', args: 'my-fork/bin\\.js' }])
   assert.equal(match(lin('/usr/bin/node', ['node', '/opt/my-fork/bin.js'])).agent, 'deepseek-dsh')
 })
+
+// ── W76 (moved from the old win32 verdicts.test.mjs, which went with the old win32 collector): measured Windows image paths and command lines ──
+// each form's process, as the Windows procinfo gives it (the command line split the helper's way, splitCommandLine), is its harness by the one name list.
+import { splitCommandLine } from '../../../src/collector/arch/win32/procinfo.mjs'
+const IMG = {
+  ccCli: String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`,
+  ccVscode: String.raw`C:\Users\u\.vscode\extensions\anthropic.claude-code-2.1.289-win32-x64\resources\native-binary\claude.exe`,
+  ccDesktop: String.raw`C:\Program Files\WindowsApps\Claude_1.0.0.0_x64__abc\app\claude.exe`,
+  codexNpm: String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe`,
+  codexApp: String.raw`C:\Users\u\AppData\Local\OpenAI\Codex\bin\0123456789abcdef\codex.exe`,
+  hermesPy: String.raw`C:\Users\u\AppData\Local\hermes\tools\python-3.12.6\python.exe`,
+  kimi: String.raw`C:\Users\u\.kimi-code\bin\kimi.exe`,
+  node: String.raw`C:\Program Files\nodejs\node.exe`,
+  dshDesktop: String.raw`C:\Users\u\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe`,
+  opencode: String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode.exe`,
+  opencodeDesk: String.raw`C:\Users\u\AppData\Local\@opencode-aidesktop\OpenCode.exe`,
+  zcode: String.raw`C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe`,
+  svchost: String.raw`C:\Windows\System32\svchost.exe`,
+}
+const DSH_CMD = String.raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\lib\bin.js`
+// what `hermes.exe -z …` execs (measured win 2026-10-14): the private python runs the zip appended to the launcher
+const HERMES_CMD = String.raw`"C:\Users\u\AppData\Local\hermes\tools\python-3.12.6\python.exe" -I "C:\Users\u\AppData\Local\hermes\bin\hermes.exe" -z "hi"`
+const HERMES_RERUN_CMD = String.raw`"C:\Users\u\AppData\Local\hermes\tools\python-3.12.6\python.exe" -I -I -c "import sys, runpy; sys.argv = ['C:\\Users\\u\\AppData\\Local\\hermes\\bin\\hermes.exe', '-z', 'hi']; runpy.run_path('C:\\Users\\u\\AppData\\Local\\hermes\\bin\\hermes.exe', run_name='__main__')"`
+const ZCODE_NET_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" --type=utility --utility-sub-type=network.mojom.NetworkService`
+const ZCODE_CMD = String.raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" C:\Users\u\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs app-server --stdio`
+
+/** What the Windows procinfo gives, with the field Task 8(v) added: `envRead: false` says "this OS never reads another process's environment", so `env: null` is the rule here and not a failure to read. */
+const winFacts = (pid, exe, extra = {}) => ({ os: 'win32', pid, ppid: 1, name: exe.split('\\').pop(), exe, argv: splitCommandLine(extra.cmdline === undefined ? `"${exe}"` : extra.cmdline), cmdline: `"${exe}"`, env: null, envRead: false, cwd: null, startedAt: 1700000000000 + pid, cmdlineState: 'ok', ...extra })
+const one = (name) => ALL.find((d) => d.name === name)
+
+test('W76 the registry finds the harness of a process of each Windows form by its name; a name alone is not enough where the list asks for arguments; one name list for every OS (D51)', () => {
+  const rows = [
+    [IMG.ccCli, {}, 'claude-code'], [IMG.ccVscode, {}, 'claude-code'], [IMG.ccDesktop, {}, 'claude-code'],
+    [IMG.codexNpm, {}, 'codex'], [IMG.codexApp, {}, 'codex'],
+    [IMG.hermesPy, { cmdline: HERMES_CMD }, 'hermes'], [IMG.hermesPy, { cmdline: HERMES_RERUN_CMD }, 'hermes'], [IMG.kimi, {}, 'kimi-code'],
+    [IMG.node, { cmdline: DSH_CMD }, 'deepseek-dsh'], [IMG.dshDesktop, {}, 'deepseek-dsh'],
+    [IMG.opencode, {}, 'opencode'], [IMG.opencodeDesk, {}, 'opencode'],
+    [IMG.zcode, { cmdline: ZCODE_CMD }, 'z-code'], [IMG.zcode, { cmdline: ZCODE_NET_CMD }, 'z-code'],
+  ]
+  for (const [exe, extra, harness] of rows) assert.deepEqual(REG.match(winFacts(10, exe, extra)), { agent: harness, descriptor: one(harness), reason: 'match' }, `${exe} ${extra.cmdline || ''}: the registry finds ${harness}`)
+  assert.equal(REG.match(winFacts(11, IMG.svchost)).agent, null, 'a process on no list is no agent')
+  assert.deepEqual([REG.match(winFacts(13, IMG.zcode)).agent, REG.match(winFacts(14, IMG.hermesPy)).agent], [null, null], 'the Z-Code GUI itself (no zcode.cjs, no network-service args) and a bare python are no agent')
+  assert.equal(REG.match(winFacts(12, IMG.node, { cmdline: null, argv: [], cmdlineState: 'pending' })).agent, null, 'a command line not known yet judges nothing')
+  for (const d of ALL) assert.ok(d.processes && !d.signatures, `${d.name}: one name list for every OS (D51), no per-OS signatures`)
+})

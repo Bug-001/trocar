@@ -118,6 +118,9 @@ export function handleFlow(client, meta, ctx) {
   // {not_captured, reason} when it can say more (DAEMON_CODES). A process the kernel steers without decrypt is
   // untrusted (with the resolver's reason when the daemon gives one) or untracked. → null (decrypt) or [code, reason]
   function skipOf(host) {
+    // the redirector judged this one connection and said why (`meta.skip`, a closed code + reason; the model door's lookupIngress): said as it is,
+    // whatever the daemon's policy — a model daemon has no tracker table, and its default policy would turn every forwarded row into a bare `untrusted`
+    if (!meta.decrypt && meta.skip && typeof meta.skip === 'object' && DAEMON_CODES.includes(meta.skip.not_captured)) return [meta.skip.not_captured, meta.skip.reason ?? null]
     let v = null
     if (meta.decrypt) v = ctx.policy(meta, host) // a throw is this flow's engine-error (guard)
     else try { v = ctx.policy(meta, host) } catch (e) { ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `policy threw: ${msgOf(e)}` }) }
@@ -424,6 +427,8 @@ export function handleFlow(client, meta, ctx) {
   function terminate(buf, cSock, uSock, sni, host, isTunnel, key, onSecure) {
     // the OS store ∪ Node's roots ∪ NODE_EXTRA_CA_CERTS (+ upstreamCa), one context (tls/roots.mjs)
     if (!ctx.upstreamTrust) ctx.upstreamTrust = createUpstreamTrust({ extra: ctx.upstreamCa })
+    // a proxy-mode door hands the agent's own set (4.11 §3 ⑭, proxymode/upstream-trust.mjs) on the connection's meta; else the union above
+    const trust = (meta && meta.upstreamTrust) || ctx.upstreamTrust
     // rejectUnauthorized:false only so the two upstream failures can be told apart: an 'error' before
     // 'secureConnect' is a network / protocol failure (the client is closed); a 'secureConnect' that is
     // not `authorized` (Node still checks chain and hostname) is a certificate that did not verify
@@ -431,7 +436,7 @@ export function handleFlow(client, meta, ctx) {
     // `host` is the verification identity when the client sent no SNI — an IP-literal destination never does (RFC 6066: SNI is DNS names only), so without it Node
     // verifies against its own default ('localhost') and every IP-literal upstream read ERR_TLS_CERT_ALTNAME_INVALID whatever the certificate (found live by the macOS test machine's
     // smoke, 2026-10-09; proven on node 22 against the mock upstream: no host → ALTNAME_INVALID, host = the address → authorized — and an IP in `servername` throws instead).
-    const upTls = tls.connect({ socket: uSock, servername: sni || undefined, host, ALPNProtocols: ['http/1.1'], secureContext: ctx.upstreamTrust.secureContext, rejectUnauthorized: false })
+    const upTls = tls.connect({ socket: uSock, servername: sni || undefined, host, ALPNProtocols: ['http/1.1'], secureContext: trust.secureContext, rejectUnauthorized: false })
     let clientTls = null
     waitFor('tls', host)
     // While we wait for the upstream, the client socket keeps flowing into `held`: a paused socket never

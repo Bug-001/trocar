@@ -4,7 +4,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { judgeHarness, STATUS_REASONS } from '../../src/cli/status.mjs'
+import { certOfForms } from '../../src/netenv/verdict.mjs'
 import { TRUST_REASONS } from '../../src/health/codes.mjs'
+import { darwinNetFacts } from '../../src/collector/arch/darwin/netfacts.mjs'
 
 // ── V32: the judgement, over every combination of desired state × entry × link × daemon × (no process | one that started before the entry was written | one after) ──────────────────────
 // Columns: desired · entry intact (T / F / N = unknown) · link attached (T / F / N) · daemon · what is said with no process | with a process older than installed_at | with a newer one.
@@ -98,7 +100,7 @@ test('V32: judgeHarness over every desired × entry × link × daemon × process
     const [desired, entry, link, daemon] = key.split(/\s+/)
     ;['none', 'before', 'after'].forEach((proc, i) => {
       const want = said(cells[i])
-      const got = judgeHarness({ desired, entryIntact: FLAG[entry], linkAttached: FLAG[link], daemon: DAEMON[daemon], procs: PROCS[proc], installedAt: INSTALLED_AT })
+      const got = judgeHarness({ desired, entryIntact: FLAG[entry], attached: FLAG[link], daemon: DAEMON[daemon], procs: PROCS[proc], installedAt: INSTALLED_AT })
       const rows = proc === 'none' ? [want] : [{ pid: 7, ...want }]
       assert.deepEqual(got, { captured: want.captured, rows }, `${key} / ${proc}`)
       if (got.rows[0].reason) seen.add(got.rows[0].reason)
@@ -115,7 +117,7 @@ test('the closed set: asight\'s own reasons and every trust reason of 4.6, no du
   assert.ok(Object.isFrozen(STATUS_REASONS))
 })
 
-const ready = { desired: 'on', entryIntact: true, linkAttached: true, daemon: 'running', installedAt: INSTALLED_AT }
+const ready = { desired: 'on', entryIntact: true, attached: true, daemon: 'running', installedAt: INSTALLED_AT }
 test('the daemon\'s own verdict on a process stands: untrusted says its reason, trusted is captured, trusted with a refused host is negative-cache; the harness is captured only when every process is', () => {
   const j = (procs, o = {}) => judgeHarness({ ...ready, procs, ...o })
   assert.deepEqual(j([{ pid: 1, trusted: false, reason: 'var-missing' }]), { captured: false, rows: [{ pid: 1, captured: false, reason: 'var-missing' }] })
@@ -132,21 +134,36 @@ test('the entry says what is wrong with it (missing or changed), a helper that i
   assert.deepEqual(j({ entryIntact: false, entryWhy: 'entry-changed' }), { captured: false, rows: [{ captured: false, reason: 'entry-changed' }] })
   assert.deepEqual(j({ entryIntact: false }).rows[0].reason, 'entry-missing', 'false without a reason is missing')
   assert.deepEqual(j({ helper: 'missing', procs: [{ pid: 3, trusted: true }] }).rows, [{ pid: 3, captured: false, reason: 'helper-missing' }])
-  assert.deepEqual(j({ linkAttached: false, procs: [{ pid: 3, trusted: true }] }).rows, [{ pid: 3, captured: false, reason: 'link-missing' }])
+  assert.deepEqual(j({ attached: false, procs: [{ pid: 3, trusted: true }] }).rows, [{ pid: 3, captured: false, reason: 'link-missing' }])
 })
 
 test('the order of the reasons is off · daemon · helper · link: a missing helper outranks a link that is not there (a dead helper leaves no link, and the fix is the helper), and is outranked by the switch and by the daemon', async () => {
   const j = (o) => judgeHarness({ ...ready, helper: 'missing', procs: [{ pid: 3, trusted: true }], ...o })
   const why = (o) => j(o).rows[0].reason
-  assert.equal(why({ linkAttached: false }), 'helper-missing', 'not link-missing: the user is sent to sudo asight setup-helper, not to asight on')
-  assert.equal(why({ linkAttached: null }), 'helper-missing')
-  assert.equal(why({ linkAttached: true }), 'helper-missing')
-  assert.equal(why({ linkAttached: false, procs: [] }), 'helper-missing', 'the harness\'s own row too')
-  assert.equal(why({ desired: 'off', linkAttached: false }), 'desired-off')
-  assert.equal(why({ daemon: 'not-running', linkAttached: false }), 'daemon-not-running')
-  assert.equal(why({ daemon: 'not-responding', linkAttached: false }), 'daemon-not-responding')
-  assert.deepEqual(j({ daemon: 'unknown', linkAttached: false, procs: [] }), { captured: null, rows: [{ captured: null, reason: null }] }, 'a daemon that is not known: the helper it reports is not known either')
-  assert.equal(judgeHarness({ ...ready, linkAttached: false, procs: [{ pid: 3, trusted: true }] }).rows[0].reason, 'link-missing', 'with a helper that is there, the link is what is missing')
+  assert.equal(why({ attached: false }), 'helper-missing', 'not link-missing: the user is sent to sudo asight setup-helper, not to asight on')
+  assert.equal(why({ attached: null }), 'helper-missing')
+  assert.equal(why({ attached: true }), 'helper-missing')
+  assert.equal(why({ attached: false, procs: [] }), 'helper-missing', 'the harness\'s own row too')
+  assert.equal(why({ desired: 'off', attached: false }), 'desired-off')
+  assert.equal(why({ daemon: 'not-running', attached: false }), 'daemon-not-running')
+  assert.equal(why({ daemon: 'not-responding', attached: false }), 'daemon-not-responding')
+  assert.deepEqual(j({ daemon: 'unknown', attached: false, procs: [] }), { captured: null, rows: [{ captured: null, reason: null }] }, 'a daemon that is not known: the helper it reports is not known either')
+  assert.equal(judgeHarness({ ...ready, attached: false, procs: [{ pid: 3, trusted: true }] }).rows[0].reason, 'link-missing', 'with a helper that is there, the link is what is missing')
+})
+
+test('V32 the certificate step: after the world and the entry, before the start time; a process the daemon judged is not overruled; the harness\'s own row too — over every cert × entry × process kind', () => {
+  const kinds = { none: [], judged: [{ pid: 1, trusted: true }], refused: [{ pid: 1, trusted: false, reason: 'var-missing' }], before: [{ pid: 1, trusted: null, startedAt: INSTALLED_AT - 1 }], after: [{ pid: 1, trusted: null, startedAt: INSTALLED_AT + 1 }], nostart: [{ pid: 1, trusted: null, startedAt: null }] }
+  for (const cert of [true, null, 'cert-root-missing', 'cert-not-installed', 'entry-changed']) for (const entryIntact of [true, false, null]) for (const [k, procs] of Object.entries(kinds)) {
+    const base = judgeHarness({ ...ready, entryIntact, procs }), got = judgeHarness({ ...ready, entryIntact, procs, cert }), at = `${cert} × ${entryIntact} × ${k}`
+    if (cert === true || k === 'judged' || k === 'refused' || entryIntact !== true) { assert.deepEqual(got, base, `${at}: the certificate does not decide`); continue }
+    assert.deepEqual(got.rows.map((r) => [r.captured, r.reason]), [[cert === null ? null : false, cert === null ? null : cert]], `${at}: the certificate decides, before the start time`)
+    for (const world of [{ desired: 'off' }, { daemon: 'not-running' }, { attached: false }]) assert.deepEqual(judgeHarness({ ...ready, entryIntact, procs, cert, ...world }), judgeHarness({ ...ready, entryIntact, procs, ...world }), `${at} ${JSON.stringify(world)}: the world comes first`)
+  }
+  assert.equal(certOfForms([]), true); assert.equal(certOfForms(undefined), true)
+  const form = (in_effect, code = null, carrier = 'root') => ({ certificate: { in_effect, carrier, code } })
+  assert.equal(certOfForms([form(true, null, 'config-key'), form(true)]), true)
+  assert.equal(certOfForms([form(true, null, 'config-key'), form(false, 'cert-root-pending')]), 'cert-root-pending', 'one form whose certificate is not in effect is enough')
+  assert.equal(certOfForms([form(false, null)]), null, 'not in effect with no code (the root store unreadable): not known')
 })
 
 test('a process the daemon has not judged: no start time is start-time-unknown, no installed_at to compare with is 不知道, an entry that is not intact comes first (a restart would not help)', () => {
@@ -163,9 +180,10 @@ import path from 'node:path'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
 import { snapshot, changedFiles, fakeIo } from './fixtures/on-ctx.mjs'
 import { runStatus, down, reply, asDaemon, claudeProc, SOCK } from './fixtures/status-ctx.mjs'
-import { validateReceipt } from '../../src/cli/schema.mjs'
+import { validateReceipt, EXIT } from '../../src/cli/schema.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { absentSpawn } from '../helpers/no-real-os.mjs'
 
 const run = runStatus
 
@@ -330,17 +348,19 @@ test('status changes nothing in the HOME but ~/.asight/netenv.json (the board\'s
   assert.equal(f, 0); assert.deepEqual(fs.readdirSync(fresh), [], 'on a machine with nothing installed it prints so, exits 0, and creates nothing')
 })
 
-// every platform prints the collector's status (the old-capture branch went with it, D39⑥ executed 2026-10-11): the win32 arm of
-// gatherStatus asks the arch's opt-in hook, and a harness name other than claude-code is a harness like any other.
-test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arch hooks are asked, the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
+// every platform prints the collector's status (the old-capture branch went with it, D39⑥ executed 2026-10-11), and a harness name other than
+// claude-code is a harness like any other. D57 (4.11 ⑱, CM25): no named item on macOS / Windows, so status asks no opt-in hook even when one is there.
+test('the flip (9(b), 1.6 §4): win32 status is the NEW status — no opt-in hook is asked (D57), the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
   const fresh = tmpDir('asight-fresh-')
   const asked = []
   const parts = { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: (q) => { asked.push(q); return [] } } } }
-  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
+  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice', spawn: absentSpawn }
   const io = fakeIo()
   const exit = await runStatusCli([], { io, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps })
   assert.equal(exit, 0, io.stdoutText())
-  assert.equal(asked.length, 1, 'the win32 arch\'s opt-in hook was asked (gatherStatus\'s win32 arm)')
+  assert.equal(asked.length, 0, 'D57: no opt-in hook is asked on win32 (4.11 ⑱)')
+  const j = fakeIo(); await runStatusCli(['--json'], { io: j, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps })
+  assert.ok(!('opt_in' in JSON.parse(j.stdoutText())), 'status --json carries no opt_in (D57)')
   assert.ok(!/还没有新采集器|旧采集/.test(io.stdoutText()), 'not the only-claude-code old-capture branch')
   const named = fakeIo()
   assert.equal(await runStatusCli(['codex'], { io: named, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps }), 0, named.stdoutText() + named.stderrText())
@@ -348,17 +368,16 @@ test('the flip (9(b), 1.6 §4): win32 status is the NEW status — the win32 arc
   assert.deepEqual(fs.readdirSync(fresh), [], 'read-only: nothing created')
 })
 
-// a Mac's status is the collector's status (the old-capture branch went with it, D39⑥ executed 2026-10-11): the darwin arm of
-// gatherStatus asks its arch's opt-in hook (the plan half; the check half is MA4's row and stays away).
-test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — the darwin arch hooks are asked, the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
+// a Mac's status is the collector's status (the old-capture branch went with it, D39⑥ executed 2026-10-11); no opt-in hook is asked (D57).
+test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — no opt-in hook is asked (D57), the old-capture branch is not taken, and a harness name other than claude-code is no longer exit 2', async () => {
   const fresh = tmpDir('asight-fresh-')
   const asked = []
   const parts = { os: 'darwin', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: { optIn: { plan: (q) => { asked.push(q); return [] } } } }
-  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
+  const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice', spawn: absentSpawn }
   const io = fakeIo()
   const exit = await runStatusCli([], { io, home: fresh, platform: 'darwin', env: { HOME: fresh }, deps })
   assert.equal(exit, 0, io.stdoutText())
-  assert.equal(asked.length, 1, 'the darwin arch\'s opt-in hook was asked (gatherStatus\'s darwin arm, the same ask win32 gets)')
+  assert.equal(asked.length, 0, 'D57: no opt-in hook is asked on darwin (4.11 ⑱)')
   assert.ok(!/还没有新采集器|旧采集/.test(io.stdoutText()), 'not the only-claude-code old-capture branch')
   const named = fakeIo()
   assert.equal(await runStatusCli(['codex'], { io: named, home: fresh, platform: 'darwin', env: { HOME: fresh }, deps }), 0, named.stdoutText() + named.stderrText())
@@ -420,7 +439,7 @@ test('a netenv.json that could not be written is said: a line in the text, neten
 
 // ── V39: logging out stops the daemon unless linger is on (1.6 §1.1) — `on` and `status` say so, give the command, and never run loginctl (R8) ───────────────────────────────────────────────────
 import { runOnCli } from '../../src/cli/on.mjs'
-import { onCtx, seedClaude, recordingExec } from './fixtures/on-ctx.mjs'
+import { onCtx, seedClaude, recordingExec, installFirst } from './fixtures/on-ctx.mjs'
 
 test('V39 status: linger off says 登出后停采(未开 linger) and loginctl enable-linger <user>, --json linger false; on says nothing; unreadable says 不知道 with the file and the errno, never 已开', async () => {
   const s = await installedHome()
@@ -442,13 +461,13 @@ test('V39 status: linger off says 登出后停采(未开 linger) and loginctl en
 
 test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --json: linger is false / true / "unknown" with a reason); nothing runs loginctl', async () => {
   for (const [lingerRead, want] of [[() => ({ state: false }), false], [() => ({ state: true }), true], [() => ({ state: null, error: '/var/lib/systemd/linger/alice: EACCES' }), 'unknown']]) {
-    const home = tmpDir('asight-v39-'); seedClaude(home)
+    const home = tmpDir('asight-v39-'); seedClaude(home); await installFirst(home)
     const io = fakeIo(), exec = recordingExec(), ctx = onCtx(home, io, { exec, deps: { lingerRead, linger: undefined } })
     assert.equal(await runOnCli(['--yes'], ctx), 0, io.text())
     if (want === false) assert.match(io.stdoutText(), /^登出后停采\(未开 linger\): 要登出后继续采集,跑 loginctl enable-linger alice$/m)
     else if (want === true) assert.ok(!/linger|登出/.test(io.stdoutText()))
     else { assert.match(io.stdoutText(), /^登出后停采: 不知道\(\/var\/lib\/systemd\/linger\/alice: EACCES\)$/m); assert.ok(!/已开/.test(io.stdoutText())) }
-    const j = fakeIo(); const home2 = tmpDir('asight-v39-'); seedClaude(home2); const exec2 = recordingExec()
+    const j = fakeIo(); const home2 = tmpDir('asight-v39-'); seedClaude(home2); await installFirst(home2); const exec2 = recordingExec()
     assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { exec: exec2, deps: { lingerRead, linger: undefined } })), 0)
     for (const e of [exec, exec2]) {
       assert.ok(e.calls.length > 0, 'on ran its OS tools through this runner: the check below looks at something')
@@ -462,8 +481,8 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
 
 // the old capture's own status test went with it (D39⑥ executed 2026-10-11): status.mjs no longer has the legacy
 // branch; every platform prints the collector's status, and the VPN lines it prints are the same cells above and below.
-test('semantics 2: an install manifest that parses but is not a manifest ({"version":2}, entries as an object) is 不知道 with the file and the reason — exit 3, no stack trace, never "没有装入口" — in the text and in --json', async () => {
-  for (const body of ['{"version":2}', (m) => ({ ...m, entries: { a: 1 } })]) {
+test('semantics 2: an install manifest that parses but is not a manifest ({"version":3}, entries as an object) is 不知道 with the file and the reason — exit 3, no stack trace, never "没有装入口" — in the text and in --json', async () => {
+  for (const body of ['{"version":3}', (m) => ({ ...m, entries: { a: 1 } })]) {
     const s = await installedHome()
     const file = path.join(s.dir, 'install-manifest.json')
     fs.writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body(JSON.parse(fs.readFileSync(file, 'utf8')))))
@@ -498,4 +517,171 @@ test('R11: with no daemon and no install manifest the asight processes the user 
   const named = await run(s, ['codex'], { procs: async () => [serve] })
   assert.match(named.text, /codex\s+没有: desired-off[^\n]*信任入口: 不知道\(no install manifest in /)
   assert.match(named.text, /你自己起的 asight 进程仍在跑: asight serve\(pid 7001,/)
+})
+
+// Accepted, not undone (D43⑦ · D47): in proxy mode the agents' proxy entries name asight's door, and the door lives in the daemon. With the daemon
+// down while the harness is desired on, status says the entries point at a dead door — forwarder-down, and the command that brings it back.
+test('proxy mode, daemon down, desired on: the reason is forwarder-down (the entries point at a dead door) with asight on; Linux keeps daemon-not-running', async () => {
+  assert.equal(judgeHarness({ desired: 'on', daemon: 'not-running', deadDoor: true, procs: [{ pid: 3, trusted: true }] }).rows[0].reason, 'forwarder-down')
+  assert.equal(judgeHarness({ desired: 'off', daemon: 'not-running', deadDoor: true }).rows[0].reason, 'desired-off', 'an off harness has no entry pointing anywhere')
+  assert.equal(judgeHarness({ desired: 'on', daemon: 'not-running' }).rows[0].reason, 'daemon-not-running')
+  const s = await installedHome()
+  const io = fakeIo()
+  await runStatusCli(['claude-code'], { io, home: s.home, platform: 'darwin', env: { ...s.sh.env }, deps: { request: down(), socketPath: SOCK, procs: async () => [], lingerRead: () => ({ state: true }), exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: { arch: {}, harnesses: [] } } })
+  assert.match(io.stdoutText(), /claude-code\s+没有: forwarder-down[^\n]*asight on/)
+})
+
+// ── proxy mode (macOS / Windows): the two axes of V32 apart, generated over desired × daemon × door × the certificate's state, with literal expected codes ──────────────────────────
+// The proxy axis gives codex's verdict: the model daemon answers `attached` per harness (its doors listen), a missing door with the daemon running is forwarder-down like a dead daemon.
+// The certificate axis gives the `cert` block (1.6 §9.4): the key and the intermediate from the daemon's issuer (unknown, with a reason, when it is not there), the root from the user's store.
+// Every cell is asserted both ways: a certificate row never changes the verdict, a proxy row never changes a certificate code (other than the daemon being there to ask).
+import { modelWorld, rootStoreStub } from '../helpers/model-world.mjs'
+import { emptyState, setDesired, writeStateAtomic } from '../../src/off/state.mjs'
+import { turnOnModel } from '../../src/collector/model-on.mjs'
+import { renderHook } from '../../src/collector/harness/templates/index.mjs'
+
+const PROXY = [ // desired · daemon · door → codex's verdict
+  'on  running up      | T',
+  'on  running missing | F:forwarder-down',
+  'on  down    up      | F:forwarder-down',
+  'on  down    missing | F:forwarder-down',
+  'on  noresp  up      | F:daemon-not-responding',
+  'on  noresp  missing | F:daemon-not-responding',
+  'off running up      | F:desired-off',
+  'off running missing | F:desired-off',
+  'off down    up      | F:desired-off',
+  'off down    missing | F:desired-off',
+  'off noresp  up      | F:desired-off',
+  'off noresp  missing | F:desired-off',
+]
+const CERT = [ // the issuer's key · its state · the root in the user's store → key.code · intermediate.code · root.code (- = null), with the daemon there to ask
+  'present ready       in  | -                | -                             | -',
+  'missing key-missing in  | cert-key-missing | cert-intermediate-unavailable | -',
+  'unknown unavailable in  | -                | cert-intermediate-unavailable | -',
+  'present ready       out | -                | -                             | cert-root-missing',
+]
+const code = (c) => (c === '-' ? null : c)
+const modelProc = { pid: 4242, holders: [{ harness: 'codex', pid: 4242, start: '111', why: 'started-while-on' }] }
+
+async function modelStatus(w, { desired, daemon, door, key, st, root }) {
+  writeStateAtomic(path.join(w.dir, 'state.json'), setDesired(emptyState(), ['codex'], desired))
+  const r = { pid: 99, doors: door === 'up' ? { 'codex:all': 17995 } : {}, harnesses: { codex: { desired, attached: door === 'unknown' ? null : door === 'up' } }, holders: 1, cert: { key, intermediate: st, expires: st === 'ready' ? '2026-10-22T09:00:02Z' : null }, engine: {} }
+  const request = daemon === 'running' ? async (q) => (q.path === '/status' ? r : q.path === '/holders' ? { count: 1, holders: modelProc.holders } : assert.fail(q.path)) : down(daemon === 'noresp' ? 'ETIMEDOUT' : 'ECONNREFUSED')
+  const io = fakeIo()
+  const exit = await runStatusCli(['--json'], { io, home: w.home, platform: 'darwin', env: w.env, deps: { request, socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: darwinNetFacts }), rootStore: root === 'in' ? w.store : root === 'throws' ? { has: async () => { throw Object.assign(new Error('trustd did not answer'), { code: 'EIO' }) } } : rootStoreStub(), user: 'alice' } })
+  return { exit, j: JSON.parse(io.stdoutText()) }
+}
+
+test('V32 proxy mode: desired × daemon × door × certificate state — the verdict is the proxy axis\'s literal until the proxy path is clear, then the certificate\'s (codex\'s forms carry the root: root out is cert-root-missing); the per-form certificate: / proxy: lines do not move each other; every output validates (V9)', async () => {
+  const w = await modelOn()
+  for (const pl of PROXY) {
+    const [pk, pcell] = pl.split('|').map((x) => x.trim()); const [desired, daemon, door] = pk.split(/\s+/)
+    const proxies = new Set()
+    for (const cl of CERT) {
+      const [ck, ...codes] = cl.split('|').map((x) => x.trim()); const [key, st, root] = ck.split(/\s+/)
+      const { j } = await modelStatus(w, { desired, daemon, door, key, st, root })
+      const at = `${pk} × ${ck}`
+      assert.deepEqual(validateReceipt(j), [], at)
+      const h = j.harnesses.find((x) => x.harness === 'codex')
+      assert.deepEqual({ captured: h.captured, reason: h.reason }, pcell === 'T' && root === 'out' ? { captured: false, reason: 'cert-root-missing' } : said(pcell), at)
+      assert.ok(j.forms && j.forms.codex.length, `${at}: codex's forms are read`)
+      for (const x of j.forms.codex) assert.deepEqual([x.certificate.carrier, x.certificate.in_effect, x.certificate.code], ['root', root === 'in', root === 'in' ? null : 'cert-root-missing'], `${at} ${x.form}`)
+      proxies.add(JSON.stringify(j.forms.codex.map((x) => x.proxy)))
+      const up = daemon === 'running'
+      assert.deepEqual([j.cert.key.code, j.cert.intermediate.code, j.cert.root.code], up ? codes.map(code) : [null, null, code(codes[2])], at)
+      assert.equal(j.cert.key.state, up ? { present: 'present', missing: 'missing', unknown: 'unknown' }[key] : 'unknown', at)
+      assert.equal(j.cert.intermediate.state, up ? (st === 'ready' ? 'current' : 'unavailable') : 'unknown', at)
+      if (!up) assert.ok(j.cert.key.reason && j.cert.intermediate.reason, `${at}: unknown says why`)
+      assert.equal(j.cert.root.state, root === 'in' ? 'in-place' : 'missing', at)
+      assert.equal(j.install.state, 'complete', at)
+      assert.equal(j.cert.key.custody, w.custody.kind, `${at}: the custody install recorded`)
+    }
+    assert.equal(proxies.size, 1, `${pk}: the certificate axis does not move the proxy: lines`)
+  }
+})
+
+// one HOME with codex installed and turned on (the door half a stub), for the cases below
+async function modelOn() {
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
+  assert.equal((await w.install()).exit, 0)
+  fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: path.join(w.home, 'c.sock'), token: 'k'.repeat(32) }))
+  const opens = async (q) => (q.path === '/on' ? { doors: Object.fromEntries(Object.entries(q.body.groups).map(([g, p]) => [g, `http://127.0.0.1:${p}`])) } : { doors: {} })
+  assert.equal((await turnOnModel({ os: 'darwin', home: w.home, env: w.env, ids: ['codex'], harnesses: w.harnesses, ctx: w.ctx, isFree: async () => true, renderHook, request: opens })).exit, 0)
+  return w
+}
+
+test('V26 proxy mode: status exits by the judgement — 0 with the door up, 1 with it missing (forwarder-down), 3 only when the daemon cannot tell whether the doors listen (captured itself unknown)', async () => {
+  const w = await modelOn()
+  const base = { desired: 'on', daemon: 'running', key: 'present', st: 'ready', root: 'in' }
+  assert.equal((await modelStatus(w, { ...base, door: 'up' })).exit, EXIT.ok)
+  assert.equal((await modelStatus(w, { ...base, door: 'missing' })).exit, EXIT.incomplete)
+  for (const [cert, exit, said] of [[{ key: 'missing', st: 'key-missing' }, EXIT.incomplete, [true, null]], [{ root: 'out' }, EXIT.incomplete, [false, 'cert-root-missing']], [{ st: 'unavailable', key: 'unknown' }, EXIT.ok, [true, null]]]) {
+    const r = await modelStatus(w, { ...base, door: 'up', ...cert })
+    assert.equal(r.exit, exit, `1.6 §9.7 / R4: a certificate state the user must act on exits 1: ${JSON.stringify(cert)}`)
+    const h = r.j.harnesses.find((x) => x.harness === 'codex')
+    assert.deepEqual([h.captured, h.reason], said, `V32: a root-carrier form with the root out is not captured; the issuer's key is the doors', not the agent's trust: ${JSON.stringify(cert)}`)
+  }
+  const r = await modelStatus(w, { ...base, door: 'unknown' })
+  assert.equal(r.exit, EXIT.unknown)
+  const h = r.j.harnesses.find((x) => x.harness === 'codex')
+  assert.equal(h.captured, null)
+  assert.ok(h.why.some((x) => /doors listen/.test(x)), `不知道 says why: ${JSON.stringify(h.why)}`)
+})
+
+test('1.6 §9.4 / §9.6 cert.root: the code follows the state — pending / declined (install\'s pending root-store item) and installed-but-gone exit 1 with their own codes; never installed is cert-not-installed (V32, R4)', async () => {
+  const w = await modelOn()
+  const mf = path.join(w.dir, 'install-manifest.json'), m0 = JSON.parse(fs.readFileSync(mf, 'utf8'))
+  const base = { desired: 'on', daemon: 'running', door: 'up', key: 'present', st: 'ready', root: 'out' }
+  for (const [install, state, code, exit] of [
+    [{ ...m0.install, state: 'partial', pending: [{ item: 'root-store', state: 'pending', reason: 'no GUI session' }] }, 'pending', 'cert-root-pending', EXIT.incomplete],
+    [{ ...m0.install, state: 'partial', pending: [{ item: 'root-store', state: 'declined', reason: 'the user said no' }] }, 'declined', 'cert-root-declined', EXIT.incomplete],
+    [m0.install, 'missing', 'cert-root-missing', EXIT.incomplete],
+    [undefined, 'missing', 'cert-not-installed', EXIT.ok],
+  ]) {
+    fs.writeFileSync(mf, JSON.stringify({ ...m0, install }))
+    const r = await modelStatus(w, base)
+    assert.deepEqual([r.j.cert.root.state, r.j.cert.root.code, r.exit], [state, code, exit], code)
+    const h = r.j.harnesses.find((x) => x.harness === 'codex') // the topology's per-form verdict on the same facts: test/netenv/model-rows.test.mjs (V32 rows)
+    const want = install ? [false, code] : [true, null] // never installed: no install record, no forms to carry a root (the cert block says cert-not-installed)
+    assert.deepEqual([h.captured, h.reason], want, `V32: the harness verdict carries the root's code: ${code}`)
+    assert.deepEqual(validateReceipt(r.j), [], code)
+  }
+})
+
+test('1.6 §9.4 cert.root: what cannot be read is unknown with its reason (store, certificate file), never pending or not-installed; an installed root whose certificate file is gone is cert-not-installed and exits 1', async () => {
+  const w = await modelOn()
+  const base = { desired: 'on', daemon: 'running', door: 'up', key: 'present', st: 'ready', root: 'throws' }
+  const store = await modelStatus(w, base)
+  assert.deepEqual([store.j.cert.root.state, store.j.cert.root.code, store.exit], ['unknown', null, EXIT.unknown], 'a store read that failed, no pending item')
+  assert.match(store.j.cert.root.reason, /root store could not be read.*EIO/)
+  assert.deepEqual(validateReceipt(store.j), [])
+  const pem = path.join(w.dir, 'ca', 'asight-ca.pem'), bytes = fs.readFileSync(pem)
+  try {
+    fs.rmSync(pem); fs.mkdirSync(pem) // there, and not readable as a file
+    const odd = await modelStatus(w, { ...base, root: 'in' })
+    assert.deepEqual([odd.j.cert.root.state, odd.j.cert.root.code, odd.exit], ['unknown', null, EXIT.unknown], 'a certificate file that cannot be read')
+    assert.match(odd.j.cert.root.reason, /asight-ca\.pem cannot be read/)
+    assert.deepEqual(validateReceipt(odd.j), [])
+    fs.rmdirSync(pem)
+    const gone = await modelStatus(w, { ...base, desired: 'off', root: 'in' })
+    assert.deepEqual([gone.j.cert.root.state, gone.j.cert.root.code, gone.exit], ['missing', 'cert-not-installed', EXIT.incomplete], 'installed, the certificate file gone: on refuses, so the user must act — even with nothing on')
+    assert.deepEqual(validateReceipt(gone.j), [])
+  } finally { if (!fs.existsSync(pem)) fs.writeFileSync(pem, bytes) }
+})
+
+test('CM23 status half: the holders\' pids — from the daemon\'s poll (GET /holders) when it answers, from the manifest\'s liveness and the process table when it does not', async () => {
+  const w = await modelOn()
+  const up = await modelStatus(w, { desired: 'off', daemon: 'running', door: 'up', key: 'present', st: 'ready', root: 'in' })
+  assert.deepEqual(up.j.holders.map((x) => [x.harness, x.pid]), [['codex', 4242]])
+  const mf = path.join(w.dir, 'install-manifest.json'), m = JSON.parse(fs.readFileSync(mf, 'utf8'))
+  const onAt = Date.parse(m.liveness.codex.on_at || new Date(Date.now() - 60_000).toISOString())
+  m.liveness.codex = { ...m.liveness.codex, on_at: new Date(onAt).toISOString(), off_at: new Date(onAt + 30_000).toISOString() }
+  fs.writeFileSync(mf, JSON.stringify(m))
+  writeStateAtomic(path.join(w.dir, 'state.json'), setDesired(emptyState(), ['codex'], 'off'))
+  const io = fakeIo()
+  const proc = { pid: 5151, ppid: 1, uid: 501, startedAt: onAt + 10_000, exe: path.join(w.home, 'bin', 'codex'), argv: ['codex'], env: () => new Map() }
+  await runStatusCli(['--json'], { io, home: w.home, platform: 'darwin', env: w.env, deps: { request: down(), socketPath: SOCK, procs: async () => [proc], exec: () => ({ status: 0, stdout: '', stderr: '' }), identity: () => ({ start_time: '111', boot_id: 'b' }), alive: () => true, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }), rootStore: w.store, user: 'alice' } })
+  const j = JSON.parse(io.stdoutText())
+  assert.deepEqual(j.holders.map((x) => [x.harness, x.pid]), [['codex', 5151]])
+  assert.equal(j.cert.intermediate.state, 'unknown'); assert.match(j.cert.intermediate.reason, /not-running/)
 })

@@ -57,7 +57,7 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
   const dir = path.join(home, '.asight', 'collector')
   try {
     appendEvent(dir, { event: 'failure', where: 'start', code: 'EADDRINUSE', reason: 'the engine port is held by another process' })
-    fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 1, complete: true, entries: [], files: [] })) // installed
+    fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, entries: [], files: [] })) // installed
     const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
     const status = { platform: 'linux', statusDeps: { procs: async () => [], exec: NO_EXEC } }
     let t = io(); assert.equal(await runCollector(['status'], { env: {}, home, ...status, ...t }), 1)

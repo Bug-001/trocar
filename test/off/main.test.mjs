@@ -54,7 +54,7 @@ test('1.6 §4 (D39⑥ executed 2026-10-11: the legacy off went with the old capt
   const io = fakeIo()
   assert.equal(await runOffCli([], ctx(s, io, { platform: 'darwin' })), 0, io.text())
   assert.match(io.stdoutText(), /^asight 已关闭采集。/, 'the NEW off ran and printed its receipt')
-  assert.match(io.stdoutText(), /~\/\.claude\/settings\.json +去掉 env\.NODE_EXTRA_CA_CERTS/, 'the undo arms ran: the entry came out of the user\'s file')
+  assert.doesNotMatch(io.stdoutText(), /NODE_EXTRA_CA_CERTS/, 'and it took no certificate item: those are install\'s (D55①)')
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'], 'an arm only the new off has: the daemon was told to drain and exit')
 })
 
@@ -66,7 +66,7 @@ test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing as
   assert.deepEqual([snapshot(s.home), s.sys.exec.calls.length, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off'))], [before, calls, []])
   assert.deepEqual([d.dry_run, d.ok, validateReceipt(d), d.notes.filter((n) => /--remove-ca/.test(n)).length], [true, true, [], 1])
   const text = fakeIo(); assert.equal(await runOffCli(['--dry-run'], ctx(s, text)), 0)
-  assert.match(text.stdoutText(), /^asight 将关闭采集。\n将撤掉:/); assert.match(text.stdoutText(), /~\/\.claude\/settings\.json/); assert.doesNotMatch(text.stdoutText(), /已关闭|已回到/)
+  assert.match(text.stdoutText(), /^asight 将关闭采集。/); assert.doesNotMatch(text.stdoutText(), /settings\.json|已关闭|已回到/, 'the plan names no certificate item: off spares them (D55①)')
   assert.deepEqual(snapshot(s.home), before)
   const real = fakeIo(); const t = await installedHome({ names: ['claude-code', 'codex'] })
   assert.equal(await runOffCli(['--now', '--json'], ctx(t, real)), 0)
@@ -74,7 +74,7 @@ test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing as
   assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true,"exit":true}'])
 })
 
-test('1.6 §7: the receipt text of an off with no names — the files back as they were with their backups gone, the edited one with its backup kept, the autostart, the daemon draining with its connections, who still trusts the CA, the processes the user started — and a failed off says what is left', async () => {
+test('1.6 §7: the receipt text of an off with no names — no certificate item (D55①), the autostart, the daemon draining with its connections, who still trusts the CA, the processes the user started — and a failed off says what is left', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
   fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EXTRA=1\n')
   const procs = async () => [
@@ -84,13 +84,13 @@ test('1.6 §7: the receipt text of an off with no names — the files back as th
   const io = fakeIo()
   assert.equal(await runOffCli([], ctx(s, io, { deps: { procs } })), 0, io.text())
   const out = io.stdoutText()
-  assert.match(out, /^asight 已关闭采集。\n撤掉了:\n/)
-  assert.match(out, /~\/\.claude\/settings\.json +去掉 env\.NODE_EXTRA_CA_CERTS +已回到改前的样子,备份已删/)
-  assert.match(out, /~\/\.codex\/\.env +去掉 asight 哨兵块\(SSL_CERT_FILE\) +已撤销,但不逐字节相同\(你之后改过这个文件:只撤了 asight 的部分,备份留在 ~\/\.asight\/backup\/[0-9a-f]{16}-/)
+  assert.match(out, /^asight 已关闭采集。\n/)
+  assert.match(out, /没有改任何用户文件/, 'no certificate item is touched, the edited one neither (D55①)')
+  assert.match(out, /说明: what asight install wrote stays — off never touches it; asight uninstall removes it: .*\.codex\/\.env/, 'they are named as staying, once')
   assert.match(out, /自启已停用;守护进程仍在排空:pid 4242,还剩 1 条等它们自己关闭;asight off --now 立即切断: 2 条连接仍经 asight 中转,本次响应\(或本轮\)结束后关闭;其中 1 条是透传连接或看不到终止消息的 WebSocket/)
-  assert.match(out, /重启前仍信任 asight CA\(不经 asight,只是还信任\): claude-code pid 4388\(重启后不再信任\)/)
+  assert.doesNotMatch(out, /重启前仍信任 asight CA/, 'off took no trust away, so it names no one as still trusting it')
   assert.match(out, /你自己起的 asight 进程仍在跑: asight serve\(pid 5310,只读看板,不在 agent 路径上\)/)
-  assert.match(out, /引流: 已摘\(守护进程回复了,内核已确认\)/)
+  assert.match(out, /引流: 已摘\(守护进程回复了,已确认\)/)
   assert.ok(out.trimEnd().endsWith('再开  asight on'), 'the last line says how to turn it back on')
   const bad = formatOffReceipt({ ok: false, all: true, harnesses: [], routing: { confirmed: true }, daemon: { pid: 9, state: 'unresponsive' }, relayed: 'unknown', relayed_reason: 'the daemon does not answer', changed: [], removed: [], skipped: [], left: [{ path: '/h/.codex/.env', result: 'left-unparsable', reason: 'is no longer valid JSON' }], problems: ['x'], notes: [] }, { home: '/h' })
   assert.match(bad, /^asight 没有做完\(引流已摘,其余原因在下面\)。/m)
@@ -138,7 +138,7 @@ test('the flip\'s platform threading: runOffCli\'s platform is offWorld\'s — t
     // one installed harness, so the off actually runs its steps (the routing switch is where the daemon is asked)
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
     fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{"env":{"NODE_EXTRA_CA_CERTS":"/x/asight.pem"}}\n')
-    fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 2, entries: [{ kind: 'json-key', harness: 'claude-code', path: path.join(home, '.claude', 'settings.json'), keys: ['env', 'NODE_EXTRA_CA_CERTS'], backup: null }], files: [] }) + '\n')
+    fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 3, entries: [{ kind: 'json-key', phase: 'on', harness: 'claude-code', path: path.join(home, '.claude', 'settings.json'), keys: ['env', 'NODE_EXTRA_CA_CERTS'], backup: null }], files: [] }) + '\n')
     const io = fakeIo()
     // deps carries NO platform of its own — the CLI's platform must be what offWorld uses (a test's deps.platform still wins; that half is every other test here)
     const exit = await runOffCli(['claude-code'], { io, home, env: { HOME: home }, platform: 'win32', deps: { getuid: () => 1000, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, fs, exec: (file) => ({ status: 0, stdout: file === 'whoami' ? 'alice' : '', stderr: '' }) } }) // exec answers the arm's own reads (whoami); nothing it stubs ever runs for real

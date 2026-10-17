@@ -15,16 +15,20 @@
 // by definition — it just connected — so one query per connection is the whole cost. `budgetMs` stays generous (250 ms): a table that is not back inside
 // it is SLOW, not unavailable — null with the cost said, and no failure record; a table that cannot be read at all gives null and ONE
 // `socktable-unavailable` record (4.8 §12) to `onFailure`, which the recorder folds. A helper the daemon closed itself (`helper-closed`: a lookup in
-// flight when `off` or a stop closed it) is null and no record: an operator's close is not a failure. Imports nothing of asight.
+// flight when `off` or a stop closed it) is null and no record: an operator's close is not a failure.
+// The budget is the TABLE's: it counts from the moment the single-threaded helper is on this read (helper.mjs `onStart`), not from the ask. A read
+// queued behind a `ps` the helper is still working on waits for it (at most `waitMs`, then `helper-busy`: null, no record) instead of being spliced
+// for a slowness that is not its own (a burst of connections after a cold ps was spliced one by one).
+import { HELPER_WAIT_MS } from './helper.mjs'
 
 const OVER = Symbol('over budget')
 
-/** ownerOfSocket({ helper, peer: {address, port}, budgetMs = 250, now, onFailure }) → { pid, source, ms }
+/** ownerOfSocket({ helper, peer: {address, port}, budgetMs = 250, waitMs, now, onFailure }) → { pid, source, ms }
  *  `peer` is the accepted socket's remote end as the engine sees it ({address, port} — `socket.remoteAddress` / `remotePort`): the AGENT's socket local
  *  end. `helper` is the resident read-only helper's client (helper.mjs), whose `tcp-table` verb is the GetExtendedTcpTable read above. source =
  *  'socket-table' when a pid is answered, null with the pid. `ms` is what the question cost. A peer address that is not an IPv4 literal is answered null
  *  at once (the engine's doors bind 127.0.0.1 only, D47: an IPv6 peer cannot be one of the agents' entries — a fail-safe null, never a guess). */
-export async function ownerOfSocket({ helper, peer, budgetMs = 250, now = Date.now, onFailure = () => {} }) {
+export async function ownerOfSocket({ helper, peer, budgetMs = 250, waitMs = HELPER_WAIT_MS, now = Date.now, onFailure = () => {} }) {
   if (!helper || typeof helper.call !== 'function') throw new TypeError('ownerOfSocket needs the helper client (helper.mjs)')
   if (!peer || !Number.isInteger(peer.port)) throw new TypeError('ownerOfSocket: peer.port is required')
   const t0 = now()
@@ -32,13 +36,15 @@ export async function ownerOfSocket({ helper, peer, budgetMs = 250, now = Date.n
   const addr = String((peer && peer.address) || '')
   if (addr === '' || addr.includes(':')) return none(0) // not an IPv4 loopback peer: the doors never see one (the fail-safe answer)
 
-  let timer
-  const over = new Promise((resolve) => { timer = setTimeout(() => resolve(OVER), budgetMs); if (timer.unref) timer.unref() })
-  const asked = helper.call('tcp-table', { localPort: peer.port, states: ['established'] }, { timeoutMs: budgetMs })
+  let timer, overNow
+  const over = new Promise((resolve) => { overNow = () => resolve(OVER) })
+  const arm = (ms) => { clearTimeout(timer); timer = setTimeout(overNow, ms); if (timer.unref) timer.unref() }
+  arm(waitMs + budgetMs) // until the helper says it is on this read; a helper that never says so gets the whole wait at most
+  const asked = helper.call('tcp-table', { localPort: peer.port, states: ['established'] }, { timeoutMs: budgetMs, waitMs, onStart: () => arm(budgetMs) })
   asked.catch(() => {}) // when the budget wins, the table's own failure or late answer is nobody's to handle
   let answer
   try { answer = await Promise.race([asked, over]) } catch (e) {
-    if (e && e.code === 'helper-timeout') answer = OVER
+    if (e && (e.code === 'helper-timeout' || e.code === 'helper-busy')) answer = OVER // slow (its own read, or the helper busy before it): not unavailable
     else if (e && e.code === 'helper-closed') return none() // the daemon stopped its own helper (off, stop): not an unreadable table, nothing to record
     else return unavailable(e && e.message ? e.message : String(e))
   } finally { clearTimeout(timer) }

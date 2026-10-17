@@ -13,11 +13,7 @@
 //   watch = { path, why }   a path the agent may write because of asight's file (OpenCode's npm install, 4.6):
 //           whether it existed is recorded at install; uninstall reports, never deletes, what appeared
 //   notes = string | { code, text }   what the user should know; also written as install-note events (D38)
-// Windows (4.8 §6.1, `ctx.os === 'win32'`): the entries come from the descriptor's `win32.inject(ctx)` (the same contract), automatic ones only — a proxy entry is data
-// (`win32.groups[].proxyEntry`), written after the kernel's read-back, never part of this plan (1.6 R9). A path may be written with either slash and is compared
-// ignoring case; every path an entry writes INTO an agent's config (a key's value, a block's variables) is returned with forward slashes, because dotenvy reads a
-// backslash as an escape and silently drops the value; a dotenv block's entry also says `quote: true`, so a profile directory with a space (C:\Users\John Smith) is written in double
-// quotes instead of refused (the entry's `vars` keep the plain path). The PowerShell profile is the Windows login environment: never an entry.
+// Linux only (4.6): macOS and Windows have no trust plan — their certificates are the collector model's `install` (spec 4.11 §1, model-install.mjs), which never calls this.
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
 import { certsOf, composeBundle } from './bundle.mjs'
@@ -27,8 +23,6 @@ import { rootsLeftOut } from '../tls/roots.mjs'
 
 // Login-environment locations: a CA variable there makes every program of the user trust asight (vetoed, D37④).
 const LOGIN_ENV = [/\/\.config\/environment\.d\//, /\/\.(profile|bash_profile|bash_login|bashrc|zshrc|zshenv|zprofile|zlogin|pam_environment)$/, /\/\.config\/fish\//, /^\/etc\//]
-const WIN_LOGIN_ENV = [/\/(Windows)?PowerShell\/[^/]*profile\.ps1$/i] // $PROFILE (slash-normalised path)
-const slash = (p) => String(p).replace(/\\/g, '/')
 const NEVER_KEYS = new Set(['NODE_OPTIONS', 'SSL_CERT_DIR', 'NODE_TLS_REJECT_UNAUTHORIZED'])
 // Library-level variables that REPLACE the trust store (or the one CA file a client uses) whatever a descriptor
 // declares: pointed at an asight-only file they would break every other TLS peer of the process (0.1 §5, T10). The
@@ -55,20 +49,15 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
   const records = [] // the notes as install-note events: { harness, code, reason }
   for (const d of descriptors) {
     const ctx = ctxFor(d)
-    const win = ctx.os === 'win32'
-    const mac = ctx.os === 'darwin' // 4.9 §1: the darwin data hangs as d.darwin (harness/index.mjs attaches it); without this arm the base — Linux — inject would run on macOS (the wrong plugin, the wrong entries)
-    const inject = win ? d.win32 && d.win32.inject : mac ? d.darwin && d.darwin.inject : d.inject
+    const inject = d.inject
     if (typeof inject !== 'function') continue
-    // the path rules of the OS the entries are for: Windows paths are absolute with either slash, compare ignoring case, and are written with forward slashes
-    const isAbs = win ? (p) => path.win32.isAbsolute(p) : (p) => path.isAbsolute(p)
-    const under = win ? (p) => slash(p).toLowerCase().startsWith(slash(collectorDir).toLowerCase() + '/') : (p) => p.startsWith(collectorDir + path.sep)
-    const base = win ? (p) => slash(p).split('/').pop() : (p) => path.basename(p)
-    const binDir = win ? `${slash(collectorDir)}/bin` : path.join(collectorDir, 'bin')
-    const inBin = (p) => (win ? slash(p).split('/').slice(0, -1).join('/').toLowerCase() === binDir.toLowerCase() : path.dirname(p) === binDir)
-    const sameFile = (a, b) => (win ? slash(a).toLowerCase() === slash(b).toLowerCase() : a === b)
-    const loginEnv = (p) => (win ? WIN_LOGIN_ENV.some((re) => re.test(slash(p))) : LOGIN_ENV.some((re) => re.test(p)))
-    // a profile directory on Windows often has a space (C:\Users\John Smith) — and on macOS too (/Users/John Smith): the block may then write its value in double quotes (`quote`, text-edit.mjs); the entry keeps the plain path (the slash conversion is a no-op on POSIX — the quote is what the darwin arm is here for)
-    const forward = (e) => (!win && !mac ? e : { ...e, ...(typeof e.value === 'string' ? { value: slash(e.value) } : {}), ...(e.vars ? { vars: Object.fromEntries(Object.entries(e.vars).map(([k, v]) => [k, slash(v)])), ...(e.format === 'dotenv-block' ? { quote: true } : {}) } : {}) })
+    const isAbs = (p) => path.isAbsolute(p)
+    const under = (p) => p.startsWith(collectorDir + path.sep)
+    const base = (p) => path.basename(p)
+    const binDir = path.join(collectorDir, 'bin')
+    const inBin = (p) => path.dirname(p) === binDir
+    const sameFile = (a, b) => a === b
+    const loginEnv = (p) => LOGIN_ENV.some((re) => re.test(p))
     const out = inject(ctx) || {}
     // one variable set to one value: the checks every CA setting asight writes must pass (key or block variable)
     const checkVar = (where, key, value, semantic) => {
@@ -99,7 +88,7 @@ export function planTrust({ descriptors, ctxFor, caCertPem, collectorDir, roots 
           throw new Error(`${where}: a login-environment file only ever gets the launch-shim PATH line, placed after the agent installer's own (D37④)`)
         }
       } else throw new Error(`${where}: unknown entry kind ${e.kind}${e.format ? ` / format ${e.format}` : ''}`)
-      entries.push({ harness: d.name, ...forward(e) })
+      entries.push({ harness: d.name, ...e })
     }
     for (const o of out.owned || []) {
       const where = `${d.name}: ${o.path}`

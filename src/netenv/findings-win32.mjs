@@ -30,13 +30,11 @@ function whyOf(c) {
 
 /** The 「把 <h> 的代理设成 <value>」 step of the not-routed rows (4.8 §10.4 row 1: 按 harness 文件的 `proxyEntry` 生成,值已填), from the form's group's entry place as the facts carry it
  *  (`entryPlace`): a JSON file is opened in 记事本 and its key written (never a PowerShell line that would reorder the user's JSON), a dotenv file gets its line, the policy value and the app's
- *  setting name their place; a shim or a launcher has no place of the user's own to write a proxy in — said, not invented. */
+ *  setting name their place (the shim and launcher places went with D52 / D57: mac / win write no shim or launcher). */
 function setProxyText(h, place, value) {
   if (!place) return `把 ${h} 的代理设成 ${value}(这个形态的入口位置读不到)`
   if (place.kind === 'file') return place.format === 'json' ? `用记事本打开 ${place.file},把 ${place.key} 写成 "${value}"` : `${place.file} 里写一行 ${place.key}=${value}`
   if (place.kind === 'policy') return `在注册表策略 ${place.path} 里把 ${place.name} 写成 ${value}(regedit)`
-  if (place.kind === 'shim') return `${place.command} 的代理入口是 asight 的 shim(${place.command}.cmd 设 HTTPS_PROXY):没有你可以改的自己的代理项`
-  if (place.kind === 'launcher') return '这个形态的代理入口是 asight 的启动器:没有你可以改的自己的代理项(不经它启动的连接 asight 不在路径上)'
   return `把 ${h} 的代理设成 ${value}`
 }
 
@@ -65,27 +63,7 @@ export const FINDINGS_WIN32 = {
     },
     verify: (c) => `asight status ${c.h}:那一支「在路径上 · 是」`,
   },
-  'opt-in-needed': {
-    why: () => '它的入口改的东西影响超出这个 agent(§1.7);点名时 asight 先印「影响」,你确认了才做',
-    commands: (c) => [asight(c, c.enable || `asight on ${c.h} --opt-in ${c.form || c.h}`)],
-    verify: (c) => `asight status ${c.h}:该支「是」`,
-  },
-  'shim-not-on-path': {
-    commands: (c) => {
-      const command = c.fm && c.fm.entryPlace && c.fm.entryPlace.command
-      return [...(command ? [ps(`where.exe ${command}`)] : []), asight(c, c.enable || `asight on ${c.h} --opt-in ${c.form || c.h}`), gui('或卸掉机器级的那一份,改用用户级安装')]
-    },
-    verify: (c) => (c.fm && c.fm.entryPlace && c.fm.entryPlace.command ? `where.exe ${c.fm.entryPlace.command} 第一个是 asight 的 shim` : `asight status ${c.h}`),
-  },
-  'not-via-entry': {
-    commands: () => [gui('退出它,从开始菜单(asight 改过的快捷方式)或新开的终端启动'), gui('任务栏固定的:取消固定,再从开始菜单固定一次')],
-    verify: (c) => `asight status ${c.h}:新 pid「是」`,
-  },
-  'entry-changed': { commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` },
-  'needs-admin': {
-    commands: (c) => [gui('正常路径:asight 先确认、再弹 UAC,你点「是」;没有提示可弹时才用下面那一整行,在你自己开的管理员 PowerShell 里跑'), ...(c.elevated ? [{ run: c.elevated, shell: c.sh }] : [])],
-    verify: () => 'asight status:不再列',
-  },
+  'entry-changed': { commands: (c) => [asight(c, (c.fm && c.fm.certificate && c.fm.certificate.command) || `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` }, // a drifted install item (row 31) names its own command
   'egress-differs': { commands: (c) => [asight(c, `asight off ${c.h}`)], verify: () => '—' },
   'elevated-agent': {
     commands: (c) => [gui(`关掉它,不用「以管理员身份运行」重新打开 ${c.h}`), ps('whoami /groups | findstr /i "Mandatory"')],
@@ -102,7 +80,7 @@ export const FINDINGS_WIN32 = {
   'engine-port-taken': {
     cls: 'failure', asightFirst: false,
     what: () => '引擎的入口端口被别的进程占了',
-    why: () => '引擎因此起不来;asight on 会重选端口、重载内核配置',
+    why: () => '这扇门因此开不了;asight off 再 asight on 会重选端口',
     commands: (c) => [netstat(c.enginePort), asight(c, 'asight off'), asight(c, 'asight on')],
     verify: () => 'asight status:引擎「在跑」',
   },

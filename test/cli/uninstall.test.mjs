@@ -60,7 +60,7 @@ test('uninstall --dry-run writes nothing and asks the daemon nothing: the same r
   assert.ok(json.removed.includes(standalonePath(s.home)) && json.removed.includes(path.join(s.dir, 'install-manifest.json')))
 })
 
-test('R6: --purge-data takes the collector machine with the data — kernel/, kernel-archive/, forwarder/ and control.json / ingress.json (the pinned kernel copy and cache, the kernel config with its secret, the daemon control endpoint) — while a plain uninstall leaves them for the next on', async () => {
+test('R6: --purge-data takes the collector machine with the data — kernel/, kernel-archive/, forwarder/ and control.json / ingress.json (the pinned kernel copy and cache, the kernel config with its secret, the daemon control endpoint) — while a plain uninstall leaves them for the next on, except ingress.json (uninstall deletes it, so the next install chooses its ports again)', async () => {
   const leftovers = (s) => { for (const k of ['kernel/asight-forwarder.exe', 'kernel-archive/mihomo.zip', 'forwarder/config.json', 'forwarder/home/db.sql', 'control.json', 'ingress.json']) { const f = path.join(s.dir, k); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '{"left":true}\n') } }
   const names = ['kernel', 'kernel-archive', 'forwarder', 'control.json', 'ingress.json']
   const there = (s) => names.map((n) => fs.existsSync(path.join(s.dir, n)))
@@ -71,7 +71,7 @@ test('R6: --purge-data takes the collector machine with the data — kernel/, ke
   const plain = await installedHome({ names: ['claude-code'] }); keep(plain); leftovers(plain)
   const p = await cli(plain, ['--yes'])
   assert.equal(p.exit, 0, p.io.text())
-  assert.deepEqual(there(plain), [true, true, true, true, true], 'a plain uninstall keeps them (the kernel may be draining; the next on reuses the cache)')
+  assert.deepEqual(there(plain), [true, true, true, true, false], 'a plain uninstall keeps them (the kernel may be draining; the next on reuses the cache), but not ingress.json')
 })
 
 test('R6: --purge-data deletes what nothing brings back, so a yes is asked for — no terminal and no --yes prints the plan and exits 2 with nothing done; a terminal asks once (n: nothing, exit 1); --yes goes; a plain uninstall never asks', async () => {
@@ -311,8 +311,8 @@ test('V8 (uninstall): every backup goes, the ones of files the user edited after
   fs.appendFileSync(codexEnv, 'EXTRA=1\n') // after install: undone but not identical
   const backup = s.manifest().entries.find((e) => e.path === codexEnv).backup
   assert.ok(fs.existsSync(backup))
-  const off = await s.off() // `off` keeps it and lists it
-  assert.ok(off.receipt.kept_backups.some((k) => k.backup === backup), 'off kept the backup of the edited file')
+  const off = await s.off() // the entry is install's: off leaves it and its backup (D55①)
+  assert.ok(fs.existsSync(backup) && !(off.receipt.kept_backups || []).length, 'off left the backup of the edited file as it was')
   const r = await s.uninstall({ yes: true })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
   assert.ok(!fs.existsSync(path.join(s.home, '.asight', 'backup')), '~/.asight/backup/ is gone')
@@ -405,7 +405,7 @@ test('semantics 2: an install manifest of the wrong shape is treated as unreadab
   const s = await installedHome({ names: ['claude-code', 'codex'] })
   s.sys.daemon.state.up = false
   const file = path.join(s.dir, 'install-manifest.json')
-  fs.writeFileSync(file, '{"version":2}')
+  fs.writeFileSync(file, '{"version":3}')
   const before = s.userFiles()
   const no = await s.uninstall({}) // not a terminal, no yes
   assert.equal(no.exit, 1)
@@ -416,7 +416,7 @@ test('semantics 2: an install manifest of the wrong shape is treated as unreadab
   assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight') && !fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8').includes('asight collector'), 'the entries went by their marks')
   // `on` does not write over a manifest it cannot read, and says what to do
   const t = await installedHome({ names: ['claude-code'] })
-  fs.writeFileSync(path.join(t.dir, 'install-manifest.json'), '{"version":2,"entries":null,"files":[]}')
+  fs.writeFileSync(path.join(t.dir, 'install-manifest.json'), '{"version":3,"entries":null,"files":[]}')
   const snap = t.userFiles()
   await assert.rejects(() => t.on(), /the install manifest cannot be read .*asight on does not write over it.*asight off.*mv '.*install-manifest\.json'/)
   assert.deepEqual(t.userFiles(), snap, 'and wrote nothing')

@@ -6,7 +6,9 @@
 // refuse rather than silently replace it.
 import nodeFs from 'node:fs'
 import path from 'node:path'
+import { X509Certificate } from 'node:crypto'
 import { createCa } from './ca.mjs'
+import { pemToDer } from './cert.mjs'
 
 export const COLLECTOR_CA_CN = 'asight collector CA'
 
@@ -50,4 +52,21 @@ export function readCa({ dir, fs = nodeFs }) {
   const cert = read('cert', p.pem)
   if (cert.error) return { ...cert, paths: p }
   return { keyPem: key.text, certPem: cert.text, created: false, paths: p }
+}
+
+/** The `file` custody of 4.11 P1 (Linux): today's ca.key + asight-ca.pem under `dir`. It has no issueIntermediate, so the issuer
+ *  signs leaves with the root as today (core/tls/issuer.mjs); `read` is readCa, for that issuer. */
+export function fileCustody({ dir, fs = nodeFs }) {
+  const p = caPaths(dir)
+  return {
+    kind: 'file',
+    create() {
+      const { certPem } = loadOrCreateCa({ dir, fs })
+      const rootDer = pemToDer(certPem)
+      return { rootDer, fp256: new X509Certificate(rootDer).fingerprint256 }
+    },
+    exists: () => fs.existsSync(p.key) && fs.existsSync(p.pem),
+    read: () => readCa({ dir, fs }),
+    remove() { const had = fs.existsSync(p.key); for (const f of [p.key, p.pem]) fs.rmSync(f, { force: true }); return { removed: had } },
+  }
 }

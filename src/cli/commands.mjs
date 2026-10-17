@@ -30,9 +30,13 @@ async function help(argv, c) {
 
 export const COMMANDS = Object.freeze([
   { name: 'on', section: 'common', mutates: true, run: via('./on.mjs', 'runOnCli'),
-    usage: 'asight on [harness…] [--dry-run] [--yes] [--opt-in <形态>[,<形态>…]] [--no-autostart | --no-unit] [--json]',
-    summary: '开始采集。第一次 on 就是安装:先列出要改的每个文件,等你确认;之后的 on 只补缺的。',
-    notes: ['--dry-run  只打印将要做的,什么都不写', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '--opt-in <形态>  点名影响超出这个 agent 自己的项(用户证书库、PATH 垫片、启动器…);不点名不做;计划里「要你点名的」一节印出每项的确切命令;可重复、逗号分隔,也可写那一节里的项 id', '--no-autostart  装单元但不 enable,本次只 start', '--no-unit  不装自启单元(测试用;平台自启机制见回执)', 'on 不重启任何 agent、桌面程序或在跑的采集;要重启的进程在回执里列出'] },
+    usage: 'asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]',
+    summary: '开始采集。只接代理,不写证书;还没跑过 asight install 时拒绝(cert-not-installed)。',
+    notes: ['--dry-run  只打印将要做的,什么都不写', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '--no-autostart  装单元但不 enable,本次只 start', '--no-unit  不装自启单元(测试用;平台自启机制见回执)', 'on 不重启任何 agent、桌面程序或在跑的采集;要重启的进程在回执里列出'] },
+  { name: 'install', section: 'common', mutates: true, run: via('./install.mjs', 'runInstallCli'),
+    usage: 'asight install [--dry-run] [--yes] [--json]',
+    summary: '一次性装好证书(D55):生成本机的根、装成用户级根证书、放 harness 自己读的证书载体。先打印计划、等确认。',
+    notes: ['--dry-run  只打印计划', '--yes  不在终端里时代替确认(没有它,不在终端里只打印计划、退出 2)', '退出码:0 全部装好 · 1 部分或失败 · 2 用法错误,或不在终端又没有 --yes'] },
   { name: 'off', section: 'common', mutates: true, run: via('../off/main.mjs', 'runOffCli'),
     usage: 'asight off [harness…] [--now] [--dry-run] [--yes] [--json]',
     summary: '撤掉 asight 对这些 agent 的全部影响;asight 自己坏了也能用(~/.asight/bin/asight-off)。',
@@ -43,7 +47,7 @@ export const COMMANDS = Object.freeze([
     notes: ['退出码:0 都在被采集 · 1 有的没有 · 3 读不到、无法判定', '不带名字是一屏摘要(失败只印条数与最新一条);点名 harness 看它的明细;--failures 印完整失败墙'] },
   { name: 'uninstall', section: 'common', mutates: true, run: via('./uninstall.mjs', 'runUninstallCli'),
     usage: 'asight uninstall [--purge-data] [--dry-run] [--yes] [--json]',
-    summary: '先做 off 的全部,再删 asight 自己的文件(CA、清单、备份、单元)。采集数据留着,--purge-data 才删(要确认)。' },
+    summary: '撤 install 装的一切(根、证书载体、清单、备份、单元),根的密钥最后删。macOS / Windows 上采集还开着或还有持有者时拒绝(先 asight off);Linux 先做 off 的全部。采集数据留着,--purge-data 才删(要确认)。' },
   { name: 'doctor', section: 'common', mutates: false, run: doctor,
     usage: 'asight doctor [harness…] [--source <ndjson|dir>] [--json]',
     summary: '自检:是否真在抓、抓得对不对、凭据没漏、没弱化全机 TLS、采集文件仅属主可读;核对 asight-off 副本。',
@@ -84,8 +88,7 @@ export const commandNamed = (name) => COMMANDS.find((c) => c.name === name)
 
 // What each old way of writing a command is now (1.6 §2 「隐藏别名」): not in help, dispatched like the command it names. `verify` is the item of `doctor` that was `verify`.
 export const HIDDEN_ALIASES = Object.freeze([
-  { argv: ['install'], to: ['on'] },
-  { argv: ['collector', 'install'], to: ['on'] },
+  { argv: ['collector', 'install'], to: ['install'] },
   { argv: ['collector', 'on'], to: ['on'] },
   { argv: ['collector', 'off'], to: ['off'] },
   { argv: ['collector', 'status'], to: ['status'] },

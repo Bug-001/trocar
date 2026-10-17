@@ -1,13 +1,13 @@
 // autostart.mjs — how the Windows collector is started and kept up, and what it refuses to start under (RFC 4.8 §7; acceptance W24 W25). The daemon is `node <asight> daemon`, started at login by one Task Scheduler task per user,
 // supervised by a small parent that brings it back when it dies. Tools (`schtasks`, `reg`) run only through execTool, so a test injects the runner; the helper, the spawn and the clock are parameters too, and every piece runs on
-// any OS against a temp directory. Node built-ins, src/paths.mjs and src/off/exec.mjs only (this file never imports a harness, 4.6 §结构).
+// any OS against a temp directory. Node built-ins, src/paths.mjs, src/off/exec.mjs and src/off/win32.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
 import { collectorHome } from '../../../paths.mjs'
-import { startHelper } from './helper.mjs'
+import { elevationByWhoami, elevatedRefusal } from '../../../off/win32.mjs'
 
 export const TASK_NAME = '\\asight\\collector' // the scheduled task, in the \asight folder of the Task Scheduler
 export const TASK_FILE = 'asight-collector.task.xml' // the task's XML, an owned file of the install manifest, beside the collector's other files
@@ -31,29 +31,17 @@ export function nodePreflight({ versions = process.versions } = {}) {
 }
 
 /**
- * R7 on Windows (4.8 §7): asight never runs with an elevated token or as SYSTEM. → `null` (go on) or `{ code: 'elevated-token', reason, token }`, which `on` and `daemon` turn into the refusal and the `start` failure record.
- * The check is the helper's own token (`token` verb: `{elevated, elevationType, integrity, system}`; `elevated` is "integrity High or above"). A token that cannot be read (the helper is down, native code did not compile, an answer
- * that is not booleans) is NOT a refusal (the helper's own failure is recorded where it happens); `onUnknown(reason)` says why it is unknown (R11). No `helper` given → one is started for the question and closed after
- * (the `prepare` pattern: `on` and the daemon have none of their own at their entry — the daemon's own comes later, with the redirector).
+ * R7 on Windows (4.8 §7, W25): asight never runs with an elevated token or as SYSTEM. → `null` (go on) or `{ code: 'elevated-token', reason, token }`, which `on` and `daemon` turn into the refusal and the `start` failure record.
+ * One criterion for on, daemon, off and uninstall: `whoami /groups` by SID (src/off/win32.mjs elevationByWhoami, with D53③'s unsplit-token exception). It used to be a
+ * helper started for this one question, whose C# compile made it the costliest step of `on` (a Windows test machine 2026-10-17: 1.2 s of on's 5.8 s, and the daemon's own 0.6 s before it
+ * answers). A token that cannot be read is not a refusal: `onUnknown(reason)` says why (R11). `run`: execTool's injected runner.
  */
-export async function refuseElevated({ helper = null, start = startHelper, env = process.env, onUnknown = () => {} } = {}) {
-  let own = null
-  let h = helper
-  if (!h) { // the caller's helper, or one started for this question alone
-    try { own = start({ env }) } catch (e) { onUnknown(`the helper could not be started: ${(e && e.code) || ''} ${(e && e.message) || e}`.replace(/\s+/g, ' ').trim()); return null }
-    h = own
-  }
-  try {
-    let t
-    try { t = await h.call('token') } catch (e) { onUnknown(`the token could not be read: ${(e && e.code) || ''} ${(e && e.message) || e}`.replace(/\s+/g, ' ').trim()); return null }
-    if (!t || typeof t !== 'object' || typeof t.elevated !== 'boolean' || typeof t.system !== 'boolean') { onUnknown(`the token answer is not {elevated, system} booleans: ${JSON.stringify(t)}`.slice(0, 300)); return null }
-    if (!t.elevated && !t.system) return null
-    return {
-      code: 'elevated-token',
-      reason: `用你自己的账号跑,不要「以管理员身份运行」,也不要用 SYSTEM(R7:asight 不以提升的令牌运行;这个令牌是${t.system ? ' SYSTEM' : '高完整性级别'})`,
-      token: { elevated: t.elevated, system: t.system, integrity: t.integrity ?? null },
-    }
-  } finally { if (own) { try { own.close() } catch { /* the question is answered either way */ } } }
+export async function refuseElevated({ run = null, env = process.env, onUnknown = () => {} } = {}) {
+  const e = elevationByWhoami({ run, env })
+  if (e.elevated === null) { onUnknown(e.reason); return null }
+  if (!e.elevated) return null
+  const system = e.why === 'system'
+  return { ...elevatedRefusal(system), token: { elevated: true, system, integrity: system ? 'system' : 'high' } }
 }
 
 const CONTROL_CHAR = /[\u0000-\u001f\u007f]/

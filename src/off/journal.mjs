@@ -3,19 +3,40 @@
 // The install half (applyJsonKey, applyTextEntry, writeOwnedFile) stays in src/collector/core/trust/journal.mjs; this half is here so
 // `asight off` and the standalone `~/.asight/bin/asight-off` can run it from node:* alone (0.1 §2).
 import nodeFs from 'node:fs'
-import { setKey, removeKey, reverseOps, getPath } from './json-text.mjs'
+import path from 'node:path'
+import { setKey, removeKey, removeItem, reverseOps, getPath, parseJsonText, unreadableJson } from './json-text.mjs'
 import { removeAsightText, asightResidue, onlySkeleton } from './text-edit.mjs'
 import { sha256, readOrNull, writeDurable, removeEmptyDirs, sweepTemps } from './fsutil.mjs'
+import { decodeText, encodeText, WHY_TEXT } from './text-codec.mjs'
 
 // Remove a file asight owns, then the directories its write created when they are empty. `changed`: the file was
-// not what asight wrote (removed all the same: it is asight's, the manifest lists it; the caller says so).
-export function removeOwnedFile(item, fs = nodeFs) {
+// not what asight wrote (removed all the same: it is asight's, the manifest lists it; the caller says so). `unlessChanged`: a file the agent itself
+// writes the user's settings into (a config-library entry, 4.11 P5 / CM18) goes only while it is byte for byte what asight wrote; otherwise it is the
+// user's now and stays (`kept-changed`) — asight's key in it is undone by its own json-key entry (D48②).
+export function removeOwnedFile(item, fs = nodeFs, { unlessChanged = false } = {}) {
   sweepTemps(item.path, fs)
   const cur = readOrNull(fs, item.path)
   if (cur == null) { removeEmptyDirs(item.created_dirs, fs); return { path: item.path, result: 'already-removed' } }
+  if (unlessChanged && sha256(cur) !== item.sha256) return { path: item.path, result: 'kept-changed' }
   fs.rmSync(item.path, { force: true })
   removeEmptyDirs(item.created_dirs, fs)
   return { path: item.path, result: 'removed', ...(item.sha256 && sha256(cur) !== item.sha256 ? { changed: true } : {}) }
+}
+
+// Undo a P8 install-folder wrapper (owned-file role `wrapper`): while the file at `path` is still asight's wrapper (`sha256`), the real program moved to
+// `real` is put back by a same-volume rename over it; otherwise the agent's update replaced the wrapper by name, and only the moved copy goes. Then the
+// copy's directory, when empty. → { path, result: 'restored' | 'removed' | 'already-removed' | 'error', reason? }
+export function undoWrapper(item, fs = nodeFs) {
+  const cur = readOrNull(fs, item.path), real = readOrNull(fs, item.real)
+  const dirGone = () => { try { fs.rmdirSync(path.dirname(item.real)) } catch { /* not empty, or gone */ } }
+  if (cur != null && sha256(cur) === item.sha256) {
+    if (real == null) return { path: item.path, result: 'error', reason: `${item.path} is still asight's wrapper, but the real program it runs (${item.real}) is gone; asight left the wrapper: reinstall the agent` }
+    fs.renameSync(item.real, item.path); dirGone()
+    return { path: item.path, result: 'restored' }
+  }
+  if (real == null) { dirGone(); return { path: item.path, result: 'already-removed' } }
+  fs.rmSync(item.real, { force: true }); dirGone()
+  return { path: item.real, result: 'removed', changed: true }
 }
 
 // What an entry put where, for messages: the key and value of a JSON entry, the variables of a block, the line; the Windows collector's
@@ -25,6 +46,8 @@ export const describeEntry = (e) => {
   if (e.kind === 'run-key') return `the Run value ${e.name ?? 'asight-collector'} (${e.hive ?? 'HKCU'}\\${e.key ?? ''})`
   if (e.kind === 'scheduled-task') return `the scheduled task ${e.task ?? '\\asight\\collector'}`
   if (e.kind === 'forwarder-binary') return `the kernel's copy ${e.path ?? ''}`
+  if (e.kind === 'json-array-item') return `${JSON.stringify(e.item)} in ${e.keys.join('.')}`
+  if (e.format === 'pem-block') return 'certificate block'
   return `${e.keys.join('.')} = ${e.value}`
 }
 
@@ -61,38 +84,56 @@ export function undoEntry(entry, { fs = nodeFs } = {}) {
     return done('already-restored')
   }
   if (cur == null) return done('missing') // the user deleted a file that existed before: nothing of asight's left
-  const text = cur.toString('utf8')
+  // The ops are offsets in the file's TEXT (4.6「文件的编码」), so the bytes are decoded first, by what they prove of themselves. Bytes that prove no
+  // form (the user saved the file in another encoding after `on`) are not edited: the entry stays, and the receipt says which file and why.
+  const read = decodeText(cur)
+  if (!read.ok) return done('left-unreadable', { why: read.why, reason: `${file} can no longer be read as text asight may write back: ${WHY_TEXT[read.why]} (${read.why}); asight did not touch it, and its ${describeEntry(entry)} may still be in it` })
+  const text = read.text
   const asInstalled = entry.post_sha256 == null || sha256(cur) === entry.post_sha256 // intent-only: test by reversing
   const back = asInstalled ? reverseOps(text, entry.ops) : null
-  if (back != null && (entry.existed_before ? sha256(Buffer.from(back)) === entry.pre_sha256 : back === '')) {
-    if (entry.existed_before) writeDurable(file, back, entry.mode, fs)
+  // byte for byte: the text before is written in the form the file had before (`charset`, absent = utf8); an edited file keeps the form it has now
+  const before = back == null ? null : encodeText(back, entry.charset || 'utf8')
+  if (back != null && (entry.existed_before ? sha256(before) === entry.pre_sha256 : back === '')) {
+    if (entry.existed_before) writeDurable(file, before, entry.mode, fs)
     else { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs) }
     return done('restored')
   }
   if (entry.kind === 'text') { // edited since: only asight's block / line goes, the user's commented line comes back
-    const out = removeAsightText(text, entry.ops)
+    const out = removeAsightText(text, entry.ops, { fold: entry.fold === true })
+    // a key the user set to a value of their own while asight was on keeps it (D48②): the line asight put out of effect stays so, and the receipt says where
+    const left = out.prior_left ? { prior_left: out.prior_left } : {}
     // "already removed" is only true when nothing of asight's is left. A line that still names asight's file in a shape the removal could not read is not
     // gone: the file is not touched, and the entry stays (`left-text`), so what it points at is not taken away under it (4.6 安装 / 卸载不静默)
     const residue = asightResidue(out.text, entry, text) // numbered as the user sees them in the file
     if (residue.length) return done('left-text', { reason: `${file} still names asight's ${describeEntry(entry)} on line ${residue.join(', ')}, in a form asight cannot tell from your own text; asight did not touch the file: delete ${residue.length === 1 ? 'that line' : 'those lines'} by hand` })
     if (!out.found) return done('already-removed')
     if (!entry.existed_before && onlySkeleton(out.text, entry.format)) { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs); return done('reverted-not-identical', { deleted: true }) }
-    writeDurable(file, out.text, fs.statSync(file).mode & 0o777, fs)
-    return done('reverted-not-identical')
+    if (out.text !== text) writeDurable(file, encodeText(out.text, read.charset), fs.statSync(file).mode & 0o777, fs)
+    return done('reverted-not-identical', left)
   }
   let doc
-  try { doc = JSON.parse(text) } catch { return done('left-unparsable') }
-  if (getPath(doc, entry.keys) !== entry.value) return done('left-user-value')
-  let out = entry.prior_value != null ? setKey(text, entry.keys, entry.prior_value).text : removeKey(text, entry.keys).text
-  if (entry.prior_value == null) {
+  try { doc = parseJsonText(text) } catch (e) { return done('left-unparsable', { reason: unreadableJson(file, text, e, `asight's ${describeEntry(entry)}`) }) }
+  let out, gone = entry.prior_value == null // the key is out: its parents this install created may be empty now
+  if (entry.kind === 'json-array-item') { // only asight's element goes; the user took it out during on → nothing to do (D48②)
+    const r = removeItem(text, entry.keys, entry.item)
+    if (!r) return done('already-removed')
+    out = r.text
+    const list = getPath(parseJsonText(out), entry.keys)
+    gone = entry.created_array === true && Array.isArray(list) && !list.length
+    if (gone) out = removeKey(out, entry.keys).text // asight made the list and it is empty again
+  } else {
+    if (getPath(doc, entry.keys) !== entry.value) return done('left-user-value')
+    out = entry.prior_value != null ? setKey(text, entry.keys, entry.prior_value).text : removeKey(text, entry.keys).text
+  }
+  if (gone) {
     for (let d = entry.keys.length - 1; d > entry.existing_depth; d--) { // parents this install created, now empty
-      const v = getPath(JSON.parse(out), entry.keys.slice(0, d))
+      const v = getPath(parseJsonText(out), entry.keys.slice(0, d))
       if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).length) break
       out = removeKey(out, entry.keys.slice(0, d)).text
     }
   }
-  const empty = (() => { const v = JSON.parse(out); return v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0 })()
+  const empty = (() => { const v = parseJsonText(out); return v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0 })()
   if (!entry.existed_before && empty) { fs.rmSync(file, { force: true }); removeEmptyDirs(entry.created_dirs, fs); return done('reverted-not-identical', { deleted: true }) }
-  writeDurable(file, out, fs.statSync(file).mode & 0o777, fs)
+  writeDurable(file, encodeText(out, read.charset), fs.statSync(file).mode & 0o777, fs)
   return done('reverted-not-identical')
 }

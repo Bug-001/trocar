@@ -119,7 +119,7 @@ export async function runCollector(argv, { env = process.env, home = os.homedir(
   if (verb === 'start') { // the old name of `asight daemon` (§2 hidden alias): the autostart units written before the rename run it
     return runDaemonCli(rest, { io: { out, err }, env, home, platform, deps: { daemon: daemon || undefined, proc, exit, script, ...(getuid ? { getuid } : {}), ...(waitForStop ? { waitForStop } : {}) } })
   }
-  if (verb === 'install' || verb === 'on') { // the first `on` is the install (1.6 §1.6); `collector install` is its old name (§2 hidden alias)
+  if (verb === 'install' || verb === 'on') { // reached by a direct call only: commands.mjs routes `asight collector install` to `asight install` and `collector on` to `on`
     const { runOnCli } = await import('../cli/on.mjs')
     return runOnCli(rest, { io: { out, err, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, env, home, platform, deps: { daemon: daemon || undefined, install: install || undefined, request, script, ...onDeps } })
   }

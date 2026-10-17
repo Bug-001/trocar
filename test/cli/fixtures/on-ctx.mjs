@@ -103,3 +103,12 @@ export function fakeSystem({ agents = [], actual = 'on', up = false, ...daemonOp
   const exec = recordingExec({ onRun: (cmd) => { if (/ (start|enable --now) asight-collector\.service$/.test(cmd)) daemon.state.up = true } })
   return { exec, daemon }
 }
+
+/** `asight install --yes` in `home` with the same world as `onCtx(home, io, opts)` (D55, override #15: on never writes a certificate, so an `on` test installs first). */
+export async function installFirst(home, opts = {}) {
+  const { runInstallCli } = await import('../../../src/cli/install.mjs')
+  const io = fakeIo()
+  const code = await runInstallCli(['--yes'], { ...onCtx(home, io, opts), platform: 'linux' })
+  if (code !== 0) throw new Error(`the fixture's install failed (${code}): ${io.text()}`)
+  return io
+}

@@ -1,8 +1,0 @@
-@echo off
-rem asight collector: launcher for OpenCode Desktop on Windows (RFC 4.8 s2.4), written by the start-menu opt-in
-rem item of `asight on opencode --opt-in opencode.desktop`. Your Start-menu and desktop shortcuts start this
-rem instead of the app itself: it sets this form's kernel listener and runs the real app. An HTTPS_PROXY the shell
-rem already set is your choice for that run and is not overridden (that run is not captured). `asight off opencode`
-rem removes it.
-if not defined HTTPS_PROXY set "HTTPS_PROXY=__ASIGHT_PROXY__"
-"__ASIGHT_REAL_BINARY__" %*

@@ -24,7 +24,7 @@ const READ_ONLY = new Set(['ps', 'ss', 'ip', 'gsettings', 'scutil', 'lsof', 'net
 // the Windows half of the allowlist (1.6 §9.7 / 4.8 §10.4: netstat, reg query, schtasks /Query, where.exe — the OS tools the printed commands name — plus the resident helper's read verbs).
 // What `doctor` itself executes on Windows goes through the helper, so the static form of the check is: the files that talk to it on the status / doctor path only ever ask its read verbs (the verb
 // closed set itself is 4.8 §1's, held by helper.test.mjs). `netsh`, printed for the user, is held by the live test above (never run).
-const HELPER_READ_VERBS = new Set(['version', 'ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server'])
+const HELPER_READ_VERBS = new Set(['version', 'ps', 'tcp-table', 'reg-read', 'net-if', 'route', 'token', 'roots', 'pipe-server', 'proc-env'])
 const WIN_HELPER_FILES = ['src/collector/arch/win32/netfacts.mjs', 'src/collector/arch/win32/upstream.mjs']
 
 /** The world of a run: a recording runner (ss lists a listener on the proxy port), and a Claude Code process whose environment holds a proxy with credentials. */

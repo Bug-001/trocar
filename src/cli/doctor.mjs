@@ -24,11 +24,10 @@ import { exportFiles } from '../raw/export.mjs'
 import { listSources, sealedUnder } from '../raw/discover.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { formatInstallNotes } from '../collector/cli.mjs'
-import { asightHome, backupDir, collectorDir } from '../off/paths.mjs'
+import { asightHome, backupDir, collectorDir, standaloneCommand } from '../off/paths.mjs'
 import { orphanBackups } from '../off/backup.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { checkStandalone } from '../off/standalone.mjs'
-import { CODEX_WS_CERT_HINT, DESKTOP_LAUNCHER_HINT } from './words.mjs'
 
 const USAGE = 'usage: asight doctor [harness…] [--source <ndjson|dir>] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
@@ -170,24 +169,11 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   for (const l of block.lines) io.out(indent(l))
   if (findings) for (const l of findings.length ? ['发现(网络与采集,§9.6;doctor 只印命令,一条也不替你跑):', ...renderFindings(findings)] : ['发现(网络与采集): 没有']) io.out(indent(l))
   else io.out(indent(`发现(网络与采集): 不知道(${findingsError})`))
-  // the codex WebSocket hint (measured on a Windows test machine): on win32, for codex, while the named cert-store opt-in is not in the ledger — said, never installed
-  if (platform === 'win32' && (names.length === 0 || names.includes('codex'))) {
-    let certStoreRecorded = false
-    try { const m = readManifest(collectorDir(home), fs); certStoreRecorded = !!(m && !m.unsupported && Array.isArray(m.entries) && m.entries.some((e) => e && e.kind === 'optin-cert-user')) } catch { /* no manifest, or one that will not read: nothing was recorded */ }
-    if (!certStoreRecorded) io.out(indent(`⚠ ${CODEX_WS_CERT_HINT}`))
-  }
-  // the Claude Desktop steering hint (4.9 §6.4): on darwin, for claude-code, while the named desktop-launcher opt-in is not
-  // recorded — said, never installed (the codex hint's darwin twin; the line itself carries the needs_restart honesty verbatim)
-  if (platform === 'darwin' && (names.length === 0 || names.includes('claude-code'))) {
-    let launcherRecorded = false
-    try { const m = readManifest(collectorDir(home), fs); launcherRecorded = !!(m && !m.unsupported && Array.isArray(m.entries) && m.entries.some((e) => e && e.kind === 'optin-desktop-launcher' && e.confirmed !== false)) } catch { /* no manifest, or one that will not read: nothing was recorded */ }
-    if (!launcherRecorded) io.out(indent(`⚠ ${DESKTOP_LAUNCHER_HINT}`))
-  }
   if (notesError) io.out(indent(`the last install's notes could not be read: ${notesError}`))
   else for (const l of notes) io.out(indent(l))
   // 1.6 R3 / V35: the copy of the undo side that needs no source tree is the version this asight writes (read only; `asight on` writes it again)
   if (standalone.error) io.out(indent(`⚠ asight-off 副本无法核对: ${standalone.error}`))
-  else io.out(indent(standalone.ok ? `✓ asight-off(不依赖源码的撤销副本): ${standalone.path} · 版本 ${standalone.found},与当前一致` : `⚠ asight-off(不依赖源码的撤销副本)不是当前版本: ${standalone.reason}`))
+  else io.out(indent(standalone.ok ? `✓ asight-off(不依赖源码的撤销副本): ${standaloneCommand(standalone.path, platform)} · 版本 ${standalone.found},与当前一致` : `⚠ asight-off(不依赖源码的撤销副本)不是当前版本: ${standalone.reason}`))
   if (orphansError) io.out(indent(`备份: 不知道(${orphansError})`))
   else if (orphans.length) io.out(indent(`⚠ ${orphans.length} 个备份没有任何清单条目认领(改文件改到一半断了留下的;留着或不要了就删,asight uninstall 会清掉): ${orphans.join(', ')}`))
   if (res.failed) {

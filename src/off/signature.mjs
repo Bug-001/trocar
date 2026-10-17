@@ -140,3 +140,11 @@ export function harnessesOf(liveness, facts) {
   }
   return hit
 }
+
+/** May a live process of a harness have read asight's entry for it (4.6 撤销顺序 第 2 / 5 步; 4.11 P12)? It started inside the window [since, until) — since =
+ *  the harness's first install time (undo) or its on_at (holders), until = its off_at, open when null — or the harness re-reads its entry while running
+ *  (`rereads`: alive at `until` is enough), or a time it needs is unknown (the safe direction: one more holder, never one less). The one copy undo.mjs
+ *  (steps 2 / 3 / 5) and holders.mjs judge with. */
+export const mayHaveRead = (p, l, since, until = null) => (l && l.rereads)
+  ? (p.startedAt == null || until == null || p.startedAt < until)
+  : (p.startedAt == null || since == null || (p.startedAt >= since && (until == null || p.startedAt < until)))

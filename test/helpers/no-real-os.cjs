@@ -7,7 +7,7 @@
 //   1. ASIGHT_TEST_SANDBOX=1, set here and inherited by every child a test starts. src/off/exec.mjs (`execTool`, the one way new
 //      code runs an OS tool) reads it and refuses a real tool: a stub inside the temp dir, or an injected runner, is all it runs.
 //   2. `node:child_process` is wrapped (spawn, spawnSync, execFile, execFileSync, exec, execSync, and the promisified exec /
-//      execFile): a command that is one of those five tools, or that a `sudo` / `env` / `sh -c` line puts in command position, is
+//      execFile): a command that is one of the guarded tools (REAL_TOOLS), or that a `sudo` / `env` / `sh -c` line puts in command position, is
 //      refused with code ESANDBOX unless it resolves (symlinks followed) to a file inside the temp dir. This is what catches the old
 //      capture's default runners (src/capture/*, src/collector/arch/linux/*) when a test forgot to inject one, and a stray direct
 //      `spawnSync('launchctl')` anywhere. The patch is seen by later `import { spawnSync } from 'node:child_process'`.
@@ -28,7 +28,9 @@ process.env.ASIGHT_TEST_SANDBOX = '1'
 // the old capture's mihomo control socket, pinned to a place nothing listens (0.1 §3 「Clash 用 ASIGHT_MIHOMO_SOCK」): src/capture/desktop-steer.mjs reads it before anything else, and a test that wants a core sets the variable itself.
 process.env.ASIGHT_MIHOMO_SOCK = path.join(fs.realpathSync(os.tmpdir()), 'asight-test-no-mihomo.sock')
 
-const REAL_TOOLS = new Set(['launchctl', 'systemctl', 'security', 'certutil', 'loginctl'])
+// + the macOS native pieces asight ships (T13): the signing helper writes the login keychain, procenv reads another process's
+// memory, plutil reads managed preferences — a test injects a runner or a stub, never the committed binary or the real tool
+const REAL_TOOLS = new Set(['launchctl', 'systemctl', 'security', 'certutil', 'loginctl', 'asight-sign-helper', 'procenv', 'plutil', 'reg', 'reg.exe', 'powershell.exe', 'csc.exe'])
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash'])
 // words that put another command after them: `sudo launchctl …`, `env X=1 security …`, `if systemctl …; then`
 const PREFIXES = new Set(['sudo', 'doas', 'env', 'command', 'exec', 'nice', 'nohup', 'time', 'timeout', 'xargs', 'arch', 'if', 'then', 'else', 'elif', 'do', 'while', 'until', '!'])

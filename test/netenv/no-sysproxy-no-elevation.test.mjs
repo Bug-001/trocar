@@ -2,8 +2,8 @@
 //   (a) no code writes the SYSTEM PROXY: the WinINET/WinHTTP write APIs never appear, and no exec call carries the system proxy's key, its values or `netsh`;
 //   (b) no code puts a PROXY variable into the LOGIN environment or a system-wide one (login profiles, HKCU\Environment, setx, launchctl setenv), on or off: the agent's own entry (a shim that sets
 //       HTTPS_PROXY for the process tree it launches, a block in the agent's own .env) is not this scan's business — it never reaches past the launched tree;
-//   (c) no code elevates ITSELF or feeds a password to an elevator: no exec call runs sudo / runas / pkexec / gksudo. The named exception is elevate.mjs (4.8 §2.4, plan Task 14: the machine-level
-//       opt-in's UAC launch lives there and nowhere else); it does not exist yet, and when it does, `runas` in ITS calls is allowed and everything else here still is not.
+//   (c) no code elevates ITSELF or feeds a password to an elevator: no exec call runs sudo / runas / pkexec / gksudo — no exception (CM25: no admin step on
+//       macOS / Windows; Linux's setup-helper is run BY the user under sudo, asight never calls it).
 // The old capture is exempt by the shared pinned list (fixtures/old-capture.mjs). The reading side needs no allowlist for the exec scan — reads go
 // through the helper's read verbs (`reg-read`) and doctor's TEXT (findings.mjs), neither of which is an exec call; upstream.mjs's mentions of the registry names are data it hands the helper, not
 // args of a tool. Planted counter-examples turn each half red.
@@ -25,8 +25,6 @@ function walk(dir) {
 }
 const SOURCES = walk(path.join(ROOT, 'src'))
 
-/** The one file whose calls may carry an elevation word: the machine-level opt-in's UAC launch (4.8 §2.4; plan Task 14, not built yet). Nothing else, and no other word in it. */
-const ELEVATE_FILE = 'src/collector/arch/win32/elevate.mjs'
 /** APIs that set the system proxy; they have no read use, so they may not appear in new code at all (comments are blanked; strings count). */
 const SYS_PROXY_APIS = /InternetSetOption|WinHttpSetDefaultProxy|netsh\s+winhttp/i
 /** Words that, in the arguments of a call that RUNS something, mean the system proxy, a login profile, or an elevator. */
@@ -50,7 +48,7 @@ export function violations(file, src) {
   }
   for (const args of callArgs(src, RUN_CALLS)) {
     const w = wordOf(args.replace(/\s+/g, ' '))
-    if (w && !(file === ELEVATE_FILE && /\brunas\b/i.test(w))) out.push(`${file}:1 ${w} in a call that runs something`)
+    if (w) out.push(`${file}:1 ${w} in a call that runs something`)
   }
   return out
 }
@@ -75,7 +73,7 @@ test('D43 planted counter-example: each half is red where it belongs, and the ex
   assert.match(violations('src/collector/arch/win32/x.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function e() { spawnSync('InternetSetOption', []) }\n").join(), /InternetSetOption/)
   assert.match(violations('src/off/win32.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function l() { execTool('setx', ['HTTPS_PROXY', 'http://127.0.0.1:1']) }\n").join(), /setx/)
   assert.match(violations('src/off/win32.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function l() { execTool('reg', ['add', 'HKCU\\\\Environment', '/v', 'HTTPS_PROXY', '/d', 'x']) }\n").join(), /proxy variable into an environment store/)
-  assert.match(violations('src/collector/arch/win32/userpath.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function p() { execTool('reg', ['add', 'HKCU\\\\Environment', '/v', 'Path', '/d', 'x']) }\n").join(), /^$/, 'the PATH opt-in writes HKCU\\Environment with no proxy variable: not this scan\'s')
+  assert.match(violations('src/collector/arch/win32/x.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function p() { execTool('reg', ['add', 'HKCU\\\\Environment', '/v', 'Path', '/d', 'x']) }\n").join(), /^$/, 'a PATH write to HKCU\\Environment with no proxy variable: not this scan\'s')
   for (const [why, call, word] of [
     ['sudo', "execTool('sudo', ['asight', 'setup-helper'])"],
     ['RunAs', "spawnSync('powershell', ['-Command', 'Start-Process -Verb RunAs -FilePath x'])"],
@@ -83,8 +81,7 @@ test('D43 planted counter-example: each half is red where it belongs, and the ex
     ['launchctl setenv', "execTool('launchctl', ['setenv', 'HTTPS_PROXY', 'x'])", 'proxy variable into an environment store'],
   ]) assert.match(violations('src/collector/x.mjs', `import { spawnSync, execTool } from 'node:child_process'\nexport function a() { ${call} }\n`).join(), new RegExp(word || why.split(' ')[0], 'i'), why)
   assert.deepEqual(violations('src/capture/desktop-steer.mjs', sys), [], 'the old capture is exempt as a whole (the shared pinned list)')
-  assert.deepEqual(violations(ELEVATE_FILE, "import { spawnSync, execTool } from 'node:child_process'\nexport function uac() { spawnSync('powershell', ['-Command', 'Start-Process -Verb RunAs -FilePath x']) }\n"), [], 'the one named place may launch UAC (runas); it does not exist yet')
-  assert.match(violations(ELEVATE_FILE, "import { spawnSync, execTool } from 'node:child_process'\nexport function no() { execTool('sudo', ['x']) }\n").join(), /sudo/, 'and even there, only runas')
+  assert.match(violations('src/collector/arch/win32/elevate.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function uac() { spawnSync('powershell', ['-Command', 'Start-Process -Verb RunAs -FilePath x']) }\n").join(), /runas/i, 'no file may launch UAC, not even one named for it (CM25)')
   assert.deepEqual(violations('src/collector/arch/win32/upstream.mjs', "// the reader names the registry values it asks the helper to read\nexport const NAMES = ['ProxyEnable', 'ProxyServer', 'AutoConfigURL', 'ProxyOverride']\nexport const KEY = 'Internet Settings'\n"), [], 'the reading side is data it hands the helper, not an exec call: no allowlist needed for it')
   assert.deepEqual(violations('src/netenv/findings.mjs', "export const cmd = 'Get-ItemProperty HKCU:/…/Internet Settings -Name AutoConfigURL' // doctor's text for the user"), [], 'doctor printing a command for the user is text, not a call')
 })

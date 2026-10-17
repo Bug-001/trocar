@@ -3,6 +3,7 @@
 // run on: every OS tool goes to the recording runner, every process question to a table the test owns, the VPN probe is injected, HOME is a temp directory (0.1 §3).
 import path from 'node:path'
 import { runCli } from '../../../src/cli/main.mjs'
+import { readManifest, installComplete } from '../../../src/off/manifest.mjs'
 import { userUnit } from '../../../src/collector/arch/linux/unit.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
@@ -15,8 +16,8 @@ const descs = await loadHarnesses()
 const tick = () => new Promise((resolve) => setTimeout(resolve, 1))
 
 /** A sandbox HOME with the user's files of the seven-homes layout, a fake systemd and a fake daemon (it comes up when the unit is started, goes away on `POST /off` with `exit`).
- *  → { home, sh, sys, dir, deps(over), ctx(over), run(argv, over) → { exit, io } }; `ctx` is the second argument of runCli (`uid` 1000: a test of root passes its own), `over.deps` is merged into the deps. */
-export function sandbox({ platform = 'linux', status = {} } = {}) {
+ *  → { home, sh, sys, dir, deps(over), ctx(over), run(argv, over) → { exit, io } } (on Linux a real `on` with no install record runs `install --yes` first); `ctx` is the second argument of runCli (`uid` 1000: a test of root passes its own), `over.deps` is merged into the deps. */
+export function sandbox({ platform = 'linux', status = {}, install: autoInstall = platform === 'linux' } = {}) {
   const home = tmpDir('asight-cli-')
   const sh = sevenHomes(home)
   const sys = fakeSystem()
@@ -29,6 +30,7 @@ export function sandbox({ platform = 'linux', status = {} } = {}) {
     }
     return sys.daemon.request(q)
   }
+  const installed = () => { try { return installComplete(readManifest(dir)) } catch { return false } }
   const parts = { os: 'none', harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { unit: { userUnit } } }
   const deps = (over = {}) => ({
     parts, exec: sys.exec.run, request, socketPath: SOCK, helperState: () => ({ ok: true }), linger: () => true, lingerRead: () => ({ state: true }),
@@ -36,11 +38,16 @@ export function sandbox({ platform = 'linux', status = {} } = {}) {
     has: () => true, verify: () => true, getuid: () => 1000, ...over,
   })
   const ctx = (over = {}) => ({ io: fakeIo(), home, platform, uid: 1000, env: { ...sh.env, XDG_RUNTIME_DIR: path.join(home, 'run'), ASIGHT_SOURCE: '' }, ...over, deps: deps(over.deps) })
-  const run = async (argv, over = {}) => { const c = ctx(over); const exit = await runCli(argv, c); return { exit, io: c.io } }
+  const run = async (argv, over = {}) => {
+    // D55 / override #15: on never writes a certificate. A real (not dry) `on` with no install record is preceded by `asight install --yes` in the same world, as
+    // a user runs them; `install: false` leaves it out (the refusal itself: test/cli/install-linux.test.mjs)
+    if (autoInstall && argv[0] === 'on' && !argv.includes('--dry-run') && !installed()) { const c = ctx({ ...over, io: fakeIo() }); const code = await runCli(['install', '--yes'], c); if (code !== 0) return { exit: code, io: c.io } }
+    const c = ctx(over); const exit = await runCli(argv, c); return { exit, io: c.io }
+  }
   return { home, sh, sys, dir, deps, ctx, run }
 }
 
-/** The same sandbox after a real `asight on --yes` run through runCli: the first on is the install. */
+/** The same sandbox after a real `asight install --yes` and `asight on --yes` run through runCli. */
 export async function installedViaCli(opts) {
   const s = sandbox(opts)
   const first = await s.run(['on', '--yes'])

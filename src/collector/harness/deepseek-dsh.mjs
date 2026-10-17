@@ -16,7 +16,7 @@ import path from 'node:path'
 import { hostOf, expandHome, versionAtLeast } from '../core/config-read.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
-import { envValues, envProxies, argAfter, dotenvLayer } from './_common.mjs'
+import { envValues, envProxies, argAfter, dotenvLayer, perOs } from './_common.mjs'
 import { renderPlugin, ANONYMOUS_MODULE_MANIFEST } from './_plugins.mjs'
 
 const ENTRY = /(^|\/)dsh$|\/@deepseek-ai\/dsh\/lib\/bin\.js$/
@@ -24,7 +24,7 @@ const ENTRY = /(^|\/)dsh$|\/@deepseek-ai\/dsh\/lib\/bin\.js$/
 const BOOTSTRAP = new Set(['PATH', 'HOME', 'USERPROFILE', 'SHELL', 'NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'PERL5OPT', 'PERL5LIB', 'PYTHONSTARTUP', 'PYTHONPATH', 'RUBYOPT', 'RUBYLIB', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'PYTHONHOME', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_EXTERNAL_DIFF', 'GIT_PAGER', 'GIT_EDITOR', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_COUNT', 'EDITOR', 'VISUAL', 'PAGER', 'BROWSER', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_SEARCH_BASE_URL', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE', 'NODE_TLS_REJECT_UNAUTHORIZED'])
 const PROXY_NAMES = new Set(['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'])
 const bootstrapOnly = (k) => { const u = k.toUpperCase(); return BOOTSTRAP.has(u) || ['DSH_', 'XDG_', 'DYLD_', 'BASH_FUNC_'].some((p) => u.startsWith(p)) }
-export const MIN_NODE = '22.19.0' // tls.setDefaultCACertificates
+const MIN_NODE = '22.19.0' // tls.setDefaultCACertificates
 
 const dshHome = (env, home) => expandHome(env.get('DSH_HOME'), home) || path.join(home, '.dsh')
 function profileOf(argv) {
@@ -77,6 +77,35 @@ const proxy = {
   restart: { hint: '退出这个 dsh(含 web / acp),再重新启动(它只在启动时读一次代理设置)', processes: 'dsh' },
 }
 
+// Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts — a plugin loaded by one
+// cordis.patch.yml row wraps dsh's own dispatcher and reads the switch file per request (live), and adds the CA in process (R3-M6, R3-W3); every form.
+const DSH = (path) => ({ base: 'home', dir: '.dsh', env: 'DSH_HOME', path })
+const DESKTOP = perOs({ darwin: { base: 'abs', path: '/Applications/DeepSeek Harness.app' } })
+const form = (id, present) => ({ id, os: ['darwin', 'win32'], route: 'switch', cert: 'plugin', trust: 'node', present: [...present, DSH()], verified: { darwin: true, win32: true } })
+const proxyMode = {
+  forms: [
+    form('deepseek-dsh.cli', [{ command: 'dsh' }]),
+    form('deepseek-dsh.acp', [{ command: 'dsh' }]),
+    form('deepseek-dsh.web', [{ command: 'dsh' }]),
+    form('deepseek-dsh.npx', []),
+    form('deepseek-dsh.desktop', [DESKTOP]),
+    form('deepseek-dsh.desktop-cli', [DESKTOP]),
+  ],
+  routes: {
+    switch: { kind: 'switch-file', perRequest: true, absent: 'create', takesEffect: '下一个请求生效,不用重启' }, // the plugin reads it on every request: no process holds it after off
+  },
+  certs: {
+    plugin: { kind: 'plugin', template: 'cordis-plugin', dir: DSH(), loader: { file: DSH('cordis.patch.yml'), format: 'yaml', keys: ['*', 'insert'] } },
+  },
+  trusts: {
+    // the plugin carries the asight root in process (carrier time = the plugin's installed_at); dsh is Node, so the files its own
+    // NODE_EXTRA_CA_CERTS names are in its set too (a relay's private CA: the door verifies that upstream with it, 4.11 §3 ⑭)
+    node: { base: 'node', sources: [{ from: { env: 'NODE_EXTRA_CA_CERTS' }, semantics: 'add' }] },
+  },
+  userCertFiles: [],
+  blockers: [],
+}
+
 export default {
   name: 'deepseek-dsh',
   runtime: 'node',
@@ -89,6 +118,7 @@ export default {
   },
   hosts: ['api.deepseek.com'],
   proxy,
+  proxyMode,
   layers,
   configHosts,
   proxies: (ctx) => envProxies(ctx.env, ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']),

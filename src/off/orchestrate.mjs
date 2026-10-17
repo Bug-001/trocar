@@ -9,7 +9,7 @@
 //   4  the entries: by the manifest (undoHarnesses), or, with no readable manifest, by asight's own marks (planByMarker) after a yes (R3);
 //      5.1's held requests through `deps.releaseHeld` (5.1 is not built: a seam)
 //   5  with no names: the autostart is disabled and the daemon was asked to exit once drained — systemd's disable on Linux (src/off/autostart.mjs), the LaunchAgent's undo on
-//      darwin (src/off/darwin.mjs undoAutostart, 4.9 §4: bootout first, then the plist), nothing on win32 (the task and Run value are manifest entries)
+//      darwin (src/off/darwin.mjs disableAgent: launchctl disable, never a bootout of a draining daemon), nothing on win32 (the task and Run value are manifest entries)
 //   6  the receipt (R1) and the `off-note` lines of `flows/`, the last of them `kind:'result'`; exit 0 only when the routing is confirmed off and every
 //      entry is undone (connections that are still draining do not count against it)
 // Everything the world gives is a `deps` entry a test replaces (0.1 §3): `fs` `exec` `request` `socketPath` `alive` `identity` `kill` `isHelper` `sleep` `ms`
@@ -22,18 +22,17 @@ import { newReceipt, EXIT } from './schema.mjs'
 import { collectorDir, stateFile, opLockFile } from './paths.mjs'
 import { readStateFile, setDesired, writeStateAtomic, emptyState } from './state.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
-import { readManifest, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
-import { undoHarnesses } from './undo.mjs'
+import { readManifest, refuseOldManifest, unknownItems, MANIFEST_VERSION, OFF_VERSION } from './manifest.mjs'
+import { undoHarnesses, undoRootKeys } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
-import { daemonState, stopDaemon, helperGone, isRedirectorHelper } from './daemon-stop.mjs'
-import { controlRequest, controlSocketPath, controlEndpointFor } from './control-client.mjs'
+import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
+import { controlRequest, controlEndpointFor } from './control-client.mjs'
 import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
-import { plistFilePath, AGENT_LABEL, agentState, undoAutostart } from './darwin.mjs'
+import { plistFilePath, AGENT_LABEL, agentState, disableAgent } from './darwin.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
 import { refuseElevatedByWhoami, disableScheduledTask } from './win32.mjs'
-import { undoOptIns } from './win32-optin.mjs'
-import { undoDarwinOptIns } from './darwin-optin.mjs'
+import { rootStore } from './root-store.mjs'
 import { runEventWriter } from './events.mjs'
 import { confirm } from './io.mjs'
 import { describeEntry } from './journal.mjs'
@@ -61,7 +60,7 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
     clock: deps.now || (() => new Date()), ms: deps.ms || Date.now, sleep: deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     alive: deps.alive || pidAlive, identity: deps.identity || identityFor({ platform, exec: deps.exec || null, env }), isHelper: deps.isHelper || isRedirectorHelper, kill: deps.kill,
     lockFile: path.join(dir, 'lock'), stateF: stateFile(home), deps, standalone: deps.standalone === true, // the single-file asight-off passes `standalone`: it words what it cannot do as "run asight off" (R3, V35)
-    socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || (() => { try { return controlSocketPath({ env }) } catch { return null } })(),
+    socketPath: deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || null,
   }
   const once = (fn) => { let p; return () => p || (p = Promise.resolve().then(fn)) } // the process table is read once per run
   w.procs = once(deps.procs || (() => listProcs({ exec: w.exec, platform, env })))
@@ -180,7 +179,7 @@ export function userProcessesOf(list, selfPid = process.pid) {
 // What a row of the receipt says an entry lost (1.6 §7): the key, the block, the line.
 function offChangeText(e, result) {
   if (!e) return '去掉 asight 加的部分'
-  if (e.kind === 'text') return e.vars ? `去掉 asight 哨兵块(${Object.keys(e.vars).join(', ')})` : `去掉一行(${String(e.line).split(' # ')[0].trim()})`
+  if (e.kind === 'text') return e.vars ? `去掉 asight 哨兵块(${Object.keys(e.vars).join(', ')})` : e.format === 'pem-block' ? '去掉 asight 的证书段' : `去掉一行(${String(e.line).split(' # ')[0].trim()})`
   const keys = (e.keys || []).join('.')
   return e.prior_value != null && result !== 'left-user-value' ? `把 ${keys} 换回原值` : `去掉 ${keys}`
 }
@@ -229,11 +228,11 @@ export async function undoSide(w, opts = {}) {
   }
 }
 
-async function undoBody(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false } = {}, u) {
+async function undoBody(w, { ids = null, manifest, manifestError = null, yes = false, interactive = false, io = null, say = null, dropCa = false, phases = undefined } = {}, u) {
   if (manifest && manifest.unsupported) {
     u.mode = 'unsupported'
     u.problems.push(w.standalone
-      ? `the install manifest is version ${JSON.stringify(manifest.version)}, which this asight-off (version ${OFF_VERSION}, it reads manifest versions 1 to ${MANIFEST_VERSION}) does not read; no entry was touched. Run \`asight off\`: the asight that wrote the manifest reads it`
+      ? `the install manifest is version ${JSON.stringify(manifest.version)}, which this asight-off (version ${OFF_VERSION}, it reads manifest version ${MANIFEST_VERSION}) does not read; no entry was touched. Run \`asight off\`: the asight that wrote the manifest reads it`
       : `the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read; no entry was touched. Use the asight that wrote it (or the asight-off it wrote)`)
     return u
   }
@@ -245,7 +244,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     let out, stopped = null
     try {
       const roots = w.deps.roots || (manifest.files.some((f) => f.role === 'bundle') ? () => rebuildRoots(w) : null)
-      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, fs: w.fs, exec: w.exec, env: w.env })
+      out = await undoHarnesses({ dir: w.dir, home: w.home, manifest, ids, procs: w.procs, roots, now: at, dropCa, phases, fs: w.fs, exec: w.exec, env: w.env })
     } catch (e) {
       if (!e || !e.partial) { // it stopped before one entry was touched
         u.stopped = true; u.problems.push(`undoing the entries stopped: ${errMessage(e)}`); u.failures.push({ code: 'entry-not-undone', reason: errMessage(e) })
@@ -263,16 +262,16 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       if (r.result === 'restored' || r.result === 'reverted-not-identical') {
         const gone = !w.fs.existsSync(r.real_path || r.path)
         if (gone) u.removed.push(r.path)
-        else u.changed.push({ path: r.path, change: offChangeText(e, r.result), backup: r.backup_kept || null, result: r.result, ...(r.backup && !r.backup_kept ? { backup_dropped: true } : {}), ...(r.result === 'reverted-not-identical' ? { not_identical: true } : {}), ...withHarness(r.harness) })
+        else u.changed.push({ path: r.path, change: offChangeText(e, r.result), backup: r.backup_kept || null, result: r.result, ...(r.backup && !r.backup_kept ? { backup_dropped: true } : {}), ...(r.result === 'reverted-not-identical' ? { not_identical: true } : {}), ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
       } else if (SKIP_REASON[r.result]) u.skipped.push({ what: r.path, reason: SKIP_REASON[r.result] })
       if (r.result === 'reverted-not-identical') note('reverted-not-identical', { ...withHarness(r.harness), path: r.path }, `${r.path} was edited after install: only asight's ${r.what} was taken out${r.deleted ? ' and the file, holding nothing else, removed' : ''}; the file is not byte for byte what it was before install, the rest is as the user left it${r.backup_kept ? `; the file as it was is kept at ${r.backup_kept}` : ''}`)
-      else if (!['restored', 'left-unparsable', 'left-link', 'left-text', 'error'].includes(r.result)) note(SKIP_CODE[r.result] || 'harness-note', { ...withHarness(r.harness), path: r.path }, UNDO_NOTE[r.result] || r.result)
+      else if (!['restored', 'left-unparsable', 'left-unreadable', 'left-link', 'left-text', 'error'].includes(r.result)) note(SKIP_CODE[r.result] || 'harness-note', { ...withHarness(r.harness), path: r.path }, UNDO_NOTE[r.result] || r.result)
     }
     u.removed.push(...out.removed)
     // an item whose kind this build does not know is left alone; the copy says who knows it (R3, V35)
     const hint = w.standalone ? ` — this asight-off (version ${OFF_VERSION}) does not know that kind; run \`asight off\`, the asight that wrote the manifest, to take it out` : ''
     u.left = out.left.map((l) => ({ path: l.path, result: l.result, reason: l.result === 'unknown-kind' ? `${l.reason}${hint}` : l.reason, ...(l.backup ? { backup: l.backup, restore: l.restore } : {}), ...withHarness(l.harness) }))
-    for (const l of u.left) u.failures.push({ code: ['error', 'unknown-kind', 'left-text'].includes(l.result) ? 'entry-not-undone' : l.result, ...withHarness(l.harness), path: l.path, reason: l.reason })
+    for (const l of u.left) u.failures.push({ code: ['error', 'unknown-kind', 'left-text', 'left-unreadable'].includes(l.result) ? 'entry-not-undone' : l.result, ...withHarness(l.harness), path: l.path, reason: l.reason })
     u.kept_bundles = out.kept_bundles
     for (const k of out.kept_bundles.filter((x) => !x.holds_ca && !x.unjudged && !x.error)) {
       const entry = k.entry_left ? `${k.entry_left.join(', ')}, which could not be undone, still points at it` : null // an agent's next start reads the bundle through it
@@ -285,6 +284,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     u.residue = out.residue
     for (const x of out.residue) note('residue-not-removed', { harness: x.harness, path: x.path }, `${x.path} appeared after install (${x.why}); it may serve the user's own plugins too, so asight did not remove it`)
     u.still_trusting = out.still_trusting
+    u.holders = out.holders // P12: who may still use a door (null: the table could not be read)
     for (const p of out.still_trusting) note('still-trusting', { harness: p.harness, pid: p.pid }, `pid ${p.pid} (${p.harness}) trusts the asight CA ${UNTIL_REASON[p.until] || UNTIL_REASON.restart}`)
     if (out.procs_error) { note('harness-note', {}, `which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`); u.notes.push(`which agents still trust the asight CA is not known: the process table could not be read (${out.procs_error})`) }
     for (const x of out.trust_unknown || []) { const why = `which running ${x.harness} processes still trust the asight CA is not known: ${x.why}`; note('harness-note', { harness: x.harness }, why); u.notes.push(why) }
@@ -293,25 +293,23 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     for (const k of u.kept_backups.filter((x) => x.at === at.toISOString())) note(CODE_OFF.backupKept, { path: k.path, backup: k.backup }, `${k.path}: ${k.reason}`)
     u.orphan_backups = orphanBackups({ home: w.home, manifest, fs: w.fs })
     if (u.orphan_backups.length) u.notes.push(`backups that no manifest entry names (leave them, or delete them if you do not need them): ${u.orphan_backups.join(', ')}`)
-    // the opt-in items (4.8 §2.4): user-level ones undone inline by kind (win32-optin.mjs's registry), machine-level ones named for the
-    // operator — asight never elevates on its own, and an item left is a not-done off (1.6 R3)
-    if (manifest.entries.some((e) => e && e.scope && e.scope !== 'agent')) {
-      const o = await (w.deps.undoOptIns || (w.platform === 'darwin' ? undoDarwinOptIns : undoOptIns))({ manifest, ids, exec: w.exec, env: w.env, fs: w.fs, home: w.home })
-      for (const r of o.results) {
-        if (r.result === 'needs-admin') { u.left.push({ path: r.path, result: 'needs-admin', reason: `${r.reason}${r.command ? `: ${r.command}` : ''}` }); u.failures.push({ code: 'needs-admin', path: r.path, reason: r.reason }) }
-        else if (r.result === 'undone') {
-          u.changed.push({ path: r.path, change: `点名项(${r.kind})已撤`, result: 'restored' })
-          // the removal is a state change, not only an install-note: the §12 twin of the apply side's optin-applied (optin.mjs), so a surface
-          // that watches state events sees the item go — an opt-in item's removal must not be silent anywhere (D38; 4.8 §12's optin-removed {form, item, scope})
-          u.events.push({ event: 'optin-removed', where: 'optin', ...(r.form != null && r.item != null ? { form: r.form, item: r.item } : {}), scope: r.scope })
-        }
-        else if (r.result === 'absent') u.skipped.push({ what: r.path, reason: `点名项(${r.kind})已不在` })
-        else { u.left.push({ path: r.path, result: r.result, reason: r.reason || r.result }); u.failures.push({ code: 'optin-not-undone', path: r.path, reason: r.reason || r.result }) }
-        // the off-note of a row: no `code` — there is no registered code for "an opt-in item's undo went" (D38: the closed sets are the only codes; the
-        // row's kind, path, form/item and reason say it, and the failures above carry the registered codes where one exists, optin-not-undone / needs-admin)
-        u.events.push({ kind: r.kind, path: r.path, scope: r.scope, ...(r.form != null && r.item != null ? { form: r.form, item: r.item } : {}), reason: `${r.path} (${r.kind}, ${r.scope}): ${r.result}${r.reason ? ` — ${r.reason}` : ''}` })
+    // the root in the user's OS store (D55, 4.11 P3): only a whole-machine uninstall takes it out, by its fingerprint — `off` never touches a
+    // certificate (1.6 §1.1). It goes before the root's key below (4.11 卸载「最后删根的密钥」); one that could not be removed is a left item (D38)
+    const roots = dropCa && ids == null ? manifest.entries.filter((e) => e && e.kind === 'system-root') : []
+    if (roots.length) {
+      const store = w.deps.rootStore || rootStore({ platform: w.platform, run: w.exec, home: w.home, env: w.env, fs: w.fs })
+      for (const e of roots) {
+        let r
+        try { r = await store.remove({ fp256: e.fp256, sha1: e.thumbprint }) } catch (err) { r = { ok: false, reason: String((err && err.message) || err) } }
+        if (r.ok && r.absent) u.skipped.push({ what: e.path, reason: '根证书已不在信任库里' })
+        else if (r.ok) u.changed.push({ path: e.path, change: '根证书已从信任库撤下', result: 'restored' })
+        else { u.left.push({ path: e.path, result: 'failed', reason: r.reason }); u.failures.push({ code: 'entry-not-undone', path: e.path, reason: r.reason }) }
       }
-      for (const x of o.unknown) u.left.push({ path: x.path, result: 'unknown-kind', reason: `${x.path} is an opt-in item of kind ${JSON.stringify(x.kind)}, which this build has no undo for; use the asight that wrote it` })
+    }
+    if (dropCa && ids == null && !stopped) { // last: the root's key, after the trust store's root above (4.11 卸载「最后删根的密钥」)
+      const k = await undoRootKeys({ dir: w.dir, manifest, custody: w.deps.custody || null, fs: w.fs })
+      u.removed.push(...k.removed)
+      for (const l of k.left) { u.left.push({ path: l.path, result: l.result, reason: l.reason }); u.failures.push({ code: 'entry-not-undone', path: l.path, reason: l.reason }) }
     }
     if (stopped) {
       u.stopped = true
@@ -339,10 +337,10 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     if (r.result === CODE_OFF.undoneByMarker) {
       u.undone_by_marker = true
       if (r.how === 'owned-file') u.removed.push(r.path)
-      else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...withHarness(r.harness) })
+      else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
       u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by asight's mark; there is no manifest to say what it was before)` })
     } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: 'asight 的标记已不在这个文件里' })
-    else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path} is no longer valid JSON; asight's value may still be in it` }) }
+    else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: asight cannot read it; asight's value may still be in it` }) }
   }
   if (u.orphan_backups.length) u.notes.push(`the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}`)
   return u
@@ -359,6 +357,22 @@ export function flowWriter(w, run, notes, { event = EVENT_OFF_NOTE, where = WHER
   }
 }
 
+// a manifest holding an item of a kind this build does not know was written by a newer asight. Undoing the rest would turn the routing off and stop
+// the daemon while that item stays, half an off: the whole off is refused instead, before the desired state and the routing (step 2 / 3) — the receipt
+// names each such item and kind and says which asight-off undoes it. → true when it refused (receipt filled), false otherwise.
+function refuseUnknownKinds(manifest, receipt, standalone) {
+  const unknown = manifest && !manifest.unsupported ? unknownItems(manifest) : []
+  if (!unknown.length) return false
+  const kinds = [...new Set(unknown.map((u) => JSON.stringify(u.kind)))].join(', ')
+  // the copy sends the person to `asight off` (the asight that wrote the manifest); `asight off` itself cannot send anyone to itself (V35)
+  const who = standalone ? 'run `asight off`, from the asight that wrote it' : 'use the asight-off of the newer asight that wrote it'
+  receipt.left.push(...unknown.map((u) => ({ path: u.path ?? null, result: 'unknown-kind', reason: `an item of kind ${JSON.stringify(u.kind)}, which this asight-off does not know: ${who}` })))
+  receipt.problems.push(`the install manifest holds ${unknown.length} item(s) of a kind this asight-off (version ${OFF_VERSION}) does not know (${kinds}): a newer asight wrote it, and only a newer asight-off can undo it — ${who}. Nothing was changed: the routing is as it was, the daemon was not asked to stop`)
+  receipt.ok = false
+  receipt.log = null
+  return true
+}
+
 /** `asight off [harness…]` (1.6 §1.1, §1.4, §1.5): see the header. `ids`: harness code ids, or null for every one; `now`: cut the connections still relayed (`--now`);
  *  `yes` / `interactive` / `io`: the one confirmation, for undoing by marks when the manifest is lost (R6); `say`: where the list goes before the question.
  *  → `{ receipt, exit }`; the receipt is src/off/schema.mjs's plus `harnesses` · `routing` · `daemon` · `autostart` · `still_trusting` · `kept_backups` · `kept_bundles` ·
@@ -368,6 +382,9 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   const run = w.clock().toISOString()
   const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, now, undo: ['asight on'], log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], user_processes: [], notes: [], problems: [] }
   const put = flowWriter(w, run, receipt.notes)
+  // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write — no lock, no state, no flows record; the receipt names the tools that undo it
+  const old = refuseOldManifest({ home, platform: w.platform, fs: w.fs })
+  if (old) { receipt.problems.push(old.message); receipt.ok = false; receipt.log = null; return { receipt, exit: EXIT.incomplete } }
   // R7 on Windows (4.8 §7): off never runs with an elevated token — asked before anything is touched, and a token that cannot be read is
   // not a refusal (an undo that stopped on a broken whoami is not an undo).
   if ((deps.platform || process.platform) === 'win32') {
@@ -380,7 +397,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   if (ids === null) receipt.harnesses = installed
   const hadAnything = w.fs.existsSync(w.dir) || w.unitManaged() || manifest != null || manifestError != null // no collector directory, no unit, no manifest: asight was never installed here (or is uninstalled, and purged)
   if (dryRun) { // R6: the same receipt in the future tense, nothing written, nothing asked of the daemon, exit 0
-    const mine = (x) => ids == null || ids.includes(x.harness)
+    const mine = (x) => x.phase === 'on' && (ids == null || ids.includes(x.harness)) // off spares what install wrote (D55①), so its plan does too
     const items = manifest && !manifest.unsupported ? manifest : { entries: [], files: [] }
     const gone = items.files.filter((f) => mine(f) && ['plugin', 'shim', 'bundle', 'trust-file'].includes(f.role)).map((f) => f.path)
     const marks = manifest && !manifest.unsupported ? [] : planByMarker({ home, ids, fs: w.fs })
@@ -396,6 +413,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     return { receipt, exit: EXIT.ok }
   }
 
+  if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt, exit: EXIT.incomplete } // before the lock, the desired state and the routing
   // 1 · the lock, off first: the desired state is written before the wait when the lock is held, so an `on` that is mid-way stops (R12)
   const tryOff = () => { try { return { r: desiredOff(w, ids, installed), error: null } } catch (e) { return { r: null, error: e } } }
   let early = null
@@ -411,6 +429,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   }
   try {
     ({ manifest, manifestError } = read()); installed = harnessIdsOf(manifest)
+    if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt, exit: EXIT.incomplete } // read again under the lock: a newer asight may have written since (the lock is released by finally)
     if (ids === null) receipt.harnesses = installed
     // 2 · the desired state
     const again = tryOff()
@@ -429,16 +448,21 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     if (routing.stop) receipt.daemon_stop = { how: routing.stop.how, signals: routing.stop.signals, stopped: routing.stop.stopped }
     receipt.problems.push(...routing.problems); receipt.notes.push(...routing.notes)
     for (const ev of routing.events) put(ev)
+    if ((deps.platform || process.platform) === 'win32') { // a supervisor.lock whose holder is gone (killed: it never removed its own) does not outlive off
+      const c = clearStaleSupervisorLock({ lockFile: w.lockFile, exec: w.exec, env, fs: w.fs })
+      if (c.removed) put({ kind: 'note', reason: `removed ${path.join(w.dir, 'supervisor.lock')}: the supervisor it named is gone` })
+    }
     for (const f of routing.failures) put({ event: 'failure', ...f })
     put({ kind: 'routing', confirmed: routing.confirmed, state: routing.state, reason: `routing ${routing.confirmed ? 'off, confirmed' : 'NOT confirmed off'} (${routing.how || routing.state})` })
 
     // 4 · the entries — only when the routing is confirmed (or the daemon could not be stopped)
     let outcome = 'off'
-    if ((deps.platform || process.platform) === 'win32' && routing.state !== 'running') receipt.notes.push('没有守护进程替它排空:内核自己等到最后一条连接结束才退;要现在断,跑 asight off --now')
+    if ((deps.platform || process.platform) === 'win32' && routing.state !== 'running') receipt.notes.push('没有守护进程在跑:门随它一起没了,没有连接要排空')
     if (routing.confirmed || routing.unstoppable) {
       const u = await undoSide(w, { ids, manifest, manifestError, yes, interactive, io, say })
       for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
       for (const k of ['kept_bundles', 'still_trusting', 'residue', 'kept_backups', 'orphan_backups', 'pending']) receipt[k] = u[k]
+      if (u.holders !== undefined) receipt.holders = u.holders
       receipt.problems.push(...u.problems); receipt.notes.push(...u.notes)
       receipt.undone_by_marker = u.undone_by_marker
       for (const ev of u.events) put(ev)
@@ -463,9 +487,9 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
           if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
         }
         else if ((deps.platform || process.platform) === 'darwin') {
-          const u = undoAutostart({ home, exec: w.exec, env, fs: w.fs })
-          receipt.autostart = { disabled: u.code === 0, removed: u.plist === 'removed' ? [plistFilePath(home)] : [], ...(u.code !== 0 ? { error: u.err || `the LaunchAgent was ${u.agent} and the plist ${u.plist}` } : {}) }
-          put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'} (launchd: agent ${u.agent}, plist ${u.plist})${u.err ? ` (${u.err})` : ''}` })
+          const u = disableAgent({ exec: w.exec, env }) // disable, never bootout — the daemon drains and exits itself; the plist stays (an install item)
+          receipt.autostart = { disabled: u.code === 0, removed: [], ...(u.code !== 0 ? { error: u.err || 'launchctl disable was refused' } : {}) }
+          put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'} (launchctl disable${u.code === 0 ? '' : `: exit ${u.code}`})${u.err ? ` (${u.err})` : ''}` })
           if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
         }
         else {

@@ -1,10 +1,12 @@
 // test/off/text-edit.test.mjs — the sentinel block and sentinel line asight writes into comment-capable
-// files (RFC 4.6 §身份与信任「标记与安装」「同名键」, §安装清单与卸载「撤一个文件的规则」; T10 / T11 text parts).
+// files (RFC 4.6 §身份与信任「标记与安装」「名字族」, §安装清单与卸载「撤一个文件的规则」; T10 / T11 text parts).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applyOps, reverseOps } from '../../src/off/json-text.mjs'
-import { dotenvBlock, insertLine, removeAsightText, asightResidue, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
+import { applyOps, reverseOps, eolOf } from '../../src/off/json-text.mjs'
+import { dotenvBlock, joinDotenvBlock, insertLine, removeAsightText, asightResidue, onlySkeleton, BLOCK_BEGIN, BLOCK_END, OFF_PREFIX, SENTINEL, lineComment } from '../../src/off/text-edit.mjs'
 import { parseDotenv } from '../../src/collector/core/config-read.mjs'
+import { foldsEnvNames } from '../../src/off/env-names.mjs'
+import { seeds, readDotenv, shapeCases } from '../helpers/file-shapes.mjs'
 
 const B = '/h/.asight/collector/ca/combined-x.pem'
 
@@ -196,4 +198,144 @@ test('text-edit: the sentinel text written into users\' files is exactly what ea
   assert.equal(BLOCK_END, '# <<< asight collector <<<')
   assert.equal(OFF_PREFIX, '#asight-collector-off# ')
   assert.equal(lineComment('Kimi shim'), '# asight collector: Kimi shim (`asight collector uninstall` removes this line)')
+})
+
+test('text-edit X6: a byte-order mark (U+FEFF at offset 0) stays first — the block goes after it, a key on the first line is read after it and put out of effect after it; undo gives the text back', () => {
+  const user = '\uFEFFSSL_CERT_FILE=/corp/ca.pem\r\nOTHER=1\r\n'
+  const r = dotenvBlock(user, { SSL_CERT_FILE: B })
+  assert.ok(r.text.startsWith(`\uFEFF${BLOCK_BEGIN}\r\n`), JSON.stringify(r.text.slice(0, 80)))
+  assert.ok(r.text.includes(`\r\n${OFF_PREFIX}SSL_CERT_FILE=/corp/ca.pem\r\n`), 'the first line\'s key is out of effect, the mark not moved')
+  assert.equal((r.text.match(/\uFEFF/g) || []).length, 1)
+  assert.deepEqual(r.prior, { SSL_CERT_FILE: '/corp/ca.pem' })
+  assert.equal(reverseOps(r.text, r.ops), user)
+  assert.equal(removeAsightText(r.text, r.ops).text, user)
+  const j = joinDotenvBlock(r.text, { HTTPS_PROXY: 'http://127.0.0.1:1' })
+  assert.ok(j.text.startsWith(`\uFEFF${BLOCK_BEGIN}\r\n`) && j.text.includes(`HTTPS_PROXY=http://127.0.0.1:1\r\n${BLOCK_END}`))
+  const y = insertLine('\uFEFF', { line: `- r ${lineComment('x')}`, format: 'yaml-list' })
+  assert.equal(y.text, `\uFEFF- r ${lineComment('x')}\n`, 'a file holding only the mark is an empty list: no blank line before the row')
+})
+
+test('text-edit ③: one eolOf decides every insert — CRLF when CRLF outnumbers bare LF, else LF, LF for an empty or new file; rc and YAML rows follow it', () => {
+  const eolOf = (t) => (/\r\n$/.test(insertLine(t, { line: `x ${lineComment('k')}` }).text) ? '\r\n' : '\n') // what an rc line ends with
+  assert.deepEqual([eolOf(null), eolOf(''), eolOf('a'), eolOf('a\r\nb\n'), eolOf('a\r\nb\r\nc\n'), eolOf('a\nb\n')], ['\n', '\n', '\n', '\n', '\r\n', '\n'])
+  const rc = insertLine('export A=1\r\nalias x=y', { line: `export PATH=p ${lineComment('k')}` })
+  assert.equal(rc.text, `export A=1\r\nalias x=y\r\nexport PATH=p ${lineComment('k')}\r\n`)
+  const after = insertLine('export PATH=/kimi/bin\r\nB=2\r\n', { line: `export PATH=p ${lineComment('k')}`, after: '^export PATH=/kimi/bin$' })
+  assert.equal(after.text, `export PATH=/kimi/bin\r\nexport PATH=p ${lineComment('k')}\r\nB=2\r\n`, 'a line\'s own \\r is not part of what `after` matches')
+  const yml = insertLine('- a\r\n# note\r\n', { line: `- r ${lineComment('x')}`, format: 'yaml-list' })
+  assert.equal(yml.text, `- a\r\n# note\r\n- r ${lineComment('x')}\r\n`, 'a CRLF comment line is still a comment line')
+})
+
+// D48② (X8): a key asight's block set that the user set to a value of their own while asight was on — inside the block or outside it — keeps the user's value after off;
+// the user's old line asight put out of effect stays out of effect and is reported by its line; a key the user did not touch gets its old line back. Key by key, not the
+// whole text: a prefixed line of a key this entry did not set is not this entry's.
+test('text-edit X8: the user\'s new value of a key asight set wins — its old line stays out of effect (prior_left, by line), another key\'s old line comes back; in either line ending', () => {
+  for (const eol of ['\n', '\r\n']) {
+    const user = ['OPENAI_API_KEY=sk-x', 'HTTPS_PROXY=http://corp:8080', 'SSL_CERT_FILE=/corp/ca.pem', ''].join(eol)
+    const r = dotenvBlock(user, { SSL_CERT_FILE: B, HTTPS_PROXY: 'http://127.0.0.1:1' })
+    const inBlock = r.text.replace('HTTPS_PROXY=http://127.0.0.1:1', 'HTTPS_PROXY=http://newcorp:3128')
+    assert.deepEqual(removeAsightText(inBlock, r.ops), {
+      text: ['HTTPS_PROXY=http://newcorp:3128', 'OPENAI_API_KEY=sk-x', `${OFF_PREFIX}HTTPS_PROXY=http://corp:8080`, 'SSL_CERT_FILE=/corp/ca.pem', ''].join(eol),
+      found: true, prior_left: [{ key: 'HTTPS_PROXY', line: 3 }],
+    }, `in the block, ${JSON.stringify(eol)}`)
+    const outside = `${r.text}export SSL_CERT_FILE = "/mine/ca.pem"${eol}`
+    const out = removeAsightText(outside, r.ops)
+    assert.deepEqual(out.prior_left, [{ key: 'SSL_CERT_FILE', line: 3 }], 'a line of its own after the block')
+    assert.equal(parseDotenv(out.text).get('SSL_CERT_FILE'), '/mine/ca.pem')
+    assert.equal(parseDotenv(out.text).get('HTTPS_PROXY'), 'http://corp:8080', 'the key the user did not touch is back to their old value')
+    assert.ok(!out.text.includes('127.0.0.1') && !out.text.includes(B) && !out.text.includes(BLOCK_BEGIN))
+  }
+  // the mark on the first line: the prefix is after it, the line number is the user's
+  const marked = dotenvBlock('﻿SSL_CERT_FILE=/corp/ca.pem\n', { SSL_CERT_FILE: B })
+  const m = removeAsightText(`${marked.text}SSL_CERT_FILE=/mine.pem\n`, marked.ops)
+  assert.deepEqual(m, { text: `﻿${OFF_PREFIX}SSL_CERT_FILE=/corp/ca.pem\nSSL_CERT_FILE=/mine.pem\n`, found: true, prior_left: [{ key: 'SSL_CERT_FILE', line: 1 }] })
+  // a prefixed line of a key this entry did not set is another entry's: it is not touched
+  const r = dotenvBlock('A=1\n', { SSL_CERT_FILE: B })
+  const other = `${OFF_PREFIX}HTTPS_PROXY=http://corp:8080\n`
+  assert.deepEqual(removeAsightText(`${r.text}${other}`, r.ops), { text: `A=1\n${other}`, found: true })
+  assert.deepEqual(removeAsightText(`A=1\n${other}`, r.ops), { text: `A=1\n${other}`, found: false }, 'nothing of this entry\'s left: nothing changes')
+})
+
+test('text-edit X8: `fold` (4.6「名字族」) compares the keys without case — a lower-case name the user set is the new value of asight\'s upper-case one; asight\'s value under another case goes too', () => {
+  const user = 'https_proxy=http://corp:8080\n'
+  const r = { ops: [{ offset: 0, removed: '', inserted: `${BLOCK_BEGIN}\nHTTPS_PROXY=http://127.0.0.1:1\n${BLOCK_END}\n` }, { offset: 0, removed: '', inserted: OFF_PREFIX }] }
+  const on = `${BLOCK_BEGIN}\nHTTPS_PROXY=http://127.0.0.1:1\n${BLOCK_END}\n${OFF_PREFIX}${user}`
+  const edited = on.replace('HTTPS_PROXY=http://127.0.0.1:1', 'https_proxy=http://newcorp:3128')
+  assert.deepEqual(removeAsightText(edited, r.ops, { fold: true }), { text: `https_proxy=http://newcorp:3128\n${OFF_PREFIX}${user}`, found: true, prior_left: [{ key: 'https_proxy', line: 2 }] })
+  assert.deepEqual(removeAsightText(on, r.ops, { fold: true }), { text: user, found: true }, 'untouched: the old line is back')
+  assert.deepEqual(removeAsightText(on.replace('HTTPS_PROXY=', 'Https_Proxy='), r.ops, { fold: true }), { text: user, found: true }, 'asight\'s value under another case is asight\'s')
+  assert.equal(removeAsightText(on.replace('HTTPS_PROXY=', 'Https_Proxy='), r.ops).text.includes('127.0.0.1'), true, 'without fold another case is another name')
+})
+
+// ---- the name family (4.6「名字族」, X7): the block puts out of effect every line that would win over it, by the platform's rules ----
+// Codex's proxy names in the order the agent reads them; the lines that would win over the block are the lower-case twins of its two names. The
+// ranking itself (which names outrank which) is the route writers' (T16); here it is data, and the reader below is the test's own.
+const CODEX_NAMES = ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy']
+const OUTRANKING = ['https_proxy', 'no_proxy']
+// the value an agent reading `names` in order sees: the first name set (the last assignment of a name wins; `fold`: names compared without case)
+const firstSet = (pairs, names, fold) => { const m = new Map(); for (const [k, v] of pairs) m.set(fold ? k.toUpperCase() : k, v); for (const n of names) { const v = m.get(fold ? n.toUpperCase() : n); if (v !== undefined) return v } return undefined }
+const GATE = 'http://codex.env:a1b2c3d4e5f60718@127.0.0.1:17991'
+for (const platform of ['win32', 'darwin']) {
+  test(`text-edit X7 (${platform} rules): https_proxy and no_proxy give way to the block, the rest stays; prior is by name; the agent reads the door; off is byte for byte`, () => {
+    const fold = foldsEnvNames(platform)
+    const seed = seeds.find((s) => s.id === 'seed-X7')
+    const before = seed.bytes.toString('utf8')
+    const vars = { HTTPS_PROXY: GATE, NO_PROXY: 'localhost,127.0.0.1,::1' }
+    const r = dotenvBlock(before, vars, { neutralize: OUTRANKING, fold })
+    // prior: what the agent read before, by the same rule
+    const was = firstSet(Object.entries(r.prior), CODEX_NAMES, fold)
+    assert.equal(was, firstSet(Object.entries(readDotenv(seed.bytes, { fold })), CODEX_NAMES, fold))
+    assert.equal(was, 'http://corp.example:8080')
+    assert.equal(r.prior.no_proxy ?? r.prior.NO_PROXY, '*.anthropic.com')
+    const lines = r.text.split('\r\n')
+    for (const k of ['https_proxy', 'no_proxy']) assert.ok(lines.some((l) => l.startsWith(`${OFF_PREFIX}${k}=`)), `${k}'s line is out of effect`)
+    for (const k of ['ALL_PROXY', 'HTTP_PROXY']) assert.ok(lines.some((l) => l.startsWith(`${k}=`)), `${k} is ranked after HTTPS_PROXY: it stays`)
+    assert.ok(r.ops.filter((o) => o.inserted === OFF_PREFIX).every((o) => typeof o.key === 'string'), 'each line put out of effect names its key')
+    assert.equal((r.text.match(/(?<!\r)\n/g) || []).length, 0, 'every inserted line ends the way the file does (CRLF)')
+    // an independent reader, by the agent's order — and with the twins the other way round, since that order was never measured
+    const read = Object.entries(readDotenv(Buffer.from(r.text), { fold }))
+    const swapped = ['https_proxy', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY', 'http_proxy', 'HTTP_PROXY']
+    for (const names of [CODEX_NAMES, swapped]) assert.equal(firstSet(read, names, fold), GATE)
+    assert.equal(firstSet(read, ['no_proxy', 'NO_PROXY'], fold), 'localhost,127.0.0.1,::1')
+    const off = removeAsightText(r.text, r.ops, { fold })
+    assert.equal(off.text, before, 'off gives back the bytes')
+    assert.deepEqual(Buffer.from(off.text, 'utf8'), seed.bytes)
+  })
+}
+
+test('text-edit: a twin line the user set again while asight was on keeps its old line out of effect (D48②), the other twin comes back; a twin the entry did not put out of effect is left', () => {
+  const before = 'https_proxy=http://old:1\nno_proxy=a\n'
+  const r = dotenvBlock(before, { HTTPS_PROXY: GATE }, { neutralize: ['https_proxy'], fold: false })
+  const edited = `${r.text}https_proxy=http://new:2\n`
+  const off = removeAsightText(edited, r.ops)
+  assert.equal(off.text, `${OFF_PREFIX}https_proxy=http://old:1\nno_proxy=a\nhttps_proxy=http://new:2\n`)
+  assert.deepEqual(off.prior_left, [{ key: 'https_proxy', line: 1 }])
+  const j = joinDotenvBlock(dotenvBlock('Ssl_Cert_File=/c\nHttps_Proxy=http://x:1\n', { SSL_CERT_FILE: '/b' }, { fold: true }).text, { HTTPS_PROXY: GATE }, { fold: true })
+  assert.match(j.text, new RegExp(`\\n${OFF_PREFIX}Ssl_Cert_File=/c\\n${OFF_PREFIX}Https_Proxy=http://x:1\\n$`), 'folding: any spelling of a block name is that name')
+  assert.deepEqual(j.prior, { HTTPS_PROXY: 'http://x:1' })
+})
+
+test('text-edit 4.11 ruling ④: `at: \'end\'` puts the block after the user\'s last line — every user line of the same names stays byte for byte, none put out of effect, the block wins, prior = what was read before; along the dotenv / rc shape axes and the seeds', () => {
+  const vars = { SSL_CERT_FILE: B, HTTPS_PROXY: 'http://127.0.0.1:47011' }
+  const texts = [...['dotenv', 'rc'].flatMap((format) => shapeCases({ format, budget: 60 }).filter((c) => c.determinable)), ...seeds.filter((s) => s.format === 'dotenv')]
+  assert.ok(texts.some((c) => /^\s*(export\s+)?(SSL_CERT_FILE|HTTPS_PROXY)\s*=/im.test(c.text)), 'the axes hold user lines of the same names')
+  for (const c of [{ text: '', describe: 'empty' }, { text: null, describe: 'missing' }, ...texts]) {
+    for (const fold of [false, true]) {
+      const src = c.text ?? ''
+      const r = dotenvBlock(c.text, vars, { at: 'end', fold, neutralize: ['https_proxy', 'ssl_cert_file'] })
+      const lead = src === '' || src.endsWith('\n') ? '' : eolOf(src)
+      const where = `${c.describe} fold=${fold}`
+      assert.equal(r.text.slice(0, src.length + lead.length), src + lead, `${where}: the user's bytes come first, untouched`)
+      assert.equal(r.text.slice(src.length + lead.length), [BLOCK_BEGIN, `SSL_CERT_FILE=${B}`, `HTTPS_PROXY=${vars.HTTPS_PROXY}`, BLOCK_END].join(eolOf(src)) + eolOf(src), `${where}: the block in the file's line ending is last`)
+      assert.equal(r.ops.length, 1, `${where}: one insertion, no op on a user line`)
+      assert.equal(r.text.split(OFF_PREFIX).length, src.split(OFF_PREFIX).length, `${where}: nothing put out of effect`)
+      const after = readDotenv(r.text, { fold }), before = readDotenv(src, { fold }), id = (k) => (fold ? k.toUpperCase() : k)
+      for (const [k, v] of Object.entries(vars)) assert.equal(after[id(k)], v, `${where}: ${k} — the block's assignment is the last, so it wins`)
+      const want = Object.fromEntries(['SSL_CERT_FILE', 'HTTPS_PROXY', 'https_proxy', 'ssl_cert_file'].filter((k) => before[id(k)] !== undefined).map((k) => [k, before[id(k)]]))
+      assert.deepEqual(r.prior ?? {}, want, `${where}: prior is what the agent read before`)
+      assert.equal(reverseOps(r.text, r.ops), src, `${where}: untouched → byte-identical undo`)
+      if (lead === '') assert.equal(removeAsightText(r.text, r.ops, { fold }).text, src, `${where}: removing asight's lines gives the user's file back`)
+    }
+  }
+  assert.throws(() => dotenvBlock('', vars, { at: 'middle' }), /'top' or 'end'/)
 })

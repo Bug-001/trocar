@@ -1,11 +1,11 @@
 // ingress.mjs — the engine's proxy ingress (RFC 4.8 §5.1, §5.2). Where the transparent listener takes connections a
-// kernel steered, this takes the ones a proxy client hands over on purpose: asight's own forwarder (the kernel, D43 — the
-// user's VPN is never pointed here) sends each agent connection as `CONNECT host:port` with `Proxy-Authorization: Basic <of.<form>>:<token>`,
-// or as a SOCKS5 CONNECT with RFC 1929 credentials. The ingress answers like the proxy it is, dials the upstream,
+// kernel steered (Linux eBPF), this takes the ones a proxy client hands over on purpose: on macOS / Windows the agent itself, through
+// the proxy entry asight wrote (D47: the engine is the proxy, one door per group; the user's VPN is never pointed here), sends each
+// connection as `CONNECT host:port` with `Proxy-Authorization: Basic <group>:<token>`, or as a SOCKS5 CONNECT with RFC 1929 credentials. The ingress answers like the proxy it is, dials the upstream,
 // and only then says yes; the bytes after that are an agent's, and go to handleFlow exactly as a transparent flow's do.
 //
 // Order per connection (§5.1):
-//   1. read the opener — CONNECT or SOCKS5; anything else (an absolute-URI GET included, mihomo never probes that way) is closed,
+//   1. read the opener — CONNECT or SOCKS5; anything else (an absolute-URI GET included) is closed,
 //      `ingress-unknown`;
 //   2. check the token, in constant time — 407 / SOCKS auth failure and `ingress-auth-failed`, zero upstream connections;
 //   3. lookupIngress({peer, user, target}) → the flow's meta, or {health:true, group}, or null (an unknown user: also an auth failure);
@@ -18,8 +18,10 @@
 // The ingress never records an envelope itself and never forwards a byte it has not been asked to.
 import crypto from 'node:crypto'
 import net from 'node:net'
+import { STATUS_CODES } from 'node:http'
 import { parseHead } from './sniff.mjs'
 import { socks5Greeting, socks5Request } from './socks.mjs'
+import { HOOK_HEADER as UPSTREAM_HEADER } from '../proxymode/chain.mjs'
 
 const HEAD_MAX = 16 * 1024        // no opener or proxy reply head is longer
 const HOLD_MAX = 256 * 1024       // what a client may send while the upstream is being dialled
@@ -81,7 +83,8 @@ function sniffOpener(buf) {
   if (buf[0] === 0x05) return { kind: 'socks5', length: 0 }
   const s = buf.toString('latin1', 0, 8)
   if (s.startsWith('CONNECT ')) return { kind: 'connect', length: 0 }
-  if (buf.length < 8 && 'CONNECT '.startsWith(s)) return null
+  if (s.startsWith('GET ')) return { kind: 'get', length: 0 } // served only on an auth:false door (the PAC, below); closed anywhere else
+  if (buf.length < 8 && ('CONNECT '.startsWith(s) || 'GET '.startsWith(s))) return null
   const m = /^([A-Z]{3,7}) /.exec(buf.toString('latin1', 0, 12))
   return { invalid: m ? `an HTTP request that is not CONNECT (${m[1]}): the ingress takes CONNECT and SOCKS5 only` : `first byte 0x${buf.subarray(0, 1).toString('hex')}: neither CONNECT nor SOCKS5` }
 }
@@ -125,7 +128,7 @@ function basicOf(headers) {
   const h = headers.find(([k]) => k.toLowerCase() === 'proxy-authorization')
   const m = h && /^basic\s+(\S+)$/i.exec(h[1])
   if (!m) return null
-  const text = Buffer.from(m[1], 'base64').toString('utf8'), i = text.indexOf(':')
+  const text = Buffer.from(m[1], 'base64').toString('utf8'), i = text.lastIndexOf(':') // the last colon: a door's user is its group id `<harness>:<route>`, the token is hex
   return i < 0 ? { user: text, pass: '' } : { user: text.slice(0, i), pass: text.slice(i + 1) }
 }
 
@@ -205,7 +208,7 @@ async function viaSocks5(sock, up, target, deadline) {
  * not authenticate as), `token` that door's password (the listener token), `open:true` a door that takes no credentials at all (the desktop
  * launcher's `auth:false` group: a CONNECT with no Proxy-Authorization is accepted; SOCKS5 keeps requiring its handshake, so an open door serves CONNECT).
  */
-export function createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing = {}, refuse = () => {} }) {
+export function createIngress({ token, lookupIngress, handleFlow, connectUpstream, failure, timing = {}, refuse = () => {}, servePac = null }) {
   if (typeof token !== 'string' || token.length < 16) throw new TypeError('the ingress needs the install\'s token (a string of at least 16 characters)')
   for (const [n, f] of Object.entries({ lookupIngress, handleFlow, connectUpstream, failure })) if (typeof f !== 'function') throw new TypeError(`createIngress: ${n} is required`)
   const tokenHash = sha(token)
@@ -215,7 +218,8 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   // to flows/: no token, right or wrong, is in any record (§5.1).
   const shownUser = (u) => (u === '' ? '' : ROUTE_NAME.test(u) && !u.includes(token) ? printable(u) : '(not a route name)')
   const openerMs = timing.ingressOpenerMs ?? 10_000, healthIdleMs = timing.ingressHealthIdleMs ?? 30_000
-  const counters = { connections: 0, flows: 0, health: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 }
+  const counters = { connections: 0, flows: 0, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 }
+  const now = timing.now || Date.now, lastUnreachable = new Map() // door group → when its upstream-unreachable event was written (1.6 §9.7: at most one per form per 60 s)
   const idle = new Set() // sockets that are not a flow: still in the handshake, or a health tunnel (closeIdle ends them; flows finish on their own)
 
   async function handle(socket, door = null) {
@@ -240,6 +244,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const first = await r.take(sniffOpener, deadline)
     if (first.gone) return void r.detach()
     if (first.timeout || first.invalid) { unknown(first.invalid || `no opener within ${openerMs} ms`); r.detach(); return socket.destroy() }
+    if (first.kind === 'get') return servePacGet(socket, r, peer, say, unknown, door, deadline)
     // what the client asked, in its own dialect: who, for where, and how each answer is spoken
     let o
     if (first.kind === 'connect') {
@@ -251,8 +256,9 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       const target = line && parseAuthority(line[1])
       if (!target) { unknown('a CONNECT whose target is not host:port'); r.detach(); return socket.destroy() }
       const c = basicOf(m.head.headers)
+      const hh = m.head.headers.find(([k]) => k.toLowerCase() === UPSTREAM_HEADER) // the hook's prior proxy (4.11 P7 step 1): handed to the lookup, never forwarded (the ingress writes its own prelude) nor recorded
       o = {
-        target, user: c ? c.user : '', pass: c ? c.pass : null, authed: false,
+        target, user: c ? c.user : '', pass: c ? c.pass : null, authed: false, ...(hh ? { header: hh[1] } : {}),
         ok: () => say('HTTP/1.1 200 Connection established\r\n\r\n'),
         denied: () => { say('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="asight"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
         badGateway: () => { say('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'); socket.end() },
@@ -288,14 +294,18 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
 
     // 2. the token, in constant time; a connection that did not present one never gets as far as a lookup. A door of an `auth:false` group
     //    (D47) takes no credentials at all: the connection is judged by its process, not by a password any process could copy.
-    if (!o.authed && !(door && door.open) && (o.pass === null || !tokenOk(o.pass, doorHash ?? tokenHash))) { authFailed(o.user, o.pass === null ? 'no Proxy-Authorization' : 'token mismatch'); r.detach(); return o.denied() }
+    //    A CONNECT with no Proxy-Authorization at all is the first leg of Basic auth (RFC 7235), not a wrong credential: Chromium (VS Code's
+    //    network service) sends none until a 407 asks, then answers from http.proxy's user:token. It gets the 407 challenge, is counted
+    //    (`challenged`), and writes no failure line; a wrong token is `ingress-auth-failed` (4.8 §5.1).
+    if (!o.authed && !(door && door.open) && o.pass === null) { counters.challenged++; r.detach(); return o.denied() }
+    if (!o.authed && !(door && door.open) && !tokenOk(o.pass, doorHash ?? tokenHash)) { authFailed(o.user, 'token mismatch'); r.detach(); return o.denied() }
     // who this connection is for: a door names its group (the client's own user is only the engine's own ingress's to say), and the lookup
     // answers it with the process the socket belongs to, not with anything the credentials claim
     const who = door && typeof door.user === 'string' && door.user !== '' ? door.user : o.user
     // 3. who is this
     const dst = { address: o.target.host, port: o.target.port, ...(net.isIP(o.target.host) ? { family: net.isIP(o.target.host) } : {}) }
     let meta
-    try { meta = await lookupIngress({ peer, user: who, target: dst }) } catch (e) {
+    try { meta = await lookupIngress({ peer, user: who, target: dst, ...(o.header !== undefined ? { header: o.header } : {}) }) } catch (e) {
       if (e && e.code === 'upstream-unavailable') { // the redirector would not hand over a connection it cannot dial (no login for the upstream, none to dial): asight's own code and the ingress's own part, not a lookup that failed (4.8 §12)
         failure({ where: 'ingress', code: 'upstream-unavailable', peer, ...(typeof e.why === 'string' ? { why: e.why } : {}), reason: `the upstream of the connection of ${shownUser(o.user)} to ${o.target.host}:${o.target.port} cannot be dialled (${msgOf(e)}); it was refused with a 502` })
       } else {
@@ -329,6 +339,8 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
       r.detach()
       if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason }); return o.refusedBy(d) }
       counters.unreachable++
+      const at = now(), last = lastUnreachable.get(group)
+      if (last === undefined || at - last >= 60_000) { lastUnreachable.set(group, at); failure({ where: 'netenv', code: 'upstream-unreachable', group, upstream: shown, reason: `the upstream of ${group || 'this door'} cannot be dialled (${d.error.type}: ${d.error.message}); its agents get 502 until it is back (one event per 60 s)` }) }
       refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error: { type: d.error.type, message: d.error.message, side: 'upstream' } })
       return o.badGateway(d.error.type)
     }
@@ -375,7 +387,27 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     } finally { if (slow) clearTimeout(slow) }
   }
 
-  // a health probe tunnel (4.8 §5.1): the group's own re-entry point, answered with what mihomo's http / socks5 outbound looks for
+  // a health probe tunnel (4.8 §5.1): the group's own re-entry point, answered with what an http / socks5 proxy client's health check looks for
+  // an origin-form GET (4.11 P10): only on an auth:false door, answered by `servePac({ peer, user, path })` → { status, headers, body } | null (not the
+  // PAC: closed). On any other door, or with no server, it is closed and `ingress-unknown`, as every opener that is not CONNECT or SOCKS5 is.
+  async function servePacGet(socket, r, peer, say, unknown, door, deadline) {
+    const bad = (why) => { unknown(why); r.detach(); socket.destroy() }
+    if (!(door && door.open) || typeof servePac !== 'function') return bad('an HTTP request that is not CONNECT (GET): the ingress takes CONNECT and SOCKS5 only; a GET is served only on the PAC door')
+    const m = await r.take(headOf, deadline)
+    if (m.gone) return void r.detach()
+    if (m.timeout || m.invalid) return bad(m.invalid || `no complete GET within ${openerMs} ms`)
+    const line = /^GET (\/\S*) HTTP\/1\.[01]$/.exec(m.head.startLine)
+    if (!line) return bad('a GET that is not origin-form')
+    let res
+    try { res = await servePac({ peer, user: door.user, path: line[1] }) } catch (e) { return bad(`the PAC could not be served: ${msgOf(e)}`) }
+    r.detach()
+    if (!res) return socket.destroy()
+    const body = Buffer.from(res.body || '')
+    const head = Object.entries({ ...(res.headers || {}), 'content-length': body.length, connection: 'close' }).map(([k, v]) => `${k}: ${v}\r\n`).join('')
+    say(Buffer.concat([Buffer.from(`HTTP/1.1 ${res.status || 200} ${STATUS_CODES[res.status || 200] || ''}\r\n${head}\r\n`), body]))
+    socket.end()
+  }
+
   async function healthTunnel(socket, r, o, group, unknown) {
     counters.health++
     o.ok()

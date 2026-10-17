@@ -33,6 +33,8 @@ export const TRUST_REASON = Object.freeze({
   'marker-pending': 'waiting for the trust plugin of this process to report that it added the asight CA',
   'no-marker': 'the trust plugin did not report adding the asight CA for this process, and no known reason explains why (plugin file missing, or the process predates it)',
   'config-unreadable': 'a configuration file of this agent exists but cannot be read',
+  'not-verified': 'this process, its form on this OS, or this host is not verified for decryption on this platform; forwarded only',
+  'outside-host-set': 'a host program carrying the agent talked to a host outside the form\'s host set; forwarded only',
 })
 
 // asight-named failure / note codes (`code` of failure, install-note and uninstall-note events).
@@ -58,6 +60,17 @@ export const CODE = Object.freeze({
   systemRootsPartial: 'system-roots-partial', // a source of the OS roots could not be read while others gave roots: what only it holds is in no combined bundle (4.9 §6.2)
   agentListInvalid: 'agent-list-invalid', // ~/.asight/agents.json unreadable / unparsable / bad items: once per file version (D51③)
   describeError: 'describe-error', // the daemon could not describe a process to the engine (the engine's own record has the same name)
+  certKeyMissing: 'cert-key-missing', // the root key is not in its custody backend: no issuer, doors forward only (4.11 P2)
+  certIntermediateUnavailable: 'cert-intermediate-unavailable', // the custody backend did not issue an intermediate: once per failure streak, retried hourly (4.11 P2)
+  enginePortTaken: 'engine-port-taken', // the engine's recorded port is held by another socket at daemon start: recorded, no other port picked (decision #16)
+  priorProxyUnknown: 'prior-proxy-unknown', // a door's upstream: the proxy the agent had in its process env could not be recovered (parent gone, env unreadable): the system proxy, else direct (4.11 P7)
+  notUsersFile: 'not-users-file', // install skipped a P8 install-folder wrapper: the target is not one native program in a folder this user owns, outside package-manager trees, with the layout declared (4.11 P8)
+  certNotInstalled: 'cert-not-installed', // on refused: no install record with a root — run asight install first (1.6 §1.1, D55⑥)
+  installPending: 'install-pending', // on went on over an install that left an item pending or declined (the root store's prompt): the forms only the root reaches forward only, said (1.6 §1.1)
+  collectorsOnline: 'collectors-online', // uninstall refused: a harness is on, or a holder may still use a door; nothing changed (1.6 §1.1, 4.11 CM24)
+  upstreamHeaderIgnored: 'upstream-header-ignored', // X-Asight-Upstream from a form whose hook does not send it: ignored, recorded without its value (4.11 P7 · ⑥)
+  holdersUnreadable: 'holders-unreadable', // the holder poll could not read the process table: the doors kept for holders stay (4.11 P12)
+  pacPeerRefused: 'pac-peer-refused', // the PAC door (no credentials) refused a peer that is not this user's process, or whose user could not be told (4.11 P10)
 })
 
 export const trustReasonText = (code) => TRUST_REASON[code] || null
