@@ -74,5 +74,15 @@ export function ago(at, now = Date.now()) {
   return 'just now' // under a minute either way: a clock a little ahead is not a negative age
 }
 
+/** `text` broken into lines of at most `width` columns, on spaces (§1.1⑥); a word longer than the line keeps its own line, unbroken. */
+export function wrap(text, width = WIDTH) {
+  const out = []
+  for (const word of String(text).split(/\s+/).filter(Boolean)) {
+    if (out.length && out[out.length - 1].length + 1 + word.length <= width) out[out.length - 1] += ` ${word}`
+    else out.push(word)
+  }
+  return out
+}
+
 /** The one way to say a value could not be read (§1.1「读不到就说读不到」): `unknown`, with the reason when there is one. */
 export const unknown = (reason) => (reason ? `unknown (${reason})` : 'unknown')

@@ -2,7 +2,7 @@
 // `~` for the home directory, 1000-based sizes, relative time, `unknown(reason)`, and colour only when a person is looking.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { colors, useColor, noColor, columns, pairs, tilde, size, ago, unknown, WIDTH } from '../../src/cli/text.mjs'
+import { colors, useColor, noColor, columns, pairs, tilde, size, ago, unknown, wrap, WIDTH } from '../../src/cli/text.mjs'
 
 const io = (isTTY) => ({ stdout: { isTTY } })
 
@@ -76,4 +76,13 @@ test('unknown: the one way to say a value could not be read — never undefined,
   assert.equal(unknown('the daemon does not answer'), 'unknown (the daemon does not answer)')
   assert.equal(unknown(''), 'unknown')
   assert.equal(unknown(undefined), 'unknown')
+})
+
+test('wrap: lines of at most 80 columns, broken on spaces; a word longer than the line keeps its own', () => {
+  assert.deepEqual(wrap('a b c', 3), ['a b', 'c'])
+  assert.deepEqual(wrap('one two three', 80), ['one two three'])
+  assert.deepEqual(wrap('x'.repeat(90), 80), ['x'.repeat(90)], 'never broken mid-word')
+  assert.deepEqual(wrap('  a   b  ', 80), ['a b'], 'runs of whitespace are one space')
+  assert.deepEqual(wrap('', 80), [])
+  for (const l of wrap('word '.repeat(60))) assert.ok(l.length <= WIDTH, l)
 })

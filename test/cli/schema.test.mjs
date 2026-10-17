@@ -9,7 +9,7 @@ const mutate = (fn, command = 'off') => { const r = newReceipt(command); fn(r); 
 const problems = (fn) => validateReceipt(mutate(fn))
 
 test('receipt schema: the keys, the exit codes and the version are the 1.6 R5 / R4 ones, and src/cli re-exports src/off', () => {
-  assert.equal(SCHEMA_VERSION, 1)
+  assert.equal(SCHEMA_VERSION, 2)
   assert.deepEqual(RECEIPT_KEYS, ['schema', 'command', 'ok', 'changed', 'created', 'removed', 'skipped', 'restart', 'relayed', 'undo', 'log'])
   assert.deepEqual({ ...EXIT }, { ok: 0, incomplete: 1, usage: 2, unknown: 3, crash: 70 })
   assert.ok(Object.isFrozen(EXIT))
@@ -18,7 +18,7 @@ test('receipt schema: the keys, the exit codes and the version are the 1.6 R5 / 
 
 test('receipt schema: newReceipt is the empty receipt in key order, a fresh object each time, and it validates', () => {
   const r = newReceipt('off')
-  assert.deepEqual(r, { schema: 1, command: 'off', ok: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: 'unknown', undo: [], log: null })
+  assert.deepEqual(r, { schema: 2, command: 'off', ok: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: 'unknown', undo: [], log: null })
   assert.deepEqual(Object.keys(r), RECEIPT_KEYS)
   assert.notEqual(newReceipt('off').changed, r.changed, 'no list shared between receipts')
   assert.deepEqual(validateReceipt(r), [])
