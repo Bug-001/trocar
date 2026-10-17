@@ -28,7 +28,7 @@ export const MODEL_OS = Object.freeze(['darwin', 'win32'])
 export const isModelOs = (os) => MODEL_OS.includes(os)
 
 const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // the store the user root goes into (src/off/root-store.mjs removes it on uninstall)
-const ROOT_SUBJECT = 'asight local root'
+export const ROOT_SUBJECT = 'asight local root' // also how the lab's reset knows asight's own certificate (spec 4.10 §7 还原)
 const NOT_USERS = CODE.notUsersFile
 const errText = (e) => String((e && e.message) || e)
 const noProxyNames = (desc) => [...new Set(((desc.proxy && desc.proxy.env) || []).map((n) => (n === n.toUpperCase() ? 'NO_PROXY' : 'no_proxy')))]
