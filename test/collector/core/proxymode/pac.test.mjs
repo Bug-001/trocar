@@ -1,4 +1,4 @@
-// test/collector/core/proxymode/pac.test.mjs — CM19 (4.11 P10): the PAC text, generated over bypass rows (each kind; verdict = bypassHit's) × own leg (set / none / credentialed) ×
+// test/collector/core/proxymode/pac.test.mjs — CM19 (4.11 P10): the PAC text, generated over bypass rows (each kind; verdict = bypassHit's: door then direct) × own leg (set / none / credentialed) ×
 // on vs after off, evaluated in a sandbox with the PAC builtins it uses; and CM33: peerAllowed over same / other uid and SID.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -27,7 +27,8 @@ for (const bypass of BYPASS) for (const [legName, ownLeg, legWord] of LEGS) for 
     assert.ok(!/alice|s3cret/.test(text), 'credentials never reach the PAC')
     for (const h of LOOPBACK) assert.equal(run(text, h), 'DIRECT', `loopback ${h} is direct`)
     const want = door ? `PROXY ${door}; ${legWord}` : legWord
-    for (const h of HOSTS) assert.equal(run(text, h), bypassHit(bypass, h) ? 'DIRECT' : want, `${h}: the PAC says what the door's own matcher (bypassHit) says`)
+    // a bypass-list host still goes through the door, which dials it direct (bypassHit): a DIRECT there was a turn never seen (mac Claude Desktop, 2026-10-17)
+    for (const h of HOSTS) assert.equal(run(text, h), bypassHit(bypass, h) ? (door ? `PROXY ${door}; DIRECT` : 'DIRECT') : want, `${h}: the PAC says what the door's own matcher (bypassHit) says`)
     if (door == null) assert.ok(!text.includes('47001'), 'after off the door is gone from the PAC')
   })
 }

@@ -1,6 +1,7 @@
 // pac.mjs (core/proxymode) — P10, the PAC the daemon serves for a route whose value is `pac-url` (RFC 4.11 P10): on the PAC group's door
-// (auth:false) at GET /asight.pac. Loopback and the user's bypass list go DIRECT; everything else `PROXY <door>; <own leg>`, the own leg being the
-// app's way without asight (the user's fixed system proxy, else DIRECT); after `off` (door null) only the own leg. The PAC door takes no
+// (auth:false) at GET /asight.pac. Loopback goes DIRECT; the user's bypass list `PROXY <door>; DIRECT` (the door dials it direct: bypassHit, as for
+// the env routes — 2026-10-17 a bypass-list host went DIRECT and Claude Desktop's turns were never seen); everything else `PROXY <door>; <own leg>`,
+// the own leg being the app's way without asight (the user's fixed system proxy, else DIRECT); after `off` (door null) only the app's own way. The PAC door takes no
 // credentials, so at accept it forwards only a peer of this user (peerAllowed). When a PAC route is not written at all (the four not-routed
 // conditions of ruling ③) is entries.mjs's pacGate, not this file's. The handler is registered on the door.
 import { LOOPBACK, PAC_PATH } from './entries.mjs'
@@ -34,14 +35,14 @@ const bypassTest = (row) => {
 /** The PAC text (P10). `door`: the door's address (null after `off`); `ownLeg`: the user's fixed system proxy, or null for DIRECT; `bypass`: the
  *  user's bypass rows (`{ kind: 'local' | 'domain' | 'domain-suffix' | 'ip-cidr', value }`, the chain's), matched as bypassHit matches them. */
 export function pacText({ door = null, ownLeg = null, bypass = [] } = {}) {
-  const own = pacProxy(ownLeg)
-  const ret = door == null ? own : `${pacProxy(door)}; ${own}`
-  const tests = [...LOOPBACK.map((h) => `host === ${JSON.stringify(h)}`), ...(bypass || []).map(bypassTest)]
+  const lead = (leg) => (door == null ? leg : `${pacProxy(door)}; ${leg}`)
+  const loop = LOOPBACK.map((h) => `host === ${JSON.stringify(h)}`), byp = [...new Set((bypass || []).map(bypassTest))]
   return [
     'function FindProxyForURL(url, host) {',
     '  host = String(host).toLowerCase().replace(/^\\[|\\]$/g, "").replace(/\\.$/, "");',
-    `  if (${[...new Set(tests)].join(' ||\n      ')}) return "DIRECT";`,
-    `  return ${JSON.stringify(ret)};`,
+    `  if (${loop.join(' || ')}) return "DIRECT";`,
+    ...(byp.length ? [`  if (${byp.join(' ||\n      ')}) return ${JSON.stringify(lead('DIRECT'))};`] : []),
+    `  return ${JSON.stringify(lead(pacProxy(ownLeg)))};`,
     '}',
     '',
   ].join('\n')
