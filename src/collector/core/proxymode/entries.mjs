@@ -33,6 +33,9 @@ export function mergeNoProxy({ userValues = [], persistent = {} } = {}) {
   return out.join(',')
 }
 
+/** P6 for a hook (P8 wrapper, P9 plugin): the bypass-list names it writes — NO_PROXY / no_proxy, in the spellings of the agent's own proxy names. */
+export const noProxyNames = (desc) => [...new Set(((desc.proxy && desc.proxy.env) || []).map((n) => (n === n.toUpperCase() ? 'NO_PROXY' : 'no_proxy')))]
+
 const notRouted = (reason, at) => ({ code: 'not-routed', reason, ...(at ? { at } : {}) })
 const readText = (ctx, f) => { try { const d = decodeText(ctx.fs.readFileSync(f)); return d.ok ? d.text : undefined } catch (e) { if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null; throw e } }
 const parse = (t) => { if (t === undefined) return undefined; try { return t === null ? {} : parseJsonText(t) ?? {} } catch { return undefined } } // undefined: undecodable or unparsable
