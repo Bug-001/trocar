@@ -1,6 +1,6 @@
-// test/collector/arch/darwin/accept-async.test.mjs — the darwin daemon's accept path runs lsof / ps through execFile (src/off/exec.mjs runAsync),
-// so socktable's 250 ms budget really races a slow lsof and one slow lookup does not hold a second door connection's. Real child processes: a stub
-// `lsof` in the temp dir (the only tools npm test lets run, 0.1 §3) that answers after 2 s, and one that answers at once.
+// test/collector/arch/darwin/accept-async.test.mjs — the darwin daemon's accept path runs netstat / ps / lsof through execFile (src/off/exec.mjs
+// runAsync), so a slow table read does not stop the daemon serving its other doors. Real child processes: stubs in the temp dir (the only tools npm test
+// lets run, 0.1 §3) that answer late.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -13,25 +13,22 @@ import { factsOfPid } from '../../../../src/collector/arch/darwin/procinfo.mjs'
 function stubs(slowMs) {
   const dir = tmpDir('asight-lsof-')
   const sh = (name, body) => { const f = path.join(dir, name); fs.writeFileSync(f, `#!/bin/sh\n${body}\n`, { mode: 0o755 }); return f }
-  // the slow one answers the 50001 peer after slowMs; any other peer at once, with the holder pid 777
-  sh('lsof', `case "$*" in *:50001*) sleep ${slowMs / 1000};; esac\nprintf 'p777\\nn127.0.0.1:%s->127.0.0.1:1\\n' "$(echo "$*" | sed 's/.*://')"`)
+  // the kernel TCP table after slowMs: peers 50001 and 50002 held by 777 and 778
+  sh('netstat', `sleep ${slowMs / 1000}\nprintf 'Proto Recv-Q Send-Q  Local Address  Foreign Address  (state)  rxbytes txbytes rhiwat shiwat process:pid state\\n'\nprintf 'tcp4 0 0 127.0.0.1.50001 127.0.0.1.18112 ESTABLISHED 1 1 1 1 a:777 00102\\ntcp4 0 0 127.0.0.1.50002 127.0.0.1.18112 ESTABLISHED 1 1 1 1 b:778 00102\\n'`)
+  sh('lsof', `sleep ${slowMs / 1000}; printf 'p777\\nftxt\\nn/bin/x\\n'`)
   sh('ps', `sleep ${slowMs / 1000}; printf '  777     1   501 x Mon Oct  5 17:00:00 2026     /bin/x\\n'`)
   return { PATH: `${dir}:/bin:/usr/bin` }
 }
 
-test('a slow lsof does not block a second door connection\'s lookup — the budget wins and the other peer is answered meanwhile', async () => {
-  // a 1 s budget (the daemon uses 250 ms): a cold shell under a loaded full run must still answer the fast peer inside it
-  const env = { ...process.env, ...stubs(2000) }
+test('the owner lookup runs off the event loop and is waited for — a slow table read answers its pid, and the loop keeps serving meanwhile', async () => {
+  const env = { ...process.env, ...stubs(600) }
   const exec = (file, args, o = {}) => execTool(file, args, { ...o, env, run: runAsync }) // the daemon's runner (arch/model-backends.mjs doorPartsFor)
-  const t0 = Date.now()
   let ticked = 0
   const tick = setInterval(() => { ticked++ }, 20)
-  const [slow, fast] = await Promise.all([ownerOfSocket({ exec, budgetMs: 1000, peer: { address: '127.0.0.1', port: 50001 } }), ownerOfSocket({ exec, budgetMs: 1000, peer: { address: '127.0.0.1', port: 50002 } })])
+  const [a, b] = await Promise.all([ownerOfSocket({ exec, peer: { address: '127.0.0.1', port: 50001 } }), ownerOfSocket({ exec, peer: { address: '127.0.0.1', port: 50002 } })])
   clearInterval(tick)
-  assert.equal(slow.pid, null, 'the slow lookup is the budget\'s fail-safe null')
-  assert.equal(fast.pid, 777, 'the other connection is answered')
-  assert.ok(Date.now() - t0 < 1800, `both settle by the budget, not after the slow lsof (${Date.now() - t0} ms)`)
-  assert.ok(ticked >= 3, `the event loop kept running while lsof ran (${ticked} ticks)`)
+  assert.deepEqual([a.pid, b.pid], [777, 778], 'both connections are answered, slow or not')
+  assert.ok(ticked >= 3, `the event loop kept running while netstat ran (${ticked} ticks)`)
 })
 
 test('the targeted facts ask (ps + lsof) does not stop the event loop with the async runner', async () => {

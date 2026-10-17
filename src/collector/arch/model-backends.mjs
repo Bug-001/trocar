@@ -86,8 +86,8 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
   let parts, watch
   if (os === 'darwin') {
     const [{ ownerOfSocket }, pi, { execTool, runAsync }] = await Promise.all([import('./darwin/socktable.mjs'), import('./darwin/procinfo.mjs'), import('../../off/exec.mjs')])
-    // every lsof / ps of the accept path runs through execFile (runAsync), never spawnSync — socktable's 250 ms budget can only win a race
-    // the event loop is free to run, and one slow lsof must not hold another door's connection (nor the lock refresh off reads)
+    // every lsof / ps of the accept path runs through execFile (runAsync), never spawnSync — the daemon keeps serving its
+    // other doors while one table read runs (nor may it hold the lock refresh off reads)
     const runner = io.exec || runAsync
     const execOf = (file, args, o = {}) => Promise.resolve(execTool(file, args, { ...o, run: runner })) // socktable races it: always a promise
     const run = { exec: runner }
