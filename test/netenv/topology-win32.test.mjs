@@ -313,7 +313,7 @@ const A = (run) => cmd(run) // asight's own, in the platform's shell
 
 test('W36 one entry per code row of §10.4 — no more, no less — and each entry\'s own output is a finding the schema accepts (a win-only code defines every field; no run holds a placeholder)', () => {
   assert.deepEqual(Object.keys(FINDINGS_WIN32), [
-    'not-routed', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'entry-changed', 'needs-admin', 'egress-differs', 'form-path-unknown', 'elevated-agent', 'proxy-dead',
+    'not-routed', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', 'entry-changed', 'needs-admin', 'egress-differs', 'elevated-agent', 'proxy-dead',
     'upstream-unreachable', 'engine-port-taken', 'forwarder-down', 'form-unsupported', 'proxy-unsupported',
     'system-proxy-pac', 'other-redirector', 'socktable-unavailable', 'cause-unknown',
   ])
@@ -365,9 +365,6 @@ const LITERALS = {
   'needs-admin': { ctx: CTX({ h: 'kimi-code', elevated: 'Start-Process powershell -Verb RunAs -ArgumentList "…"' }),
     commands: [cmd('正常路径:asight 先确认、再弹 UAC,你点「是」;没有提示可弹时才用下面那一整行,在你自己开的管理员 PowerShell 里跑', 'gui'), A('Start-Process powershell -Verb RunAs -ArgumentList "…"')], verify: 'asight status:不再列' },
   'egress-differs': { ctx: CTX({ h: 'codex' }), commands: [A('asight off codex')], verify: '—' },
-  'form-path-unknown': { ctx: CTX({ h: 'claude-code' }),
-    what: '这个安装方式的路径 asight 还不认识', why: '进程名对得上、安装路径没测过,asight 不猜它是哪个形态(路径的形状已在 asight status 里印出,用户名打码)',
-    commands: [cmd('把它报给 asight(附 asight status 印出的那一行)', 'gui')], verify: '—' },
   'fallback-active': { ctx: CTX({ h: 'codex', enginePort: 17990 }),
     what: '引擎不在,内核把 agent 的连接只转发到上游(回退)', why: '引擎死了或没起来;内核自己活着,连接不断但不再被采集',
     commands: [A('asight on'), cmd('netstat -ano -p TCP | findstr ":17990"')], verify: 'asight status:那一形态不再报' },

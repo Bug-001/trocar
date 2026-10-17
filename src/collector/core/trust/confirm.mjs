@@ -16,6 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { X509Certificate } from 'node:crypto'
+import { chromiumRole } from './chromium.mjs'
 
 const PEM_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g
 
@@ -169,7 +170,10 @@ export function createTrustChecker({ caCertPem, readFile = fs.readFileSync, stat
   }
 
   // extra: what a harness's refine may also look at besides argv (e.g. the process's runtime version), lazily.
+  // A Chromium child other than the network service (a renderer, the GPU process, another utility) owns no model sockets: never trusted, whichever
+  // harness the name list says it is (4.6 D51④) — one rule here, not one per desktop.
   function check(trust, { environ = new Map(), layers = [], cwd = '/', startedAt = null, argv = [], extra = {} } = {}) {
+    if (chromiumRole(argv) === 'child') return { trusted: false, reason: 'chromium-child', var: null, via: null, file: null }
     let res = checkOne(trust, environ, layers, cwd, startedAt, argv, extra)
     if (res.trusted) {
       for (const v of trust.variants || []) {

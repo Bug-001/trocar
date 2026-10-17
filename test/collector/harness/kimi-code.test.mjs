@@ -27,8 +27,11 @@ test('kimi-code: the single-executable app matches by exe (its title is rewritte
   assert.equal(matchOf([kimi], facts({ exe: SEA, argv: [SEA, '-p', 'hi'] })).agent, 'kimi-code')
   assert.equal(matchOf([kimi], facts({ exe: '/usr/bin/node', argv: ['node', '/usr/local/bin/kimi', '-p', 'hi'] })).agent, 'kimi-code', 'the npm bin symlink run through #!/usr/bin/env node')
   assert.equal(matchOf([kimi], facts({ exe: '/usr/bin/node', argv: ['node', NPM_MAIN] })).agent, 'kimi-code')
+  // the title is on the list (4.6 Kimi row, review R20): an npm build scanned only after it retitled itself — a rescan on Linux, the accept-time ps on
+  // macOS — is still kimi-code (and is then told kimi-npm-no-shim, below)
+  assert.equal(matchOf([kimi], facts({ exe: '/usr/bin/node', argv: ['kimi-code'] })).agent, 'kimi-code', 'the npm build seen only after its title rewrite')
+  assert.equal(matchOf([kimi], { ...facts({ exe: '/opt/homebrew/bin/node', argv: ['kimi-code'] }), os: 'darwin', argvSplit: true, env: null, envRead: false }).agent, 'kimi-code', 'the darwin shape of it')
   for (const [exe, argv, why] of [
-    ['/usr/bin/node', ['kimi-code'], 'the npm build seen only after its title rewrite: unidentifiable'],
     [SEA, [SEA, '__update_download', '2.1.2'], 'the background update download'],
     [SEA, [SEA, '__plugin_run_node', '/p/server.js'], "a plugin's MCP server"],
     ['/usr/bin/dash', ['/bin/sh', '/home/u/.asight/collector/bin/kimi', '-p', 'hi'], "asight's shim itself"],
@@ -78,6 +81,11 @@ test('kimi-code: the shim-set NODE_EXTRA_CA_CERTS trusts; without it the reason 
     assert.equal(why({}).reason, 'kimi-not-via-shim', 'the .cmd shim alone is the door on Windows')
     assert.equal(why({ NODE_EXTRA_CA_CERTS: s.put('corp.pem', OTHER.certPem) }).reason, 'kimi-not-via-shim', "the user's own CA file: started without the shim, not 'ca-not-in-file'")
     assert.equal(why({}, { exe: '/usr/bin/node', argv: ['node', '/usr/local/bin/kimi'] }).reason, 'kimi-npm-no-shim')
+    assert.equal(why({}, { exe: '/usr/bin/node', argv: ['kimi-code'] }).reason, 'kimi-npm-no-shim', 'retitled: the exe still says node')
+    // the npm build on Windows and macOS (review R6): node is told by its normalized name, not by a POSIX path
+    for (const exe of [String.raw`C:\Program Files\nodejs\node.exe`, '/opt/homebrew/Cellar/node/22.20.0/bin/node', '/Users/u/.nvm/versions/node/v22.20.0/bin/node22'])
+      assert.equal(why({}, { exe, argv: ['node', '/usr/local/bin/kimi'] }).reason, 'kimi-npm-no-shim', exe)
+    assert.equal(why({}, { exe: null, argv: ['C:/Program Files/nodejs/node.exe', 'x'] }).reason, 'kimi-npm-no-shim', 'no exe: argv[0] names it')
     fs.rmSync(extra)
     assert.equal(why({ NODE_EXTRA_CA_CERTS: extra }).reason, 'file-unreadable', "asight's own file gone (uninstalled): the generic reason")
     for (const k of ['shim-not-on-path', 'kimi-not-via-shim', 'kimi-npm-no-shim']) assert.ok(kimi.trust.hints[k], k)
@@ -151,8 +159,8 @@ test('kimi after uninstall, as data: untilEnviron names the variable the shim se
   const { livenessOf } = await import('../../../src/collector/core/registry.mjs')
   assert.equal(kimi.trust.untilEnviron, 'NODE_EXTRA_CA_CERTS')
   assert.ok(kimi.trust.chain.some((e) => e.var === kimi.trust.untilEnviron), 'untilEnviron is one of the chain\'s doors (the marker entry, 2026-10-12, sits first — dsh\'s ordering)')
-  assert.deepEqual(livenessOf(kimi, 'linux').until_environ, 'NODE_EXTRA_CA_CERTS')
-  assert.deepEqual([livenessOf(kimi, 'linux').until, livenessOf(kimi, 'linux').rereads], ['restart', false])
+  assert.deepEqual(livenessOf(kimi).until_environ, 'NODE_EXTRA_CA_CERTS')
+  assert.deepEqual([livenessOf(kimi).until, livenessOf(kimi).rereads], ['restart', false])
 })
 
 test('kimi-code on an OS that cannot read the environment (macOS, the 2026-10-12 macOS test-machine gap): the shim\'s per-pid launch marker is the trust door; a stale marker is not', async () => {

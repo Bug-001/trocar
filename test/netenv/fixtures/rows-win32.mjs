@@ -113,11 +113,5 @@ row({ n: 'r', title: 'Claude Desktop, named: the policy value points at the kern
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['claude-code.desktop'], names: ['all'], on_path: true, captured: true, reason: null,
   compact: ['Claude 8801 → [策略 egressProxyUrl · 你点名的] asight 本地代理 :17996 → asight 引擎 :17990 → [系统代理] verge-mihomo.exe :7897 → 出口'] })
 
-row({ n: 's', title: 'the image name matches, the install path was never measured: the form is not claimed and the path shape is said', h: 'claude-code',
-  facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, asight: true, opt_in: false, intact: true }, reason: 'form-path-unknown', unknownPaths: ['…\\scoop\\apps\\claude\\current\\claude.exe'], procs: [proc(7712, { name: 'claude', exe: 'C:\\Users\\u\\scoop\\apps\\claude\\current\\claude.exe', version: null })] }), fwForm(17991)),
-  kinds: [['agent', 'upstream']], forms: ['claude-code.cli'], names: ['all'], on_path: false, captured: false, reason: 'form-path-unknown',
-  compact: ['claude 7712 → api.anthropic.com:443(直连)'],
-  notes: ['这个安装方式的路径 asight 还不认识(…\\scoop\\apps\\claude\\current\\claude.exe);把它报给 asight'] })
-
 /** What the gatherWin32Facts-driven tests reach the facts through: the parts the rows fix by hand (the helper's reads, the collector dir's files). */
 export { ENV, SETTINGS, POLICY, VSCODE, CODEX_PROC, CLAUDE_PROC, sysProxy, viaSystemProxy }

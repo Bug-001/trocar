@@ -16,7 +16,8 @@ import { readManifest } from '../off/manifest.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlSocketPath, controlEndpointFor } from '../off/control-client.mjs'
 import { listProcs, procIdentity, pidAlive } from '../off/proc.mjs'
-import { matchHarness } from '../off/signature.mjs'
+import { createRegistry } from '../collector/core/registry.mjs'
+import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
@@ -71,7 +72,7 @@ const entriesOf = (m, id) => [...(m.entries || []).filter((e) => e.harness === i
 const installedAtOf = (m, id) => { const t = [...(m.entries || []).filter((e) => e.harness === id && e.kind !== 'owned-file'), ...(m.files || []).filter((f) => f.harness === id && (f.role === 'plugin' || f.role === 'shim'))].map((x) => Date.parse(x.installed_at)).filter(Number.isFinite); return t.length ? Math.max(...t) : null }
 
 /** The facts `status` is made of. The daemon's `GET /status` when it answers (its view of the switch, the kernel, the processes and the connections), else the disk (state.json, the manifest, the process table
- *  read with the manifest's `liveness`). → { at, platform, user, daemon: { state, pid, reason, socket, reply }, state: { error? }, manifest: { value, error }, harnesses: [ { id, installed, desired, entry: { state, why },
+ *  matched with the name list in effect now: the presets plus agents.json, `ignore` applied). → { at, platform, user, daemon: { state, pid, reason, socket, reply }, state: { error? }, manifest: { value, error }, harnesses: [ { id, installed, desired, entry: { state, why },
  *  installedAt, procs, judged: { captured, rows }, why: [] } ], link, relayed, health }. Anything that could not be read is `null` / `unknown` and says why; nothing is thrown for it. */
 export async function gatherStatus({ home = nodeOs.homedir(), env = process.env, deps = {}, names = null } = {}) {
   const fs = deps.fs || nodeFs, platform = deps.platform || process.platform
@@ -106,16 +107,28 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const kernelReason = (r) => (r.actual === 'unknown' ? `the daemon could not read the kernel state: ${r.error || 'it gave no reason'}${r.error_code && !String(r.error || '').includes(r.error_code) ? ` (${r.error_code})` : ''}` : `the daemon's reply does not say whether the kernel has this instance's link (actual: ${JSON.stringify(r.actual ?? null)})`)
   const attached = reply ? (reply.actual === 'on' ? true : reply.actual === 'off' ? false : null) : null
   f.link = reply ? { attached, helper: reply.helper && (reply.helper.down || reply.helper.ok === false) ? 'missing' : 'ok', helper_reason: reply.helper && reply.helper.down ? String(reply.helper.down) : reply.helper && reply.helper.ok === false ? `helper protocol ${reply.helper.proto} (this daemon expects ${reply.helper.expected_proto})` : null, reason: attached === null ? kernelReason(reply) : null } : { attached: null, helper: 'ok', helper_reason: null, reason: null }
-  // the processes: the daemon's rows when it answered, else the process table matched with the manifest's `liveness`
+  // the processes: the daemon's rows when it answered, else the process table matched with the name list in effect now (below)
   // The table is read whatever else is missing: the processes the user started themselves (`asight serve`, a foreground `capture`) are found by their command line alone. Only the
-  // matching of a process to a harness needs the manifest's signatures; with no daemon and no manifest (a fresh machine, or after uninstall) that is what cannot be said (audit rule-b 6, R11)
+  // matching of a process to a harness needs the name list; with no daemon and no descriptors to build it from, that is what cannot be said (audit rule-b 6, R11)
   let table = null, tableError = null
   try { table = await (deps.procs ? deps.procs() : listProcs({ exec: deps.exec || null, platform, env })) } catch (e) { rethrowSandbox(e); tableError = errText(e) }
-  const matchError = !reply && !m ? (f.manifest.error || 'there is no install manifest to match the processes with') : tableError
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
-  const matched = table && m ? table.map((p) => ({ p, h: matchHarness(m.liveness, p) })) : [] // which harness each process of the table is, by the manifest's signatures
+  const list = readAgentList({ home, fs }) // the name list (D51③⑤, 1.6 §9.7): read here, daemon or not
+  f.agent_list = { path: list.path, state: list.state, problems: list.problems } // the file is one for the machine: said once, whatever harnesses there are
+  // the name list in effect NOW — the descriptors' presets with the user's agents.json merged in, its `ignore` applied — built by the daemon's own primitive
+  // (createRegistry, the registry the doors and the tracker judge by), so `status` names the same harness for a process with a daemon and without (1.6 V65).
+  // Not the manifest's liveness: that is `off`'s holder snapshot, a union that never drops a name and never applies `ignore` (the safe direction for `off` only).
+  let merged = null, whose = null
+  try {
+    const descriptors = await descriptorsOf({ platform, env, deps })
+    merged = mergedNames(descriptors, list)
+    whose = createRegistry(descriptors, { agentList: list.entries }).match
+  } catch (e) { rethrowSandbox(e); f.identity_error = `the harness descriptors could not be loaded (${errMessage(e)})` }
+  const matchError = !reply && !whose ? (f.identity_error || 'there is no name list to match the processes with') : tableError
+  const matched = table && whose ? table.map((p) => ({ p, h: (whose(p) || {}).agent ?? null })) : [] // which harness each process of the table is
   f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
+  const tableOf = new Map((table || []).map((p) => [p.pid, p]))
   for (const id of wanted) {
     const why = []
     const desired = fromReply && fromReply[id] ? (fromReply[id].desired === 'on' ? 'on' : 'off') : state ? (state.harnesses[id] && state.harnesses[id].desired === 'on' ? 'on' : 'off') : null
@@ -131,10 +144,11 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
       // a process of this harness the daemon has not listed (it started since the daemon last looked): not judged by it, so the entry and when it started decide (V32, 4.6 确认信任)
       const listed = new Set(rows.map((a) => a.pid))
       for (const x of matched) if (x.h === id && !listed.has(x.p.pid)) procs.push({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null })
-    } else if (table && m) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
+    } else if (table && whose) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
     else { procs = []; why.push(`the processes could not be listed (${matchError})`) }
     const installedAt = m ? installedAtOf(m, id) : null
     const judged = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', linkAttached: f.link.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt })
+    if (merged) judged.rows = judged.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
     if (f.daemon.state === 'unknown' && desired === 'on') why.push(f.daemon.reason)
     if (desired === 'on' && f.daemon.state === 'running' && f.link.helper !== 'missing' && f.link.attached === null) why.push(f.link.reason) // the link is what the verdict waits for, and the daemon could not say
     f.harnesses.push({ id, installed: installedIds.includes(id), desired, entry, installedAt, procs, judged, why: [...new Set(why.filter(Boolean))] })
@@ -150,14 +164,14 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const hasOptinRecords = !!(m && Array.isArray(m.entries) && m.entries.some((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-')))
   if (platform === 'win32' || platform === 'darwin' || hasOptinRecords || deps.parts) {
     try {
-      const parts = deps.parts || await (deps.daemon || await import('../collector/daemon.mjs')).loadParts({ env })
+      const parts = deps.parts || await (deps.daemon || await import('../collector/daemon.mjs')).loadParts({ env, agentList: (list && list.entries) || [] })
       const hook = parts && parts.arch && parts.arch.optIn
       let rows = hook && typeof hook.plan === 'function' ? hook.plan({ harnesses: parts.harnesses, manifest: m }) : []
       // 「入口还有没有效」(1.6 §1.7, W68): the same hook's check re-verifies, read-only, the entries that are in effect — its findings fold
       // into the very same rows (a broken entry is `broken` with its code, a check that could not be told is `unknown`); the process table it
-      // sees is the one this status already read (the agents half of the check matches it to the forms itself).
+      // sees is the one this status already read (the agents half of the check judges it by the name list).
       if (hook && typeof hook.check === 'function' && hasOptinRecords) {
-        rows = applyEntryCheck(rows, hook.check({ harnesses: parts.harnesses, manifest: m, procs: table || [] }))
+        rows = applyEntryCheck(rows, hook.check({ harnesses: parts.harnesses, manifest: m, procs: table || [], identify: parts.match }))
       }
       f.optInRows = rows
     } catch (e) { rethrowSandbox(e); f.opt_in_error = errText(e) }
@@ -171,7 +185,39 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     f.linger = read.state === true || read.state === false ? { linger: read.state } : { linger: 'unknown', linger_reason: read.error || 'the linger state could not be read' }
   }
   try { f.health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
+  if (merged) f.identity = identityBlocks({ ids: f.harnesses.map((h) => h.id), merged, health: effectiveHealth(f).health })
   return f
+}
+
+// ── the name list (D51③⑤, 1.6 §9.7 「名单」) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** The harness descriptors (their `processes` are the preset names): an injected list, else the daemon module's (the CLI reaches harness only through it, layering rule 5). */
+async function descriptorsOf({ platform, env, deps }) {
+  if (deps.harnesses) return deps.harnesses
+  if (deps.netFactsDeps) return (await deps.netFactsDeps()).harnesses
+  const mod = await (deps.daemon || import('../collector/daemon.mjs'))
+  if (typeof mod.netFactsDeps !== 'function') throw new Error('no reader of the harness descriptors is wired into this build')
+  return (await mod.netFactsDeps({ platform, env })).harnesses
+}
+/** The presets with the user's list merged in (mergeAgentList, the registry's own merge) → { <h>: { names, ignored } }. */
+const mergedNames = (descriptors, list) => {
+  const presets = Object.fromEntries((descriptors || []).map((d) => [d.name, d.processes || {}]))
+  return mergeAgentList(presets, list.entries.filter((e) => presets[e.harness]))
+}
+const patternText = (v) => (v instanceof RegExp ? v.source : String(v))
+const nameView = (n) => ({ name: n.name, ...(n.args != null ? { args: patternText(n.args) } : {}), ...(n.entry != null ? { entry: patternText(n.entry) } : {}), source: n.source })
+/** The name of `p` (a process of the table) that one of the harness's names in effect holds, or null (a daemon row whose process the table does not have). */
+const hitName = (p, m) => { if (!p || !m) return null; const names = processNames(p); return (m.names.find((n) => names.includes(n.name)) || {}).name || null }
+/** Per harness: { names, ignored, unknown } (`status --json`'s `identity`; the file itself is `agent_list`, once). `unknown` = the process-unknown of this daemon life
+ *  (the fold's `unknown_procs`), less a name the user has since put on the harness's list without args (it is claimed now). */
+function identityBlocks({ ids, merged, health }) {
+  const seen = (health && health.collector && Array.isArray(health.collector.unknown_procs)) ? health.collector.unknown_procs : []
+  const out = {}
+  for (const id of ids) {
+    const m = merged[id] || { names: [], ignored: [] }
+    const plain = new Set(m.names.filter((n) => n.args == null && n.entry == null).map((n) => n.name))
+    out[id] = { names: m.names.map(nameView), ignored: m.ignored.map(nameView), unknown: seen.filter((u) => u.harness === id && !plain.has(u.name)).map((u) => ({ name: u.name, wide: u.wide, named: u.named === true, pid: u.pid, door: u.door })) }
+  }
+  return out
 }
 
 /**
@@ -237,15 +283,35 @@ export function renderStatus(f, { home = null, detail = [], now = null, colors: 
     for (const r of j.rows.filter((x) => x.pid != null)) {
       const p = h.procs.find((x) => x.pid === r.pid)
       const byEntry = p && p.trusted === null // the daemon has not judged this one: the entry and when it started say
-      lines.push(`      pid ${r.pid}  ${r.captured === true ? `已被采集${byEntry ? '(守护进程还没判过它,这是按信任入口与启动时间判的)' : ''}` : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
+      lines.push(`      ${r.name ? `${r.name} ` : ''}pid ${r.pid}  ${r.captured === true ? `已被采集${byEntry ? '(守护进程还没判过它,这是按信任入口与启动时间判的)' : ''}` : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
     }
+    lines.push(...identityLines(f, h.id))
   }
+  lines.push(...listProblemLines(f))
   if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id), now }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id], { now })]))
   else if (f.topology_error) lines.push(`各 harness 的路: 不知道(${f.topology_error})`)
   lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvWriteText(f), ...userProcsText(f.userProcs))
   const restart = restartOf(f)
   if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
   return lines
+}
+
+// the name list of one harness (1.6 §9.7): the names in effect with their source, the ignored presets, the processes on no list that used its door
+const SOURCE_TEXT = { preset: '预设', custom: '自定' }
+const nameText = (n) => `${n.name}(${SOURCE_TEXT[n.source] || n.source}${n.args ? `, args ${n.args}` : ''}${n.entry ? `, entry ${n.entry}` : ''})`
+const unknownText = (u) => `${u.name ?? '不知道名字'}(pid ${u.pid ?? '不知道'}${u.named ? ';名字在名单上、参数没对上' : ''})`
+function identityLines(f, id) {
+  if (!f.identity) return f.identity_error ? [`      名单: 不知道(${f.identity_error})`] : []
+  const x = f.identity[id]
+  if (!x) return []
+  return [`      名单: ${x.names.length ? x.names.map(nameText).join(' · ') : '(空:没有名字认它的进程)'}`, ...(x.ignored.length ? [`      忽略的预设: ${x.ignored.map(nameText).join(' · ')}`] : []),
+    ...(x.unknown.length ? [`      不在名单上、用了它的入口: ${x.unknown.map(unknownText).join('、')}(只转发;doctor ${id} 给出加进名单的那一行)`] : [])]
+}
+/** agents.json's own problems (once: the file is one for every harness) — a bad item does not apply, the others do (4.6 §识别进程). */
+function listProblemLines(f) {
+  const x = f.agent_list
+  if (!x || !x.problems.length) return []
+  return [`名单文件 ${x.path}: ${x.state === 'ok' ? '有坏项(坏项不生效,其余照用)' : `${x.state}(只用预设)`}`, ...x.problems.map((p) => `  agents.json ${p.index == null ? '整个文件' : `第 ${p.index + 1} 项(agents[${p.index}])`}: ${p.code} — ${p.detail}`)]
 }
 
 // ── the digest of the unnamed `asight status` (D46: one screen of conclusions) ──────────────────────────────────────────────────────────────────────────────
@@ -274,7 +340,14 @@ const effectiveHealth = (f) => (f.daemon && f.daemon.reply && f.daemon.reply.hea
 
 /** 采集健康 as one or two lines: the state, the 24 h failure count by kind, the newest failure as ONE squashed brief (src/cli/words.mjs) — and where the
  *  whole wall lives. Zero failures is a ✓ line; a health that could not be read keeps its error verbatim (R11). */
+/** The critical conditions (D51④: a decrypted client refused asight's certificate), first in the health's own order: `status` puts them at the top. */
+const criticalOf = (f) => { const h = effectiveHealth(f).health; return ((h && h.collector && h.collector.conditions) || []).filter((x) => x.level === 'critical') }
+const criticalLine = (x, c) => `${c.red('‼ 严重')} ${x.harness || x.agent || '?'}${x.pid != null ? ` pid ${x.pid}` : ''} 拒了 asight 的证书(${x.host || '?'} · ${x.alert || '?'})${x.trust_entry && x.trust_entry.var ? ` · 信任入口 ${x.trust_entry.var}${x.trust_entry.file ? ` ${x.trust_entry.file}` : ''}` : ''} · 自 ${x.since}`
 export function healthSummary(f, c = noColor()) {
+  const crit = criticalOf(f).map((x) => criticalLine(x, c))
+  return [...crit, ...healthLines(f, c)]
+}
+function healthLines(f, c) {
   const eff = effectiveHealth(f), h = eff.health
   if (!h) return [`采集健康 ${c.red('?')} 读不到(capture health could not be read: ${eff.error})`] // the reader's own phrase, kept verbatim (R11)
   const s = h.summary || {}
@@ -326,6 +399,9 @@ export function renderStatusDigest(f, { home = null, now = null, colors: c = noC
     if (drawn.length) lines.push(...renderPathBlock(f.topology, { ids: drawn, now })) // header and rows: the 各 harness 的路 line is the block's own
     if (rest.length) lines.push(`各 harness 的路: 不知道(${[...new Set(rest.flatMap((id) => f.topology[id].notes || []))].join('; ') || '画不出来(读不到足够的事实)'};细节: asight status <harness>)`)
   }
+  const outsiders = f.identity ? Object.entries(f.identity).filter(([, x]) => x.unknown.length) : []
+  if (outsiders.length) lines.push(`不在名单上、用了入口(只转发): ${outsiders.map(([id, x]) => `${id}: ${x.unknown.map(unknownText).join('、')}`).join(' · ')};细节: asight status <harness>`)
+  lines.push(...listProblemLines(f))
   lines.push(...healthSummary(f, c))
   lines.push(`日志     ${c.dim(tilde(path.join(f.dir, 'logs'), home))} · 记录 ${c.dim(tilde(path.dirname(f.dir), home))} · 关闭 asight off`)
   if (f.relayed !== 'unknown' && f.relayed.closing + f.relayed.waiting > 0) lines.push(relayedText(f))
@@ -372,7 +448,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   const exit = unreadable ? EXIT.unknown : failing ? EXIT.incomplete : EXIT.ok
   const restart = restartOf(f)
   if (json) {
-    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows })), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), ...(f.netenv_write_error ? { netenv_write_error: f.netenv_write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), ...(f.optInRows ? { opt_in: optInOf(f.optInRows) } : {}), ...(f.opt_in_error ? { opt_in_error: f.opt_in_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, log: path.join(f.dir, 'flows') }
+    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows, ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}) })), agent_list: f.agent_list, ...(f.identity_error ? { identity_error: f.identity_error } : {}), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), ...(f.netenv_write_error ? { netenv_write_error: f.netenv_write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), ...(f.optInRows ? { opt_in: optInOf(f.optInRows) } : {}), ...(f.opt_in_error ? { opt_in_error: f.opt_in_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, critical: criticalOf(f), log: path.join(f.dir, 'flows') }
     io.out(JSON.stringify(r, null, 2))
     return { exit, f }
   }

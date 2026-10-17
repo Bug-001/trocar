@@ -1,6 +1,6 @@
 // test/collector/arch/darwin/wiring.test.mjs — the daemon's macOS half (RFC 4.9 §1 接线 · §2.2 · §5, as D47 wrote it; the case list is 4.8 §1's W39 W71, plan Task 8(c), with the lazy rule's own case).
 // createDarwinCollector is what loadArch('darwin') hands the daemon: the ingress config, the entries writer and the route plan in one Redirector, plus the darwin bag the daemon
-// reaches (bindDoors, osMatch, replan, carried, the applied host sets). There is no kernel any more (D47: the engine's doors are the only proxy) and no process watcher (the scan
+// reaches (bindDoors, replan, carried, the applied host sets). There is no kernel any more (D47: the engine's doors are the only proxy) and no process watcher (the scan
 // is deleted; identity is the door's own targeted questions). Everything is injected: a fake scutil and a doors recorder — no real ps, lsof or scutil runs.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,12 +10,15 @@ import { loadArch } from '../../../../src/collector/arch/index.mjs'
 import { createDarwinCollector } from '../../../../src/collector/arch/darwin/wiring.mjs'
 import { groupsOf } from '../../../../src/collector/arch/darwin/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
+import { createRegistry } from '../../../../src/collector/core/registry.mjs'
 import { installCollector } from '../../../../src/collector/install.mjs'
 import { readManifest } from '../../../../src/collector/core/trust/journal.mjs'
 import { saveManifest } from '../../../../src/off/manifest.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
+import { factsOfPid } from '../../../../src/collector/arch/darwin/procinfo.mjs'
 
 const ALL = await loadHarnesses()
+const ID = createRegistry(ALL).match // what the daemon hands the collector: registry.match, built first (D51)
 const one = (name) => ALL.find((d) => d.name === name)
 const GROUPS = groupsOf(ALL)
 /** The scutil dictionary of a machine whose https traffic follows a local proxy (the VERGE of the win32 test, in scutil's own key names). */
@@ -84,7 +87,7 @@ async function rigged(names, { proxyDict = VERGE, desired = {}, rels = [], optIn
     env: { HOME: home }, dir, home, harnesses: ds,
     failure: (where, e, extra) => failures.push({ where, reason: String((e && e.message) || e), ...(extra || {}) }),
     event: (rec) => events.push(rec),
-    manifest: () => readManifest(dir), desired: () => state.desired, optIns: () => optIns,
+    manifest: () => readManifest(dir), desired: () => state.desired, optIns: () => optIns, identify: ID,
     deps,
   })
   redirector.darwin.bindDoors(doors) // what the daemon does the moment the engine exists (daemon.mjs's bindDoors arm)
@@ -113,15 +116,14 @@ test('W39 loadArch("darwin") returns the darwin arch on any OS, with the pieces 
 
 
 
-test('the lazy rule: a construction without the dir (loadParts\' { env } one) builds the shell and touches nothing — no ingress.json anywhere, scan works, attach refuses, osMatch judges', async () => {
+test('the lazy rule: a construction without the dir (loadParts\' { env } one) builds the shell and touches nothing — no ingress.json anywhere, scan works, attach refuses; the bag carries no osMatch (the registry judges by name, D51)', async () => {
   const home = tmpDir('asight-wiring-shell-')
   const box = fakeScutil()
   const redirector = await createDarwinCollector({ env: { HOME: home }, harnesses: ALL, deps: { exec: box.exec } })
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written into the home of a read-only command')
   assert.equal(typeof redirector.scan, 'function')
   await assert.rejects(redirector.attach(), /attach needs the doors and the entries/, 'the shell cannot attach: there is no entries writer to attach with')
-  assert.equal(redirector.darwin.osMatch.darwin({ exe: '/Users/x/.local/bin/claude', cmdline: '/Users/x/.local/bin/claude' }), 'claude-code', 'the forms of the descriptors it was handed are judged (the registry\'s second key)')
-  assert.equal(redirector.darwin.osMatch.darwin({ exe: '/usr/bin/curl', cmdline: 'curl https://example.com' }), null, 'a non-agent process is no harness\'s')
+  assert.equal('osMatch' in redirector.darwin, false, 'no second rule for which harness a process is')
 })
 
 test('the wiring plans from the daemon\'s own ctx and serves a door\'s lookup with capture:"proxy" and the group\'s upstream (the door names its group — D47; no identity questions are wired here, so no pid)', async () => {
@@ -198,7 +200,7 @@ test('the host sets of a host-tree form are applied at on and kept for status (t
     proxy: { env: ['HTTPS_PROXY'], files: [], systemProxy: { http: false, ws: false }, schemes: ['http'], unsupported: {}, branches: ['all'], measured: { win32: 'inferred', linux: 'inferred', darwin: 'inferred' }, restart: { hint: 'restart it', processes: ['made-up'] } },
     darwin: {
       groups: [{ g: 'made-up.settings', proxyEntry: { kind: 'file', format: 'json-key', files: (ctx) => [path.join(ctx.home, 'relay', 'settings.json')], key: ['HTTPS_PROXY'] }, auth: true, followsSystemProxy: { http: false, ws: false } }],
-      forms: [{ id: 'made-up.cli', g: 'made-up.settings', match: { image: 'made-up' }, nameRule: false, processRules: true, supported: true, hosts: { defaults: ['api.made-up.example'], settings: { file: (ctx) => path.join(ctx.home, 'relay', 'settings.json'), hostsOf: (text) => { const j = JSON.parse(text); return typeof j.api_base === 'string' ? [new URL(j.api_base).hostname] : [] } } } }],
+      forms: [{ id: 'made-up.cli', g: 'made-up.settings', supported: true, hosts: { defaults: ['api.made-up.example'], settings: { file: (ctx) => path.join(ctx.home, 'relay', 'settings.json'), hostsOf: (text) => { const j = JSON.parse(text); return typeof j.api_base === 'string' ? [new URL(j.api_base).hostname] : [] } } } }],
       proxy: { env: ['HTTPS_PROXY'], files: [], systemProxy: { http: false, ws: false }, schemes: ['http'], unsupported: {}, branches: ['all'], measured: { darwin: 'inferred' }, restart: { hint: 'restart it', processes: ['made-up'] } },
       inject: () => ({ entries: [] }),
     },
@@ -207,7 +209,7 @@ test('the host sets of a host-tree form are applied at on and kept for status (t
   let ports = 18800
   const redirector = await createDarwinCollector({
     env: { HOME: home }, dir: path.join(home, '.asight', 'collector'), home, harnesses: [made],
-    failure: () => {}, event: () => {}, desired: () => ({ 'made-up': { desired: 'on', extra_hosts: ['extra.relay.example'] } }), optIns: () => [],
+    failure: () => {}, event: () => {}, desired: () => ({ 'made-up': { desired: 'on', extra_hosts: ['extra.relay.example'] } }), optIns: () => [], identify: ID,
     deps: { exec: box.exec, loadIngress: async () => ({ enginePort: 18790, groupPorts: { 'made-up.settings': ++ports }, ingressToken: 'a'.repeat(32), listenerToken: 'b'.repeat(32) }), isFree: async () => true, random: (n) => Buffer.alloc(n, 7), timers: fakeTimers().timers, watchSystemProxy: false },
   })
   await redirector.start()
@@ -257,13 +259,13 @@ test('W71 the watcher stops with the collector: close() stops it (no timer left)
 
 // ---------- the two seams the close-out review found dead (F1, F2) — these tests run them through the REAL callers ----------
 
-test('review F1: the daemon\'s own loadParts on darwin lands the shell whole — osMatch alive through the registry, not a Promise behind the guard (the pre-fix line awaited nothing)', { skip: process.platform !== 'darwin' }, async () => {
+test('review F1: the daemon\'s own loadParts on darwin lands the shell whole — a scan-able shell and a registry that judges darwin facts, not a Promise behind the guard (the pre-fix line awaited nothing)', { skip: process.platform !== 'darwin' }, async () => {
   const { loadParts } = await import('../../../../src/collector/daemon.mjs')
   const parts = await loadParts({ env: { HOME: '/Users/x' }, harnesses: ALL })
   assert.equal(parts.os, 'darwin')
-  assert.equal(parts.match({ os: 'darwin', pid: 10, exe: '/Users/x/.local/bin/claude', cmdline: '/Users/x/.local/bin/claude' }).agent, 'claude-code',
-    'the registry judged darwin facts through osMatch: with the Promise, redirector.darwin read undefined, osMatch fell to null and this answer was null — nothing on macOS matched anything')
-  assert.equal(parts.match({ os: 'darwin', pid: 11, exe: '/usr/bin/curl', cmdline: 'curl https://example.com' }).agent, null, 'and a non-agent still matches nothing')
+  assert.equal(typeof parts.scan, 'function')
+  assert.equal(parts.match({ os: 'darwin', pid: 10, exe: '/Users/x/.local/bin/claude', argv: ['/Users/x/.local/bin/claude'], cmdline: '/Users/x/.local/bin/claude' }).agent, 'claude-code', 'the registry judges darwin facts (by name, D51)')
+  assert.equal(parts.match({ os: 'darwin', pid: 11, exe: '/usr/bin/curl', argv: ['curl', 'https://example.com'], cmdline: 'curl https://example.com' }).agent, null, 'and a non-agent still matches nothing')
 })
 
 test('review F2 (as D47 left it): there is no kernel to claim any more — start() reads the network and plans, and a KeepAlive-restarted daemon\'s doors bind or fail with EADDRINUSE said (the engine\'s own listen), never an adopted stranger', async () => {
@@ -291,18 +293,18 @@ test('osLayers hands the layers ctx the keychain door (4.9 §6.4): open only for
     listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, unparsable: () => {},
   })
   const cc = r.redirector.darwin.osLayers.darwin(one('claude-code'))
-  assert.deepEqual(cc(ctx([helper, '--type=utility'])), [], 'no keychain entry: the desktop family gets no layer — the engine only forwards')
+  assert.deepEqual(cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService'])), [], 'no keychain entry: the network service gets no layer — the engine only forwards')
   assert.ok(cc(ctx([cli, '-p', 'hi'])).some((l) => l.vars && l.vars.NODE_EXTRA_CA_CERTS === caFile), 'the cli form reads the settings file through the base layers all along')
 
   const m = readManifest(r.dir)
   m.entries.push({ kind: 'optin-keychain-cert', harness: 'codex', form: 'codex.app', item: 'keychain-login', scope: 'user', path: `login-keychain:${fp256}`, installed_at: new Date().toISOString(), values: { fp256, certFile: caFile } })
   saveManifest(r.dir, m) // another harness's entry, and unconfirmed (the dialog was never answered)
-  assert.deepEqual(cc(ctx([helper, '--type=utility'])), [], 'an entry of another harness — unconfirmed at that — opens nothing')
+  assert.deepEqual(cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService'])), [], 'an entry of another harness — unconfirmed at that — opens nothing')
 
   const t0 = Date.now()
   m.entries.push({ kind: 'optin-keychain-cert', harness: 'claude-code', form: 'claude-code.desktop', item: 'keychain-login', scope: 'user', path: `login-keychain:${fp256}`, installed_at: new Date(t0).toISOString(), confirmed: true, values: { fp256, certFile: caFile } })
   saveManifest(r.dir, m)
-  const door = cc(ctx([helper, '--type=utility']))
+  const door = cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService']))
   assert.equal(door.length, 1, 'exactly the keychain layer')
   assert.equal(door[0].vars.NODE_EXTRA_CA_CERTS, caFile)
   assert.equal(door[0].since, t0, 'config-after-start is judged against the item\'s installed_at')
@@ -311,8 +313,38 @@ test('osLayers hands the layers ctx the keychain door (4.9 §6.4): open only for
   m.entries = m.entries.filter((e) => !(e.kind === 'optin-keychain-cert' && e.harness === 'claude-code'))
   m.entries.push({ kind: 'optin-keychain-cert', harness: 'claude-code', form: 'claude-code.desktop', item: 'keychain-login', scope: 'user', path: 'login-keychain:AA:BB:CC:DD', installed_at: new Date(t0).toISOString(), confirmed: true, values: { fp256: 'AA:BB:CC:DD', certFile: caFile } })
   saveManifest(r.dir, m)
-  assert.deepEqual(cc(ctx([helper, '--type=utility'])), [], 'a fingerprint of a CA this build no longer holds: the keychain trusts a certificate asight cannot decrypt with — the door stays shut')
+  assert.deepEqual(cc(ctx([helper, '--type=utility', '--utility-sub-type=network.mojom.NetworkService'])), [], 'a fingerprint of a CA this build no longer holds: the keychain trusts a certificate asight cannot decrypt with — the door stays shut')
 
   const codex = r.redirector.darwin.osLayers.darwin(one('codex'))
   assert.deepEqual(codex(ctx(['/opt/homebrew/bin/codex'])), [null], 'the wrapper is a no-op for a harness with no darwin layers of its own (its base layers ran as ever and answered their absent-files [null] — the tracker filters it; the door\'s keys were simply ignored)')
+})
+
+// The collector -> door handoff (D51 T7, review of the T7 branch): the door this wiring builds asks the identify the daemon handed in and the isOn read from
+// desired(), and its process-unknown reaches the daemon's event sink. The door's own tests inject both straight into createDoorRedirector; this one drives a
+// lookup through the wiring with real-shaped facts (procinfo's factsOfPid over recorded ps / lsof output, convention 3) behind the peer.
+test('the wiring\'s door names a process by the identify handed in, splices an off harness as harness-off, and sends one process-unknown to the event sink (D51⑤⑥)', async () => {
+  const uid = process.getuid()
+  const facts = (pid, exe, cmdline) => factsOfPid(pid, { env: {}, exec: (file) => {
+    if (file === 'ps') return { status: 0, stdout: `${pid}     1   ${uid} ${cmdline.split(' ')[0]}  Tue Oct 14 10:00:01 2026     ${cmdline}\n`, stderr: '' }
+    if (file === 'lsof') return { status: 0, stdout: `p${pid}\nftxt\nn${exe}\n`, stderr: '' }
+    return { status: 1, stdout: '', stderr: 'not in the fake' }
+  } })
+  const store = new Map([
+    [61, facts(61, '/Users/u/.local/share/claude/versions/2.1.296', 'claude -p hi')],
+    [62, facts(62, '/Users/u/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex', 'codex exec hi')],
+    [63, facts(63, '/Users/u/.local/bin/claude-nightly', 'claude-nightly -p hi')],
+  ])
+  const owner = { pid: null }
+  const r = await rigged(['claude-code', 'codex'], { desired: { 'claude-code': { desired: 'on' }, codex: { desired: 'off' } }, over: { deps: { ownerOf: async () => ({ pid: owner.pid, source: 'socket-table', ms: 1 }), factsOf: (pid) => store.get(pid) ?? null } } })
+  r.redirector.on('exec', (f) => r.redirector.watch(f.pid, { decrypt: true, agent: ID(f).agent }))
+  const ask = (pid) => { owner.pid = pid; return r.redirector.lookupIngress({ peer: { address: '127.0.0.1', port: 50000 + pid }, user: 'claude-code.settings', target: { address: 'api.anthropic.com', port: 443 } }) }
+  const cc = await ask(61)
+  assert.deepEqual([cc.agent, cc.door, cc.decrypt, cc.skip], ['claude-code', 'claude-code.settings', true, undefined], 'named by the identify the daemon handed in, and judged')
+  const codex = await ask(62)
+  assert.deepEqual([codex.agent, codex.skip && codex.skip.reason], ['codex', 'harness-off'], 'codex is off in desired(): the wiring\'s isOn says so at the claude door')
+  const n1 = await ask(63)
+  await ask(63)
+  assert.equal(n1.skip && n1.skip.reason, 'not-an-agent')
+  const unknown = r.events.filter((e) => e.event === 'process-unknown')
+  assert.deepEqual(unknown.map((e) => [e.name, e.door, e.pid]), [['claude-nightly', 'claude-code.settings', 63]], 'one process-unknown, through the wiring to the daemon\'s event sink')
 })

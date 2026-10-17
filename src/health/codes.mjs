@@ -12,12 +12,20 @@ export const NOT_CAPTURED_EXPECTED = Object.freeze(['policy', 'not-trust-path', 
 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
-export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set'])
+export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set',
+  'agent-list-ok', // ~/.asight/agents.json reads cleanly again, or is gone: ends the agent-list-invalid condition (D51③, 4.6 R6)
+  'process-unknown']) // a process no list item claims used a door (where 'engine'; harness, door, name, wide, named = listed only with args it missed, pid; never its command line): once per (door group, name) per daemon life (D51⑥)
+
+/** The `reason` of a door's `untracked` row (4.8 §5.2 · §5.3, 4.6 §连接行怎么落码): why the door could not vouch for the connection's process. */
+export const UNTRACKED_REASONS = Object.freeze(['pid-unresolved', 'facts-unavailable', 'other-user', 'outside-host-set', 'agent-helper', 'cmdline-pending', 'not-an-agent', 'ambiguous', 'harness-off', 'group-off'])
 
 /** Failure codes the failure recorder never folds by where + code: the reader folds each of them into a condition per
  *  (pid, host), so a folded line would make the pairs folded into it vanish (4.6 §事件与码, D1-1). Bounded: a (pid,
  *  host) is written at most once in the process's life. */
-export const UNFOLDED_CODES = Object.freeze(['negative-cache'])
+export const UNFOLDED_CODES = Object.freeze(['negative-cache', 'trust-rejected'])
+
+/** The `level` a failure may carry (D51④, 4.6 §事件与码): `critical` — the reader puts it first, the daemon also tells stderr. No level = an ordinary failure. */
+export const LEVELS = Object.freeze(['critical'])
 
 /** The part of asight a record comes from. */
 export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
@@ -34,10 +42,11 @@ export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'eve
 export const TRUST_REASONS = Object.freeze([
   'var-missing', 'env-frozen', 'config-after-start', 'start-time-unknown', 'file-unreadable', 'ca-not-in-file', 'replace-without-ca', 'shadowed',
   'verify-disabled', 'marker-stale', 'marker-pending', 'no-marker', 'ca-unusable', 'environ-unreadable', 'config-unreadable',
-  'settings-unparsable', 'settings-unreadable',
+  'settings-unparsable', 'settings-unreadable', 'chromium-child',
   // a harness's own
   'settings-ignored-managed-by-host', 'settings-ignored-restricted', 'settings-ignored-setting-sources', 'dsh-use-openssl-ca', 'dsh-node-too-old',
   'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override',
+  'route-without-ca', 'win-doors-rejected', // hermes: darwin's active route has no asight ssl_ca_cert; win32's client refuses the .env entry
 ])
 
 /** Codes asight names itself, by part (the grouping is documentation; the set is flat). */
@@ -46,12 +55,14 @@ export const CODES_BY_PART = Object.freeze({
   record: ['record-error', 'file-replaced'],
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
   // a harness's configuration or files, read or written (the Claude Code settings layers have their own codes, above)
-  harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial'],
+  harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial',
+    'agent-list-invalid'], // ~/.asight/agents.json cannot be read / parsed, or holds bad items (with `path` and `problems`; one per file version, D51③)
   trust: [...TRUST_REASONS],
   bundle: ['roots-changed', 'missing', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial'], // the last three: the bundles of the harnesses that are on were (re)built with no OS root, without OS roots that did not parse, without a roots source whose read failed (4.6 「合并包」)
   note: ['ok'], // the code of an agent-trusted line
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
-  engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'upstream-ca-unreadable', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response'],
+  engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'upstream-ca-unreadable', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response',
+    'trust-rejected'], // a decrypted connection whose client refused asight's leaf: level 'critical', one per (pid, host) (D51④)
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
   // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
   // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in
@@ -100,7 +111,7 @@ export const ROUTE_FAILURE_CODES = Object.freeze([...ROUTE_CODES])
 export const ROUTE_TRUST_REASONS = Object.freeze(['smart-app-control', 'env-unreadable-fill'])
 /** What `status` says when a form is not captured, that the Windows collector adds (4.8 §2.3, §12). The status reason set itself is the CLI's
  *  (1.6 §2); its list takes these in. */
-export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported', 'form-path-unknown'])
+export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported'])
 /** The envelope's `capture`: how the call reached the engine (4.1 信封表, 4.8 §5.6): `transparent` (Linux, and the other per-process captures) or `proxy` (Windows: the call came through asight's own kernel, D43). */
 export const CAPTURE_KINDS = Object.freeze(['transparent', 'proxy'])
 
@@ -114,7 +125,7 @@ const ROUTE_LOOP = 'route-loop', FORWARDER_DOWN = 'forwarder-down', EGRESS_DIFFE
 const NET_FAILURE_OWN = ['not-routed', 'proxy-dead', 'proxy-unsupported', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path', 'not-via-entry']
 export const NET_CODES = Object.freeze([...NET_FAILURE_OWN, 'proxy-changed', 'netenv-changed', 'opt-in-needed', 'needs-admin', 'linger-off', 'system-proxy-pac', 'other-redirector', 'fake-ip', 'inferred-behaviour', 'cause-unknown', ROUTE_LOOP, FORWARDER_DOWN, EGRESS_DIFFERS])
 export const NET_FAILURE_CODES = Object.freeze([...NET_FAILURE_OWN, ROUTE_LOOP, FORWARDER_DOWN])
-// the net names `status` gives as the reason an agent is not captured (1.6 §9.7); the proxy-mode reasons of 4.8 §12 (`form-unsupported`, `fallback-active`, `form-path-unknown`) are ROUTE_STATUS_REASONS above
+// the net names `status` gives as the reason an agent is not captured (1.6 §9.7); the proxy-mode reasons of 4.8 §12 (`form-unsupported`) is ROUTE_STATUS_REASONS above; a process on no name list is `process-unknown` (a state event, D51⑥), not a status reason
 const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'opt-in-needed', 'shim-not-on-path', 'not-via-entry', ROUTE_LOOP, FORWARDER_DOWN])
 
 // What `asight status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. asight's own, then every trust

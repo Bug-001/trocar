@@ -150,10 +150,6 @@ const fileSig = (st) => `${st.size}.${Math.round(st.mtimeMs)}.${st.ctimeMs}`;
 // its sealed copy coexist, and the reason for every entry NOT read (a dangling link, a compressed
 // capture; 4.4:83, never folded into empty) — lives in src/raw/discover.mjs, shared with the resolver.
 const sigOf = (files) => files.map((f) => { try { return `${f}:${fileSig(fssync.statSync(f))}`; } catch { return ''; } }).join('|') || '∅dir';
-export function sourceFiles(sourcePath, { sessionsRoot = null } = {}) {
-  const r = listSources([sourcePath], { sessionsRoot }); // throws if missing → caller resets sig
-  return { files: r.files, skipped: r.skipped.map((x) => ({ root: sourcePath, ...x })), sig: sigOf(r.files), superseded: r.superseded, mismatched: r.mismatched, unattributed: r.unattributed };
-}
 // What went wrong reading a set of files, as the board labels it (`source.errors`). A sealed file
 // that could not be read in full is COUNTED and named, never a silently shorter board (user
 // requirement 2026-10-06); the readable records of it still show.

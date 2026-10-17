@@ -5,21 +5,19 @@
 // The contract's OS-neutral half — the doors' lifecycle, the accept-time socket identity, the splice/decrypt decision, the tracker's announce-and-wait seam
 // — lives in ONE shared core since the win32 twin conversion: core/engine/door-redirector.mjs (`createDoorRedirector`). What this adapter
 // adds is darwin's three backends and nothing else:
-//   · `matchForm` — darwin's forms table (forms.mjs): `ps` gives the whole command line in the same shot as the image, so a form that needs it either has it
-//     or there is none (no `pending`, 4.9 §1);
+//   · who a process is is NOT this file's: the daemon's `identify` (registry.match, the D51 name list) is passed through to the core unchanged;
 //   · the facts' shape is darwin's own (procinfo.mjs `factsOfPid`, bound by the wiring): one targeted `ps -p <pid>` plus one targeted `lsof -p <pid>` for the
 //     real executable, cached per process life by the core;
 //   · `directCount` — the lsof established-connections table below, the one `status` shows as "still going direct".
 // There is NO resident helper (4.9 §1): ps, lsof and scutil are plain CLIs, run on demand through execTool by the wiring. This file names no harness
 // (arch/ never imports harness/: the daemon hands the groups in). Node built-ins only; nothing here execs anything itself.
 import { createDoorRedirector, VERDICT_WAIT_MS as CORE_VERDICT_WAIT_MS } from '../../core/engine/door-redirector.mjs'
-import { matchForm } from './forms.mjs'
 
 /** The shared core's verdict wait (core/engine/door-redirector.mjs), re-exported for the tests that pin it. */
 export const VERDICT_WAIT_MS = CORE_VERDICT_WAIT_MS
 
 /**
- * createDarwinRedirector({ groups, home, ownerOf, factsOf, routes, ingress, authOf, onFailure, doors, entries, gate, exec, carried, now }) → the Redirector
+ * createDarwinRedirector({ groups, ownerOf, factsOf, routes, ingress, authOf, onFailure, onEvent, doors, entries, gate, exec, carried, hostsOf, identify, isOn, ownUid, now }) → the Redirector
  * (an EventEmitter) — the shared door core dressed with darwin's backends. See core/engine/door-redirector.mjs for the contract and every argument's
  * meaning; the two darwin-specific ones:
  *   ownerOf  `({ peer: { address, port } }) → { pid, source, ms } | null` (socktable.mjs `ownerOfSocket`, bound to the exec runner by the wiring): the
@@ -27,11 +25,11 @@ export const VERDICT_WAIT_MS = CORE_VERDICT_WAIT_MS
  *   exec     the on-demand runner of the OS's read-only CLIs, `exec('lsof', args, { timeoutMs }) → Promise<{ code, out, err }>` (socktable.mjs's shape):
  *            what `directCount(pid)` asks through; without it there is no answer, only `{ count: null, error: 'no-exec' }` — unknown, never 0 (D-17)
  */
-export function createDarwinRedirector({ groups, home = null, ownerOf = null, factsOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, doors = null, entries = null, gate = null, exec = null, carried = () => null, hostsOf = () => null, now = Date.now } = {}) {
+export function createDarwinRedirector({ groups, ownerOf = null, factsOf = null, routes = () => ({}), ingress = () => ({}), authOf = () => null, onFailure = () => {}, onEvent = () => {}, doors = null, entries = null, gate = null, exec = null, carried = () => null, hostsOf = () => null, identify = null, isOn = null, ownUid = undefined, now = Date.now } = {}) {
   if (!Array.isArray(groups)) throw new TypeError('createDarwinRedirector needs the groups (route-plan.mjs groupsOf)')
   return createDoorRedirector({
-    groups, home, ownerOf, factsOf, routes, ingress, authOf, onFailure, doors, entries, gate, carried, hostsOf, now,
-    matchForm,
+    groups, ownerOf, factsOf, routes, ingress, authOf, onFailure, onEvent, doors, entries, gate, carried, hostsOf, identify, isOn, now,
+    ...(ownUid !== undefined ? { ownUid } : {}),
     /** How many of the process's established connections do not go to a group's door on loopback — what `status` shows as "still going direct" (4.6 §开关
      *  语义). The table is `lsof -nP -Fpcn -iTCP -sTCP:ESTABLISHED` — the same record stream socktable.mjs reads, with the state in the command so the
      *  stream holds established connections only. `exec` is the injected on-demand runner (socktable.mjs's shape); one that is not there is

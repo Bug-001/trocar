@@ -97,7 +97,7 @@ test('engine: two consecutive rejections on one host splice that host only; anot
   assert.equal(await hello('api.deepseek.com', upCa.certPem), 'rejected'); await settled(1)
   assert.equal(await hello('api.deepseek.com', upCa.certPem), 'rejected'); await settled(2)
   assert.deepEqual(engine.negatives().map((e) => [e.pid, e.agent, e.host, e.cause, e.rejections]), [[5, 'dsh', 'api.deepseek.com', 'client-rejected-leaf', 2]])
-  assert.deepEqual(fails.map((f) => [f.where, f.code, f.pid, f.host, f.cause]), [['engine', 'negative-cache', 5, 'api.deepseek.com', 'client-rejected-leaf']], 'the write is a failure event, once (D-12)')
+  assert.deepEqual(fails.filter((f) => f.code !== 'trust-rejected').map((f) => [f.where, f.code, f.pid, f.host, f.cause]), [['engine', 'negative-cache', 5, 'api.deepseek.com', 'client-rejected-leaf']], 'the write is a failure event, once (D-12)')
   assert.deepEqual([fails[0].neg_key, engine.negatives()[0].negKey], ['5', '5'], 'keyed by the pid: neg_key is "<pid>" (4.8 §5.5)')
   assert.match(await hello('api.deepseek.com', upCa.certPem), /upstream test CA/, 'the rejected host is spliced')
   assert.match(await hello('chat.deepseek.com', asightCa.certPem), /asight collector CA/, 'another host of the same pid is still decrypted')

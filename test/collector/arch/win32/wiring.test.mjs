@@ -1,6 +1,6 @@
 // test/collector/arch/win32/wiring.test.mjs — the daemon's Windows half (RFC 4.8 §1 接线 · §2.2 · §3.5; W39 W71; plan Task 8(c)).
 // createWin32Collector is what loadArch('win32') hands the daemon: the helper, watcher, ingress config, kernel, entries writer and route plan in one Redirector,
-// plus the win32 bag the daemon reaches (osMatch, replan, carried, the applied host sets). Everything is injected: a fake helper, kernel and process watcher.
+// plus the win32 bag the daemon reaches (replan, carried, the applied host sets). Everything is injected: a fake helper, kernel and process watcher.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
@@ -12,13 +12,17 @@ import { createWin32Collector } from '../../../../src/collector/arch/win32/wirin
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { groupsOf } from '../../../../src/collector/arch/win32/route-plan.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
+import { createRegistry } from '../../../../src/collector/core/registry.mjs'
 import { installCollector } from '../../../../src/collector/install.mjs'
 import { readManifest } from '../../../../src/collector/core/trust/journal.mjs'
+import { saveManifest } from '../../../../src/off/manifest.mjs'
 import { readText, readTextOrError } from '../../../../src/collector/core/config-read.mjs'
 import { regReadAllowed } from '../../../../src/collector/arch/win32/helper.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
+import { factsOfRow } from '../../../../src/collector/arch/win32/procinfo.mjs'
 
 const ALL = await loadHarnesses()
+const ID = createRegistry(ALL).match // what the daemon hands the collector: registry.match, built first (D51)
 const one = (name) => ALL.find((d) => d.name === name)
 const sha = (b) => createHash('sha256').update(b).digest('hex')
 const EXE = Buffer.from('MZ fake asight-forwarder.exe, sixty kilobytes of nothing '.repeat(8))
@@ -81,7 +85,7 @@ async function rigged(names, { internet = VERGE, desired = {}, rels = [], optIns
     env: { HOME: home, USERPROFILE: home }, dir, home, harnesses: ds,
     failure: (where, e, extra) => failures.push({ where, reason: String((e && e.message) || e), ...(extra || {}) }),
     event: (rec) => events.push(rec),
-    manifest: () => readManifest(dir), desired: () => state.desired, optIns: () => optIns,
+    manifest: () => readManifest(dir), desired: () => state.desired, optIns: () => optIns, identify: ID,
     deps,
   })
   // the daemon owns the engine: bind the wiring's door slot to a recorder of listen({groups}) / closeGroups, as daemon.mjs does once both exist
@@ -194,3 +198,64 @@ test('W71 the watcher stops with the collector: close() stops it (no timer left)
 
 
 
+
+test('osLayers hands the layers ctx the desktop door (D51④): claude-code\'s CONFIRMED optin-cert-user only while its thumbprint is this build\'s CA, z-code\'s CONFIRMED optin-zcode; read live off the manifest; the CLI\'s settings door untouched', async () => {
+  const r = await rigged(['claude-code', 'z-code'], { desired: { 'claude-code': { desired: 'on' }, 'z-code': { desired: 'on' } } })
+  const { X509Certificate } = await import('node:crypto')
+  const caFile = path.join(r.dir, 'ca', 'asight-ca.pem')
+  const thumbprint = createHash('sha1').update(new X509Certificate(fs.readFileSync(caFile)).raw).digest('hex').toUpperCase()
+  const NS = ['--type=utility', '--utility-sub-type=network.mojom.NetworkService']
+  const ctx = (argv) => ({ os: 'win32', environ: new Map(), env: new Map(), home: r.home, cwd: r.home, argv, startedAt: null, readText, readTextOrError,
+    mtimeOf: (f) => { try { return fs.statSync(f).mtimeMs } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } }, unparsable: () => {} })
+  const cc = r.redirector.win32.osLayers.win32(one('claude-code'))
+  const zc = r.redirector.win32.osLayers.win32(one('z-code'))
+  assert.deepEqual(cc(ctx(['claude.exe', ...NS])), [], 'no item: the network service gets no layer')
+  const m = readManifest(r.dir)
+  const t0 = Date.now()
+  const cert = (tp, confirmed = true) => ({ kind: 'optin-cert-user', harness: 'claude-code', form: 'claude-code.desktop', item: 'cert-store-current-user', scope: 'user', path: `CurrentUser\\Root\\${tp}`, installed_at: new Date(t0).toISOString(), confirmed, values: { thumbprint: tp, certFile: caFile } })
+  m.entries.push(cert(thumbprint, false)); saveManifest(r.dir, m)
+  assert.deepEqual(cc(ctx(['claude.exe', ...NS])), [], 'unconfirmed (the box was declined): shut')
+  m.entries.push(cert('AABBCCDD')); saveManifest(r.dir, m)
+  assert.deepEqual(cc(ctx(['claude.exe', ...NS])), [], 'a thumbprint of a CA this build no longer holds: shut')
+  assert.deepEqual(zc(ctx(['ZCode.exe', ...NS])), [], 'another harness\'s item opens nothing')
+  m.entries.push(cert(thumbprint)); saveManifest(r.dir, m)
+  const door = cc(ctx(['claude.exe', ...NS]))
+  assert.deepEqual([door.length, door[0].vars.NODE_EXTRA_CA_CERTS, door[0].since, door[0].live], [1, caFile, t0, false])
+  assert.match(door[0].name, /CurrentUser\\Root/)
+  assert.ok(cc(ctx(['claude.exe'])).every((l) => /settings/.test(l.name)), 'claude.exe with no --type= reads settings (the CA `on` wrote there), not the door')
+
+  const setting = path.join(r.home, '.zcode', 'v2', 'setting.json')
+  fs.mkdirSync(path.dirname(setting), { recursive: true }); fs.writeFileSync(setting, JSON.stringify({ httpProxyCaCertPath: caFile }))
+  assert.deepEqual(zc(ctx(['ZCode.exe', ...NS])), [], 'the setting without the confirmed optin-zcode item: shut')
+  m.entries.push({ kind: 'optin-zcode', harness: 'z-code', form: 'z-code.desktop', item: 'zcode-app-settings', scope: 'user', path: setting, installed_at: new Date(t0).toISOString(), confirmed: true, values: {} }); saveManifest(r.dir, m)
+  const z = zc(ctx(['ZCode.exe', ...NS]))
+  assert.deepEqual([z.length, z[0].vars.ZCODE_AGENT_CA_CERT, z[0].since], [1, caFile, t0])
+})
+
+// The collector -> door handoff (D51 T7, review of the T7 branch): the door this wiring builds asks the identify the daemon handed in and the isOn read from
+// desired(), and its process-unknown reaches the daemon's event sink. The door's own tests inject both straight into createDoorRedirector; this one drives a
+// lookup through the wiring with real-shaped facts (procinfo's factsOfRow over helper ps rows, convention 3) behind the peer.
+test('the wiring\'s door names a process by the identify handed in, splices an off harness as harness-off, and sends one process-unknown to the event sink (D51⑤⑥)', async () => {
+  const U = String.raw`C:\Users\u`
+  const row = (pid, exe, cmdline) => factsOfRow({ pid, ppid: 1, name: exe.split('\\').pop(), exe, cmdline, startedAt: 1760000000000 + pid, sessionId: 1, integrity: 'medium', tokenDenied: false })
+  const store = new Map([
+    [61, row(61, `${U}\\.local\\bin\\claude.exe`, `"${U}\\.local\\bin\\claude.exe" -p hi`)],
+    [62, row(62, `${U}\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe`, 'codex.exe exec hi')],
+    [63, row(63, `${U}\\.local\\bin\\claude-nightly.exe`, 'claude-nightly.exe -p hi')],
+  ])
+  const owner = { pid: null }
+  const r = await rigged(['claude-code', 'codex'], { desired: { 'claude-code': { desired: 'on' }, codex: { desired: 'off' } }, over: { deps: { ownerOf: async () => ({ pid: owner.pid, source: 'socket-table', ms: 1 }), factsOf: (pid) => store.get(pid) ?? null } } })
+  await r.redirector.start()
+  r.redirector.on('exec', (f) => r.redirector.watch(f.pid, { decrypt: true, agent: ID(f).agent }))
+  const ask = (pid) => { owner.pid = pid; return r.redirector.lookupIngress({ peer: { address: '127.0.0.1', port: 50000 + pid }, user: 'claude-code.settings', target: { address: 'api.anthropic.com', port: 443 } }) }
+  const cc = await ask(61)
+  assert.deepEqual([cc.agent, cc.door, cc.decrypt, cc.skip], ['claude-code', 'claude-code.settings', true, undefined], 'named by the identify the daemon handed in, and judged')
+  const codex = await ask(62)
+  assert.deepEqual([codex.agent, codex.skip && codex.skip.reason], ['codex', 'harness-off'], 'codex is off in desired(): the wiring\'s isOn says so at the claude door')
+  const n1 = await ask(63)
+  await ask(63)
+  assert.equal(n1.skip && n1.skip.reason, 'not-an-agent')
+  const unknown = r.events.filter((e) => e.event === 'process-unknown')
+  assert.deepEqual(unknown.map((e) => [e.name, e.door, e.pid]), [['claude-nightly', 'claude-code.settings', 63]], 'one process-unknown, through the wiring to the daemon\'s event sink')
+  r.redirector.stop?.()
+})

@@ -3,8 +3,7 @@
 // this machine — the mihomo kernel is retired from the capture path, its download, its controller and its config gone with it), the targeted
 // identity questions (lsof for the socket's owner, ps + lsof for that pid's facts), ingress.json's ports and tokens, the proxy entries'
 // writer, the route plan and its refresh (the scutil system-proxy watcher: a change re-plans, and a plan that moved brings the doors and the
-// entries to it), the host sets, the tracker's OS rule (`osMatch` — one rule for which form, the same matchForm the doors' lookups route by)
-// and the keychain trust door of the desktop family. There is NO resident helper (4.9 §1): ps, lsof and scutil are plain CLIs, run on demand
+// entries to it), the host sets and the keychain trust door of the desktop family. There is NO resident helper (4.9 §1): ps, lsof and scutil are plain CLIs, run on demand
 // through execTool. Nothing here names a harness: the daemon hands the descriptors in.
 //
 // THE LAZY RULE: construction touches nothing that reads or changes the machine beyond what its arguments already hold. Two constructions exist —
@@ -12,8 +11,7 @@
 //     entries writer made — and nothing STARTED: no door, no scutil read. redirector.start() (the daemon's) adds this wiring's netenv half —
 //     the first scutil read, the first plan, the 5 s watcher; the doors themselves come with the first attach (the switch's `on`), and the
 //     daemon binds them to the engine the moment both exist (`bindDoors`, below).
-//   · loadParts' ({ env } alone, no dir — daemon.mjs builds one for on / status / install): the shell — the groups it was handed (none:
-//     osMatch answers null), and attach() refusing with its own TypeError. A read-only command must not find ingress.json created by reading it.
+//   · loadParts' ({ env } alone, no dir — daemon.mjs builds one for on / status / install): the shell — the groups it was handed, and attach() refusing with its own TypeError. A read-only command must not find ingress.json created by reading it.
 // Everything is injected through `deps` for a test, the win32 wiring's list: `exec · ownerOf · factsOf · loadIngress · entries · isFree ·
 // random · now · timers · readSystemProxy · watchSystemProxy · systemProxy · fs`.
 import os from 'node:os'
@@ -23,7 +21,9 @@ import { X509Certificate } from 'node:crypto'
 import { factsOfPid } from './procinfo.mjs'
 import { ownerOfSocket as askOwnerOfSocket } from './socktable.mjs'
 import { loadIngressConfig, freeOnLoopback } from './ingress-config.mjs'
-import { groupsOf, planRoutes, resolveLogin, hostSetOf, proxyRecordsOf } from './route-plan.mjs'
+import { groupsOf, planRoutes, resolveLogin, hostSetOf } from './route-plan.mjs'
+import { isDesiredOn, movedRoute, optedInOf, carriedOf as carriedGroupsOf } from '../../core/route-plan.mjs'
+import { identifyOf, desktopDoorOf } from '../../core/proxy-wiring.mjs'
 import { createDarwinRedirector } from './redirector.mjs'
 import { createProxyEntries } from './entries.mjs'
 import { readSystemProxy, watchSystemProxy } from './upstream.mjs'
@@ -31,7 +31,6 @@ import { readText, readTextOrError } from '../../core/config-read.mjs'
 import { execTool } from '../../../off/exec.mjs'
 import { readManifest } from '../../core/trust/journal.mjs'
 import { MARKER_TOLERANCE_MS } from '../../core/trust/confirm.mjs'
-import { matchForm } from './forms.mjs'
 
 /** The gate `attach()` asks before it writes a group's proxy entry (4.8 W19; the Task 8(b) review made it the redirector's required argument): Codex's and Hermes's lines join a
  *  block their trust entry wrote, and may not be written before the journal's four W19 conditions hold. They hold (the journal's join landed with the win line's Task 8(v) round,
@@ -40,25 +39,21 @@ import { matchForm } from './forms.mjs'
  *  case (test/collector/arch/darwin/entries.test.mjs): a journal that regresses the join refuses it and that test goes red with the GATE. */
 const w19Gate = () => ({ ok: true })
 
-/** Whether a re-plan moved this group in a way the doors and the entries must be told: its upstream, its bypass table, or on/off (4.8 §2.2, carried by 4.9 §2.2: a change whose
- *  recomputed answers equal the group's `last` reloads nothing — a `scutil` read that timed out and the read back are two changes with the same upstream). */
-const movedRoute = (a, b) => !a || !b || a.on !== b.on || JSON.stringify(a.upstream ?? null) !== JSON.stringify(b.upstream ?? null) || JSON.stringify(a.bypass ?? null) !== JSON.stringify(b.bypass ?? null)
-
 /**
  * createDarwinCollector({ env, dir, home, harnesses, failure, event, manifest, desired, optIns, deps }) → the Redirector (4.9 §1), carrying a `darwin` bag of what only the daemon
- *   reaches: `{ bindDoors, ingress, replan, groups, netenv, appliedHosts, osMatch, osLayers, markerToleranceMs, close }` (the win32 bag's shape; osMatch is the registry's
- *   second key, 4.8 §5.4; markerToleranceMs is the plugin marker's fixed tolerance — the daemon hands it to the tracker, confirm.mjs's value). Everything is injected through `deps`
+ *   reaches: `{ bindDoors, ingress, replan, groups, netenv, appliedHosts, osLayers, markerToleranceMs, close }` (the win32 bag's shape;
+ *   markerToleranceMs is the plugin marker's fixed tolerance — the daemon hands it to the tracker, confirm.mjs's value). Everything is injected through `deps`
  *   for a test. `dir` absent = the lazy shell (the header's LAZY RULE).
  *   failure (where, error, extra)  the daemon's failure recorder · event (record)  its event writer (netenv-change, the watcher's own records)
  *   manifest  () → the manifest as it is NOW (the daemon re-reads it; null reads it here) · desired  () → state.json's `harnesses` (`{ <id>: { desired, extra_hosts } }`)
+ *   identify  (facts) → registry.match's answer: the D51 name list the daemon built BEFORE this collector (the same function the tracker judges by);
+ *             required with a dir (the daemon), a no-dir shell holds no door and gets a stand-in that names nobody
  *   optIns    () → the groups or forms the user named and asight has the record of; the default (null) DERIVES them from the manifest's `optin-*` entries (4.9 §6.4's wiring arm,
  *              2026-10-12: without it a daemon that restarts after `on … --opt-in claude-code.desktop` re-plans the group as unnamed → the launcher points at a port with no listener)
  */
-export async function createDarwinCollector({ env = process.env, dir = null, home = env.HOME || os.homedir(), harnesses = [], failure = () => {}, event = () => {}, manifest = null, desired = () => ({}), optIns = null, deps = {} } = {}) {
+export async function createDarwinCollector({ env = process.env, dir = null, home = env.HOME || os.homedir(), harnesses = [], failure = () => {}, event = () => {}, manifest = null, desired = () => ({}), optIns = null, identify = null, deps = {} } = {}) {
   const fs = deps.fs || nodeFs
   const groups = groupsOf(harnesses)
-  const forms = groups.flatMap((x) => x.forms)
-  const harnessOfForm = new Map(groups.flatMap((x) => x.forms.map((f) => [f.id, x.harness])))
   const ctx = { // the daemon's own ctx (4.8 §2.2's, darwin's half): its env is not the install shell's, and priorOf reads the manifest's records by harness and entry, not by files(ctx)
     os: 'darwin', home, env: new Map(Object.entries(env || {}).filter(([, v]) => typeof v === 'string')), running: [],
     readText: (f) => readText(f), readTextOrError: (f) => readTextOrError(f), readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } },
@@ -93,18 +88,12 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   let systemProxy = deps.systemProxy ?? null
   let plan = null
   const ownPorts = () => (ing ? [ing.enginePort, ...Object.values(ing.groupPorts)] : [])
-  // the manifest's opt-in records of one group's forms (confirmed: an entry whose write failed is re-offered, not treated as in effect — planOptIns' own 'done' rule); these say the
-  // group is opted in (the plan's gate) and may keep a forward-only door while off (carried, audit F7) — the desktop-launcher's door lives or dies by this arm (4.9 §6.4)
-  const optinRecordsOf = (m, x) => (m && Array.isArray(m.entries) ? m.entries : []).filter((e) => e && typeof e.kind === 'string' && e.kind.startsWith('optin-') && e.confirmed !== false && e.harness === x.harness && x.forms.some((f) => f.id === e.form))
-  // the named-and-recorded forms (and their groups) the daemon's re-plan treats as opted in: the caller's own list when it brought one, else derived from the manifest — a caller
-  // that passes none (the daemon today) still re-plans a launcher'd group as on (4.9 §6.4's wiring arm)
-  const namedOptIns = () => {
-    const given = optIns ? optIns() : null
-    if (given && given.length) return given
-    const m = manifestNow()
-    return groups.filter((x) => optinRecordsOf(m, x).length > 0).flatMap((x) => [x.g, ...x.forms.map((f) => f.id)])
-  }
-  const carriedOf = () => new Set(groups.filter((x) => proxyRecordsOf(manifestNow(), x.group, x.harness).length > 0 || optinRecordsOf(manifestNow(), x).length > 0).map((x) => x.g)) // installed, once on, or opted in (the opt-in's own record — the desktop launcher's arm, 4.9 §6.4)
+  // the named-and-recorded forms (and their groups) the daemon's re-plan treats as opted in: the caller's own list when it brought one, else derived from the manifest's
+  // `optin-*` records (core/route-plan.mjs optedInOf) — the desktop-launcher's door lives or dies by this arm (4.9 §6.4)
+  const namedOptIns = () => { const given = optIns ? optIns() : null; return given && given.length ? given : optedInOf(groups, manifestNow()) }
+  const carriedOf = () => carriedGroupsOf(groups, manifestNow()) // installed, once on, or opted in (audit F7)
+  const isOn = (harness) => isDesiredOn(desired() || {}, harness) // the door's desired-state question: the plan's own rule
+  const who = identifyOf(identify, dir) // required with a dir; the no-dir shell gets a stand-in that names nobody
   const extraHostsOf = (harness) => { const h = (desired() || {})[harness]; return h && Array.isArray(h.extra_hosts) ? h.extra_hosts : [] }
   const appliedHosts = new Map() // form id → the host set the last plan applied; `status` compares it with a fresh read
   let redirector = null
@@ -142,7 +131,8 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
     groups, home, ownerOf, factsOf, doors,
     routes: () => plan, ingress,
     authOf: (ref) => resolveLogin(ref, { groups, ctx, manifest: manifestNow() }),
-    onFailure: (rec) => event(rec), entries, gate: w19Gate,
+    onFailure: (rec) => event(rec), onEvent: (rec) => event(rec), entries, gate: w19Gate,
+    identify: who, isOn,
     exec: execOf, // the redirector's exec is the lsof shape (socktable's, its docstring): the execTool wrapper, not the spawnSync-shaped run the old spread passed
     hostsOf: (f) => { const s = appliedHosts.get(f.id); return s ? s.hosts : null },
     carried: () => [...carriedOf()],
@@ -190,27 +180,20 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
   const innerDetach = redirector.detach
   redirector.detach = async (...a) => { await replan(); return innerDetach(...a) }
 
-  // ---- the login-keychain door a desktop form's trust runs on (4.9 §6.4's trust arm, 2026-10-12) -------------------------------------------------------
-  // The keychain item is the desktop family's ONE trust door (the env doors are dead for it, §6.4's measured verdict); the tracker judges by layers, so the door
-  // reaches it as two ctx keys the osLayers wrapper below injects: `caFile` (this build's CA — what the engine would decrypt with) and `keychain`
-  // ({ since, fp256 } | null — the manifest's confirmed optin-keychain-cert entry of THAT harness, read live so an `on` that lands the item after the daemon
-  // started opens the door without a restart, and only while the entry's fingerprint is the CA this build actually holds: a certificate asight no longer has
-  // the private key of would be a door to broken handshakes, so it stays shut). darwin/claude-code.mjs's layers turn the open door into the family's one
-  // synthetic layer; a harness with no such item sees null and its layers never know the keys were there.
+  // ---- the login-keychain door Claude Desktop's network service is trusted by (4.9 §6.4's trust arm, D51④) ---------------------------------------
+  // The keychain item is the network service's ONE trust door (the env doors are dead for it, §6.4's measured verdict); the tracker judges by layers, so
+  // the door reaches it as two ctx keys the osLayers wrapper below injects: `caFile` (this build's CA — what the engine would decrypt with) and
+  // `desktopDoor` ({ since, name } | null — the manifest's confirmed optin-keychain-cert entry of THAT harness, read live so an `on` that lands the item
+  // after the daemon started opens the door without a restart, and only while the entry's fingerprint is the CA this build actually holds: a certificate
+  // asight no longer has the private key of would be a door to broken handshakes, so it stays shut). The base claude-code layers turn the open door into
+  // the network service's one synthetic layer (core/trust/chromium.mjs's role); a harness with no such item sees null.
   const caFileOf = () => (dir ? path.join(dir, 'ca', 'asight-ca.pem') : null)
   const keychainDoorOf = (d) => {
     const caFile = caFileOf()
     if (!caFile) return null
     let fp = null
     try { fp = new X509Certificate(fs.readFileSync(caFile)).fingerprint256 } catch { return null }
-    let door = null
-    for (const e of (manifestNow() || {}).entries || []) {
-      if (!e || e.kind !== 'optin-keychain-cert' || e.harness !== d.name || e.confirmed !== true) continue
-      const since = Date.parse(e.installed_at)
-      if (!Number.isFinite(since) || (e.values || {}).fp256 !== fp) continue
-      if (!door || since > door.since) door = { since, fp256: fp } // a re-install supersedes: config-after-start is judged against the newest install
-    }
-    return door
+    return desktopDoorOf(manifestNow(), d.name, { 'optin-keychain-cert': (e) => ((e.values || {}).fp256 === fp ? `login keychain (asight's CA trusted, ${fp.slice(0, 23)}…)` : null) })
   }
 
   redirector.darwin = {
@@ -218,13 +201,10 @@ export async function createDarwinCollector({ env = process.env, dir = null, hom
     ingress, replan, groups,
     netenv: () => ({ systemProxy, ownPorts: ownPorts() }),
     appliedHosts: () => Object.fromEntries(appliedHosts),
-    osMatch: { darwin: (f) => { const m = matchForm(forms, f, { home }); return m.kind === 'form' ? harnessOfForm.get(m.id) ?? null : null } }, // one rule for which form (4.8 §5.4, carried by 4.9 §5.4): the registry judges by the same matchForm the doors' lookups route by
     // a harness with macOS layers of its own declares them; the rest read the same files as on Linux. The wrapper hands every one of them the desktop door's
-    // two ctx keys (4.9 §6.4's trust arm, 2026-10-12): `keychain` — the manifest's CONFIRMED optin-keychain-cert entry of THIS harness, live-read (an item that
-    // lands after the daemon started opens without a restart), and only while that entry's fingerprint is this build's CA (an entry of a certificate asight no
-    // longer holds would trust a CA it cannot decrypt with) — and `caFile`, this build's collector CA. Only darwin/claude-code.mjs's layers read them; for every
+    // two ctx keys (above): `desktopDoor` (keychainDoorOf) and `caFile`. Only the claude-code layers read them, for a network-service process; for every
     // other descriptor the spread is an additive no-op.
-    osLayers: { darwin: (d) => { const own = (d.darwin && d.darwin.layers) || d.layers; return (ctx2) => own({ ...ctx2, keychain: keychainDoorOf(d), caFile: caFileOf() }) } },
+    osLayers: { darwin: (d) => { const own = (d.darwin && d.darwin.layers) || d.layers; return (ctx2) => own({ ...ctx2, desktopDoor: keychainDoorOf(d), caFile: caFileOf() }) } },
     markerToleranceMs: MARKER_TOLERANCE_MS, // the darwin plugin twins write performance.timeOrigin (sub-millisecond) against ps's second-granular lstart (startTicks): the tracker gets the same fixed tolerance the win line's markers are compared with (confirm.mjs; review F4)
     close: () => { if (netenvWatcher) netenvWatcher.stop() },
   }

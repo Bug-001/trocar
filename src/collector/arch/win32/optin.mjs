@@ -14,7 +14,9 @@ import { fileURLToPath } from 'node:url'
 import { execTool } from '../../../off/exec.mjs'
 import { writeBackup } from '../../../off/backup.mjs'
 import { setKey, getPath } from '../../../off/json-text.mjs'
-import { proxyUrl, matchForm } from './forms.mjs'
+import { proxyUrl } from './forms.mjs'
+import { splitCommandLine } from './procinfo.mjs'
+import { whoseWithHosts } from '../../core/host-agent.mjs'
 import { renderCmdTemplate, markerScript } from './shims.mjs'
 import { readIngressConfig } from './ingress-config.mjs'
 import { readUserPath, prependUserPath, resolveCommand, sacOf, sacBlocksShims, readShortcutTarget, shortcutPlaces } from './userpath.mjs'
@@ -518,10 +520,11 @@ async function machineValuesOf({ row, groups = [], deps = {}, env = process.env 
 export const CHECK_KINDS = Object.freeze(['optin-user-path', 'optin-machine-path', 'optin-shortcut', 'optin-cert-user', 'optin-claude-policy', 'optin-vscode', 'optin-zcode'])
 
 /**
- * checkEntries({ groups, manifest, procs, deps }) → [{ form, item, harness, code, detail }] — the read-only re-check that asight's opt-in
- * entries are still the ones used. `groups` is route-plan's groupsOf shape (the forms, for matching the running processes); `manifest` the
- * install manifest as it is; `procs` the process table (`[{ pid, ppid, exe, cmdline? , argv? }]` — listProcs' own rows or the redirector's
- * full table); `deps: { run, env, fs }` the injections (every OS read goes through them). A ledger entry that is in effect (not
+ * checkEntries({ manifest, procs, identify, groups, deps }) → [{ form, item, harness, code, detail }] — the read-only re-check that asight's opt-in
+ * entries are still the ones used. `manifest` the install manifest as it is; `procs` the process table
+ * (`[{ pid, ppid, exe, cmdline? , argv? }]` — listProcs' own rows or the redirector's full table); `identify` the name list's judge (registry.match,
+ * D51: which harness a process is; a process a form's `hosts.processes` names — the editor carrying the extension — is that form's harness, as at its door);
+ * `groups` groupsOf(descriptors) (which forms each harness has); `deps: { run, env, fs }` the injections (every OS read goes through them). A ledger entry that is in effect (not
  * `pending_admin`, not a `confirmed: false` apply) is checked by its kind:
  *   optin-user-path / optin-machine-path  the command still resolves, in Windows' own order (the machine PATH first, §6.3), to asight's shim
  *                                         or dispatcher — anything else first is `shim-not-on-path`, the detail naming the PATH entry that wins;
@@ -531,14 +534,15 @@ export const CHECK_KINDS = Object.freeze(['optin-user-path', 'optin-machine-path
  *   optin-vscode / optin-zcode            the settings file still holds what asight wrote in its keys (→ `entry-changed`);
  *   optin-claude-policy                   the policy value is still asight's URL (→ `entry-changed`);
  *   optin-cert-user                       the certificate is still in CurrentUser\Root (→ `entry-changed`).
- * Then, for each form whose entries are all still in effect and that has an entry things are started through (a shim, the dispatcher, a
- * launcher), a running agent of that form whose parent is neither one of those (by image, or by the parent's command line naming it — a .cmd
- * is interpreted by cmd.exe, so the parent of a shim-launched agent is the cmd.exe whose command line carries the path; the shapes are the
- * lab's W68 run to measure) nor a process of the same form (an agent's own children are not the entry's question) is `not-via-entry`.
+ * Then, for each harness whose entries are all still in effect and EVERY form of which (in `groups`) has an entry things are started through (a
+ * shim, the dispatcher, a launcher) — otherwise a process of it cannot be put in a form, and nothing is said (D25) —, a running agent of that harness (by the name list — it says the harness, never the form, so any of the harness's start entries
+ * will do) whose parent is neither one of those (by image, or by the parent's command line naming it — a .cmd is interpreted by cmd.exe, so the
+ * parent of a shim-launched agent is the cmd.exe whose command line carries the path; the shapes are the lab's W68 run to measure) nor a process
+ * of the same harness (an agent's own children are not the entry's question) is `not-via-entry`, on the harness's first PATH entry (else launcher).
  * Nothing broken → nothing reported (W68). A read that failed is never a verdict: it comes back as an `unknown` finding (`code: null` with a
  * `reason` of 1.6 §9.4's closed set), not a guess (R11, D38).
  */
-export function checkEntries({ groups = [], manifest = null, procs = [], deps = {} } = {}) {
+export function checkEntries({ manifest = null, procs = [], identify = null, groups = null, deps = {} } = {}) {
   const run = deps.run || null, env = deps.env || process.env, fs = deps.fs || nodeFs
   const expand = (p) => String(p).replace(/%([^%]+)%/g, (m, k) => (env[k] != null ? String(env[k]) : m))
   const exists = (p) => { try { return fs.existsSync(p) || fs.existsSync(expand(p)) } catch { return false } } // where.exe expands %Environment% names of a REG_EXPAND_SZ PATH; fs.existsSync does not
@@ -636,39 +640,48 @@ export function checkEntries({ groups = [], manifest = null, procs = [], deps = 
     if (e.kind === 'optin-vscode' || e.kind === 'optin-zcode') checkSettingsOf(e)
   }
 
-  // the agents half: for each form with an entry things are started through, a running agent must have been started through it
-  const startTargetsOf = new Map() // form id → the paths a parent is identified by (raw and %expanded%: the ledger and PATH hold the raw, a shell's command line the expanded)
-  const launchEntryOf = new Map() // form id → the entry to attribute a not-via-entry finding to (the first PATH entry, else the first launcher one)
-  const noteStart = (e, t) => { if (!t) return; const l = startTargetsOf.get(e.form) || startTargetsOf.set(e.form, []).get(e.form); l.push(t, expand(t)); if (!launchEntryOf.has(e.form)) launchEntryOf.set(e.form, e) }
+  // the agents half: for each harness with an entry things are started through, a running agent of it must have been started through one
+  const startTargetsOf = new Map() // harness → the paths a parent is identified by (raw and %expanded%: the ledger and PATH hold the raw, a shell's command line the expanded)
+  const launchEntryOf = new Map() // harness → the entry to attribute a not-via-entry finding to (the first PATH entry, else the first launcher one)
+  const noteStart = (e, t) => { if (!t) return; const l = startTargetsOf.get(e.harness) || startTargetsOf.set(e.harness, []).get(e.harness); l.push(t, expand(t)); if (!launchEntryOf.has(e.harness)) launchEntryOf.set(e.harness, e) }
+  const START_KINDS = new Set(['optin-user-path', 'optin-machine-path', 'optin-shortcut', 'optin-vscode'])
   for (const e of entries) {
     if (e.kind === 'optin-user-path') noteStart(e, path.win32.join(v(e).binDir || '', `${v(e).command}.cmd`))
     else if (e.kind === 'optin-machine-path') noteStart(e, `${MACHINE_BIN}\\${v(e).command}.cmd`)
     else if (e.kind === 'optin-shortcut' || e.kind === 'optin-vscode') noteStart(e, v(e).launcher)
     else continue
-    if (e.kind === 'optin-user-path' || e.kind === 'optin-machine-path') launchEntryOf.set(e.form, e) // a PATH entry outranks a launcher one for the attribution
+    if (e.kind === 'optin-user-path' || e.kind === 'optin-machine-path') launchEntryOf.set(e.harness, e) // a PATH entry outranks a launcher one for the attribution
   }
-  if (startTargetsOf.size && Array.isArray(procs) && procs.length) {
-    const formsList = groups.flatMap((x) => x.forms)
-    const rows = procs.map((p) => ({ pid: p && p.pid, ppid: p && p.ppid, exe: p && p.exe, cmdline: p && p.cmdline != null ? String(p.cmdline) : Array.isArray(p && p.argv) ? p.argv.join(' ') : null }))
-    const formOf = new Map()
+  // a harness is judged only when each of its forms has a start entry: the name list says the harness, never the form (D51), so a CLI process must not be
+  // compared with the editor's launcher, nor the editor with the CLI's shim
+  const startForms = new Set(entries.filter((e) => START_KINDS.has(e.kind)).map((e) => e.form))
+  for (const h of [...startTargetsOf.keys()]) {
+    const forms = (groups || []).filter((x) => x.harness === h).flatMap((x) => x.forms.map((f) => f.id))
+    if (!forms.length || !forms.every((f) => startForms.has(f))) startTargetsOf.delete(h)
+  }
+  if (startTargetsOf.size && Array.isArray(procs) && procs.length && typeof identify === 'function') {
+    const whose = whoseWithHosts(identify, groups) // the host-tree rule (a form's hosts.processes → its harness) first, then the name list: core/host-agent.mjs
+    const rows = procs.map((p) => ({ pid: p && p.pid, ppid: p && p.ppid, exe: p && p.exe, argv: Array.isArray(p && p.argv) ? p.argv : p && p.cmdline != null ? splitCommandLine(String(p.cmdline)) : null, cmdline: p && p.cmdline != null ? String(p.cmdline) : Array.isArray(p && p.argv) ? p.argv.join(' ') : null }))
+    const harnessOf = new Map()
     for (const p of rows) {
       if (p.exe == null) continue
-      const m = matchForm(formsList, { exe: p.exe, cmdline: p.cmdline, cmdlineState: p.cmdline ? 'ok' : 'empty' }, {})
-      if (m.kind === 'form') formOf.set(p.pid, m.id)
+      const facts = { os: 'win32', exe: p.exe, argv: p.argv, cmdlineState: p.argv ? 'ok' : 'empty' }
+      const m = whose(facts)
+      if (m && m.agent) harnessOf.set(p.pid, m.agent)
     }
-    for (const [form, targets] of startTargetsOf) {
-      if (findings.some((f) => f.form === form && f.code)) continue // the entry itself is already the finding; which process went around it is noise next to that
+    for (const [harness, targets] of startTargetsOf) {
+      if (findings.some((f) => f.harness === harness && f.code)) continue // the entry itself is already the finding; which process went around it is noise next to that
       const bad = []
       for (const p of rows) {
-        if (formOf.get(p.pid) !== form || p.ppid == null) continue
+        if (harnessOf.get(p.pid) !== harness || p.ppid == null) continue
         const parent = rows.find((r) => r.pid === p.ppid)
         if (parent && targets.some((t) => (parent.exe != null && samePath(parent.exe, t)) || (parent.cmdline != null && parent.cmdline.toLowerCase().includes(String(t).toLowerCase())))) continue
-        if (parent && formOf.get(parent.pid) === form) continue // a child of the agent itself (an editor's extension host): the entry question is the top process's
+        if (parent && harnessOf.get(parent.pid) === harness) continue // a child of the agent itself (an editor's extension host): the entry question is the top process's
         bad.push(`pid ${p.pid} (parent ${parent && parent.exe ? parent.exe : 'no longer running'})`)
       }
       if (bad.length) {
-        const e = launchEntryOf.get(form)
-        findings.push({ form, item: e.item, harness: e.harness, code: 'not-via-entry', detail: `${bad.length} running ${form} process(es) were not started through the entry (${targets[0]}): ${bad.join(', ')}` })
+        const e = launchEntryOf.get(harness)
+        findings.push({ form: e.form, item: e.item, harness, code: 'not-via-entry', detail: `${bad.length} running ${harness} process(es) were not started through the entry (${targets[0]}): ${bad.join(', ')}` })
       }
     }
   }

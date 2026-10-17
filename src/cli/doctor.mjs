@@ -21,7 +21,7 @@ import { readRecords } from '../etl/ingest.mjs'
 import { serveSource } from '../paths.mjs'
 import { appendJournal, sealedReadProblem } from '../raw/journal.mjs'
 import { exportFiles } from '../raw/export.mjs'
-import { sealedUnder } from '../raw/discover.mjs'
+import { listSources, sealedUnder } from '../raw/discover.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { formatInstallNotes } from '../collector/cli.mjs'
 import { asightHome, backupDir, collectorDir } from '../off/paths.mjs'
@@ -56,18 +56,19 @@ function filesIn(dir, fs) {
   }
 }
 
-/** The capture files, sampled records and everything ④b has to look at → { sources, files, extra, records, srcMeta, readErrors }. One resolver for the source, shared with the board (src/server.mjs sourceFiles):
- *  a root is usually a DIRECTORY and `serveSource()` returns a list of them (D27) — the day `fs.statSync(list)` threw, the catch swallowed it and doctor certified a capture it had read nothing from. */
+/** The capture files, sampled records and everything ④b has to look at → { sources, files, extra, records, srcMeta, readErrors }. One resolver for the source, shared with the board (listSources,
+ *  src/raw/discover.mjs): a root is usually a DIRECTORY and `serveSource()` returns a list of them (D27) — the day `fs.statSync(list)` threw, the catch swallowed it and doctor
+ *  certified a capture it had read nothing from. The resolver itself, never server.mjs: that one opens the database (@duckdb/node-api), and a self-check that dies on a package it does not need
+ *  says nothing at all — on a tree without node_modules (a test machine's) `asight doctor` printed only ERR_MODULE_NOT_FOUND (the D51 cells, 2026-10-14). */
 async function collect({ home, env, sourceFlags, deps }) {
   const fs = deps.fs || nodeFs, ah = asightHome(home)
   const flagged = sourceFlags.filter(Boolean)
   const sources = [].concat(flagged.length ? flagged : env.ASIGHT_SOURCE || serveSource({ home: ah, legacy: path.join(home, '.atrace', 'asight'), collector: collectorDir(home) })).filter(Boolean)
   const sessionsRoot = path.join(ah, 'sessions')
   const files = [], extra = [], records = [], readErrors = []
-  const { sourceFiles } = deps.sourceFiles ? { sourceFiles: deps.sourceFiles } : await import('../server.mjs')
   for (const root of sources) {
     try {
-      const part = sourceFiles(root, { sessionsRoot })
+      const part = listSources([root], { sessionsRoot })
       files.push(...part.files)
       extra.push(...part.superseded.map((x) => x.sealed)) // sealed copies superseded by an original that still exists hold the same credentials (D35)
     } catch (e) { readErrors.push(`${root}: ${(e && e.message) || e}`) }

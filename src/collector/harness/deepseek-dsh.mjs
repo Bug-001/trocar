@@ -1,7 +1,7 @@
 // deepseek-dsh.mjs — DeepSeek dsh (RFC 4.6 §身份与信任 tables, D37). Facts: dsh 0.2.0-rc.2 on Node 22.23.3 on a test machine,
 // the installed package and its source; lab ⑤ in the RFC. `#!/usr/bin/env node` gives two execs on one pid (env, then
 // node): the second is judged. The agent is node with the dsh bin as its entry script (`/usr/local/bin/dsh`, or
-// …/@deepseek-ai/dsh/lib/bin.js), at most two node flags before it. Its subprocess runner
+// …/@deepseek-ai/dsh/lib/bin.js), whatever node flags come before it. Its subprocess runner
 // (…/dsh-subprocess-local/lib/runner.js), PTC child (node --max-old-space-size=… <bootstrap>) and browser opener
 // (node --input-type=module --eval …) carry @deepseek-ai/dsh paths elsewhere and are not the agent; they do not
 // inherit the plugin's trust (D37). Env: inherited > <cwd>/.env > $DSH_HOME/.env, a file only fills names the
@@ -19,7 +19,6 @@ import { lineComment } from '../../off/text-edit.mjs'
 import { envValues, envProxies, argAfter, dotenvLayer } from './_common.mjs'
 import { renderPlugin, ANONYMOUS_MODULE_MANIFEST } from './_plugins.mjs'
 
-const NODE = /(^|\/)node( \(deleted\))?$/
 const ENTRY = /(^|\/)dsh$|\/@deepseek-ai\/dsh\/lib\/bin\.js$/
 // dsh-app-boot BOOTSTRAP_NAMES / _PREFIXES: names no .env file may set (dsh aborts its start when one does)
 const BOOTSTRAP = new Set(['PATH', 'HOME', 'USERPROFILE', 'SHELL', 'NODE_OPTIONS', 'NODE_PATH', 'NODE_EXTRA_CA_CERTS', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'PERL5OPT', 'PERL5LIB', 'PYTHONSTARTUP', 'PYTHONPATH', 'RUBYOPT', 'RUBYLIB', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'PYTHONHOME', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_EXTERNAL_DIFF', 'GIT_PAGER', 'GIT_EDITOR', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_COUNT', 'EDITOR', 'VISUAL', 'PAGER', 'BROWSER', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_SEARCH_BASE_URL', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE', 'NODE_TLS_REJECT_UNAUTHORIZED'])
@@ -81,11 +80,12 @@ const proxy = {
 export default {
   name: 'deepseek-dsh',
   runtime: 'node',
-  signatures: {
-    linux: {
-      match: [{ exe: NODE, 'argv.1': ENTRY }, { exe: NODE, 'argv.1': /^-/, 'argv.2': ENTRY }, { exe: NODE, 'argv.1': /^-/, 'argv.2': /^-/, 'argv.3': ENTRY }],
-      longLived: [{ argv: [/^web$/] }, { argv: [/^acp$/] }, { argv: [/^--profile=(web|acp)$/] }],
-    },
+  // Which processes are dsh (D51 preset, every OS): node whose `entry` (the program it runs, after any node flags) is dsh's bin (…/dsh, or npm's
+  // …/@deepseek-ai/dsh/lib/bin.js) — so its runner and PTC children (whose argv names dsh only later) are not it — and the desktop's main process.
+  processes: {
+    names: [{ name: 'node', entry: '(/dsh|/@deepseek-ai/dsh/lib/bin\\.js)$' }, { name: 'deepseek harness' }],
+    exclude: [{ name: 'node', args: 'dsh-ptc-runtime-node' }],
+    longLived: [{ args: '(^| )(web|acp)( |$)' }, { args: '(^| )--profile=(web|acp)( |$)' }],
   },
   hosts: ['api.deepseek.com'],
   proxy,

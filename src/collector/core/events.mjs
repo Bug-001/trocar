@@ -61,6 +61,8 @@ export function createFailureRecorder(dir, { log = () => {}, windowMs = 10_000, 
   const unfolded = new Set(UNFOLDED_CODES)
   function event(shaped) {
     const rec = { event: 'failure', ...shaped }
+    // a critical failure (D51④) is also one stderr line — launchd / the scheduled task / systemd keep it — with its code, harness, pid and host
+    if (rec.level === 'critical') log('critical', new Error(`${rec.code} harness=${rec.harness ?? '-'} pid=${rec.pid ?? '-'} host=${rec.host ?? '-'}: ${rec.reason ?? ''}`))
     if (unfolded.has(rec.code)) { write(rec); return }
     const key = `${rec.where}\u0000${rec.code || ''}`
     const w = open.get(key)

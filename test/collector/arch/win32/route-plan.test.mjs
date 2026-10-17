@@ -1089,28 +1089,25 @@ test('W5 the login environment: a harness that reads a proxy variable of the log
   assert.deepEqual(denied['claude-code.settings'].unknown, [{ what: 'agent-proxy', reason: 'denied', detail: 'EACCES' }], 'an entry file that cannot be read is said too')
 })
 
-test('W5 the form results: an elevated process of a form and a process whose path nobody measured are said on the forms; they do not change what the group gets, and a group\'s own reason says the same for all its forms', () => {
+test('W5 the form results: an elevated agent is said on the forms of the door group it came through when that group is its own harness\'s (D51: the name list says who, the door says where); it does not change what the group gets, and a group\'s own reason comes first', () => {
   const b = box()
   const procs = [
-    { pid: 7712, match: { kind: 'form', id: 'claude-code.cli' }, elevated: true },
-    { pid: 7713, match: { kind: 'form', id: 'claude-code.cli' }, elevated: true },
-    { pid: 7714, match: { kind: 'form', id: 'claude-code.vscode' }, elevated: false },
-    { pid: 5530, match: { kind: 'form', id: 'codex.app' }, elevated: null },
-    { pid: 9001, match: { kind: 'path-unknown', forms: ['claude-code.cli', 'claude-code.vscode', 'claude-code.desktop'], shape: 'D:\\tools\\claude.exe' }, elevated: false },
-    { pid: 9002, match: { kind: 'path-unknown', forms: ['codex.cli', 'codex.vscode', 'codex.app'], shape: 'C:\\Users\\<user>\\x\\codex.exe' } },
-    { pid: 4000, match: { kind: 'pending', forms: ['deepseek-dsh.cli'] } },
-    { pid: 4001, match: { kind: 'none' }, elevated: true },
-    { pid: 4002, match: { kind: 'form', id: 'no.such.form' }, elevated: true },
+    { pid: 7712, agent: 'claude-code', names: ['claude'], door: 'claude-code.settings', elevated: true },
+    { pid: 7713, agent: 'claude-code', names: ['claude'], door: 'claude-code.settings', elevated: true },
+    { pid: 7714, agent: 'claude-code', names: ['claude'], door: 'claude-code.settings', elevated: false },
+    { pid: 5530, agent: 'codex', names: ['codex'], door: 'codex.env', elevated: null },
+    { pid: 5531, agent: 'codex', names: ['codex'], door: 'claude-code.settings', elevated: true }, // codex at the claude door (W79): a fact about codex, not about claude's forms
+    { pid: 4002, agent: 'claude-code', names: ['claude'], door: 'no.such.group', elevated: true },
+    { pid: 4003, agent: 'claude-code', names: ['claude'], door: 'claude-code.desktop', elevated: true },
   ]
   const p = plan(b, { procs })
   const f = p['claude-code.settings'].forms
-  assert.deepEqual(f['claude-code.cli'], { reason: 'elevated-agent', elevatedPids: [7712, 7713], unknownPaths: ['D:\\tools\\claude.exe'] }, 'the elevated pids are a fact about a known form, and the first thing said about it')
-  assert.deepEqual(f['claude-code.vscode'], { reason: 'form-path-unknown', unknownPaths: ['D:\\tools\\claude.exe'] }, 'a path that tells which form it is does not exist: every form of that image carries it')
-  assert.deepEqual(p['codex.env'].forms['codex.app'], { reason: 'form-path-unknown', unknownPaths: ['C:\\Users\\<user>\\x\\codex.exe'] }, 'an elevation nobody could read (null) is not an elevation')
-  assert.deepEqual(p['deepseek-dsh.env'].forms, { 'deepseek-dsh.cli': { reason: null }, 'deepseek-dsh.desktop': { reason: null } }, 'a form whose command line is not known yet, and one that is no agent, are nothing yet')
+  for (const id of Object.keys(f)) assert.deepEqual(f[id], { reason: 'elevated-agent', elevatedPids: [7712, 7713] }, `${id}: the elevated pids are a fact about every form of the door group they came through`)
+  assert.deepEqual(p['codex.env'].forms['codex.app'], { reason: null }, 'an elevation nobody could read (null) is not an elevation')
   assert.deepEqual(['entry', 'on', 'reason'].map((k) => p['claude-code.settings'][k]), ['auto', true, null], 'the group is connected: the elevated process is the one that is not captured')
-  assert.deepEqual(p['claude-code.desktop'].forms['claude-code.desktop'], { reason: 'opt-in-needed', unknownPaths: ['D:\\tools\\claude.exe'] }, 'the group\'s reason is first')
+  assert.equal(p['claude-code.desktop'].forms['claude-code.desktop'].reason, 'opt-in-needed', 'the group\'s reason is first')
   assert.deepEqual(plan(b)['claude-code.settings'].forms, { 'claude-code.cli': { reason: null }, 'claude-code.vscode': { reason: null } }, 'nothing seen, nothing said')
+  for (const g of Object.values(p)) for (const x of Object.values(g.forms)) assert.equal(x.unknownPaths, undefined, 'no path shape is reported any more: the name list decides who a process is')
 })
 
 test('W71 (plan half): fed its own result as `last`, a system proxy that turned PAC or could not be read leaves the followers on the upstream and the bypass table they had, with a hint; a group that was not routed before stays not routed', () => {
@@ -1254,8 +1251,8 @@ test('hostSetOf wants a form with a host set, and a reader when the form has set
 
 const PLAN_SRC = fs.readFileSync(fileURLToPath(new URL('../../../../src/collector/arch/win32/route-plan.mjs', import.meta.url)), 'utf8')
 
-test('route-plan.mjs imports only the config readers, forms.mjs, upstream.mjs and the rule text generator (the judge of a host name), touches no disk, process, network or OS by itself (the files it reads come through the ctx it is given), and names no harness: its groups are data (W39)', () => {
-  assert.deepEqual(reaches(PLAN_SRC, ['../../core/config-read.mjs', '../../core/upstream-shape.mjs', './forms.mjs', './upstream.mjs']), [])
+test('route-plan.mjs imports only the shared plan (core/route-plan.mjs, whose own scan is test/collector/core/route-plan.test.mjs) and upstream.mjs, touches no disk, process, network or OS by itself (the files it reads come through the ctx it is given), and names no harness: its groups are data (W39)', () => {
+  assert.deepEqual(reaches(PLAN_SRC, ['../../core/route-plan.mjs', './upstream.mjs']), [])
   assert.ok(reaches("import fs from 'node:fs'\n", ['./forms.mjs']).length > 0, 'the scan can fail')
   assert.ok(reaches("/** the process. */\nconst x = process.platform\n", []).length > 0 && reaches('/** the process. */\nconst x = 1\n', []).length === 0, 'a call is found, prose in a comment is not')
   const code = PLAN_SRC.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')

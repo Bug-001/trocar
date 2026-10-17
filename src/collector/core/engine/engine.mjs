@@ -35,6 +35,17 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
   const neg = createNegativeCache()
   // neg_key: what the entry is keyed by — "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5)
   const negWritten = (made, key, o) => { if (made) { const e = neg.get(key); failure({ code: 'negative-cache', pid: e.pid ?? null, neg_key: e.negKey, agent: e.agent, host: e.host, cause: e.cause, reason: `${e.host} is no longer decrypted for ${e.pid != null ? `pid ${e.pid}` : e.negKey} (${e.cause}${e.rejections > 1 ? `, ${e.rejections} times in a row` : ''}); its connections there are passed through until ${e.pid != null ? 'it exits' : 'every process of that form has exited'}` }) } return made }
+  // trust-rejected (D51④, 4.6 §事件与码): a critical failure at most once per (pid, host) in the process's life, the negative cache's bound; the
+  // daemon's forgetPid ends it with the negative cache's entries (negative-cache-cleared, counted in `dropped` when it was not cached too)
+  const rejectedOnce = new Set()
+  const firstRejection = (key) => (rejectedOnce.has(key) ? false : (rejectedOnce.add(key), true))
+  const forgetWho = (who) => {
+    who = String(who)
+    const cached = new Set(neg.list().filter((e) => e.negKey === who).map((e) => e.key))
+    let only = 0
+    for (const k of [...rejectedOnce]) if (k.slice(0, k.indexOf('|')) === who) { rejectedOnce.delete(k); if (!cached.has(k)) only++ }
+    return neg.forgetKey(who) + only
+  }
   const negCache = { ...neg, observe: (key, o) => negWritten(neg.observe(key, o), key, o), mark: (key, o) => negWritten(neg.mark(key, o), key, o) }
   let flowSeq = 0
   const defaultConnect = (dst) => net.connect(dst.port, dst.address)
@@ -104,7 +115,7 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
     }
   }
   const flowCtx = (connect) => ({
-    ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, retention, negCache, counters, failure,
+    ...timing, drainTimeoutMs, issuer, store, upstreamCa, upstreamTrust, policy, isRecording, retention, negCache, counters, failure, firstRejection,
     connectUpstream: connect,
     newFlowId: () => `flow_${String(++flowSeq).padStart(6, '0')}`,
   })
@@ -267,5 +278,5 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
 
   // negatives() is for status only; forgetPid(pid) is called by the daemon when that process exits; forgetNegKey(k) when the last process of a
   // form with no pid to key by has (4.8 §5.5).
-  return { listen, closeGroups, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: (pid) => neg.forgetPid(pid), forgetNegKey: (k) => neg.forgetKey(k) }
+  return { listen, closeGroups, close, stats, drain, relayed, drained, negatives: () => neg.list(), forgetPid: forgetWho, forgetNegKey: forgetWho }
 }

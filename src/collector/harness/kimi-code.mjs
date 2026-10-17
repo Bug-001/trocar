@@ -2,7 +2,7 @@
 // app on Node 24.15.0) on a test machine and its strings; the npm package metadata (bin `kimi` → dist/main.mjs); lab ③ / ⑦.
 // Identity: the installer's app ~/.kimi-code/bin/kimi sets process.title = "kimi-code" within 250 ms of start (cmdline
 // and comm both change, exe does not), so it is matched by exe. The npm build is node running the bin symlink
-// (…/bin/kimi through `#!/usr/bin/env node`) or dist/main.mjs, matchable only from the argv read at exec. The same
+// (…/bin/kimi through `#!/usr/bin/env node`) or dist/main.mjs, matched by that entry before the retitle and by the title after it. The same
 // exe's `__update_download` (background update download) and `__plugin_run_node` (a plugin's MCP server) are not
 // the agent.
 // Hosts: config.toml ($KIMI_CODE_HOME, else ~/.kimi-code) — `base_url` of providers / models / services and the
@@ -27,13 +27,11 @@ import path from 'node:path'
 import { hostOf, expandHome } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { lineComment } from '../../off/text-edit.mjs'
+import { normalizeName } from '../../off/identity.mjs'
 import { MARKER_VAR } from '../core/trust/confirm.mjs'
 import { envValues, envProxies } from './_common.mjs'
 import { renderShim } from './_plugins.mjs'
 
-const SEA = /\/\.kimi-code\/bin\/kimi( \(deleted\))?$/
-const NODE = /(^|\/)node( \(deleted\))?$/
-const NPM_ENTRY = /(^|\/)kimi$|\/@moonshot-ai\/kimi-code\/dist\/main\.mjs$/
 const CA_VAR = 'NODE_EXTRA_CA_CERTS'
 // POSIX shell rc files the kimi installer may have put its PATH line in (asight's line is an `export`, not for fish)
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin']
@@ -77,6 +75,15 @@ function inject(ctx) {
   }
 }
 
+// Which processes are Kimi Code (D51 preset, every OS): the single-file build (its exe is kimi), the npm package run by node (the program it runs, its
+// `entry`, is dist/main.mjs or the bin symlink — so a wrapper merely naming kimi later in its arguments is not it), and the title kimi-code both rewrite
+// argv to within 250 ms of start (lab ③): it is argv[0] then, so an npm build first scanned after that — a Linux rescan, the accept-time `ps` on macOS —
+// is still recognised (4.6 Kimi row; its trust reason then says kimi-npm-no-shim, by its exe). The update downloader and the plugin runner are its helpers.
+const processes = {
+  names: [{ name: 'kimi' }, { name: 'kimi-code' }, { name: 'node', entry: '(/@moonshot-ai/kimi-code/dist/main\\.mjs|/bin/kimi)$' }],
+  exclude: [{ name: ['kimi', 'node'], args: '(^| )__(update_download|plugin_run_node)( |$)' }],
+}
+
 // How Kimi Code reads a proxy (RFC 1.6 §9.7): the proxy variables of its environment, at start; SOCKS is supported; no config file, no OS proxy (its VS Code extension follows VS Code's own setting, on Windows).
 const proxy = {
   env: ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'all_proxy', 'ALL_PROXY'],
@@ -86,7 +93,7 @@ const proxy = {
   unsupported: {},
   branches: ['all'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '退出这个 kimi,在新开的终端里以 `kimi` 重新启动(经 asight 的启动脚本,在那里读代理环境变量)', processes: 'kimi' },
+  restart: { hint: '退出这个 kimi,在新开的终端里以 `kimi` 重新启动(经 asight 的启动脚本,在那里读代理环境变量)', processes: processes.names[0].name },
 }
 
 export default {
@@ -96,12 +103,7 @@ export default {
   // (darwin's osLayers calls it — a descriptor without it throws "own is not a function" in the live judge, the mac
   // lab's run 2026-10-12: every kimi row degraded to its known hosts); nothing here is a layer.
   layers: () => [],
-  signatures: {
-    linux: {
-      match: [{ exe: SEA }, { exe: NODE, 'argv.1': NPM_ENTRY }],
-      exclude: [{ 'argv.1': /^__(update_download|plugin_run_node)$/ }],
-    },
-  },
+  processes,
   hosts: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'],
   proxy,
   configHosts,
@@ -119,7 +121,7 @@ export default {
     refine: (r, env, { argv = [], exe = null, readText = () => null, collectorDir = null }) => {
       if (r.var === MARKER_VAR || !['var-missing', 'ca-not-in-file', 'file-unreadable'].includes(r.reason)) return null
       if (r.reason !== 'var-missing' && collectorDir && String(r.file || '').startsWith(collectorDir + path.sep)) return null
-      if (NODE.test(exe || argv[0] || '')) return 'kimi-npm-no-shim'
+      if (normalizeName(exe || argv[0]) === 'node') return 'kimi-npm-no-shim' // the npm build on every OS: node's name, not a POSIX path (node.exe, node22)
       const shim = collectorDir && (readText(path.join(collectorDir, 'bin', 'kimi')) != null || readText(path.join(collectorDir, 'bin', 'kimi.cmd')) != null)
       return collectorDir && !shim ? 'shim-not-on-path' : 'kimi-not-via-shim'
     },

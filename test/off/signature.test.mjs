@@ -3,12 +3,14 @@
 // JSON round trip, or a match that differs from the registry's, would make `off` call a live agent dead — so the two are held equal here.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { matchPattern, serializeSignature, reviveSignature, matchHarness } from '../../src/off/signature.mjs'
+import { matchPattern, serializeSignature, reviveSignature } from '../../src/off/signature.mjs'
+import { matchHarness } from '../helpers/one-harness.mjs'
 import { createRegistry, matchPattern as registryMatchPattern } from '../../src/collector/core/registry.mjs'
+import { compileIdentity } from '../../src/off/identity.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 
 const harnesses = await loadHarnesses()
-const SIGS = Object.fromEntries(harnesses.map((d) => [d.name, d.signatures.linux]))
+const SIGS = Object.fromEntries(harnesses.map((d) => [d.name, compileIdentity({ harness: d.name, ...d.processes })])) // the compiled name lists (D51), what livenessOf snapshots
 const live = (names = Object.keys(SIGS)) => Object.fromEntries(names.map((n) => [n, { signature: JSON.parse(JSON.stringify(serializeSignature(SIGS[n]))) }]))
 const proc = (exe, argv = [exe], env = null) => ({ exe, argv, env: env == null ? () => new Map() : () => new Map(Object.entries(env)) })
 
@@ -16,18 +18,19 @@ test('the registry matches with the function that moved to src/off/signature.mjs
   assert.equal(registryMatchPattern, matchPattern)
   assert.equal(matchPattern({ exe: /codex$/, argv: [/^app-server$/] }, { exe: '/x/codex', argv: ['codex', 'app-server'] }), true)
   assert.equal(matchPattern({ env: { A: '1' } }, { env: new Map([['A', '2']]) }), false)
+  assert.deepEqual([new Map(), new Map([['A', '1']]), null].map((env) => matchPattern({ env: { A: null } }, { env })), [true, false, false], 'null asks for an absent key; an unreadable env (null) holds no key, not even an absent one')
 })
 
 test('a signature survives JSON: every RegExp comes back with its source and flags, and the revived one matches what the original does', () => {
   for (const d of harnesses) {
-    const sig = d.signatures.linux
+    const sig = SIGS[d.name]
     const json = JSON.parse(JSON.stringify(serializeSignature(sig)))
     assert.doesNotMatch(JSON.stringify(json), /\{\}/, `${d.name}: no RegExp was flattened to {}`)
     const back = reviveSignature(json)
     const flat = (x) => JSON.stringify(x, (k, v) => (v instanceof RegExp ? `/${v.source}/${v.flags}` : v))
     assert.equal(flat(back), flat(sig), `${d.name}: the revived signature is the declared one`)
   }
-  assert.deepEqual(reviveSignature(serializeSignature({ match: [{ 'argv.0': /^x$/i, env: { K: 'v', R: /r/ } }] })), { match: [{ 'argv.0': /^x$/i, env: { K: 'v', R: /r/ } }] })
+  assert.deepEqual(reviveSignature(serializeSignature({ match: [{ 'argv.0': /^x$/i, env: { K: 'v', R: /r/, Z: null } }] })), { match: [{ 'argv.0': /^x$/i, env: { K: 'v', R: /r/, Z: null } }] })
 })
 
 test('matchHarness names the one harness whose match holds and whose exclude does not, from the snapshot alone, resolving a lazy env', () => {

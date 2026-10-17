@@ -74,7 +74,9 @@ test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine th
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4343, pid: 4343, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
     const row = await until(async () => (await req(sock, 'GET', '/status')).agents.find((a) => a.pid === 4343 && a.trusted))
     assert.equal(row.hosts.includes(PROXY_HOST), false, 'its proxy is FlowExtras, never a decrypt host')
-    assert.deepEqual(d.tracker.extrasFor(4343), { wsTerminal: null, proxies: [{ scheme: 'https', host: PROXY_HOST, port: proxy.port, own: true, source: 'env:HTTPS_PROXY' }] }, 'no credentials')
+    const { trust, ...extras } = d.tracker.extrasFor(4343)
+    assert.equal(trust.var, 'NODE_EXTRA_CA_CERTS', 'the trust entry the verdict relied on rides along (D51④)')
+    assert.deepEqual(extras, { wsTerminal: null, proxies: [{ scheme: 'https', host: PROXY_HOST, port: proxy.port, own: true, source: 'env:HTTPS_PROXY' }] }, 'no credentials')
 
     // the agent connects to its proxy; the kernel steers that connection to the engine
     raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')

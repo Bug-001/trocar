@@ -1,14 +1,14 @@
 // win32/kimi-code.mjs — Kimi Code on Windows (RFC 4.8 §2.3 · §2.4 · §3.5 · §6.3; lab L1, T0): data, no behaviour. Both forms are opt-in items (4.8 §2.4): the CLI has no file
 // entry that sets a proxy (its entry is a launch shim `kimi.cmd`, which also sets NODE_EXTRA_CA_CERTS), and the VS Code extension lives inside the editor's extension host.
 //   kimi-code.cli     the native app %USERPROFILE%\.kimi-code\bin\kimi.exe; entry = a shim in a directory first on the user's PATH (Task 14), so there is no automatic trust entry either
-//   kimi-code.vscode  `Code.exe`, the editor itself: VS Code's user setting http.proxy sends ALL extensions' connections to this form's port, so the kernel hands the engine only
+//   kimi-code.vscode  `Code.exe` (hosts.processes `code`), the editor itself: VS Code's user setting http.proxy sends ALL extensions' connections to this form's port, so the kernel hands the engine only
 //                     the connections to Kimi's hosts (the host-tree rule, §3.5) and forwards the rest untouched: `hosts` below, with the set built at `on` by hostSetOf (Task 8)
+// Processes are told by the name list (D51), see the base file's `processes`.
 import path from 'node:path'
 import { hostOf } from '../../core/config-read.mjs'
 import linux from '../kimi-code.mjs'
 import { appData } from './_paths.mjs'
 
-const raw = String.raw
 const kimiHome = (ctx) => (ctx.env.get('KIMI_CODE_HOME') || '') || path.join(ctx.home, '.kimi-code')
 // `base_url = "…"` / `X_BASE_URL = '…'` at a line start or inside an inline table (the Linux harness reads config.toml the same way)
 const TOML_URL = /(?:^|[{,])[ \t]*(base_url|[A-Z][A-Z0-9_]*_BASE_URL)[ \t]*=[ \t]*(["'])([^"'\n]+)\2/gm
@@ -39,14 +39,14 @@ export default {
     },
   ],
   forms: [
-    { id: 'kimi-code.cli', g: 'kimi-code.cli', match: { image: 'kimi.exe', path: [raw`\\\.kimi-code\\bin\\kimi\.exe`], reportUnknownPath: true }, nameRule: true, processRules: true, supported: true },
+    { id: 'kimi-code.cli', g: 'kimi-code.cli', supported: true },
     {
       id: 'kimi-code.vscode', g: 'kimi-code.vscode',
-      match: { image: 'Code.exe', path: [raw`\\Microsoft VS Code\\Code\.exe`] },
-      nameRule: false, processRules: true, supported: true,
+      supported: true,
       hosts: {
         // `program` / `extension` name the two sides of the host-tree line of 4.8 §3.5: the host program whose other connections only forward, and the extension whose own settings carry the relay
         program: 'VS Code', extension: 'Kimi',
+        processes: ['code'], // the host program's name (D51 normalized: Code.exe → code): its connections at this door are Kimi's only for the hosts below (4.8 §3)
         defaults: [...linux.hosts], // Kimi's known API hosts: one list, the Linux descriptor's
         // Where the extension's own settings live, and how a base URL is read out of them. NOT MEASURED on Windows (4.8 §3.5「预期」, W62): this is the file the Linux harness reads,
         // $KIMI_CODE_HOME/config.toml; whether the Windows extension reads it or keeps keys of its own is checked by the lab's W62 run.

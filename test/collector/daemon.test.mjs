@@ -301,7 +301,7 @@ test('daemon: an agent started with ANTHROPIC_UNIX_SOCKET or the HTTP3 flag is a
 test('daemon: a process whose exe cannot be read is a failure only if its command line could be an agent\'s; the rest is counted in status as unjudged, never ⚠ (B-1)', async () => {
   const s = sandbox(); const p = fakeProc()
   await install(s)
-  const gamma = { ...cc, name: 'gamma', signatures: { linux: { match: [{ exe: /\/node$/, 'argv.1': /\/gamma\.js$/ }] } } }
+  const gamma = { ...cc, name: 'gamma', processes: { names: [{ name: 'node', args: '^\\S*/gamma\\.js( |$)' }] } }
   const unreadableExe = (pid, argv, comm) => { p.add(pid, { uid: UID, exe: '/x/y', argv, comm }); fs.rmSync(path.join(p.root, String(pid), 'exe')); fs.mkdirSync(path.join(p.root, String(pid), 'exe')) }
   unreadableExe(6001, ['sshd: u@notty'], 'sshd'); unreadableExe(6002, ['(sd-pam)'], '(sd-pam)')
   const { arch, clients } = fakeArch(p)
@@ -633,7 +633,7 @@ test('daemon: a plugin harness is marker-pending (not recorded) until its marker
   const s = sandbox(); const p = fakeProc()
   await install(s)
   const locked = path.join(s.home, 'locked.env'); fs.writeFileSync(locked, 'X=1\n'); fs.chmodSync(locked, 0o000)
-  const plug = { name: 'plug-agent', runtime: 'node', hosts: ['api.plug.test'], signatures: { linux: { match: [{ exe: /\/plug-agent$/ }] } },
+  const plug = { name: 'plug-agent', runtime: 'node', hosts: ['api.plug.test'], processes: { names: [{ name: 'plug-agent' }] },
     layers: (ctx) => { ctx.readText(locked); ctx.unparsable(path.join(s.home, 'broken.json')); return [] }, bypass: () => [{ host: 'early.plug.test', reason: 'before-plugin' }],
     trust: { chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }, { var: 'asight:marker', semantic: 'append' }], refine: (r) => (r.reason === 'var-missing' ? 'no-marker' : null) } }
   const { arch, clients } = fakeArch(p)
@@ -670,7 +670,7 @@ test('daemon: combined bundles follow the roots — rebuilt at start when the OS
   const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
   const corp = createCa({ commonName: 'corp' }); fs.writeFileSync(path.join(s.home, 'corp.pem'), corp.certPem)
   const dir = s.collector
-  const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+  const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on')) // the daemon rebuilds the bundles of the harnesses whose desired state is on only (4.6 「合并包」, D39)
@@ -705,7 +705,7 @@ test('daemon: the Linux arch\'s OS roots — none on the machine is a bundle fai
   }
   const osRoots = () => linux.osRoots({ read })
   const dir = s.collector
-  const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+  const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
   const first = osRoots()
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, roots: { node: [...tls.rootCertificates], osText: first.pem, missing: first.missing } })
@@ -745,7 +745,7 @@ test('daemon: OS roots the reader dropped as unparsable, or a roots source that 
   const root = createCa({ commonName: 'an OS root' })
   let answer = { pem: root.certPem, dropped: 0, tried: [] }, asked = 0
   const osRoots = async () => { asked++; return answer }
-  const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+  const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [] }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
@@ -782,7 +782,7 @@ test('daemon: the daily bundle rebuild never writes the asight CA back into a bu
   const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
   fs.writeFileSync(path.join(s.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
   const dir = s.collector
-  const repOf = (name) => ({ name, runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: new RegExp(`/${name}$`) }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+  const repOf = (name) => ({ name, runtime: 'rust', hosts: [], processes: { names: [{ name }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${name}.env`), vars: { SSL_CERT_FILE: path.join(dir, 'ca', `combined-${name}.pem`) }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', `combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }) })
   const list = [repOf('stay'), repOf('gone'), repOf('idle')]
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: list, freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
@@ -814,7 +814,7 @@ test('daemon: the bundle rebuild runs under the op lock (1.6 R12) — while anot
   const { createCa } = await import('../../src/collector/core/tls/ca.mjs')
   const osRoots = path.join(s.root, 'os-roots.pem'); fs.writeFileSync(osRoots, '')
   const dir = s.collector
-  const rep = { name: 'rep', runtime: 'rust', hosts: [], signatures: { linux: { match: [{ exe: /\/rep$/ }] } }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+  const rep = { name: 'rep', runtime: 'rust', hosts: [], processes: { names: [{ name: 'rep' }] }, trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }], files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [], role: 'bundle' }] }) }
   await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [rep], freePort: async () => 0, arch: { osRoots: fileRoots(osRoots) } })
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), ['rep'], 'on'))
@@ -854,7 +854,9 @@ test('daemon: describe hands the engine the harness WebSocket terminators and th
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 5151, pid: 5151, comm: 'codex', filename: CODEX_EXE, ts_ns: 1 })
     const row = await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 5151 && a.trusted))
     assert.deepEqual([row.agent, row.trust_var, row.hosts.includes('proxy.lab.test')], ['codex', 'SSL_CERT_FILE', false], 'its proxy reaches the engine as FlowExtras, not as a decrypt host')
-    assert.deepEqual(d.tracker.extrasFor(5151), { wsTerminal: codex.wsTerminal, proxies: [{ scheme: 'https', host: 'proxy.lab.test', port: 8443, own: true, source: 'env:HTTPS_PROXY' }] })
+    const { trust, ...extras } = d.tracker.extrasFor(5151)
+    assert.equal(trust.var, 'SSL_CERT_FILE', 'the trust entry the verdict relied on rides along (D51④)')
+    assert.deepEqual(extras, { wsTerminal: codex.wsTerminal, proxies: [{ scheme: 'https', host: 'proxy.lab.test', port: 8443, own: true, source: 'env:HTTPS_PROXY' }] })
 
     const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 5151, decrypt: 1 })

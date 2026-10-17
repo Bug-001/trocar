@@ -26,7 +26,7 @@ const proc = (pid, exe, { startedAt = Date.now() + 5000, env = {}, argv = [exe],
 
 // a replace-semantics harness (Codex / Hermes shape): a dotenv block naming its own combined bundle
 const repH = (b, name, extra = {}) => ({
-  name, runtime: 'rust', signatures: { none: { match: [{ exe: new RegExp(`/${name}$`) }] } }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], ...extra },
+  name, runtime: 'rust', processes: { names: [{ name }] }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], ...extra },
   inject: (ctx) => ({
     entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, `.${name}`, '.env'), vars: { SSL_CERT_FILE: b.ca(`combined-${name}.pem`) }, semantic: 'replace' }],
     files: [{ path: b.ca(`combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }],
@@ -34,12 +34,12 @@ const repH = (b, name, extra = {}) => ({
 })
 // an append-semantics harness (Claude Code shape): a JSON key naming an extra file that carries the user's CA
 const jsonH = (b) => ({
-  name: 'jj', runtime: 'node', signatures: { none: { match: [{ exe: /\/jj$/ }] } }, hosts: [], trust: { chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }], rereadsEntry: true },
+  name: 'jj', runtime: 'node', processes: { names: [{ name: 'jj' }] }, hosts: [], trust: { chain: [{ var: 'NODE_EXTRA_CA_CERTS', semantic: 'append' }], rereadsEntry: true },
   inject: (ctx) => ({ entries: [{ kind: 'json-key', path: path.join(ctx.home, '.jj', 'settings.json'), keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: b.ca('extra-jj.pem'), semantic: 'append' }], files: [{ path: b.ca('extra-jj.pem'), certsFrom: [path.join(ctx.home, 'corp.pem')] }] }),
 })
 // a plugin-style harness: a plugin file in the agent's directory, a YAML row loading asight's plugin dir, a path the agent may write because of it
 const plugH = (b) => ({
-  name: 'plug', runtime: 'node', signatures: { none: { match: [{ exe: /\/plug$/ }] } }, hosts: [], trust: { chain: [{ var: 'asight:marker', semantic: 'append' }] },
+  name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'asight:marker', semantic: 'append' }] },
   inject: (ctx) => ({
     owned: [{ path: path.join(ctx.home, '.config', 'plug', 'plugins', 'asight-ca.js'), role: 'plugin', data: '// asight collector: trust plugin\n', mode: 0o644 }, { path: path.join(b.dir, 'plugins', 'plug', 'index.js'), role: 'plugin', data: 'export {}\n', mode: 0o644 }],
     entries: [{ kind: 'text', format: 'yaml-list', path: path.join(ctx.home, '.plug', 'patch.yml'), line: `- insert: [{ name: ${JSON.stringify(path.join(b.dir, 'plugins', 'plug', 'index.js'))} }] ${lineComment('plug trust plugin')}`, semantic: 'append' }],
@@ -261,7 +261,7 @@ test('a process table that cannot be read is not "nobody is alive": the bundle i
   const none = await u.run({ manifest: n, procs: async () => [proc(92, '/x/older', { startedAt: t0 - 60000 }), proc(93, '/x/older', { startedAt: t0 - 1 })] }) // no record: whether aa re-reads is not known either, so alive is enough
   assert.deepEqual([none.kept_bundles.map((k) => k.unjudged), none.left.length], [[true], 1], 'with no record, an older process may still be an aa that re-reads its entry')
   const v = await setup((b) => [repH(b, 'aa')])
-  const q = readManifest(v.b.dir); q.liveness.aa.signature = null // a record with no signature: whether aa re-reads IS known (it does not)
+  const q = readManifest(v.b.dir); delete q.liveness.aa.identity // a record with no identity (nor an older signature): whether aa re-reads IS known (it does not)
   const older = await v.run({ manifest: q, procs: async () => [proc(94, '/x/older', { startedAt: t0 - 60000 })] })
   assert.deepEqual([older.kept_bundles, older.left, older.trust_unknown, fs.existsSync(v.b.ca('combined-aa.pem'))], [[], [], [], false], 'no process that may have read the entry: nobody holds the bundle, signature or not')
 })
@@ -393,7 +393,7 @@ test('asight\'s text in a shape the removal cannot read is NOT "already removed"
 
 test('before a bundle is removed the entry files of its harness are read again: an entry reported as the user\'s own value whose file still names the bundle (the key was moved) keeps it — without the CA, the entry put back among the ones left', async () => {
   const repJson = (b, name) => ({
-    name, runtime: 'rust', signatures: { none: { match: [{ exe: new RegExp(`/${name}$`) }] } }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
+    name, runtime: 'rust', processes: { names: [{ name }] }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }] },
     inject: (ctx) => ({ entries: [{ kind: 'json-key', path: path.join(ctx.home, `.${name}`, 'settings.json'), keys: ['env', 'SSL_CERT_FILE'], value: b.ca(`combined-${name}.pem`), semantic: 'replace' }], files: [{ path: b.ca(`combined-${name}.pem`), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }] }),
   })
   const b = box()

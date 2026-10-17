@@ -168,17 +168,20 @@ test('R9: on after off writes the entries again with a new installed_at; a bundl
   assert.equal(bundlesAreValid(s).length, 3)
 })
 
-test('R9: a manifest an older asight wrote has no liveness for some harness: on adds it, only the missing, and leaves the ones that are there', async () => {
+test('R9: a manifest an older asight wrote has no liveness for some harness: on adds it, and rewrites the others from the descriptors (identity united with what was recorded, 4.6 「判活快照」)', async () => {
   const s = sandbox()
   await s.run()
   const file = path.join(s.dir, 'install-manifest.json')
   const m = JSON.parse(fs.readFileSync(file, 'utf8'))
-  m.liveness['claude-code'].until = 'session-end' // a value only a hand could have put there: it must survive
+  m.liveness['claude-code'].until = 'session-end' // not what the descriptor says: the record is rewritten from it
+  const recorded = { re: '(^|/)claude-old$', flags: 'i' }
+  m.liveness['claude-code'].identity.match.push({ names: recorded }) // a name an earlier list held: kept
   delete m.liveness.codex
   fs.writeFileSync(file, JSON.stringify(m, null, 2))
   assert.equal((await s.run()).exit, 0)
   const after = readManifest(s.dir).liveness
-  assert.equal(after['claude-code'].until, 'session-end')
+  assert.equal(after['claude-code'].until, 'restart')
+  assert.ok(after['claude-code'].identity.match.some((p) => JSON.stringify(p.names) === JSON.stringify(recorded)), 'the recorded pattern is united in')
   assert.ok(after.codex && typeof after.codex.rereads === 'boolean', 'codex has its record again')
 })
 
@@ -378,4 +381,48 @@ test('R11: with flows/ unwritable `on` still installs (exit 0); stderr and the r
   assert.ok(err.length >= 1 && err.every((m) => /could not be written to .*flows \(ENOSPC/.test(m)), `stderr said so: ${err.join(' | ')}`)
   assert.equal(r.receipt.notes.filter((n) => /^not recorded \(ENOSPC/.test(n)).length, err.length, 'and the receipt says the same, line for line')
   assert.ok(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('NODE_EXTRA_CA_CERTS'), 'the install itself was done')
+})
+
+// R21 (D51③, 1.6 V65): `on` judges the running processes with the name list in effect — the presets plus ~/.asight/agents.json — the one the daemon and `status`
+// judge with. Through the real loadParts (the registry it builds), only the arch's process table faked: a custom name running before its entry is a process to restart.
+test('R21 `on` reads agents.json: a running agent of a custom name (claude-nightly) is judged as the harness\'s — it is on the restart list of the plan', async () => {
+  const { runOnCli } = await import('../../src/cli/on.mjs')
+  const { loadParts } = await import('../../src/collector/daemon.mjs')
+  const { onCtx, fakeIo, seedClaude } = await import('./fixtures/on-ctx.mjs')
+  const unit = await import('../../src/collector/arch/linux/unit.mjs')
+  const cc = descs.find((d) => d.name === 'claude-code')
+  const home = tmpDir('asight-on-list-'); seedClaude(home)
+  fs.mkdirSync(path.join(home, '.asight'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.asight', 'agents.json'), JSON.stringify({ version: 1, agents: [{ harness: 'claude-code', name: 'claude-nightly' }] }))
+  const nightly = { pid: 7100, ppid: 1, uid: 1000, startedAt: 1, exe: '/home/u/.local/bin/claude-nightly', argv: ['claude-nightly'], env: new Map() }
+  const arch = { os: 'none', unit, createRedirector: async () => ({ scan: () => [nightly] }) }
+  const io = fakeIo()
+  const ctx = onCtx(home, io, { deps: { parts: undefined, daemon: { loadParts: (o) => loadParts({ ...o, arch, harnesses: [cc] }) } } })
+  const code = await runOnCli(['claude-code', '--dry-run', '--json'], ctx)
+  assert.equal(code, 0, io.stdoutText())
+  const receipt = JSON.parse(io.stdoutText())
+  assert.deepEqual(receipt.restart.map((x) => [x.harness, x.pid]), [['claude-code', 7100]], 'the custom name is claude-code\'s, as the daemon will judge it')
+})
+
+// R13 (1.6 V65, D48): the list file belongs to the user — `on`, a second `on`, and `off` leave ~/.asight/agents.json byte for byte and untouched (mtime), whether it
+// reads cleanly (a custom item, an ignore, a bad item) or does not parse at all.
+test('R13 V65 on, on again and off leave agents.json byte for byte unchanged (a valid list with a bad item, and one that is not JSON)', async () => {
+  const { installedHome } = await import('../off/fixtures/off-ctx.mjs')
+  const docs = {
+    valid: `${JSON.stringify({ version: 1, agents: [{ harness: 'claude-code', name: 'claude-nightly' }, { harness: 'codex', name: 'codex', ignore: true }, { harness: 'claude-code', name: 'node' }] }, null, 2)}\n`,
+    invalid: '{ "version": 1, "agents": [ not json\n',
+  }
+  for (const [label, text] of Object.entries(docs)) {
+    const file = (home) => path.join(home, '.asight', 'agents.json')
+    const s = await installedHome({ seed: (home) => { fs.mkdirSync(path.join(home, '.asight'), { recursive: true }); fs.writeFileSync(file(home), text); fs.utimesSync(file(home), 1_700_000_000, 1_700_000_000) } })
+    const same = (step) => {
+      assert.equal(fs.readFileSync(file(s.home), 'utf8'), text, `${label}: ${step} left the bytes`)
+      assert.equal(fs.statSync(file(s.home)).mtimeMs, 1_700_000_000_000, `${label}: ${step} did not write the file`)
+    }
+    same('the first on')
+    assert.equal((await s.on()).exit, 0, `${label}: on again`)
+    same('a second on')
+    assert.equal((await s.off()).exit, 0, `${label}: off`)
+    same('off')
+  }
 })

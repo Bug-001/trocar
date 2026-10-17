@@ -3,9 +3,8 @@
 //   (the command line holds …/bin/dsh — the global npm symlink — or …/@deepseek-ai/dsh/lib/bin.js, the two shapes measured on Linux, 4.6's identity row) and it reads
 //   ~/.dsh/.env (or $DSH_HOME), so the one form owns one group, one port and one listener. dsh accepts a proxy variable from the HOME .env (not a CA or TLS one, which it refuses
 //   to start on), and dsh configured with SOCKS silently goes direct [E19], so the entry is always http://.
-// `node` is every Node program of the machine: no PROCESS-NAME, and no process rule at all — the group's port is the dedicated port of 4.8 §3 and the engine judges by pid
-//   (dsh's own subprocess runner and PTC children never read the .env, so they never reach the kernel through it; a pid that is not this form's, or none at all, is passed
-//   through). The DESKTOP app is measured (on a macOS test machine, dmg 0.2.0-rc.2): it is NOT the CLI's twin — its dsh core READS ~/.dsh/.env (the real home,
+// Processes are told by the name list (D51), see the base file's `processes`. The group's port is the dedicated port of 4.8 §3 (dsh's own subprocess runner and PTC children never read
+//   the .env, so they never reach the door through it). The DESKTOP app is measured (on a macOS test machine, dmg 0.2.0-rc.2): it is NOT the CLI's twin — its dsh core READS ~/.dsh/.env (the real home,
 //   NSHomeDirectory) but a launcher key there (DEEPSEEK_BASE_URL) is FATAL to it ("only the launching environment may set"), and a proxy key there is IGNORED by the
 //   app's Chromium network service (measured: the Helper went direct with HTTPS_PROXY in .env). Its steering door is Chromium's --proxy-server at a credential-less
 //   launcher — Claude Desktop's §6.4 shape — so the desktop is its OWN group with a launcher entry, never the CLI's .env group; the family is the bundle's main binary
@@ -21,7 +20,6 @@ import { expandHome } from '../../core/config-read.mjs'
 import { renderPlugin } from '../_plugins.mjs'
 import linux from '../deepseek-dsh.mjs'
 
-const raw = String.raw
 const dshHome = (ctx) => expandHome(ctx.env.get('DSH_HOME'), ctx.home) || path.join(ctx.home, '.dsh')
 
 function inject(ctx) {
@@ -46,12 +44,10 @@ export default {
     optIn: [{ item: 'desktop-launcher', scope: 'user', impact: 'ONLY DeepSeek Harness instances started through the launcher are steered (a desktop that is already running is untouched): it starts the app with Chromium\'s proxy switch pointing at a loopback-only listener with no password, and the engine still judges every process' }],
   }],
   forms: [
-    // the agent is node with dsh's entry script in its command line: …/bin/dsh (the global symlink) or …/@deepseek-ai/dsh/lib/bin.js (npm); no path of its own — node is not
-    // unique — so the form has no process rule and the engine judges it by pid on the group's dedicated port (4.8 §3)
-    { id: 'deepseek-dsh.cli', g: 'deepseek-dsh.env', match: { image: 'node', cmdline: [raw`@deepseek-ai\/dsh`, raw`\/bin\/dsh`] }, nameRule: false, processRules: false, supported: true },
-    // the dmg app's family, measured 2026-10-12: the bundle's main binary and its Chromium Helpers — the network utility Helper owns the sockets (lsof, live); a Helper of
-    // another app's bundle is not this form (the paths stay inside DeepSeek Harness.app)
-    { id: 'deepseek-dsh.desktop', g: 'deepseek-dsh.desktop', match: { image: ['DeepSeek Harness', 'DeepSeek Harness Helper', 'DeepSeek Harness Helper (Renderer)', 'DeepSeek Harness Helper (GPU)'], path: [raw`\/DeepSeek Harness\.app\/Contents\/MacOS\/DeepSeek Harness`, raw`\/DeepSeek Harness\.app\/Contents\/Frameworks\/DeepSeek Harness Helper[^/]*\.app\/Contents\/MacOS\/DeepSeek Harness Helper[^/]*`] }, nameRule: false, processRules: true, supported: true },
+    // node running dsh's entry script: …/bin/dsh (the global symlink) or …/@deepseek-ai/dsh/lib/bin.js (npm), on the group's dedicated port (4.8 §3)
+    { id: 'deepseek-dsh.cli', g: 'deepseek-dsh.env', supported: true },
+    // the dmg app's family, measured 2026-10-12: the bundle's main binary and its Chromium Helpers — the network utility Helper owns the sockets (lsof, live)
+    { id: 'deepseek-dsh.desktop', g: 'deepseek-dsh.desktop', supported: true },
   ],
   inject,
   proxy: {

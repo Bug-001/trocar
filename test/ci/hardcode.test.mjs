@@ -2,8 +2,9 @@
 //   1. (§2) An external fact written as a literal in src/ — an absolute path, a loopback port, a version — appears once in the whole tree;
 //      every other use imports it. Two copies drift: one gets fixed, the other keeps the old value (the 2026-10-11 incident had five
 //      copies of one endpoint rule).
-//   2. (§3 convention 6) A harness form's match pattern generalizes: no version number and no CPU architecture in it. A pattern written from one measured
-//      path keeps every test green and silently stops capturing after the next update or on another machine (2026-10-13 audit, M3).
+//   2. (§3 convention 6 · §2 guard 2, D51) A harness's name list generalizes: a preset item is a NAME (no path, no version, no CPU architecture), an
+//      interpreter name carries an `args` pattern, and no `args` pins a version or an architecture; the OS twins hold no identity data at all. A pattern
+//      written from one measured path keeps every test green and silently stops capturing after the next update or on another machine (2026-10-13 audit, M3).
 //   3. (§3 convention 7) Tests pin no new counts (`.length, 17`): a count restates today's data, goes red when an item is added and stays green when the
 //      world changes. The files that still do are listed and may only shrink.
 //   4. (§3 convention 4) Exports that only tests use do not grow: a test that reaches past the public entry pins the implementation, not the behaviour.
@@ -13,6 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
+import { WIDE } from '../../src/off/identity.mjs'
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const walk = (d) => fs.readdirSync(path.join(ROOT, d), { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(d, e.name)) : /\.(mjs|cjs|js)$/.test(e.name) ? [path.join(d, e.name)] : [])
@@ -43,26 +45,56 @@ test('1 · the fact scanner sees each kind and skips comments, IPs and OIDs (it 
 })
 
 const ARCH = /aarch64|arm64|x86_64|amd64|\bx64\b|\bia32\b/i
-/** Every match-path pattern in a descriptor tree (base and per-OS twins). */
-function patternsOf(node, at = '', out = []) {
-  if (Array.isArray(node)) node.forEach((x, i) => patternsOf(x, `${at}[${i}]`, out))
-  else if (node && typeof node === 'object') for (const [k, v] of Object.entries(node)) {
-    if (k === 'match' && v && Array.isArray(v.path)) v.path.forEach((p, i) => out.push([`${at}.match.path[${i}]`, String(p)]))
-    else if (typeof v === 'object') patternsOf(v, `${at}.${k}`, out)
+export const overfit = (p) => /\d+\\?\.\d+/.test(p) || ARCH.test(p)
+const TWIN_FORM_KEYS = new Set(['id', 'g', 'supported', 'hosts']) // a form is an entry group's, an opt-in item's and a matrix row's unit, never an identity (plan §2.9)
+const TWIN_BANNED = ['processes', 'match', 'image', 'path']
+
+/** What guard 2 finds wrong in descriptors, one line each, led by `harness.path` (G8: the failure names where to fix it). */
+export function identityFindings(descs) {
+  const out = []
+  for (const d of descs) {
+    const p = d.processes || {}
+    const items = [...(p.names || []).map((x, i) => [`names[${i}]`, x]), ...(p.exclude || []).map((x, i) => [`exclude[${i}]`, x]), ...(p.longLived || []).map((x, i) => [`longLived[${i}]`, x])]
+    for (const [at, x] of items) {
+      const where = `${d.name}.processes.${at}`
+      for (const n of x.name == null ? [] : [].concat(x.name)) {
+        if (/[/\\]/.test(n)) out.push(`${where}: name ${JSON.stringify(n)} is a path, not a name`)
+        if (/\d+\.\d+/.test(n)) out.push(`${where}: name ${JSON.stringify(n)} pins a version`)
+        if (ARCH.test(n)) out.push(`${where}: name ${JSON.stringify(n)} pins a CPU architecture`)
+        if (at.startsWith('names') && WIDE.has(n) && x.args == null && x.entry == null) out.push(`${where}: ${n} is an interpreter name; the item needs an args or entry pattern`)
+      }
+      for (const k of ['args', 'entry']) if (x[k] != null && overfit(String(x[k]))) out.push(`${where}.${k}: ${x[k]} pins a version or a CPU architecture`)
+    }
+    for (const os of ['darwin', 'win32']) {
+      const t = d[os]
+      if (!t) continue
+      for (const k of TWIN_BANNED) if (k in t) out.push(`${d.name}.${os}.${k}: identity data lives in the base descriptor's processes (D51)`)
+      for (const [i, f] of (t.forms || []).entries()) for (const k of Object.keys(f)) if (!TWIN_FORM_KEYS.has(k)) out.push(`${d.name}.${os}.forms[${i}].${k}: a form keeps only id · g · supported · hosts`)
+    }
   }
   return out
 }
-export const overfit = (p) => /\d+\\?\.\d+/.test(p) || ARCH.test(p)
 
-test('2 · no harness form matches one measured version or one CPU architecture', async () => {
-  const bad = []
-  for (const d of await loadHarnesses()) for (const [at, p] of patternsOf(d, d.name)) if (overfit(p)) bad.push(`${at}: ${p}`)
-  assert.deepEqual(bad, [], 'write the pattern for every version and architecture; keep the measured path as a test sample')
+test('2 · every preset is a name that generalizes, and the OS twins carry no identity data', async () => {
+  assert.deepEqual(identityFindings(await loadHarnesses()), [], 'write names, not paths; give an interpreter name an args pattern; keep versions and architectures out')
 })
 
-test('2 · the overfit check catches the audit\'s M3 pattern and passes the shipped one', () => {
-  assert.equal(overfit(String.raw`\/\.vscode\/extensions\/openai\.chatgpt-26\.1002\.51308-darwin-aarch64\/bin\/macos-aarch64\/codex`), true)
-  assert.equal(overfit(String.raw`\/\.vscode\/extensions\/openai\.chatgpt-[^/]*\/bin\/[^/]*\/codex`), false)
+test('2 · the guard goes red on each kind of bad descriptor, naming harness.path', () => {
+  const bad = [
+    { name: 'h1', processes: { names: [{ name: '/usr/local/bin/h1' }] } },
+    { name: 'h2', processes: { names: [{ name: 'python3.14' }] } },
+    { name: 'h3', processes: { names: [{ name: 'h3-arm64' }] } },
+    { name: 'h4', processes: { names: [{ name: 'node' }] } },
+    { name: 'h5', processes: { names: [{ name: 'node', args: String.raw`openai\.chatgpt-26\.1002\.51308-darwin-aarch64` }] } },
+    { name: 'h6', processes: { names: [{ name: 'h6' }] }, darwin: { forms: [{ id: 'h6.cli', g: 'h6.env', supported: true, match: { image: 'h6' } }] } },
+    { name: 'h7', processes: { names: [{ name: 'h7' }] }, win32: { processes: { names: [{ name: 'h7' }] }, forms: [] } },
+  ]
+  for (const d of bad) {
+    const got = identityFindings([d])
+    assert.equal(got.length, 1, `${d.name}: one finding, got ${JSON.stringify(got)}`)
+    assert.match(got[0], new RegExp(`^${d.name}\\.(processes|darwin|win32)\\.`), got[0])
+  }
+  assert.deepEqual(identityFindings([{ name: 'ok', processes: { names: [{ name: 'ok' }, { name: 'node', args: String.raw`/ok/bin\.js` }] }, darwin: { forms: [{ id: 'ok.cli', g: 'ok.env', supported: true }] } }]), [])
 })
 
 // The test files that still pin counts, with how many: this list may only shrink (fix a file → lower or delete its row).
@@ -123,7 +155,7 @@ export function testOnlyExports() {
 }
 // The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
 // It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
-const TEST_ONLY_EXPORTS_CEILING = 321
+const TEST_ONLY_EXPORTS_CEILING = 320 // D51 T3 raised it for src/off/identity.mjs + identityView before their callers; the registry (T4) took three of them in, the daemon's agents.json watch (T5) readAgentList; the door (T7) took WIDE in; T10 deleted the form matcher; the D51 review fixes took one more in
 
 test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
   const n = testOnlyExports().length

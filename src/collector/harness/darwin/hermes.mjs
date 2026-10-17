@@ -9,19 +9,18 @@
 //     model block's inline route — gets one ssl_ca_cert line right after its header line, carrying the route's name in the sentinel comment (two routes in one file are two entries,
 //     told apart by that name); a route that already holds an ssl_ca_cert of the user's is NOT touched (asight rewrites no YAML value): it is reported as not captured while it is
 //     there, like the managed .env below.
-// hermes.cli is told by its command line — the Linux descriptor's identity (the sh launchers exec the private CPython as `python3 -I -c '<bootstrap>'` naming hermes_bootstrap and
-// hermes_cli.main / acp_adapter.entry; the TUI children as `-m tui_gateway.entry` / `slash_worker`), which needs no install path; python3 is every Python of the machine, so there is
-// no PROCESS-NAME rule, and a command-line form has no PROCESS-PATH-REGEX either: no process rule, the engine judges it by pid on its port (the dsh precedent, 4.8 §3). The image is a
-// LIST of the two spellings one launcher takes: the exec names `…/tools/python-<ver>/bin/python3`, but the facts' exe is lsof's txt record — the REAL binary the symlink resolves to — and
-// that is the version-named `python3.14` (installer main 0.21.5+9145: `bin/python3 -> python3.14`; MA4's "a python3.12 is not measured" answered). A private
-// CPython of another minor extends this list — its miss is the form going `none` again, and the capture-matrix cell is the tripwire. `exe` on darwin
-// is that lsof answer (never the launcher's own word), so `python3` alone gated nothing of the real launcher: every capture-path connection spliced `not-a-process-of-form` — the
-// 2026-10-12 gap this list closes.
+// Processes are told by the name list (D51), see the base file's `processes`.
+// Trust (D51④): this build's httpx honours a route's own ssl_ca_cert and nothing else — with none it uses the platform store alone, and
+// SSL_CERT_FILE is a dead arm for it. So `layers` judges by the route Hermes really reads: the
+// entry model.provider names (providers map / custom_providers list), else the model block's inline route; trusted only when that block holds the
+// ssl_ca_cert line asight wrote (its sentinel) and the file holds the CA. A built-in provider, a route without the line, or the user's own
+// ssl_ca_cert (alone, or after asight's line: YAML keeps the last key) is route-without-ca. What `on` writes is unchanged (the .env block stays for the proxy and for other stacks).
 // hermes.desktop was not installable in any lab (the Windows one could not install it either): listed, not recognised, so `status` says 「unknown · not measured」 and does not leave it
 // out. The managed .env note stays for a HERMES_MANAGED_DIR (the variable applies on macOS too); whether Hermes defaults to /etc/hermes there is unmeasured, so without the variable
 // there is nothing to read. Nothing here execs anything: readText / listDir arrive in the ctx.
 import path from 'node:path'
 import { expandHome, parseDotenv } from '../../core/config-read.mjs'
+import base, { hermesHome, DOORS_SHUT } from '../hermes.mjs'
 import { CODE } from '../../core/codes.mjs'
 import { isOwnPath } from '../_common.mjs'
 import { lineComment, SENTINEL } from '../../../off/text-edit.mjs'
@@ -86,6 +85,66 @@ function openaiRoutes(ctx, home, bundle) {
   return { entries, notes }
 }
 
+const indentOf = (l) => (l.match(/^[ \t]*/) || [''])[0].length
+const bare = (l) => l.trim() === '' || l.trim().startsWith('#')
+/** A YAML scalar as text: the trailing comment off, the quotes off (text scanning only, D18 — no YAML parser). */
+const scalar = (v) => { const t = String(v).replace(/[ \t]+#.*$/, '').trim(); return /^(["']).*\1$/.test(t) ? t.slice(1, -1) : t }
+/** The keys of the block whose header is lines[h], as [key, raw value, line index], at the block's first key indent; a list item header (`- name: x`)
+ *  contributes its own key. */
+function blockKeys(lines, h) {
+  const hi = indentOf(lines[h])
+  const own = /^[ \t]*-[ \t]+([^:#\s][^:]*?)[ \t]*:[ \t]*(.*)$/.exec(lines[h])
+  const out = own ? [[scalar(own[1]), own[2], h]] : []
+  let ki = null
+  for (let j = h + 1; j < lines.length; j++) {
+    if (bare(lines[j])) continue
+    const i = indentOf(lines[j])
+    if (i <= hi) break
+    if (ki == null) ki = i
+    const m = i === ki && /^[ \t]*([^:#\s-][^:]*?)[ \t]*:(?:[ \t]+(.*))?$/.exec(lines[j])
+    if (m) out.push([scalar(m[1]), m[2] || '', j])
+  }
+  return out
+}
+/** The route Hermes reads: the providers / custom_providers entry model.provider names, else the model block itself (its inline route); null without a model block. */
+function activeRoute(lines) {
+  const top = (k) => lines.findLastIndex((l) => new RegExp(`^${k}[ \\t]*:[ \\t]*(#.*)?$`).test(l)) // a repeated top-level key: the last one wins
+  const m = top('model')
+  if (m < 0) return null
+  const own = blockKeys(lines, m)
+  const provider = scalar((own.find(([k]) => k === 'provider') || [])[1] || '')
+  if (provider) {
+    const p = top('providers')
+    const hit = p < 0 ? null : blockKeys(lines, p).find(([k, v]) => k === provider && scalar(v) === '')
+    if (hit) return { name: provider, keys: blockKeys(lines, hit[2]) }
+    const c = top('custom_providers')
+    if (c >= 0) {
+      for (let j = c + 1; j < lines.length && (bare(lines[j]) || indentOf(lines[j]) > 0); j++) {
+        const item = /^[ \t]*-[ \t]+name[ \t]*:[ \t]*(.*)$/.exec(lines[j])
+        if (item && [scalar(item[1]), `custom:${scalar(item[1])}`].includes(provider)) return { name: scalar(item[1]), keys: blockKeys(lines, j) }
+      }
+    }
+  }
+  return { name: 'model', keys: own }
+}
+
+// The tracker's macOS layers (header): the base layers (the .env files, every route's ssl_verify), then one layer that shuts the CA doors this
+// build does not read (SSL_CERT_FILE, HERMES_CA_BUNDLE, the any-route ssl_ca_cert variant) and names route-without-ca, then — only when the active
+// route holds asight's line — that route's file as the one CA source. Hermes reads config.yaml at start: the route layer is not live (a line written
+// after start is config-after-start).
+function layers(ctx) {
+  const file = path.join(hermesHome(ctx), 'config.yaml')
+  const text = ctx.readText(file)
+  const lines = text == null ? [] : text.split('\n').map((l) => l.replace(/\r$/, ''))
+  const route = activeRoute(lines)
+  // YAML keeps the last of duplicate keys (PyYAML safe_load): the route's effective ssl_ca_cert is its last one, and only asight's line there trusts
+  const last = route && route.keys.filter(([k]) => k === 'ssl_ca_cert').at(-1)
+  const line = last && lines[last[2]].includes(SENTINEL) ? last : null
+  const out = [...base.layers(ctx), { name: `${file} (the route in use: macOS Hermes reads no other CA)`, file, mode: 'override', vars: { SSL_CERT_FILE: '', HERMES_CA_BUNDLE: '', 'hermes:ssl_ca_cert': '', [DOORS_SHUT]: 'route-without-ca' }, live: true }]
+  if (line) out.push({ name: `${file} route ${route.name}: ssl_ca_cert (asight)`, file, mode: 'override', vars: { SSL_CERT_FILE: expandHome(scalar(line[1]), ctx.home), [DOORS_SHUT]: '' }, live: false, mtimeMs: ctx.mtimeOf(file) })
+  return out
+}
+
 function inject(ctx) {
   const root = hermesRoot(ctx)
   if (!ctx.listDir(root).length) return { notes: [{ code: CODE.harnessNote, text: `${root} does not exist (Hermes is not installed for this user), so no trust entry is written; after installing Hermes, run asight on hermes again` }] }
@@ -133,10 +192,11 @@ export default {
     noProxyKey: 'NO_PROXY',
   }],
   forms: [
-    { id: 'hermes.cli', g: 'hermes.cli', match: { image: ['python3', 'python3.14'], cmdline: ['hermes_bootstrap.*(hermes_cli\\.main|acp_adapter\\.entry)', '-m tui_gateway\\.(entry|slash_worker)'] }, nameRule: false, processRules: false, supported: true },
-    { id: 'hermes.desktop', g: null, match: null, nameRule: false, processRules: false, supported: { reason: 'not-measured' } },
+    { id: 'hermes.cli', g: 'hermes.cli', supported: true },
+    { id: 'hermes.desktop', g: null, supported: { reason: 'not-measured' } },
   ],
   inject,
+  layers,
   proxy: {
     env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'],
     files: [{ path: '~/.hermes/.env', key: 'HTTPS_PROXY', format: 'dotenv' }],

@@ -16,9 +16,12 @@ import codex from '../../../../src/collector/harness/win32/codex.mjs'
 import deepseekDsh from '../../../../src/collector/harness/win32/deepseek-dsh.mjs'
 import zCode from '../../../../src/collector/harness/win32/z-code.mjs'
 import kimiCode from '../../../../src/collector/harness/win32/kimi-code.mjs'
+import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
+import { createRegistry } from '../../../../src/collector/core/registry.mjs'
 
 const GROUPS = groupsOf([{ name: 'claude-code', win32: claudeCode }, { name: 'codex', win32: codex }, { name: 'deepseek-dsh', win32: deepseekDsh }, { name: 'z-code', win32: zCode }, { name: 'kimi-code', win32: kimiCode }])
-const HOME = String.raw`C:\Users\u`
+const ID = createRegistry(await loadHarnesses()).match // the D51 name list the daemon hands the door (identify)
+const ON = () => true // every harness's desired state is on
 const IMG = {
   ccCli: String.raw`C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`,
   codexApp: String.raw`C:\Users\u\AppData\Local\OpenAI\Codex\bin\0123456789abcdef\codex.exe`,
@@ -65,7 +68,7 @@ const routesOf = (over = {}) => Object.fromEntries(Object.keys(PORTS).map((g) =>
 
 /** The construction under test: the REAL backends (socktable, procinfo) bound to the fake helper, so the adapter is exercised end to end. */
 const makeRedirector = ({ helper, routes = routesOf(), doors = doorsOf(), entries = entriesOf(), gate = () => ({ ok: true }), carried = () => [], hostsOf = () => null, verdictWaitMs = 60 } = {}) => createWin32Redirector({
-  helper, groups: GROUPS, home: HOME,
+  helper, groups: GROUPS, identify: ID, isOn: ON,
   ownerOf: (q) => ownerOfSocket({ helper, peer: q.peer }),
   factsOf: (pid) => factsOfPid(pid, { helper }),
   routes: () => routes, ingress: () => ING, doors, entries, gate, carried, hostsOf, verdictWaitMs,
@@ -86,9 +89,9 @@ test('W16 lookupIngress: the door\'s group is the user — identity comes from t
   const helper = helperOf({ procs: [psRow(4121, IMG.ccCli, 'claude')], tcp: [peerRow(4121, 5010)] })
   const r = makeRedirector({ helper })
   const meta = await r.lookupIngress(CC)
-  assert.deepEqual([meta.agent, meta.pid, meta.exe, meta.form, meta.capture, meta.pid_source, meta.negKey], ['claude-code', 4121, IMG.ccCli, 'claude-code.cli', 'proxy', 'socket-table', '4121'])
+  assert.deepEqual([meta.agent, meta.pid, meta.exe, meta.door, meta.capture, meta.pid_source, meta.negKey], ['claude-code', 4121, IMG.ccCli, 'claude-code.settings', 'proxy', 'socket-table', '4121'])
   assert.equal(meta.decrypt, false, 'nobody pushed a verdict: not trusted, fail-safe')
-  assert.equal(meta.skip, undefined, 'the form is this door\'s own: the engine\'s policy arm says the why of an untrusted form, not the table\'s untracked code')
+  assert.equal(meta.skip, undefined, 'the name list names it: the engine\'s policy arm says the why of an untrusted agent, not the table\'s untracked code')
   assert.deepEqual(meta.upstream, DIRECT)
   assert.equal(typeof meta.pid_ms, 'number')
   assert.deepEqual(helper.asked.map(([v, a]) => [v, a.localPort ?? null]), [['tcp-table', 5010], ['ps', null]], 'exactly the two targeted asks')
@@ -101,11 +104,14 @@ test('W16 lookupIngress: the door\'s group is the user — identity comes from t
   r.unwatch(4121)
 })
 
-test('W16 lookupIngress: a process of another group\'s form at this door is forwarded untracked (the open door\'s security arm); no pid at all is untracked too', async () => {
-  const helper = helperOf({ procs: [psRow(4121, IMG.codexApp, 'codex')], tcp: [peerRow(4121, 5010)] })
+test('W16 · W79 lookupIngress: an agent on the list at another harness\'s door is its own harness (D51⑥); a process on no list is forwarded `not-an-agent`; no pid at all is untracked too', async () => {
+  const helper = helperOf({ procs: [psRow(4121, IMG.codexApp, 'codex'), psRow(4122, IMG.node, 'node C:\\work\\server.js')], tcp: [peerRow(4121, 5010), peerRow(4122, 5011)] })
   const r = makeRedirector({ helper })
+  r.watch(4121, { decrypt: true, agent: 'codex' })
   const m = await r.lookupIngress(CC)
-  assert.deepEqual([m.skip.not_captured, m.skip.reason], ['untracked', 'not-a-process-of-form'], 'codex.exe at the claude door: forwarded')
+  assert.deepEqual([m.agent, m.door, m.decrypt, m.skip], ['codex', 'claude-code.settings', true, undefined], 'codex.exe at the claude door: codex, by its own verdict')
+  const n = await r.lookupIngress({ ...CC, peer: { address: '127.0.0.1', port: 5011 } })
+  assert.deepEqual([n.agent, n.skip.not_captured, n.skip.reason], ['claude-code', 'untracked', 'not-an-agent'], 'a node MCP server at the claude door: forwarded')
   const none = helperOf({ procs: [psRow(4121, IMG.ccCli, 'claude')], tcp: [] })
   const r2 = makeRedirector({ helper: none })
   const m2 = await r2.lookupIngress(CC)
@@ -119,7 +125,7 @@ test('W16 lookupIngress: the group the plan has off serves an arriving agent (th
   routes['claude-code.settings'] = { g: 'claude-code.settings', entry: null, on: false, reason: 'desired-off', upstream: { kind: 'http', host: 'proxy.corp', port: 8080, source: 'agent' }, bypass: [] }
   const r = makeRedirector({ helper, routes })
   const m = await r.lookupIngress(CC)
-  assert.deepEqual([m.pid, m.form, m.exe], [null, null, null])
+  assert.deepEqual([m.pid, m.door, m.exe], [null, 'claude-code.settings', null])
   assert.deepEqual(m.upstream, { kind: 'http', host: 'proxy.corp', port: 8080 })
   assert.deepEqual([m.skip.not_captured, m.skip.reason], ['untracked', 'group-off'])
   assert.equal(m.negKey, 'claude-code.settings')
@@ -140,7 +146,7 @@ test('W72 lookupIngress: a CONNECT target that hits the group\'s bypass table go
   r3.authOf = () => ({ username: 'u', password: 'p' })
   // the authOf of the wiring is not on the adapter's surface: re-make with the real construction and a route whose login resolves
   const withAuth = createWin32Redirector({
-    helper, groups: GROUPS, home: HOME,
+    helper, groups: GROUPS, identify: ID, isOn: ON,
     ownerOf: (q) => ownerOfSocket({ helper, peer: q.peer }),
     factsOf: (pid) => factsOfPid(pid, { helper }),
     routes: () => routes, ingress: () => ING, doors: doorsOf(), entries: entriesOf(), gate: () => ({ ok: true }),
@@ -167,11 +173,11 @@ test('W69 the host-tree arm: a form that declares hosts decrypts only the connec
   const r = makeRedirector({ helper, routes, hostsOf: () => ['api.kimi.com', 'relay.corp.example'] })
   const K = { peer: { address: '127.0.0.1', port: 5010 }, user: 'kimi-code.vscode' }
   const inSet = await r.lookupIngress({ ...K, target: { address: 'api.kimi.com', port: 443 } })
-  assert.equal(inSet.form, 'kimi-code.vscode', 'a target on the set: the form\'s connection (trusted verdicts aside)')
+  assert.deepEqual([inSet.agent, inSet.door, inSet.skip], ['kimi-code', 'kimi-code.vscode', undefined], 'a target on the set: Kimi\'s connection (trusted verdicts aside) — Code is on no list, the group\'s hosts.processes names it')
   const sub = await r.lookupIngress({ ...K, target: { address: 'eu.api.kimi.com', port: 443 } })
-  assert.equal(sub.form, 'kimi-code.vscode', 'a subdomain of a set entry is on the set')
+  assert.deepEqual([sub.agent, sub.skip], ['kimi-code', undefined], 'a subdomain of a set entry is on the set')
   const out = await r.lookupIngress({ ...K, target: { address: 'marketplace.visualstudio.com', port: 443 } })
-  assert.deepEqual([out.form, out.skip?.reason, out.decrypt], [null, 'outside-host-set', false], 'the host program\'s other connections are forwarded, untracked')
+  assert.deepEqual([out.agent, out.skip?.reason, out.decrypt], ['kimi-code', 'outside-host-set', false], 'the host program\'s other connections are forwarded, untracked')
 })
 
 test('W12 attach(): the doors first (carried included), then the on groups\' entries; the gate refuses a group without writing it; the off group is undone; a group the plan has on with nothing to carry it is said', async () => {
@@ -271,10 +277,10 @@ test('W16 scan() and procs(): the table is what connections taught — the pids 
   assert.deepEqual(r.unreadable(), [])
 })
 
-test('what the redirector may do (static): it imports only the door core, its forms and the helper contract — no engine, no harness, no plan module, opens no socket, names no harness', () => {
+test('what the redirector may do (static): it imports only the door core and the helper contract — no engine, no harness, no plan module, opens no socket, names no harness', () => {
   const src = fs.readFileSync(new URL('../../../../src/collector/arch/win32/redirector.mjs', import.meta.url), 'utf8')
   const imports = [...src.matchAll(/^import .*?from '([^']+)'/gm)].map((m) => m[1])
-  assert.deepEqual(imports, ['../../core/engine/door-redirector.mjs', './helper.mjs', './forms.mjs'])
+  assert.deepEqual(imports, ['../../core/engine/door-redirector.mjs', './helper.mjs'])
   assert.ok(!/require\(|node:net|createServer|spawn\(/.test(src), 'no socket, no process, no file: the doors are the engine\'s, the helper the wiring\'s')
   for (const h of ['claude-code', 'codex', 'hermes', 'kimi-code', 'opencode', 'deepseek-dsh', 'z-code']) assert.ok(!src.includes(h), `names no harness: ${h}`)
 })

@@ -15,7 +15,8 @@
 // startedAt (ms since the epoch, or null), startTicks (startedAt as a string), sessionId (null), integrity (null), tokenDenied (false),
 // elevated (uid===0), elevationInferred (false), cmdlineState, source:'accept' }. `name` is `comm`, at most 16 characters (MAXCOMLEN);
 // `cmdline` is the raw command line and `argv` is it split on white space — `ps` joins the arguments with spaces, so the argument
-// boundaries are lost (the same documented loss as src/off/proc.mjs's table, same command family). `cmdline` may hold secrets: callers
+// boundaries are lost (the same documented loss as src/off/proc.mjs's table, same command family, one splitter: psArgv) — except argv[0] when the line
+// starts with lsof's real exe (a bundle path with spaces stays whole); `argvSplit: true` says so to the name list (src/off/identity.mjs entryOf). `cmdline` may hold secrets: callers
 // keep it in memory and never write it to a record.
 //
 // The commands and the shape of their answers (measured on the darwin kernels this collector runs on, macOS 26.6.2 arm64; ps from the C
@@ -28,8 +29,10 @@
 // column name asks `ps` for no header line; the command column is LAST so this kernel's `ps` does not cap the line at 128 columns and cut
 // the command line mid-word (measured). Everything that touches the machine is injected: `exec` (the runner, spawnSync-shaped —
 // execTool's `run`; a test injects one and nothing real runs), `env` (LC_ALL=C is added here: `ps` prints dates in the user's language,
-// and under LC_ALL=zh_CN.UTF-8 the five words of lstart are no longer "Mon Oct  8 17:00:00 2026").
+// and under LC_ALL=zh_CN.UTF-8 the five words of lstart are no longer "Mon Oct  8 17:00:00 2026"; `lsof` runs in the UTF-8 ctype
+// locale instead, src/off/proc.mjs lsofEnv: under C it prints a non-ASCII path as `\xNN` escapes).
 import { execTool } from '../../../off/exec.mjs'
+import { lsofEnv, psArgv } from '../../../off/proc.mjs'
 
 /** How long one targeted ask waits: a single-pid read is a small question on any machine — a `ps`/`lsof` that exceeds it is killed by
  *  execTool's timeout and the answer is null (fail-safe: no facts, no form, the connection is spliced untracked), never a guess. */
@@ -41,17 +44,13 @@ const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*?)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:
 // `ps` prints dates in the user's language: the C locale gives the same five words on every machine (see the file header).
 const psEnv = (env) => ({ ...env, LC_ALL: 'C' })
 
-/** The command line split into arguments the way `ps` left it: on white space (the argument boundaries were lost when `ps` joined them;
- *  a path with a space in it splits — the documented loss of this data source). Nothing (null, empty) is no arguments. */
-const argvOf = (cmdline) => (typeof cmdline === 'string' && cmdline.trim() !== '' ? cmdline.trim().split(/\s+/) : [])
-
 /** The first `ftxt` record's name of `lsof -p <pid> -Fn` — the REAL executable of the process, the one source that answers it: `ps`
  *  repeats the command as invoked (a bare argv[0] for a PATH-launched agent, a path cut at its first space under `Claude Helper.app`),
  *  and a form whose patterns live in the path can never match such a word. → the path, or null when lsof failed, was killed at its
  *  timeout, or answered no txt record that is a path (the process can be gone between the accept and this ask: that is not an error —
  *  the caller keeps ps's word, and a word that matches no pattern is the fail-safe answer, never a wrong one). */
 export function realExeOf(pid, { exec = null, env = process.env, psTimeoutMs = PS_TIMEOUT_MS } = {}) {
-  const r = execTool('lsof', ['-p', String(pid), '-Fn'], { run: exec, env: psEnv(env), timeoutMs: psTimeoutMs })
+  const r = execTool('lsof', ['-p', String(pid), '-Fn'], { run: exec, env: lsofEnv(env), timeoutMs: psTimeoutMs })
   if (r.code !== 0) return null
   let wantName = false
   for (const line of String(r.out).split('\n')) {
@@ -86,15 +85,16 @@ export function factsOfPid(pid, { exec = null, env = process.env, psTimeoutMs = 
   const m = PS_ROW.exec(line)
   if (!m) return null // a localized lstart or a changed format: no facts, never a guess
   const cmdline = m[6].trim() !== '' ? m[6].trim() : null
-  const argv = argvOf(cmdline)
+  const words = psArgv(cmdline)
   const at = new Date(m[5].replace(/\s+/g, ' ')).getTime()
   const startedAt = Number.isFinite(at) ? at : null
-  const row = { pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), name: m[4] !== '' ? m[4] : null, exe: argv.length > 0 ? argv[0] : null, cmdline, startedAt, cmdlineState: cmdline != null ? 'ok' : 'empty' }
+  const row = { pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), name: m[4] !== '' ? m[4] : null, exe: words.length > 0 ? words[0] : null, cmdline, startedAt, cmdlineState: cmdline != null ? 'ok' : 'empty' }
   const real = realExeOf(pid, { exec, env, psTimeoutMs })
   if (real != null) row.exe = real // lsof's txt record is THE executable; ps's word is the fallback
+  const argv = psArgv(cmdline, real) // split on white space, except a line that starts with the real exe keeps it whole (src/off/proc.mjs psArgv)
   const { elevated, inferred } = elevationOf(row)
   const facts = {
-    os: 'darwin', pid: row.pid, ppid: row.ppid, name: row.name, exe: row.exe, argv, cmdline,
+    os: 'darwin', pid: row.pid, ppid: row.ppid, uid: Number.isInteger(row.uid) ? row.uid : null, name: row.name, exe: row.exe, argv, argvSplit: true, cmdline,
     env: null, envRead: false, cwd: null, startedAt, startTicks: startedAt != null ? String(startedAt) : null,
     sessionId: null, integrity: null, tokenDenied: false, elevated, elevationInferred: inferred, source: 'accept', cmdlineState: row.cmdlineState,
   }

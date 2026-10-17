@@ -13,7 +13,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { openSealed } from '../raw/reader.mjs'
 import { resolveCoexistence } from '../raw/discover.mjs'
-import { isFailure, notCapturedClass } from './codes.mjs'
+import { isFailure, notCapturedClass, LEVELS } from './codes.mjs'
 
 export const WINDOW_MS = 24 * 3600e3
 export const MAX_BYTES = 4 << 20
@@ -123,7 +123,8 @@ const KEEP = ['ts', 'event', 'where', 'code', 'reason', 'suppressed', 'folded', 
   'flow_id', 'seq', 'd', 'i', 'pattern', 'candidates', 'cause', 'via', 'hint', 'which', 'file', 'harness', 'path', 'kind',
   'type', 'index', 'desired', 'actual', 'links', 'counts', 'from', 'to', 'lost', 'exit', 'stderr', 'signal', 'failed',
   'version', 'foreground', 'linger', 'upstream_ca', 'dropped', 'neg_key', 'errno', 'route', 'phase', 'decision', 'inner',
-  'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept', 'reader', 'target', 'source', 'id', 'run']
+  'not_captured', 'write_failed', 'transport', 'port', 'out', 'servername', 'op', 'outcome', 'records', 'originalKept', 'reader', 'target', 'source', 'id', 'run',
+  'level', 'door', 'process', 'alert', 'trust_entry'] // the last five: trust-rejected (D51④)
 const CLIP = 1000
 const clip = (v) => (typeof v === 'string' && v.length > CLIP ? `${v.slice(0, CLIP)}… (${v.length} chars)` : v)
 /** A record cut down to metadata: listed fields only, long strings clipped and said so, `error` as {type, message, side}. */
@@ -136,6 +137,7 @@ export function pick(rec) {
     else if (typeof v === 'string') o[k] = clip(v)
     else if (Array.isArray(v)) o[k] = v.slice(0, 40).map((x) => (typeof x === 'object' && x !== null ? JSON.stringify(x).slice(0, 200) : clip(String(x))))
     else if (k === 'counts' && typeof v === 'object') o[k] = Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === 'number'))
+    else if (k === 'trust_entry' && typeof v === 'object') o[k] = Object.fromEntries(['var', 'via', 'file'].map((x) => [x, typeof v[x] === 'string' ? clip(v[x]) : null]))
     else if (k === 'proc' || typeof v === 'object') continue
   }
   if (rec.error != null) o.error = typeof rec.error === 'object' ? { type: clip(String(rec.error.type ?? '')), message: clip(String(rec.error.message ?? '')), ...(rec.error.side ? { side: String(rec.error.side) } : {}) } : clip(String(rec.error))
@@ -173,7 +175,9 @@ const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r
  *   last_start / last_stop   the last daemon-start, and the daemon-stop after it (or null)
  *   conditions               what still holds since the last daemon-start (with no daemon-start read: over all records
  *                            read, `partial:true`) — untrusted agents, negative-cache pairs, a dead helper, a wrong
- *                            helper protocol, desired ≠ actual, an unusable CA, an unreadable retention.json; each {kind, failure:true, since, …}
+ *                            helper protocol, desired ≠ actual, an unusable CA, an unreadable retention.json, a broken agents.json; each {kind, failure:true, since, …}
+ *   unknown_procs            process-unknown since the last daemon-start, one per (harness, name), the newest pid: {harness, name, wide, named, pid, door, since}
+ *                            — expected (the process is only forwarded), so not a condition; a daemon restart clears them (D51⑥)
  *   groups                   failures of the last 24 h by groupKey: {key, count, first_ts, last_ts, last}
  *   expected                 {not_captured: count} of the last 24 h
  *   agents                   [{agent, last_captured, last_failure, last_failure_key}]
@@ -183,7 +187,7 @@ const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r
 export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = {}) {
   let startIdx = -1
   for (let i = records.length - 1; i >= 0; i--) if (records[i].event === 'daemon-start') { startIdx = i; break }
-  const out = { last_start: startIdx >= 0 ? pick(records[startIdx]) : null, last_stop: null, conditions: [], partial: startIdx < 0 && records.length > 0, groups: [], expected: {}, agents: [], last_ts: null, install: { install: [], uninstall: [] } }
+  const out = { last_start: startIdx >= 0 ? pick(records[startIdx]) : null, last_stop: null, conditions: [], unknown_procs: [], partial: startIdx < 0 && records.length > 0, groups: [], expected: {}, agents: [], last_ts: null, install: { install: [], uninstall: [] } }
   // conditions: only what this run wrote — from the last daemon-start, plus the start-up lines written before it (the
   // CA check, the helper's protocol): back to the last daemon-stop, the previous daemon-start, a refused start, or this
   // start's own unclean-stop, and no further than 60 s before daemon-start (4.6 §事件与码)
@@ -196,11 +200,13 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     from = i
     if (r.event === 'failure' && r.code === 'unclean-stop') break
   }
-  const untrusted = new Map(), neg = new Map()
+  const untrusted = new Map(), neg = new Map(), rejected = new Map() // rejected: trust-rejected per (pid, host), cleared as the negative cache is (D51④)
   // a negative-cache pair is (neg_key ?? pid, host): "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5, W17), so two forms with
   // no pid are listed apart, and a clearing removes only its own key
-  const clearNeg = (who) => { for (const k of [...neg.keys()]) if (k.slice(0, k.indexOf('\u0000')) === who) neg.delete(k) }
-  let degraded = null, version = null, mismatch = null, ca = null, retention = null
+  const clearNeg = (who) => { for (const m of [neg, rejected]) for (const k of [...m.keys()]) if (k.slice(0, k.indexOf('\u0000')) === who) m.delete(k) }
+  let degraded = null, version = null, mismatch = null, ca = null, retention = null, agentList = null
+  // D51⑥: a process on no name list used a door — a fact of this daemon life per (harness, name), the newest pid kept; expected, so not a condition (no ⚠)
+  const unknownProcs = new Map()
   for (let i = from; i < records.length; i++) {
     const r = records[i]
     if (r.event === 'daemon-stop') out.last_stop = pick(r)
@@ -213,6 +219,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     else if (r.event === 'switch') mismatch = r.actual && r.actual !== 'unknown' && r.desired !== r.actual ? { kind: 'state-mismatch', ...pick(r), since: r.ts } : null
     else if (r.event === 'failure' && r.code === 'state-mismatch') mismatch = { kind: 'state-mismatch', ...pick(r), since: r.ts }
     else if (r.event === 'failure' && r.code === 'negative-cache') neg.set(`${r.neg_key ?? r.pid}\u0000${r.host}`, { kind: 'negative-cache', ...pick(r), since: r.ts })
+    else if (r.event === 'failure' && r.code === 'trust-rejected') rejected.set(`${r.neg_key ?? r.pid}\u0000${r.host}`, { kind: 'trust-rejected', ...pick(r), since: r.ts })
     else if (r.event === 'failure' && r.code === 'ca-invalid') ca = { kind: 'ca-invalid', ...pick(r), since: r.ts }
     else if (r.event === 'ca-ok') ca = null // the daemon found the CA usable again and rebuilt what it signs with (D1-2)
     // D40: ~/.asight/retention.json cannot be read or parsed (or holds a bad cell): every call is kept in full meanwhile,
@@ -221,8 +228,17 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     // written, `retention-log-failed`, is likewise its own failure: the settings file is fine.)
     else if (r.event === 'failure' && r.where === 'retention' && r.code !== 'pattern-invalid' && r.code !== 'classify-failed' && r.code !== 'retention-log-failed') retention = { kind: 'retention', ...pick(r), since: r.ts }
     else if (r.event === 'retention-ok') retention = null
+    // D51③: ~/.asight/agents.json cannot be read or parsed, or holds bad items (the good ones and the presets apply meanwhile): a condition until agent-list-ok
+    else if (r.event === 'failure' && r.code === 'agent-list-invalid') agentList = { kind: 'agent-list', ...pick(r), since: r.ts }
+    else if (r.event === 'agent-list-ok') agentList = null
+    else if (r.event === 'process-unknown' && typeof r.harness === 'string' && (typeof r.name === 'string' || r.name === null)) unknownProcs.set(`${r.harness}\u0000${r.name}`, { harness: r.harness, name: r.name, wide: r.wide === true, named: r.named === true, pid: Number.isInteger(r.pid) ? r.pid : null, door: typeof r.door === 'string' ? r.door : null, since: r.ts })
   }
-  out.conditions = [...[ca, degraded, version, mismatch, retention].filter(Boolean), ...untrusted.values(), ...neg.values()].map((c) => ({ ...c, failure: true }))
+  out.unknown_procs = [...unknownProcs.values()]
+  out.conditions = [...[ca, degraded, version, mismatch, retention, agentList].filter(Boolean), ...untrusted.values(), ...neg.values()].map((c) => ({ ...c, failure: true }))
+  // critical first (D51④, 4.6 §事件与码): status and /api/capture-health show them at the top; the rest keep their order
+  out.conditions = [...rejected.values()].map((c) => ({ ...c, level: 'critical', failure: true })).concat(out.conditions)
+  const rank = (c) => (LEVELS.includes(c.level) ? LEVELS.indexOf(c.level) : LEVELS.length)
+  out.conditions.sort((a, b) => rank(a) - rank(b))
   // the last 24 h: failure groups, expected counts, per agent
   const cutoff = now - windowMs
   const groups = new Map(), agents = new Map()

@@ -16,50 +16,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments, specsOf } from '../helpers/imports.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const WIRING_ENTRY = 'src/collector/daemon.mjs' // the single file allowed to wire core + arch + harness
 const HARNESS_NAMES = /\b(claude|codex|opencode|kimi|dsh|deepseek|hermes|zcode|z-code)\b/i
-
-// Drop // and /* */ comments; keep strings, template literals and regex literals verbatim.
-function stripComments(src) {
-  let out = ''
-  let i = 0
-  let q = null
-  const prevSig = () => { for (let j = out.length - 1; j >= 0; j--) if (!/\s/.test(out[j])) return out[j]; return '' }
-  while (i < src.length) {
-    const c = src[i]
-    const n = src[i + 1]
-    if (q) {
-      out += c
-      if (c === '\\') { out += n ?? ''; i += 2; continue }
-      if (c === q) q = null
-      i++
-      continue
-    }
-    if (c === '"' || c === "'" || c === '`') { q = c; out += c; i++; continue }
-    if (c === '/' && n === '/') { while (i < src.length && src[i] !== '\n') i++; continue }
-    if (c === '/' && n === '*') { const e = src.indexOf('*/', i + 2); i = e < 0 ? src.length : e + 2; out += ' '; continue }
-    if (c === '/' && (prevSig() === '' || '(,=:[!&|?{};'.includes(prevSig()) || /\b(return|typeof)$/.test(out.trimEnd()))) {
-      let j = i + 1
-      let cls = false
-      while (j < src.length && src[j] !== '\n') {
-        const d = src[j]
-        if (d === '\\') { j += 2; continue }
-        if (d === '[') cls = true
-        else if (d === ']') cls = false
-        else if (d === '/' && !cls) break
-        j++
-      }
-      out += src.slice(i, j + 1)
-      i = j + 1
-      continue
-    }
-    out += c
-    i++
-  }
-  return out
-}
 
 function walk(dir) {
   let names
@@ -67,17 +28,8 @@ function walk(dir) {
   return names.flatMap((d) => (d.isDirectory() ? walk(path.join(dir, d.name)) : [path.join(dir, d.name)]))
 }
 
-// The import-clause gap excludes quotes so `import 'a'` is never paired with a later `from 'b'`.
-const IMPORT_RE = /\b(?:import|export)\s[^;'"`]*?\bfrom\s*(['"])([^'"]+)\1|\bimport\s*\(\s*(['"])([^'"]+)\3\s*\)|\bimport\s+(['"])([^'"]+)\5/g
-
 function importsOf(code, file, root) {
-  const out = []
-  for (const m of code.matchAll(IMPORT_RE)) {
-    const spec = m[2] || m[4] || m[6]
-    if (!spec || !spec.startsWith('.')) continue
-    out.push(path.relative(root, path.resolve(path.dirname(file), spec)).split(path.sep).join('/'))
-  }
-  return out
+  return specsOf(code).filter((spec) => spec.startsWith('.')).map((spec) => path.relative(root, path.resolve(path.dirname(file), spec)).split(path.sep).join('/'))
 }
 
 function areaOf(rel) {
@@ -92,13 +44,14 @@ function checkLayering(root) {
   for (const file of files) {
     const rel = path.relative(root, file).split(path.sep).join('/')
     const area = areaOf(rel)
-    const code = stripComments(fs.readFileSync(file, 'utf8'))
+    const text = fs.readFileSync(file, 'utf8')
+    const code = stripComments(text)
     if (area === 'core') {
       if (/\bprocess\.platform\b/.test(code)) bad.push(`rule1 ${rel}`)
       const hit = HARNESS_NAMES.exec(code)
       if (hit) bad.push(`rule2 ${rel} (${hit[0]})`)
     }
-    for (const target of importsOf(code, file, root)) {
+    for (const target of importsOf(text, file, root)) {
       const t = areaOf(target)
       if (area === 'arch' && t === 'harness') bad.push(`rule3 ${rel} -> ${target}`)
       if (area === 'harness' && (t === 'arch' || target.startsWith('src/collector/core/engine/'))) bad.push(`rule4 ${rel} -> ${target}`)

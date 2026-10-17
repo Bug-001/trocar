@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sourceFiles } from '../src/server.mjs';
+import { scanRoots } from '../src/server.mjs';
 
 // DESCENDING ONE LEVEL IS A DIFFERENT THING FROM DESCENDING.
 //
-// `sourceFiles` is non-recursive on purpose: pointed anywhere near ~/.atrace it would otherwise
+// The board's scan (`scanRoots`) is non-recursive on purpose: pointed anywhere near ~/.atrace it would otherwise
 // walk into the v0 demo's per-project dumps and try to load several GB of history nobody asked for.
 // That guard has to survive.
 //
@@ -33,7 +33,7 @@ test('a shard root one level down is found', () => {
   try {
     shard('11111111-1111-1111-1111-111111111111');
     shard('22222222-2222-2222-2222-222222222222');
-    const { files } = sourceFiles(dir);
+    const { files } = scanRoots([dir]);
     assert.equal(files.length, 2,
       'the shard layout ETL writes was invisible to the server — the board would render '
       + '"no sessions captured yet" about a populated capture');
@@ -48,7 +48,7 @@ test('flat *.ndjson in the root still work, alongside shards', () => {
   try {
     fs.writeFileSync(path.join(dir, 'codex-capture.ndjson'), '{"id":"c"}\n');
     shard('33333333-3333-3333-3333-333333333333');
-    const { files } = sourceFiles(dir);
+    const { files } = scanRoots([dir]);
     assert.equal(files.length, 2);
     assert.ok(files.some((f) => f.endsWith('codex-capture.ndjson')), 'the flat source was dropped');
     assert.ok(files.some((f) => f.endsWith('calls.ndjson')), 'the shard was dropped');
@@ -63,7 +63,7 @@ test('the descent is exactly ONE level, never two', () => {
     const deep = path.join(dir, 'projects', 'some-project', 'sess');
     fs.mkdirSync(deep, { recursive: true });
     fs.writeFileSync(path.join(deep, 'calls.ndjson'), '{"id":"deep"}\n');
-    const { files } = sourceFiles(dir);
+    const { files } = scanRoots([dir]);
     assert.equal(files.length, 0,
       'the scan descended more than one level — pointed at ~/.atrace it would pull in the v0 '
       + "demo's multi-GB per-project dumps");
@@ -80,7 +80,7 @@ test('only calls.ndjson is taken from a subdirectory', () => {
       path.join(dir, '44444444-4444-4444-4444-444444444444', 'scratch-export.ndjson'),
       '{"id":"nope"}\n',
     );
-    const { files } = sourceFiles(dir);
+    const { files } = scanRoots([dir]);
     assert.equal(files.length, 1, 'an unrelated NDJSON inside a shard directory was picked up');
     assert.ok(files[0].endsWith('calls.ndjson'));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -90,9 +90,9 @@ test('the signature changes when a shard grows, so the board refreshes', () => {
   const { dir, shard } = mkRoot();
   try {
     shard('55555555-5555-5555-5555-555555555555', 1);
-    const a = sourceFiles(dir).sig;
+    const a = scanRoots([dir]).sig;
     fs.appendFileSync(path.join(dir, '55555555-5555-5555-5555-555555555555', 'calls.ndjson'), '{"id":"x"}\n');
-    assert.notEqual(sourceFiles(dir).sig, a,
+    assert.notEqual(scanRoots([dir]).sig, a,
       'appending to a shard did not change the signature — the board would serve a stale cache '
       + 'and never show new calls');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -102,9 +102,9 @@ test('the signature changes when a NEW shard appears', () => {
   const { dir, shard } = mkRoot();
   try {
     shard('66666666-6666-6666-6666-666666666666');
-    const a = sourceFiles(dir).sig;
+    const a = scanRoots([dir]).sig;
     shard('77777777-7777-7777-7777-777777777777');
-    assert.notEqual(sourceFiles(dir).sig, a, 'a brand new session would never appear on the board');
+    assert.notEqual(scanRoots([dir]).sig, a, 'a brand new session would never appear on the board');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -119,7 +119,7 @@ test('the ETL state file is not mistaken for a capture', () => {
   try {
     shard('88888888-8888-8888-8888-888888888888');
     fs.writeFileSync(path.join(dir, '.shard-state.json'), '{}');
-    const { files } = sourceFiles(dir);
+    const { files } = scanRoots([dir]);
     assert.equal(files.length, 1);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

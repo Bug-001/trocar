@@ -1,7 +1,7 @@
 // win32/opencode.mjs — OpenCode on Windows (RFC 4.8 §2.3 · §2.4 · §6.1; lab L1, L2, T0): data and the trust injection. Both forms are opt-in items for their proxy entry (4.8 §2.4):
 //   opencode.cli      …\npm\node_modules\opencode-ai\bin\opencode.exe (CLI, web, and the editor extension's terminal); entry = a shim `opencode.cmd` in a directory first on the user's PATH (Task 14)
 //   opencode.desktop  …\@opencode-aidesktop\OpenCode.exe; entry = the user's Start-menu and desktop shortcuts started through an asight launcher (Task 14)
-// `opencode.exe` and `OpenCode.exe` are ONE image name to Windows, so the two forms are told by their paths alone, and neither has a PROCESS-NAME rule.
+// Processes are told by the name list (D51), see the base file's `processes`.
 // Trust (§6.1) is automatic and the same plugin for both: asight-ca.js in OpenCode's own plugin directory (%USERPROFILE%\.config\opencode\plugins), which OpenCode discovers. It extends Node's roots
 // where the process has tls.setDefaultCACertificates (a Node sidecar) and wraps fetch where it has not (Bun). Everything else — the watch list for what OpenCode installs on its first run
 // with a plugin, the notes — is the Linux descriptor's, whose directory logic is the same.
@@ -10,7 +10,6 @@ import linux from '../opencode.mjs'
 import { renderPlugin } from '../_plugins.mjs'
 import { fwd } from './_paths.mjs'
 
-const raw = String.raw
 const PATH_IMPACT = 'the order of the PATH every one of your programs sees changes (asight\'s shim directory first); only commands named like the shim (`opencode`) resolve to it'
 
 function inject(ctx) {
@@ -43,8 +42,8 @@ export default {
     },
   ],
   forms: [
-    { id: 'opencode.cli', g: 'opencode.cli', match: { image: 'opencode.exe', path: [raw`\\node_modules\\opencode-ai\\bin\\opencode\.exe`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
-    { id: 'opencode.desktop', g: 'opencode.desktop', match: { image: 'OpenCode.exe', path: [raw`\\@opencode-aidesktop\\OpenCode\.exe`], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    { id: 'opencode.cli', g: 'opencode.cli', supported: true },
+    { id: 'opencode.desktop', g: 'opencode.desktop', supported: true },
   ],
   inject,
   proxy: {

@@ -1,19 +1,19 @@
 // win32/hermes.mjs — Hermes Agent on Windows (RFC 4.8 §2.3 · §6.1; lab L1): data, no behaviour but the trust injection. `hermes.cli` runs Hermes' own private CPython,
 // %LOCALAPPDATA%\hermes\tools\python-<version>\python.exe; its entry is the sentinel block atop %LOCALAPPDATA%\hermes\.env (HTTPS_PROXY, and NO_PROXY with 127.0.0.1 so Hermes' own calls
-// to this machine never go round the kernel). `python.exe` is every Python of the machine, so the form is told by its path alone and never has a PROCESS-NAME rule.
-// `hermes.desktop` has no known install: a form with no way to recognise it, listed so `status` says 「unknown · not measured」 and does not leave it out.
+// to this machine never go round the kernel).
+// `hermes.desktop` has no known install: listed so `status` says 「unknown · not measured」 and does not leave it out.
 // Trust: the same sentinel block carries SSL_CERT_FILE = combined-hermes.pem (and HERMES_CA_BUNDLE for a release ≤ v2026.9.24, by the checkout's install-stamp.json), in the
 // .env of the Hermes root and of every profile; it is the Linux descriptor's injection with the Windows root: the Linux file reads ~/.hermes, Windows keeps its data in
 // %LOCALAPPDATA%\hermes, so the root moves and nothing else does. The managed .env note is kept for HERMES_MANAGED_DIR (that variable applies on Windows too); Linux's default
 // /etc/hermes has no Windows counterpart that anyone measured, so without the variable there is nothing to read (4.8 §6.1).
+// Processes are told by the name list (D51), see the base file's `processes`.
 import path from 'node:path'
 import { expandHome, parseDotenv } from '../../core/config-read.mjs'
 import { CODE } from '../../core/codes.mjs'
 import { isOwnPath, argAfter, dotenvLayer } from '../_common.mjs'
 import { localAppData } from './_paths.mjs'
-import { OLD_RELEASE, LAST_CA_BUNDLE_RELEASE, oldRelease } from '../hermes.mjs'
+import { OLD_RELEASE, LAST_CA_BUNDLE_RELEASE, oldRelease, DOORS_SHUT } from '../hermes.mjs'
 
-const raw = String.raw
 const COVERED = ['SSL_CERT_FILE', 'HERMES_CA_BUNDLE'] // what the block sets over the launch env and the user's lines
 const FALSEY = /^(false|0|no|off)$/i
 
@@ -70,8 +70,8 @@ function hermesHome(ctx) {
 // The checkout the bootstrap puts on sys.path; the default under the Windows root.
 function checkout(ctx) {
   const root = hermesRoot(ctx)
-  const m = /sys\.path\.insert\(\s*0\s*,\s*(['"])([A-Za-z]:[^'"]+)\1/.exec(ctx.argv[3] || '')
-  return m ? m[2] : path.join(root, 'hermes-agent')
+  const m = /sys\.path\.insert\(\s*0\s*,\s*(['"])([A-Za-z]:[^'"]+)\1/.exec(argAfter(ctx.argv, ['-c']) || '') // `-I -c` or the launcher's `-I -I -c` runpy re-run
+  return m ? m[2].replace(/\\\\/g, '\\') : path.join(root, 'hermes-agent') // a Python literal doubles its backslashes
 }
 // Per-route TLS keys in the active home's config.yaml, as the Linux descriptor reads them.
 function tlsKeys(ctx, home) {
@@ -104,6 +104,13 @@ function layers(ctx) {
   return out.filter(Boolean)
 }
 
+// D51④: on Windows the live client does not take the trust entry asight writes — the .env block's SSL_CERT_FILE
+// (measured win 2026-10-14T09-06-56-260Z: with the .env block in place the live client refused asight's leaf with ECONNRESET and the turn failed; its connections do reach the door; the earlier "proxy ignored, direct dial" did not reproduce and was not re-traced — that install also had known ACL and sandbox-root faults).
+// So no Hermes process is decrypted here — recognised, judged, `status` names win-doors-rejected, the agent is forwarded intact. One last
+// override layer shuts the CA variables and names the reason (the base refine turns it into the verdict whatever the files above it say);
+// the file layers stay for the system trust root of D55, which this client may read (it imports truststore; to be measured).
+const DOORS_REJECTED = { name: 'Windows Hermes trust entry (the .env SSL_CERT_FILE is refused by the client)', mode: 'override', vars: { SSL_CERT_FILE: '', HERMES_CA_BUNDLE: '', 'hermes:ssl_ca_cert': '', [DOORS_SHUT]: 'win-doors-rejected' }, live: true }
+
 export default {
   groups: [{
     g: 'hermes.cli',
@@ -114,11 +121,11 @@ export default {
     noProxyKey: 'NO_PROXY',
   }],
   forms: [
-    { id: 'hermes.cli', g: 'hermes.cli', match: { image: 'python.exe', path: [raw`\\hermes\\tools\\python[^\\]*\\python\.exe`] }, nameRule: false, processRules: true, supported: true },
-    { id: 'hermes.desktop', g: null, match: null, nameRule: false, processRules: false, supported: { reason: 'not-measured' } },
+    { id: 'hermes.cli', g: 'hermes.cli', supported: true },
+    { id: 'hermes.desktop', g: null, supported: { reason: 'not-measured' } },
   ],
   inject,
-  layers,
+  layers: (ctx) => [...layers(ctx), DOORS_REJECTED],
   proxy: {
     env: ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'],
     files: [{ path: '%LOCALAPPDATA%\\hermes\\.env', key: 'HTTPS_PROXY', format: 'dotenv' }],

@@ -1,12 +1,11 @@
-// test/collector/harness/win32-forms.test.mjs — the Windows forms of the harnesses (RFC 4.8 §2.3 · §2.4 · §3; acceptance W3, W23). Table-driven from §2.3 and the install paths
-// the T0 spike measured (user directory made up). The mechanics of matching are held on made-up forms in test/collector/arch/win32/forms.test.mjs; here the REAL data is.
+// test/collector/harness/win32-forms.test.mjs — the Windows forms of the harnesses (RFC 4.8 §2.3 · §2.4 · §3; acceptance W23). A form is the unit of an entry group,
+// an opt-in item and a matrix row; which process is a harness is the name list's (D51), tested on the presets in test/collector/core/. Here the REAL data is.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
-import { matchForm, entryGate, formSignature } from '../../../src/collector/arch/win32/forms.mjs'
-import { serializeSignature, matchHarness } from '../../../src/off/signature.mjs'
+import { entryGate } from '../../../src/collector/arch/win32/forms.mjs'
 import { tmpDir } from '../../helpers/tmp.mjs'
 
 const raw = String.raw
@@ -16,88 +15,37 @@ const WIN = Object.fromEntries(ALL.filter((d) => d.win32).map((d) => [d.name, d.
 const formsOf = () => Object.values(WIN).flatMap((w) => w.forms)
 const groupsOf = () => Object.values(WIN).flatMap((w) => w.groups)
 
-// ── what 4.8 §2.3 says each harness has: its groups (form lists) and per form the paths that ARE it ──
-// `yes`: image paths of every install the spike measured; `unknown`: the same image where nobody measured (form-path-unknown)
+// ── what 4.8 §2.3 says each harness has: its groups (form lists) and its forms — whether the user must name one, and which are listed unmeasured. Which PROCESS is a
+// harness is the name list's (D51, the base descriptors' `processes`; test/collector/core/identity-presets.test.mjs), never a form's ──
 const EXPECT = {
   'claude-code': {
     groups: { 'claude-code.settings': ['claude-code.cli', 'claude-code.vscode'], 'claude-code.desktop': ['claude-code.desktop'] },
-    forms: {
-      'claude-code.cli': { nameRule: false, yes: [`${U}\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe`, `${U}\\.local\\bin\\claude.exe`] },
-      'claude-code.vscode': { nameRule: false, yes: [`${U}\\.vscode\\extensions\\anthropic.claude-code-2.1.289-win32-x64\\resources\\native-binary\\claude.exe`] },
-      'claude-code.desktop': { nameRule: false, yes: [raw`C:\Program Files\WindowsApps\Claude_1.0.0.0_x64__abc\app\claude.exe`, `${U}\\AppData\\Local\\AnthropicClaude\\claude.exe`], optIn: true },
-    },
-    unknown: [raw`D:\tools\claude.exe`],
+    forms: { 'claude-code.cli': {}, 'claude-code.vscode': {}, 'claude-code.desktop': { optIn: true } },
   },
   'codex': {
     groups: { 'codex.env': ['codex.cli', 'codex.vscode', 'codex.app'] },
-    forms: {
-      'codex.cli': { nameRule: false, yes: [`${U}\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe`] },
-      'codex.vscode': { nameRule: false, yes: [`${U}\\.vscode\\extensions\\openai.chatgpt-0.4.1-win32-x64\\bin\\windows-x86_64\\codex.exe`] },
-      'codex.app': { nameRule: false, yes: [`${U}\\AppData\\Local\\OpenAI\\Codex\\bin\\0123456789abcdef\\codex.exe`] },
-    },
-    unknown: [raw`D:\tools\codex.exe`],
+    forms: { 'codex.cli': {}, 'codex.vscode': {}, 'codex.app': {} },
   },
   'opencode': {
     groups: { 'opencode.cli': ['opencode.cli'], 'opencode.desktop': ['opencode.desktop'] },
-    forms: {
-      // opencode.exe and OpenCode.exe are one image name to Windows: the path alone tells the CLI (npm) from the desktop app
-      'opencode.cli': { nameRule: false, optIn: true, yes: [`${U}\\AppData\\Roaming\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe`] },
-      'opencode.desktop': { nameRule: false, optIn: true, yes: [`${U}\\AppData\\Local\\Programs\\@opencode-aidesktop\\OpenCode.exe`] },
-    },
-    unknown: [raw`D:\tools\opencode.exe`],
+    forms: { 'opencode.cli': { optIn: true }, 'opencode.desktop': { optIn: true } },
   },
   'deepseek-dsh': {
     groups: { 'deepseek-dsh.env': ['deepseek-dsh.cli', 'deepseek-dsh.desktop'] },
-    forms: {
-      'deepseek-dsh.cli': { nameRule: false, yes: [{ exe: raw`C:\Program Files\nodejs\node.exe`, cmdline: raw`"C:\Program Files\nodejs\node.exe" C:\Users\u\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\lib\bin.js` }] },
-      'deepseek-dsh.desktop': { nameRule: true, yes: [`${U}\\AppData\\Local\\Programs\\DeepSeek Harness\\DeepSeek Harness.exe`] },
-    },
-    unknown: [raw`D:\apps\DeepSeek Harness.exe`],
+    forms: { 'deepseek-dsh.cli': {}, 'deepseek-dsh.desktop': {} },
   },
   'hermes': {
     groups: { 'hermes.cli': ['hermes.cli'] },
-    forms: {
-      'hermes.cli': { nameRule: false, yes: [`${U}\\AppData\\Local\\hermes\\tools\\python-3.12.4\\python.exe`] },
-      'hermes.desktop': { nameRule: false, yes: [], unmeasured: true },
-    },
-    unknown: [],
+    forms: { 'hermes.cli': {}, 'hermes.desktop': { unmeasured: true } },
   },
   'kimi-code': {
     groups: { 'kimi-code.cli': ['kimi-code.cli'], 'kimi-code.vscode': ['kimi-code.vscode'] },
-    forms: {
-      'kimi-code.cli': { nameRule: true, optIn: true, yes: [`${U}\\.kimi-code\\bin\\kimi.exe`] },
-      'kimi-code.vscode': { nameRule: false, optIn: true, yes: [`${U}\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe`, raw`C:\Program Files\Microsoft VS Code\Code.exe`] },
-    },
-    unknown: [raw`D:\tools\kimi.exe`],
+    forms: { 'kimi-code.cli': { optIn: true }, 'kimi-code.vscode': { optIn: true } }, // the host program Code.exe: named by hosts.processes at the door (D51)
   },
   'z-code': {
     groups: { 'z-code.cli': ['z-code.cli'], 'z-code.desktop': ['z-code.desktop'] },
-    forms: {
-      'z-code.cli': { nameRule: false, yes: [{ exe: `${U}\\AppData\\Local\\Programs\\ZCode\\ZCode.exe`, cmdline: raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe" C:\r\resources\glm\zcode.cjs app-server --stdio` }] },
-      'z-code.desktop': { nameRule: false, optIn: true, yes: [{ exe: `${U}\\AppData\\Local\\Programs\\ZCode\\ZCode.exe`, cmdline: raw`"C:\Users\u\AppData\Local\Programs\ZCode\ZCode.exe"` }] },
-    },
-    unknown: [raw`D:\apps\ZCode.exe`],
+    forms: { 'z-code.cli': {}, 'z-code.desktop': { optIn: true } },
   },
-}
-
-// ── the pattern subset (4.8 §2.3): what JavaScript and mihomo's .NET regexp2 read the same way ──
-export function lintPattern(p) {
-  const bad = []
-  let depth = 0
-  for (let i = 0; i < p.length;) {
-    const rest = p.slice(i)
-    if (rest.startsWith(raw`[^\\]*`)) { i += 6; continue }
-    if (rest.startsWith('.*')) { i += 2; continue }
-    if (p[i] === '\\') { if (i + 1 < p.length && /[^A-Za-z0-9]/.test(p[i + 1])) { i += 2; continue } bad.push(`${rest.slice(0, 2)}: an escape is for punctuation only`); i += 2; continue }
-    if (p[i] === '(') { if (p[i + 1] === '?') bad.push('(?: no flags, lookbehind or named groups'); depth++; i++; continue }
-    if (p[i] === ')') { if (--depth < 0) bad.push('unbalanced )'); i++; continue }
-    if (p[i] === '|') { i++; continue }
-    if (/[A-Za-z0-9 _@~-]/.test(p[i])) { i++; continue }
-    bad.push(`${p[i]}: not in the subset`)
-    i++
-  }
-  if (depth !== 0) bad.push('unbalanced (')
-  return bad
 }
 
 test('all seven harnesses have Windows data, and the table above covers every one of them', () => {
@@ -105,11 +53,6 @@ test('all seven harnesses have Windows data, and the table above covers every on
   assert.deepEqual(Object.keys(WIN).sort(), seven)
   assert.deepEqual(Object.keys(EXPECT).sort(), seven)
   assert.equal(formsOf().length, 16, 'the 16 forms of 4.8 §2.3 (hermes.desktop among them, unmeasured)')
-})
-
-test('the pattern lint accepts the subset and rejects what JavaScript and .NET read differently, so the real data passing it means something', () => {
-  for (const ok of [raw`\\bin\\claude\.exe`, raw`\\Claude_[^\\]*\\app`, raw`\\a(b|c)\\.*x`, raw`@scope\\tool`]) assert.deepEqual(lintPattern(ok), [], ok)
-  for (const bad of ['(?i)claude', '^claude', 'claude$', raw`(?<=\\)x`, raw`(?<n>x)`, raw`\d+`, raw`\bclaude`, 'a+', '[abc]', 'a{2}', raw`\\x(`, 'x)', 'a?']) assert.notDeepEqual(lintPattern(bad), [], bad)
 })
 
 test('loadHarnesses attaches win32/<name>.mjs as desc.win32, skips the win32 directory and its helpers, and leaves a harness without Windows data as it was', async () => {
@@ -131,7 +74,7 @@ test('loadHarnesses attaches win32/<name>.mjs as desc.win32, skips the win32 dir
   assert.deepEqual((await loadHarnesses(new URL(`file://${none}/`))).map((d) => d.name), ['only'], 'no win32 directory at all')
 })
 
-test('every win32 data file has the shape the later tasks read: groups, forms, trust injection, the proxy export; ids, patterns and the group table are consistent', () => {
+test('every win32 data file has the shape the later tasks read: groups, forms, trust injection, the proxy export; ids and the group table are consistent', () => {
   assert.ok(Object.keys(WIN).length > 0)
   for (const [h, w] of Object.entries(WIN)) {
     assert.equal(typeof w.inject, 'function', `${h}: inject(ctx) gives the trust entries`)
@@ -159,19 +102,13 @@ test('every win32 data file has the shape the later tasks read: groups, forms, t
       assert.ok(!ids.has(f.id), `${f.id} once`)
       ids.add(f.id)
       assert.ok(f.id.startsWith(`${h}.`), f.id)
-      assert.equal(typeof f.nameRule, 'boolean')
-      assert.equal(typeof f.processRules, 'boolean')
-      if (f.supported !== true) { // a form nobody could install: listed so status says "unknown · not measured", with nothing to match and no group (4.8 §2.3, §6.4)
-        assert.deepEqual([f.supported, f.g, f.match, f.processRules], [{ reason: 'not-measured' }, null, null, false], f.id)
+      assert.deepEqual(Object.keys(f).filter((k) => !['id', 'g', 'supported', 'hosts'].includes(k)), [], `${f.id}: a form keeps only id · g · supported · hosts (D51: no identity data)`)
+      if (f.supported !== true) { // a form nobody could install: listed so status says "unknown · not measured", with no group (4.8 §2.3, §6.4)
+        assert.deepEqual([f.supported, f.g], [{ reason: 'not-measured' }, null], f.id)
         continue
       }
       assert.ok(gids.has(f.g), `${f.id}: its group ${f.g} exists`)
-      assert.match(f.match.image, /^[^\\/]+\.exe$/i, `${f.id}: an image name`)
-      for (const p of [...(f.match.path || []), ...(f.match.cmdline || [])]) {
-        assert.deepEqual(lintPattern(p), [], `${f.id}: ${p}`)
-        assert.doesNotThrow(() => new RegExp(p, 'i'))
-      }
-      assert.ok(f.match.path || f.match.cmdline, `${f.id}: an image alone says nothing (it would match any program of that name)`)
+      if (f.hosts) assert.ok(Array.isArray(f.hosts.processes) && f.hosts.processes.length > 0 && f.hosts.processes.every((n) => n === n.toLowerCase() && !/[\\/.]/.test(n)), `${f.id}: hosts.processes are normalized names (Code.exe → code)`)
     }
     const proxy = w.proxy
     assert.deepEqual(Object.keys(proxy).sort(), ['branches', 'env', 'files', 'measured', 'restart', 'schemes', 'systemProxy', 'unsupported'], `${h}: the proxy export has the 1.6 §9.7 fields`)
@@ -179,71 +116,32 @@ test('every win32 data file has the shape the later tasks read: groups, forms, t
   }
 })
 
-test('the group table: the three shared groups hold their forms, every other form is its own group, and a group has at most one form without a process rule', () => {
+test('the group table: the three shared groups hold their forms, every other form is its own group', () => {
   const shared = { 'claude-code.settings': ['claude-code.cli', 'claude-code.vscode'], 'codex.env': ['codex.cli', 'codex.vscode', 'codex.app'], 'deepseek-dsh.env': ['deepseek-dsh.cli', 'deepseek-dsh.desktop'] }
   for (const [h, w] of Object.entries(WIN)) {
     for (const g of w.groups) {
       const members = w.forms.filter((f) => f.g === g.g).map((f) => f.id)
       assert.deepEqual(members, shared[g.g] || [g.g], `${g.g}: its forms`)
       assert.ok(members.length >= 1)
-      assert.ok(w.forms.filter((f) => f.g === g.g && !f.processRules).length <= 1, `${g.g}: only one form with no process rule (the engine judges it by pid, 4.8 §3)`)
     }
     assert.deepEqual(Object.fromEntries(w.groups.map((g) => [g.g, w.forms.filter((f) => f.g === g.g).map((f) => f.id)])), EXPECT[h].groups, `${h}: the table of 4.8 §2.3`)
   }
 })
 
-test('W3: every install path the spike measured is its form, the same image elsewhere is form-path-unknown, and no form claims another form\'s path', () => {
-  const formsAll = formsOf()
-  const forms = formsAll.filter((f) => f.match)
+test('the forms of 4.8 §2.3: each harness lists exactly these, an unmeasured one says so, and a form needs naming exactly when its group has an opt-in item', () => {
   for (const [h, e] of Object.entries(EXPECT)) {
     assert.deepEqual(WIN[h].forms.map((f) => f.id).sort(), Object.keys(e.forms).sort(), `${h}: the forms of 4.8 §2.3`)
     for (const [id, row] of Object.entries(e.forms)) {
-      const f = formsAll.find((x) => x.id === id)
-      assert.equal(f.nameRule, row.nameRule, `${id}: nameRule`)
+      const f = WIN[h].forms.find((x) => x.id === id)
       if (row.unmeasured) { assert.equal(f.supported.reason, 'not-measured', id); continue }
       assert.equal(!!(WIN[h].groups.find((g) => g.g === f.g).optIn || []).length, !!row.optIn, `${id}: whether the user must name it`)
-      for (const yes of row.yes) {
-        const { exe, cmdline = null } = typeof yes === 'string' ? { exe: yes } : yes
-        assert.deepEqual(matchForm(forms, { exe, cmdline, cmdlineState: cmdline ? 'ok' : 'not-asked' }), { kind: 'form', id }, `${id}: ${exe}`)
-        const hit = (x) => x.match.path.some((p) => new RegExp(p, 'i').test(exe)) && (!x.match.cmdline || (cmdline != null && x.match.cmdline.some((p) => new RegExp(p, 'i').test(cmdline))))
-        const hits = forms.filter((x) => x.match && x.match.path && hit(x))
-        assert.deepEqual(hits.filter((x) => !WIN[h].forms.includes(x)).map((x) => x.id), [], `${exe}: no other harness's form claims it`)
-        const wider = f.match.cmdline ? WIN[h].forms.filter((x, i) => i > WIN[h].forms.indexOf(f) && x.match && !x.match.cmdline && hit(x)).map((x) => x.id) : [id] // a form that needs the command line comes before the wider one it would be taken for
-        assert.deepEqual(hits.filter((x) => !x.match.cmdline).map((x) => x.id), wider, `${exe}: among the forms that need no command line, only the form itself (or the wider one after it) hits`)
-      }
-    }
-    for (const exe of e.unknown || []) {
-      const r = matchForm(forms, { exe, cmdline: null, cmdlineState: 'not-asked' })
-      assert.equal(r.kind, 'path-unknown', exe)
-      assert.deepEqual(r.forms.sort(), forms.filter((x) => x.match && x.match.reportUnknownPath && x.match.image.toLowerCase() === path.win32.basename(exe).toLowerCase()).map((x) => x.id).sort())
     }
   }
 })
 
-test('W3: Code.exe is only the Kimi extension, node.exe and python.exe are never told by their name, and a node.exe is an agent only with the dsh command line', () => {
-  const forms = formsOf().filter((f) => f.match)
-  assert.deepEqual(forms.filter((f) => /^code\.exe$/i.test(f.match.image)).map((f) => f.id), ['kimi-code.vscode'])
-  for (const f of forms.filter((x) => /^(node|python|code)\.exe$/i.test(x.match.image))) {
-    assert.equal(f.nameRule, false, `${f.id}: a PROCESS-NAME rule on ${f.match.image} would hand every program of that name to this form`)
-    assert.equal(!!f.match.reportUnknownPath, false, `${f.id}: most ${f.match.image} are no agent, so an odd path is not reported`)
-  }
-  for (const f of forms.filter((x) => /^node\.exe$/i.test(x.match.image))) assert.ok(f.match.cmdline && !f.match.path, `${f.id}: node.exe is told by the command line, not by where it is`)
-  const exe = raw`C:\Program Files\nodejs\node.exe`
-  assert.deepEqual(matchForm(forms, { exe, cmdline: 'node.exe build.js', cmdlineState: 'ok' }), { kind: 'none' })
-  assert.deepEqual(matchForm(forms, { exe, cmdline: null, cmdlineState: 'empty' }), { kind: 'none' })
-  for (const exe2 of [raw`C:\Python312\python.exe`, raw`C:\Program Files\Microsoft VS Code Insiders\Code - Insiders.exe`, raw`D:\portable\Code.exe`]) assert.deepEqual(matchForm(forms, { exe: exe2, cmdline: null, cmdlineState: 'not-asked' }), { kind: 'none' }, exe2)
-})
-
-test('W3: only the dsh CLI has no process rule in the kernel (node.exe is every Node program: the engine judges it by pid on its port, 4.8 §3); every other supported form has one', () => {
-  assert.deepEqual(formsOf().filter((f) => f.supported === true && !f.processRules).map((f) => f.id), ['deepseek-dsh.cli'])
-})
-
-test('W3: the ZCode forms match the whole image and carry no hosts; only the Kimi extension has a host set, and its settings reader finds the base URLs in a config.toml', () => {
+test('only the Kimi extension has a host set, and its settings reader finds the base URLs in a config.toml', () => {
   const forms = formsOf()
   assert.deepEqual(forms.filter((f) => f.hosts).map((f) => f.id), ['kimi-code.vscode'], 'a host tree is only the editor Kimi lives in (4.8 §3); ZCode.exe is the agent\'s own process (OPEN 23)')
-  for (const f of forms.filter((x) => x.match && /^zcode\.exe$/i.test(x.match.image))) {
-    assert.ok(f.match.path.every((p) => new RegExp(p, 'i').test(`${U}\\AppData\\Local\\Programs\\ZCode\\ZCode.exe`)), `${f.id}: any ZCode.exe of the install, not only some of its processes`)
-  }
   const { hosts } = forms.find((f) => f.id === 'kimi-code.vscode')
   assert.deepEqual(hosts.defaults, ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'])
   const ctx = (env = {}) => ({ home: U, env: new Map(Object.entries(env)) })
@@ -254,24 +152,13 @@ test('W3: the ZCode forms match the whole image and carry no hosts; only the Kim
   assert.deepEqual(hosts.settings.hostsOf(''), [])
 })
 
-test('W23: a form that needs naming has an opt-in item and no automatic entry; Claude Desktop takes no credentialed upstream; the process rules of the automatic groups reach neither Claude Desktop nor any Code.exe', () => {
+test('W23: a form that needs naming has an opt-in item and no automatic entry; Claude Desktop takes no credentialed upstream', () => {
   const desktop = groupsOf().find((g) => g.g === 'claude-code.desktop')
   assert.deepEqual(entryGate(desktop), { ok: false, reason: 'opt-in-needed' })
   assert.deepEqual(entryGate(desktop, { optedIn: true }), { ok: true })
   assert.deepEqual(entryGate(desktop, { optedIn: true, upstreamCredentialed: true }), { ok: false, reason: 'form-unsupported' }, 'its entry takes no credentials, so its port is open to every process of the machine')
   assert.equal(desktop.auth, false)
   for (const g of groupsOf().filter((x) => !(x.optIn && x.optIn.length))) assert.deepEqual(entryGate(g), { ok: true }, g.g)
-  const IMAGES = [raw`C:\Program Files\WindowsApps\Claude_1.0.0.0_x64__abc\app\claude.exe`, `${U}\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe`, raw`C:\Program Files\Microsoft VS Code\Code.exe`, `${U}\\AppData\\Local\\Programs\\Microsoft VS Code Insiders\\Code - Insiders.exe`]
-  for (const w of Object.values(WIN)) {
-    for (const g of w.groups.filter((x) => !(x.optIn && x.optIn.length))) {
-      const own = w.forms.filter((f) => f.g === g.g && f.processRules)
-      const rules = [...own.flatMap((f) => f.match.path || []), ...own.filter((f) => f.nameRule).map((f) => f.match.image)]
-      for (const exe of IMAGES) for (const r of rules) {
-        const hit = r.includes('\\') || r.includes('/') ? new RegExp(r, 'i').test(exe) : r.toLowerCase() === path.win32.basename(exe).toLowerCase()
-        assert.ok(!hit, `${g.g}: ${r} must not reach ${exe}`)
-      }
-    }
-  }
 })
 
 // ── the data Tasks 6b, 8 and 10 read, pinned to 4.8 §2.3 (the 「跟随系统代理」 column, the entry column) and §2.4 (the opt-in items) and to the CLI plan's proxy table (T13, 1.6 §9.7) ──
@@ -386,26 +273,3 @@ test('where the app-setting entries live: the Z-Code Desktop v2 setting.json (ZC
   assert.equal(k.file(w.ctx({ APPDATA: path.join(w.home, 'R') })), path.join(w.home, 'R', 'Code', 'User', 'settings.json'))
 })
 
-// 4.6 「判活快照」: `on` folds each harness's forms into the signature `off` judges by (formSignature, kept in the manifest as JSON), so off and the collector tell the
-// processes apart by one table. For every install shape above — and the same shape in capitals, the forms being case-blind — it names the harness the table says, as
-// matchForm does; for the shapes no form knows, none.
-test('4.6 判活快照: the signature folded from the forms, read back from JSON, names each install shape\'s harness — the one matchForm names — and none for an unknown shape', () => {
-  const liveness = Object.fromEntries(Object.entries(WIN).map(([h, w]) => [h, { signature: JSON.parse(JSON.stringify(serializeSignature(formSignature(w.forms)))) }]))
-  const forms = formsOf().filter((f) => f.match)
-  const owner = (exe, cmdline) => { const m = matchForm(forms, { exe, cmdline, cmdlineState: cmdline ? 'ok' : 'not-asked' }); return m.kind === 'form' ? Object.keys(WIN).find((h) => WIN[h].forms.some((f) => f.id === m.id)) : null }
-  let shapes = 0
-  for (const [h, e] of Object.entries(EXPECT)) {
-    for (const row of Object.values(e.forms)) for (const yes of row.yes || []) {
-      const shape = typeof yes === 'string' ? { exe: yes, cmdline: null } : { cmdline: null, ...yes }
-      for (const { exe, cmdline } of [shape, { exe: shape.exe.toUpperCase(), cmdline: shape.cmdline && shape.cmdline.toUpperCase() }]) {
-        assert.deepEqual([matchHarness(liveness, { exe, cmdline }), owner(exe, cmdline)], [h, h], exe)
-        shapes++
-      }
-    }
-    for (const unk of e.unknown || []) {
-      const { exe, cmdline = null } = typeof unk === 'string' ? { exe: unk } : unk
-      assert.equal(matchHarness(liveness, { exe, cmdline }), null, exe)
-    }
-  }
-  assert.ok(shapes > 0, 'the table has shapes to hold the signature to')
-})

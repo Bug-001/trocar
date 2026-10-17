@@ -15,7 +15,6 @@ import { installCollector } from '../../../src/collector/install.mjs'
 import { uninstallCollector } from '../../helpers/uninstall.mjs'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { sandbox, ctxFor, facts, judge, matchOf, CA, OTHER } from './_ctx.mjs'
-import { onNone } from '../../helpers/signature-os.mjs'
 
 const DAEMON = '/home/u/.codex/packages/app-server-daemon/releases/0.160.0/bin/codex'
 const fps = (text) => (String(text).match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).map((p) => new X509Certificate(p).fingerprint256)
@@ -112,7 +111,7 @@ test('codex through install / uninstall: the user\'s SSL_CERT_FILE line is put o
     const corp = s.put('corp.pem', OTHER.certPem)
     const before = `OPENAI_API_KEY=sk-secret\nexport SSL_CERT_FILE="${corp}"\n`
     const env = s.put('.codex/.env', before)
-    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [onNone(codex)], freePort: async () => 47017, roots: { node: [], osText: '' } })
+    await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [codex], freePort: async () => 47017, roots: { node: [], osText: '' } })
     const dir = path.join(s.home, '.asight', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-codex.pem')
     assert.match(fs.readFileSync(env, 'utf8'), new RegExp(`^# >>> asight collector >>>[^\\n]*\\nSSL_CERT_FILE=${bundle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n# <<< asight collector <<<\\nOPENAI_API_KEY=sk-secret\\n#asight-collector-off# export SSL_CERT_FILE=`))

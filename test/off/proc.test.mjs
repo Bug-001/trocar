@@ -46,14 +46,15 @@ test('listProcs on macOS: `ps` for the table and the command line, then one `lso
     { pid: 501, at, exe: '/Applications/Claude.app/Contents/MacOS/claude', cmdline: '/Applications/Claude.app/Contents/MacOS/claude --flag x' },
     { pid: 777, uid: 0, at, exe: '/usr/sbin/mDNSResponder' },
     { pid: 502, ppid: 501, at, exe: '/Users/u/.local/share/codex/bin/codex', cmdline: 'codex app-server' }, // started through PATH: ps has the bare word
-    { pid: 503, at, exe: helper, cmdline: `${helper} --type=utility zcode-cli` }, // a space in the path: ps's first word is cut there
+    { pid: 503, at, exe: helper, cmdline: `${helper} --type=utility zcode-cli` }, // a space in the path: ps's line starts with lsof's exe, so argv[0] stays whole
   ])
   const got = await listProcs({ uid: 501, platform: 'darwin', exec: t.run })
   assert.deepEqual(t.calls.map((c) => c[0]), ['ps', 'lsof'], 'two questions for the whole table, whatever its size')
   assert.deepEqual(t.calls[1].slice(1), ['-a', '-u', '501', '-d', 'txt', '-Fpn'], 'lsof is asked about this user\'s processes only')
   assert.deepEqual(got.map((f) => [f.pid, f.ppid, f.uid]), [[501, 1, 501], [502, 501, 501], [503, 1, 501]])
   assert.deepEqual(got.map((f) => f.exe), ['/Applications/Claude.app/Contents/MacOS/claude', '/Users/u/.local/share/codex/bin/codex', helper], 'the executable is lsof\'s, not the word ps repeats')
-  assert.deepEqual(got.map((f) => [f.argv[0], f.cmdline]), [['/Applications/Claude.app/Contents/MacOS/claude', '/Applications/Claude.app/Contents/MacOS/claude --flag x'], ['codex', 'codex app-server'], ['/Applications/ZCode.app/Contents/Frameworks/ZCode', `${helper} --type=utility zcode-cli`]])
+  assert.deepEqual(got.map((f) => [f.argv[0], f.cmdline]), [['/Applications/Claude.app/Contents/MacOS/claude', '/Applications/Claude.app/Contents/MacOS/claude --flag x'], ['codex', 'codex app-server'], [helper, `${helper} --type=utility zcode-cli`]])
+  assert.deepEqual(got.map((f) => f.argvSplit), [true, true, true], 'the rest of the line is split on white space, and the facts say so (identity.mjs entryOf)')
   assert.equal(got[0].startedAt, at.getTime(), 'lstart is local time')
   assert.deepEqual([got[0].env(), got[0].envRead], [null, false], 'another process\'s environment is never readable on macOS: not a failed read')
   await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'ps: nope' }) }), /ps.*nope/)
@@ -103,12 +104,12 @@ const tools = (psOut) => (file) => ({ status: 0, stdout: file === 'lsof' ? LSOF_
 
 test('listProcs on macOS runs ps in the C locale: the runner is handed LC_ALL=C over whatever the user\'s own environment says, and a ps that honours the locale gives the table it would give in English', async () => {
   const seen = []
-  const exec = (file, args, opts) => { seen.push(opts.env); return tools(opts.env.LC_ALL === 'C' ? PS_C : PS_ZH)(file) } // a ps that localizes unless told not to
+  const exec = (file, args, opts) => { seen.push([file, opts.env.LC_ALL]); return tools(opts.env.LC_ALL === 'C' ? PS_C : PS_ZH)(file) } // a ps that localizes unless told not to
   for (const loc of ['zh_CN.UTF-8', 'ja_JP.UTF-8', 'C', undefined]) {
     const got = await listProcs({ uid: 501, platform: 'darwin', exec, env: { ...process.env, LC_ALL: loc, LANG: loc, LC_TIME: loc } })
     assert.deepEqual(got.map((f) => [f.pid, f.startedAt]), [[501, new Date(2026, 9, 7, 4, 27, 0).getTime()], [502, new Date(2026, 9, 7, 5, 0, 0).getTime()]], `LC_ALL=${loc}`)
   }
-  assert.ok(seen.every((e) => e.LC_ALL === 'C'), 'every run was in the C locale')
+  assert.ok(seen.every(([f, l]) => (f === 'ps' ? l === 'C' : l === 'UTF-8')), `ps in the C locale, lsof in UTF-8 (lsofEnv: a non-ASCII path, not \\xNN): ${JSON.stringify(seen)}`)
 })
 
 test('listProcs on macOS: a ps whose lines cannot be read is an error that says so — never an empty table, which would read as "nobody is alive" — while a table with a few odd lines among readable ones is read as far as it goes', async () => {

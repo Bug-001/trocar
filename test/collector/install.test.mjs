@@ -23,7 +23,6 @@ import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector
 import cc from '../../src/collector/harness/claude-code.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { spawnStandin } from '../helpers/standin.mjs'
-import { onNone } from '../helpers/signature-os.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { fakeSystem, recordingExec, fakeDaemon, ROOTS } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, ALL_HARNESSES } from '../off/fixtures/off-ctx.mjs'
@@ -119,7 +118,7 @@ test('uninstall: stops the daemon first, reports CC processes still trusting unt
   try {
     const running = [{ pid: 4242, exe: '/x/claude/versions/2.1.289', argv: ['claude'], env: new Map() }]
     const match = (f) => ({ agent: f.pid === 4242 ? 'claude-code' : null })
-    await installCollector(base(b, { harnesses: [onNone(cc)], scan: async () => running, match }))
+    await installCollector(base(b, { harnesses: [cc], scan: async () => running, match }))
     fs.writeFileSync(path.join(b.dir, 'capture-2026-10-06.ndjson'), '{}\n'); fs.mkdirSync(path.join(b.dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(b.dir, 'flows', 'x.ndjson'), '{}\n')
     fs.writeFileSync(path.join(b.dir, 'lock'), '{}'); fs.writeFileSync(path.join(b.dir, 'state.json'), '{}')
     const order = []
@@ -373,7 +372,7 @@ async function plugHarness(b) {
   const { lineComment } = await import('../../src/off/text-edit.mjs')
   const dir = path.join(b.home, '.asight', 'collector')
   return {
-    name: 'plug', runtime: 'node', signatures: { linux: { match: [{ exe: /plug$/ }] } }, hosts: [], trust: { chain: [{ var: 'asight:marker', semantic: 'append' }] },
+    name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'asight:marker', semantic: 'append' }] },
     inject: (ctx) => ({
       owned: [
         { path: path.join(ctx.home, '.config', 'plug', 'plugins', 'asight-ca.js'), role: 'plugin', data: '// asight collector: trust plugin\n', mode: 0o644 },
@@ -442,7 +441,7 @@ test('an entry uninstall cannot undo stays in the manifest; install refuses unti
 
 // A synthetic replace-semantics harness: a dotenv block naming its combined bundle (Codex / Hermes shape).
 const repHarness = (dir, extra = {}) => ({
-  name: 'rep', runtime: 'rust', signatures: { none: { match: [{ exe: /\/rep$/ }] } }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], ...extra },
+  name: 'rep', runtime: 'rust', processes: { names: [{ name: 'rep' }] }, hosts: [], trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], ...extra },
   inject: (ctx) => ({
     entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.rep', '.env'), vars: { SSL_CERT_FILE: path.join(dir, 'ca', 'combined-rep.pem') }, semantic: 'replace' }],
     files: [{ path: path.join(dir, 'ca', 'combined-rep.pem'), bundle: true, certsFrom: [path.join(ctx.home, 'corp.pem')] }],
@@ -669,9 +668,9 @@ test('uninstall step 5: only a process that may have read the entry is reported 
   const b = box()
   try {
     // plugin-only harness: its install time is its owned file's; a harness whose afterUninstall is a function of the process
-    const plug = { name: 'plug', runtime: 'node', signatures: { none: { match: [{ exe: /\/plug$/ }] } }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
+    const plug = { name: 'plug', runtime: 'node', processes: { names: [{ name: 'plug' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] },
       inject: (ctx) => ({ owned: [{ path: path.join(ctx.home, '.plug', 'plugins', 'asight-ca.js'), role: 'plugin', data: '// asight collector: trust plugin\n', mode: 0o644 }] }) }
-    const picky = { ...repHarness(b.dir), name: 'picky', signatures: { none: { match: [{ exe: /\/picky$/ }] } },
+    const picky = { ...repHarness(b.dir), name: 'picky', processes: { names: [{ name: 'picky' }] },
       inject: (ctx) => ({ entries: [{ kind: 'text', format: 'dotenv-block', path: path.join(ctx.home, '.picky', '.env'), vars: { SSL_CERT_FILE: path.join(b.dir, 'ca', 'combined-picky.pem') }, semantic: 'replace' }], files: [{ path: path.join(b.dir, 'ca', 'combined-picky.pem'), bundle: true, certsFrom: [] }] }),
       trust: { chain: [{ var: 'SSL_CERT_FILE', semantic: 'replace' }], afterUninstall: 'next-connection', untilEnviron: 'VIA' } }
     fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
@@ -721,7 +720,7 @@ test('install: an autostart unit file already there is refused before anything i
 test('uninstall step 5: a Claude Code from before install is reported too — it uses a settings value added while it runs (acceptance ④, review 4 #2)', async () => {
   const b = box()
   try {
-    await installCollector(base(b, { harnesses: [onNone(cc)] }))
+    await installCollector(base(b, { harnesses: [cc] }))
     const early = [{ pid: 4343, exe: '/x/claude/versions/2.1.289', argv: ['claude'], startedAt: 1, env: new Map() }]
     const r = await uninstallCollector({ home: b.home, env: {}, stop: stopNone, scan: async () => early })
     assert.deepEqual(r.still_trusting, [{ pid: 4343, agent: 'claude-code', until: 'restart' }])
@@ -768,7 +767,7 @@ test('uninstall writes an uninstall-note for every result but a plain restore an
     fs.mkdirSync(path.join(b.home, '.claude')); fs.writeFileSync(settingsOf(b), '{"model":"x"}')
     const running = [{ pid: 4242, exe: '/x/claude/versions/2.1.289', argv: ['claude'], env: new Map() }]
     const match = (f) => ({ agent: f.pid === 4242 ? 'claude-code' : null })
-    await installCollector(base(b, { harnesses: [onNone(cc)], scan: async () => running, match }))
+    await installCollector(base(b, { harnesses: [cc], scan: async () => running, match }))
     const doc = JSON.parse(fs.readFileSync(settingsOf(b), 'utf8')); doc.theme = 'dark'; fs.writeFileSync(settingsOf(b), JSON.stringify(doc)) // edited since
     const r = await uninstallCollector({ home: b.home, env: {}, scan: async () => running, stop: stopNone })
     assert.deepEqual(r.entries.map((e) => e.result), ['reverted-not-identical'])
@@ -780,7 +779,7 @@ test('uninstall writes an uninstall-note for every result but a plain restore an
     assert.deepEqual(recentFailures(b.dir), [], 'notes are not failures')
     assert.equal(readManifest(b.dir), null)
 
-    await installCollector(base(b, { harnesses: [onNone(cc)], scan: async () => running, match }))
+    await installCollector(base(b, { harnesses: [cc], scan: async () => running, match }))
     fs.rmSync(path.join(b.dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(b.dir, 'flows'), 'not a directory')
     const r2 = await uninstallCollector({ home: b.home, env: {}, scan: async () => running, stop: stopNone })
     assert.ok(r2.notes.some((n) => /^not recorded \(.+\): pid 4242 \(claude-code\) trusts the asight CA until it restarts$/.test(n)), JSON.stringify(r2.notes))
@@ -833,7 +832,7 @@ test('install writes manifest version 2: every item has kind and undo_by_hand, a
     fs.writeFileSync(settingsOf(b), before, { mode: 0o640 })
     await installCollector(base(b))
     const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file itself: readManifest would fill in what is missing
-    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, m.liveness], [2, [], [], { 'claude-code': { signature: null, rereads: true, until: 'restart' } }], 'liveness: osName none has no signature to snapshot')
+    assert.deepEqual([m.version, m.confirmed_paths, m.kept_backups, { ...m.liveness['claude-code'], identity: !!m.liveness['claude-code'].identity }], [2, [], [], { identity: true, rereads: true, until: 'restart' }], 'liveness: the name list is snapshotted on every OS, osName none too (D51)')
     for (const it of [...m.entries, ...m.files]) { assert.ok(it.kind && it.undo_by_hand && it.undo_by_hand.length > 10, JSON.stringify(it)) }
     assert.deepEqual(m.files.map((f) => f.kind), ['owned-file', 'owned-file'], 'the CA files install pushes with a role only get their kind when saved')
     const e = m.entries[0]
@@ -911,27 +910,30 @@ test('a manifest of a version this build does not read stops install before anyt
 test('install records liveness per harness it changed anything for: its signature as JSON, whether it re-reads its entry, until when a running one still trusts', async () => {
   const b = box()
   try {
-    const { reviveSignature, matchHarness } = await import('../../src/off/signature.mjs')
-    const rep = { ...repHarness(b.dir, { rereadsEntry: true, afterUninstall: 'next-connection', untilEnviron: 'SSL_CERT_FILE' }), signatures: { none: { match: [{ exe: /\/rep$/ }], exclude: [{ argv: [/^--helper$/] }] } } }
-    const quiet = { name: 'quiet', runtime: 'node', signatures: { none: { match: [{ exe: /quiet$/ }] } }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] }, inject: () => ({}) } // injects nothing
+    const { reviveSignature } = await import('../../src/off/signature.mjs')
+    const { matchHarness } = await import('../helpers/one-harness.mjs')
+    const rep = { ...repHarness(b.dir, { rereadsEntry: true, afterUninstall: 'next-connection', untilEnviron: 'SSL_CERT_FILE' }), processes: { names: [{ name: 'rep' }], exclude: [{ name: 'rep', args: '(^| )--helper( |$)' }] } }
+    const quiet = { name: 'quiet', runtime: 'node', processes: { names: [{ name: 'quiet' }] }, hosts: [], trust: { chain: [{ var: 'X', semantic: 'append' }] }, inject: () => ({}) } // injects nothing
     fs.writeFileSync(path.join(b.home, 'corp.pem'), createCa({ commonName: 'corp' }).certPem)
     await installCollector(base(b, { harnesses: [rep, quiet], roots: { node: [], osText: '' } }))
     const m = JSON.parse(fs.readFileSync(path.join(b.dir, 'install-manifest.json'), 'utf8')) // the file as written: what `off` reads
     assert.deepEqual(Object.keys(m.liveness), ['rep'], 'a harness install changed nothing for has no liveness: nothing of it to judge')
     assert.deepEqual([m.liveness.rep.rereads, m.liveness.rep.until, m.liveness.rep.until_environ], [true, 'next-connection', 'SSL_CERT_FILE'])
-    const sig = reviveSignature(m.liveness.rep.signature)
-    assert.deepEqual(sig, rep.signatures.none, 'the signature survives the manifest')
+    const sig = reviveSignature(m.liveness.rep.identity)
+    const { compileIdentity } = await import('../../src/off/identity.mjs')
+    assert.deepEqual(sig, compileIdentity({ harness: 'rep', ...rep.processes }), 'the compiled name list survives the manifest')
     assert.equal(matchHarness(m.liveness, { exe: '/x/rep', argv: ['rep'], env: null }), 'rep')
     assert.equal(matchHarness(m.liveness, { exe: '/x/rep', argv: ['rep', '--helper'], env: null }), null, 'and so does its exclude')
   } finally { b.done() }
 })
 
-test('liveness of a harness with no signature for this OS or no data form of afterUninstall: no signature (it matches no process), and a descriptor whose afterUninstall is a function snapshots restart', async () => {
+test('liveness of a harness with no data form of afterUninstall snapshots restart; its identity is the name list, the same on every OS (D51: no OS without one)', async () => {
   const b = box()
   try {
     const fn = { ...cc, trust: { ...cc.trust, rereadsEntry: false, afterUninstall: () => 'next-handshake' } }
-    await installCollector(base(b, { harnesses: [fn] })) // osName 'none': claude-code declares a linux signature only
-    assert.deepEqual(readManifest(b.dir).liveness, { 'claude-code': { signature: null, rereads: false, until: 'restart' } })
+    await installCollector(base(b, { harnesses: [fn] })) // osName 'none': the preset list holds there too
+    const l = readManifest(b.dir).liveness['claude-code']
+    assert.deepEqual([l.rereads, l.until, !!l.identity], [false, 'restart', true])
   } finally { b.done() }
 })
 

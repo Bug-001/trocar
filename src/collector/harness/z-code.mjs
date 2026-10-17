@@ -20,23 +20,10 @@ import path from 'node:path'
 import { parseJsonc, hostOf } from '../core/config-read.mjs'
 import { CODE } from '../core/codes.mjs'
 import { urlHostsDeep, dotenvLayer, isOwnPath } from './_common.mjs'
+import { NETWORK_SERVICE_ARG } from '../core/trust/chromium.mjs'
 
-const ZEXE = /(^|\/)zcode( \(deleted\))?$/
-const NODE = /(^|\/)node( \(deleted\))?$/
-const CJS = /\/glm\/zcode\.cjs$/
-const AS_NODE = { ELECTRON_RUN_AS_NODE: '1' }
-const TITLE = /^zcode-cli$/
+const ZCJS = '/glm/zcode\\.cjs$' // the bundle, as an `entry` pattern: the program the exe runs as Node (D51)
 
-/** The command line of a Z-Code CLI process, both shapes it lives in: the bundle path as invoked, and the title a `-p` / `tui` CLI rewrites its WHOLE
- *  command line to within moments of start (`process.title = "zcode-cli"`, the header's own fact — the desktop's app-server never rewrites). The darwin
- *  and win32 form tables carry these (their twins import this list): the rewrite is the agent's own behaviour, not a platform fact, so the patterns
- *  live here beside the signature that has always known the title. Found live on macOS (D47): the macOS form knew only the
- *  bundle path, so a `-p` CLI's sockets — whose `ps` command line is exactly `zcode-cli` — came out `path-unknown` at the door, the accept-time verdict
- *  was never asked, and every connection was spliced `untracked` with no llm_call, while cc/codex/dsh (none of which rewrites its command line)
- *  decrypted fine. The title pattern is unanchored because the form-pattern subset has no anchors (4.8 §2.3: `^` and `$` are not letters JavaScript and
- *  .NET read the same way): the image and path gates are what pin the binary, the command line only tells the CLI from the desktop. On win32 the title
- *  assignment reaches the console title alone, never GetCommandLineW, so the title pattern simply never hits there. */
-export const CLI_CMDLINE = ['zcode\\.cjs', 'zcode-cli']
 // the model fetch follows only ZCODE_HTTP_PROXY / network.httpProxy (HTTP(S)_PROXY is web-fetch only)
 const CDN_HOST = 'cdn-zcode.z.ai'
 const PROXY_SOURCES = [
@@ -151,17 +138,13 @@ const proxy = {
 export default {
   name: 'z-code',
   runtime: 'node',
-  signatures: {
-    linux: {
-      match: [
-        { exe: ZEXE, argv: [CJS], env: AS_NODE },
-        { exe: ZEXE, 'argv.0': TITLE, env: AS_NODE },
-        { exe: NODE, 'argv.1': CJS },
-        { exe: NODE, 'argv.0': TITLE },
-      ],
-      exclude: [{ argv: [/^__zcode-(plugin-host|dwf-child)$/] }],
-      longLived: [{ argv: [/^(app|agent)-server$/] }],
-    },
+  // Which processes are Z-Code (D51 preset, every OS): the bundle zcode.cjs under glm/ run by the app's exe, its Helper or a plain node (remote
+  // mode), the CLI's retitled zcode-cli, and on win32 the desktop's Chromium network service. Its plugin host and dwf child are helpers.
+  processes: {
+    names: [{ name: 'zcode-cli' }, { name: 'zcode', entry: ZCJS }, { name: 'zcode helper', entry: ZCJS }, { name: 'node', entry: ZCJS }, { name: 'zcode', args: NETWORK_SERVICE_ARG }],
+    // on Linux (the one OS that reads another process's environment) the app's exe is the agent only as Node (ELECTRON_RUN_AS_NODE=1): without it, the GUI
+    exclude: [{ name: 'zcode', env: { ELECTRON_RUN_AS_NODE: null } }, { name: ['zcode', 'zcode helper', 'node'], args: '(^| )__zcode-(plugin-host|dwf-child)( |$)' }, { name: 'zcode helper', args: NETWORK_SERVICE_ARG }],
+    longLived: [{ args: '(^| )(app|agent)-server( |$)' }],
   },
   hosts: ['api.z.ai', 'open.bigmodel.cn', 'zcode.z.ai', 'api.moonshot.cn', 'api.minimaxi.com', 'api.deepseek.com', 'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com', 'api.xiaomimimo.com', 'api.openai.com', 'api.anthropic.com', 'api.x.ai', 'openrouter.ai', 'opencode.ai'],
   layers,

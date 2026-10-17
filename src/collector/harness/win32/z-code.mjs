@@ -4,15 +4,29 @@
 //   z-code.cli      network.httpProxy in %USERPROFILE%\.zcode\cli\config.json (the ZCODE_HTTP_PROXY variable does not honour caCertFile), the same file as the trust key
 //                   network.caCertFile (written by the Linux descriptor's `inject`, as it is)
 //   z-code.desktop  opt-in (4.8 §2.4): httpProxy and httpProxyCaCertPath in %USERPROFILE%\.zcode\v2\setting.json. ZCode.exe IS this agent's process, not a host that carries other
-//                   programs' connections (D40, 4.8 §3, OPEN 23): its process rule is the whole image and it has no `hosts`.
-// ZCode.exe is no shared image, but two forms use it, so there is no PROCESS-NAME rule (it would hand the other form's connections to this one's listener).
+//                   programs' connections (D40, 4.8 §3, OPEN 23): it has no `hosts`.
+// Processes are told by the name list (D51), see the base file's `processes`.
 import path from 'node:path'
-import linux, { CLI_CMDLINE } from '../z-code.mjs'
+import linux from '../z-code.mjs'
+import { parseJsonc } from '../../core/config-read.mjs'
+import { chromiumRole } from '../../core/trust/chromium.mjs'
 
-const raw = String.raw
 const inject = (ctx) => linux.inject(ctx)
-const IMAGE_PATH = raw`\\Programs\\ZCode\\ZCode\.exe`
 const desktopSetting = (ctx) => path.join(ctx.env.get('ZCODE_DESKTOP_HOME_DIR') || ctx.home, '.zcode', 'v2', 'setting.json')
+
+// The desktop's Chromium network service (`ZCode.exe --type=utility …NetworkService`, D51④, plan §2.5) owns its sockets and trusts what the app's
+// own setting names: one synthetic layer, opened only by the wiring's `desktopDoor` (the confirmed optin-zcode item) AND v2/setting.json's
+// httpProxyCaCertPath — evaluate() reads that file back and finds asight's CA in it, or the verdict is untrusted; without either, no layer
+// (var-missing). `since` = the item's installed_at (config-after-start). The app-server (no Chromium role) keeps the base caCertFile layers.
+function layers(ctx) {
+  if (chromiumRole(ctx.argv) !== 'network-service') return linux.layers(ctx) // another Chromium child is never trusted anyway (core/trust/confirm.mjs)
+  if (!ctx.desktopDoor) return []
+  const file = desktopSetting(ctx)
+  const text = ctx.readText(file)
+  const ca = text == null ? null : ((parseJsonc(text).data || {}).httpProxyCaCertPath)
+  if (typeof ca !== 'string' || !ca.trim()) return []
+  return [{ name: `desktop setting httpProxyCaCertPath (${file})`, file, mode: 'override', vars: { ZCODE_AGENT_CA_CERT: ca.trim() }, live: false, since: ctx.desktopDoor.since }]
+}
 
 export default {
   groups: [
@@ -34,14 +48,12 @@ export default {
     },
   ],
   forms: [
-    // `cmdline` is the base descriptor's CLI_CMDLINE (z-code.mjs): the bundle path as invoked AND the title a `-p` / `tui` CLI sets (`zcode-cli`). On
-    // Windows the assignment reaches only the console title, never GetCommandLineW, so the title pattern never hits here — it is carried because the
-    // rewrite is the agent's own behaviour, one list for both twins (found live on the darwin lab, 2026-10-12: the mac twin knew only the bundle path
-    // and a CLI's sockets came out path-unknown at the door, no verdict asked)
-    { id: 'z-code.cli', g: 'z-code.cli', match: { image: 'ZCode.exe', path: [IMAGE_PATH], cmdline: CLI_CMDLINE, reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
-    { id: 'z-code.desktop', g: 'z-code.desktop', match: { image: 'ZCode.exe', path: [IMAGE_PATH], reportUnknownPath: true }, nameRule: false, processRules: true, supported: true },
+    // the exe running its zcode.cjs bundle; a `-p` / `tui` CLI's `zcode-cli` title reaches only the console title on Windows, never GetCommandLineW
+    { id: 'z-code.cli', g: 'z-code.cli', supported: true },
+    { id: 'z-code.desktop', g: 'z-code.desktop', supported: true },
   ],
   inject,
+  layers,
   proxy: {
     env: ['ZCODE_HTTP_PROXY'],
     files: [{ path: '%USERPROFILE%\\.zcode\\cli\\config.json', key: 'network.httpProxy', format: 'json' }],

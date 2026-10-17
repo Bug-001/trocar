@@ -17,7 +17,7 @@ test.after(() => fs.rmSync(dir, { recursive: true, force: true }))
 
 const agent = {
   name: 'alpha', runtime: 'node', hosts: ['api.alpha.test', '.alpha-cdn.test'],
-  signatures: { linux: { match: [{ exe: /\/alpha$/ }] } },
+  processes: { names: [{ name: 'alpha' }] },
   configHosts: (ctx) => [ctx.env.get('ALPHA_BASE_URL')].filter(Boolean).map((u) => new URL(u).hostname),
   trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] },
 }
@@ -29,7 +29,8 @@ function fakeRedirector() {
   r.scan = async () => r.live
   return r
 }
-const facts = (pid, o = {}) => ({ os: 'linux', pid, ppid: 1, uid: 1000, exe: '/opt/alpha', argv: ['alpha'], env: new Map(), cwd: '/', source: 'exec', startedAt: 0, ...o })
+// argv[0] follows the exe unless given: a process is named by its exe AND its argv[0] (D51), so an /opt/beta with argv[0] alpha would be both
+const facts = (pid, o = {}) => ({ os: 'linux', pid, ppid: 1, uid: 1000, exe: '/opt/alpha', argv: [typeof o.exe === 'string' ? o.exe.split('/').pop() : 'alpha'], env: new Map(), cwd: '/', source: 'exec', startedAt: 0, ...o })
 function rig(descriptors = [agent], o = {}) {
   const redirector = fakeRedirector()
   const errors = []
@@ -73,7 +74,7 @@ test('tracker: a process no descriptor matches is never watched (S3); re-exec in
 // D-24 / review D1-4: an agent pid that leaves the table without exiting — it exec'd into a non-agent, or judging it
 // again threw — is told to onGone like an exit, so the daemon writes agent-exit and forgets its negative-cache entries.
 test('tracker: an agent that execs into a non-agent, or whose re-judging throws, leaves through onGone (D1-4)', async () => {
-  const thrower = { ...agent, name: 'beta', signatures: { linux: { match: [{ exe: /\/beta$/ }] } }, trust: { ...agent.trust, refine: () => { throw new Error('refine blew up') } } }
+  const thrower = { ...agent, name: 'beta', processes: { names: [{ name: 'beta' }] }, trust: { ...agent.trust, refine: () => { throw new Error('refine blew up') } } }
   const redirector = fakeRedirector()
   const gone = []
   const tracker = createTracker({ redirector, registry: createRegistry([agent, thrower]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, onGone: (row, via) => gone.push([row.pid, row.agent, via]) })
@@ -166,7 +167,7 @@ test('tracker: a layer read only at start is judged against installedAt when asi
 })
 
 // A plugin harness (D37④): trust only through the per-pid marker its plugin writes (4.6 「标记」).
-const plugged = { ...agent, name: 'beta', hosts: ['api.beta.test'], signatures: { linux: { match: [{ exe: /\/beta$/ }], longLived: [{ argv: [/^serve$/] }] } },
+const plugged = { ...agent, name: 'beta', hosts: ['api.beta.test'], processes: { names: [{ name: 'beta' }], longLived: [{ args: '(^| )serve( |$)' }] },
   trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }, { var: 'asight:marker', semantic: 'append' }], refine: (r) => (r.reason === 'var-missing' ? 'no-marker' : null) } }
 function markerRig(o = {}) {
   const markerDir = fs.mkdtempSync(path.join(dir, 'run-trust-'))
@@ -215,7 +216,7 @@ test('tracker: no marker by the end of the grace → the harness reason (no-mark
 })
 
 test('tracker: hosts a harness declares as not via the trust path are never decrypted, under all and operator hosts too (4.6 不经信任路径, T12)', async () => {
-  const gamma = { ...agent, name: 'gamma', signatures: { linux: { match: [{ exe: /\/gamma$/ }] } },
+  const gamma = { ...agent, name: 'gamma', processes: { names: [{ name: 'gamma' }] },
     bypass: (ctx) => [{ host: 'models.alpha.test', reason: 'before-plugin' }, ...(ctx.env.get('ALPHA_WS') ? [{ host: 'api.alpha.test', reason: 'ws-path' }] : [])] }
   const { redirector, tracker } = rig([gamma])
   redirector.emit('exec', facts(600, { exe: '/opt/gamma', env: new Map([['EXTRA_CA', PEM]]) }))
@@ -229,21 +230,23 @@ test('tracker: hosts a harness declares as not via the trust path are never decr
 })
 
 test('tracker: extrasFor hands the engine this process\'s own proxies and the harness WebSocket terminators (plan 3c describe, 4.6 §引擎 3)', async () => {
-  const delta = { ...agent, name: 'delta', signatures: { linux: { match: [{ exe: /\/delta$/ }] } },
+  const delta = { ...agent, name: 'delta', processes: { names: [{ name: 'delta' }] },
     proxies: (ctx) => ['HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'].filter((k) => ctx.env.get(k)).map((k) => ({ url: ctx.env.get(k), source: `env:${k}` })),
     wsTerminal: [{ pathSuffix: '/ws', patterns: ['^\\{"done"'] }] }
   const { redirector, tracker } = rig([delta, agent])
   const env = new Map([['EXTRA_CA', PEM], ['HTTPS_PROXY', 'https://user:secret@Proxy.Example.com:8443'], ['HTTP_PROXY', 'plain-proxy.example.com:3128'], ['ALL_PROXY', 'ftp://x']])
   redirector.emit('exec', facts(550, { exe: '/opt/delta', env }))
   redirector.emit('exec', facts(551, { env: new Map([['EXTRA_CA', PEM], ['HTTPS_PROXY', 'https://p.example.com']]) })); await settle()
-  assert.deepEqual(tracker.extrasFor(550), {
+  const noTrust = ({ trust, ...rest }) => rest // trust: the entry the verdict relied on (D51④, trust-rejected.test.mjs)
+  assert.equal(tracker.extrasFor(550).trust.var, 'EXTRA_CA')
+  assert.deepEqual(noTrust(tracker.extrasFor(550)), {
     wsTerminal: [{ pathSuffix: '/ws', patterns: ['^\\{"done"'] }],
     proxies: [
       { scheme: 'https', host: 'proxy.example.com', port: 8443, own: true, source: 'env:HTTPS_PROXY' }, // no credentials
       { scheme: 'http', host: 'plain-proxy.example.com', port: 3128, own: true, source: 'env:HTTP_PROXY' },
     ],
   })
-  assert.deepEqual(tracker.extrasFor(551), { wsTerminal: null, proxies: [] }, 'a harness that declares no proxy reader hands none over')
+  assert.deepEqual(noTrust(tracker.extrasFor(551)), { wsTerminal: null, proxies: [] }, 'a harness that declares no proxy reader hands none over')
   assert.deepEqual([tracker.extrasFor(null), tracker.extrasFor(9999)], [{}, {}])
   // its proxies are not decrypt hosts: the engine's proxy path decides from FlowExtras (4.6 §引擎 3, plan 3c-7)
   assert.deepEqual(['proxy.example.com', 'plain-proxy.example.com'].map((h) => tracker.policy({ pid: 550 }, h)), [false, false])
@@ -257,7 +260,7 @@ test('tracker: a long-lived process missing the variable is env-frozen; a config
   r.redirector.emit('exec', facts(820, { exe: '/opt/beta', argv: ['beta', 'serve'], startTicks: '1', startedAt: r.clock - 60_000 })); await settle()
   assert.equal(r.tracker.describe(820).reason, 'no-marker', 'a plugin harness says the marker, not env-frozen')
   r.redirector.emit('exec', facts(821, { exe: '/opt/alpha', argv: ['alpha'] })); await settle()
-  const longLived = { ...agent, name: 'delta', signatures: { linux: { match: [{ exe: /\/delta$/ }], longLived: [{ argv: [/^serve$/] }] } },
+  const longLived = { ...agent, name: 'delta', processes: { names: [{ name: 'delta' }], longLived: [{ args: '(^| )serve( |$)' }] },
     layers: (ctx) => [ctx.readText('/locked/.env'), ctx.readText('/absent/.env')].filter(Boolean).map(() => null) }
   const errs = []
   const t = createTracker({ redirector: fakeRedirector(), registry: createRegistry([longLived]), trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir,
@@ -316,7 +319,7 @@ test('tracker: the default marker watcher hands its error event on', async () =>
 })
 
 test('tracker: a harness\'s refine can read its own files through the tracker\'s reader and knows the collector dir and the exe (a launch shim lives there)', async () => {
-  const shimmed = { ...agent, name: 'gamma', signatures: { linux: { match: [{ exe: /\/gamma$/ }] } },
+  const shimmed = { ...agent, name: 'gamma', processes: { names: [{ name: 'gamma' }] },
     trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }], refine: (r, env, { readText, collectorDir, exe }) => (r.reason !== 'var-missing' ? null : `${readText(path.join(collectorDir, 'bin', 'gamma')) == null ? 'no-shim' : 'not-via-shim'}@${exe}`) } }
   const cdir = fs.mkdtempSync(path.join(dir, 'collector-'))
   const redirector = fakeRedirector()
@@ -330,7 +333,7 @@ test('tracker: a harness\'s refine can read its own files through the tracker\'s
 })
 
 test('tracker: a harness reports a config file that does not parse; the row carries it for the daemon (D38, review 3 #9)', async () => {
-  const picky = { ...agent, name: 'eps', signatures: { linux: { match: [{ exe: /\/eps$/ }] } }, layers: (ctx) => { ctx.unparsable('/cfg/a.json'); ctx.unparsable('/cfg/a.json'); return [] } }
+  const picky = { ...agent, name: 'eps', processes: { names: [{ name: 'eps' }] }, layers: (ctx) => { ctx.unparsable('/cfg/a.json'); ctx.unparsable('/cfg/a.json'); return [] } }
   const { redirector, tracker } = rig([picky])
   redirector.emit('exec', facts(850, { exe: '/opt/eps', argv: ['eps'] })); await settle()
   assert.deepEqual(tracker.describe(850).parseErrors, ['/cfg/a.json'])
@@ -384,12 +387,12 @@ test('tracker: facts-update re-judges the same pid and pushes watch again (a for
 })
 
 test('tracker: the wiring\'s osLayers pick a descriptor\'s platform layers (the daemon hands the win32 ones, 4.8 §5.4); without them the descriptor\'s own layers run', async () => {
-  const d = { ...agent, name: 'delta', signatures: { linux: { match: [{ exe: /\/delta$/ }] } },
+  const d = { ...agent, name: 'delta', processes: { names: [{ name: 'delta' }] },
     layers: () => [{ name: 'the linux layers', file: path.join(dir, 'l.env'), mode: 'override', vars: {}, live: true, mtimeMs: 1 }],
     win32: { layers: () => [{ name: 'the win32 layers', file: path.join(dir, 'w.env'), mode: 'override', vars: { EXTRA_CA: PEM }, live: true, mtimeMs: 1 }] } }
   const os = async (osName, o = {}) => {
     const redirector = fakeRedirector()
-    const registry = createRegistry([d], osName === 'win32' ? { osMatch: { win32: () => 'delta' } } : {}) // the seam under test here is the layers; the form rule is osMatch's (above)
+    const registry = createRegistry([d]) // the seam under test here is the layers; the name list is the same on every OS (D51)
     const tracker = createTracker({ redirector, registry, trust: createTrustChecker({ caCertPem: ca.certPem }), home: dir, alive: () => false, osLayers: { win32: (x) => x.win32.layers }, ...o })
     tracker.start()
     redirector.emit('exec', facts(430, { os: osName, exe: '/opt/delta', argv: ['delta'], env: null, envRead: false }))
@@ -413,7 +416,7 @@ test('tracker: an unreadable environment is untrusted as environ-unreadable, nev
 })
 
 // ── per-harness switching (1.6 §1.5, D39②) ─────────────────────────────────────────────────────────────────────────────────────
-const beta = { ...agent, name: 'beta', hosts: ['api.beta.test'], signatures: { linux: { match: [{ exe: /\/beta$/ }] } } }
+const beta = { ...agent, name: 'beta', hosts: ['api.beta.test'], processes: { names: [{ name: 'beta' }] } }
 const betaFacts = (pid, o = {}) => facts(pid, { exe: '/opt/beta', argv: ['beta'], ...o })
 
 test('tracker: a harness that is not on is never judged, never watched and never told to onVerdict; its rows are listed with off:true (1.6 §1.5)', async () => {
@@ -562,4 +565,14 @@ test('tracker: the decrypt policy is per harness — each uses its own mode and 
   assert.deepEqual([tracker.policy({ pid: 750 }, 'anything.example'), tracker.policy({ pid: 751 }, 'anything.example')], [false, true])
   tracker.setPolicy({ mode: 'all' }) // the old form: one policy for every harness
   assert.deepEqual([tracker.policy({ pid: 750 }, 'anything.example'), tracker.policy({ pid: 751 }, 'anything.example')], [true, true])
+})
+
+test('rejudgeAll: a row a host-tree door named (hostAgent) is the door\'s harness whatever the name list says — it survives an agents.json change, no false agent-exit', async () => {
+  const gone = []
+  const { redirector, tracker } = rig([agent], { onGone: (row, via) => gone.push([row.pid, via]) })
+  redirector.emit('exec', facts(300, { exe: '/usr/share/code/code', argv: ['code'], hostAgent: 'alpha' })); await settle()
+  assert.deepEqual(tracker.agents().map((r) => [r.pid, r.agent]), [[300, 'alpha']], 'judged as the door\'s harness, not by its name')
+  await tracker.rejudgeAll('list')
+  assert.deepEqual(tracker.agents().map((r) => [r.pid, r.agent]), [[300, 'alpha']], 'still there after the list changed')
+  assert.deepEqual(gone, [], 'no agent-exit')
 })
