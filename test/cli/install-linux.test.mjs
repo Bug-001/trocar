@@ -18,6 +18,10 @@ test('Linux install: CA + trust entries (phase install) + asight-off, no unit, n
   const ctx = (io) => ({ ...onCtx(home, io), platform: 'linux' })
   const io = fakeIo()
   assert.equal(await runInstallCli(['--yes'], ctx(io)), 0, io.text())
+  // R1: the receipt says each user file it changed — path, what was changed, where the backup is — not only the plan before the yes
+  const receipt = io.text().slice(io.text().indexOf('asight install 完成'))
+  assert.match(receipt, /~\/\.claude\/settings\.json +加 env\.NODE_EXTRA_CA_CERTS +备份 ~\/\.asight\/backup\//, receipt)
+  assert.match(receipt, /asight 自己建的: .*asight-off/, receipt)
   const dir = path.join(home, '.asight', 'collector')
   const m = readManifest(dir)
   assert.equal(m.install.state, 'complete')

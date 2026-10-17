@@ -64,6 +64,20 @@ export const lingerText = ({ linger, linger_reason: why = null, user = null }) =
 
 const joinPaths = (list, home) => list.map((x) => tilde(typeof x === 'string' ? x : x.path, home)).join('  ')
 
+/** R1's file lines of a receipt that writes (`on`, Linux `install`): each user file changed — path, what, where its backup is — then what asight made itself.
+ *  `past`: false for a dry run (what it would do). */
+export function changeLines(r, { past = true, home = null } = {}) {
+  const t = (x) => tilde(x, home)
+  const lines = []
+  if (r.changed.length) {
+    lines.push(past ? '改了这些文件:' : '将改这些文件:')
+    const w = Math.max(...r.changed.map((x) => t(x.path).length)), v = Math.max(...r.changed.map((x) => x.change.length))
+    for (const x of r.changed) lines.push(`  ${t(x.path).padEnd(w)}  ${x.change.padEnd(v)}  ${x.backup ? `备份 ${t(x.backup)}` : past ? '(asight 新建的文件,没有改前版本可备份)' : '备份 改前先存进 ~/.asight/backup/'}`)
+  } else lines.push(past ? '没有改任何用户文件。' : '不会改任何用户文件。')
+  if (r.created.length) lines.push(`${past ? 'asight 自己建的' : 'asight 将自己建'}: ${joinPaths(r.created, home)}`)
+  return lines
+}
+
 /** The receipt of `asight on` as text (D46: the verdict first, the changes it lists in full — R1 — the long tail pointed at). `tense`: 'past' | 'future'
  *  (the dry run). `fresh` = the set of harnesses THIS run newly wired (their one-time notes print; the rest live in `doctor` and `--json` — the notes
  *  themselves stay in the receipt object untouched, R5/R11); null prints every note (the pure call). */
@@ -80,12 +94,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
         : past ? `${c.green('✔')} 入口已写 · ${daemonBit || '守护进程: 不知道'}${doorsBit}`
           : 'asight 将打开采集(本用户,不用 sudo)。',
   ]
-  if (r.changed.length) {
-    lines.push(past ? '改了这些文件:' : '将改这些文件:')
-    const w = Math.max(...r.changed.map((x) => t(x.path).length)), v = Math.max(...r.changed.map((x) => x.change.length))
-    for (const x of r.changed) lines.push(`  ${t(x.path).padEnd(w)}  ${x.change.padEnd(v)}  ${x.backup ? `备份 ${t(x.backup)}` : past ? '(asight 新建的文件,没有改前版本可备份)' : '备份 改前先存进 ~/.asight/backup/'}`)
-  } else lines.push(past ? '没有改任何用户文件。' : '不会改任何用户文件。')
-  if (r.created.length) lines.push(`${past ? 'asight 自己建的' : 'asight 将自己建'}: ${joinPaths(r.created, home)}`)
+  lines.push(...changeLines(r, { past, home }))
   if (r.unchanged && r.unchanged.length) { // the display caps at three names; the whole list is the receipt's `unchanged` (R5) — none of them is rewritten by a second on (R9)
     const shown = joinPaths(r.unchanged.slice(0, 3), home)
     lines.push(`已在位、没有重写: ${shown}${r.unchanged.length > 3 ? `  …等 ${r.unchanged.length} 个(全部: --json)` : ''}`)

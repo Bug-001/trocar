@@ -89,7 +89,7 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
 async function linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked }) {
   const { readAgentList } = await import('../off/identity.mjs')
   const { writeStandalone, buildStandalone } = await import('../off/standalone.mjs')
-  const { formatPlan } = await import('./receipt.mjs')
+  const { formatPlan, changeLines } = await import('./receipt.mjs')
   const { OFF_VERSION } = await import('../off/manifest.mjs')
   const parts = deps.parts || await (await import('../collector/daemon.mjs')).loadParts({ env, agentList: readAgentList({ home, fs }).entries })
   const inst = await import('../collector/install.mjs')
@@ -121,6 +121,6 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const { stdl, r } = done
   const receipt = { ...newReceipt('install'), ok: true, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created)], standalone: standalonePath(home), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], notes: r.plan ? r.plan.notes : [] }
   if (json) io.out(JSON.stringify(receipt, null, 2))
-  else io.out([`asight install ${r.already ? '已经装好,什么都没改' : '完成'}。`, ...receipt.notes.map((n) => `  · ${n}`), `开 asight on · 关 asight off · 状态 asight status · 卸载 asight uninstall · 独立撤销 ${standalonePath(home)}`].join('\n'))
+  else io.out([`asight install ${r.already ? '已经装好,什么都没改' : '完成'}。`, ...(r.already ? [] : changeLines(receipt, { home })), ...receipt.notes.map((n) => `  · ${n}`), `开 asight on · 关 asight off · 状态 asight status · 卸载 asight uninstall · 独立撤销 ${standalonePath(home)}`].join('\n'))
   return EXIT.ok
 }
