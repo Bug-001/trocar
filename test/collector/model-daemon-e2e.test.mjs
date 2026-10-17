@@ -16,6 +16,8 @@ import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
+import { runUninstallCli } from '../../src/cli/uninstall.mjs'
+import { readManifest } from '../../src/off/manifest.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 import { statusRun } from '../../src/cli/status.mjs'
 import { runDoctor } from '../../src/cli/doctor.mjs'
@@ -116,6 +118,45 @@ for (const platform of ['darwin', 'win32']) {
         const why = await Promise.race([box.daemon.exited.then((x) => ({ x })), new Promise((res) => setTimeout(() => res(null), 5000))])
         assert.ok(why, 'the daemon drained and exited after off (mayExit: nothing on, no holder, no connection)')
         assert.equal(await canConnect(port), false, 'the door is closed')
+      } finally { await box.stop() }
+    })
+  })
+}
+
+// CM24 / 4.11 ruling ② across the real seam (macOS acceptance G11 「uninstall with a holder and the daemon down exited 0」): the real `on` opens the window,
+// the real `off` closes it (the manifest's off_at) while a codex started inside it still lives; `uninstall` through the real endpoint refuses with the
+// daemon up (GET /holders) and, the daemon stopped, again (the CLI judges the same table from the manifest); once the holder has exited it uninstalls.
+for (const platform of ['darwin', 'win32']) {
+  test(`${platform}: CM24 · a holder from the on window: uninstall refuses with the daemon up and with it down, and uninstalls once the holder exits`, { timeout: 30_000 }, async () => {
+    const w = await modelWorld({ os: platform, commands: ['codex'] })
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    const box = await liveUnit({ w, platform })
+    await withScratchCwd(platform, async () => {
+      try {
+        const stub = () => ({ status: 0, stdout: '', stderr: '' })
+        const base = { getuid: () => 501, alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: stub }
+        let table = []
+        const deps = { ...base, procs: async () => table }
+        const io = fakeIo()
+        assert.equal(await runOnCli(['codex', '--yes'], { io, env: w.env, home: w.home, platform, deps: { ...base, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) } }), 0, io.text())
+        const holder = { pid: 4711, ppid: 1, uid: 501, startedAt: Date.now() + 5, exe: '/usr/local/bin/codex', argv: ['codex'], argvSplit: true, cmdline: 'codex', env: () => null, envRead: false }
+        await new Promise((res) => setTimeout(res, 10))
+        table = [holder]; box.procs = table
+        const io2 = fakeIo()
+        assert.equal(await runOffCli([], { io: io2, home: w.home, env: w.env, platform, deps }), 0, io2.text())
+        const uninstall = async () => { const o = fakeIo(); const exit = await runUninstallCli(['--yes'], { io: o, env: w.env, home: w.home, platform, deps: { ...deps, custody: w.custody } }); return { exit, text: o.text() } }
+        const up = await uninstall()
+        assert.equal(up.exit, 1, up.text); assert.match(up.text, /pid 4711 \(codex\)/, 'daemon up: GET /holders names it')
+        await box.stop()
+        http.globalAgent.destroy() // a CLI is a new process: no kept-alive socket to the stopped daemon's server
+        const down = await uninstall()
+        assert.equal(down.exit, 1, down.text); assert.match(down.text, /pid 4711 \(codex\)/, 'daemon down: the CLI judges it from the manifest\'s window and the table')
+        assert.equal(readManifest(w.dir).install.state, 'complete', 'nothing was undone')
+        assert.ok(readManifest(w.dir).liveness.codex.off_at, 'the real off closed the window in the manifest')
+        table = []
+        const after = await uninstall()
+        assert.equal(after.exit, 0, after.text)
+        assert.equal(fs.existsSync(path.join(w.dir, 'state.json')), false, 'uninstalled')
       } finally { await box.stop() }
     })
   })
