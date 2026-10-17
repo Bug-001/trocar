@@ -98,7 +98,9 @@ const proxyMode = {
     plugin: { kind: 'plugin', template: 'cordis-plugin', dir: DSH(), loader: { file: DSH('cordis.patch.yml'), format: 'yaml', keys: ['*', 'insert'] } },
   },
   trusts: {
-    node: { base: 'node', sources: [] }, // the plugin carries the CA in process; carrier time = the plugin's installed_at
+    // the plugin carries the asight root in process (carrier time = the plugin's installed_at); dsh is Node, so the files its own
+    // NODE_EXTRA_CA_CERTS names are in its set too (a relay's private CA: the door verifies that upstream with it, 4.11 §3 ⑭)
+    node: { base: 'node', sources: [{ from: { env: 'NODE_EXTRA_CA_CERTS' }, semantics: 'add' }] },
   },
   userCertFiles: [],
   blockers: [],
