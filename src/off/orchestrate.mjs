@@ -179,7 +179,7 @@ export function userProcessesOf(list, selfPid = process.pid) {
 // What a row of the receipt says an entry lost (1.6 §7): the key, the block, the line.
 function offChangeText(e, result) {
   if (!e) return '去掉 asight 加的部分'
-  if (e.kind === 'text') return e.vars ? `去掉 asight 哨兵块(${Object.keys(e.vars).join(', ')})` : `去掉一行(${String(e.line).split(' # ')[0].trim()})`
+  if (e.kind === 'text') return e.vars ? `去掉 asight 哨兵块(${Object.keys(e.vars).join(', ')})` : e.format === 'pem-block' ? '去掉 asight 的证书段' : `去掉一行(${String(e.line).split(' # ')[0].trim()})`
   const keys = (e.keys || []).join('.')
   return e.prior_value != null && result !== 'left-user-value' ? `把 ${keys} 换回原值` : `去掉 ${keys}`
 }
