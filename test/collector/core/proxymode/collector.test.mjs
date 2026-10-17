@@ -352,6 +352,38 @@ test('CM23 · on → off → on → off: a live process the door recognised in t
   c.close()
 })
 
+// macOS acceptance G11 (daemon up: uninstall exited 0 with a holder): the poll that stopped after the first off kept its last answer, an empty one, and the
+// second off's GET /holders and mayExit read that answer while the new poll's first table was still being read (lsof takes seconds on a real Mac). The
+// table read for off is held open here, so the stale answer is all the old code had: the second off's own rows are what both must see.
+test('CM23 · a second off answers GET /holders and mayExit from its own table, never the stopped poll\'s last (empty) answer', async () => {
+  const pending = []
+  const timers = { setTimeout: (fn) => { pending.push(fn); return pending.length }, clearTimeout: () => {} }
+  const d = descs[0], f = d.proxyMode.forms.find((x) => x.os.includes('darwin')), g = `${d.name}:${f.route}`
+  const T1 = INSTALLED + 100, T2 = INSTALLED + 1000
+  let table = [{ pid: 51, startedAt: T1 + 1 }], hang = null, reads = 0
+  const { c, w } = await rig({ desc: d, timers, w: { pid: 51, facts: { agent: d.name, startedAt: T1 + 1 }, env: {} } })
+  Object.defineProperty(w, 'procs', { get: () => { reads++; return hang && reads > 1 ? hang.p : table } })
+  const live = (on, off) => { w.manifest = manifestOf(d.name, { liveness: { [d.name]: { on_at: iso(on), ...(off ? { off_at: iso(off) } : {}) } } }) }
+  const connect = () => c.lookupIngress({ peer: PEER, user: g, target: { address: 'api.example', port: 443 } })
+  live(T1); w.now = T1; await c.on({ harnesses: [d.name], groups: { [g]: 18108 } })
+  w.now = T1 + 2; await connect()
+  w.now = T1 + 10; live(T1, T1 + 10); assert.equal((await c.off({ harnesses: [d.name] })).holders, 1)
+  table = [] // the first holder exits: the poll answers [] and stops, its door closes
+  for (let i = 0; i < 3 && Object.keys(c.doors()).length; i++) { await pending.shift()?.(); await new Promise((r) => setImmediate(r)) }
+  assert.deepEqual(c.doors(), {})
+  // window 2: a new holder; the poll's own table read hangs (the real lsof's seconds), the off's first read answers
+  table = [{ pid: 52, startedAt: T2 + 1 }]; w.pid = 52; w.facts = { agent: d.name, startedAt: T2 + 1 }
+  live(T2); w.now = T2; await c.on({ harnesses: [d.name], groups: { [g]: 18108 } })
+  w.now = T2 + 2; await connect()
+  let release; hang = { p: new Promise((r) => { release = () => r(table) }) }; reads = 0
+  w.now = T2 + 10; live(T2, T2 + 10)
+  assert.equal((await c.off({ harnesses: [d.name] })).holders, 1)
+  try {
+    assert.equal((await c.holders()).count, 1, 'GET /holders right after the second off names its holder')
+    assert.equal(c.mayExit(), false, 'and the daemon may not exit under it')
+  } finally { release(); c.close() }
+})
+
 // ---- ① / G4: no writes; the recorded ports; a taken port ----------------------------------------------------------------------------------------
 test('4.11 ① · on / off / restore / lookup write nothing: a recording fs over the real state, ingress and manifest files sees zero writes', async () => {
   const dir = tmpDir()

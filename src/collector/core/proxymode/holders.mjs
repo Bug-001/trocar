@@ -14,21 +14,32 @@ export const mayExit = ({ harnessesOn = [], holders = [], openConns = 0 } = {}) 
 
 /** Polls `list()` (→ holdersOf's rows; it reads the process table, never the connections) every `every` ms through injected `timers`
  *  ({ setTimeout, clearTimeout }); `onChange(rows)` when the set of (harness, pid, start) changes, the first answer included. A list that throws keeps
- *  the last answer (an unreadable table is not "nobody holds the door") and is passed to `onError`. → { start(), stop(), now() → rows | null }. */
+ *  the last answer (an unreadable table is not "nobody holds the door") and is passed to `onError`. → { start(seed?), stop(), now() → rows | null }.
+ *  Each `start` begins a new watch (an `off`): `seed` is the table that off has just judged (null: none yet), and nothing of an earlier watch stands for
+ *  this one — neither its rows nor a read still in flight (a poll stopped with [] answered GET /holders and mayExit for the next off while its
+ *  first table was still being read). `stop` forgets the rows: GET /holders then judges afresh. */
 export function createHolderPoll({ list, every = HOLDER_POLL_MS, timers = globalThis, onChange = () => {}, onError = () => {} } = {}) {
-  let rows = null, sig = null, timer = null, running = false
-  const tick = async () => {
+  let rows = null, sig = null, timer = null, running = false, watch = 0
+  const sigOf = (r) => r.map(keyOf).sort().join('\n')
+  const tick = async (w) => {
     try {
       const next = await list()
-      const s = next.map(keyOf).sort().join('\n')
+      if (w !== watch) return // a read of a watch that has ended or been restarted
+      const s = sigOf(next)
       rows = next
       if (s !== sig) { sig = s; onChange(next) }
-    } catch (e) { onError(e) }
-    if (running) timer = timers.setTimeout(tick, every)
+    } catch (e) { if (w === watch) onError(e) }
+    if (running && w === watch) timer = timers.setTimeout(() => tick(w), every)
   }
+  const clear = () => { if (timer != null) timers.clearTimeout(timer); timer = null }
   return {
-    start() { if (!running) { running = true; tick() } },
-    stop() { running = false; if (timer != null) timers.clearTimeout(timer); timer = null },
+    start(seed = null) {
+      clear(); running = true
+      const w = ++watch
+      rows = Array.isArray(seed) ? seed : null; sig = rows ? sigOf(rows) : null
+      if (rows) timer = timers.setTimeout(() => tick(w), every); else tick(w)
+    },
+    stop() { ++watch; running = false; clear(); rows = null; sig = null },
     now: () => rows,
   }
 }

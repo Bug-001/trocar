@@ -282,7 +282,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
       let rows = null
       try { rows = await holdersNow() } catch { rows = null } // unreadable: unknown, every door stays
       if (rows) await settle(rows)
-      if (kept().length) poll.start()
+      if (kept().length) poll.start(rows) // this off's own table: never the last watch's answer
       const relayed = drain ? await drain({ harnesses: ids, now: !!now }) : null
       return { pid, actual: onSet.size ? 'on' : 'off', confirmed: true, relayed, holders: rows ? rows.length : null }
     },
