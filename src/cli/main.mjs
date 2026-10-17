@@ -1,33 +1,54 @@
-// main.mjs — `asight <command> …` from the argument list to the exit code (RFC 1.6 §2, R4, R7, R10): the dispatch over the one table of commands (src/cli/commands.mjs). It resolves a hidden alias, says one
-// command's help for `--help` / `-h`, refuses root for the per-user commands that change state and a non-root caller for `setup-helper` BEFORE anything is read or written, then hands the command its
-// context. An unknown command is a usage error on stderr, exit 2 (it used to print the usage and exit 0). What a command returns is the exit code; this file never exits the process (bin/asight.mjs does).
+// main.mjs — `asight <command> …` from the argument list to the exit code (RFC 1.6 §1.2, §1.3, §1.5, §2): the dispatch over the one table of
+// commands (src/cli/commands.mjs). It answers help and `--version` itself, refuses an unknown command or option in one line, refuses root for
+// the commands that change your own state and a non-root caller for setup-helper BEFORE anything is read or written, parses the options the
+// command declares, and turns anything the command throws into exit 70. With `--json` anywhere in the arguments every one of those answers is
+// one JSON document on stdout and nothing on stderr. What a command returns is the exit code; this file never exits the process (bin/asight.mjs does).
 //   runCli(argv, { io, env, home, platform, uid, deps }) → Promise<exit code>
 //     io        { out, err, stdin, stdout, stderr } (src/off/io.mjs makeIo); the process's own streams when none is given
 //     uid       who runs it (default: the process's); `deps.getuid` follows it, so a command's own root refusal agrees with this one
-//     deps      what the world gives (0.1 §3), passed to the command as it is; `deps.commands` = { <name>: async (argv, ctx) → exit } replaces what a command runs (a test's spy: what was dispatched, not what it does)
+//     deps      what the world gives (0.1 §3), passed to the command as it is; `deps.commands` = { <name>: async (argv, ctx) → exit } replaces
+//               what a command runs (a test's spy: what was dispatched, not what it does)
+//   The command gets `(argv, ctx)`; `ctx.args` is the parsed form of argv ({ positionals, flags }) and `ctx.json` whether `--json` was asked.
 import fs from 'node:fs'
 import os from 'node:os'
 import { makeIo } from '../off/io.mjs'
-import { commandNamed, resolveAlias, helpText } from './commands.mjs'
+import { commandNamed, helpText, usageLine } from './commands.mjs'
+import { parseArgs } from './args.mjs'
+import { printJson, errorDoc } from './json.mjs'
 import { EXIT } from './schema.mjs'
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const version = () => JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version
+const REPORT = 'Please report it with what you ran: https://github.com/Bug-001/asight/issues'
 
 export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }), env = process.env, home = os.homedir(), platform = process.platform, uid = processUid(), deps = {} } = {}) {
-  const [first] = argv
-  if (first === undefined || first === '--help' || first === '-h') { io.out(helpText(undefined, { platform })); return EXIT.ok }
-  if (first === '--version' || first === '-v' || first === 'version') { io.out(version()); return EXIT.ok }
-  const { argv: resolved } = resolveAlias(argv)
-  const [name, ...rest] = resolved
-  const cmd = commandNamed(name)
-  if (!cmd) {
-    io.err(first === 'collector' ? (await import('../collector/cli.mjs')).collectorHint(argv[1]) : `asight: 没有这个命令 '${first}'\n\n${helpText(undefined, { platform })}`)
-    return EXIT.usage
+  const json = argv.includes('--json')
+  /** One answer that is not an answer: a JSON document on stdout, or a line (and the usage line, when there is one) on stderr. */
+  const refuse = (command, code, message, { usage = null, detail = null, exit = EXIT.usage } = {}) => {
+    if (json) printJson(io, errorDoc(command, code, message, detail))
+    else { io.err(message); if (usage) io.err(usage) }
+    return exit
   }
-  if (rest.includes('--help') || rest.includes('-h')) { io.out(helpText(cmd.name, { platform })); return EXIT.ok }
-  if (cmd.mutates && uid === 0) { io.err(`asight ${cmd.name}: 用你自己的账号跑,不要用 root / sudo(D36;只有 \`sudo asight setup-helper\` 要 root)`); return EXIT.incomplete }
-  if (cmd.needsRoot && uid !== 0) { io.err(`asight ${cmd.name}: 要以 root 跑(给助手加能力位、放进 root 所有的路径,D36):sudo asight ${cmd.name}`); return EXIT.incomplete }
+  const [first, ...rest] = argv
+  if (first === undefined || first === '--help' || first === '-h') { io.out(helpText()); return EXIT.ok } // `asight` with nothing = `asight help` (§2)
+  if (first === '--version') { io.out(`asight ${version()}`); return EXIT.ok }
+  const cmd = commandNamed(first)
+  if (!cmd) return refuse(first, 'usage', `asight: unknown command '${first}'. Run: asight help`)
+  if (rest.includes('--help') || rest.includes('-h')) { io.out(helpText(cmd.name)); return EXIT.ok }
+  // §1.5: the commands that change your own state refuse root, and the one that needs root refuses everyone else — before anything is read or written.
+  if (cmd.needsRoot && platform !== 'linux') return refuse(cmd.name, 'usage', `asight ${cmd.name}: not needed on this platform.`)
+  if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `asight ${cmd.name}: run it with sudo: sudo asight ${cmd.name}`)
+  if (cmd.mutates && uid === 0) return refuse(cmd.name, 'usage', `asight ${cmd.name}: run this as your own user, not as root.`)
+  const args = parseArgs(cmd, rest)
+  if (args.error) return refuse(cmd.name, args.error.code, args.error.message, { usage: args.error.usage })
   const run = (deps.commands && deps.commands[cmd.name]) || cmd.run
-  return run(rest, { io, env, home, platform, uid, deps: { getuid: () => uid, ...deps } })
+  try {
+    return await run(rest, { io, env, home, platform, uid, json, args, deps: { getuid: () => uid, ...deps } })
+  } catch (e) {
+    // §1.3: 70 is asight's own fault. The message is one line; the stack belongs in `--json` and in a report, never on a person's screen.
+    const message = `asight: internal error: ${(e && e.message) || e}`
+    if (json) { printJson(io, errorDoc(cmd.name, 'internal', message, (e && e.stack) || String(e))); return EXIT.crash }
+    io.err(message); io.err(REPORT)
+    return EXIT.crash
+  }
 }
