@@ -218,7 +218,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
   // to flows/: no token, right or wrong, is in any record (§5.1).
   const shownUser = (u) => (u === '' ? '' : ROUTE_NAME.test(u) && !u.includes(token) ? printable(u) : '(not a route name)')
   const openerMs = timing.ingressOpenerMs ?? 10_000, healthIdleMs = timing.ingressHealthIdleMs ?? 30_000
-  const counters = { connections: 0, flows: 0, health: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 }
+  const counters = { connections: 0, flows: 0, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 }
   const now = timing.now || Date.now, lastUnreachable = new Map() // door group → when its upstream-unreachable event was written (1.6 §9.7: at most one per form per 60 s)
   const idle = new Set() // sockets that are not a flow: still in the handshake, or a health tunnel (closeIdle ends them; flows finish on their own)
 
@@ -294,7 +294,11 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
 
     // 2. the token, in constant time; a connection that did not present one never gets as far as a lookup. A door of an `auth:false` group
     //    (D47) takes no credentials at all: the connection is judged by its process, not by a password any process could copy.
-    if (!o.authed && !(door && door.open) && (o.pass === null || !tokenOk(o.pass, doorHash ?? tokenHash))) { authFailed(o.user, o.pass === null ? 'no Proxy-Authorization' : 'token mismatch'); r.detach(); return o.denied() }
+    //    A CONNECT with no Proxy-Authorization at all is the first leg of Basic auth (RFC 7235), not a wrong credential: Chromium (VS Code's
+    //    network service) sends none until a 407 asks, then answers from http.proxy's user:token. It gets the 407 challenge, is counted
+    //    (`challenged`), and writes no failure line; a wrong token is `ingress-auth-failed` (4.8 §5.1).
+    if (!o.authed && !(door && door.open) && o.pass === null) { counters.challenged++; r.detach(); return o.denied() }
+    if (!o.authed && !(door && door.open) && !tokenOk(o.pass, doorHash ?? tokenHash)) { authFailed(o.user, 'token mismatch'); r.detach(); return o.denied() }
     // who this connection is for: a door names its group (the client's own user is only the engine's own ingress's to say), and the lookup
     // answers it with the process the socket belongs to, not with anything the credentials claim
     const who = door && typeof door.user === 'string' && door.user !== '' ? door.user : o.user
