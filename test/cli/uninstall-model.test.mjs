@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import tls from 'node:tls'
-import { modelWorld } from '../helpers/model-world.mjs'
+import { modelWorld, sharedCertFileWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runUninstall } from '../../src/cli/uninstall.mjs'
 import { formatUninstallReceipt } from '../../src/cli/receipt.mjs'
@@ -122,6 +122,18 @@ for (const [what, make] of Object.entries(ANSWERS)) {
     assert.deepEqual(removed, [r.fp256], JSON.stringify({ p: receipt.problems, l: receipt.left }))
   })
 }
+
+// 4.11 P4 rule U: one user file two harnesses' settings name holds one block, recorded once — uninstall takes it out once, the user's bytes as they were
+test('rule U · the block Claude Code and Kimi Code share comes out once: the user\'s file byte for byte, nothing left, exit 0', async () => {
+  const w = await sharedCertFileWorld({ userPem: USER_PEM })
+  assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+  assert.notEqual(fs.readFileSync(w.file, 'utf8'), USER_PEM, 'the block is there')
+  const { receipt, exit } = await uninstall(w)
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  assert.equal(fs.readFileSync(w.file, 'utf8'), USER_PEM)
+  const at = (k) => receipt[k].filter((x) => x.path === w.file || x.what === w.file)
+  assert.deepEqual([at('changed').length, at('skipped'), at('left')], [1, [], []], JSON.stringify(receipt.changed))
+})
 
 // invariant 5: uninstall leaves nothing of asight's but the captures — the darwin signing helper install put in ~/.asight/bin goes too, after the key;
 // while the key could not be removed (the custody unreachable), the helper stays with its record: the next uninstall needs it

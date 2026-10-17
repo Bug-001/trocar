@@ -5,6 +5,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { modelFormFacts } from '../../../../src/collector/core/proxymode/status-facts.mjs'
 import { MODEL as all, OSES, PRIOR, SYS, ROOT_OK, ctxOf, world } from '../../../netenv/fixtures/model-rows.mjs'
+import fs from 'node:fs'
+import tls from 'node:tls'
+import { sharedCertFileWorld } from '../../../helpers/model-world.mjs'
+import { renderWrapper } from '../../../../src/collector/arch/darwin/wrapper.mjs'
+import { readManifest } from '../../../../src/off/manifest.mjs'
 
 for (const os of OSES) {
   for (const desc of all) {
@@ -66,3 +71,25 @@ for (const os of OSES) {
     })
   }
 }
+
+// 4.11 P4 rule U · 1.6 §9.4 `user_file`: two harnesses whose settings name one user certificate file share one marked block, recorded once under the
+// harness that placed it (`shared_with` for the other). Both read that block as theirs: intact and in effect while it is there, changed once it is gone —
+// never not-users-file (review 2026-10-17: the second harness read not-users-file, so "not captured" and status exit 1, which install could not change).
+test('rule U · one user file named by Claude Code and Kimi Code: both certificates in effect with user_file intact; the block gone, both read changed', async () => {
+  const w = await sharedCertFileWorld({ userPem: `${tls.rootCertificates[1].trim()}\n` })
+  const r = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(r.exit, 0, JSON.stringify(r.carriers))
+  const pair = ['claude-code', 'kimi-code']
+  assert.deepEqual(r.carriers.filter((c) => c.carrier === 'pem-block').map((c) => c.harness).sort(), pair)
+  assert.equal(r.carriers.filter((c) => c.shared_with).length, 1, 'one harness shares the other\'s block')
+  const facts = async () => modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: readManifest(w.dir), root: ROOT_OK, ctx: w.ctx })
+  const certs = (out, h) => out[h].filter((x) => x.certificate.carrier !== 'root').map((x) => x.certificate)
+  const out = await facts()
+  for (const h of pair) {
+    assert.ok(certs(out, h).length, `${h}: a form the file carries`)
+    for (const c of certs(out, h)) assert.deepEqual([c.in_effect, c.code, c.user_file], [true, null, { path: w.file, state: 'intact' }], `${h}: ${JSON.stringify(c)}`)
+  }
+  fs.writeFileSync(w.file, `${tls.rootCertificates[1].trim()}\n`) // the user took the block out
+  const gone = await facts()
+  for (const h of pair) for (const c of certs(gone, h)) assert.deepEqual([c.in_effect, c.code, c.user_file.state], [false, 'entry-changed', 'changed'], h)
+})

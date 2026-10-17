@@ -19,14 +19,18 @@ const red = (v) => (typeof v === 'string' && v.trim() ? redactProxyUrl(v) : null
 const latest = (items) => { const t = items.map((i) => Date.parse(i.installed_at)).filter(Number.isFinite); return t.length ? new Date(Math.max(...t)).toISOString() : null }
 const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? judgeOwned({ manifest: m, file: e.path, fs }) : judgeEntry({ manifest: m, planned: e, fs })).action === 'skip-intact' } catch { return false } }
 
+/** The files a harness's `userCertFiles` keys name now, in the descriptor's order. */
+const userFilesOf = (desc, ctx) => (desc.proxyMode.userCertFiles || []).map((src) => readSrc(src, ctx)).filter((r) => r.set && typeof r.value === 'string').map((r) => r.value)
+/** The install items that carry a harness's certificate: its own, and the pem-block in a user file its settings name that another harness's entry holds —
+ *  one block per file, recorded once (4.11 P4 rule U, shared_with), yet it serves both. */
+const itemsFor = (desc, inst, ctx) => { const files = userFilesOf(desc, ctx); return inst.filter((i) => i.harness === desc.name || (i.kind === 'text' && i.format === 'pem-block' && files.includes(i.path))) }
+
 /** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`): asight appended to it (intact / changed), or it is not one asight could append to. */
 function userFileOf(desc, { m, ctx, fs, own }) {
-  for (const src of desc.proxyMode.userCertFiles || []) {
-    const r = readSrc(src, ctx)
-    if (!r.set || typeof r.value !== 'string') continue
-    if (own.some((i) => i.path === r.value && i.kind === 'owned-file')) continue // asight's own bundle: not the user's file
-    const e = own.find((i) => i.path === r.value && i.kind !== 'owned-file')
-    return { path: r.value, state: !e ? CODE.notUsersFile : intactOf(m, e, fs) ? 'intact' : 'changed' }
+  for (const file of userFilesOf(desc, ctx)) {
+    if (own.some((i) => i.path === file && i.kind === 'owned-file')) continue // asight's own bundle: not the user's file
+    const e = own.find((i) => i.path === file && i.kind !== 'owned-file')
+    return { path: file, state: !e ? CODE.notUsersFile : intactOf(m, e, fs) ? 'intact' : 'changed' }
   }
   return null
 }
@@ -53,7 +57,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
   const ports = Object.values(doors)
   for (const desc of harnesses.filter((d) => d.proxyMode && installed.includes(d.name))) {
     const pm = desc.proxyMode, h = desc.name
-    const plan = planRoutes(desc, ctx), d = drift(h), own = inst.filter((i) => i.harness === h)
+    const plan = planRoutes(desc, ctx), d = drift(h), own = itemsFor(desc, inst, ctx)
     const uf = userFileOf(desc, { m, ctx, fs, own })
     const forms = []
     for (const f of pm.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
