@@ -1,4 +1,4 @@
-// doctor.mjs — `asight doctor [harness…] [--source F|DIR] [--json]` (RFC 1.6 §2, R4, R11; 4.1 §凭据处置): the self-check an operator runs when something looks wrong. It answers the four questions
+// doctor.mjs — `asight doctor [<harness>...] [--json]` (RFC 1.6 §2, R4, R11; 4.1 §凭据处置): the self-check an operator runs when something looks wrong. It answers the four questions
 // of the 「测试」(is it capturing · is what it captured right · no credential outside the files · no machine-wide TLS weakening) and ④b (every file that holds captured bytes is owner-only), and it
 // folds in what `asight verify` was (the old CA is in the user trust store only). Then it prints, read-only, what `status` knows (the daemon, every harness, the topology) and what the last
 // install noted, the standalone undo copy, and the backups no manifest names. It never changes a thing of the user's and starts nothing: its OS queries are read-only (`ps`, the trust-store
@@ -29,7 +29,7 @@ import { orphanBackups } from '../off/backup.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { checkStandalone } from '../off/standalone.mjs'
 
-const USAGE = 'usage: asight doctor [harness…] [--source <ndjson|dir>] [--json]'
+const USAGE = 'usage: asight doctor [<harness>...] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 const errText = (e) => String((e && (e.code || e.message)) || e)
@@ -112,19 +112,17 @@ async function statusBlock({ names, json, env, home, platform, deps }) {
 /** → the exit code. `argv` is what follows `doctor`; `io` = { out, err } (src/off/io.mjs makeIo). */
 export async function runDoctor(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   let json = false
-  const sourceFlags = [], names = []
+  const names = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--json') json = true
-    else if (a === '--source') { if (i + 1 >= argv.length) { io.err(`asight doctor: --source needs a file or a directory\n${USAGE}`); return EXIT.usage } sourceFlags.push(argv[++i]) }
-    else if (a.startsWith('--source=')) sourceFlags.push(a.slice('--source='.length))
     else if (a.startsWith('-')) { io.err(`asight doctor: unknown option ${a}\n${USAGE}`); return EXIT.usage }
     else names.push(a)
   }
   const named = resolveHarnesses(names)
   if (!named.ok) { io.err(`asight doctor: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
   const fs = deps.fs || nodeFs
-  const c = await collect({ home, env, sourceFlags, deps })
+  const c = await collect({ home, env, sourceFlags: [], deps })
   for (const e of c.readErrors) io.err(`read error: ${e}`) // a read failure MUST be visible: a silently swallowed error is what let ③ pass vacuously
   const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
   // ④ the old `verify`: the CA is in the user's trust store only. This home's keychain / NSS db, never the real one of whoever runs a test

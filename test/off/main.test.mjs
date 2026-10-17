@@ -58,13 +58,14 @@ test('1.6 §4 (D39⑥ executed 2026-10-11: the legacy off went with the old capt
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'], 'an arm only the new off has: the daemon was told to drain and exit')
 })
 
-test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing asked of the daemon — exits 0, prints the same files in the future tense as the real run then changes; --now is passed on; --remove-ca is accepted with one note', async () => {
+test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing asked of the daemon — exits 0, prints the same files in the future tense as the real run then changes; --now is passed on; the old --remove-ca is a plain unknown option now', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); const before = snapshot(s.home); const calls = s.sys.exec.calls.length
   const dry = fakeIo()
-  assert.equal(await runOffCli(['--dry-run', '--json', '--remove-ca'], ctx(s, dry)), 0)
+  assert.equal(await runOffCli(['--dry-run', '--json'], ctx(s, dry)), 0)
   const d = dry.json()
   assert.deepEqual([snapshot(s.home), s.sys.exec.calls.length, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off'))], [before, calls, []])
-  assert.deepEqual([d.dry_run, d.ok, validateReceipt(d), d.notes.filter((n) => /--remove-ca/.test(n)).length], [true, true, [], 1])
+  assert.deepEqual([d.dry_run, d.ok, validateReceipt(d)], [true, true, []])
+  const ca = fakeIo(); assert.equal(await runOffCli(['--remove-ca'], ctx(s, ca)), 2); assert.match(ca.stderrText(), /^asight off: unknown option --remove-ca\n/)
   const text = fakeIo(); assert.equal(await runOffCli(['--dry-run'], ctx(s, text)), 0)
   assert.match(text.stdoutText(), /^asight 将关闭采集。/); assert.doesNotMatch(text.stdoutText(), /settings\.json|已关闭|已回到/, 'the plan names no certificate item: off spares them (D55①)')
   assert.deepEqual(snapshot(s.home), before)

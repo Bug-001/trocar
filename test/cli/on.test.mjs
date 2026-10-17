@@ -434,8 +434,8 @@ test('R13 V65 on, on again and off leave agents.json byte for byte unchanged (a 
   }
 })
 
-test('V72 (1.6 §2, D57): `on --opt-in <any value>` and `--opt-in=<x>` exit 2 saying 「D57 起没有点名项」; HOME byte for byte unchanged, zero OS tools, zero daemon calls, on every platform', async () => {
-  const shapes = [['--opt-in', 'kimi-code.cli'], ['--opt-in=codex.machine'], ['codex', '--opt-in', 'a,b', '--yes'], ['--yes', '--opt-in='], ['--opt-in']]
+test('V72 (1.6 §2, D57): `on --opt-in <any value>`, `--opt-in=<x>` and the old `--proxy` are plain unknown options now — exit 2, HOME byte for byte unchanged, zero OS tools, zero daemon calls, on every platform', async () => {
+  const shapes = [['--opt-in', 'kimi-code.cli'], ['--opt-in=codex.machine'], ['codex', '--opt-in', 'a,b', '--yes'], ['--yes', '--opt-in='], ['--opt-in'], ['--proxy', 'http://127.0.0.1:8899'], ['--proxy=http://127.0.0.1:8899']]
   for (const platform of ['linux', 'darwin', 'win32']) for (const argv of shapes) {
     const home = tmpDir('asight-v72-')
     seedClaude(home)
@@ -447,7 +447,7 @@ test('V72 (1.6 §2, D57): `on --opt-in <any value>` and `--opt-in=<x>` exit 2 sa
     const exit = await runOnCli(argv, { ...ctx, platform })
     const label = `${platform} ${argv.join(' ')}`
     assert.equal(exit, 2, `${label}: ${io.text()}`)
-    assert.match(io.stderrText(), /D57 起没有点名项/, label)
+    assert.match(io.stderrText(), /^asight on: unknown option '--(opt-in|proxy)'\n/, label)
     assert.deepEqual(snapshot(home), before, `${label}: HOME byte for byte unchanged`)
     assert.deepEqual(exec.calls, [], `${label}: no OS tool`)
     assert.deepEqual(daemon.calls, [], `${label}: no daemon request`)
