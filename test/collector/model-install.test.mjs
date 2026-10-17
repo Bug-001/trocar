@@ -109,6 +109,23 @@ for (const answer of ['declined', 'pending']) {
   })
 }
 
+// 1.6 §1.6: an add the OS answers with success while the root is not trusted when read back (a box cancelled whose tool still exits 0)
+// is not "added": the item is pending, exit 1, the rest done; the next install, whose add takes, completes.
+test('1.6 §1.6 · an add that reports success but is not trusted when read back → root-store pending, exit 1; the next install completes', async () => {
+  const w = await everything()
+  const add = w.store.add
+  w.store.add = () => ({ ok: true }) // the tool exits 0, the trust setting never lands
+  const r = await w.install({ wrapperKit: { renderWrapper } })
+  assert.deepEqual([r.exit, r.pending.map((p) => [p.item, p.state])], [1, [['root-store', 'pending']]])
+  assert.match(r.pending[0].reason, /not find it trusted/)
+  assert.equal(readManifest(w.dir).install.state, 'partial')
+  assert.ok(!r.items.some((i) => i.item === 'root-store' && i.state === 'added'), 'never said added')
+  w.store.add = add
+  const again = await w.install({ wrapperKit: { renderWrapper } })
+  assert.equal(again.exit, 0)
+  assert.equal(readManifest(w.dir).install.state, 'complete')
+})
+
 // CM35 (4.11 §3 ㉒): the lost-key install. The custody's key gone behind asight's back (exists() false, the manifest records the old root) → the old
 // root leaves the store by its recorded fingerprint, one new key and root are made and added, and every carrier holding root bytes holds only the new
 // root: asight-ca.pem, Z-Code's bundle, the pem-block in the user's file (the user's bytes outside the marks as they were); their installed_at moves.
@@ -148,7 +165,7 @@ test('CM35: the key lost → remove the old root once by its fingerprint, create
   const calls = w.store.calls.length, creates = w.custody.calls.filter((c) => c.verb === 'create').length
   const r2 = await w.install({ wrapperKit: { renderWrapper }, now: later })
   assert.equal(r2.exit, 0, JSON.stringify({ c: r2.carriers, p: r2.problems, pe: r2.pending }))
-  assert.deepEqual(w.store.calls.slice(calls), ['remove', 'has', 'add'])
+  assert.deepEqual(w.store.calls.slice(calls), ['remove', 'has', 'add', 'has'], 'the add is read back')
   assert.equal(w.custody.calls.filter((c) => c.verb === 'create').length - creates, 1)
   assert.ok(!w.store.held.has(r1.fp256) && w.store.held.has(r2.fp256))
   assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'system-root').map((e) => e.fp256), [r2.fp256])

@@ -118,6 +118,11 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   else if (!inStore.present) {
     const r = await rootStore.add(rootDer)
     if (!r.ok) pending.push({ item: 'root-store', state: promptState(r), reason: r.reason })
+    else { // the add is read back as the next install's would be: an OS tool that answers 0 while the trust it was asked for is absent (a box cancelled,
+      // a setting refused) leaves the root untrusted — said and pending, never "added" (D38; 1.6 §1.6 OS 框)
+      const back = await rootStore.has(id)
+      if (back.error || !back.present) pending.push({ item: 'root-store', state: 'pending', reason: back.error || 'the OS took the root, but reading your trust settings back does not find it trusted (was the box cancelled?)' })
+    }
   }
   if (!inStore.error && (inStore.present || pending.every((p) => p.item !== 'root-store')) && !storeRec) {
     storeRec = { kind: 'system-root', store: storeKind, scope: 'user', harness: null, phase: 'install', path: ca.pem, fp256: id.fp256, thumbprint: id.sha1, cert_file: ca.pem, values: { fp256: id.fp256, thumbprint: id.sha1, ...(os === 'darwin' ? { keychain: path.join(home, 'Library', 'Keychains', 'login.keychain-db') } : {}) }, installed_at: now().toISOString() }
