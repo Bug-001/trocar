@@ -45,6 +45,29 @@ test('CM9: Z-Code\'s caCertFile → a bundle of Node\'s own roots plus the asigh
   assert.equal(r2.carriers.find((c) => c.harness === 'z-code' && c.carrier === 'pem-block').state, 'placed')
 })
 
+// rule U, one file named by two harnesses' settings (Windows test machine 2026-10-17: Claude Code and Kimi Code both read NODE_EXTRA_CA_CERTS; the second
+// was refused "already holds asight's text from an install this manifest does not list" and install exited 1): one block, one entry, both carriers in place
+for (const [variable, harnesses] of [['NODE_EXTRA_CA_CERTS', ['claude-code', 'kimi-code']]]) { // (Codex and Hermes share SSL_CERT_FILE the same way; this world has no Hermes)
+  test(`rule U: ${variable} names one user file for ${harnesses.join(' and ')} → one marked block, one entry, install exits 0; a second install changes nothing`, async () => {
+    const w0 = await modelWorld()
+    const mine = path.join(w0.home, 'mine.pem')
+    const w = await everything({ [variable]: mine })
+    put(mine, USER_PEM)
+    const r = await w.install({ wrapperKit: { renderWrapper } })
+    const rows = r.carriers.filter((c) => c.carrier === 'pem-block' && c.path === mine)
+    for (const h of harnesses.filter((x) => rows.some((c) => c.harness === x))) assert.ok(['placed', 'intact'].includes(rows.find((c) => c.harness === h).state), JSON.stringify(rows))
+    assert.ok(rows.length >= 2, `both harnesses route through the file: ${JSON.stringify(rows)}`)
+    assert.equal(r.exit, 0, JSON.stringify(r.problems))
+    const text = fs.readFileSync(mine, 'utf8')
+    assert.equal(certBlocks(text).filter((b) => b.fp === r.fp256).length, 1, 'one block')
+    assert.ok(text.startsWith(USER_PEM), 'the user\'s bytes first, as they were')
+    assert.equal(readManifest(w.dir).entries.filter((e) => e.format === 'pem-block' && e.path === mine).length, 1)
+    const again = await w.install({ wrapperKit: { renderWrapper } })
+    assert.equal(again.exit, 0)
+    assert.equal(fs.readFileSync(mine, 'utf8'), text)
+  })
+}
+
 for (const inSettings of [false, true]) for (const inEnv of [false, true]) {
   test(`CM10: bundled Claude Code, NODE_EXTRA_CA_CERTS ${inSettings ? 'in' : 'not in'} the settings and ${inEnv ? 'in' : 'not in'} the install env → ${!inSettings && !inEnv ? 'settings env points at asight-ca.pem' : 'settings untouched, the block appended to the named file'}`, async () => {
     const w0 = await modelWorld()

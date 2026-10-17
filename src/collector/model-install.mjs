@@ -234,6 +234,10 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         if (out.found) fs.writeFileSync(file, out.text, 'latin1')
         m.entries.splice(m.entries.indexOf(older), 1); save()
       }
+      // two harnesses whose settings name one file (Claude Code and Kimi Code both read NODE_EXTRA_CA_CERTS; Codex and Hermes SSL_CERT_FILE) share
+      // one block: the first places it and its entry is the file's one record, undone once; the next finds this root's block there (a Windows test machine 2026-10-17)
+      const shared = m.entries.find((x) => x.kind === 'text' && x.format === 'pem-block' && x.harness !== desc.name && x.path === file && (x.ops || []).some((o) => o.pem && o.inserted.replace(/\s/g, '').includes(rootBody)))
+      if (shared) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'intact', shared_with: shared.harness }); return }
       const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file, edit: { format: 'pem-block', pem: rootPem }, home, now: now(), fs })
       carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: e ? 'placed' : 'intact' })
     } catch (e) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: e.code || NOT_USERS, why: errText(e) }) }
