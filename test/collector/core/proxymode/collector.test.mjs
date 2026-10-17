@@ -232,6 +232,26 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   c.close()
 })
 
+// P10 at the door: the PAC says `PROXY <door>; DIRECT` for a bypass-list host and `PROXY <door>; <own leg>` for the rest, so the door must dial exactly
+// that own leg. The door group's descriptor chain is the CLI form's (it may not follow the system proxy, and it reads the process env): wrong for a PAC.
+test('CM19 / P10 · the PAC door dials the own leg its PAC names: a bypass-list host direct, any other the fixed system proxy, whatever the process env holds', async () => {
+  const sp = { url: 'http://sys.corp:8080', bypass: [{ kind: 'domain-suffix', value: 'corp.example' }] }
+  const env = Object.fromEntries(pacDesc.proxy.env.map((n) => [n, 'http://env.corp:1']))
+  for (const agent of [pacDesc.name, null]) { // a process the name list knows, and one it does not
+    const { c, w } = await rig({ desc: pacDesc, w: { pid: ++pid, facts: { uid: 501, agent, startedAt: INSTALLED + 1 }, env, sp } })
+    await c.on({ harnesses: [pacDesc.name], groups: { [pacG]: 18104 } })
+    const dial = async (address) => (await c.lookupIngress({ peer: PEER, user: pacG, target: { address, port: 443 } })).upstream
+    assert.deepEqual(await dial('gw.corp.example'), { kind: 'direct' }, `${agent}: a bypass-list host is dialled direct, never through the env's proxy`)
+    assert.deepEqual(await dial('api.example'), proxyOf(sp.url), `${agent}: any other host through the user's fixed system proxy, the PAC's own leg`)
+    if (agent) assert.equal(c.upstreams()[pacG][0].source, 'system-proxy', 'status reads the same answer')
+    const pac = (await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' })).body
+    assert.match(pac, /corp\.example/); assert.match(pac, /"PROXY 127\.0\.0\.1:18104; PROXY sys\.corp:8080"/)
+    w.sp = null
+    assert.deepEqual(await dial('api.example'), { kind: 'direct' }, 'no system proxy: direct, as the PAC then says')
+    c.close()
+  }
+})
+
 // D51⑥ at the door: a process the name list names for a harness that is off, at the door of one that is on, is forwarded `harness-off` and never judged
 test('harness-off · another harness\'s agent at an on harness\'s door, its own harness off: forwarded with its harness named, never judged', async () => {
   const [d, other] = descs.filter((x) => x.proxyMode.forms.some((f) => f.os.includes('darwin')))

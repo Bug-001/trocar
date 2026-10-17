@@ -7,6 +7,7 @@
 // credentials, so at accept it forwards only a peer of this user (peerAllowed). When a PAC route is not written at all (the four not-routed
 // conditions of ruling ③) is entries.mjs's pacGate, not this file's. The handler is registered on the door.
 import { PAC_PATH } from './entries.mjs'
+import { upstreamFor } from './chain.mjs'
 import { CODE } from '../codes.mjs'
 import { bypassRuleOf } from '../upstream-shape.mjs'
 
@@ -34,6 +35,18 @@ const bypassTest = (row) => {
   if (row.kind === 'domain-suffix') return `(host === ${JSON.stringify(v)} || dnsDomainIs(host, ${JSON.stringify(`.${v}`)}))`
   const [net, bits] = v.split('/')
   return `(/^\\d{1,3}(\\.\\d{1,3}){3}$/.test(host) && isInNet(host, ${JSON.stringify(net)}, ${JSON.stringify(maskOf(Number(bits)))}))` // IPv4 literals only: no lookup
+}
+
+// The PAC's client as the upstream chain (P7) sees it: it reads no proxy variable and has no prior of its own; it takes the system proxy with its
+// bypass list, the own leg the PAC names. No harness: whatever reaches an auth:false door came by its PAC (a Chromium network service, not the
+// door group's CLI form, whose descriptor may not follow the system proxy).
+const PAC_CLIENT = Object.freeze({ proxy: Object.freeze({ env: Object.freeze([]), systemProxy: Object.freeze({ http: true, ws: true }) }) })
+
+/** The app's own way the PAC names (P10), in upstreamFor's shape `{ url, source, bypass, … }`: the user's fixed system proxy with its bypass rows,
+ *  else direct (a PAC or an unreadable system proxy names no leg). The PAC is written from it and an auth:false door dials it, so they say one
+ *  thing. `header`: a CONNECT's X-Asight-Upstream, never honoured here (noted, as upstreamFor notes it); `isAsightDoor` as upstreamFor's. */
+export function pacLeg({ systemProxy = null, header = null, isAsightDoor } = {}) {
+  return upstreamFor({ desc: PAC_CLIENT, systemProxy, header, ...(isAsightDoor ? { isAsightDoor } : {}) })
 }
 
 /** The PAC text (P10). `door`: the door's address (null after `off`); `ownLeg`: the user's fixed system proxy, or null for DIRECT; `bypass`: the

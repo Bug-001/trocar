@@ -1,7 +1,7 @@
 // collector.mjs (core/proxymode) — the collector model's daemon half (RFC 4.11 §1 on / off, §3 ① ② ③ ⑥, P2, P7, P10, P11, P12; 4.6 §代理模式的门;
 // plan §E.6 ruling 1): one OS-neutral collector the darwin / win32 daemon runs. It opens a door per entry group from `POST /on`'s
 // `{ harnesses, groups: { '<h>:<route>': port } }`, judges each connection at the door — identity (door-identity.mjs, D51), the upstream per connection
-// (chain.mjs P7; an unidentified process uses steps 2, 4, 5 only, ⑥), decrypt by verdict.mjs P11 keyed by pid + start — serves the PAC on the
+// (chain.mjs P7; an unidentified process uses steps 2, 4, 5 only, ⑥; an auth:false door dials its PAC's own leg, pac.mjs pacLeg, P10), decrypt by verdict.mjs P11 keyed by pid + start — serves the PAC on the
 // auth:false door (P10), keeps doors forward-only while holders live after `off` (P12), and signs leaves through the issuer over the key custody (P2).
 // It never writes an agent file or ingress.json (§3 ①): ports and the token are read from ingress.json, never picked. Names no harness and no OS;
 // every reader of the world is injected (0.1 §3).
@@ -12,7 +12,7 @@ import tls from 'node:tls'
 import { createDoorIdentity } from '../engine/door-identity.mjs'
 import { verdictOf } from './verdict.mjs'
 import { upstreamFor, isAsightDoorUrl, isLoopbackHost, HOOK_ENV } from './chain.mjs'
-import { pacHandler, peerAllowed } from './pac.mjs'
+import { pacHandler, pacLeg, peerAllowed } from './pac.mjs'
 import { createDoorSeen, createHolderPoll, mayExit } from './holders.mjs'
 import { holdersOf } from '../../../off/holders.mjs'
 import { itemsOfPhase, readManifest as readManifestAt } from '../../../off/manifest.mjs'
@@ -154,7 +154,9 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     const own = known ? formsOn(byName.get(id.agent), id.agent === d.harness ? d.routeId : null) : []
     const allowed = own.length > 0 && own.every((f) => sendsHeader(byName.get(id.agent), f)) // only a form whose hook sends the header (P7 step 1)
     const ports = [...doors.values()].map((x) => x.port)
-    const up = await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isAsightDoor: (v) => isAsightDoorUrl(v, { ports }) })
+    const isAsightDoor = (v) => isAsightDoorUrl(v, { ports })
+    const up = d.auth ? await upstreamFor({ desc, facts: pf, recordedPrior: priorOf(d), systemProxy: systemProxy(), header, headerAllowed: allowed, isAsightDoor })
+      : await pacLeg({ systemProxy: systemProxy(), header, isAsightDoor }) // an auth:false door is a PAC's: it dials the own leg that PAC names (P10)
     if (known) answered(d.g, id.pid, up)
     if ((up.notes || []).some((n) => n.note === 'header-ignored')) fail(CODE.upstreamHeaderIgnored, `pid ${id.pid ?? '?'} sent X-Asight-Upstream at the ${d.g} door, but no hook of its form sends it: ignored (its value is not recorded)`, { door: d.g, pid: id.pid })
     if (up.code && !said.has(`${up.code}\0${id.pid}\0${d.g}`)) { said.add(`${up.code}\0${id.pid}\0${d.g}`); fail(up.code, `the proxy pid ${id.pid ?? '?'} would have used without asight could not be recovered; the door dials ${up.url ? 'the system proxy' : 'direct'}`, { door: d.g, pid: id.pid }) }
@@ -180,10 +182,9 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (!peerAllowed({ ...(facts || {}), pid: q }, self, { record }).ok) return null
     const m = identify(facts) || {}
     if (m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
-    const sp = systemProxy()
-    const fixed = sp && !sp.pac && sp.ok !== false && sp.url ? sp.url : null
+    const leg = await pacLeg({ systemProxy: systemProxy(), isAsightDoor: (v) => isAsightDoorUrl(v, { ports: [...doors.values()].map((x) => x.port) }) }) // what this door dials too
     let res = { status: 404, headers: {}, body: '' }
-    pacHandler({ state: () => ({ door: onSet.has(d.harness) ? `127.0.0.1:${d.port}` : null, ownLeg: fixed, bypass: (sp && sp.bypass) || [] }) })({ method: 'GET', url: p }, { writeHead: (status, headers) => { res = { status, headers, body: '' } }, end: (b) => { res.body = b } })
+    pacHandler({ state: () => ({ door: onSet.has(d.harness) ? `127.0.0.1:${d.port}` : null, ownLeg: leg.url, bypass: leg.bypass }) })({ method: 'GET', url: p }, { writeHead: (status, headers) => { res = { status, headers, body: '' } }, end: (b) => { res.body = b } })
     return res
   }
 
