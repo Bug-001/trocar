@@ -83,3 +83,17 @@ test('⑭ seed · claude-code default (no CLAUDE_CODE_CERT_STORE): a relay CA in
   for (const n of ['relay', 'os', 'node']) assert.equal(await verifies(n, secureContext), true, `${n}-signed upstream`)
   assert.equal(await verifies('asight', secureContext), false)
 })
+
+// Regression seed (a macOS test machine run, deepseek-dsh: "splice(UNABLE_TO_VERIFY_LEAF_SIGNATURE)"): a Node agent whose stated trust adds files (no replace
+// source, no `when`) also adds what its own NODE_EXTRA_CA_CERTS names — Node does, whatever else the descriptor lists — so a relay CA there verifies.
+test('⑭ seed · every node-runtime descriptor\'s additive trust holds the relay CA its NODE_EXTRA_CA_CERTS names', async () => {
+  const stated = (await loadHarnesses()).filter((d) => d.runtime === 'node' && d.proxyMode)
+    .flatMap((d) => Object.entries(d.proxyMode.trusts || {}).map(([id, t]) => [`${d.name}.${id}`, t]))
+    .filter(([, t]) => !t.when && !(t.sources || []).some((s) => s.semantics === 'replace'))
+  assert.ok(stated.some(([id]) => id === 'deepseek-dsh.node'), 'deepseek-dsh states an additive node trust')
+  for (const [id, t] of stated) {
+    const { secureContext } = await trust.contextFor(agentTrustSet({ trust: t, ctx, facts: { env: { NODE_EXTRA_CA_CERTS: agentFile }, cwd: home } }))
+    assert.equal(await verifies('relay', secureContext), true, `${id}: relay-signed upstream`)
+    assert.equal(await verifies('asight', secureContext), false, `${id}: asight-signed upstream`)
+  }
+})
