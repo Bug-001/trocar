@@ -169,7 +169,7 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     if (!onSet.has(d.harness)) return { ...base, skip: untracked('group-off') } // a door kept for its holders: forward only
     if (!onSet.has(id.agent)) return { ...base, skip: untracked('harness-off') }
     const v = await judge(id, d, String(target.address).toLowerCase())
-    return { ...base, decrypt: v.decrypt === true, ...(v.upstreamTrust ? { upstreamTrust: v.upstreamTrust } : {}) }
+    return { ...base, decrypt: v.decrypt === true, ...(v.upstreamTrust ? { upstreamTrust: v.upstreamTrust } : {}), ...(v.decrypt === true ? {} : { skip: { not_captured: 'untrusted', reason: v.code } }) } // P11's closed code on the row (D38)
   }
 
   /** GET /asight.pac on the auth:false door (P10): this user's processes only; the door leg while its harness is on, then only the app's own way. */

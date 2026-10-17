@@ -118,6 +118,9 @@ export function handleFlow(client, meta, ctx) {
   // {not_captured, reason} when it can say more (DAEMON_CODES). A process the kernel steers without decrypt is
   // untrusted (with the resolver's reason when the daemon gives one) or untracked. → null (decrypt) or [code, reason]
   function skipOf(host) {
+    // the redirector judged this one connection and said why (`meta.skip`, a closed code + reason; the model door's lookupIngress): said as it is,
+    // whatever the daemon's policy — a model daemon has no tracker table, and its default policy would turn every forwarded row into a bare `untrusted`
+    if (!meta.decrypt && meta.skip && typeof meta.skip === 'object' && DAEMON_CODES.includes(meta.skip.not_captured)) return [meta.skip.not_captured, meta.skip.reason ?? null]
     let v = null
     if (meta.decrypt) v = ctx.policy(meta, host) // a throw is this flow's engine-error (guard)
     else try { v = ctx.policy(meta, host) } catch (e) { ctx.failure({ code: 'engine-error', flow_id: rec.flow_id, reason: `policy threw: ${msgOf(e)}` }) }
