@@ -65,7 +65,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     const w = Math.max(...changed.map((c) => t(c.path).length)), v = Math.max(...changed.map((c) => c.change.length))
     for (const c of changed) lines.push(`  ${t(c.path).padEnd(w)}  ${c.change.padEnd(v)}  ${past ? rowStatus(c, t) : c.backup ? `改前副本 ${t(c.backup)}` : ''}`.trimEnd())
   } else lines.push(past ? '没有改任何用户文件。' : '不会改任何用户文件。')
-  if (removed.length) lines.push(`${past ? 'asight 自己建的,删了' : 'asight 自己建的,将删'}: ${removed.map((p) => t(typeof p === 'string' ? p : p.path)).join('  ')}`)
+  if (removed.length) lines.push(`${past ? 'asight 自己建的,删了' : 'asight 自己建的,将删'}: ${[...new Set(removed.map((p) => t(typeof p === 'string' ? p : p.path)))].join('  ')}`) // a file is said once: several entries of one file (json keys) are one removal
   const listed = new Set(changed.map((c) => c.path)), skipped = (r.skipped || []).filter((s) => !listed.has(s.what)) // a file is said once: what was undone is not also 「早已是安装前的样子」
   if (skipped.length) lines.push(`跳过: ${skipped.map((s) => `${t(s.what)}(${s.reason})`).join('  ')}`)
   if (past && r.routing) lines.push(`引流: ${r.routing.confirmed ? '已摘' : '没有确认摘掉'}(${ROUTING_WORDS[r.routing.how] || r.routing.state || '不知道'})`)

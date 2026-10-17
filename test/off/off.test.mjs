@@ -884,3 +884,11 @@ test('① a file is listed once: restored, not also skipped as already restored'
   assert.equal(text.split('/h/.claude/settings.json').length - 1, 1, text)
   assert.ok(text.includes('/h/.codex/.env'), 'another file that was skipped stays')
 })
+
+test('a file asight created is said once among the removed, however many of its entries off took out (a macOS test machine, 2026-10-17: settings.json ×4)', async () => {
+  const { formatOffReceipt } = await import('../../src/off/receipt.mjs')
+  const p = '/h/.claude/settings.json'
+  const text = formatOffReceipt({ ok: true, all: true, changed: [], removed: [p, { path: p }, p, '/h/.codex/.env'], skipped: [] })
+  assert.equal(text.split(p).length - 1, 1, text)
+  assert.ok(text.includes('/h/.codex/.env'), text)
+})
