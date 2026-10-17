@@ -32,7 +32,7 @@ process.chdir(tmpDir('asight-pipes-')) // a win32 control endpoint is a pipe nam
 // one case per harness per OS (its first generated form): the writes N15 forbids do not depend on a file's shape or a user edit, which the contract suite varies
 const CASES = OSES.flatMap((os) => harnesses.map((h) => casesFor(os, harnesses).find((s) => s.h === h.name && s.form)).filter(Boolean))
 
-describe('N15(b): on / off / uninstall write nothing of a VPN / proxy product and set no system proxy', { concurrency: 4 }, () => {
+describe('N15(b): on / off / uninstall write nothing of a VPN / proxy product and set no system proxy', { concurrency: 1 }, () => {
   for (const spec of CASES) {
     it(label(spec), async () => {
       const r = await run({ ...spec, world: placeProducts }, harnesses)

@@ -67,7 +67,7 @@ it('CM27: every template a descriptor names is a file in src/collector/harness/t
 })
 
 process.chdir(tmpDir('asight-pipes-')) // a win32 control endpoint is a pipe name, served as a socket path relative to the cwd (switch-contract.test.mjs)
-describe('CM27: the eighth harness through the switch, from data alone', { concurrency: 4 }, () => {
+describe('CM27: the eighth harness through the switch, from data alone', { concurrency: 1 }, () => {
   // a harness is its own neighbour here (there is one): the D54 neighbour axis is the seven's, so it is off
   for (const spec of OSES.flatMap((os) => casesFor(os, harnesses)).map((s) => ({ ...s, neighbour: null }))) {
     it(label(spec), async () => {

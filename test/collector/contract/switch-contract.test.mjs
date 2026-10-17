@@ -16,10 +16,10 @@ import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { OSES, ASIGHT, invariants, casesFor, seedCasesFor, run, editKept, fileOf, diff, label } from '../../helpers/switch-kit.mjs'
 
 const harnesses = await loadHarnesses()
-// a win32 control endpoint is a pipe name, served on this host as a socket path relative to the cwd: one scratch cwd for this file's process, so the
-// cases can run side by side (each world has its own HOME and pipe name)
+// a win32 control endpoint is a pipe name, served on this host as a socket path relative to the cwd: one scratch cwd for this file's process (each
+// world has its own HOME and pipe name). The cases run one at a time: run() refuses an overlap (switch-kit.mjs)
 process.chdir(tmpDir('asight-pipes-'))
-describe('switch contract', { concurrency: 8 }, () => {
+describe('switch contract', { concurrency: 1 }, () => {
 for (const spec of [...OSES.flatMap((os) => casesFor(os, harnesses)), ...seedCasesFor(harnesses)]) {
   it(label(spec), async () => {
     const r = await run(spec, harnesses)
@@ -57,7 +57,7 @@ const BAD = [
   ['D54 off', 'off2', (w) => fs.writeFileSync(at(w, '.codex', '.env'), fs.readFileSync(at(w, '.codex', '.env'))), (r) => invariants.d54({ a: r.s4, b: r.s5, verb: 'off' })],
   ['D48② edit kept', 'off', (w, c) => fs.writeFileSync(at(w, c.file), fs.readFileSync(at(w, c.file), 'utf8').replace(/ASIGHT_SHAPES_ADDED=added\r?\n?/, '')), (r) => editKept(r)],
 ]
-describe('the invariants go red on a seeded bad write', { concurrency: 4 }, () => {
+describe('the invariants go red on a seeded bad write', { concurrency: 1 }, () => {
   for (const [name, phase, write, check] of BAD) {
     it(`${name}: a bad write at ${phase}`, async () => {
       const r = await run({ os: 'darwin', h: 'codex', form: 'codex.cli', neighbour: null, shape: 'lf', edit: 'unrelated', cert: true, bad: (p, w, c) => p === phase && write(w, c) }, harnesses)
@@ -65,4 +65,13 @@ describe('the invariants go red on a seeded bad write', { concurrency: 4 }, () =
       assert.notDeepEqual(check({ ...r, snaps }), [], `${name} did not see it`)
     })
   }
+})
+
+// the kit drives one case at a time in a process — a second run() while one is in flight is refused before it touches anything (switch-kit.mjs
+// says why), and the first one ends as it would have
+it('the kit refuses a second case while one is running in this process', async () => {
+  const spec = { os: 'darwin', h: 'codex', form: 'codex.cli', neighbour: null, shape: 'lf', edit: 'none', cert: false }
+  const first = run(spec, harnesses)
+  await assert.rejects(run(spec, harnesses), /still running in this process/)
+  assert.equal((await first).un.exit, 0)
 })

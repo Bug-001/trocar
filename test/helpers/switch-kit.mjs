@@ -126,7 +126,18 @@ export const seedCasesFor = (harnesses) => seeds.flatMap((s, i) => harnesses.fla
   return form ? [{ os: OSES[i % 2], h: h.name, form: form.id, neighbour: null, shape: s.id, seed: s, edit: 'none', cert: false }] : []
 }))
 
+// One case at a time in a process. The commands are synchronous where they write (a durable write is fsync, F_FULLFSYNC on macOS: unbounded
+// under disk load) and the daemon they ask is a server on this same event loop. Cases run side by side interleave, so one case's writes hold the loop
+// while another's bounded request waits: uninstall's 2 s GET /holders timed out under load and uninstall refused (collectors-online). A command runs
+// alone in its process in the product; and side by side bought no time, the writes being synchronous: the cases overlapped only in their waits.
+let driving = null
 export async function run(spec, harnesses) {
+  if (driving) throw new Error(`switch-kit run(${label(spec)}) while ${driving} is still running in this process: one case's synchronous writes would hold back the other's daemon requests; run the cases with { concurrency: 1 }`)
+  driving = label(spec)
+  try { return await drive(spec, harnesses) } finally { driving = null }
+}
+
+async function drive(spec, harnesses) {
   const desc = harnesses.find((x) => x.name === spec.h)
   const certEnv = spec.cert ? Object.fromEntries((desc.proxyMode.userCertFiles || []).filter((u) => u.env).map((u) => [u.env, null])) : {}
   const w = await contractWorld({ os: spec.os, env: (home) => Object.fromEntries(Object.keys(certEnv).map((n) => [n, path.join(home, 'certs', 'mine.pem')])) })
