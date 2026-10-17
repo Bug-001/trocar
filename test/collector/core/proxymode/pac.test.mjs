@@ -1,4 +1,4 @@
-// test/collector/core/proxymode/pac.test.mjs — CM19 (4.11 P10): the PAC text, generated over bypass rows (each kind; verdict = bypassHit's: door then direct) × own leg (set / none / credentialed) ×
+// test/collector/core/proxymode/pac.test.mjs — CM19 (4.11 P10): the PAC text, generated over bypass rows (each kind; verdict = bypassHit's: door then direct) × own leg (set / none / credentialed) × scheme (plain http: the app's own way) ×
 // on vs after off, evaluated in a sandbox with the PAC builtins it uses; loopback = the door's own predicate (chain.mjs isLoopbackHost); and CM33: peerAllowed over same / other uid and SID.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -12,7 +12,7 @@ import { bypassHit } from '../../../../src/collector/core/upstream-shape.mjs'
 // the PAC builtins the text uses, as the PAC spec defines them (isInNet on an address literal: no lookup)
 const ip4 = (a) => a.split('.').reduce((n, o) => ((n << 8) | Number(o)) >>> 0, 0)
 const PAC_ENV = { dnsDomainIs: (h, d) => h.length >= d.length && h.slice(-d.length) === d, isInNet: (h, net, mask) => ((ip4(h) & ip4(mask)) >>> 0) === ((ip4(net) & ip4(mask)) >>> 0) }
-const run = (text, host) => { const ctx = vm.createContext({ ...PAC_ENV }); vm.runInContext(text, ctx); return ctx.FindProxyForURL(`https://${host}/`, host) }
+const run = (text, host, scheme = 'https') => { const ctx = vm.createContext({ ...PAC_ENV }); vm.runInContext(text, ctx); return ctx.FindProxyForURL(`${scheme}://${host}/`, host) }
 
 // the bypass axis: rows of each kind the chain carries (translateBypass's output), alone and mixed, incl. macOS's default 169.254/16
 const ROWS = { local: { kind: 'local' }, domain: { kind: 'domain', value: 'build.internal' }, suffix: { kind: 'domain-suffix', value: 'corp.example' }, cidr: { kind: 'ip-cidr', value: '169.254.0.0/16' }, cidr8: { kind: 'ip-cidr', value: '10.0.0.0/8' }, all: { kind: 'ip-cidr', value: '0.0.0.0/0' } }
@@ -35,6 +35,11 @@ for (const bypass of BYPASS) for (const [legName, ownLeg, legWord] of LEGS) for 
     const want = door ? `PROXY ${door}; ${legWord}` : legWord
     // a bypass-list host still goes through the door, which dials it direct (bypassHit): a DIRECT there was a turn never seen (mac Claude Desktop, 2026-10-17)
     for (const h of [...HOSTS, ...NEAR]) assert.equal(run(text, h), bypassHit(bypass, h) ? (door ? `PROXY ${door}; DIRECT` : 'DIRECT') : want, `${h}: the PAC says what the door's own matcher (bypassHit) says`)
+    // plain http takes the app's own way, on and after off: through a proxy Chromium sends it absolute-form (GET http://…), the door takes CONNECT and
+    // SOCKS5 only, and once the door accepted the connection the `; DIRECT` after it never applies (an intranet http host on the bypass list broke)
+    for (const h of [...HOSTS, ...NEAR]) assert.equal(run(text, h, 'http'), bypassHit(bypass, h) ? 'DIRECT' : legWord, `http://${h}: the app's own way`)
+    for (const h of LOOP) assert.equal(run(text, h, 'HTTP'), 'DIRECT')
+    if (!bypassHit(bypass, 'api.anthropic.com')) for (const scheme of ['wss', 'ws']) assert.equal(run(text, 'api.anthropic.com', scheme), want, `${scheme}: a WebSocket is CONNECTed, so it goes to the door`)
     if (door == null) assert.ok(!text.includes('47001'), 'after off the door is gone from the PAC')
   })
 }

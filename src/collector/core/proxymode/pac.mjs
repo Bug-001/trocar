@@ -1,7 +1,9 @@
 // pac.mjs (core/proxymode) — P10, the PAC the daemon serves for a route whose value is `pac-url` (RFC 4.11 P10): on the PAC group's door
 // (auth:false) at GET /asight.pac. Loopback (chain.mjs isLoopbackHost: localhost, *.localhost, 127.0.0.0/8, ::1) goes DIRECT; the user's bypass list `PROXY <door>; DIRECT` (the door dials it direct: bypassHit, as for
 // the env routes — 2026-10-17 a bypass-list host went DIRECT and Claude Desktop's turns were never seen); everything else `PROXY <door>; <own leg>`,
-// the own leg being the app's way without asight (the user's fixed system proxy, else DIRECT); after `off` (door null) only the app's own way. The PAC door takes no
+// the own leg being the app's way without asight (the user's fixed system proxy, else DIRECT). A plain `http:` URL, and every URL after `off` (door
+// null), gets only the app's own way: the door takes CONNECT and SOCKS5, a proxied plain-http request is absolute-form, and once the door accepted
+// the connection the `; …` after it never applies (P10: plain http on the PAC route is not captured). The PAC door takes no
 // credentials, so at accept it forwards only a peer of this user (peerAllowed). When a PAC route is not written at all (the four not-routed
 // conditions of ruling ③) is entries.mjs's pacGate, not this file's. The handler is registered on the door.
 import { PAC_PATH } from './entries.mjs'
@@ -37,14 +39,17 @@ const bypassTest = (row) => {
 /** The PAC text (P10). `door`: the door's address (null after `off`); `ownLeg`: the user's fixed system proxy, or null for DIRECT; `bypass`: the
  *  user's bypass rows (`{ kind: 'local' | 'domain' | 'domain-suffix' | 'ip-cidr', value }`, the chain's), matched as bypassHit matches them. */
 export function pacText({ door = null, ownLeg = null, bypass = [] } = {}) {
-  const lead = (leg) => (door == null ? leg : `${pacProxy(door)}; ${leg}`)
-  const byp = [...new Set((bypass || []).map(bypassTest))]
+  const own = pacProxy(ownLeg), byp = [...new Set((bypass || []).map(bypassTest))]
+  // the answer on each side of the bypass list: `way` turns the app's own word (DIRECT for a bypass host, the own leg for any other) into the PAC's
+  const answer = (way) => (byp.length ? `bypass ? ${JSON.stringify(way('DIRECT'))} : ` : '') + JSON.stringify(way(own))
   return [
     'function FindProxyForURL(url, host) {',
     '  host = String(host).toLowerCase().replace(/^\\[|\\]$/g, "").replace(/\\.$/, "");',
     `  if (${LOOPBACK_TEST}) return "DIRECT";`,
-    ...(byp.length ? [`  if (${byp.join(' ||\n      ')}) return ${JSON.stringify(lead('DIRECT'))};`] : []),
-    `  return ${JSON.stringify(lead(pacProxy(ownLeg)))};`,
+    ...(byp.length ? [`  var bypass = ${byp.join(' ||\n      ')};`] : []),
+    // every scheme but plain http goes to the door (it CONNECTs); plain http, and after `off` everything, takes the app's own way
+    ...(door == null ? [] : [`  if (String(url).substring(0, 5).toLowerCase() !== "http:") return ${answer((w) => `${pacProxy(door)}; ${w}`)};`]),
+    `  return ${answer((w) => w)};`,
     '}',
     '',
   ].join('\n')
