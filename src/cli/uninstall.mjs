@@ -267,7 +267,11 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // collector's own machine goes with it: the kernel's copy (kernel/) and its verified-archive cache (kernel-archive/), the kernel's config and home with the controller
     // secret and tokens (forwarder/), and the endpoint file control.json (the daemon's control endpoint; ingress.json went above, with every uninstall) — a plain uninstall
     // keeps them (a kernel may still be draining; the next on reuses the cache), the purge leaves the collector directory empty of everything asight can rebuild nothing of.
-    if (purgeData) {
+    // Only when every step above succeeded (invariant 2; 1.6 §1.1): a run that leaves an item, has a problem or a failure keeps every capture
+    // and says so — the captures are what nothing brings back, and the next uninstall can still purge them.
+    const purgeHeld = purgeData && (blocked || receipt.left.length > 0 || receipt.problems.length > 0 || failed.length > 0)
+    if (purgeHeld) { receipt.purge_data = false; receipt.kept_captures = true; receipt.notes.push('uninstall 没有全部完成:采集数据一个都没删(--purge-data 只在其余各步都成功后才删);修好上面的问题后再跑 asight uninstall --purge-data') }
+    if (purgeData && !purgeHeld) {
       for (const n of (() => { try { return fs.readdirSync(w.dir) } catch { return [] } })()) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(w.dir, n))
       for (const sub of ['flows', 'audit', 'replays', 'kernel', 'kernel-archive', 'forwarder']) rm(path.join(w.dir, sub))
       rm(path.join(w.dir, 'control.json'))
@@ -278,7 +282,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // the outcome follows the exit code (as `off`'s does): an item that could not be undone is 'left'; any other problem — a blocked run, a state.json that could not be
     // written — is 'failed'; 'uninstalled' only when the run is clean
     const failedRun = blocked || (receipt.problems.length > 0 && !left)
-    if (!(purgeData && !left && !blocked && !receipt.problems.length)) {
+    if (!(purgeData && !purgeHeld)) { // a purge took flows/ with it: nothing to append to
       for (const n of noted) put(n)
       put({ kind: 'result', outcome: failedRun ? 'failed' : left ? 'left' : 'uninstalled', counts: { entries: (u.results || []).length, left, still_trusting: u.still_trusting.length, notes: noted.length }, reason: failedRun ? `uninstall did not finish: ${receipt.problems[0]}` : left ? `uninstalled, except ${left} item(s) that could not be undone; the install manifest is kept` : `uninstalled: ${(u.results || []).length} trust entr${(u.results || []).length === 1 ? 'y' : 'ies'} undone, ${noted.length} note(s)` })
     }

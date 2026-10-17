@@ -155,3 +155,32 @@ test('0.2:130 · a refused uninstall (collectors-online) leaves the daemon\'s lo
   assert.deepEqual(fs.readdirSync(logs).sort(), ['daemon-err.log', 'daemon-out.log'])
   assert.deepEqual(tree(w.home), before)
 })
+
+// invariant 2: `--purge-data` deletes the captures only once every other step has succeeded — a run with a problem (a state.json that cannot be written —
+// the test rig's EIO) or an item left (a key the custody cannot reach) keeps every capture and says so (G12: exit 1, yet 「采集数据已删」). Generated along the causes.
+const CAPTURES = ['capture-2026-10-17.ndjson', 'flows/2026-01-01.ndjson', 'audit/a.ndjson', 'replays/r.json']
+const withCaptures = (w) => { for (const p of CAPTURES) { fs.mkdirSync(path.dirname(path.join(w.dir, p)), { recursive: true }); fs.writeFileSync(path.join(w.dir, p), `${p}\n`) } }
+const UNFINISHED = {
+  'a state.json that cannot be written': (w) => { fs.rmSync(path.join(w.dir, 'state.json'), { force: true }); fs.mkdirSync(path.join(w.dir, 'state.json', 'x'), { recursive: true }) },
+  'a key the custody cannot reach': (w) => { w.custody.switches.unavailable = true },
+}
+for (const [cause, make] of Object.entries(UNFINISHED)) {
+  test(`invariant 2 · --purge-data with ${cause}: exit 1, and every capture stays; the receipt says they stay`, async () => {
+    const w = await installed()
+    withCaptures(w)
+    make(w)
+    const { receipt, exit } = await uninstall(w, {}, { purgeData: true })
+    assert.equal(exit, 1, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+    for (const p of CAPTURES) assert.equal(fs.readFileSync(path.join(w.dir, p), 'utf8'), `${p}\n`, `${p} stays`)
+    assert.deepEqual([receipt.purge_data, receipt.kept_captures], [false, true])
+    assert.doesNotMatch(formatUninstallReceipt(receipt), /采集数据已删/)
+  })
+}
+test('invariant 2 · --purge-data on a clean run deletes the captures (the negative above is not vacuous)', async () => {
+  const w = await installed()
+  withCaptures(w)
+  const { receipt, exit } = await uninstall(w, {}, { purgeData: true })
+  assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  for (const p of CAPTURES) assert.equal(fs.existsSync(path.join(w.dir, p)), false, `${p} is gone`)
+  assert.match(formatUninstallReceipt(receipt), /采集数据已删/)
+})
