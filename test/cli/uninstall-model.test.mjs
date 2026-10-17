@@ -100,6 +100,29 @@ test('CM24 · offline: LIFO — the wrapper back, the plugin and its loader line
   assert.equal(w.custody.exists(), false)
 })
 
+// D48 · 1.6 §1.6 OS 框: once the OS was asked to add the root, whatever it answered, the root may be in the user's store — a cancelled macOS box leaves
+// it in the login keychain without trust, a Windows read-back that failed hides a trusted one, a prompt left open may be answered later. Install records
+// it, and uninstall removes it by its fingerprint (review 2026-10-17: the read-back's pending skipped the record, and uninstall left the root). Generated
+// along what the add and its read-back answer.
+const ANSWERS = {
+  'the add ok, the read-back absent': (s) => { s.add = () => ({ ok: true }) },
+  'the add ok, the read-back an error': (s) => { const has = s.has; let n = 0; s.add = () => ({ ok: true }); s.has = (id) => (n++ ? { error: 'certutil -user -store failed (exit 1)' } : has(id)) },
+  'the prompt declined': (s) => { s.answer = 'declined' },
+  'the prompt left pending': (s) => { s.answer = 'pending' },
+}
+for (const [what, make] of Object.entries(ANSWERS)) {
+  test(`D48 · ${what} → the manifest records the root, uninstall removes it by its fingerprint`, async () => {
+    const w = await modelWorld()
+    make(w.store)
+    const r = await w.install()
+    assert.deepEqual([r.exit, r.pending.map((p) => p.item)], [1, ['root-store']])
+    assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'system-root').map((e) => e.fp256), [r.fp256], 'one system-root record, this root')
+    const removed = []
+    const { receipt } = await uninstall(w, { rootStore: { remove: (id) => { removed.push(id.fp256); return { ok: true } } } })
+    assert.deepEqual(removed, [r.fp256], JSON.stringify({ p: receipt.problems, l: receipt.left }))
+  })
+}
+
 // invariant 5: uninstall leaves nothing of asight's but the captures — the darwin signing helper install put in ~/.asight/bin goes too, after the key;
 // while the key could not be removed (the custody unreachable), the helper stays with its record: the next uninstall needs it
 const leftUnder = (home) => { const out = []; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); if (p.includes(`${path.sep}flows`)) continue; if (fs.lstatSync(p).isDirectory()) walk(p); else out.push(path.relative(home, p)) } }; if (fs.existsSync(path.join(home, '.asight'))) walk(path.join(home, '.asight')); return out }

@@ -144,9 +144,11 @@ test('1.6 §1.6 · an add that reports success but is not trusted when read back
   assert.equal(readManifest(w.dir).install.state, 'partial')
   assert.ok(!r.items.some((i) => i.item === 'root-store' && i.state === 'added'), 'never said added')
   w.store.add = add
-  const again = await w.install({ wrapperKit: { renderWrapper } })
+  const at = new Date(Date.now() + 3600e3)
+  const again = await w.install({ wrapperKit: { renderWrapper }, now: () => at })
   assert.equal(again.exit, 0)
   assert.equal(readManifest(w.dir).install.state, 'complete')
+  assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'system-root').map((e) => e.installed_at), [at.toISOString()], 'one record; its time is when the trust took (P11 ③)')
 })
 
 // CM35 (4.11 §3 ㉒): the lost-key install. The custody's key gone behind asight's back (exists() false, the manifest records the old root) → the old

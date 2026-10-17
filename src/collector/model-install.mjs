@@ -114,8 +114,9 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const storeKind = STORE[os]
   const inStore = await rootStore.has(id)
   let storeRec = m.entries.find((e) => e.kind === 'system-root' && e.store === storeKind && e.fp256 === id.fp256)
+  const asked = !inStore.error && !inStore.present // the OS is asked to add the root: from then on it may be in the user's store, trusted or not
   if (inStore.error) pending.push({ item: 'root-store', state: 'pending', reason: inStore.error })
-  else if (!inStore.present) {
+  else if (asked) {
     const r = await rootStore.add(rootDer)
     if (!r.ok) pending.push({ item: 'root-store', state: promptState(r), reason: r.reason })
     else { // the add is read back as the next install's would be: an OS tool that answers 0 while the trust it was asked for is absent (a box cancelled,
@@ -124,12 +125,16 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       if (back.error || !back.present) pending.push({ item: 'root-store', state: 'pending', reason: back.error || 'the OS took the root, but reading your trust settings back does not find it trusted (was the box cancelled?)' })
     }
   }
-  if (!inStore.error && (inStore.present || pending.every((p) => p.item !== 'root-store')) && !storeRec) {
+  const rootPending = pending.find((p) => p.item === 'root-store')
+  // the record uninstall removes the root by (D48): written once the OS was asked, whatever it answered — a cancelled macOS box leaves the certificate
+  // in the login keychain without trust, a prompt left open may still be answered yes after the timeout, a Windows listing that failed hides a root that
+  // is there; remove() answers `absent` for one that never landed (1.6 §1.6 OS 框)
+  if (!storeRec && (inStore.present || asked)) {
     storeRec = { kind: 'system-root', store: storeKind, scope: 'user', harness: null, phase: 'install', path: ca.pem, fp256: id.fp256, thumbprint: id.sha1, cert_file: ca.pem, values: { fp256: id.fp256, thumbprint: id.sha1, ...(os === 'darwin' ? { keychain: path.join(home, 'Library', 'Keychains', 'login.keychain-db') } : {}) }, installed_at: now().toISOString() }
     storeRec.undo_by_hand = undoByHand(storeRec)
     m.entries.push(storeRec); save()
-  }
-  said('root-store', pending.some((p) => p.item === 'root-store') ? pending.find((p) => p.item === 'root-store').state : inStore.present ? 'intact' : 'added')
+  } else if (storeRec && asked && !rootPending) { storeRec.installed_at = now().toISOString(); save() } // trusted only now (an earlier add left it pending): the carrier time is now (P11 ③)
+  said('root-store', rootPending ? rootPending.state : inStore.present ? 'intact' : 'added')
 
   // c · the carriers of every present form (P4)
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
