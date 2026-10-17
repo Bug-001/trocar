@@ -7,7 +7,8 @@
 //                   prompt was declined or ignored is in the keychain without trust, and must read as absent so the next add asks again
 //           remove  security remove-trusted-cert <file>, then security delete-certificate -Z <sha1> <login keychain>
 //   win32   add     certutil -user -addstore Root <file>
-//           has     certutil -user -store Root <thumbprint>
+//           has     certutil -user -store Root (the user's own store, listed), matched by thumbprint: a lookup's exit is not a fact —
+//                   `-store Root <absent thumbprint>` exits 0, CRYPT_E_NOT_FOUND or NTE_NOT_FOUND by caller (a Windows test machine, 2026-10-17)
 //           remove  certutil -user -delstore Root <thumbprint>
 // A root is named by rootIdOf(der) = { fp256 (node's AB:CD:… form), sha1 (the thumbprint, hex) }: Windows looks a certificate up by its
 // SHA-1 thumbprint only. The certificate file `security` / `certutil` read is written under ~/.asight/collector and removed after.
@@ -22,9 +23,6 @@ export function rootIdOf(cert) {
   const x = new crypto.X509Certificate(cert)
   return { fp256: x.fingerprint256, sha1: x.fingerprint.replace(/:/g, '') }
 }
-
-/** certutil's exit when the store has no such certificate: CRYPT_E_NOT_FOUND. */
-const CRYPT_E_NOT_FOUND = 0x80092004
 
 const rsTool = (r, what) => (r.code === 0 ? null : `${what} failed (exit ${r.code ?? 'none'}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`)
 
@@ -92,13 +90,14 @@ export function rootStore({ platform, run = null, home, env = process.env, fs = 
   }
   if (platform === 'win32') {
     const thumb = (id) => { if (!id || !id.sha1) throw new Error('the Windows root store looks a certificate up by its SHA-1 thumbprint: pass rootIdOf(der)'); return id.sha1 }
-    // only certutil's not-found exit is "absent"; a spawn failure, a timeout (code null) or any other exit is an error,
-    // never a silent "already gone" (D38). The exit is the HRESULT; `>>> 0` reads it signed or unsigned alike.
+    // the whole user store listed: present iff a line, spaces taken out (older certutil prints `Cert Hash(sha1): ab cd …`), holds the
+    // thumbprint; the labels are localized, the hex is not. A listing that did not succeed (a spawn failure, a timeout: code null, any
+    // other exit) is an error, never a silent "absent" (D38).
     const find = (id) => {
-      const r = execTool('certutil', ['-user', '-store', 'Root', thumb(id)], opts)
-      if (r.code === 0) return { present: true }
-      if (r.code !== null && r.code >>> 0 === CRYPT_E_NOT_FOUND) return { present: false }
-      return { error: rsTool(r, 'certutil -user -store') }
+      const t = thumb(id).toLowerCase()
+      const r = execTool('certutil', ['-user', '-store', 'Root'], opts)
+      if (r.code !== 0) return { error: rsTool(r, 'certutil -user -store') }
+      return { present: r.out.split(/\r?\n/).some((l) => l.replace(/\s+/g, '').toLowerCase().includes(t)) }
     }
     return {
       add: (rootDer) => withFile(pemOf(rootDer), (f) => {

@@ -8,8 +8,8 @@ import path from 'node:path'
 import { rootStore, rootIdOf } from '../../src/off/root-store.mjs'
 import { custodyStub } from '../helpers/custody-stub.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { certutilModel } from '../helpers/certutil-model.mjs'
 
-const CRYPT_E_NOT_FOUND = 0x80092004 // certutil's not-found exit, the fact root-store.mjs reads (black-box here)
 const stub = custodyStub(); const { rootDer } = stub.create()
 const id = rootIdOf(rootDer)
 const pemOf = (der) => `-----BEGIN CERTIFICATE-----\n${der.toString('base64').match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----\n`
@@ -30,19 +30,19 @@ const expected = {
   },
   win32: {
     add: () => [['certutil', ['-user', '-addstore', 'Root', FILE]]],
-    has: () => [['certutil', ['-user', '-store', 'Root', id.sha1]]],
-    remove: (home, present) => [['certutil', ['-user', '-store', 'Root', id.sha1]], ...(present ? [['certutil', ['-user', '-delstore', 'Root', id.sha1]]] : [])],
+    has: () => [['certutil', ['-user', '-store', 'Root']]],
+    remove: (home, present) => [['certutil', ['-user', '-store', 'Root']], ...(present ? [['certutil', ['-user', '-delstore', 'Root', id.sha1]]] : [])],
   },
 }
 
 function runner({ platform, present, files }) {
-  const calls = []
+  const calls = [], win = certutilModel({ store: present ? [id.sha1] : [] })
   const run = (file, args) => {
     const a = args.map((x) => (x.endsWith('root-store-tmp.pem') ? (files.push(fs.readFileSync(x, 'utf8')), FILE) : x))
     calls.push([file, a])
     if (platform === 'darwin' && args[0] === 'trust-settings-export') { fs.writeFileSync(args[1], trustPlist([id.sha1])); return { status: 0, stdout: '' } }
     if (platform === 'darwin' && args[0] === 'find-certificate') return { status: 0, stdout: `SHA-1 hash: X\n${pemOf(other.rootDer)}${present ? `SHA-1 hash: ${id.sha1}\n${pemOf(rootDer)}` : ''}` }
-    if (platform === 'win32' && args[1] === '-store') return { status: present ? 0 : CRYPT_E_NOT_FOUND, stdout: '' }
+    if (platform === 'win32') return win.run(file, args)
     return { status: 0, stdout: '' }
   }
   return { run, calls }
@@ -84,8 +84,28 @@ test('CM7 a failing tool is a reason, never a throw; Linux has no user root stor
   assert.throws(() => rootStore({ platform: 'win32', run, home }).has({ fp256: id.fp256 }), /thumbprint/)
 })
 
-// win32: only certutil's not-found exit (read signed or unsigned) is "absent"; a spawn failure / timeout (status null), an
-// unexpected exit, or a failing find under remove is an error — remove never claims "already gone" and never runs -delstore
+// win32: membership is the user's store listed and searched by thumbprint. The lookup of one thumbprint exits NTE_NOT_FOUND on a
+// Windows test machine (certutilModel), which the old exit-code reading took for an error: install then never added the root. Generated over the listing's
+// shapes; a listing that did not succeed (spawn failure / timeout: status null, any other exit) is an error, never "absent", and remove
+// never runs -delstore then (D38).
+const other1 = rootIdOf(other.rootDer).sha1
+for (const [label, opts, present] of [['empty', { store: [] }, false], ['other roots only', { store: [other1] }, false], ['it among others', { store: [other1, id.sha1] }, true], ['it, the older spaced hash', { store: [id.sha1], spaced: true }, true], ['others, spaced', { store: [other1], spaced: true }, false]]) {
+  test(`CM7 win32 has / remove over the real certutil, the user's store ${label} → present ${present}`, () => {
+    const m = certutilModel(opts)
+    const store = rootStore({ platform: 'win32', run: m.run, home: tmpDir('asight-rs-') })
+    assert.deepEqual(store.has(id), { present })
+    assert.deepEqual(store.remove(id), present ? { ok: true } : { ok: true, absent: true })
+    assert.equal(m.store.has(id.sha1.toUpperCase()), false)
+    assert.equal(m.store.has(other1.toUpperCase()), opts.store.includes(other1))
+  })
+}
+test('CM7 win32 install path over the real certutil: absent → add → present (the old lookup read absent as an error and never added)', () => {
+  const m = certutilModel()
+  const store = rootStore({ platform: 'win32', run: m.run, home: tmpDir('asight-rs-') })
+  assert.deepEqual(store.has(id), { present: false })
+  assert.deepEqual(store.add(rootDer), { ok: true })
+  assert.deepEqual(store.has(id), { present: true })
+})
 for (const [what, status] of [['a spawn failure or timeout', null], ['an unexpected exit', 5], ['access denied', 0x80070005], ['access denied, signed', 0x80070005 | 0]]) {
   test(`CM7 win32 has / remove with ${what}: an error, never "absent"`, () => {
     const home = tmpDir('asight-rs-')
@@ -98,12 +118,6 @@ for (const [what, status] of [['a spawn failure or timeout', null], ['an unexpec
     assert.ok(!calls.includes('-delstore'))
   })
 }
-test('CM7 win32 not-found read as a signed exit is still "absent"', () => {
-  const run = () => ({ status: CRYPT_E_NOT_FOUND | 0 })
-  const store = rootStore({ platform: 'win32', run, home: tmpDir('asight-rs-') })
-  assert.deepEqual(store.has(id), { present: false })
-  assert.deepEqual(store.remove(id), { ok: true, absent: true })
-})
 
 // D38 · CM7: on macOS `present` means TRUSTED. add-trusted-cert imports the certificate before it asks; a declined or ignored prompt leaves it in the
 // login keychain with no trust setting, and an install that read that as present would record the root and never ask again (every root-only

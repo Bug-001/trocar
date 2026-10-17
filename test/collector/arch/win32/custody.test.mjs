@@ -7,6 +7,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { custodyStub } from '../../../helpers/custody-stub.mjs'
+import { certutilModel } from '../../../helpers/certutil-model.mjs'
 import { cngCustody, CUSTODY_PS1, PS_FILE_ARGS } from '../../../../src/collector/arch/win32/custody.mjs'
 import { userRootStore } from '../../../../src/collector/arch/win32/root-store.mjs'
 import { ROOT, INTERMEDIATE, checkProfile } from '../../../../src/collector/core/tls/cert.mjs'
@@ -89,19 +90,19 @@ test('custody.ps1 builds and signs itself: no caller TBS, X509SignatureGenerator
 
 test('CM7 (argv): the Windows root store is always certutil -user on the Root store', () => {
   const home = tmpDir('asight-rs-win-')
-  const calls = []
   const der = custodyStub().create({ subject: 'r' }).rootDer
-  const run = (file, args) => { calls.push([file, ...args]); return { status: args.includes('-store') ? 0x80092004 : 0, stdout: '', stderr: '' } }
+  const { run, calls } = certutilModel()
   const rs = userRootStore({ home, run })
   const id = { fp256: new crypto.X509Certificate(der).fingerprint256, sha1: new crypto.X509Certificate(der).fingerprint.replace(/:/g, '') }
-  assert.deepEqual(rs.add(der), { ok: true })
   assert.deepEqual(rs.has(id), { present: false })
+  assert.deepEqual(rs.add(der), { ok: true })
+  assert.deepEqual(rs.remove(id), { ok: true })
   assert.deepEqual(rs.remove(id), { ok: true, absent: true })
-  assert.equal(calls.length, 3)
+  assert.equal(calls.length, 5)
   for (const c of calls) {
     assert.equal(c[0], 'certutil')
     assert.equal(c[1], '-user', `the user's store, never the machine's: ${c.join(' ')}`)
     assert.equal(c[3], 'Root')
   }
-  assert.deepEqual(calls.map((c) => c[2]), ['-addstore', '-store', '-store'])
+  assert.deepEqual(calls.map((c) => c[2]), ['-store', '-addstore', '-store', '-delstore', '-store'])
 })
