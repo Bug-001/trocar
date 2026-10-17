@@ -103,7 +103,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   if (lingerText(r)) lines.push(lingerText(r))
   for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(adoptedLine(h, x)) // D46: a chain that says nothing is not printed
   if (r.daemon && !daemonBit) lines.push(`守护进程: 没在跑,什么都没有被采集(入口已写好,守护进程起来后才挂引流)`)
-  if (r.restart.length) lines.push(`  ${c.yellow('⚠')} 重启后才被采: ${r.restart.map((x) => `${x.harness}(pid ${x.pid},启动早于信任入口)`).join('、')};在那之前照常直连`)
+  if (r.restart.length) lines.push(`  ${c.yellow('⚠')} ${r.restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集(启动早于证书)`).join(';')};在那之前照常直连`) // 1.6 §1.1: the phrase status prints (D55: what it started before is the certificate)
   const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length
   // A note is a 问题 exactly when the run's own `problems` list names it — never merely because the whole run failed: a failed first
   // install otherwise labelled its own success lines as problems (seen on a macOS test machine, 2026-10-11). turnOn sets receipt.problems

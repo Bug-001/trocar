@@ -201,7 +201,7 @@ test('formatOnReceipt: past and future tense, the four commands, the restart lis
   assert.match(past, /~\/\.claude\/settings\.json +加 env\.NODE_EXTRA_CA_CERTS +备份 ~\/\.asight\/backup\/aa-bb/)
   assert.match(past, /跳过: hermes\(~\/\.hermes 不存在\)/)
   assert.match(past, /登出后停采\(未开 linger\)[^\n]*loginctl enable-linger alice/)
-  assert.match(past, /claude-code\(pid 4121,启动早于信任入口\)/)
+  assert.match(past, /正在跑的 claude-code\(pid 4121\)重启后才会被采集\(启动早于证书\)/, '1.6 §1.1: on names each process with the phrase status uses')
   for (const c of ['asight on', 'asight off', 'asight status', 'asight uninstall']) assert.ok(past.includes(c), c)
   const future = formatOnReceipt({ ...r, dry_run: true }, { tense: 'future', home })
   assert.match(future, /^asight 将打开采集/); assert.match(future, /将改这些文件/)
