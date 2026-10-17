@@ -9,6 +9,7 @@
 //   skewMs      — a well-formed intermediate whose notBefore is shifted by this much (a local-vs-UTC slip)
 import crypto from 'node:crypto'
 import { rootCertDer, intermediateCertDer } from '../../src/collector/core/tls/cert.mjs'
+import { NO_KEY } from '../../src/collector/core/tls/custody-cli.mjs'
 
 const DAY = 86400e3
 const spkiOf = (k) => k.export({ type: 'spki', format: 'der' })
@@ -38,7 +39,7 @@ export function custodyStub({ kind = 'stub', clock = () => Date.now() } = {}) {
       calls.push({ verb: 'issue', spkiDer, serial, notBefore })
       if (switches.throws) throw new Error('stub custody: the helper crashed')
       if (switches.unavailable) return 'unavailable'
-      if (!self.exists()) throw new Error('stub custody: no root key')
+      if (!self.exists()) throw Object.assign(new Error('stub custody: no root key'), { code: NO_KEY }) // the programs' exit 4
       if (switches.wrongProfile) { const k = p256(); return rootCertDer({ subject: 'not an intermediate', spkiDer: spkiOf(k.publicKey), serial, notBefore, notAfter: new Date(notBefore.getTime() + 7 * DAY), sign: signer(k.privateKey) }) }
       const nb = new Date(notBefore.getTime() + switches.skewMs)
       return intermediateCertDer({ root: rootDer, subject: `asight intermediate ${nb.toISOString()}`, spkiDer: switches.wrongKey ? spkiOf(p256().publicKey) : spkiDer, serial, notBefore: nb, sign: signer(keys.privateKey) })

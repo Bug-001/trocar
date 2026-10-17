@@ -11,6 +11,7 @@ import { checkProfile, certPem, certSubjectAndSki, INTERMEDIATE } from './cert.m
 import { loadCa } from './ca.mjs'
 import { createLeafIssuer } from './leaf.mjs'
 import { CODE } from '../codes.mjs'
+import { NO_KEY } from './custody-cli.mjs'
 
 const HOUR = 3600e3
 const DAY = 86400e3
@@ -75,7 +76,8 @@ export async function makeIssuer({ custody, root = null, clock = () => Date.now(
     if (closed) return
     let reason
     try {
-      if (!(await custody.exists())) return failed(CODE.certKeyMissing, `the root key is not in its ${custody.kind} custody; run asight install`)
+      // no exists() first: the custody's own `issue` answers no-key (both helpers' exit 4), and each question is a process (a PowerShell on Windows,
+      // 0.4–0.6 s on a Windows test machine, 2026-10-17) on the daemon's way to answering `on`
       const key = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }) // the intermediate key: memory only
       const serial = crypto.randomBytes(16); serial[0] &= 0x7f
       const spkiDer = key.publicKey.export({ type: 'spki', format: 'der' })
@@ -88,7 +90,10 @@ export async function makeIssuer({ custody, root = null, clock = () => Date.now(
         if (!bad.length) return install(der, key)
         reason = `the ${custody.kind} custody issued a certificate that is not the intermediate profile: ${bad.join('; ')}`
       }
-    } catch (e) { reason = `the ${custody.kind} custody failed: ${String((e && e.message) || e)}` }
+    } catch (e) {
+      if (e && e.code === NO_KEY) return failed(CODE.certKeyMissing, `the root key is not in its ${custody.kind} custody; run asight install`)
+      reason = `the ${custody.kind} custody failed: ${String((e && e.message) || e)}`
+    }
     if (!closed) failed(CODE.certIntermediateUnavailable, reason)
   }
 

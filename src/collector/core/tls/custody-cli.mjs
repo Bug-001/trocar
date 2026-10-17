@@ -10,6 +10,8 @@ import crypto from 'node:crypto'
 import { execTool } from '../../../off/exec.mjs'
 
 const EXIT_UNAVAILABLE = 3
+/** The error word both programs answer `issue` with when the root key is not there (exit 4): a throw with this code, which the issuer reads as cert-key-missing. */
+export const NO_KEY = 'no-key'
 
 /** cliCustody({ kind, file, prefix, name, run, env, timeoutMs }) → { kind, create, exists, issueIntermediate, remove }. `file` +
  *  `prefix` is what runs before the verb (the helper itself, or powershell.exe and its -File script); `name` is what errors call it;

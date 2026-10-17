@@ -289,6 +289,9 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     lookupIngress,
     servePac,
     holders: holdersRoute({ holders: async () => poll.now() ?? holdersNow() }),
+    /** The holder count the poll last saw, or null when nothing is watched: GET /status's number, which never reads the process table itself
+     *  (on Windows that is a PowerShell each; `on` asks /status twice before POST /on, a Windows test machine 2026-10-17). GET /holders is the fresh answer. */
+    polledHolders: () => { const r = poll.now(); return Array.isArray(r) ? r.length : null },
     mayExit: () => mayExit({ harnessesOn: [...onSet], holders: kept().length ? poll.now() : [], openConns: openConns() }),
     close() { poll.stop(); if (iss) iss.close() },
   }

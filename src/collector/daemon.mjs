@@ -31,6 +31,7 @@ import { appendEvent, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 import { procIdentity, captureHealth } from '../health/read.mjs'
 import { identityFor } from '../off/proc.mjs'
+import { runAsync } from '../off/exec.mjs'
 import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
 import { retentionFile } from '../capture/retention.mjs'
 import { retentionHook, wsTerminalHook } from './engine-data.mjs'
@@ -166,7 +167,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
-  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env }) /* darwin = ps lstart + kern.boottime */, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows })
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows })
   identity = identity || procIdentity
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
@@ -652,7 +653,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const status = async () => {
     const st = collector.issuer.state()
     const hs = Object.fromEntries(Object.entries(desired()).map(([h, e]) => [h, { ...e, attached: collector.attached(h) }])) // per harness: its doors listen (status's `attached`, 1.6 V32)
-    return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: (await collector.holders()).count ?? null, cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   let stop = null, markReady
@@ -675,7 +676,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   try {
     await collector.start()
     markReady()
-    const me = identity(process.pid)
+    const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
     fs.writeFileSync(`${P.lock}.tmp-${process.pid}`, JSON.stringify({ pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }) + '\n', { mode: 0o600 })
     fs.renameSync(`${P.lock}.tmp-${process.pid}`, P.lock)
     const lockTimer = setInterval(() => { try { const t = new Date(); fs.utimesSync(P.lock, t, t) } catch (e) { failure('daemon', coded(e, 'record-error')) } }, lockRefreshMs); lockTimer.unref()

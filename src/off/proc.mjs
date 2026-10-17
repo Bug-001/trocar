@@ -104,10 +104,14 @@ const WIN_IDENTITY_SCRIPT = (pid) => `$p = Get-CimInstance Win32_Process -Filter
  *  /proc reader: never a throw, never a guess (a dead powershell, or an answer that is neither 'gone' nor the JSON object, is "not known").
  *  `run` is the injected runner (execTool's). */
 export function winIdentity(pid, { run = null, env = process.env } = {}) {
-  const r = execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', WIN_IDENTITY_SCRIPT(pid)], { run, env })
-  if (r.code !== 0 || r.out === 'gone') return { start_time: null, boot_id: null }
-  try { const o = JSON.parse(r.out); return { start_time: Number.isFinite(o.s) ? String(o.s) : null, boot_id: Number.isFinite(o.b) ? String(o.b) : null } } catch { return { start_time: null, boot_id: null } }
+  return then(execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', WIN_IDENTITY_SCRIPT(pid)], { run, env }), (r) => {
+    if (r.code !== 0 || r.out === 'gone') return { start_time: null, boot_id: null }
+    try { const o = JSON.parse(r.out); return { start_time: Number.isFinite(o.s) ? String(o.s) : null, boot_id: Number.isFinite(o.b) ? String(o.b) : null } } catch { return { start_time: null, boot_id: null } }
+  })
 }
+/** f(r) now, or once r resolves: the identity readers answer in the runner's own time — at once with spawnSync, as a promise with an async
+ *  runner (runAsync), which the daemon passes so a PowerShell does not stop its event loop on its way to answering `on` (a Windows test machine 2026-10-17). */
+const then = (r, f) => (r && typeof r.then === 'function' ? r.then(f) : f(r))
 
 // What one question about the whole process table may print (spawnSync's own default is 1 MiB): `lsof`'s txt records of one user's processes on a
 // working Mac are 1.6 MB (every mapped library is a txt record), and a cut answer reads as a table whose newest processes — the highest pids, the
@@ -127,11 +131,13 @@ export const lsofEnv = (env = process.env) => ({ ...env, LC_ALL: 'UTF-8' })
  *  and the seconds of `sysctl -n kern.boottime` as the boot id (lstart has a one-second grain, the boot time tells a reboot apart); both null when `ps`
  *  does not know the pid, boot_id null when sysctl does not answer. `exec` is the injected runner (execTool). */
 export function psIdentity(pid, { exec = null, env = process.env } = {}) {
-  const r = execTool('ps', ['-o', 'lstart=', '-p', String(pid)], { run: exec, env: psEnv(env) })
-  if (!(r.code === 0 && /\S/.test(r.out))) return { start_time: null, boot_id: null }
-  const b = execTool('sysctl', ['-n', 'kern.boottime'], { run: exec, env: psEnv(env) })
-  const sec = b.code === 0 && /\bsec\s*=\s*(\d+)/.exec(b.out)
-  return { start_time: r.out.replace(/\s+/g, ' ').trim(), boot_id: sec ? sec[1] : null }
+  return then(execTool('ps', ['-o', 'lstart=', '-p', String(pid)], { run: exec, env: psEnv(env) }), (r) => {
+    if (!(r.code === 0 && /\S/.test(r.out))) return { start_time: null, boot_id: null }
+    return then(execTool('sysctl', ['-n', 'kern.boottime'], { run: exec, env: psEnv(env) }), (b) => {
+      const sec = b.code === 0 && /\bsec\s*=\s*(\d+)/.exec(b.out)
+      return { start_time: r.out.replace(/\s+/g, ' ').trim(), boot_id: sec ? sec[1] : null }
+    })
+  })
 }
 
 /** The reader of a process's identity for a platform: /proc on Linux, `ps` on macOS, one Get-CimInstance question on Windows. Without one a

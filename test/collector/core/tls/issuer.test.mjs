@@ -149,11 +149,11 @@ for (const [what, fault, value] of FAULTS.slice(3)) {
   })
 }
 
-test('CM6 the key missing: state key-missing, cert-key-missing, the custody is never asked to issue', async () => {
+test('CM6 the key missing: state key-missing, cert-key-missing; the custody is asked once, to issue, and its no-key answer is the whole question (no exists() first: one process fewer before the daemon answers, Windows test machine 2026-10-17)', async () => {
   const { stub, issuer, records } = await setup({ before: (s) => { s.switches.keyLost = true } })
   assert.equal(issuer.state(), 'key-missing')
   assert.equal(issuer.leafFor('a.test'), null)
-  assert.equal(issues(stub), 0)
+  assert.equal(issues(stub), 1)
   assert.deepEqual(records.map((r) => [r.event, r.where, r.code]), [['failure', 'ca', 'cert-key-missing']])
   issuer.close()
 })
