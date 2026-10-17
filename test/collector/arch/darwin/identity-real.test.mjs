@@ -21,6 +21,7 @@ import { matchHarness } from '../../../helpers/one-harness.mjs'
 import { readAgentList, agentListPath } from '../../../../src/off/identity.mjs'
 import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { createRegistry, livenessOf } from '../../../../src/collector/core/registry.mjs'
+import { hostFormOf } from '../../../../src/collector/core/host-agent.mjs'
 import { SLEEP, stageShapes, startShapes, stopAll } from '../../../helpers/real-procs.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
@@ -113,4 +114,19 @@ test('the real ps cuts a command line at its spaces; lsof still names the whole 
   const ps = spawnSync('ps', ['-p', String(spaced.pid), '-o', 'args='], { encoding: 'utf8' }).stdout.trim()
   assert.notEqual(ps.split(/\s+/)[0], spaced.shape.exe, 'argv[0] as ps prints it is not the file')
   assert.equal(factsOfPid(spaced.pid, { exec: realRunner }).exe, spaced.shape.exe)
+})
+
+// the door names a host program by the same normalizeName the descriptor's hosts.processes is read with. VS Code's extension host is the
+// form's host; its plain `Code Helper` (the Chromium network service: VS Code's own traffic, which answers a 407 from http.proxy's credentials) is not.
+test('real ps / lsof: an editor helper is the host the darwin forms name, by the one normalized name', { skip }, () => {
+  const groups = ALL.map((d) => ({ harness: d.name, forms: ((d.proxyMode && d.proxyMode.forms) || []).filter((f) => (f.os || []).includes('darwin')) }))
+  const hosted = procs.filter(({ shape }) => 'host' in shape)
+  assert.ok(hosted.length > 0)
+  const wrong = []
+  for (const { shape, pid } of hosted) {
+    const facts = factsOfPid(pid, { exec: realRunner, psTimeoutMs: PS_TIMEOUT_MS })
+    const got = (hostFormOf(groups, facts) || {}).harness ?? null
+    if (got !== shape.host) wrong.push(`${shape.label}: hostFormOf → ${got} (exe ${facts && facts.exe}), want ${shape.host}`)
+  }
+  assert.deepEqual(wrong, [])
 })

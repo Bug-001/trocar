@@ -29,6 +29,7 @@ const MUTATIONS = {
   'pac-auth': (pm) => { const r = pm.routes[firstRoute(pm)]; r.value = 'pac-url'; delete r.auth },
   verified: (pm) => { pm.forms[0].verified = { ...pm.forms[0].verified, [pm.forms[0].os[0]]: {} } },
   'shape (hostTree)': (pm) => { pm.forms[0].hostTree = true; delete pm.forms[0].hosts },
+  'shape (hostTree name)': (pm) => { pm.forms[0].hostTree = true; pm.forms[0].hosts = { processes: ['/Applications/Editor.app/Contents/MacOS/Editor Helper (Plugin)'] } },
   'write-target': (pm) => { pm.routes[firstRoute(pm)].file = { base: 'abs', path: '/Library/Managed Preferences/agent.plist' } },
   'write-target (perOs)': (pm) => { pm.routes[firstRoute(pm)].file = { perOs: { darwin: { base: 'home', path: '.agent.json' }, win32: { base: 'abs', path: 'C:/ProgramData/Agent/settings.json' } } } },
   'write-target (cwd)': (pm) => { pm.routes[firstRoute(pm)].file = { base: 'cwd', path: '.agent/settings.json' } },

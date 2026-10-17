@@ -6,6 +6,7 @@
 // every descriptor owes `asight status` and `asight doctor` (RFC 1.6 §9.7): `proxy`, how its agent reads a proxy.
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { normalizeName } from '../../off/identity.mjs'
 
 const SCHEME = ['http', 'https', 'socks4', 'socks5', 'socks5h']
 const MEASURED = ['lab', 'inferred']
@@ -127,6 +128,7 @@ function proxyModeProblems(pm) {
     }
     if (f.hostTree !== undefined && f.hostTree !== true) say('shape', `${at}.hostTree is not true`)
     if (f.hostTree && !(obj(f.hosts) && Array.isArray(f.hosts.processes) && f.hosts.processes.length && f.hosts.processes.every(nonEmpty))) say('shape', `${at} is a hostTree form without hosts.processes: the door could not tell its host program (4.8 §3)`)
+    else if (f.hostTree) for (const n of f.hosts.processes) if (normalizeName(n) !== n) say('shape', `${at}.hosts.processes names ${JSON.stringify(n)}, not the normalized program name ${JSON.stringify(normalizeName(n))}: the door reads a process by that one name (D51)`)
     if (f.forwardOnlyHosts !== undefined && !(Array.isArray(f.forwardOnlyHosts) && f.forwardOnlyHosts.every(nonEmpty))) say('shape', `${at}.forwardOnlyHosts is not a list of hosts`)
   }
   for (const [id, r] of Object.entries(routes)) {

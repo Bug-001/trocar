@@ -11,7 +11,8 @@ import { onceWithin } from './bounded.mjs'
 export const SLEEP = '/bin/sleep'
 
 /** The shapes: `file` is where the copy lives (relative to the sandbox), `via` a symlink it is started through instead (argv[0] is then the
- *  link, the executable the target), `expect` the harness the preset list names (null: none), `listed` the harness once agents.json adds it. */
+ *  link, the executable the target), `expect` the harness the preset list names (null: none), `listed` the harness once agents.json adds it,
+ *  `host` (when present) the harness whose form names it as its host program. */
 export const SHAPES = Object.freeze([
   { label: 'Homebrew cask', file: 'Caskroom/claude-code/9.9.9/claude', expect: 'claude-code' },
   { label: 'Desktop-bundled Claude Code (spaces in the path)', file: 'Application Support/Claude/claude-code/9.9.9/abc/claude.app/Contents/MacOS/claude', expect: 'claude-code' },
@@ -19,6 +20,9 @@ export const SHAPES = Object.freeze([
   { label: 'native version-named file, started through bin/claude', file: 'claude/versions/9.9.9', via: 'bin/claude', expect: 'claude-code' },
   { label: 'a space and CJK in the directory', file: '测 试/claude', expect: 'claude-code' },
   { label: 'a name on no preset list', file: 'claude-nightly', expect: null, listed: 'claude-code' },
+  // an editor's helpers: on no name list; `host` = the harness whose form's hosts.processes names it (the host-tree rule, darwin forms)
+  { label: 'VS Code\'s extension host (spaces and parentheses)', file: 'Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)', expect: null, host: 'kimi-code' },
+  { label: 'VS Code\'s plain helper (the Chromium network service)', file: 'Visual Studio Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper', expect: null, host: null },
 ])
 
 /** Copies `source` to every shape's file under `dir` (once per file) and makes the symlinks. `prepare(file)` runs on each copy (darwin re-signs
