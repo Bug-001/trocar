@@ -23,13 +23,19 @@ test('the table is the command list of 1.6 §2 — the names of that list, each 
     assert.ok(c.summary.split(/(?<=\.)\s/).length >= 2, `${c.name}: two or three sentences of summary`)
     assert.ok(Array.isArray(c.exits) && c.exits.length, `${c.name}: says which exit codes it uses`)
     for (const [code] of c.exits) assert.ok([0, 1, 2, 3, 70].includes(code), `${c.name}: ${code} is one of the five codes of §1.3`)
-    assert.equal(typeof c.mutates, 'boolean', `${c.name}: says whether it changes state`)
+    assert.ok(typeof c.mutates === 'boolean' || typeof c.mutates === 'function', `${c.name}: says whether it changes state`)
   }
 })
 
 test('§1.5: exactly the commands that change your own state refuse root, and setup-helper is the one that needs it', () => {
-  assert.deepEqual(COMMANDS.filter((c) => c.mutates).map((c) => c.name).sort(), ['daemon', 'install', 'off', 'on', 'raw', 'uninstall'])
+  assert.deepEqual(COMMANDS.filter((c) => c.mutates === true).map((c) => c.name).sort(), ['daemon', 'install', 'off', 'on', 'uninstall'])
   assert.deepEqual(COMMANDS.filter((c) => c.needsRoot).map((c) => c.name), ['setup-helper'])
+  // the two commands where only some subcommands change state (§1.5: `classes set|add|rm|reset` and `raw seal`)
+  const asked = (name, word) => commandNamed(name).mutates({ positionals: word === undefined ? [] : [word], flags: {} })
+  for (const word of ['set', 'add', 'rm', 'reset']) assert.equal(asked('classes', word), true, `classes ${word}`)
+  for (const word of [undefined, 'catalog']) assert.equal(asked('classes', word), false, `classes ${word ?? '(shown)'}`)
+  assert.equal(asked('raw', 'seal'), true)
+  for (const word of ['verify', 'cat']) assert.equal(asked('raw', word), false, `raw ${word}`)
 })
 
 test('D58: every word of help is English ASCII — no section number, decision number, source path or internal code name', () => {

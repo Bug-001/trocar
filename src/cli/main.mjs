@@ -38,8 +38,9 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   // §1.5: the commands that change your own state refuse root, and the one that needs root refuses everyone else — before anything is read or written.
   if (cmd.needsRoot && platform !== 'linux') return refuse(cmd.name, 'usage', `asight ${cmd.name}: not needed on this platform.`)
   if (cmd.needsRoot && uid !== 0) return refuse(cmd.name, 'usage', `asight ${cmd.name}: run it with sudo: sudo asight ${cmd.name}`)
-  if (cmd.mutates && uid === 0) return refuse(cmd.name, 'usage', `asight ${cmd.name}: run this as your own user, not as root.`)
+  // `mutates` may be a function of the parsed args: `classes set` and `raw seal` change state, `classes` shown and `raw cat` do not. Parsing reads and writes nothing, so it comes first.
   const args = parseArgs(cmd, rest)
+  if ((typeof cmd.mutates === 'function' ? cmd.mutates(args) : cmd.mutates) && uid === 0) return refuse(cmd.name, 'usage', `asight ${cmd.name}: run this as your own user, not as root.`)
   if (args.error) return refuse(cmd.name, args.error.code, args.error.message, { usage: args.error.usage })
   const run = (deps.commands && deps.commands[cmd.name]) || cmd.run
   try {

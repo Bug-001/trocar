@@ -7,7 +7,8 @@
 //     summary     two or three sentences of English a user understands: no section numbers, decision numbers, source paths or internal code names.
 //     options     [['--name' | '--name <value>', 'one line of help']] — the declaration src/cli/args.mjs parses by (nothing is guessed).
 //     exits       [[code, 'what it means']], out of the five codes of §1.3.
-//     mutates     changes the user's own state, so it refuses root (§1.5). needsRoot: setup-helper, the one command that must be root.
+//     mutates     changes the user's own state, so it refuses root (§1.5): true, or a function of the parsed args when only some subcommands do
+//                 (`classes set|add|rm|reset` and `raw seal` refuse root; `classes` shown, `raw verify` and `raw cat` do not). needsRoot: setup-helper, the one command that must be root.
 //     run         gets the argv after the name and the context of runCli: { io, env, home, platform, uid, args: { positionals, flags }, deps }.
 //   helpText    the help, made from the table: the three sections, or one command when named.
 import { optionsOf } from './args.mjs'
@@ -39,6 +40,7 @@ export const COMMANDS = Object.freeze([
     group: 'Capture', mutates: true, run: via('./on.mjs', 'runOnCli'),
     usage: `asight on ${HARNESS} [--no-autostart] [--no-unit] [--yes] [--dry-run] [--json]`,
     summary: 'Starts capturing the named agents, or every agent install knows when you name none. It only points each agent at asight and starts the collector; it touches no certificate and restarts no agent. Run asight install first.',
+    // shortcut: --no-unit is still its own option, to be merged into --no-autostart with the on/off rewrite of the next branch
     options: [['--no-autostart', 'start the collector now but do not have it start at login'], ['--no-unit', 'do not write the autostart entry at all'], YES, DRY, JSON_OPT],
     exits: [[0, 'every named agent is being captured'], [1, 'some of them are not'], [2, 'nothing ran: a usage error, an unknown agent, root, or a confirmation nobody could give']] },
   { name: 'off',
@@ -52,28 +54,28 @@ export const COMMANDS = Object.freeze([
     usage: `asight status ${HARNESS} [--failures] [--json]`,
     summary: 'Says which agents are being captured and why not, for the ones that are not. With no name it is one screen: the collector, the agents, the connections still going through asight, and what failed in the last day. Name an agent for its details.',
     options: [['--failures', 'list every failure of the last day, not just the newest'], JSON_OPT],
-    exits: [[0, 'every agent is being captured'], [1, 'some are not'], [3, 'it could not be read; the reason is in the output']] },
+    exits: [[0, 'every agent is being captured'], [1, 'some are not'], [2, 'a usage error, or an unknown agent'], [3, 'it could not be read; the reason is in the output']] },
   { name: 'uninstall',
     group: 'Capture', mutates: true, run: via('./uninstall.mjs', 'runUninstallCli'),
     usage: 'asight uninstall [--purge-data] [--yes] [--dry-run] [--json]',
     summary: 'Removes what install put on this machine: the root, the certificates the agents read, and the records of both. Capture must be off first. Your captured data stays unless you ask for it to go.',
     options: [['--purge-data', 'also delete the captured records'], YES, DRY, JSON_OPT],
-    exits: [[0, 'all of it is gone'], [1, 'some of it is still there'], [2, 'nothing ran: a usage error, root, capture still on, or a confirmation nobody could give']] },
+    exits: [[0, 'all of it is gone'], [1, 'capture is still on, or some of it is still there'], [2, 'nothing ran: a usage error, root, or a confirmation nobody could give']] },
   { name: 'doctor',
     group: 'Capture', mutates: false, run: via('./doctor.mjs', 'runDoctor'),
     usage: `asight doctor ${HARNESS} [--json]`,
-    summary: 'Checks the four things that matter: whether records are really arriving, whether they are complete, whether any credential leaked into them, and whether the captured files are readable only by you. It changes nothing.',
+    summary: 'Finds what keeps capture or the network from working and says how to fix it. It looks at the agents, your proxy, the certificates, who can read the captured files, and the backups nothing claims. It changes nothing.',
     options: [JSON_OPT],
-    exits: [[0, 'nothing is wrong'], [1, 'something is wrong, and it says what'], [3, 'it could not judge; no records is not a pass']] },
+    exits: [[0, 'nothing is wrong'], [1, 'something is wrong, and it says what'], [2, 'a usage error, or an unknown agent'], [3, 'it could not judge; it says what it could not read']] },
 
   { name: 'query',
     group: 'Data', mutates: false, openOptions: true, run: via('./query.mjs', 'run'),
     usage: 'asight query <name> [--<param> <value>...]',
     summary: 'The one way to read what was captured. Each query has a name and its own parameters; the board asks the same queries over HTTP. Run it with no name to list them.',
     options: [],
-    exits: [[0, 'the answer is on stdout'], [1, 'the query or a parameter is not known, or the records could not be read']] },
+    exits: [[0, 'the answer is on stdout'], [1, 'no document could be produced'], [2, 'nothing ran: the query name or one of its parameters is not known']] },
   { name: 'classes',
-    group: 'Data', mutates: false, run: via('./classes.mjs', 'run'),
+    group: 'Data', mutates: (args) => ['set', 'add', 'rm', 'reset'].includes(args.positionals[0]), run: via('./classes.mjs', 'run'),
     usage: 'asight classes [<class>] [--json]\nasight classes set <class> full|log\nasight classes add <class> <host-regex> [<path-regex>] [--harness <harness>]\nasight classes rm <class> [<rule>]\nasight classes reset',
     summary: 'Shows and edits your traffic classes: which hosts belong to which class, and how much of each class is kept. Editing takes effect for calls made afterwards; what is already stored does not change.',
     options: [['--harness <harness>', 'the rule applies to this agent only'], JSON_OPT],
@@ -86,7 +88,7 @@ export const COMMANDS = Object.freeze([
     exits: [[0, 'it stopped when you asked'], [1, 'it could not listen, and it says why'], [2, 'a usage error']] },
 
   { name: 'raw',
-    group: 'Maintenance', mutates: true, run: via('./raw.mjs', 'run'),
+    group: 'Maintenance', mutates: (args) => args.positionals[0] === 'seal', run: via('./raw.mjs', 'run'),
     usage: 'asight raw seal [--json]\nasight raw verify [<segment>...] [--json]\nasight raw cat <segment>[:<from>[-<to>]]',
     summary: 'Hand maintenance of the captured records, which the collector normally seals by itself. seal seals every closed segment now, verify checks the sealed ones against their hashes, and cat prints a segment\'s records byte for byte.',
     options: [JSON_OPT],
