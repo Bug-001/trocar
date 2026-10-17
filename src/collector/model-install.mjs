@@ -16,6 +16,7 @@ import { installComplete, itemsOfPhase, undoByHand, OFF_VERSION } from '../off/m
 import { writeStandalone } from '../off/standalone.mjs'
 import { missingDirs } from '../off/fsutil.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
+import { noProxyNames } from './core/proxymode/entries.mjs'
 import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
 import { lineComment, removeAsightText } from '../off/text-edit.mjs'
 import { livenessOf } from './core/registry.mjs'
@@ -31,7 +32,6 @@ const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentus
 export const ROOT_SUBJECT = 'asight local root' // also how the lab's reset knows asight's own certificate (spec 4.10 §7 还原)
 const NOT_USERS = CODE.notUsersFile
 const errText = (e) => String((e && e.message) || e)
-const noProxyNames = (desc) => [...new Set(((desc.proxy && desc.proxy.env) || []).map((n) => (n === n.toUpperCase() ? 'NO_PROXY' : 'no_proxy')))]
 // an OS prompt that was not answered (timeout, no GUI session) is pending; one the user answered no is declined (1.6 §1.6)
 const promptState = (r) => r.state || (/time[d ]?out|no gui|interaction|session|unavailable/i.test(String(r.reason || '')) ? 'pending' : 'declined')
 

@@ -14,12 +14,13 @@ import opencode from '../../../src/collector/harness/opencode.mjs'
 const DOOR = 'http://127.0.0.1:18103'
 const PROXY_ENV = opencode.proxy.env
 const PROXY_NAMES = ['HTTPS_PROXY', 'https_proxy']
+const NO_PROXY_ENV = ['NO_PROXY', 'no_proxy']
 
 async function load(env) {
   const file = path.join(tmpDir(), 'asight-route.js')
-  fs.writeFileSync(file, renderTemplate(fs.readFileSync(templateUrl('opencode-plugin'), 'utf8'), { DOOR, PROXY_ENV, PROXY_NAMES }))
+  fs.writeFileSync(file, renderTemplate(fs.readFileSync(templateUrl('opencode-plugin'), 'utf8'), { DOOR, PROXY_ENV, PROXY_NAMES, NO_PROXY_ENV }))
   const saved = { env: { ...process.env }, fetch: globalThis.fetch }
-  for (const k of [...PROXY_ENV, 'ASIGHT_PRIOR_PROXY']) delete process.env[k]
+  for (const k of [...PROXY_ENV, ...NO_PROXY_ENV, 'ASIGHT_PRIOR_PROXY']) delete process.env[k]
   Object.assign(process.env, env)
   const before = { ...process.env }
   const seen = []
@@ -59,7 +60,7 @@ test('CM13 import: prior recorded (or none), both spellings at the door, only th
       assert.equal(p.after.ASIGHT_PRIOR_PROXY, prior, JSON.stringify(env))
       for (const k of PROXY_NAMES) assert.equal(p.after[k], DOOR)
       const changed = Object.keys({ ...before, ...p.after }).filter((k) => before[k] !== p.after[k] )
-      assert.deepEqual(changed.filter((k) => ![...PROXY_NAMES, 'ASIGHT_PRIOR_PROXY'].includes(k)), [], 'nothing else in the environment changes')
+      assert.deepEqual(changed.filter((k) => ![...PROXY_NAMES, ...NO_PROXY_ENV, 'ASIGHT_PRIOR_PROXY'].includes(k)), [], 'nothing else in the environment changes')
     } finally { p.restore() }
   }
 })
@@ -86,4 +87,19 @@ test('CM13 fetch: https non-loopback gets the door; http, loopback and a caller\
     await f('https://api.anthropic.com', { proxy: 'http://own:1' })
     assert.equal(p.seen.at(-1).init.proxy, 'http://own:1', "the caller's own proxy wins")
   } finally { p.restore() }
+})
+
+// a macOS test machine, 2026-10-17 (mac-opencode-2/-3): OpenCode's ACP client reaches its own loopback server over plain http, and Bun sends that through
+// HTTP_PROXY — at the door, `session/new` failed ("OpenCode service failure", service directory). P6: the bypass list gets loopback.
+test('CM13 import: the bypass list (both spellings) is loopback plus what the process had, deduped without case, order kept', async () => {
+  const CASES = [
+    [{}, 'localhost,127.0.0.1,::1'],
+    [{ NO_PROXY: 'corp.local,LOCALHOST' }, 'localhost,127.0.0.1,::1,corp.local'],
+    [{ no_proxy: '.internal', NO_PROXY: '10.0.0.0/8' }, 'localhost,127.0.0.1,::1,10.0.0.0/8,.internal'],
+    [{ NO_PROXY: 'localhost,127.0.0.1,::1,corp.local', no_proxy: 'localhost,127.0.0.1,::1,corp.local' }, 'localhost,127.0.0.1,::1,corp.local'], // nested OpenCode: unchanged
+  ]
+  for (const [env, want] of CASES) {
+    const p = await load(env)
+    try { for (const k of NO_PROXY_ENV) assert.equal(p.after[k], want, `${k} for ${JSON.stringify(env)}`) } finally { p.restore() }
+  }
 })

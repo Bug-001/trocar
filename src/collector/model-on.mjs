@@ -12,7 +12,7 @@ import { installUsable, itemsOfPhase } from '../off/manifest.mjs'
 import { readOrNull } from '../off/fsutil.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../off/state.mjs'
 import { checkWrapper } from './core/proxymode/hooks/wrapper.mjs'
-import { planRoutes, writeRoutes } from './core/proxymode/entries.mjs'
+import { planRoutes, writeRoutes, noProxyNames } from './core/proxymode/entries.mjs'
 import { resolveLoc } from './core/proxymode/sources.mjs'
 import { loadIngressConfig, rebindTaken, freeOnLoopback } from './core/ingress-config.mjs'
 import { controlEndpointFor } from './core/control.mjs'
@@ -61,7 +61,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const pending = (Array.isArray(m.install.pending) ? m.install.pending : []).map((p) => ({ harness: null, code: CODE.installPending, item: p.item, state: p.state, why: p.reason, command: INSTALL_HINT }))
   const out = { on, refused, routes: [], notes: [...pending], problems: [], doors: {}, planned: [], exit: 1 }
   if (!on.length) return out
-  const render = (tpl, { door, harness }) => { const p = (byName.get(harness).proxy || {}).env || []; return renderHook(tpl, { DOOR: door, PROXY_ENV: p, PROXY_NAMES: p }).text }
+  const render = (tpl, { door, harness }) => { const d = byName.get(harness), p = (d.proxy || {}).env || []; return renderHook(tpl, { DOOR: door, PROXY_ENV: p, PROXY_NAMES: p, NO_PROXY_ENV: noProxyNames(d) }).text }
   const wctx = { ...ctx, dir, home, manifest: m, fs, now, persistentEnv, systemProxy, render, ...(newId ? { newId } : {}) }
   const planned = on.map((h) => ({ h, plan: planRoutes(byName.get(h), wctx) }))
   // --dry-run (1.6 §1.1): what would be written — each planned route with the files it resolves to — and nothing written
