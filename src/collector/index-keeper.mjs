@@ -5,9 +5,11 @@
 // `asight query` never pay for a cold build (3.9 s on 1 GB before this, a macOS machine). The lazy build in
 // src/query/index-build.mjs stays as the fallback, and a reader that takes it says `index-cold` (D38).
 //
-// OFF THE HOT PATH: `wrote()` is all the record's own path does — one Set add and at most one timer. The indexing runs
-// DEBOUNCE_MS after the last append (so a burst is one pass, not one pass per record) and in chunks of CHUNK_BYTES
-// with one turn of the event loop between them, so a backlog never blocks the engine for longer than a chunk.
+// ALMOST OFF THE HOT PATH: `wrote()` builds THIS record's index entry from the envelope the store just serialized —
+// its own index work, which the pass would otherwise pay with a read-back and a JSON.parse of the whole record — and
+// then does one Set add and at most one timer. The PASS (the file read, the mark, the append) runs DEBOUNCE_MS after
+// the last append, so a burst is one pass, not one pass per record, and in chunks of CHUNK_BYTES with one turn of the
+// event loop between them, so a backlog never blocks the engine for longer than a chunk.
 // NO POLLING: nothing is armed while nothing is written, so an idle daemon has no wakeup of its own here.
 //
 // WHO WRITES WHICH INDEX FILE: this keeper, the segment the daemon is appending to — until that segment closes, when
@@ -26,7 +28,7 @@
 // estimated: `scripts/perf-cli.mjs --write-amp <HOME>` reproduces the two write-amplification numbers on a dataset
 // `scripts/gen-dataset.mjs` generates, and the spec's two lines are 1.6 §3.1. A measurement does not belong in a
 // source comment, where it rots.
-import { segmentIndex, KEEPER_CHUNK_BYTES } from '../query/index-build.mjs'
+import { segmentIndex, KEEPER_CHUNK_BYTES, indexEntryOf } from '../query/index-build.mjs'
 
 export const DEBOUNCE_MS = 1_000 // one pass per burst; the tail a query may still have to resume is this much traffic
 export const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of the event loop (a macOS machine: ~260 MB/s)
@@ -47,6 +49,7 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
   const pending = new Set()   // segments with appended bytes that may not be in their index yet
   const handed = new Set()    // segments flushed at close: the sealer's child owns their index from then on
   const given = new Set()     // handed over WHILE a pass may be in flight: that pass MUST stop before it writes again
+  const fresh = new Map()     // segment → the entries of the lines written since the last pass, in line order
   let timer = null, chain = Promise.resolve(), stopped = false, paused = false
 
   const after = (fn) => (chain = chain.then(fn, fn)) // one pass at a time, in the order they were asked for
@@ -63,12 +66,26 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
     for (const segment of pending) { pending.delete(segment); await catchUp(segment) }
   }
 
+  // Measurement seam for scripts/perf-capture.mjs (D62): nothing is installed unless that script set the hook, so
+  // the product path is one `typeof` per pass.
+  const measured = async (fn) => {
+    const hook = globalThis.__asightPerfHook
+    if (typeof hook !== 'function') return fn()
+    const c = process.cpuUsage()
+    try { return await fn() } finally { const d = process.cpuUsage(c); hook((d.user + d.system) / 1000) }
+  }
+
   // One segment, chunk by chunk, until its index covers every complete line it has. A failure is the daemon's to
   // report (D38); the answer stays correct, because the next query builds what is missing and says `index-cold`.
   async function catchUp(segment) {
     while (!stopped && !given.has(segment)) {
       let r
-      try { r = await index({ home, segment, maxBytes: chunkBytes, owner: true }) } catch (e) {
+      // What this pass already knows: the entries of the lines written since the last one. Taken away before the
+      // pass, so a line appended DURING it starts the next pass's list (whose offsets then continue from this
+      // pass's mark); a pass that fails or that has to scan simply leaves that list empty, and the scan is the truth.
+      const entries = fresh.get(segment) || null
+      fresh.delete(segment)
+      try { r = await measured(() => index({ home, segment, maxBytes: chunkBytes, owner: true, entries })) } catch (e) {
         indexFailed(segment, `keeping the index of ${segment} current failed (${String((e && e.message) || e)})`)
         return
       }
@@ -84,13 +101,29 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
   }
 
   return {
-    wrote(segment) {
+    wrote(segment, facts = null) {
       if (paused || stopped || !segment || handed.has(segment)) return
       // This runs ON the record's write path (store.mjs onRecord). It MUST NOT throw there: the store would count the
       // keeper's failure as `record-error` (the wrong D38 class — the record itself is on disk) and set it as the
       // store's last error. So whatever fails here is said as the raw layer's `index-failed` instead, and the record
       // write is left alone.
-      try { pending.add(segment); arm() } catch (e) { indexFailed(segment, `arming the index catch-up of ${segment} failed (${String((e && e.message) || e)})`) }
+      //
+      // The entry is built HERE, from the envelope the store just serialized, and not in the pass: the pass would
+      // otherwise have to read the line back and JSON.parse it (5.2 ms of a 500 KB exchange's 9.4 ms, a macOS machine
+      // 2026-10-20), and holding the envelope until the debounce fires would hold every body of the burst in memory.
+      // It is this record's own index work and nothing more; the pass still happens once per burst.
+      try {
+        pending.add(segment)
+        if (facts && facts.env) {
+          const e = { lineNo: facts.lineNo, offset: facts.offset, storedBytes: facts.storedBytes, entry: indexEntryOf(facts.env, { segment, ...facts }) }
+          const list = fresh.get(segment)
+          if (list) list.push(e); else fresh.set(segment, [e])
+        } else fresh.delete(segment) // no facts: this pass has to scan the segment for them
+        arm()
+      } catch (e) {
+        fresh.delete(segment) // what the pass does not know, it scans
+        indexFailed(segment, `arming the index catch-up of ${segment} failed (${String((e && e.message) || e)})`)
+      }
     },
     flush(segment) {
       if (stopped || !segment) return chain
@@ -103,13 +136,13 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
      *  storeIndex), so even a chunk that loses the race lands on the old, unlinked inode. */
     handOff(segment) {
       if (!segment) return
-      pending.delete(segment); handed.add(segment); given.add(segment)
+      pending.delete(segment); handed.add(segment); given.add(segment); fresh.delete(segment)
     },
     pause() { paused = true; clearTimeout(timer); timer = null },
     // Best effort, for the stop's convenience: the guarantee that nothing more is written is stop()'s, not this one's.
     async idle() { for (let i = 0; i < 100; i++) { const c = chain; await c.catch(() => {}); if (c === chain) return } },
     stop() {
-      stopped = true; paused = true; clearTimeout(timer); timer = null; pending.clear()
+      stopped = true; paused = true; clearTimeout(timer); timer = null; pending.clear(); fresh.clear()
       // `wrote` and `flush` add nothing to the chain once stopped, so this IS the last pass: when it settles (its own
       // failure included — a failed pass has already been reported), nothing of this keeper's can still be written.
       return chain.then(() => {}, () => {})
