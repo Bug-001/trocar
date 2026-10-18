@@ -139,7 +139,7 @@ const proxy = {
   unsupported: {},
   branches: ['all'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '退出这个 Hermes(含 gateway),再重新启动;在它 /reload 之前,.env 里改的代理它已读过的不会变', processes: 'hermes' },
+  restart: { hint: 'Quit this Hermes (the gateway too), then start it again; until it reloads, a proxy it has already read from .env does not change', processes: 'hermes' },
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (the .env block routes every form; the root

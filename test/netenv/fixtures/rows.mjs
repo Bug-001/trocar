@@ -28,12 +28,12 @@ export const proc = (pid, over = {}) => ({ pid, name: 'claude', exe: '/home/u/.l
 const SOCKS_FAILS = { socks4: 'fails', socks5: 'fails', socks5h: 'fails' }
 const SOCKS_SILENT = { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' }
 const BEHAVE = {
-  'claude-code': { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_FAILS, branches: ['all'], restart: { hint: '退出这个 Claude Code,再重新启动(它只在启动时读一次代理设置)', processes: 'claude' } },
-  codex: { follows: { http: true, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_SILENT, branches: ['http', 'ws'], restart: { hint: '关掉所有 codex 窗口,再结束托管的 codex app-server --managed-daemon 进程', processes: 'codex app-server --managed-daemon', managed: true } },
-  hermes: { follows: { http: true, ws: true }, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], unsupported: {}, branches: ['all'], restart: { hint: '退出这个 Hermes,再重新启动', processes: 'hermes' } },
-  'kimi-code': { follows: { http: false, ws: false }, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], unsupported: {}, branches: ['all'], restart: { hint: '退出这个 kimi,在新开的终端里重新启动', processes: 'kimi' } },
-  'deepseek-dsh': { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_SILENT, branches: ['all'], restart: { hint: '退出这个 dsh,再重新启动', processes: 'dsh' } },
-  opencode: { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_FAILS, branches: ['all'], restart: { hint: '退出这个 OpenCode(含 serve / web),在设好代理环境变量的终端里重新启动', processes: 'opencode' } },
+  'claude-code': { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_FAILS, branches: ['all'], restart: { hint: 'Quit this Claude Code, then start it again (it reads the proxy setting once, at start)', processes: 'claude' } },
+  codex: { follows: { http: true, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_SILENT, branches: ['http', 'ws'], restart: { hint: 'Quit every codex window, then end the managed codex app-server --managed-daemon process', processes: 'codex app-server --managed-daemon', managed: true } },
+  hermes: { follows: { http: true, ws: true }, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], unsupported: {}, branches: ['all'], restart: { hint: 'Quit this Hermes, then start it again', processes: 'hermes' } },
+  'kimi-code': { follows: { http: false, ws: false }, schemes: ['http', 'https', 'socks4', 'socks5', 'socks5h'], unsupported: {}, branches: ['all'], restart: { hint: 'Quit this kimi, then start it again from a new terminal', processes: 'kimi' } },
+  'deepseek-dsh': { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_SILENT, branches: ['all'], restart: { hint: 'Quit this dsh, then start it again', processes: 'dsh' } },
+  opencode: { follows: { http: false, ws: false }, schemes: ['http', 'https'], unsupported: SOCKS_FAILS, branches: ['all'], restart: { hint: 'Quit this OpenCode (serve / web too), then start it again from a terminal whose proxy variables are set', processes: 'opencode' } },
 }
 export const harness = (h, over = {}) => ({
   installed: true, entry: { state: 'intact' }, installedAt: ENTRY_AT, setting: none(), systemProxy: null, behaviour: { ...BEHAVE[h], measured: h === 'claude-code' ? 'lab' : 'inferred' }, // Linux: V54 measured claude-code's HTTPS_PROXY path on a test machine; the others are inferred from the Windows measurements

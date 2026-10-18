@@ -74,7 +74,7 @@ const proxy = {
   unsupported: { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' },
   branches: ['all'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '退出这个 dsh(含 web / acp),再重新启动(它只在启动时读一次代理设置)', processes: 'dsh' },
+  restart: { hint: 'Quit this dsh (web / acp too), then start it again (it reads the proxy setting once, at start)', processes: 'dsh' },
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts — a plugin loaded by one
