@@ -35,19 +35,14 @@ export const UNREACHED = Object.freeze({
   'src/dissect/session-headers.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
   'src/etl/cli.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
   'src/etl/shard.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
-  'src/query/raw-compare.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
-  'src/raw/legacy.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
-  'src/raw/seal.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
   'src/raw/session-key.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
   'src/raw/verify.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
-  'src/raw/writer.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
   // D59/D60 wave 1: the read core and the class table land before the entries that drive them (T8 `asight query` / `asight classes`, T9 the server), in the same PR series.
   'src/classes/table.mjs': 'the editable traffic-class table (D60-3); its callers are the collector (T5) and `asight classes` (T8), later in this series',
   'src/query/index-build.mjs': 'the segment index the read core builds; reached once `asight query` (T8) / GET /api/<name> (T9) exist',
   'src/query/named/index.mjs': 'the named-query registry (QUERIES / runQuery); same two entries, T8 and T9',
   'src/query/named/segments.mjs': 'a named query, reached only through src/query/named/index.mjs',
   'src/query/named/classes.mjs': 'a named query, reached only through src/query/named/index.mjs',
-  'src/raw/closed.mjs': "the old shard's closed marker: T2's segment write path dropped its last reached caller (core/record/store.mjs), so only seal.mjs / legacy.mjs name it, and both are already here",
 })
 
 const walk = (dir) => fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]) : []

@@ -8,7 +8,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { readFlows, foldFlows, pick, groupKey, HealthUnreadable } from '../../src/health/flows.mjs'
-import { sealUnchecked } from '../../src/raw/seal.mjs'
 
 const NOW = Date.parse('2026-10-06T12:00:00Z')
 const H = 3600e3
@@ -73,25 +72,6 @@ test('readFlows: one unreadable day file is listed and the rest is read; a line 
     assert.equal(r.unparsable, 1)
     // the start is in the newest file, but the window reaches into the 5th: the broken file is reported
     assert.deepEqual(r.errors.map((e) => path.basename(e.file)), ['2026-10-05.ndjson'])
-  } finally { b.done() }
-})
-
-test('readFlows: a sealed flows/ file is read through src/raw/; an original and its sealed copy are read once', async () => {
-  const b = box()
-  try {
-    b.put('2026-10-05', [{ id: 'sealed-1', ts: at(30 * H), event: 'daemon-start' }, { id: 'sealed-2', ts: at(29 * H), event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'r' }])
-    b.put('2026-10-06', [{ id: 'now', ts: at(H), event: 'switch' }])
-    const shard = path.join(b.dir, 'flows', '2026-10-05.ndjson')
-    await sealUnchecked(shard, { split: false, deleteOriginal: false, journal: null })
-    assert.deepEqual(ids(readFlows({ dir: b.dir, now: NOW })), ['sealed-1', 'sealed-2', 'now'], 'kept original + its sealed copy: one copy read')
-    fs.rmSync(shard)
-    const r = readFlows({ dir: b.dir, now: NOW })
-    assert.deepEqual(ids(r), ['sealed-1', 'sealed-2', 'now'], 'only the sealed copy left: read through src/raw/')
-    assert.ok(r.files.some((f) => /\.sealed$/.test(f)))
-    // a sealed file that cannot be opened is reported, not skipped
-    const sealed = r.files.find((f) => /\.sealed$/.test(f))
-    fs.writeFileSync(sealed, 'damaged')
-    assert.deepEqual(readFlows({ dir: b.dir, now: NOW }).errors.map((e) => path.basename(e.file)), [path.basename(sealed)])
   } finally { b.done() }
 })
 

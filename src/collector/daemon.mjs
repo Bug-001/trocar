@@ -8,7 +8,8 @@ import fs from 'node:fs'
 import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
-import { asightHome, collectorHome } from '../paths.mjs'
+import { asightHome, collectorHome, rawHome } from '../paths.mjs'
+import { startSealing } from './seal-queue.mjs'
 import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
@@ -238,6 +239,10 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     caTimer.unref()
     const retention = retentionHook({ file: retentionPath || retentionFile(path.dirname(P.dir)), rows: trafficRows, failure }) // D40, engine-data.mjs
     const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
+  startSealing({ store, raw: rawHome(path.dirname(P.dir)), collectorDir: P.dir, lockFile: P.lock, failure }) // 4.2 §自动封存; see runDaemon's copy
+    // the raw layer's sealer (4.2 §自动封存): the upgrade rename and the leftovers of the last run first, then every
+    // segment this run closes — one at a time, each in a forked child, so this event loop never encodes or hashes
+    startSealing({ store, raw: rawHome(path.dirname(P.dir)), collectorDir: P.dir, lockFile: P.lock, failure })
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
     let engine = null // created after the tracker; the tracker's onGone reaches it at call time
