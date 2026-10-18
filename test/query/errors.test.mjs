@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { rawHome, writeSegment, envLine } from './raw-home.mjs'
+import { rawHome, writeSegment, envLine, requiredFor } from './raw-home.mjs'
 import { QUERIES, runQuery } from '../../src/query/named/index.mjs'
 import { validateQueryDoc } from '../../src/cli/schema.mjs'
 import { indexDir } from '../../src/query/index-build.mjs'
@@ -13,7 +13,7 @@ const SEG = '20261018T100000Z'
 const everyDoc = async (home, now = Date.now) => {
   const docs = {}
   for (const name of Object.keys(QUERIES)) {
-    docs[name] = await runQuery(name, {}, { home, now })
+    docs[name] = await runQuery(name, requiredFor(name, { segment: SEG }), { home, now })
     assert.deepEqual(validateQueryDoc(docs[name], name), [])
   }
   return docs
@@ -28,6 +28,9 @@ test('一条记录坏了:文档照出,errors 点名那条记录,其余 id 不变
   assert.equal(docs.segments.segments[0].records, 2)
   assert.deepEqual(docs.segments.segments[0].problems.map((p) => p.code), ['record-unparseable'])
   assert.equal(docs.classes.classes.find((c) => c.class === 'files').counts.all.calls, 1)
+  // 第二次读用的是存下来的索引(没有重扫),坏记录照样点名:只有建索引那一次报就是静默了(D38)
+  const again = await runQuery('segments', {}, { home })
+  assert.deepEqual([again.ok, again.errors], [docs.segments.ok, docs.segments.errors])
 })
 
 test('一个段读不出:文档照出,errors 说哪个段', async () => {

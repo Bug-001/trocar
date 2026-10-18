@@ -155,7 +155,10 @@ export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs }
   const idxFile = path.join(indexDir(home), `${segment}.json`);
   const stored = readMark(fs, idxFile);
   const how = usability(fs, source, stored);
-  if (how === 'reuse') return { segment, source, records: stored.records, problems, bytesRead: 0 };
+  // A stored index remembers what it could NOT read, and says it again on every later read: a problem
+  // that only the read which BUILT the index reports would go silent the second time (D38).
+  if (how === 'reuse') return { segment, source, records: stored.records, problems: stored.problems || [], bytesRead: 0 };
+  if (how === 'resume' && stored.problems) problems.push(...stored.problems); // carried over, so they are not said once only
   let got;
   try {
     got = /\.sealed$/.test(source)
@@ -166,7 +169,10 @@ export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs }
     return { segment, source, records: stored && how === 'resume' ? stored.records : [], problems, bytesRead: 0 };
   }
   const records = how === 'resume' ? [...stored.records, ...got.records] : got.records;
-  writeIndex(fs, idxFile, { v: INDEX_V, segment, mark: got.mark, records }, problems);
+  // what the scan found goes INTO the index, so a later reuse says it again; `index-unwritable` is about
+  // this read, not about the file, so it stays out of the stored doc.
+  const found = [...problems];
+  writeIndex(fs, idxFile, { v: INDEX_V, segment, mark: got.mark, records, problems: found }, problems);
   return { segment, source, records, problems, bytesRead: got.bytesRead };
 }
 
