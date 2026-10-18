@@ -35,6 +35,8 @@ export const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of t
  * createIndexKeeper({ home, failure }) → { wrote, flush, pause, idle, stop }
  *   wrote(segment):  a record was appended there (called from the store's write path: it must stay trivial).
  *   flush(segment):  index it fully, and never touch it again — the segment is closed. → the chain's promise.
+ *   handOff(segment): give its index to the sealer NOW — a pass in flight stops before its next write (seal-queue's
+ *                    deadline calls it, so the keeper and the seal worker are never both writing one index file).
  *   pause():         the daemon is stopping: no new debounce is armed (the segment the stop closes still flushes).
  *   idle():          resolves when every queued pass is done (the stop awaits it after the store closed).
  *   stop():          → a promise. Nothing more is queued, and when it settles the pass that was in flight is over:
@@ -44,6 +46,7 @@ export const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of t
 export function createIndexKeeper({ home, failure = () => {}, index = segmentIndex, debounceMs = DEBOUNCE_MS, chunkBytes = CHUNK_BYTES }) {
   const pending = new Set()   // segments with appended bytes that may not be in their index yet
   const handed = new Set()    // segments flushed at close: the sealer's child owns their index from then on
+  const given = new Set()     // handed over WHILE a pass may be in flight: that pass MUST stop before it writes again
   let timer = null, chain = Promise.resolve(), stopped = false, paused = false
 
   const after = (fn) => (chain = chain.then(fn, fn)) // one pass at a time, in the order they were asked for
@@ -63,7 +66,7 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
   // One segment, chunk by chunk, until its index covers every complete line it has. A failure is the daemon's to
   // report (D38); the answer stays correct, because the next query builds what is missing and says `index-cold`.
   async function catchUp(segment) {
-    while (!stopped) {
+    while (!stopped && !given.has(segment)) {
       let r
       try { r = await index({ home, segment, maxBytes: chunkBytes, owner: true }) } catch (e) {
         indexFailed(segment, `keeping the index of ${segment} current failed (${String((e && e.message) || e)})`)
@@ -93,6 +96,14 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
       if (stopped || !segment) return chain
       if (!handed.has(segment)) { pending.delete(segment); handed.add(segment); after(() => catchUp(segment)) }
       return chain
+    },
+    /** The seal queue waited for `flush` and gave up (its deadline): this segment's index is the sealer's from NOW,
+     *  so a pass still in flight stops at its next chunk instead of appending to a file the sealer is about to
+     *  replace whole (4.2 §段索引 谁写哪一笔 — one writer). The write itself is by fd (src/query/index-build.mjs
+     *  storeIndex), so even a chunk that loses the race lands on the old, unlinked inode. */
+    handOff(segment) {
+      if (!segment) return
+      pending.delete(segment); handed.add(segment); given.add(segment)
     },
     pause() { paused = true; clearTimeout(timer); timer = null },
     // Best effort, for the stop's convenience: the guarantee that nothing more is written is stop()'s, not this one's.

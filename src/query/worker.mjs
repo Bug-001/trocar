@@ -14,16 +14,16 @@
 // `warm: true` on every query it runs: a query here is never the only one, so what a query may build FOR THE NEXT
 // ONE (src/query/named/session.mjs assembles the whole session after answering a window) is built here and nowhere
 // else — a one-shot CLI would pay for it and exit.
-import os from 'node:os'
 import { LOCAL_ENV } from './client.mjs'
 import { runQuery, QueryArgError } from './named/index.mjs'
+import { lowerPriority } from '../low-priority.mjs'
 
 const home = process.argv[2]
 const IDLE_MS = Number(process.env.ASIGHT_QUERY_IDLE_MS || 180_000)
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
 for (const k of LOCAL_ENV) delete process.env[k]
-try { os.setPriority(0, 5) } catch { /* not permitted: it runs at the daemon's priority then, one query at a time */ }
+lowerPriority({ say: (m) => process.stderr.write(`${m}\n`) }) // behind the agents' traffic (1.6 §3.1), like the sealer
 
 let idle = null
 const rearm = () => { clearTimeout(idle); idle = setTimeout(() => process.exit(0), IDLE_MS) }

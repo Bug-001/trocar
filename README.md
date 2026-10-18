@@ -130,7 +130,11 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   are listed on that call.
 
 Reading the records across sessions is `asight query <name>` — the one core that reads data, of which
-the board is the HTTP shell (D59); there is no separate ETL step and no database to load.
+the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
+daemon's query worker, which stays warm and keeps the segment index current as it captures, so a query about a
+session you are looking at answers in milliseconds. It is not a prerequisite: with no daemon — or none that answers
+yet — the command reads the records itself and gives the same document, only slower. Long results page with
+`--limit` and `--after <cursor>`, where the cursor is the `page.next` of the document before it.
 
 ## What it touches, and what lands on disk
 
@@ -201,7 +205,9 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   and dsh's plugin read. The door connects onward through the proxy the agent would have used without asight.
 - `off` removes those entries and switch files; your edits to unrelated keys during `on` stay, and a proxy key you
   changed yourself keeps your value. It kills and restarts nothing: a process started while capture was on keeps its
-  door, which now only forwards (no decryption, no record), and `asight status` says how many are left.
+  door, which now only forwards (no decryption, no record), and `asight status` says how many are left. The daemon
+  itself stays up with its doors closed — the same idle state as right after a login, so the next `on` is a door
+  opening (about 0.2 s) and not a daemon start. On Linux `off` drains what it was relaying and the daemon exits.
 - *macOS*: the autostart unit is the LaunchAgent `com.asight.collector` in `~/Library/LaunchAgents` (`RunAtLoad` +
   `KeepAlive` — logout stops it). *Windows*: a scheduled task run by a supervisor that re-pulls the daemon. `install`
   registers the entry and `uninstall` removes it; `on` and `off` leave it alone, so on and off both survive a reboot.
@@ -415,6 +421,8 @@ asight serve [--port <port>]
 asight raw <segment>[:<from>[-<to>]]
 sudo asight setup-helper [--remove] [--binary <path>]   # Linux, once per machine
 asight daemon [--supervise]   # the daemon in the foreground; the autostart unit runs it (Windows's task with --supervise)
+                              # another daemon already answering: exits 0, nothing to do. The control endpoint held by
+                              # something silent: records `control-endpoint-held` and exits 1.
 asight help [<command>]   # also --help · -h · --version · -v
 ```
 
