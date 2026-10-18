@@ -18,6 +18,9 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { parseSegment, recordId } from '../collector/core/record/segments.mjs';
+import { harnessOf, sessionKeyOf, headerOf } from '../dissect/harnesses.mjs';
+import { synthFactsOf } from '../dissect/synth-key.mjs';
+import { isLogOnly } from '../dissect/capture-labels.mjs';
 import { fpRanges, readRangeSync, sameFileAs } from './source.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
@@ -26,29 +29,31 @@ import { readDaemonLock } from '../off/daemon-stop.mjs';
 
 const rawDir = (home = asightHome()) => path.join(home, 'raw');
 export const indexDir = (home = asightHome()) => path.join(home, 'index');
-const INDEX_V = 1;
+const INDEX_V = 2;
 const CHUNK = 1 << 20;
 const NL = 0x0a;
-// The request headers that name a session, in priority order (RFC 3.4:21). Only HEADER keys: a query never
-// judges identity from a body.
-const SESSION_HEADER_KEYS = ['x-claude-code-session-id', 'x-session-id', 'session-id', 'thread-id'];
-const sessionKeyOf = (e) => {
-  const h = e.req_headers || e.request_headers;
-  if (!h || typeof h !== 'object') return null;
-  for (const k of SESSION_HEADER_KEYS) if (h[k]) return String(h[k]);
+// What a session is made of, per record, so `sessions` never reads a record back (1.6 §4.1 速度目标 ≤ 1 s).
+// Each is a fact of THIS record; the grouping and the counting are the read side's (src/query/rows.mjs), and
+// the session key is the ONE table's answer (3.4, body keys included), not a header list of this file's own.
+const entrypointOf = (e) => {
+  const app = String(headerOf(e, 'x-app') || '').toLowerCase(), ua = String(headerOf(e, 'user-agent') || headerOf(e, 'originator') || '').toLowerCase();
+  if (app === 'desktop' || /desktop/.test(ua)) return 'desktop';
+  if (app === 'cli' || /cli|sdk-cli/.test(ua)) return 'cli';
   return null;
 };
 
 // ── one line → one index record ───────────────────────────────────────────
 // A line that is not JSON can never be indexed (its bytes are still on disk and `raw cat` still prints
 // them): it is reported, and it keeps its line number so every later record's id stays what it was.
-function recordOf(lineBuf, segment, lineNo, problems) {
+function recordOf(lineBuf, segment, lineNo, problems, offset = null) {
   let e;
   try { e = JSON.parse(lineBuf.toString('utf8')); } catch (err) {
     problems.push({ code: 'record-unparseable', reason: `${recordId(segment, lineNo)} is not JSON (${err.message}); it is left out of the index` });
     return null;
   }
   const wire = e.body_wire_bytes || {};
+  const h = harnessOf(e);
+  const synth = synthFactsOf(e);
   return {
     id: recordId(segment, lineNo),
     ts: e.ts_request ?? e.ts ?? null,
@@ -59,8 +64,18 @@ function recordOf(lineBuf, segment, lineNo, problems) {
     status: (e.resp && e.resp.status) ?? null,
     stored_bytes: lineBuf.length,
     wire_bytes: (Number(wire.req) || 0) + (Number(wire.resp) || 0),
-    session_key: sessionKeyOf(e),
+    session_key: sessionKeyOf(e).key ?? null,
     is_llm: !!e.is_llm_call,
+    // the session facts: harness_id is the harness the BOARD decides (proc, else the UA — and it says which)
+    harness_id: h.id,
+    has_proc: !!(e.proc && typeof e.proc === 'object'),
+    has_headers: !!(e.req_headers || e.request_headers),
+    harness_inferred: !!h.inferred,
+    entrypoint: entrypointOf(e),
+    log_only: isLogOnly(e),
+    subagent: !!String(headerOf(e, 'x-claude-code-agent-id') || '').trim(),
+    synth_hash: synth ? synth.hash : null,
+    offset,  // where this line starts in the plaintext segment, so one record is read by seek (null: sealed)
   };
 }
 
@@ -75,7 +90,7 @@ function scanNdjson(fs, file, from, firstLine, segment, problems) {
     let pos = from, lineStart = from, lineNo = firstLine - 1, pending = Buffer.alloc(0);
     const take = (lineBuf) => {
       lineNo++;
-      if (lineBuf.length) { const r = recordOf(lineBuf, segment, lineNo, problems); if (r) records.push(r); }
+      if (lineBuf.length) { const r = recordOf(lineBuf, segment, lineNo, problems, lineStart); if (r) records.push(r); }
       lineStart += lineBuf.length + 1;
     };
     while (pos < st.size) {
@@ -190,6 +205,9 @@ export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs }
 // other plaintext segment is closed; one with a `.sealed` beside it is sealed.
 const defaultLockState = (home, fs) => readDaemonLock({ file: path.join(collectorHome(home), 'lock'), fs });
 
+// A segment that has BOTH files was interrupted after the rename and before the plaintext was deleted: the plaintext
+// wins (4.2:30), so it is the source, it gives the bytes, and the state is `closed` — not `sealed`, which would say the
+// long-term copy is the sealed one while 128 MB of plaintext is still on disk (tested 2026-10-18).
 /** allSegments({home}) → [{ segment, state, path, records, bytes, sealed_bytes, from, to, problems }], oldest first. */
 export async function allSegments({ home = asightHome(), fs = nodeFs, lockState = () => defaultLockState(home, fs) } = {}) {
   let names;
@@ -210,7 +228,7 @@ export async function allSegments({ home = asightHome(), fs = nodeFs, lockState 
     const sealedBytes = at.sealed ? sizeOf(fs, path.join(rawDir(home), `${segment}.sealed`)) : null;
     const bytes = at.plain ? sizeOf(fs, path.join(rawDir(home), `${segment}.ndjson`)) : records.reduce((n, r) => n + r.stored_bytes + 1, 0);
     const stamps = records.map((r) => r.ts).filter(Boolean).sort();
-    out.push({ segment, state: at.sealed ? 'sealed' : segment === current ? 'writing' : 'closed', path: source,
+    out.push({ segment, state: at.plain ? (segment === current ? 'writing' : 'closed') : 'sealed', path: source,
       records: records.length, bytes, sealed_bytes: sealedBytes, from: stamps[0] ?? null, to: stamps[stamps.length - 1] ?? null, problems });
   }
   return out;

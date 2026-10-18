@@ -12,6 +12,7 @@
 // a reader never sees half a file and a crash leaves the old one or the new one.
 import nodeFs from 'node:fs'
 import path from 'node:path'
+import { fsyncDir } from './fsutil.mjs'
 
 export const STATE_VERSION = 2
 
@@ -71,13 +72,6 @@ export function setDesired(state, ids, desired, now = new Date()) {
   return { ...state, version: STATE_VERSION, updated_at: at, harnesses }
 }
 
-// A directory cannot be fsynced everywhere (Windows, some network file systems): that is not a failed write, the rename is done.
-const NO_DIR_FSYNC = new Set(['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR', 'EBADF'])
-function syncDir(dir, fs) {
-  let fd
-  try { fd = fs.openSync(dir, 'r'); fs.fsyncSync(fd) } catch (e) { if (!NO_DIR_FSYNC.has(e && e.code)) throw e } finally { if (fd !== undefined) try { fs.closeSync(fd) } catch { /* the sync above is what counted */ } }
-}
-
 /** Writes `state` to `file` whole or not at all (temp file in the same directory, fsync, rename, fsync the directory), 0600, in a
  *  0700 directory when it had to be made. Throws what failed, and leaves no temp file behind. */
 export function writeStateAtomic(file, state, { fs = nodeFs } = {}) {
@@ -97,5 +91,5 @@ export function writeStateAtomic(file, state, { fs = nodeFs } = {}) {
     try { fs.rmSync(tmp, { force: true }) } catch { /* same */ }
     throw e
   }
-  syncDir(dir, fs)
+  fsyncDir(fs, dir)
 }

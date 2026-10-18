@@ -12,7 +12,7 @@ import { normalizeRecord } from '../etl/ingest.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { R, FLAG_UNPARSEABLE } from '../raw/format.mjs';
-import { allSegments } from './index-build.mjs';
+import { allSegments, segmentIndex } from './index-build.mjs';
 import { asightHome } from '../paths.mjs';
 
 const NL = 0x0a;
@@ -67,14 +67,89 @@ export async function allRecords({ home = asightHome(), fs = nodeFs, errors = []
 }
 
 /**
- * readRecord({home, segment, lineNo}) → the raw envelope of that record (decoded bodies, nothing else
- * derived), or null when the segment holds no such line.
- * shortcut: it scans the segment's lines to find one; give the segment index byte offsets if `block`
- * misses its 0.3 s target (1.6 §4.1 速度目标) on a full 128 MB segment.
+ * recordsAt({home, rows}) → the raw records of the given index rows (src/query/rows.mjs), in the order given.
+ * ONE record costs one seek: a plaintext segment is read at the row's byte offset for exactly its stored
+ * bytes, a sealed one decodes that record's frame only — so `session` and `block` pay for the records they
+ * answer with, never for the segment (1.6 §4.1 速度目标: `session` ≤ 1 s, `block` ≤ 0.3 s).
+ * A row whose record cannot be read goes into `errors` (D38), never silently missing.
  */
-export function readRecord({ home = asightHome(), fs = nodeFs, segment, lineNo } = {}) {
-  for (const [no, text] of segmentLines({ home, fs, segment })) if (no === lineNo) return expandRequestBody(JSON.parse(text));
-  return null;
+export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors = [] } = {}) {
+  const bySegment = new Map();
+  for (const r of rows) { if (!bySegment.has(r.segment)) bySegment.set(r.segment, []); bySegment.get(r.segment).push(r); }
+  const out = [];
+  for (const [segment, rs] of bySegment) {
+    const file = segmentFile({ home, fs, segment });
+    const stream = path.basename(file);
+    let read;
+    try { read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs); }
+    catch (e) { for (const r of rs) errors.push({ where: r.id, reason: `cannot be read: ${String((e && e.message) || e)}` }); continue; }
+    try {
+      for (const r of rs) {
+        try { out.push(recordOf(read(r), segment, r.lineNo, stream)); }
+        catch (e) { errors.push({ where: r.id, reason: `cannot be read back: ${String((e && e.message) || e)}` }); }
+      }
+    } finally { read.close(); }
+  }
+  return out;
+}
+
+// The plaintext at a row's own offset, exactly its stored bytes; a row from an index that has no offset
+// (a segment sealed when the row was written) falls back to the line scan.
+function plainReader(file, fs) {
+  const fd = fs.openSync(file, 'r');
+  let all = null;
+  const read = (r) => {
+    if (r.offset == null || r.stored_bytes == null) {
+      if (!all) all = [...lines(file, fs, { all: true })];
+      const hit = all.find(([no]) => no === r.lineNo);
+      if (!hit) throw new Error(`line ${r.lineNo} is not in ${path.basename(file)}`);
+      return hit[1];
+    }
+    const buf = Buffer.allocUnsafe(r.stored_bytes);
+    const n = fs.readSync(fd, buf, 0, r.stored_bytes, r.offset);
+    return buf.subarray(0, n).toString('utf8');
+  };
+  read.close = () => fs.closeSync(fd);
+  return read;
+}
+
+// A sealed segment knows where every record is: its own index names the line number of each frame.
+function sealedReader(file, fs) {
+  const sf = openSealed(file, { fs });
+  const at = new Map();
+  for (let i = 0; i < sf.count; i++) at.set(Number(sf.records[i][R.lineNo]) + 1, i);
+  const read = (r) => {
+    const i = at.get(r.lineNo);
+    if (i === undefined) throw new Error(`line ${r.lineNo} is not in ${path.basename(file)}`);
+    let b = sf.lineAt(i);
+    if (b.length && b[b.length - 1] === NL) b = b.subarray(0, b.length - 1);
+    return b.toString('utf8');
+  };
+  read.close = () => sf.close();
+  return read;
+}
+
+/**
+ * readRecord({home, segment, lineNo}) → the raw envelope of that record (decoded bodies, nothing else
+ * derived), or null when the segment holds no such line. The segment index says where the record is, so
+ * neither the segment nor its index is scanned for it.
+ */
+export async function readRecord({ home = asightHome(), fs = nodeFs, segment, lineNo } = {}) {
+  const { records } = await segmentIndex({ home, segment, fs });
+  const row = records.find((r) => r.id === recordId(segment, lineNo));
+  if (!row) return null;
+  const file = segmentFile({ home, fs, segment });
+  const read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs);
+  try { return expandRequestBody(JSON.parse(read({ ...row, lineNo }))); } finally { read.close(); }
+}
+
+/** The file a segment's bytes are in: the plaintext while it exists (4.2:30 明文为准), else the sealed copy. */
+function segmentFile({ home, fs, segment }) {
+  const plain = path.join(home, 'raw', `${segment}.ndjson`);
+  const sealed = path.join(home, 'raw', `${segment}.sealed`);
+  const file = fs.existsSync(plain) ? plain : sealed;
+  if (!fs.existsSync(file)) throw new Error(`there is no segment ${segment} in ${path.join(home, 'raw')}`);
+  return file;
 }
 
 /**
@@ -82,9 +157,5 @@ export function readRecord({ home = asightHome(), fs = nodeFs, segment, lineNo }
  * a sealed segment is decoded first, and nothing is parsed. Throws when there is no such segment.
  */
 export function* segmentLines({ home = asightHome(), fs = nodeFs, segment } = {}) {
-  const plain = path.join(home, 'raw', `${segment}.ndjson`);
-  const sealed = path.join(home, 'raw', `${segment}.sealed`);
-  const file = fs.existsSync(plain) ? plain : sealed;
-  if (!fs.existsSync(file)) throw new Error(`there is no segment ${segment} in ${path.join(home, 'raw')}`);
-  yield* lines(file, fs, { all: true });
+  yield* lines(segmentFile({ home, fs, segment }), fs, { all: true });
 }

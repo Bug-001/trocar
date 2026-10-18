@@ -44,12 +44,15 @@ export async function run({ home, fs, now, errors }) {
 
   const du = await diskUsage({ home, fs: fs.promises || undefined });
   for (const u of du.unreadable) errors.push({ where: u.path, reason: u.error });
+  // Every `disk` number is what the file system says, out of the ONE walk (src/query/disk.mjs): the plaintext
+  // records, their sealed copies, the whole home. A segment that still has its plaintext beside a sealed copy
+  // counts in both — that is what it costs (tested 2026-10-18: both were 0 while 1 GB sat in raw/).
   return {
     classes,
     disk: {
       asight_bytes: du.total_bytes,
-      records_bytes: segs.reduce((n, s) => n + (s.state === 'sealed' ? 0 : s.bytes), 0),
-      sealed_bytes: segs.reduce((n, s) => n + (s.sealed_bytes || 0), 0),
+      records_bytes: du.groups.records.bytes,
+      sealed_bytes: du.groups.sealed.bytes,
     },
     file: table.file,
     last_change: table.lastChange,

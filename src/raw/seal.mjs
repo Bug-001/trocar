@@ -18,16 +18,12 @@ import { createSealWriter, FRAME_BYTES } from './writer.mjs';
 import { openSealed, createFrameCache } from './reader.mjs';
 import { appendJournal, defaultJournalPath } from './journal.mjs';
 import { parseSegment } from '../collector/core/record/segments.mjs';
+import { fsyncDir } from '../off/fsutil.mjs';
 
 export class SealRefused extends Error { constructor(m) { super(m); this.name = 'SealRefused'; this.code = 'SEAL_REFUSED'; } }
 
 export const SEALED_EXT = '.sealed';
 const CHUNK = 8 << 20;
-
-export function fsyncDir(fs, dir) {
-  const fd = fs.openSync(dir, 'r');
-  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-}
 
 // The segment the live daemon is appending to, from its lock (4.6 §控制面 `lock`), or null when there is no readable
 // lock. A lock that cannot be read never licenses a seal: `sealOne` only compares, and an unknown live segment leaves
@@ -40,12 +36,16 @@ export function liveSegment(lockFile, { fs = nodeFs } = {}) {
  *  A segment whose file is gone (ENOENT) is nothing to do: `{ gone: true }`, no journal line. */
 export async function sealSegment(file, { lockFile, journal = defaultJournalPath(), fs = nodeFs, frameBytes = FRAME_BYTES, onPhase = () => {} } = {}) {
   if (!lockFile) throw new Error('sealSegment: lockFile is required — the live segment must be refused, not guessed');
+  const seg = parseSegment(path.basename(file));
+  const t0 = Date.now();
   try {
     const res = await sealOne(file, { lockFile, fs, frameBytes, onPhase });
-    if (!res.gone) appendJournal({ op: 'seal', outcome: 'ok', file, records: res.records, bytes: res.bytes, sha256: res.sha256, sealed: res.sealed, sealedBytes: res.sealedBytes }, { journal, fs });
+    // `segment` and `took_ms` are what 附录 D.2 自动封存 asks of every sealed segment (how long each took); the
+    // journal is the only place it is recorded, so a report that leaves them out has nothing to read (mac run P2).
+    if (!res.gone) appendJournal({ op: 'seal', outcome: 'ok', file, segment: seg && seg.segment, took_ms: Date.now() - t0, records: res.records, bytes: res.bytes, sha256: res.sha256, sealed: res.sealed, sealedBytes: res.sealedBytes }, { journal, fs });
     return res;
   } catch (e) {
-    appendJournal({ op: 'seal', outcome: e instanceof SealRefused ? 'refused' : 'failed', file, reason: e.message,
+    appendJournal({ op: 'seal', outcome: e instanceof SealRefused ? 'refused' : 'failed', file, segment: seg && seg.segment, took_ms: Date.now() - t0, reason: e.message,
       originalKept: fs.existsSync(file) }, { journal, fs });
     throw e;
   }
