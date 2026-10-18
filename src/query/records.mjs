@@ -158,9 +158,21 @@ function segmentFile({ home, fs, segment }) {
 }
 
 /**
- * segmentLines({home, segment}) → [lineNo, text] of one segment, verbatim as it was captured (`asight raw`, 1.6 §5.1):
- * a sealed segment is decoded first, and nothing is parsed. Throws when there is no such segment.
+ * segmentLines({home, segment}) → [lineNo, bytes] of one segment, the bytes exactly as they are stored (`asight raw`,
+ * 1.6 §5.1): each line with its newline, a half line a crash left without one, an empty line as itself; a sealed
+ * segment is decoded first, and nothing is parsed or re-encoded. Throws when there is no such segment.
  */
 export function* segmentLines({ home = asightHome(), fs = nodeFs, segment } = {}) {
-  yield* lines(segmentFile({ home, fs, segment }), fs, { all: true });
+  const file = segmentFile({ home, fs, segment });
+  if (file.endsWith('.sealed')) {
+    const sf = openSealed(file, { fs });
+    try { for (let i = 0; i < sf.count; i++) yield [Number(sf.records[i][R.lineNo]) + 1, sf.lineAt(i)]; } finally { sf.close(); }
+    return;
+  }
+  const buf = fs.readFileSync(file);
+  for (let start = 0, no = 1; start < buf.length; no++) {
+    const nl = buf.indexOf(NL, start), end = nl === -1 ? buf.length : nl + 1;
+    yield [no, buf.subarray(start, end)];
+    start = end;
+  }
 }

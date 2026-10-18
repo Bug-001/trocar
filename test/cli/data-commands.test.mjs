@@ -86,6 +86,20 @@ test('V81: `asight query` lists every name with its parameters, a query prints i
   assert.deepEqual([JSON.parse(asJson.out).ok, JSON.parse(asJson.out).error.code], [false, 'usage'])
 })
 
+test('V82: a half line a crash left comes out of `asight raw` as the stored bytes, plain or sealed — no newline added', async () => {
+  const home = tmpDir('asight-half-')
+  const raw = path.join(home, '.asight', 'raw')
+  fs.mkdirSync(raw, { recursive: true, mode: 0o700 })
+  const bytes = `${envLine({})}\n{"id":"cut-off-mid`
+  for (const seg of [SEG, SEALED]) fs.writeFileSync(path.join(raw, `${seg}.ndjson`), bytes, { mode: 0o600 })
+  const { sealSegment } = await import('../../src/raw/seal.mjs')
+  await sealSegment(path.join(raw, `${SEALED}.ndjson`), { lockFile: path.join(home, '.asight', 'collector', 'lock'), journal: null })
+  for (const seg of [SEG, SEALED]) {
+    assert.equal((await run(['raw', seg], home)).out, bytes, `${seg}: every stored byte`)
+    assert.equal((await run(['raw', `${seg}:2`], home)).out, '{"id":"cut-off-mid', `${seg}: the half line alone`)
+  }
+})
+
 test('V82: `asight raw` prints the records of a plain and of a sealed segment byte for byte; an unknown segment or record number is exit 1', async () => {
   const { home, lines } = await dataHome()
   for (const seg of [SEG, SEALED]) {

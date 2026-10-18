@@ -26,8 +26,9 @@ export async function run(argv, { io, args, home }) {
   if (to < from) return usage(`asight raw: ${target} ends before it begins.`)
   let printed = 0
   try {
-    for (const [no, text] of segmentLines({ home: asightHome(home), segment })) {
-      if (no >= from && no <= to) { io.out(text); printed++ }
+    // the stored bytes as they are: nothing added (a half line a crash left has no newline, and gets none)
+    for (const [no, bytes] of segmentLines({ home: asightHome(home), segment })) {
+      if (no >= from && no <= to) { io.stdout.write(bytes); printed++ }
     }
   } catch (e) {
     say(`asight raw: ${String((e && e.message) || e)}`)

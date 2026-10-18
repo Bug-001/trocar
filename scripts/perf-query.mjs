@@ -41,7 +41,7 @@ const sizeOr0 = (p) => { try { return fs.statSync(p).isDirectory() ? dirBytes(p)
 /** One cold `asight <argv…>` process: its wall clock, exit code and parsed --json document. */
 export function runQuery(home, argv) {
   const t = process.hrtime.bigint()
-  const r = spawnSync(process.execPath, [CLI, ...argv, '--json'], { env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: 'utf8' })
+  const r = spawnSync(process.execPath, [CLI, ...argv, '--json'], { env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: 'utf8', maxBuffer: 1 << 28 })
   const ms = Number(process.hrtime.bigint() - t) / 1e6
   let doc = null
   try { doc = JSON.parse(r.stdout) } catch { /* a failed command has no document; the exit code says so */ }

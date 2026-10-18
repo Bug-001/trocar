@@ -124,7 +124,6 @@ test('a directory fsync that fails with EPERM (win32) still deletes the plaintex
   const res = await sealSegment(b.file, { lockFile: b.lock, journal: b.journal, fs: spy });
   assert.equal(fs.existsSync(b.file), false, 'the plaintext is deleted even though the directory could not be fsynced');
   assert.deepEqual(listFiles(b.raw), [res.sealed]);
-  const want = b.lines.map((l) => l.toString('utf8').replace(/\n$/, '')).filter((s) => s.length);
-  assert.deepEqual([...segmentLines({ home: b.home, segment: SEGMENT })].map(([, text]) => text), want, 'every original line, verbatim, out of the sealed file');
+  assert.ok(Buffer.concat([...segmentLines({ home: b.home, segment: SEGMENT })].map(([, bytes]) => bytes)).equals(Buffer.concat(b.lines)), 'every original byte, out of the sealed file');
   assert.equal(JSON.parse(fs.readFileSync(b.journal, 'utf8').trim().split('\n').pop()).outcome, 'ok');
 });
