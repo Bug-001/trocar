@@ -8,7 +8,7 @@
 //     options     [['--name' | '--name <value>', 'one line of help']] — the declaration src/cli/args.mjs parses by (nothing is guessed).
 //     exits       [[code, 'what it means']], out of the five codes of §1.3.
 //     mutates     changes the user's own state, so it refuses root (§1.5): true, or a function of the parsed args when only some subcommands do
-//                 (`classes set|add|rm|reset` and `raw seal` refuse root; `classes` shown, `raw verify` and `raw cat` do not). needsRoot: setup-helper, the one command that must be root.
+//                 (`classes set|add|rm|reset` refuse root; `classes` shown does not). needsRoot: setup-helper, the one command that must be root.
 //     run         gets the argv after the name and the context of runCli: { io, env, home, platform, uid, args: { positionals, flags }, deps }.
 //   helpText    the help, made from the table: the three sections, or one command when named.
 import { optionsOf } from './args.mjs'
@@ -88,11 +88,11 @@ export const COMMANDS = Object.freeze([
     exits: [[0, 'it stopped when you asked'], [1, 'it could not listen, and it says why'], [2, 'a usage error']] },
 
   { name: 'raw',
-    group: 'Maintenance', mutates: (args) => args.positionals[0] === 'seal', run: via('./raw.mjs', 'run'),
-    usage: 'asight raw seal [--json]\nasight raw verify [<segment>...] [--json]\nasight raw cat <segment>[:<from>[-<to>]]',
-    summary: 'Hand maintenance of the captured records, which the collector normally seals by itself. seal seals every closed segment now, verify checks the sealed ones against their hashes, and cat prints a segment\'s records byte for byte.',
-    options: [JSON_OPT],
-    exits: [[0, 'done, and everything checked out'], [1, 'a segment did not seal, did not check out, or could not be found'], [2, 'nothing ran: a usage error or root'], [3, 'a sealed segment could not be read at all']] },
+    group: 'Maintenance', mutates: false, run: via('./raw.mjs', 'run'),
+    usage: 'asight raw <segment>[:<from>[-<to>]]',
+    summary: 'Prints captured records byte for byte; a sealed segment is decoded first. <from> and <to> are record numbers, both included. Sealing itself is the daemon\'s job.',
+    options: [],
+    exits: [[0, 'the records are on stdout'], [1, 'the segment or a record number does not exist, or could not be read'], [2, 'a usage error']] },
   { name: 'daemon',
     group: 'Maintenance', mutates: true, run: via('./daemon.mjs', 'runDaemonCli'),
     usage: 'asight daemon [--supervise]',

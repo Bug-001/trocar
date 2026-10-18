@@ -301,26 +301,25 @@ command's output is its only report. An `off` or `uninstall` that cannot undo so
 keeps the install manifest for the next run. The Linux helper is a root-owned copy of the build, so after upgrading
 run `sudo asight setup-helper` again to replace it.
 
-## Shrinking the raw logs — sealed files (D35)
+## Shrinking the raw logs — sealed segments (D35, D60)
 
 Raw captures grow with the square of a conversation (every call re-sends the whole history), so they
-dwarf the agent's own logs. A **closed** capture file can be *sealed*: re-encoded losslessly into a
-`<stream>.<NNNN>.sealed` file (per-record byte deltas + brotli frames + an index) that is typically a
-few percent of the original. Every reader — the board, `asight query`, the "view verbatim bytes" panel —
-reads sealed files directly and shows exactly the same records; the original is deleted only after
-every record and the whole file are proven to decode back byte for byte.
+dwarf the agent's own logs. The daemon appends records to a segment under `~/.asight/raw/` and closes
+it at 128 MB or when the daemon stops. It then seals each closed segment by itself, one at a time: a
+lossless re-encoding (per-record byte deltas + brotli frames + an index), typically a few percent of
+the original. Every reader reads sealed segments directly and shows exactly the same records; the
+plain copy is deleted only after every record decodes back byte for byte. A segment that fails to seal
+keeps its plain copy, is tried again at the next daemon start, and shows in `asight status`. There is
+no manual seal command.
 
 ```sh
-asight raw seal                  # seal every closed segment now (the daemon normally does it by itself, D60)
-asight raw verify                # decode every sealed copy and compare it byte for byte with its hashes
-asight raw cat <segment>         # print a segment's records byte for byte
+asight raw <segment>[:<from>[-<to>]]   # print records byte for byte, sealed or not
 ```
 
-The daemon seals closed segments on its own; `asight raw` is the hand maintenance of the same thing
-(1.6 §2). The old root `~/.atrace/asight/` is never sealed — move it into `~/.asight` first.
-
-A capture file that is still being written is never sealed. Sealed and exported files hold the same
-plaintext and credentials as the capture and are created owner-only (0600); `asight doctor` checks them.
+On its first start after an upgrade, the daemon renames the previous version's
+`~/.asight/collector/capture-<date>.ndjson` files into `~/.asight/raw/` (bytes untouched); from then on
+they are ordinary segments. Older roots such as `~/.atrace` are neither read nor touched. Segments hold
+the same plaintext and credentials as the traffic and are owner-only (0600).
 
 ## Claude Desktop
 
@@ -410,9 +409,7 @@ asight classes reset
 asight serve [--port <port>]
 
 # maintenance
-asight raw seal [--json]
-asight raw verify [<segment>...] [--json]
-asight raw cat <segment>[:<from>[-<to>]]
+asight raw <segment>[:<from>[-<to>]]
 sudo asight setup-helper [--remove] [--binary <path>]   # Linux, once per machine
 asight daemon [--supervise]   # the daemon in the foreground; the autostart unit runs it (Windows's task with --supervise)
 asight help [<command>]   # also --help · -h · --version · -v
