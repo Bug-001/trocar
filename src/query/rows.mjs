@@ -11,7 +11,7 @@ import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { allSegments, segmentIndex } from './index-build.mjs';
 import { asightHome } from '../paths.mjs';
-import { statKey, warmCache } from './warm.mjs';
+import { statKey, warmCache, fsTag } from './warm.mjs';
 
 // WARM (D63 ①, 1.6 §4.1 附近的查询): one entry per segment, kept against that segment's own source file. A closed or
 // sealed segment never moves, so its rows are read from disk once per process; the live one is re-read when it grew,
@@ -33,9 +33,9 @@ const segStamp = (home, segment, fs) => `${statKey(path.join(home, 'raw', `${seg
 export async function indexRows({ home = asightHome(), fs = nodeFs, errors = [] } = {}) {
   const assign = createSynthAssigner();
   const out = [];
-  const segments = await segList.get(home, namesStamp(home, fs), () => allSegments({ home, fs }));
+  const segments = await segList.get(`${fsTag(fs)}\n${home}`, namesStamp(home, fs), () => allSegments({ home, fs }));
   for (const s of await segments) {
-    const got = await segRows.get(`${home}\n${s.segment}`, segStamp(home, s.segment, fs), () => segmentIndex({ home, segment: s.segment, fs }));
+    const got = await segRows.get(`${fsTag(fs)}\n${home}\n${s.segment}`, segStamp(home, s.segment, fs), () => segmentIndex({ home, segment: s.segment, fs }));
     const { records, problems } = got;
     for (const pr of problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
     for (const r of records) {

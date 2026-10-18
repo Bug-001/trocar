@@ -9,6 +9,18 @@
 // Always on, in every process: a one-shot CLI simply never gets a second lookup, and correctness does not depend
 // on who is calling. The bound is bytes, so a warm worker's footprint is set by its budget and not by the corpus.
 import nodeFs from 'node:fs'
+import v8 from 'node:v8'
+
+/** Which `fs` a cached value was read through, as a key fragment. A caller that injects its own `fs` reads its own
+ *  files (src/query/client.mjs localOnly), so its entries MUST NOT be the ones the real file system put there. */
+const fsIds = new WeakMap()
+let fsSeq = 0
+export function fsTag(fs = nodeFs) {
+  if (fs === nodeFs) return ''
+  let id = fsIds.get(fs)
+  if (id === undefined) fsIds.set(fs, (id = `fs${++fsSeq}`))
+  return id
+}
 
 /** A file's identity, the same three fields the index layer calls a match (src/query/index-build.mjs `usability`):
  *  size + mtime + ctime. `null` when there is no such file — which is itself a stamp (it may come back). */
@@ -26,35 +38,51 @@ export function rowsKey(rows) {
 }
 
 /**
- * warmCache({maxBytes, max, bytes}) → { get(id, stamp, compute) }: `compute()` runs when this `id` was never
- * seen or its `stamp` moved; otherwise the remembered value comes back untouched. Least recently used entries
- * are dropped first, so that the whole cache stays inside `maxBytes` (`bytes(value)` sizes one entry) and `max`
- * entries. The entry just computed is never the one dropped.
+ * warmCache({maxBytes, max, bytes, heapFraction}) → { get(id, stamp, compute), peek(id, stamp) }: `compute()` runs
+ * when this `id` was never seen or its `stamp` moved; otherwise the remembered value comes back untouched.
+ * Least recently used entries are dropped first, so that the whole cache stays inside `maxBytes` (`bytes(value)`
+ * sizes one entry) and `max` entries. With `heapFraction` the real heap decides as well: entries go while
+ * `heapUsed` is past that fraction of this process's heap limit — what a value costs in the heap is several times
+ * the bytes it serializes to, so a budget of estimated bytes alone let the worker reach its
+ * `--max-old-space-size` and die (the review of D63, measured: 30 records = 3.08 MB serialized).
+ * The entry just computed is never the one dropped.
  */
-export function warmCache({ maxBytes = Infinity, max = Infinity, bytes = () => 0 } = {}) {
+export function warmCache({ maxBytes = Infinity, max = Infinity, bytes = () => 0, heapFraction = null, heapUsed = () => process.memoryUsage().heapUsed } = {}) {
   const m = new Map() // insertion order IS the LRU order: a hit is deleted and set again
   let total = 0
+  const heapLimit = heapFraction ? v8.getHeapStatistics().heap_size_limit * heapFraction : Infinity
+  const over = () => total > maxBytes || m.size > max || (m.size > 1 && heapUsed() > heapLimit)
   const trim = (keep) => {
     for (const [k, e] of m) {
-      if (total <= maxBytes && m.size <= max) break
+      if (!over()) break
       if (k === keep) continue // the answer of THIS lookup is never evicted, whatever the budget
       m.delete(k); total -= e.size
     }
   }
+  const fresh = (id, stamp) => { const hit = m.get(id); return hit && hit.stamp === stamp ? hit : null }
   return {
     get(id, stamp, compute) {
-      const hit = m.get(id)
-      if (hit && hit.stamp === stamp) { m.delete(id); m.set(id, hit); return hit.value }
-      if (hit) { total -= hit.size; m.delete(id) }
+      const hit = fresh(id, stamp)
+      if (hit) { m.delete(id); m.set(id, hit); return hit.value }
+      const old = m.get(id)
+      if (old) { total -= old.size; m.delete(id) }
       const value = compute()
       const e = { stamp, value, size: 0 }
       m.set(id, e)
       // A promise is sized when it settles (the segment readers are async), and a rejected one is forgotten
       // at once: a transient read error must not become this segment's answer for the rest of the process.
-      if (value && typeof value.then === 'function') value.then((v) => { e.size = bytes(v); total += e.size; trim(id) }, () => { if (m.get(id) === e) { m.delete(id); total -= e.size } })
-      else { e.size = bytes(value); total += e.size; trim(id) }
+      // Either way the entry is checked first: one that was replaced or evicted while the promise was in
+      // flight must not add its size to a total it is no longer part of (that total never came down again,
+      // and from then on every lookup trimmed the cache to nothing).
+      if (value && typeof value.then === 'function') {
+        value.then((v) => { if (m.get(id) !== e) return; e.size = bytes(v); total += e.size; trim(id) },
+          () => { if (m.get(id) === e) { m.delete(id); total -= e.size } })
+      } else { e.size = bytes(value); total += e.size; trim(id) }
       return value
     },
+    /** The remembered value if it is there and still fresh, without computing anything: the caller that can answer
+     *  a cheaper way when it is absent (src/query/named/session.mjs renders the window only). */
+    peek: (id, stamp) => { const hit = fresh(id, stamp); if (!hit) return undefined; m.delete(id); m.set(id, hit); return hit.value },
     /** What the cache holds now: `{entries, bytes}` — the worker's memory line, and what a test asserts on. */
     state: () => ({ entries: m.size, bytes: total }),
   }
