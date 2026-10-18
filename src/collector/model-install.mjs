@@ -21,8 +21,9 @@ import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
 import { lineComment, removeAsightText } from '../off/text-edit.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
-import { unitedLiveness } from './install.mjs'
-import { CODE } from './core/codes.mjs'
+import { unitedLiveness, daemonEnv } from './install.mjs'
+import { CODE, EVENT } from './core/codes.mjs'
+import { runEventWriter } from '../off/events.mjs'
 
 /** The OSes the collector model (4.11) runs on — the one list `install`, `on`, `uninstall` and the arch backends ask. */
 export const MODEL_OS = Object.freeze(['darwin', 'win32'])
@@ -63,7 +64,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
   const before = JSON.stringify(m)
-  const items = [], carriers = [], pending = [], problems = [], installedHarnesses = [] // the last: read by finish(), which an install with no root reaches early
+  const items = [], carriers = [], pending = [], problems = [], notes = [], installedHarnesses = [] // the last: read by finish(), which an install with no root reaches early
   // R5 / 附录 C.1: an item that is about no harness carries NO harness field (a `harness: null` is drift validateReceipt reports, a Windows test machine 2026-10-18)
   const said = (item, state, { harness = null, ...extra } = {}) => items.push({ item, state, ...extra, ...(harness ? { harness } : {}) })
   const save = () => saveManifest(dir, m, fs)
@@ -175,8 +176,13 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     for (const src of pm.userCertFiles || []) ruleU(desc, src)
   }
 
-  // d · the autostart unit (inert until on enables it)
-  if (unit) { const text = unit.text({}); owned(unit.path, 'unit', null, text, 0o644) }
+  // d · the autostart unit. It carries this shell's NODE_EXTRA_CA_CERTS: the door's upstream trust includes the daemon's own (4.11 §3 ⑭), and a
+  // login-started daemon has no shell exports (its job environment, not the user's login environment, D56⑨); what cannot be carried is said and kept (D38)
+  if (unit) {
+    const d = daemonEnv(env, dir)
+    if (d.note) { notes.push(d.note); runEventWriter({ dir, base: { run: now().toISOString() }, notes, fs })({ event: EVENT.installNote, where: 'install', kind: 'note', code: CODE.unitEnvNotCarried, reason: d.note }) }
+    owned(unit.path, 'unit', null, unit.text(d.env), 0o644)
+  }
   const agentList = readAgentList({ home, fs }).entries
   for (const d of harnesses.filter((x) => installedHarnesses.includes(x.name))) m.liveness[d.name] = { ...unitedLiveness(m.liveness[d.name], livenessOf(d, { agentList, os })), ...pick(m.liveness[d.name], ['on_at', 'off_at']) }
   return finish()
@@ -190,7 +196,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     if (JSON.stringify(next) !== JSON.stringify(m.install)) m.install = next
     if (JSON.stringify(m) !== before) save()
     const skipped = carriers.filter((x) => x.state === 'skipped').length + items.filter((x) => x.state === 'skipped').length
-    return { manifest: m, fp256: rootDer ? rootIdOf(rootDer).fp256 : null, items, carriers, pending, problems, exit: pending.length || problems.length || skipped ? 1 : 0 }
+    return { manifest: m, fp256: rootDer ? rootIdOf(rootDer).fp256 : null, items, carriers, pending, problems, notes, exit: pending.length || problems.length || skipped ? 1 : 0 }
   }
 
   function owned(file, role, harness, data, mode) {
