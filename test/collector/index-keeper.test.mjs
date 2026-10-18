@@ -65,7 +65,7 @@ test('nothing written, nothing armed: no timer, no index file, no pass', async (
 test('a backlog is indexed in chunks, the event loop free between them, and the result is the full index', async () => {
   const h = home()
   const big = 'y'.repeat(20_000)
-  append(h, 60, 0, big) // ~1.2 MB
+  const n = append(h, 60, 0, big) // ~1.2 MB
   let turns = 0
   const beat = setInterval(() => { turns++ }, 1)
   const keeper = createIndexKeeper({ home: h, debounceMs: 1, chunkBytes: 100_000 })
@@ -74,7 +74,7 @@ test('a backlog is indexed in chunks, the event loop free between them, and the 
   await keeper.idle()
   clearInterval(beat)
   assert.ok(turns > 1, `the loop ran while the backlog was indexed (${turns} turns)`)
-  assert.equal(stored(h).records.length, 60)
+  assert.equal(stored(h).records.length, n)
   // byte for byte what one uninterrupted build would have stored (the index is a projection, invariant 2)
   const chunked = fs.readFileSync(idxFile(h))
   fs.rmSync(indexDir(h), { recursive: true })

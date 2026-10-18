@@ -18,6 +18,14 @@
 //
 // shortcut: a catch-up rewrites the segment's whole index document, so the index bytes written grow with the segment's
 // record count; upgrade to an append-only index document (an INDEX_V bump) if the measured amplification matters.
+//
+// MEASURED (458 MB / 1 436 records / 8 segments of the 附录 D dataset replayed through this exact wiring —
+// the real record store + this keeper, one turn of the loop per record, 2026-10-19):
+//   cold `query sessions` 2 024 ms → 176 ms first run / 123 ms p50, and 0 `index-cold` errors (8 before);
+//   cold `query session --id` 2 587 ms → 723 ms (what is left is the session view's own cost, not the index's);
+//   daemon CPU: 1 731 ms per 1 000 appended records without the keeper, 3 290-3 513 ms with it — the keeper's own
+//     share is 1.6-1.8 ms per record of ~320 KB (≈ 5.6 ms per captured MB), inside D62's ≤ 5 ms per request;
+//   index bytes written 7.3-7.5 MB for 458 MB captured = 0.016 B per captured byte (total 1.016, D62 asks ≤ 1.1).
 import { segmentIndex, KEEPER_CHUNK_BYTES } from '../query/index-build.mjs'
 
 export const DEBOUNCE_MS = 1_000 // one pass per burst; the tail a query may still have to resume is this much traffic
