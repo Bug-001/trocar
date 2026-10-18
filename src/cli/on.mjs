@@ -1,6 +1,6 @@
-// on.mjs — `asight on [harness…] [--dry-run] [--yes] [--no-autostart] [--json]` (RFC 1.6 §1.1, §1.6, §2, R4–R7): the front end of
+// on.mjs — `asight on [harness…] [--dry-run] [--yes] [--json]` (RFC 1.6 §1.1, §1.6, §2, R4–R7): the front end of
 // turnOn (src/collector/install.mjs). It parses the arguments, builds what turnOn needs from the platform (the descriptors, the process table,
-// the autostart unit, the control socket), decides how a confirmation is asked, and prints the plan and the receipt. Everything the world gives is a
+// the unit the daemon is started through, the control socket), decides how a confirmation is asked, and prints the plan and the receipt. Everything the world gives is a
 // `deps` entry a test replaces (0.1 §3): `parts` (the descriptors, `scan`, `match`, the arch), `exec` (the runner of OS tools: spawnSync-shaped),
 // `request` (the control socket), `helperState`, `linger` / `lingerRead`, `now`, `freePort`, `sleep`, `roots`, `user`, `getuid`, `fs`, `script`.
 // A platform without a collector is refused by loadArch's own error.
@@ -23,7 +23,7 @@ import { isModelOs } from '../collector/model-install.mjs'
 import { runModelOn } from './on-model.mjs'
 
 const USAGE = usageLine(commandNamed('on'))
-const FLAGS = new Set(['--dry-run', '--yes', '--no-autostart', '--json'])
+const FLAGS = new Set(['--dry-run', '--yes', '--json'])
 const chainText = (t) => renderCompact(t).join(' ; ')
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
@@ -88,7 +88,6 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const script = deps.script || process.argv[1]
     const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script, run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }) // `deps.spawn`: the `--no-autostart` start is a real spawn, so a test hands in its own (0.1 §3)
     const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)
-    const autostart = !flags.has('--no-autostart')
     const yes = flags.has('--yes')
     const confirm = async (plan) => {
       if (yes) return true
@@ -99,13 +98,13 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const routing = deps.routing || (parts.arch && typeof parts.arch.routing === 'function' ? parts.arch.routing({ harnesses: parts.harnesses, home, env, fs: deps.fs }) : null) // §9.5's proxy-mode routing: the platform supplies it beside prepare (win32, Task 8(c)); a platform without one (Linux's driver mode) adopts nothing extra and every existing on is its guard
     const planText = (raw) => {
       const adopted = adoption && !adoption.error ? Object.entries(adoption.chains(raw.targets)).filter(([h]) => raw.targets.includes(h)).map(([h, t]) => ({ harness: h, chain: chainText(t) })).filter((x) => /\s->\s/.test(x.chain) || false) : [] // D46: the degenerate one-hop chain says nothing and is not printed
-      return formatPlan({ ...raw, adopted }, { home, autostart, platform, colors: c })
+      return formatPlan({ ...raw, adopted }, { home, platform, colors: c })
     }
     // The combined bundles' OS roots are the arch's (the flip checklist ②, 4.9 §4 末): the plan asks it through the one resolver (tls/roots.mjs bundleRoots), so the FIRST
     // install's bundles carry them — not only the daemon's next rebuild — and a read that fails stops the on before one file of the agents' is touched (D38); `deps.roots` overrides them.
     let { receipt, exit, plan } = await install.turnOn({
       home, env, ids: named.ids, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null,
-      roots: deps.roots || null, unit, autostart, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
+      roots: deps.roots || null, unit, freePort: deps.freePort, dryRun: flags.has('--dry-run'), confirm,
       networkEdited: async (targets) => editedFields({ adoption, routing, targets, home, env, fs: deps.fs }),
       onPlan: (p) => say(planText(p)),
       request: deps.request, now: deps.now, getuid: deps.getuid, helperState, linger: deps.linger || parts.linger || null, lingerRead: deps.lingerRead || (deps.linger ? null : parts.lingerRead || null), sleep: deps.sleep, user: deps.user, fs: deps.fs,

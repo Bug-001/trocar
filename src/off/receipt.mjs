@@ -51,9 +51,6 @@ function rowLines(c, t, past, width) {
 // the daemon and the connections still going through asight (§3.4's sample: 「The daemon (pid 4012) exits after 2 open responses finish.」)
 function daemonLines(r, past, cutNote) {
   const lines = []
-  const a = r.all ? r.autostart : null
-  if (a && a.planned) lines.push('Autostart will be turned off.')
-  else if (a && !a.disabled && !a.planned) lines.push(...fit(`Autostart could not be turned off (${a.error || 'reason unknown'}).`))
   const d = r.daemon || {}
   const rel = r.relayed && r.relayed !== 'unknown' ? r.relayed : null
   const pid = d.pid == null ? '' : ` (pid ${d.pid})`

@@ -13,7 +13,7 @@ export { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt }
 export const COMMAND_KEYS = Object.freeze({
   install: Object.freeze(['fp256', 'items', 'carriers', 'harnesses', 'pending', 'standalone', 'commands', 'residual_risk', 'notes']),
   on: Object.freeze(['harnesses', 'refused', 'routes', 'user', 'standalone', 'commands', 'unit', 'unchanged', 'capture', 'daemon', 'linger', 'linger_reason', 'adopted', 'notes']),
-  off: Object.freeze(['harnesses', 'all', 'outcome', 'autostart', 'daemon', 'daemon_stop', 'holders', 'left', 'kept_backups', 'orphan_backups', 'kept_bundles', 'still_trusting', 'residue', 'undone_by_marker', 'routing', 'install_items', 'pending', 'user_processes', 'nothing_installed', 'relayed_reason', 'notes']),
+  off: Object.freeze(['harnesses', 'all', 'outcome', 'daemon', 'daemon_stop', 'holders', 'left', 'kept_backups', 'orphan_backups', 'kept_bundles', 'still_trusting', 'residue', 'undone_by_marker', 'routing', 'install_items', 'pending', 'user_processes', 'nothing_installed', 'relayed_reason', 'notes']),
   uninstall: Object.freeze(['harnesses', 'all', 'purge_data', 'kept', 'kept_bundles', 'still_trusting', 'residue', 'dropped_backups', 'non_identical', 'entries', 'left', 'pending', 'autostart', 'daemon', 'relayed_reason', 'routing', 'user_processes', 'declined', 'notes']),
   classes: Object.freeze(['class', 'before', 'after']),
 })

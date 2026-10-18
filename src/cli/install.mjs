@@ -59,7 +59,7 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
     const ctx = sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
     const rows = planInstall({ os: platform, harnesses, ctx })
-    // the autostart unit is install's, inert until `on` enables it (4.11 §1 install d; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
+    // the login entry is install's (D61: registered AND started here, 4.11 §1 install 7; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
     const unit = deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch(platform)).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
     const carrierOf = (r) => (r.carrier === 'root'
       ? 'reads your user trust store'
@@ -86,9 +86,14 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     const r = await locked(() => runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
       wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) }))
     if (!r) return EXIT.incomplete
+    // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs)
+    const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.asight', 'collector'), env, fs, unit, register: true, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
+    r.problems.push(...dmn.problems)
+    for (const n of dmn.notes) if (!r.problems.includes(n)) r.problems.push(n)
+    if (dmn.problems.length) r.exit = 1
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: r.pending, problems: r.problems, standalone: standalonePath(home), residual_risk: RISK,
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: r.pending, problems: r.problems, standalone: standalonePath(home), residual_risk: RISK, daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started },
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       planned, commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
     const dir = path.join(home, '.asight', 'collector')
@@ -135,14 +140,16 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const { OFF_VERSION } = await import('../off/manifest.mjs')
   const parts = deps.parts || await (await import('../collector/daemon.mjs')).loadParts({ env, agentList: readAgentList({ home, fs }).entries })
   const inst = await import('../collector/install.mjs')
-  const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}) }
+  // D61: the login entry is install's — written here and enabled with `--now`, so the daemon is up from install until uninstall
+  const unit = deps.unit !== undefined ? deps.unit : (!parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }))
+  const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, unit, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}) }
   let plan
   try { plan = await inst.planOn(args) } catch (e) { io.err(`asight install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
   // asight-off (R3) is install's: named in the plan and the dry run when this run would write it, i.e. when it is not already what src/off generates
   const stdPath = standalonePath(home)
   let stdNew = true
   try { stdNew = fs.readFileSync(stdPath, 'utf8') !== buildStandalone({ version: OFF_VERSION, fs }) } catch { stdNew = true }
-  say([formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, autostart: false, platform, command: 'install' }), ...wrap(COST)].join('\n'))
+  say([formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, platform, command: 'install' }), ...wrap(COST)].join('\n'))
   if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), harnesses: plan.targets, changed: plan.changed, created: [...(stdNew ? [stdPath] : []), ...plan.created] }, null, 2)); return EXIT.ok }
   if ((plan.writing || stdNew) && !flags.has('--yes')) {
     if (json || !isInteractive(io)) return needsYes(io, json, planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }))
