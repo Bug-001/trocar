@@ -45,9 +45,12 @@ export const FAILURE_WORDS = Object.freeze({
   'install/launchd-register-failed': 'the login item could not be registered',
   'install/unit-not-enabled': 'the login item is not enabled',
   'install/install-error': 'the install step failed',
+  'uninstall/left-unparsable': 'an uninstall left an item behind',
   'ingress/ingress-auth-failed': 'a program did not answer the proxy challenge',
   'ingress/engine-port-taken': 'asight\'s port is taken',
   'ingress/upstream-unavailable': 'the upstream could not be dialled',
+  // a connection row the fold knows by its `not_captured` / `reason` alone (its group key is `flow:<code>`), not by a (where, code) pair
+  'flow/client-rejected-leaf': 'a connection whose program refused asight\'s certificate',
 })
 
 /** The short reason of a `(where, code)` pair, or null when the table does not know it (errno and unknown codes keep their raw shape). */
@@ -64,7 +67,7 @@ const briefText = (s, max = 100) => { const t = squashed(s); return t.length > m
 export function failureBrief(g) {
   const l = (g && g.last) || {}
   const reason = briefText(l.reason || (l.error && l.error.message) || '')
-  const word = failureWord(l.where, l.code)
+  const word = failureWord(l.where, l.code) || (typeof (g && g.key) === 'string' && g.key.startsWith('flow:') ? failureWord('flow', g.key.slice(5)) : null)
   if (word) return reason ? `${word} (${reason})` : word
   if (l.code && ERRNO.test(String(l.code))) return [l.code, reason].filter(Boolean).join(' ')
   const head = [l.where, l.code].filter(Boolean).join('/')

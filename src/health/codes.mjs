@@ -133,9 +133,15 @@ export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing',
   'cert-not-installed', 'cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file']) // the cert group's status reasons that have a producer (1.6 §9.7, 4.11 §3 ⑱)
 export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...ROUTE_STATUS_REASONS, ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 
+// What `asight status` and `asight doctor` name in their own documents (RFC 1.6 附录 C.3 / C.4 / C.5), a block of its own like the ones above: the `where` of an
+// `errors[]` entry is the part of the picture that could not be read, in the words the text prints; the codes are `doctor`'s own findings, the ones §3.7 asks it
+// to look at beside the network (附录 B owns the rest, src/netenv/findings.mjs). They are no D38 record of a collector writer, and they are closed all the same.
+export const DOC_WHERE = Object.freeze(['the on/off state', 'the install record', 'capture health', 'the agent name list', 'the process table', 'a captured file'])
+export const DOCTOR_CODES = Object.freeze(['file-readable-by-others', 'standalone-unreadable', 'standalone-stale', 'backup-unclaimed'])
+
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), written as they are
-const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS, ...ROUTE_EVENTS, ...NET_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE, ...ROUTE_WHERE, ...NET_WHERE]),
-  code: new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES]) }
+const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS, ...ROUTE_EVENTS, ...NET_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE, ...ROUTE_WHERE, ...NET_WHERE, ...DOC_WHERE]),
+  code: new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...DOCTOR_CODES]) }
 
 export const isCode = (c) => sets.code.has(c) || ERRNO.test(String(c))
 export const isEvent = (e) => sets.event.has(e) // the sets checkRecord() judges by, for the static scans (test/health/codes.test.mjs): one rule, not two
