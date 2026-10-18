@@ -855,7 +855,7 @@ test('P13 uninstall: the root key is removed after the trust store\'s root; off 
       { kind: 'system-root', phase: 'install', harness: null, scope: 'user', path: 'login:root', store: 'login', fp256: 'AB' }] }
     fs.mkdirSync(dir, { recursive: true }); saveManifest(dir, m)
     const w = offWorld({ home, env: { HOME: home }, deps: { platform: 'darwin', socketPath: null, procs: async () => [],
-      rootStore: { remove: async (id) => { order.push(`root ${id.fp256}`); return { ok: true } } },
+      rootStore: { remove: async (id) => { order.push(`root ${id.fp256}`); return { ok: true } }, has: () => ({ present: false }) },
       custody: { remove: async () => { order.push('key'); return { removed: true } } } } })
     const u = await undoSide(w, { manifest: readManifest(dir), dropCa, yes: true })
     assert.deepEqual([order, u.left], [dropCa ? ['root AB', 'key'] : [], []], `dropCa ${dropCa}`)

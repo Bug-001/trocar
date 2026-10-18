@@ -118,7 +118,7 @@ for (const [what, make] of Object.entries(ANSWERS)) {
     assert.deepEqual([r.exit, r.pending.map((p) => p.item)], [1, ['root-store']])
     assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'system-root').map((e) => e.fp256), [r.fp256], 'one system-root record, this root')
     const removed = []
-    const { receipt } = await uninstall(w, { rootStore: { remove: (id) => { removed.push(id.fp256); return { ok: true } } } })
+    const { receipt } = await uninstall(w, { rootStore: { remove: (id) => { removed.push(id.fp256); return { ok: true } }, has: () => ({ present: false }) } })
     assert.deepEqual(removed, [r.fp256], JSON.stringify({ p: receipt.problems, l: receipt.left }))
   })
 }
@@ -219,3 +219,33 @@ test('invariant 2 · --purge-data on a clean run deletes the captures (the negat
   for (const p of CAPTURES) assert.equal(fs.existsSync(path.join(w.dir, p)), false, `${p} is gone`)
   assert.match(formatUninstallReceipt(receipt), /your captured records \(--purge-data\)/)
 })
+
+// D38 · P5 (Windows test machine 2026-10-18): removing a root asks the operator, and a question nobody answers (or a tool that exits 0 while the root stays)
+// must not read as "removed" — uninstall exited 1 with nothing naming the certificate, and the manifest went anyway, so the machine kept trusting
+// asight and the next uninstall said nothing was installed. Generated along the ways the store can keep the root.
+const KEPT_ROOT = {
+  'the removal reports success, the store still holds it': { remove: () => ({ ok: true }), has: () => ({ present: true }) },
+  'the removal fails': { remove: () => ({ ok: false, reason: 'certutil -user -delstore failed (exit none)' }), has: () => ({ present: true }) },
+  'the removal throws': { remove: () => { throw new Error('the prompt was not answered') }, has: () => ({ present: true }) },
+  'the store cannot be read back': { remove: () => ({ ok: true }), has: () => ({ error: 'certutil -user -store failed (exit 1)' }) },
+}
+for (const [what, store] of Object.entries(KEPT_ROOT)) {
+  test(`D38 · ${what}: exit 1, the receipt names the root and the command, the manifest keeps the record for the next run`, async () => {
+    const w = await installed()
+    const fp = readManifest(w.dir).entries.find((e) => e.kind === 'system-root').fp256
+    const { receipt, exit } = await uninstall(w, { rootStore: store })
+    assert.equal(exit, 1, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+    assert.equal(receipt.ok, false)
+    assert.deepEqual(receipt.still_trusting.map((x) => [x.what, x.fp256]), [['root', fp]], JSON.stringify(receipt.still_trusting))
+    assert.match(receipt.still_trusting[0].command, /security remove-trusted-cert|certutil/, 'the by-hand command is there')
+    assert.equal(receipt.problems.length, 1, JSON.stringify(receipt.problems))
+    assert.match(receipt.problems[0], /root certificate was NOT taken out of your trust store/)
+    assert.ok(receipt.left.some((l) => /trust store/.test(l.reason)), JSON.stringify(receipt.left))
+    const after = readManifest(w.dir)
+    assert.deepEqual(after.entries.filter((e) => e.kind === 'system-root').map((e) => e.fp256), [fp], 'the next uninstall finds the root to remove')
+    const flows = path.join(w.dir, 'flows')
+    const lines = fs.readdirSync(flows).flatMap((n) => fs.readFileSync(path.join(flows, n), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+    assert.equal(lines.filter((l) => l.code === 'root-not-removed').length, 1, `one failure line (${lines.map((l) => l.code || l.kind).join(', ')})`)
+    assert.match(formatUninstallReceipt(receipt, { home: w.home }), /trust store/)
+  })
+}

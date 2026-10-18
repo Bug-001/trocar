@@ -114,8 +114,13 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     lines.push(`asight exits when ${who.length === 1 ? 'it does' : 'they do'}.`, 'Cut them now: asight off --now')
   }
   if ((r.still_trusting || []).length) {
-    lines.push('Still trusting the asight certificate, but not going through asight:')
-    for (const p of r.still_trusting) lines.push(...fit(`  ${p.harness} (pid ${p.pid}) ${UNTIL_WORDS[p.until] || UNTIL_WORDS.restart}`, '    '))
+    const roots = r.still_trusting.filter((p) => p.what === 'root')
+    for (const p of roots) lines.push(...fit(`Your trust store still holds asight's root certificate: ${p.reason}. Take it out by hand: ${p.command}`, '  '))
+    const procs = r.still_trusting.filter((p) => p.what !== 'root')
+    if (procs.length) {
+      lines.push('Still trusting the asight certificate, but not going through asight:')
+      for (const p of procs) lines.push(...fit(`  ${p.harness} (pid ${p.pid}) ${UNTIL_WORDS[p.until] || UNTIL_WORDS.restart}`, '    '))
+    }
   }
   for (const k of r.kept_bundles || []) {
     const who = k.pids && k.pids.length ? `Programs that may have loaded it are still running (pid ${k.pids.join(', ')}); run asight off again once they exit.` : ''
