@@ -120,6 +120,9 @@ for (const platform of ['darwin', 'win32']) {
     assert.ok(ERROR_CODES.includes(doc.error.code), `error.code is in the closed set: ${JSON.stringify(doc.error)}`)
     assert.ok(doc.error.message.includes('asight install'), doc.error.message)
     assert.equal(doc.fp256, null, 'no root was made')
+    // P5 (a macOS test machine 2026-10-18): a refusal writes nothing of yours and nothing of asight's undo either
+    assert.deepEqual(doc.items, [], 'a refused install reports no written item')
+    assert.equal(fs.existsSync(path.join(w.home, '.asight', 'bin', 'asight-off')), false, 'the undo program is not left behind by a refusal')
   })
 }
 
