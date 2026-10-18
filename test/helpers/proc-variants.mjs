@@ -104,11 +104,11 @@ export function variantsOf(seed) {
   return out
 }
 
-/** A darwin variant as the collector sees it: `ps` prints argv joined by spaces, lsof names the exe; factsOfPid turns the two into the facts. */
+/** A darwin variant as the collector sees it: `ps` prints argv joined by spaces, the native helper names the exe; factsOfPid turns the two into the facts. */
 function psSplit(v) {
   const run = (cmd) => (cmd === 'ps'
     ? { status: 0, stdout: `  42     1   501 x Mon Oct  5 17:00:00 2026     ${v.argv.join(' ')}\n` }
-    : { status: 0, stdout: `p42\nfcwd\nn/\nftxt\nn${v.exe}\n` })
-  const f = factsOfPid(42, { exec: run })
+    : { status: 0, stdout: `:exe=${v.exe}\0` })
+  const f = factsOfPid(42, { exec: run, cache: new Map() })
   return { ...v, exe: f.exe, argv: f.argv, argvSplit: f.argvSplit, cmdline: f.cmdline, variant: `${v.variant}+ps-split` }
 }
