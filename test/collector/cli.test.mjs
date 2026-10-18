@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { appendEvent } from '../../src/collector/core/events.mjs'
+import { checkRecord } from '../../src/health/codes.mjs'
 import { newManifest, saveManifest } from '../../src/off/manifest.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
 import { fileURLToPath } from 'node:url'
@@ -12,7 +13,7 @@ import { runSetupHelper } from '../../src/collector/cli.mjs'
 import { formatStatus } from '../../src/cli/status-text.mjs'
 import { runCli as runOne } from '../../src/cli/main.mjs'
 import { runDaemonCli } from '../../src/cli/daemon.mjs'
-import { DAEMON_ALREADY_UP } from '../../src/collector/core/control.mjs'
+import { DAEMON_ALREADY_UP, DAEMON_ENDPOINT_BUSY } from '../../src/collector/core/control.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { osStubs } from '../helpers/os-stubs.mjs' // on a Mac the real bin's status asks launchd and the keychain (read-only): stubs answer, 0.1 §3
 
@@ -294,5 +295,29 @@ test('cli: a daemon that finds another one answering on the control channel says
   assert.equal(second.t.e.filter((l) => /another collector daemon is answering/.test(l)).length, 1, `said once: ${JSON.stringify(second.t.e)}`)
   const other = await run(false)
   assert.equal(other.exit, 1, 'a start that failed for any other reason is still a failure')
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+// the other half of the same probe (D38): the control endpoint accepts a connection but answers nothing — a daemon with a wedged event loop, another
+// program holding the pipe name. Exiting 0 here would leave the machine with no working collector and no record until the next login, so this one is a
+// failure: one persistent record naming the pid the lock claims holds it, and a non-zero exit, which the platform retries at its own throttle.
+test('cli: a control endpoint held by something that does not answer is a failure record naming the pid that holds it, and a non-zero exit (not exit 0)', async () => {
+  const home = tmpDir('asight-cli-held-')
+  const dir = markInstalled(home)
+  fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: 7371 }))
+  const daemon = {
+    collectorPaths: (d) => ({ lock: path.join(d, 'lock') }),
+    startDaemon: async () => { throw Object.assign(new Error('the control endpoint /s is held by something that does not answer'), { [DAEMON_ENDPOINT_BUSY]: true }) },
+  }
+  const t = io()
+  const exit = await runDaemonCli([], { io: t, home, env: {}, platform: 'darwin', deps: { daemon, proc: { on() {} }, getuid: () => 1000 } })
+  assert.equal(exit, 1, 'non-zero: the platform retries, and status/doctor have something to show')
+  const flows = path.join(dir, 'flows')
+  const rows = fs.readdirSync(flows).flatMap((f) => fs.readFileSync(path.join(flows, f), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+  const held = rows.filter((r) => r.code === 'control-endpoint-held')
+  assert.equal(held.length, 1, `one record, not none and not a loop of them: ${JSON.stringify(rows)}`)
+  assert.deepEqual([held[0].event, held[0].where], ['failure', 'start'], 'a failure, so the board turns it up (D38)')
+  assert.match(held[0].reason, /pid 7371/, 'and it names the pid the lock claims holds the endpoint')
+  assert.deepEqual(checkRecord(held[0]), [], 'the code and where are in the closed sets')
   fs.rmSync(home, { recursive: true, force: true })
 })

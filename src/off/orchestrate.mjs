@@ -139,7 +139,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.relayed = counts(reply && reply.relayed) || 'unknown'
       if (r.relayed === 'unknown') r.relayed_reason = 'the daemon\'s reply did not carry the connection counts'
       r.daemon = { pid: Number.isInteger(reply && reply.pid) ? reply.pid : (lock && lock.pid) ?? null, state: exit ? 'draining' : 'running' }
-      r.confirmed = exit ? reply.actual === 'off' && reply.confirmed !== false : reply.confirmed === true
+      r.confirmed = ids === null ? reply.actual === 'off' && reply.confirmed !== false : reply.confirmed === true // 1.6 §3.1: a nameless off takes the whole routing off and reads it back (`actual`), whether or not the daemon was asked to exit
       r.how = 'daemon-reply'
       if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that the kernel's watch table${exit ? ' and links' : ''} are off (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are. ${wayOut(w, r.daemon.pid)}`)
     } catch (e) {
