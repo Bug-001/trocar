@@ -30,7 +30,7 @@
  "test/collector/harness/_ctx.mjs",
  "test/collector/harness/plugins.test.mjs",
  "test/collector/layering.test.mjs",
- "test/collector/retention-daemon.test.mjs",
+ "test/collector/classes-daemon.test.mjs",
  "test/db.test.mjs",
  "test/etl/compressed-request.test.mjs",
  "test/etl/etl-dir.test.mjs",
