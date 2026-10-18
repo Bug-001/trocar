@@ -45,6 +45,11 @@ export const collectorHome = (home = asightHome()) => path.join(home, 'collector
 export const retentionFile = (home = asightHome()) => path.join(home, 'retention.json');
 export const retentionLog = (home = asightHome()) => path.join(home, 'logs', 'retention.ndjson');
 
+// D60③ (1.6 §4.2): the editable traffic class table — the user's copy of it (written whole on the first edit) and the
+// log of every change (old value, new value, time). Read by the collector (the level of a call) and by `asight classes`.
+export const classesFile = (home = asightHome()) => path.join(home, 'classes.json');
+export const classesLog = (home = asightHome()) => path.join(home, 'logs', 'classes.ndjson');
+
 // Capture CA. NOT symmetric with the others: for every other path "not found" means an empty board,
 // but for the CA it means the code MINTS A SECOND ROOT and asks the user to trust it — while the
 // first one stays installed in their keychain, and `off --remove-ca` (which now looks in the new

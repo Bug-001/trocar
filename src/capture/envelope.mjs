@@ -20,17 +20,24 @@ export const HOP_BY_HOP = new Set([
 // /codex/responses through the capture tee), OpenAI/DeepSeek Chat Completions. Capture stays a thin tee
 // — this is endpoint recognition, NOT provider parsing (that lives in the 3.1 adapter / D25 dissector).
 // Suffix-based so relay/中转站 prefixes count too (RFC 4.6 §记录: `/anthropic/v1/messages` is still
-// an inference request). Strip the query, then match the inference endpoints of the v1 harnesses by
-// path suffix: Anthropic Messages (excluding count_tokens), OpenAI Responses (Codex), OpenAI/DeepSeek
-// Chat Completions, and Gemini's :generateContent / :streamGenerateContent.
+// an inference request). The endpoints are DATA — path regex sources matched on the path without its query, from the
+// path's start — because the class table (src/classes/table.mjs, D60③) ships them as its `llm` / `token-count` rules
+// and the two must not drift (一个外部事实只写一处). The v1 harnesses' inference endpoints: Anthropic Messages
+// (count_tokens excluded by the token-count list), OpenAI Responses (Codex), OpenAI/DeepSeek Chat Completions, and
+// Gemini's :generateContent / :streamGenerateContent.
+export const TOKEN_COUNT_ENDPOINT_PATHS = Object.freeze(['.*count_tokens.*'])
+export const LLM_ENDPOINT_PATHS = Object.freeze([
+  '.*/v1/messages$',          // Anthropic Messages (incl. relay prefixes)
+  '.*/responses$',            // OpenAI Responses (Codex)
+  '.*/chat/completions$',     // OpenAI / DeepSeek Chat Completions
+  '.*:streamGenerateContent.*', '.*:generateContent.*', // Gemini
+])
+const pathMatchers = (sources) => sources.map((s) => new RegExp(`^(?:${s})`))
+const TOKEN_COUNT_RE = pathMatchers(TOKEN_COUNT_ENDPOINT_PATHS), LLM_RE = pathMatchers(LLM_ENDPOINT_PATHS)
 export function isLlmCall(endpoint) {
   const e = String(endpoint || '').split('?')[0]
-  if (e.includes('count_tokens')) return false
-  if (e.endsWith('/v1/messages')) return true          // Anthropic Messages (incl. relay prefixes)
-  if (e.endsWith('/responses')) return true            // OpenAI Responses (Codex)
-  if (e.endsWith('/chat/completions')) return true     // OpenAI / DeepSeek Chat Completions
-  if (e.includes(':streamGenerateContent') || e.includes(':generateContent')) return true // Gemini
-  return false
+  if (TOKEN_COUNT_RE.some((re) => re.test(e))) return false
+  return LLM_RE.some((re) => re.test(e))
 }
 
 // The seven traffic classes (RFC 4.6 §记录「保存级别」, D40) and the two retention levels. `llm` and `token-count` are
@@ -44,7 +51,7 @@ export const MAX_BODY_BYTES = 64 << 20
 /** 'llm' | 'token-count' | null — what the endpoint says by itself. */
 export function endpointClass(endpoint) {
   if (isLlmCall(endpoint)) return 'llm'
-  return String(endpoint || '').split('?')[0].includes('count_tokens') ? 'token-count' : null
+  return TOKEN_COUNT_RE.some((re) => re.test(String(endpoint || '').split('?')[0])) ? 'token-count' : null
 }
 
 // What a response keeps at the `log` level (RFC 4.1 D40 行): the metadata and the headers, never the body. `kind` is told
