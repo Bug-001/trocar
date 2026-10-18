@@ -752,11 +752,11 @@ test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no Power
   const sameSide = (d) => [d.daemon, d.holders, d.harnesses]
   assert.deepEqual(sameSide(cold.doc), sameSide(hot.doc), 'and what the table decides — the daemon\'s verdict, the holders, the harnesses — is the same, whichever side answered')
 
-  // the daemon's own word on itself is used INSTEAD of the OS only while it is exactly what the lock claims. A reply that says
-  // anything else proves nothing about that lock, so the identity question goes to the OS — which here says what the lock says.
+  // The judgement rests on the TABLE's own row for that pid, never on the daemon's word about ITSELF: the row carries the creation time the OS
+  // would print, and the table came with the machine's boot time, so a `self` envelope that says something else changes nothing and starts nothing.
   const lying = await once(true, { pid: PID, start_time: String(CREATED + 1), boot_id: String(BOOTED) })
-  assert.deepEqual(lying.shells.map((c) => (/ForEach-Object/.test(c) ? 'table' : 'identity')), ['identity'], 'the pid\'s identity is asked of the OS (the table still came from the daemon)')
-  assert.deepEqual([lying.doc.daemon.running, lying.doc.daemon.responding], [true, true], 'and the lock is judged on the OS\'s answer, not on the daemon\'s word about itself')
+  assert.deepEqual(lying.shells, [], 'no OS question is started: the daemon\'s table answered the pid\'s identity')
+  assert.deepEqual([lying.doc.daemon.running, lying.doc.daemon.responding], [true, true], 'and the lock is judged on the table\'s row, which says what the lock says')
 })
 
 test('D62: `GET /holders` is asked only when the daemon\'s poll has rows — with nothing watched (`holders: null`) the rows are judged from the table `status` already read, and the daemon reads no second process snapshot for it', async () => {

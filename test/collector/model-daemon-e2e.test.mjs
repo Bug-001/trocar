@@ -45,11 +45,15 @@ for (const platform of ['darwin', 'win32']) {
     const envFile = path.join(w.home, '.codex', '.env')
     fs.mkdirSync(path.dirname(envFile), { recursive: true }); fs.writeFileSync(envFile, '# the user\'s own\nOPENAI_BASE_URL=https://relay.example\n')
     const before = fs.readFileSync(envFile)
-    const box = await liveUnit({ w, platform })
+    // D62: `on` and `off` ask the daemon's resident read-only helper for the process table (4.8 §1 §7), over this real control endpoint — a
+    // stand-in here, this host not being Windows (0.1 §3). An empty table is a machine with nothing of ours on it.
+    const box = await liveUnit({ w, platform, parts: { helper: { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } } } })
     await withScratchCwd(platform, async () => {
       try {
         const io = fakeIo()
-        const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        // the FIRST `on` here runs with no daemon yet (it starts it), so there is no warm helper to ask for the process table and the OS is asked:
+        // injected, as every OS question in a test is (0.1 §3). The second `on` below, with the daemon still there, asks the daemon instead.
+        const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, exec: () => ({ status: 0, stdout: '', stderr: '' }), sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text() + (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : ''))
         assert.deepEqual([box.enabled, box.startedNow], [[], [true]], 'D61: `on` started the daemon through the OS mechanism once (startNow) and never touched the registration (no enable)')
         const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
@@ -146,7 +150,7 @@ for (const platform of ['darwin', 'win32']) {
   test(`${platform}: CM24 · a holder from the on window: uninstall refuses with the daemon up and with it down, and uninstalls once the holder exits`, { timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
-    const box = await liveUnit({ w, platform })
+    const box = await liveUnit({ w, platform, parts: { helper: { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } } } })
     await withScratchCwd(platform, async () => {
       try {
         const stub = () => ({ status: 0, stdout: '', stderr: '' })

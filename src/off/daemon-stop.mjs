@@ -13,7 +13,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
 import { controlRequest, isPipePath } from './control-client.mjs'
-import { procIdentity, pidAlive, readArgv, readExe } from './proc.mjs'
+import { procIdentity, pidAlive, readArgv, readExe, winStartedAtOfTable } from './proc.mjs'
 import { UNIT_FILE_NAME } from './autostart.mjs'
 import { AGENT_LABEL, agentState, launchctl } from './darwin.mjs'
 
@@ -38,7 +38,7 @@ export function readDaemonLock({ file, now = Date.now(), alive = pidAlive, ident
   if (!lock || !Number.isInteger(lock.pid)) return { state: 'unknown', error: `${file} names no pid` }
   const age_ms = Math.max(0, Math.round(now - mtimeMs))
   if (!alive(lock.pid)) return { state: 'stale', lock, why: `pid ${lock.pid} is not running`, age_ms }
-  const id = identity(lock.pid, { expect: lock }) || {} // `expect`: what this lock claims of the pid — a reader that can answer without the OS (the daemon's own word on itself, 4.8 §7) may use it only when it matches exactly
+  const id = identity(lock.pid) || {} // on Windows this is answered out of the one process table the command already read (src/off/proc.mjs winIdentity)
   const verified = id.start_time != null && id.boot_id != null && lock.start_time != null && lock.boot_id != null // an older lock has neither
   if (verified && String(lock.boot_id) !== id.boot_id) return { state: 'stale', lock, why: 'the machine has rebooted since (boot id differs)', age_ms }
   if (verified && String(lock.start_time) !== id.start_time) return { state: 'stale', lock, why: `pid ${lock.pid} is another process now (start time differs)`, age_ms }
@@ -119,6 +119,11 @@ export const SUPERVISOR_START_TOLERANCE_MS = 2000
  *  throw kills nothing on a guess. A pid that is not a positive integer is a TypeError: it never reaches a command. */
 export function supervisorHolderAlive({ pid, startedAt } = {}, { run = null, env = process.env, toleranceMs = SUPERVISOR_START_TOLERANCE_MS } = {}) {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new TypeError(`supervisorHolderAlive needs a positive integer pid, got ${JSON.stringify(pid)}`)
+  // The process table this command already read answers the same question (the same Win32_Process creation time): a pid it does not list is gone,
+  // and one it lists carries its creation time. One `Get-Process` start less for every `off` on Windows (~306 ms measured, D62 / 1.6 §3.1).
+  const seen = winStartedAtOfTable(pid)
+  if (seen === null) return false
+  if (seen !== undefined) return Math.abs(seen - startedAt) <= toleranceMs
   const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if (-not $p) { 'gone' } else { try { [DateTimeOffset]::new($p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { 'unreadable' } }`
   const r = execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { run, env })
   if (r.code !== 0) throw new Error(`the start time of pid ${pid} could not be asked: powershell ${r.code === null ? 'did not run' : `exited ${r.code}`}${r.err ? ` (${r.err.slice(0, 200)})` : ''}`)

@@ -203,6 +203,6 @@ test('D55 / 4.11 P13 the new kinds: known, each with a sentence of undo by hand;
 
 // T11 (plan §E.5 #1): the undo knows the collector model's kinds (root-key, wrapper / switch / config-entry, pem-block, a real json-array-item undo) and refuses a
 // v2 manifest and an unknown kind before it changes anything; a copy written by 12 lists those kinds as unknown and would undo a v2 manifest it no longer reads right.
-test('OFF_VERSION is 18 — the copy whose nameless off leaves a proxy-mode daemon running (D62 ⑥) is told apart from 17, which asked it to exit; the manifest stays version 3', () => {
-  assert.equal(OFF_VERSION, 18); assert.equal(MANIFEST_VERSION, 3)
+test('OFF_VERSION is 19 — the copy that asks the daemon\'s warm helper for the process table (D62, 1.6 §3.1) is told apart from 18, which started a powershell.exe per question; the manifest stays version 3', () => {
+  assert.equal(OFF_VERSION, 19); assert.equal(MANIFEST_VERSION, 3)
 })

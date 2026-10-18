@@ -31,7 +31,7 @@ import { unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
 import { isProxyMode } from './mode.mjs'
 import { plistFilePath, AGENT_LABEL, agentState } from './darwin.mjs'
 import { execTool } from './exec.mjs'
-import { listProcs, identityFor, pidAlive } from './proc.mjs'
+import { listProcs, identityFor, pidAlive, primeProcQuestions, procAskNotes } from './proc.mjs'
 import { refuseElevatedByWhoami } from './win32.mjs'
 import { rootStore } from './root-store.mjs'
 import { runEventWriter } from './events.mjs'
@@ -141,7 +141,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
       r.daemon = { pid: Number.isInteger(reply && reply.pid) ? reply.pid : (lock && lock.pid) ?? null, state: exit ? 'draining' : 'running' }
       r.confirmed = exit ? reply.actual === 'off' && reply.confirmed !== false : reply.confirmed === true
       r.how = 'daemon-reply'
-      if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that the kernel's watch table${exit ? ' and links' : ''} are off (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are. ${wayOut(w, r.daemon.pid)}`)
+      if (!r.confirmed) fail('state-mismatch', `the daemon did not confirm that ${isProxyMode(w.platform) ? `its doors are shut${exit ? ' and it is exiting' : ''}` : `the kernel's watch table${exit ? ' and links' : ''} are off`} (actual: ${reply && reply.actual}, confirmed: ${reply && reply.confirmed}); the entries are left as they are. ${wayOut(w, r.daemon.pid)}`)
     } catch (e) {
       if (e && e.status) fail('control-error', `the daemon refused the off request (${errMessage(e)}); the entries are left as they are. ${wayOut(w, lock && lock.pid)}`)
       else await stopIt(`did not answer the off request (${errMessage(e)})`)
@@ -455,6 +455,14 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   }
 
   if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } // before the lock, the desired state and the routing
+  // D62 (1.6 §3.1): the process questions of this one off, asked once, here — BEFORE the lock, whose own question is about this very process and is
+  // synchronous (lock.mjs tryOpLock). On Windows each of off's four questions was its own powershell.exe start (~450 ms each, measured on a Windows test machine,
+  // 2026-10-19): this process's identity, the daemon lock's, the supervisor's and the whole table. The daemon's resident read-only helper answers
+  // all four from one table when it answers (D62 ⑥ leaves it running through an off in proxy mode), and when it does not the one local question does —
+  // the same answers, with the reason in the receipt. `w.procs()` is that one read (offWorld's `once`), so step 5 below reads nothing again.
+  const closeProcs = await primeProcQuestions({ platform: w.platform, dir: w.dir, env, fs: w.fs, exec: w.exec, ...(deps.daemonReader !== undefined ? { reader: deps.daemonReader } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath !== undefined ? { socketPath: deps.socketPath } : {}) })
+  for (const why of procAskNotes()) receipt.notes.push(`the daemon could not answer a read question, so the OS was asked instead: ${why}`) // D38: a fallback is never silent
+  try {
   // 1 · the lock, off first: the desired state is written before the wait when the lock is held, so an `on` that is mid-way stops (R12)
   const tryOff = () => { try { return { r: desiredOff(w, ids, installed), error: null } } catch (e) { return { r: null, error: e } } }
   let early = null
@@ -538,4 +546,5 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     put({ kind: 'result', outcome: receipt.ok ? outcome : outcome === 'off' ? 'failed' : outcome, counts: n, reason: receipt.ok ? `off: ${receipt.harnesses.join(', ') || 'nothing installed'}${outcome === CODE_OFF.undoneByMarker ? ' (undone by their marks: there was no manifest)' : ''}` : `off did not finish: ${receipt.problems[0]}` })
     return { receipt: shapeReceipt(receipt), exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
   } finally { if (lock) lock.release() }
+  } finally { closeProcs() }
 }

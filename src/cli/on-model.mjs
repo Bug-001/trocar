@@ -8,6 +8,7 @@ import path from 'node:path'
 import { EXIT, newReceipt, UNDO_LINE } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
+import { primeProcQuestions } from '../off/proc.mjs'
 import { opLockFile } from '../off/paths.mjs'
 import { readManifest, saveManifest } from '../collector/core/trust/journal.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
@@ -80,6 +81,12 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (json || !isInteractive(io)) { if (json) io.out(JSON.stringify({ ...receiptOf({ ...plan, exit: 2 }), ok: false, planned: plan.planned, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES); return EXIT.usage }
     if (!(await ask({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
   }
+  // D62 (1.6 §3.1): `on`'s ONE process question is op.lock's about this very process, and it is a synchronous contract (off/lock.mjs tryOpLock).
+  // On Windows it was its own powershell.exe start (490 ms measured on a Windows test machine 2026-10-19) of an `on` that is meant to take 0.5 s in all.
+  // This scope reads the table first — from the daemon's resident read-only helper when one answers (the normal case: D61's login start, and D62 ⑥
+  // leaves it running through an off), else from the one local question — and the lock's question is answered out of it.
+  const closeProcs = await primeProcQuestions({ platform: os, dir, env, fs, exec: deps.exec || null, ...(deps.daemonReader !== undefined ? { reader: deps.daemonReader } : {}) })
+  try {
   let lock
   try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) { io.err(`asight on: ${e.message}`); return EXIT.incomplete } throw e }
   try {
@@ -89,4 +96,5 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
     return out(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, doors: r.doors || {} }), r.exit)
   } finally { lock.release() }
+  } finally { closeProcs() }
 }
