@@ -102,6 +102,14 @@ function summaryPairs(doc, now) {
   const r = doc.relayed
   rows.push(['Connections', r === 'unknown' || !r ? unknown(doc.relayed_reason || 'the daemon did not say') : `${r.closing + r.waiting} open through asight`])
   const fl = doc.failures
+  // D51④: a program that refuses asight's certificate is not captured for that host at all. A count of problems does not say that,
+  // so the summary names it on its own row; which hosts is in `asight status --failures` and in `critical` of the document (C.3).
+  const crit = doc.critical || []
+  if (crit.length) {
+    const who = [...new Set(crit.map((x) => x.agent || x.harness).filter(Boolean))]
+    const hosts = [...new Set(crit.map((x) => x.host).filter(Boolean))]
+    rows.push(['Not captured', `${who.length ? who.join(', ') : 'a program'} refused asight's certificate${hosts.length ? ` for ${hosts.length} host${hosts.length === 1 ? '' : 's'}` : ''}; restart it. Which hosts: asight status --failures`])
+  }
   rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? 'none in the last 24 hours' : `${fl.problem} in the last 24 hours, latest ${ago(fl.latest, now)}`])
   // V39 (§1.1): logging out stops the daemon unless linger is on — the command is printed, never run; a state that could not be read is said with its reason, never taken for "on"
   if (doc.linger === false) rows.push(['Logging out', `capture stops when you log out; run: loginctl enable-linger ${doc.user || '<your user name>'}`])

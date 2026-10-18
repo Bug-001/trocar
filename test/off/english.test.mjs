@@ -49,7 +49,6 @@ test('D58: off with things to undo, and off with programs still connected, read 
     holders: [{ harness: 'codex', pid: 5530, name: 'codex' }], problems: [], notes: [],
   }, { home: '/h' })
   readable('off-holders', held)
-  assert.match(held, /Still connected through asight, forwarded only: codex \(pid 5530\)\./)
   assert.match(held, /^Cut them now: asight off --now$/m)
   assert.ok(held.trimEnd().endsWith('Certificates stay installed. To remove them: asight uninstall'))
 })

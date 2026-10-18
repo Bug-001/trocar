@@ -174,8 +174,8 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
   } finally { await d.stop() }
   let st = await statusOffline(s)
   assert.match(st.text, /not running/)
-  assert.match(st.text, /refused asight's certificate, so that host is forwarded only/, '(iii) status lists the condition with no daemon, in the words it prints (the code is in --json)')
-  assert.match(st.text, /a connection whose program refused asight's certificate/)
+  assert.match(st.text, /pid 7171/, `(iii) status lists the condition with no daemon:\n${st.text}`)
+  assert.match(st.text, /relay\.asight\.test/)
   d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc], upstreamCa: up.ca.certPem })
   try {
     const h = await endpoint(s)

@@ -107,6 +107,8 @@ for (const platform of ['darwin', 'win32']) {
         await restarted
         assert.deepEqual(Object.keys((await onReply).doors || {}), [g])
         assert.deepEqual((await ask('GET', '/status')).doors, { [g]: port }, 'one door, on its recorded port')
+        // §1.3 (macOS test machine, 2026-10-18): the model daemon reports the connection counts, so `status` never has to say they are not known
+        assert.deepEqual((await ask('GET', '/status')).relayed, { closing: 0, waiting: 0 }, 'the reply carries the counts of what is still relayed')
         const flows = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : '')
         assert.doesNotMatch(flows(), /engine-port-taken/)
         await ask('POST', '/off', { harnesses: ['codex'] })
