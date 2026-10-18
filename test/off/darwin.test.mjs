@@ -44,25 +44,25 @@ const writePlist = (home) => { const f = plistOf(home); fs.mkdirSync(path.dirnam
 // the flip checklist ① (4.9 §4 末): a no-names `off` on darwin undoes the autostart through launchd — the agent booted out, the plist gone — and
 // systemctl is never asked for anything. There is no daemon (no lock): the `unitIsUp` branch is what stops the (absent) daemon, so the arm's bootout
 // is the only thing between KeepAlive and a daemon coming back.
-test('the flip ① (4.9 §4) with a no-names off on darwin with no daemon stops the loaded agent (bootout: nothing drains; then the disable of step 5) and keeps the plist — launchd verbs only, never systemctl', async () => {
+test('the flip ① (4.9 §4) with D61: a no-names off on darwin with no daemon stops the loaded agent (bootout: nothing drains) and keeps the plist enabled — launchd verbs only, never systemctl, never a disable', async () => {
   const home = tmpDir('asight-off-darwin-')
   const plist = writePlist(home)
   const launchd = fakeLaunchd()
   const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: { platform: 'darwin', exec: launchd.run, procs: async () => [], sleep: async () => {} } })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
-  const at = (re) => launchd.calls.findIndex((c) => re.test(c))
-  assert.ok(at(/^launchctl bootout /) >= 0 && at(/^launchctl disable /) > at(/^launchctl bootout /), `the stop boots the agent out, then step 5 disables it: ${JSON.stringify(launchd.calls)}`)
   assert.ok(launchd.has(new RegExp(`^launchctl bootout ${DOMAIN}/${LABEL}$`)), 'no daemon runs, so the loaded agent is booted out (the slash form)')
   assert.ok(!launchd.has(/systemctl/), 'no systemd verb runs on darwin')
-  assert.ok(fs.existsSync(plist), 'the plist stays (an install item): the disabled job is not loaded at a login')
-  assert.equal(receipt.autostart.disabled, true, JSON.stringify(receipt.autostart))
-  assert.deepEqual(receipt.autostart.removed, [])
+  assert.ok(fs.existsSync(plist), 'the plist stays (an install item, D61): the next login starts the daemon again, with no doors open')
+  // D61: off never touches the autostart — no disable, and no autostart row in the receipt
+  assert.ok(!launchd.has(/^launchctl disable /), `no off disables the LaunchAgent (D61): ${JSON.stringify(launchd.calls)}`)
+  assert.equal(receipt.autostart, undefined, 'no autostart row: off has nothing to say about it (D61)')
   assert.equal(receipt.ok, true)
 })
 
 // a daemon that answers and is draining after a no-names off is never booted out — the bootout took the daemon down mid-stream
-// while the receipt said clean. off disables the job; the daemon exits itself once drained, and KeepAlive {SuccessfulExit:false} does not relaunch it.
-test('a no-names off with a draining daemon runs launchctl disable and never a bootout before the drain', async () => {
+// while the receipt said clean. The daemon exits itself once drained (exit 0, which KeepAlive {SuccessfulExit:false} does not relaunch), and the
+// LaunchAgent is left exactly as `install` registered it (D61).
+test('with D61: a no-names off with a draining daemon touches launchd not at all — no bootout before the drain, and no disable', async () => {
   const home = tmpDir('asight-off-darwin-')
   const plist = writePlist(home)
   const launchd = fakeLaunchd()
@@ -75,15 +75,16 @@ test('a no-names off with a draining daemon runs launchctl disable and never a b
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
   assert.equal(asked[0].exit, true, 'the daemon is asked to exit once drained')
   assert.ok(!launchd.has(/bootout/), `no bootout while the daemon drains: ${JSON.stringify(launchd.calls)}`)
-  assert.ok(launchd.has(new RegExp(`^launchctl disable ${DOMAIN}/${LABEL}$`)), 'disable is what keeps launchd from loading it again')
+  assert.ok(!launchd.has(/^launchctl disable /), `no off disables the LaunchAgent (D61): ${JSON.stringify(launchd.calls)}`)
   assert.ok(fs.existsSync(plist))
   assert.equal(receipt.daemon.state, 'draining')
-  assert.deepEqual(receipt.autostart, { disabled: true, removed: [] })
+  assert.equal(receipt.autostart, undefined, 'no autostart row (D61)')
 })
 
-// the failure half (D38): a bootout that launchctl refuses is said — the autostart row is NOT disabled, the failure record carries the closed set's
-// unit-not-disabled, and the receipt names the way out.
-test('the flip ① (4.9 §4): a bootout launchctl refuses is not a silent pass — the row says not disabled, the record says unit-not-disabled', async () => {
+// the failure half (D38) under D61: off does not disable the autostart, but it does boot the loaded agent out to stop the daemon (4.9 §4's order);
+// a bootout launchctl refuses is said — the off is not clean (exit 1), the receipt names the way out, and the failure record carries the closed
+// set's stop-failed. There is no autostart row to put it in any more.
+test('the flip ① (4.9 §4) with D61: a bootout launchctl refuses is not a silent pass — exit 1, the receipt names the way out, the record says stop-failed', async () => {
   const home = tmpDir('asight-off-darwin-')
   const dir = path.join(home, '.asight', 'collector')
   fs.mkdirSync(path.join(dir, 'flows'), { recursive: true })
@@ -92,9 +93,9 @@ test('the flip ① (4.9 §4): a bootout launchctl refuses is not a silent pass �
   const run = (file, args) => { const cmd = [file, ...args].join(' '); calls.push(cmd); return /print /.test(cmd) ? { status: 0, stdout: '', stderr: '' } : { status: 1, stdout: '', stderr: 'Boot-out failed: the operation was cancelled' } } // present, but the bootout refuses
   const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: { platform: 'darwin', exec: run, procs: async () => [], sleep: async () => {} } })
   assert.equal(exit, 1, 'a not-done off')
-  assert.equal(receipt.autostart.disabled, false)
-  assert.match(receipt.autostart.error, /boot-?out/i)
-  const rec = flowEvents(dir).find((e) => e.event === 'failure' && e.code === 'unit-not-disabled')
+  assert.equal(receipt.autostart, undefined, 'off has no autostart row to fail in (D61)')
+  assert.ok(receipt.problems.some((p) => /bootout/i.test(p)), `the receipt says the bootout failed: ${JSON.stringify(receipt.problems)}`)
+  const rec = flowEvents(dir).find((e) => e.event === 'failure' && e.code === 'stop-failed')
   assert.ok(rec, `the failure record exists in the closed set: ${JSON.stringify(flowEvents(dir))}`)
   assert.doesNotThrow(() => checkRecord(rec))
 })

@@ -160,7 +160,7 @@ function storeWithSealing({ P, failure }) {
   const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
   let queue = null
   const seal = {
-    start() { queue = startSealing({ store, raw: rawHome(path.dirname(P.dir)), collectorDir: P.dir, lockFile: P.lock, failure }); return queue },
+    start() { queue = startSealing({ store, raw: rawHome(path.dirname(P.dir)), lockFile: P.lock, failure }); return queue },
     stop() { if (queue) queue.stop() },
   }
   return { store, seal }

@@ -3,7 +3,7 @@
 // `--port 9801 file` used to hand `9801` back as the file — and an option nobody declared is a usage error instead of silence.
 //   optionsOf(cmd)          → Map '--name' → { name, value: 'port' | null, help }
 //   parseArgs(cmd, argv)    → { positionals, flags, error }. `flags` is keyed by the option's name without the dashes
-//                             (`--no-autostart` → `flags['no-autostart']`); a declared value is a string, a plain option is `true`.
+//                             (`--dry-run` → `flags['dry-run']`); a declared value is a string, a plain option is `true`.
 //                             `error` is `{ code: 'usage', message, usage }` or null; `cmd.openOptions` (query, whose parameters belong
 //                             to the query, not to the CLI) keeps every option it is given instead of refusing it, and reads a negative
 //                             number (`--limit -1`) as a value, since no option is named that.

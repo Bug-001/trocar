@@ -82,7 +82,7 @@ test('V2: with the repository out of reach the copy install wrote does what `asi
   assert.deepEqual(normalize(JSON.parse(r.stdout), b.home), normalize(io.json(), a.home), 'the same receipt, key for key')
   assert.deepEqual([backToBefore(preEntries(b)).length, JSON.parse(r.stdout).changed], [preEntries(b).length, []], 'every certificate entry install wrote is still in (D55①): the copy, like off, takes none')
   assert.deepEqual(readManifest(b.dir).entries.map((e) => [e.harness, e.kind, e.path]), kept, 'and its manifest keeps the same entries')
-  assert.ok(r.stubs.calls().some((c) => /^systemctl --user disable asight-collector\.service/.test(c)), `no names: the autostart was disabled, through the one runner (${r.stubs.calls()})`)
+  assert.ok(!r.stubs.calls().some((c) => /disable/.test(c)), `D61: no off disables the autostart, the copy included (${r.stubs.calls()})`)
   assert.equal(r.stderr, '')
 })
 
@@ -232,7 +232,7 @@ test('src/off carries OFF_VERSION as an integer, and the unique-name rule the ge
 
 // The kinds the copy undoes, and how (the file rule's kinds), pinned to the OFF_VERSION that ships them: a change to either list
 // without a bump (and a row here) is red, so doctor's version line tells an old copy from one that knows the new rules.
-const KINDS_AT = { 16: 'e3c392509cb0c538' }
+const KINDS_AT = { 16: 'e3c392509cb0c538', 17: 'e3c392509cb0c538' } // 17 ships the same kinds: the bump is D61 (the copy no longer disables the autostart), its reason line is in src/off/manifest.mjs
 test('OFF_VERSION moves with the undo rules: the known kinds and the file-rule kinds are the ones this version ships', () => {
   const fp = sha256(Buffer.from(JSON.stringify([KNOWN_KINDS, FILE_ENTRY_KINDS]))).slice(0, 16)
   assert.equal(KINDS_AT[OFF_VERSION], fp, `KNOWN_KINDS / FILE_ENTRY_KINDS changed: bump OFF_VERSION with its reason line (src/off/manifest.mjs) and add { ${OFF_VERSION + 1}: '${fp}' } here`)

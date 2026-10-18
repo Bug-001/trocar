@@ -60,7 +60,9 @@ test('V7: a first install outside a terminal without --yes prints the plan, writ
   assert.deepEqual(validateReceipt(b), [])
   assert.deepEqual(validateReceipt(a), [])
   assert.equal(readStateFile(path.join(home, '.asight', 'collector', 'state.json')).state.harnesses['claude-code'].desired, 'on')
-  assert.ok(ex.has(/^systemctl --user enable --now asight-collector\.service$/), 'no daemon answered: the unit is enabled and started')
+  // D61: `on` registers nothing — it starts the daemon through the mechanism `install` registered
+  assert.ok(ex.has(/^systemctl --user start asight-collector\.service$/), `no daemon answered: on starts it through the login entry (${ex.calls.join(' | ')})`)
+  assert.ok(!ex.calls.some((c) => /enable|disable/.test(c)), `and enables or disables nothing (${ex.calls.join(' | ')})`)
   assert.deepEqual(daemon.calls.filter((c) => c.startsWith('POST')), ['POST /on {"harnesses":["claude-code"]}'], 'and the daemon is asked to attach, by name')
   assert.deepEqual(b.relayed, { closing: 0, waiting: 0, cut: 0 }, 'on relays nothing: zeros on purpose, not "unknown"')
   assert.equal(b.linger, true)
@@ -141,8 +143,10 @@ test('on: usage errors exit 2 and touch nothing — an unknown harness lists the
   io = fakeIo(); assert.equal(await runOnCli(['--proxy', 'http://127.0.0.1:8899'], onCtx(home, io)), 2)
   // 1.6 §2 has no `--proxy` on `on`, so it is the one usage error of §1.3: `asight on: unknown option '--proxy'`
   assert.match(io.text(), /unknown option '--proxy'/)
-  io = fakeIo(); assert.equal(await runOnCli(['--no-autostart', '--no-unit', '--yes'], onCtx(home, io)), 2)
-  assert.match(io.text(), /unknown option '--no-unit'/, '--no-unit is gone: --no-autostart is the one flag (1.6 §3.3)')
+  io = fakeIo(); assert.equal(await runOnCli(['--no-unit', '--yes'], onCtx(home, io)), 2)
+  assert.match(io.text(), /unknown option '--no-unit'/, '--no-unit is gone')
+  io = fakeIo(); assert.equal(await runOnCli(['--no-autostart', '--yes'], onCtx(home, io)), 2)
+  assert.match(io.text(), /unknown option '--no-autostart'/, 'D61: --no-autostart is gone too — the autostart is install\'s, and no flag of `on` touches it')
   io = fakeIo(); assert.equal(await runOnCli(['--yess'], onCtx(home, io)), 2)
   assert.deepEqual(snapshot(home), before)
 })
@@ -162,24 +166,6 @@ test('on: refused as root (R7), with the helper missing it writes nothing and sa
     assertEnglish(io.text(), `the dry-run plan of on on ${platform}`)
   }
   assert.deepEqual(snapshot(home), before)
-})
-
-test('on --no-autostart with no daemon answering: everything is written and it exits 0, but the text says nothing is captured yet and how to start the daemon — never "Capturing"', async () => {
-  const home = tmpDir('asight-on-idle-'); seedClaude(home); await installFirst(home)
-  const io = fakeIo()
-  const ctx = onCtx(home, io, { daemon: fakeDaemon({ up: false }) })
-  ctx.deps.parts = { ...ctx.deps.parts, arch: {} } // a platform with no autostart entry at all: nothing starts the collector, so nothing is captured yet
-  assert.equal(await runOnCli(['--yes', '--no-autostart'], ctx), 0)
-  assert.match(io.stdoutText(), /^The settings are in place, but no collector is running/m)
-  assert.doesNotMatch(io.stdoutText(), /^Capturing /m)
-  assert.match(io.stdoutText(), /The collector is not running, so nothing is captured yet/)
-  assert.match(io.stdoutText(), /asight daemon/, 'and how to start it')
-  assertEnglish(io.stdoutText(), 'the receipt of an on with no collector running')
-  const j = fakeIo()
-  const jctx = onCtx(home, j, { daemon: fakeDaemon({ up: false }) })
-  jctx.deps.parts = { ...jctx.deps.parts, arch: {} }
-  assert.equal(await runOnCli(['--no-autostart', '--json'], jctx), 0)
-  assert.equal(j.json().daemon.state, 'not-running', '--json says the same, as a field')
 })
 
 test('receipt: every file the receipt lists is a file the run wrote, and every file the run wrote is listed — install, then on (V3)', async () => {
@@ -225,7 +211,7 @@ test('formatOnReceipt: past and future tense, the four commands, the restart lis
   assert.doesNotMatch(formatOnReceipt({ ...r, linger: true }, { home }), /linger/)
   assert.match(formatOnReceipt({ ...r, linger: 'unknown', linger_reason: 'EACCES' }, { home }), /Whether capture survives a logout is unknown \(EACCES\)/)
   assert.match(formatOnReceipt({ ...r, ok: false, notes: ['the collector does not answer'] }, { home }), /did not finish[\s\S]*the collector does not answer/)
-  // --no-autostart with nothing answering: done, exit 0, but nothing is captured: the header and the daemon line say so, never "Capturing"
+  // nothing answering: done, exit 0, but nothing is captured: the header and the daemon line say so, never "Capturing"
   const idle = formatOnReceipt({ ...r, ok: true, daemon: { state: 'not-running', started: false }, unit: null }, { home })
   assert.match(idle, /^The settings are in place, but no collector is running: nothing is\n? *captured\n? *until it is./)
   assert.doesNotMatch(idle, /^Capturing /m)
@@ -259,10 +245,6 @@ test('formatPlan: every file the first on will write is listed before any is wri
   assert.match(text, /d +~\/\.d\/patch\.yml: line "- insert: x"/)
   assert.match(text, /record +~\/\.asight\/collector\/flows\/: what each run did/, 'the event log is listed')
   assert.match(text, /o itself may write ~\/\.config\/o\/node_modules \(npm install\); uninstall[\s\S]*never deletes it$/)
-  const once = formatPlan(plan, { home: '/h', autostart: false })
-  assert.match(once, /The collector is started this once; nothing is added to your login\./, '--no-autostart: started once, nothing at login')
-  assert.doesNotMatch(once, /default\.target\.wants/, 'and no link is made')
-  assertEnglish(once, 'the plan of on --no-autostart')
 })
 
 // ── T07: what off and uninstall print is what they did (V3, V29) ─────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@
 // any OS against a temp directory. Node built-ins, src/paths.mjs, src/off/exec.mjs and src/off/win32.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
 import { directStartEnv, startDaemonDirect } from '../direct-start.mjs'
+import { autostartNode } from '../autostart-node.mjs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
@@ -234,7 +235,7 @@ const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1
  *                    Exactly one login mechanism is left live: by the task, asight's own Run value of an earlier fallback is taken out (`runKey: 'removed' | 'restored'` when it was there: the caller drops the `run-key`
  *                    ledger entry; `enable({ prior })` takes the ledger entry's prior so that the user's own value comes back); by the fallback, an earlier task is switched off (`task: 'disabled'`). Either that cannot be
  *                    done is `warn` (a line for the receipt; `on` does not fail for it, because the supervisor singleton keeps a second start from running a second daemon).
- *   start()          the `--no-autostart` run: this session, nothing at login. A task with a login trigger would be an autostart, so none is registered: the supervised daemon is started directly, detached, with no window, with the
+ *   start()          the fallback `on` uses when the task cannot start it: this session, nothing registered. A task with a login trigger would be an autostart, so none is registered: the supervised daemon is started directly, detached, with no window, with the
  *                    environment of `directStartEnv(env)` (the shell's, without the trust and proxy variables a login-started daemon would not have).
  *   reload()         nothing to do: a rewritten task is registered again by `enable` (`/F`).
  *   disable({ prior }) a no-argument `off`: the task is switched off (`/Change /DISABLE`; it does not end a running instance, the caller stops the supervisor parent first, 4.8 §4.2) and asight's Run value is taken out, whichever
@@ -242,6 +243,7 @@ const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1
  *   remove({ prior }) `uninstall`: the task is deleted (`/Delete /F`) and the Run value taken out the same way. A task that is not there is already as asked (found with `/Query`, never by parsing a localised error text); a `/Query` that did not run at all is not "not there": it is a failure (`task: 'failed'`, code 1) and nothing is changed on a guess.
  */
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, user = null, conhost = 'conhost.exe' } = {}) {
+  node = autostartNode({ env, execPath: node, fs, platform: 'win32' }) // D61: a node the task can still name after a node upgrade (one rule, all three OSes)
   const file = path.join(collectorHome(path.join(home, '.asight')), TASK_FILE)
   const tools = { run, env }
   // the daemon this run starts itself: the scheduled task's own environment and the task's own log files (direct-start.mjs)
@@ -250,6 +252,15 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     return r.code === 0 ? { ...ok, ...r } : r.err === 'the daemon did not start' ? { ...r, err: `${conhost} did not start the supervised daemon` } : r
   }
   // the task is changed or deleted when it is there, and asight's Run value is taken out; each says what it did
+  // `on`'s start (D61): the task's own `/Run`, and the direct start when /Run answers SUCCESS and runs nothing (267011, no
+  // interactive session for the task) — the registration is never touched here, `install` made it.
+  const runNow = () => {
+    const ran = schtasks(['/Run', '/TN', TASK_NAME], tools)
+    if (!(ran.code === 0 && lastTaskResult(tools) === TASK_NOT_YET_RUN)) return ran
+    const started = startDirect()
+    const warn = 'schtasks /Run answered success but the task has not run (LastTaskResult 267011, no interactive session for it): the daemon was started directly this run; the task will start it at next login'
+    return started.code !== 0 ? { code: started.code ?? 1, out: '', err: started.err, warn } : { ...ok, ...(started.pid != null ? { pid: started.pid } : {}), warn }
+  }
   const undo = (args, done, prior) => {
     const q = taskState(tools)
     const t = q.state === 'present' ? (() => { const r = schtasks(args, tools); return { ...r, state: r.code === 0 ? done : 'failed' } })()
@@ -268,15 +279,8 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
         const note = gone.runKey === 'failed' ? { warn: `the HKCU Run entry ${RUN_KEY.name} of an earlier \`on\` could not be taken out (${gone.err || 'no reason given'}): both it and the task start asight at login (one supervisor runs, the other leaves at once); \`asight off\` removes both` } : {}
         const base = { via: 'task', ...(gone.runKey !== 'absent' ? { runKey: gone.runKey } : {}), ...note }
         if (!now) return { ...c, ...base }
-        const ran = schtasks(['/Run', '/TN', TASK_NAME], tools)
-        if (ran.code === 0 && lastTaskResult(tools) === TASK_NOT_YET_RUN) {
-          // /Run answered SUCCESS and started nothing (no interactive session for the task, 267011): start the daemon directly THIS run — on's own probe of the control socket is the
-          // "is a daemon answering" check here — and say so; the task keeps the login and will start it there (first `on` after an SSH install, the lab's shape)
-          const started = startDirect()
-          const warn = `schtasks /Run answered success but the task has not run (LastTaskResult 267011, no interactive session for it): the daemon was started directly this run; the task will start it at next login`
-          return started.code !== 0 ? { code: started.code ?? 1, out: '', err: started.err, ...base, warn } : { ...ok, ...base, ...(started.pid != null ? { pid: started.pid } : {}), warn }
-        }
-        return { ...ran, ...base }
+        const r = runNow()
+        return { ...r, ...base, ...(r.warn ? { warn: r.warn } : {}) }
       }
       if (c.precondition) return { ...c, via: 'task' }
       const why = errOf(c)
@@ -297,8 +301,8 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       return started && started.code !== 0 ? { code: started.code, out: '', err: started.err, ...base } : { ...ok, ...base, ...(started ? { pid: started.pid } : {}) }
     },
     start: (carry = null) => startDirect(carry),
+    startNow: () => runNow(), // D61: `on` starts the daemon through the task, never touching the registration
     reload: () => ({ ...ok }),
-    disable: ({ prior = null } = {}) => undo(['/Change', '/TN', TASK_NAME, '/DISABLE'], 'disabled', prior),
     remove: ({ prior = null } = {}) => undo(['/Delete', '/TN', TASK_NAME, '/F'], 'removed', prior),
   }
 }

@@ -283,7 +283,7 @@ test('W24 userUnit gives the shape turnOn and install consume: the plist\'s path
   assert.match(u.text({}), new RegExp('<key>StandardOutPath</key>\n  <string>' + sinks.out.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'), 'D46: the daemon console is the log file under ~/.asight/collector/logs')
   assert.match(u.text({}), new RegExp('<key>StandardErrorPath</key>\n  <string>' + sinks.err.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '</string>'))
   assert.notEqual(u.text({ NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' }), plist(), 'the daemon env install offers is carried (unlike the win32 task, 4.8 §7)')
-  for (const verb of ['enable', 'start', 'reload', 'disable', 'remove']) assert.equal(typeof u[verb], 'function', verb)
+  for (const verb of ['enable', 'start', 'startNow', 'reload', 'remove']) assert.equal(typeof u[verb], 'function', verb) // D61: no `disable` verb — nothing in an off touches the registration
   assert.deepEqual(u.reload(), { code: 0, out: '', err: '' }, 'a rewritten plist is replaced by the next enable (bootout + bootstrap), so there is nothing to reload')
 })
 
@@ -329,7 +329,7 @@ test('W24 enable says why it failed, with the launchd-register-failed record (la
   assert.deepEqual(none.calls, [], 'no launchctl without a file to bootstrap')
 })
 
-test('W24 start (the --no-autostart run: this session, nothing at login) starts the daemon itself without registering anything: detached, no window, no supervisor flag, and a spawn that did not start is a failure, not a success', () => {
+test('W24 start (the direct start `on` falls back to: this session, nothing at login) starts the daemon itself without registering anything: detached, no window, no supervisor flag, and a spawn that did not start is a failure, not a success', () => {
   const o = withHome()
   const run = fakeTools()
   const spawned = []
@@ -360,21 +360,6 @@ test('W24 a daemon started directly (start()) gets the environment a login-start
   assert.equal(userUnit({ ...withHome({ env: shell }), run: fakeTools(), spawn: fakeSpawn, uid: 501 }).start().code, 0)
   assert.deepEqual(spawned[0].env, kept, 'start()')
   assert.equal(spawned[0].detached, true, 'the rest of the spawn is as before')
-})
-
-test('disable (a no-names off) is launchctl disable only — never a bootout of a draining daemon — and the plist stays (an install item); a refusal is a failure with the reason', () => {
-  const run = fakeTools()
-  const u = installed(userUnit({ ...withHome(), run, uid: 501 }))
-  assert.deepEqual(u.disable(), { code: 0, out: '', err: '', state: 'disabled' })
-  assert.deepEqual(run.calls, [['launchctl', 'disable', 'gui/501/com.asight.collector']])
-  assert.ok(fs.existsSync(u.path), 'the plist stays: the disabled job is not loaded at a login, and on enables it again')
-  const refused = fakeTools({ 'launchctl disable': { status: 5, stderr: 'nope' } })
-  assert.equal(installed(userUnit({ ...withHome(), run: refused, uid: 501 })).disable().state, 'failed')
-  for (const [answers] of [[{}], [{ 'launchctl disable': { status: 5, stderr: 'nope' } }]]) { // the standalone off makes the same call with the same answer
-    const a = fakeTools(answers), b = fakeTools(answers)
-    assert.deepEqual(offDarwin.disableAgent({ exec: b, uid: 501 }), installed(userUnit({ ...withHome(), run: a, uid: 501 })).disable())
-    assert.deepEqual(b.calls, a.calls)
-  }
 })
 
 test('W24 remove (an uninstall) is the undo: the agent is booted out and the plist leaves ~/Library/LaunchAgents — the file IS the registration, there is no wants/-link to split off (the linux unit\'s file stays, 4.6; darwin\'s cannot)', () => {

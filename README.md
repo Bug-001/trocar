@@ -134,11 +134,10 @@ the board is the HTTP shell (D59); there is no separate ETL step and no database
 
 ## What it touches, and what lands on disk
 
-Everything asight writes lives under `~/.asight/`, and every record under `~/.asight/raw/`. At its
-first start after an upgrade the daemon moves the previous version's
-`~/.asight/collector/capture-<date>.ndjson` files in there itself (see 「Shrinking the raw logs」), so
-upgrading costs you nothing and no session. Roots older than that (`~/.asight/sessions/`, the v0
-`~/.atrace`) are neither read nor touched.
+Everything asight writes lives under `~/.asight/`, and every record under `~/.asight/raw/`. This version is
+**not** backwards compatible: records the previous version wrote to
+`~/.asight/collector/capture-<date>.ndjson`, and older roots (`~/.asight/sessions/`, the v0 `~/.atrace`),
+are neither read nor moved nor touched. If you still want what is in them, keep a copy yourself.
 
 `asight on` arranges a local, observe-only tap **on your user account only**. It never changes your
 system proxy, never adds machine-wide trust, never needs root (Linux's one-time `setup-helper` is the
@@ -223,7 +222,7 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | root / CA (per user) | Linux: `~/.asight/collector/ca/` (key 0600), in **no** trust store · macOS: login keychain key + user trust · Windows: CNG key + `CurrentUser\Root`; `~/.asight/collector/ca/asight-ca.pem` is the public certificate | `asight uninstall` |
 | certificate carriers (`install`) | Linux: each agent's trust entry, written by `install` (Claude Code `env.NODE_EXTRA_CA_CERTS`, OpenCode / dsh plugins, Codex / Hermes `.env` blocks, Z-Code `network.caCertFile`, combined bundles `combined-<agent>.pem`) · macOS / Windows: the carriers above | `asight uninstall` |
 | proxy entries (`on`) | macOS / Windows: the proxy keys and switch files above; Linux: none (the helper steers) | `asight off` |
-| autostart unit (per user) | Linux: `~/.config/systemd/user/asight-collector.service` · macOS: `~/Library/LaunchAgents/com.asight.collector.plist` · Windows: the scheduled task `\asight\collector`; each runs `asight daemon` | `asight off` with no names disables it, `asight uninstall` removes it (`on --no-autostart` writes none at all) |
+| autostart unit (per user) | Linux: `~/.config/systemd/user/asight-collector.service` · macOS: `~/Library/LaunchAgents/com.asight.collector.plist` · Windows: the scheduled task `\asight\collector`; each runs `asight daemon` | registered and enabled by `asight install`; `on` and `off` never touch it (D61), `asight uninstall` removes it |
 | install manifest | `~/.asight/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `asight uninstall` |
 | backups of your files | `~/.asight/backup/` (0700, files 0600): the file as it was before asight changed it — API keys included | `off` leaves them; `uninstall` deletes them all |
 | the standalone undo | `~/.asight/bin/asight-off`, written by `install`; `asight doctor` checks it is current | `asight uninstall` |
@@ -233,7 +232,6 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 sudo asight setup-helper      # Linux, once per machine
 asight install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
 asight on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
-asight on --no-autostart      # no autostart entry: the daemon is started this once, and by you (`asight daemon`) after that
 asight status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
 asight off                    # every trace of it is off your agents' path (off claude-code: only that one)
 asight serve                  # the captures appear on the board
@@ -281,8 +279,8 @@ and the trust entry asight believed was in effect. It goes to the daemon's log t
 
 A relay or proxy with a private CA keeps working. On Linux `install` carries the CA you already gave Claude Code into
 `extra-cc.pem` (the other agents' CAs into their bundles), and the daemon verifies upstreams with Node's store plus
-`NODE_EXTRA_CA_CERTS` (the Linux unit carries the value of the shell you install from; with `--no-autostart`, the
-daemon takes it from the shell you run `on` in). On macOS and Windows the door verifies an upstream with that agent's own trust set —
+`NODE_EXTRA_CA_CERTS` (the Linux unit carries the value of the shell you install from; when `on` has to start the
+daemon itself because the login mechanism refused, it carries the value of the shell you run `on` in). On macOS and Windows the door verifies an upstream with that agent's own trust set —
 the OS roots, Node's, and the files its certificate variables name — never with the asight root (RFC 4.11 §3 ⑭).
 asight does not count on a Claude Code process that was already
 running at install picking up the new trust entry (not verified for every mode), so `status` reports it
@@ -321,9 +319,8 @@ no manual seal command.
 asight raw <segment>[:<from>[-<to>]]   # print records byte for byte, sealed or not
 ```
 
-On its first start after an upgrade, the daemon renames the previous version's
-`~/.asight/collector/capture-<date>.ndjson` files into `~/.asight/raw/` (bytes untouched); from then on
-they are ordinary segments. Older roots such as `~/.atrace` are neither read nor touched. Segments hold
+Records the previous version wrote to `~/.asight/collector/capture-<date>.ndjson`, and older roots such as
+`~/.atrace`, are neither read nor moved nor touched. Segments hold
 the same plaintext and credentials as the traffic and are owner-only (0600).
 
 ## Claude Desktop
@@ -356,8 +353,7 @@ The old CC-CLI steer (`HTTPS_PROXY` / `NO_PROXY` in `~/.claude/settings.json`) a
 Verge's `Script.js` are yours to revert the same way they were written; v0 leftovers
 (`com.atrace.serve`, `~/.local/share/atrace`, `.atrace-bak`) are only ever reported, never touched.
 
-Captures the earlier capture wrote are **not** read: only `~/.asight/raw/` is (the one exception is the
-upgrade move above, from `~/.asight/collector/capture-<date>.ndjson`). The board's 监测 toggle steers only the old CC-CLI steer — it is labelled 「只管旧 CC-CLI steer」 — and is
+Captures the earlier capture wrote are **not** read: only `~/.asight/raw/` is. The board's 监测 toggle steers only the old CC-CLI steer — it is labelled 「只管旧 CC-CLI steer」 — and is
 not the collector's switch; `asight off` is.
 
 ## Limits
@@ -400,7 +396,7 @@ not the collector's switch; `asight off` is.
 ```sh
 # common
 asight install [--yes] [--dry-run] [--json]   # once: the certificates (D55); prints the plan and asks first
-asight on [<harness>...] [--no-autostart] [--yes] [--dry-run] [--json]
+asight on [<harness>...] [--yes] [--dry-run] [--json]
 asight off [<harness>...] [--now] [--yes] [--dry-run] [--json]
 asight status [<harness>...] [--failures] [--json]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
 asight uninstall [--purge-data] [--yes] [--dry-run] [--json]

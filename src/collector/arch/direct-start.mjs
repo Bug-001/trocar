@@ -1,4 +1,4 @@
-// direct-start.mjs — the environment of a collector daemon this run starts itself (`unit.start()`, the `asight on --no-autostart` run), shared by
+// direct-start.mjs — the environment of a collector daemon this run starts itself (`unit.start()`: the fallback when the OS mechanism refuses), shared by
 // every arch (RFC 1.6 §3.3; 4.9 §4, 4.8 §7): the shell's environment without the variables that change what the daemon trusts or whom it dials
 // (Node's CA, TLS and proxy switches, OpenSSL's CA file and directory, the `*_PROXY` family, in any case), so a daemon started by hand trusts and
 // dials exactly as the one a login entry would start. What is not in this list stays: the user-level variables a login job carries too (`CODEX_HOME`,
@@ -28,7 +28,7 @@ export function directStartStdio(home, { fs = nodeFs } = {}) {
   }
 }
 
-/** The one copy of "start the daemon myself, this once" every arch's `unit.start()` returns (1.6 §3.3): the environment AND the two log files of a
+/** The one copy of "start the daemon myself, this once" every arch's `unit.start()` returns (D61: the fallback of `on`): the environment AND the two log files of a
  *  login-started daemon, so a start by hand trusts what a start at login trusts and leaves its reason in the same place.
  *  `carry` is what the login entry would carry beyond the shell's own environment (install's `daemonEnv(env, dir)`: `{ env, note }` — NODE_EXTRA_CA_CERTS,
  *  without which capture breaks behind a corporate MITM relay and nothing says so). `argv`: what follows `command` (win32 wraps it in conhost).
