@@ -16,12 +16,25 @@ function fakeIo({ tty = false } = {}) {
   const out = [], err = []
   return { out: (s) => out.push(s), err: (s) => err.push(s), stdin: { isTTY: tty }, stdout: { isTTY: tty }, stderr: {}, text: () => [...out, ...err].join('\n'), json: () => JSON.parse(out.join('\n')) }
 }
+/** launchctl as a recording fake: install registers and starts the LaunchAgent (D61), and no test may run the real tool (0.1 §3). */
+function fakeLaunchctl() {
+  const calls = []
+  return { calls, run: (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: '', stderr: '' } } }
+}
 async function cli(argv, { tty = false, over = {} } = {}) {
   const w = await modelWorld({ commands: ['codex'] })
   const io = fakeIo({ tty })
-  const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, ...over }
+  const launchctl = fakeLaunchctl()
+  // the control endpoint a daemon publishes (arch/darwin/control-path.mjs): without the file the CLI has no socket to ask, so the
+  // probe below would never be asked anything and a started daemon could not be seen
+  const { controlEndpoint } = await import('../../src/collector/arch/darwin/control-path.mjs')
+  const endpoint = () => controlEndpoint({ dir: w.dir }) // called below only when this run gets as far as writing: as root nothing may appear under ~/.asight
+  // nothing answers until the registration started it: the first probe is ENOENT, the ones after it answer (D61: install registers AND starts)
+  let probes = 0
+  const deps = { getuid: () => 501, exec: launchctl.run, request: async () => { if (probes++ === 0) throw Object.assign(new Error('nothing answers yet'), { code: 'ENOENT' }); return {} }, sleep: async () => {}, launchctl, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, ...over }
+  if ((over.getuid ? over.getuid() : 501) !== 0) endpoint()
   const exit = await runInstallCli(argv, { io, env: w.env, home: w.home, platform: 'darwin', deps })
-  return { w, io, exit }
+  return { w, io, exit, launchctl: deps.launchctl || launchctl }
 }
 
 test('install is a command of its own (and the hidden `collector install` alias is gone, 1.6 §2: one feature, one name)', () => {
@@ -61,17 +74,20 @@ test('4.11 ⑰: a version 2 manifest is refused before any write — exit 1, the
 })
 
 test('install --yes --json: the receipt (fingerprint, carriers, residual risk, commands) and an install-note; exit 0; a declined root store → exit 1', async () => {
-  const { w, io, exit } = await cli(['--yes', '--json'])
+  const { w, io, exit, launchctl } = await cli(['--yes', '--json'])
   assert.equal(exit, 0, io.text())
   const r = io.json()
   assert.deepEqual([r.command, r.ok, typeof r.fp256, r.commands.includes('asight uninstall')], ['install', true, 'string', true])
+  // D61: install registers the login autostart, enables it (an `enable` clears a disable an earlier version left) and starts the daemon now
+  assert.deepEqual(launchctl.calls.filter((c) => /enable|bootstrap/.test(c)), ['launchctl enable gui/501/com.asight.collector', `launchctl bootstrap gui/501 ${path.join(w.home, 'Library', 'LaunchAgents', 'com.asight.collector.plist')}`], launchctl.calls.join(' | '))
+  assert.deepEqual([r.daemon.state, r.daemon.started], ['running', true])
   const day = fs.readdirSync(path.join(w.dir, 'flows')).find((n) => n.endsWith('.ndjson'))
   assert.ok(fs.readFileSync(path.join(w.dir, 'flows', day), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).some((e) => e.event === 'install-note' && e.kind === 'result'))
   w.store.answer = 'declined'
   const again = await cli(['--yes'])
   again.w.store.answer = 'declined'
   const io2 = fakeIo()
-  assert.equal(await runInstallCli(['--yes'], { io: io2, env: again.w.env, home: tmpHomeOf(again.w), platform: 'darwin', deps: { getuid: () => 501, backends: { custody: again.w.custody, rootStore: again.w.store, dirs: again.w.ctx.dirs }, harnesses: [], owns: again.w.owns } }), 1)
+  assert.equal(await runInstallCli(['--yes'], { io: io2, env: again.w.env, home: tmpHomeOf(again.w), platform: 'darwin', deps: { getuid: () => 501, unit: null, backends: { custody: again.w.custody, rootStore: again.w.store, dirs: again.w.ctx.dirs }, harnesses: [], owns: again.w.owns } }), 1)
 })
 const tmpHomeOf = () => tmpDir('asight-model-2-') // a second HOME, made where the leak guard sweeps
 
