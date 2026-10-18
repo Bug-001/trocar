@@ -19,6 +19,10 @@ const src = (p) => fileURLToPath(new URL(`../../src/${p}`, import.meta.url))
 const CHILDREN = ['collector/seal-worker.mjs', 'query/worker.mjs']
 
 test('nice ≥ 5 is asked for in one place, and both children of the daemon ask through it', () => {
+  // The MEANING, not a number copied out of the source: "below normal on this OS". A literal 5 passed this very
+  // assertion while lowering nothing on Windows — libuv maps nice to Windows priority classes in bands and
+  // BELOW_NORMAL begins at 10, so nice 5 landed on NORMAL (Windows test machine, 2026-10-19).
+  assert.equal(NICE, os.constants.priority.PRIORITY_BELOW_NORMAL, 'the one nice is node\'s own "below normal", on every platform')
   assert.ok(NICE >= 5, `1.6 §3.1 asks for nice ≥ 5 (this says ${NICE})`)
   for (const f of CHILDREN) {
     const text = fs.readFileSync(src(f), 'utf8')
@@ -50,5 +54,6 @@ test('a real forked child runs at the nice it asked for', async (t) => {
   // child to have loaded (its first reply is proof it is past that line)
   child.stdin.write(`${JSON.stringify({ name: 'segments', params: {}, indent: 0 })}\n`)
   await new Promise((done, fail) => { child.stdout.once('data', done); child.once('exit', (c) => fail(new Error(`the worker exited with ${c}`))) })
-  assert.ok(os.getPriority(child.pid) >= NICE, `the child is at nice ${os.getPriority(child.pid)}, asked for ${NICE}`)
+  assert.ok(os.getPriority(child.pid) >= os.constants.priority.PRIORITY_BELOW_NORMAL,
+    `the child is at nice ${os.getPriority(child.pid)}, which is not at or below ${os.constants.priority.PRIORITY_BELOW_NORMAL} ("below normal" on this OS)`)
 })

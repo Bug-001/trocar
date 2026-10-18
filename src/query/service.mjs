@@ -30,13 +30,25 @@ const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon y
 const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: [`--max-old-space-size=${WORKER_MEMORY_MB}`] })
 
 export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker }) {
-  let child = null, pending = null, head = '', left = 0, stderr = ''
+  let child = null, pending = null, head = '', left = 0, stderr = '', paused = false
   let queue = Promise.resolve()
+
+  /** Read the worker again. Called wherever the reason to hold off is gone — INCLUDING the end of a frame: a
+   *  response that hit its high-water mark on the LAST write of a document is `end()`ed in the same tick, and node
+   *  emits 'drain' on an outgoing message only while it is not finished. That drain therefore never comes, and
+   *  without this the worker's stdout stayed paused for good: the NEXT query got no byte at all and its caller sat
+   *  out its whole deadline before reading locally (a Windows test machine: `query sessions` 5 723 ms with 4 ms of core time —
+   *  a named pipe fills far earlier than a unix socket, which is why macOS never saw it). */
+  function resumeChild() {
+    if (!paused) return
+    paused = false
+    if (child) child.stdout.resume()
+  }
 
   /** The worker is gone or must go: whoever was waiting is told, so no request hangs on it. */
   function drop(why) {
     const c = child, p = pending
-    child = null; pending = null; head = ''; left = 0; stderr = ''
+    child = null; pending = null; head = ''; left = 0; stderr = ''; paused = false
     if (c) { c.removeAllListeners(); try { c.kill() } catch { /* already gone */ } }
     if (p) { clearTimeout(p.timer); p.fail(new Error(why)) }
   }
@@ -77,7 +89,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
       left -= take.length
       b = b.subarray(take.length)
       const room = pending.res.write(take)
-      if (!room && child) { child.stdout.pause(); const c = child; pending.res.once('drain', () => { if (child === c) c.stdout.resume() }) }
+      if (!room && child && !paused) { paused = true; child.stdout.pause(); const c = child; pending.res.once('drain', () => { if (child === c) resumeChild() }) }
       if (!left) settle()
     }
   }
@@ -86,6 +98,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     const p = pending
     pending = null
     clearTimeout(p.timer)
+    resumeChild() // the document is through: nothing is left to hold off for, and no drain comes after end()
     p.res.end()
     p.done()
   }
@@ -98,7 +111,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     if (!pending || pending.res !== res) return // its turn has not come yet, or it is already answered
     pending.res = SINK
     pending.quiet = true
-    if (child) child.stdout.resume()
+    resumeChild()
   }
 
   const run = (line, res) => new Promise((done, fail) => {

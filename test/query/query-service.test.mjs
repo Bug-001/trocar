@@ -107,3 +107,33 @@ test('a name outside the closed set is refused before any worker is forked', asy
     svc.stop()
   }
 })
+
+// A response whose socket is FULL: every write returns false, and — like a real http.ServerResponse — it emits no
+// 'drain' at all, because the one node would emit comes from the socket after the document is already `end()`ed and
+// node emits 'drain' only while the message is not finished (verified against http.createServer: 18 writes returned
+// false on a 200 KB document and zero 'drain' events followed). The daemon pauses the worker's stdout on such a
+// write, so what is pinned here is that it reads it again: it used to stay paused for good, and the NEXT query got
+// no byte at all — on the Windows test machine `query sessions` then cost 5 723 ms (its own core time: 4 ms) because the CLI
+// sat out its whole 5 s deadline before reading locally. A named pipe fills far earlier than a unix socket, which is
+// why only Windows saw it.
+const full = () => Object.assign(recorder(), { write: () => false })
+
+test('a response that is full when the document ends does not leave the worker paused for the next query', async () => {
+  const home = rawHome('asight-qsvc-')
+  const svc = createQueryService({ home, fork: alive })
+  try {
+    await warmed(svc)
+    const first = full()
+    await svc.route({ query: new URLSearchParams({ name: 'segments' }), res: first })
+    assert.equal(first.status, 200, 'the full caller still gets its document')
+    // No deadline is allowed to be involved: this must come back as fast as any other warm query.
+    const next = recorder()
+    const t0 = Date.now()
+    await svc.route({ query: new URLSearchParams({ name: 'segments' }), res: next })
+    assert.equal(next.status, 200)
+    assert.deepEqual(JSON.parse(next.text()).segments, [], 'the whole document, not a frame read half')
+    assert.ok(Date.now() - t0 < 2000, `the next query waited ${Date.now() - t0} ms: the worker's stdout was left paused`)
+  } finally {
+    svc.stop()
+  }
+})
