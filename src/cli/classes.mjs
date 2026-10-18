@@ -36,7 +36,7 @@ export function classesTable(doc, { home = null, colors: c } = {}) {
   return [c.bold(first), ...body, '',
     c.dim(`Sizes are what is stored. ${tilde(asightHome(home), home)} uses ${size(doc.disk.asight_bytes)} in all.`),
     c.dim('full keeps whole requests and responses; log keeps headers and sizes only.'),
-    ...wrap('Change what is kept with asight classes set, and the rules with asight classes add or rm.').map((l) => c.dim(l))]
+    c.dim('Change what is kept with asight classes set; the rules with add or rm.')]
 }
 
 /** `asight classes <class>` (§4.2): the class, where its level comes from, and its rules by number. */

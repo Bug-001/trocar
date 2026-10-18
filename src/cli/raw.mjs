@@ -12,7 +12,8 @@ const TARGET = /^([^:]+)(?::(\d+)(?:-(\d+))?)?$/
 
 /** → the exit code. `argv` is what follows `raw`; the parsed form is `ctx.args` ({ positionals, flags }). */
 export async function run(argv, { io, args, home }) {
-  const say = (message) => { for (const line of wrap(message)) io.err(line) } // §1.1⑥: folded; a path longer than the line keeps its own
+  // §1.1⑤⑥: the home directory is `~`, and the message folds instead of passing 80 columns (a path longer than a line keeps its own)
+  const say = (message) => { for (const line of wrap(String(message).split(home).join('~'))) io.err(line) }
   const usage = (message) => { say(message); io.err(usageLine(commandNamed('raw'))); return EXIT.usage }
   const [target, ...extra] = args.positionals
   if (target === undefined) return usage('asight raw: name the segment to print.')
