@@ -30,7 +30,7 @@ export const FAILURE_WORDS = Object.freeze({
   'engine/lookup-miss': 'a connection\'s destination could not be read',
   'engine/engine-error': 'the engine failed',
   'engine/flow-write-failed': 'a connection log line could not be written',
-  'engine/negative-cache': 'a program refused asight\'s certificate, so that host is forwarded only',
+  'engine/negative-cache': 'a program refused asight\'s certificate, so its traffic to that host is passed on unread',
   'engine/trust-rejected': 'a program refused asight\'s certificate under TLS, so that host is not captured',
   'engine/upstream-slow': 'the upstream was slow',
   'engine/leaf-error': 'a certificate could not be issued',

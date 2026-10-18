@@ -399,6 +399,11 @@ function refuseUnknownKinds(manifest, receipt, standalone) {
 // The id list the text and the flows record go by is `receipt.harnesses` until this runs, so it is called at the return.
 function shapeReceipt(receipt) {
   const ids = (receipt.harnesses || []).map((h) => (typeof h === 'string' ? h : h && h.harness)).filter(Boolean)
+  // §1.1: a receipt holds each fact once. Two entries of ONE file (two json keys of kimi-code's settings.json) made two rows that said the
+  // same sentence about the same path (a Windows test machine 2026-10-18), so these are the DISTINCT facts — V3's file set is unchanged by it.
+  const distinct = (list, keys) => [...new Map((list || []).map((x) => [typeof x === 'string' ? x : JSON.stringify(keys.map((k) => x[k] ?? null)), x])).values()]
+  receipt.changed = distinct(receipt.changed, ['harness', 'path', 'change', 'backup'])
+  receipt.removed = distinct(receipt.removed, ['harness', 'path'])
   receipt.left = (receipt.left || []).map((l) => ({ what: l.what ?? (l.result === 'unknown-kind' ? 'an item this asight does not know' : 'something asight wrote'), ...l, undo_by_hand: l.undo_by_hand ?? l.restore ?? null }))
   receipt.outcome = receipt.ok ? 'done' : 'partial'
   receipt.harnesses = ids.map((id) => {

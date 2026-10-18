@@ -61,13 +61,14 @@ function watchLines(watch, t) {
  *  to put in `--json` as `planned`. `p` = what planOn returns (its `files` / `owned` / `entries` / `unit` are only what would be written). */
 export function planItems(p, { home = null, platform = 'linux', autostart = true } = {}) {
   const t = (x) => tilde(x, home)
+  const sep = platform === 'win32' ? '\\' : '/' // one separator style per platform (§1.1): a directory shown as `~\\.asight\\collector/` mixes two
   const items = []
   const add = (what, path_, detail) => items.push({ what, path: path_ || null, detail })
   if (p.manifest) add('record', p.manifest, `${t(p.manifest)}: what was installed`)
   if (p.state) add('record', p.state, `${t(p.state)}: which agents are on`)
   if (p.standalone) add('undo', p.standalone, `${t(p.standalone)}: works without this source tree`)
   for (const c of p.ca || []) add('certificate', c, `${t(c)}: in no trust store`)
-  if (p.run) add('record', p.run, `${t(p.run)}/: what the plugins trust`)
+  if (p.run) add('record', p.run, `${t(p.run)}${sep}: what the plugins trust`)
   for (const f of p.files || []) add(f.harness, f.path, `${t(f.path)}: ${f.sources.length ? `the certificates of ${f.sources.map((x) => String(x).split(/[\\/]/).pop()).join(', ')} plus asight's` : "asight's certificate"}`)
   for (const o of p.owned || []) add(o.harness, o.path, `${t(o.path)}: asight's ${o.role}`)
   for (const e of p.entries || []) add(e.harness, e.path, `${t(e.path)}${e.real_path ? ` -> ${t(e.real_path)}` : ''}: ${e.what || e.keys.join('.')}`)
@@ -75,7 +76,7 @@ export function planItems(p, { home = null, platform = 'linux', autostart = true
   // §1.4「计划写全」: the symlink `enable` makes is a file of the user's too, so it is named as well (nothing is enabled with `--no-autostart`)
   if (p.unit && autostart) for (const l of p.unit.links || []) add('autostart', l, `${t(l)}: the link that enables it`)
   for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output`)
-  if (p.records) add('record', p.records, `${t(p.records)}/: what each run did`)
+  if (p.records) add('record', p.records, `${t(p.records)}${sep}: what each run did`)
   else if (p.events) add('record', p.events, `${t(p.events)}: what each run did`)
   return items
 }

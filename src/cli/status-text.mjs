@@ -38,7 +38,7 @@ export function noteText(code, { harness = '', pid = null } = {}) {
     'cert-key-missing': "the key for asight's root is gone",
     'cert-bundle-missing': `${h}'s certificate file no longer holds asight's root`,
     'cert-tier-unreachable': `this form of ${h} has no way to reach a certificate`,
-    'not-verified': `this form of ${h} is not verified yet; it is forwarded only`,
+    'not-verified': `this form of ${h} is not verified yet, so asight passes its traffic on without reading it`,
     'not-users-file': `${h} points at a certificate file that is not yours`,
     'shim-not-on-path': `${h} did not start through the program asight installed`,
   }
@@ -164,7 +164,7 @@ export function failuresBlock(health, { now = Date.now() } = {}) {
   return lines
 }
 
-const expectedText = (k) => ({ 'not-an-agent': 'connections of programs that are not agents, forwarded only', passthrough: 'connections asight does not decrypt by design', 'client-rejected-leaf': "connections whose program refused asight's certificate" }[k] || k)
+const expectedText = (k) => ({ 'not-an-agent': 'connections of programs that are not agents, passed on unread', passthrough: 'connections asight does not decrypt by design', 'client-rejected-leaf': "connections whose program refused asight's certificate" }[k] || k)
 
 // ── what the daemon and the disk say, verbatim (printed by `--failures` and by `doctor`) ──────────────────────────
 export function formatStatus(s) {

@@ -145,7 +145,7 @@ test('V85: the model install plan names asight\'s own tree in one line and every
   const { io, exit, w } = await cli(['--dry-run', '--json'])
   assert.equal(exit, 0)
   const plan = io.json().planned
-  const asightLine = plan.filter((p) => p.detail.includes('~/.asight/:'))
+  const asightLine = plan.filter((p) => /^~[\\/]\.asight[\\/]:/.test(p.detail))
   assert.equal(asightLine.length, 1, `asight's own tree is one line, not ${asightLine.length}: ${JSON.stringify(plan)}`)
   assert.match(asightLine[0].detail, /asight-off/, 'and that line names the undo program, so the plan is readable without a second lookup')
   assert.equal(plan.filter((p) => p.detail.includes(w.home)).length, 0, 'every path is written under ~, never the home twice')
