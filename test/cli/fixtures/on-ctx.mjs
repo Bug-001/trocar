@@ -87,13 +87,18 @@ export function fakeDaemon({ up = true, agents = [], actual = 'on', onOn = null,
   return { request, calls, state, isRecording: (h) => state.on.has(h) }
 }
 
+/** A `spawn` no test's daemon is ever really started by (0.1 §3): it records `node <script> daemon` and brings `daemon` up, as the real `--no-autostart` start does. Calls: `spawn.calls`. */
+export function fakeSpawn(daemon) {
+  const spawn = (exe, args) => { spawn.calls.push([exe, ...args].join(' ')); daemon.state.up = true; return { pid: 4242, unref: () => {}, on: () => {} } }
+  spawn.calls = []
+  return spawn
+}
+
 /** The second argument of runOnCli, for a sandbox HOME. `deps` overrides what a test wants to see. */
 export function onCtx(home, io, { exec = recordingExec(), daemon = fakeDaemon(), harnesses = [cc], deps = {}, env = {} } = {}) {
   const parts = { os: 'none', harnesses, scan: async () => [], match: () => ({ agent: null }), arch: { unit } }
-  // `--no-autostart` really spawns `node <script> daemon` (1.6 §3.3): every ctx hands in its own spawn, so no test starts a daemon (0.1 §3).
-  // Reachable as `ctx.deps.spawn.calls`; it brings the fake daemon up, as the real start does.
-  const spawn = (exe, args) => { spawn.calls.push([exe, ...args].join(' ')); daemon.state.up = true; return { pid: 4242, unref: () => {}, on: () => {} } }
-  spawn.calls = []
+  // `--no-autostart` really spawns `node <script> daemon` (1.6 §3.3): every ctx hands in its own spawn, so no test starts a daemon.
+  const spawn = fakeSpawn(daemon)
   return {
     io, home, platform: 'linux',
     env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run'), ...env },
@@ -105,7 +110,7 @@ export function onCtx(home, io, { exec = recordingExec(), daemon = fakeDaemon(),
 export function fakeSystem({ agents = [], actual = 'on', up = false, ...daemonOpts } = {}) {
   const daemon = fakeDaemon({ up, agents, actual, ...daemonOpts })
   const exec = recordingExec({ onRun: (cmd) => { if (/ (start|enable --now) asight-collector\.service$/.test(cmd)) daemon.state.up = true } })
-  return { exec, daemon }
+  return { exec, daemon, spawn: fakeSpawn(daemon) }
 }
 
 /** `asight install --yes` in `home` with the same world as `onCtx(home, io, opts)` (D55, override #15: on never writes a certificate, so an `on` test installs first). */
