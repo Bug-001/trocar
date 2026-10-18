@@ -94,7 +94,7 @@ const CHANGE = {
 export const routeNotes = (t) => [...(t.on_path === true ? [`If your VPN or proxy routes by process, it sees asight, not ${t.harness}.`] : []), (CHANGE[t.routing] || CHANGE.unknown)(t.harness)]
 
 /** The `Routes` rows of `status <harness>` (§3.5): `[[label, chain], …]` — the path of new connections, the path with asight taken out, and each running process that goes another way. */
-export function routeRows(t, { labels = true } = {}) {
+function routeRows(t, { labels = true } = {}) {
   const rows = []
   for (const b of distinct(t)) rows.push([`new processes${prefixOf(t, b) ? ` (${prefixOf(t, b).trim()})` : ''}`, chain(t, b.path, true, labels)])
   if (t.branches.some((b) => b.path.some((id) => isAsight(nodeOf(t, id))))) for (const b of distinct(t)) rows.push([`without asight${prefixOf(t, b, 'off_path') ? ` (${prefixOf(t, b, 'off_path').trim()})` : ''}`, chain(t, b.off_path, true, labels)])

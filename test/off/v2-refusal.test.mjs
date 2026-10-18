@@ -70,10 +70,11 @@ for (const [cmd, run] of Object.entries(COMMANDS)) {
         assert.deepEqual(calls, [], `${cmd} wrote nothing through fs`)
         assert.deepEqual(snapshot(home), before, `${cmd}: the HOME is byte-identical, the standalone copy included`)
         assert.equal(exit, 1, io.text())
-        const text = io.text(), copy = standalonePath(home)
+        const copy = standalonePath(home)
+        const text = io.text().slice(io.text().indexOf('Undo it first')) // the guidance, not the heading a failed uninstall prints above it
         const main = text.indexOf('asight off'), un = text.indexOf('asight uninstall'), named = text.indexOf(copy) // the path keeps a line of its own, however the line is wrapped (§1.1 版式 6)
         assert.ok(main >= 0 && un > main && named > un, `the old build's off, then its uninstall, then the copy — in that order:\n${text}`)
-        assert.match(text, new RegExp(`version ${version}`))
+        assert.match(io.text(), new RegExp(`version ${version}`))
       })
     }
   }

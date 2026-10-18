@@ -28,7 +28,7 @@ const adoptedLine = (h, x) => `  ${h}: route ${x.chain}${x.proxy ? ` (its proxy 
 
 /** D46: a chain that is the harness's own name and nothing else (the degenerate topology a machine whose facts cannot be read leaves) says nothing
  *  and is not printed. A chain with a hop (or a proxy setting named) is real. */
-const saysSomething = (x) => !!x && (/\s(→|->)\s/.test(String(x.chain || '')) || !!x.proxy)
+const saysSomething = (x) => !!x && (/\s->\s/.test(String(x.chain || '')) || !!x.proxy)
 
 /** One line per (harness, reason) of a plan's watch entries, the files named together — the same fact in four entries (OpenCode's package.json
  *  family) is one line, not four. The caller indents it. */
@@ -81,7 +81,7 @@ export function formatPlan(p, { home = null, autostart = true, platform = 'linux
 
 /** The line about logging out (§3.3): linger off says what happens and how to change it (never done for the user); unreadable says unknown and why;
  *  on says nothing → string | null. `linger`: true | false | 'unknown'. */
-export const lingerText = ({ linger, linger_reason: why = null, user = null }) => (linger === false
+const lingerText = ({ linger, linger_reason: why = null, user = null }) => (linger === false
   ? `Capture stops when you log out. To keep it on: loginctl enable-linger ${user || 'your-user-name'}`
   : linger === 'unknown' ? `Whether capture survives a logout is unknown (${why || 'the linger state could not be read'})` : null)
 
