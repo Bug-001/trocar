@@ -1,5 +1,5 @@
 // test/cli/not-implemented.test.mjs — the three commands the data-format branch (D59/D60) still owes (query, classes, raw): until they are
-// written they say so in one line a person can read, and with --json in exactly one error document on stdout with nothing on stderr (RFC 1.6 §1.2, §1.3).
+// written they say so in one line a person can read, and with --json (query, classes; raw prints bytes and has no --json) in exactly one error document on stdout with nothing on stderr (RFC 1.6 §1.2, §1.3).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { runCli } from '../../src/cli/main.mjs'
@@ -21,7 +21,7 @@ test('query / classes / raw say they are not implemented yet in one line of at m
 })
 
 test('--json: one error document on stdout, code not-implemented, nothing on stderr, exit 1', async () => {
-  for (const name of NAMES) {
+  for (const name of ['query', 'classes']) {
     const { exit, io } = await run([name, '--json'])
     assert.equal(exit, 1, name)
     assert.equal(io.stderrText(), '', `${name}: nothing on stderr`)

@@ -30,12 +30,11 @@ test('the table is the command list of 1.6 §2 — the names of that list, each 
 test('§1.5: exactly the commands that change your own state refuse root, and setup-helper is the one that needs it', () => {
   assert.deepEqual(COMMANDS.filter((c) => c.mutates === true).map((c) => c.name).sort(), ['daemon', 'install', 'off', 'on', 'uninstall'])
   assert.deepEqual(COMMANDS.filter((c) => c.needsRoot).map((c) => c.name), ['setup-helper'])
-  // the two commands where only some subcommands change state (§1.5: `classes set|add|rm|reset` and `raw seal`)
+  // the command where only some subcommands change state (§1.5: `classes set|add|rm|reset`); `raw` only reads
   const asked = (name, word) => commandNamed(name).mutates({ positionals: word === undefined ? [] : [word], flags: {} })
   for (const word of ['set', 'add', 'rm', 'reset']) assert.equal(asked('classes', word), true, `classes ${word}`)
   for (const word of [undefined, 'catalog']) assert.equal(asked('classes', word), false, `classes ${word ?? '(shown)'}`)
-  assert.equal(asked('raw', 'seal'), true)
-  for (const word of ['verify', 'cat']) assert.equal(asked('raw', word), false, `raw ${word}`)
+  assert.equal(commandNamed('raw').mutates, false)
 })
 
 test('D58: every word of help is English ASCII — no section number, decision number, source path or internal code name', () => {
@@ -69,8 +68,7 @@ test('§5.4: one command\'s help is its usage, its summary, its options with a l
   for (const o of optionsOf(commandNamed('on')).keys()) assert.match(one, new RegExp(`^ {2}${o}\\b`, 'm'), `${o} has its own line`)
   for (const [code] of commandNamed('on').exits) assert.match(one, new RegExp(`^ {2}${code} {2}\\S`, 'm'), `exit ${code} is explained`)
   assert.ok(!/asight uninstall/.test(one), 'one command only')
-  assert.match(helpText('raw'), /asight raw seal[\s\S]*asight raw verify[\s\S]*asight raw cat/, 'a command with subcommands says all of them')
-  assert.match(helpText('classes'), /asight classes set[\s\S]*asight classes add[\s\S]*asight classes rm[\s\S]*asight classes reset/)
+  assert.match(helpText('classes'), /asight classes set[\s\S]*asight classes add[\s\S]*asight classes rm[\s\S]*asight classes reset/, 'a command with subcommands says all of them')
   assert.ok(!/--db|--source|--control/.test(helpText('serve')), 'serve has only --port now (§4.3)')
   assert.throws(() => helpText('nope'), /nope/)
 })
