@@ -27,7 +27,7 @@ import { asightHome, backupDir, collectorDir, standaloneCommand } from '../off/p
 import { orphanBackups } from '../off/backup.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { checkStandalone } from '../off/standalone.mjs'
-import { memoProcQuestions } from '../off/proc.mjs'
+import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 
 const USAGE = 'usage: asight doctor [<harness>...] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
@@ -113,8 +113,11 @@ const realUndetermined = (u) => u.filter((x) => x.reason !== 'no captured data y
 
 /** The 附录 C.4 document. `status`'s own document is folded in under `status`, so one read answers both. */
 export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = process.env, platform = process.platform, deps = {} } = {}) {
-  const close = memoProcQuestions() // one command, one answer per OS question (D62 task E): the trailing capture-health read asks the daemon pid's identity again
-  try { return await doctorDocOf({ names, home, env, platform, deps }) } finally { close() }
+  // one command, one answer per OS question (D62 task E): the trailing capture-health read asks the daemon pid's identity again. The scope is
+  // opened HERE, so it is this one that carries the daemon read client statusFacts would otherwise open its own scope with (it is re-entrant).
+  const reader = deps.daemonReader !== undefined ? deps.daemonReader : daemonProcReader({ platform, dir: collectorDir(home), env, fs: deps.fs || nodeFs, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath !== undefined ? { socketPath: deps.socketPath } : {}) })
+  const close = memoProcQuestions({ reader })
+  try { return await doctorDocOf({ names, home, env, platform, deps: { ...deps, daemonReader: reader } }) } finally { close() }
 }
 async function doctorDocOf({ names, home, env, platform, deps }) {
   const fs = deps.fs || nodeFs

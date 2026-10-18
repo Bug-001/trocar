@@ -16,7 +16,7 @@ import { readManifest } from '../off/manifest.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
-import { listProcs, identityFor, pidAlive, memoProcQuestions } from '../off/proc.mjs'
+import { listProcs, identityFor, pidAlive, memoProcQuestions, procAskNotes, daemonProcReader } from '../off/proc.mjs'
 import { createRegistry } from '../collector/core/registry.mjs'
 import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
@@ -284,7 +284,11 @@ export async function gatherTopology(f, { home, env, platform, deps = {} }) {
     const mod = deps.netFactsDeps ? null : await (deps.daemon || import('../collector/daemon.mjs'))
     const nd = deps.netFactsDeps ? await deps.netFactsDeps() : mod && typeof mod.netFactsDeps === 'function' ? await mod.netFactsDeps({ platform }) : null
     if (!nd) return { topology_error: 'no reader of the network facts is wired into this build' }
-    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
+    // the platform's own reader of the network facts (the Windows helper): the DAEMON's warm one when it answers on the control channel, so this
+    // command starts no PowerShell of its own for the process snapshot, the socket table and Internet Settings (4.8 §1; D62). Without a daemon
+    // the platform's part starts and closes one itself, as it did.
+    const warm = deps.daemonReader && f.daemon && f.daemon.state === 'running' ? deps.daemonReader : null
+    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(warm ? { helper: warm } : {}), ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
     const topology = buildTopology(facts)
     // the codes `doctor` would give, on the topology of each harness (the board reads them there); the commands and the text are `doctor`'s
     try { const by = diagnose({ facts, topology, harnesses: null, user: f.user }); for (const h of Object.keys(topology)) topology[h].findings = [...new Set(by.filter((x) => x.harness === h).map((x) => x.code))] } catch (e) { rethrowSandbox(e) }
@@ -346,6 +350,8 @@ export function statusDocOf(f) {
     ...(f.health_error ? [{ where: 'capture health', reason: f.health_error }] : []),
     ...(f.identity_error ? [{ where: 'the agent name list', reason: f.identity_error }] : []),
     ...(f.userProcs && f.userProcs.error ? [{ where: 'the process table', reason: f.userProcs.error }] : []),
+    // a read put to the OS because the daemon could not answer it: the fallback worked, and is never silent (D38; 4.8 §1)
+    ...(f.proc_asks || []).map((reason) => ({ where: 'the process facts the daemon was asked for', reason })),
   ]
   const doc = {
     ...newReceipt('status'), ok: statusExit(f) === EXIT.ok,
@@ -364,11 +370,15 @@ export function statusDocOf(f) {
 
 /** What `status` read: the facts, the topology drawn on them, and the certificate axis folded into each verdict. Nothing is written. */
 export async function statusFacts({ names = null, home = nodeOs.homedir(), env = process.env, platform = process.platform, deps = {} } = {}) {
-  const close = memoProcQuestions() // one command, one answer per OS question (D62 task E): the table and the daemon pid's identity are asked once
+  // one command, one answer per OS question (D62 task E): the table and the daemon pid's identity are asked once. On Windows they are asked of the
+  // DAEMON's warm helper when it answers (daemonProcReader; 4.8 §1 §7) — a powershell.exe start costs ~450 ms there — and of the OS when it does not.
+  const reader = deps.daemonReader !== undefined ? deps.daemonReader : daemonProcReader({ platform, dir: collectorDir(home), env, fs: deps.fs || nodeFs, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath !== undefined ? { socketPath: deps.socketPath } : {}) })
+  const close = memoProcQuestions({ reader })
   try {
     const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names })
-    Object.assign(f, await gatherTopology(f, { home, env, platform, deps }))
+    Object.assign(f, await gatherTopology(f, { home, env, platform, deps: { ...deps, daemonReader: reader } }))
     judgeCertificates(f)
+    f.proc_asks = procAskNotes()
     return f
   } finally { close() }
 }
