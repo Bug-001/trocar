@@ -106,7 +106,7 @@ async function relay() {
   return { ca, got, port: srv.address().port, hold: () => { state.hold = true }, release: () => { state.hold = false; while (held.length) held.shift()() }, close: () => srv.close() }
 }
 
-test('daemon: CC trusted through the installed settings key is decrypted and recorded verbatim into the raw layer's segment; off stops recording (S2/S1/T7 unit)', async () => {
+test('daemon: CC trusted through the installed settings key is decrypted and recorded verbatim into a raw segment; off stops recording (S2/S1/T7 unit)', async () => {
   const s = sandbox(); const p = fakeProc(); const up = await relay()
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   // the user's own Claude Code config, as for any private-CA relay: base URL + the relay's CA
