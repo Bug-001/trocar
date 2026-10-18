@@ -299,8 +299,20 @@ function storeIndex(fs, file, lines, problems, at = null) {
       fs.writeFileSync(tmp, lines.join(''), { mode: 0o600 });
       fs.renameSync(tmp, file);
     } else {
-      if (at !== sizeOf(fs, file)) fs.truncateSync(file, at); // the tail after the last parsable mark: a torn or holed batch
-      fs.appendFileSync(file, lines.join(''), { mode: 0o600 });
+      // BY FD, never by path (4.2 §段索引 谁写哪一笔): the seal worker renames a freshly built index over this one
+      // the moment the segment is handed over, and a path-based truncate + append that loses that race would cut the
+      // NEW file down to this pass's idea of its length. One fd, opened before the checks and written through:
+      // whatever the rename does, these bytes land on the inode this pass opened — the old one, by then unlinked.
+      const fd = fs.openSync(file, 'r+');
+      try {
+        if (at !== fs.fstatSync(fd).size) fs.ftruncateSync(fd, at); // the tail after the last parsable mark: a torn or holed batch
+        const buf = Buffer.from(lines.join(''));
+        for (let off = 0; off < buf.length;) {
+          const n = fs.writeSync(fd, buf, off, buf.length - off, at + off);
+          if (!n) throw new Error(`${path.basename(file)}: the write made no progress at ${at + off}`);
+          off += n;
+        }
+      } finally { fs.closeSync(fd); }
     }
   } catch (e) {
     // The index is a cache: failing to store it costs speed, never an answer (D38 — and never silently).
