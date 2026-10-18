@@ -21,21 +21,11 @@
 // whole-document format this replaces made a pass cost the segment's record count in both, which with sparse real
 // traffic (a pass per record) came to ≈ e·N²/2 index bytes per segment.
 //
-// MEASURED, SPARSE arrival (found in development): one record per debounce window — what real traffic looks like
-// (OpenCode: an LLM call every few seconds plus small non-LLM records) — with the mix 70 % ≈ 1.5 KB / 30 % ≈ 100 KB,
-// 2 000 records / 63 MB, through this keeper with the index bytes counted at `segmentIndex`'s fs seam:
-//   index bytes written per captured byte: 13.03 with the whole-document format (v3) → 0.018 here
-//     (D62 asks ≤ 1.1 for plaintext + index together);
-//   the keeper's CPU per record, first 100 → last 100: 1.21 → 3.46 ms with v3 (it grew with the record count),
-//     0.89 → 1.58 ms here, and 0.75 → 1.27 ms over 4 000 records — flat, inside D62's ≤ 5 ms per request;
-//   what a query pays to READ a current index (20 000 entries): 12.6 ms v3 → 14.5 ms here.
-// MEASURED, queries (the dense replay of the 458 MB / 1 436 records / 8 segments of the 附录 D dataset through the
-// real record store + this keeper, 2026-10-19; unchanged by the format, whose read path is 2 ms per 20 k entries):
-//   cold `query sessions` 2 024 ms → 176 ms first run / 123 ms p50, and 0 `index-cold` errors (8 before);
-//   cold `query session --id` 2 587 ms → 723 ms (what is left is the session view's own cost, not the index's);
-//   daemon CPU: 1 731 ms per 1 000 appended records without the keeper, 3 290-3 513 ms with it.
-//   On a 300 MB generated dataset with the index as this keeper leaves it: `query sessions` 11 ms first / 3 ms warm,
-//   `query session` 495 ms, 0 errors.
+// WHAT IT COSTS, MEASURED: the numbers (write amplification on the reference mix and per record in the worst arrival
+// shape, the CPU per pass, what a query pays to read a current index, the cold query times this removed) are measured, not
+// estimated: `scripts/perf-cli.mjs --write-amp <HOME>` reproduces the two write-amplification numbers on a dataset
+// `scripts/gen-dataset.mjs` generates, and the spec's two lines are 1.6 §3.1. A measurement does not belong in a
+// source comment, where it rots.
 import { segmentIndex, KEEPER_CHUNK_BYTES } from '../query/index-build.mjs'
 
 export const DEBOUNCE_MS = 1_000 // one pass per burst; the tail a query may still have to resume is this much traffic

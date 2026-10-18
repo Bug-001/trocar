@@ -2,6 +2,7 @@
 //
 //   node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only sessions,status] [--json out.json]
 //   node scripts/perf-cli.mjs --idle <pid> [--seconds 60]        ← the resource line of §3.1 (D62④) on a running daemon
+//   node scripts/perf-cli.mjs --write-amp <HOME> [--records 200]  ← the write-amplification line of §3.1, both halves
 //
 // It reports, per command: the COLD wall clock (the index deleted first), the WARM p50/p95 wall clock, the
 // command's own CPU time and peak RSS, and — separately — the CORE time, which is runQuery inside an already
@@ -112,7 +113,7 @@ async function cores({ home, names, vars, runs }) {
     const first = await timed(name, params)
     const ms = []
     for (let i = 0; i < runs; i++) ms.push((await timed(name, params)).ms)
-    out[label] = { cold_ms: Math.round(first.ms), p50_ms: Math.round(median(ms)), p95_ms: Math.round(pct(ms, 95)), ...(first.error ? { error: first.error } : {}) }
+    out[label] = { no_index_ms: Math.round(first.ms), p50_ms: Math.round(median(ms)), p95_ms: Math.round(pct(ms, 95)), ...(first.error ? { error: first.error } : {}) }
   }
   // 附近的查询 (§4.1 ≤ 50 ms): the session is open; these are the clicks that follow, in the same process.
   const nearby = []
@@ -147,8 +148,13 @@ export async function measure({ home, runs = DEFAULT_RUNS, only = null }) {
   const kept = async () => { const h = path.join(home, '.asight'); for (const s of await allSegments({ home: h })) await segmentIndex({ home: h, segment: s.segment, owner: true }) }
   // discovery (warm, index built): the id / ref / harness the parameterised commands use
   fs.rmSync(indexPath, { recursive: true, force: true })
-  const segDoc = run(home, ['query', 'segments'])
+  // `index_build_ms` is the REAL build — what the daemon's keeper pays to index a whole cold home, and what a user
+  // pays once after deleting `index/`. A query over a plaintext segment writes nothing, so timing one would have
+  // measured the reader's in-memory scan of that one query instead.
+  const t0 = process.hrtime.bigint()
   await kept()
+  const buildMs = Number(process.hrtime.bigint() - t0) / 1e6
+  const segDoc = run(home, ['query', 'segments'])
   const sesDoc = run(home, ['query', 'sessions'])
   const big = (segDoc.doc?.segments || []).filter((s) => s.records > 0).sort((a, b) => a.bytes - b.bytes).pop()
   const { HARNESS_IDS } = await import('../src/cli/harness-names.mjs')  // one fact, one place (0.1 §2)
@@ -158,7 +164,7 @@ export async function measure({ home, runs = DEFAULT_RUNS, only = null }) {
     harness: HARNESS_IDS[0],
   }
   const dataset = { segments: (segDoc.doc?.segments || []).length, records: (segDoc.doc?.segments || []).reduce((n, s) => n + s.records, 0),
-    bytes: (segDoc.doc?.segments || []).reduce((n, s) => n + (s.bytes || 0), 0), index_build_ms: Math.round(segDoc.ms) }
+    bytes: (segDoc.doc?.segments || []).reduce((n, s) => n + (s.bytes || 0), 0), index_build_ms: Math.round(buildMs) }
 
   const commands = []
   for (const [label, argv, opt] of CMDS) {
@@ -166,13 +172,15 @@ export async function measure({ home, runs = DEFAULT_RUNS, only = null }) {
     const filled = fill(argv, vars)
     if (filled.some((a) => a == null)) { commands.push({ command: label, skipped: 'no value for its parameter in this dataset' }); continue }
     fs.rmSync(indexPath, { recursive: true, force: true })
-    const cold = run(home, filled, opt)
+    const noIndex = run(home, filled, opt)
     await kept()
     const warm = []
-    let last = cold
+    let last = noIndex
     for (let i = 0; i < runs; i++) { last = run(home, filled, opt); warm.push(last.ms) }
     commands.push({ command: label, argv: filled.join(' '),
-      cold_ms: Math.round(cold.ms), p50_ms: Math.round(median(warm)), p95_ms: Math.round(pct(warm, 95)),
+      // `no_index_ms`: this one run had `index/` deleted, so it is the fallback (the reader's own in-memory scan,
+      // which reports `index-cold`) — NOT what a user sees with a daemon that keeps the index current (`p50`/`p95`).
+      no_index_ms: Math.round(noIndex.ms), p50_ms: Math.round(median(warm)), p95_ms: Math.round(pct(warm, 95)),
       cpu_ms: last.cpu_ms == null ? null : Math.round(last.cpu_ms), rss_kb: last.rss_kb,
       disk_read_blocks: diskRead(home, filled), status: last.status, ...(last.status ? { error: last.stderr } : {}) })
   }
@@ -220,15 +228,78 @@ function printIdle(o) {
   console.log(`cpu          ${o.cpu_ms_per_minute} ms per minute over ${o.seconds} s idle`)
 }
 
+// ── the write-amplification line of §3.1 (D62), both halves ───────────────────────────────
+// Written bytes = the plaintext segments plus their index (the sealed copies do not count, §3.1).
+// (a) THE RATIO, on the reference mix scripts/gen-dataset.mjs generates: that is where it means something, because
+//     LLM calls dominate the bytes there, as they do in real traffic.
+// (b) AN ABSOLUTE BOUND PER RECORD, in the worst arrival shape: one tiny record per keeper pass. A pass costs one
+//     entry line plus one mark line whatever the record was, so a 236 B record can cost ~2 index bytes per captured
+//     byte — a ratio that says nothing, since the bytes themselves are a few hundred. The bound is what to hold.
+const du = (dir, match = () => true) => { let n = 0
+  let names = []
+  try { names = fs.readdirSync(dir) } catch { return 0 }
+  for (const f of names) { if (!match(f)) continue; try { n += fs.statSync(path.join(dir, f)).size } catch { /* gone */ } }
+  return n }
+
+/** (b) One tiny record per keeper pass, `n` times → index bytes per record. Its own throwaway HOME. */
+async function sparseAmp(n) {
+  const { segmentIndex, indexDir } = await import('../src/query/index-build.mjs')
+  const { envLine } = await import('../test/query/raw-home.mjs') // one record shape, one place (0.1 §2)
+  const dir = fs.mkdtempSync(path.join(require_tmp(), 'perf-amp-'))
+  const h = path.join(dir, '.asight'), seg = '20261020T100000Z'
+  fs.mkdirSync(path.join(h, 'raw'), { recursive: true })
+  const file = path.join(h, 'raw', `${seg}.ndjson`)
+  for (let i = 0; i < n; i++) {
+    fs.appendFileSync(file, envLine({ id: `req_${String(i).padStart(5, '0')}` }) + '\n')
+    await segmentIndex({ home: h, segment: seg, owner: true }) // exactly what one keeper pass does
+  }
+  const captured = fs.statSync(file).size
+  const index = du(indexDir(h))
+  fs.rmSync(dir, { recursive: true, force: true })
+  return { records: n, record_bytes: Math.round(captured / n), captured_bytes: captured, index_bytes: index,
+    index_bytes_per_record: Math.round(index / n), bytes_written_per_captured_byte: +((captured + index) / captured).toFixed(2) }
+}
+
+/** (a) the reference mix already in <home>/.asight/raw, indexed the way the daemon's keeper does. */
+async function writeAmp({ home, records }) {
+  const { allSegments, segmentIndex, indexDir } = await import('../src/query/index-build.mjs')
+  const h = path.join(home, '.asight')
+  fs.rmSync(path.join(h, 'index'), { recursive: true, force: true })
+  const segs = await allSegments({ home: h })
+  const t0 = process.hrtime.bigint()
+  for (const s of segs) await segmentIndex({ home: h, segment: s.segment, owner: true })
+  const build_ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6)
+  let wire = 0, stored = 0, n = 0
+  for (const s of segs) {
+    const r = await segmentIndex({ home: h, segment: s.segment })
+    for (const rec of r.records) { wire += rec.wire_bytes || 0; stored += rec.stored_bytes || 0; n++ }
+  }
+  const plaintext = du(path.join(h, 'raw'), (f) => f.endsWith('.ndjson'))
+  const index = du(indexDir(h))
+  return { mix: { segments: segs.length, records: n, plaintext_bytes: plaintext, index_bytes: index,
+      captured_wire_bytes: wire, stored_record_bytes: stored, build_ms,
+      bytes_written_per_captured_byte: wire ? +((plaintext + index) / wire).toFixed(3) : null,
+      index_bytes_per_captured_byte: wire ? +(index / wire).toFixed(4) : null },
+    sparse: await sparseAmp(records) }
+}
+
+function printAmp(o) {
+  const m = o.mix, s = o.sparse
+  console.log(`reference mix (gen-dataset): ${m.segments} segments  ${m.records} records  plaintext ${(m.plaintext_bytes / 1e6).toFixed(1)} MB  index ${(m.index_bytes / 1e6).toFixed(2)} MB  (built in ${m.build_ms} ms)`)
+  console.log(`  captured (wire) ${(m.captured_wire_bytes / 1e6).toFixed(1)} MB → WRITTEN PER CAPTURED BYTE ${m.bytes_written_per_captured_byte}   (§3.1: ≤ 1.1; the index alone is ${m.index_bytes_per_captured_byte})`)
+  console.log(`worst arrival shape: ${s.records} × one ${s.record_bytes} B record per keeper pass  index ${(s.index_bytes / 1024).toFixed(1)} KiB`)
+  console.log(`  INDEX PER RECORD ${s.index_bytes_per_record} B   (§3.1: ≤ 1 KB; the ratio here would be ${s.bytes_written_per_captured_byte}, which is meaningless at this size)`)
+}
+
 function print(out) {
   const t = out.dataset
-  console.log(`dataset  ${t.segments} segments  ${t.records} records  ${(t.bytes / 2 ** 30).toFixed(2)} GiB  cold index build ${t.index_build_ms} ms`)
+  console.log(`dataset  ${t.segments} segments  ${t.records} records  ${(t.bytes / 2 ** 30).toFixed(2)} GiB  index build (the keeper's, whole home) ${t.index_build_ms} ms`)
   console.log(`floor    node boot ${out.floor.node_boot_ms} ms  +asight module load ${out.floor.module_load_ms} ms  (= ${out.floor.cli_version_ms} ms before any work)`)
-  console.log('command           cold    p50    p95   core50  core95   cpu    rss(MB)  diskblk')
+  console.log('command         noindex    p50    p95   core50  core95   cpu    rss(MB)  diskblk')
   for (const c of out.commands) {
     if (c.skipped) { console.log(`  ${c.command.padEnd(16)}${c.skipped}`); continue }
     const k = out.core[c.command] || {}
-    console.log(`  ${c.command.padEnd(16)}${String(c.cold_ms).padStart(5)}${String(c.p50_ms).padStart(7)}${String(c.p95_ms).padStart(7)}${String(k.p50_ms ?? '-').padStart(8)}${String(k.p95_ms ?? '-').padStart(8)}${String(c.cpu_ms ?? '-').padStart(7)}${String(c.rss_kb == null ? '-' : (c.rss_kb / 1024).toFixed(0)).padStart(9)}${String(c.disk_read_blocks ?? '-').padStart(9)}${c.error ? `  FAILED: ${c.error}` : ''}`)
+    console.log(`  ${c.command.padEnd(16)}${String(c.no_index_ms).padStart(5)}${String(c.p50_ms).padStart(7)}${String(c.p95_ms).padStart(7)}${String(k.p50_ms ?? '-').padStart(8)}${String(k.p95_ms ?? '-').padStart(8)}${String(c.cpu_ms ?? '-').padStart(7)}${String(c.rss_kb == null ? '-' : (c.rss_kb / 1024).toFixed(0)).padStart(9)}${String(c.disk_read_blocks ?? '-').padStart(9)}${c.error ? `  FAILED: ${c.error}` : ''}`)
   }
   console.log(`nearby (one process, a session already open in ${out.core.__open_ms ?? '-'} ms core):`)
   for (const n of out.nearby) console.log(`  ${n.step.padEnd(26)} p50 ${String(n.p50_ms).padStart(5)} ms  p95 ${String(n.p95_ms).padStart(5)} ms${n.error ? `  FAILED: ${n.error}` : ''}`)
@@ -240,7 +311,13 @@ async function main(argv) {
   const args = {}
   for (let i = 0; i < argv.length; i += 2) args[argv[i].replace(/^--/, '')] = argv[i + 1]
   if (args.idle) { const o = idle(Number(args.idle), args.seconds ? Number(args.seconds) : 60); printIdle(o); if (args.json) fs.writeFileSync(args.json, JSON.stringify(o, null, 2)); return }
-  if (!args.home) { console.error('usage: node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only a,b] [--json out.json]\n       node scripts/perf-cli.mjs --idle <pid> [--seconds 60] [--json out.json]'); process.exit(2) }
+  if (args['write-amp']) {
+    const o = await writeAmp({ home: args['write-amp'], records: args.records ? Number(args.records) : 200 })
+    printAmp(o)
+    if (args.json) fs.writeFileSync(args.json, JSON.stringify(o, null, 2))
+    return
+  }
+  if (!args.home) { console.error('usage: node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only a,b] [--json out.json]\n       node scripts/perf-cli.mjs --idle <pid> [--seconds 60] [--json out.json]\n       node scripts/perf-cli.mjs --write-amp <HOME> [--records 200] [--json out.json]'); process.exit(2) }
   const out = await measure({ home: args.home, runs: args.runs ? Number(args.runs) : undefined, only: args.only ? args.only.split(',') : null })
   print(out)
   if (args.json) fs.writeFileSync(args.json, JSON.stringify(out, null, 2))
