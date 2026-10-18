@@ -50,7 +50,7 @@ export function controlEndpointOf({ dir, fs = nodeFs } = {}) {
  *  `request` is controlRequest wrapped with the token on the platforms that use one; a `why` names what is missing when there is no endpoint. Never
  *  throws — reading control.json is best-effort; the caller decides what a missing endpoint means. */
 export function controlEndpointFor({ platform = process.platform, dir, env = process.env, fs = nodeFs } = {}) {
-  if (platform === 'win32' || platform === 'darwin') {
+  if (platform === 'win32' || platform === 'darwin') { // not proxy mode: the OSes that name their endpoint in control.json (4.9 §7)
     const ep = controlEndpointOf({ dir, fs })
     if (ep == null) return { socketPath: null, request: controlRequest, why: `${CONTROL_FILE} names no daemon here (none was ever started)` }
     if (ep.error) return { socketPath: null, request: controlRequest, why: ep.error }
