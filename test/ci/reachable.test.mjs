@@ -31,6 +31,16 @@ export const UNREACHED = Object.freeze({
   'src/query/index.mjs': 'spec 3.5:44 names runNamed as the server\'s only entry, but src/server.mjs does not use it',
   'src/capture/desktop-steer.mjs': 'old CC-Desktop Clash Verge steer; only src/netenv/clash.mjs reached it (for socket discovery), and D49 deleted that. Removal waits on the backlog',
   'src/off/clash.mjs': 'the Verge strip / reload half of that steer, reached only through src/capture/desktop-steer.mjs; same backlog items',
+  'src/capture/keep.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
+  'src/dissect/session-headers.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
+  'src/etl/cli.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
+  'src/etl/shard.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
+  'src/query/raw-compare.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
+  'src/raw/legacy.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
+  'src/raw/seal.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
+  'src/raw/session-key.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
+  'src/raw/verify.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
+  'src/raw/writer.mjs': 'kept until the data-format branch (D59/D60) replaces or reuses it',
 })
 
 const walk = (dir) => fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]) : []

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { runInstallCli } from '../../src/cli/install.mjs'
-import { resolveAlias, commandNamed } from '../../src/cli/commands.mjs'
+import { commandNamed } from '../../src/cli/commands.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -22,10 +22,9 @@ async function cli(argv, { tty = false, over = {} } = {}) {
   return { w, io, exit }
 }
 
-test('install is a command of its own, and `collector install` is its hidden alias (no longer `on`)', () => {
+test('install is a command of its own (and the hidden `collector install` alias is gone, 1.6 §2: one feature, one name)', () => {
   assert.ok(commandNamed('install'))
-  assert.deepEqual(resolveAlias(['collector', 'install', '--yes']).argv, ['install', '--yes'])
-  assert.deepEqual(resolveAlias(['install']).argv, ['install'], 'install is no alias of on')
+  assert.equal(commandNamed('collector'), undefined)
 })
 
 test('1.6 §1.6: as root, install refuses before it reads anything — exit 1, no ~/.asight', async () => {

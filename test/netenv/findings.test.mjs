@@ -310,7 +310,7 @@ test('V49 end to end, with the real descriptors: a proxy that came from the invo
   const SRC = path.join(os.tmpdir(), 'none')
   const base = s.ctx().env
   const dead = async (env) => {
-    const r = await s.run(['doctor', 'claude-code', '--json', '--source', SRC], { env: { ...base, ...env }, deps })
+    const r = await s.run(['doctor', 'claude-code', '--json'], { env: { ...base, ...env, ASIGHT_SOURCE: SRC }, deps })
     const f = r.io.json().findings.find((x) => x.code === 'proxy-dead')
     return { f, text: f ? f.commands.filter((c) => c.shell === 'gui').map((c) => c.run).join('\n') : '' }
   }

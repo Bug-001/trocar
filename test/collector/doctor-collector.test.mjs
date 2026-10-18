@@ -27,7 +27,7 @@ const CLEAN = { id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic
 const cleanSource = (home) => { const d = path.join(home, 'src'); fs.mkdirSync(d); fs.writeFileSync(path.join(d, 'capture.ndjson'), JSON.stringify(CLEAN) + '\n', { mode: 0o600 }); return d }
 const doctor = (home, source) => {
   let status = 0, out = ''
-  try { out = execFileSync(process.execPath, [CLI, 'doctor', '--source', source], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, PATH: OS_PATH, XDG_RUNTIME_DIR: '', ASIGHT_SOURCE: '' } }) } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || '') }
+  try { out = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, PATH: OS_PATH, XDG_RUNTIME_DIR: '', ASIGHT_SOURCE: source } }) } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || '') }
   return { status, out }
 }
 
