@@ -180,7 +180,9 @@ for (const platform of ['darwin', 'win32']) {
         assert.deepEqual([r.proc.pid, r.proc.agent], [PID, 'codex'])
         // D62: the daemon indexed what it wrote. Before any query ran, the index of that segment is there and covers
         // the record — so the first query answers from it instead of building it (3.9 s on 1 GB before this).
-        const idx = JSON.parse(fs.readFileSync(path.join(path.dirname(w.dir), 'index', `${lock.segment}.json`), 'utf8'))
+        // The document is append-only NDJSON (4.2 §段索引): entry lines and one mark line per pass.
+        const lines = fs.readFileSync(path.join(path.dirname(w.dir), 'index', `${lock.segment}.json`), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+        const idx = { records: lines.filter((o) => !o.m && !o.p), mark: lines.filter((o) => o.m).pop().m }
         assert.deepEqual(idx.records.map((x) => x.id), [`${lock.segment}:1`], 'the index covers the captured record')
         assert.deepEqual([idx.records[0].host, idx.records[0].harness], [r.host, 'codex'])
         assert.equal(idx.mark.size, fs.statSync(path.join(rawDir, `${lock.segment}.ndjson`)).size, 'to the last byte the daemon wrote')

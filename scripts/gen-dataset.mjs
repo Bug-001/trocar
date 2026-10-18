@@ -331,6 +331,19 @@ export function generate({ home, seed = DEFAULTS.seed, bytes = DEFAULTS.bytes, s
   return { seed, bytes: w.bytes, records: w.records, sessions, segments: w.segments, peak_estimate_bytes: peak }
 }
 
+/** The indexes the daemon would have left behind (D62, 4.2 §段索引): without them the dataset is not what a real
+ *  install looks like, and a query measured on it measures the reader's fallback build instead of the product.
+ *  Built exactly as the daemon's keeper builds them — `owner: true`, one pass per segment. */
+export async function keepIndexes({ home, segments }) {
+  const { segmentIndex } = await import('../src/query/index-build.mjs')
+  let bytes = 0
+  for (const s of segments) {
+    await segmentIndex({ home, segment: s.segment, owner: true })
+    try { bytes += fs.statSync(path.join(home, 'index', `${s.segment}.json`)).size } catch { /* nothing indexed */ }
+  }
+  return bytes
+}
+
 async function main(argv) {
   const args = {}
   for (let i = 0; i < argv.length; i += 2) args[argv[i].replace(/^--/, '')] = argv[i + 1]
@@ -339,10 +352,11 @@ async function main(argv) {
   const home = path.join(args.home, '.asight')
   const started = Date.now()
   const out = generate({ home, seed: num('seed'), bytes: num('bytes'), segmentBytes: num('segment-bytes'), maxDisk: num('max-disk'), start: args.start })
+  const index_bytes = await keepIndexes({ home, segments: out.segments })
   const took = Date.now() - started
-  const summary = { ...out, home, took_ms: took }
+  const summary = { ...out, index_bytes, home, took_ms: took }
   if ('json' in args) { console.log(JSON.stringify(summary, null, 2)); return }
-  console.log(`seed ${out.seed}  records ${out.records}  bytes ${out.bytes}  sessions ${out.sessions}  segments ${out.segments.length}  ${took} ms`)
+  console.log(`seed ${out.seed}  records ${out.records}  bytes ${out.bytes}  sessions ${out.sessions}  segments ${out.segments.length}  index ${index_bytes} bytes  ${took} ms`)
   for (const s of out.segments) console.log(`  ${s.segment}  ${String(s.records).padStart(8)} records  ${String(s.bytes).padStart(12)} bytes`)
 }
 

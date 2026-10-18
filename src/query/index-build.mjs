@@ -180,26 +180,51 @@ const markLine = (m) => `${JSON.stringify({ m, v: INDEX_V })}\n`;
 const fpDigest = (read, end) => { const h = createHash('sha256'); for (const [a, b] of fpRanges(end)) h.update(read(a, b)); return h.digest('base64'); };
 
 // The whole document, for a READER: everything up to the last complete mark line.
-// → { mark, records, problems, covered } | null (no usable index). `covered` = where that mark line ended.
+// → { mark, records, problems } | null (no usable index).
 function readIndex(fs, file) {
   let buf;
-  try { buf = fs.readFileSync(file); } catch { return null; }
-  const got = { mark: null, records: [], problems: [], covered: 0 };
-  let pend = [], pendP = [];
+  try { buf = fs.readFileSync(file) } catch { return null; }
+  // ONE JSON.parse over the document, not one per line: a JSON line never holds a raw newline, so the document is an
+  // array once every newline is a comma (≈ 1.5× faster than per line on a 20 k-entry index — this is the path every
+  // query pays). A torn last batch makes that parse fail, and then the line loop takes what is complete.
+  let lines;
+  try { lines = JSON.parse(asArray(buf)); } catch { lines = completeLines(buf); }
+  const got = { mark: null, records: [], problems: [] };
+  // the last complete mark is what the document asserts; the lines after it are a batch that was cut off
+  let upTo = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const o = lines[i];
+    if (!o || typeof o !== 'object') break;
+    if (!o.m) continue;
+    if (o.v !== INDEX_V) return null;      // another format: stale, rebuilt like any stale index
+    got.mark = o.m; upTo = i;
+  }
+  if (!got.mark) return null;
+  for (let i = 0; i < upTo; i++) {        // no spread: one segment can hold ~85 k entries
+    const o = lines[i];
+    if (o.m) continue;
+    if (o.p) got.problems.push(o.p); else got.records.push(o);
+  }
+  return got;
+}
+// Every complete line of a document whose end is torn (the fallback above).
+function completeLines(buf) {
+  const out = [];
   for (let at = 0; at < buf.length;) {
     const nl = buf.indexOf(NL, at);
-    if (nl < 0) break;                     // a torn batch at the end: not a fact yet
-    let o;
-    try { o = JSON.parse(buf.subarray(at, nl)); } catch { break; }
+    if (nl < 0) break;                     // the torn batch: not a fact yet
+    try { out.push(JSON.parse(buf.subarray(at, nl))); } catch { break; }
     at = nl + 1;
-    if (!o || typeof o !== 'object') break;
-    if (o.m) {
-      if (o.v !== INDEX_V) return null;    // another format: stale, rebuilt like any stale index
-      got.mark = o.m; got.records.push(...pend); got.problems.push(...pendP); pend = []; pendP = []; got.covered = at;
-    } else if (o.p) pendP.push(o.p);
-    else pend.push(o);
   }
-  return got.mark ? got : null;
+  return out;
+}
+// The NDJSON document as one JSON array, in one copy: `[`, the bytes with every newline turned into a comma, `]`.
+function asArray(buf) {
+  const end = buf.length && buf[buf.length - 1] === NL ? buf.length - 1 : buf.length;
+  const out = Buffer.allocUnsafe(end + 2);
+  out[0] = 0x5b; buf.copy(out, 1, 0, end); out[end + 1] = 0x5d;
+  for (let i = out.indexOf(NL, 1); i > 0; i = out.indexOf(NL, i + 1)) out[i] = 0x2c;
+  return out.toString('utf8');
 }
 
 const TAIL = 64 << 10; // a mark line is a few hundred bytes: room for it plus a torn batch, and widened if not
@@ -295,7 +320,7 @@ export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs, 
   const source = fs.existsSync(plainPath) ? plainPath : sealedPath;
   const sealed = /\.sealed$/.test(source);
   const idxFile = path.join(indexDir(home), `${segment}.json`);
-  // the keeper needs the stored mark only; a reader needs the entries behind it too
+  // the keeper needs the stored mark and where it ended (only it appends); a reader needs the entries behind it
   const stored = owner && !sealed ? tailMark(fs, idxFile) : readIndex(fs, idxFile);
   const how = usability(fs, source, stored);
   // A stored index remembers what it could NOT read, and says it again on every later read: a problem

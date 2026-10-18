@@ -137,9 +137,15 @@ async function cores({ home, names, vars, runs }) {
 export async function measure({ home, runs = DEFAULT_RUNS, only = null }) {
   const indexPath = path.join(home, '.asight', 'index')
   const names = CMDS.map(([n]) => n).filter((n) => !only || only.includes(n))
+  // What the daemon leaves behind (D62, 4.2 §段索引): a reader never writes a plaintext segment's index, so after a
+  // COLD run (the index deleted) the index has to be put back the way the keeper would have, or every "warm" run
+  // would measure the fallback build instead of the product.
+  const { allSegments, segmentIndex } = await import('../src/query/index-build.mjs')
+  const kept = async () => { const h = path.join(home, '.asight'); for (const s of await allSegments({ home: h })) await segmentIndex({ home: h, segment: s.segment, owner: true }) }
   // discovery (warm, index built): the id / ref / harness the parameterised commands use
   fs.rmSync(indexPath, { recursive: true, force: true })
   const segDoc = run(home, ['query', 'segments'])
+  await kept()
   const sesDoc = run(home, ['query', 'sessions'])
   const big = (segDoc.doc?.segments || []).filter((s) => s.records > 0).sort((a, b) => a.bytes - b.bytes).pop()
   const { HARNESS_IDS } = await import('../src/cli/harness-names.mjs')  // one fact, one place (0.1 §2)
@@ -158,6 +164,7 @@ export async function measure({ home, runs = DEFAULT_RUNS, only = null }) {
     if (filled.some((a) => a == null)) { commands.push({ command: label, skipped: 'no value for its parameter in this dataset' }); continue }
     fs.rmSync(indexPath, { recursive: true, force: true })
     const cold = run(home, filled, opt)
+    await kept()
     const warm = []
     let last = cold
     for (let i = 0; i < runs; i++) { last = run(home, filled, opt); warm.push(last.ms) }
