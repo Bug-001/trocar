@@ -734,6 +734,9 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       const no = (error) => ({ ok: false, error, ...(self ? { self } : {}) })
       if (!DAEMON_READ_VERBS.includes(verb)) return no(`${JSON.stringify(verb ?? null)} is not one of the daemon's read verbs`)
       if (!parts.helper) return no('this daemon reads the OS without a resident helper, so it has none to ask')
+      // `reg-read` names a registry key, so the ARGUMENTS are checked here too, against the one allow-list the helper itself checks against
+      // (4.8 §7, W26: the daemon refuses an out-of-list key before its helper is asked). No checker, no reg-read.
+      if (verb === 'reg-read' && !(typeof parts.regReadAllowed === 'function' && parts.regReadAllowed(args && typeof args === 'object' ? args : {}))) return no(`reg-read outside the allow-list: ${JSON.stringify(args ?? null)}`)
       try { return { ok: true, data: await parts.helper.call(verb, args && typeof args === 'object' ? args : {}, { timeoutMs: verb === 'ps' ? 10000 : 2000 }), ...(self ? { self } : {}) } } catch (e) { return no(`${verb}: ${String((e && (e.code || e.message)) || e)}`) }
     }),
     'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); return collector.on(body(q)) }),

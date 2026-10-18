@@ -25,6 +25,9 @@ const base = (p) => String(p).split(/[\\/]/).pop()
 const iso = (t) => (typeof t === 'number' && Number.isFinite(t) ? new Date(t).toISOString() : typeof t === 'string' ? t : null)
 const versionOf = (exe) => { const all = [...String(exe || '').matchAll(/\d+\.\d+\.\d+/g)]; return all.length ? all[all.length - 1][0] : null }
 const GENERIC = /^(node|python3?|bun|deno|ruby|code|windowsterminal|powershell)$/i
+/** A refusal BY the helper — a verb it does not know, a key outside its allow-list — is the helper ANSWERING: a second helper would answer the
+ *  same, and starting one costs ~450 ms. Only a channel that cannot answer at all (down, timed out, no daemon) makes a read start its own. */
+const REFUSED_BY_HELPER = new Set(['helper-forbidden-key', 'helper-unknown-verb', 'helper-verb-error', 'daemon-read-unknown-verb'])
 /** `claude`, `codex app-server`: the program's name — its image without `.exe`, with a sub-command word when it has one (a word, not a path or a flag). */
 function processName(row) {
   const image = (base(row.exe || row.name || '').replace(/\.exe$/i, '') || row.name || '')
@@ -41,14 +44,33 @@ export async function gatherWin32Facts(ctx, deps = {}) {
   const unknowns = []
   const fail = (fact, reason, detail) => unknowns.push({ fact, reason, detail })
 
-  // ---- the resident helper: injected, or started here for the read verbs and closed again ----------------------------------------------------------------
-  const own = !D.helper
+  // ---- the resident helper: injected (the daemon's warm one, through src/off/daemon-read.mjs), or started here for the read verbs and closed again ----
+  // An INJECTED helper that fails is not the end of the diagnosis: a daemon whose helper is down or busy would otherwise turn the process, the
+  // listener and the system-proxy axes all `denied` — exactly when the user needs them. On its first failure this starts its own helper and says
+  // so (D38, never silent), and every later read goes to that one. The daemon's reader stops asking after its own first failure (DAEMON_READ_CAP).
   let helper = D.helper || null
-  if (!helper) {
-    helper = startHelper({ env, ...(D.spawn ? { spawn: D.spawn } : {}) })
-    try { await helper.ready } catch (e) { fail('helper', 'denied', `the resident helper could not be started (${(e && e.code) || String((e && e.message) || e)})`); helper = null }
+  let own = false, injected = !!helper
+  const startOwn = async () => {
+    const h = startHelper({ env, ...(D.spawn ? { spawn: D.spawn } : {}) })
+    own = true
+    try { await h.ready; return h } catch (e) { fail('helper', 'denied', `the resident helper could not be started (${(e && e.code) || String((e && e.message) || e)})`); return null }
   }
-  const call = async (verb, args = {}, o = {}) => { if (!helper) return null; try { return await helper.call(verb, args, o) } catch (e) { return { $failed: (e && e.code) || String((e && e.message) || e) } } }
+  if (!helper) helper = await startOwn()
+  const call = async (verb, args = {}, o = {}) => {
+    if (!helper) return null
+    try { return await helper.call(verb, args, o) } catch (e) {
+      const why = (e && e.code) || String((e && e.message) || e)
+      if (injected && !REFUSED_BY_HELPER.has(why)) {
+        injected = false
+        fail('helper', 'denied', `the daemon's resident helper did not answer (${why}), so this command started its own`)
+        helper = await startOwn()
+        if (helper) return call(verb, args, o)
+      }
+      return { $failed: why }
+    }
+  }
+  // the same one gate for the readers that take a helper of their own (upstream.mjs's Internet Settings read): they throw, `call` does not
+  const asHelper = { call: async (verb, args, o) => { const r = await call(verb, args, o); if (r === null) throw new Error('there is no resident helper to ask'); if (r.$failed) throw Object.assign(new Error(String(r.$failed)), { code: String(r.$failed) }); return r } }
   try {
     // ---- the reads: processes, listeners, interfaces, the registry --------------------------------------------------------------------------------------------------------
     const psA = await call('ps', { all: true }, { timeoutMs: 10000 })
@@ -58,7 +80,8 @@ export async function gatherWin32Facts(ctx, deps = {}) {
     const tblA = await call('tcp-table', { states: ['listen'] })
     const listenRows = tblA && Array.isArray(tblA.rows) ? tblA.rows.filter((r) => r && Number.isInteger(r.localPort) && Number.isInteger(r.pid)) : null
     if (!listenRows) fail('listeners', tblA && tblA.$failed ? 'denied' : 'unparseable', `the helper's socket table: ${(tblA && tblA.$failed) || 'no rows'}`)
-    const sp = await (D.readSystemProxy || readSystemProxy)({ helper })
+    const sp = await (D.readSystemProxy || readSystemProxy)({ helper: asHelper })
+    // ---- the reads: processes, listeners, interfaces, the registry ------
     const sysFact = (() => {
       if (!(sp && sp.ok)) return { unknown: { reason: (sp && sp.reason) || 'absent', ...(sp && sp.detail ? { detail: String(sp.detail) } : {}) } }
       const addr = sp.autoConfigUrl ? null : proxyAddress(sp.server)

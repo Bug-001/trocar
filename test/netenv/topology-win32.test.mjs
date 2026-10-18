@@ -16,6 +16,14 @@ import { newManifest, applyJsonKey } from '../../src/collector/core/trust/journa
 import { tmpDir } from '../helpers/tmp.mjs'
 import { ROWS } from './fixtures/rows-win32.mjs'
 import { squash, pfacts, form, fwForm, proc } from './fixtures/rows.mjs'
+import { spawn as nodeSpawn } from 'node:child_process'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
+// the resident helper a command starts for itself: the Node stand-in of test/collector/arch/win32/fixtures/fake-helper.mjs, speaking the same
+// line protocol (nothing here runs Windows), and the child `spawn` hands back when the program is not there
+const FAKE_HELPER = fileURLToPath(new URL('../collector/arch/win32/fixtures/fake-helper.mjs', import.meta.url))
+const fakeSpawn = (fixture) => (exe, args, opts) => nodeSpawn(process.execPath, [FAKE_HELPER, JSON.stringify(fixture)], { ...opts, env: { ...process.env, ASIGHT_FAKE_HELPER: '1' } })
+const ghostChild = (emit) => { const c = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), pid: undefined, kill: () => true }); process.nextTick(() => emit(c)); return c }
 
 const all = await loadHarnesses()
 const kindOf = (t, id) => t.nodes.find((x) => x.id === id).kind
@@ -61,8 +69,8 @@ const statusOf = (ids, { agents = [], desired = 'on', appliedHosts = null } = {}
   link: { attached: null, helper: 'ok', ids: [] },
   harnesses: ids.map((id) => ({ id, installed: true, desired, entry: { state: 'intact' }, installedAt: '2026-10-09T09:00:00.000Z', procs: [] })),
 })
-const gather = (home, { helper, ids = ['claude-code'], env = {}, agents = [], desired = 'on', manifest = null, appliedHosts = null, netenv = { result: { products: [], unknown: [] } } } = {}) =>
-  gatherNetFacts({ platform: 'win32', home, env, harnesses: all, status: { ...statusOf(ids, { agents, desired, appliedHosts }), ...(manifest ? { manifest: { value: manifest, error: null } } : {}) }, netenv, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper } })
+const gather = (home, { helper, ids = ['claude-code'], env = {}, agents = [], desired = 'on', manifest = null, appliedHosts = null, spawn = null, netenv = { result: { products: [], unknown: [] } } } = {}) =>
+  gatherNetFacts({ platform: 'win32', home, env, harnesses: all, status: { ...statusOf(ids, { agents, desired, appliedHosts }), ...(manifest ? { manifest: { value: manifest, error: null } } : {}) }, netenv, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper, ...(spawn ? { spawn } : {}) } })
 const KERNEL_URL = 'http://claude-code.settings:s3-listener-token@127.0.0.1:17991'
 /** The collector dir of an installed proxy mode: the kernel's lock, the ports of ingress.json, and the manifest's record of the entry that was written over the user's own proxy. */
 function collectorOf(home, { url = KERNEL_URL, prior = 'http://proxy.corp:8080', groupPorts = { 'claude-code.settings': 17991 } } = {}) {
@@ -101,11 +109,32 @@ test('a helper that cannot be started, and one that answers nothing: every read 
   const home = tmpDir('asight-wf-dead-')
   collectorOf(home)
   const broken = { call: async () => { throw Object.assign(new Error('helper-down'), { code: 'helper-down' }) }, close: async () => {} }
-  const f = await gather(home, { helper: broken, ids: ['codex'] })
+  // the injected helper fails AND one of this command's own cannot be started (the program is not there): both halves are said, nothing is invented
+  const f = await gather(home, { helper: broken, ids: ['codex'], spawn: () => ghostChild((c) => c.emit('error', Object.assign(new Error('spawn powershell.exe ENOENT'), { code: 'ENOENT' }))) })
   assert.equal(f.routing, 'proxy')
   assert.ok(f.unknowns.length >= 2, `the processes and the listeners are each said: ${JSON.stringify(f.unknowns)}`)
   for (const u of f.unknowns) assert.ok(['denied', 'timeout', 'absent', 'unparseable'].includes(u.reason), `${JSON.stringify(u)}: a reason of the closed set`)
   assert.deepEqual(f.listeners, [])
+})
+
+test('an INJECTED helper (the daemon\'s warm one) that fails does not end the diagnosis — this command starts its own helper, says it did (D38), and every axis is read', async () => {
+  const home = tmpDir('asight-wf-fallback-')
+  collectorOf(home)
+  const asked = []
+  const broken = { call: async (verb) => { asked.push(verb); throw Object.assign(new Error('helper-down'), { code: 'helper-down' }) }, close: async () => {} }
+  const fixture = { verbs: {
+    ps: { data: { procs: [{ pid: 4242, name: 'claude.exe', exe: 'C:\\Users\\u\\.local\\bin\\claude.exe', cmdline: 'claude', cmdlineState: 'ok' }] } },
+    'tcp-table': { data: { rows: [{ localAddr: '127.0.0.1', localPort: 7890, pid: 4242, state: 'listen' }] } },
+    'reg-read': { data: { keyExists: true, values: { ProxyEnable: 0 } } },
+  } }
+  const f = await gather(home, { helper: broken, ids: ['claude-code'], spawn: fakeSpawn(fixture), agents: [{ pid: 4242, decrypt: true, trusted: true }] })
+  assert.deepEqual(asked, ['ps'], 'the daemon\'s helper was asked once, and is not asked again')
+  assert.deepEqual(f.unknowns.filter((u) => u.fact === 'procs' || u.fact === 'listeners'), [], 'the process and listener axes are READ, not denied: that is the diagnosis the user needs')
+  assert.deepEqual(f.listeners, [{ addr: '127.0.0.1', port: 7890, pid: 4242, exe: 'C:\\Users\\u\\.local\\bin\\claude.exe' }])
+  assert.deepEqual(f.harnesses['claude-code'].procs.map((p) => p.pid), [4242])
+  const said = f.unknowns.filter((u) => u.fact === 'helper')
+  assert.equal(said.length, 1, `the fallback is never silent (D38): ${JSON.stringify(f.unknowns)}`)
+  assert.match(said[0].detail, /did not answer \(helper-down\), so this command started its own/)
 })
 
 

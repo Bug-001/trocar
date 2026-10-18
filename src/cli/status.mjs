@@ -379,8 +379,7 @@ export async function statusFacts({ names = null, home = nodeOs.homedir(), env =
   // one command, one answer per OS question (D62 task E): the table and the daemon pid's identity are asked once. On Windows they are asked of the
   // DAEMON's warm helper when it answers (daemonProcReader; 4.8 §1 §7) — a powershell.exe start costs ~450 ms there — and of the OS when it does not.
   const reader = deps.daemonReader !== undefined ? deps.daemonReader : daemonProcReader({ platform, dir: collectorDir(home), env, fs: deps.fs || nodeFs, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath !== undefined ? { socketPath: deps.socketPath } : {}) })
-  const close = memoProcQuestions({ reader })
-  try {
+  return memoProcQuestions({ reader }, async () => {
     const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names })
     Object.assign(f, await gatherTopology(f, { home, env, platform, deps: { ...deps, daemonReader: reader } }))
     judgeCertificates(f)
@@ -388,7 +387,7 @@ export async function statusFacts({ names = null, home = nodeOs.homedir(), env =
     // the normal no-daemon state, not a fact about the user's machine.
     f.proc_asks = f.daemon && f.daemon.state === 'running' ? procAskNotes() : []
     return f
-  } finally { close() }
+  })
 }
 
 /** `asight query status` (附录 C.3 / C.5): the document, for the data side and for `--json`. */

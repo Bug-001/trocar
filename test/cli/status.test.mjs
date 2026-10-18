@@ -709,7 +709,7 @@ test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no Power
   const cim = [{ p: PID, pp: 1, n: 'node.exe', x: 'C:\\n.exe', s: CREATED, c: 'node asight.mjs daemon' }]
   const parts = { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: {} }
   const PIPE = '\\\\.\\pipe\\asight-d62' // on win32 only a named pipe is asked (daemonState): a unix path in the lock is not connected to
-  const once = async (warm) => {
+  const once = async (warm, self = { pid: PID, start_time: String(CREATED), boot_id: String(BOOTED) }) => {
     const fresh = tmpDir('asight-warm-')
     const dir = collectorDir(fresh)
     fs.mkdirSync(dir, { recursive: true })
@@ -727,8 +727,8 @@ test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no Power
       if (p === '/holders') return { count: 0, holders: [] }
       if (p === '/helper') {
         verbs.push(body.verb)
-        return warm ? { ok: true, data: { procs: [row] }, self: { pid: PID, start_time: String(CREATED), boot_id: String(BOOTED) } }
-          : { ok: false, error: 'ps: helper down: it exited with code 1', self: { pid: PID, start_time: String(CREATED), boot_id: String(BOOTED) } }
+        return warm ? { ok: true, data: { procs: [row] }, self }
+          : { ok: false, error: 'ps: helper down: it exited with code 1', self }
       }
       throw Object.assign(new Error(`no route ${p}`), { status: 404 })
     }
@@ -737,7 +737,8 @@ test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no Power
     return { exit, shells, verbs, doc: JSON.parse(io.stdoutText()) }
   }
   const hot = await once(true)
-  assert.deepEqual(hot.verbs, ['ps', 'tcp-table', 'reg-read'], 'every read of the OS goes to the daemon\'s warm helper: the table, then the platform\'s network facts (which used to start a helper of their own) — and the snapshot both of them want is asked ONCE')
+  assert.deepEqual([...new Set(hot.verbs)].sort(), ['ps', 'reg-read', 'tcp-table'], 'every read of the OS goes to the daemon\'s warm helper: the process snapshot, the socket table and Internet Settings (which used to start a helper of their own) — in whatever order they are asked')
+  assert.equal(hot.verbs.filter((v) => v === 'ps').length, 1, 'and the snapshot the table and the platform\'s network facts both want is asked ONCE')
   assert.deepEqual(hot.shells, [], 'and no powershell.exe is started for the table or for the pid\'s identity (~450 ms each on the Windows test machine)')
   assert.deepEqual([hot.doc.daemon.running, hot.doc.daemon.responding], [true, true], 'the daemon\'s own identity, as its answer carried it, matched the lock')
   assert.equal(hot.exit, EXIT.ok, hot.io)
@@ -750,6 +751,12 @@ test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no Power
   assert.match(asked[0].reason, /ps: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
   const sameSide = (d) => [d.daemon, d.holders, d.harnesses]
   assert.deepEqual(sameSide(cold.doc), sameSide(hot.doc), 'and what the table decides — the daemon\'s verdict, the holders, the harnesses — is the same, whichever side answered')
+
+  // the daemon's own word on itself is used INSTEAD of the OS only while it is exactly what the lock claims. A reply that says
+  // anything else proves nothing about that lock, so the identity question goes to the OS — which here says what the lock says.
+  const lying = await once(true, { pid: PID, start_time: String(CREATED + 1), boot_id: String(BOOTED) })
+  assert.deepEqual(lying.shells.map((c) => (/ForEach-Object/.test(c) ? 'table' : 'identity')), ['identity'], 'the pid\'s identity is asked of the OS (the table still came from the daemon)')
+  assert.deepEqual([lying.doc.daemon.running, lying.doc.daemon.responding], [true, true], 'and the lock is judged on the OS\'s answer, not on the daemon\'s word about itself')
 })
 
 test('D62: `GET /holders` is asked only when the daemon\'s poll has rows — with nothing watched (`holders: null`) the rows are judged from the table `status` already read, and the daemon reads no second process snapshot for it', async () => {

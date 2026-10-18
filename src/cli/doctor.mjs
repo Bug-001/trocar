@@ -116,8 +116,7 @@ export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = p
   // one command, one answer per OS question (D62 task E): the trailing capture-health read asks the daemon pid's identity again. The scope is
   // opened HERE, so it is this one that carries the daemon read client statusFacts would otherwise open its own scope with (it is re-entrant).
   const reader = deps.daemonReader !== undefined ? deps.daemonReader : daemonProcReader({ platform, dir: collectorDir(home), env, fs: deps.fs || nodeFs, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath !== undefined ? { socketPath: deps.socketPath } : {}) })
-  const close = memoProcQuestions({ reader })
-  try { return await doctorDocOf({ names, home, env, platform, deps: { ...deps, daemonReader: reader } }) } finally { close() }
+  return memoProcQuestions({ reader }, () => doctorDocOf({ names, home, env, platform, deps: { ...deps, daemonReader: reader } }))
 }
 async function doctorDocOf({ names, home, env, platform, deps }) {
   const fs = deps.fs || nodeFs

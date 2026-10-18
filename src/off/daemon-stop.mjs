@@ -38,7 +38,7 @@ export function readDaemonLock({ file, now = Date.now(), alive = pidAlive, ident
   if (!lock || !Number.isInteger(lock.pid)) return { state: 'unknown', error: `${file} names no pid` }
   const age_ms = Math.max(0, Math.round(now - mtimeMs))
   if (!alive(lock.pid)) return { state: 'stale', lock, why: `pid ${lock.pid} is not running`, age_ms }
-  const id = identity(lock.pid) || {}
+  const id = identity(lock.pid, { expect: lock }) || {} // `expect`: what this lock claims of the pid — a reader that can answer without the OS (the daemon's own word on itself, 4.8 §7) may use it only when it matches exactly
   const verified = id.start_time != null && id.boot_id != null && lock.start_time != null && lock.boot_id != null // an older lock has neither
   if (verified && String(lock.boot_id) !== id.boot_id) return { state: 'stale', lock, why: 'the machine has rebooted since (boot id differs)', age_ms }
   if (verified && String(lock.start_time) !== id.start_time) return { state: 'stale', lock, why: `pid ${lock.pid} is another process now (start time differs)`, age_ms }

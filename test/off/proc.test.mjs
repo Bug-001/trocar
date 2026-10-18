@@ -227,3 +227,16 @@ test('memoProcQuestions: inside a scope the process table is asked once and a Wi
     assert.deepEqual(identityFor({ platform: 'win32', exec: broken.run })(4242), { start_time: String(CREATED_W), boot_id: String(BOOTED_W) }, 'and the identity falls back to its own question instead of inheriting the failure')
   } finally { close2() }
 })
+
+test('memoProcQuestions in the callback form: the scope is that call\'s async context, so two commands running at once never take each other\'s answers (the protection if `status` ever runs in a resident process) — and the boot time one of them read is its own', async () => {
+  const a = winTools(), b = winTools()
+  const run = (tools) => memoProcQuestions({}, async () => {
+    await listProcs({ platform: 'win32', exec: tools.run })
+    await listProcs({ platform: 'win32', exec: tools.run })
+    return identityFor({ platform: 'win32', exec: tools.run })(4242, { expect: { start_time: String(CREATED_W), boot_id: String(BOOTED_W) } })
+  })
+  const [ia, ib] = await Promise.all([run(a), run(b)])
+  assert.deepEqual([a.table(), b.table()], [1, 1], 'each command asked the table once, and neither answered from the other\'s')
+  assert.deepEqual([a.ident(), b.ident()], [0, 0], 'each answered the identity out of its own table')
+  assert.deepEqual([ia, ib], [{ start_time: String(CREATED_W), boot_id: String(BOOTED_W) }, { start_time: String(CREATED_W), boot_id: String(BOOTED_W) }])
+})

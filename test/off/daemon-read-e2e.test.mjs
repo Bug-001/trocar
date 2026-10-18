@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
 import { daemonReader, DAEMON_READ_VERBS } from '../../src/off/daemon-read.mjs'
+import { regReadAllowed, REG_READ_ALLOW } from '../../src/collector/arch/win32/helper.mjs'
 import { memoProcQuestions, listProcs } from '../../src/off/proc.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
 
@@ -18,8 +19,8 @@ for (const platform of ['win32', 'darwin']) {
   test(`${platform}: the CLI's read question reaches the daemon's resident helper over the real control endpoint, and the table reader takes that answer instead of asking the OS`, { timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     const asked = []
-    const helper = { close: async () => {}, call: async (verb, args) => { asked.push(verb); if (verb === 'ps') return { sessionId: 1, procs: [ROW] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }
-    const box = await liveUnit({ w, platform, parts: { helper } })
+    const helper = { close: async () => {}, call: async (verb, args) => { asked.push(verb); if (verb === 'ps') return { sessionId: 1, procs: [ROW] }; if (verb === 'reg-read') return { keyExists: true, values: { ProxyEnable: 0 } }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }
+    const box = await liveUnit({ w, platform, parts: { helper, regReadAllowed } })
     await withScratchCwd(platform, async () => {
       box.unit.startNow()
       await box.starting
@@ -50,6 +51,18 @@ for (const platform of ['win32', 'darwin']) {
         assert.equal(raw.ok, false, 'and a request that goes round the client is refused by the daemon itself')
         assert.match(raw.error, /not one of the daemon's read verbs/)
         assert.deepEqual(asked, ['ps'], 'the helper was never asked it')
+
+        // `reg-read` names a registry KEY, so the daemon checks the arguments too, against the one allow-list its helper checks against
+        // (4.8 §7, W26: refused before the helper is asked) — the verb alone was the whole gate
+        const rule = REG_READ_ALLOW[0]
+        const regAsk = (args) => reader.call('reg-read', args)
+        await assert.rejects(() => regAsk({ hive: rule.hive, key: 'Software\\Anything\\Else', names: rule.names.slice(0, 1) }), (e) => /outside the allow-list/.test(e.message), 'a key no rule names')
+        assert.deepEqual(asked, ['ps'], 'the helper was never asked it')
+        const reader2 = daemonReader({ platform, dir: w.dir, env: w.env }) // the first failure ends a reader for the life of its command (fix 3)
+        const good = { hive: rule.hive, key: rule.key, names: rule.names.slice(0, 1) }
+        assert.ok(regReadAllowed(good), 'the allow-list itself says this one is in it')
+        assert.deepEqual(await reader2.call('reg-read', good), { keyExists: true, values: { ProxyEnable: 0 } }, 'and a key the list names is answered by the helper')
+        assert.deepEqual(asked, ['ps', 'reg-read'])
       } finally { await box.stop() }
     })
   })
