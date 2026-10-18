@@ -13,6 +13,10 @@ import { controlEndpointFor } from '../off/control-client.mjs'
 export const QUERY_PATH = '/query'
 /** Names that read the machine as it is right now, not the captured corpus: they stay in the asking process (D63④). */
 export const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
+/** Every query name there is (src/query/named/index.mjs QUERIES, which this list is checked against by
+ *  test/query/docs.test.mjs — the query core is most of a CLI's load time, so the daemon must be able to refuse an
+ *  unknown name without importing it, and before forking a worker for it). */
+export const QUERY_NAMES = Object.freeze(['status', 'doctor', 'sessions', 'session', 'calls', 'block', 'classes', 'segments', 'pricing'])
 /** Environment variables that change what the query core answers. Set in the caller's environment → the caller
  *  answers locally, and the worker runs as if none were set (worker.mjs deletes them): one list, one place, so the
  *  two paths cannot disagree about a document. */
@@ -32,24 +36,28 @@ export const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_
  * (the collector directory, where this platform's daemon says how to reach it) — `home` = ~/.asight, `userHome` =
  * the user's home. Throws what the query core throws (QueryArgError for an unknown name or parameter) on either path.
  */
-export async function queryDocument(name, params = {}, { home, userHome, dir, platform, env = {}, deps, fs, now, indent = 0, deadlineMs = DEADLINE_MS } = {}) {
-  if (!localOnly(name, env) && !fs && !now) {
-    const ep = controlEndpointFor({ platform, dir, env })
+export async function queryDocument(name, params = {}, { home, userHome, dir, platform, env, deps, fs, now, indent = 0, deadlineMs = DEADLINE_MS } = {}) {
+  if (!localOnly(name, env || {}) && !fs && !now) {
+    const ep = controlEndpointFor({ platform, dir, env: env || {} })
     if (ep.socketPath) {
       try {
         const q = new URLSearchParams({ ...params, name, indent: String(indent) })
         const bytes = await ep.request({ socketPath: ep.socketPath, path: `${QUERY_PATH}?${q}`, timeoutMs: deadlineMs, raw: true })
         return { text: bytes.toString('utf8'), via: 'daemon' }
       } catch (e) {
-        // 4xx is the query core's own verdict on these very arguments, so this process must raise the same error
-        // instead of computing it again; anything else (no daemon, a refused socket, a wedge, an older daemon with
-        // no such route) is answered locally.
-        if (e && e.status >= 400 && e.status < 500 && e.status !== 404) throw await asQueryError(e)
+        // 400 is the query core's own verdict on these very arguments, so this process must raise the same error
+        // instead of computing it again. EVERYTHING else is answered locally: no daemon, a refused socket, a wrong
+        // token (401 — the control plane's, not the query core's), an older daemon with no such route (404), no warm
+        // worker (503), a wedge. A verdict on the arguments is the only answer this process may take over.
+        if (e && e.status === 400) throw await asQueryError(e)
       }
     }
   }
   const { runQuery } = await import('./named/index.mjs')
-  return { text: JSON.stringify(await runQuery(name, params, { home, userHome, env, platform, deps, fs, now }), null, indent), via: 'local' }
+  // `env` only when the caller gave one: an empty object here is not "no environment", it is an environment with
+  // nothing in it, and it defeated the default the commands themselves set (cli/status.mjs `env = process.env`),
+  // so the board answered `/api/status` and `/api/doctor` as if the machine had no environment at all.
+  return { text: JSON.stringify(await runQuery(name, params, { home, userHome, platform, deps, fs, now, ...(env ? { env } : {}) }), null, indent), via: 'local' }
 }
 
 /** The daemon's 400 as the error the local path would have thrown (the message is the query core's own). */

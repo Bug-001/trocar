@@ -6,9 +6,15 @@
 // Requests are serialized: one worker, one query at a time, which is also what bounds its memory.
 // A worker that crashes or says nothing within DEADLINE_MS is a D38 failure (`where:'daemon'`, `query-failed`) and
 // is dropped; the next request forks a new one, and a caller whose request died gets a 500 and answers locally.
+//
+// NO WORKER YET (the cold path): the daemon does NOT make the caller wait for a fork plus a cold query — measured,
+// that was 842-1142 ms against 548 ms locally. It answers 503 at once, which the one read client reads as "no warm
+// worker" and answers locally, at local speed; the same query line then warms a worker in the background, so the
+// next query is the warm one. "No worker while nobody queries" (D63) is untouched: nothing is forked until a query
+// arrives.
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { QUERY_PATH } from './client.mjs'
+import { QUERY_PATH, QUERY_NAMES } from './client.mjs'
 
 const WORKER = fileURLToPath(new URL('./worker.mjs', import.meta.url))
 /** The worker's heap bound. Measured warm on the reference dataset: RSS ~180 MB with every session of a 500 MB
@@ -16,6 +22,10 @@ const WORKER = fileURLToPath(new URL('./worker.mjs', import.meta.url))
 export const WORKER_MEMORY_MB = 384
 const DEADLINE_MS = 30_000 // a worker silent this long is wedged, not slow: the queue must not be held for ever
 const NL = 0x0a
+/** Where the bytes of a document nobody waits for go: the warm-up query's answer, and the rest of a document whose
+ *  caller disconnected (its frame MUST still be read to the end, or the next reply is read as part of it). */
+const SINK = { writeHead() {}, write() { return true }, end() {}, once() {} }
+const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon yet: it is being started, read this one locally (D63)' })
 
 const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: [`--max-old-space-size=${WORKER_MEMORY_MB}`] })
 
@@ -80,24 +90,63 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     p.done()
   }
 
+  /** The caller of the pending request went away (Ctrl-C, a closed board tab). The rest of ITS document is read into
+   *  SINK so the worker stays in step and usable, nothing is said as a failure (nothing failed), and a stdout paused
+   *  because that socket was full is resumed — without this the worker stayed paused for good, the deadline then
+   *  wrote a false `query-failed` and killed it with its warm cache, and the read side was dead for 30 s. */
+  function abandon(res) {
+    if (!pending || pending.res !== res) return // its turn has not come yet, or it is already answered
+    pending.res = SINK
+    pending.quiet = true
+    if (child) child.stdout.resume()
+  }
+
+  const run = (line, res) => new Promise((done, fail) => {
+    const c = child || start()
+    const p = { res, done, fail, quiet: false }
+    p.timer = setTimeout(() => {
+      // Still the deadline when the caller is gone (a silent worker must not hold the queue), but then it is not a
+      // failure anyone asked about: no D38 record.
+      if (!p.quiet) failWorker(`the query worker did not answer within ${DEADLINE_MS} ms`)
+      drop('the query worker did not answer in time')
+    }, DEADLINE_MS)
+    pending = p
+    c.stdin.write(line)
+  })
+
+  /** Fork a worker and give it this very query, with nobody waiting for the answer: the next query finds it warm. */
+  const warmUp = (line) => { const go = () => run(line, SINK); queue = queue.then(go, go).catch(() => {}) }
+
   /** GET /query?name=<name>&indent=<n>&<param>=<value> — the control plane's read route (4.6 §控制面). */
   const route = async ({ query, res }) => {
+    // FIRST, before anything that can await: a caller may be gone at any moment, and the worker must survive it.
+    let gone = false, finish, failRoute
+    const answered = new Promise((resolve, reject) => { finish = resolve; failRoute = reject })
+    res.once('close', () => { gone = true; abandon(res); finish() })
     const name = query.get('name')
     if (!name) throw Object.assign(new Error('GET /query: ?name=<query name> is required'), { status: 400 })
+    // The closed name set (client.mjs QUERY_NAMES), checked here: an arbitrary name used to fork a worker before the
+    // query core refused it.
+    if (!QUERY_NAMES.includes(name)) throw Object.assign(new Error(`asight query: no query called ${JSON.stringify(name)} (names: ${QUERY_NAMES.join(', ')})`), { status: 400 })
     const params = {}
     for (const [k, v] of query) if (k !== 'name' && k !== 'indent') params[k] = v
     const line = JSON.stringify({ name, params, indent: query.get('indent') || 0 }) + '\n'
-    const run = () => new Promise((done, fail) => {
-      const c = child || start()
-      pending = { res, done, fail, timer: setTimeout(() => { failWorker(`the query worker did not answer ${name} within ${DEADLINE_MS} ms`); drop('the query worker did not answer in time') }, DEADLINE_MS) }
-      c.stdin.write(line)
-    })
+    if (!child) { // the cold path: answered at once, warmed behind the answer (see the head of this file)
+      warmUp(line)
+      res.writeHead(503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(NO_WORKER) })
+      res.end(NO_WORKER)
+      return undefined
+    }
     // The handler answers `res` itself, so the control server sends nothing: nothing of this document is held in
     // this process's memory as a JavaScript value. A request that failed does not hold the next one up, and its
     // rejection reaches the control server, which answers 500 — the caller then reads locally.
-    const task = queue.then(run, run)
+    const go = () => run(line, res)
+    const task = queue.then(go, go)
     queue = task.catch(() => {})
-    return task.then(() => undefined)
+    // The route answers as soon as EITHER the document is through or the caller is gone; a failure is raised only
+    // while there is someone to raise it to (writing a 500 into a closed socket is nobody's answer).
+    task.then(() => finish(), (e) => (gone ? finish() : failRoute(e)))
+    return answered.then(() => undefined)
   }
 
   return { route, path: QUERY_PATH, stop: () => drop('the daemon is stopping') }

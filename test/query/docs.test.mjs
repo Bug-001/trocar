@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { rawHome, writeSegment, requiredFor, DATA_QUERIES } from './raw-home.mjs'
 import { QUERIES, runQuery, parseTime, QueryArgError } from '../../src/query/named/index.mjs'
+import { QUERY_NAMES } from '../../src/query/client.mjs'
 import { validateQueryDoc } from '../../src/cli/schema.mjs'
 
 const SEG = '20261018T100000Z'
@@ -162,4 +163,10 @@ test('名字或参数不对 → QueryArgError(CLI 退 2)', async () => {
   await assert.rejects(() => runQuery('session', {}, { home }), QueryArgError, '--id 必填')
   await assert.rejects(() => runQuery('block', {}, { home }), QueryArgError, '--ref 必填')
   await assert.rejects(() => runQuery('sessions', { limit: 'many' }, { home }), QueryArgError)
+})
+
+test('the closed name set the daemon refuses by is the query core\'s own names (src/query/client.mjs QUERY_NAMES)', () => {
+  // The daemon must be able to refuse an unknown name WITHOUT importing the query core (it forks a worker for a
+  // name it accepts), so the list lives in the light module — and is the same list, or it is a second truth.
+  assert.deepEqual([...QUERY_NAMES].sort(), Object.keys(QUERIES).sort())
 })
