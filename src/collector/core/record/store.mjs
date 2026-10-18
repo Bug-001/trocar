@@ -15,6 +15,7 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
   let lastError = null // the reason of the last failed write, for the caller's failure record (RFC 4.6 §记录 采集失败不静默)
   let segment = null, segFile = null, segBytes = 0, segLines = 0
   const onClosed = [] // the seal queue hangs here (4.6 §记录 自动封存)
+  const onWrote = [] // the index keeper hangs here (D62): told the segment a line was just appended to
   const onOpening = [] // called with the name BEFORE the file exists: the daemon writes it into the lock there (see openSegment)
   const report = (e, file) => { errors++; lastError = e; if (file && e && typeof e === 'object' && !e.file) e.file = file; onError(e) }
   const closeAll = () => { for (const fd of fds.values()) { try { fs.closeSync(fd) } catch { /* already closed */ } } fds.clear() }
@@ -109,6 +110,10 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
         fs.writeSync(fdFor(segFile), line)
         segBytes += Buffer.byteLength(line); segLines++
         const id = recordId(segment, segLines)
+        // before the rollover below, so the name is the segment this line went into, never null (D62)
+        // the keeper hangs here (D62) and never throws (index-keeper.mjs `wrote`): a listener that did would be
+        // counted below as a `record-error`, which this line is not — the record is already in the segment.
+        for (const cb of onWrote) { try { cb(segment) } catch (e) { report(e, segFile) } }
         if (segBytes >= segmentBytes) closeSegment()
         return { ok: true, id }
       } catch (e) {
@@ -125,6 +130,9 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
     onSegmentClosed(cb) { onClosed.push(cb) },
     /** cb(segment) right before the segment's file is created — the daemon rewrites the lock there (D60, invariant 2). */
     onSegmentOpening(cb) { onOpening.push(cb) },
+    /** cb(segment) once a line is in that segment — the index keeper's trigger (D62). It is ON the write path of a
+     *  record, so it must do no work of its own: the keeper only remembers the name and arms its debounce. */
+    onRecord(cb) { onWrote.push(cb) },
     get currentSegment() { return segment },
     get lastError() { return lastError },
     get errors() { return errors },

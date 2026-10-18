@@ -10,6 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { asightHome, collectorHome, rawHome } from '../paths.mjs'
 import { startSealing } from './seal-queue.mjs'
+import { createIndexKeeper } from './index-keeper.mjs'
 import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
@@ -33,6 +34,7 @@ import { appendEvent, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 import { procIdentity, captureHealth } from '../health/read.mjs'
 import { identityFor } from '../off/proc.mjs'
+import { DAEMON_READ_VERBS } from '../off/daemon-read.mjs'
 import { runAsync } from '../off/exec.mjs'
 import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
 import { classesHook, wsTerminalHook } from './engine-data.mjs'
@@ -150,21 +152,31 @@ function noteUncleanStop(lock, failure) {
   else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
 }
 
-/** The ONE place a daemon's record store and its sealer are wired (no per-platform copy), so BOTH
- *  entries — Linux's runDaemon and the model OSes' runModelDaemon — seal: `seal.start()` does the upgrade rename and
- *  the last run's leftovers, then every segment this run closes, one at a time in a forked child, so this event loop
- *  never encodes or hashes (4.2 §自动封存).
+/** The ONE place a daemon's record store, its sealer and its index keeper are wired (the platform-seam rule: no per-platform
+ *  copy), so BOTH entries — Linux's runDaemon and the model OSes' runModelDaemon — seal AND keep the index current:
+ *  `seal.start()` does the upgrade rename and the last run's leftovers, then every segment this run closes, one at a
+ *  time in a forked child, so this event loop never encodes or hashes (4.2 §自动封存).
+ *    The keeper (D62, index-keeper.mjs) indexes the bytes this daemon just appended, debounced and in chunks, so no
+ *  query ever pays for a cold index build; it hands a segment over to the sealer's child when the segment closes.
  *    `seal.start()` MUST come after the control server claimed the collector (before that the lock may be a LIVE
  *  daemon's, and the start scan clears the lock's `segment`); `seal.stop()` belongs at the top of the stop, before
- *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off. */
+ *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off,
+ *  and nothing of asight's writes anything after the stop (the tail the stop closes is indexed by that next start's
+ *  sealer, and until then a query resumes it from the last indexed byte). */
 function storeWithSealing({ P, failure }) {
+  const home = path.dirname(P.dir)
   const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
+  const keeper = createIndexKeeper({ home, failure })
+  store.onRecord(keeper.wrote) // on the write path: one Set add and at most one timer (index-keeper.mjs)
   let queue = null
   const seal = {
-    start() { queue = startSealing({ store, raw: rawHome(path.dirname(P.dir)), lockFile: P.lock, failure }); return queue },
-    stop() { if (queue) queue.stop() },
+    start() { queue = startSealing({ store, raw: rawHome(home), lockFile: P.lock, failure, beforeSeal: keeper.flush }); return queue },
+    stop() { if (queue) queue.stop(); keeper.pause() },
+    // after store.close(): the segment the stop just closed is indexed to its last byte, so the daemon leaves behind
+    // the index of everything it wrote; only then does the keeper write nothing more (D62)
+    async settle() { try { await keeper.idle() } finally { await keeper.stop() } },
   }
-  return { store, seal }
+  return { store, seal, keeper }
 }
 
 /** The lock a live daemon holds (4.6 §控制面, D-25): `fields` (pid, start time, boot id …) plus `segment`, the raw-layer
@@ -656,6 +668,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       await step('helper', () => redirector.close()) // the helper exits; its unpinned links vanish; new connections go direct
       await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))
       await step('record', () => store.close())
+      await step('raw', () => seal.settle()) // the index of what this daemon wrote, including the segment just closed (D62)
       failure.flush()
       failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
       fs.rmSync(P.lock, { force: true }) // last: a lock still there at the next start means this stop never finished
@@ -715,6 +728,9 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
+  // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is
+  // what proves which process the lock names — so `status` does not ask the OS about that pid (4.8 §7; D62). null until the lock is written.
+  let selfId = null
   let stop = null, markReady
   // restore() first (runDaemon's `ready` gate): a request that arrives while it reopens the recorded doors waits for it, so an `on` racing a restart
   // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
@@ -725,6 +741,16 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     'GET /status': gate(status),
     'GET /holders': gate(() => collector.holders()),
     ...query.routes,
+    // the read question a read-only CLI command puts instead of starting a powershell.exe of its own (4.8 §1 §7; D62): a closed SUBSET of the
+    // helper's read verbs, refused here as well as in the helper (W1's two gates). It reads and changes nothing.
+    'POST /helper': gate(async (q) => {
+      const { verb, args } = body(q)
+      const self = selfId ? { pid: process.pid, start_time: selfId.start_time ?? null, boot_id: selfId.boot_id ?? null } : null
+      const no = (error) => ({ ok: false, error, ...(self ? { self } : {}) })
+      if (!DAEMON_READ_VERBS.includes(verb)) return no(`${JSON.stringify(verb ?? null)} is not one of the daemon's read verbs`)
+      if (!parts.helper) return no('this daemon reads the OS without a resident helper, so it has none to ask')
+      try { return { ok: true, data: await parts.helper.call(verb, args && typeof args === 'object' ? args : {}, { timeoutMs: verb === 'ps' ? 10000 : 2000 }), ...(self ? { self } : {}) } } catch (e) { return no(`${verb}: ${String((e && (e.code || e.message)) || e)}`) }
+    }),
     'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); return collector.on(body(q)) }),
     'POST /off': gate(async (q) => {
       const r = await collector.off(body(q))
@@ -739,6 +765,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     await collector.start()
     markReady()
     const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
+    selfId = me
     const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
     refreshLock()
     const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(e, 'record-error')) } }
@@ -758,6 +785,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       await step('engine', () => Promise.race([engine.close(), new Promise((r) => setTimeout(r, 2000).unref())]))
       collector.close(); await step('helper', () => parts.close && parts.close())
       await step('record', () => store.close())
+      await step('raw', () => seal.settle()) // as in runDaemon: the index covers everything this daemon wrote (D62)
       failure.flush()
       failure.write({ event: 'daemon-stop', pid: process.pid, ...(signal ? { signal } : { reason: reason || 'stop requested' }), ...(failed.length ? { failed } : {}) })
       fs.rmSync(P.lock, { force: true })
