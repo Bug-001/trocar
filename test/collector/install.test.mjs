@@ -28,6 +28,7 @@ import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { fakeSystem, recordingExec, fakeDaemon, ROOTS } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, ALL_HARNESSES } from '../off/fixtures/off-ctx.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
+import { envelopesOf } from '../helpers/record-store.mjs'
 
 function box() {
   const home = tmpDir('asight-inst-')
@@ -1055,7 +1056,7 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     assert.match(reply, /^HTTP\/1\.1 200 OK/)
     assert.ok(Buffer.concat(up.got).toString().includes('v16-through'), 'the relay received it')
     conn.end()
-    assert.equal(fs.readdirSync(b.dir).filter((n) => /^capture-.*\.ndjson$/.test(n)).length, 0, 'and nothing of it was recorded: it was not decrypted')
+    assert.equal(envelopesOf(b.dir).length, 0, 'and nothing of it was recorded: it was not decrypted')
     // after a restart the new process is trusted — it started after the entry — and decrypted
     await pause(30)
     await start(4444)
@@ -1066,8 +1067,7 @@ test('V16 (unit half): a Claude Code started while its harness was off, then on 
     const conn2 = tls.connect({ socket: raw2, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(b.dir, 'ca', 'asight-ca.pem'), 'utf8') }); await once(conn2, 'secureConnect') // asight's leaf, which only a process that trusts asight's CA accepts
     const body2 = JSON.stringify({ model: 'claude-x', max_tokens: 4, messages: [{ role: 'user', content: 'v16-after-restart' }] })
     await new Promise((resolve, reject) => { let t = ''; conn2.on('error', reject); conn2.on('data', (x) => { t += x; if (t.endsWith(REPLY)) resolve(t) }); conn2.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body2)}\r\n\r\n${body2}`) })
-    const capture = await until(() => fs.readdirSync(b.dir).find((n) => /^capture-.*\.ndjson$/.test(n)))
-    const envs = await until(() => { const t = fs.readFileSync(path.join(b.dir, capture), 'utf8'); return t.includes('v16-after-restart') && t.trim().split('\n').map((l) => JSON.parse(l)) })
+    const envs = await until(() => { const e = envelopesOf(b.dir); return e.some((x) => JSON.stringify(x).includes('v16-after-restart')) && e })
     assert.deepEqual([envs.length, envs[0].proc.pid, envs[0].proc.agent], [1, 4444, 'claude-code'], 'recorded verbatim, from the process that restarted')
     conn2.end()
   } finally { await (d && d.stop()); up.close(); p.done() }

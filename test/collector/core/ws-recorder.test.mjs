@@ -6,6 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import zlib from 'node:zlib'
 import { randomBytes } from 'node:crypto'
+import { asWritten } from '../../helpers/record-store.mjs'
 import { createWsRecorder, compileTerminal, MAX_CALL_BYTES } from '../../../src/collector/core/ws/recorder.mjs'
 import { rebuildWsWire } from '../../../src/collector/core/ws/raw.mjs'
 import { encodeFrame } from '../../lab/ws-client.mjs'
@@ -24,7 +25,7 @@ function upgrade({ ext, offer, target = '/v1/responses' }) {
 }
 function rig({ ext = null, offer, terminal = TERMINAL, target, write, maxCallBytes, split = Infinity, seqStart = 0, retention } = {}) {
   const out = [], failures = [], turns = { n: 0 }; let on = true; let n = 0
-  const store = { envelope: (e) => (write ? write(e, out, store) : (out.push(e), true)), lastError: null }
+  const store = { envelope: (e) => asWritten(write ? write(e, out, store) : (out.push(e), true), out.length), lastError: null }
   const r = createWsRecorder({ flow: FLOW, upgrade: upgrade({ ext, offer, target }), seqStart, genId: () => `id${n++}`, isRecording: () => on, terminal, maxCallBytes, retention, recordStore: store, onFailure: (f) => failures.push(f), onTurnEnd: () => { turns.n++ } })
   const wire = { c: [], s: [] }
   const feed = (fn, b) => { for (let i = 0; i < b.length; i += split) fn(b.subarray(i, i + split)) }

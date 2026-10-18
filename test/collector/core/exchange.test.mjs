@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createExchangeTee } from '../../../src/collector/core/engine/exchange.mjs'
+import { asWritten } from '../../helpers/record-store.mjs'
 
 const FLOW = { id: 'f', host: 'h.test', scheme: 'https', dst: { address: '1.2.3.4', port: 443 }, proc: { pid: 1, exe: 'x', agent: 'a' } }
-const sink = () => { const out = []; return { out, store: { envelope: (e) => out.push(e) } } }
+const sink = () => { const out = []; return { out, store: { envelope: (e) => asWritten(true, out.push(e)) } } }
 
 test('keep-alive: three exchanges, split across arbitrary chunks, three envelopes in order', () => {
   const { out, store } = sink()
@@ -160,7 +161,7 @@ test('a framing error on either side calls onFailure once with its side; open ex
 })
 
 // ── D38 (RFC 4.6 §记录): what the connection's flows/ row and the engine's events must say ──────────────
-const failSink = () => { const out = [], failures = []; return { out, failures, store: { envelope: (e) => out.push(e) }, onFailure: (f) => failures.push(f) } }
+const failSink = () => { const out = [], failures = []; return { out, failures, store: { envelope: (e) => asWritten(true, out.push(e)) }, onFailure: (f) => failures.push(f) } }
 const OK0 = 'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'
 
 test('an exception while building an envelope is engine-error, not a framing error; the next exchange is still framed (D38 T-11)', () => {
@@ -184,7 +185,7 @@ test('a response with no request to pair with is one unpaired-response event per
 
 test('envelopes the store did not write are counted for the flows/ row (false or a throw); written ones are not (D38 T-13)', () => {
   let n = 0
-  const store = { envelope: () => { n++; if (n === 1) return false; if (n === 2) throw new Error('EIO'); return true } }
+  const store = { envelope: () => { n++; if (n === 1) return asWritten(false); if (n === 2) throw new Error('EIO'); return asWritten(true, n) } }
   const t = createExchangeTee({ flow: FLOW, recordStore: store })
   for (let i = 0; i < 3; i++) { t.fromClient(Buffer.from(`GET /${i} HTTP/1.1\r\n\r\n`)); t.fromUpstream(Buffer.from(OK0)) }
   assert.deepEqual([t.rowNotes(), t.stats.recorded], [{ writeFailed: 2 }, 1])
@@ -192,7 +193,7 @@ test('envelopes the store did not write are counted for the flows/ row (false or
 
 test('after a WebSocket 101 the recorder\'s lost envelopes are counted on the row too (D38 T-13)', () => {
   const failures = []
-  const t = createExchangeTee({ flow: FLOW, recordStore: { envelope: () => false }, onFailure: (f) => failures.push(f) })
+  const t = createExchangeTee({ flow: FLOW, recordStore: { envelope: () => asWritten(false) }, onFailure: (f) => failures.push(f) })
   t.fromClient(Buffer.from('GET /v1/responses HTTP/1.1\r\nHost: h.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'))
   t.fromUpstream(Buffer.from('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n'))
   const mask = Buffer.from([1, 2, 3, 4]), text = Buffer.from('{"a":1}')

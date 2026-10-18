@@ -18,6 +18,8 @@ import { X509Certificate } from 'node:crypto'
 import http from 'node:http'
 import { once } from 'node:events'
 import { fakeMac } from '../cli/fixtures/legacy-ctx.mjs'
+import { rawHome } from '../../src/paths.mjs'
+import { envelopesOf, asWritten } from '../helpers/record-store.mjs'
 import { fileURLToPath } from 'node:url'
 import { startDaemon } from '../../src/collector/daemon.mjs'
 import { installCollector } from '../../src/collector/install.mjs'
@@ -362,7 +364,7 @@ test('F4 write failures: an event line that cannot be written is on stderr and i
 test('F4 the connection row of a flow whose envelope could not be written carries write_failed, and the agent still gets its reply', async () => {
   const S = await scene({ reply: 'HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok' })
   try {
-    fs.mkdirSync(path.join(S.s.collector, `capture-${new Date().toISOString().slice(0, 10)}.ndjson`)) // the day's capture file cannot be opened
+    fs.mkdirSync(path.dirname(rawOf(S.s)), { recursive: true }); fs.writeFileSync(rawOf(S.s), '') // raw/ is a file, so no segment can be opened
     const raw = await S.inject()
     const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect')
     let got = ''; c.on('data', (x) => { got += x })
@@ -424,8 +426,9 @@ test('F7 sealing and reading: a seal refused on an unclosed shard is a journal l
 // What the engine's own half asserts piece by piece is test/collector/core/exchange.test.mjs (T-11 / T-12 / T-14) and
 // not-captured.test.mjs; these are the same three things through the product path: a daemon, a real TLS client and a real
 // upstream, then the row, the event, the envelope on disk and the endpoint.
-const captureOf = (s) => fs.readdirSync(s.collector).filter((n) => /^capture-.*\.ndjson$/.test(n) && fs.statSync(path.join(s.collector, n)).isFile())
-  .flatMap((n) => fs.readFileSync(path.join(s.collector, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+// Envelopes live in the raw layer's segments now (D59/D60), not in the collector's own dated files.
+const rawOf = (s) => rawHome(path.dirname(s.collector))
+const captureOf = (s) => envelopesOf(s.collector)
 async function talk(S, bytes, { until: ok = () => true } = {}) {
   const raw = await S.inject()
   const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect')
@@ -595,7 +598,7 @@ test('F5 WebSocket labels and the top bar, by D38 class: a call cut at the cap i
   try {
     const out = []; let n = 0
     const rec = (o = {}) => createWsRecorder({ flow: WS_FLOW, upgrade: wsUpgrade(o.ext), genId: () => `ws-env-${n++}`, onFailure: failures.event, terminal: [{ pathSuffix: '/responses', patterns: ['^\\{"type":"response\\.completed"'] }],
-      recordStore: { envelope: o.write || ((e) => (out.push(e), true)), lastError: null }, ...o })
+      recordStore: { envelope: (e) => asWritten(o.write ? o.write(e) : (out.push(e), true), out.length), lastError: null }, ...o })
     const ev = (type, extra = {}) => JSON.stringify({ type, ...extra })
     const cli = (op, payload, opts) => encodeFrame(op, payload, opts), srv = (op, payload, opts) => encodeFrame(op, payload, { mask: false, ...opts })
     const wsKeys = async () => keys(await endpoint(S.s)).filter((k) => k.startsWith('ws/'))
