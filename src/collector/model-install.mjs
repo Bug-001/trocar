@@ -67,15 +67,13 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const said = (item, state, extra = {}) => items.push({ item, state, ...extra })
   const save = () => saveManifest(dir, m, fs)
   if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); save() }
-  const stdl = writeStandalone({ home, version: OFF_VERSION, fs }) // the way back first (R3)
-  said('asight-off', stdl.written ? 'written' : 'intact', { path: stdl.path })
-  if (installHelper) { const h = installHelper(interactive); if (h && h.why && h.why !== 'same') problems.push(h.why) }
-
   // a · the root's key (P1): created only when the custody has none; the root it returns must have the ROOT profile (T12)
-  let rootDer = null
-  const rec = m.entries.find((e) => e.kind === 'root-key')
   // one call shape for every custody verb: a program that cannot be used is a refusal with its reason, never a stack (P5)
+  // The custody is asked BEFORE anything is written (measured: a HOME with no login keychain refused with
+  // exit 1 and still left ~/.asight/bin/asight-off behind). Nothing of the install happened, so there is nothing to undo, and
+  // R3 (the way back before the first thing it undoes) is kept: the undo is written below, still before the first write.
   let custodyWhy = null
+  let rootDer = null
   const ask = async (verb, arg) => {
     try { return await custody[verb](arg) } catch (e) {
       custodyWhy = `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32}`
@@ -85,6 +83,11 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   }
   const has = await ask('exists')
   if (custodyWhy) return finish()
+  const stdl = writeStandalone({ home, version: OFF_VERSION, fs }) // the way back first (R3)
+  said('asight-off', stdl.written ? 'written' : 'intact', { path: stdl.path })
+  if (installHelper) { const h = installHelper(interactive); if (h && h.why && h.why !== 'same') problems.push(h.why) }
+
+  const rec = m.entries.find((e) => e.kind === 'root-key')
   if (has === 'unavailable') { pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody is not reachable (macOS: no graphical login session); run asight install again in a terminal of that session' }) }
   else if (rec && has === true && fs.existsSync(ca.pem)) { rootDer = pemToDer(fs.readFileSync(ca.pem, 'utf8')); said('root-key', 'intact', { fp256: rec.fp256 }) }
   else {

@@ -693,8 +693,13 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   let exitAsked = 0, exitTimer = null
   const status = async () => {
     const st = collector.issuer.state()
-    const hs = Object.fromEntries(Object.entries(desired()).map(([h, e]) => [h, { ...e, attached: collector.attached(h) }])) // per harness: its doors listen (status's `attached`, 1.6 V32)
-    return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    const d = desired()
+    const hs = Object.fromEntries(Object.entries(d).map(([h, e]) => [h, { ...e, attached: collector.attached(h) }])) // per harness: its doors listen (status's `attached`, 1.6 V32)
+    // the connections of the harnesses that are off and still relayed (1.6 §1.3), as runDaemon reports them: the engine counts
+    // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
+    // carry the connection counts)" on every model-mode machine — a reason about asight's own IPC (a macOS test machine 2026-10-18).
+    const off = new Set(Object.entries(d).filter(([, e]) => e && e.desired === 'off').map(([h]) => h))
+    return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   let stop = null, markReady

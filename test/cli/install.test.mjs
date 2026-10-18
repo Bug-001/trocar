@@ -120,6 +120,9 @@ for (const platform of ['darwin', 'win32']) {
     assert.ok(ERROR_CODES.includes(doc.error.code), `error.code is in the closed set: ${JSON.stringify(doc.error)}`)
     assert.ok(doc.error.message.includes('asight install'), doc.error.message)
     assert.equal(doc.fp256, null, 'no root was made')
+    // P5 (a macOS test machine 2026-10-18): a refusal writes nothing of yours and nothing of asight's undo either
+    assert.deepEqual(doc.items, [], 'a refused install reports no written item')
+    assert.equal(fs.existsSync(path.join(w.home, '.asight', 'bin', 'asight-off')), false, 'the undo program is not left behind by a refusal')
   })
 }
 
@@ -136,6 +139,9 @@ test('the install receipt prints each (agent, carrier, file) fact once, in words
   const forms = w.harnesses.flatMap((d) => ((d.proxyMode && d.proxyMode.forms) || []).map((f) => f.id))
   assert.ok(forms.length > 0, 'the world has forms to name')
   for (const id of forms) assert.ok(!text.includes(id), `the receipt prints the form id ${id} instead of what the form is`)
+  // the whole run says the residual risk once: it is the last line of the plan (§3.2), not a paragraph the receipt repeats (macOS test machine run 2, 2026-10-18)
+  const risk = io.text().match(/Any program running as you can ask asight/g) || []
+  assert.equal(risk.length, 1, `the residual-risk paragraph is printed ${risk.length} times`)
   assertEnglish(text, 'the install receipt')
 })
 

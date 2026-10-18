@@ -243,6 +243,20 @@ test('renderFindings (§3.7): a problem is numbered, a note says `Note:`, what t
   assert.ok(lines.every((l) => l.length <= 80), lines.join('\n'))
 })
 
+test('§3.7: a note carries no `Fix` (it is not a problem), and one fact several harnesses share is one line that names them', () => {
+  const note = (h, code = 'inferred-behaviour') => ({ code, class: 'note', harness: h, what: `${h}'s proxy behaviour on this platform is inferred, not measured.`, why: 'It was measured on another platform.', commands: [], verify: 'asight status' })
+  const lines = renderFindings([note('claude-code'), note('codex'), note('hermes'), note('z-code')])
+  assert.equal(lines.filter((l) => l.startsWith('Note: ')).length, 1, `the same fact is one line:\n${lines.join('\n')}`)
+  assert.match(lines[0], /^Note: claude-code, codex, hermes and z-code's proxy behaviour /)
+  // a note that says what you may do about it labels it an Option, never a Fix — a Fix under "no problems" is a contradiction
+  const withCmd = renderFindings([{ ...note('codex', 'egress-differs'), what: 'Some of codex\'s connections now leave through a different hop.', commands: [{ run: 'asight off codex', shell: 'sh' }] }])
+  assert.ok(withCmd.some((l) => l === '      Option asight off codex'), withCmd.join('\n'))
+  assert.ok(!withCmd.some((l) => /\bFix\b/.test(l)), withCmd.join('\n'))
+  // and a note about one harness, with something to do about it, is not folded with another harness's
+  const two = renderFindings([{ ...note('codex', 'egress-differs'), commands: [{ run: 'asight off codex', shell: 'sh' }] }, { ...note('hermes', 'egress-differs'), commands: [{ run: 'asight off hermes', shell: 'sh' }] }])
+  assert.equal(two.filter((l) => l.startsWith('Note: ')).length, 2)
+})
+
 // ── where the line to edit is (V49): the setting's own source, not the first key of the first file ────────────────────────────────────────────────────────────────────────────────────────────────────
 const CC_FILES = [{ path: '/h/.claude/settings.json', format: 'json', key: 'env.HTTPS_PROXY' }, { path: '/h/.claude.json', format: 'json', key: 'env.HTTPS_PROXY' }]
 const CODEX_FILES = [{ path: '/h/.codex/.env', format: 'dotenv', key: 'HTTPS_PROXY' }, { path: '/h/.codex/config.toml', format: 'dotenv', key: 'x' }]

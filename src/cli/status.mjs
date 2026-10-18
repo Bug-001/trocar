@@ -289,6 +289,9 @@ const restartOf = (f) => f.harnesses.flatMap((h) => h.judged.rows.filter((r) => 
 
 /** The health the document counts from: the daemon's own read when it answered, else the disk's. A reply whose read failed carries `{ error }` — that is a health that could not be read, never "no problems". */
 const effectiveHealth = (f) => (f.daemon && f.daemon.reply && f.daemon.reply.health ? { health: f.daemon.reply.health.error ? null : f.daemon.reply.health, error: f.daemon.reply.health.error || null } : { health: f.health, error: f.health_error })
+/** The critical conditions (D51④: a program refused asight's certificate, so what it sends to that host is not captured), in the health's own order.
+ *  A fact of the user's machine, not a count: `failures` says how many problems there were, this says capture is failing right now. */
+const criticalOf = (f) => { const h = effectiveHealth(f).health; return ((h && h.collector && h.collector.conditions) || []).filter((x) => x.level === 'critical') }
 
 
 /** Each form's `certificate` and `proxy` (proxy mode, 附录 C.3), as the facts the topology was drawn from carry them. */
@@ -340,7 +343,7 @@ export function statusDocOf(f) {
     }])),
     ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
-    ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), failures: failuresOf(f), errors,
+    ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures: failuresOf(f), errors,
   }
   return doc
 }

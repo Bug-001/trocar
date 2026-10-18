@@ -183,6 +183,18 @@ test('a stale standalone copy is a problem with its reason (exit 1); where nothi
   assert.equal(r.exit, 0, r.out)
 })
 
+test('§3.7 (Windows test machine run 2 Q3): the headline says what the list numbers — problems and expected findings, never fewer', async () => {
+  const s = await installedHome()
+  const src = path.join(s.home, 'src'); capture(src)
+  fs.appendFileSync(path.join(s.home, '.asight', 'bin', 'asight-off'), '\n// edited\n')
+  const r = await doctor(s, [], { source: src })
+  const numbered = r.out.split('\n').filter((l) => /^\d+\. /.test(l)).length
+  const head = r.out.split('\n')[0]
+  const said = [...head.matchAll(/(\d+) (problem|expected finding)/g)].reduce((n, m) => n + Number(m[1]), 0)
+  assert.ok(numbered > 0, r.out)
+  assert.equal(said, numbered, `the headline counts ${said}, the list numbers ${numbered}:\n${r.out}`)
+})
+
 test('backups no manifest names are a note with their paths; the ones the manifest names are not; with no manifest all of them are', async () => {
   const s = await installedHome({ seed: (home) => { fs.mkdirSync(path.join(home, '.claude'), { recursive: true }); fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{"model":"x"}\n') } })
   const src = path.join(s.home, 'src'); capture(src)

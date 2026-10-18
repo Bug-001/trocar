@@ -126,7 +126,7 @@ export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = p
   for (const bad of res.q4b.bad) extra.push({ code: 'file-readable-by-others', class: 'problem', what: `${bad.file} (mode ${bad.mode}) can be read by someone else, and captured files hold live credentials.`, why: 'Only you may read what asight captured.', commands: [{ run: `chmod 600 ${shq(bad.file)}`, shell: 'sh' }], verify: 'asight doctor' })
   // the copy of the undo program is `install`'s; a machine where nothing was installed has nothing to check (§3.7)
   const installed = !!(status.install && status.install.state)
-  const standalone = installed ? (() => { try { return checkStandalone({ home, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })() : { ok: true }
+  const standalone = installed ? (() => { try { return checkStandalone({ home, platform, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })() : { ok: true }
   if (standalone.error) extra.push({ code: 'standalone-unreadable', class: 'problem', what: 'The standalone undo program could not be checked.', why: standalone.error, commands: [{ run: 'asight install', shell: 'sh' }], verify: 'asight doctor' })
   else if (!standalone.ok) extra.push({ code: 'standalone-stale', class: 'problem', what: `${standaloneCommand(standalone.path, platform)} is not the current version, so it may not undo everything.`, why: standalone.reason || 'its bytes are not the ones this asight writes', commands: [{ run: 'asight install', shell: 'sh' }], verify: 'asight doctor' })
   let orphans = [], orphansError = null
@@ -161,7 +161,16 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   const { exit } = doc
   if (json) { const { exit: _drop, ...out } = doc; io.out(JSON.stringify(out, null, 2)); return exit }
   const s = doc.summary
-  io.out(s === null ? `asight doctor: findings are ${unknown(doc.findings_error)}.` : s.problem ? `asight doctor: ${s.problem} problem${s.problem === 1 ? '' : 's'}.` : 'asight doctor: no problems.')
+  // §3.7: the headline says what the list below it numbers — problems AND the expected findings (a Windows test machine 2026-10-18:
+  // "1 problem." over three numbered entries). Notes are not numbered, so they are not counted here. The exit code is unchanged.
+  const headline = (x) => {
+    if (!x.problem && !x.expected) return 'asight doctor: no problems.'
+    const parts = []
+    if (x.problem) parts.push(`${x.problem} problem${x.problem === 1 ? '' : 's'}`)
+    if (x.expected) parts.push(`${x.expected} expected finding${x.expected === 1 ? '' : 's'}`)
+    return `asight doctor: ${parts.join(' and ')}.`
+  }
+  io.out(s === null ? `asight doctor: findings are ${unknown(doc.findings_error)}.` : headline(s))
   if (doc.findings && doc.findings.length) { io.out(''); for (const l of renderFindings(doc.findings)) io.out(l) }
   for (const u of realUndetermined(doc.undetermined)) io.out(`Could not judge ${u.what}: ${u.reason}`)
   for (const u of doc.undetermined.filter((x) => x.reason === 'no captured data yet')) io.out(`${u.what.replace(/^./, (m) => m.toUpperCase())}: no captured data yet`)

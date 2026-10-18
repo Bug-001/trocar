@@ -116,7 +116,9 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
       ...pairs(carrierRows),
       ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: asight install`),
       ...r.problems.map((p) => `Problem: ${p}`),
-      ...wrap(RISK),
+      // the residual risk (RISK) is the last line of the plan printed just above in this same run (§3.2 prints it there, and the
+      // receipt sample does not carry it); printing it again put the paragraph on the screen twice (a macOS test machine 2026-10-18).
+      // `--json` keeps it as `residual_risk`, because a document has no plan above it.
       'Next: asight on',
       `If asight itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
     return r.exit
