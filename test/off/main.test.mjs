@@ -88,7 +88,7 @@ test('§3.4: the receipt text of an off with no names — no certificate item (D
   const out = io.stdoutText()
   assert.match(out, /^Capture is off for all harnesses\. asight is no longer on their path\.\n/)
   assert.match(out, /No file of yours was changed\./, 'no certificate item is touched, the edited one neither (D55①)')
-  assert.match(out, /^What asight install wrote stays: 6 files off never touches\. asight uninstall\n {2}removes them\.$/m, 'what install wrote is named as staying, once, by count and not by six paths')
+  assert.doesNotMatch(out, /install wrote/, 'the last line already says the certificates stay and how to remove them: what install wrote is named in --json (install_items), not in a second line here')
   assert.match(out, /The daemon \(pid 4242\) exits after 2 open responses finish\./)
   assert.match(out, /1 connection asight cannot see the end of/)
   assert.doesNotMatch(out, /Still trusting the asight certificate/, 'off took no trust away, so it names no one as still trusting it')

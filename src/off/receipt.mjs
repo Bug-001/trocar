@@ -12,12 +12,14 @@ const offTilde = (p, home) => (home && typeof p === 'string' && (p === home || p
 const UNTIL_WORDS = { restart: 'until it restarts', 'next-connection': 'until its next new connection', 'next-handshake': 'until its next handshake', 'session-end': 'until its current session ends' }
 
 /** One line of at most 80 columns, or the line split at spaces with `indent` in front of every line after the first. A single word longer than the
- *  width (a path, a command) is never broken: it keeps its own line (§1.1 版式 6). */
+ *  width (a path, a command) is never broken: it keeps its own line (§1.1 版式 6). White space the text starts with is kept as the first line's lead. */
 function fit(text, indent = '  ') {
+  const s = String(text)
+  const lead = s.slice(0, s.length - s.trimStart().length)
   const out = []
   let line = ''
-  for (const word of String(text).split(' ')) {
-    const next = line ? `${line} ${word}` : word
+  for (const word of s.trimStart().split(/\s+/).filter(Boolean)) {
+    const next = line ? `${line} ${word}` : `${out.length ? indent : lead}${word}`
     if (line && next.length > WIDTH) { out.push(line); line = `${indent}${word}` } else line = next
   }
   if (line) out.push(line)
@@ -62,7 +64,10 @@ function daemonLines(r, past, cutNote) {
   if (r.relayed === 'unknown') lines.push(...fit(`Connections still going through asight: unknown (${r.relayed_reason || 'they could not be read'}).`))
   else if (rel) {
     if (rel.closing > 0 && d.state !== 'draining') lines.push(`${rel.closing} connection${rel.closing === 1 ? ' is' : 's are'} still going through asight; ${rel.closing === 1 ? 'it closes' : 'they close'} when the response in flight is through.`)
-    if (rel.waiting > 0) lines.push(...fit(`${rel.waiting} connection${rel.waiting === 1 ? '' : 's'} asight cannot see the end of; ${rel.waiting === 1 ? 'it stays' : 'they stay'} open until the other side closes.`))
+    if (rel.waiting > 0) {
+      lines.push(...fit(`${rel.waiting} connection${rel.waiting === 1 ? '' : 's'} asight cannot see the end of; ${rel.waiting === 1 ? 'it stays' : 'they stay'} open until the other side closes.`))
+      if (!(r.holders || []).length) lines.push(`Cut ${rel.waiting === 1 ? 'it' : 'them'} now: asight off --now`) // the holders below say it for themselves: one output gives one or two next steps (§1.1 版式 3)
+    }
     if (rel.cut > 0) lines.push(`${past ? 'Cut' : 'Will cut'} ${rel.cut} connection${rel.cut === 1 ? '' : 's'}${cutNote}.`)
   }
   return lines
@@ -86,7 +91,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
     if ((r.skipped || []).length) for (const s of r.skipped) out.push(...fit(`  ${t(s.what)}: ${s.reason}`, '    '))
     if ((r.user_processes || []).length) for (const p of r.user_processes) out.push(...fit(`Still running, started by you: ${p.command} (pid ${p.pid}, ${p.note}).`))
     for (const n of r.notes || []) out.push(...fit(n))
-    out.push(...extra, footer || 'Turn capture on: asight on')
+    out.push(...extra, footer || 'Turn capture on: asight install, then asight on') // `on` refuses with no certificates installed (§3.3 前提), so the next step is install first
     return out.join('\n')
   }
   const changed = r.changed || [], removed = r.removed || []

@@ -214,7 +214,7 @@ const rebuildRoots = async (w) => {
  *  `notes`, `failures`, `events`, `stopped` (an error ended the undoing part-way; what it had done is in the other fields), `mode`: 'manifest' | 'marker' | 'none' |
  *  'unsupported'). */
 export async function undoSide(w, opts = {}) {
-  const u = { mode: 'none', changed: [], removed: [], skipped: [], left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], dropped_backups: [], pending: [], orphan_backups: [], problems: [], notes: [], failures: [], events: [], undone_by_marker: false, procs_error: null, stopped: false }
+  const u = { mode: 'none', install_items: [], changed: [], removed: [], skipped: [], left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], dropped_backups: [], pending: [], orphan_backups: [], problems: [], notes: [], failures: [], events: [], undone_by_marker: false, procs_error: null, stopped: false }
   try { return await undoBody(w, opts, u) } catch (e) { // whatever throws here (a manifest of a shape nobody foresaw, a file that vanishes) must not cost the receipt: the routing is already off and files may already be written (R1, R11)
     u.stopped = true
     if (u.raw && !u.changed.length && !u.removed.length) { // the files were written before it threw: the receipt lists them, as the plain undo would have
@@ -255,6 +255,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
     const note = (code, extra, reason) => u.events.push({ kind: code, code, ...extra, reason }) // `kind` = `code`: one line per thing the operator should know (4.6 安装 / 卸载不静默)
     u.raw = out // what the undo did, for a receipt if what follows throws (undoSide)
     u.results = out.results
+    u.install_items = out.install_items || []
     u.notes.push(...(out.notes || [])) // the undo's own notes (e.g. a kernel copy kept while it drains)
     for (const r of out.results) {
       const e = before.get(`${r.harness}\0${r.path}\0${r.what}`)
@@ -330,7 +331,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
   if (!go && interactive && io) { (say || io.out)(listing); go = await confirm(io, 'Proceed?') }
   if (!go) {
     u.pending = items
-    u.problems.push(`the install manifest is ${manifestError ? 'unreadable' : 'missing'}: ${items.length} file(s) hold asight's marks and were left as they are; the routing is off, the entries are not. Run asight off --yes to undo them by their marks`)
+    u.problems.push(`asight's own record of what it wrote ${manifestError ? 'cannot be read' : 'is missing'}, so the ${items.length} file${items.length === 1 ? '' : 's'} above ${items.length === 1 ? 'was' : 'were'} left as ${items.length === 1 ? 'it is' : 'they are'}.`, `Undo ${items.length === 1 ? 'it' : 'them'} by the marks asight left in ${items.length === 1 ? 'it' : 'them'}: asight off --yes`)
     return u
   }
   for (const r of undoByMarker(plan, { home: w.home, fs: w.fs })) {
@@ -476,7 +477,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     if (routing.confirmed || routing.unstoppable) {
       const u = await undoSide(w, { ids, manifest, manifestError, yes, interactive, io, say })
       for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
-      for (const k of ['kept_bundles', 'still_trusting', 'residue', 'kept_backups', 'orphan_backups', 'pending']) receipt[k] = u[k]
+      for (const k of ['kept_bundles', 'still_trusting', 'residue', 'kept_backups', 'orphan_backups', 'pending', 'install_items']) receipt[k] = u[k]
       if (u.holders !== undefined) receipt.holders = u.holders
       receipt.problems.push(...u.problems); receipt.notes.push(...u.notes)
       receipt.undone_by_marker = u.undone_by_marker
