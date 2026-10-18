@@ -130,7 +130,7 @@ export const FINDINGS = {
     commands: (c) => [asight(c, `asight off ${c.h}`), gui(`Try ${c.h} again: if it still fails, asight is not the cause; if it works, run asight on ${c.h} and then asight doctor ${c.h}`)], verify: (c) => `Try ${c.h} again` },
 }
 // the trust reasons not listed above (a variable missing, a file unreadable, …): the daemon's own hint says what to do about this agent
-const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'problem'), asightFirst: false, what: (c) => `${c.h} is not captured${c.pid ? `: pid ${c.pid}` : ''}${RESTART_REASONS.includes(c.code) ? ' started before capture was on.' : '.'}`,
+const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'problem'), asightFirst: false, what: (c) => `${c.h} is not captured${RESTART_REASONS.includes(c.code) ? `${c.pid ? `: pid ${c.pid} started` : ': it started'} before capture was on.` : `${c.pid ? `: pid ${c.pid}` : ''}.`}`,
   why: (c) => c.hint || trustReasonText(c.code) || 'Certificates are read when a program starts.',
   commands: (c) => (RESTART_REASONS.includes(c.code) ? restartSteps(c) : [asight(c, `asight status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `Follow ${c.h}'s own instructions`)]), verify: (c) => `asight status ${c.h}` }
 
@@ -182,7 +182,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     const upstream = Object.values((F.forwarder && F.forwarder.forms) || {}).map((x) => x.upstream).find((u) => u && u !== 'DIRECT')
     // the doctor's own name for a protocol the upstream cannot take replaces the branch's not-routed (4.8 §10.4: upstream-protocol sits on the proxy-unsupported row)
     const protoForm = (hf.forms || []).find((f) => f.route && f.route.code === 'proxy-unsupported') || null
-    for (const r of reasons.filter((x) => !(protoForm && x === 'not-routed'))) add(r, { upPort: upstream ? (parseProxyUrl(upstream) || {}).port : undefined, hint: row && row.reason === r ? row.hint : undefined, pac: sysPac, fm: formOf(r) })
+    for (const r of reasons.filter((x) => !(protoForm && x === 'not-routed'))) add(r, { upPort: upstream ? (parseProxyUrl(upstream) || {}).port : undefined, hint: row && row.reason === r ? row.hint : undefined, pid: row && row.reason === r ? row.pid : undefined, pac: sysPac, fm: formOf(r) })
     if (protoForm) add('proxy-unsupported', { protocol: protoForm.route.protocol, fm: protoForm })
     const dead = deadProxy(t)
     if (dead) add('proxy-dead', { dead })
