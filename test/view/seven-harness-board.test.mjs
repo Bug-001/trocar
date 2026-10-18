@@ -72,7 +72,7 @@ async function exchange(store, { agent, host, target, headers, body, reply }) {
 
 // All real I/O first.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-seven-'));
-const store = createRecordStore({ root, onError: (e) => { throw e; } });
+const store = createRecordStore({ root, raw: root, onError: (e) => { throw e; } });
 for (const [, agent, host, target, headers, body, reply] of HARNESSES) await exchange(store, { agent, host, target, headers, body, reply });
 // Hermes on a custom endpoint carries no session key at all (3.4: synthesized later, gate G11)
 await exchange(store, { agent: 'hermes', host: 'relay.example.com', target: '/v1/chat/completions', headers: { 'User-Agent': 'OpenAI/Python 1.109.1' }, body: CHAT(), reply: 'chat' });

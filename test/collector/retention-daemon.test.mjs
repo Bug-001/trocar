@@ -33,7 +33,8 @@ async function until(fn, ms = 4000) { const end = Date.now() + ms; for (;;) { co
 const nowTicks = (p) => Math.ceil((Date.now() / 1000 - p.btime) * 100)
 const ndjson = (f) => fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
 const flowsOf = (dir) => { const d = path.join(dir, 'flows'); return fs.existsSync(d) ? fs.readdirSync(d).flatMap((n) => ndjson(path.join(d, n))) : [] }
-const capturesOf = (dir) => fs.readdirSync(dir).filter((n) => /^capture-.*\.ndjson$/.test(n)).flatMap((n) => ndjson(path.join(dir, n)))
+// envelopes live in the raw layer's segments, one directory up from the collector's own (D60)
+const capturesOf = (dir) => { const raw = path.join(path.dirname(dir), 'raw'); return fs.existsSync(raw) ? fs.readdirSync(raw).flatMap((n) => ndjson(path.join(raw, n))) : [] }
 const b64 = (s) => Buffer.from(s, 'base64')
 
 async function scene({ state = null, trafficRows = undefined } = {}) {

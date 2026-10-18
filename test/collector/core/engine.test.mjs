@@ -132,7 +132,7 @@ test('engine: a flows/ record that cannot be written is a flow-write-failed fail
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-flowfail-'))
   const flowsDir = path.join(root, 'flows')
   fs.mkdirSync(flowsDir); fs.mkdirSync(path.join(flowsDir, `${new Date().toISOString().slice(0, 10)}.ndjson`)) // the day's connection-row file is a directory
-  const store = createRecordStore({ root })
+  const store = createRecordStore({ root, raw: root })
   const failures = []
   const up = net.createServer((sk) => sk.end()); await new Promise((r) => up.listen(0, '127.0.0.1', r))
   const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 2, agent: 'x', decrypt: false }), issuer: createLeafIssuer(loadCa(createCa())), store, onFailure: (f) => failures.push(f) })

@@ -44,7 +44,7 @@ test('a flat legacy capture and a collector-written session list side by side on
   const { home, legacy } = homes(t);
   fs.writeFileSync(path.join(home, 'claude-capture.ndjson'), JSON.stringify(env('m-1', 'FLAT-MITM', { capture: 'mitm' })) + '\n');
   fs.writeFileSync(path.join(legacy, 'claude-capture.ndjson'), JSON.stringify(env('l-1', 'LEGACY')) + '\n');
-  const store = createRecordStore({ root: collectorHome(home), onError: (e) => { throw e; } });
+  const store = createRecordStore({ root: collectorHome(home), raw: collectorHome(home), onError: (e) => { throw e; } });
   store.envelope(env('req_c-00001', 'COLLECTOR', { capture: 'transparent', proc: { pid: 3, exe: '/x/claude', agent: 'claude-code' } }));
   store.flow({ ts: '2026-10-06T00:00:00.000Z', flow_id: 'f1', decision: 'decrypt' });
   store.audit({ ts: '2026-10-06T00:00:00.000Z', event: 'on' });

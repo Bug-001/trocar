@@ -22,7 +22,7 @@ const SSE = 'event: message_start\ndata: {"type":"message_start","message":{"id"
 test('a field-qualified ref resolves over HTTP to the reply bytes; a field outside the grammar is a 400', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-bf-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const store = createRecordStore({ root, onError: (e) => { throw e; } });
+  const store = createRecordStore({ root, raw: root, onError: (e) => { throw e; } });
   const flow = { id: 'f1', host: 'api.anthropic.com', scheme: 'https', dst: { address: '127.0.0.1', port: 443 }, proc: { pid: 9, exe: '/x/claude', agent: 'claude-code' } };
   const tee = createExchangeTee({ flow, recordStore: { envelope: (e) => store.envelope(e) } });
   const body = '{"model":"m","messages":[{"role":"user","content":"q"}]}';

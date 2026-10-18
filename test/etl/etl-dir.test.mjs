@@ -68,7 +68,7 @@ test('a call that starts before midnight and ends after it: incremental == full'
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-col-'));
   const dbs = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-db-'));
   let clock = '2026-10-05T23:59:01Z';
-  const store = createRecordStore({ root: dir, now: () => new Date(clock) });
+  const store = createRecordStore({ root: dir, raw: dir, now: () => new Date(clock) });
   const put = (id, ts, at) => { clock = at; store.envelope(JSON.parse(line(id, 'S', ts, id))); };
   try {
     put('a1', '2026-10-05T23:59:00Z', '2026-10-05T23:59:01Z');
