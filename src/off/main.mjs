@@ -59,10 +59,12 @@ export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdo
   const named = resolveOffNames(names, names.length ? installedIds(home) : [])
   if (!named.ok) { io.err(`asight off: unknown harness '${named.unknown[0]}'. Known: ${named.known.filter((n) => !Object.hasOwn(OFF_NAMES.aliases, n)).join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
-  const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5): the list and the question go to stderr
+  // §1.2: under `--json` stdout holds the one document and stderr is EMPTY — so no listing on stderr and no question: an `off` with no install record
+  // puts its plan in the receipt's `planned` and exits 1, the way install / on / uninstall answer a run that needs a yes (review 2026-10-18).
+  const say = json ? () => {} : io.out
   if ((deps.getuid || (typeof process.getuid === 'function' ? () => process.getuid() : () => -1))() === 0) { io.err('asight off: run this as your own user, not as root.'); return EXIT.usage } // §1.5: it refuses before it reads or writes anything
   try {
-    const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say, deps: { platform, ...deps, ...(standalone ? { standalone: true } : {}) } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins): before the darwin flip a linux sandbox on a Mac host silently ran the darwin arms
+    const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: !json && isInteractive(io), io: { ...io, prompt: io.stdout }, say, deps: { platform, ...deps, ...(standalone ? { standalone: true } : {}) } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins): before the darwin flip a linux sandbox on a Mac host silently ran the darwin arms
     io.out(json ? JSON.stringify(receipt, null, 2) : formatOffReceipt(receipt, { home }))
     return exit
   } catch (e) {

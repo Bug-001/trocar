@@ -85,14 +85,16 @@ async function recorded(dir, where, fn) {
   }
 }
 
-// 4.6 §引擎 5: the engine checks an upstream with Node's roots + NODE_EXTRA_CA_CERTS of the daemon's own environment. A
-// daemon the autostart unit starts has no login shell's exports, so the unit carries this shell's value — an absolute
-// path outside asight's home only; anything else is said, never dropped silently (review 3 #1, D38).
+// 4.6 §引擎 5: the engine checks an upstream with Node's roots + NODE_EXTRA_CA_CERTS of the daemon's own environment. A daemon
+// nothing but a login entry starts has no login shell's exports, so the entry carries this shell's value — an absolute path
+// outside asight's home only; anything else is said, never dropped silently (review 3 #1, D38). The daemon a `--no-autostart`
+// run starts by hand is handed exactly the same (ensureDaemonUp → unit.start): without it capture breaks behind a corporate
+// MITM relay and nothing says so (review 2026-10-18).
 export function daemonEnv(env, dir) {
   const v = env.NODE_EXTRA_CA_CERTS
   if (typeof v !== 'string' || v === '') return { env: {}, note: null }
   const why = !path.isAbsolute(v) ? 'it is a relative path' : v.startsWith(path.dirname(dir) + path.sep) ? "it is asight's own file" : null
-  if (why) return { env: {}, note: `NODE_EXTRA_CA_CERTS of this shell (${v}) is not given to the autostart unit (${why}); a daemon the unit starts checks a relay's certificate with Node's roots only` }
+  if (why) return { env: {}, note: `NODE_EXTRA_CA_CERTS of this shell (${v}) is not given to the daemon asight starts (${why}); that daemon checks a relay's certificate with Node's roots only` }
   return { env: { NODE_EXTRA_CA_CERTS: v }, note: null }
 }
 
@@ -560,6 +562,9 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
     }
   }
   const notes = [], problems = []
+  // `--no-autostart` writes no login entry, and removes none either: one an earlier `on` installed still starts the daemon at every login, so the
+  // receipt says it is there and where (review 2026-10-18: it stayed and went unsaid). Said here, so both `on` arms carry it. `asight off` takes it out.
+  if (!autostart && unit && unit.path && fs.existsSync(unit.path)) notes.push(`an autostart entry an earlier "asight on" installed is still there (${unit.path}): --no-autostart adds none and removes none; it starts the collector at every login until "asight off"`)
   const was = await probe()
   let up = was.up, started = false, unitFailed = null, halt = false
   if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "asight off", then "asight on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
@@ -567,7 +572,7 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
     if (halted()) halt = true
     else {
       if (reload && typeof unit.reload === 'function') unit.reload() // a unit file rewritten under a loaded unit
-      const rr = autostart ? unit.enable({ now: !was.up }) : (was.up ? null : unit.start())
+      const rr = autostart ? unit.enable({ now: !was.up }) : (was.up ? null : unit.start(daemonEnv(env, dir))) // the direct start carries what the login entry's Environment= would carry
       started = !was.up
       if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // enable's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
       if (rr && rr.code !== 0) {
@@ -586,7 +591,9 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       } else if (!was.up) {
         for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
         if (!up && !halt) {
-          const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.asight.collector' : osName === 'win32' ? 'schtasks /Query /TN \\asight\\collector (and "asight status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
+          const errLog = typeof unit.logFiles === 'function' ? (unit.logFiles()[1] || {}).path : null
+          const where = !autostart && errLog ? errLog // nothing was enabled: there is no unit, task or LaunchAgent to query — the daemon's own log is where its reason is (D46)
+            : osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.asight.collector' : osName === 'win32' ? 'schtasks /Query /TN \\asight\\collector (and "asight status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
           const why = `the collector was started${sock ? ` but does not answer on ${sock}` : ', but it does not answer yet'}; look at "${where}" and the capture health on the board` // never "answers on null": an endpoint that is not known yet is not named (1.6 §1.1)
           problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
         }
