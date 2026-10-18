@@ -144,6 +144,12 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(got.length, 1); assert.equal(got[0].toString('latin1'), REQ, 'the mock received the request bytes verbatim')
         await one.end()
 
+        // D60: the record went into the raw layer's current segment, and the live daemon names that segment in its lock —
+        // which is how the sealer and `raw seal` know the one segment they must leave alone.
+        const rawDir = path.join(path.dirname(w.dir), 'raw')
+        const lock = await within((async () => { for (;;) { try { const l = JSON.parse(fs.readFileSync(path.join(w.dir, 'lock'), 'utf8')); if (l.segment) return l } catch { /* mid-rename */ } await new Promise((r) => setTimeout(r, 25)) } })(), 10_000, 'the lock named the daemon\'s current segment')
+        assert.deepEqual(fs.readdirSync(rawDir), [`${lock.segment}.ndjson`], 'one open segment, the one the lock names')
+
         // off: this process is a holder (door-seen in the on window), so the door stays and only forwards (CM23, 1.6 §1.2 exception two)
         const off = await runOffCli([], { io, home: w.home, env: w.env, platform, deps: { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: () => ({ status: 0, stdout: '', stderr: '' }) } })
         assert.equal(off, 0)
@@ -165,7 +171,7 @@ for (const platform of ['darwin', 'win32']) {
         assert.ok(await within(box.daemon.exited.then(() => true), 20_000, 'the daemon exited once its holder was gone'))
 
         // D40: one record — the on window's exchange, its bytes exactly; nothing for the forwarded one
-        const recs = fs.readdirSync(w.dir).filter((n) => /^capture-.*\.ndjson$/.test(n)).flatMap((n) => fs.readFileSync(path.join(w.dir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+        const recs = fs.readdirSync(rawDir).flatMap((n) => fs.readFileSync(path.join(rawDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
         assert.equal(recs.length, 1, `one record, the decrypted exchange only: ${recs.map((r) => r.endpoint).join(', ')}`)
         const r = recs[0]
         assert.equal(Buffer.concat([Buffer.from(r.req_head_raw, 'latin1'), Buffer.from(r.req_body, 'utf8')]).toString('latin1'), REQ, 'the recorded request bytes are the bytes the mock received')

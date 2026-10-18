@@ -1,6 +1,7 @@
 // test/helpers/cut-requests.mjs — Claude Code /v1/messages exchanges pushed through the collector's
 // REAL createExchangeTee (RFC 4.6 §记录, PR #21), so every envelope a board test reads was written by
 // collector code, not by hand. Exports only; node --test running this file does nothing.
+import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createExchangeTee } from '../../src/collector/core/engine/exchange.mjs';
 import { createRecordStore } from '../../src/collector/core/record/store.mjs';
@@ -28,7 +29,7 @@ async function exchange(store, client, upstream, opts = {}) {
 // `root` given → each envelope is also written by the collector's own record store to
 // <root>/capture-<date>.ndjson, the file `asight serve` reads.
 export async function cutRequestEnvelopes({ root } = {}) {
-  const store = root ? createRecordStore({ root, onError: (e) => { throw e; } }) : null;
+  const store = root ? createRecordStore({ root: path.join(root, 'collector'), raw: root, onError: (e) => { throw e; } }) : null; // envelopes = the raw layer's segments (D60)
   const out = {
     complete: await exchange(store, head(BODY.length) + BODY, OK),
     // the capture cap (maxBodyBytes) cut the body: req_truncated + req_body_bytes, prefix unparseable
