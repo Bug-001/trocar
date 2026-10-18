@@ -322,7 +322,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
           u.left.push({ path: e.path, result: 'failed', reason })
           u.still_trusting.push({ what: 'root', store: e.store ?? null, fp256: e.fp256 ?? null, reason: why, command: byHand })
           u.problems.push(`${reason} Your machine still trusts asight's certificate; the install record is kept, so \`asight uninstall\` tries again`)
-          u.failures.push({ code: 'root-not-removed', path: e.path, reason }) // its one D38 line; a `note` here would write a second
+          u.failures.push({ code: CODE_OFF.rootNotRemoved, path: e.path, reason }) // its one D38 line; a `note` here would write a second
         }
       }
     }
@@ -420,7 +420,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   const put = flowWriter(w, run, receipt.notes)
   // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write — no lock, no state, no flows record; the receipt names the tools that undo it
   const old = refuseOldManifest({ home, platform: w.platform, fs: w.fs })
-  if (old) { receipt.problems.push(old.message); receipt.ok = false; receipt.log = null; return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } }
+  if (old) { receipt.problems.push(old.message); receipt.ok = false; Object.assign(receipt, { error: { code: 'older-install', message: old.message } }); receipt.log = null; return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } }
   // R7 on Windows (4.8 §7): off never runs with an elevated token — asked before anything is touched, and a token that cannot be read is
   // not a refusal (an undo that stopped on a broken whoami is not an undo).
   if ((deps.platform || process.platform) === 'win32') {

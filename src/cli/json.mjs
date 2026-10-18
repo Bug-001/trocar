@@ -6,7 +6,7 @@
 //                                               or the command's own code for what it could not do.
 import { SCHEMA_VERSION } from '../off/schema.mjs'
 
-export const ERROR_CODES = Object.freeze(['usage', 'internal'])
+export const ERROR_CODES = Object.freeze(['usage', 'internal', 'key-custody-failed', 'older-install'])
 
 /** The one JSON document of a run, on stdout. */
 export function printJson(io, doc) {

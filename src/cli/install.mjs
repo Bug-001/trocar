@@ -38,7 +38,7 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
   if ((deps.getuid || processUid)() === 0) { io.err('asight install: run this as your own user, not as root.'); return EXIT.usage }
   const fs = deps.fs || nodeFs
   const old = refuseOldManifest({ home, platform, fs })
-  if (old) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [old.message] }, null, 2)); else io.err(`asight install: ${old.message}`); return EXIT.incomplete }
+  if (old) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }, null, 2)); else io.err(`asight install: ${old.message}`); return EXIT.incomplete }
   const { isModelOs } = await import('../collector/model-install.mjs')
   const model = isModelOs(platform)
   // R12: the writes run under op.lock, taken after the yes (a plan that is only printed takes nothing and writes nothing)
@@ -85,11 +85,16 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     const r = await locked(() => runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
       wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) }))
     if (!r) return EXIT.incomplete
+    // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
+    const refusal = r.pending.find((p) => p.code)
     const receipt = { ...newReceipt('install'), ok: r.exit === 0, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: r.pending, problems: r.problems, standalone: standalonePath(home), residual_risk: RISK,
+      ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       planned, commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
     const dir = path.join(home, '.asight', 'collector')
     try { appendEvent(dir, { event: EVENT.installNote, where: 'install', kind: 'result', outcome: receipt.ok ? 'installed' : 'partial', reason: `install: root ${r.fp256 || 'not made'}; ${r.carriers.length} carrier row(s); ${r.pending.length} pending` }) } catch (e) { r.problems.push(`the install-note could not be written (${e.message})`) }
     if (json) io.out(JSON.stringify(receipt, null, 2))
+    // a refusal installed nothing: the fingerprint, the risk of an installed root and "Next" would all be untrue, so the stop and its reason are the whole receipt
+    else if (refusal) io.out(fit([`asight install stopped: ${refusal.message || refusal.reason}`, 'Nothing of yours was changed.']).join('\n'))
     else io.out(fit([receipt.ok ? "Installed. asight's root certificate is trusted by your user." : 'asight install did not finish. What is missing is below.',
       ...pairs([['Fingerprint', r.fp256 ? `SHA-256 ${r.fp256}` : 'unknown (no root was made)'],
         ...r.carriers.map((c) => [c.harness || 'root', `${c.carrier}${c.state ? ` ${c.state}` : ''}${c.path ? ` ${tilde(c.path, home)}` : ''}${c.why ? ` (${c.why})` : ''}`])]),

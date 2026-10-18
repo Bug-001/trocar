@@ -2,6 +2,8 @@
 // issuer, install and uninstall (T12, T13, T14, T18, T20). The root key never leaves it; `issueIntermediate` builds the TBS
 // itself from the INTERMEDIATE profile (it takes no caller TBS, CM3). Switches:
 //   unavailable — create / issueIntermediate answer 'unavailable' (no GUI session, a locked keychain)
+//   failed      — EVERY verb throws the way cliCustody reports a program that could not run at all: a HOME with no login keychain
+//                 answers "A default keychain could not be found" (macOS test machine, 2026-10-18). Set it to the message, or to true for that one.
 //   throws      — issueIntermediate throws (the helper crashed)
 //   keyLost     — exists() is false: the key was deleted behind asight's back (create then makes a new one; create over a key that exists throws, code 'exists')
 //   wrongProfile — issueIntermediate hands back a self-signed root-shaped certificate instead
@@ -19,13 +21,16 @@ const signer = (k) => (tbs) => crypto.sign('sha256', tbs, k)
 
 export function custodyStub({ kind = 'stub', clock = () => Date.now() } = {}) {
   let keys = null, rootDer = null
-  const switches = { unavailable: false, throws: false, keyLost: false, wrongProfile: false, wrongKey: false, skewMs: 0 }
+  const switches = { unavailable: false, failed: false, throws: false, keyLost: false, wrongProfile: false, wrongKey: false, skewMs: 0 }
   const calls = []
+  // what cliCustody throws when the program ran and reported a failure: the message it builds, with the error word as `code`
+  const failure = (verb) => Object.assign(new Error(`${kind} ${verb} failed (exit 1): failed: ${switches.failed === true ? 'A default keychain could not be found' : switches.failed}`), { code: 'failed' })
   const self = {
     kind, switches, calls,
     get rootDer() { return rootDer },
     create({ subject = 'asight root (test)' } = {}) {
       calls.push({ verb: 'create' })
+      if (switches.failed) throw failure('create')
       if (switches.unavailable) return 'unavailable'
       if (keys && !switches.keyLost) throw Object.assign(new Error('stub custody: a key already exists'), { code: 'exists' }) // the helper's exit 5
       switches.keyLost = false
@@ -34,7 +39,7 @@ export function custodyStub({ kind = 'stub', clock = () => Date.now() } = {}) {
       rootDer = rootCertDer({ subject, spkiDer: spkiOf(keys.publicKey), serial: serialOf(), notBefore: new Date(now - DAY), notAfter: new Date(now + 3650 * DAY), sign: signer(keys.privateKey) })
       return { rootDer, fp256: new crypto.X509Certificate(rootDer).fingerprint256 }
     },
-    exists: () => !!keys && !switches.keyLost,
+    exists: () => { if (switches.failed) throw failure('exists'); return !!keys && !switches.keyLost },
     issueIntermediate({ spkiDer, serial, notBefore }) {
       calls.push({ verb: 'issue', spkiDer, serial, notBefore })
       if (switches.throws) throw new Error('stub custody: the helper crashed')
@@ -44,7 +49,7 @@ export function custodyStub({ kind = 'stub', clock = () => Date.now() } = {}) {
       const nb = new Date(notBefore.getTime() + switches.skewMs)
       return intermediateCertDer({ root: rootDer, subject: `asight intermediate ${nb.toISOString()}`, spkiDer: switches.wrongKey ? spkiOf(p256().publicKey) : spkiDer, serial, notBefore: nb, sign: signer(keys.privateKey) })
     },
-    remove() { calls.push({ verb: 'remove' }); if (switches.unavailable) return 'unavailable'; const had = !!keys; keys = null; rootDer = null; return { removed: had } },
+    remove() { calls.push({ verb: 'remove' }); if (switches.failed) throw failure('remove'); if (switches.unavailable) return 'unavailable'; const had = !!keys; keys = null; rootDer = null; return { removed: had } },
   }
   return self
 }

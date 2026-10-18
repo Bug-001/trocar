@@ -10,6 +10,7 @@ import { commandNamed } from '../../src/cli/commands.mjs'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { ERROR_CODES } from '../../src/cli/json.mjs'
 
 function fakeIo({ tty = false } = {}) {
   const out = [], err = []
@@ -96,5 +97,28 @@ for (const platform of ['darwin', 'win32']) {
         assert.ok(m.files.some((f) => f.role === 'unit' && f.phase === 'install'), 'the unit is install\'s item')
       } finally { await box.stop() }
     })
+  })
+}
+
+// macOS test machine, 2026-10-18: in a HOME with no login keychain the signing helper reports "A default keychain could not be found" and `install`
+// exited 70 with the stack of that throw. A custody that cannot be used is a stated refusal: exit 1, `error.code` from the closed set
+// (src/cli/json.mjs ERROR_CODES), and a sentence that says what the reader has to do. Driven with a custody stand-in that fails the same way.
+for (const platform of ['darwin', 'win32']) {
+  test(`${platform}: a key custody that cannot be used is a refusal — exit 1, error.code, and what to do; never a stack`, async () => {
+    const w = await modelWorld({ os: platform, commands: ['codex'] })
+    w.custody.switches.failed = true
+    const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+    const io = fakeIo()
+    const exit = await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform, deps })
+    assert.equal(exit, 1, io.text())
+    assertEnglish(io.text(), 'the refusal of an install whose key custody failed')
+    assert.match(io.text(), /asight install/, 'it names what to run once the custody can be used')
+    const j = fakeIo()
+    assert.equal(await runInstallCli(['--yes', '--json'], { io: j, env: w.env, home: w.home, platform, deps }), 1, j.text())
+    const doc = j.json()
+    assert.equal(doc.ok, false)
+    assert.ok(ERROR_CODES.includes(doc.error.code), `error.code is in the closed set: ${JSON.stringify(doc.error)}`)
+    assert.ok(doc.error.message.includes('asight install'), doc.error.message)
+    assert.equal(doc.fp256, null, 'no root was made')
   })
 }

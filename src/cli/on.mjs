@@ -46,7 +46,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
   // 4.11 ⑰: a manifest of version 1 / 2 is refused before anything else, before any write — the standalone copy is not rewritten either
   const old = refuseOldManifest({ home, platform, fs: deps.fs || nodeFs })
   if (old) {
-    const receipt = { ...newReceipt('on'), ok: false, harnesses: named.ids, notes: [old.message] }
+    const receipt = { ...newReceipt('on'), ok: false, error: { code: 'older-install', message: old.message }, harnesses: named.ids, notes: [old.message] }
     if (json) io.out(JSON.stringify(receipt, null, 2)); else io.err(`asight on: ${old.message}`)
     return EXIT.incomplete
   }

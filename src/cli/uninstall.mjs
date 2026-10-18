@@ -111,7 +111,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const put = flowWriter(w, run, receipt.notes, { event: 'uninstall-note', where: 'uninstall' })
   // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write (no lock, no state, no record); the receipt names the tools that undo it
   const old = refuseOldManifest({ home, platform: w.platform, fs })
-  if (old) { receipt.problems.push(old.message); receipt.ok = false; receipt.log = null; return { receipt, exit: EXIT.incomplete } }
+  if (old) { receipt.problems.push(old.message); receipt.ok = false; Object.assign(receipt, { error: { code: 'older-install', message: old.message } }); receipt.log = null; return { receipt, exit: EXIT.incomplete } }
   // R7 on Windows (4.8 §7), the same refusal `off` has, before anything is touched; a token that cannot be read is not a refusal.
   if ((deps.platform || process.platform) === 'win32') {
     const refusal = refuseElevatedByWhoami({ run: w.exec, env })
