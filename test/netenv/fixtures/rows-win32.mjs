@@ -5,7 +5,7 @@
 // product names there are examples (V41's wording). `status <h>` ends with the one line about per-process rules (§9.2) on every row whose `on_path` is true, whatever the machine has (D49).
 import { facts, form, fwForm, proc, proxyOf, CLASH, clashVpn, pfacts } from './rows.mjs'
 
-const ENV = '.env HTTPS_PROXY', SETTINGS = 'settings env.HTTPS_PROXY', POLICY = '策略 egressProxyUrl', VSCODE = 'settings.json http.proxy'
+const ENV = '.env HTTPS_PROXY', SETTINGS = 'settings env.HTTPS_PROXY', POLICY = 'policy egressProxyUrl', VSCODE = 'settings.json http.proxy'
 const sysProxy = (port = 7897) => ({ value: `http://127.0.0.1:${port}`, pac: false })
 const viaSystemProxy = (port = 7897) => ({ listeners: [{ ...CLASH, port }], vpn: clashVpn({ port }) })
 const CODEX_PROC = { name: 'codex app-server', exe: 'C:\\Users\\u\\AppData\\Local\\OpenAI\\Codex\\bin\\ab12\\codex.exe', version: '0.160.1' }
@@ -22,47 +22,47 @@ const row = (r) => { ROWS.push(r); return r }
 row({ n: 'a', title: 'Verge with the system proxy on, a form that follows it (Codex): the kernel, the engine, then the system proxy; the WebSocket used to go direct', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: sysProxy(), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), viaSystemProxy()),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress'], [...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: true, reason: null,
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992 → asight 引擎 :17990 → [系统代理] verge-mihomo.exe :7897 → 出口'] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by asight] asight :17992 -> asight :17990 -> [system proxy] verge-mihomo.exe :7897 -> internet'] })
 
 row({ n: 'b', title: 'Verge with the system proxy on, a form that does not follow it (Claude Code CLI): the engine dials the API host direct', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, asight: true, opt_in: false, intact: true }, procs: [proc(7712, CLAUDE_PROC)] }), fwForm(17991), viaSystemProxy()),
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], forms: ['claude-code.cli'], names: ['all'], on_path: true, captured: true, reason: null,
-  compact: ['claude 7712 → [settings env.HTTPS_PROXY · asight 写的] asight 本地代理 :17991 → asight 引擎 :17990 → api.anthropic.com:443(直连)'] })
+  compact: ['claude (pid 7712) -> [settings env.HTTPS_PROXY, written by asight] asight :17991 -> asight :17990 -> api.anthropic.com:443 (direct)'] })
 
 row({ n: 'c', title: 'the agent had a proxy of its own, and it was Verge: it is the upstream, the entry points at the kernel', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, asight: true, opt_in: false, intact: true }, setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: 'C:\\Users\\u\\.claude\\settings.json', key: 'env.HTTPS_PROXY' }]), procs: [proc(7712, CLAUDE_PROC)] }), fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'agent' }), viaSystemProxy()),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['claude-code.cli'], names: ['all'], on_path: true, captured: true, reason: null,
-  compact: ['claude 7712 → [settings env.HTTPS_PROXY · asight 写的] asight 本地代理 :17991 → asight 引擎 :17990 → [CONNECT 原样转] verge-mihomo.exe :7897 → 出口'] })
+  compact: ['claude (pid 7712) -> [settings env.HTTPS_PROXY, written by asight] asight :17991 -> asight :17990 -> [CONNECT passed on as it is] verge-mihomo.exe :7897 -> internet'] })
 
 row({ n: 'd', title: 'Verge with TUN on (service mode): TUN is not read (D49), the engine dials the API host as the agent would, direct', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, asight: true, opt_in: false, intact: true }, procs: [proc(7712, CLAUDE_PROC)] }), fwForm(17991), { listeners: [CLASH], vpn: clashVpn({ tun: true }) }),
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], forms: ['claude-code.cli'], names: ['all'], on_path: true, captured: true, reason: null,
-  compact: ['claude 7712 → [settings env.HTTPS_PROXY · asight 写的] asight 本地代理 :17991 → asight 引擎 :17990 → api.anthropic.com:443(直连)'] })
+  compact: ['claude (pid 7712) -> [settings env.HTTPS_PROXY, written by asight] asight :17991 -> asight :17990 -> api.anthropic.com:443 (direct)'] })
 
 row({ n: 'e', title: 'v2rayN with the system proxy on: the same follower shape with a product the adapter does not read (a unit fixture; the end-to-end suite covers it in W67)', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: { value: 'http://127.0.0.1:10808', pac: false }, follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:10808', source: 'system-proxy' }), { listeners: [V2RAYN], vpn: v2raynVpn() }),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress'], [...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: true, reason: null,
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992 → asight 引擎 :17990 → [系统代理] v2rayN.exe :10808 → 出口'] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by asight] asight :17992 -> asight :17990 -> [system proxy] v2rayN.exe :10808 -> internet'] })
 
 row({ n: 'f', title: 'no VPN: the kernel and the engine dial the API host', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)] }), fwForm(17992)),
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], forms: ['codex.app'], names: ['all'], on_path: true, captured: true, reason: null,
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992 → asight 引擎 :17990 → chatgpt.com:443(直连)'] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by asight] asight :17992 -> asight :17990 -> chatgpt.com:443 (direct)'] })
 
 row({ n: 'g', title: 'the system proxy is a PAC and the form follows it: asight does not run a PAC, the form is not wired', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: { value: null, pac: true }, follows: { http: true, ws: false }, entry: null }), fwForm(17992, { state: 'forward-only' })),
   kinds: [['agent', 'unknown'], ['agent', 'upstream']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: false, captured: false, reason: 'not-routed',
-  compact: ['HTTP codex app-server 5530 → [系统代理] PAC(不知道 · pac)', 'WebSocket codex app-server 5530 → chatgpt.com:443(直连)'] })
+  compact: ['HTTP codex app-server (pid 5530) -> [system proxy] PAC (unknown: pac)', 'WebSocket codex app-server (pid 5530) -> chatgpt.com:443 (direct)'] })
 
 row({ n: 'h', title: 'the agent runs elevated: the kernel cannot tell the process and only forwards', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.cli', { entry: { where: SETTINGS, asight: true, opt_in: false, intact: true }, procs: [proc(7712, { ...CLAUDE_PROC, elevated: true })] }), fwForm(17991)),
   kinds: [['agent', 'asight-forwarder', 'upstream']], forms: ['claude-code.cli'], names: ['all'], on_path: true, captured: false, reason: 'elevated-agent',
-  compact: ['claude 7712(提权) → [settings env.HTTPS_PROXY · asight 写的] asight 本地代理 :17991(只转发) → api.anthropic.com:443(直连)'] })
+  compact: ['claude (pid 7712, elevated) -> [settings env.HTTPS_PROXY, written by asight] asight :17991 (forwarded only) -> api.anthropic.com:443 (direct)'] })
 
 row({ n: 'i', title: 'the engine is gone: nobody listens on the door the entry points at (no kernel to fall back to, D47)', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)] }), fwForm(17992), { daemon: { state: 'not-running', pid: null, enginePort: null }, forwarder: { pid: null, up: false, forms: { 'codex.app': fwForm(17992) } } }),
   kinds: [['agent', 'asight-forwarder']], forms: ['codex.app'], names: ['all'], on_path: true, captured: false, reason: 'forwarder-down', // 4.8 §12: forwarder-down is「引擎 / 门不在,§10.2 行 i」(the §10.2 table's daemon-not-running for row i)
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992(没人在听)'] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by asight] asight :17992 (nothing listening)'] })
 
 // row k's facts are the shape a REAL `off` leaves: the entry record is gone from the manifest (undo.mjs takes it out) and the file holds the user's own value again, so `entry` is null — what says
 // the agent is still on the kernel is its live connection to the group's port (`clients`). The shape with `entry.intact: true` under `desired: 'off'` (rows.mjs row 14, the cross-platform twin)
@@ -70,28 +70,28 @@ row({ n: 'i', title: 'the engine is gone: nobody listens on the door the entry p
 row({ n: 'k', title: 'after off, an agent started while it was on is still connected to the kernel, which only forwards', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: sysProxy(), follows: { http: true, ws: false }, entry: null }), fwForm(17992, { state: 'forward-only', upstream: 'http://127.0.0.1:7897', source: 'system-proxy', clients: [5530] }), { desired: { codex: 'off' }, ...viaSystemProxy() }),
   kinds: [['agent', 'asight-forwarder', 'proxy', 'egress'], ['agent', 'asight-forwarder', 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: false, reason: 'desired-off',
-  compact: ['codex app-server 5530 → asight 本地代理 :17992(只转发) → [系统代理] verge-mihomo.exe :7897 → 出口'], notes: ['还有 1 个 agent 连着 asight 的门,重启它们之后 asight 就完全退出'] })
+  compact: ['codex app-server (pid 5530) -> asight :17992 (forwarded only) -> [system proxy] verge-mihomo.exe :7897 -> internet'], notes: ['1 process(es) are still connected through asight, forwarded only; asight exits once they do'] })
 
 row({ n: 'l', title: 'the user changed the agent\'s own proxy: it no longer points at the kernel and goes where the setting says', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], setting: proxyOf('http://proxy.new:3128', [{ kind: 'file', where: 'C:\\Users\\u\\.codex\\.env', key: 'HTTPS_PROXY' }]), entry: { where: ENV, asight: true, opt_in: false, intact: false } }), fwForm(17992, { upstream: 'http://proxy.corp:8080', source: 'agent' })),
   kinds: [['agent', 'proxy', 'egress']], forms: ['codex.app'], names: ['all'], on_path: false, captured: false, reason: 'proxy-changed',
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY] proxy.new:3128 → 出口'], notes: ['接上: asight on codex'] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY] proxy.new:3128 -> internet'], notes: ['To put asight back on its path: asight on codex'] })
 
 row({ n: 'm', title: 'the system proxy changed its port: the kernel was reloaded, the agent\'s own setting did not change', h: 'codex',
   facts: pfacts('codex', form('codex.app', { procs: [proc(5530, CODEX_PROC)], systemProxy: sysProxy(7898), follows: { http: true, ws: false } }), fwForm(17992, { upstream: 'http://127.0.0.1:7898', source: 'system-proxy' }), viaSystemProxy(7898)),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress'], [...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['codex.app', 'codex.app'], names: ['http', 'ws'], on_path: true, captured: true, reason: null,
-  compact: ['codex app-server 5530 → [.env HTTPS_PROXY · asight 写的] asight 本地代理 :17992 → asight 引擎 :17990 → [系统代理] verge-mihomo.exe :7898 → 出口'] })
+  compact: ['codex app-server (pid 5530) -> [.env HTTPS_PROXY, written by asight] asight :17992 -> asight :17990 -> [system proxy] verge-mihomo.exe :7898 -> internet'] })
 
 row({ n: 'q', title: 'Kimi\'s VS Code extension, named: the editor\'s setting points at the kernel, only Kimi\'s host set goes to the engine', h: 'kimi-code',
   facts: pfacts('kimi-code', form('kimi-code.vscode', { entry: { where: VSCODE, asight: true, opt_in: true, intact: true }, optIn: { state: 'done' }, procs: [proc(8100, { name: 'Code', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', version: null })], hosts: { program: 'VS Code', extension: 'Kimi', defaults: ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn'], hosts: ['api.moonshot.cn', 'relay.corp.example'], settings: 'read', dropped: [] } }), fwForm(17995)),
   kinds: [[...ENGINE_AND_KERNEL, 'upstream']], forms: ['kimi-code.vscode'], names: ['all'], on_path: true, captured: true, reason: null,
-  compact: ['Code 8100 → [settings.json http.proxy · 你点名的] asight 本地代理 :17995 → asight 引擎 :17990 → api.moonshot.cn:443(直连)'],
-  notes: ['VS Code 别的连接经 asight 的门(只转发),只有到 Kimi 的 host 集的连接进引擎'] })
+  compact: ['Code (pid 8100) -> [settings.json http.proxy, you named it] asight :17995 -> asight :17990 -> api.moonshot.cn:443 (direct)'],
+  notes: ["VS Code's other connections are forwarded only; only the hosts of Kimi are captured"] })
 
 row({ n: 'r', title: 'Claude Desktop, named: the policy value points at the kernel\'s own port, the upstream is the system proxy', h: 'claude-code',
   facts: pfacts('claude-code', form('claude-code.desktop', { entry: { where: POLICY, asight: true, opt_in: true, intact: true }, optIn: { state: 'done' }, systemProxy: sysProxy(), follows: { http: true, ws: false }, procs: [proc(8801, { name: 'Claude', exe: 'C:\\Program Files\\Claude\\Claude.exe', version: null })] }), fwForm(17996, { upstream: 'http://127.0.0.1:7897', source: 'system-proxy' }), viaSystemProxy()),
   kinds: [[...ENGINE_AND_KERNEL, 'proxy', 'egress']], forms: ['claude-code.desktop'], names: ['all'], on_path: true, captured: true, reason: null,
-  compact: ['Claude 8801 → [策略 egressProxyUrl · 你点名的] asight 本地代理 :17996 → asight 引擎 :17990 → [系统代理] verge-mihomo.exe :7897 → 出口'] })
+  compact: ['Claude (pid 8801) -> [policy egressProxyUrl, you named it] asight :17996 -> asight :17990 -> [system proxy] verge-mihomo.exe :7897 -> internet'] })
 
 /** What the gatherWin32Facts-driven tests reach the facts through: the parts the rows fix by hand (the helper's reads, the collector dir's files). */
 export { ENV, SETTINGS, POLICY, VSCODE, CODEX_PROC, CLAUDE_PROC, sysProxy, viaSystemProxy }

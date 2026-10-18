@@ -122,12 +122,12 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     assert.notEqual(status, 0,
       `doctor exited 0 on a world-readable capture holding live credentials.\n--- output ---\n${out}`);
-    assert.match(out, /0644|属主|owner-only|readable/i, `doctor did not name the permission problem.\n${out}`);
+    assert.match(out, /0644[^\n]*can be read by someone else/, `doctor did not name the permission problem.\n${out}`);
 
     // …and passes once the file is owner-only, credentials and all.
     fs.chmodSync(path.join(home, 'capture.ndjson'), 0o600);
     const ok = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, ASIGHT_SOURCE: '', PATH: OS_PATH } });
-    assert.match(ok, /record\(s\) captured/, 'a 0600 capture must pass and report what it read');
+    assert.match(ok, /^asight doctor: no problems\.$/m, 'a 0600 capture must pass, credentials and all');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -167,9 +167,9 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
     assert.equal(status, 0,
       `doctor hard-failed on a CLEAN capture. Almost certainly it read zero records — which is the `
       + `array-source defect, now surfacing loudly instead of silently.\n--- output ---\n${out}`);
-    assert.match(out, /1 record\(s\) captured|record\(s\) captured/,
-      `doctor did not report reading any records from a multi-root source that holds one.\n${out}`);
-    assert.doesNotMatch(out, /0 record/, `doctor read zero records from a non-empty capture.\n${out}`);
+    // exit 0 IS the assertion that the record was read: a capture file that yields no record at all
+    // is 「cannot judge」 (exit 3, §3.7), which is how the array-source defect would surface now.
+    assert.doesNotMatch(out, /Could not judge/, `doctor could not read the multi-root source that holds one record.\n${out}`);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -204,7 +204,7 @@ test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () =
     // Subject is SOURCE RESOLUTION, not credentials: a bare doctor must find the legacy root and
     // read the record in it. Before the fix it statSync'd an array, read zero records, and said ✓.
     assert.equal(status, 0, `bare doctor hard-failed on a healthy multi-root capture.\n${out}`);
-    assert.match(out, /1 record\(s\) captured/,
-      `bare doctor did not read the record sitting in the legacy root — the D27 array-source defect.\n${out}`);
+    assert.doesNotMatch(out, /Could not judge/,
+      `bare doctor did not read the record sitting in the legacy root — the D27 array-source defect (a file that yields no record exits 3).\n${out}`);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

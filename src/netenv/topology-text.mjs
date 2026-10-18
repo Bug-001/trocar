@@ -1,45 +1,47 @@
-// topology-text.mjs (src/netenv) — the words of the topology (RFC 1.6 §9.2). Everything printed is rendered from a HarnessTopology (topology.mjs) and from nothing else, so the text and `--json` cannot differ (V43):
-// `renderCompact` is one line per branch for `status`, `renderDetail` a hop per line for `status <harness>`, `firstHopAfterAsight` / `firstHopOff` the two hops V45 compares. Pure.
-// What is never printed: a proxy URL's credentials (the facts never held them), a proxy product's secret, subscription address and node names (nothing here has them), and a hop's name when it could not be read — that
-// hop says 「不知道 · <原因>」 (R11).
-export const ROUTING_TEXT = Object.freeze({ driver: '驱动模式(eBPF)', proxy: '代理模式', legacy: '旧采集', none: '没有采集', unknown: '引流模式不知道' })
+// topology-text.mjs (src/netenv) — the words of the topology (RFC 1.6 §3.5, 附录 A). Everything printed is rendered from a HarnessTopology (topology.mjs) and from nothing else, so the text and `--json` cannot differ (V43):
+// `renderCompact` is one line per branch, `renderRoutes` the `Routes` block of `status <harness>`, `firstHopAfterAsight` / `firstHopOff` the two hops V45 compares. Pure.
+// English, ASCII only (D58): a chain is `agent (pid N) -> [where it came from] hop -> internet`.
+// What is never printed: a proxy URL's credentials (the facts never held them), a proxy product's name or node names (nothing here has them), and a hop's name when it could not be read — that
+// hop says `unknown (<reason>)` (D58③).
+export const ROUTING_TEXT = Object.freeze({ driver: 'driver mode', proxy: 'proxy mode', legacy: 'the old capture', none: 'no capture', unknown: 'routing unknown' })
 const BRANCH_TEXT = { http: 'HTTP', ws: 'WebSocket' }
-const tri = (v, yes = '是', no = '否') => (v === true ? yes : v === false ? no : '不知道')
+const tri = (v, yes = 'yes', no = 'no') => (v === true ? yes : v === false ? no : 'unknown')
 const base = (p) => String(p).split(/[\\/]/).pop()
 
 const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 const edgeOf = (t, from, to) => t.edges.find((e) => e.from === from && e.to === to) || null
-const unknownText = (n) => `不知道 · ${n.unknown.reason}`
-const passText = (n) => (n.passthrough ? `透传 · 负缓存 ${n.passthrough.hosts.join('、')}` : null)
-const paren = (...parts) => { const p = parts.filter(Boolean); return p.length ? `(${p.join(';')})` : '' }
+const unknownText = (n) => `unknown: ${n.unknown.reason}`
+const passText = (n) => (n.passthrough ? `forwarded only for ${n.passthrough.hosts.join(', ')}` : null)
+const paren = (...parts) => { const p = parts.filter(Boolean); return p.length ? ` (${p.join('; ')})` : '' }
 
-/** A hop as one short phrase (`detail`: with the pid, version and address a hop-per-line view has room for). `via` is the edge into it. */
+/** A hop as one short phrase (`detail`: with the pid and address a hop-per-line view has room for). `via` is the edge into it. */
 function hopText(n, via, detail, inferred = false) {
   switch (n.kind) {
-    case 'agent': return detail ? `${n.name}${n.pid ? ` pid ${n.pid}` : ''}${n.version ? ` · ${n.version}` : ''}${n.elevated ? ` · 提权${n.elevatedInferred ? '(推断)' : ''}` : ''}` : `${n.name}${n.pid ? ` ${n.pid}` : ''}${n.elevated ? `(提权${n.elevatedInferred ? ' · 推断' : ''})` : ''}`
-    case 'asight-engine': return detail ? `${n.name}${n.pid ? ` pid ${n.pid}` : ''}${n.port ? ` · ${n.addr}:${n.port}` : ''}${n.mode === 'decrypt' ? ' · 解密' : ''}${paren(passText(n))}` : `${n.name}${n.port ? ` :${n.port}` : ''}${paren(passText(n))}` // a daemon that did not say its port is drawn without one: no `:undefined`
-    case 'asight-forwarder': return `${n.name} :${n.port}${paren(n.mode === 'forward-only' ? '只转发' : n.mode === 'down' ? '没人在听' : null)}`
+    case 'agent': return `${n.name}${n.pid ? ` (pid ${n.pid}${n.elevated ? `, elevated${n.elevatedInferred ? ', inferred' : ''}` : ''})` : n.elevated ? ' (elevated)' : ''}`
+    case 'asight-engine': return `${n.name}${n.port ? ` :${n.port}` : ''}${paren(passText(n))}` // a daemon that did not say its port is drawn without one: no `:undefined`
+    case 'asight-forwarder': return `${n.name} :${n.port}${paren(n.mode === 'forward-only' ? 'forwarded only' : n.mode === 'down' ? 'nothing listening' : null)}`
     case 'legacy-mitm': return `${n.name} :${n.port}`
     case 'proxy': {
       const at = n.port && !String(n.name).endsWith(`:${n.port}`) ? ` :${n.port}` : '' // every proxy hop has its port; a hop already named `host:port` says it once
-      return `${n.name}${at}${detail && n.pid ? ` · pid ${n.pid}` : ''}${paren(n.unknown ? unknownText(n) : n.down ? '没人在听' : null)}`
+      const name = n.port && /^(system proxy|proxy setting|upstream)$/.test(String(n.name)) ? '' : n.name // the edge already says where it came from: a hop with no name of its own is its port
+      return `${name}${name ? at : at.trim()}${detail && n.pid ? ` (pid ${n.pid})` : ''}${paren(n.unknown ? unknownText(n) : n.down ? 'nothing listening' : null)}`
     }
-    case 'upstream': return `${n.name}${via === 'direct' ? `(直连${inferred ? ' · 推断' : ''})` : ''}`
-    case 'egress': return n.unknown ? '?' : '出口'
-    default: return `${n.name}${n.unknown ? paren(`${unknownText(n)}${n.inferred === true ? ' · 推断' : ''}`) : ''}`
+    case 'upstream': return `${n.name}${via === 'direct' ? ` (direct${inferred ? ', inferred' : ''})` : ''}`
+    case 'egress': return n.unknown ? 'unknown' : 'internet'
+    default: return `${n.name}${n.unknown ? paren(`${unknownText(n)}${n.inferred === true ? ', inferred' : ''}`) : ''}`
   }
 }
 
 /** The word on an edge: how the connection gets from one hop to the next. */
 function edgeLabel(e, from, to, detail) {
   if (!e) return ''
-  if (to.kind === 'legacy-mitm') return '旧块 · 旧采集' // the old capture's block in the VPN's script routes the connection into its MITM
+  if (to.kind === 'legacy-mitm') return 'the old capture'
   if (from.kind === 'legacy-mitm') return ''
-  if (e.via === 'ebpf') return detail && (e.evidence || []).find((x) => x.startsWith('link:')) ? `eBPF · link ${e.evidence.find((x) => x.startsWith('link:')).slice(5)}` : 'eBPF'
-  if (e.via === 'system-proxy') return '系统代理'
+  if (e.via === 'ebpf') return 'ebpf'
+  if (e.via === 'system-proxy') return 'system proxy'
   if (e.via === 'proxy-http' || e.via === 'proxy-https' || e.via === 'proxy-socks') {
-    if (e.entry) return `${e.entry.where} · ${e.entry.opt_in ? '你点名的' : 'asight 写的'}`
-    if (from.asight) return e.via === 'proxy-socks' ? 'SOCKS 前导原样转' : e.via === 'proxy-https' ? 'CONNECT 原样转 · https 代理' : 'CONNECT 原样转' // an https proxy of the agent's own: the engine ends its outer TLS first (4.6 §引擎 第 3 步)
+    if (e.entry) return `${base(e.entry.where)}${e.entry.opt_in ? ', you named it' : ', written by asight'}`
+    if (from.asight) return e.via === 'proxy-socks' ? 'SOCKS passed on as it is' : 'CONNECT passed on as it is'
     const ev = (e.evidence || [])[0] || ''
     if (ev.startsWith('env:')) return ev.slice(4)
     if (ev.startsWith('file:')) { const [file, key] = ev.slice(5).split('#'); return key ? `${base(file)} ${key}` : base(file) }
@@ -48,13 +50,13 @@ function edgeLabel(e, from, to, detail) {
   return ''
 }
 
-/** `agent → [label] hop → …` for a list of node ids. */
-function chain(t, ids, detail = false) {
+/** `agent -> [label] hop -> …` for a list of node ids. */
+function chain(t, ids, detail = false, labels = true) {
   return ids.map((id, i) => {
     const n = nodeOf(t, id), e = i ? edgeOf(t, ids[i - 1], id) : null
-    const label = i ? edgeLabel(e, nodeOf(t, ids[i - 1]), n, detail) : ''
+    const label = i && labels ? edgeLabel(e, nodeOf(t, ids[i - 1]), n, detail) : ''
     return `${label ? `[${label}] ` : ''}${hopText(n, e && e.via, detail, !!(e && e.inferred))}`
-  }).join(' → ')
+  }).join(' -> ')
 }
 
 // Which words a branch's line needs in front: its form when the harness has more than one, HTTP / WebSocket when the branches of its form do not all go the same way (`key`: the path with asight, or without).
@@ -66,28 +68,11 @@ const distinct = (t) => t.branches.filter((b, i) => t.branches.findIndex((x) => 
 /** One line per way a harness's traffic goes: the path with asight on it (HTTP and WebSocket that take the same path are one line). */
 export const renderCompact = (t) => distinct(t).map((b) => `${prefixOf(t, b)}${chain(t, b.path)}`)
 
-/**
- * The 「各 harness 的路」 block of `status` (§9.2): a header with the mode, how long ago it was probed and where the detail is, then each harness's compact lines with the verdict (on the path or not · captured or
- * not and why) at the end of the last one. `topo` = { <h>: HarnessTopology } (what `--json` carries), `ids` the order. Rendered from the topology and nothing else.
- */
-export function renderPathBlock(topo, { ids = Object.keys(topo), now = null } = {}) {
-  const list = ids.filter((h) => topo[h])
-  if (!list.length) return []
-  const first = topo[list[0]]
-  const ago = now != null && Number.isFinite(Date.parse(first.at)) ? ` · ${Math.max(0, Math.round((now - Date.parse(first.at)) / 1000))} 秒前探测` : ''
-  const lines = [`各 harness 的路(${ROUTING_TEXT[first.routing] || ROUTING_TEXT.unknown} · 新连接${ago} · 细节: asight status <harness>)`]
-  for (const h of list) {
-    const t = topo[h], rows = renderCompact(t)
-    rows.forEach((r, i) => lines.push(`  ${i ? ' '.repeat(13) : h.padEnd(13)} ${r}${i === rows.length - 1 ? `   ${verdictText(t.branches[0])}` : ''}`))
-  }
-  return lines
-}
-
-/** What `status` says after a branch's chain: 「在路径上 · 是」 / 「不在 · 否 · desired-off」 — whether asight is on the path, whether the harness is captured, and why not. */
-export const verdictText = (b) => `${b.on_path === true ? '在路径上' : b.on_path === false ? '不在' : '在不在路径上不知道'} · ${tri(b.captured)}${b.reason ? ` · ${b.reason}` : ''}`
+/** What `status` says after a branch's chain: `on asight's path: yes · captured: no (desired-off)`. */
+export const verdictText = (b) => `on asight's path: ${tri(b.on_path)} · captured: ${tri(b.captured)}${b.reason ? ` (${b.reason})` : ''}`
 
 const isAsight = (n) => n.asight === true
-/** The first hop after asight on a branch (the first one that is not asight's own), and the first hop of the same branch with asight taken out: §9.5 says they are the same. */
+/** The first hop after asight on a branch (the first one that is not asight's own), and the first hop of the same branch with asight taken out: 附录 A says they are the same. */
 export function firstHopAfterAsight(t, b) {
   const nodes = b.path.map((id) => nodeOf(t, id))
   let last = 0
@@ -99,30 +84,49 @@ export const firstHopOff = (t, b) => nodeOf(t, b.off_path[1]) || null
 export const hopKey = (n) => (n ? [n.kind, n.addr ?? '', n.port ?? '', n.name].join('|') : null)
 
 const CHANGE = {
-  driver: (h) => `要换代理: 照常改 ${h} 的设置(或你的 VPN);新启动的进程按新设置走,asight 不用做什么`,
-  proxy: (h) => `要换代理: 照常改 ${h} 的设置,再跑 asight on ${h},把 asight 接在新代理前面;系统代理变了不用做什么`,
-  legacy: () => '要换代理: 照常改你的代理软件;旧采集的路由跟着它的配置,asight 不用做什么',
-  none: (h) => `要换代理: 照常改 ${h} 的设置(或你的 VPN);asight 现在不在路径上`,
-  unknown: (h) => `要换代理: 照常改 ${h} 的设置`,
+  driver: (h) => `To change the proxy: edit ${h}'s own settings; new processes follow them.`,
+  proxy: (h) => `To change the proxy: edit ${h}'s own settings, then run: asight on ${h}`,
+  legacy: () => 'To change the proxy: edit your proxy\'s own settings.',
+  none: (h) => `To change the proxy: edit ${h}'s own settings; asight is not on its path now.`,
+  unknown: (h) => `To change the proxy: edit ${h}'s own settings.`,
+}
+/** The one sentence 附录 A asks for whenever asight is on the path, and the line that says how to change the proxy. */
+export const routeNotes = (t) => [...(t.on_path === true ? [`If your VPN or proxy routes by process, it sees asight, not ${t.harness}.`] : []), (CHANGE[t.routing] || CHANGE.unknown)(t.harness)]
+
+/** The `Routes` rows of `status <harness>` (§3.5): `[[label, chain], …]` — the path of new connections, the path with asight taken out, and each running process that goes another way. */
+export function routeRows(t, { labels = true } = {}) {
+  const rows = []
+  for (const b of distinct(t)) rows.push([`new processes${prefixOf(t, b) ? ` (${prefixOf(t, b).trim()})` : ''}`, chain(t, b.path, true, labels)])
+  if (t.branches.some((b) => b.path.some((id) => isAsight(nodeOf(t, id))))) for (const b of distinct(t)) rows.push([`without asight${prefixOf(t, b, 'off_path') ? ` (${prefixOf(t, b, 'off_path').trim()})` : ''}`, chain(t, b.off_path, true, labels)])
+  for (const r of t.running || []) rows.push([`pid ${r.pid} now`, chain(t, r.path, true, labels)])
+  return rows
 }
 
-/** `status <harness>`: the harness's header, the path of each branch a hop to a line, the path with asight taken out, the processes that go another way, what could not be read, and how to change the proxy. */
-export function renderDetail(t, { now = null } = {}) {
-  const head = `${t.harness} · ${t.desired === 'on' ? '开' : t.desired === 'off' ? '关' : '期望态不知道'} · ${ROUTING_TEXT[t.routing]} · 被采集: ${t.captured === true ? '是' : t.captured === false ? `否${t.reason ? `(${t.reason})` : ''}` : '不知道'}`
-  const ago = now != null && Number.isFinite(Date.parse(t.at)) ? ` · ${Math.max(0, Math.round((now - Date.parse(t.at)) / 1000))} 秒前探测` : ''
-  const lines = [head]
-  for (const b of distinct(t)) {
-    lines.push(`新连接的路${prefixOf(t, b) ? `(${prefixOf(t, b).trim()})` : ''}${ago}  ${verdictText(b)}`)
-    b.path.forEach((id, i) => {
-      const n = nodeOf(t, id), e = i ? edgeOf(t, b.path[i - 1], id) : null
-      const label = i ? edgeLabel(e, nodeOf(t, b.path[i - 1]), n, true) : ''
-      lines.push(i ? `  → ${label ? `[${label}] ` : ''}${hopText(n, e && e.via, true, !!(e && e.inferred))}` : `  ${hopText(n, null, true)}`)
-    })
+/** `status <harness>`: the `Routes` block, a hop chain to a line, then what could not be read. */
+export function renderRoutes(t, { width = 80 } = {}) {
+  let rows = routeRows(t)
+  if (!rows.length) return []
+  const w = () => Math.max(...rows.map(([l]) => l.length))
+  const fits = () => rows.every(([l, c]) => 6 + w() + c.length <= width)
+  if (!fits()) rows = routeRows(t, { labels: false }) // 附录 A: a chain that does not fit drops where each hop came from first, and never folds
+  const pad = w()
+  return ['  Routes', ...rows.flatMap(([l, c]) => (6 + pad + c.length <= width ? [`    ${l.padEnd(pad)}  ${c}`] : [`    ${l}`, `      ${c}`])), ...(t.notes || []).map((n) => `    note: ${n}`)]
+}
+
+/** The `Routes` block with the two sentences 附录 A asks for after it (kept for callers that want the whole detail in one call). */
+export const renderDetail = (t) => [...renderRoutes(t), ...routeNotes(t).map((s) => `  ${s}`)]
+
+/**
+ * One line per harness, for a caller that wants the paths of several of them at once (the board and `--json` read the topology itself).
+ * `topo` = { <h>: HarnessTopology }, `ids` the order.
+ */
+export function renderPathBlock(topo, { ids = Object.keys(topo) } = {}) {
+  const list = ids.filter((h) => topo[h])
+  if (!list.length) return []
+  const lines = []
+  for (const h of list) {
+    const t = topo[h], rows = renderCompact(t)
+    rows.forEach((r, i) => lines.push(`  ${i ? ' '.repeat(13) : h.padEnd(13)} ${r}`))
   }
-  if (t.branches.some((b) => b.path.some((id) => isAsight(nodeOf(t, id))))) lines.push(`关掉 asight 时的路: ${t.branches.map((b) => `${prefixOf(t, b, 'off_path')}${chain(t, b.off_path)}`).join(' · ')}`)
-  for (const r of t.running || []) lines.push(r.note === 'start-time-settings' ? `pid ${r.pid} 仍按启动时的设置:${chain(t, r.path)};重启后按上面的路` : `pid ${r.pid} 没有经过 asight${r.reason ? `(${r.reason})` : ''}:${chain(t, r.path)};重启后被采集`)
-  for (const n of t.notes || []) lines.push(`说明: ${n}`)
-  if (t.on_path === true) lines.push(`若你的 VPN / 代理按进程分流,它看到的来源是 asight,不是 ${t.harness}`)
-  lines.push((CHANGE[t.routing] || CHANGE.unknown)(t.harness))
   return lines
 }

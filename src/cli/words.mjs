@@ -6,28 +6,50 @@
 // prints a brief also points at where the whole wall lives (`asight status --failures`, `doctor`, the board).
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+|ERR_[A-Z0-9_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), as src/health/codes.mjs spells them
 
-/** `(where, code) → 短中文`,for the closed failure codes of 4.6 / 4.8 / 4.9 a person actually meets in a wall. */
+/** `(where, code)` -> one short English sentence, for the closed failure codes a person actually meets in a wall. */
 export const FAILURE_WORDS = Object.freeze({
-  // daemon / start
-  'daemon/start-failed': '守护进程没起来', 'daemon/crash': '守护进程崩过一次', 'daemon/unclean-stop': '上次没停干净', 'daemon/stop-failed': '没停成', 'daemon/control-error': '控制面出错', 'daemon/check-error': '自检出错',
-  'start/start-failed': '没起来', 'start/root-refused': '拒绝了 root 运行', 'start/root-token': '拒绝了 root 运行', 'start/elevated-token': '拒绝了提权运行',
-  // record / events (R11's own failures)
-  'record/record-error': '采集写不进', 'record/file-replaced': '采集文件被换掉了', 'events/log-gap': '事件日志有缺口',
-  // tracker / trust / bundle
-  'bundle/system-roots-unavailable': '合并包里没有系统根证书', 'bundle/system-roots-unparsable': '有系统根证书解析不了,没进合并包', 'bundle/system-roots-partial': '合并包少了一部分系统根证书', 'tracker/watch-failed': '进程没看住', 'tracker/judge-error': '进程判不了', 'tracker/ambiguous': '进程认不出是哪一个 harness',
-  // engine
-  'engine/lookup-miss': '拿不到连接的原目的地', 'engine/engine-error': '引擎出错', 'engine/flow-write-failed': '流写不进', 'engine/negative-cache': '客户端拒了证书,那个 host 之后透传', 'engine/upstream-slow': '上游慢', 'engine/leaf-error': '出证书失败', 'engine/framer-error': '解析请求失败',
-  // kernel / helper
-  'kernel/kernel-drops': '内核丢了包', 'helper/helper-error': '能力助手出错', 'helper/heartbeat-failed': '助手心跳失败', 'helper/heartbeat-gap': '助手心跳断了', 'helper/loader-down': '助手装载器没在听',
-  // switch / state
-  'switch/state-mismatch': '内核没确认引流', 'switch/state-unparsable': '期望态文件读不了',
-  // install / unit
-  'install/launchd-register-failed': '自启单元没注册上(launchd 是唯一的自启)', 'install/unit-not-enabled': '自启单元没启用', 'install/install-error': '安装出错',
-  // the proxy-mode ingress (4.8; the engines are their own proxies since D47 and its win32 twin — the kernel's words went with it)
-  'ingress/ingress-auth-failed': '代理入口没答上', 'ingress/engine-port-taken': '引擎端口被占', 'ingress/upstream-unavailable': '上游拨不出去',
+  'daemon/start-failed': 'the background process would not start',
+  'daemon/crash': 'the background process crashed once',
+  'daemon/unclean-stop': 'the last run did not stop cleanly',
+  'daemon/stop-failed': 'it could not be stopped',
+  'daemon/control-error': 'its control channel failed',
+  'daemon/check-error': 'its self-check failed',
+  'start/start-failed': 'it would not start',
+  'start/root-refused': 'refused: it was run as root',
+  'start/root-token': 'refused: it was run as root',
+  'start/elevated-token': 'refused: it was run elevated',
+  'record/record-error': 'a record could not be written',
+  'record/file-replaced': 'the capture file was replaced',
+  'events/log-gap': 'the event log has a gap',
+  'bundle/system-roots-unavailable': 'the certificate bundle has no system roots',
+  'bundle/system-roots-unparsable': 'some system roots would not parse and are not in the bundle',
+  'bundle/system-roots-partial': 'the certificate bundle is missing some system roots',
+  'tracker/watch-failed': 'a process could not be watched',
+  'tracker/judge-error': 'a process could not be judged',
+  'tracker/ambiguous': 'a process matches more than one harness',
+  'engine/lookup-miss': 'a connection\'s destination could not be read',
+  'engine/engine-error': 'the engine failed',
+  'engine/flow-write-failed': 'a connection log line could not be written',
+  'engine/negative-cache': 'a program refused asight\'s certificate, so that host is forwarded only',
+  'engine/upstream-slow': 'the upstream was slow',
+  'engine/leaf-error': 'a certificate could not be issued',
+  'engine/framer-error': 'a request could not be parsed',
+  'kernel/kernel-drops': 'the kernel dropped packets',
+  'helper/helper-error': 'the capture helper failed',
+  'helper/heartbeat-failed': 'the helper\'s heartbeat failed',
+  'helper/heartbeat-gap': 'the helper\'s heartbeat stopped',
+  'helper/loader-down': 'the helper loader is not listening',
+  'switch/state-mismatch': 'the kernel did not confirm the attach',
+  'switch/state-unparsable': 'the saved on/off state could not be read',
+  'install/launchd-register-failed': 'the login item could not be registered',
+  'install/unit-not-enabled': 'the login item is not enabled',
+  'install/install-error': 'the install step failed',
+  'ingress/ingress-auth-failed': 'a program did not answer the proxy challenge',
+  'ingress/engine-port-taken': 'asight\'s port is taken',
+  'ingress/upstream-unavailable': 'the upstream could not be dialled',
 })
 
-/** The short Chinese reason of a `(where, code)` pair, or null when the table does not know it (errno and unknown codes keep their raw shape). */
+/** The short reason of a `(where, code)` pair, or null when the table does not know it (errno and unknown codes keep their raw shape). */
 export const failureWord = (where, code) => (where && code ? FAILURE_WORDS[`${where}/${code}`] || null : null)
 
 /** One line out of many: newlines and runs of whitespace become one space (a launchctl stderr with line breaks must not break the digest's alignment). */
@@ -36,15 +58,15 @@ export const squashed = (s) => String(s ?? '').replace(/\s+/g, ' ').trim()
 /** The whole reason, or its head: the digest shows ~100 columns of it — the whole wall is one `--failures` away (R11: relocated, not dropped). */
 const briefText = (s, max = 100) => { const t = squashed(s); return t.length > max ? `${t.slice(0, max - 1)}…` : t }
 
-/** One failure group as the digest's 「最新」 brief: the zh word when the table knows the code, else the raw errno / `where/code` with the squashed reason.
+/** One failure group as the digest's `latest` brief: the table's word when it knows the code, else the raw errno / `where/code` with the squashed reason.
  *  `g` is what captureHealth's fold produced ({ count, last_ts, last: { event, where, code, reason, … } }); the `×count` multiplier is the caller's. */
 export function failureBrief(g) {
   const l = (g && g.last) || {}
   const reason = briefText(l.reason || (l.error && l.error.message) || '')
   const word = failureWord(l.where, l.code)
-  if (word) return reason ? `${word}(${reason})` : word
+  if (word) return reason ? `${word} (${reason})` : word
   if (l.code && ERRNO.test(String(l.code))) return [l.code, reason].filter(Boolean).join(' ')
   const head = [l.where, l.code].filter(Boolean).join('/')
-  return [head || String(l.event || g.key || '记录'), reason].filter(Boolean).join(' ') // a row the fold knows only by its key still says which it was (R11)
+  return [head || String(l.event || g.key || 'a record'), reason].filter(Boolean).join(' ') // a row the fold knows only by its key still says which it was (R11)
 }
 

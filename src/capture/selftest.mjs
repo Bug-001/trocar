@@ -41,7 +41,7 @@ export function qCorrect(records) {
     if (hasReq && hasResp) good++;
   }
   // ok = 有 LLM call 且没有一条丢了 verbatim 请求体(缺响应体可能是 interrupted,归 warn 不判死)。
-  const keptNote = logged ? ` · ${logged} LLM call(s) kept as a log line only (只记日志, set with \`asight keep\`): no body by choice, not a capture failure` : '';
+  const keptNote = logged ? ` · ${logged} LLM call(s) kept as a log line only (log line only, set with \`asight keep\`): no body by choice, not a capture failure` : '';
   return { ok: llm > 0 && badReq === 0, llm, good, badReq, badResp, logged,
     note: (llm === 0 ? (logged ? 'no LLM call kept a body to validate' : 'no LLM calls to validate (capture a /v1/messages turn)')
       : `${good}/${llm} LLM call(s) carry verbatim req_body + a reconstructed response`
@@ -58,7 +58,7 @@ export function qNoLeak(records) {
   // 它曾经让 doctor 在读到零条记录时打印「✓ 凭据没漏」并退出 0。
   if (!records || records.length === 0) {
     return { ok: false, examined: 0, withCreds: 0, tokens: [], tokenCount: 0,
-      note: '✗ 没有检查任何记录 — no records were examined, so nothing can be reported. '
+      note: 'x no records were examined, so nothing can be reported. '
         + 'The capture source resolved to zero readable records (wrong --source, an unreadable '
         + 'directory, or a capture that has not started).' };
   }
@@ -70,7 +70,7 @@ export function qNoLeak(records) {
     const m = body.match(ANT_TOKEN); if (m) tokens.push(m[0].slice(0, 10) + '…');
   }
   return { ok: true, examined: records.length, withCreds, tokens: tokens.slice(0, 10), tokenCount: tokens.length,
-    note: `${withCreds}/${records.length} record(s) carry credential headers — 逐字存储,by design `
+    note: `${withCreds}/${records.length} record(s) carry credential headers - stored verbatim, by design `
       + '(asight records what really went over the wire; the protection is file permissions, see ④b)'
       + (tokens.length ? ` · ${tokens.length} sk-ant token-shaped string(s) inside request bodies` : '') };
 }
@@ -84,7 +84,7 @@ const shq = (f) => `'${String(f).replace(/'/g, `'\\''`)}'`;
 export function qFilePerms(files) {
   if (!files || files.length === 0) {
     return { ok: false, checked: 0, bad: [], unreadable: [],
-      note: '? 没有检查任何文件 — no capture files were examined, so permissions cannot be certified (无法判定).' };
+      note: '? no capture files were examined, so permissions cannot be certified (undetermined).' };
   }
   const bad = [], unreadable = [];
   for (const f of files) {
@@ -95,8 +95,8 @@ export function qFilePerms(files) {
     } catch (e) { unreadable.push({ file: f, error: (e && (e.code || e.message)) || String(e) }); }
   }
   const parts = [];
-  if (bad.length) parts.push(`✗ 采集文件可被他人读取: ${bad.length} 个 [${bad.map((b) => `${b.file.split('/').pop()} ${b.mode}`).join(', ')}] — capture file(s) readable by group/others; these bytes contain live API credentials. Fix: chmod 600 ${bad.map((b) => shq(b.file)).join(' ')}`);
-  if (unreadable.length) parts.push(`? 不知道: ${unreadable.length} 个文件的权限读不出来 [${unreadable.map((u) => `${u.file}: ${u.error}`).join('; ')}] — cannot say they are owner-only`);
+  if (bad.length) parts.push(`x capture files others can read: ${bad.length} [${bad.map((b) => `${b.file.split('/').pop()} ${b.mode}`).join(', ')}] — capture file(s) readable by group/others; these bytes contain live API credentials. Fix: chmod 600 ${bad.map((b) => shq(b.file)).join(' ')}`);
+  if (unreadable.length) parts.push(`? unknown: the permissions of ${unreadable.length} file(s) could not be read [${unreadable.map((u) => `${u.file}: ${u.error}`).join('; ')}] — cannot say they are owner-only`);
   return { ok: bad.length === 0 && unreadable.length === 0, checked: files.length, bad, unreadable,
     note: parts.length ? parts.join(' · ') : `all ${files.length} capture file(s) are owner-only (0600)` };
 }
@@ -108,7 +108,7 @@ export function qUserTrustOnly(verify) {
   return { ok, err,
     note: ok ? 'CA present in the USER trust store; asight never writes machine-wide trust (import-only, D22)'
       : err ? 'trust check errored: ' + err
-      : 'CA not found in the user trust store — this item is about the old capture\'s CA, which only the board\'s 监测 toggle puts there any more (its CLI face `monitor` went with the old capture); the collector\'s own CA (`asight on`) is in no trust store by design, so this is expected when you use `asight on` alone. asight only ever installs user-level.' };
+      : 'CA not found in the user trust store — this item is about the old capture\'s CA, which only the board\'s monitor toggle puts there any more (its CLI face `monitor` went with the old capture); the collector\'s own CA (`asight on`) is in no trust store by design, so this is expected when you use `asight on` alone. asight only ever installs user-level.' };
 }
 
 // 组装四问 + 依赖探测为一个结构化结果。三个结局(R4),不混:
@@ -129,10 +129,10 @@ export function runSelfTest({ records = [], srcMeta = null, deps = [], verify = 
   const depsMissing = deps.filter((d) => !d.present);
   const failed = q4b.bad.length > 0;
   const why = [];
-  if (!q3.ok) why.push('没有核到任何记录(0 records examined),③ 与 ④b 都说不了话');
-  if (q4b.checked === 0) why.push('没有核任何采集文件的权限(no capture files examined)');
-  if (q4b.unreadable.length) why.push(`${q4b.unreadable.length} 个文件的权限读不出来`);
-  if (readErrors.length) why.push(`${readErrors.length} 个采集文件没读完整(read errors)`);
+  if (!q3.ok) why.push('no records were examined, so neither the credentials nor the file permissions can be reported');
+  if (q4b.checked === 0) why.push('no capture file was examined, so no permissions were checked');
+  if (q4b.unreadable.length) why.push(`the permissions of ${q4b.unreadable.length} file(s) could not be read`);
+  if (readErrors.length) why.push(`${readErrors.length} capture file(s) could not be read in full`);
   const undetermined = !failed && why.length > 0;
   return { deps, depsMissing, q1, q2, q3, q4, q4b, failed, undetermined, undeterminedWhy: why, hardFail: failed, sampled: records.length };
 }

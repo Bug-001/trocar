@@ -15,7 +15,7 @@ import { SYSTEM_BUNDLES } from '../../src/collector/core/tls/roots.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { certBlocks } from '../../src/off/pem.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
-import { formatInstallNotes } from '../../src/collector/cli.mjs'
+import { formatInstallNotes } from '../../src/cli/status-text.mjs'
 import { fakeDaemon, fakeIo } from './fixtures/on-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 

@@ -132,7 +132,7 @@ const proxy = {
   unsupported: { socks4: 'fails', socks5: 'fails' },
   branches: ['all'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '退出这个 Z-Code(CLI 的 app-server 与桌面应用都要退),再重新启动(它只在启动时读一次代理设置)', processes: 'zcode' },
+  restart: { hint: 'Quit this Z-Code (the CLI app-server and the desktop app both), then start it again (it reads the proxy setting once, at start)', processes: 'zcode' },
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (cli, cli-node and the desktop all read
