@@ -172,7 +172,7 @@ test('V11: what is generated imports node:* and nothing else — no import or ex
 // The file has no extension: which kind of module Node takes it for is up to the Node (and a package.json somewhere above it). It is written to be right either way.
 test('the file runs however Node takes a file with no extension: not as an ES module (no detection), and as one (a package.json of type module above it)', async () => {
   const text = buildStandalone({ version: 'test' })
-  const usage = async (opts) => { const r = await runCopy(text, ['--bogus'], opts); assert.deepEqual([r.status, /unknown option --bogus/.test(r.stderr)], [2, true], `${JSON.stringify(opts)}: ${r.stderr}`) }
+  const usage = async (opts) => { const r = await runCopy(text, ['--bogus'], opts); assert.deepEqual([r.status, /unknown option '--bogus'/.test(r.stderr)], [2, true], `${JSON.stringify(opts)}: ${r.stderr}`) }
   await usage({}) // parses its own arguments and prints on the process's streams
   if (spawnSync(process.execPath, ['--no-experimental-detect-module', '-e', '0']).status === 0) await usage({ nodeArgs: ['--no-experimental-detect-module'] })
   if (typeof process.getBuiltinModule === 'function') await usage({ sibling: { 'package.json': '{"type":"module"}\n' } })
@@ -233,7 +233,7 @@ test('src/off carries OFF_VERSION as an integer, and the unique-name rule the ge
 
 // The kinds the copy undoes, and how (the file rule's kinds), pinned to the OFF_VERSION that ships them: a change to either list
 // without a bump (and a row here) is red, so doctor's version line tells an old copy from one that knows the new rules.
-const KINDS_AT = { 15: 'e3c392509cb0c538' }
+const KINDS_AT = { 16: 'e3c392509cb0c538' }
 test('OFF_VERSION moves with the undo rules: the known kinds and the file-rule kinds are the ones this version ships', () => {
   const fp = sha256(Buffer.from(JSON.stringify([KNOWN_KINDS, FILE_ENTRY_KINDS]))).slice(0, 16)
   assert.equal(KINDS_AT[OFF_VERSION], fp, `KNOWN_KINDS / FILE_ENTRY_KINDS changed: bump OFF_VERSION with its reason line (src/off/manifest.mjs) and add { ${OFF_VERSION + 1}: '${fp}' } here`)
@@ -382,7 +382,7 @@ test('install names the copy, lists it among what it created and in the plan it 
   assert.match(io2.stderrText(), /asight-off/, 'the plan printed before the first write names it')
   assert.deepEqual(r.created.slice().sort(), dry.created.slice().sort(), 'the dry run and the run list the same files')
   const run = spawnSync(process.execPath, [standalonePath(home), '--bogus'], { env: { ...process.env, NODE_PATH: '' }, cwd: path.dirname(standalonePath(home)), encoding: 'utf8' })
-  assert.deepEqual([run.status, /unknown option --bogus/.test(run.stderr)], [2, true], 'the path the receipt prints is a file that runs')
+  assert.deepEqual([run.status, /unknown option '--bogus'/.test(run.stderr)], [2, true], 'the path the receipt prints is a file that runs')
   assert.match(formatPlan({ first: true, files: [], entries: [], standalone: '/home/a/.asight/bin/asight-off' }, { home: '/home/a' }), /~\/\.asight\/bin\/asight-off/)
 })
 
