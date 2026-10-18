@@ -394,7 +394,8 @@ test('V10: status says unknown with the reason for connections the daemon did no
   const j = await runStatus(s, ['--json'], { request: down(), fs: broken })
   const doc = j.io.json()
   assert.deepEqual(validateReceipt(doc), [])
-  assert.deepEqual([doc.relayed, typeof doc.relayed_reason, 'netenv' in doc, doc.daemon.state], ['unknown', 'string', false, 'unknown'])
+  // the C.3 document says a state it could not read as null plus the reason — never false, never 0
+  assert.deepEqual([doc.relayed, typeof doc.relayed_reason, 'netenv' in doc, doc.daemon.running, typeof doc.daemon.error], ['unknown', 'string', false, null, 'string'])
 })
 
 // D49 (1.6 §6): `on` looks at no VPN / proxy software — no 本机网络环境 line in the plan or the receipt, no `netenv` key in --json, and it writes no netenv.json when it has nothing to adopt (the receipt lists

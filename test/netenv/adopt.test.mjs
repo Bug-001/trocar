@@ -45,8 +45,10 @@ test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and
   assert.equal(a.chain, 'claude-code -> [ebpf] asight -> [CONNECT passed on as it is] proxy.corp:8080 -> internet')
   assert.equal(a.proxy, 'http://***@proxy.corp:8080')
   const text = (await (async () => { const t = sandbox(ENGINE); seedProxy(t); return (await t.run(['on', '--yes'], { deps: FACTS })).io.text() })())
-  assert.match(text, /^接上后 claude-code 的路: .*\[CONNECT passed on as it is\] proxy\.corp:8080.*http:\/\/\*\*\*@proxy\.corp:8080/m, 'the plan and the receipt print the chain')
-  assert.equal(text.match(/^接上后 claude-code 的路:/gm).length, 2, 'once in the plan, once in the receipt')
+  const unwrap = (t) => t.replace(/\n\s+/g, ' ') // a long chain wraps (§1.1 width); the fact is the chain, not where it breaks
+  const chain = /claude-code: route claude-code -> \[ebpf\] asight -> \[CONNECT passed on as it is\] proxy\.corp:8080 -> internet/g
+  assert.equal(unwrap(text).match(chain).length, 2, 'the chain is printed once in the plan, once in the receipt')
+  assert.match(unwrap(text), /internet \(its proxy setting http:\/\/\*\*\*@proxy\.corp:8080, read from /, 'the receipt names the setting it adopted, masked')
   assert.ok(!/dave|hunter2/.test(text + JSON.stringify(doc)), 'no credential in the text or the JSON')
   const file = fs.readFileSync(netenvOf(s), 'utf8')
   assert.ok(!/dave|hunter2|proxy\.corp:8080"/.test(file.replace('http://***@proxy.corp:8080', '')), 'netenv.json: no original value')
@@ -259,7 +261,7 @@ test('V46 (b) proxy mode: `adopt` is handed the setting that was there (the valu
   assert.deepEqual(quiet, [])
 })
 
-test('V47 (b) `on` over a field the user edited since the last `on`: not in a terminal and no --yes, it prints the plan with 「你改过的代理设置」 and exits 2 having written nothing; with --yes `adopt` gets the new proxy; a field `on` itself wrote is not an edit', async () => {
+test('V47 (b) `on` over a field the user edited since the last `on`: not in a terminal and no --yes, it prints the plan with the line that names it and exits 2 having written nothing; with --yes `adopt` gets the new proxy; a field `on` itself wrote is not an edit', async () => {
   const s = await installedViaCli(ENGINE)
   const calls = [], { routing, field } = proxyRouting(s, calls)
   await s.run(['on', '--yes', 'codex'], { deps: { ...FACTS, routing } })
@@ -269,7 +271,7 @@ test('V47 (b) `on` over a field the user edited since the last `on`: not in a te
   const before = snapshot(s.home), n = calls.length
   const plan = await s.run(['on', 'codex'], { deps: { ...FACTS, routing } })
   assert.equal(plan.exit, 2)
-  assert.match(plan.io.text(), /你改过的代理设置: codex 的 .*\.env HTTPS_PROXY 现在是 http:\/\/proxy\.new:3128/)
+  assert.match(plan.io.text().replace(/\n\s+/g, ' '), /You changed the proxy setting of codex: .*\.env HTTPS_PROXY is now http:\/\/proxy\.new:3128/)
   assert.deepEqual(snapshot(s.home), before, 'nothing written')
   assert.equal(calls.length, n, 'and the routing was not asked to adopt')
   const yes = await s.run(['on', '--yes', 'codex'], { deps: { ...FACTS, routing } })
