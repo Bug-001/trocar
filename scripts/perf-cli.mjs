@@ -1,6 +1,7 @@
 // scripts/perf-cli.mjs — the CLI performance baseline of spec 1.6 §3 / §4.1 (D62), on one dataset, in one command:
 //
 //   node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only sessions,status] [--json out.json]
+//   node scripts/perf-cli.mjs --idle <pid> [--seconds 60]        ← the resource line of §3.1 (D62④) on a running daemon
 //
 // It reports, per command: the COLD wall clock (the index deleted first), the WARM p50/p95 wall clock, the
 // command's own CPU time and peak RSS, and — separately — the CORE time, which is runQuery inside an already
@@ -8,6 +9,8 @@
 // FLOOR (node's own boot plus asight's module load), which this script measures on its own line.
 // `nearby` is the sequence §4.1 calls 「附近的查询」: a session is open, and the next page / another step's block /
 // its calls follow in the SAME process — the 50 ms budget is theirs.
+// `--idle <pid>` is the OTHER half of D62: the daemon's own idle cost, read the way §3.1 says (two readings of
+// `top`, never one cumulative row) plus the CPU-time delta over `--seconds` of idle.
 //
 // Every number is wall clock from one process per run, so nothing here can be faster than the product is.
 // Measurement only: it writes nothing but the index the queries themselves write (and `--json`'s file).
@@ -177,6 +180,46 @@ export async function measure({ home, runs = DEFAULT_RUNS, only = null }) {
   return { platform: process.platform, node: process.version, home, runs, dataset, vars, floor: floor(home, runs), commands, core, nearby }
 }
 
+// ── the idle daemon: §3.1's resource line, read the way §3.1 says ────────────────────────────────
+// macOS `top` reports every per-process counter CUMULATIVELY SINCE LAUNCH in its default mode — in EVERY
+// sample, not just the first; the `+` it appends only means "this grew". That is why a `top -l 2` row once
+// read 75 wakeups/s for a daemon doing ~1.4: 75 was its total since launch. Two readings give a rate, and
+// this does both: `-c d` (delta mode), whose samples after the first are true per-interval deltas, and the
+// difference between consecutive cumulative samples. IDLEW is pinned to 0 on a machine that is never idle
+// (no idle CPU to wake), so CSW ≥ IDLEW is reported beside it as the usable upper bound. CPU comes from
+// `ps -o time=` before and after, not from top's instantaneous %.
+function idle(pid, seconds) {
+  const secs = (t) => { const p = String(t).trim().split(':').map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1] }
+  const cpu = () => { const r = spawnSync('ps', ['-p', String(pid), '-o', 'time='], { encoding: 'utf8' }); return r.status !== 0 || !r.stdout.trim() ? null : secs(r.stdout) }
+  const t0 = cpu()
+  if (t0 == null) throw new Error(`no process ${pid}`)
+  const samples = 5
+  const n = (x) => Number(String(x).replace('+', ''))
+  const top = (mode) => {
+    const r = spawnSync('top', [...(mode ? ['-c', mode] : []), '-l', String(samples + 1), '-s', '1', '-stats', 'pid,cpu,idlew,csw', '-pid', String(pid)], { encoding: 'utf8', timeout: (samples + 10) * 1000 })
+    return (r.stdout || '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith(`${pid} `)).map((l) => l.split(/\s+/))
+  }
+  const d = top('d') // delta mode: every sample after the first is the per-second change
+  const per_second = d.slice(1).map((c) => ({ cpu_pct: n(c[1]), idlew: n(c[2]), csw: n(c[3]) }))
+  const c = top(null) // the same thing the other way: consecutive cumulative samples, differenced here
+  const differenced = c.slice(1).map((row, i) => ({ idlew: n(row[2]) - n(c[i][2]), csw: n(row[3]) - n(c[i][3]) }))
+  const left = Math.max(0, seconds * 1000 - 2 * samples * 1000)
+  if (left) spawnSync(process.execPath, ['-e', `setTimeout(()=>{}, ${left})`])
+  const t1 = cpu()
+  return { pid, seconds, cumulative_at_start: c.length ? { idlew: n(c[0][2]), csw: n(c[0][3]) } : null, per_second, differenced,
+    worst: per_second.length ? { idlew: Math.max(...per_second.map((s) => s.idlew)), csw: Math.max(...per_second.map((s) => s.csw)), cpu_pct: Math.max(...per_second.map((s) => s.cpu_pct)) } : null,
+    mean: per_second.length ? { idlew: +(per_second.reduce((a, s) => a + s.idlew, 0) / per_second.length).toFixed(1), csw: +(per_second.reduce((a, s) => a + s.csw, 0) / per_second.length).toFixed(1) } : null,
+    cpu_ms_per_minute: t1 == null ? null : Math.round(((t1 - t0) / seconds) * 60 * 1000) }
+}
+
+function printIdle(o) {
+  console.log(`daemon pid ${o.pid}  (top's default mode is CUMULATIVE since launch in every row: idlew ${o.cumulative_at_start?.idlew} csw ${o.cumulative_at_start?.csw} — NOT a rate)`)
+  for (const s of o.per_second) console.log(`  per second   idlew ${String(s.idlew).padStart(5)}   csw ${String(s.csw).padStart(5)}   cpu ${s.cpu_pct} %`)
+  console.log(`  cross-check (cumulative, differenced): idlew ${o.differenced.map((s) => s.idlew).join(' ')} | csw ${o.differenced.map((s) => s.csw).join(' ')}`)
+  console.log(`worst/s      idlew ${o.worst?.idlew}  csw ${o.worst?.csw}  cpu ${o.worst?.cpu_pct} %   mean/s  idlew ${o.mean?.idlew}  csw ${o.mean?.csw}     (§3.1: ≤ 10 idle wakeups/s, ≤ 1 % CPU)`)
+  console.log(`cpu          ${o.cpu_ms_per_minute} ms per minute over ${o.seconds} s idle`)
+}
+
 function print(out) {
   const t = out.dataset
   console.log(`dataset  ${t.segments} segments  ${t.records} records  ${(t.bytes / 2 ** 30).toFixed(2)} GiB  cold index build ${t.index_build_ms} ms`)
@@ -196,7 +239,8 @@ async function main(argv) {
   if (w === 0) return wrap(argv[1], argv.slice(argv.indexOf('--') + 1))
   const args = {}
   for (let i = 0; i < argv.length; i += 2) args[argv[i].replace(/^--/, '')] = argv[i + 1]
-  if (!args.home) { console.error('usage: node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only a,b] [--json out.json]'); process.exit(2) }
+  if (args.idle) { const o = idle(Number(args.idle), args.seconds ? Number(args.seconds) : 60); printIdle(o); if (args.json) fs.writeFileSync(args.json, JSON.stringify(o, null, 2)); return }
+  if (!args.home) { console.error('usage: node scripts/perf-cli.mjs --home <HOME> [--runs 7] [--only a,b] [--json out.json]\n       node scripts/perf-cli.mjs --idle <pid> [--seconds 60] [--json out.json]'); process.exit(2) }
   const out = await measure({ home: args.home, runs: args.runs ? Number(args.runs) : undefined, only: args.only ? args.only.split(',') : null })
   print(out)
   if (args.json) fs.writeFileSync(args.json, JSON.stringify(out, null, 2))
