@@ -12,18 +12,19 @@ import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { EXIT, newReceipt } from './schema.mjs'
+import { unknown } from './text.mjs'
 import { resolveHarnesses } from './harness-names.mjs'
-import { statusRun } from './status.mjs'
+import { statusFacts, statusDocOf } from './status.mjs'
 import { diagnose, renderFindings } from '../netenv/findings.mjs'
 import { checkDeps, runSelfTest } from '../capture/selftest.mjs'
 import { verifyUserTrustOnly } from '../capture/onboard.mjs'
 import { readRecords } from '../etl/ingest.mjs'
 import { serveSource } from '../paths.mjs'
-import { appendJournal, sealedReadProblem } from '../raw/journal.mjs'
+import { sealedReadProblem } from '../raw/journal.mjs'
 import { exportFiles } from '../raw/export.mjs'
 import { listSources, sealedUnder } from '../raw/discover.mjs'
 import { captureHealth } from '../health/read.mjs'
-import { formatInstallNotes } from '../collector/cli.mjs'
+import { formatInstallNotes } from './status-text.mjs'
 import { asightHome, backupDir, collectorDir, standaloneCommand } from '../off/paths.mjs'
 import { orphanBackups } from '../off/backup.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
@@ -91,95 +92,80 @@ async function collect({ home, env, sourceFlags, deps }) {
         for (const rec of got) records.push(rec)
         // a sealed file read only in part is a read error, and leaves a journal entry
         const p = sealedReadProblem(got.scan)
-        if (p) { readErrors.push(`${f}: ${p.unreadableRecords ?? 'all'} record(s) unreadable — ${p.reason}`); appendJournal({ op: 'read', reader: 'doctor', outcome: 'failed', ...p }, { journal: path.join(ah, 'raw', 'journal.jsonl') }) }
+        if (p) readErrors.push(`${f}: ${p.unreadableRecords ?? 'all'} record(s) could not be read - ${p.reason}`) // `doctor` writes nothing (§3.7): the problem is reported, never recorded
       } catch (e) { readErrors.push(`${f}: ${(e && e.message) || e}`) }
     }
   }
   return { sources, files, extra, records, srcMeta, readErrors }
 }
 
-/** `asight status` for the same harnesses, captured: `{ lines, exit }` or, in JSON, `{ json, exit }`. Its failures are text here, never a thrown error (a refusal of the test guard excepted). */
-async function statusBlock({ names, json, env, home, platform, deps }) {
-  const out = [], err = []
-  const io = { out: (s) => out.push(String(s)), err: (s) => err.push(String(s)), stdin: null, stdout: null }
-  try {
-    const { exit, f } = await statusRun([...names, ...(json ? ['--json'] : [])], { io, env, home, platform, deps })
-    if (json) { try { return { json: JSON.parse(out.join('\n')), exit, f } } catch { return { json: { error: 'asight status printed no JSON', output: out.join('\n') }, exit, f } } }
-    return { lines: [...out, ...err], exit, f }
-  } catch (e) { rethrowSandbox(e); const msg = `collector status could not be read: ${(e && e.message) || e}`; return json ? { json: { error: msg }, exit: EXIT.unknown } : { lines: [msg], exit: EXIT.unknown } }
+/** The things `doctor` looked at and could not judge (附录 C.4 `undetermined`), in English, from the structured result — never a reason string of another module. */
+function undeterminedOf(res, readErrors) {
+  const out = []
+  if (res.q4b.checked === 0) out.push({ what: 'file permissions', reason: 'no captured data yet' }) // §3.7: having no captured data is not 「cannot judge」
+  if (res.q4b.unreadable.length) out.push({ what: 'file permissions', reason: `the permissions of ${res.q4b.unreadable.length} file(s) could not be read` })
+  for (const e of readErrors) out.push({ what: 'a captured file', reason: e })
+  return out
+}
+/** Only these keep `doctor` from judging (exit 3). No captured data yet does not. */
+const realUndetermined = (u) => u.filter((x) => x.reason !== 'no captured data yet')
+
+/** The 附录 C.4 document. `status`'s own document is folded in under `status`, so one read answers both. */
+export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = process.env, platform = process.platform, deps = {} } = {}) {
+  const fs = deps.fs || nodeFs
+  const c = await collect({ home, env, sourceFlags: [], deps })
+  const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
+  const installerOpts = { keychain: path.join(home, 'Library', 'Keychains', 'login.keychain-db'), nssdb: path.join(home, '.pki', 'nssdb') }
+  const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors, verify: deps.verify || (() => verifyUserTrustOnly({ platform, installerOpts })) })
+  const f = await statusFacts({ names, home, env, platform, deps })
+  const status = statusDocOf(f)
+  let findings = null, findingsError = null
+  if (f.facts) { try { findings = diagnose({ facts: f.facts, topology: f.topology, harnesses: names, user: f.user }) } catch (e) { rethrowSandbox(e); findingsError = errText(e) } }
+  else findingsError = f.topology_error || 'the network facts could not be read on this platform'
+  // what `doctor` looks at besides the network: the files only you may read, the copy of the undo program, the backups no install record names
+  const extra = []
+  for (const bad of res.q4b.bad) extra.push({ code: 'file-readable-by-others', class: 'problem', what: `${bad.path || bad} can be read by someone else, and captured files hold live credentials.`, why: 'Only you may read what asight captured.', commands: [{ run: `chmod 600 ${bad.path || bad}`, shell: 'sh' }], verify: 'asight doctor' })
+  // the copy of the undo program is `install`'s; a machine where nothing was installed has nothing to check (§3.7)
+  const installed = !!(status.install && status.install.state)
+  const standalone = installed ? (() => { try { return checkStandalone({ home, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })() : { ok: true }
+  if (standalone.error) extra.push({ code: 'standalone-unreadable', class: 'problem', what: 'The standalone undo program could not be checked.', why: standalone.error, commands: [{ run: 'asight install', shell: 'sh' }], verify: 'asight doctor' })
+  else if (!standalone.ok) extra.push({ code: 'standalone-stale', class: 'problem', what: `${standaloneCommand(standalone.path, platform)} is not the current version, so it may not undo everything.`, why: standalone.reason || 'its bytes are not the ones this asight writes', commands: [{ run: 'asight install', shell: 'sh' }], verify: 'asight doctor' })
+  let orphans = [], orphansError = null
+  try { const m = readManifest(collectorDir(home), fs); orphans = m && m.unsupported ? null : orphanBackups({ home, manifest: m, fs }); if (orphans === null) orphansError = 'the install record is of a version this asight does not read, so which backups it names cannot be said' } catch (e) { orphansError = `${manifestPath(collectorDir(home))}: ${errText(e)}` }
+  if (orphans && orphans.length) extra.push({ code: 'backup-unclaimed', class: 'note', what: `${orphans.length} backup file(s) belong to no install record.`, why: 'An edit that was interrupted left them behind.', commands: [{ run: `Look at them, then remove them: ${orphans[0]}`, shell: 'sh' }], verify: 'asight doctor' })
+  if (orphansError) extra.push({ code: 'backup-unclaimed', class: 'note', what: `Whether any backup belongs to no install record is ${unknown(orphansError)}.`, why: 'The install record could not be read.', commands: [], verify: 'asight doctor' })
+  const all = findings === null ? null : [...extra.filter((x) => x.class === 'problem'), ...findings, ...extra.filter((x) => x.class !== 'problem')]
+  const summary = all === null ? null : { problem: all.filter((x) => x.class === 'problem').length, expected: all.filter((x) => x.class === 'expected').length, note: all.filter((x) => x.class === 'note').length }
+  const undetermined = undeterminedOf(res, c.readErrors)
+  const exit = summary && summary.problem ? EXIT.incomplete : realUndetermined(undetermined).length ? EXIT.unknown : EXIT.ok
+  let notes = []
+  try { notes = formatInstallNotes((deps.captureHealth || captureHealth)({ home: asightHome(home), ...(deps.captureHealth ? {} : { fs }) })) } catch (e) { rethrowSandbox(e) }
+  return {
+    ...newReceipt('doctor'), ok: exit === EXIT.ok, findings: all, ...(findingsError ? { findings_error: findingsError } : {}),
+    summary, undetermined, status, install_notes: notes, errors: [...c.readErrors.map((e) => ({ where: 'a captured file', reason: e })), ...(status.errors || [])], exit,
+  }
 }
 
-/** → the exit code. `argv` is what follows `doctor`; `io` = { out, err } (src/off/io.mjs makeIo). */
+/** → the exit code. `argv` is what follows `doctor`; `io` = { out, err }. */
 export async function runDoctor(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   let json = false
   const names = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--json') json = true
-    else if (a.startsWith('-')) { io.err(`asight doctor: unknown option ${a}\n${USAGE}`); return EXIT.usage }
+    else if (a.startsWith('-')) { io.err(`asight doctor: unknown option '${a}'\n${USAGE}`); return EXIT.usage }
     else names.push(a)
   }
   const named = resolveHarnesses(names)
-  if (!named.ok) { io.err(`asight doctor: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
-  const fs = deps.fs || nodeFs
-  const c = await collect({ home, env, sourceFlags: [], deps })
-  for (const e of c.readErrors) io.err(`read error: ${e}`) // a read failure MUST be visible: a silently swallowed error is what let ③ pass vacuously
-  const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
-  // ④ the old `verify`: the CA is in the user's trust store only. This home's keychain / NSS db, never the real one of whoever runs a test
-  const installerOpts = { keychain: path.join(home, 'Library', 'Keychains', 'login.keychain-db'), nssdb: path.join(home, '.pki', 'nssdb') }
-  const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors, verify: deps.verify || (() => verifyUserTrustOnly({ platform, installerOpts })) })
-  const exit = res.failed ? EXIT.incomplete : res.undetermined ? EXIT.unknown : EXIT.ok
-  // the rest is a report
-  const block = await statusBlock({ names, json, env, home, platform, deps })
-  // §9.6: what the network facts of that same read call for, each with the commands to run and how to check — printed, never run (R8). A harness named: only its findings. The exit is not theirs: they are the report (B-7).
-  let findings = null, findingsError = null
-  if (block.f && block.f.facts) { try { findings = diagnose({ facts: block.f.facts, topology: block.f.topology, harnesses: named.ids, user: block.f.user }) } catch (e) { rethrowSandbox(e); findingsError = errText(e) } } else findingsError = block.f && block.f.topology_error ? block.f.topology_error : 'the network facts were not read on this platform'
-  let notes = [], notesError = null
-  try { notes = formatInstallNotes((deps.captureHealth || captureHealth)({ home: asightHome(home), ...(deps.captureHealth ? {} : { fs }) })) } catch (e) { rethrowSandbox(e); notesError = errText(e) }
-  const standalone = (() => { try { return checkStandalone({ home, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })()
-  let orphans = [], orphansError = null
-  try { const m = readManifest(collectorDir(home), fs); orphans = m && m.unsupported ? null : orphanBackups({ home, manifest: m, fs }); if (orphans === null) orphansError = 'the install manifest is of a version this build does not know, so which backups it names cannot be said' } catch (e) { orphansError = `${manifestPath(collectorDir(home))}: ${errText(e)}` }
-
-  if (json) {
-    io.out(JSON.stringify({
-      ...newReceipt('doctor'), ok: exit === EXIT.ok, exit, verdict: res.failed ? 'failed' : res.undetermined ? 'undetermined' : 'ok', undetermined_why: res.undeterminedWhy,
-      source: c.sources, records_examined: c.records.length, capture_files_checked: res.q4b.checked, readable_by_others: res.q4b.bad, unreadable: res.q4b.unreadable, read_errors: c.readErrors,
-      questions: { capturing: { ok: res.q1.ok, note: res.q1.note }, correct: { ok: res.q2.ok, note: res.q2.note }, credentials: { ok: res.q3.ok, note: res.q3.note }, user_trust_only: { ok: res.q4.ok, note: res.q4.note }, file_permissions: { ok: res.q4b.ok, note: res.q4b.note } },
-      deps: depList, status: block.json, findings, ...(findingsError ? { findings_error: findingsError } : {}), install_notes: notesError ? { error: notesError } : notes, standalone: standalone.error ? { ok: false, error: standalone.error } : { ok: standalone.ok, path: standalone.path, found: standalone.found, expected: standalone.expected, ...(standalone.reason ? { reason: standalone.reason } : {}) },
-      orphan_backups: orphansError ? { error: orphansError } : orphans,
-    }, null, 2))
-    return exit
-  }
-
-  const source = c.sources.join(', ') || '(none)'
-  io.out('asight doctor — onboard 自检(依赖探测 + 「测试」四问)\n')
-  io.out('deps:')
-  for (const d of depList) io.out(`  ${mark(d.present, true)} ${d.bin} — ${d.present ? 'found' : `MISSING · ${d.hint}`} (${d.why})`)
-  io.out(`\n源:${source}${c.srcMeta.exists ? ` · ${(c.srcMeta.bytes / 1024).toFixed(0)} KB${c.records.length >= LIMIT ? ` · sampled first ${LIMIT} records` : ''}` : ' · (not found)'}\n`)
-  io.out('四问(人核对):')
-  io.out(`  ${mark(res.q1.ok, true)} ① 是否真在抓   — ${res.q1.note}`)
-  io.out(`  ${mark(res.q2.ok, res.q2.llm === 0)} ② 抓得对       — ${res.q2.note}`)
-  io.out(`  ${res.q3.ok ? '✓' : '?'} ③ 凭据没漏     — ${res.q3.note}`)
-  io.out(`  ${mark(res.q4.ok, true)} ④ 没弱化全机 TLS — ${res.q4.note}`)
-  io.out(`  ${res.q4b.ok ? '✓' : res.failed ? '✗' : '?'} ④b 采集文件仅属主可读 — ${res.q4b.note}`)
-  // 4.6 §确认信任 / §合并包: the same text as `asight status` (the live daemon when it answers, else what is on disk), then the notes of the last install; it only reads and never changes the exit
-  io.out('\n按进程采集器(collector, 4.6):')
-  for (const l of block.lines) io.out(indent(l))
-  if (findings) for (const l of findings.length ? ['发现(网络与采集,§9.6;doctor 只印命令,一条也不替你跑):', ...renderFindings(findings)] : ['发现(网络与采集): 没有']) io.out(indent(l))
-  else io.out(indent(`发现(网络与采集): 不知道(${findingsError})`))
-  if (notesError) io.out(indent(`the last install's notes could not be read: ${notesError}`))
-  else for (const l of notes) io.out(indent(l))
-  // 1.6 R3 / V35: the copy of the undo side that needs no source tree is the version this asight writes (read only; `asight on` writes it again)
-  if (standalone.error) io.out(indent(`⚠ asight-off 副本无法核对: ${standalone.error}`))
-  else io.out(indent(standalone.ok ? `✓ asight-off(不依赖源码的撤销副本): ${standaloneCommand(standalone.path, platform)} · 版本 ${standalone.found},与当前一致` : `⚠ asight-off(不依赖源码的撤销副本)不是当前版本: ${standalone.reason}`))
-  if (orphansError) io.out(indent(`备份: 不知道(${orphansError})`))
-  else if (orphans.length) io.out(indent(`⚠ ${orphans.length} 个备份没有任何清单条目认领(改文件改到一半断了留下的;留着或不要了就删,asight uninstall 会清掉): ${orphans.join(', ')}`))
-  if (res.failed) {
-    io.err('\n✗ 采集文件可被他人读取 — these files hold live API credentials (stored verbatim, by design); only their owner may read them. Fix the permissions (chmod 600, see ④b above) before capturing further.')
-  } else if (res.undetermined) {
-    io.err(`\n? 无法判定(exit 3) — ${res.undeterminedWhy.join(';')}。\n  没核到就不能说「采集文件的权限已经核过」:先让采集跑起来(asight on,再用一次 agent),或用 --source 指到有采集文件的地方,再跑 asight doctor。`)
-  } else {
-    io.out('\n✓ 采集文件仅属主可读;凭据逐字存储 = 设计如此。(①②③④ 供你核对 — 见上方说明)')
-  }
+  if (!named.ok) { io.err(`asight doctor: unknown harness '${named.unknown.join(', ')}'. Known: ${named.known.join(', ')}`); return EXIT.usage }
+  const doc = await doctorDoc({ names: named.ids, home, env, platform, deps })
+  const { exit } = doc
+  if (json) { const { exit: _drop, ...out } = doc; io.out(JSON.stringify(out, null, 2)); return exit }
+  const s = doc.summary
+  io.out(s === null ? `asight doctor: findings are ${unknown(doc.findings_error)}.` : s.problem ? `asight doctor: ${s.problem} problem${s.problem === 1 ? '' : 's'}.` : 'asight doctor: no problems.')
+  if (doc.findings && doc.findings.length) { io.out(''); for (const l of renderFindings(doc.findings)) io.out(l) }
+  for (const u of realUndetermined(doc.undetermined)) io.out(`Could not judge ${u.what}: ${u.reason}`)
+  for (const u of doc.undetermined.filter((x) => x.reason === 'no captured data yet')) io.out(`${u.what.replace(/^./, (m) => m.toUpperCase())}: no captured data yet`)
+  if (doc.install_notes.length) { io.out(''); for (const l of doc.install_notes) io.out(l) }
   return exit
 }

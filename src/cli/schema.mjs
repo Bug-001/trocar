@@ -160,7 +160,7 @@ export const UNKNOWN_REASONS = Object.freeze(['denied', 'timeout', 'absent', 'un
 export const BRANCH_NAMES = Object.freeze(['all', 'http', 'ws'])
 /** What a running process's line says about it: it still goes by the setting it started with, or asight is not on its path. */
 export const RUNNING_NOTES = Object.freeze(['start-time-settings', 'not-steered'])
-export const FINDING_CLASSES = Object.freeze(['failure', 'expected', 'hint'])
+export const FINDING_CLASSES = Object.freeze(['problem', 'expected', 'note']) // 附录 B
 
 const TRI = [true, false, null]
 const isId = (v) => typeof v === 'string' && v !== ''
@@ -241,7 +241,7 @@ export function validateFinding(f) {
   for (const k of ['what', 'why', 'verify']) if (!isString(f[k]) || f[k].trim() === '') bad.push(`${k}: empty`)
   if (!Array.isArray(f.commands)) bad.push('commands: not a list')
   else {
-    if (f.class !== 'hint' && f.commands.length === 0) bad.push('commands: a failure or an expected finding says what to do')
+    if (f.class !== 'note' && f.commands.length === 0) bad.push('commands: a problem or an expected finding says what to do')
     f.commands.forEach((c, i) => {
       if (!isObject(c) || !isString(c.run) || c.run.trim() === '') bad.push(`commands[${i}].run: empty`)
       else if (/<[^<>\n]+>/.test(c.run)) bad.push(`commands[${i}].run: has a <…> placeholder left`)

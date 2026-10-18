@@ -10,7 +10,7 @@ import { TRUST_REASONS, ROUTE_TRUST_REASONS } from '../health/codes.mjs'
 import { FINDINGS_WIN32 } from './findings-win32.mjs'
 
 const RESTART_REASONS = ['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim'] // what restarting the agent fixes (1.6 §1.1)
-const BY_CLASS = { failure: 0, expected: 1, hint: 2 }
+const BY_CLASS = { problem: 0, expected: 1, note: 2 }
 const nodeOf = (t, id) => t.nodes.find((n) => n.id === id)
 
 // ── what a command is ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -19,7 +19,7 @@ const asight = (ctx, run) => ({ run, shell: ctx.sh })
 const installFix = (c) => (c.fm && c.fm.certificate && c.fm.certificate.command ? [asight(c, c.fm.certificate.command)] : null)
 const os = (ctx, byPlatform) => ({ run: byPlatform[ctx.platform] || byPlatform.linux, shell: ctx.platform === 'win32' ? 'powershell' : 'sh' })
 const gui = (run) => ({ run, shell: 'gui' })
-const unknownValue = (what, reason) => `不知道 · ${reason}(${what})`
+const unknownValue = (what, reason) => `unknown ${what} (${reason})`
 
 /**
  * Where a proxy setting lives, for a command that names the line to edit: the place the facts read it from (`setting.source[0]`: a variable of the shell that starts the agent, or a key of one of its files;
@@ -34,26 +34,26 @@ function placeOf(hf, setting) {
   if (files[0]) return { kind: 'file', ...files[0] }
   return { kind: 'env', name: (b.env && b.env[0]) || 'HTTPS_PROXY' }
 }
-/** The step that puts `value` where the setting lives. */
+/** The step that puts `value` where the setting lives. One verb for one step (附录 B). */
 function setAt(h, place, value) {
-  if (place.kind === 'env') return `在启动 ${h} 的终端里 export ${place.name}=${value}`
-  if (place.kind === 'system') return `在系统代理设置里把它改成 ${value}`
-  return place.format === 'json' ? `${place.path} 里的 ${place.key} 写成 "${value}"` : `${place.path} 里写一行 ${place.key}=${value}`
+  if (place.kind === 'env') return `In the terminal that starts ${h}, run: export ${place.name}=${value}`
+  if (place.kind === 'system') return `Set your system proxy to ${value}`
+  return place.format === 'json' ? `Set ${place.key} in ${place.path} to "${value}"` : `Put the line ${place.key}=${value} in ${place.path}`
 }
 /** The step that takes the setting away from where it lives. */
 function removeAt(h, place) {
-  if (place.kind === 'env') return `在启动 ${h} 的终端里 unset ${place.name}`
-  if (place.kind === 'system') return '在系统代理设置里关掉它'
-  return place.format === 'json' ? `删掉 ${place.path} 里的 ${place.key}` : `删掉 ${place.path} 里的 ${place.key}= 那一行`
+  if (place.kind === 'env') return `In the terminal that starts ${h}, run: unset ${place.name}`
+  if (place.kind === 'system') return 'Turn off your system proxy'
+  return place.format === 'json' ? `Remove ${place.key} from ${place.path}` : `Remove the ${place.key}= line from ${place.path}`
 }
 const portCheck = (ctx, port) => os(ctx, { linux: `ss -ltnp 'sport = :${port}'`, darwin: `lsof -nP -iTCP:${port} -sTCP:LISTEN`, win32: `netstat -ano -p TCP | findstr ":${port}"` })
 /** The steps that make an agent read its settings again: the harness's own words (the application step), and, where the harness keeps its settings in a managed process its windows do not end (`restart.managed`),
  *  the command that ends it, with the pid the facts hold. A managed process that is not running has nothing to end. */
 function restartSteps(ctx) {
   const r = (ctx.hf.behaviour && ctx.hf.behaviour.restart) || {}
-  const steps = [gui(r.hint ? r.hint : `退出 ${ctx.h},再重新启动`)]
+  const steps = [gui(r.hint ? r.hint : `Quit every ${ctx.h} window, then start it again`)]
   if (r.managed === true && r.processes) {
-    const name = r.processes.split(/\s+/).filter((t) => !t.startsWith('-')).join(' ') // `codex app-server --managed-daemon` → the name a process of it is listed under: `codex app-server`
+    const name = r.processes.split(/\s+/).filter((t) => !t.startsWith('-')).join(' ') // `codex app-server --managed-daemon` -> the name a process of it is listed under: `codex app-server`
     for (const p of ctx.hf.procs) if (p.name === name) steps.push(os(ctx, { linux: `kill ${p.pid}`, darwin: `kill ${p.pid}`, win32: `Stop-Process -Id ${p.pid}` }))
   }
   return steps
@@ -61,79 +61,79 @@ function restartSteps(ctx) {
 const settingOf = (hf) => (hf.setting && !hf.setting.unknown && hf.setting.value ? hf.setting : ((hf.forms || []).map((f) => f.setting).find((s) => s && s.value) || null))
 const deadProxy = (t) => t.nodes.find((n) => n.kind === 'proxy' && n.down === true) || null
 
-/** not-routed, by the reason the model's route plan gave the form (`fm.route.reason`, src/collector/core/proxymode/entries.mjs; 4.11 §3 ③ ⑦ ⑩ ㉑, 1.6 §9.6): the why, and the steps
- *  (the place the plan named in `at`, else 「不知道」). A PAC the facts see and no reason of the plan's is the PAC row; nothing known is the generic row. */
+/** not-routed, by the reason the model's route plan gave the form (`fm.route.reason`, src/collector/core/proxymode/entries.mjs; 4.11 §3, 1.6 附录 B): the why, and the steps
+ *  (the place the plan named in `at`, else `unknown`). A PAC the facts see and no reason of the plan's is the PAC row; nothing known is the generic row. */
 function notRoutedOf(c) {
-  const r = (c.fm && c.fm.route) || {}, at = r.at || unknownValue('那一处', 'absent'), on = asight(c, `asight on ${c.h}`)
-  if (r.reason === 'system-pac' || (!r.reason && c.pac)) return { why: '它跟随的系统代理是 PAC,asight 不执行 PAC', commands: [gui(`把 ${c.h} 的代理设成一个具体地址:${setAt(c.h, placeOf(c.hf, c.setting), unknownValue('你的代理地址', 'pac'))}`), on] }
-  if (r.reason === 'blocker' || r.reason === 'own-egress') return { why: `你的一处设置让 ${c.h} 不走 asight 能接的入口(${at})`, commands: [gui(`删掉 ${at} 这一处设置`), on] }
-  if (r.reason === 'blocker-unreadable' || r.reason === 'unreadable') return { why: `asight 读不出 ${at},不知道它会不会拦住采集,所以没接`, commands: [gui(`让 ${at} 可读(或改好它)`), on] }
-  if (r.reason === 'absent') return { why: `${c.h} 的入口文件 ${at} 不在;asight 不新建它(建了会改变别处设置的优先级)`, commands: [gui(`先跑 ${c.h} 自己的设置,让它建出 ${at}`), on] }
-  if (r.reason === 'credentialed-own-leg') return { why: '这个形态的入口没有口令,asight 不把带用户名口令的上游接给它', commands: [gui(`把 ${c.h} 的上游换成不带口令的代理,或改用它的 CLI 形态`), on] }
-  if (r.reason === 'no-path' || r.reason === 'no-applied-entry') return { why: `asight 找不到 ${c.h} 这个形态的入口${r.at ? `(${r.at})` : ''}`, commands: [gui(`先启动一次 ${c.h},让它建出自己的设置`), on] }
-  if (r.reason === 'no-carrier') return { why: '这个形态的证书还没装', commands: [asight(c, 'asight install'), on] }
-  return { why: '这个形态没有 asight 能用的入口', commands: [gui(`${c.h} 的这个形态没有入口:改用它的 CLI 形态`), asight(c, `asight status ${c.h}`)] }
+  const r = (c.fm && c.fm.route) || {}, at = r.at || unknownValue('place', 'absent'), on = asight(c, `asight on ${c.h}`)
+  if (r.reason === 'system-pac' || (!r.reason && c.pac)) return { why: 'The system proxy it follows is a PAC script, which asight does not run.', commands: [gui(`${setAt(c.h, placeOf(c.hf, c.setting), unknownValue('proxy address', 'pac'))}`), on] }
+  if (r.reason === 'blocker' || r.reason === 'own-egress') return { why: `A setting of yours (${at}) keeps ${c.h} off any entry asight can use.`, commands: [gui(`Remove the setting at ${at}`), on] }
+  if (r.reason === 'blocker-unreadable' || r.reason === 'unreadable') return { why: `asight cannot read ${at}, so it did not connect this form.`, commands: [gui(`Make ${at} readable, or fix it`), on] }
+  if (r.reason === 'absent') return { why: `${c.h}'s entry file ${at} does not exist, and asight does not create it.`, commands: [gui(`Run ${c.h}'s own setup so that it creates ${at}`), on] }
+  if (r.reason === 'credentialed-own-leg') return { why: 'This form\'s entry takes no login, so asight does not hand it an upstream that needs one.', commands: [gui(`Use a proxy without a login for ${c.h}, or use its CLI form`), on] }
+  if (r.reason === 'no-path' || r.reason === 'no-applied-entry') return { why: `asight found no entry for this form of ${c.h}${r.at ? ` (${r.at})` : ''}.`, commands: [gui(`Start ${c.h} once so that it writes its own settings`), on] }
+  if (r.reason === 'no-carrier') return { why: 'This form has no certificate yet.', commands: [asight(c, 'asight install'), on] }
+  return { why: 'This form has no entry asight can use.', commands: [gui(`Use ${c.h}'s CLI form instead`), asight(c, `asight status ${c.h}`)] }
 }
 
-/** The catalogue. `applies` is `diagnose`'s business; each entry says what it is. `cls` is the class, or a function of the context where it depends (§9.6: `proxy-changed`). */
+/** The catalogue (附录 B). `applies` is `diagnose`'s business; each entry says what it is. `cls` is the class, or a function of the context where it depends (`proxy-changed`). */
 export const FINDINGS = {
-  'desired-off': { cls: 'expected', asightFirst: true, what: (c) => `${c.h} 现在是关着的(期望态 off)`, why: () => '你(或 asight off)把它关了:asight 不在它的路径上,它直连或走自己的代理', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:被采集「是」` },
-  'daemon-not-running': { cls: 'failure', asightFirst: true, what: () => '守护进程没在跑', why: () => '没有它就没有引擎,新连接不被采集(入口之外的驱动已随助手一起没了)', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: () => 'asight status:守护进程「在跑」' },
-  'daemon-not-responding': { cls: 'failure', asightFirst: true, what: () => '守护进程在跑但没响应', why: () => '心跳过期,新连接已因此直连;它卡住了', commands: (c) => [asight(c, 'asight off'), asight(c, `asight on ${c.h}`)], verify: () => 'asight status:守护进程「在跑」' },
-  'helper-missing': { cls: 'failure', asightFirst: false, what: () => '能力助手缺失或版本不对', why: () => '没有它就挂不上内核里的驱动', commands: (c) => [{ run: 'sudo asight setup-helper', shell: 'sh' }, asight(c, `asight on ${c.h}`)], verify: () => 'asight status:link 已挂' },
-  'link-missing': { cls: 'failure', asightFirst: true, what: () => '期望开,但内核里没有本实例的 link', why: () => '驱动没挂上,新连接直连', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: () => 'asight status:link 已挂' },
-  'entry-missing': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口不在了`, why: () => '入口(asight 写进它配置的那一项)被删了或还没写', commands: (c) => installFix(c) || [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
-  'entry-changed': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的信任入口被改成了别的`, why: () => '你或别的程序改了 asight 写的那一项', commands: (c) => installFix(c) || [asight(c, `asight off ${c.h}`), asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}:信任入口完好` },
-  'negative-cache': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的进程拒绝了 asight 的证书,那个 host 之后透传`, why: () => '这个形态不认 asight 的信任入口;(pid, host) 随进程记着', commands: (c) => [asight(c, `asight status ${c.h}`), ...restartSteps(c)], verify: (c) => `重启后 asight status ${c.h}:「是」` },
-  'not-routed': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 的新连接不经过 asight`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `asight status ${c.h}:该支「在路径上 · 是」` },
-  'route-loop': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的上游又是 asight 自己`, why: () => '算出的上游是 asight 自己的端口:代理字段的原值就是 asight 的门端口,或系统代理指着它;on 因此不接这个形态', commands: (c) => [asight(c, `asight off ${c.h}`), gui(`把 ${c.h} 的代理改回你原来的:${setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('原来的代理', 'absent'))}`), asight(c, `asight on ${c.h}`)], verify: () => 'asight doctor:不再报' },
-  'proxy-dead': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 配的代理 ${c.dead.addr}:${c.dead.port} 没人在听`, why: () => '你的代理软件没开;这个设置不是 asight 写的',
-    commands: (c) => [gui(`打开你的代理软件(它应该监听 ${c.dead.addr}:${c.dead.port})`), gui(`或者删掉这个设置:${c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('这个设置', 'absent')}`), portCheck(c, c.dead.port)], verify: (c) => `同一条命令看到监听;asight status ${c.h} 那一跳有属主` },
-  'proxy-unsupported': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 配了它不支持的代理协议(${c.setting.scheme})`, why: (c) => (c.silent ? `${c.h} 不支持 ${c.setting.scheme},会静默直连,代理形同虚设` : `${c.h} 不支持 ${c.setting.scheme}`),
-    commands: (c) => [gui(`把它改成 HTTP 代理:${setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('代理地址', 'absent'))}`)], verify: (c) => `asight status ${c.h}:那条边是 proxy-http` },
-  'proxy-changed': { cls: (c) => (c.F.routing === 'proxy' ? 'failure' : 'expected'), asightFirst: true, what: (c) => `${c.h} 的代理设置与上次 on 接上的不同`, why: () => '你改了它',
-    commands: (c) => (c.F.routing === 'proxy' ? [asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)] : [gui(`无需操作:${c.h} 在跑的进程仍按启动时的设置,重启后按新设置走;新启动的进程照常被采`)]), verify: (c) => `asight status ${c.h}` },
-  'elevated-agent': { cls: 'failure', asightFirst: false, what: (c) => `${c.h} 以管理员权限运行`, why: () => '提权的进程 asight 不解密(保守规则),只转发', commands: (c) => [gui(`关掉它,以普通权限重新启动 ${c.h}(不用「以管理员身份运行」)`)], verify: (c) => `asight status ${c.h}` },
-  'forwarder-down': { cls: 'failure', asightFirst: true, what: () => 'asight 的本地代理(引擎的门)没在跑,入口指向它的 agent 连不上', why: () => '引擎死了或没起来;asight 的自启单元会把它拉起来', commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`)], verify: () => 'asight status:引擎「在跑」' },
-  'upstream-unreachable': { cls: 'failure', asightFirst: false, what: (c) => `asight 给 ${c.h} 接的上游连不上`, why: () => '你的代理软件退出了而系统代理还指着它,或你配的代理不通;没有 asight 时同样连不上',
-    commands: (c) => [gui('打开你的代理软件,或关掉指着它的系统代理'), ...(c.upPort ? [portCheck(c, c.upPort)] : [])], verify: (c) => `asight status ${c.h}:那一跳有属主` },
-  'shim-not-on-path': { cls: 'failure', asightFirst: true, what: (c) => `${c.h} 的入口(shim)没被用上`, why: () => '机器 PATH 里的同名命令排在用户 PATH 前面,或 agent 不是经入口启动的',
-    commands: (c) => [asight(c, 'asight install'), gui('不是经入口启动的:退出它,从 asight 的入口或新开的终端启动')], verify: (c) => `asight status ${c.h}` },
-  'egress-differs': { cls: 'hint', asightFirst: false, what: (c) => `asight 接上后,${c.h} 的一部分连接出口与原来不同`, why: () => '代理模式下一个形态只有一个上游:原本分两路的(如 HTTP 跟随系统代理、WebSocket 直连),接上后都走那一个', commands: (c) => [asight(c, `asight off ${c.h}`)], verify: () => '—' },
-  'linger-off': { cls: 'hint', asightFirst: false, what: () => '登出后停采(未开 linger)', why: () => '用户登出后 systemd 会停掉你的服务,守护进程也在其中', commands: (c) => [{ run: `loginctl enable-linger ${c.user || '"$(id -un)"'}`, shell: 'sh' }], verify: () => 'asight status:不再印这一行' },
-  'system-proxy-pac': { cls: 'hint', asightFirst: false, what: () => '系统代理是 PAC', why: () => 'asight 不执行 PAC,下一跳不知道', commands: (c) => [os(c, { win32: "Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL", darwin: 'scutil --proxy', linux: 'gsettings get org.gnome.system.proxy autoconfig-url' })], verify: () => '—' },
-  'other-redirector': { cls: 'hint', asightFirst: false, what: () => '本机还有别的连接改写', why: () => '根 cgroup 上有别人的 connect 程序(如 dae),或有 Winsock LSP:可能与 asight 互相改写', commands: (c) => [os(c, { linux: 'sudo bpftool cgroup tree /sys/fs/cgroup', win32: 'netsh winsock show catalog', darwin: 'netstat -rn' })], verify: () => '—' },
-  'fake-ip': { cls: 'hint', asightFirst: false, what: (c) => `${c.h} 的 API host 解析到 198.18.0.0/15`, why: () => 'VPN 的 fake-ip;asight 按 SNI 记 host', commands: () => [], verify: () => '—' },
-  'inferred-behaviour': { cls: 'hint', asightFirst: false, what: (c) => `${c.h} 在本平台的代理行为是按别的平台实测推断的`, why: () => '本平台还没测', commands: () => [], verify: () => '—' },
-  // the name list (D51③⑤, 4.6 §识别进程): a process on no list used the harness's door (only forwarded), and agents.json's own problems. Not a WIDE name: the line to add, every value filled in;
-  // an interpreter name needs args (its script), and asight does not keep command lines, so that line cannot be written (§9.6: no <…> left, an unknown value is said)
-  // `named`: the name is listed, but only with args patterns its arguments missed; a bare line would claim every process of that name and undo them — none is given, like a WIDE name
-  'process-unknown': { cls: 'hint', asightFirst: false, what: (c) => `名为 ${c.u.name ?? '(名字不知道)'} 的进程(pid ${c.u.pid ?? '不知道'})用了 ${c.h} 的入口,${c.u.named ? '名字在名单上、但参数没对上任何一项' : '不在名单上'},只转发`,
-    why: (c) => (c.u.named ? 'asight 按进程名认 agent(D51);这个名字在名单上只带 args(参数模式),这个进程的参数一项都没对上' : 'asight 按进程名认 agent(D51);这个名字不在预设里,也不在你的 agents.json 里'),
-    commands: (c) => [gui(c.u.name == null ? unknownValue('它的名字', '入口读不到这个进程的名字') : c.u.wide ? `解释器名要带 args(它的脚本名);asight 不记命令行,脚本名不知道:${c.u.name} 这一项要你自己在 ${c.listPath} 的 agents 里写,带上 "args"`
-      : c.u.named ? `${c.u.name} 在名单上只带 args;不带 args 的整行会认领所有叫 ${c.u.name} 的进程,所以不给整行;asight 不记命令行,参数不知道:要采它,在 ${c.listPath} 的 agents 里自己写这一项,带上 "args"`
-      : `把 ${JSON.stringify({ harness: c.h, name: c.u.name })} 加进 ${c.listPath} 的 agents(文件不在就新建为 {"version":1,"agents":[…]}),不用重启`)], verify: (c) => `asight status ${c.h}:该 pid 带上命中的名字` },
-  'agent-list-invalid': { cls: 'failure', asightFirst: false, what: (c) => `${c.file.path} ${{ unreadable: '读不出', unparsable: '解析不了或版本不对' }[c.file.state] || '有坏项'}`, why: (c) => (c.file.state === 'ok' ? '坏项不生效,其余照用' : '整个文件不生效,只用预设的名字'),
-    commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `改好 ${c.file.path}` : `改好或删掉 ${c.file.path} 的第 ${p.index + 1} 项(agents[${p.index}])`}:${p.code} — ${p.detail};不用重启`)), verify: () => 'asight status:不再列' },
-  // 4.11 §3 ⑱ / 1.6 §9.6: the issuer, the files install leaves alone, the forms and hosts not verified, the window's proxy that could not be recovered, and uninstall's refusal
-  'cert-key-missing': { cls: 'failure', asightFirst: true, what: () => '根的密钥不在了,门只转发', why: () => '登录钥匙串里的密钥或 Windows 的 CNG 密钥被删了;守护进程每次启动核对', commands: (c) => [asight(c, 'asight install')], verify: () => 'asight status:密钥「在」' },
-  'cert-intermediate-unavailable': { cls: 'failure', asightFirst: false, what: () => '签不出中间证书,门只转发', why: () => '没有图形登录会话(只有 ssh 登录)或钥匙串锁着;手里那张还没到期时照用,守护进程每小时重试',
-    commands: (c) => [gui('在这台机器上登录图形会话、解锁钥匙串'), asight(c, 'asight status')], verify: () => 'asight status:中间证书「当前」' },
-  'not-users-file': { cls: 'expected', asightFirst: false, what: (c) => `${c.h} 的设置指向的证书文件或程序不是你自己的,asight 没往里加`, why: () => 'install 只在你自己能写的文件末尾追加;包装只用于描述符写明 native-binary 的命令行',
-    commands: (c) => [gui(`要采它:把 ${c.h} 的证书设置指向你自己的一份证书文件`), asight(c, 'asight install')], verify: (c) => `asight status ${c.h}:证书「生效」` },
-  'not-verified': { cls: 'expected', asightFirst: false, what: (c) => `${c.h} 的这个形态,或它连的这个主机,还没在实验室验过信任,只转发`, why: () => 'asight 只解密验过的形态(D51④)',
-    commands: (c) => [gui(`无需操作:${c.h} 照常工作,这些连接不经解密`)], verify: (c) => `asight status ${c.h}` },
-  'prior-proxy-unknown': { cls: 'hint', asightFirst: false, what: (c) => `窗口里的代理没接上:${c.h}${c.pids && c.pids.length ? `(pid ${c.pids.join(', ')})` : ''}启动时的代理找不回,门改用系统代理,没有就直连`,
-    why: () => '创建它的进程已退出,或中间隔着 Git Bash', commands: (c) => [gui(`要用窗口里的代理:把它写进 ${c.h} 自己的设置(${setAt(c.h, placeOf(c.hf, null), unknownValue('你的代理地址', 'env-unreadable'))})`), asight(c, `asight on ${c.h}`), gui(`重启 ${c.h}`)],
-    verify: (c) => `asight status ${c.h}:上游的来源不是「不知道」` },
-  'collectors-online': { cls: 'failure', asightFirst: true, what: (c) => `uninstall 拒绝:采集没有全部下线${c.online ? `(${c.online})` : ''}`, why: () => 'uninstall 从不代做 off', commands: (c) => [asight(c, 'asight off'), asight(c, 'asight uninstall')], verify: () => 'asight status:全部 off' },
-  // The user named the harness (§9.1: the symptom is said by agent), and nothing in the facts explains it. asight has no fact that says an agent cannot connect, so this does not claim it: a condition, a hint.
-  'cause-unknown': { cls: 'hint', asightFirst: true, what: (c) => `如果 ${c.h} 仍连不上:asight 这边没找到具体原因`, why: () => 'asight 读到的(期望态、进程、信任入口、代理设置)里没有哪一项能解释它;你点名了它,所以给出怎样把 asight 排除在外',
-    commands: (c) => [asight(c, `asight off ${c.h}`), gui(`再试 ${c.h}:仍连不上 → 与 asight 无关;连得上 → ${`asight on ${c.h}`},再跑 asight doctor ${c.h} --json,并看看板「采集健康」里那段时间的失败`)], verify: (c) => `再试 ${c.h}:仍连不上 → 与 asight 无关` },
+  'desired-off': { cls: 'expected', asightFirst: true, what: (c) => `Capture is off for ${c.h}.`, why: () => 'asight is not on its path: it connects directly, or through your own proxy.', commands: (c) => [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` },
+  'daemon-not-running': { cls: 'problem', asightFirst: true, what: () => 'asight is not running in the background, so nothing is captured.', why: () => 'Without it there is no engine, and new connections go straight out.', commands: (c) => [asight(c, `asight on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'asight status' },
+  'daemon-not-responding': { cls: 'problem', asightFirst: true, what: () => 'asight runs in the background but does not answer, so nothing is captured.', why: () => 'Its heartbeat is stale, so new connections already go straight out.', commands: (c) => [asight(c, 'asight off'), asight(c, `asight on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'asight status' },
+  'helper-missing': { cls: 'problem', asightFirst: false, what: () => 'asight\'s capture helper is missing or is the wrong version.', why: () => 'Without it asight cannot attach to the kernel, so nothing is captured.', commands: (c) => [{ run: 'sudo asight setup-helper', shell: 'sh' }, asight(c, `asight on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'asight status' },
+  'link-missing': { cls: 'problem', asightFirst: true, what: () => 'Capture is on, but asight is not attached, so nothing is captured.', why: () => 'New connections go straight out.', commands: (c) => [asight(c, `asight on${c.h ? ` ${c.h}` : ''}`)], verify: () => 'asight status' },
+  'entry-missing': { cls: 'problem', asightFirst: true, what: (c) => `${c.h}'s setting that points at asight is gone.`, why: () => 'It was removed, or it was never written.', commands: (c) => installFix(c) || [asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` },
+  'entry-changed': { cls: 'problem', asightFirst: true, what: (c) => `${c.h}'s setting that points at asight holds something else now.`, why: () => 'You, or another program, changed what asight wrote.', commands: (c) => installFix(c) || [asight(c, `asight off ${c.h}`), asight(c, `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` },
+  'negative-cache': { cls: 'problem', asightFirst: true, what: (c) => `${c.h}${c.pid ? ` (pid ${c.pid})` : ''} refused asight's certificate; it is forwarded only.`, why: () => 'Certificates are read when a program starts.', commands: (c) => [...restartSteps(c), asight(c, `asight status ${c.h}`)], verify: (c) => `asight status ${c.h}` },
+  'not-routed': { cls: 'problem', asightFirst: false, what: (c) => `New connections from ${c.h} do not go through asight.`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `asight status ${c.h}` },
+  'route-loop': { cls: 'problem', asightFirst: true, what: (c) => `asight's upstream for ${c.h} would be asight itself.`, why: () => 'The proxy setting asight read already points at one of asight\'s own ports, so asight did not connect this form.', commands: (c) => [asight(c, `asight off ${c.h}`), gui(setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('proxy address', 'absent'))), asight(c, `asight on ${c.h}`)], verify: (c) => `asight doctor ${c.h}` },
+  'proxy-dead': { cls: 'problem', asightFirst: false, what: (c) => `Nothing is listening on ${c.dead.addr}:${c.dead.port}, the proxy ${c.h} is set to use.`, why: () => 'Your proxy is not running; asight did not write this setting.',
+    commands: (c) => [gui(`Start your proxy, so that it listens on ${c.dead.addr}:${c.dead.port}`), gui(c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('setting', 'absent')), portCheck(c, c.dead.port)], verify: (c) => `asight status ${c.h}` },
+  'proxy-unsupported': { cls: 'problem', asightFirst: false, what: (c) => `${c.h} does not support the proxy scheme ${c.setting.scheme}.`, why: (c) => (c.silent ? `${c.h} connects directly and says nothing, so that proxy has no effect.` : `${c.h} cannot use a ${c.setting.scheme} proxy.`),
+    commands: (c) => [gui(setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('proxy address', 'absent')))], verify: (c) => `asight status ${c.h}` },
+  'proxy-changed': { cls: (c) => (c.F.routing === 'proxy' ? 'problem' : 'expected'), asightFirst: true, what: (c) => `${c.h}'s proxy setting is not the one asight connected to.`, why: () => 'You changed it.',
+    commands: (c) => (c.F.routing === 'proxy' ? [asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)] : [asight(c, `asight status ${c.h}`)]), verify: (c) => `asight status ${c.h}` },
+  'elevated-agent': { cls: 'problem', asightFirst: false, what: (c) => `${c.h}${c.pid ? ` (pid ${c.pid})` : ''} runs elevated, so asight only forwards it.`, why: () => 'asight never decrypts an elevated process.', commands: () => [gui('Quit it and start it again without administrator rights')], verify: (c) => `asight status ${c.h}` },
+  'forwarder-down': { cls: 'problem', asightFirst: true, what: (c) => `asight is not listening${c.port ? ` on :${c.port}` : ''}, so ${c.h || 'your agents'} cannot connect.`, why: () => 'The port lives with asight\'s background process, which is not there.', commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`)], verify: () => 'asight status' },
+  'upstream-unreachable': { cls: 'problem', asightFirst: false, what: (c) => `asight cannot reach the proxy${c.upPort ? ` :${c.upPort}` : ''} it uses for ${c.h}.`, why: () => 'Your proxy has quit while a setting still points at it; without asight it would not connect either.',
+    commands: (c) => [gui('Start your proxy, or turn off the system proxy that points at it'), ...(c.upPort ? [portCheck(c, c.upPort)] : [])], verify: (c) => `asight status ${c.h}` },
+  'shim-not-on-path': { cls: 'problem', asightFirst: true, what: (c) => `${c.h} does not start through the program asight installed.`, why: () => 'Another command of the same name comes first on PATH, or it was started another way.',
+    commands: (c) => [asight(c, 'asight install'), gui(`Quit ${c.h} and start it again from a new terminal`)], verify: (c) => `asight status ${c.h}` },
+  'egress-differs': { cls: 'note', asightFirst: false, what: (c) => `Some of ${c.h}'s connections now leave through a different hop.`, why: () => 'In proxy mode a form has one upstream, so traffic that used to split now takes that one.', commands: (c) => [asight(c, `asight off ${c.h}`)], verify: (c) => `asight status ${c.h}` },
+  'linger-off': { cls: 'note', asightFirst: false, what: () => 'Capture stops when you log out.', why: () => 'Your login session owns asight\'s background process.', commands: (c) => [{ run: `loginctl enable-linger ${c.user || '"$(id -un)"'}`, shell: 'sh' }], verify: () => 'asight status' },
+  'system-proxy-pac': { cls: 'note', asightFirst: false, what: () => 'Your system proxy is a PAC script, so the next hop is unknown.', why: () => 'asight does not run PAC scripts.', commands: (c) => [os(c, { win32: "Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL", darwin: 'scutil --proxy', linux: 'gsettings get org.gnome.system.proxy autoconfig-url' })], verify: () => 'asight status' },
+  'other-redirector': { cls: 'note', asightFirst: false, what: () => 'Something else on this machine also rewrites connections.', why: () => 'It may rewrite the same connections asight does.', commands: (c) => [os(c, { linux: 'sudo bpftool cgroup tree /sys/fs/cgroup', win32: 'netsh winsock show catalog', darwin: 'netstat -rn' })], verify: () => 'asight status' },
+  'fake-ip': { cls: 'note', asightFirst: false, what: (c) => `${c.h}'s API host resolves inside 198.18.0.0/15, a fake IP range.`, why: () => 'asight records the host from the TLS handshake, not from the address.', commands: () => [], verify: () => 'asight status' },
+  'inferred-behaviour': { cls: 'note', asightFirst: false, what: (c) => `${c.h}'s proxy behaviour on this platform is inferred, not measured.`, why: () => 'It was measured on another platform.', commands: () => [], verify: () => 'asight status' },
+  // the name list (D51): a process on no list used the harness's entry (forwarded only), and agents.json's own problems. Not a WIDE name: the line to add, every value filled in;
+  // an interpreter name needs args (its script), and asight does not keep command lines, so that line cannot be written (no `<…>` is left, an unknown value is said)
+  'process-unknown': { cls: 'note', asightFirst: false, what: (c) => `A process named ${c.u.name ?? unknownValue('name', 'unreadable')} (pid ${c.u.pid ?? unknownValue('pid', 'unreadable')}) used ${c.h}'s proxy but is not listed.`,
+    why: (c) => (c.u.named ? `That name is listed for ${c.h}, but only with argument patterns this process did not match.` : `asight matches agents by process name, and this one is on no list.`),
+    commands: (c) => [gui(c.u.name == null ? unknownValue('name', 'the name of that process could not be read') : c.u.wide ? `An interpreter name needs its script name, which asight does not keep: add ${c.u.name} with an "args" pattern to the agents list in ${c.listPath}`
+      : c.u.named ? `A line without "args" would claim every process named ${c.u.name}: add this one with its own "args" pattern to the agents list in ${c.listPath}`
+      : `Add ${JSON.stringify({ harness: c.h, name: c.u.name })} to the agents list in ${c.listPath} (create it as {"version":1,"agents":[...]} if it is not there); no restart needed`)], verify: (c) => `asight status ${c.h}` },
+  'agent-list-invalid': { cls: 'problem', asightFirst: false, what: (c) => `${c.file.path} has ${c.file.problems.length} bad entr${c.file.problems.length === 1 ? 'y' : 'ies'}; the rest is still used.`, why: (c) => (c.file.state === 'ok' ? 'A bad entry does not apply; the others do.' : 'The whole file does not apply, so only the built-in names are used.'),
+    commands: (c) => c.file.problems.map((p) => gui(`${p.index == null ? `Fix ${c.file.path}` : `Fix or remove entry ${p.index + 1} of ${c.file.path}`}: ${p.detail}`)), verify: () => 'asight status' },
+  'cert-key-missing': { cls: 'problem', asightFirst: true, what: () => 'The key for asight\'s root is gone, so asight only forwards.', why: () => 'It was removed from your keychain or key store.', commands: (c) => [asight(c, 'asight install')], verify: () => 'asight status' },
+  'cert-intermediate-unavailable': { cls: 'problem', asightFirst: false, what: () => 'asight cannot sign certificates right now, so it only forwards.', why: () => 'There is no desktop login session, or your keychain is locked.',
+    commands: (c) => [gui('Log in to the desktop session on this machine and unlock your keychain'), asight(c, 'asight status')], verify: () => 'asight status' },
+  'not-users-file': { cls: 'expected', asightFirst: false, what: (c) => `${c.h} points at a certificate file that is not yours; asight left it alone.`, why: () => 'asight only appends to files you own.',
+    commands: (c) => [gui(`Point ${c.h}'s certificate setting at a file you own`), asight(c, 'asight install')], verify: (c) => `asight status ${c.h}` },
+  'not-verified': { cls: 'expected', asightFirst: false, what: (c) => `This form of ${c.h} is not verified on this platform yet; it is forwarded only.`, why: () => 'asight only decrypts the forms it has verified.',
+    commands: (c) => [gui(`No action needed: ${c.h} keeps working, and these connections are not decrypted`)], verify: (c) => `asight status ${c.h}` },
+  'prior-proxy-unknown': { cls: 'note', asightFirst: false, what: (c) => `asight could not recover the proxy ${c.h}${c.pids && c.pids.length ? ` (pid ${c.pids.join(', ')})` : ''} started with.`,
+    why: () => 'The process that set it has quit, so asight uses the system proxy, or none.', commands: (c) => [gui(setAt(c.h, placeOf(c.hf, null), unknownValue('proxy address', 'env-unreadable'))), asight(c, `asight on ${c.h}`), gui(`Restart ${c.h}`)],
+    verify: (c) => `asight status ${c.h}` },
+  'collectors-online': { cls: 'problem', asightFirst: true, what: (c) => `Capture is still on${c.online ? ` for ${c.online}` : ''}, so nothing was uninstalled.`, why: () => 'asight never turns capture off for you.', commands: (c) => [asight(c, 'asight off'), asight(c, 'asight uninstall')], verify: () => 'asight status' },
+  // The user named the harness, and nothing in the facts explains it. asight has no fact that says an agent cannot connect, so this does not claim it: a condition, a note.
+  'cause-unknown': { cls: 'note', asightFirst: true, what: (c) => `If ${c.h} still cannot connect: asight found no cause on its side.`, why: () => 'Nothing asight read explains it.',
+    commands: (c) => [asight(c, `asight off ${c.h}`), gui(`Try ${c.h} again: if it still fails, asight is not the cause; if it works, run asight on ${c.h} and then asight doctor ${c.h}`)], verify: (c) => `Try ${c.h} again` },
 }
 // the trust reasons not listed above (a variable missing, a file unreadable, …): the daemon's own hint says what to do about this agent
-const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'failure'), asightFirst: false, what: (c) => `${c.h} 的进程没被信任:${c.code}`, why: (c) => c.hint || trustReasonText(c.code) || '入口只在启动时读(§1.1);遮住的原因见 harness 的提示',
-  commands: (c) => (RESTART_REASONS.includes(c.code) ? restartSteps(c) : [asight(c, `asight status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `按 ${c.h} 的提示改`)]), verify: (c) => `asight status ${c.h}:新 pid「是」` }
+const TRUST = { cls: (c) => (RESTART_REASONS.includes(c.code) ? 'expected' : 'problem'), asightFirst: false, what: (c) => `${c.h} is not captured${c.pid ? `: pid ${c.pid}` : ''}${RESTART_REASONS.includes(c.code) ? ' started before capture was on.' : '.'}`,
+  why: (c) => c.hint || trustReasonText(c.code) || 'Certificates are read when a program starts.',
+  commands: (c) => (RESTART_REASONS.includes(c.code) ? restartSteps(c) : [asight(c, `asight status ${c.h}`), gui(c.hint || trustReasonText(c.code) || `Follow ${c.h}'s own instructions`)]), verify: (c) => `asight status ${c.h}` }
+
 /** Every code a finding may carry: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — the Windows collector's own trust reasons (ROUTE_TRUST_REASONS, 4.8 §12) included,
  *  for the same reason TRUST_REASONS is: they are the codes of `agent-untrusted` a form's verdict can carry. The schema validates against this list. */
 export const FINDING_CODES = Object.freeze([...new Set([...Object.keys(FINDINGS), ...Object.keys(FINDINGS_WIN32), ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
@@ -200,7 +200,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     if (inferred(F, hf)) add('inferred-behaviour')
     const listPath = F.agentList ? F.agentList.path : null
     for (const u of (F.identity && F.identity[h] && F.identity[h].unknown) || []) found.set(`process-unknown\u0000${u.name}`, make('process-unknown', { ...base, u, listPath }))
-    if (named && F.desired[h] === 'on' && hf.installed !== false && ![...found.values()].some((f) => f.class !== 'hint')) add('cause-unknown') // a failure or an expected finding already says why; only hints (about the data) leave it open
+    if (named && F.desired[h] === 'on' && hf.installed !== false && ![...found.values()].some((f) => f.class !== 'note')) add('cause-unknown') // a failure or an expected finding already says why; only hints (about the data) leave it open
     out.push(...[...found.values()].sort((a, b) => BY_CLASS[a.class] - BY_CLASS[b.class]))
   }
   if (!named) {
@@ -215,12 +215,33 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
   return out
 }
 
-/** The findings as lines for a person: what, why, then each command on a line of its own with its shell, and how to check. */
-export function renderFindings(findings) {
-  const CLASS = { failure: '失败', expected: '预期', hint: '提示' }
-  return findings.flatMap((f) => [
-    `[${CLASS[f.class]}] ${f.harness ? `${f.harness} · ` : ''}${f.code} — ${f.what}`, `  为什么: ${f.why}`,
-    ...f.commands.map((c, i) => `  ${i === 0 ? '怎么做:' : '       '} ${c.shell === 'gui' ? c.run : `$ ${c.run}`}${c.shell === 'powershell' ? '  (PowerShell)' : ''}`), `  怎么验证: ${f.verify}`,
-  ])
+/**
+ * The findings as lines for a person (附录 B · §3.7): a problem or an expected finding is numbered, a note is prefixed `Note:`; then `Fix` with one command
+ * to a line and `Check` with the one that verifies it. Wrapped to 80 columns, except a path or a command, which keeps its own line unbroken.
+ */
+export function renderFindings(findings, { width = 80 } = {}) {
+  const lines = []
+  let n = 0
+  for (const f of findings) {
+    const head = f.class === 'note' ? 'Note: ' : `${(n += 1)}. `
+    const pad = ' '.repeat(head.length)
+    lines.push(...wrap(`${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
+    if (f.why) lines.push(...wrap(f.why, width - head.length).map((l) => pad + l))
+    f.commands.forEach((c, i) => {
+      const label = i === 0 ? `${pad}Fix    ` : `${pad}       `
+      wrap(c.run, width - label.length).forEach((l, k) => lines.push((k ? `${pad}       ` : label) + l))
+    })
+    if (f.verify) lines.push(`${pad}Check  ${f.verify}`)
+  }
+  return lines
 }
 
+/** `text` into lines of at most `width` columns, broken on spaces; a word longer than the line keeps its own line. */
+function wrap(text, width) {
+  const out = []
+  for (const word of String(text).split(/\s+/).filter(Boolean)) {
+    if (out.length && out[out.length - 1].length + 1 + word.length <= width) out[out.length - 1] += ` ${word}`
+    else out.push(word)
+  }
+  return out.length ? out : ['']
+}

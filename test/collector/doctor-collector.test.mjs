@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { installCollector } from '../../src/collector/install.mjs'
 import { appendEvent } from '../../src/collector/core/events.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
-import { formatInstallNotes } from '../../src/collector/cli.mjs'
+import { formatInstallNotes } from '../../src/cli/status-text.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
 
 const CLI = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
