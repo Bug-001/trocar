@@ -9,7 +9,7 @@ import { createClassSource } from '../../src/classes/source.mjs'
 import { BUILTIN } from '../../src/classes/table.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
-const CALL = { host: 'api.example.test', path: '/v1/messages', harness: 'cc' }
+const CALL = { host: 'api.example.test', path: '/v1/messages', harness: 'claude-code' }
 const write = (home, keep) => fs.writeFileSync(path.join(home, 'classes.json'), JSON.stringify({ version: 1, classes: BUILTIN.map((c) => (c.class === 'llm' ? { ...c, keep } : c)) }))
 // a call samples class + level once, at its start — exactly what the engine does
 const sample = (src) => { const cls = src.classOf(CALL); return { class: cls, level: src.keepOf(cls) } }

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
 import { BUILTIN, readTable, classify, keepOf, edit, ClassArgError } from '../../src/classes/table.mjs'
 import { LLM_ENDPOINT_PATHS, TOKEN_COUNT_ENDPOINT_PATHS } from '../../src/capture/envelope.mjs'
 
@@ -34,7 +35,9 @@ test('归类:首个匹配、host 整串、path 从开头、harness 限定,都不
   assert.equal(of({ host: 'api.anthropic.com', path: '/v1/messages' }), 'llm')
   assert.equal(of({ host: 'api.anthropic.com', path: '/v1/messages/count_tokens' }), 'token-count')
   assert.equal(of({ host: 'api.anthropic.com', path: '/v1/messages?beta=1' }), 'llm')
-  assert.equal(of({ host: 'api.anthropic.com', path: '/api/event_logging/x', harness: 'cc' }), 'telemetry')
+  assert.equal(of({ host: 'api.anthropic.com', path: '/api/event_logging/x', harness: 'claude-code' }), 'telemetry')
+  // one name for a harness (D58): the built-in rules name it as the CLI and the collector do, so `--harness` and the engine meet
+  assert.deepEqual(BUILTIN.flatMap((c) => c.rules).filter((r) => r.harness !== null && !HARNESS_IDS.includes(r.harness)), [])
   // the same path under a harness the rule does not name is not that class
   assert.equal(of({ host: 'api.anthropic.com', path: '/api/event_logging/x', harness: 'codex' }), 'other')
   assert.equal(of({ host: 'oastify.sentry.io', path: '/x' }), 'telemetry') // shared table: any harness

@@ -17,6 +17,7 @@ import path from 'node:path'
 import { asightHome, classesFile, classesLog } from '../paths.mjs'
 import { LLM_ENDPOINT_PATHS, TOKEN_COUNT_ENDPOINT_PATHS, RETENTION_LEVELS } from '../capture/envelope.mjs'
 import { HARNESSES } from '../dissect/harnesses.mjs'
+import { HARNESS_IDS } from '../cli/harness-names.mjs'
 import { THIRD_PARTY_TELEMETRY } from '../dissect/traffic.mjs'
 
 // not exported: the interface is BUILTIN / readTable / classify / keepOf / edit (+ ClassArgError); the CLI prints what
@@ -45,7 +46,8 @@ function builtinTable() {
   for (const name of DATA_CLASSES) {
     const rules = []
     for (const row of HARNESSES) for (const e of row.traffic || []) {
-      if (e.class === name) rules.push(rule(hostSource(e.host), e.path || null, row.id))
+      // a rule names its harness the way the CLI and the collector do (the descriptor's name), never the read side's short row id
+      if (e.class === name) rules.push(rule(hostSource(e.host), e.path || null, row.agents.find((a) => HARNESS_IDS.includes(a)) || null))
     }
     if (name === 'telemetry') for (const h of THIRD_PARTY_TELEMETRY) rules.push(rule(hostSource(h)))
     out.push(cls(name, 'full', rules))

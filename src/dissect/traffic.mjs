@@ -29,8 +29,6 @@ function hostTest(pattern) {
 }
 const pathOf = (endpoint) => String(endpoint || '').split('?')[0];
 
-/** The harness id for a collector `proc.agent` (either spelling), 'unknown' when the table does not know it. */
-export function harnessIdOfAgent(agent) { return harnessOf({ proc: { agent: typeof agent === 'string' ? agent : null } }).id || 'unknown'; }
 /** The harness id of a request seen with NO process identity (the old reverse proxy and MITM), by its headers — the read side's own UA inference
  *  (harnessOf, what the ETL files the call under), 'unknown' when no UA names one. The setting that applies to a call is the one its row in the
  *  sizes table is filed under. */

@@ -8,7 +8,6 @@ import path from 'node:path'
 import { classesHook, wsTerminalHook } from '../../src/collector/engine-data.mjs'
 import { BUILTIN } from '../../src/classes/table.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
-import { harnessIdOfAgent } from '../../src/dissect/traffic.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const list = await loadHarnesses()
@@ -17,7 +16,7 @@ const sink = () => { const recs = []; return { recs, failure: { event: (r) => re
 for (const d of list) {
   test(`${d.name}: a class whose rule names its harness gives the engine that class and its level; the same rule bound to another harness does not`, () => {
     const home = tmpDir('asight-classes-')
-    const id = harnessIdOfAgent(d.name), other = list.map((x) => harnessIdOfAgent(x.name)).find((x) => x !== id)
+    const id = d.name, other = list.map((x) => x.name).find((x) => x !== id) // a rule names its harness by the descriptor's name, as the CLI does
     const table = (h) => fs.writeFileSync(path.join(home, 'classes.json'), JSON.stringify({ version: 1, classes: [{ class: 'mine', keep: 'log', rules: [{ host: 'example\\.test', harness: h }] }, ...BUILTIN] }))
     const s = sink()
     const sample = () => classesHook({ home, failure: s.failure })({ agent: d.name }, 'example.test', 'POST', '/x')

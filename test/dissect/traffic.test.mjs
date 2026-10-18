@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { makeClassifier, compileTraffic, harnessIdOfAgent, retentionHarnessIds, THIRD_PARTY_TELEMETRY } from '../../src/dissect/traffic.mjs'
+import { makeClassifier, compileTraffic, retentionHarnessIds, THIRD_PARTY_TELEMETRY } from '../../src/dissect/traffic.mjs'
 import { endpointClass } from '../../src/capture/envelope.mjs'
 import { HARNESSES } from '../../src/dissect/harnesses.mjs'
 
@@ -62,8 +62,6 @@ test('a pattern that does not compile, or names a class a pattern may not, is sk
 })
 
 test('proc.agent → read-side harness id: either spelling, unknown otherwise; the settings may name every row plus unknown', () => {
-  assert.deepEqual(['cc', 'claude-code', 'codex', 'z-code', 'zcode'].map(harnessIdOfAgent), ['cc', 'cc', 'codex', 'zcode', 'zcode'])
-  assert.deepEqual([harnessIdOfAgent('mystery'), harnessIdOfAgent(null), harnessIdOfAgent(undefined)], ['unknown', 'unknown', 'unknown'])
   // deepseek-cli has no table row: only an old capture's UA names it — but a call filed under it must have a setting (review 2026-10-07)
   assert.deepEqual(retentionHarnessIds(), ['cc', 'codex', 'opencode', 'kimi', 'dsh', 'hermes', 'zcode', 'deepseek-cli', 'unknown'])
   assert.ok(THIRD_PARTY_TELEMETRY.every((p) => /^(\*\.)?[a-z0-9.-]+$/.test(p)))
