@@ -6,7 +6,8 @@
 //                                               or the command's own code for what it could not do.
 import { SCHEMA_VERSION } from '../off/schema.mjs'
 
-export const ERROR_CODES = Object.freeze(['usage', 'internal', 'key-custody-failed', 'older-install'])
+// 附录 C.1: the ONE place a refusal's code lives. A receipt never carries a top-level `code` — a client reads `error.code` and nothing else.
+export const ERROR_CODES = Object.freeze(['usage', 'internal', 'key-custody-failed', 'older-install', 'cert-not-installed', 'collectors-online'])
 
 /** The one JSON document of a run, on stdout. */
 export function printJson(io, doc) {

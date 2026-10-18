@@ -47,14 +47,15 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
       ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)]).join('\n'))
     return exit
   }
-  const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, ...(extra.dry_run || r.code ? {} : { undo: UNDO_LINE.on }), harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...(r.code ? { code: r.code } : {}), ...extra })
+  const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, ...(extra.dry_run || r.code ? {} : { undo: UNDO_LINE.on }), harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...extra })
   const plan = await turnOnModel({ ...args, dryRun: true })
   // 附录 C.2: a `--dry-run` goes as expected even when the real run would stop before writing — it exits 0, and what would stop it is `blocked`
   // (a Windows test machine 2026-10-18: with nothing installed it exited 1 with a top-level `code` and no `planned`)
   if (plan.code) {
     const blocked = (plan.problems.length ? plan.problems : [plan.code]).map((reason) => ({ what: 'asight on', reason }))
     if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned || [], blocked }), EXIT.ok)
-    return out(receiptOf(plan, { blocked }), EXIT.incomplete)
+    // 附录 C.1: the refusal's code lives in `error` and nowhere else (a dry run carries none: nothing went wrong)
+    return out(receiptOf(plan, { blocked, error: { code: plan.code, message: plan.problems[0] || plan.code } }), EXIT.incomplete)
   }
   const m = readManifest(dir, fs)
   const seen = new Set(m.confirmed_paths || [])

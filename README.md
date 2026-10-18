@@ -58,7 +58,7 @@ node bin/asight.mjs on          # then start capture
 
 The same five commands on every OS, in this order: `asight install` (once) → `asight on` → `asight off` →
 `asight status` (any time) → `asight uninstall`. `install` lists every file it will touch and writes them after you
-confirm; until it has run, `asight on` refuses (`cert-not-installed`). `on` starts capture, `status` shows state,
+confirm; until it has run, `asight on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
 `off` takes every trace of asight off your agents' path, and the certificates stay until `asight uninstall`.
 
 From a Release: not published yet.
@@ -73,7 +73,7 @@ asight uninstall --purge-data  # also deletes capture data (asks first)
 
 `uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
 nothing and exits 2. `uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
-holds a door, it changes nothing, exits 1 with `collectors-online` and names the harnesses and the pids.
+holds a door, it changes nothing, exits 1 with `error.code` `collectors-online` and names the harnesses and the pids.
 
 ## What you see
 

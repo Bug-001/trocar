@@ -26,7 +26,7 @@ for (const os of ['darwin', 'win32']) {
     const w = await modelWorld({ os, commands: ['codex'] })
     const { exit, io } = await on(w, os, ['--yes', '--json'])
     assert.equal(exit, 1, io.text())
-    assert.equal(io.json().code, 'cert-not-installed')
+    assert.equal(io.json().error.code, 'cert-not-installed')
     assert.equal(fs.existsSync(path.join(w.home, '.asight')), false)
   })
 

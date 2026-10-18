@@ -156,8 +156,10 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // CM24: on macOS / Windows uninstall never does off — capture online (a harness on, a holder, or not knowable) is named and nothing changes
     const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m) : null
     if (online) {
-      receipt.ok = false; receipt.code = 'collectors-online'; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
-      receipt.problems.push([online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have asight in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}` : null, online.unknown ? `whether any process still has asight in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed. Run: asight off, wait for those processes to quit, then run asight uninstall again')
+      const why = [online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have asight in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}` : null, online.unknown ? `whether any process still has asight in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed. Run: asight off, wait for those processes to quit, then run asight uninstall again'
+      // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints
+      receipt.ok = false; receipt.error = { code: 'collectors-online', message: why }; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
+      receipt.problems.push(why)
       receipt.problems.push(`Run: ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(', then: ')}`) // the doctor's own steps for the code (1.6 §9.6)
       put({ event: 'failure', code: 'collectors-online', reason: receipt.problems.at(-2) })
       put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${receipt.problems.at(-2)}` })
