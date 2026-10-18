@@ -309,7 +309,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
         let unconfirmed = null
         if (r.ok && !r.absent) {
           let h
-          try { h = store.has(id) } catch (err) { h = { error: String((err && err.message) || err) } }
+          try { h = await store.has(id) } catch (err) { h = { error: String((err && err.message) || err) } }
           if (h && h.error) unconfirmed = `whether it is still in your trust store could not be read (${h.error})`
           else if (h && h.present) unconfirmed = 'it is still in your trust store: removing a root asks you first, and that question was not answered with yes'
         }

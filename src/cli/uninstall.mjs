@@ -63,7 +63,7 @@ const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the 
 const KEEPS = [[rawHome, 'your captured records'], [indexHome, 'the index asight built from them']]
 const bytesUnder = (p, fs) => { // the size of a directory, for the receipt; what cannot be read counts 0 rather than failing an uninstall
   let n = 0
-  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const q = path.join(d, e.name); if (e.isDirectory()) walk(q); else try { n += fs.statSync(q).size } catch { /* gone while we looked */ } } }
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const q = path.join(d, e.name); if (e.isDirectory()) walk(q); else try { n += fs.lstatSync(q).size } catch { /* gone while we looked */ } } } // lstat: a link counts as the link, never as what it points at outside ~/.asight
   try { walk(p) } catch { /* unreadable: the path is still named, with what could be counted */ }
   return n
 }
