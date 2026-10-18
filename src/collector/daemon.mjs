@@ -151,17 +151,18 @@ function noteUncleanStop(lock, failure) {
 
 /** The lock a live daemon holds (4.6 §控制面, D-25): `fields` (pid, start time, boot id …) plus `segment`, the raw-layer
  *  segment it is appending to right now (D60: readers and the sealer leave that one alone, and may take every other). The
- *  returned refresh is called on a timer: the mtime says the daemon answers, and the file is rewritten only when the
- *  segment changed (a rollover, a stop) — a reader never sees a segment named here that is already closed. */
+ *  returned refresh is called on a timer, and by the record store right before it creates a new segment file (so the lock
+ *  names the live segment no later than its first byte); the file is rewritten only when the segment changed (a rollover,
+ *  a stop) — a reader never sees a segment named here that is already closed. */
 export function lockKeeper({ file, fields, segmentOf = () => null }) {
   let written = false, segment = null
   return () => {
     const seg = segmentOf()
     if (written && seg === segment) { const t = new Date(); fs.utimesSync(file, t, t); return }
-    segment = seg; written = true
     const tmp = `${file}.tmp-${process.pid}`
-    fs.writeFileSync(tmp, JSON.stringify({ ...fields, segment }) + '\n', { mode: 0o600 })
-    fs.renameSync(tmp, file)
+    fs.writeFileSync(tmp, JSON.stringify({ ...fields, segment: seg }) + '\n', { mode: 0o600 })
+    fs.renameSync(tmp, file) // atomic: a reader sees the whole old lock or the whole new one
+    segment = seg; written = true // only now: a failed write must be retried, not remembered as done
   }
 }
 
@@ -456,7 +457,12 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     const me = identity(process.pid)
     const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }, segmentOf: () => store.currentSegment })
     refreshLock()
-    const lockTimer = setInterval(() => { try { refreshLock() } catch (e) { failure('daemon', coded(new Error(`the lock ${P.lock} could not be refreshed (${errText(e)}); readers will judge this daemon unresponsive`), e && e.code ? e.code : 'record-error')) } }, lockRefreshMs)
+    // the lock must name the live segment before that segment's first byte (D60, invariant 2): the store calls this
+    // synchronously right before it creates the file, so a sealer never takes the segment the daemon is appending to.
+    // A lock that cannot be written is said (D38) and the capture goes on.
+    const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(new Error(`the lock ${P.lock} could not be refreshed (${errText(e)}); readers will judge this daemon unresponsive`), e && e.code ? e.code : 'record-error')) } }
+    store.onSegmentOpening(bumpLock)
+    const lockTimer = setInterval(bumpLock, lockRefreshMs)
     lockTimer.unref()
     // lifecycle (D-24): readers fold conditions from the last daemon-start; upstream_ca = the daemon's own
     // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon
@@ -695,7 +701,9 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
     const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
     refreshLock()
-    const lockTimer = setInterval(() => { try { refreshLock() } catch (e) { failure('daemon', coded(e, 'record-error')) } }, lockRefreshMs); lockTimer.unref()
+    const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(e, 'record-error')) } }
+    store.onSegmentOpening(bumpLock) // before the new segment's file exists (D60, invariant 2); see runDaemon's copy
+    const lockTimer = setInterval(bumpLock, lockRefreshMs); lockTimer.unref()
     const listTimer = setInterval(() => { const l = nextAgentList(); if (l) { agents = l.entries; registry.replaceAgentList(agents) } }, 5000); listTimer.unref()
     failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: VERSION, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
     let stopping = null, markExited
