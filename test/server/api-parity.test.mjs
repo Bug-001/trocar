@@ -7,6 +7,7 @@
 // read path is left anywhere in the shell or the page.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { takeRefusals } from '../helpers/no-real-os.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -55,8 +56,14 @@ test('V80: every named query answers the same document through HTTP as through r
       try { doc = await runQuery(name, params, { home: h }); }
       catch (e) {
         // A required parameter the test did not supply is a 400 with the query layer's own message —
-        // the same answer, not a different one.
-        assert.ok(e instanceof QueryArgError, `query ${name} failed for another reason: ${e.message}`);
+        // the same answer, not a different one. Any other failure must ALSO be the same answer on both
+        // sides: `status` reads the process list, which no-real-os.cjs refuses under `npm test`, and the
+        // subject here is parity, not whether the query can run on this machine.
+        if (!(e instanceof QueryArgError)) {
+          assert.equal(r.status, 500, `${name}: runQuery threw (${e.message}) — HTTP must fail the same way`);
+          assert.deepEqual(JSON.parse(r.body), { error: e.message }, `${name}: the same failure, said the same way`);
+          continue;
+        }
         assert.equal(r.status, 400, `${name}: a QueryArgError must be a 400`);
         assert.deepEqual(JSON.parse(r.body), { error: e.message });
         continue;
@@ -66,6 +73,8 @@ test('V80: every named query answers the same document through HTTP as through r
       assert.equal(JSON.parse(r.body).command, name, `${name}: the document's command IS the name`);
     }
   } finally { server.close(); }
+  // `status` reads the process list; both sides were refused it on purpose (above), so the ledger is cleared here.
+  takeRefusals();
 });
 
 test('V80: the routes the board fetches are exactly the query names', () => {
