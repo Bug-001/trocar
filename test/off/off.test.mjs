@@ -895,3 +895,23 @@ test('a file asight created is said once among the removed, however many of its 
   assert.equal(text.split(p).length - 1, 1, text)
   assert.ok(text.includes('/h/.codex/.env'), text)
 })
+
+// 1.6 §3.1 (a review of D62 ⑥ found this lost): a nameless `off` takes the whole routing off and READS IT BACK. The read-back used to be keyed on
+// whether the daemon was asked to exit, so in proxy mode — where it no longer is — `confirmed` fell back to the daemon's own `confirmed` flag, which
+// the collector hardcodes to true once its unwatches answered: a daemon still routing would have been reported as off. The key is the scope: with no
+// names, nothing may be left on.
+test('1.6 §3.1 · D62 ⑥: a nameless off in proxy mode reads the routing back — a daemon that answers actual: on is a mismatch, said with a way out, exit 1', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'], daemon: { pid: 4242 } })
+  const asked = []
+  const bad = await s.off({ deps: { platform: 'darwin', request: async (q) => { if (q.path !== '/off') return s.sys.daemon.request(q); asked.push(q.body); return { actual: 'on', confirmed: true, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 4242 } } } })
+  assert.equal(bad.exit, 1, `the routing did not read back as off: ${JSON.stringify(bad.receipt.problems)}`)
+  assert.equal(bad.receipt.routing.confirmed, false, 'and the receipt says so, however sure the daemon was of its own unwatches')
+  assert.deepEqual(flowEvents(s.dir).filter((e) => e.event === 'failure').map((e) => [e.where, e.code]), [['off', 'state-mismatch']], 'and it is on the record (D38)')
+  assert.deepEqual(asked, [{}], 'no names and no exit asked for: proxy mode leaves the daemon running (D62 ⑥)')
+
+  // the same off against a daemon that answers off: confirmed, exit 0, and the daemon stays
+  const t = await installedHome({ names: ['claude-code', 'codex'], daemon: { pid: 4242 } })
+  const good = await t.off({ deps: { platform: 'darwin', request: async (q) => (q.path === '/off' ? { actual: 'off', confirmed: true, relayed: { closing: 0, waiting: 0, cut: 0 }, pid: 4242 } : t.sys.daemon.request(q)) } })
+  assert.equal(good.exit, 0, JSON.stringify(good.receipt.problems))
+  assert.deepEqual([good.receipt.routing.confirmed, good.receipt.daemon], [true, { pid: 4242, state: 'running' }])
+})

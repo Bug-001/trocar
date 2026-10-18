@@ -21,6 +21,7 @@ import { rewriteBundles } from './core/trust/bundle.mjs'
 import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
+import { createQueryService } from '../query/service.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
 import { tryOpLock } from '../off/lock.mjs'
 import { readAgentList, agentListPath } from '../off/identity.mjs'
@@ -191,6 +192,15 @@ export function lockKeeper({ file, fields, segmentOf = () => null }) {
   }
 }
 
+/** The ONE place the read route is wired (D63 ①; the platform-seam rule: both entries get it, not one each): `GET /query` hands the
+ *  request to a query worker this daemon forks on demand and streams its bytes back. This event loop forwards agent traffic, so it
+ *  never computes an answer; the worker exits by itself when nobody queries. `stop()` belongs in the stop, before the control server
+ *  closes, so a worker a stop cuts off is not left behind. */
+function queryRouteFor({ P, failure }) {
+  const svc = createQueryService({ home: path.dirname(P.dir), failure })
+  return { routes: { 'GET /query': svc.route }, stop: svc.stop }
+}
+
 async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {} }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
@@ -225,7 +235,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       throw e
     }
   }
-  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off') } }) // throws if another daemon answers
+  const query = queryRouteFor({ P, failure })
+  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off'), ...query.routes } }) // throws if another daemon answers
 
   let redirector = null
   try {
@@ -639,6 +650,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }
     async function doStop({ signal = null, reason = null } = {}) {
       seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off
+      query.stop()
       clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer); clearTimeout(bundleRetry)
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
@@ -663,6 +675,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     failure.flush()
     await control.close()
     if (redirector) await redirector.close().catch((w) => failure('helper', w)) // the start failure itself is recorded by startDaemon
+    query.stop()
     throw e
   }
 }
@@ -719,9 +732,11 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
   const ready = new Promise((r) => { markReady = r })
   const gate = (fn) => async (q) => { await ready; return fn(q) }
+  const query = queryRouteFor({ P, failure })
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: {
     'GET /status': gate(status),
     'GET /holders': gate(() => collector.holders()),
+    ...query.routes,
     // the read question a read-only CLI command puts instead of starting a powershell.exe of its own (4.8 §1 §7; D62): a closed SUBSET of the
     // helper's read verbs, refused here as well as in the helper (W1's two gates). It reads and changes nothing.
     'POST /helper': gate(async (q) => {
@@ -761,6 +776,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     const exited = new Promise((r) => { markExited = r })
     const doStop = async ({ signal = null, reason = null } = {}) => {
       seal.stop() // as in runDaemon: the last segment is left to the next start's scan
+      query.stop()
       clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
       const failed = []
       const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
@@ -778,6 +794,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     return { port: null, socketPath: sock, paths: P, stop, exited, status, engine, collector }
   } catch (e) {
     failure.flush(); await control.close(); collector.close(); if (parts.close) parts.close()
+    query.stop()
     throw e
   }
 }

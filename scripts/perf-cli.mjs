@@ -122,7 +122,7 @@ async function cores({ home, names, vars, runs }) {
     const page = open.doc?.page || {}
     const steps = (open.doc?.records || []).map((r) => r.ref || r.text_ref).filter(Boolean)
     const seq = [
-      ['session page 2', 'session', { id: vars.session, cursor: page.next ?? '1', limit: String(page.limit ?? 50) }],
+      ['session page 2', 'session', { id: vars.session, after: page.next ?? '1', limit: String(page.limit ?? 50) }],
       ['block of another step', 'block', { ref: steps[1] || vars.ref }],
       ['calls of this session', 'calls', { session: vars.session }],
       ['sessions (the list again)', 'sessions', {}],
