@@ -8,7 +8,7 @@ import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { STATUS_REASONS } from '../health/codes.mjs'
-import { EXIT, newReceipt } from './schema.mjs'
+import { EXIT, newReceipt } from '../off/schema.mjs' // the keys and the exit codes themselves (D62): `status` prints a receipt, it does not VALIDATE one, so it does not pay for ./schema.mjs's checker and the closed lists under it
 import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
@@ -286,7 +286,8 @@ function identityBlocks({ ids, merged, health }) {
 
 /**
  * The network facts and the topology of the harnesses `f` is about (1.6 §9): what `gatherStatus` read, the descriptors, and this platform's part (`netFactsDeps` of the daemon module: the CLI reaches
- * arch and harness only through it, layering rule 5). → `{ facts, topology }` (topology = { <h>: HarnessTopology }), or `{ topology_error }`: a failure of the build is said, and does not change what `status` judged.
+ * arch and harness only through it, layering rule 5). → `{ facts, topology, diagnosed }` (topology = { <h>: HarnessTopology }, `diagnosed` = the finding list the codes came from, so `doctor` does not diagnose the same
+ * facts a second time, D62), or `{ topology_error }`: a failure of the build is said, and does not change what `status` judged.
  */
 export async function gatherTopology(f, { home, env, platform, deps = {} }) {
   try {
@@ -301,8 +302,9 @@ export async function gatherTopology(f, { home, env, platform, deps = {} }) {
     const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(warm ? { helper: warm } : {}), ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
     const topology = buildTopology(facts)
     // the codes `doctor` would give, on the topology of each harness (the board reads them there); the commands and the text are `doctor`'s
-    try { const by = diagnose({ facts, topology, harnesses: null, user: f.user }); for (const h of Object.keys(topology)) topology[h].findings = [...new Set(by.filter((x) => x.harness === h).map((x) => x.code))] } catch (e) { rethrowSandbox(e) }
-    return { facts, topology }
+    let diagnosed = null
+    try { diagnosed = diagnose({ facts, topology, harnesses: null, user: f.user }); for (const h of Object.keys(topology)) topology[h].findings = [...new Set(diagnosed.filter((x) => x.harness === h).map((x) => x.code))] } catch (e) { rethrowSandbox(e) }
+    return { facts, topology, diagnosed }
   } catch (e) { rethrowSandbox(e); return { topology_error: errMessage(e) } }
 }
 
