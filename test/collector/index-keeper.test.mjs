@@ -178,3 +178,34 @@ test('stop() settles only after the pass in flight, and the index file does not 
   await tick()
   assert.equal(fs.statSync(idxFile(h)).size, size, 'nothing of the keeper\'s is written after stop() settles')
 })
+
+// ONE WRITER (4.2 §段索引 谁写哪一笔, MUST): the seal queue waits for `flush` before it queues a closed segment, but
+// that wait has a deadline (seal-queue.mjs BEFORE_SEAL_MS) — past it the segment is sealed while a keeper pass may
+// still be in flight. `handOff` is what the deadline calls: from then on this keeper writes nothing more for that
+// segment, so the index the seal worker renamed into place stays the seal worker's (review of D62, 2026-10-20).
+test('交接之后在飞的那趟不再写:封存器换掉索引文件,新文件一个字节不动', async () => {
+  const h = home()
+  append(h, 40, 0, 'y'.repeat(20_000)) // ~800 KB: more than one chunk of this keeper
+  const sealer = Buffer.from('{"m":{"size":99,"sealed":true},"v":4}\n')
+  let raced = false
+  const keeper = createIndexKeeper({ home: h, debounceMs: 1, chunkBytes: 100_000,
+    index: async (a) => {
+      const r = await segmentIndex(a)
+      // the seal queue's deadline, exactly between two chunks: it takes the index away and the sealer's child
+      // renames its own whole document over this file
+      if (!r.done && !raced) {
+        raced = true
+        keeper.handOff(SEG)
+        const tmp = `${idxFile(h)}.sealer`
+        fs.writeFileSync(tmp, sealer); fs.renameSync(tmp, idxFile(h))
+      }
+      return r
+    } })
+  keeper.wrote(SEG)
+  await tick(); await keeper.idle(); await tick()
+  assert.equal(raced, true, 'the backlog did take more than one chunk, which is where the hand-over was placed')
+  assert.deepEqual(fs.readFileSync(idxFile(h)), sealer, 'the pass stopped before writing again')
+  keeper.wrote(SEG) // and a later append to a segment that is no longer the keeper's changes nothing either
+  await tick(); await keeper.idle()
+  assert.deepEqual(fs.readFileSync(idxFile(h)), sealer)
+})

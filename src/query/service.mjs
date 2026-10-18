@@ -25,7 +25,7 @@ const NL = 0x0a
 /** Where the bytes of a document nobody waits for go: the warm-up query's answer, and the rest of a document whose
  *  caller disconnected (its frame MUST still be read to the end, or the next reply is read as part of it). */
 const SINK = { writeHead() {}, write() { return true }, end() {}, once() {} }
-const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon yet: it is being started, read this one locally (D63)' })
+const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon yet: it is being started, read this one locally' })
 
 const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: [`--max-old-space-size=${WORKER_MEMORY_MB}`] })
 

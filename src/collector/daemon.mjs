@@ -166,7 +166,7 @@ function storeWithSealing({ P, failure }) {
   store.onRecord(keeper.wrote) // on the write path: one Set add and at most one timer (index-keeper.mjs)
   let queue = null
   const seal = {
-    start() { queue = startSealing({ store, raw: rawHome(home), lockFile: P.lock, failure, beforeSeal: keeper.flush }); return queue },
+    start() { queue = startSealing({ store, raw: rawHome(home), lockFile: P.lock, failure, beforeSeal: keeper.flush, handOff: keeper.handOff }); return queue },
     stop() { if (queue) queue.stop(); keeper.pause() },
     // after store.close(): the segment the stop just closed is indexed to its last byte, so the daemon leaves behind
     // the index of everything it wrote; only then does the keeper write nothing more (D62)
