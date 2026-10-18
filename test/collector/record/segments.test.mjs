@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { createRecordStore } from '../../../src/collector/core/record/store.mjs'
+import { lockKeeper } from '../../../src/collector/daemon.mjs'
 import { SEGMENT_BYTES, segmentName, parseSegment, recordId, parseRecordId } from '../../../src/collector/core/record/segments.mjs'
 
 const raw = (home) => path.join(home, 'raw')
@@ -84,8 +85,60 @@ test('segments: every closed segment reaches onSegmentClosed once, at rollover a
   assert.deepEqual(closed, ['20261018T070809Z.ndjson', '20261018T070810Z.ndjson'], 'a second stop closes nothing twice')
 })
 
+test('segments: the lock names a new segment before that segment\'s file exists (invariant 2: no sealer takes the live segment)', () => {
+  const home = tmpDir('asight-seg-')
+  const lock = path.join(home, 'lock')
+  let clock = '2026-10-18T07:08:09.000Z'
+  const s = store(home, { now: () => new Date(clock), segmentBytes: 1 })
+  const refreshLock = lockKeeper({ file: lock, fields: { pid: 7 }, segmentOf: () => s.currentSegment })
+  s.onSegmentOpening(refreshLock) // the daemon's wiring
+  const seen = [] // what a sealer would have read at the instant the file was about to appear
+  s.onSegmentOpening((seg) => seen.push({ seg, named: JSON.parse(fs.readFileSync(lock, 'utf8')).segment, onDisk: fs.existsSync(path.join(raw(home), `${seg}.ndjson`)) }))
+  s.envelope({ id: 'a' }) // past 1 byte: this segment is closed at once, so the next envelope rotates
+  clock = '2026-10-18T07:08:10.000Z'
+  s.envelope({ id: 'b' })
+  s.close()
+  assert.deepEqual(seen, [
+    { seg: '20261018T070809Z', named: '20261018T070809Z', onDisk: false },
+    { seg: '20261018T070810Z', named: '20261018T070810Z', onDisk: false },
+  ], 'the lock named each segment while its file did not exist yet — not on the next 1 s tick')
+})
+
+test('segments: a name the directory scan missed is never appended to — the exclusive create takes the next suffix', () => {
+  const home = tmpDir('asight-seg-')
+  fs.mkdirSync(raw(home), { recursive: true })
+  const other = path.join(raw(home), '20261018T070809Z.ndjson')
+  fs.writeFileSync(other, '{"id":"theirs"}\n') // another writer's segment, appearing after the scan
+  const readdir = fs.readdirSync
+  fs.readdirSync = (p, o) => (path.resolve(p) === path.resolve(raw(home)) ? [] : readdir(p, o)) // the scan sees nothing
+  try {
+    const s = store(home, { now: () => new Date('2026-10-18T07:08:09.000Z') })
+    assert.equal(s.envelope({ id: 'a' }).id, '20261018T070809Z-2:1')
+    s.close()
+  } finally { fs.readdirSync = readdir }
+  assert.equal(fs.readFileSync(other, 'utf8'), '{"id":"theirs"}\n', 'the other writer\'s file was not appended to')
+})
+
+test('segments: a failed write closes the segment — the fd is released and the seal queue gets it (its half line as it is)', () => {
+  const home = tmpDir('asight-seg-')
+  const errs = [], closed = []
+  const s = store(home, { now: () => new Date('2026-10-18T07:08:09.000Z'), onError: (e) => errs.push(e) })
+  s.onSegmentClosed((p) => closed.push(path.basename(p)))
+  s.envelope({ id: 'a' })
+  const write = fs.writeSync
+  fs.writeSync = () => { throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }) }
+  try { assert.deepEqual(s.envelope({ id: 'b' }), { ok: false }) } finally { fs.writeSync = write }
+  assert.equal(s.currentSegment, null)
+  assert.equal(s.openFiles, 0, 'the fd was released')
+  assert.deepEqual(closed, ['20261018T070809Z.ndjson'], 'the half-written segment reached the seal queue')
+  assert.equal(errs[0].code, 'ENOSPC')
+  assert.deepEqual(lines(home, '20261018T070809Z.ndjson').map((r) => r.id), ['a'])
+  s.close()
+})
+
 test('segments: the raw directory is 0700 and a segment 0600 — capture data is the owner\'s only (1.6 §1.7)', () => {
   const home = tmpDir('asight-seg-')
+  fs.mkdirSync(raw(home), { recursive: true, mode: 0o755 }) // a raw/ from an older version: raw bytes hold credentials verbatim
   const s = store(home, { now: () => new Date('2026-10-18T07:08:09.000Z') })
   s.envelope({ id: 'a' }); s.close()
   assert.equal(fs.statSync(raw(home)).mode & 0o777, 0o700)

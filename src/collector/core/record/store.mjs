@@ -15,6 +15,7 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
   let lastError = null // the reason of the last failed write, for the caller's failure record (RFC 4.6 §记录 采集失败不静默)
   let segment = null, segFile = null, segBytes = 0, segLines = 0
   const onClosed = [] // the seal queue hangs here (4.6 §记录 自动封存)
+  const onOpening = [] // called with the name BEFORE the file exists: the daemon writes it into the lock there (see openSegment)
   const report = (e, file) => { errors++; lastError = e; if (file && e && typeof e === 'object' && !e.file) e.file = file; onError(e) }
   const closeAll = () => { for (const fd of fds.values()) { try { fs.closeSync(fd) } catch { /* already closed */ } } fds.clear() }
   // A day that has ended: the previous day's files get no more lines, so their fds are fsync'd and closed. A daemon
@@ -50,14 +51,30 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
   }
 
   // A new segment, never an existing one: a segment on disk is closed for good, so a crash's half line stays as it is
-  // and a reader's line numbers (the record ids) never shift under it.
+  // and a reader's line numbers (the record ids) never shift under it. The name is announced to onOpening BEFORE the
+  // file exists (invariant 2: a sealer that believed the live segment closed would delete its plaintext, so the lock
+  // must name the new segment no later than its first byte — not on the next timer tick), and the file is created with
+  // 'ax', so two writers on one home can never share a name and a restart never appends to an old file.
   function openSegment() {
     fs.mkdirSync(raw, { recursive: true, mode: 0o700 })
+    try { fs.chmodSync(raw, 0o700) } catch { /* a raw/ from an older version, or one we do not own */ }
     const taken = fs.readdirSync(raw).map(parseSegment).filter(Boolean).map((s) => s.segment)
-    segment = segmentName(now(), taken)
-    segFile = path.join(raw, `${segment}.ndjson`)
-    segBytes = 0; segLines = 0
-    fdFor(segFile)
+    const at = now()
+    for (;;) {
+      segment = segmentName(at, taken)
+      segFile = path.join(raw, `${segment}.ndjson`)
+      for (const cb of onOpening) { try { cb(segment) } catch (e) { report(e, segFile) } } // never breaks the capture
+      let fd
+      try { fd = fs.openSync(segFile, 'ax', 0o600) } catch (e) {
+        if (e.code !== 'EEXIST') throw e // reported by the caller; the next envelope tries again
+        taken.push(segment) // a name the directory scan missed (another writer, a scan race): take the next suffix
+        continue
+      }
+      try { fs.fchmodSync(fd, 0o600) } catch { /* some filesystems refuse chmod */ }
+      fds.set(segFile, fd)
+      segBytes = 0; segLines = 0
+      return
+    }
   }
   /** fsync, close, and hand the path to the seal queue. The next envelope opens the next segment. */
   function closeSegment() {
@@ -96,7 +113,9 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
         return { ok: true, id }
       } catch (e) {
         report(e, segFile)
-        segment = null; segFile = null // the next envelope tries a fresh segment rather than this broken one
+        // the next envelope opens a fresh segment, not this broken one; closeSegment releases the fd and hands the
+        // segment to the seal queue (its half line stays as it is, 4.6 §记录)
+        closeSegment()
         return { ok: false }
       }
     },
@@ -104,6 +123,8 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
     audit(rec) { write((d) => path.join(root, 'audit', `${d}.ndjson`), rec) },
     replay(env) { write((d) => path.join(root, 'replays', `${d}.ndjson`), env) },
     onSegmentClosed(cb) { onClosed.push(cb) },
+    /** cb(segment) right before the segment's file is created — the daemon rewrites the lock there (D60, invariant 2). */
+    onSegmentOpening(cb) { onOpening.push(cb) },
     get currentSegment() { return segment },
     get lastError() { return lastError },
     get errors() { return errors },

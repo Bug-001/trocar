@@ -114,15 +114,19 @@ test('ws envelope: no opener → req_body null; a binary opener → req_body nul
 
 // RFC 4.6 §记录: the dated files of flows/ audit/ replays/ are chosen when the line is WRITTEN, and the day never goes
 // back — an earlier file is never appended to once a later one exists. (Envelopes are not dated at all: they go to the
-// current segment, test/collector/record/segments.test.mjs.)
-test('store: crossing midnight closes the previous day\'s files, so a long-running daemon does not leak one fd set per day', () => {
+// current segment, test/collector/record/segments.test.mjs.) On a day change the previous day's fds are fsync'd and
+// closed (4.6 §事件与码 「audit/、replays/ 换日时先 fsync 再关掉前一天的 fd」); there are no closing markers anywhere.
+test('store: crossing midnight fsyncs and closes the previous day\'s files, so a long-running daemon does not leak one fd set per day', () => {
   const root = tmpDir('asight-store-')
   let clock = '2026-10-05T23:59:01.000Z'
   const s = createRecordStore({ root, now: () => new Date(clock), onError: (e) => { throw e } })
   s.flow({ flow_id: 'f1' }); s.audit({ event: 'on' }); s.replay({ id: 'r1' })
   assert.equal(s.openFiles, 3)
   clock = '2026-10-06T00:00:01.000Z'
-  s.flow({ flow_id: 'f2' })
+  const fsynced = [], fsync = fs.fsyncSync
+  fs.fsyncSync = (fd) => { fsynced.push(fd); return fsync(fd) }
+  try { s.flow({ flow_id: 'f2' }) } finally { fs.fsyncSync = fsync }
+  assert.equal(fsynced.length, 3, 'the three files of the day that ended were fsync\'d before being closed')
   assert.equal(s.openFiles, 1, 'only the new day\'s flows file is open')
   s.close()
   assert.equal(s.openFiles, 0)
