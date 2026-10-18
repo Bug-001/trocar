@@ -32,6 +32,8 @@ function checkHarnessIds(v, at, bad, seen) {
     const here = at ? `${at}.${k}` : k
     if (k === 'harness' && !HARNESS_IDS.includes(x)) bad.push(`${here}: ${JSON.stringify(x)} is not a harness id (the code id is printed, never an alias)`)
     else if (k === 'harnesses' && Array.isArray(x)) x.forEach((id, i) => { if (isString(id) && !HARNESS_IDS.includes(id)) bad.push(`${here}[${i}]: ${JSON.stringify(id)} is not a harness id`) })
+    // 附录 C.3: `status`'s own `harnesses` is an object KEYED by the harness — the keys are ids too
+    else if (k === 'harnesses' && isObject(x)) for (const id of Object.keys(x)) if (!HARNESS_IDS.includes(id)) bad.push(`${here}.${id}: ${JSON.stringify(id)} is not a harness id`)
     checkHarnessIds(x, here, bad, seen)
   }
 }
@@ -72,6 +74,7 @@ export function validateReceipt(r) {
   if ('linger' in r && !(r.linger === true || r.linger === false || r.linger === 'unknown')) bad.push('linger: not true, false or "unknown"')
   if ('agent_list' in r) bad.push(...validateAgentList(r.agent_list))
   if (Array.isArray(r.harnesses)) r.harnesses.forEach((h, i) => { if (isObject(h) && h.identity !== undefined) bad.push(...validateIdentity(h.identity).map((x) => `harnesses[${i}].${x}`)) })
+  else if (isObject(r.harnesses)) for (const [h, x] of Object.entries(r.harnesses)) if (isObject(x) && x.identity !== undefined) bad.push(...validateIdentity(x.identity).map((y) => `harnesses.${h}.${y}`))
   if ('install' in r || 'cert' in r) bad.push(...validateInstallCert(r))
   if ('forms' in r) bad.push(...validateForms(r.forms))
   checkHarnessIds(r, '', bad, new WeakSet())
