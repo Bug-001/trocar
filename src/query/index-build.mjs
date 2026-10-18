@@ -69,8 +69,21 @@ function recordOf(lineBuf, segment, lineNo, problems, offset = null) {
     problems.push({ code: 'record-unparseable', reason: `${recordId(segment, lineNo)} is not JSON (${err.message}); it is left out of the index` });
     return null;
   }
+  return indexEntryOf(e, { segment, lineNo, storedBytes: lineBuf.length, offset });
+}
+
+/**
+ * ONE record's index entry, from the record as an object — the single definition of what the index holds, used both by
+ * the scan above (which parses the line back) and by the daemon's keeper, which hands over the envelope it just
+ * serialized instead of re-reading and re-parsing its own bytes (D62; index-keeper.mjs `wrote`). Two callers, one
+ * implementation, so the keeper's document stays what a fresh rebuild produces — test/query/segment-index.test.mjs
+ * holds that, and test/collector/index-keeper-entries.test.mjs holds it for the keeper's path specifically.
+ *   storedBytes: the line's bytes WITHOUT its newline (what `lineBuf.length` is above).
+ *   offset: where the line starts in the plaintext segment (null: sealed).
+ */
+export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null }) {
   // the body as the board reads it: a request body stored compressed (req_body null + req_body_b64) still carries its session key
-  e = expandRequestBody(e);
+  const e = expandRequestBody(env);
   const wire = e.body_wire_bytes || {};
   const h = harnessOf(e);
   const synth = synthFactsOf(e);
@@ -82,7 +95,7 @@ function recordOf(lineBuf, segment, lineNo, problems, offset = null) {
     host: e.host ?? null,
     path: e.endpoint ?? null,
     status: (e.resp && e.resp.status) ?? null,
-    stored_bytes: lineBuf.length,
+    stored_bytes: storedBytes,
     wire_bytes: (Number(wire.req) || 0) + (Number(wire.resp) || 0),
     session_key: sessionKeyOf(e).key ?? null,
     is_llm: !!e.is_llm_call,
@@ -260,6 +273,32 @@ function tailMark(fs, file) {
   } finally { fs.closeSync(fd); }
 }
 
+// ── the keeper's own lines, without re-reading them ───────────────────────
+// The daemon serialized these records; parsing its own bytes back to learn what it already had cost a JSON.parse of
+// the whole record per record (5.2 ms of the 9.4 ms a 500 KB exchange took, a macOS machine 2026-10-20). So the keeper hands
+// over the entries, and this takes them — but ONLY when they account for the segment EXACTLY: contiguous line numbers
+// from the stored mark, contiguous offsets from `mark.end`, and an end that equals the file's current size. Any gap,
+// any line written by something else, any entry the keeper failed to build → null, and the scan is the truth. The
+// result is byte-for-byte the scan's, which is what keeps the index a rebuildable projection (invariant 2).
+function fromEntries(fs, source, stored, how, entries) {
+  if (!entries || !entries.length) return null;
+  const from = how === 'resume' ? { end: stored.mark.end, lines: stored.mark.lines } : (how === 'rebuild' && !stored ? { end: 0, lines: 0 } : null);
+  if (!from) return null;                                 // the file was rewritten or truncated: scan it
+  let end = from.end, lineNo = from.lines;
+  for (const r of entries) {
+    if (r.offset !== end || r.lineNo !== lineNo + 1) return null;
+    end += r.storedBytes + 1; lineNo = r.lineNo;           // + its newline
+  }
+  let st;
+  try { st = fs.statSync(source); } catch { return null; }
+  if (st.size !== end) return null;                        // bytes nobody told us about: scan them
+  let fd;
+  try { fd = fs.openSync(source, 'r'); } catch { return null; }
+  let fp;
+  try { fp = fpDigest((a, b) => readRangeSync(fd, a, b), end); } catch { return null; } finally { try { fs.closeSync(fd); } catch { /* gone */ } }
+  return { records: entries.map((r) => r.entry), mark: { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, end, lines: lineNo, fp }, bytesRead: 0, done: true };
+}
+
 // Reusable as it is (nothing changed), resumable from mark.end (appended bytes only), or neither.
 function usability(fs, source, stored) {
   if (!stored) return 'rebuild';
@@ -335,9 +374,12 @@ function storeIndex(fs, file, lines, problems, at = null) {
  *     than KEEPER_CHUNK_BYTES, because the daemon is supposed to have done it (D62, D38). A SEALED segment's index is
  *     written whole by whoever finds it missing (the seal child, else the reading query): the same content either way.
  *     Like `index-unwritable`, `index-cold` is about this read, so it is not stored in the document.
+ *   entries: what the daemon's keeper already knows about the lines it just wrote ([{lineNo, offset, storedBytes,
+ *     entry}], in line order; see fromEntries). Taken ONLY when they account for the segment exactly from the stored
+ *     mark to its current size, so the answer is the scan's answer; anything else falls back to the scan.
  * Never throws for a segment it cannot read: the reason is in `problems` and the caller lists it in `errors`.
  */
-export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false } = {}) {
+export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null } = {}) {
   const problems = [];
   const sealedPath = path.join(rawDir(home), `${segment}.sealed`);
   const plainPath = path.join(rawDir(home), `${segment}.ndjson`);
@@ -355,7 +397,8 @@ export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs, 
   try {
     got = sealed
       ? scanSealed(fs, source, segment, problems)
-      : scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes);
+      : (owner && fromEntries(fs, source, stored, how, entries))
+        || scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes);
   } catch (e) {
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(source)}: ${String((e && e.message) || e)}` });
     return { segment, source, records: stored && how === 'resume' ? stored.records || [] : [], problems: [...prior, ...problems], bytesRead: 0, done: true };

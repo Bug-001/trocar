@@ -105,15 +105,20 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
     // reported). The WebSocket recorder marks the calls after a lost envelope partial (4.6 §传输与帧级记录, write-failed).
     envelope(env) {
       try {
-        const line = JSON.stringify(env) + '\n'
+        // ONE utf-8 encode: `Buffer.byteLength` on the string used to scan it a second time only to count it, and
+        // writeSync encodes it a third (D62: ~0.3 ms per MB of record, a macOS machine).
+        const line = Buffer.from(`${JSON.stringify(env)}\n`, 'utf8')
         if (!segFile) openSegment()
+        const offset = segBytes
         fs.writeSync(fdFor(segFile), line)
-        segBytes += Buffer.byteLength(line); segLines++
+        segBytes += line.length; segLines++
         const id = recordId(segment, segLines)
         // before the rollover below, so the name is the segment this line went into, never null (D62)
         // the keeper hangs here (D62) and never throws (index-keeper.mjs `wrote`): a listener that did would be
         // counted below as a `record-error`, which this line is not — the record is already in the segment.
-        for (const cb of onWrote) { try { cb(segment) } catch (e) { report(e, segFile) } }
+        // The facts are what the keeper needs to index this line WITHOUT reading it back: where it starts, its line
+        // number, its bytes without the newline (the index's `stored_bytes`), and the envelope itself.
+        for (const cb of onWrote) { try { cb(segment, { lineNo: segLines, offset, storedBytes: line.length - 1, env }) } catch (e) { report(e, segFile) } }
         if (segBytes >= segmentBytes) closeSegment()
         return { ok: true, id }
       } catch (e) {
@@ -130,8 +135,8 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
     onSegmentClosed(cb) { onClosed.push(cb) },
     /** cb(segment) right before the segment's file is created — the daemon rewrites the lock there (D60, invariant 2). */
     onSegmentOpening(cb) { onOpening.push(cb) },
-    /** cb(segment) once a line is in that segment — the index keeper's trigger (D62). It is ON the write path of a
-     *  record, so it must do no work of its own: the keeper only remembers the name and arms its debounce. */
+    /** cb(segment, facts) once a line is in that segment — the index keeper's trigger (D62). facts = { lineNo,
+     *  offset, storedBytes, env }: everything needed to index that line without reading it back. */
     onRecord(cb) { onWrote.push(cb) },
     get currentSegment() { return segment },
     get lastError() { return lastError },
