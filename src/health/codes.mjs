@@ -56,7 +56,8 @@ export const TRUST_REASONS = Object.freeze([
 
 /** Codes asight names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
-  daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error'],
+  daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
+    'query-failed'], // D63 (4.6 §事件与码): the query worker crashed, exited non-zero or did not answer in time; that query is still answered (a re-fork, or the caller's local path)
   record: ['record-error', 'file-replaced'],
   raw: ['seal-failed'],
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
