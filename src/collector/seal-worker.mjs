@@ -5,11 +5,18 @@
 // After sealing, this child also re-indexes the segment from its sealed copy (D62): the records keep the ids they had,
 // but their bytes are addressed by line number instead of by plaintext offset, so the index must be derived again —
 // and here, in the low-priority child that already did the encoding, the daemon's event loop never parses a segment.
+// LOW PRIORITY is asked for below, on the first line that runs: encoding and hashing a 128 MB segment is the heaviest
+// thing asight ever does, and it MUST NOT take CPU from the agents whose traffic the daemon is forwarding
+// (1.6 §3.1 nice ≥ 5). Acceptance on a macOS test machine (2026-10-20) found this child at nice 0: the comment said it, nothing
+// did it.
 import path from 'node:path'
 import { sealSegment } from '../raw/seal.mjs'
 import { WORKER_GONE_EXIT } from './seal-queue.mjs'
 import { parseSegment } from './core/record/segments.mjs'
 import { segmentIndex } from '../query/index-build.mjs'
+import { lowerPriority } from '../low-priority.mjs'
+
+lowerPriority({ say: (m) => process.stderr.write(`${m}\n`) })
 
 process.on('disconnect', () => process.exit(WORKER_GONE_EXIT)) // a sealer MUST NOT outlive the daemon that forked it
 
