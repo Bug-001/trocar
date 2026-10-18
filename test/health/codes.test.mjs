@@ -14,6 +14,7 @@ import { NOT_CAPTURED_FAILURE, NOT_CAPTURED_EXPECTED, FAILURE_EVENTS, STATE_EVEN
 import { WHERE_OFF, EVENT_OFF_NOTE, CODE_OFF } from '../../src/off/names.mjs'
 import { EVENT, CODE, TRUST_REASON } from '../../src/collector/core/codes.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
+import { ERROR_CODES } from '../../src/cli/json.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : /\.mjs$/.test(e.name) ? [path.join(d, e.name)] : []))
@@ -26,12 +27,15 @@ function literals(root) {
   // src/netenv (RFC 4.7, 4.8 §12) writes the drift and routing failures of the VPN / forwarder side, and `netenv-change` (1.6 §9.7)
   const more = ['capture', 'off', 'cli', 'netenv'].flatMap((d) => (fs.existsSync(path.join(root, 'src', d)) ? walk(path.join(root, 'src', d)) : []))
   for (const f of [...walk(path.join(root, 'src', 'collector')), ...more]) {
-    const src = fs.readFileSync(f, 'utf8')
+    // line comments are prose about the names, not a writer naming one (src/cli/args.mjs documents its error document in a comment)
+    const src = fs.readFileSync(f, 'utf8').replace(/^[ \t]*\/\/.*$/gm, '')
     const rel = path.relative(root, f)
     const grab = (re, kind) => { for (const m of src.matchAll(re)) out.push({ kind, name: m[1], file: rel }) }
     grab(/\bevent:\s*'([^']+)'/g, 'event')
     grab(/\bwhere:\s*'([^']+)'/g, 'where')
-    grab(/\bcode:\s*'([^']+)'/g, 'code')
+    // `error: { code: … }` is the JSON error document of 1.6 §3 (V74), not a D38 record: its own closed set is src/cli/json.mjs ERROR_CODES
+    grab(/\berror:\s*\{\s*code:\s*'([^']+)'/g, 'error-code')
+    grab(/(?<!error:\s*\{\s*)\bcode:\s*'([^']+)'/g, 'code')
     grab(/\bnot_captured(?:\s*=\s*|:\s*)'([^']+)'/g, 'not_captured')
     grab(/\bnotCaptured\(\s*'([^']+)'/g, 'not_captured') // the engine flow's helper: notCaptured('h2', reason)
     grab(/\bfailure\(\s*'([^']+)'/g, 'where')
@@ -48,7 +52,8 @@ function literals(root) {
 }
 // the same sets checkRecord() judges by (isEvent / isWhere / isCode), so a name the scan lets through is one the check lets through
 const outside = (lits) => lits.filter(({ kind, name }) => !(kind === 'event' ? isEvent(name)
-  : kind === 'where' ? isWhere(name) : kind === 'code' ? isCode(name) : [...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED].includes(name)))
+  : kind === 'where' ? isWhere(name) : kind === 'code' ? isCode(name)
+    : kind === 'error-code' ? ERROR_CODES.includes(name) : [...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED].includes(name)))
 
 test('D38 every event / where / code / not_captured a collector writer names is in the closed set (src/health/codes.mjs)', () => {
   const lits = literals(REPO)
@@ -56,6 +61,7 @@ test('D38 every event / where / code / not_captured a collector writer names is 
     assert.ok(lits.some((l) => l.kind === kind && l.name === name), `the scan still sees ${kind} ${name} (else it proves nothing)`)
   }
   assert.ok(lits.some((l) => l.kind === 'where' && l.name === 'off' && l.file.startsWith(path.join('src', 'off'))), 'and it reaches src/off (D39⑦), where `off` names its records')
+  assert.ok(lits.some((l) => l.kind === 'error-code' && l.name === 'usage' && l.file === path.join('src', 'cli', 'args.mjs')), 'the parser\'s error document is seen, and judged by ERROR_CODES (1.6 §3, V74)')
   assert.deepEqual(outside(lits), [])
 })
 
