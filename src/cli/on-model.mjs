@@ -11,13 +11,16 @@ import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile } from '../off/paths.mjs'
 import { readManifest, saveManifest } from '../collector/core/trust/journal.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
+import { fit, tilde } from './receipt.mjs'
+import { pairs } from './text.mjs'
 
 const errText = (e) => String((e && e.message) || e)
-const NEEDS_YES = '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'
+const NEEDS_YES = 'Nothing was changed: this is not a terminal, so the plan above is all. Read it, then run the same command with --yes'
 
-const routeLine = (p) => `  · ${p.harness} · ${p.route}: ${p.kind}${p.paths.length ? ` ${p.paths.join(', ')}` : ''}`
-const noteLine = (n) => (n.code === 'install-pending' ? `  · ${n.item}: ${n.state} — ${n.why};再跑一次 ${n.command}` : `  · ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
-const refusedLine = (r) => `  · ${r.harness} 没开:${r.reason}${r.path ? ` ${r.path}` : ''};再跑一次 ${r.command}`
+// §1.4「计划写全」: every planned route by the full path (and key) it will write; a route that writes no file of yours says why instead
+const planLine = (p, home) => [p.harness, `${p.paths.length ? p.paths.map((x) => tilde(x, home)).join(', ') : `no file of yours: asight hands ${p.harness} the setting as it starts`}${p.keys && p.keys.length ? `: ${p.keys.join('.')}` : ''}`]
+const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
+const refusedLine = (r) => `${r.harness} was not turned on: ${r.reason}${r.path ? ` (${r.path})` : ''}. Run: ${r.command}`
 
 /** → the exit code. `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
 export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, json }) {
@@ -31,9 +34,12 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const args = { os, home, env, ids, harnesses: deps.harnesses || parts.harnesses, ctx, fs, renderHook, ...(deps.now ? { now: deps.now } : {}) }
   const out = (receipt, exit) => {
     if (json) io.out(JSON.stringify(receipt, null, 2))
-    else io.out([`asight on ${receipt.dry_run ? '的计划(什么都没写)' : exit === 0 ? '完成' : '没有全部完成'}${receipt.harnesses.length ? `:${receipt.harnesses.join(', ')}` : ''}`,
-      ...receipt.refused.map(refusedLine), ...(receipt.routes || []).map((r) => `  · ${r.harness} · ${r.route}: ${r.ok ? '入口已写' : `没写(${r.code}: ${r.reason})`}`),
-      ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `  问题: ${p}`)].join('\n'))
+    else io.out(fit([receipt.dry_run ? `asight on would start capturing ${receipt.harnesses.join(', ') || 'no agent'}. Nothing was written.`
+      : exit === 0 ? `Capturing ${receipt.harnesses.join(', ') || 'no agent'}.${receipt.daemon && receipt.daemon.state === 'running' ? ' The collector is running.' : ''}`
+        : `asight on did not finish${receipt.harnesses.length ? ` for all of ${receipt.harnesses.join(', ')}` : ''}. What stopped it is below.`,
+      ...receipt.refused.map(refusedLine),
+      ...pairs((receipt.routes || []).map((r) => [r.harness, r.ok ? 'the setting is in place' : `not written (${r.reason})`])),
+      ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)]).join('\n'))
     return exit
   }
   const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...(r.code ? { code: r.code } : {}), ...extra })
@@ -42,21 +48,23 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const m = readManifest(dir, fs)
   const seen = new Set(m.confirmed_paths || [])
   const fresh = [...new Set(plan.planned.flatMap((p) => p.paths))].filter((p) => !seen.has(p))
-  say(['asight on 的计划:', ...plan.planned.map(routeLine), ...(fresh.length ? [`  这次新要改的文件:${fresh.join(', ')}`] : [])].join('\n'))
+  say(fit([`asight on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
+    ...pairs(plan.planned.map((p) => planLine(p, home))),
+    ...(fresh.length ? [`New since you last said yes: ${fresh.map((x) => tilde(x, home)).join(', ')}`] : [])]).join('\n'))
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned }), EXIT.ok)
   if (fresh.length && !flags.has('--yes')) {
-    if (!isInteractive(io)) { io.err(NEEDS_YES); return EXIT.usage }
-    if (!(await ask({ ...io, prompt: json ? io.stderr : io.stdout }, 'asight 将按上面的清单写或改这些文件。继续?'))) { io.err('没有确认:什么都没改'); return EXIT.incomplete }
+    if (json || !isInteractive(io)) { if (json) io.out(JSON.stringify({ ...receiptOf({ ...plan, exit: 2 }), ok: false, planned: plan.planned, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES); return EXIT.usage }
+    if (!(await ask({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
   }
   let lock
   try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) { io.err(`asight on: ${e.message}`); return EXIT.incomplete } throw e }
   try {
-    const unit = flags.has('--no-unit') || !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
+    const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
     const { ensureDaemonUp } = await import('../collector/install.mjs')
     const up = await ensureDaemonUp({ osName: os, dir, env, fs, unit, autostart: !flags.has('--no-autostart'), put, ...(deps.sleep ? { pause: deps.sleep } : {}) })
     const r = up.up ? await turnOnModel(args) : { ...plan, routes: [], problems: up.problems.length ? up.problems : up.notes, exit: EXIT.incomplete }
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
     if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
-    return out(receiptOf(r, { daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, doors: r.doors || {} }), r.exit)
+    return out(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, doors: r.doors || {} }), r.exit)
   } finally { lock.release() }
 }

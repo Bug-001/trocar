@@ -38,10 +38,9 @@ export const COMMANDS = Object.freeze([
     exits: [[0, 'everything is installed'], [1, 'some of it is not'], [2, 'nothing ran: a usage error, root, or a confirmation nobody could give']] },
   { name: 'on',
     group: 'Capture', mutates: true, run: via('./on.mjs', 'runOnCli'),
-    usage: `asight on ${HARNESS} [--no-autostart] [--no-unit] [--yes] [--dry-run] [--json]`,
+    usage: `asight on ${HARNESS} [--no-autostart] [--yes] [--dry-run] [--json]`,
     summary: 'Starts capturing the named agents, or every agent install knows when you name none. It only points each agent at asight and starts the collector; it touches no certificate and restarts no agent. Run asight install first.',
-    // shortcut: --no-unit is still its own option, to be merged into --no-autostart with the on/off rewrite of the next branch
-    options: [['--no-autostart', 'start the collector now but do not have it start at login'], ['--no-unit', 'do not write the autostart entry at all'], YES, DRY, JSON_OPT],
+    options: [['--no-autostart', 'start the collector this once, and write no login entry'], YES, DRY, JSON_OPT],
     exits: [[0, 'every named agent is being captured'], [1, 'some of them are not'], [2, 'nothing ran: a usage error, an unknown agent, root, or a confirmation nobody could give']] },
   { name: 'off',
     group: 'Capture', mutates: true, run: via('../off/main.mjs', 'runOffCli'),

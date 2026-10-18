@@ -57,7 +57,7 @@ function refuseUnsupported(dir, m) {
 }
 
 function refuseRoot(verb, getuid = processUid) {
-  if (getuid() === 0) throw new Error(`asight ${verb === 'on' ? verb : `collector ${verb}`}: run it as the user whose agents you capture, not as root (D36); 用你自己的账号跑`)
+  if (getuid() === 0) throw new Error(`asight ${verb === 'on' ? verb : `collector ${verb}`}: run this as your own user, not as root.`)
 }
 
 // onPlan(list) is called once with every file install will write or change, BEFORE anything is written (4.6, user
@@ -117,10 +117,10 @@ const DAEMON_CMD = 'asight daemon' // 1.6 §2: the autostart unit's ExecStart is
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
 export function changeText(e, prior = null) {
   if (e.kind === 'text') {
-    if (e.vars) return `顶部加 asight 哨兵块(${Object.keys(e.vars).join(', ')})${prior ? `;注释掉你原有的 ${Object.keys(prior).join(', ')}` : ''}`
-    return `加一行(${shortLine(e.line)})`
+    if (e.vars) return `asight block added at the top (${Object.keys(e.vars).join(', ')})${prior ? `; your own ${Object.keys(prior).join(', ')} commented out` : ''}`
+    return `one line added (${shortLine(e.line)})`
   }
-  return prior != null ? `改 ${(e.keys || []).join('.')}(原值 ${prior})` : `加 ${(e.keys || []).join('.')}`
+  return prior != null ? `${(e.keys || []).join('.')} set (was ${prior})` : `${(e.keys || []).join('.')} added`
 }
 
 // An error that is not a failure of asight: an `off` asked for while this `on` ran (R12: off wins), or a step that has to stop the run.
@@ -387,13 +387,15 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *  `sleep`), so a test runs it in a sandbox HOME. Refuses root by throwing (R7); everything else is a receipt: `exit` 0 done · 1 not done or a problem ·
  *  2 not in a terminal without a yes (the plan is in the receipt, nothing was written).
  *    ids        harness code ids, or null for every one found   confirm(plan) → true | false | null (null: nobody can be asked)   onPlan(plan): print it
- *    unit       the autostart unit (arch/linux/unit.mjs userUnit), or null (`--no-unit`)   autostart  false: `start` it, never `enable` (`--no-autostart`)
+ *    unit       the autostart unit (arch/linux/unit.mjs userUnit), or null (no autostart on this platform)   autostart  false: no entry is written at all, `start` it this once (`--no-autostart`)
  *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
  *    arch       the arch, asked for the combined bundles' OS roots (planOn)   roots  overrides them
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
   const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
+  // `--no-autostart` (1.6 §3.3): no login entry is written at all, and the daemon is started this once (`unit.start()`) — so the writing side is handed no unit
+  const unitFile = autostart ? unit : null
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
   const username = (() => { try { return user || os.userInfo().username } catch { return String(env.USER || '') } })()
@@ -416,9 +418,9 @@ export async function turnOn(opts = {}) {
     return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' }
   } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
-    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit, fs, now })
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: unitFile, fs, now })
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
-    if (!isModelOs(osName) && !installComplete(plan._.prior)) return { receipt: unwritten({ ...fresh(), ok: false, code: CODE.certNotInstalled, notes: ['asight 还没装证书(没有完整的 install 记录):先跑 asight install。on 从不写证书,所以也不会悄悄安装(D55⑥)'] }), manifest: plan._.prior, plan, exit: 1 }
+    if (!isModelOs(osName) && !installComplete(plan._.prior)) return { receipt: unwritten({ ...fresh(), ok: false, code: CODE.certNotInstalled, notes: ['certificates are not installed. Run: asight install'] }), manifest: plan._.prior, plan, exit: 1 }
     // the copy of the undo side that needs no source tree (R3) is one more file asight writes: listed in the plan and the dry run when it is missing or not what src/off generates now
     const standaloneCheck = checkStandalone({ home, version: OFF_VERSION, fs })
     if (!standaloneCheck.ok) { plan.created = [...plan.created, standaloneCheck.path]; plan.standalone = standaloneCheck.path }
@@ -436,13 +438,13 @@ export async function turnOn(opts = {}) {
     const named = !!ids && plan.skipped.some((s) => ids.includes(s.what)) // a harness asked for by name that has nothing to install: not done
     // the proxy fields the user edited since the last `on` (1.6 §9.5): asked about like an extra file (R6); a routing that owns none has none
     const edited = networkEdited && plan.targets.length ? await networkEdited(plan.targets) : []
-    if (edited.length) r.notes.push(...edited.map((e) => `你改过的代理设置: ${e.harness} 的 ${e.where || '代理字段'} 现在是 ${e.now ?? '空'}(asight 上次接上时是 ${e.was ?? '空'});on 会把它接成新的上游,再指回 asight`))
+    if (edited.length) r.notes.push(...edited.map((e) => `you changed the proxy setting of ${e.harness}: ${e.where || 'the proxy field'} is now ${e.now ?? 'empty'} (asight left ${e.was ?? 'empty'} there); on takes that as the upstream and points the setting back at asight`))
     if (dryRun) return { receipt: { ...r, dry_run: true, ok: !named, ...(helperBlock ? { blocked: helperBlock, notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real asight on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
     if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
     if (plan.first || plan.newPaths.length || edited.length) {
       const verdict = confirm ? await confirm(plan) : null
-      if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'] }, manifest: plan._.prior, plan, exit: 2 }
-      if (verdict === false) return { receipt: { ...r, ok: false, planned: true, declined: true, notes: [...r.notes, '没有确认:什么都没改'] }, manifest: plan._.prior, plan, exit: 1 }
+      if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, 'Nothing was changed: this is not a terminal, so the plan above is all. Read it, then run the same command with --yes'] }, manifest: plan._.prior, plan, exit: 2 }
+      if (verdict === false) return { receipt: { ...r, ok: false, planned: true, declined: true, notes: [...r.notes, 'You said no: nothing was changed'] }, manifest: plan._.prior, plan, exit: 1 }
     }
 
     // ── confirmed: from here on, writes — one state-changing command at a time (R12): the lock is held to the end of this callback (the try below), and
@@ -484,7 +486,7 @@ export async function turnOn(opts = {}) {
     const receipt = {
       ...r,
       changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
-      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unit ? [unit.path] : [])] : [])],
+      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unitFile ? [unitFile.path] : [])] : [])],
       unchanged: written ? written.intact : [],
     }
     const finish = (outcome, reason) => {
@@ -506,7 +508,7 @@ export async function turnOn(opts = {}) {
     notes.push(...d.notes); problems.push(...d.problems); if (d.halt) halt = true
     const pid = readLockPid(dir, fs)
     receipt.daemon = { state: up ? 'running' : 'not-running', started, ...(pid ? { pid } : {}) }
-    receipt.unit = unit ? { path: unit.path, written: written.unit || false, autostart, enabled: autostart && !unitFailed } : null
+    receipt.unit = unitFile ? { path: unitFile.path, written: written.unit || false, autostart, enabled: autostart && !unitFailed } : null
     // the links last: the daemon attaches on this request, and answers with the state it reached
     if (up && !halt) checked(() => guard())
     if (up && !halt) {
@@ -572,11 +574,12 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
         // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —
         // launchd is the only autostart there, 4.9 §11); the systemd wording below is the answer of an arch that has none.
         if (rr.event) { unitFailed = rr.event.reason; put(rr.event) }
+        else if (!autostart) { unitFailed = `the collector could not be started (${rr.err || `exit ${rr.code}`}); start it yourself: ${DAEMON_CMD}`; put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: unitFailed }) } // no login entry was written: there is nothing to enable, only this one start
         else {
           // the start question in the platform's own words: win32's unit is a scheduled task (\asight\collector, autostart.mjs), darwin's a LaunchAgent,
           // and the systemd wording is Linux's alone — a Windows user told to run `systemctl --user status` has been handed nothing (tested 2026-10-11)
           unitFailed = osName === 'win32' ? `the scheduled task \\asight\\collector was not registered or run (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}"`
-            : `${unit.path} is written but "systemctl --user ${autostart ? `enable${was.up ? '' : ' --now'}` : 'start'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
+            : `${unit.path} is written but "systemctl --user enable${was.up ? '' : ' --now'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
           put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
         }
         notes.push(unitFailed); problems.push(unitFailed)
@@ -584,12 +587,12 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
         for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
         if (!up && !halt) {
           const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.asight.collector' : osName === 'win32' ? 'schtasks /Query /TN \\asight\\collector (and "asight status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
-          const why = `the unit was ${autostart ? 'enabled and started' : 'started'}, but no daemon answers on ${sock}; look at "${where}" and the board's capture health`
+          const why = `the collector was started${sock ? ` but does not answer on ${sock}` : ', but it does not answer yet'}; look at "${where}" and the capture health on the board` // never "answers on null": an endpoint that is not known yet is not named (1.6 §1.1)
           problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
         }
       }
     }
-  } else if (!up) notes.push(`没有自启单元,守护进程没在跑:运行 ${DAEMON_CMD}(它按 state.json 里的期望态挂引流)${was.why ? `;${was.why}` : ''}`)
+  } else if (!up) notes.push(`no autostart entry and no collector running: start it with ${DAEMON_CMD} (it follows what is turned on)${was.why ? `; ${was.why}` : ''}`)
   return { up, started: started && up, sock, ask, unitFailed, notes, problems, halt }
 }
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }

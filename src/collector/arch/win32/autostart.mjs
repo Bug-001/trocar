@@ -2,6 +2,7 @@
 // supervised by a small parent that brings it back when it dies. Tools (`schtasks`, `reg`) run only through execTool, so a test injects the runner; the helper, the spawn and the clock are parameters too, and every piece runs on
 // any OS against a temp directory. Node built-ins, src/paths.mjs, src/off/exec.mjs and src/off/win32.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
+import { directStartEnv } from '../direct-start.mjs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
@@ -118,18 +119,13 @@ function lastTaskResult({ run, env }) {
   return Number.isInteger(n) ? n : null
 }
 
-const TRUST_AND_PROXY = /^(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_USE_SYSTEM_CA|NODE_USE_ENV_PROXY|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_FILE|SSL_CERT_DIR|(HTTPS?|ALL|NO|FTP|WSS?)_PROXY)$/i // Windows names are not case sensitive
 /**
  * The environment of a daemon that is started directly (`start()`, the fallback with `now`): the installer shell's, without the variables that change what the daemon trusts or whom it dials (Node's CA, TLS and proxy
  * switches, OpenSSL's CA file and directory, the `*_PROXY` family, any case). A daemon the task or the Run value starts at login has none of the shell's: a task has no environment of its own (4.8 §7), so a daemon that
  * got them from `on` would trust and dial differently from the same daemon after the next login. What is not in this list stays: the user-level variables a login task carries (`CODEX_HOME`, `PATH`, `USERPROFILE`) are in
  * the shell's environment too, and the shell's own extras are harmless; the difference that remains is the user's own `NODE_OPTIONS` and `*_PROXY` at user level, which a login would carry and this does not.
  */
-export function directStartEnv(env = process.env) {
-  const out = {}
-  for (const [k, v] of Object.entries(env)) if (!TRUST_AND_PROXY.test(k)) out[k] = v
-  return out
-}
+export { directStartEnv }
 
 /** `schtasks /Create /XML <file> /TN \asight\collector /F` from the task file install wrote. schtasks reads the file as the encoding it declares, which is UTF-16, and install writes text as UTF-8: so a UTF-16LE copy with a byte
  *  order mark (the T0 form) is made beside it, handed over, and removed. → `{ code, out, err }`; a file that cannot be read is `code: null` with the reason and `precondition: true` (schtasks was not asked, so it is not a refusal to fall back from). */

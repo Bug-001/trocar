@@ -55,7 +55,7 @@ const condLine = (c) => `  now: ${c.level ? `[${c.level}] ` : ''}${c.kind}${c.pi
 export function formatHealth(h, { daemonLine = true } = {}) {
   const c = h.collector, lines = []
   if (daemonLine) lines.push(daemonText(h))
-  lines.push(`capture health: ${(SUMMARY[h.summary.state] || ((x) => x.state))(h.summary)}${h.summary.part && h.summary.part !== 'collector' ? ` (${h.summary.part === 'legacy' ? 'the old capture' : 'the raw layer'})` : ''}${h.summary.read_errors ? ' · 读不全: some files could not be read (below)' : ''}`)
+  lines.push(`capture health: ${(SUMMARY[h.summary.state] || ((x) => x.state))(h.summary)}${h.summary.part && h.summary.part !== 'collector' ? ` (${h.summary.part === 'legacy' ? 'the old capture' : 'the raw layer'})` : ''}${h.summary.read_errors ? ' · some files could not be read (below)' : ''}`)
   if (c.conditions && c.conditions.length) lines.push(c.conditions_as_of ? `conditions as of ${c.conditions_as_of} (the daemon is not running):` : 'conditions now:', ...c.conditions.map(condLine))
   if (c.conditions_partial) lines.push('(the conditions are partial: the last daemon-start is older than the part of flows/ read, so some that still hold may be missing)')
   if (c.failures && c.failures.length) lines.push(`recent failures (${c.failures.length} kind(s), last 24 h):`, ...c.failures.map(groupLine))
@@ -95,12 +95,12 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
     const A = arch || (await (await loadDaemon()).loadArch())
     if (argv.includes('--remove')) {
       const r = A.install.uninstallHelper()
-      out(`removed ${A.install.DEFAULTS.helperBin}${r.warnings.length ? `\nwarning: ${r.warnings.join('; ')}` : ''}`)
+      out(`Removed the kernel helper ${A.install.DEFAULTS.helperBin}.${r.warnings.length ? `\nWarning: ${r.warnings.join('; ')}` : ''}`)
       return 0
     }
     const i = argv.indexOf('--binary')
     const r = A.install.setupHelper({ binarySrc: i >= 0 ? argv[i + 1] : path.join(packageRoot, 'src', 'collector', 'arch', 'linux', 'asight-redirector') })
     out(`installed ${r.bin} (${r.getcap})${r.swept && r.swept.length ? `\nremoved ${r.swept.length} copy(ies) an interrupted setup-helper had staged: ${r.swept.join(', ')}` : ''}`)
     return 0
-  } catch (e) { err(e.message); return 1 }
+  } catch (e) { err(`asight setup-helper: ${(e && e.message) || e}`); return 1 }
 }
