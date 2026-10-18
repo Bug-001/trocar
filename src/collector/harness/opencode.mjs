@@ -83,13 +83,13 @@ const proxyMode = {
     form('opencode.acp', [{ command: 'opencode' }]),
   ],
   routes: {
-    plugin: { kind: 'plugin-file', dir: CONFIG('plugins'), template: 'opencode-plugin', value: 'door-url', rereads: true, absent: 'create', takesEffect: '下一个 OpenCode 实例启动时生效;在跑的 v2 服务在下一次 run 时读到' },
+    plugin: { kind: 'plugin-file', dir: CONFIG('plugins'), template: 'opencode-plugin', value: 'door-url', rereads: true, absent: 'create', takesEffect: 'takes effect for the next OpenCode you start; a running v2 server reads it on its next run' },
   },
   certs: {},
   trusts: {},
   userCertFiles: [],
   blockers: [],
-  effects: [{ id: 'opencode-1x-npm', paths: [CONFIG('package.json'), CONFIG('bun.lock'), CONFIG('node_modules')], when: 'OpenCode 1.x 第一次带插件运行时在配置目录装 @opencode-ai/plugin;off 只报告,不删' }],
+  effects: [{ id: 'opencode-1x-npm', paths: [CONFIG('package.json'), CONFIG('bun.lock'), CONFIG('node_modules')], when: 'the first OpenCode 1.x run with a plugin installs @opencode-ai/plugin in the config directory; off reports it and deletes nothing' }],
 }
 
 export default {

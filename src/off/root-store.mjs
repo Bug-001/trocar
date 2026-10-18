@@ -44,6 +44,9 @@ export function rootStore({ platform, run = null, home, env = process.env, fs = 
     const kc = path.join(home, 'Library', 'Keychains', 'login.keychain-db')
     const find = (fp256) => {
       const r = execTool('security', ['find-certificate', '-a', '-Z', '-p', kc], opts)
+      // exit 44 is errSecItemNotFound: the keychain holds no certificate, which is a FACT (the root is absent), not a store it could not read
+      // (src/capture/trust-store.mjs knew this already; here it made `status` say the root is unknown and `doctor` 'could not judge', P7's neighbour)
+      if (r.code === 44 || /could not be found/i.test(String(r.err || ''))) return { block: null }
       if (r.code !== 0) return { error: rsTool(r, 'security find-certificate') }
       return { block: certBlocks(r.out).find((c) => c.fp === fp256) || null }
     }

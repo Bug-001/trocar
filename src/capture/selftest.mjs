@@ -101,15 +101,10 @@ export function qFilePerms(files) {
     note: parts.length ? parts.join(' · ') : `all ${files.length} capture file(s) are owner-only (0600)` };
 }
 
-// ④ 没弱化全机 TLS:CA 只在用户级信任库(import-only,D22 — asight 从不写全机信任)。verify=()->bool 注入。
-export function qUserTrustOnly(verify) {
-  let ok = false, err = null;
-  try { ok = !!(verify && verify()); } catch (e) { err = e && e.message; }
-  return { ok, err,
-    note: ok ? 'CA present in the USER trust store; asight never writes machine-wide trust (import-only, D22)'
-      : err ? 'trust check errored: ' + err
-      : 'CA not found in the user trust store — this item is about the old capture\'s CA, which only the board\'s monitor toggle puts there any more (its CLI face `monitor` went with the old capture); the collector\'s own CA (`asight on`) is in no trust store by design, so this is expected when you use `asight on` alone. asight only ever installs user-level.' };
-}
+// ④ was 「CA 只在用户级信任库」: it asked a SECOND trust-store check of its own, which on Windows threw an internal
+// "not implemented (D22 reserved …)" at the person reading `doctor` (a Windows test machine 2026-10-18). There is one check for
+// 「is the root trusted」 — the collector's root store, the one `status` and `install` use — and `doctor` reads its verdict
+// (src/cli/doctor.mjs undeterminedOf, from `status`'s `cert.root`).
 
 // 组装四问 + 依赖探测为一个结构化结果。三个结局(R4),不混:
 //   failed        有采集文件可被他人读取(④b `bad`)→ 退出 1。唯一不可谈判的安全红线;其余是给人核对的诊断。已发现的问题压过「判不了」。
@@ -117,11 +112,10 @@ export function qUserTrustOnly(verify) {
 //                 「核到零条」报「过」会让人以为权限已经核过(0.1 §3 「测试必须能变红」;这条守卫曾经缺席)。
 //   否则 ok → 0。
 // `hardFail` = failed:旧名字,只表示「必须以非 0 退出的失败」;`undetermined` 另走自己的退出码。
-export function runSelfTest({ records = [], srcMeta = null, deps = [], verify = null, files = [], readErrors = [] } = {}) {
+export function runSelfTest({ records = [], srcMeta = null, deps = [], files = [], readErrors = [] } = {}) {
   const q1 = qCapturing(records, srcMeta);
   const q2 = qCorrect(records);
   const q3 = qNoLeak(records);
-  const q4 = qUserTrustOnly(verify);
   // The red line MOVED (2026-07-20): credentials are stored verbatim by design, so the failure is no
   // longer "a secret is present" but "the file holding it is readable by someone else". q3 still
   // refuses to certify a VACUOUS scan — reading nothing must never certify anything.
@@ -134,5 +128,5 @@ export function runSelfTest({ records = [], srcMeta = null, deps = [], verify = 
   if (q4b.unreadable.length) why.push(`the permissions of ${q4b.unreadable.length} file(s) could not be read`);
   if (readErrors.length) why.push(`${readErrors.length} capture file(s) could not be read in full`);
   const undetermined = !failed && why.length > 0;
-  return { deps, depsMissing, q1, q2, q3, q4, q4b, failed, undetermined, undeterminedWhy: why, hardFail: failed, sampled: records.length };
+  return { deps, depsMissing, q1, q2, q3, q4b, failed, undetermined, undeterminedWhy: why, hardFail: failed, sampled: records.length };
 }

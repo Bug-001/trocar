@@ -17,7 +17,6 @@ import { resolveHarnesses } from './harness-names.mjs'
 import { statusFacts, statusDocOf } from './status.mjs'
 import { diagnose, renderFindings } from '../netenv/findings.mjs'
 import { checkDeps, runSelfTest } from '../capture/selftest.mjs'
-import { verifyUserTrustOnly } from '../capture/onboard.mjs'
 import { readRecords } from '../etl/ingest.mjs'
 import { serveSource } from '../paths.mjs'
 import { sealedReadProblem } from '../raw/journal.mjs'
@@ -95,9 +94,12 @@ async function collect({ home, env, sourceFlags, deps }) {
 }
 
 /** The things `doctor` looked at and could not judge (附录 C.4 `undetermined`), in English, from the structured result — never a reason string of another module. */
-function undeterminedOf(res, readErrors, { files = 0, records = 0 } = {}) {
+function undeterminedOf(res, readErrors, { files = 0, records = 0, root = null } = {}) {
   const out = []
-  if (res.q4.err) out.push({ what: 'the user trust store', reason: res.q4.err }) // the trust check threw: say why, never silence (D38)
+  // whether the root is trusted is ONE check, the one `status` and `install` use (the collector's root store): `unknown` is the only
+  // verdict doctor cannot judge, and it carries its own English reason (a Windows test machine 2026-10-18: a second, unimplemented check printed
+  // "win32 TrustStoreInstaller not implemented (D22 reserved …)" at a person while install had just written the root)
+  if (root && root.state === 'unknown') out.push({ what: 'the user trust store', reason: root.reason })
   if (res.q4b.checked === 0) out.push({ what: 'file permissions', reason: 'no captured data yet' }) // §3.7: having no captured data is not 「cannot judge」
   if (res.q4b.unreadable.length) out.push({ what: 'file permissions', reason: `the permissions of ${res.q4b.unreadable.length} file(s) could not be read` })
   // a capture file that is there and yielded no record at all: the read failed without saying so (the D27 array-source defect certified a capture it had read nothing from)
@@ -113,8 +115,7 @@ export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = p
   const fs = deps.fs || nodeFs
   const c = await collect({ home, env, sourceFlags: [], deps })
   const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
-  const installerOpts = { keychain: path.join(home, 'Library', 'Keychains', 'login.keychain-db'), nssdb: path.join(home, '.pki', 'nssdb') }
-  const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors, verify: deps.verify || (() => verifyUserTrustOnly({ platform, installerOpts })) })
+  const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors })
   const f = await statusFacts({ names, home, env, platform, deps })
   const status = statusDocOf(f)
   let findings = null, findingsError = null
@@ -134,7 +135,7 @@ export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = p
   if (orphansError) extra.push({ code: 'backup-unclaimed', class: 'note', what: `Whether any backup belongs to no install record is ${unknown(orphansError)}.`, why: 'The install record could not be read.', commands: [], verify: 'asight doctor' })
   const all = findings === null ? null : [...extra.filter((x) => x.class === 'problem'), ...findings, ...extra.filter((x) => x.class !== 'problem')]
   const summary = all === null ? null : { problem: all.filter((x) => x.class === 'problem').length, expected: all.filter((x) => x.class === 'expected').length, note: all.filter((x) => x.class === 'note').length }
-  const undetermined = undeterminedOf(res, c.readErrors, { files: c.files.length, records: c.records.length })
+  const undetermined = undeterminedOf(res, c.readErrors, { files: c.files.length, records: c.records.length, root: (status.cert || {}).root || null })
   const exit = summary && summary.problem ? EXIT.incomplete : realUndetermined(undetermined).length ? EXIT.unknown : EXIT.ok
   let notes = []
   try { notes = formatInstallNotes((deps.captureHealth || captureHealth)({ home: asightHome(home), ...(deps.captureHealth ? {} : { fs }) })) } catch (e) { rethrowSandbox(e) }

@@ -21,7 +21,7 @@ test('Linux install: CA + trust entries (phase install) + asight-off, no unit, n
   assert.equal(await runInstallCli(['--yes'], ctx(io)), 0, io.text())
   // R1: the receipt says each user file it changed — path, what was changed, where the backup is — not only the plan before the yes
   const receipt = io.text().slice(io.text().indexOf("Installed. asight's certificates are in place."))
-  assert.match(receipt, /~\/\.claude\/settings\.json\n\s+env\.NODE_EXTRA_CA_CERTS added \(backup/, receipt)
+  assert.match(receipt.replace(/\s+/g, ' '), /~\/\.claude\/settings\.json env\.NODE_EXTRA_CA_CERTS added \(backup/, receipt)
   assert.match(receipt, /asight's own files: .*asight-off/, receipt)
   assertEnglish(io.text(), 'the Linux install plan and receipt')
   const dir = path.join(home, '.asight', 'collector')

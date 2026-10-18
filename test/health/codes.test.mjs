@@ -169,7 +169,7 @@ test('D39 the off names (where off, event off-note, codes backup-failed / backup
   assert.deepEqual(checkRecord({ event: 'failure', where: 'off', code: 'backup-failed', reason: 'could not write the backup' }), [])
   assert.deepEqual(checkRecord({ event: 'off-note', where: 'off', kind: 'result', outcome: 'done' }), [])
   for (const c of OFF_CODES) { assert.ok(isCode(c), c); assert.deepEqual(checkRecord({ event: 'off-note', where: 'off', code: c }), [], c) }
-  assert.deepEqual(OFF_CODES, ['backup-failed', 'backup-kept', 'undone-by-marker', 'entry-refused'])
+  assert.deepEqual(OFF_CODES, ['backup-failed', 'backup-kept', 'undone-by-marker', 'root-not-removed', 'entry-refused'])
   assert.deepEqual(OFF_WHERE, ['off']); assert.deepEqual(OFF_EVENTS, ['off-note'])
   // the sets still reject a name next to them (the check can fail)
   assert.deepEqual(checkRecord({ event: 'off-notes', where: 'offf', code: 'backup-lost' }), ['event "off-notes"', 'where "offf"', 'code "backup-lost"'])
@@ -185,7 +185,7 @@ test('D39 src/off/names.mjs is the same list as the closed set (src/off cannot i
   assert.deepEqual([WHERE_OFF], OFF_WHERE)
   assert.deepEqual([EVENT_OFF_NOTE], OFF_EVENTS)
   assert.deepEqual(Object.values(CODE_OFF), OFF_CODES)
-  assert.deepEqual(Object.keys(CODE_OFF), ['backupFailed', 'backupKept', 'undoneByMarker', 'entryRefused'])
+  assert.deepEqual(Object.keys(CODE_OFF), ['backupFailed', 'backupKept', 'undoneByMarker', 'rootNotRemoved', 'entryRefused'])
   assert.ok(Object.isFrozen(CODE_OFF))
 })
 

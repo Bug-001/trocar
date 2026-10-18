@@ -92,7 +92,7 @@ const proxyMode = {
     form('deepseek-dsh.desktop-cli', [DESKTOP]),
   ],
   routes: {
-    switch: { kind: 'switch-file', perRequest: true, absent: 'create', takesEffect: '下一个请求生效,不用重启' }, // the plugin reads it on every request: no process holds it after off
+    switch: { kind: 'switch-file', perRequest: true, absent: 'create', takesEffect: 'takes effect on the next request; no restart needed' }, // the plugin reads it on every request: no process holds it after off
   },
   certs: {
     plugin: { kind: 'plugin', template: 'cordis-plugin', dir: DSH(), loader: { file: DSH('cordis.patch.yml'), format: 'yaml', keys: ['*', 'insert'] } },

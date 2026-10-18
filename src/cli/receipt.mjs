@@ -5,11 +5,30 @@
 // the absolute path.
 import path from 'node:path'
 import { standaloneCommand } from '../off/paths.mjs'
-import { noColor, WIDTH, wrap, pairs } from './text.mjs'
+import { noColor, WIDTH, wrap, pairs, size } from './text.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
 
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
 export const tilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
+
+// §1.1 / D58: a form id and a carrier kind are asight's own words (4.11's primitives). A receipt prints what they MEAN to the reader. One
+// vocabulary, here, for every command: a name that is not in it is read out as its own words (`desktop-prebuilt` → "desktop prebuilt"), never
+// a refusal and never an id — adding a form or a carrier stays descriptor data (D57⑥).
+const FORM_WORDS = Object.freeze({
+  cli: 'the command line', 'cli-standalone': 'the standalone command line', 'cli-node': 'the command line (the node build)', 'cli-v2': 'the command line (version 2)',
+  vscode: 'the VS Code extension', app: 'the desktop app', desktop: 'the desktop app', 'desktop-cli': "the desktop app's command line",
+  'desktop-prebuilt': 'the prebuilt desktop app', acp: 'the editor plug-in', web: 'the web interface', npx: 'a run through npx',
+  wsl: 'the Windows Subsystem for Linux', gateway: 'the gateway', dashboard: 'the dashboard',
+})
+const CARRIER_WORDS = Object.freeze({
+  root: 'reads your user trust store', 'config-key': "the certificate setting of its own configuration", 'pem-block': 'a block in your certificate file',
+  plugin: 'a plug-in asight installed', wrapper: 'a launch command asight installed', 'switch-file': "asight's switch file",
+  bundle: 'a certificate bundle asight wrote', env: 'the certificate variable of its settings',
+})
+/** A form id (`codex.vscode`) as the form a user would name it by — the harness prefix goes. */
+export const formWords = (id) => { const s = String(id ?? '').split('.').slice(1).join('.'); return FORM_WORDS[s] || s.replace(/-/g, ' ') || String(id ?? '') }
+/** A certificate carrier kind (`config-key`, `pem-block`) as what it is to the reader. */
+export const carrierWords = (kind) => CARRIER_WORDS[kind] || String(kind ?? '').replace(/-/g, ' ')
 
 const BARE = /\u001b\[\d+m/g
 
@@ -152,8 +171,9 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
   for (const p of r.removed || []) removed.push(t(p))
   if ((r.dropped_backups || []).length) removed.push(`${r.dropped_backups.length} backup${r.dropped_backups.length === 1 ? '' : 's'} in ${t(path.dirname(r.dropped_backups[0]))}/`)
   if (dataNote) kept.push(dataNote)
-  else if (r.purge_data) removed.push(past ? 'your captured records (--purge-data)' : 'your captured records (--purge-data)')
-  else kept.push(`your captured records${r.log ? `, in ${t(path.dirname(r.log))}/` : ''}`)
+  else if (r.purge_data) removed.push('your captured records (--purge-data)')
+  // 附录 C.2 `kept`: every path that stays, with its size — the records are segments under ~/.asight/raw (D60), not the collector's directory
+  for (const k of r.kept || []) kept.push(`${k.what}, in ${t(k.path)}/ (${size(k.bytes)})`)
   if (typeof r.class_table === 'string') kept.push(`your traffic classes, ${t(r.class_table)}`)
   // §3.6 / 4.6: a bundle a live process may still have open is kept with asight's CA taken out — the receipt says which, and who may hold it
   for (const b of r.kept_bundles || []) kept.push(`${t(b.path)} (asight's certificate taken out)${(b.pids || []).length ? `: ${(b.pids || []).map((p) => `pid ${p}`).join(', ')} may have loaded it` : ''}`)
