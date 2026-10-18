@@ -18,8 +18,8 @@ export const DAEMON_READ_VERBS = Object.freeze(['ps', 'tcp-table', 'reg-read', '
 
 /** How long one read question waits for the daemon: short on purpose — the fallback is one PowerShell (~450 ms), so a daemon that does not
  *  answer quickly must not cost more than the question it saves. `ps` is slower (the helper may have to read command lines) and says so.
- *  It is also the CAP: a caller asking for more (arch/win32/netfacts.mjs gives its own helper 10 s) gets 2 × this and no more — a stuck helper
- *  must never make a read-only command slower than the local question it replaced. */
+ *  It is also the CAP, absolutely: a caller asking for more (arch/win32/netfacts.mjs gives its own helper 10 s) gets this and no more, and so does
+ *  a reader built with a longer default of its own — a stuck helper must never make a read-only command slower than the local question it replaced. */
 export const DAEMON_READ_MS = 1200
 export const DAEMON_READ_CAP = 2 * DAEMON_READ_MS
 
@@ -50,7 +50,7 @@ export function daemonReader({ platform = process.platform, dir, env = process.e
     const key = `${verb}|${JSON.stringify(args ?? {})}`
     if (answers.has(key)) return answers.get(key)
     let r
-    try { r = await ask({ socketPath: sock, method: 'POST', path: '/helper', body: { verb, args }, timeoutMs: Math.min(ms, Math.max(DAEMON_READ_CAP, 2 * timeoutMs)) }) } catch (e) {
+    try { r = await ask({ socketPath: sock, method: 'POST', path: '/helper', body: { verb, args }, timeoutMs: Math.min(ms, DAEMON_READ_CAP) }) } catch (e) {
       throw fatal(`${verb}: ${String((e && (e.code || e.message)) || e)}`)
     }
     if (r && r.self && Number.isInteger(r.self.pid)) self = { pid: r.self.pid, start_time: r.self.start_time ?? null, boot_id: r.self.boot_id ?? null }

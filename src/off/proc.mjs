@@ -101,7 +101,6 @@ export function procIdentity(pid, { root = '/proc', fs = nodeFs, platform = null
 // The one fixed question of a process's identity on Windows (4.8 §7): its creation time and the machine's boot time, both as Unix
 // milliseconds — boot_id is the system start time, start_time the process's own, so a reused pid and a reboot are told apart exactly
 // as /proc's pair is. One Get-CimInstance for the pid and one for the OS per call; the calls are rare (a daemon start, an off's checks).
-let winBoot = null // the boot time the last Windows table ask printed, for a question put OUTSIDE a memo scope; inside one it is the scope's (`m.winBoot`)
 /** The boot-time line off the head of a Windows table answer → `{ boot, json }`; an answer without one keeps `boot` null, and then no
  *  identity is answered from the table. */
 function splitWinTable(out) {
@@ -123,8 +122,19 @@ export function winIdentity(pid, { run = null, env = process.env } = {}) {
   // One rule: the process table this command already read answers it — its row carries the same creation time the identity question would print, and
   // the boot time it came with is the machine's (procsOfWin). The table of the whole machine not listing the pid IS the answer "gone", the two nulls.
   // Only without a table (or without its boot time) is the OS asked for this one pid.
-  const fromTable = m.table && m.table.value && m.table.value.boot != null ? identityOfRow(m.table.value, pid) : null
-  const v = fromTable || winIdentityAsk(pid, { run, env })
+  let v = m.table && m.table.value && m.table.value.boot != null ? identityOfRow(m.table.value, pid) : null
+  // No table in this scope yet, and this asker cannot await one (op.lock's question about this very process, the daemon lock's about the
+  // daemon): then the ONE question put to the OS is the WHOLE table, read synchronously here. It costs the same single powershell.exe start
+  // as asking about this one pid (~450 ms on a Windows test machine) and it carries the same two numbers from the same CIM expressions — so every
+  // identity question after it, and every later reader of the table, is answered out of it (D62, 1.6 §3.1: a switch has 0.5 s in all). A
+  // table that cannot be read is not an error here: this one pid is asked about, exactly as before.
+  if (!v) {
+    try {
+      const rows = seedTable(m, procsOfWinLocal({ exec: run, env })) // sync with spawnSync; an async runner answers no rows and throws, and the pid is asked about below
+      v = identityOfRow(rows, pid)
+    } catch { /* not known from a table: the one pid is asked about, as before */ }
+  }
+  v = v || winIdentityAsk(pid, { run, env })
   m.identity.set(key, v)
   return v
 }
@@ -290,7 +300,7 @@ function procsOfPs({ uid, exec, env }) {
  *  fixed Get-CimInstance question, all through `exec`
  *  (a spawnSync-like runner a test injects; execTool refuses a real one under npm test). Another platform, or a table that cannot be read, rejects. */
 export async function listProcs(opts = {}) {
-  const m = cur(), key = `${opts.platform || process.platform}|${'uid' in opts ? opts.uid : 'self'}|${opts.root || '/proc'}`
+  const m = cur(), key = tableKey(opts)
   if (m && m.tables.has(key)) return m.tables.get(key)
   const p = tableOf(opts)
   if (m) {
@@ -299,6 +309,19 @@ export async function listProcs(opts = {}) {
     if (!m.table) { const t = m.table = {}; p.then((rows) => { t.value = { rows, boot: m.winBoot } }, () => { /* a table that could not be read answers nothing */ }) }
   }
   return p
+}
+/** The memo key of one table read: the platform, whose processes, and where they are read from — written in ONE place, so a table seeded into a
+ *  scope (primeProcQuestions, winIdentity) is the one a later `listProcs` of the same question finds. */
+const tableKey = (opts = {}) => `${opts.platform || process.platform}|${'uid' in opts ? opts.uid : 'self'}|${opts.root || '/proc'}`
+/** Puts a Windows table THIS scope read outside `listProcs` into it — the rows under the table's own memo key, and the identity view every
+ *  synchronous question is answered from — and hands back that view (`{ rows, boot }`). The boot time is the scope's: the reader that produced
+ *  the rows set it (procsOfWinLocal, winTableViaDaemon). */
+function seedTable(m, rows) {
+  const value = { rows, boot: m.winBoot }
+  if (!m.table) m.table = { value }
+  else if (!m.table.value) m.table.value = value
+  if (!m.tables.has(tableKey({ platform: 'win32' }))) m.tables.set(tableKey({ platform: 'win32' }), Promise.resolve(rows))
+  return m.table.value
 }
 async function tableOf({ uid = typeof process.getuid === 'function' ? process.getuid() : null, root = '/proc', platform = process.platform, exec = null, env = process.env } = {}) {
   if (platform === 'linux') return procsOfLinux({ uid, root })
@@ -317,7 +340,9 @@ async function tableOf({ uid = typeof process.getuid === 'function' ? process.ge
 // A scope opened with `reader` (src/off/daemon-read.mjs, the CLI's question to the daemon's warm helper) asks the DAEMON for the Windows process
 // table first: the daemon keeps one resident read-only PowerShell, so that answer starts no process at all, and its envelope carries the daemon's
 // own identity — which is what `status` needed the second question for (4.8 §7). A daemon that does not answer leaves the local PowerShell
-// question, and the reason is kept in `procAskNotes()` for the caller to report (D38, never silent). `off` opens its scope without a reader: it is
+// question, and the reason is kept in `procAskNotes()` for the caller to report (D38, never silent). `off` opens its scope with a reader too
+// (D62 ⑥: in proxy mode an `off` leaves the daemon running, so its warm helper answers the switch's identity questions as well) — and the
+// answers inside one switch are a snapshot either way: a process that exits while `off` works is judged by the table that switch read.
 // about to stop that daemon.
 let memo = null, memoDepth = 0
 const scope = new AsyncLocalStorage() // so that one command's answers cannot leak into another's if `status` ever runs in a resident process
@@ -336,19 +361,20 @@ export const procAskNotes = () => { const m = cur(); return m ? [...m.notes] : [
 /** The daemon read client a read-only command's scope uses on Windows: null on another platform, or when no endpoint is known. */
 export const daemonProcReader = (o = {}) => ((o.platform || process.platform) === 'win32' ? daemonReader(o) : null)
 
-/** primeProcQuestions({ platform, dir, env, fs, exec, reader }) → the closer (try/finally). Opens a scope for ONE command AND, on Windows, reads the
+/** primeProcQuestions({ platform, dir, env, fs, reader }) → the closer (try/finally). Opens a scope for ONE command AND, on Windows, reads the
  *  process table into it BEFORE anything else is asked — so the questions that follow are answered out of that one answer even where they are
  *  synchronous contracts and cannot await anything: op.lock's question about this very process (./lock.mjs tryOpLock) and the daemon lock's about the
- *  daemon (./daemon-stop.mjs readDaemonLock). Each of those is its own powershell.exe start otherwise, ~450-490 ms each on a Windows test machine (measured
+ *  daemon (./daemon-stop.mjs readDaemonLock). Each of those was its own powershell.exe start, ~450-490 ms each on a Windows test machine (measured
  *  2026-10-19: `off` started four, `on` one), where the whole switch is meant to take 0.5 s (D62, 1.6 §3.1).
- *  The table comes from the daemon's resident helper when it answers (daemonProcReader: no process started at all) and from the one local PowerShell
- *  question when it does not — a table that cannot be read at all is not an error here: every question then goes to the OS exactly as it did before,
- *  and the reason the daemon was not used is kept in procAskNotes() for the caller to report (D38, never silent). Nothing is read on another platform:
- *  /proc and `ps` cost nothing to ask again. */
-export async function primeProcQuestions({ platform = process.platform, dir, env = process.env, fs = nodeFs, exec = null, reader = undefined, request, socketPath } = {}) {
+ *  Only the DAEMON's resident helper is asked here — it starts no process (4.8 §1) — and a daemon that does not answer starts nothing either: the
+ *  reason is kept in procAskNotes() for the caller to report (D38, never silent) and the table is left to the first question that needs it, which
+ *  reads the whole table in its own one PowerShell start and fills this same scope with it (winIdentity). So no command pays a process start up
+ *  front, and one that asks no identity question at all (an `on` with no lock to judge) pays none. Nothing is read on another platform: /proc and
+ *  `ps` cost nothing to ask again. */
+export async function primeProcQuestions({ platform = process.platform, dir, env = process.env, fs = nodeFs, reader = undefined, request, socketPath } = {}) {
   const r = reader !== undefined ? reader : daemonProcReader({ platform, dir, env, fs, ...(request ? { request } : {}), ...(socketPath !== undefined ? { socketPath } : {}) })
   const close = memoProcQuestions({ reader: r })
-  if (platform === 'win32') { try { await listProcs({ platform, exec, env }) } catch { /* not known: each question goes to the OS on its own, as before */ } }
+  if (platform === 'win32' && r) { const m = cur(); const rows = await winTableViaDaemon(m); if (rows) seedTable(m, rows) }
   return close
 }
 
@@ -389,26 +415,26 @@ export async function psTableVia(helper, { timeoutMs = WIN_PS_ASK_MS } = {}) {
 }
 
 const WIN_TABLE_SCRIPT = '$o = Get-CimInstance Win32_OperatingSystem; \'boot \' + [DateTimeOffset]::new($o.LastBootUpTime.ToUniversalTime()).ToUnixTimeMilliseconds(); Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = $_.ProcessId; pp = $_.ParentProcessId; n = $_.Name; x = $_.ExecutablePath; s = $(try { [DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { $null }); c = $_.CommandLine } } | ConvertTo-Json -Compress'
+/** The Windows table from the daemon's warm helper alone: the rows, or null — with the reason kept in this scope's notes for the caller to
+ *  report (D38, never silent). No process is started either way (4.8 §1). */
+async function winTableViaDaemon(m) {
+  if (!m || !m.reader) return null
+  try {
+    const rows = await psTableVia(m.reader)
+    // the daemon's own identity, as its answer carried it: kept for `winIdentity` to use IF it is what the lock claims (4.8 §7), so no OS
+    // question is put about that pid. It is never taken as the truth of the lock on its own.
+    const s = m.reader.self()
+    // The boot id is a fact of the MACHINE, not of a process: the daemon's own `boot_id` is the same number the identity question would
+    // print for any pid on it (the same Win32_OperatingSystem.LastBootUpTime expression, 4.8 §7). So a table that came from the daemon
+    // carries the boot time too, and `identityOfRow` can answer the identity of EVERY pid it lists — which is what lets the synchronous
+    // questions of `on` and `off` (op.lock's own pid, the daemon lock's) be answered without a powershell.exe start (D62, 1.6 §3.1).
+    if (s && s.boot_id != null) m.winBoot = s.boot_id
+    return rows
+  } catch (e) { m.notes.push(String((e && e.message) || e)); return null }
+}
 /** The Windows table: the daemon's warm helper when this scope has a reader and it answers, else the one fixed PowerShell question. */
 async function procsOfWin({ exec, env }) {
-  const m = cur()
-  if (m && m.reader) {
-    try {
-      const rows = await psTableVia(m.reader)
-      // the daemon's own identity, as its answer carried it: kept for `winIdentity` to use IF it is what the lock claims (4.8 §7), so no OS
-      // question is put about that pid. It is never taken as the truth of the lock on its own.
-      const s = m.reader.self()
-      if (s && s.boot_id != null) {
-        // The boot id is a fact of the MACHINE, not of a process: the daemon's own `boot_id` is the same number the identity question would
-        // print for any pid on it (the same Win32_OperatingSystem.LastBootUpTime expression, 4.8 §7). So a table that came from the daemon
-        // carries the boot time too, and `identityOfRow` can answer the identity of EVERY pid it lists — which is what lets the synchronous
-        // questions of `on` and `off` (op.lock's own pid, the daemon lock's) be answered without a powershell.exe start (D62, 1.6 §3.1).
-        m.winBoot = s.boot_id
-      }
-      return rows
-    } catch (e) { m.notes.push(String((e && e.message) || e)) }
-  }
-  return procsOfWinLocal({ exec, env })
+  return (await winTableViaDaemon(cur())) || procsOfWinLocal({ exec, env })
 }
 /** How long the daemon's `ps` answer is waited for: the helper may have to read command lines through CIM, but the fallback here is one
  *  PowerShell start (~450 ms measured), so this question is given a little more than that and no more. The reader caps it too (DAEMON_READ_CAP). */
@@ -418,7 +444,6 @@ function procsOfWinLocal({ exec, env }) {
   const what = `the Windows process table (one Get-CimInstance question) ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`}, so which agents are alive is not known`
   if (r.code !== 0) throw new Error(what)
   const { boot, json } = splitWinTable(r.out)
-  winBoot = boot
   const m = cur()
   if (m) m.winBoot = boot
   if (json === '') return [] // a table that printed nothing is an empty table (the same reading as `ps` printing nothing)

@@ -84,8 +84,9 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   // D62 (1.6 §3.1): `on`'s ONE process question is op.lock's about this very process, and it is a synchronous contract (off/lock.mjs tryOpLock).
   // On Windows it was its own powershell.exe start (490 ms measured on a Windows test machine 2026-10-19) of an `on` that is meant to take 0.5 s in all.
   // This scope reads the table first — from the daemon's resident read-only helper when one answers (the normal case: D61's login start, and D62 ⑥
-  // leaves it running through an off), else from the one local question — and the lock's question is answered out of it.
-  const closeProcs = await primeProcQuestions({ platform: os, dir, env, fs, exec: deps.exec || null, ...(deps.daemonReader !== undefined ? { reader: deps.daemonReader } : {}) })
+  // leaves it running through an off); when none answers, the first question that needs the table reads it in its own one start (proc.mjs winIdentity)
+  // and the lock's question is answered out of it.
+  const closeProcs = await primeProcQuestions({ platform: os, dir, env, fs, ...(deps.daemonReader !== undefined ? { reader: deps.daemonReader } : {}) })
   try {
   let lock
   try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) { io.err(`asight on: ${e.message}`); return EXIT.incomplete } throw e }
