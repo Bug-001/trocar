@@ -158,14 +158,16 @@ const CHUNK = 1 << 20;
 // append-only file the bytes before `end` never change, so the first and the last FP bytes before `end` are kept with
 // the mark (plus mtime / ctime, to catch a same-size rewrite) and compared before any resume.
 const FP = 4096;
-const fpRanges = (end) => [[0, Math.min(FP, end)], [Math.max(0, end - FP), end]];
+// Exported: the segment index (src/query/index-build.mjs) invalidates its own files by the SAME rule —
+// an append-only file is resumed only when the bytes before the last indexed line are still the ones indexed.
+export const fpRanges = (end) => [[0, Math.min(FP, end)], [Math.max(0, end - FP), end]];
 const fpOfReads = (end, read) => fpRanges(end).map(([a, b]) => read(a, b));
-function readRangeSync(fd, a, b) { const out = Buffer.alloc(b - a); let n = 0; while (n < out.length) { const r = readSync(fd, out, n, out.length - n, a + n); if (!r) break; n += r; } return out.subarray(0, n); }
+export function readRangeSync(fd, a, b) { const out = Buffer.alloc(b - a); let n = 0; while (n < out.length) { const r = readSync(fd, out, n, out.length - n, a + n); if (!r) break; n += r; } return out.subarray(0, n); }
 async function readRange(fd, a, b) { const out = Buffer.alloc(b - a); let n = 0; while (n < out.length) { const { bytesRead } = await fd.read(out, n, out.length - n, a + n); if (!bytesRead) break; n += bytesRead; } return out.subarray(0, n); }
 const withIdentity = (mark, st, fp) => Object.assign(mark, { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, fp });
 // → true when `file` still holds, before m.end, the bytes it held when `m` was made (an append), false when they differ
 // or cannot be read (then the caller rebuilds: the safe answer).
-function sameFileAs(file, m) {
+export function sameFileAs(file, m) {
   if (!m.fp) return true; // a mark without a fingerprint (sealed): its own rule applies
   let fd;
   try {
