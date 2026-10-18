@@ -105,6 +105,12 @@ export function plistXml({ node, asight, env = {}, logs = null } = {}) {
     '    <key>SuccessfulExit</key>',
     '    <false/>',
     '  </dict>',
+    // D62 (1.6 §3.1: a switch is ≤ 0.5 s): launchd spawns a job at most once every ThrottleInterval seconds — 10 s by default — and
+    // `launchctl kickstart` does not return until the job IS spawned. That is the whole of the 9.7 s an `off` → `on` cycle took on
+    // measured: kickstart blocked 8 630 ms by the default, 33 ms with this key. One second, not zero: KeepAlive
+    // brings a daemon that keeps crashing back, and a bounded once-a-second is the end of that loop's cost.
+    `  <key>${THROTTLE_KEY}</key>`,
+    `  <integer>${THROTTLE_SECONDS}</integer>`,
     '</dict>',
     '</plist>',
     '',
@@ -117,6 +123,10 @@ export function plistXml({ node, asight, env = {}, logs = null } = {}) {
 const launchctl = (args, { run, env }) => execTool('launchctl', args, { run, env })
 /** The user's GUI session domain, launchd's per-user target (`bootstrap` / `bootout` take it): `gui/<uid>`, this process's own uid. */
 const domainOf = (uid) => `gui/${uid}`
+
+/** launchd's respawn throttle, and what asight asks it to be (seconds). Read by the test that pins it; 10 s is launchd's own default. */
+export const THROTTLE_KEY = 'ThrottleInterval'
+export const THROTTLE_SECONDS = 1
 
 const ok = { code: 0, out: '', err: '' }
 /** Is the agent loaded in this user's session? `launchctl print gui/<uid>/<label>` is the question (never a localised error text): exit 0 = there; any other exit = not there; a print
