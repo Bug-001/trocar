@@ -1,7 +1,7 @@
 // test/collector/core/door-identity.test.mjs — who a connection at a door is (RFC 4.8 §5.3, 4.9 §5.3, 4.6 §识别进程 R7), written once in
 // core/engine/door-identity.mjs (createDoorIdentity): the order pid → facts → this user → host tree → name list, the untracked `why` each step leaves,
 // the harness it names, and `process-unknown` to the recorder. The facts are real-shaped (0.1 §3 convention 3): darwin's come out of procinfo's
-// factsOfPid fed recorded `ps` / `lsof` output through an injected runner, win32's out of factsOfRow fed helper `ps` rows. The name list is the real
+// factsOfPid fed recorded `ps` / `procenv` output through an injected runner, win32's out of factsOfRow fed helper `ps` rows. The name list is the real
 // one (createRegistry over the real descriptors), the same function the tracker judges by; the doors are the model's (collector.mjs doorOf) over the
 // descriptors' proxyMode data. Whether a harness is on, the verdict's decrypt and the upstream are the collector's (test/collector/core/proxymode/).
 import test from 'node:test'
@@ -20,14 +20,14 @@ const REG = createRegistry(ALL)
 const W = String.raw`C:\Users\u`
 const OWN_UID = 501
 
-/** darwin's targeted facts, as procinfo gives them: one `ps -p` row and one `lsof -p -Fn` txt record, recorded shapes, through the injected runner. */
+/** darwin's targeted facts, as procinfo gives them: one `ps -p` row and one `procenv <pid> :exe :cwd` answer, recorded shapes, through the injected runner. */
 function darwinFacts(pid, { exe, cmdline, uid = OWN_UID }) {
   const exec = (file) => {
     if (file === 'ps') return { status: 0, stdout: `${pid}     1   ${uid} ${cmdline.split(' ')[0]}  Tue Oct 14 10:00:0${pid % 10} 2026     ${cmdline}\n`, stderr: '' }
-    if (file === 'lsof') return { status: 0, stdout: `p${pid}\nfcwd\nn/Users/u\nftxt\nn${exe}\nftxt\nn/usr/lib/dyld\n`, stderr: '' }
+    if (file.endsWith('procenv')) return { status: 0, stdout: `:exe=${exe}\0:cwd=/Users/u\0`, stderr: '' }
     return { status: 1, stdout: '', stderr: 'not in the fake' }
   }
-  return factsOfPid(pid, { exec, env: {} })
+  return factsOfPid(pid, { exec, env: {}, cache: new Map() })
 }
 /** win32's targeted facts, as procinfo gives them from the helper's `ps` row. */
 const winRow = (pid, exe, cmdline, over = {}) => ({ pid, ppid: 1, name: exe.split('\\').pop(), exe, cmdline, startedAt: 1760000000000 + pid, sessionId: 1, integrity: 'medium', tokenDenied: false, ...over })
