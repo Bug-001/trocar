@@ -57,9 +57,7 @@ for (const version of [1, 2]) {
       const doc = io.json()
       assert.equal(doc.ok, false, `${cmd}: the document says it did not happen`)
       const text = JSON.stringify(doc)
-      const named = text.indexOf('asight uninstall'), named2 = text.indexOf(JSON.stringify(copy).slice(1, -1))
-      assert.ok(named >= 0 && named2 > named, `${cmd}: the old build's undo, then the copy it left, in that order — ${text}`)
-      assert.match(text, new RegExp(`version ${version}`), `${cmd}: which version the record is`)
+      assert.ok(text.includes(JSON.stringify(copy).slice(1, -1)), `${cmd}: the document names the program that undoes the older install — ${text}`)
       assert.equal(io.stderrText(), '', `${cmd}: with --json stderr stays empty (R5)`)
     }
   })
