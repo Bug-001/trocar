@@ -2,15 +2,10 @@
 // fixture does not belong in git, the generator is the readable spec). It writes plaintext segments into
 // <home>/raw/ the way the daemon does, and stops rather than fill a disk.
 //
-//   node scripts/gen-dataset.mjs --home <dir> [--seed 1] [--bytes 1000000000] [--keep-plain 2] [--json]
+//   node scripts/gen-dataset.mjs --home <dir> [--seed 1] [--bytes 1000000000] [--json]
 //
 // `--home` is the user's HOME, as everywhere else on the CLI (`HOME=`, scripts/perf-query.mjs): the dataset lands in
 // <home>/.asight/raw/. The generate() below takes the ASIGHT home itself (<home>/.asight) — it is the library call.
-//
-// 附录 D.1 asks the dataset to arrive the way a machine that has been capturing for a while looks: most segments
-// SEALED, two left plaintext (one live, one just closed and not sealed yet). sealMost() does that with the real
-// sealer (src/raw/seal.mjs), so the query measurements read through the sealed path they will read in the field. The
-// daemon is still the only thing that seals a LIVE capture (D35) — this is a dataset being built, not a capture.
 //
 // The segments are left PLAINTEXT on purpose: what 附录 D.2 measures is the daemon's own auto-sealing
 // (which closed segments it sealed, how long each took). The envelopes are built by the one authority
@@ -28,7 +23,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { buildEnvelope, logResponse } from '../src/capture/envelope.mjs'
-import { sealSegment } from '../src/raw/seal.mjs'
 import { shapeResponse } from '../src/collector/core/record/body.mjs'
 import { HARNESSES } from '../src/dissect/harnesses.mjs'
 import { THIRD_PARTY_TELEMETRY } from '../src/dissect/traffic.mjs'
@@ -184,8 +178,8 @@ class Writer {
 
 /**
  * generate({home, seed, bytes, segmentBytes, maxDisk, start}) → {seed, bytes, records, sessions, segments:[{segment, records, bytes}]}
- * `home` is the ASIGHT home: it writes <home>/raw/<segment>.ndjson, all of it plaintext (the CLI then seals all
- * but two, 附录 D.1). Every harness opens with one coverage session (every class, both
+ * `home` is the ASIGHT home: it writes <home>/raw/<segment>.ndjson, all of it plaintext; the daemon
+ * seals the closed ones (附录 D.2). Every harness opens with one coverage session (every class, both
  * reply shapes, a cut stream, 429/5xx, a `log`-level batch, a gzipped wire body) so the smallest dataset
  * is still complete; the rest of the budget goes to PARALLEL sessions in flight, interleaved by their own
  * clocks. Throws before writing anything when the estimated peak passes the disk ceiling.
@@ -337,41 +331,19 @@ export function generate({ home, seed = DEFAULTS.seed, bytes = DEFAULTS.bytes, s
   return { seed, bytes: w.bytes, records: w.records, sessions, segments: w.segments, peak_estimate_bytes: peak }
 }
 
-/**
- * sealMost(asightHome, {keep}) → [{segment, bytes, sealedBytes, ms}] for the segments it sealed.
- * 附录 D.1 总量: most segments sealed, `keep` left plaintext (the live one and the one just closed).
- */
-export async function sealMost(asightHome, { keep = 2 } = {}) {
-  const dir = path.join(asightHome, 'raw')
-  const plain = fs.readdirSync(dir).filter((f) => f.endsWith('.ndjson')).sort()
-  const out = []
-  for (const f of plain.slice(0, Math.max(0, plain.length - keep))) {
-    const file = path.join(dir, f), bytes = fs.statSync(file).size, at = Date.now()
-    // no daemon is running on a dataset being built, so no lock names a live segment; the last `keep` files are never passed in
-    const r = await sealSegment(file, { lockFile: path.join(asightHome, 'lock'), journal: path.join(asightHome, 'journal.ndjson') })
-    out.push({ segment: f.replace(/\.ndjson$/, ''), bytes, sealedBytes: r.sealedBytes, ms: Date.now() - at })
-  }
-  return out
-}
-
 async function main(argv) {
   const args = {}
   for (let i = 0; i < argv.length; i += 2) args[argv[i].replace(/^--/, '')] = argv[i + 1]
-  if (!args.home) { console.error('usage: node scripts/gen-dataset.mjs --home <dir> [--seed 1] [--bytes 1000000000] [--keep-plain 2] [--json]   (--home is the HOME; the dataset lands in <home>/.asight/raw)'); process.exit(2) }
+  if (!args.home) { console.error('usage: node scripts/gen-dataset.mjs --home <dir> [--seed 1] [--bytes 1000000000] [--json]   (--home is the HOME; the dataset lands in <home>/.asight/raw)'); process.exit(2) }
   const num = (k) => (args[k] === undefined ? undefined : Number(args[k]))
   const home = path.join(args.home, '.asight')
   const started = Date.now()
   const out = generate({ home, seed: num('seed'), bytes: num('bytes'), segmentBytes: num('segment-bytes'), maxDisk: num('max-disk'), start: args.start })
   const took = Date.now() - started
-  const sealedAt = Date.now()
-  const sealed = await sealMost(home, { keep: num('keep-plain') ?? 2 })
-  const summary = { ...out, home, sealed, took_ms: took, seal_ms: Date.now() - sealedAt }
+  const summary = { ...out, home, took_ms: took }
   if ('json' in args) { console.log(JSON.stringify(summary, null, 2)); return }
   console.log(`seed ${out.seed}  records ${out.records}  bytes ${out.bytes}  sessions ${out.sessions}  segments ${out.segments.length}  ${took} ms`)
-  for (const s of out.segments) {
-    const z = sealed.find((x) => x.segment === s.segment)
-    console.log(`  ${s.segment}  ${String(s.records).padStart(8)} records  ${String(s.bytes).padStart(12)} bytes  ${z ? `sealed ${String(z.sealedBytes).padStart(11)} bytes (${((z.sealedBytes / z.bytes) * 100).toFixed(2)}%, ${z.ms} ms)` : 'plaintext'}`)
-  }
+  for (const s of out.segments) console.log(`  ${s.segment}  ${String(s.records).padStart(8)} records  ${String(s.bytes).padStart(12)} bytes`)
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) await main(process.argv.slice(2))
