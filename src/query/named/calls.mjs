@@ -10,7 +10,7 @@ import { allSegments, segmentIndex } from '../index-build.mjs';
 import { allRecords } from '../records.mjs';
 import { listOf, paginate, tsFilter } from './index.mjs';
 
-export const params = Object.freeze(['class', 'harness', 'session', 'since', 'until', 'limit', 'cursor']);
+export const params = Object.freeze(['class', 'harness', 'session', 'since', 'until', 'limit', 'after']);
 
 export async function run({ home, fs, now, params: p, errors }) {
   const keep = tsFilter(p, now), cls = listOf(p.class), harness = listOf(p.harness), sess = listOf(p.session);

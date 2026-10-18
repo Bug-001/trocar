@@ -10,7 +10,7 @@ import { sessionMetaOfFacts } from '../../view/board.mjs';
 import { indexRows, sessionGroups, sessionFactsOf } from '../rows.mjs';
 import { listOf, paginate, tsFilter } from './index.mjs';
 
-export const params = Object.freeze(['harness', 'since', 'until', 'limit', 'cursor']);
+export const params = Object.freeze(['harness', 'since', 'until', 'limit', 'after']);
 
 export async function run({ home, fs, now, params: p, errors }) {
   const keep = tsFilter(p, now), harness = listOf(p.harness);
