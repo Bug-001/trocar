@@ -119,6 +119,9 @@ test('明文与封存件并存时:状态不是 sealed,读的是明文的字节',
   assert.equal(seg.records, 2)
   assert.equal(seg.bytes, fs.statSync(path.join(home, 'raw', `${SEG}.ndjson`)).size)
   assert.equal((await segmentIndex({ home, segment: SEG })).source, seg.path)
+  // and the index of that plaintext is REUSED, not rebuilt on every read: the stored mark names the source it was
+  // built from (mac-run question: 明文与封存件并存 does not cost a rebuild per query)
+  assert.equal((await segmentIndex({ home, segment: SEG })).bytesRead, 0)
   assert.equal([...segmentLines({ home, segment: SEG })].length, 2)
   assert.deepEqual((await allRecords({ home })).map((r) => r.id), [`${SEG}:1`, `${SEG}:2`])
 })

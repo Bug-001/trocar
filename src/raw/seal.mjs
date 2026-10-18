@@ -36,12 +36,16 @@ export function liveSegment(lockFile, { fs = nodeFs } = {}) {
  *  A segment whose file is gone (ENOENT) is nothing to do: `{ gone: true }`, no journal line. */
 export async function sealSegment(file, { lockFile, journal = defaultJournalPath(), fs = nodeFs, frameBytes = FRAME_BYTES, onPhase = () => {} } = {}) {
   if (!lockFile) throw new Error('sealSegment: lockFile is required — the live segment must be refused, not guessed');
+  const seg = parseSegment(path.basename(file));
+  const t0 = Date.now();
   try {
     const res = await sealOne(file, { lockFile, fs, frameBytes, onPhase });
-    if (!res.gone) appendJournal({ op: 'seal', outcome: 'ok', file, records: res.records, bytes: res.bytes, sha256: res.sha256, sealed: res.sealed, sealedBytes: res.sealedBytes }, { journal, fs });
+    // `segment` and `took_ms` are what 附录 D.2 自动封存 asks of every sealed segment (how long each took); the
+    // journal is the only place it is recorded, so a report that leaves them out has nothing to read (mac run P2).
+    if (!res.gone) appendJournal({ op: 'seal', outcome: 'ok', file, segment: seg && seg.segment, took_ms: Date.now() - t0, records: res.records, bytes: res.bytes, sha256: res.sha256, sealed: res.sealed, sealedBytes: res.sealedBytes }, { journal, fs });
     return res;
   } catch (e) {
-    appendJournal({ op: 'seal', outcome: e instanceof SealRefused ? 'refused' : 'failed', file, reason: e.message,
+    appendJournal({ op: 'seal', outcome: e instanceof SealRefused ? 'refused' : 'failed', file, segment: seg && seg.segment, took_ms: Date.now() - t0, reason: e.message,
       originalKept: fs.existsSync(file) }, { journal, fs });
     throw e;
   }

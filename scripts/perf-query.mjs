@@ -58,14 +58,16 @@ export function sealingReport(segmentsDoc) {
 
 /**
  * Did auto-sealing seal every closed segment, and how long did each take?
- * Closed = a segment that is not the daemon's current one; `state` comes from the segments document, the
- * per-segment duration from the daemon's own journal (raw/journal.jsonl) when it recorded one.
+ * Closed = a segment that is not the daemon's current one. SEALED = `state: "sealed"`, which the read side says
+ * only when the plaintext is GONE (4.2:30 明文为准): a segment that still has its plaintext beside a sealed copy
+ * is not done, however many sealed bytes it has (a test-machine run 2026-10-18 looked like 8/8 sealed). The per-segment
+ * duration comes from the sealer's own journal line (raw/journal.jsonl, `took_ms`).
  */
 export function autosealReport({ segmentsDoc, journal = [] }) {
-  const took = new Map(journal.filter((l) => l && l.segment).map((l) => [l.segment, l.took_ms ?? l.duration_ms ?? null]))
+  const took = new Map(journal.filter((l) => l && l.op === 'seal' && l.outcome === 'ok' && l.segment).map((l) => [l.segment, l.took_ms ?? l.duration_ms ?? null]))
   const closed = (segmentsDoc?.segments || []).filter((s) => s.state !== 'writing')
-  const segments = closed.map((s) => ({ segment: s.segment, state: s.state, sealed: s.sealed_bytes > 0, took_ms: took.get(s.segment) ?? null, problems: s.problems || [] }))
-  return { closed: segments.length, sealed: segments.filter((s) => s.sealed).length, unsealed: segments.filter((s) => !s.sealed).map((s) => s.segment), segments }
+  const segments = closed.map((s) => ({ segment: s.segment, state: s.state, sealed: s.state === 'sealed', plaintext_left: s.state !== 'sealed' && s.sealed_bytes > 0, took_ms: took.get(s.segment) ?? null, problems: s.problems || [] }))
+  return { closed: segments.length, sealed: segments.filter((s) => s.sealed).length, unsealed: segments.filter((s) => !s.sealed).map((s) => s.segment), plaintext_left: segments.filter((s) => s.plaintext_left).map((s) => s.segment), segments }
 }
 
 function readJournal(asightHome) {
@@ -122,7 +124,7 @@ function main(argv) {
   for (const q of out.queries) console.log(`  ${q.query.padEnd(10)} ${q.skipped ? q.skipped : `${String(q.median_ms).padStart(6)} ms median of ${q.runs.length}${q.status ? `  FAILED: ${q.error}` : ''}`}`)
   console.log(`sealing  ratio ${out.sealing.ratio == null ? 'unknown' : out.sealing.ratio.toFixed(3)}  segments ${out.sealing.segments.length}`)
   for (const s of out.sealing.segments) console.log(`  ${s.segment}  ${s.state.padEnd(8)} ${String(s.bytes).padStart(12)} → ${String(s.sealed_bytes).padStart(12)}  ratio ${s.ratio ?? '-'}${s.problems.length ? `  ${s.problems.map((p) => p.code).join(',')}` : ''}`)
-  console.log(`autoseal  ${out.autoseal.sealed}/${out.autoseal.closed} closed segments sealed${out.autoseal.unsealed.length ? `  still plaintext: ${out.autoseal.unsealed.join(', ')}` : ''}`)
+  console.log(`autoseal  ${out.autoseal.sealed}/${out.autoseal.closed} closed segments sealed${out.autoseal.unsealed.length ? `  still plaintext: ${out.autoseal.unsealed.join(', ')}` : ''}${out.autoseal.plaintext_left.length ? `  sealed but the plaintext is still there: ${out.autoseal.plaintext_left.join(', ')}` : ''}`)
   for (const s of out.autoseal.segments) if (s.took_ms != null) console.log(`  ${s.segment}  ${s.took_ms} ms`)
   console.log(`disk  .asight ${out.disk.asight_bytes}  plaintext ${out.disk.plaintext_bytes}  sealed ${out.disk.sealed_bytes}  index ${out.disk.index_bytes}${out.disk.compare ? `  ${out.disk.compare.dir} ${out.disk.compare.bytes}` : ''}`)
 }
