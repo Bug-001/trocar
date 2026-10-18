@@ -28,8 +28,8 @@ export const asightHome = () => path.join(os.homedir(), '.asight');
 export const captureOut = () => path.join(asightHome(), 'capture.ndjson');
 // MITM (Claude Desktop — the only source that must decrypt TLS)
 export const mitmOut = () => path.join(asightHome(), 'claude-capture.ndjson');
-// The per-user process collector (RFC 4.6 §记录) writes its envelopes to <here>/capture-<date>.ndjson.
-// Its subdirectories flows/ audit/ replays/ are NOT envelopes; the board never reads them because a
+// The per-user process collector's own state and logs (RFC 4.6 §记录) live here: ca/ flows/ audit/ replays/ lock
+// state.json. NO envelopes — those are segments under rawHome(). The board never reads this subtree because a
 // root's scan only descends into <sub>/calls.ndjson (server.mjs scanRoots), and `asight etl <dir>`
 // does not descend at all. It needs a root of its own: the home's one-level scan never reaches it.
 export const collectorHome = (home = asightHome()) => path.join(home, 'collector');

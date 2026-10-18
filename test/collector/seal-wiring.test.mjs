@@ -1,8 +1,9 @@
 // test/collector/seal-wiring.test.mjs — BOTH daemon entries seal (RFC 4.2 §自动封存 · 验收 4; the platform-seam rule).
 // A real daemon — Linux's runDaemon over the fake helper and a synthetic /proc, and the model daemon (darwin / win32)
-// as test/collector/model-unclean-stop.test.mjs starts it — finds a closed segment and the older version's dated
-// capture left by an earlier run, and after its start the segment is sealed and the capture is a segment in raw/.
-// This test is what fails if either entry stops wiring the sealer (the model entry never did until 2026-10-18).
+// as test/collector/model-unclean-stop.test.mjs starts it — finds a closed segment left by an earlier run, and after
+// its start that segment is sealed. This test is what fails if either entry stops wiring the sealer (the model entry
+// never did until 2026-10-18). It also holds 4.2 验收 6: this version is NOT backwards compatible, so a dated capture
+// of a version before D60 is left where it is, byte for byte .
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -38,44 +39,44 @@ function leftovers(dir) {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   fs.writeFileSync(path.join(raw, `${CLOSED}.ndjson`), LINE, { mode: 0o600 })
   fs.writeFileSync(path.join(dir, 'capture-2026-10-16.ndjson'), CAPTURE, { mode: 0o600 })
-  return raw
+  return { raw, capture: path.join(dir, 'capture-2026-10-16.ndjson') }
 }
 async function until(fn, ms = 10_000) { const end = Date.now() + ms; for (;;) { const v = fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 25)) } }
-/** Both leftovers are sealed, byte for byte, and no plaintext of them is left. */
-async function sealedBoth(raw) {
-  // both sealed AND no plaintext left: the sealed file is renamed into place before the plaintext is unlinked, so
-  // "two sealed files" alone is a window in which a plaintext still exists (4.2 §封存流程)
-  const names = await until(() => { const ls = fs.readdirSync(raw); const n = ls.filter((x) => x.endsWith('.sealed')).sort(); return n.length === 2 && !ls.some((x) => x.endsWith('.ndjson')) ? n : null })
-  assert.deepEqual(names, ['20261016T000000Z.sealed', `${CLOSED}.sealed`], 'the upgraded capture and the closed segment')
-  for (const [n, want] of [['20261016T000000Z.sealed', CAPTURE], [`${CLOSED}.sealed`, LINE]]) {
-    const f = openSealed(path.join(raw, n))
-    try { assert.deepEqual(Buffer.concat([...f.lines()].map((x) => x.line)), want, `${n}: byte for byte`) } finally { f.close() }
-  }
+/** The closed segment is sealed byte for byte and its plaintext is gone; the older version's capture is untouched. */
+async function sealedLeftover({ raw, capture }) {
+  // sealed AND no plaintext left: the sealed file is renamed into place before the plaintext is unlinked, so
+  // "a sealed file" alone is a window in which the plaintext still exists (4.2 §封存流程)
+  const names = await until(() => { const ls = fs.readdirSync(raw); const n = ls.filter((x) => x.endsWith('.sealed')).sort(); return n.length === 1 && !ls.some((x) => x.endsWith('.ndjson')) ? n : null })
+  assert.deepEqual(names, [`${CLOSED}.sealed`], 'only the closed segment of raw/ is sealed')
+  const f = openSealed(path.join(raw, `${CLOSED}.sealed`))
+  try { assert.deepEqual(Buffer.concat([...f.lines()].map((x) => x.line)), LINE, 'byte for byte') } finally { f.close() }
   assert.deepEqual(fs.readdirSync(raw).filter((n) => n.endsWith('.ndjson')), [], 'no plaintext of a sealed segment is left')
+  // 4.2 验收 6: not backwards compatible — the dated capture is neither read, nor moved, nor changed
+  assert.deepEqual(fs.readFileSync(capture), CAPTURE, 'the older version\'s capture is left byte for byte')
 }
 
-test('linux: runDaemon seals the last run\'s closed segment and upgrades its dated capture', { timeout: 30_000 }, async () => {
+test('linux: runDaemon seals the last run\'s closed segment and leaves the older version\'s capture alone', { timeout: 30_000 }, async () => {
   const root = tmpDir('as-sw-') // short: unix socket paths are length-limited
   const home = path.join(root, 'home')
   const dir = path.join(home, '.asight', 'collector')
-  const raw = leftovers(dir)
+  const left = leftovers(dir)
   const p = fakeProc()
   const makeClient = () => createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
   await installCollector({ home, env: { HOME: home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
   const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: process.getuid() }) }
   const d = await startDaemon({ dir, socketPath: path.join(root, 'c.sock'), arch, harnesses: [cc] })
-  try { await sealedBoth(raw) } finally { await d.stop({ reason: 'test' }) }
+  try { await sealedLeftover(left) } finally { await d.stop({ reason: 'test' }) }
 })
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: the model daemon seals the last run's closed segment and upgrades its dated capture`, { timeout: 30_000 }, async () => {
+  test(`${platform}: the model daemon seals the last run's closed segment and leaves the older version's capture alone`, { timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
-    const raw = leftovers(w.dir)
+    const left = leftovers(w.dir)
     const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
     await withScratchCwd(platform, async () => {
       const d = await startDaemon({ dir: w.dir, env: w.env, home: w.home, arch: { os: platform, controlEndpoint }, harnesses: w.harnesses, getuid: () => 501,
         identity: () => ({ start_time: '111', boot_id: 'boot-1' }), model: { backends: { custody: w.custody, dirs: w.ctx.dirs }, parts: NOBODY } })
-      try { await sealedBoth(raw) } finally { await d.stop({ reason: 'test' }) }
+      try { await sealedLeftover(left) } finally { await d.stop({ reason: 'test' }) }
     })
   })
 }

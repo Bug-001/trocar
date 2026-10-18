@@ -33,12 +33,16 @@ test('D60①②: 4.2 and 4.6 state where envelopes land, when a segment is close
   for (const re of [/seal\.lock/, /asight raw seal/]) assert.doesNotMatch(storage + collector, re)
 })
 
-test('D60②③: `<段>:<行号>` is the ONE ref shape, and the older capture files are renamed into segments at start', () => {
+test('D60②③: `<段>:<行号>` is the ONE ref shape, and the older capture files are not read, moved or touched', () => {
   const capture = read('4.1-capture-sources.md'), storage = read('4.2-storage-etl.md')
   assert.match(capture, /<段>:<行号>/)
   assert.match(capture, /只有这一种 ref 形状|这一种 ref 形状|只有这一种/) // one shape: nothing keeps a second one
-  assert.match(capture, /capture-<YYYY-MM-DD>\.ndjson/) // the upgrade names what it renames ...
-  assert.match(storage, /<YYYYMMDD>T000000Z\.ndjson/) // ... and 4.2 names what it becomes
+  // not backwards compatible : both units name the old path only to say it is left alone
+  for (const unit of [capture, storage]) {
+    assert.match(unit, /capture-<(YYYY-MM-DD|日期)>\.ndjson/)
+    assert.match(unit, /不向后兼容/)
+  }
+  assert.doesNotMatch(capture + storage, /rename 进 `~\/\.asight\/raw\/`|<YYYYMMDD>T000000Z\.ndjson/)
 })
 
 test('附录 D: the reference dataset and measurement scripts live in scripts/', () => {
