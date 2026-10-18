@@ -1,7 +1,7 @@
 // daemon.mjs — `asight daemon` (RFC 1.6 §2, R4, R7; 4.6 §控制面): the per-user collector daemon in the foreground until SIGTERM / SIGINT / SIGHUP / SIGQUIT, or until it has stopped itself (after an `off` with no
 // names, once nothing is relayed). `--supervise` (win32, 4.8 §7) is the other mode: the scheduled task runs it — the supervisor parent that pulls the real `node <asight> daemon` and re-pulls it on a non-zero
 // exit; it owns no crash records (stderr only), so that mode returns as soon as arch.runSupervisor does. The autostart unit's ExecStart is this command; `asight collector start` is its old name (a hidden alias, §2: units already installed run it). Exit codes (R4): 0 stopped
-// cleanly · 1 refused (as root) or a step of the stop failed · 2 a usage error · 70 an uncaught exception or rejection, recorded as a
+// cleanly · 1 it could not start, or a step of the stop failed · 2 a usage error, root included (V76) · 70 an uncaught exception or rejection, recorded as a
 // `crash` first. Everything the world gives is a `deps` entry a test replaces (0.1 §3): `daemon` (the module with `startDaemon`; the real one is src/collector/daemon.mjs) or `startDaemon` itself, `waitForStop`,
 // `proc` (the process whose uncaught errors are caught), `exit`, `getuid`.
 import os from 'node:os'
@@ -10,7 +10,7 @@ import { EXIT } from './schema.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { collectorHome } from '../paths.mjs'
 import nodeFs from 'node:fs'
-import { installComplete, readManifest as readInstallManifest } from '../off/manifest.mjs'
+import { daemonMayStart, readManifest as readInstallManifest } from '../off/manifest.mjs'
 
 
 const USAGE = 'usage: asight daemon [--supervise]'
@@ -41,8 +41,9 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
     return run({ asight: deps.script || process.argv[1], dir, proc, env, log: (line) => io.err(`[supervise] ${line}`) })
   }
   // 1.6 §5.2: no install, no daemon — it is refused before anything of asight's is made or written (an empty collector directory and a netenv.json
-  // left behind by a daemon that could not run is residue of a run that never should have begun)
-  if (!installComplete(readInstallManifest(dir, deps.fs || nodeFs))) { io.err('asight daemon: certificates are not installed. Run: asight install'); return EXIT.incomplete }
+  // left behind by a daemon that could not run is residue of a run that never should have begun). The gate is the daemon's own (daemonMayStart):
+  // an install that left a root but could not finish (a root store still pending) routes, and this daemon starts, as src/collector/daemon.mjs does.
+  if (!daemonMayStart(readInstallManifest(dir, deps.fs || nodeFs))) { io.err('asight daemon: certificates are not installed. Run: asight install'); return EXIT.incomplete }
   let crashed
   const crashedFirst = new Promise((resolve) => { crashed = resolve })
   // An uncaught exception or rejection: one `crash` record with the first line of the stack, then a non-zero exit — the next start's "no clean stop" then has a reason on disk (D-5).
