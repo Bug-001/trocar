@@ -44,6 +44,5 @@
   "test/query/source-symlink.test.mjs",
   "test/raw/sealed-file.test.mjs",
   "test/view/block-never-orphaned.test.mjs",
-  "test/view/openai-refs.test.mjs",
   "test/view/reply-refs.test.mjs"
 ]
