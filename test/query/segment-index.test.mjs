@@ -169,7 +169,8 @@ test('冷建索引不静默:读取侧自己建了超过一块的索引时,在 er
   fs.writeFileSync(path.join(home, 'raw', `${SEG}.ndjson`), Array.from({ length: 20 }, (_, i) => fat(i)).join(''))
   const cold = await segmentIndex({ home, segment: SEG })
   assert.deepEqual(cold.problems.map((p) => p.code), ['index-cold'])
-  assert.match(cold.problems[0].reason, /MB of 20261018T100000Z itself \(the whole segment\)/)
+  // the closed-set code is the contract (D38), not the wording; all the prose must do is name the segment it was about
+  assert.ok(cold.problems[0].reason.includes(SEG), cold.problems[0].reason)
   assert.deepEqual((await segmentIndex({ home, segment: SEG })).problems.map((p) => p.code), ['index-cold'], 'a reader does not store it, so the next query pays again and says so again')
   await segmentIndex({ home, segment: SEG, owner: true })
   assert.deepEqual((await segmentIndex({ home, segment: SEG })).problems, [], 'the daemon kept it current: nothing to say')
@@ -290,4 +291,24 @@ test('一个写者:补索引的那一笔与封存器的 rename 相撞时,写在�
   assert.equal(raced, true, 'the pass did cut its file back, which is where the rename was placed')
   assert.deepEqual(got.problems, [], 'the write itself succeeded — on the inode it had opened')
   assert.deepEqual(fs.readFileSync(idx), sealer, 'the file the sealer put there is exactly as the sealer wrote it')
+})
+
+// D63 ① / 1.6 §4.1 附近的查询: there is ONE warm reading of a segment's index rows, and `allSegments` (the `segments`
+// document, and the ordered segment list every other query starts from) reads through it like everybody else —
+// reading `segmentIndex` directly meant re-reading and re-parsing every index file on every query (review of D63,
+// 2026-10-20; the same miss `calls` had).
+test('段列表走那唯一一处温读:同一个进程里第二次不再读索引文件', async () => {
+  const home = rawHome()
+  writeSegment(home, SEG, [{ id: 'a' }])
+  writeSegment(home, SEG2, [{ id: 'b' }])
+  await segmentIndex({ home, segment: SEG, owner: true })
+  await segmentIndex({ home, segment: SEG2, owner: true })
+  const read = []
+  const counting = { ...fs, readFileSync: (p, ...rest) => { if (String(p).startsWith(indexDir(home))) read.push(String(p)); return fs.readFileSync(p, ...rest) } }
+  const first = await allSegments({ home, fs: counting, lockState: () => ({ state: 'none' }) })
+  assert.equal(read.length, 2, 'the first call reads each segment\'s index once')
+  read.length = 0
+  const again = await allSegments({ home, fs: counting, lockState: () => ({ state: 'none' }) })
+  assert.deepEqual(read, [], 'nothing moved, so no index file is read or parsed again')
+  assert.deepEqual(again, first)
 })

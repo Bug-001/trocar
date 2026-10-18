@@ -81,9 +81,8 @@ export function warmCache({ maxBytes = Infinity, max = Infinity, bytes = () => 0
       return value
     },
     /** The remembered value if it is there and still fresh, without computing anything: the caller that can answer
-     *  a cheaper way when it is absent (src/query/named/session.mjs renders the window only). */
+     *  a cheaper way when it is absent (src/query/named/session.mjs renders the window only), and the caller that
+     *  decides AFTER computing whether the answer may be remembered (src/query/records.mjs: never a failed read). */
     peek: (id, stamp) => { const hit = fresh(id, stamp); if (!hit) return undefined; m.delete(id); m.set(id, hit); return hit.value },
-    /** What the cache holds now: `{entries, bytes}` — the worker's memory line, and what a test asserts on. */
-    state: () => ({ entries: m.size, bytes: total }),
   }
 }

@@ -9,20 +9,17 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
-import { allSegments, segmentIndex } from './index-build.mjs';
+import { allSegments, warmSegmentIndex } from './index-build.mjs';
 import { asightHome } from '../paths.mjs';
-import { statKey, warmCache, fsTag } from './warm.mjs';
+import { warmCache, fsTag } from './warm.mjs';
 
-// WARM (D63 ①, 1.6 §4.1 附近的查询): one entry per segment, kept against that segment's own source file. A closed or
-// sealed segment never moves, so its rows are read from disk once per process; the live one is re-read when it grew,
-// which is where new records come from. `allSegments` is asked again only when the NAMES in raw/ change (a rollover, a
-// seal): it is used here for the ordered segment list alone, and every row and problem below comes from the
-// stat-revalidated segmentIndex, so a line appended to the live segment is never missed.
-const segRows = warmCache({ maxBytes: 64 * 1024 * 1024, bytes: (v) => v.records.length * 320 }); // ~320 B per index row in memory (measured on the reference dataset)
+// WARM (D63 ①, 1.6 §4.1 附近的查询): the rows of one segment come from the ONE warm reading of its index
+// (src/query/index-build.mjs `warmSegmentIndex`, which `allSegments` reads through as well), kept against that
+// segment's own source file. `allSegments` is asked again only when the NAMES in raw/ change (a rollover, a seal): it
+// is used here for the ordered segment list alone, and every row and problem below comes from the stat-revalidated
+// reading, so a line appended to the live segment is never missed.
 const segList = warmCache({ max: 4 });
 const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(home, 'raw')).sort().join('\n'); } catch { return ''; } };
-// Both files, so a plaintext that is sealed (or a sealed file rebuilt) is a new stamp: the plaintext wins while it exists (4.2:30).
-const segStamp = (home, segment, fs) => `${statKey(path.join(home, 'raw', `${segment}.ndjson`), fs)}|${statKey(path.join(home, 'raw', `${segment}.sealed`), fs)}`;
 
 /**
  * indexRows({home, fs, errors}) → [{…index row, segment, lineNo, session_id}], oldest segment first,
@@ -35,8 +32,7 @@ export async function indexRows({ home = asightHome(), fs = nodeFs, errors = [] 
   const out = [];
   const segments = await segList.get(`${fsTag(fs)}\n${home}`, namesStamp(home, fs), () => allSegments({ home, fs }));
   for (const s of await segments) {
-    const got = await segRows.get(`${fsTag(fs)}\n${home}\n${s.segment}`, segStamp(home, s.segment, fs), () => segmentIndex({ home, segment: s.segment, fs }));
-    const { records, problems } = got;
+    const { records, problems } = await warmSegmentIndex({ home, segment: s.segment, fs });
     for (const pr of problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
     for (const r of records) {
       const synth = r.synth_hash ? assign({ harness: r.harness_id, hash: r.synth_hash, ms: Date.parse(r.ts || '') }) : null;

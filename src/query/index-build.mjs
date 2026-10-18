@@ -39,6 +39,7 @@ import { openSealed } from '../raw/reader.mjs';
 import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 import { asightHome, collectorHome } from '../paths.mjs';
 import { readDaemonLock } from '../off/daemon-stop.mjs';
+import { statKey, warmCache, fsTag } from './warm.mjs';
 
 const rawDir = (home = asightHome()) => path.join(home, 'raw');
 export const indexDir = (home = asightHome()) => path.join(home, 'index');
@@ -373,6 +374,20 @@ export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs, 
   return { segment, source, records, problems: said, bytesRead: got.bytesRead, done: got.done };
 }
 
+// WARM (D63 ①, 1.6 §4.1 附近的查询): THE one reading of a segment's index rows — everything that wants them
+// (src/query/rows.mjs for every row list, `allSegments` below for the `segments` document) goes through here, so a
+// nearby query re-reads and re-parses no index file. One entry per segment, kept against that segment's own source
+// file: a closed or sealed segment is read once per process, the live one again when it grew (never stale). It lives
+// in this file and not in the readers because `allSegments` is in this file: a warm wrapper in rows.mjs that
+// `allSegments` also called would be a cycle between the two modules.
+const segRows = warmCache({ maxBytes: 64 * 1024 * 1024, bytes: (v) => v.records.length * 320 }); // ~320 B per index row in memory (measured on the reference dataset)
+// Both files, so a plaintext that is sealed (or a sealed file rebuilt) is a new stamp: the plaintext wins while it exists (4.2:30).
+const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home), `${segment}.ndjson`), fs)}|${statKey(path.join(rawDir(home), `${segment}.sealed`), fs)}`;
+/** warmSegmentIndex({home, segment, fs}) → the same `segmentIndex()` answer, read from disk only when that segment's
+ *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory. */
+export const warmSegmentIndex = ({ home = asightHome(), segment, fs = nodeFs } = {}) =>
+  segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs), () => segmentIndex({ home, segment, fs }));
+
 // WHICH SEGMENT IS BEING WRITTEN (main-session decision, 2026-10-18): there is no `.closed` marker.
 // The running daemon records its current segment in its lock file (~/.asight/collector/lock), and a
 // lock only counts when its pid + start time check out (src/off/daemon-stop.mjs readDaemonLock). Every
@@ -398,7 +413,7 @@ export async function allSegments({ home = asightHome(), fs = nodeFs, lockState 
   const current = (L.state === 'running' || L.state === 'unresponsive') && L.lock ? L.lock.segment || null : null;
   const out = [];
   for (const [segment, at] of [...seen].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    const { records, problems, source } = await segmentIndex({ home, segment, fs });
+    const { records, problems, source } = await warmSegmentIndex({ home, segment, fs });
     const sealedBytes = at.sealed ? sizeOf(fs, path.join(rawDir(home), `${segment}.sealed`)) : null;
     const bytes = at.plain ? sizeOf(fs, path.join(rawDir(home), `${segment}.ndjson`)) : records.reduce((n, r) => n + r.stored_bytes + 1, 0);
     const stamps = records.map((r) => r.ts).filter(Boolean).sort();
