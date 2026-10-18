@@ -42,12 +42,6 @@ export const collectorHome = (home = asightHome()) => path.join(home, 'collector
 // The raw layer (D60①, 1.6 §1.7): the daemon's segments `<here>/<segment>.ndjson`, their sealed form `<segment>.sealed`,
 // and the seal journal. Only envelopes live here — the collector's own logs stay under collectorHome().
 export const rawHome = (home = asightHome()) => path.join(home, 'raw');
-// D40 (RFC 4.6 §记录「保存级别」): what to keep of each call, per harness × traffic class — one per-user file read by BOTH
-// capture paths (src/capture/retention.mjs) — and the log of every change to it. Not in the collector's state.json: the
-// old MITM reads it too, and state.json is the collector's own.
-export const retentionFile = (home = asightHome()) => path.join(home, 'retention.json');
-export const retentionLog = (home = asightHome()) => path.join(home, 'logs', 'retention.ndjson');
-
 // D60③ (1.6 §4.2): the editable traffic class table — the user's copy of it (written whole on the first edit) and the
 // log of every change (old value, new value, time). Read by the collector (the level of a call) and by `asight classes`.
 export const classesFile = (home = asightHome()) => path.join(home, 'classes.json');

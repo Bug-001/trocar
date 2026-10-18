@@ -13,6 +13,7 @@ export const NOT_CAPTURED_EXPECTED = Object.freeze(['policy', 'not-trust-path', 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
 export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set',
+  'classes-ok', // ~/.asight/classes.json reads cleanly again: ends the condition its problem opened (D60③, 4.6 §记录「保存级别」)
   'agent-list-ok', // ~/.asight/agents.json reads cleanly again, or is gone: ends the agent-list-invalid condition (D51③, 4.6 R6)
   'process-unknown']) // a process no list item claims used a door (where 'engine'; harness, door, name, wide, named = listed only with args it missed, pid; never its command line): once per (door group, name) per daemon life (D51⑥)
 
@@ -32,7 +33,9 @@ export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'eve
   // the old capture (RFC 4.1 过渡期, ~/.asight/logs/mitm-events.ndjson; deleted with it)
   'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard',
   // the retention settings (D40, RFC 4.6 §记录「保存级别」): read by the collector's engine and by the old MITM / reverse proxy
-  'retention'])
+  'retention',
+  // the traffic class table (D60③, 1.6 §4.2): ~/.asight/classes.json, read hot by the collector's engine
+  'classes'])
 
 /** The reasons a running agent is not (yet) trusted — the `code` of `agent-untrusted`, and of the `agent-exit` that ends
  *  it. Generic ones come from the resolver (core/trust/confirm.mjs, core/tracker.mjs); the rest are a harness's own
@@ -68,6 +71,10 @@ export const CODES_BY_PART = Object.freeze({
   // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in
   // the change log could not be written is `retention-log-failed` (the edit applies; the record of it is missing)
   retention: ['retention-unparsable', 'retention-unreadable', 'classify-failed', 'pattern-invalid', 'retention-log-failed'],
+  // ~/.asight/classes.json cannot be read / parsed, or holds an entry that is not a class or a rule that does not
+  // compile (`pattern-invalid`, above): the builtin table applies and every call is kept at ITS level, never dropped.
+  // `classes-log-failed`: the edit was made but logs/classes.ndjson could not record it (`asight classes`, 1.6 §4.2).
+  classes: ['classes-unparsable', 'classes-unreadable', 'classes-bad-entry', 'classes-write-failed', 'classes-log-failed'],
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
   ca: ['ca-invalid', 'cert-key-missing', 'cert-intermediate-unavailable'], // the last two: the issuer's (4.11 P2, ⑱): the root key is not in its custody; the custody did not issue an intermediate

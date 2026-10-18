@@ -1,11 +1,12 @@
-// test/collector/engine-data.test.mjs — the engine's per-call / per-flow data both daemons build through engine-data.mjs (D40; Plan 3c §2): for every shipped
-// harness, a retention.json cell `log` reaches the level the engine samples for that harness's agent, a cell for another harness does not, and the
-// descriptor's WebSocket terminators are what describe() hands the engine (none for a harness without them, none for an unknown agent).
+// test/collector/engine-data.test.mjs — the engine's per-call / per-flow data both daemons build through engine-data.mjs (D60③; Plan 3c §2): for every
+// shipped harness, the class table's level reaches the level the engine samples, a rule bound to another harness does not match it, and the descriptor's
+// WebSocket terminators are what describe() hands the engine (none for a harness without them, none for an unknown agent).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { retentionHook, wsTerminalHook } from '../../src/collector/engine-data.mjs'
+import { classesHook, wsTerminalHook } from '../../src/collector/engine-data.mjs'
+import { BUILTIN } from '../../src/classes/table.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { harnessIdOfAgent } from '../../src/dissect/traffic.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -14,17 +15,17 @@ const list = await loadHarnesses()
 const sink = () => { const recs = []; return { recs, failure: { event: (r) => recs.push(r), write: (r) => recs.push(r) } } }
 
 for (const d of list) {
-  test(`${d.name}: retention.json says log for its harness → the engine samples log; another harness's cell leaves it full`, () => {
-    const dir = tmpDir('asight-keep-'), file = path.join(dir, 'retention.json')
+  test(`${d.name}: a class whose rule names its harness gives the engine that class and its level; the same rule bound to another harness does not`, () => {
+    const home = tmpDir('asight-classes-')
     const id = harnessIdOfAgent(d.name), other = list.map((x) => harnessIdOfAgent(x.name)).find((x) => x !== id)
-    const write = (h) => fs.writeFileSync(file, JSON.stringify({ version: 1, levels: { [h]: { llm: 'log', other: 'log' } } }))
-    write(id)
+    const table = (h) => fs.writeFileSync(path.join(home, 'classes.json'), JSON.stringify({ version: 1, classes: [{ class: 'mine', keep: 'log', rules: [{ host: 'example\\.test', harness: h }] }, ...BUILTIN] }))
     const s = sink()
-    const r1 = retentionHook({ file, failure: s.failure })({ agent: d.name }, 'example.test', 'POST', '/v1/x')
-    assert.equal(r1.level, 'log', JSON.stringify({ r1, recs: s.recs }))
-    write(other)
-    const r2 = retentionHook({ file, failure: s.failure })({ agent: d.name }, 'example.test', 'POST', '/v1/x')
-    assert.equal(r2.level, 'full')
+    const sample = () => classesHook({ home, failure: s.failure })({ agent: d.name }, 'example.test', 'POST', '/x')
+    table(id)
+    assert.deepEqual(sample(), { class: 'mine', level: 'log' }, JSON.stringify(s.recs))
+    table(other)
+    assert.deepEqual(sample(), { class: 'other', level: 'full' }, 'the rule is another harness\'s: nothing else matches, so `other` at its own level')
+    assert.deepEqual(s.recs, [], 'a usable table is no event')
   })
   test(`${d.name}: describe hands the engine exactly the descriptor's WebSocket terminators`, () => {
     assert.deepEqual(wsTerminalHook(list)({ agent: d.name }), d.wsTerminal ? { wsTerminal: d.wsTerminal } : {})
