@@ -45,6 +45,7 @@ export const UNREACHED = Object.freeze({
   'src/query/named/index.mjs': 'the named-query registry (QUERIES / runQuery); same two entries, T8 and T9',
   'src/query/named/segments.mjs': 'a named query, reached only through src/query/named/index.mjs',
   'src/query/named/classes.mjs': 'a named query, reached only through src/query/named/index.mjs',
+  'src/query/disk.mjs': 'the disk totals of the named `classes` query, reached only through it (T8 / T9 wire the entries)',
   'src/query/named/sessions.mjs': 'a named query, reached only through src/query/named/index.mjs',
   'src/query/named/session.mjs': 'a named query, reached only through src/query/named/index.mjs',
   'src/query/named/calls.mjs': 'a named query, reached only through src/query/named/index.mjs',
