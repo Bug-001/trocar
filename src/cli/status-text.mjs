@@ -98,7 +98,9 @@ function summaryPairs(doc, now) {
   rows.push(['Connections', r === 'unknown' || !r ? unknown(doc.relayed_reason || 'the daemon did not say') : `${r.closing + r.waiting} open through asight`])
   const fl = doc.failures
   rows.push(['Problems', !fl ? unknown('capture health could not be read') : fl.problem === 0 ? 'none in the last 24 hours' : `${fl.problem} in the last 24 hours, latest ${ago(fl.latest, now)}`])
-  if (doc.linger === false) rows.push(['Logging out', 'capture stops when you log out'])
+  // V39 (§1.1): logging out stops the daemon unless linger is on — the command is printed, never run; a state that could not be read is said with its reason, never taken for "on"
+  if (doc.linger === false) rows.push(['Logging out', `capture stops when you log out; run: loginctl enable-linger ${doc.user || '<your user name>'}`])
+  else if (doc.linger === 'unknown') rows.push(['Logging out', unknown(doc.linger_reason || 'the linger state could not be read')])
   return rows
 }
 

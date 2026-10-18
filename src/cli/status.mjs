@@ -9,7 +9,6 @@ import nodeOs from 'node:os'
 import path from 'node:path'
 import { STATUS_REASONS } from '../health/codes.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
-import { lingerText } from './receipt.mjs'
 import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
@@ -342,7 +341,7 @@ export function statusDocOf(f) {
     }])),
     ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
-    ...(f.linger ? f.linger : {}), agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures: failuresOf(f), errors,
+    ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures: failuresOf(f), errors,
   }
   return doc
 }
