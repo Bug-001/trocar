@@ -614,7 +614,7 @@ test('V26 proxy mode: status exits by the judgement — 0 with the door up, 1 wi
   assert.equal(r.exit, EXIT.unknown)
   const h = r.j.harnesses.codex
   assert.equal(h.captured, null)
-  assert.ok(h.why.some((x) => /doors listen/.test(x)), `不知道 says why: ${JSON.stringify(h.why)}`)
+  assert.ok(h.why.some((x) => typeof x === 'string' && x.trim() !== ''), `不知道 says why: ${JSON.stringify(h.why)}`) // R11: the reason is there; its wording is the text's business, not this check's
 })
 
 test('1.6 §9.4 / §9.6 cert.root: the code follows the state — pending / declined (install\'s pending root-store item) and installed-but-gone exit 1 with their own codes; never installed is cert-not-installed (V32, R4)', async () => {

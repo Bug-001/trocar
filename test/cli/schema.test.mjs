@@ -4,8 +4,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt, validateReceipt, validateTopology, ROUTING, TOPOLOGY_KINDS, TOPOLOGY_VIA, UNKNOWN_REASONS, FINDING_CLASSES } from '../../src/cli/schema.mjs'
 import * as off from '../../src/off/schema.mjs'
+import { COMMAND_KEYS } from '../../src/cli/schema.mjs'
+import { readFileSync } from 'node:fs'
 
-const mutate = (fn, command = 'off') => { const r = newReceipt(command); fn(r); return r }
+const mutate = (fn, command = 'status') => { const r = newReceipt(command); fn(r); return r } // `status` carries no C.2 key list, so a probe of a common key is not read as drift
 const problems = (fn) => validateReceipt(mutate(fn))
 
 test('receipt schema: the keys, the exit codes and the version are the 1.6 R5 / R4 ones, and src/cli re-exports src/off', () => {
@@ -18,7 +20,7 @@ test('receipt schema: the keys, the exit codes and the version are the 1.6 R5 / 
 
 test('receipt schema: newReceipt is the empty receipt in key order, a fresh object each time, and it validates', () => {
   const r = newReceipt('off')
-  assert.deepEqual(r, { schema: 2, command: 'off', ok: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: 'unknown', undo: [], log: null })
+  assert.deepEqual(r, { schema: 2, command: 'off', ok: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: 'unknown', undo: null, log: null })
   assert.deepEqual(Object.keys(r), RECEIPT_KEYS)
   assert.notEqual(newReceipt('off').changed, r.changed, 'no list shared between receipts')
   assert.deepEqual(validateReceipt(r), [])
@@ -106,9 +108,11 @@ test('receipt schema: linger is optional, and true | false | "unknown" when ther
   for (const v of ['maybe', null, 0, 1, 'true', {}]) assert.ok(problems((r) => { r.linger = v }).some((s) => s.includes('linger')), JSON.stringify(v))
 })
 
-test('receipt schema: created, removed and undo are lists; log is a path or null', () => {
-  assert.deepEqual(problems((r) => { r.created.push('/h/.asight/bin/asight-off'); r.removed.push('/h/.config/systemd/user/asight-collector.service'); r.undo.push('asight on'); r.log = '/h/.asight/collector/flows/' }), [])
-  for (const key of ['created', 'removed', 'undo']) {
+test('receipt schema: created and removed are lists, undo is the one line that undoes the command, log is a path or null', () => {
+  assert.deepEqual(problems((r) => { r.created.push('/h/.asight/bin/asight-off'); r.removed.push('/h/.config/systemd/user/asight-collector.service'); r.undo = 'asight on'; r.log = '/h/.asight/collector/flows/' }), [])
+  assert.ok(problems((r) => { r.undo = ['asight on'] }).some((s) => s.includes('undo')), 'a list of related commands is not an undo (附录 C.1)')
+  assert.ok(validateReceipt(mutate((r) => { r.undo = 'asight uninstall' }, 'off')).some((s) => s.includes('undo')), "off's undo is `asight on`, not another command's line")
+  for (const key of ['created', 'removed']) {
     assert.ok(problems((r) => { r[key] = 'x' }).some((s) => s.includes(key)), key)
     assert.ok(problems((r) => { r[key] = [3] }).some((s) => s.includes(`${key}[0]`)), `${key} item`)
     assert.ok(problems((r) => { r[key] = [''] }).some((s) => s.includes(`${key}[0]`)), `${key} empty item`)
@@ -183,4 +187,20 @@ test('validateFinding (1.6 §9.6, V49): a code in the closed sets, a class, a wh
   assert.match(bad({ commands: [{ run: 'kill <pid>', shell: 'sh' }] })[0], /placeholder/)
   assert.match(bad({ commands: [{ run: 'x', shell: 'zsh' }] })[0], /shell/)
   assert.match(validateFinding(null)[0], /not an object/)
+})
+
+// 附录 C.2 names the keys a reader writes a client against, and `COMMAND_KEYS` is what validateReceipt checks: one external fact, one place (0.1 §2).
+// The drift this guard catches is the one the test machines found (macOS and Windows test machines, 2026-10-18: thirteen keys the manual named nowhere).
+test('附录 C.2 names exactly the keys of COMMAND_KEYS, for every command', () => {
+  const manual = readFileSync(new URL('../../spec/01-asight-rfc/1.6-cli.md', import.meta.url), 'utf8')
+  const table = manual.split('### C.2')[1].split('###')[0]
+  const rows = table.split('\n').filter((l) => /^\| `/.test(l)).map((l) => l.split('|').slice(1, 3))
+  // a key is a code span that IS a key: an identifier, with its value shape after a `:` — so `asight-off`, a path or a prose span is not one
+  const keysIn = (cell) => [...new Set([...cell.matchAll(/`([a-z_][a-z0-9_]*)((?:[:([].*?)?)`/g)].map((m) => m[1]))]
+  const named = new Map(rows.map(([head, cell]) => [head.match(/`([a-z-]+)/)[1], keysIn(cell)]))
+  assert.deepEqual([...named.keys()], Object.keys(COMMAND_KEYS), 'a command per row, in the order of COMMAND_KEYS')
+  for (const [command, keys] of named) {
+    const documented = keys.filter((k) => !RECEIPT_KEYS.includes(k)) // the common keys are C.1's; the row does not repeat them
+    assert.deepEqual([...documented].sort(), [...COMMAND_KEYS[command]].sort(), `附录 C.2 and COMMAND_KEYS disagree about ${command}`)
+  }
 })

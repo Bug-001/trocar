@@ -66,6 +66,17 @@ export function changeLines(r, { home = null } = {}) {
   return [...out, ...wrap('It applies to calls made from now on; what is already stored does not change.')]
 }
 
+/** C.1 `undo`: the one line that puts this edit back. A `reset` threw the whole table away and no single line writes it back, so it is `null` (R11: what is not there is not claimed). */
+function undoEdit(op, before, after) {
+  if (op.kind === 'set') return before && before.keep ? `asight classes set ${op.class} ${before.keep}` : null
+  if (op.kind === 'add') return `asight classes rm ${op.class} ${((after && after.rules) || []).length}`
+  if (op.kind === 'rm') {
+    const gone = ((before && before.rules) || [])[Number(op.rule) - 1]
+    return gone ? `asight classes add ${op.class} ${gone.host}${gone.path ? ` ${gone.path}` : ''}${gone.harness ? ` --harness ${gone.harness}` : ''}` : null
+  }
+  return null
+}
+
 /** The edit `positionals` ask for, `null` when they are not a usable change, `undefined` when they are not a change at all. */
 function opOf(pos, flags) {
   const [kind, name, a, b] = pos
@@ -104,7 +115,7 @@ export async function run(argv, { io, json, args, home, deps = {} }) {
     for (const p of result.written) changed.push({ path: p, change: p === result.file ? 'written' : 'appended', backup: null })
     const receipt = {
       ...newReceipt('classes'), class: op.kind === 'reset' ? null : op.class,
-      before: op.kind === 'reset' ? null : before, after, changed,
+      before: op.kind === 'reset' ? null : before, after, changed, undo: undoEdit(op, before, after),
     }
     if (json) printJson(io, receipt)
     else for (const line of changeLines(receipt, { home })) io.out(line)

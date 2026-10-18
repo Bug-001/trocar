@@ -18,7 +18,7 @@ import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import nodeTls from 'node:tls'
 import path from 'node:path'
-import { newReceipt, EXIT } from './schema.mjs'
+import { newReceipt, EXIT, UNDO_LINE } from './schema.mjs'
 import { collectorDir, stateFile, opLockFile } from './paths.mjs'
 import { readStateFile, setDesired, writeStateAtomic, emptyState } from './state.mjs'
 import { acquireOpLock, LOCK_BUSY } from './lock.mjs'
@@ -399,6 +399,11 @@ function refuseUnknownKinds(manifest, receipt, standalone) {
 // The id list the text and the flows record go by is `receipt.harnesses` until this runs, so it is called at the return.
 function shapeReceipt(receipt) {
   const ids = (receipt.harnesses || []).map((h) => (typeof h === 'string' ? h : h && h.harness)).filter(Boolean)
+  // §1.1: a receipt holds each fact once. Two entries of ONE file (two json keys of kimi-code's settings.json) made two rows that said the
+  // same sentence about the same path (a Windows test machine 2026-10-18), so these are the DISTINCT facts — V3's file set is unchanged by it.
+  const distinct = (list, keys) => [...new Map((list || []).map((x) => [typeof x === 'string' ? x : JSON.stringify(keys.map((k) => x[k] ?? null)), x])).values()]
+  receipt.changed = distinct(receipt.changed, ['harness', 'path', 'change', 'backup'])
+  receipt.removed = distinct(receipt.removed, ['harness', 'path'])
   receipt.left = (receipt.left || []).map((l) => ({ what: l.what ?? (l.result === 'unknown-kind' ? 'an item this asight does not know' : 'something asight wrote'), ...l, undo_by_hand: l.undo_by_hand ?? l.restore ?? null }))
   receipt.outcome = receipt.ok ? 'done' : 'partial'
   receipt.harnesses = ids.map((id) => {
@@ -416,7 +421,7 @@ function shapeReceipt(receipt) {
 export async function runOff({ home = nodeOs.homedir(), env = process.env, ids = null, now = false, yes = false, dryRun = false, interactive = false, io = null, say = null, deps = {} } = {}) {
   const w = offWorld({ home, env, deps })
   const run = w.clock().toISOString()
-  const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, now, undo: ['asight on'], log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], planned: [], user_processes: [], notes: [], problems: [] }
+  const receipt = { ...newReceipt('off'), harnesses: ids || [], all: ids === null, undo: UNDO_LINE.off, log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], kept_backups: [], orphan_backups: [], pending: [], planned: [], user_processes: [], notes: [], problems: [] }
   const put = flowWriter(w, run, receipt.notes)
   // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write — no lock, no state, no flows record; the receipt names the tools that undo it
   const old = refuseOldManifest({ home, platform: w.platform, fs: w.fs })

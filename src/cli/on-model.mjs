@@ -5,7 +5,7 @@
 // every probe — control.json appears only at the daemon's first start); then turnOnModel (POST /on, the doors read back, the entries written).
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { EXIT, newReceipt } from './schema.mjs'
+import { EXIT, newReceipt, UNDO_LINE } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile } from '../off/paths.mjs'
@@ -47,7 +47,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
       ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)]).join('\n'))
     return exit
   }
-  const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...(r.code ? { code: r.code } : {}), ...extra })
+  const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, ...(extra.dry_run || r.code ? {} : { undo: UNDO_LINE.on }), harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...(r.code ? { code: r.code } : {}), ...extra })
   const plan = await turnOnModel({ ...args, dryRun: true })
   // 附录 C.2: a `--dry-run` goes as expected even when the real run would stop before writing — it exits 0, and what would stop it is `blocked`
   // (a Windows test machine 2026-10-18: with nothing installed it exited 1 with a top-level `code` and no `planned`)

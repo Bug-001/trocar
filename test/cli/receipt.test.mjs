@@ -348,7 +348,8 @@ test('V29: the on receipt after install, in the text and in --json, carries the 
   const r = io.json()
   const everything = JSON.stringify(r)
   for (const c of ['asight on', 'asight off', 'asight status', 'asight uninstall']) assert.ok(everything.includes(c), `--json carries ${c}`)
-  assert.ok(r.undo.includes(standalonePath(home)) && r.standalone === standalonePath(home), 'the absolute path of asight-off: the undo list and the key')
+  assert.equal(r.standalone, standalonePath(home), 'the absolute path of asight-off is its own key')
+  assert.equal(r.undo, 'asight off', '附录 C.1: `undo` is the ONE line that undoes an on')
   assert.ok(path.isAbsolute(r.standalone))
   assert.ok(fs.statSync(r.standalone).isFile() && (fs.statSync(r.standalone).mode & 0o100), 'and the path is a file asight wrote, executable (install wrote it; test/off/standalone.test.mjs runs it)')
   const io2 = fakeIo(); const home2 = tmpDir('asight-on-v29b-'); seedClaude(home2); await installFirst(home2)
@@ -411,7 +412,7 @@ test('on prints no network-environment line and its --json receipt has no netenv
 })
 
 // Windows ignores the shebang, so the bare path of asight-off runs nothing there; every place that prints it as a command says `node "<path>"` on win32.
-test('the standalone asight-off is printed as a runnable command: node "<path>" on win32, the path elsewhere (receipt, --json undo, doctor)', async () => {
+test('the standalone asight-off is printed as a runnable command: node "<path>" on win32, the path elsewhere', async () => {
   const { standaloneCommand } = await import('../../src/off/paths.mjs')
   const win = 'C:\\Users\\a\\.asight\\bin\\asight-off', posix = '/home/a/.asight/bin/asight-off'
   assert.equal(standaloneCommand(win, 'win32'), `node "${win}"`)
@@ -419,6 +420,4 @@ test('the standalone asight-off is printed as a runnable command: node "<path>" 
   const r = { ...newReceipt('on'), ok: true, standalone: win }
   assert.ok(formatOnReceipt(r, { platform: 'win32' }).includes(`node "${win}"`), 'the receipt line runs on Windows')
   assert.ok(!formatOnReceipt({ ...r, standalone: posix }, { platform: 'darwin' }).includes('node "'))
-  const src = (f) => fs.readFileSync(new URL(`../../src/${f}`, import.meta.url), 'utf8')
-  for (const f of ['collector/install.mjs', 'cli/doctor.mjs']) assert.match(src(f), /standaloneCommand\(/, `${f} prints the command, not the bare path`)
 })

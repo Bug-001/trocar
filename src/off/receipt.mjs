@@ -110,7 +110,7 @@ export function formatOffReceipt(r, { home = null, tense = r.dry_run ? 'future' 
   if (r.holders === null) lines.push(...fit('Whether a program is still connected through asight: unknown (the process table could not be read).'))
   else if ((r.holders || []).length) {
     const who = [...new Map(r.holders.map((x) => [x.pid, x])).values()]
-    lines.push(...fit(`Still connected through asight, forwarded only: ${who.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}.`))
+    lines.push(...fit(`Still connected through asight, which only passes their traffic on and records nothing of it: ${who.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}.`))
     lines.push(`asight exits when ${who.length === 1 ? 'it does' : 'they do'}.`, 'Cut them now: asight off --now')
   }
   if ((r.still_trusting || []).length) {

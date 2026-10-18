@@ -6,7 +6,7 @@
 import nodeOs from 'node:os'
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { EXIT, newReceipt } from '../off/schema.mjs'
+import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs'
 import { refuseOldManifest } from '../off/manifest.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath } from '../off/paths.mjs'
@@ -71,7 +71,8 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
       // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
       ...[...rows.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
         .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, what: group[0].harness, detail: carrierOf(group[0]) })),
-      { what: 'undo', detail: `${tilde(standalonePath(home), home)}: the undo that works without this source tree` },
+      // V85: asight's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
+      { what: 'asight', detail: `${tilde(path.join(home, '.asight'), home)}${platform === 'win32' ? '\\' : '/'}: asight's own files (its root certificate and key, the install record, and ${tilde(standalonePath(home), home)}, the undo that works without this source tree)` },
     ]
     say(fit([`asight install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
       ...pairs(planned.map((p) => [p.what, p.detail])),
@@ -87,7 +88,7 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     if (!r) return EXIT.incomplete
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: r.pending, problems: r.problems, standalone: standalonePath(home), residual_risk: RISK,
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: r.pending, problems: r.problems, standalone: standalonePath(home), residual_risk: RISK,
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       planned, commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
     const dir = path.join(home, '.asight', 'collector')
@@ -158,7 +159,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   if (!done) return EXIT.incomplete
   if (done.failed) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [done.failed] }, null, 2)); else io.err(`asight install: ${done.failed}`); return EXIT.incomplete }
   const { stdl, r } = done
-  const receipt = { ...newReceipt('install'), ok: true, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created)], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], notes: r.plan ? r.plan.notes : [] }
+  const receipt = { ...newReceipt('install'), ok: true, undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created)], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], notes: r.plan ? r.plan.notes : [] }
   if (json) io.out(JSON.stringify(receipt, null, 2))
   else io.out(fit([r.already ? 'Already installed. Nothing was changed.' : "Installed. asight's certificates are in place.",
     ...(r.already ? [] : changeLines(receipt, { home })),

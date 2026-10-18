@@ -1,4 +1,4 @@
-// test/cli/data-commands.test.mjs — the three data commands (RFC 1.6 §4.1, §4.2, §5.1; V79 V80 V81 V82 V83 V89): `query` lists its names and
+// test/cli/data-commands.test.mjs — the three data commands (RFC 1.6 §4.1, §4.2, §5.1; V79 V80 V81 V82 V83): `query` lists its names and
 // prints a query's document, `status` / `doctor` with --json ARE the documents `asight query status` / `doctor` print, `classes` shows and edits
 // the class table, and `raw` prints a segment's bytes as they were captured. Nothing here reaches the machine the tests run on: a temp HOME, and
 // for `status` / `doctor` the injected deps of the dispatch fixture (0.1 §3).

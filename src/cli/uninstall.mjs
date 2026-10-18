@@ -8,7 +8,7 @@
 // asight's own: what `off` could do is done, exit 1. Nothing here signals an agent or restarts anything (R8). The world is `deps` (see src/off/orchestrate.mjs).
 import nodeOs from 'node:os'
 import path from 'node:path'
-import { newReceipt, EXIT } from '../off/schema.mjs'
+import { newReceipt, EXIT, UNDO_LINE } from '../off/schema.mjs'
 import { offWorld, desiredOff, switchRoutingOff, undoSide, harnessIdsOf, flowWriter, userProcessesOf, OFF_LOCK_WAIT_MS } from '../off/orchestrate.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { readManifest, saveManifest, manifestPath, refuseOldManifest } from '../off/manifest.mjs'
@@ -107,7 +107,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const w = offWorld({ home, env, deps })
   const fs = w.fs
   const run = w.clock().toISOString()
-  const receipt = { ...newReceipt('uninstall'), all: true, harnesses: [], purge_data: purgeData, kept: [], undo: ['asight install'], log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], dropped_backups: [], non_identical: [], entries: [], pending: [], user_processes: [], notes: [], problems: [] }
+  const receipt = { ...newReceipt('uninstall'), all: true, harnesses: [], purge_data: purgeData, kept: [], undo: UNDO_LINE.uninstall, log: path.join(w.dir, 'flows'), left: [], kept_bundles: [], still_trusting: [], residue: [], dropped_backups: [], non_identical: [], entries: [], pending: [], user_processes: [], notes: [], problems: [] }
   const put = flowWriter(w, run, receipt.notes, { event: 'uninstall-note', where: 'uninstall' })
   // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write (no lock, no state, no record); the receipt names the tools that undo it
   const old = refuseOldManifest({ home, platform: w.platform, fs })
