@@ -28,13 +28,17 @@ test('D59 · D60: no data-format unit presents DuckDB, the ETL pipeline, `asight
 test('D60①②: 4.2 and 4.6 state where envelopes land, when a segment is closed, and that the daemon publishes its current segment', () => {
   const storage = read('4.2-storage-etl.md'), collector = read('4.6-process-collector.md')
   for (const re of [/~\/\.asight\/raw\/<段>\.ndjson/, /~\/\.asight\/index\//, /128 MB/]) assert.match(storage, re)
-  for (const re of [/~\/\.asight\/collector\/lock/, /`segment`/, /seal\.lock/]) assert.match(storage + collector, re)
+  for (const re of [/~\/\.asight\/collector\/lock/, /`segment`/]) assert.match(storage + collector, re)
+  // only the daemon seals: no seal lock (one daemon, one queue) and no manual seal command (`asight raw` only prints records)
+  for (const re of [/seal\.lock/, /asight raw seal/]) assert.doesNotMatch(storage + collector, re)
 })
 
-test('D60②③: a record in a segment is `<段>:<行号>`; records in the older locations keep their own ref shape', () => {
-  const capture = read('4.1-capture-sources.md')
+test('D60②③: `<段>:<行号>` is the ONE ref shape, and the older capture files are renamed into segments at start', () => {
+  const capture = read('4.1-capture-sources.md'), storage = read('4.2-storage-etl.md')
   assert.match(capture, /<段>:<行号>/)
-  assert.match(capture, /capture-/) // the older locations are named, so nobody renumbers their refs
+  assert.match(capture, /只有这一种 ref 形状|这一种 ref 形状|只有这一种/) // one shape: nothing keeps a second one
+  assert.match(capture, /capture-<YYYY-MM-DD>\.ndjson/) // the upgrade names what it renames ...
+  assert.match(storage, /<YYYYMMDD>T000000Z\.ndjson/) // ... and 4.2 names what it becomes
 })
 
 test('附录 D: the reference dataset and measurement scripts live in scripts/', () => {

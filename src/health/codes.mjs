@@ -32,6 +32,8 @@ export const LEVELS = Object.freeze(['critical'])
 export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
   // the old capture (RFC 4.1 过渡期, ~/.asight/logs/mitm-events.ndjson; deleted with it)
   'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard',
+  // the raw layer's sealer (D35 · D60②, RFC 4.2 §自动封存): the daemon's seal queue reports a segment it could not seal
+  'raw',
   // the retention settings (D40, RFC 4.6 §记录「保存级别」): read by the collector's engine and by the old MITM / reverse proxy
   'retention',
   // the traffic class table (D60③, 1.6 §4.2): ~/.asight/classes.json, read hot by the collector's engine
@@ -56,6 +58,7 @@ export const TRUST_REASONS = Object.freeze([
 export const CODES_BY_PART = Object.freeze({
   daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error'],
   record: ['record-error', 'file-replaced'],
+  raw: ['seal-failed', 'upgrade-failed'],
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
   // a harness's configuration or files, read or written (the Claude Code settings layers have their own codes, above)
   harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial',

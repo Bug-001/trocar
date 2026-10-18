@@ -8,7 +8,8 @@ import fs from 'node:fs'
 import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
-import { asightHome, collectorHome } from '../paths.mjs'
+import { asightHome, collectorHome, rawHome } from '../paths.mjs'
+import { startSealing } from './seal-queue.mjs'
 import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
@@ -148,6 +149,23 @@ function noteUncleanStop(lock, failure) {
   else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
 }
 
+/** The ONE place a daemon's record store and its sealer are wired (no per-platform copy), so BOTH
+ *  entries — Linux's runDaemon and the model OSes' runModelDaemon — seal: `seal.start()` does the upgrade rename and
+ *  the last run's leftovers, then every segment this run closes, one at a time in a forked child, so this event loop
+ *  never encodes or hashes (4.2 §自动封存).
+ *    `seal.start()` MUST come after the control server claimed the collector (before that the lock may be a LIVE
+ *  daemon's, and the start scan clears the lock's `segment`); `seal.stop()` belongs at the top of the stop, before
+ *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off. */
+function storeWithSealing({ P, failure }) {
+  const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
+  let queue = null
+  const seal = {
+    start() { queue = startSealing({ store, raw: rawHome(path.dirname(P.dir)), collectorDir: P.dir, lockFile: P.lock, failure }); return queue },
+    stop() { if (queue) queue.stop() },
+  }
+  return { store, seal }
+}
+
 /** The lock a live daemon holds (4.6 §控制面, D-25): `fields` (pid, start time, boot id …) plus `segment`, the raw-layer
  *  segment it is appending to right now (D60: readers and the sealer leave that one alone, and may take every other). The
  *  returned refresh is called on a timer, and by the record store right before it creates a new segment file (so the lock
@@ -236,7 +254,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }, caCheckMs)
     caTimer.unref()
     const retention = classesHook({ home: path.dirname(P.dir), failure }) // D60③, engine-data.mjs
-    const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
+    const { store, seal } = storeWithSealing({ P, failure })
+    seal.start() // after noteUncleanStop above: the gate (the control server) has claimed the collector
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
     let engine = null // created after the tracker; the tracker's onGone reaches it at call time
@@ -611,6 +630,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && !sw.anyOn()) return stop({ reason: 'off' }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
     }
     async function doStop({ signal = null, reason = null } = {}) {
+      seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off
       clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer); clearTimeout(bundleRetry)
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
@@ -653,7 +673,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const parts = model.parts || (await doorPartsFor({ os: A.os, env, event, failure, io: model.io || {} }))
   let rootPem = null
   try { rootPem = fs.readFileSync(path.join(P.caDir, 'asight-ca.pem'), 'utf8') } catch { /* no root: the issuer says so, every door forwards only */ }
-  const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
+  const { store, seal } = storeWithSealing({ P, failure }) // 4.2 §自动封存, the same wiring as runDaemon's
   let collector = null
   const desired = () => { try { return readStateFile(P.state).state.harnesses || {} } catch { return {} } }
   const engine = createEngine({
@@ -694,6 +714,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   } })
   // only now: the control server refuses a start while another daemon answers, so a lock read before it may be a live daemon's (runDaemon's order)
   noteUncleanStop(P.lock, failure)
+  seal.start() // only now (the gate claimed the collector): the lock read before this could have been a live daemon's
   try {
     await collector.start()
     markReady()
@@ -708,6 +729,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     let stopping = null, markExited
     const exited = new Promise((r) => { markExited = r })
     const doStop = async ({ signal = null, reason = null } = {}) => {
+      seal.stop() // as in runDaemon: the last segment is left to the next start's scan
       clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
       const failed = []
       const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }

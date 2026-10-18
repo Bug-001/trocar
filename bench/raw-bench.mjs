@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 // bench/raw-bench.mjs — D35 benchmarks on a generated shard (4.6 E3 / E4). Not part of `npm test`.
-//   node bench/raw-bench.mjs seal <shard.ndjson> <sessionsDir>   E4: seal (split per session), default heap
+//   node bench/raw-bench.mjs seal <raw/<segment>.ndjson> <lock>   E4: seal one segment, default heap
 //   node bench/raw-bench.mjs read <sessionsDir> [n=1000] [seed=7]  E3: random raw_ref reads in a NEW process
 // Prints one JSON line of numbers. Run on synthetic data only (bench/raw-gen.mjs).
 import fs from 'node:fs';
 import path from 'node:path';
-import { sealShard } from '../src/raw/seal.mjs';
-import { markClosed } from '../src/raw/closed.mjs';
+import { sealSegment } from '../src/raw/seal.mjs';
 import { openSealed } from '../src/raw/reader.mjs';
 import { buildResolver } from '../src/query/source.mjs';
 
@@ -16,13 +15,12 @@ const pct = (xs, p) => { const s = [...xs].sort((x, y) => x - y); return +s[Math
 const rssMB = () => mb(process.memoryUsage().rss);
 
 if (mode === 'seal') {
-  const shard = a, ses = b, journal = path.join(path.dirname(shard), 'bench-journal.jsonl');
+  const shard = a, lock = b, journal = path.join(path.dirname(shard), 'bench-journal.jsonl');
   const size = fs.statSync(shard).size;
-  if (!fs.existsSync(shard + '.closed')) markClosed(shard);
   const t0 = Date.now(), at = {};
-  const res = await sealShard(shard, { sessionsRoot: ses, deleteOriginal: false, journal, onPhase: (p) => { at[p] = at[p] || Date.now() - t0; } });
+  const res = await sealSegment(shard, { lockFile: lock, journal, onPhase: (p) => { at[p] = at[p] || Date.now() - t0; } });
   const total = Date.now() - t0;
-  console.log(JSON.stringify({ e4: 'seal', input_bytes: size, input_gib: +(size / 2 ** 30).toFixed(3), records: res.records, outputs: res.outputs.length,
+  console.log(JSON.stringify({ e4: 'seal', input_bytes: size, input_gib: +(size / 2 ** 30).toFixed(3), records: res.records,
     sealed_bytes: res.sealedBytes, sealed_pct: +(res.sealedBytes / size * 100).toFixed(3),
     encode_s: +(at.written / 1000).toFixed(1), verify_s: +((at.verified - at.written) / 1000).toFixed(1), total_s: +(total / 1000).toFixed(1),
     peak_rss_mb: mb(process.resourceUsage().maxRSS * 1024), heap_limit_mb: mb((await import('node:v8')).getHeapStatistics().heap_size_limit) }));

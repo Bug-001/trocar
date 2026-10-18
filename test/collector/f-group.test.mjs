@@ -40,7 +40,7 @@ import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
 import { createServer } from '../../src/server.mjs'
-import { sealShard, sealUnchecked } from '../../src/raw/seal.mjs'
+import { sealSegment } from '../../src/raw/seal.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -396,25 +396,19 @@ test('F6 install / uninstall: an entry uninstall cannot undo → exit-worthy `le
   s.done()
 })
 
-test('F7 sealing and reading: a seal refused on an unclosed shard is a journal line the endpoint lists (⚠); an unreadable journal is said; a sealed flows/ file is still read', async () => {
+test('F7 sealing and reading: a seal refused on a file that is not a closed segment is a journal line the endpoint lists (⚠); an unreadable journal is said', async () => {
   const s = sandbox()
   const journal = path.join(s.asight, 'raw', 'journal.jsonl')
   const shard = path.join(s.asight, 'sessions', 'p', 's', 'calls.ndjson')
   fs.mkdirSync(path.dirname(shard), { recursive: true }); fs.writeFileSync(shard, '{"id":"a"}\n')
-  await assert.rejects(sealShard(shard, { journal }))
+  await assert.rejects(sealSegment(shard, { lockFile: path.join(s.collector, 'lock'), journal }))
   let h = await endpoint(s)
   assert.deepEqual(h.raw.problems.map((x) => [x.op, x.outcome]), [['seal', 'refused']])
   assert.deepEqual([h.summary.state, h.summary.part], ['failing', 'raw'], 'the top bar turns ⚠')
-  // a sealed flows/ day of an installed collector: its failure is still listed
+  // Nothing else can be sealed any more: only the daemon seals, and only a closed segment of raw/ (4.2 §自动封存), so
+  // the old "a sealed flows/ day is still read" case cannot occur. Reading a sealed SEGMENT end to end (every record
+  // by its id, byte for byte) is test/query/segment-index.test.mjs.
   await install(s)
-  const old = path.join(s.collector, 'flows', '2000-01-01.ndjson')
-  fs.mkdirSync(path.dirname(old), { recursive: true })
-  fs.writeFileSync(old, JSON.stringify({ ts: new Date(Date.now() - 3600e3).toISOString(), event: 'failure', where: 'engine', code: 'loader-down', reason: 'in a sealed file' }) + '\n')
-  await sealUnchecked(old, { split: false, deleteOriginal: true, journal })
-  assert.ok(!fs.existsSync(old))
-  h = await endpoint(s)
-  assert.ok(keys(h).includes('engine/loader-down') && h.read.files.some((f) => f.endsWith('.sealed')), `read through src/raw/: ${keys(h)}`)
-  assert.match((await statusOffline(s)).text, /loader-down/, 'and by an offline status')
   // the journal itself unreadable
   fs.chmodSync(journal, 0o000)
   try {

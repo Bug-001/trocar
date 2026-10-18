@@ -110,7 +110,6 @@ const COUNT_PINS = {
   'test/collector/core/tls-ca.test.mjs': 1,
   'test/dissect/request-body.test.mjs': 1,
   'test/query/source-refresh.test.mjs': 2,
-  'test/raw/seal-locks.test.mjs': 1,
   'test/view/analyze-admission.test.mjs': 1,
   'test/view/control-wire.test.mjs': 1,
   'test/view/session-paging.test.mjs': 5,
@@ -158,7 +157,7 @@ export function testOnlyExports() {
 }
 // The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
 // It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
-const TEST_ONLY_EXPORTS_CEILING = 346 // T5 + T7 merged (measured): the retention surface deleted (-2), the remaining named queries gave view/board, view/pricing and dissect/capture-labels exports src callers (-1); query/disk.mjs restored for the classes query (+2, its callers are reached once T8 / T9 wire the entries)
+const TEST_ONLY_EXPORTS_CEILING = 337 // T3 + T5 + T7 merged (measured): the single-output sealer's dropped entries (-9), the retention surface (-2), the named queries giving view / pricing / capture-labels exports src callers (-1), query/disk.mjs kept for the classes query (+2)
 
 test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
   const n = testOnlyExports().length
