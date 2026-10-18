@@ -50,8 +50,6 @@ export async function run({ home, fs, now, errors }) {
       asight_bytes: du.total_bytes,
       records_bytes: segs.reduce((n, s) => n + (s.state === 'sealed' ? 0 : s.bytes), 0),
       sealed_bytes: segs.reduce((n, s) => n + (s.sealed_bytes || 0), 0),
-      // The older capture locations in one line (main-session decision, 2026-10-18): they are not segments.
-      legacy_bytes: du.groups.captures.bytes,
     },
     file: table.file,
     last_change: table.lastChange,
