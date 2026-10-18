@@ -250,3 +250,26 @@ export function validateFinding(f) {
   }
   return bad
 }
+
+/** Problems with a `query` document against 附录 C.5 (`[]` = valid): every document, whatever the name, has
+ *  `schema` · `command` · `ok` · `errors:[{where, reason}]`, and a paged one has `next` and `has_more` too. */
+export function validateQueryDoc(doc, name = doc && doc.command) {
+  if (!isObject(doc)) return ['document: not an object']
+  const bad = []
+  if (doc.schema !== SCHEMA_VERSION) bad.push(`schema: ${JSON.stringify(doc.schema)}, expected the integer ${SCHEMA_VERSION}`)
+  if (doc.command !== name) bad.push(`command: ${JSON.stringify(doc.command)}, expected ${JSON.stringify(name)} (C.5: the query's own name, and no second \`query\` key)`)
+  if ('query' in doc) bad.push('query: C.5 allows no such key — the name is `command`')
+  if (typeof doc.ok !== 'boolean') bad.push('ok: not a boolean')
+  if (!Array.isArray(doc.errors)) bad.push('errors: not a list')
+  else doc.errors.forEach((e, i) => {
+    if (!isObject(e)) { bad.push(`errors[${i}]: not an object {where, reason}`); return }
+    for (const k of ['where', 'reason']) if (!isString(e[k]) || e[k].trim() === '') bad.push(`errors[${i}].${k}: empty`)
+  })
+  if (doc.ok !== (Array.isArray(doc.errors) && doc.errors.length === 0)) bad.push('ok: says something else than `errors` does')
+  if ('has_more' in doc || 'next' in doc) {
+    if (typeof doc.has_more !== 'boolean') bad.push('has_more: not a boolean')
+    if (!(doc.next === null || isString(doc.next))) bad.push('next: neither the next --cursor nor null')
+    if (doc.has_more !== (doc.next !== null)) bad.push('next: says something else than `has_more` does')
+  }
+  return bad
+}

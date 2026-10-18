@@ -76,3 +76,20 @@ test('段的状态:守护进程的当前段在写,其余关闭,带 .sealed 的�
   const idle = await allSegments({ home, lockState: () => ({ state: 'stale', lock: { pid: 1, segment: SEG2 } }) })
   assert.deepEqual(idle.map((s) => s.state), ['sealed', 'closed', 'closed'])
 })
+
+test('封存后记录 id 与索引字段不变(V88 读取侧)', async () => {
+  const { sealUnchecked } = await import('../../src/raw/seal.mjs')
+  const home = rawHome()
+  const f = writeSegment(home, SEG, [{ id: 'a', sessionKey: 's-1' }, { id: 'b', class: 'files', is_llm: false, status: 404 }])
+  const before = await segmentIndex({ home, segment: SEG })
+  const res = await sealUnchecked(f, { split: false, deleteOriginal: true, journal: null })
+  fs.renameSync(res.outputs[0].path, path.join(home, 'raw', `${SEG}.sealed`))
+  fs.rmSync(indexDir(home), { recursive: true })
+  const after = await segmentIndex({ home, segment: SEG })
+  assert.deepEqual(after.records, before.records)
+  assert.deepEqual(after.problems, [])
+  const [seg] = await allSegments({ home, lockState: () => ({ state: 'none' }) })
+  assert.equal(seg.state, 'sealed')
+  assert.equal(seg.sealed_bytes, fs.statSync(path.join(home, 'raw', `${SEG}.sealed`)).size)
+  assert.equal(seg.bytes, before.records.reduce((n, r) => n + r.stored_bytes + 1, 0)) // the plaintext bytes, from the sealed index
+})
