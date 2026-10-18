@@ -27,6 +27,7 @@ import { asightHome, backupDir, collectorDir, standaloneCommand } from '../off/p
 import { orphanBackups } from '../off/backup.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { checkStandalone } from '../off/standalone.mjs'
+import { memoProcQuestions } from '../off/proc.mjs'
 
 const USAGE = 'usage: asight doctor [<harness>...] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
@@ -112,11 +113,15 @@ const realUndetermined = (u) => u.filter((x) => x.reason !== 'no captured data y
 
 /** The 附录 C.4 document. `status`'s own document is folded in under `status`, so one read answers both. */
 export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = process.env, platform = process.platform, deps = {} } = {}) {
+  const close = memoProcQuestions() // one command, one answer per OS question (D62 task E): the trailing capture-health read asks the daemon pid's identity again
+  try { return await doctorDocOf({ names, home, env, platform, deps }) } finally { close() }
+}
+async function doctorDocOf({ names, home, env, platform, deps }) {
   const fs = deps.fs || nodeFs
-  const c = await collect({ home, env, sourceFlags: [], deps })
+  // the capture files and what `status` reads are independent: the disk walk and the OS questions run together (D62 task E)
+  const [c, f] = await Promise.all([collect({ home, env, sourceFlags: [], deps }), statusFacts({ names, home, env, platform, deps })])
   const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
   const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors, platform })
-  const f = await statusFacts({ names, home, env, platform, deps })
   const status = statusDocOf(f)
   let findings = null, findingsError = null
   if (f.facts) { try { findings = diagnose({ facts: f.facts, topology: f.topology, harnesses: names, user: f.user }) } catch (e) { rethrowSandbox(e); findingsError = errText(e) } }

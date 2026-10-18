@@ -673,3 +673,31 @@ test('CM23 status half: the holders\' pids — from the daemon\'s poll (GET /hol
   assert.deepEqual(j.holders.map((x) => [x.harness, x.pid]), [['codex', 5151]])
   assert.equal(j.cert.intermediate.state, 'unknown'); assert.match(j.cert.intermediate.reason, /not-running/)
 })
+
+// ── D62 task E / 1.6 §3.1: one question, one answer ──────────────────────────────────────────────────────────────────────
+import { collectorDir } from '../../src/off/paths.mjs'
+
+test('one `status` asks the OS each question once: on Windows the whole process table is one PowerShell and the daemon pid\'s identity comes out of that same answer (it used to be three starts, ~450 ms each on the Windows test machine)', async () => {
+  const fresh = tmpDir('asight-once-')
+  const CREATED = 1_740_000_123_456, BOOTED = 1_740_000_000_000, PID = 4242
+  const dir = collectorDir(fresh)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lock'), `${JSON.stringify({ pid: PID, start_time: String(CREATED), boot_id: String(BOOTED), socket: SOCK, engine_port: 47123 })}\n`)
+  const rows = [{ p: PID, pp: 1, n: 'node.exe', x: 'C:\\n.exe', s: CREATED, c: 'node asight.mjs daemon' }]
+  const calls = []
+  const exec = (file, args) => {
+    const cmd = [file, ...args].join(' ')
+    calls.push(cmd)
+    if (/Win32_Process \| ForEach-Object/.test(cmd)) return { status: 0, stdout: `boot ${BOOTED}\n${JSON.stringify(rows)}`, stderr: '' }
+    if (/Win32_Process -Filter/.test(cmd)) return { status: 0, stdout: JSON.stringify({ s: CREATED, b: BOOTED }), stderr: '' }
+    return { status: 0, stdout: '', stderr: '' }
+  }
+  const parts = { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: {} }
+  const io = fakeIo()
+  const exit = await runStatusCli(['--json'], { io, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps: { request: down(), socketPath: SOCK, exec, parts, user: 'alice', spawn: absentSpawn, alive: () => true } })
+  const doc = JSON.parse(io.stdoutText())
+  assert.equal(calls.filter((c) => /Win32_Process \| ForEach-Object/.test(c)).length, 1, 'the process table: one question for the whole command')
+  assert.equal(calls.filter((c) => /Win32_Process -Filter/.test(c)).length, 0, 'and not one identity question of its own: the table\'s answer carries the pid\'s creation time and the machine\'s boot time')
+  assert.deepEqual([doc.daemon.running, doc.daemon.responding], [null, false], 'the identity the table gave matched the lock byte for byte: a daemon that holds the lock and does not answer (a mismatch would read as a stale lock, [false, null])')
+  assert.equal(exit, EXIT.ok, io.stdoutText())
+})
