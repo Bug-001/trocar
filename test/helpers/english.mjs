@@ -18,5 +18,8 @@ export function assertEnglish(text, where = 'the output') {
   const bare = String(text).replace(/\u001b\[\d+m/g, '')
   for (const [re, what] of BAD) assert.ok(!re.test(bare), `${where} holds ${what}:\n${bare}`)
   for (const ch of bare) assert.ok(ch.codePointAt(0) < 128, `${where} is not ASCII (${JSON.stringify(ch)}):\n${bare}`)
-  for (const line of bare.split('\n')) assert.ok(line.length <= WIDTH, `${where} has a line of ${line.length} columns (max ${WIDTH}):\n${line}`)
+  for (const line of bare.split('\n')) {
+    if (!line.trim().includes(' ')) continue // §1.1⑥: one long value (a path, a command) keeps its own line unbroken, however long it is
+    assert.ok(line.length <= WIDTH, `${where} has a line of ${line.length} columns (max ${WIDTH}):\n${line}`)
+  }
 }

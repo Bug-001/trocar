@@ -32,13 +32,21 @@ async function sandbox({ installed = true } = {}) {
   const sh = sevenHomes(home)
   const dir = path.join(home, '.asight', 'collector')
   const sys = fakeSystem()
-  const unit = (script = '/repo/bin/asight.mjs') => userUnit({ home, node: '/usr/bin/node', script, run: sys.exec.run })
+  const unit = (script = '/repo/bin/asight.mjs') => userUnit({ home, node: '/usr/bin/node', script, run: sys.exec.run, spawn: fakeSpawn(sys.daemon) })
   const opts = (o = {}) => ({ home, env: sh.env, osName: 'linux', harnesses: descs, freePort: async () => 47011, roots: ROOTS, confirm: async () => true, unit: unit(), request: sys.daemon.request, socketPath: SOCK, sleep: async () => {}, linger: () => true, user: 'alice', ...o })
   const install = async (o = {}) => { await installCollector({ ...opts(o), unit: null }); installed = true }
   const run = async (o = {}) => { if (!installed) await install(o); return turnOn(opts(o)) }
   if (installed) await install()
   return { home, sh, dir, sys, run, unit, install }
 }
+// `unit.start()` (the `--no-autostart` run) really spawns a daemon: every test hands in its own spawn, so no test ever starts one (0.1 §3).
+// It brings the given fake daemon up, as a real start does.
+function fakeSpawn(daemon = null) {
+  const spawn = (exe, args) => { spawn.calls.push([exe, ...args].join(' ')); if (daemon) daemon.state.up = true; return { pid: 4242, unref: () => {}, on: () => {} } }
+  spawn.calls = []
+  return spawn
+}
+
 const asightOnly = (rel) => rel.startsWith('.asight') || rel.startsWith(path.join('.config', 'systemd'))
 const userView = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([rel]) => !asightOnly(rel)))
 
@@ -251,7 +259,7 @@ test('R12: a state.json a version 1 collector wrote (desired on or off) is read 
   }
 })
 
-test('on: with no daemon answering and no unit (--no-unit) it writes everything, exits 0 and says how to start the daemon; with a unit it starts one (--no-autostart: start only, never enable)', async () => {
+test('on: with no daemon answering and no unit it writes everything, exits 0 and says how to start the daemon; --no-autostart writes no login entry and starts the daemon directly this once (1.6 §3.3)', async () => {
   const s = await sandbox()
   const down = fakeDaemon({ up: false })
   const bare = await s.run({ unit: null, request: down.request })
@@ -263,26 +271,29 @@ test('on: with no daemon answering and no unit (--no-unit) it writes everything,
 
   const t = await sandbox()
   const sys = fakeSystem()
-  const r = await t.run({ unit: userUnit({ home: t.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run: sys.exec.run }), request: sys.daemon.request, autostart: false })
+  const spawn = fakeSpawn(sys.daemon)
+  const r = await t.run({ unit: userUnit({ home: t.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run: sys.exec.run, spawn }), request: sys.daemon.request, autostart: false })
   assert.equal(r.exit, 0)
-  assert.deepEqual(sys.exec.calls, ['systemctl --user start asight-collector.service'], 'started for this run, not enabled')
-  assert.deepEqual([r.receipt.daemon.state, r.receipt.daemon.started, r.receipt.unit.enabled], ['running', true, false])
+  assert.deepEqual(spawn.calls, ['/usr/bin/node /repo/bin/asight.mjs daemon'], 'the daemon is started directly, this once')
+  assert.deepEqual(sys.exec.calls, [], 'no systemctl at all: nothing is enabled and no unit is loaded')
+  assert.ok(!fs.existsSync(path.join(t.home, '.config', 'systemd')), '--no-autostart writes no login entry')
+  assert.deepEqual([r.receipt.daemon.state, r.receipt.daemon.started, r.receipt.unit], ['running', true, null])
 })
 
 test('on: a unit systemd refuses to enable, a daemon that never answers, a kernel that does not confirm — each exit 1 with the reason, recorded; the attach is not asked when the unit failed', async () => {
   const refused = await sandbox()
   const sys = fakeSystem()
   const ex = recordingExec({ fail: (cmd) => (/enable/.test(cmd) ? { status: 1, stderr: 'Failed to connect to bus' } : null) })
-  let r = await refused.run({ unit: userUnit({ home: refused.home, node: '/n', script: '/s', run: ex.run }), request: sys.daemon.request })
+  let r = await refused.run({ unit: userUnit({ home: refused.home, node: '/n', script: '/s', run: ex.run, spawn: fakeSpawn() }), request: sys.daemon.request })
   assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /"systemctl --user enable --now" failed \(Failed to connect to bus\)/)
   assert.equal(readManifest(refused.dir).install?.state, 'complete', 'the install itself is complete; only the autostart is not')
 
   const silent = await sandbox(); const dead = fakeDaemon({ up: false })
   r = await silent.run({ request: dead.request })
-  assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /no daemon answers on \/x\/collector\.sock/)
+  assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /does not answer on \/x\/collector\.sock/)
 
   const notOn = await sandbox(); const sys2 = fakeSystem({ actual: 'off' })
-  r = await notOn.run({ unit: userUnit({ home: notOn.home, node: '/n', script: '/s', run: sys2.exec.run }), request: sys2.daemon.request })
+  r = await notOn.run({ unit: userUnit({ home: notOn.home, node: '/n', script: '/s', run: sys2.exec.run, spawn: fakeSpawn() }), request: sys2.daemon.request })
   assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /the daemon did not reach on/)
   const flows = fs.readdirSync(path.join(notOn.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(notOn.dir, 'flows', n), 'utf8').trim().split('\n').map((l) => JSON.parse(l)))
   assert.ok(flows.some((f) => f.event === 'failure' && f.where === 'switch'), 'recorded where the board looks (D38)')
@@ -298,7 +309,7 @@ test('on: the processes the daemon says are not captured yet are the restart lis
     { pid: 6002, agent: 'kimi-code', trusted: false, reason: 'kimi-not-via-shim' }, // a harness this on is not turning on
     { pid: 6003, agent: 'codex', trusted: false, reason: 'var-missing' }, // not a restart: the entry is not in effect for another reason
   ] })
-  const r = await s.run({ unit: userUnit({ home: s.home, node: '/n', script: '/s', run: sys.exec.run }), request: sys.daemon.request })
+  const r = await s.run({ unit: userUnit({ home: s.home, node: '/n', script: '/s', run: sys.exec.run, spawn: fakeSpawn() }), request: sys.daemon.request })
   assert.deepEqual(r.receipt.restart.map((x) => [x.harness, x.pid]), [['claude-code', 4121], ['codex', 5530], ['opencode', 6001]])
   assert.deepEqual(validateReceipt(r.receipt), [])
 })

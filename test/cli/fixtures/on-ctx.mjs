@@ -90,10 +90,14 @@ export function fakeDaemon({ up = true, agents = [], actual = 'on', onOn = null,
 /** The second argument of runOnCli, for a sandbox HOME. `deps` overrides what a test wants to see. */
 export function onCtx(home, io, { exec = recordingExec(), daemon = fakeDaemon(), harnesses = [cc], deps = {}, env = {} } = {}) {
   const parts = { os: 'none', harnesses, scan: async () => [], match: () => ({ agent: null }), arch: { unit } }
+  // `--no-autostart` really spawns `node <script> daemon` (1.6 §3.3): every ctx hands in its own spawn, so no test starts a daemon (0.1 §3).
+  // Reachable as `ctx.deps.spawn.calls`; it brings the fake daemon up, as the real start does.
+  const spawn = (exe, args) => { spawn.calls.push([exe, ...args].join(' ')); daemon.state.up = true; return { pid: 4242, unref: () => {}, on: () => {} } }
+  spawn.calls = []
   return {
     io, home, platform: 'linux',
     env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run'), ...env },
-    deps: { parts, exec: exec.run, request: daemon.request, helperState: () => ({ ok: true }), linger: () => true, roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, ...deps },
+    deps: { parts, exec: exec.run, request: daemon.request, spawn, helperState: () => ({ ok: true }), linger: () => true, roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, ...deps },
   }
 }
 

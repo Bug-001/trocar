@@ -40,7 +40,7 @@ function watchLines(watch, t) {
 
 /** Every file a plan would write or change, by full path and key, one per line (§1.4「计划写全」) → [{ what, detail }] for the caller to print or
  *  to put in `--json` as `planned`. `p` = what planOn returns (its `files` / `owned` / `entries` / `unit` are only what would be written). */
-export function planItems(p, { home = null, platform = 'linux' } = {}) {
+export function planItems(p, { home = null, platform = 'linux', autostart = true } = {}) {
   const t = (x) => tilde(x, home)
   const items = []
   const add = (what, path_, detail) => items.push({ what, path: path_ || null, detail })
@@ -53,6 +53,8 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   for (const o of p.owned || []) add(o.harness, o.path, `${t(o.path)}: asight's ${o.role}`)
   for (const e of p.entries || []) add(e.harness, e.path, `${t(e.path)}${e.real_path ? ` -> ${t(e.real_path)}` : ''}: ${e.what || e.keys.join('.')}`)
   if (p.unit) add('autostart', p.unit.path, `${t(p.unit.path)}: starts the collector at login`)
+  // §1.4「计划写全」: the symlink `enable` makes is a file of the user's too, so it is named as well (nothing is enabled with `--no-autostart`)
+  if (p.unit && autostart) for (const l of p.unit.links || []) add('autostart', l, `${t(l)}: the link that enables it`)
   for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output`)
   if (p.records) add('record', p.records, `${t(p.records)}/: what each run did`)
   else if (p.events) add('record', p.events, `${t(p.events)}: what each run did`)
@@ -62,7 +64,7 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
 /** Every file `on` (or Linux `install`) would write or change, before it writes any (§1.4): the count first, then every file by full path and key. */
 export function formatPlan(p, { home = null, autostart = true, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
-  const items = planItems(p, { home, platform })
+  const items = planItems(p, { home, platform, autostart })
   const backups = t(p.backups || path.join(home || '~', '.asight', 'backup'))
   return fit([
     c.bold(`asight ${command} will write ${items.length} file${items.length === 1 ? '' : 's'}:`),
@@ -121,7 +123,7 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
   if (r.skipped.length) lines.push(`Skipped: ${r.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`)
   if (lingerText(r)) lines.push(lingerText(r))
   for (const [h, x] of Object.entries(r.adopted || {})) if (saysSomething(x)) lines.push(adoptedLine(h, x))
-  if (r.daemon && !daemonBit) lines.push('The collector is not running, so nothing is captured yet. Start it: asight daemon')
+  if (r.daemon && !daemonBit) lines.push('The collector is not running, so nothing is captured yet.', 'Start it: asight daemon') // the command keeps its own line: folding must not cut it (§1.1③)
   if (r.restart.length) lines.push(`  ${c.yellow('!')} Restart to capture: ${r.restart.map((x) => `${x.harness} (pid ${x.pid} started before the certificate was there)`).join(', ')}. Until then they connect as they do now.`)
   const nothingNew = fresh && fresh.size === 0 && !(r.changed || []).length && !(r.created || []).length
   // A note is a problem exactly when the run's own `problems` list names it — never merely because the whole run failed.
@@ -133,7 +135,9 @@ export function formatOnReceipt(r, { tense = 'past', home = null, platform = 'li
     const isProblem = problemNotes ? problemNotes.has(n) : r.ok === false && past
     lines.push(`${isProblem ? 'Problem' : 'Note'}: ${n}`)
   }
-  lines.push(`Stop: asight off${r.standalone ? `   If asight itself breaks: ${c.dim(standaloneCommand(r.standalone, platform))}` : ''}`)
+  lines.push(`Stop: asight off`)
+  // §1.1③⑥: a command a person copies gets its own line, so folding never cuts it in two
+  if (r.standalone) lines.push(`If asight itself breaks: ${c.dim(standaloneCommand(r.standalone, platform))}`)
   lines.push(c.dim('Status: asight status   Remove asight: asight uninstall (your captured records stay)'))
   return fit(lines).join('\n')
 }
