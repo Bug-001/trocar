@@ -27,6 +27,7 @@ import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
+import { segmentIndex } from '../../src/query/index-build.mjs'
 
 const FAKE_HELPER = fileURLToPath(new URL('./arch/win32/fixtures/fake-helper.mjs', import.meta.url))
 const PID = 2_000_001 // the agent's pid as the fake readers answer it: never this process (the doors exclude their own pid) nor a real one
@@ -177,6 +178,14 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(Buffer.concat([Buffer.from(r.req_head_raw, 'latin1'), Buffer.from(r.req_body, 'utf8')]).toString('latin1'), REQ, 'the recorded request bytes are the bytes the mock received')
         assert.equal(r.resp_head_raw + r.resp.raw, REPLY, 'the recorded response bytes are the bytes the mock sent')
         assert.deepEqual([r.proc.pid, r.proc.agent], [PID, 'codex'])
+        // D62: the daemon indexed what it wrote. Before any query ran, the index of that segment is there and covers
+        // the record — so the first query answers from it instead of building it (3.9 s on 1 GB before this).
+        const idx = JSON.parse(fs.readFileSync(path.join(path.dirname(w.dir), 'index', `${lock.segment}.json`), 'utf8'))
+        assert.deepEqual(idx.records.map((x) => x.id), [`${lock.segment}:1`], 'the index covers the captured record')
+        assert.deepEqual([idx.records[0].host, idx.records[0].harness], [r.host, 'codex'])
+        assert.equal(idx.mark.size, fs.statSync(path.join(rawDir, `${lock.segment}.ndjson`)).size, 'to the last byte the daemon wrote')
+        const read = await segmentIndex({ home: path.dirname(w.dir), segment: lock.segment })
+        assert.deepEqual([read.bytesRead, read.problems], [0, []], 'a query reads no segment bytes and reports no cold build')
       } finally {
         for (const s of open) s.destroy()
         await box.stop()

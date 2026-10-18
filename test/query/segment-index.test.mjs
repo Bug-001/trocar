@@ -67,6 +67,59 @@ test('删掉 index/ 后重建,结果逐字段相等', async () => {
   assert.equal(withIndex.records[0].session_key, 's-1')
 })
 
+// D62: `maxBytes` is what lets the daemon's keeper index a backlog in chunks without blocking its event loop. The
+// chunks must add up to exactly what one pass stores, and one line bigger than a chunk must still make progress —
+// otherwise the keeper would loop for ever on a 10 MB record.
+test('分块补索引(maxBytes):每块只读新字节,合起来与一次建完全相同;单行大于一块也照样推进', async () => {
+  const home = rawHome()
+  const many = Array.from({ length: 12 }, (_, i) => ({ id: `r${i}`, ts: `2026-10-18T10:00:${String(i).padStart(2, '0')}.000Z` }))
+  writeSegment(home, SEG, many)
+  const whole = await segmentIndex({ home, segment: SEG, owner: true })
+  const oneGo = fs.readFileSync(path.join(indexDir(home), `${SEG}.json`))
+  fs.rmSync(indexDir(home), { recursive: true })
+  let passes = 0, read = 0
+  for (;;) {
+    const r = await segmentIndex({ home, segment: SEG, owner: true, maxBytes: 1000 })
+    passes++; read += r.bytesRead
+    if (r.done) break
+    assert.ok(passes < 50, 'the chunked catch-up does not finish')
+  }
+  assert.ok(passes > 2, `more than one chunk was needed (${passes})`)
+  const size = fs.statSync(path.join(home, 'raw', `${SEG}.ndjson`)).size
+  // every byte is read, and the only bytes read twice are the partial line a chunk ended in (at most one per chunk)
+  assert.ok(read >= size && read - size < passes * 1000, `${read} bytes read for a ${size}-byte segment in ${passes} chunks`)
+  assert.ok(fs.readFileSync(path.join(indexDir(home), `${SEG}.json`)).equals(oneGo), 'the chunked index is byte for byte the index of one pass')
+  assert.deepEqual((await segmentIndex({ home, segment: SEG })).records, whole.records)
+
+  // a chunk smaller than one record: the scan reads on until it has a whole line, so a call always makes progress
+  // (a keeper that looped on a 10 MB record would never catch up)
+  const big = rawHome()
+  writeSegment(big, SEG, [{ id: 'huge', body: 'x' }])
+  fs.appendFileSync(path.join(big, 'raw', `${SEG}.ndjson`), envLine({ id: 'huge2' }) + '\n')
+  let n = 0, last
+  do { last = await segmentIndex({ home: big, segment: SEG, owner: true, maxBytes: 1 }); n++ } while (!last.done && n < 5)
+  assert.ok(last.done, 'a chunk smaller than a record still finishes')
+  assert.equal(last.records.length, 2)
+})
+
+// D62 · D38: when the daemon did NOT keep the index current, the query that pays for it says so — the one case where
+// the lazy build is still taken (no daemon ever wrote this segment, index/ deleted, INDEX_V bumped). The threshold is
+// cost: more than one of the keeper's chunks (KEEPER_CHUNK_BYTES), which the keeper itself never leaves behind.
+test('冷建索引不静默:读取侧自己建了超过一块的索引时,在 errors 里说清楚;第二次读没有这条', async () => {
+  const home = rawHome()
+  // > 4 MB of records (envLine's bodies are fixed, so the padding goes in by hand — the index only needs valid JSON)
+  const fat = (i) => JSON.stringify({ ...JSON.parse(envLine({ id: `fat${i}` })), pad: 'z'.repeat(300_000) }) + '\n'
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
+  fs.writeFileSync(path.join(home, 'raw', `${SEG}.ndjson`), Array.from({ length: 20 }, (_, i) => fat(i)).join(''))
+  const cold = await segmentIndex({ home, segment: SEG })
+  assert.deepEqual(cold.problems.map((p) => p.code), ['index-cold'])
+  assert.match(cold.problems[0].reason, /MB of 20261018T100000Z itself \(the whole segment\)/)
+  assert.deepEqual((await segmentIndex({ home, segment: SEG })).problems, [], 'the index is current now: nothing to say')
+  // the daemon doing the same work is not a problem to report: it IS the owner
+  fs.rmSync(indexDir(home), { recursive: true })
+  assert.deepEqual((await segmentIndex({ home, segment: SEG, owner: true })).problems, [])
+})
+
 test('段的状态:守护进程的当前段在写,其余关闭,带 .sealed 的已封存', async () => {
   const home = rawHome()
   writeSegment(home, SEG, [{ id: 'a' }])

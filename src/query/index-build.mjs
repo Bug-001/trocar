@@ -15,6 +15,14 @@
 // re-read; anything else (a rewrite, a truncation, a different file at the same name) rebuilds whole.
 // A half line at the end of a segment (a crash) is not indexed and not rewritten — it becomes the next
 // record once the writer completes it.
+//
+// WHO KEEPS IT CURRENT (D62, 1.6 §4.1 随机取用 ≤ 0.5 s): the daemon, as a side effect of writing — it is the only
+// writer of a segment, so it is the only thing that can index the bytes it just appended
+// (src/collector/index-keeper.mjs for the segment it appends to, the seal worker for the sealed copy). The build here
+// stays as the FALLBACK — no daemon ever wrote this segment, the user deleted index/, INDEX_V was bumped, the segment
+// was rewritten — and a reader that pays for more than a chunk of it says so (`index-cold` in the document's errors,
+// D38) instead of silently charging the query seconds. `maxBytes` is what lets the keeper work in chunks: it stops at
+// the first line boundary past that many bytes and reports `done: false`, and the next call resumes where it stopped.
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { parseSegment, recordId } from '../collector/core/record/segments.mjs';
@@ -32,6 +40,10 @@ const rawDir = (home = asightHome()) => path.join(home, 'raw');
 export const indexDir = (home = asightHome()) => path.join(home, 'index');
 const INDEX_V = 3;
 const CHUNK = 1 << 20;
+// How many appended bytes one catch-up of the daemon's keeper takes (src/collector/index-keeper.mjs imports it): the
+// unit of "a chunk of index work". A READER that had to read more than this from a segment is the honest definition of
+// a cold index (D62 · D38): the keeper never leaves that much behind, so nothing was keeping this index current.
+export const KEEPER_CHUNK_BYTES = 4 << 20;
 const NL = 0x0a;
 // What a session is made of, per record, so `sessions` never reads a record back (1.6 §4.1 速度目标 ≤ 1 s).
 // Each is a fact of THIS record; the grouping and the counting are the read side's (src/query/rows.mjs), and
@@ -83,8 +95,10 @@ function recordOf(lineBuf, segment, lineNo, problems, offset = null) {
 }
 
 // Byte-scan `file` from `from`, one record per complete line, holding one chunk + one line at a time.
-// → { records, end, lines, bytesRead }: `end` = just past the last newline (where the next read resumes).
-function scanNdjson(fs, file, from, firstLine, segment, problems) {
+// → { records, mark, bytesRead, done }: mark.end = just past the last newline (where the next read resumes).
+// `maxBytes` stops the scan at the first line boundary past that many bytes (`done: false`); it always takes at least
+// one whole line, so a caller that loops until `done` always makes progress, however long a single line is.
+function scanNdjson(fs, file, from, firstLine, segment, problems, maxBytes = Infinity) {
   const fd = fs.openSync(file, 'r');
   try {
     const st = fs.fstatSync(fd);
@@ -96,8 +110,11 @@ function scanNdjson(fs, file, from, firstLine, segment, problems) {
       if (lineBuf.length) { const r = recordOf(lineBuf, segment, lineNo, problems, lineStart); if (r) records.push(r); }
       lineStart += lineBuf.length + 1;
     };
-    while (pos < st.size) {
-      const n = fs.readSync(fd, buf, 0, CHUNK, pos);
+    while (pos < st.size && (lineStart === from || pos - from < maxBytes)) {
+      // read no further than this call's budget; with no complete line yet the budget is ignored, so one line longer
+      // than a chunk is still taken whole and the caller always makes progress
+      const budget = maxBytes - (pos - from);
+      const n = fs.readSync(fd, buf, 0, Math.min(CHUNK, budget > 0 ? budget : CHUNK), pos);
       if (!n) break;
       let seg = 0;
       for (let i = 0; i < n; i++) {
@@ -110,9 +127,12 @@ function scanNdjson(fs, file, from, firstLine, segment, problems) {
       pos += n;
     }
     const end = lineStart;
-    const mark = { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, end, lines: lineNo,
+    const done = pos >= st.size;
+    // `size` is what the identity rule compares against (usability below). A scan that stopped early must NOT claim
+    // the bytes past `end`: it records the file as far as it indexed it, so the next read sees a GROWN file and resumes.
+    const mark = { size: done ? st.size : end, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, end, lines: lineNo,
       fp: fpRanges(end).map(([a, b]) => readRangeSync(fd, a, b).toString('base64')) };
-    return { records, mark, bytesRead: pos - from };
+    return { records, mark, bytesRead: pos - from, done };
   } finally { fs.closeSync(fd); }
 }
 
@@ -123,7 +143,7 @@ function scanSealed(fs, file, segment, problems) {
   let sf;
   try { sf = openSealed(file, { fs }); } catch (e) {
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(file)}: ${String((e && e.message) || e)}` });
-    return { records: [], mark: { size: fs.statSync(file).size, sealed: true }, bytesRead: 0 };
+    return { records: [], mark: { size: fs.statSync(file).size, sealed: true }, bytesRead: 0, done: true };
   }
   try {
     const records = [];
@@ -138,7 +158,7 @@ function scanSealed(fs, file, segment, problems) {
       if (rec) records.push(rec);
     }
     const st = fs.statSync(file);
-    return { records, mark: { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, sealed: true }, bytesRead: st.size };
+    return { records, mark: { size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, sealed: true }, bytesRead: st.size, done: true };
   } finally { sf.close(); }
 }
 
@@ -168,12 +188,17 @@ function writeIndex(fs, file, doc, problems) {
 }
 
 /**
- * segmentIndex({home, segment}) → { segment, source, records, problems, bytesRead }
+ * segmentIndex({home, segment, maxBytes, owner}) → { segment, source, records, problems, bytesRead, done }
  *   records: [{ id, ts, harness, class, host, path, status, stored_bytes, wire_bytes, session_key, is_llm }]
  *   bytesRead: what this call read from the segment (0 = the stored index was current).
+ *   done: the index now covers the segment to its last complete line (false only with `maxBytes`: call again).
+ *   maxBytes: index at most this many appended bytes (the daemon's keeper works in chunks; a reader never does).
+ *   owner: the caller is the daemon, keeping the index current. A reader (the default) that had to index more than
+ *     KEEPER_CHUNK_BYTES itself reports `index-cold`, because the daemon is supposed to have done it (D62, D38): that
+ *     problem is about this read, so — like `index-unwritable` — it is not stored in the index document.
  * Never throws for a segment it cannot read: the reason is in `problems` and the caller lists it in `errors`.
  */
-export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs } = {}) {
+export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false } = {}) {
   const problems = [];
   const sealedPath = path.join(rawDir(home), `${segment}.sealed`);
   const plainPath = path.join(rawDir(home), `${segment}.ndjson`);
@@ -183,23 +208,26 @@ export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs }
   const how = usability(fs, source, stored);
   // A stored index remembers what it could NOT read, and says it again on every later read: a problem
   // that only the read which BUILT the index reports would go silent the second time (D38).
-  if (how === 'reuse') return { segment, source, records: stored.records, problems: stored.problems || [], bytesRead: 0 };
+  if (how === 'reuse') return { segment, source, records: stored.records, problems: stored.problems || [], bytesRead: 0, done: true };
   if (how === 'resume' && stored.problems) problems.push(...stored.problems); // carried over, so they are not said once only
   let got;
   try {
     got = /\.sealed$/.test(source)
       ? scanSealed(fs, source, segment, problems)
-      : scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems);
+      : scanNdjson(fs, source, how === 'resume' ? stored.mark.end : 0, how === 'resume' ? stored.mark.lines + 1 : 1, segment, problems, maxBytes);
   } catch (e) {
     problems.push({ code: 'segment-unreadable', reason: `${path.basename(source)}: ${String((e && e.message) || e)}` });
-    return { segment, source, records: stored && how === 'resume' ? stored.records : [], problems, bytesRead: 0 };
+    return { segment, source, records: stored && how === 'resume' ? stored.records : [], problems, bytesRead: 0, done: true };
   }
   const records = how === 'resume' ? [...stored.records, ...got.records] : got.records;
   // what the scan found goes INTO the index, so a later reuse says it again; `index-unwritable` is about
   // this read, not about the file, so it stays out of the stored doc.
   const found = [...problems];
   writeIndex(fs, idxFile, { v: INDEX_V, segment, mark: got.mark, records, problems: found }, problems);
-  return { segment, source, records, problems, bytesRead: got.bytesRead };
+  // after the write, so it is never stored: this is about THIS read. A reader that had to index more than one of the
+  // keeper's chunks did work the daemon should have done, and the seconds it cost are its own (D62 · D38).
+  if (!owner && got.bytesRead > KEEPER_CHUNK_BYTES) problems.push({ code: 'index-cold', reason: `this query had to index ${Math.round(got.bytesRead / (1 << 20))} MB of ${segment} itself (${how === 'rebuild' ? 'the whole segment' : 'the part no index covered'}), which is what made it slow: the daemon keeps the index current while it captures, so this means no daemon wrote this segment, index/ was deleted, the index format changed, or the daemon was not running while these records arrived` });
+  return { segment, source, records, problems, bytesRead: got.bytesRead, done: got.done };
 }
 
 // WHICH SEGMENT IS BEING WRITTEN (main-session decision, 2026-10-18): there is no `.closed` marker.
