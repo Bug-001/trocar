@@ -233,7 +233,7 @@ async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.asight
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-drain-'))
   const mock = upstream ? await upstream() : await startMockUpstream({ tls: { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }, delays })
   const envelopes = [], errors = []
-  const store = createRecordStore({ root: path.join(dir, 'rec') })
+  const store = createRecordStore({ root: path.join(dir, 'rec'), raw: path.join(dir, 'rec') })
   const L = { recording: true, boom: false }
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 11, agent: 'claude-code', decrypt: true })
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(labCa.caCert), systemCa: fs.readFileSync(labCa.caCert, 'utf8'),

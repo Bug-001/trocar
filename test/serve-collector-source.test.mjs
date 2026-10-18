@@ -30,7 +30,7 @@ test('capture-<date>.ndjson under ~/.asight/collector is listed; flows/, audit/ 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-home-'));
   try {
     const col = collectorHome(home);
-    const store = createRecordStore({ root: col });
+    const store = createRecordStore({ root: col, raw: col });
     store.envelope(env('req_a-00001', 'COL'));
     // envelope-shaped look-alikes, each where the collector puts that stream: none may become a session
     store.flow(env('flow-1', 'FLOWS'));

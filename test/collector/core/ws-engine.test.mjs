@@ -34,7 +34,7 @@ async function lab(t, { terminal = TERMINAL, recording, delays, describe } = {})
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ws-engine-'))
   const mock = await startMockUpstream({ tls: { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }, delays })
   const envelopes = [], errors = []
-  const store = createRecordStore({ root: path.join(dir, 'rec') }) // real 0600 files: W10 and flows/ read the disk
+  const store = createRecordStore({ root: path.join(dir, 'rec'), raw: path.join(dir, 'rec') }) // real 0600 files: W10 and flows/ read the disk
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 11, agent: 'codex', decrypt: true })
   const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(labCa.caCert),
     store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => store.flow(f) }, onFailure: createFailureRecorder(path.join(dir, 'rec')).event, // as the daemon wires it

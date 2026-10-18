@@ -41,7 +41,7 @@ function connection(store, { target = '/v1/responses', maxCallBytes, flow = 'f1'
 }
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-wsinc-'))
-const store = createRecordStore({ root, onError: (e) => { throw e } })
+const store = createRecordStore({ root, raw: root, onError: (e) => { throw e } })
 const E = {}
 E.complete = connection(store, {}, (r) => { r.fromClient(cli(1, ev('response.create', { input: 'hi' }))); r.fromUpstream(srv(1, ev('response.completed'))) })[0]
 ;[E.undecoded, E.partial] = connection(store, { flow: 'f2' }, (r) => {

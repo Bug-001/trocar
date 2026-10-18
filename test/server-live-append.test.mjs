@@ -27,7 +27,7 @@ const get = (port, p) => new Promise((res, rej) => http.get({ host: '127.0.0.1',
 test('a call captured after `asight serve` started opens with its exact bytes (4.4 #10)', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-live-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const store = createRecordStore({ root: collectorHome(home), onError: (e) => { throw e; } });
+  const store = createRecordStore({ root: collectorHome(home), raw: collectorHome(home), onError: (e) => { throw e; } });
   t.after(() => store.close());
   store.envelope(env('req_x-00001', '2026-10-06T10:00:00.000Z', 'before the board started'));
   const { server } = await createServer({ dbPath: path.join(home, 'none.duckdb'), sourcePath: serveSource({ home, legacyExists: false }) });

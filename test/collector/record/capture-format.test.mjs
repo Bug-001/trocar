@@ -84,7 +84,7 @@ async function run(t, door, capture) {
   redirector.setIngress('of.claude-code.cli', meta)
   const engine = createEngine({
     redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: originCa.certPem, ingressToken: TOKEN,
-    store: { envelope: (e) => { envelopes.push(structuredClone(e)); return true }, flow: (f) => { flows.push(structuredClone(f)); return true } }, onFailure: (f) => failures.push(f),
+    store: { envelope: (e) => { envelopes.push(structuredClone(e)); return { ok: true, id: `20261007T000000Z:${envelopes.length}` } }, flow: (f) => { flows.push(structuredClone(f)); return true } }, onFailure: (f) => failures.push(f),
   })
   const { port: enginePort, ingressPort } = await engine.listen({ ingress: door === 'ingress' ? { port: 0 } : null })
   t.after(() => closeWithin(engine))

@@ -126,7 +126,7 @@ export function createWsRecorder({ flow, upgrade, seqStart = 0, genId, recordSto
         class: call.rt.class, level: call.rt.level, wire: { req: call.wireC, resp: call.wireS } },
     })
     let ok = false, why = null
-    try { ok = recordStore.envelope(env) !== false } catch (e) { why = e }
+    try { ok = recordStore.envelope(env).ok === true } catch (e) { why = e }
     if (!ok) { lost.add('write-failed'); fail('write-failed', why || recordStore.lastError || 'the store did not write the envelope', { seq: call.seq, id: env.id }); return }
     stats.recorded++
     if (partial.length) stats.partial++
