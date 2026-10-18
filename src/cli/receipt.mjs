@@ -155,6 +155,8 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
   else if (r.purge_data) removed.push(past ? 'your captured records (--purge-data)' : 'your captured records (--purge-data)')
   else kept.push(`your captured records${r.log ? `, in ${t(path.dirname(r.log))}/` : ''}`)
   if (typeof r.class_table === 'string') kept.push(`your traffic classes, ${t(r.class_table)}`)
+  // §3.6 / 4.6: a bundle a live process may still have open is kept with asight's CA taken out — the receipt says which, and who may hold it
+  for (const b of r.kept_bundles || []) kept.push(`${t(b.path)} (asight's certificate taken out)${(b.pids || []).length ? `: ${(b.pids || []).map((p) => `pid ${p}`).join(', ')} may have loaded it` : ''}`)
   const lines = [!past
     ? 'asight uninstall will take out everything install put on this machine, and remove the root certificate from your trust settings.'
     : r.ok === false ? 'asight uninstall did not finish. What is left is below.'
@@ -163,8 +165,10 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
   if (removed.length) lines.push(past ? 'Removed' : 'Will remove', ...removed.map((x) => `  ${x}`))
   if (kept.length) lines.push('Kept', ...kept.map((x) => `  ${x}`))
   const d = r.daemon || {}
-  if (d.state === 'stopped' && d.pid) lines.push(`The collector (pid ${d.pid}) was stopped.`)
+  if (d.state === 'stopped') lines.push(`The collector${d.pid ? ` (pid ${d.pid})` : ''} was stopped.`)
   else if (d.state === 'unresponsive' && d.pid) lines.push(`The collector (pid ${d.pid}) did not answer and could not be stopped. Stop it yourself: kill -9 ${d.pid}`)
+  // §1.1: a connection nothing else would end was cut — how many is said, never left to --json alone
+  if ((r.relayed || {}).cut) lines.push(`${r.relayed.cut} connection${r.relayed.cut === 1 ? '' : 's'} that would not end by itself ${r.relayed.cut === 1 ? 'was' : 'were'} cut.`)
   for (const n of r.non_identical || []) lines.push(`Not byte for byte what it was (you changed it after asight did; only asight's part was taken out): ${t(n.path)} (backup ${t(n.backup)})`)
   for (const l of r.left || []) lines.push(`Left in place: ${t(l.path)}: ${l.reason}`)
   for (const p of r.problems || []) lines.push(`Problem: ${p}`)

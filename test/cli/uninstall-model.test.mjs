@@ -51,11 +51,11 @@ test('CM24 · daemon up: a holder the daemon names (GET /holders over its real e
     const { receipt, exit } = await uninstall(w)
     assert.deepEqual([exit, receipt.code], [1, 'collectors-online'])
     assert.ok(receipt.problems.some((p) => p.includes('asight off') && p.includes('asight uninstall')), 'the refusal gives the steps: asight off, then asight uninstall (1.6 §9.6 collectors-online)')
-    assert.match(receipt.problems.join('\n'), /pid 4242 \(codex\)/)
+    assert.match(receipt.problems.join('\n'), /codex \(pid 4242\)/)
     assert.deepEqual(tree(w.home), before, 'not one file changed')
     const purged = await uninstall(w, {}, { purgeData: true }) // the receipt of a refused --purge-data says the captures stay (it said 「采集数据已删」)
     assert.deepEqual([purged.exit, purged.receipt.code, tree(w.home)], [1, 'collectors-online', before])
-    assert.doesNotMatch(formatUninstallReceipt(purged.receipt), /采集数据已删/)
+    assert.doesNotMatch(formatUninstallReceipt(purged.receipt), /your captured records \(--purge-data\)/)
   } finally { await server.close() }
 })
 
@@ -65,7 +65,7 @@ test('CM24 · a harness still on (desired on) → refused and named, nothing cha
   const before = tree(w.home)
   const { receipt, exit } = await uninstall(w)
   assert.deepEqual([exit, receipt.code], [1, 'collectors-online'])
-  assert.match(receipt.problems.join('\n'), /还开着: kimi-code/)
+  assert.match(receipt.problems.join('\n'), /capture is still on for kimi-code/)
   assert.deepEqual(tree(w.home), before)
 })
 
@@ -79,7 +79,7 @@ test('CM24 · daemon down: the CLI judges holders from the manifest\'s liveness 
   const proc = { pid: 777, startedAt: onAt + 1000, name: 'codex', comm: 'codex', exe: '/usr/local/bin/codex', args: ['codex'], cmdline: 'codex', argv: ['codex'] }
   const { receipt, exit } = await uninstall(w, { procs: async () => [proc] })
   assert.deepEqual([exit, receipt.code], [1, 'collectors-online'], JSON.stringify(receipt.problems))
-  assert.match(receipt.problems.join('\n'), /pid 777 \(codex\)/)
+  assert.match(receipt.problems.join('\n'), /codex \(pid 777\)/)
   assert.deepEqual(tree(w.home), before)
 })
 
@@ -208,7 +208,7 @@ for (const [cause, make] of Object.entries(UNFINISHED)) {
     assert.equal(exit, 1, JSON.stringify({ p: receipt.problems, l: receipt.left }))
     for (const p of CAPTURES) assert.equal(fs.readFileSync(path.join(w.dir, p), 'utf8'), `${p}\n`, `${p} stays`)
     assert.deepEqual([receipt.purge_data, receipt.kept_captures], [false, true])
-    assert.doesNotMatch(formatUninstallReceipt(receipt), /采集数据已删/)
+    assert.doesNotMatch(formatUninstallReceipt(receipt), /your captured records \(--purge-data\)/)
   })
 }
 test('invariant 2 · --purge-data on a clean run deletes the captures (the negative above is not vacuous)', async () => {
@@ -217,5 +217,5 @@ test('invariant 2 · --purge-data on a clean run deletes the captures (the negat
   const { receipt, exit } = await uninstall(w, {}, { purgeData: true })
   assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
   for (const p of CAPTURES) assert.equal(fs.existsSync(path.join(w.dir, p)), false, `${p} is gone`)
-  assert.match(formatUninstallReceipt(receipt), /采集数据已删/)
+  assert.match(formatUninstallReceipt(receipt), /your captured records \(--purge-data\)/)
 })
