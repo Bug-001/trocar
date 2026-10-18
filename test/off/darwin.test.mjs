@@ -41,16 +41,16 @@ function fakeLaunchd(order = null) {
 
 const writePlist = (home) => { const f = plistOf(home); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '<?xml version="1.0"?>\n<plist version="1.0"><dict><key>Label</key><string>com.asight.collector</string></dict></plist>\n'); return f }
 
-// the flip checklist ① (4.9 §4 末): a no-names `off` on darwin undoes the autostart through launchd — the agent booted out, the plist gone — and
-// systemctl is never asked for anything. There is no daemon (no lock): the `unitIsUp` branch is what stops the (absent) daemon, so the arm's bootout
-// is the only thing between KeepAlive and a daemon coming back.
-test('the flip ① (4.9 §4) with D61: a no-names off on darwin with no daemon stops the loaded agent (bootout: nothing drains) and keeps the plist enabled — launchd verbs only, never systemctl, never a disable', async () => {
+// the flip checklist ① (4.9 §4 末) under D61 + D62 ⑥: a no-names `off` on darwin asks launchd for NOTHING. There is no daemon here (no lock), and a
+// daemon KeepAlive brings back is now the wanted end state — doors shut, nothing on any agent's path — so there is nothing to boot out, nothing to
+// disable, and systemctl is never asked for anything either.
+test('D61 + D62 ⑥: a no-names off on darwin with no daemon asks launchd for nothing and keeps the plist enabled — never a bootout, never a disable, never systemctl', async () => {
   const home = tmpDir('asight-off-darwin-')
   const plist = writePlist(home)
   const launchd = fakeLaunchd()
   const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: { platform: 'darwin', exec: launchd.run, procs: async () => [], sleep: async () => {} } })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
-  assert.ok(launchd.has(new RegExp(`^launchctl bootout ${DOMAIN}/${LABEL}$`)), 'no daemon runs, so the loaded agent is booted out (the slash form)')
+  assert.ok(!launchd.has(/bootout/), `nothing is booted out: a daemon launchd brings back with no door open is the end state off wants (D62 ⑥): ${JSON.stringify(launchd.calls)}`)
   assert.ok(!launchd.has(/systemctl/), 'no systemd verb runs on darwin')
   assert.ok(fs.existsSync(plist), 'the plist stays (an install item, D61): the next login starts the daemon again, with no doors open')
   // D61: off never touches the autostart — no disable, and no autostart row in the receipt
@@ -59,10 +59,10 @@ test('the flip ① (4.9 §4) with D61: a no-names off on darwin with no daemon s
   assert.equal(receipt.ok, true)
 })
 
-// a daemon that answers and is draining after a no-names off is never booted out — the bootout took the daemon down mid-stream
-// while the receipt said clean. The daemon exits itself once drained (exit 0, which KeepAlive {SuccessfulExit:false} does not relaunch), and the
-// LaunchAgent is left exactly as `install` registered it (D61).
-test('with D61: a no-names off with a draining daemon touches launchd not at all — no bootout before the drain, and no disable', async () => {
+// Red before T19: a daemon that answers after a no-names off is never booted out — the bootout took it down mid-stream while the receipt said
+// clean. Under D62 ⑥ it is not even asked to exit: it closes its doors and goes on idling, so the LaunchAgent is left exactly as `install` registered
+// it (D61) and the next `on` asks the daemon that is there.
+test('with D61 + D62 ⑥: a no-names off with an answering daemon touches launchd not at all, and asks for no exit', async () => {
   const home = tmpDir('asight-off-darwin-')
   const plist = writePlist(home)
   const launchd = fakeLaunchd()
@@ -73,25 +73,25 @@ test('with D61: a no-names off with a draining daemon touches launchd not at all
     request: async (q) => { asked.push(q.body); return { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 1, waiting: 0, cut: 0 } } },
   } })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
-  assert.equal(asked[0].exit, true, 'the daemon is asked to exit once drained')
+  assert.equal(asked[0].exit, undefined, `proxy mode: the doors are the whole of it, no exit is asked for (D62 ⑥): ${JSON.stringify(asked[0])}`)
   assert.ok(!launchd.has(/bootout/), `no bootout while the daemon drains: ${JSON.stringify(launchd.calls)}`)
   assert.ok(!launchd.has(/^launchctl disable /), `no off disables the LaunchAgent (D61): ${JSON.stringify(launchd.calls)}`)
   assert.ok(fs.existsSync(plist))
-  assert.equal(receipt.daemon.state, 'draining')
+  assert.deepEqual([receipt.daemon.state, receipt.daemon.exits_after], ['running', undefined], 'the receipt says it keeps running, with nothing to wait for')
   assert.equal(receipt.autostart, undefined, 'no autostart row (D61)')
 })
 
-// the failure half (D38) under D61: off does not disable the autostart, but it does boot the loaded agent out to stop the daemon (4.9 §4's order);
-// a bootout launchctl refuses is said — the off is not clean (exit 1), the receipt names the way out, and the failure record carries the closed
-// set's stop-failed. There is no autostart row to put it in any more.
-test('the flip ① (4.9 §4) with D61: a bootout launchctl refuses is not a silent pass — exit 1, the receipt names the way out, the record says stop-failed', async () => {
+// the failure half (D38): off boots the loaded agent out when it has to STOP a daemon that does not answer (4.9 §4's order — a stopped daemon under a
+// loaded agent is pulled right back). A bootout launchctl refuses is said: the off is not clean (exit 1), the receipt names the way out, and the
+// failure record carries the closed set's stop-failed. There is no autostart row to put it in (D61).
+test('the flip ① (4.9 §4) with D61: stopping a daemon that does not answer, a bootout launchctl refuses is not a silent pass — exit 1, the receipt names the way out, the record says stop-failed', async () => {
   const home = tmpDir('asight-off-darwin-')
   const dir = path.join(home, '.asight', 'collector')
   fs.mkdirSync(path.join(dir, 'flows'), { recursive: true })
   writePlist(home)
   const calls = []
   const run = (file, args) => { const cmd = [file, ...args].join(' '); calls.push(cmd); return /print /.test(cmd) ? { status: 0, stdout: '', stderr: '' } : { status: 1, stdout: '', stderr: 'Boot-out failed: the operation was cancelled' } } // present, but the bootout refuses
-  const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: { platform: 'darwin', exec: run, procs: async () => [], sleep: async () => {} } })
+  const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: { platform: 'darwin', exec: run, procs: async () => [], sleep: async () => {}, socketPath: '/x/collector.sock', daemonState: async () => ({ state: 'unresponsive', reason: 'does not answer', socket: '/x/collector.sock' }), alive: () => true } })
   assert.equal(exit, 1, 'a not-done off')
   assert.equal(receipt.autostart, undefined, 'off has no autostart row to fail in (D61)')
   assert.ok(receipt.problems.some((p) => /bootout/i.test(p)), `the receipt says the bootout failed: ${JSON.stringify(receipt.problems)}`)

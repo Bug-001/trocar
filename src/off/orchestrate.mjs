@@ -28,6 +28,7 @@ import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from './control-client.mjs'
 import { unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
+import { isProxyMode } from './mode.mjs'
 import { plistFilePath, AGENT_LABEL, agentState } from './darwin.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
@@ -388,7 +389,7 @@ function refuseUnknownKinds(manifest, receipt, standalone) {
   // the copy sends the person to `asight off` (the asight that wrote the manifest); `asight off` itself cannot send anyone to itself (V35)
   const who = standalone ? 'run `asight off`, from the asight that wrote it' : 'use the asight-off of the newer asight that wrote it'
   receipt.left.push(...unknown.map((u) => ({ path: u.path ?? null, result: 'unknown-kind', reason: `an item of kind ${JSON.stringify(u.kind)}, which this asight-off does not know: ${who}` })))
-  receipt.problems.push(`the install manifest holds ${unknown.length} item(s) of a kind this asight-off (version ${OFF_VERSION}) does not know (${kinds}): a newer asight wrote it, and only a newer asight-off can undo it — ${who}. Nothing was changed: the routing is as it was, the daemon was not asked to stop`)
+  receipt.problems.push(`the install manifest holds ${unknown.length} item(s) of a kind this asight-off (version ${OFF_VERSION}) does not know (${kinds}): a newer asight wrote it, and only a newer asight-off can undo it: ${who}. Nothing was changed: the routing is as it was, the daemon was not asked to stop`)
   receipt.ok = false
   receipt.log = null
   return true
@@ -448,7 +449,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     if (manifest && manifest.unsupported) receipt.notes.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read: no entry would be touched`)
     else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by asight's own marks, after a yes` : 'no file holds asight\'s marks'}`)
     for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'asight has nothing on its path (it was never set up, or it is already off)' })
-    receipt.daemon = { pid: null, state: ids === null ? 'draining' : 'running' }
+    receipt.daemon = { pid: null, state: ids === null && !isProxyMode(w.platform) ? 'draining' : 'running' } // D62 ⑥: proxy mode's daemon keeps running
     if (!hadAnything && !receipt.changed.length && !receipt.removed.length) { receipt.nothing_installed = true; receipt.log = null } // said as it is (audit semantics 7); nothing would be written, so there is no log to point at
     return { receipt: shapeReceipt(receipt), exit: EXIT.ok }
   }
@@ -480,7 +481,10 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     if (w.deps.releaseHeld) await w.deps.releaseHeld(ids) // 5.1: held requests are released unchanged (a seam; 5.1 is not built)
 
     // 3 · the routing
-    const routing = await switchRoutingOff(w, { ids, now, exit: ids === null })
+    // D62 ⑥: only driver mode's daemon is asked to exit by an `off` with no names — there the exit IS what takes the kernel's watch table and links off.
+    // In proxy mode the doors are the whole of it: the daemon idles on (one state, the one D61's login start already leaves), and the next `on` asks it
+    // directly instead of waiting out launchd's ThrottleInterval. `uninstall` passes `exit: true` itself, on either mode.
+    const routing = await switchRoutingOff(w, { ids, now, exit: ids === null && !isProxyMode(w.platform) })
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
     receipt.daemon = routing.daemon && routing.daemon.state === 'draining' ? { ...routing.daemon, exits_after: routing.relayed && routing.relayed !== 'unknown' ? routing.relayed.closing : null } : routing.daemon // C.2 `daemon:{state, pid, exits_after}`
     receipt.relayed = routing.relayed
@@ -515,9 +519,10 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       // forward-only or stopped it through its controller — went with the kernel itself, D47's win32 twin: the engine's doors die with the daemon, nothing
       // outlives them to be steered, and uninstall's purge list still cleans kernel-era residue: kernel\, kernel-archive\, forwarder\.)
       // 5 · the login registration is NOT touched (D61): `on` rewrote the agents' config files, so a machine that came
-      // up without the daemon left every harness that was on unable to reach anything. The daemon was asked to exit once drained in step 3 and exits 0 —
-      // systemd's Restart=on-failure and launchd's KeepAlive {SuccessfulExit: false} leave a clean exit down — and at the next login it starts again and
-      // opens the doors the persisted desired state asks for (none, after this off). `install` registers it, `uninstall` takes it out.
+      // up without the daemon left every harness that was on unable to reach anything. In driver mode the daemon was asked in step 3 to exit once drained
+      // and exits 0 (systemd's Restart=on-failure and launchd's KeepAlive {SuccessfulExit: false} leave a clean exit down); in proxy mode it was not asked
+      // at all (D62 ⑥) and goes on idling with every door shut. Either way the next login starts it and it opens the doors the persisted desired state asks
+      // for (none, after this off). `install` registers it, `uninstall` takes it out.
     } else outcome = 'failed'
     let list = []
     try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errMessage(e)}), so the asight processes you started yourself are not listed`) }

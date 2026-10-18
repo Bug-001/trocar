@@ -50,13 +50,30 @@ test('§1.5: off as root is refused before anything is read or written, nothing 
   assert.deepEqual([snapshot(s.home), s.sys.exec.calls.length, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off'))], [before, calls, []])
 })
 
-test('1.6 §4 (D39⑥ executed 2026-10-11: the legacy off went with the old capture): every platform runs the NEW off — the undo arms, the receipt, the daemon told to drain and exit', async () => {
+test('1.6 §4 (D39⑥ executed 2026-10-11: the legacy off went with the old capture): the NEW off runs — the undo arms, the receipt, and in DRIVER mode the daemon told to drain and exit', async () => {
   const s = await installedHome({ names: ['claude-code'] })
   const io = fakeIo()
-  assert.equal(await runOffCli([], ctx(s, io, { platform: 'darwin' })), 0, io.text())
+  assert.equal(await runOffCli([], ctx(s, io)), 0, io.text()) // the sandbox is a Linux user's (off-ctx.mjs): driver mode
   assert.match(io.stdoutText(), /^Capture is off for all harnesses\. asight is no longer on their path\./, 'the NEW off ran and printed its receipt')
   assert.doesNotMatch(io.stdoutText(), /NODE_EXTRA_CA_CERTS/, 'and it took no certificate item: those are install\'s (D55①)')
+  // driver mode (Linux): the exit IS what takes the kernel's watch table and links off, so an off with no names asks for it (D62 ⑥ keeps this half)
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'], 'an arm only the new off has: the daemon was told to drain and exit')
+})
+
+// D62 ⑥: the other half of the same seam. In proxy mode the doors are the whole of it, so the daemon is NOT asked to exit — asking cost an `off` → `on`
+// cycle 9.7 s on the macOS test machine (launchd spawns a job at most once every ThrottleInterval seconds). The receipt says which it is, so a reader is never told
+// a daemon went away that did not. The real-socket end to end is test/collector/model-daemon-e2e.test.mjs; this pins the request and the receipt.
+test('D62 ⑥: in proxy mode an off with no names asks the daemon to switch off WITHOUT the exit, and the receipt says it keeps running', async () => {
+  for (const platform of ['darwin']) { // win32's arm asks through control.json, which this sandbox has none of (see the threading test below); its real-socket run is model-daemon-e2e
+    const s = await installedHome({ names: ['claude-code'] })
+    const io = fakeIo()
+    assert.equal(await runOffCli(['--json'], ctx(s, io, { platform, deps: { platform } })), 0, io.text())
+    assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {}'], `${platform}: no exit was asked for`)
+    const r = JSON.parse(io.stdoutText())
+    assert.deepEqual([r.all, r.daemon.state], [true, 'running'], `${platform}: ${io.stdoutText()}`)
+    assert.equal(r.daemon.exits_after, undefined, 'nothing to wait for')
+    assert.deepEqual(validateReceipt(r), [], 'the receipt validates (R5)')
+  }
 })
 
 test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing asked of the daemon — exits 0, prints the same files in the future tense as the real run then changes; --now is passed on; the old --remove-ca is a plain unknown option now', async () => {

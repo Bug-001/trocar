@@ -12,6 +12,7 @@ import { runSetupHelper } from '../../src/collector/cli.mjs'
 import { formatStatus } from '../../src/cli/status-text.mjs'
 import { runCli as runOne } from '../../src/cli/main.mjs'
 import { runDaemonCli } from '../../src/cli/daemon.mjs'
+import { DAEMON_ALREADY_UP } from '../../src/collector/core/control.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { osStubs } from '../helpers/os-stubs.mjs' // on a Mac the real bin's status asks launchd and the keychain (read-only): stubs answer, 0.1 §3
 
@@ -276,3 +277,22 @@ test('cli: the real bin runs `status` without a runtime dir on a HOME with nothi
   fs.rmSync(home, { recursive: true, force: true })
 })
 
+
+// D62 ⑥ (the hidden loop a review found): a second daemon starting while one answers must EXIT, not fail. A non-zero exit is retried by the platform for
+// as long as the other one lives — launchd's KeepAlive {SuccessfulExit: false} every ThrottleInterval, the Windows supervisor on its backoff (4.8 §7: 0 =
+// it was asked to stop, do not re-pull) — so the loop would burn CPU every 10 s with nothing to show. The reason is said once, into the daemon log (D38).
+test('cli: a daemon that finds another one answering on the control channel says so once and exits 0 — the platform must not retry it; any other start failure still exits 1', async () => {
+  const home = tmpDir('asight-cli-second-')
+  markInstalled(home)
+  const run = (already) => {
+    const daemon = { startDaemon: async () => { throw Object.assign(new Error(already ? 'another collector daemon is answering on /s' : 'the engine port is taken'), already ? { [DAEMON_ALREADY_UP]: true } : {}) } }
+    const t = io()
+    return runDaemonCli([], { io: t, home, env: {}, platform: 'darwin', deps: { daemon, proc: { on() {} }, getuid: () => 1000 } }).then((exit) => ({ exit, t }))
+  }
+  const second = await run(true)
+  assert.equal(second.exit, 0, 'already as asked: the OS mechanism is given no reason to start another one')
+  assert.equal(second.t.e.filter((l) => /another collector daemon is answering/.test(l)).length, 1, `said once: ${JSON.stringify(second.t.e)}`)
+  const other = await run(false)
+  assert.equal(other.exit, 1, 'a start that failed for any other reason is still a failure')
+  fs.rmSync(home, { recursive: true, force: true })
+})

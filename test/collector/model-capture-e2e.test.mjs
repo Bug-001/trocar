@@ -34,6 +34,7 @@ const PID = 2_000_001 // the agent's pid as the fake readers answer it: never th
 const BODY = '{"model":"e2e","input":"asight-model-e2e"}'
 const reqOf = (host) => `POST /v1/responses HTTP/1.1\r\nHost: ${host}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(BODY)}\r\n\r\n${BODY}`
 const REPLY = 'HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 4\r\n\r\npong'
+const doorOpen = (port) => new Promise((resolve) => { const s = net.connect(port, '127.0.0.1'); s.once('connect', () => { s.destroy(); resolve(true) }); s.once('error', () => resolve(false)) })
 const ok = (stdout) => ({ status: 0, stdout, stderr: '' })
 const no = (why) => ({ status: 1, stdout: '', stderr: why })
 const W = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -101,7 +102,7 @@ async function through({ door, auth, target, localPort, ca, req, open }) {
 }
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: a codex connection through the real door is decrypted and recorded verbatim; after off this holder is forwarded only, then the daemon exits`, { timeout: 60_000 }, async () => {
+  test(`${platform}: a codex connection through the real door is decrypted and recorded verbatim; after off this holder is forwarded only, and the daemon stays up with its door forward-only`, { timeout: 60_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '# the user\'s own\n')
@@ -167,9 +168,10 @@ for (const platform of ['darwin', 'win32']) {
         const probe = net.connect({ port: door, host: '127.0.0.1' }); open.push(probe)
         await onceWithin(probe, 'connect'); probe.destroy()
 
-        // the holder leaves the process table: the daemon drains and exits (CM23)
+        // the holder leaves the process table: the door closes, and the daemon goes on idling (CM23 under D62 ⑥ — proxy mode never asks it to exit)
         a.alive = false; win?.write()
-        assert.ok(await within(box.daemon.exited.then(() => true), 20_000, 'the daemon exited once its holder was gone'))
+        await within((async () => { for (;;) { if (!(await doorOpen(door))) return true; await new Promise((r) => setTimeout(r, 100)) } })(), 20_000, 'the door closed once its holder was gone')
+        assert.equal(await Promise.race([box.daemon.exited.then(() => 'exited'), new Promise((r) => setTimeout(() => r('up'), 500))]), 'up', 'and the daemon is still running, with no door open (D62 ⑥)')
 
         // D40: one record — the on window's exchange, its bytes exactly; nothing for the forwarded one
         const recs = fs.readdirSync(rawDir).flatMap((n) => fs.readFileSync(path.join(rawDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
