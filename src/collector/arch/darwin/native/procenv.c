@@ -5,9 +5,18 @@
 // show, libc setenv / putenv / unsetenv after launch do not.
 // Usage: procenv <pid> <NAME>... Answers only the named variables, never the whole environment (RFC 4.9 §5.2): each launch entry
 // whose name equals one of NAME exactly ("NAME=value", case-sensitive) is printed followed by one NUL, on stdout, exit 0.
+// Two facts of the process that are no environment entry are asked for by the names `:exe` and `:cwd`, which no environment entry
+// can have (a ':' is not in a variable name), and answered in the same `NAME=value NUL` records: `:exe` is the REAL executable —
+// the path the kernel exec'd (the first string of this same buffer), resolved, so a program started through a symlink or as a bare
+// word on PATH names its file — and `:cwd` the current directory, from proc_pidinfo(PROC_PIDVNODEPATHINFO) (an already resolved
+// vnode path). Both are the same user's processes only, as the environment is; a fact that cannot be read is simply absent from the
+// answer, never guessed (RFC 4.8 W4). They replace the `lsof` asks of RFC 4.9 §5.3 (one 3 ms helper, not a walk of every process's
+// file table).
 // Failure: the errno text on stderr, exit 1; bad argv (no pid, no name, a name with '=' or empty): exit 2.
 // Build: scripts/build-darwin-native.sh.
 #include <errno.h>
+#include <libproc.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +33,19 @@ static int is_apple(const char *s) {
 static int named(const char *e, char **names, int n) {      // e = "NAME=value"; exact NAME match
   for (int i = 0; i < n; i++) { size_t l = strlen(names[i]); if (strncmp(e, names[i], l) == 0 && e[l] == '=') return 1; }
   return 0;
+}
+
+static int asked(const char *name, char **names, int n) {   // is `name` one of the asked-for names?
+  for (int i = 0; i < n; i++) if (strcmp(names[i], name) == 0) return 1;
+  return 0;
+}
+
+static void record(const char *name, const char *value) {   // "NAME=value" and one NUL; an empty value is no fact
+  if (!value || !*value) return;
+  fputs(name, stdout);
+  fputc('=', stdout);
+  fputs(value, stdout);
+  fputc('\0', stdout);
 }
 
 int main(int argc, char **argv) {
@@ -46,6 +68,14 @@ int main(int argc, char **argv) {
   int nargs;
   memcpy(&nargs, buf, sizeof(nargs));
   char *p = buf + sizeof(nargs), *end = buf + sz;
+  if (asked(":exe", argv + 2, argc - 2)) {                 // the exec'd path, resolved (a symlink, a bare word on PATH) → the file
+    char real[PATH_MAX];
+    record(":exe", realpath(p, real) ? real : p);
+  }
+  if (asked(":cwd", argv + 2, argc - 2)) {                 // the vnode path of the process's current directory, already resolved
+    struct proc_vnodepathinfo vpi;
+    if (proc_pidinfo((int)pid, PROC_PIDVNODEPATHINFO, 0, &vpi, sizeof vpi) > 0) record(":cwd", vpi.pvi_cdir.vip_path);
+  }
   p += strnlen(p, (size_t)(end - p));                      // exec_path
   while (p < end && *p == '\0') p++;                       // its padding
   for (int i = 0; i < nargs && p < end; i++) p += strnlen(p, (size_t)(end - p)) + 1;
