@@ -13,6 +13,7 @@ import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userU
 import { elevationByWhoami, refuseElevatedByWhoami } from '../../../../src/off/win32.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, PIPE_PREFIX } from '../../../../src/collector/arch/win32/control-path.mjs'
+import { autostartBlock } from '../../../../src/collector/install.mjs' // D61: the refusal `registered()` feeds
 import { startControlServer, CONTROL_TOKEN_HEADER } from '../../../../src/collector/core/control.mjs'
 
 
@@ -447,6 +448,42 @@ test('W24 a /Query that did not run (timeout, blocked, no schtasks) is a failure
   const lost = fakeTools({ 'schtasks /Query': { status: 0 }, 'schtasks /Delete': { status: null, error: new Error('spawnSync schtasks ETIMEDOUT') }, 'reg query': { status: 1 } })
   const d = userUnit({ ...withHome(), run: lost }).remove()
   assert.deepEqual([d.task, typeof d.code, d.code !== 0], ['failed', 'number', true])
+})
+
+// ---- D61 / 1.6 §3.3: `registered()` — is the login entry registered AND enabled? ------------------------------------------------------------------
+
+/** The task's XML as `schtasks /Query /TN \asight\collector /XML` prints it, shortened to the elements the answer turns on (a Windows test machine, 2026-10-19, pass C /
+ *  win-6): `<Enabled>false</Enabled>` is in `<Settings>` only when the task is switched off — an enabled task has no such element at all. */
+const TASK_XML = (enabled) => ['<?xml version="1.0" encoding="UTF-16"?>', '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">', '  <Settings>',
+  '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>', ...(enabled ? [] : ['    <Enabled>false</Enabled>']), '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>', '  </Settings>',
+  '  <Triggers>', '    <LogonTrigger>', '      <UserId>TESTMACHINE\\tester</UserId>', '    </LogonTrigger>', '  </Triggers>', '</Task>'].join('\r\n')
+/** schtasks writes that XML as UTF-16LE with a BOM on a redirected stdout, and execTool decodes UTF-8 (and trims): what the code really gets is every ASCII character followed by a NUL. */
+const asSchtasksPrintsIt = (xml) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')]).toString('utf8').trim()
+/** A `schtasks` whose task is registered and answers `xml` to `/Query /XML` (null = the query fails), with no Run value of ours. */
+const taskThatAnswers = (xml) => fakeTools({ 'schtasks /Query': (file, args) => (args.includes('/XML') ? (xml === null ? { status: 1, stderr: 'ERROR: The system cannot find the file specified.' } : { status: 0, stdout: xml }) : { status: 0 }), ...NO_RUN_VALUE })
+
+test('D61 registered() answers the one question 1.6 §3.3 asks — registered AND enabled: a DISABLED task is not "present", in either encoding schtasks may print its XML in', () => {
+  for (const [how, form] of [['UTF-16LE decoded as UTF-8, as execTool gets it', asSchtasksPrintsIt], ['plain text', (x) => x]]) {
+    const on = userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(true))) })
+    assert.equal(on.registered().state, 'present', `${how}: an enabled task is the login entry`)
+    assert.equal(autostartBlock({ unit: on, osName: 'win32' }), null, `${how}: so \`on\` goes on`)
+    const off = userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(false))) })
+    assert.equal(off.registered().state, 'disabled', `${how}: /Query /TN exits 0 for a disabled task too, so the XML is what tells`)
+    assert.match(autostartBlock({ unit: off, osName: 'win32' }), /asight install$/, `${how}: and \`on\` refuses — nothing starts at the next login`)
+  }
+  // the XML could not be read: no verdict, so the refusal stands (D61: anything but a proven enabled entry)
+  const blind = userUnit({ ...withHome(), run: taskThatAnswers(null) })
+  assert.equal(blind.registered().state, 'unknown')
+  assert.match(autostartBlock({ unit: blind, osName: 'win32' }), /asight install$/)
+})
+
+test('D61 the Run-key fallback is still the login entry when the task is gone OR switched off (that fallback disables the task itself)', () => {
+  const withValue = (xml) => { // the task answers `xml` (null: not registered) and asight's own Run value is there
+    const run = fakeTools({ 'schtasks /Query': (file, args) => (xml === null ? { status: 1 } : args.includes('/XML') ? { status: 0, stdout: xml } : { status: 0 }), 'reg query': { status: 0, stdout: REG_OUT('REG_SZ', COMMAND) } })
+    return userUnit({ ...withHome(), run }).registered()
+  }
+  assert.equal(withValue(null).state, 'present', 'no task, our Run value: the §7 fallback IS the login entry')
+  assert.equal(withValue(TASK_XML(false)).state, 'present', 'a disabled task next to our Run value is what runKeyFallback leaves behind, and it does start at login')
 })
 
 // ---- W24: the Run-key fallback -------------------------------------------------------------------------------------------------------------------

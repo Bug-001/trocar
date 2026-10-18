@@ -123,13 +123,13 @@ export const AUTOSTART_MISSING = 'autostart-missing'
 /** D61 / 1.6 §3.3: the login entry is `install`'s and `on` never touches it, so an `on` whose entry is not registered would leave the agents'
  *  rewritten configs pointing at doors that nobody opens after the next login (without it nothing starts after a reboot and no agent can reach a door).
  *  One question per OS, asked of the arch's own autostart unit (`registered()`: launchctl print · schtasks /Query · systemctl --user is-enabled),
- *  so no call site has a platform branch. Anything but a proven `present` — not registered, or an answer that could not be read — refuses.
+ *  so no call site has a platform branch. Anything but a proven `present` — not registered, registered but switched off, or an answer that could not be read — refuses.
  *  → the reason (one English sentence ending in the fix command), or null when the entry is there (or there is no autostart on this platform). */
 export function autostartBlock({ unit, osName }) {
   if (!unit) return null
   const q = unit.registered()
   if (q.state === 'present') return null
-  return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, and the agents asight points at its doors would all fail to connect. Nothing was changed. Run: asight install`
+  return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, and the agents asight points at its doors would all fail to connect. Nothing was changed. Run: asight install`
 }
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
