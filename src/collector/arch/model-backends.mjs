@@ -81,9 +81,9 @@ export async function systemProxyWatch({ up, read, io = {}, failure = () => {}, 
  *  { spawn, exe, args } (win32). Everything above them stays this function's own. */
 export async function doorPartsFor({ os, env = process.env, event = () => {}, failure = () => {}, io = {} }) {
   if (!isModelOs(os)) throw new Error(`the collector model runs on macOS and Windows, not ${os}`)
-  const [up, { listProcs }] = await Promise.all([import(`./${os}/upstream.mjs`), import('../../off/proc.mjs')])
+  const [up, { listProcs, tableFromPsRows }] = await Promise.all([import(`./${os}/upstream.mjs`), import('../../off/proc.mjs')])
   const proxyOf = (text) => { const p = up.parseProxyText(text); return p && p.ok ? { kind: p.kind, host: p.host, port: p.port, ...(p.credentialed ? { auth: up.proxyAuthOf(text) } : {}) } : null }
-  let parts, watch
+  let parts, watch, winHelper = null
   if (os === 'darwin') {
     const [{ ownerOfSocket }, pi, { execTool, runAsync }] = await Promise.all([import('./darwin/socktable.mjs'), import('./darwin/procinfo.mjs'), import('../../off/exec.mjs')])
     // every lsof / ps of the accept path runs through execFile (runAsync), never spawnSync — the daemon keeps serving its
@@ -97,11 +97,18 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
     // no declared registry keys (plan §E.7 ruling 4): the model reads a policy value through policy.mjs (reg.exe), not this helper
     const [{ ownerOfSocket }, pi, { startHelper }] = await Promise.all([import('./win32/socktable.mjs'), import('./win32/procinfo.mjs'), import('./win32/helper.mjs')])
     const helper = startHelper({ env, onFailure: event, ...(io.helper || {}) })
+    winHelper = helper
     const r = pi.procReaders({ helper })
     parts = { ownerOf: (q) => ownerOfSocket({ helper, ...q, onFailure: event }), factsOf: (pid) => pi.factsOfPid(pid, { helper }), proc: r, close: () => helper.close() }
     watch = await systemProxyWatch({ up, read: up.readSystemProxyChain, io: { helper }, failure: (e) => failure('helper', e), event })
   }
-  return { ...parts, proxyOf, systemProxy: watch.now, procTable: () => listProcs({ platform: os, env, exec: io.exec || null }), close: () => { watch.stop(); parts.close() } }
+  // the process table (P12's holder poll, and the CLI's own question through `POST /helper`): on Windows the warm helper's `ps` verb, never a
+  // powershell.exe of its own — each start costs ~450 ms on a Windows test machine and `GET /holders` paid it per call (D62, 4.8 §1). An answer that is no
+  // list of rows throws: an empty table would read as "nobody holds the door" (D38).
+  const procTable = winHelper
+    ? async () => { const d = await winHelper.call('ps', { all: true }, { timeoutMs: 10000 }); const rows = tableFromPsRows(d && d.procs); if (!rows) throw new Error('the helper answered the process snapshot with no rows, so which agents are alive is not known'); return rows }
+    : () => listProcs({ platform: os, env, exec: io.exec || null })
+  return { ...parts, proxyOf, systemProxy: watch.now, procTable, helper: winHelper, close: () => { watch.stop(); parts.close() } }
 }
 
 /** The proxy-mode half of status's facts on macOS / Windows (1.6 §9.7, 4.11 CM21): the model's per-form reader over this user's install manifest, the daemon's

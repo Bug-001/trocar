@@ -33,6 +33,7 @@ import { appendEvent, createFailureRecorder } from './core/events.mjs'
 import { EVENT, CODE, trustReasonText } from './core/codes.mjs'
 import { procIdentity, captureHealth } from '../health/read.mjs'
 import { identityFor } from '../off/proc.mjs'
+import { DAEMON_READ_VERBS } from '../off/daemon-read.mjs'
 import { runAsync } from '../off/exec.mjs'
 import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
 import { classesHook, wsTerminalHook } from './engine-data.mjs'
@@ -714,6 +715,9 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
+  // the daemon's own identity, as it writes it into its lock (below): the read route hands it back, and an answer on the token-checked channel is
+  // what proves which process the lock names — so `status` does not ask the OS about that pid (4.8 §7; D62). null until the lock is written.
+  let selfId = null
   let stop = null, markReady
   // restore() first (runDaemon's `ready` gate): a request that arrives while it reopens the recorded doors waits for it, so an `on` racing a restart
   // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
@@ -722,6 +726,16 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: {
     'GET /status': gate(status),
     'GET /holders': gate(() => collector.holders()),
+    // the read question a read-only CLI command puts instead of starting a powershell.exe of its own (4.8 §1 §7; D62): a closed SUBSET of the
+    // helper's read verbs, refused here as well as in the helper (W1's two gates). It reads and changes nothing.
+    'POST /helper': gate(async (q) => {
+      const { verb, args } = body(q)
+      const self = selfId ? { pid: process.pid, start_time: selfId.start_time ?? null, boot_id: selfId.boot_id ?? null } : null
+      const no = (error) => ({ ok: false, error, ...(self ? { self } : {}) })
+      if (!DAEMON_READ_VERBS.includes(verb)) return no(`${JSON.stringify(verb ?? null)} is not one of the daemon's read verbs`)
+      if (!parts.helper) return no('this daemon reads the OS without a resident helper, so it has none to ask')
+      try { return { ok: true, data: await parts.helper.call(verb, args && typeof args === 'object' ? args : {}, { timeoutMs: verb === 'ps' ? 10000 : 2000 }), ...(self ? { self } : {}) } } catch (e) { return no(`${verb}: ${String((e && (e.code || e.message)) || e)}`) }
+    }),
     'POST /on': gate(async (q) => { exitAsked++; clearInterval(exitTimer); return collector.on(body(q)) }),
     'POST /off': gate(async (q) => {
       const r = await collector.off(body(q))
@@ -736,6 +750,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     await collector.start()
     markReady()
     const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
+    selfId = me
     const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
     refreshLock()
     const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(e, 'record-error')) } }
