@@ -96,11 +96,19 @@ export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeF
 
 /** What the daemon calls once at start: scan (temps and leftovers), then seal every segment the store closes. This
  *  version is not backwards compatible: records an earlier version wrote elsewhere are not read,
- *  not moved and not touched. */
-export function startSealing({ store, raw, lockFile, journal, fork: run, fs = nodeFs, failure }) {
+ *  not moved and not touched.
+ *  `beforeSeal(segment)` is awaited before a segment the store just closed is queued (D62): the index keeper brings
+ *  that segment's index up to date and hands it over while its plaintext is still there, so the keeper and the worker
+ *  (which indexes the sealed copy) never write one index file at the same time. It never stops a seal. */
+export function startSealing({ store, raw, lockFile, journal, fork: run, fs = nodeFs, failure, beforeSeal = null }) {
   const queue = createSealQueue({ raw, lockFile, journal, fs, fork: run,
     onFailure: ({ file, reason }) => failure('raw', Object.assign(new Error(`sealing ${file} failed (${reason}); its plaintext is kept, and it is not sealed again before the next start`), { code: 'seal-failed' }), { file }) })
   queue.scan({ current: store.currentSegment })
-  store.onSegmentClosed(queue.add)
+  if (!beforeSeal) store.onSegmentClosed(queue.add)
+  else store.onSegmentClosed((file) => {
+    const seg = parseSegment(path.basename(file))
+    // the index is a cache: a catch-up that fails never keeps the segment unsealed
+    Promise.resolve(seg && beforeSeal(seg.segment)).catch(() => {}).then(() => queue.add(file))
+  })
   return queue
 }

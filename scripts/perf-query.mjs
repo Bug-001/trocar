@@ -5,7 +5,8 @@
 //   node scripts/perf-query.mjs --home <HOME> [--runs 5] [--queries sessions,calls] [--compare <dir>] [--json]
 //
 // --home is the HOME the dataset lives in (<HOME>/.asight), so each run is a real cold `asight` process
-// against it. The index is removed first (it is a rebuildable projection) to time building it once.
+// The index is built the way the daemon builds it (D62: a query never writes a plaintext segment's index), then
+// timed once; the medians are measured with it present.
 // They are acceptance only as spec 1.6 附录 D.2 defines it; a run is not one on its own.
 import fs from 'node:fs'
 import path from 'node:path'
@@ -75,16 +76,19 @@ function readJournal(asightHome) {
 }
 
 /** measure({home, runs, names, compare}) → the whole 附录 D.2 report. */
-export function measure({ home, runs = DEFAULT_RUNS, names = queryNames(), compare = null }) {
+export async function measure({ home, runs = DEFAULT_RUNS, names = queryNames(), compare = null }) {
   const asightHome = path.join(home, '.asight')
   const indexPath = path.join(asightHome, 'index')
   fs.rmSync(indexPath, { recursive: true, force: true })  // a rebuildable projection: timed once, cold
-  // `segments` reads EVERY segment, so this one process builds the whole index — which is what the
-  // following medians are measured with. A build that failed or wrote nothing is said so (a run once:
-  // the build step ran a name that is not a query, exited 2, and every median was index-less).
+  // The index as THE DAEMON leaves it (D62, 4.2 §段索引 谁写哪一笔): it is the only writer of a plaintext segment's
+  // index, so building it is its work and not a query's — and the medians below have to be measured with it present,
+  // or they measure the reader's fallback build. A build that wrote nothing is said so (test-machine run P3).
+  const { allSegments, segmentIndex } = await import('../src/query/index-build.mjs')
+  const t0 = process.hrtime.bigint()
+  for (const s of await allSegments({ home: asightHome })) await segmentIndex({ home: asightHome, segment: s.segment, owner: true })
+  const index = { built_by: "the daemon's keeper", build_ms: Math.round(Number(process.hrtime.bigint() - t0) / 1e6), status: 0, bytes: sizeOr0(indexPath) }
   const build = runQuery(home, ['query', 'segments'])
-  const index = { built_by: 'segments', build_ms: Math.round(build.ms), status: build.status, bytes: sizeOr0(indexPath) }
-  if (build.status !== 0 || index.bytes === 0) index.error = build.status ? build.stderr : 'the build wrote no index file'
+  if (build.status !== 0 || index.bytes === 0) { index.status = build.status; index.error = build.status ? build.stderr : 'the build wrote no index file' }
 
   const docs = new Map([['segments', build.doc]])
   // A query whose parameter comes from another document is given it, even when that one is measured later.
@@ -114,11 +118,11 @@ export function measure({ home, runs = DEFAULT_RUNS, names = queryNames(), compa
   return { home, runs, index, queries, sealing: sealingReport(segmentsDoc), autoseal: autosealReport({ segmentsDoc, journal: readJournal(asightHome) }), disk }
 }
 
-function main(argv) {
+async function main(argv) {
   const args = {}
   for (let i = 0; i < argv.length; i += 2) args[argv[i].replace(/^--/, '')] = argv[i + 1]
   if (!args.home) { console.error('usage: node scripts/perf-query.mjs --home <HOME> [--runs 5] [--queries a,b] [--compare <dir>] [--json]'); process.exit(2) }
-  const out = measure({ home: args.home, runs: args.runs ? Number(args.runs) : undefined, names: args.queries ? args.queries.split(',') : undefined, compare: args.compare || null })
+  const out = await measure({ home: args.home, runs: args.runs ? Number(args.runs) : undefined, names: args.queries ? args.queries.split(',') : undefined, compare: args.compare || null })
   if ('json' in args) { console.log(JSON.stringify(out, null, 2)); return }
   console.log(`index  built by query ${out.index.built_by}  ${out.index.build_ms} ms  ${out.index.bytes} bytes${out.index.error ? `  FAILED: ${out.index.error}` : ''}`)
   for (const q of out.queries) console.log(`  ${q.query.padEnd(10)} ${q.skipped ? q.skipped : `${String(q.median_ms).padStart(6)} ms median of ${q.runs.length}${q.status ? `  FAILED: ${q.error}` : ''}`}`)
@@ -129,4 +133,4 @@ function main(argv) {
   console.log(`disk  .asight ${out.disk.asight_bytes}  plaintext ${out.disk.plaintext_bytes}  sealed ${out.disk.sealed_bytes}  index ${out.disk.index_bytes}${out.disk.compare ? `  ${out.disk.compare.dir} ${out.disk.compare.bytes}` : ''}`)
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) main(process.argv.slice(2))
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) await main(process.argv.slice(2))
