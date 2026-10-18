@@ -71,24 +71,25 @@ asight uninstall               # removes all of asight's changes, keeps captures
 asight uninstall --purge-data  # also deletes capture data (asks first)
 ```
 
-`uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
+`uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
+nothing and exits 2. `uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
 holds a door, it changes nothing, exits 1 with `collectors-online` and names the harnesses and the pids.
 
 ## What you see
 
-No ETL, no database, no build step — the board reads the NDJSON directly (`asight serve` →
-http://127.0.0.1:9800, the HTTP shell of `asight query`, D59). It reads the capture directory, so
-**the sessions of every captured harness appear side by side on one board**, including the per-user
-process collector's `~/.asight/collector/capture-*.ndjson` (its `flows/`, `audit/` and `replays/` are
-not envelopes and are not shown).
+No ETL, no database, no build step — the board reads the raw segments directly (`asight serve` →
+http://127.0.0.1:9800, read-only, the HTTP shell of `asight query` over `GET /api/<name>`, D59). It
+reads `~/.asight/raw/`, so **the sessions of every captured harness appear side by side on one
+board** (the collector's `flows/`, `audit/` and `replays/` are not envelopes and are not shown).
 
 Per call, on one board: **context replay** (the full assembled request, block by block, plus the raw
 wire body) · **cache overlay** (real `cache_read` / `cache_write` counts, the marked break, its cause
 and fix hint) · **reconstructed streamed reply** with usage and an estimated cost · **resource
 lifecycle** — which files entered context, when, via which tool *(Claude Code only — see Limits)*.
 
-Cost is a local, editable estimate in `~/.atrace/pricing.json` (or the file `ASIGHT_PRICING` names; `atrace` is this
-project's v0 name, kept for what is already on disk); providers return usage, never dollars.
+Cost is a local, editable estimate in `~/.asight/pricing.json` (or the file `ASIGHT_PRICING` names;
+`asight query pricing` prints the table in effect and says where it came from); providers return
+usage, never dollars.
 
 What the board cannot vouch for, it labels on the call (raw panel and the top of the context window):
 - **不完整 · partial context**: what is shown is not the whole context the model saw (an earlier record is
@@ -131,9 +132,11 @@ the board is the HTTP shell (D59); there is no separate ETL step and no database
 
 ## What it touches, and what lands on disk
 
-Everything asight writes lives under `~/.asight/`. Captures made before 2026-07-20 sit under
-`~/.atrace/asight/` and are **still read** — the board lists both, so upgrading never costs you a
-session (the older `atrace` name was this project's v0 prototype).
+Everything asight writes lives under `~/.asight/`, and every record under `~/.asight/raw/`. At its
+first start after an upgrade the daemon moves the previous version's
+`~/.asight/collector/capture-<date>.ndjson` files in there itself (see 「Shrinking the raw logs」), so
+upgrading costs you nothing and no session. Roots older than that (`~/.asight/sessions/`, the v0
+`~/.atrace`) are neither read nor touched.
 
 `asight on` arranges a local, observe-only tap **on your user account only**. It never changes your
 system proxy, never adds machine-wide trust, never needs root (Linux's one-time `setup-helper` is the
@@ -222,7 +225,7 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | install manifest | `~/.asight/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `asight uninstall` |
 | backups of your files | `~/.asight/backup/` (0700, files 0600): the file as it was before asight changed it — API keys included | `off` leaves them; `uninstall` deletes them all |
 | the standalone undo | `~/.asight/bin/asight-off`, written by `install`; `asight doctor` checks it is current | `asight uninstall` |
-| captures | `~/.asight/collector/capture-<date>.ndjson`; `flows/` holds connection metadata and failure records | kept unless `asight uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
+| captures | `~/.asight/raw/<segment>.ndjson` and its `<segment>.sealed` (0600); `~/.asight/index/` is a deletable accelerator; `flows/` holds connection metadata and failure records | kept unless `asight uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
 ```sh
 sudo asight setup-helper      # Linux, once per machine
@@ -351,8 +354,8 @@ The old CC-CLI steer (`HTTPS_PROXY` / `NO_PROXY` in `~/.claude/settings.json`) a
 Verge's `Script.js` are yours to revert the same way they were written; v0 leftovers
 (`com.atrace.serve`, `~/.local/share/atrace`, `.atrace-bak`) are only ever reported, never touched.
 
-Captures the earlier capture wrote are still read (they are the source truth; the board lists them beside the
-collector's). The board's 监测 toggle steers only the old CC-CLI steer — it is labelled 「只管旧 CC-CLI steer」 — and is
+Captures the earlier capture wrote are **not** read: only `~/.asight/raw/` is (the one exception is the
+upgrade move above, from `~/.asight/collector/capture-<date>.ndjson`). The board's 监测 toggle steers only the old CC-CLI steer — it is labelled 「只管旧 CC-CLI steer」 — and is
 not the collector's switch; `asight off` is.
 
 ## Limits
@@ -372,10 +375,12 @@ not the collector's switch; `asight off` is.
 - **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
   reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and its chip
   says so (「推断自 UA」). Sessions from the per-process collector are named by process, never by UA.
-- **DuckDB is a projection, not an analytics product.** Roughly a dozen canned queries, no query UI.
-  Open the `.duckdb` file with any DuckDB client and write your own SQL.
-- **Non-verbatim data is labelled in place.** Raw NDJSON is the only source of truth; DuckDB is
-  rebuildable from it. SSE replies are faithful reconstructions of the streamed frames. Data imported
+- **The read side is a fixed set of questions, not an analytics product.** `asight query <name>` has
+  the named queries the board asks (sessions, calls, blocks, classes, segments, pricing, status,
+  doctor) and no query language. For anything else, read the segments: `asight raw <segment>` prints
+  the records byte for byte.
+- **Non-verbatim data is labelled in place.** The raw segments are the only source of truth; the
+  segment index under `~/.asight/index/` is a deletable accelerator, rebuilt from them. SSE replies are faithful reconstructions of the streamed frames. Data imported
   from the v0 demo is badged `v0-converted` (re-serialized bodies, summarized tool schemas); fresh
   captures are byte-exact with full tool schemas. A request body the collector stored only in part is
   badged on its call with the exact reason: 已截断 (cut at the 64 MiB capture cap) or 不完整 (the capture
