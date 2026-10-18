@@ -156,7 +156,7 @@ function keptSealedPrefix(o, s, st, fs) {
 
 // Coexistence over an explicit list of files (a session dir, the control dir, or a whole scan): drop
 // sealed files superseded by an original that is IN THIS LIST and still the very file that was sealed.
-export function resolveCoexistence(all, { fs = nodeFs } = {}) {
+function resolveCoexistence(all, { fs = nodeFs } = {}) {
   const originals = new Map();
   for (const f of all) if (!isSealedPath(f)) originals.set(path.resolve(f), f);
   const superseded = [], mismatched = [], drop = new Set();
