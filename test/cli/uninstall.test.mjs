@@ -23,6 +23,10 @@ async function cli(s, argv, { io = fakeIo(), deps = {}, platform = 'linux', ask 
   return { exit, io }
 }
 const keep = (s) => { for (const k of ['capture-2026-10-06.ndjson', 'audit/a.ndjson', 'replays/r.ndjson']) { fs.mkdirSync(path.dirname(path.join(s.dir, k)), { recursive: true }); fs.writeFileSync(path.join(s.dir, k), '{"keep":true}\n') } }
+// D60: the records are segments under ~/.asight/raw (plain and sealed), the index asight builds from them under ~/.asight/index
+const SEGMENTS = { 'raw/20261018T000000Z.ndjson': '{"id":"r1"}\n', 'raw/20261018T000000Z.sealed': 'sealed-bytes\n', 'raw/journal.jsonl': '{"seal":1}\n', 'index/20261018T000000Z.json': '{"idx":1}\n' }
+const seedRecords = (s) => { const h = path.dirname(s.dir); for (const [k, v] of Object.entries(SEGMENTS)) { fs.mkdirSync(path.dirname(path.join(h, k)), { recursive: true }); fs.writeFileSync(path.join(h, k), v) } }
+const records = (s) => { const h = path.dirname(s.dir); return Object.fromEntries(Object.keys(SEGMENTS).map((k) => [k, fs.existsSync(path.join(h, k)) ? fs.readFileSync(path.join(h, k), 'utf8') : null])) }
 const kept = (s) => ['capture-2026-10-06.ndjson', 'audit/a.ndjson', 'replays/r.ndjson'].map((k) => fs.existsSync(path.join(s.dir, k)))
 const CLASSES = '{"version":1,"classes":[]}\n', CLASSES_LOG = '{"ts":"2026-10-18T00:00:00.000Z","op":"reset"}\n'
 /** the class table and its change log, seeded in ~/.asight (above the collector dir) and read back */
@@ -38,7 +42,7 @@ test('uninstall: every entry is back as it was, asight\'s own files are gone, th
   assert.equal(exit, 0, io.text())
   const r = io.json()
   assert.deepEqual(validateReceipt(r), [])
-  assert.deepEqual([r.command, r.ok, r.all, r.kept_captures, r.purge_data, r.routing.confirmed], ['uninstall', true, true, true, false, true])
+  assert.deepEqual([r.command, r.ok, r.all, r.purge_data, r.routing.confirmed], ['uninstall', true, true, false, true])
   assert.deepEqual([r.daemon.state, r.autostart.disabled], ['stopped', true])
   for (const e of entries) assert.equal(fs.existsSync(e.path) && fs.readFileSync(e.path).length > 0 ? true : !e.existed_before, true)
   assert.notDeepEqual(s.userFiles(), before, 'on had changed them')
@@ -46,10 +50,11 @@ test('uninstall: every entry is back as it was, asight\'s own files are gone, th
   assert.deepEqual(kept(s), [true, true, true])
   assert.ok(r.changed.length > 0 && r.entries.length === entries.length, 'what was taken out, row by row')
   assert.ok(r.removed.includes(path.join(s.dir, 'install-manifest.json')), 'the manifest is in the list of what asight removed')
-  const text = await cli(await installedHome({ names: ['claude-code'] }), [])
+  const twin = await installedHome({ names: ['claude-code'] }); seedRecords(twin)
+  const text = await cli(twin, [])
   assert.equal(text.exit, 0)
   assert.match(text.io.stdoutText(), /^Uninstalled\. asight is no longer on your agents' path/)
-  assert.match(text.io.stdoutText(), /Kept\n +your captured records, in .*collector\//)
+  assert.match(text.io.stdoutText(), /Kept\n +your captured records, in ~\/\.asight\/raw\//)
   assert.match(text.io.stdoutText(), /Delete the captured records: asight uninstall --purge-data/)
   // no assertEnglish here: the `change` words of each row come from `off` (src/off/orchestrate.mjs), whose output is not this task's (1.6 §3.4)
 })
@@ -82,7 +87,7 @@ test('R6: --purge-data takes the collector machine with the data — kernel/, ke
   const plain = await installedHome({ names: ['claude-code'] }); keep(plain); leftovers(plain)
   const p = await cli(plain, ['--yes'])
   assert.equal(p.exit, 0, p.io.text())
-  assert.deepEqual(there(plain), [true, true, true, true, false], 'a plain uninstall keeps them (the kernel may be draining; the next on reuses the cache), but not ingress.json')
+  assert.deepEqual(there(plain), [true, true, true, false, false], 'a plain uninstall keeps the kernel, its cache and the forwarder state (the kernel may be draining; the next on reuses the cache), but neither endpoint file: ingress.json nor control.json (P12: daemon state, and the daemon has stopped)')
 })
 
 test('R6 · §3.6: uninstall always asks — no terminal and no --yes prints the plan and exits 2 with nothing done; a terminal asks once (n: nothing, exit 1); --yes goes; --purge-data says the records go for good', async () => {
@@ -399,7 +404,7 @@ test('formatUninstallReceipt: not done says so and what to do; the entries left 
   const home = '/home/u'
   const r = {
     schema: 2, command: 'uninstall', ok: false, all: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: { closing: 0, waiting: 0, cut: 0 }, undo: ['asight on'], log: '/home/u/.asight/collector/flows',
-    left: [{ path: '/home/u/.codex/.env', result: 'left-unparsable', reason: 'no longer valid' }], problems: ['1 item(s) could not be undone; the install manifest is kept'], notes: [], kept_captures: true, purge_data: false,
+    left: [{ path: '/home/u/.codex/.env', result: 'left-unparsable', reason: 'no longer valid' }], problems: ['1 item(s) could not be undone; the install manifest is kept'], notes: [], kept: [{ what: 'your captured records', path: '/home/u/.asight/raw', bytes: 2048 }], purge_data: false,
     routing: { confirmed: true, state: 'none', how: 'no-daemon' }, daemon: { pid: null, state: 'none' }, autostart: { disabled: true }, dropped_backups: [], non_identical: [],
     kept_bundles: [{ path: '/home/u/.asight/collector/ca/combined-codex.pem', pids: [5], holds_ca: false }],
   }
@@ -411,7 +416,7 @@ test('formatUninstallReceipt: not done says so and what to do; the entries left 
   assert.match(text, /Fix what is above, then run: asight uninstall$/)
   assert.doesNotMatch(text, /Install it again/)
   assertEnglish(text, 'the receipt of an uninstall that did not finish')
-  const purged = formatUninstallReceipt({ ...r, ok: true, left: [], problems: [], kept_bundles: [], purge_data: true, kept_captures: false }, { home })
+  const purged = formatUninstallReceipt({ ...r, ok: true, left: [], problems: [], kept_bundles: [], purge_data: true, kept: [] }, { home })
   assert.match(purged, /^Uninstalled\./); assert.match(purged, /your captured records \(--purge-data\)/); assert.doesNotMatch(purged, /Kept/)
   assertEnglish(purged, 'the receipt of uninstall --purge-data')
 })
@@ -461,4 +466,22 @@ test('uninstall removes ~/.asight/netenv.json with the rest of asight\'s own fil
   const t = await installedHome({ names: ['claude-code'] })
   const run = await cli(t, ['--json'])
   assert.deepEqual([run.io.json().daemon.state, Number.isInteger(run.io.json().daemon.pid)], ['stopped', true])
+})
+
+// D60 · 附录 C.2 `kept`: the records are segments under ~/.asight/raw and the index built from them under ~/.asight/index — a plain uninstall
+// keeps every byte of them and says where they are, `--purge-data` leaves neither. (Windows test machine 2026-10-18 P11 / macOS test machine: the purge deleted
+// collector/ only, so every record stayed on disk while the receipt said they were gone.)
+test('D60: a plain uninstall keeps every byte under raw/ and names it with its size; --purge-data leaves no raw/ and no index/', async () => {
+  const plain = await installedHome({ names: ['claude-code'] }); seedRecords(plain)
+  const r = await cli(plain, ['--json'])
+  assert.equal(r.exit, 0, r.io.text())
+  assert.deepEqual(records(plain), SEGMENTS, 'every record and the index are byte for byte what they were')
+  const raw = path.join(path.dirname(plain.dir), 'raw'), bytes = Object.entries(SEGMENTS).filter(([k]) => k.startsWith('raw/')).reduce((n, [, v]) => n + v.length, 0)
+  assert.deepEqual(r.io.json().kept.find((k) => k.path === raw), { what: 'your captured records', path: raw, bytes }, JSON.stringify(r.io.json().kept))
+  assert.match(formatUninstallReceipt(r.io.json(), { home: plain.home }), new RegExp(`your captured records, in ~/\\.asight/raw/ \\(${bytes} B\\)`))
+  const purged = await installedHome({ names: ['claude-code'] }); seedRecords(purged)
+  const p = await cli(purged, ['--purge-data', '--json'])
+  assert.equal(p.exit, 0, p.io.text())
+  assert.deepEqual(records(purged), Object.fromEntries(Object.keys(SEGMENTS).map((k) => [k, null])), 'nothing of the records or the index is left')
+  assert.deepEqual(p.io.json().kept, [], 'and the receipt claims nothing is kept')
 })

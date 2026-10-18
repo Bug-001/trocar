@@ -207,7 +207,7 @@ for (const [cause, make] of Object.entries(UNFINISHED)) {
     const { receipt, exit } = await uninstall(w, {}, { purgeData: true })
     assert.equal(exit, 1, JSON.stringify({ p: receipt.problems, l: receipt.left }))
     for (const p of CAPTURES) assert.equal(fs.readFileSync(path.join(w.dir, p), 'utf8'), `${p}\n`, `${p} stays`)
-    assert.deepEqual([receipt.purge_data, receipt.kept_captures], [false, true])
+    assert.deepEqual(receipt.purge_data, false)
     assert.doesNotMatch(formatUninstallReceipt(receipt), /your captured records \(--purge-data\)/)
   })
 }

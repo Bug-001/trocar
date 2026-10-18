@@ -36,6 +36,9 @@ export const collectorHome = (home = asightHome()) => path.join(home, 'collector
 // The raw layer (D60①, 1.6 §1.7): the daemon's segments `<here>/<segment>.ndjson`, their sealed form `<segment>.sealed`,
 // and the seal journal. Only envelopes live here — the collector's own logs stay under collectorHome().
 export const rawHome = (home = asightHome()) => path.join(home, 'raw');
+// D60: what `asight query` builds from the segments to answer fast. Derived, never a source of truth — deleting it costs a rebuild, nothing more
+// (src/query/index-build.mjs has the same path under its own name; uninstall reads it from here).
+export const indexHome = (home = asightHome()) => path.join(home, 'index');
 // D60③ (1.6 §4.2): the editable traffic class table — the user's copy of it (written whole on the first edit) and the
 // log of every change (old value, new value, time). Read by the collector (the level of a call) and by `asight classes`.
 export const classesFile = (home = asightHome()) => path.join(home, 'classes.json');

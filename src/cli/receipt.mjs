@@ -5,7 +5,7 @@
 // the absolute path.
 import path from 'node:path'
 import { standaloneCommand } from '../off/paths.mjs'
-import { noColor, WIDTH, wrap, pairs } from './text.mjs'
+import { noColor, WIDTH, wrap, pairs, size } from './text.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
 
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
@@ -152,8 +152,9 @@ export function formatUninstallReceipt(r, { home = null, tense = r.dry_run ? 'fu
   for (const p of r.removed || []) removed.push(t(p))
   if ((r.dropped_backups || []).length) removed.push(`${r.dropped_backups.length} backup${r.dropped_backups.length === 1 ? '' : 's'} in ${t(path.dirname(r.dropped_backups[0]))}/`)
   if (dataNote) kept.push(dataNote)
-  else if (r.purge_data) removed.push(past ? 'your captured records (--purge-data)' : 'your captured records (--purge-data)')
-  else kept.push(`your captured records${r.log ? `, in ${t(path.dirname(r.log))}/` : ''}`)
+  else if (r.purge_data) removed.push('your captured records (--purge-data)')
+  // 附录 C.2 `kept`: every path that stays, with its size — the records are segments under ~/.asight/raw (D60), not the collector's directory
+  for (const k of r.kept || []) kept.push(`${k.what}, in ${t(k.path)}/ (${size(k.bytes)})`)
   if (typeof r.class_table === 'string') kept.push(`your traffic classes, ${t(r.class_table)}`)
   // §3.6 / 4.6: a bundle a live process may still have open is kept with asight's CA taken out — the receipt says which, and who may hold it
   for (const b of r.kept_bundles || []) kept.push(`${t(b.path)} (asight's certificate taken out)${(b.pids || []).length ? `: ${(b.pids || []).map((p) => `pid ${p}`).join(', ')} may have loaded it` : ''}`)
