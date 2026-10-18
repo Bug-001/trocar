@@ -8,7 +8,9 @@
 // fixture shaped to agree.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
@@ -48,4 +50,32 @@ test('one session is read back from its own records only — the same membership
   const doc = await runQuery('session', { id }, { home })
   assert.equal(doc.meta.session_id, id)
   assert.deepEqual(doc.errors, [])
+})
+
+// Capture keeps a request body it could not decode as req_body null + req_body_b64 (a zstd body, one over the
+// decode limit); the board decodes it when it reads. The index must read it the same way, or the body's session
+// key (and the synthesized key's hash) is lost from the list while the board still has it (review 2026-10-18).
+test('a request body stored compressed names the same session in the list as on the board', async () => {
+  const home = dataset(1_000_000)
+  for (const f of fs.readdirSync(path.join(home, 'raw')).filter((n) => n.endsWith('.ndjson'))) {
+    const file = path.join(home, 'raw', f)
+    const out = fs.readFileSync(file, 'utf8').split('\n').map((line) => {
+      let e
+      try { e = JSON.parse(line) } catch { return line } // the half line stays as it is
+      if (typeof e.req_body !== 'string' || !e.req_body) return line
+      return JSON.stringify({ ...e, req_body: null, req_body_b64: zlib.gzipSync(e.req_body).toString('base64'), req_content_encoding: 'gzip' })
+    })
+    fs.writeFileSync(file, out.join('\n'))
+  }
+  const want = sessionMetasOf(await allRecords({ home })).sort((a, b) => String(b.last_ts).localeCompare(String(a.last_ts)))
+  const doc = await runQuery('sessions', { limit: '500' }, { home })
+  assert.deepEqual(doc.sessions, want.slice(0, 500))
+})
+
+test('a row whose offset no longer lands on its line is read by the scan, never as another record', async () => {
+  const home = dataset()
+  const rows = (await indexRows({ home })).filter((r) => r.offset != null).slice(0, 20)
+  const right = recordsAt({ home, rows }).map((r) => JSON.stringify(r))
+  const stale = recordsAt({ home, rows: rows.map((r) => ({ ...r, offset: r.offset + 1 })) }).map((r) => JSON.stringify(r))
+  assert.deepEqual(stale, right)
 })

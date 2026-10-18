@@ -21,6 +21,7 @@ import { parseSegment, recordId } from '../collector/core/record/segments.mjs';
 import { harnessOf, sessionKeyOf, headerOf } from '../dissect/harnesses.mjs';
 import { synthFactsOf } from '../dissect/synth-key.mjs';
 import { isLogOnly } from '../dissect/capture-labels.mjs';
+import { expandRequestBody } from '../dissect/request-body.mjs';
 import { fpRanges, readRangeSync, sameFileAs } from './source.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
@@ -29,7 +30,7 @@ import { readDaemonLock } from '../off/daemon-stop.mjs';
 
 const rawDir = (home = asightHome()) => path.join(home, 'raw');
 export const indexDir = (home = asightHome()) => path.join(home, 'index');
-const INDEX_V = 2;
+const INDEX_V = 3;
 const CHUNK = 1 << 20;
 const NL = 0x0a;
 // What a session is made of, per record, so `sessions` never reads a record back (1.6 §4.1 速度目标 ≤ 1 s).
@@ -51,6 +52,8 @@ function recordOf(lineBuf, segment, lineNo, problems, offset = null) {
     problems.push({ code: 'record-unparseable', reason: `${recordId(segment, lineNo)} is not JSON (${err.message}); it is left out of the index` });
     return null;
   }
+  // the body as the board reads it: a request body stored compressed (req_body null + req_body_b64) still carries its session key
+  e = expandRequestBody(e);
   const wire = e.body_wire_bytes || {};
   const h = harnessOf(e);
   const synth = synthFactsOf(e);

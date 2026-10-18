@@ -98,16 +98,21 @@ export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors 
 function plainReader(file, fs) {
   const fd = fs.openSync(file, 'r');
   let all = null;
+  const scan = (r) => {
+    if (!all) all = [...lines(file, fs, { all: true })];
+    const hit = all.find(([no]) => no === r.lineNo);
+    if (!hit) throw new Error(`line ${r.lineNo} is not in ${path.basename(file)}`);
+    return hit[1];
+  };
   const read = (r) => {
-    if (r.offset == null || r.stored_bytes == null) {
-      if (!all) all = [...lines(file, fs, { all: true })];
-      const hit = all.find(([no]) => no === r.lineNo);
-      if (!hit) throw new Error(`line ${r.lineNo} is not in ${path.basename(file)}`);
-      return hit[1];
-    }
-    const buf = Buffer.allocUnsafe(r.stored_bytes);
-    const n = fs.readSync(fd, buf, 0, r.stored_bytes, r.offset);
-    return buf.subarray(0, n).toString('utf8');
+    if (r.offset == null || r.stored_bytes == null) return scan(r);
+    // a seek lands between two newlines or is not trusted: an index that no longer matches the file never
+    // lends one record another record's bytes — it costs the scan instead
+    const from = r.offset > 0 ? r.offset - 1 : 0, len = r.stored_bytes + 1 + (r.offset - from);
+    const buf = Buffer.allocUnsafe(len);
+    const n = fs.readSync(fd, buf, 0, len, from);
+    if (n !== len || buf[len - 1] !== NL || (r.offset > 0 && buf[0] !== NL)) return scan(r);
+    return buf.toString('utf8', r.offset - from, r.offset - from + r.stored_bytes);
   };
   read.close = () => fs.closeSync(fd);
   return read;

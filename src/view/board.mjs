@@ -76,7 +76,8 @@ function harnessOf(recs) {
 }
 // a subagent turn carries its own x-claude-code-agent-id (differs from the main lane's absence)
 const hasSubagent = (recs) => recs.some((r) => String(headersOf(r)['x-claude-code-agent-id'] || '').trim());
-function lastTs(recs) { let m = ''; for (const r of recs) { const t = String(r.ts_request || ''); if (t > m) m = t; } return m; }
+// the same time the segment index keeps per record (src/query/rows.mjs), so the list and the board sort alike
+function lastTs(recs) { let m = ''; for (const r of recs) { const t = String(r.ts_request ?? r.ts ?? ''); if (t > m) m = t; } return m; }
 
 // project_slug / project_path / title are a BOARD-side lookup (enrich against ~/.claude/projects),
 // not a capture fact — so they are layered on separately from the per-session facts. This is applied
