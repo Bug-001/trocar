@@ -59,8 +59,8 @@ function filesIn(dir, fs) {
 
 /** The capture files, sampled records and everything ④b has to look at → { sources, files, extra, records, srcMeta, readErrors }. One resolver for the source, shared with the board (listSources,
  *  src/raw/discover.mjs): a root is usually a DIRECTORY and `serveSource()` returns a list of them (D27) — the day `fs.statSync(list)` threw, the catch swallowed it and doctor
- *  certified a capture it had read nothing from. The resolver itself, never server.mjs: that one opens the database (@duckdb/node-api), and a self-check that dies on a package it does not need
- *  says nothing at all — on a tree without node_modules (a test machine's) `asight doctor` printed only ERR_MODULE_NOT_FOUND (the D51 cells, 2026-10-14). */
+ *  certified a capture it had read nothing from. The resolver itself, never server.mjs: a self-check that dies on a package it does not need says nothing at all — on a tree
+ *  without node_modules (a test machine's) `asight doctor` printed only ERR_MODULE_NOT_FOUND (tested 2026-10-14). */
 async function collect({ home, env, sourceFlags, deps }) {
   const fs = deps.fs || nodeFs, ah = asightHome(home)
   const flagged = sourceFlags.filter(Boolean)

@@ -138,27 +138,10 @@ test('3 · the pin comparison: fewer pins or a deleted file is stale, more pins 
   assert.deepEqual(comparePins({ 'a.mjs': 3, 'b.mjs': 1 }, listed, exists).grew, ['a.mjs: 3 (allowed 2)', 'b.mjs: 1 (allowed 0)'])
 })
 
-/** src/ exports that no src/ or bin/ file other than their own names: what reaches them from outside is a test (or nothing). */
-export function testOnlyExports() {
-  const texts = new Map([...SRC, ...walk('bin')].map((f) => [f, code(read(f))]))
-  const out = []
-  for (const f of SRC) {
-    const t = texts.get(f)
-    const names = new Set([...t.matchAll(/export\s+(?:async\s+)?(?:function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1]))
-    for (const m of t.matchAll(/export\s*\{([^}]+)\}/g)) for (const n of m[1].split(',')) { const k = n.trim().split(/\s+as\s+/).pop(); if (k && k !== 'default') names.add(k) }
-    for (const n of names) {
-      const re = new RegExp(`\\b${n.replace(/\$/g, '\\$')}\\b`)
-      if (![...texts].some(([g, u]) => g !== f && re.test(u))) out.push(`${f}: ${n}`)
-    }
-  }
-  return out
-}
-// The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
-// It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
-const TEST_ONLY_EXPORTS_CEILING = 329 // T10's deletions (-7) and T8 giving doctorDoc its src caller (-1), measured after both merged
-
-test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
-  const n = testOnlyExports().length
-  assert.ok(n <= TEST_ONLY_EXPORTS_CEILING, `${n} src exports are used by tests only (ceiling ${TEST_ONLY_EXPORTS_CEILING}): test through the public entry instead`)
-  assert.equal(n, TEST_ONLY_EXPORTS_CEILING, `only ${n} test-only exports now: lower TEST_ONLY_EXPORTS_CEILING to ${n}`)
+// DuckDB is gone (the readers read the raw files): neither the manifest nor any source file may bring it back.
+test('5 · nothing depends on DuckDB any more', () => {
+  const pkg = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')
+  assert.ok(!/duckdb/i.test(pkg), 'package.json names duckdb')
+  const named = SRC.filter((f) => /@duckdb|DuckDBInstance/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
+  assert.deepEqual(named, [], 'these source files still reach for DuckDB')
 })
