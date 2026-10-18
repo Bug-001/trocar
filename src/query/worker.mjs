@@ -10,6 +10,10 @@
 // (`{name, params, indent}`), one reply on stdout as `<status> <byteLength>\n` then exactly those bytes. The daemon
 // forwards the bytes without parsing or re-encoding them, so a 30 MB document costs it a few buffer writes (1.6
 // §4.1 「守护进程的负担」).
+//
+// `warm: true` on every query it runs: a query here is never the only one, so what a query may build FOR THE NEXT
+// ONE (src/query/named/session.mjs assembles the whole session after answering a window) is built here and nowhere
+// else — a one-shot CLI would pay for it and exit.
 import os from 'node:os'
 import { LOCAL_ENV } from './client.mjs'
 import { runQuery, QueryArgError } from './named/index.mjs'
@@ -33,7 +37,7 @@ async function answer(line) {
   let status = 200, text
   try {
     const { name, params, indent } = JSON.parse(line)
-    text = JSON.stringify(await runQuery(name, params || {}, { home }), null, Number(indent) || 0)
+    text = JSON.stringify(await runQuery(name, params || {}, { home, warm: true }), null, Number(indent) || 0)
   } catch (e) {
     // 400 = the caller's mistake (an unknown name or parameter), 500 = this worker's. The message is the query
     // core's own, so the caller can raise the very error its local path would have raised.
