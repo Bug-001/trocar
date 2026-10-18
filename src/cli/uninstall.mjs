@@ -26,7 +26,7 @@ import { confirm, isInteractive } from '../off/io.mjs'
 import { CODE_OFF } from '../off/names.mjs'
 import { formatUninstallReceipt } from './receipt.mjs'
 import { removeIngressConfig } from '../collector/core/ingress-config.mjs'
-import { refuseElevatedByWhoami, disableScheduledTask } from '../off/win32.mjs'
+import { refuseElevatedByWhoami, disableScheduledTask, TASK_NAME } from '../off/win32.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readAgentList } from '../off/identity.mjs'
@@ -188,7 +188,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // the task registered at every login while the receipt said otherwise; the Run value stays a ledger entry), Linux disables the systemd unit
     if (w.platform === 'win32') {
       const t = disableScheduledTask({ uninstall: true, run: w.exec, env })
-      receipt.autostart = { disabled: t.ok, removed: [], ...(t.ok ? {} : { error: t.reason || `the task is ${t.task}` }) }
+      // what it did, in the keys C.2 names: the task is DELETED here, so the entry belongs in `removed` the way macOS puts its plist there (a Windows test machine 2026-10-19 read `removed: []` as "nothing was taken away")
+      receipt.autostart = { disabled: t.ok, removed: t.task === 'deleted' ? [TASK_NAME] : [], ...(t.ok ? {} : { error: t.reason || `the task is ${t.task}` }) }
     }
     else if (w.platform === 'darwin') {
       const u = undoAutostart({ home, exec: w.exec, env, fs })
