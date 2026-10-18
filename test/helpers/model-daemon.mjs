@@ -10,14 +10,15 @@ import { tmpDir } from './tmp.mjs'
 
 const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {}, proxyOf: () => null, systemProxy: () => null, procTable: async () => [], close: () => {} }
 
-/** io: doorPartsFor's OS readers (its `io`), for a daemon whose door parts are the arch's own; without it the door parts are NOBODY. */
-export async function liveUnit({ w, platform, io = null }) {
+/** io: doorPartsFor's OS readers (its `io`), for a daemon whose door parts are the arch's own; without it the door parts are NOBODY — `parts` adds to
+ *  those (a stand-in `helper` for the daemon's read route, 4.8 §7). */
+export async function liveUnit({ w, platform, io = null, parts = null }) {
   const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
   const arch = { os: platform, controlEndpoint }
   const box = { daemon: null, starting: null, enabled: [], startedNow: [], procs: [] } // procs: the process table the daemon's holder judge reads (empty: no holder)
   const start = (custody = w.custody) => {
     box.starting = startDaemon({ dir: w.dir, env: w.env, home: w.home, arch, harnesses: w.harnesses, getuid: () => 501, identity: () => ({ start_time: '111', boot_id: 'boot-1' }),
-      model: { backends: { custody, dirs: w.ctx.dirs }, ...(io ? { io } : { parts: { ...NOBODY, procTable: async () => box.procs } }) } }).then((d) => { box.daemon = d; return d })
+      model: { backends: { custody, dirs: w.ctx.dirs }, ...(io ? { io } : { parts: { ...NOBODY, procTable: async () => box.procs, ...(parts || {}) } }) } }).then((d) => { box.daemon = d; return d })
     box.starting.catch(() => {})
   }
   box.unit = {
