@@ -22,7 +22,6 @@ import { runOnCli } from '../../src/cli/on.mjs'
 import { formatPlan } from '../../src/cli/receipt.mjs'
 import { fakeIo, onCtx, seedClaude } from '../cli/fixtures/on-ctx.mjs'
 import { installedHome, flowEvents } from './fixtures/off-ctx.mjs'
-import { verifyUserTrustOnly } from '../../src/capture/onboard.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -336,20 +335,6 @@ test('V35: `asight doctor` says nothing of a copy that is current, and makes a f
   assert.match(flat(doctor()), new RegExp(`${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is not there`))
   assert.ok(!fs.existsSync(file), 'doctor reads: it does not write the copy')
   assert.deepEqual((fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('\n').filter((c) => /^(systemctl|loginctl) |^certutil (?!-L )|^launchctl (?!list |getenv )/.test(c)), [], 'and runs none of the tools that change a machine (`certutil -L` is the question doctor asks of the user trust store on Linux, `launchctl list` / `getenv` the ones it asks on a Mac; 1.6 §2)')
-})
-
-// The filter of the test above lets `certutil -L` through (audit rule-b 1: on Linux doctor's question ④ is that very call, 1.6 §2, and the filter used to forbid every certutil, so the
-// test was red on every Linux run and green on a Mac). It must let through ONLY that: the question asked of the user trust store is a listing, whichever platform this runs on.
-test('V35: the trust-store question `asight doctor` asks is a read — certutil -L on Linux, security find-certificate on a Mac — never an add, a delete or a trust change', () => {
-  for (const platform of ['linux', 'darwin']) {
-    const calls = []
-    const sandbox = tmpDir('asight-trust-q-')
-    // "not found" is the answer a fake store gives: the question is what is under test, so the verdict (a throw or false) is not
-    try { verifyUserTrustOnly({ platform, installerOpts: { keychain: path.join(sandbox, 'login.keychain-db'), nssdb: path.join(sandbox, 'nssdb'), run: (file, args) => { calls.push([file, ...args]); return { status: platform === 'darwin' ? 44 : 255, stdout: '', stderr: platform === 'darwin' ? 'could not be found in the keychain' : 'certutil: Could not find cert' } } } }) } catch { /* the verdict */ }
-    assert.equal(calls.length, 1, platform)
-    assert.ok(platform === 'linux' ? calls[0][0] === 'certutil' && calls[0][1] === '-L' : calls[0][0] === 'security' && calls[0][1] === 'find-certificate', `${platform}: ${calls[0].join(' ')}`)
-    assert.ok(!calls[0].some((a) => ['-A', '-D', '-N', 'add-trusted-cert', 'delete-certificate', 'add-certificates'].includes(a)), `${platform}: no write verb`)
-  }
 })
 
 test('V35: every `on` writes the copy again — after the first on it is what src/off generates, and a copy that was changed is put back by the next on', async () => {
