@@ -31,6 +31,7 @@ export const FAILURE_WORDS = Object.freeze({
   'engine/engine-error': 'the engine failed',
   'engine/flow-write-failed': 'a connection log line could not be written',
   'engine/negative-cache': 'a program refused asight\'s certificate, so that host is forwarded only',
+  'engine/trust-rejected': 'a program refused asight\'s certificate under TLS, so that host is not captured',
   'engine/upstream-slow': 'the upstream was slow',
   'engine/leaf-error': 'a certificate could not be issued',
   'engine/framer-error': 'a request could not be parsed',

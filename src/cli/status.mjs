@@ -316,6 +316,7 @@ function failuresOf(f) {
 
 /** The exit code of `status` (§3.5): 0 every harness that is on is captured · 1 some are not · 3 that cannot be judged. A stale record never decides it: the daemon's own answer does. */
 export function statusExit(f) {
+  if (f.health_error) return EXIT.unknown // the capture health could not be read: it cannot be judged, and that is never a pass (D-2, R4)
   if (f.harnesses.some((h) => h.judged.captured === null)) return EXIT.unknown
   const failing = f.harnesses.some((h) => h.desired === 'on' && h.judged.captured === false) || certNeedsUser(f)
   return failing ? EXIT.incomplete : EXIT.ok

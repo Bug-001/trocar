@@ -64,7 +64,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
   const shown = names.filter((h) => installed.length === 0 || installed.includes(h))
   const on = shown.filter((h) => doc.harnesses[h].desired === 'on')
   const captured = shown.filter((h) => doc.harnesses[h].captured === true)
-  if (!shown.length) return [c.bold('No harness is set up for capture yet.'), '', 'Next: asight install']
+  if (!shown.length) return [c.bold('No harness is set up for capture yet.'), '', ...readErrorLines(doc), 'Next: asight install']
   const head = `Capturing ${captured.length} of ${shown.length} installed harness${shown.length === 1 ? '' : 'es'}.`
   const daemon = daemonClause(doc.daemon, now)
   const lines = head.length + 1 + daemon.length <= WIDTH ? [c.bold(`${head} ${daemon}`), ''] : [c.bold(head), ...wrap(daemon, WIDTH), '']
@@ -85,6 +85,11 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
   return lines
 }
 
+/** The reason of one `errors[]` entry of the document (附录 C.5), or null. */
+const errorReason = (doc, where) => (((doc.errors || []).find((e) => e.where === where) || {}).reason || null)
+/** What could not be read, said even when there is no harness to report it under: a read that failed is never silence (D38). */
+const readErrorLines = (doc) => ((doc.errors || []).length ? [...(doc.errors || []).flatMap((e) => wrap(`Could not read ${e.where}: ${e.reason}`, WIDTH)), ''] : [])
+
 function summaryPairs(doc, now) {
   const rows = []
   const cert = doc.cert || null
@@ -97,7 +102,7 @@ function summaryPairs(doc, now) {
   const r = doc.relayed
   rows.push(['Connections', r === 'unknown' || !r ? unknown(doc.relayed_reason || 'the daemon did not say') : `${r.closing + r.waiting} open through asight`])
   const fl = doc.failures
-  rows.push(['Problems', !fl ? unknown('capture health could not be read') : fl.problem === 0 ? 'none in the last 24 hours' : `${fl.problem} in the last 24 hours, latest ${ago(fl.latest, now)}`])
+  rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? 'none in the last 24 hours' : `${fl.problem} in the last 24 hours, latest ${ago(fl.latest, now)}`])
   // V39 (§1.1): logging out stops the daemon unless linger is on — the command is printed, never run; a state that could not be read is said with its reason, never taken for "on"
   if (doc.linger === false) rows.push(['Logging out', `capture stops when you log out; run: loginctl enable-linger ${doc.user || '<your user name>'}`])
   else if (doc.linger === 'unknown') rows.push(['Logging out', unknown(doc.linger_reason || 'the linger state could not be read')])
