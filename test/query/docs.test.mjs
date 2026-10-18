@@ -130,7 +130,12 @@ test('classes 的顶层键与每类的键照 C.5,条数与大小来自段索引'
   assert.equal(doc.classes.find((c) => c.class === 'telemetry').counts.all.calls, 1)
   assert.ok(llm.counts.all.bytes > 0)
   assert.deepEqual(Object.keys(doc.disk).sort(), ['asight_bytes', 'records_bytes', 'sealed_bytes'])
-  assert.equal(doc.disk.records_bytes, (await runQuery('segments', {}, { home, now })).segments[0].bytes)
+  // every disk number IS a size on disk (P4): the plaintext segments, their sealed copies, the whole home
+  const sizes = (re) => fs.readdirSync(path.join(home, 'raw')).filter((n) => re.test(n)).reduce((n, f) => n + fs.statSync(path.join(home, 'raw', f)).size, 0)
+  assert.equal(doc.disk.records_bytes, sizes(/\.ndjson$/))
+  assert.ok(doc.disk.records_bytes > 0)
+  assert.equal(doc.disk.sealed_bytes, sizes(/\.sealed$/))
+  assert.ok(doc.disk.asight_bytes >= doc.disk.records_bytes)
   assert.equal(doc.file, null)
 
   // 24 h / 7 d are windows on the record's own time, not on everything on disk

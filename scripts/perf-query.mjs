@@ -10,16 +10,20 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { QUERIES } from '../src/query/named/index.mjs'
 
 export const DEFAULT_RUNS = 5
 const CLI = path.join(import.meta.dirname, '..', 'bin', 'asight.mjs')
-// Queries that need an argument take it from an earlier query's document (附录 C.5 key → the flag to pass).
-const ARG_FROM = { session: { query: 'sessions', pick: (d) => d.sessions?.[0]?.session }, block: { query: 'calls', pick: (d) => d.records?.[0]?.ref } }
-
-/** The named queries to measure: whatever src/query/named/ implements (one fact, one place). */
-export function queryNames(dir = path.join(import.meta.dirname, '..', 'src', 'query', 'named')) {
-  return fs.readdirSync(dir).filter((f) => f.endsWith('.mjs')).map((f) => f.replace(/\.mjs$/, '')).sort()
+// Queries that need a parameter take its value from another query's document (附录 C.5 key → the flag to pass).
+// `block` is measured on the LAST record of the biggest segment: that is the worst case for reading one record
+// back (§4.1 ≤ 0.3 s), and the ref `<segment>:<line>` is what C.5 calls a record.
+const ARG_FROM = {
+  session: { query: 'sessions', flag: '--id', pick: (d) => (d.sessions || [])[0]?.session_id },
+  block: { query: 'segments', flag: '--ref', pick: (d) => { const s = (d.segments || []).filter((x) => x.records > 0).sort((a, b) => a.bytes - b.bytes).pop(); return s ? `${s.segment}:${s.records}` : null } },
 }
+
+/** The named queries to measure: every name `asight query` has (src/query/named/index.mjs QUERIES — one fact, one place). */
+export function queryNames() { return Object.keys(QUERIES) }
 
 export const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2 }
 
@@ -71,21 +75,28 @@ function readJournal(asightHome) {
 /** measure({home, runs, names, compare}) → the whole 附录 D.2 report. */
 export function measure({ home, runs = DEFAULT_RUNS, names = queryNames(), compare = null }) {
   const asightHome = path.join(home, '.asight')
-  fs.rmSync(path.join(asightHome, 'index'), { recursive: true, force: true })  // a rebuildable projection: timed once, cold
-  const first = runQuery(home, ['query', names[0]])
-  const index = { built_by: names[0], build_ms: Math.round(first.ms), status: first.status, bytes: sizeOr0(path.join(asightHome, 'index')) }
+  const indexPath = path.join(asightHome, 'index')
+  fs.rmSync(indexPath, { recursive: true, force: true })  // a rebuildable projection: timed once, cold
+  // `segments` reads EVERY segment, so this one process builds the whole index — which is what the
+  // following medians are measured with. A build that failed or wrote nothing is said so (a run once:
+  // the build step ran a name that is not a query, exited 2, and every median was index-less).
+  const build = runQuery(home, ['query', 'segments'])
+  const index = { built_by: 'segments', build_ms: Math.round(build.ms), status: build.status, bytes: sizeOr0(indexPath) }
+  if (build.status !== 0 || index.bytes === 0) index.error = build.status ? build.stderr : 'the build wrote no index file'
 
-  const docs = new Map()
+  const docs = new Map([['segments', build.doc]])
+  // A query whose parameter comes from another document is given it, even when that one is measured later.
+  const docOf = (name) => { if (!docs.has(name)) docs.set(name, runQuery(home, ['query', name]).doc); return docs.get(name) || {} }
   const queries = []
   for (const name of names) {
     const arg = ARG_FROM[name]
-    const value = arg ? arg.pick(docs.get(arg.query) || {}) : null
-    if (arg && !value) { queries.push({ query: name, skipped: `no value for its argument in the ${arg.query} document` }); continue }
+    const value = arg ? arg.pick(docOf(arg.query)) : null
+    if (arg && !value) { queries.push({ query: name, skipped: `no value for ${arg.flag} in the ${arg.query} document` }); continue }
     const times = []
     let last = null
-    for (let i = 0; i < runs; i++) { last = runQuery(home, value ? ['query', name, value] : ['query', name]); times.push(last.ms) }
+    for (let i = 0; i < runs; i++) { last = runQuery(home, value ? ['query', name, arg.flag, value] : ['query', name]); times.push(last.ms) }
     docs.set(name, last.doc)
-    queries.push({ query: name, runs: times.map((t) => Math.round(t)), median_ms: Math.round(median(times)), status: last.status, ...(last.status ? { error: last.stderr } : {}) })
+    queries.push({ query: name, ...(value ? { arg: `${arg.flag} ${value}` } : {}), runs: times.map((t) => Math.round(t)), median_ms: Math.round(median(times)), status: last.status, ...(last.status ? { error: last.stderr } : {}) })
   }
 
   const rawDir = path.join(asightHome, 'raw')
@@ -107,7 +118,7 @@ function main(argv) {
   if (!args.home) { console.error('usage: node scripts/perf-query.mjs --home <HOME> [--runs 5] [--queries a,b] [--compare <dir>] [--json]'); process.exit(2) }
   const out = measure({ home: args.home, runs: args.runs ? Number(args.runs) : undefined, names: args.queries ? args.queries.split(',') : undefined, compare: args.compare || null })
   if ('json' in args) { console.log(JSON.stringify(out, null, 2)); return }
-  console.log(`index  built by query ${out.index.built_by}  ${out.index.build_ms} ms  ${out.index.bytes} bytes`)
+  console.log(`index  built by query ${out.index.built_by}  ${out.index.build_ms} ms  ${out.index.bytes} bytes${out.index.error ? `  FAILED: ${out.index.error}` : ''}`)
   for (const q of out.queries) console.log(`  ${q.query.padEnd(10)} ${q.skipped ? q.skipped : `${String(q.median_ms).padStart(6)} ms median of ${q.runs.length}${q.status ? `  FAILED: ${q.error}` : ''}`}`)
   console.log(`sealing  ratio ${out.sealing.ratio == null ? 'unknown' : out.sealing.ratio.toFixed(3)}  segments ${out.sealing.segments.length}`)
   for (const s of out.sealing.segments) console.log(`  ${s.segment}  ${s.state.padEnd(8)} ${String(s.bytes).padStart(12)} → ${String(s.sealed_bytes).padStart(12)}  ratio ${s.ratio ?? '-'}${s.problems.length ? `  ${s.problems.map((p) => p.code).join(',')}` : ''}`)
