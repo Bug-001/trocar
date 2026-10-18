@@ -36,7 +36,7 @@ export async function installedHome({ names = ['claude-code', 'codex'], seed = n
   const s = {
     home, sh, dir, sys, descs,
     on: (o) => turnOn(onOpts(o)),
-    install: (o) => installCollector({ ...onOpts(o), unit: null }), // `asight install`'s collector half: the CA and every certificate item (D55)
+    install: (o) => installCollector({ ...onOpts(o), unit: unit() }), // `asight install`'s collector half: the CA, every certificate item (D55) and the login entry it registers and starts (D61)
     offDeps,
     off: (o = {}) => runOff({ home, env: sh.env, ...o, deps: offDeps(o.deps) }),
     uninstall: (o = {}) => runUninstall({ home, env: sh.env, ...o, deps: offDeps(o.deps) }),
