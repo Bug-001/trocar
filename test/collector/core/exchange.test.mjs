@@ -372,11 +372,13 @@ test('D40: pipelined requests of different levels each get the level of their ow
   assert.deepEqual(out.map((e) => [e.endpoint, e.body_retention, e.resp.body, e.resp.raw_chars]), [['/quiet', 'log', undefined, 7], ['/loud', undefined, { l: 1 }, undefined]])
 })
 
+// D60③ changed one half of this: class names are the operator's table's now, so a NAME the core does not know is not nonsense — it is
+// recorded as it is. What still has to be `full` and still must not stop the framing: a callback that throws, or one whose answer is no answer.
 test('D40: a retention callback that throws or answers nonsense is `full`, and never stops the framing', () => {
-  for (const retention of [() => { throw new Error('boom') }, () => null, () => ({ class: 'nonsense', level: 'half' })]) {
+  for (const [retention, cls] of [[() => { throw new Error('boom') }, 'llm'], [() => null, 'other'], [() => ({ class: 'mine', level: 'half' }), 'mine']]) {
     const { out, store } = sink()
     const t = createExchangeTee({ flow: FLOW, recordStore: store, retention })
     t.fromClient(Buffer.from(post('/v1/messages', '{"a":1}'))); t.fromUpstream(Buffer.from(ok('{}')))
-    assert.deepEqual([out[0].req_body, 'body_retention' in out[0], ['llm', 'other'].includes(out[0].traffic_class)], ['{"a":1}', false, true])
+    assert.deepEqual([out[0].req_body, 'body_retention' in out[0], out[0].traffic_class], ['{"a":1}', false, cls])
   }
 })

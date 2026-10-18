@@ -1,4 +1,4 @@
-// test/collector/retention-daemon.test.mjs — D40 through the PRODUCT path: the daemon over the fake helper and a synthetic /proc,
+// test/collector/classes-daemon.test.mjs — D40 through the PRODUCT path: the daemon over the fake helper and a synthetic /proc,
 // a trusted agent, a mock upstream behind a lab CA (RFC 4.6 acceptance T17 + K2 / K3 at the daemon):
 //   - the default decrypt policy is `all` (an agent's non-model traffic is seen), `auto` stays when the install already wrote it;
 //   - a client that does not trust the asight CA costs two failed connections per (pid, host), then passes through byte-exact;
