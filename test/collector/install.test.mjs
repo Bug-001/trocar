@@ -11,7 +11,7 @@ import tls from 'node:tls'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { startControlServer, controlRequest } from '../../src/collector/core/control.mjs'
-import { installCollector, freeEnginePort, daemonEnv, turnOn } from '../../src/collector/install.mjs'
+import { installCollector, freeEnginePort, daemonEnv, turnOn, ensureDaemonUp } from '../../src/collector/install.mjs'
 import { uninstallCollector } from '../helpers/uninstall.mjs'
 import { startDaemon } from '../../src/collector/daemon.mjs'
 import { readManifest } from '../../src/collector/core/trust/journal.mjs'
@@ -646,6 +646,29 @@ test('install: a unit whose enable() carries its own failure event — the darwi
     assert.ok(!/systemctl/.test(f.reason), 'no systemd remediation text in a launchd failure')
     assert.ok(!recentFailures(a.dir).some((x) => x.code === 'unit-not-enabled'), 'the generic code is not what the record carries')
   } finally { a.done() }
+})
+
+// D62 / D38 (macOS 测试机 2026-10-19): the 9.7 s of an `off` → `on` cycle was spent INSIDE the OS start call — `launchctl kickstart` does not return until launchd
+// spawned the job, and launchd spawns one at most once every ThrottleInterval seconds (10 s by default; the plist asight writes now asks for 1 s). asight does not
+// hide a wait it did not spend working: the clock is injected, so this asserts the saying, not the waiting.
+test('ensureDaemonUp: a start call the OS held back is said in the notes with its milliseconds and the way out (launchd\'s respawn throttle), and a start that did not block says nothing', async () => {
+  const run = async (blockMs) => {
+    let clock = 1_000_000, up = false
+    const unit = { path: '/Users/ada/Library/LaunchAgents/com.asight.collector.plist', registered: () => ({ state: 'present' }), startNow: () => { clock += blockMs; up = true; return { code: 0 } } }
+    return ensureDaemonUp({
+      osName: 'darwin', dir: '/nope/collector', env: {}, unit, socketPath: '/tmp/asight-test.sock',
+      request: async () => { if (!up) throw Object.assign(new Error('not there'), { code: 'ENOENT' }); return { doors: {} } },
+      pause: async () => { clock += 250 }, ms: () => clock,
+    })
+  }
+  const slow = await run(8630)
+  assert.deepEqual([slow.up, slow.started, slow.problems], [true, true, []], 'the daemon came up: this is a note, not a failure')
+  const note = slow.notes.find((n) => /held the collector's start for 8630 ms/.test(n))
+  assert.ok(note, `the wait is said with its number: ${JSON.stringify(slow.notes)}`)
+  assert.match(note, /LaunchAgent/, 'in the platform\'s own words (a Mac user told about systemd has been handed nothing)')
+  assert.match(note, /ThrottleInterval[\s\S]*asight install/, 'what held it, and the one command that rewrites a plist an older install left')
+  const fast = await run(20)
+  assert.deepEqual([fast.up, fast.notes], [true, []], 'a start that did not block says nothing')
 })
 
 test('daemonEnv: the install shell\'s NODE_EXTRA_CA_CERTS goes to the unit when it is an absolute path outside asight\'s home; otherwise it is said and recorded (review 3 #1, D38)', async () => {

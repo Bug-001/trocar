@@ -13,7 +13,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
-import { refuseElevated, nodePreflight, plistXml, plistPath, userUnit, directStartEnv, AGENT_LABEL, PLIST_FILE } from '../../../../src/collector/arch/darwin/autostart.mjs'
+import { refuseElevated, nodePreflight, plistXml, plistPath, userUnit, directStartEnv, AGENT_LABEL, PLIST_FILE, THROTTLE_KEY, THROTTLE_SECONDS } from '../../../../src/collector/arch/darwin/autostart.mjs'
 import { daemonLogPaths } from '../../../../src/collector/arch/daemon-logs.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, SOCKET_PREFIX, SOCKET_SUFFIX } from '../../../../src/collector/arch/darwin/control-path.mjs'
 import * as offDarwin from '../../../../src/off/darwin.mjs'
@@ -233,6 +233,12 @@ test('W24 the plist has the fields of 4.9 §4: Label com.asight.collector, Progr
   assert.doesNotMatch(x, /--supervise/, 'the supervisor flag went with the supervisor parent (4.9 §4)')
   assert.match(x, /<key>RunAtLoad<\/key>\s*<true\/>/, 'launchd starts the daemon at every login')
   assert.match(x, /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/, 'launchd brings a crashed daemon back (no supervisor), but not one that drained after off and exited 0')
+  // D62 (1.6 §3.1): launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default, and `launchctl kickstart` blocks until it did — measured
+  // 8 630 ms measured on a macOS test machine, which WAS the 9.7 s of an `off` → `on` cycle (33 ms with this key). The plist must ask for less than launchd's default,
+  // and for more than nothing: KeepAlive brings a daemon that keeps crashing back, and the throttle is what bounds that loop.
+  const throttle = Number(new RegExp(`<key>${THROTTLE_KEY}</key>\\s*<integer>(\\d+)</integer>`).exec(x)?.[1])
+  assert.equal(throttle, THROTTLE_SECONDS, `the plist asks launchd for its own ${THROTTLE_KEY}`)
+  assert.ok(throttle >= 1 && throttle < 10, `${THROTTLE_KEY} is under launchd's 10 s default (a switch is ≤ 0.5 s, D62) and not 0 (a crash loop stays bounded), got ${throttle}`)
   assert.doesNotMatch(x, /EnvironmentVariables/, 'no environment needed: the daemon\'s env is empty unless install says otherwise')
   const withEnv = plistXml({ node: NODE, asight: SCRIPT, env: { NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' } })
   assert.ok(balanced(withEnv))
