@@ -172,7 +172,7 @@ test('W25 off and uninstall (no source tree, no helper): the standalone check of
   for (const w of [{ getuid: () => 0, geteuid: () => 0 }, { getuid: () => 501, geteuid: () => 0 }]) {
     const r = offDarwin.refuseElevatedByUid(w)
     assert.equal(r.code, 'root-token')
-    assert.match(r.reason, /R7/)
+    assert.match(r.reason, /not as root/) // human text names no spec rule (D58)
     assert.deepEqual(checkRecord({ event: 'failure', where: 'start', code: r.code, reason: r.reason }), [])
   }
   // the same refusal the arch module gives on and daemon: one rule, two homes (src/off cannot import it, 0.1 §2)
