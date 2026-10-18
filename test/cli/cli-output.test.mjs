@@ -1,8 +1,9 @@
-// test/cli/cli-output.test.mjs — D46 (2026-10-12): the CLI text layer's own rules. (a) the unnamed `asight status` digest fits one screen in a quiet world;
-// (b) the whole failure wall is `--failures`, the digest itself carries count + newest only; (c) a non-TTY or NO_COLOR run emits zero ANSI bytes anywhere
-// (status, plan and receipt alike); (d) a TTY run colours the verdict lines; (e) `--dry-run` still prints the receipt the real run word for word (R6).
-// Then the rework seams: the platform-correct autostart line, the degenerate adopted chain that says nothing, the one-time harness notes, the watch
-// dedup, and the daemon log files (made at unit-write time, listed in the manifest, never truncated by a later on).
+// test/cli/cli-output.test.mjs — the CLI text layer's own rules. Colour (D58): a non-TTY or NO_COLOR run emits zero ANSI bytes anywhere (status, plan and
+// receipt alike), a TTY colours the verdict lines. R6: `--dry-run` still prints the receipt the real run will. Then the seams: the platform-correct
+// autostart lines, the degenerate adopted chain that says nothing, the one-time harness notes, the watch dedup, and the daemon log files (D46, which now
+// covers the log files alone — made at unit-write time, listed in the manifest, never truncated by a later on).
+// What `status` itself prints (the summary's shape, the health line, `--failures`, the exit codes) is test/cli/status-doctor-en.test.mjs, the guard under
+// the manual's samples; the digest's old 日志 / 记录 line is not in §3.5 any more, so nothing asserts it.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -19,43 +20,8 @@ import { tmpDir } from '../helpers/tmp.mjs'
 
 const HEALTH_OK = { summary: { state: 'ok', since: '2026-10-12T00:00:00.000Z' }, collector: { installed: true, daemon: { state: 'running' }, conditions: [], failures: [], expected: {} }, legacy: { present: false }, raw: { problems: [] }, read: { errors: [], truncated: false } }
 
-// (a) the digest: one screen in a quiet world — the daemon answers, every harness it watches is captured, nothing failed in 24 h
-test('D46 (a): the unnamed status digest is at most 10 lines in a quiet world, and its shape is the approved one', async () => {
-  const s = await installedHome()
-  const r = await runStatus(s, [], { request: asDaemon(reply({ health: HEALTH_OK, agents: [{ pid: 4121, agent: 'claude-code', trusted: true }] })) })
-  assert.equal(r.exit, 0, r.text)
-  const lines = r.text.split('\n')
-  assert.ok(lines.length <= 10, lines.length + ' lines:\n' + r.text)
-  assert.match(lines[0], /^asight · 在采 2\/7 · 守护进程 在跑/) // claude-code and codex, of the seven asight knows
-  assert.match(lines[1], /^  在采   claude-code\(pid 4121\) · codex$/) // the process annotation, only where one runs
-  assert.match(lines[2], /^  未装   hermes · opencode · deepseek-dsh · kimi-code · z-code$/)
-  assert.match(lines[3], /^各 harness 的路\(/) // D49: the block's own header takes the place of the 路径 row
-  assert.match(lines[4], /^  claude-code\s+claude-code → /) // a known path is drawn per harness
-  assert.match(r.text, /采集健康 ✓\(24 h 内无失败\)/) // zero failures is a ✓ line
-  assert.match(r.text, /^日志     ~\/\.asight\/collector\/logs · 记录 ~\/\.asight · 关闭 asight off$/m)
-})
-
-// (b) the failure wall: the digest says count + kinds + the newest one (squashed, ×count) and points the way; the wall itself is --failures, in its old format
-test('D46 (b): the digest health line is count + newest; --failures prints the whole wall (the format it always had), and neither changes the exit code', async () => {
-  const s = await installedHome()
-  const reason = 'EPERM: chmod $TMPDIR/asight-abc\n  at some/internal/place.mjs:2:3'
-  appendEvent(s.dir, { event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'no original destination' }) // the oldest: the newest below wins
-  appendEvent(s.dir, { event: 'failure', where: 'start', code: 'EPERM', reason })
-  appendEvent(s.dir, { event: 'failure', where: 'start', code: 'EPERM', reason })
-  const r = await runStatus(s, []) // no daemon: the disk is the story, and its failures are the digest's
-  assert.equal(r.exit, 1, 'a failure in 24 h is still exit 1 (R4 unchanged)')
-  assert.match(r.text, /采集健康 ✗ 守护进程没在跑 · 24h 内 3 条失败\(2 类\) — 最新: EPERM EPERM: chmod \$TMPDIR\/asight-abc at some\/internal\/place\.mjs:2:3 ×2/, 'the state word, the count by kind, and the newest one squashed with its multiplier')
-  assert.match(r.text, /全部明细: asight status --failures · 看板「采集健康」/)
-  assert.ok(!/recent failures/.test(r.text), 'the wall itself is not in the plain digest')
-  const wall = await runStatus(s, ['--failures'])
-  assert.equal(wall.exit, r.exit, '--failures is a display flag: the exit code is the judgement alone')
-  assert.match(wall.text, /recent failures \(2 kind\(s\), last 24 h\):/)
-  assert.match(wall.text, /failure \(start\/EPERM\): EPERM: chmod \$TMPDIR\/asight-abc/)
-  assert.match(wall.text, /\(×2 in 24 h\)/, 'the multiplier survives in the wall')
-})
-
-// (c)+(d) colour: TTY-only, NO_COLOR honoured — and zero ANSI bytes anywhere else
-test('D46 (c)+(d): a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan, receipt); a TTY run colours the verdict lines', async () => {
+// (c)+(d) colour (D58): TTY-only, NO_COLOR honoured — and zero ANSI bytes anywhere else
+test('D58: a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan, receipt); a TTY run colours the verdict lines', async () => {
   const s = await installedHome()
   for (const tty of [false, true]) { // a pipe, and a TTY under NO_COLOR
     process.env.NO_COLOR = '1'
@@ -71,13 +37,12 @@ test('D46 (c)+(d): a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan
   }
   const tty = fakeIo({ tty: true })
   const r = await runStatus(s, [], { request: asDaemon(reply({ health: HEALTH_OK })), io: tty })
-  const onTheRow = r.text.split('\n').find((l) => l.startsWith('  ') && l.includes('在采'))
-  assert.ok(/\u001b\[32m/.test(onTheRow), 'the 在采 row is green on a TTY: ' + JSON.stringify(onTheRow))
-  assert.match(r.text.split('\n')[0].replace(/\u001b\[\d+m/g, ''), /^asight · 在采/, 'the bold header strips back to the same words')
+  assert.match(r.text.split('\n')[0], /^\u001b\[1m/, 'the verdict line of the summary is bold on a TTY: ' + JSON.stringify(r.text.split('\n')[0]))
+  assert.match(r.text.split('\n')[0].replace(/\u001b\[\d+m/g, ''), /^Capturing |^No harness is set up/, 'and it strips back to the same words')
   const home = tmpDir('asight-color-'); seedClaude(home); await installFirst(home)
   const sys = fakeSystem(); const on = fakeIo({ tty: true })
   await runOnCli(['--yes'], onCtx(home, on, { exec: sys.exec, daemon: sys.daemon }))
-  assert.match(on.stdoutText(), /\u001b\[32m✔\u001b\[\d+m 入口已写/, 'the receipt verdict mark is green on a TTY')
+  assert.match(on.stdoutText(), /\u001b\[32mCapturing\u001b\[\d+m/, 'the receipt verdict is green on a TTY')
   const c = colors({ stdout: { isTTY: true } }, {})
   const codes = new Set([...r.text.matchAll(/\u001b\[(\d+)m/g)].map((m) => m[1]).filter((x) => !['0', '22', '39'].includes(x)))
   assert.ok(codes.size <= 5, 'at most the five palette codes appear: ' + [...codes])
@@ -86,7 +51,7 @@ test('D46 (c)+(d): a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan
 })
 
 // (e) R6 once more through the reworked words: the dry run prints the receipt of the real run, word for word, and writes nothing
-test('D46 (e): --dry-run still prints the same receipt the real run will (R6) — the same files in the future tense, zero writes', async () => {
+test('R6: --dry-run still prints the same receipt the real run will — the same files in the future tense, zero writes', async () => {
   const home = tmpDir('asight-r6-'); seedClaude(home); await installFirst(home)
   assert.equal(await runOnCli(['--dry-run'], onCtx(home, fakeIo())), 0)
   const realHome = tmpDir('asight-r6-'); seedClaude(realHome); await installFirst(realHome); await installFirst(realHome); const sys = fakeSystem()
@@ -94,53 +59,56 @@ test('D46 (e): --dry-run still prints the same receipt the real run will (R6) �
   assert.equal(await runOnCli(['--yes'], onCtx(realHome, real, { exec: sys.exec, daemon: sys.daemon })), 0, real.text())
   const dryHome = tmpDir('asight-r6-'); seedClaude(dryHome); await installFirst(dryHome); await installFirst(dryHome); const dry = fakeIo()
   assert.equal(await runOnCli(['--dry-run'], onCtx(dryHome, dry)), 0, dry.text())
-  assert.match(dry.stdoutText(), /^asight 将打开采集/m)
-  for (const row of real.stdoutText().split('\n').filter((l) => l.startsWith('  ~/') && /备份|新建/.test(l))) {
-    assert.ok(dry.stdoutText().includes(row.replace(/备份 ~\/\.asight\/backup\/[0-9a-zA-Z-]+/, '备份 改前先存进 ~/.asight/backup/')), 'the dry run lists the row the real run wrote: ' + row)
-  }
-  assert.match(dry.stdoutText(), /不会改任何用户文件。/, 'every user file asight changes is install\'s (D55①): the on after it changes none')
+  assert.match(dry.stdoutText(), /^asight will start capturing /m, 'the dry run is the same receipt in the future tense')
+  // the same files, named the same way: `asight will make:` in the dry run, `asight's own files:` after the real one
+  const files = (t, head, home) => (t.replace(/\n\s+/g, ' ').split('\n').find((l) => l.startsWith(head)) || '').slice(head.length).trim().split(/\s+/).map((f) => f.replace(home, '')).sort()
+  assert.deepEqual(files(dry.stdoutText(), 'asight will make:', dryHome), files(real.stdoutText(), "asight's own files:", realHome), 'the dry run names the files the real run writes')
+  assert.match(dry.stdoutText(), /No file of yours will be changed\./, 'every user file asight changes is install\'s (D55①): the on after it changes none')
 })
 
-// the autostart line names the real mechanism of the platform (D46): launchd on darwin — the hardcoded systemd wording is gone
-test('D46: the plan autostart line is the platform own mechanism — launchd on darwin, systemd --user on linux', () => {
+// the autostart plan names the mechanism of the platform by its own file (D46): a plist on darwin — the hardcoded systemd wording is gone
+test('the plan autostart line is the platform own mechanism — a launchd plist on darwin, the systemd --user unit and its link on linux', () => {
   const mac = formatPlan({ unit: { path: '/h/Library/LaunchAgents/com.asight.collector.plist', env: {}, links: [] }, entries: [], files: [], owned: [], watch: [] }, { home: '/h', platform: 'darwin' })
-  assert.match(mac, /autostart unit \(launchd, RunAtLoad \+ KeepAlive\): ~\/Library\/LaunchAgents\/com\.asight\.collector\.plist/)
+  assert.match(mac.replace(/\n\s+/g, ' '), /autostart ~\/Library\/LaunchAgents\/com\.asight\.collector\.plist: starts the collector at login/)
   assert.ok(!mac.includes('systemd'), 'no systemd word on a Mac')
   const linux = formatPlan({ unit: { path: '/h/.config/systemd/user/asight-collector.service', env: {}, links: ['/h/.config/systemd/user/default.target.wants/asight-collector.service'] }, entries: [], files: [], owned: [], watch: [] }, { home: '/h', platform: 'linux' })
-  assert.match(linux, /autostart unit \(systemd --user, enabled --now\)/, 'linux keeps its own words')
+  const flat = linux.replace(/\n\s+/g, ' ')
+  assert.match(flat, /autostart ~\/\.config\/systemd\/user\/asight-collector\.service: starts the collector at login/, 'linux names its unit')
+  assert.match(flat, /autostart ~\/\.config\/systemd\/user\/default\.target\.wants\/asight-collector\.service: the link that enables it/, 'and the link that enables it')
 })
 
-// the degenerate adopted chain (the harness own name and nothing else) says nothing and is not printed (D46)
-test('D46: a chain that is the harness itself is not printed as a adopted line — a chain with a hop (or a named proxy) is', () => {
+// the degenerate adopted chain (the harness own name and nothing else) says nothing and is not printed
+test('a chain that is the harness itself is not printed as an adopted line — a chain with a hop (or a named proxy) is', () => {
   const degenerate = { harness: 'claude-code', chain: 'claude-code' }
-  const hopful = { harness: 'codex', chain: 'codex → [eBPF] asight 引擎 :4711 → api.openai.com:443(直连)' }
+  const hopful = { harness: 'codex', chain: 'codex -> [ebpf] asight -> api.openai.com:443 (direct)' }
   const withProxy = { harness: 'z-code', chain: 'z-code', proxy: 'http://127.0.0.1:7897' }
-  const plan = formatPlan({ adopted: [degenerate, hopful, withProxy], entries: [], files: [], owned: [], watch: [] }, { home: '/h' })
-  assert.doesNotMatch(plan, /接上后 claude-code 的路: claude-code/)
-  assert.match(plan, /接上后 codex 的路: codex → /)
-  assert.match(plan, /接上后 z-code 的路: z-code\(它的代理设置 http:\/\/127\.0\.0\.1:7897/, 'a degenerate chain with a real proxy setting still says something')
-  const receipt = formatOnReceipt({ changed: [], created: [], skipped: [], restart: [], notes: [], adopted: { 'claude-code': degenerate, codex: hopful } }, { home: '/h' })
-  assert.ok(!receipt.includes('接上后 claude-code 的路: claude-code'))
-  assert.match(receipt, /接上后 codex 的路: codex → /)
+  const plan = formatPlan({ adopted: [degenerate, hopful, withProxy], entries: [], files: [], owned: [], watch: [] }, { home: '/h' }).replace(/\n\s+/g, ' ')
+  assert.doesNotMatch(plan, /claude-code: route claude-code/)
+  assert.match(plan, /codex: route codex -> /)
+  assert.match(plan, /z-code: route z-code \(its proxy setting http:\/\/127\.0\.0\.1:7897/, 'a degenerate chain with a real proxy setting still says something')
+  const receipt = formatOnReceipt({ changed: [], created: [], skipped: [], restart: [], notes: [], adopted: { 'claude-code': degenerate, codex: hopful } }, { home: '/h' }).replace(/\n\s+/g, ' ')
+  assert.ok(!receipt.includes('claude-code: route claude-code'))
+  assert.match(receipt, /codex: route codex -> /)
 })
 
 // the one-time harness notes: printed when THIS run wires the harness, relocated to doctor / --json afterwards (D46); the receipt object is untouched
-test('D46: a harness one-time note prints on its first wiring only; an idempotent on prints none', () => {
+test('a harness one-time note prints on its first wiring only; an idempotent on prints none', () => {
   const r = { changed: [], created: [], skipped: [], restart: [], log: null, notes: ['claude-code: a NODE_EXTRA_CA_CERTS exported only in a shell asight did not see no longer reaches Claude Code', 'codex: something about codex', 'install: the collector CA is in the user trust store'] }
-  const first = formatOnReceipt({ ...r, created: ['x'] }, { fresh: new Set(['claude-code']) })
-  assert.match(first, /说明: claude-code: a NODE_EXTRA_CA_CERTS/)
-  assert.doesNotMatch(first, /说明: codex:/, 'codex was wired before: its note lives in doctor and --json')
-  assert.match(first, /说明: install: the collector CA/, 'a machine-level note still prints when this run did something new')
-  const idempotent = formatOnReceipt({ ...r }, { fresh: new Set() })
-  assert.doesNotMatch(idempotent, /说明: /, 'an idempotent on prints no note at all')
-  assert.match(formatOnReceipt({ ...r, created: ['x'] }, { fresh: new Set(['codex']) }), /说明: codex: something/, 'codex own first wiring prints its note')
+  const flat = (t) => t.replace(/\n\s+/g, ' ')
+  const first = flat(formatOnReceipt({ ...r, created: ['x'] }, { fresh: new Set(['claude-code']) }))
+  assert.match(first, /Note: claude-code: a NODE_EXTRA_CA_CERTS/)
+  assert.doesNotMatch(first, /Note: codex:/, 'codex was wired before: its note lives in doctor and --json')
+  assert.match(first, /Note: install: the collector CA/, 'a machine-level note still prints when this run did something new')
+  const idempotent = flat(formatOnReceipt({ ...r }, { fresh: new Set() }))
+  assert.doesNotMatch(idempotent, /Note: /, 'an idempotent on prints no note at all')
+  assert.match(flat(formatOnReceipt({ ...r, created: ['x'] }, { fresh: new Set(['codex']) })), /Note: codex: something/, 'codex own first wiring prints its note')
 })
 
 // the same watch fact in several entries (OpenCode package.json ×4) is ONE plan line (D46)
-test('D46: the plan folds the watch entries of one (harness, reason) into one line that names them all', () => {
+test('the plan folds the watch entries of one (harness, reason) into one line that names them all', () => {
   const why = 'OpenCode installs @opencode-ai/plugin there on its first run with any plugin'
   const watch = ['package.json', 'package-lock.json', 'bun.lock', 'node_modules'].map((n) => ({ harness: 'opencode', path: '/h/.config/opencode/' + n, why }))
-  const text = formatPlan({ watch, entries: [], files: [], owned: [] }, { home: '/h' })
+  const text = formatPlan({ watch, entries: [], files: [], owned: [] }, { home: '/h' }).replace(/\n\s+/g, ' ')
   const said = text.split('\n').filter((l) => l.includes('opencode itself may write'))
   assert.equal(said.length, 1, 'one line, not four:\n' + text)
   assert.match(said[0], /~\/\.config\/opencode\/package\.json \(\+3 more: package-lock\.json, bun\.lock, node_modules\)/)
@@ -166,11 +134,4 @@ test('D46: the unit write makes the daemon log directory (0700, two 0600 files),
   const sys2 = fakeSystem()
   assert.equal(await runOnCli(['--yes'], onCtx(home, fakeIo(), { exec: sys2.exec, daemon: sys2.daemon })), 0, 'the second on succeeds')
   assert.match(fs.readFileSync(path.join(logs, 'daemon-out.log'), 'utf8'), /a line the daemon printed at login/, 'a later on never truncates the log')
-})
-
-// the status digest points at the daemon logs (the operations face); the daemon records stay in flows/ (the record, R11)
-test('D46: the digest log line names the log directory and the records directory', async () => {
-  const s = await installedHome()
-  const r = await runStatus(s, [], { request: asDaemon(reply({ health: HEALTH_OK })) })
-  assert.match(r.text, /~\/\.asight\/collector\/logs · 记录 ~\/\.asight · 关闭 asight off/)
 })
