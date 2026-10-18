@@ -24,6 +24,3 @@ export function appendLegacyEvent(rec, { file = legacyEventsPath(), now = new Da
     return false
   }
 }
-
-// A failure record from an Error: `code` = Node's error code when it has one, else asight's name for it.
-export const failureOf = (where, e, fallback, extra = {}) => ({ event: 'failure', where, code: (e && typeof e.code === 'string' && e.code) || fallback, reason: String((e && e.message) || e), ...extra })
