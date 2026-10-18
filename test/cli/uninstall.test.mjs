@@ -12,7 +12,7 @@ import { standalonePath } from '../../src/off/paths.mjs'
 import { installedHome, writeDaemonLock, flowEvents, procTable, fakeClock, DAEMON_ROWS, hangsOnStatus, snapshot } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
-import { runStatus } from './fixtures/status-ctx.mjs'
+import { writeNetenv, netenvFile } from '../../src/netenv/index.mjs'
 
 const BASE = new Date('2026-10-07T00:00:00Z')
 /** `asight uninstall <argv>` over a sandbox: the exit code, and what it printed. §3.6 — uninstall always asks, so a case that is not about
@@ -436,9 +436,9 @@ test('semantics 2: an install manifest of the wrong shape is treated as unreadab
 test('uninstall removes ~/.asight/netenv.json with the rest of asight\'s own files — the plan lists it, nothing but the kept captures is left in ~/.asight — and with no daemon the receipt does not say one was stopped', async () => {
   const s = await installedHome({ names: ['claude-code'] }); keep(s)
   s.sys.daemon.state.up = false
-  await runStatus(s) // writes the board's copy
-  const nf = path.join(s.home, '.asight', 'netenv.json')
-  assert.ok(fs.existsSync(nf), 'status wrote it')
+  const nf = netenvFile(s.home)
+  writeNetenv(s.home, { adopted: {} }) // the daemon's copy for the board (§3.5: `status` writes nothing of its own)
+  assert.ok(fs.existsSync(nf), 'the board\'s copy is on disk')
   const dry = await cli(s, ['--dry-run', '--json'])
   assert.ok(dry.io.json().removed.includes(nf), 'the plan lists it')
   assert.ok(fs.existsSync(nf), 'and a dry run removed nothing')
