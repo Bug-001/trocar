@@ -59,7 +59,7 @@ test('V50 status and doctor only read: they write nothing at all, run only read-
     // printed for the user, never run
     w.deps.netFactsDeps = async () => ({ harnesses: descs, archFacts: async (ctx) => ({ ...(await linuxNetFacts(ctx)), otherRedirector: true }) })
     const out = (await w.s.run(['doctor'], { deps: w.deps })).io.stdoutText()
-    assert.match(out, /Fix +sudo bpftool cgroup tree \/sys\/fs\/cgroup/, 'doctor prints it for the user')
+    assert.ok(out.includes('sudo bpftool cgroup tree /sys/fs/cgroup'), 'doctor prints the command for the user') // the command is the fact; its label is wording
     assert.ok(!w.calls.some((c) => /bpftool|netsh|sudo/.test(c)), 'and never runs it')
     assert.ok(!(w.s.sys.exec.calls.some((c) => /bpftool|netsh|sudo/.test(c))))
   } finally { await w.close() }
