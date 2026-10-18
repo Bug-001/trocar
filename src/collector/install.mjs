@@ -118,6 +118,20 @@ const DAEMON_CMD = 'asight daemon' // 1.6 §2: the autostart unit's ExecStart is
 /** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
 const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\asight\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.asight.collector'}` : 'the systemd user unit asight-collector.service')
 
+/** 附录 C.1: the code of the refusal below (one place, mirrored by src/cli/json.mjs's ERROR_CODES). */
+export const AUTOSTART_MISSING = 'autostart-missing'
+/** D61 / 1.6 §3.3: the login entry is `install`'s and `on` never touches it, so an `on` whose entry is not registered would leave the agents'
+ *  rewritten configs pointing at doors that nobody opens after the next login (without it nothing starts after a reboot and no agent can reach a door).
+ *  One question per OS, asked of the arch's own autostart unit (`registered()`: launchctl print · schtasks /Query · systemctl --user is-enabled),
+ *  so no call site has a platform branch. Anything but a proven `present` — not registered, or an answer that could not be read — refuses.
+ *  → the reason (one English sentence ending in the fix command), or null when the entry is there (or there is no autostart on this platform). */
+export function autostartBlock({ unit, osName }) {
+  if (!unit) return null
+  const q = unit.registered()
+  if (q.state === 'present') return null
+  return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, and the agents asight points at its doors would all fail to connect. Nothing was changed. Run: asight install`
+}
+
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
 export function changeText(e, prior = null) {
   if (e.kind === 'text') {
@@ -367,20 +381,13 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
     onPlan(plan)
     const m = openManifest({ dir, plan, now, fs })
     const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs })
-    let unitFailed = null, unitEvent = null
-    if (opts.unit) {
-      if (written.unit === 'rewrite' && typeof opts.unit.reload === 'function') opts.unit.reload() // a unit file rewritten under a loaded unit
-      const r = opts.unit.enable()
-      if (r.code === 0 && r.warn) final.notes.push(r.warn) // enable's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say)
-      if (r.code !== 0) {
-        // the flip checklist ③ (4.9 §4 末): an arch whose enable() carries its own failure record (the darwin LaunchAgent: `launchd-register-failed`, launchctl wording —
-        // launchd is the only autostart there, 4.9 §11) has THAT recorded verbatim, not the systemd-shaped remediation below replacing it.
-        if (r.event) { unitEvent = r.event; unitFailed = r.event.reason }
-        else unitFailed = `${opts.unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
-      }
-    }
     const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
-    if (unitFailed) { final.notes.push(unitFailed); put(unitEvent || { event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
+    // D61: the login registration and the daemon, through the one seam every command uses — so Linux's install probes before it starts too
+    // (拉起不是重启, R8: a daemon someone started by hand is never started a second time), and no `--now` is issued blind.
+    if (opts.unit) {
+      const dmn = await ensureDaemonUp({ osName: opts.osName, dir, env: opts.env || process.env, fs, unit: opts.unit, register: true, reload: written.unit === 'rewrite', put, ...(opts.request ? { request: opts.request } : {}), ...(opts.sleep ? { pause: opts.sleep } : {}) })
+      for (const n of dmn.notes) if (!final.notes.includes(n)) final.notes.push(n)
+    }
     const counts = { entries: manifest.entries.length, files: manifest.files.filter((f) => f.role === 'trust-file').length, notes: final.notes.length }
     put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)` })
     return { already: false, manifest, plan: final }
@@ -399,8 +406,6 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
 export async function turnOn(opts = {}) {
   const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
-  // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
-  const unitFile = null
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
   const username = (() => { try { return user || os.userInfo().username } catch { return String(env.USER || '') } })()
@@ -416,6 +421,10 @@ export async function turnOn(opts = {}) {
     if (h && h.ok === false) helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo asight setup-helper`
   }
   if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperBlock] }), manifest: null, plan: null, exit: 1 }
+  // D61 / 1.6 §3.3: the login entry is `install`'s, so an `on` with none would open doors that nobody opens after the next login
+  // (without the login registration, a reboot after `on` leaves every agent unusable). Asked here, before the first write; a `--dry-run` goes on and carries it in `blocked`.
+  const autostartBlk = dryRun ? null : autostartBlock({ unit, osName })
+  if (autostartBlk) return { receipt: unwritten({ ...fresh(), ok: false, notes: [autostartBlk], blocked: [{ what: 'asight on', reason: autostartBlk }], error: { code: AUTOSTART_MISSING, message: autostartBlk } }), manifest: null, plan: null, exit: 2 }
   // `lingerRead()` → { state, error? } (src/collector/arch/linux/redirector.mjs) says why when it cannot be read; `linger()` → true | false | null is the older form
   const lingerNow = () => { try {
     if (lingerRead) { const r = lingerRead(); return r.state === true || r.state === false ? { linger: r.state } : { linger: 'unknown', linger_reason: r.error || 'the linger state could not be read' } }
@@ -423,7 +432,7 @@ export async function turnOn(opts = {}) {
     return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' }
   } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
-    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: unitFile, fs, now })
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: asight install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
@@ -445,7 +454,10 @@ export async function turnOn(opts = {}) {
     // the proxy fields the user edited since the last `on` (1.6 §9.5): asked about like an extra file (R6); a routing that owns none has none
     const edited = networkEdited && plan.targets.length ? await networkEdited(plan.targets) : []
     if (edited.length) r.notes.push(...edited.map((e) => `you changed the proxy setting of ${e.harness}: ${e.where || 'the proxy field'} is now ${e.now ?? 'empty'} (asight left ${e.was ?? 'empty'} there); on takes that as the upstream and points the setting back at asight`))
-    if (dryRun) return { receipt: { ...r, dry_run: true, ok: !named, ...(helperBlock ? { blocked: helperBlock, notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real asight on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+    if (dryRun) {
+      const blk = autostartBlock({ unit, osName })
+      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk ? { blocked: [{ what: 'asight on', reason: blk }], notes: [...r.notes, `${blk} (a real asight on stops there)`] } : {}), ...(helperBlock ? { blocked: [{ what: 'asight on', reason: helperBlock }], notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real asight on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+    }
     if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
     if (plan.first || plan.newPaths.length || edited.length) {
       const verdict = confirm ? await confirm(plan) : null
@@ -492,7 +504,7 @@ export async function turnOn(opts = {}) {
     const receipt = {
       ...r,
       changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
-      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unitFile ? [unitFile.path] : [])] : [])],
+      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned] : [])],
       unchanged: written ? written.intact : [],
     }
     const finish = (outcome, reason) => {

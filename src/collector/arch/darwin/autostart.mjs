@@ -203,6 +203,9 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     // D61: `on` asks launchd to start the daemon now (the job launchd loaded at login) and never touches the registration
     // (`install` made it). A job that is not loaded answers non-zero, and ensureDaemonUp falls back to `start()`, reason said.
     startNow: () => launchctl(['kickstart', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools),
+    // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything (an `on` with no
+    // entry opens doors that nobody opens after the next login) — `launchctl print`, the question this file already asks (agentState).
+    registered: () => agentState(tools),
     reload: () => ({ ...ok }),
     remove: undo,
   }

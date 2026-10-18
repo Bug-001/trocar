@@ -48,7 +48,9 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     return exit
   }
   const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, ...(extra.dry_run || r.code ? {} : { undo: UNDO_LINE.on }), harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...extra })
+  const { autostartBlock, AUTOSTART_MISSING, ensureDaemonUp } = await import('../collector/install.mjs')
   const plan = await turnOnModel({ ...args, dryRun: true })
+  const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
   // 附录 C.2: a `--dry-run` goes as expected even when the real run would stop before writing — it exits 0, and what would stop it is `blocked`
   // (a Windows test machine 2026-10-18: with nothing installed it exited 1 with a top-level `code` and no `planned`)
   if (plan.code) {
@@ -56,6 +58,15 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned || [], blocked }), EXIT.ok)
     // 附录 C.1: the refusal's code lives in `error` and nowhere else (a dry run carries none: nothing went wrong)
     return out(receiptOf(plan, { blocked, error: { code: plan.code, message: plan.problems[0] || plan.code } }), EXIT.incomplete)
+  }
+  // D61 / 1.6 §3.3: the login entry is `install`'s, and an `on` with none would point the agents at doors nobody opens after the next
+  // login — so it is asked here, before the first write, and refused (exit 2, nothing written). A `--dry-run` says it in `blocked` and exits 0.
+  const autostartBlk = autostartBlock({ unit, osName: os })
+  if (autostartBlk) {
+    const blocked = [{ what: 'asight on', reason: autostartBlk }]
+    if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned || [], blocked }), EXIT.ok)
+    put({ event: 'failure', where: 'start', code: AUTOSTART_MISSING, reason: autostartBlk })
+    return out(receiptOf({ ...plan, exit: 2, problems: [autostartBlk] }, { blocked, error: { code: AUTOSTART_MISSING, message: autostartBlk } }), EXIT.usage)
   }
   const m = readManifest(dir, fs)
   const seen = new Set(m.confirmed_paths || [])
@@ -71,8 +82,6 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   let lock
   try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) { io.err(`asight on: ${e.message}`); return EXIT.incomplete } throw e }
   try {
-    const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
-    const { ensureDaemonUp } = await import('../collector/install.mjs')
     const up = await ensureDaemonUp({ osName: os, dir, env, fs, unit, put, ...(deps.sleep ? { pause: deps.sleep } : {}) })
     const r = up.up ? await turnOnModel(args) : { ...plan, routes: [], problems: up.problems.length ? up.problems : up.notes, exit: EXIT.incomplete }
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))

@@ -66,6 +66,10 @@ export function userUnit({ home, node, script, run = null, env = process.env, sp
     // D61: `on` asks systemd to start the daemon now and never touches the registration (`install` made it). A machine
     // without a systemd --user bus answers non-zero, and ensureDaemonUp falls back to `start()` with the reason said.
     startNow: () => sc(['start', UNIT_NAME]),
+    // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything (an `on` with no
+    // entry opens doors that nobody opens after the next login). `is-enabled` answers 0 for enabled; a systemctl that did not run at
+    // all (code null) is not "not enabled": nothing was asked, so the answer is unknown and `on` does not go on a guess.
+    registered: () => { const r = sc(['is-enabled', UNIT_NAME]); return r.code === 0 ? { state: 'present' } : r.code === null ? { state: 'unknown', err: `systemctl --user is-enabled did not run (${r.err || 'no reason given'})` } : { state: 'absent' } },
     start: (carry = null) => startDirect(carry),
     reload: () => sc(['daemon-reload']),
     stop: () => sc(['stop', UNIT_NAME]),

@@ -634,7 +634,7 @@ test('install: a unit systemd refuses to enable is a recorded failure, the insta
 // it (launchd is the only autostart on darwin, 4.9 §11: the receipt must say so). Both halves of the install: installCollector (the harness/lab shape) and turnOn (`asight on`).
 test('install: a unit whose enable() carries its own failure event — the darwin LaunchAgent — records THAT, not unit-not-enabled and systemd words (flip ③, 4.9 §4; D61: registering is install\'s, so this is install\'s record)', async () => {
   const refused = { code: 1, err: 'Boot-on-boot failed: 5: Input/output error', event: { event: 'failure', where: 'install', code: 'launchd-register-failed', reason: 'launchctl bootstrap was refused (exit 5: Boot-on-boot failed: 5: Input/output error); launchd is the only autostart, so asight does not start at login' } }
-  const unit = (b) => ({ path: path.join(b.home, 'Library', 'LaunchAgents', 'com.asight.collector.plist'), links: [], text: (env) => JSON.stringify(env), enable: () => ({ ...refused }), stop: () => {} })
+  const unit = (b) => ({ path: path.join(b.home, 'Library', 'LaunchAgents', 'com.asight.collector.plist'), links: [], text: (env) => JSON.stringify(env), enable: () => ({ ...refused }), startNow: () => ({ ...refused }), start: () => ({ ...refused }), registered: () => ({ state: 'present' }), stop: () => {} })
   const { recentFailures } = await import('../../src/collector/core/events.mjs')
   const a = box()
   try {

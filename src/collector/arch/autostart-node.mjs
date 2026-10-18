@@ -20,6 +20,7 @@ export function autostartNode({ env = process.env, execPath = process.execPath, 
   if (!mine) return execPath
   const names = platform === 'win32' ? ['node.exe', 'node.cmd', 'node.bat'] : ['node']
   for (const dir of String(env.PATH || env.Path || '').split(platform === 'win32' ? ';' : ':').filter(Boolean)) {
+    if (!(platform === 'win32' ? path.win32 : path.posix).isAbsolute(dir)) continue // launchd / systemd / the task need an absolute program path; a relative PATH entry (`node_modules/.bin`, `.`) would resolve against the install run's cwd (4.11 §1 install 7)
     for (const n of names) {
       const cand = path.join(dir, n)
       const r = real(fs, cand)

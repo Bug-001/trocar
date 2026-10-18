@@ -302,6 +302,9 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     },
     start: (carry = null) => startDirect(carry),
     startNow: () => runNow(), // D61: `on` starts the daemon through the task, never touching the registration
+    // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything — `schtasks /Query`
+    // (taskState, the question this file already asks), and asight's own HKCU Run value when the task was refused (the §7 fallback IS the login entry then).
+    registered: () => { const q = taskState(tools); if (q.state === 'present') return q; const k = readRunValue({ run, env }); return k.present && ours(k.value) ? { state: 'present' } : q },
     reload: () => ({ ...ok }),
     remove: ({ prior = null } = {}) => undo(['/Delete', '/TN', TASK_NAME, '/F'], 'removed', prior),
   }
