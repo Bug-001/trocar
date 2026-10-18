@@ -16,6 +16,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { closure } from '../helpers/imports.mjs'
+import { modelWorld } from '../helpers/model-world.mjs'
 
 // a record the four questions are content with: an LLM call with its verbatim request and a reconstructed response
 const REC = { id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages', ts_request: '2026-01-01T00:00:00.000Z',
@@ -31,7 +32,7 @@ function capture(dir, { n = 1, mode = 0o600, name = 'capture.ndjson' } = {}) {
 }
 /** A HOME where asight has not been turned on: a doctor with nothing of its own to look at. */
 const plain = () => { const home = tmpDir('asight-doc-'); return { home, sh: { env: { HOME: home } }, sys: { exec: recordingExec() } } }
-const DEPS = { spawn: absentSpawn, has: () => true, verify: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
+const DEPS = { spawn: absentSpawn, has: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
 async function doctor(s, argv = [], { deps = {}, io = fakeIo(), platform = 'linux', source = '' } = {}) {
   // `doctor` has no --source any more (1.6 §2): the capture it reads is the default location, and a test points it elsewhere with the internal seam ASIGHT_SOURCE (§1.8)
   const exit = await runDoctor(argv, { io, home: s.home, platform, env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run'), ASIGHT_SOURCE: source }, deps: { ...DEPS, exec: s.sys.exec.run, ...deps } })
@@ -108,17 +109,26 @@ test('④b covers ~/.asight/backup/: a backup of a user\'s file that others can 
 const NET_READ = /^(ss -ltnpH|ip -j (route get 1\.1\.1\.1|-d link show dev \S+))$/
 const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !NET_READ.test(c))
 
-test('the old `verify` is read-only: in the store or not in it is exit 0; a check that threw is something doctor could not read — exit 3 with the reason (§3.7, D38); no OS tool runs', async () => {
-  const s = plain()
-  const src = path.join(s.home, 'src'); capture(src)
-  let r = await doctor(s, [], { source: src, deps: { verify: () => true } })
-  assert.equal(r.exit, 0, r.text)
-  r = await doctor(s, [], { source: src, deps: { verify: () => false } })
-  assert.doesNotMatch(r.out, /run: asight on/, 'the item is the old capture\'s CA: `asight on` cannot fix it'); assert.equal(r.exit, 0)
-  r = await doctor(s, [], { source: src, deps: { verify: () => { throw new Error('security: the keychain could not be opened') } } })
-  assert.equal(r.exit, 3, r.text); assert.match(r.out, /Could not judge the user trust store: security: the keychain could not be opened/)
-  assert.deepEqual(ranBesides(s), [], 'with the trust-store check, and the process table injected, no OS tool ran at all')
-})
+// P7 (Windows test machine 2026-10-18): there is ONE check for 「is asight's root trusted」 — the collector's root store, the one `status` and `install` use.
+// doctor used to run a second, half-built one of its own and printed its exception at the reader: "win32 TrustStoreInstaller not implemented
+// (D22 reserved — CurrentUser Root store; ship with the Windows onboard sub-unit)" — a class name, a decision id and a plan item, on a machine
+// where install had just written the root. Over both model platforms: a store that answers is judged (exit ≠ 3), one that cannot be read is
+// 「could not judge」 with its own reason and no internal label.
+for (const platform of ['darwin', 'win32']) {
+  test(`P7 · ${platform}: doctor judges the trust store by the one check status uses — a store that cannot be read is exit 3 with an English reason, never an internal label`, async () => {
+    const w = await modelWorld()
+    await w.install()
+    const src = path.join(w.home, 'src'); capture(src)
+    const run = (rootStore) => doctor({ home: w.home, sh: { env: w.env }, sys: { exec: recordingExec() } }, [], { platform, source: src, deps: { rootStore, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) } })
+    const judged = await run(w.store)
+    assert.notEqual(judged.exit, 3, judged.text)
+    assert.doesNotMatch(judged.out, /trust store/i, 'a store it could read is not \u300ccould not judge\u300d')
+    const blind = await run({ has: () => { throw new Error('certutil -user -store Root failed (exit 1)') } })
+    assert.equal(blind.exit, 3, blind.text)
+    assert.match(blind.out, /Could not judge the user trust store: the root store could not be read \(certutil -user -store Root failed \(exit 1\)\)/)
+    for (const leak of [/TrustStoreInstaller/, /not implemented/, /D22/, /sub-unit/]) assert.doesNotMatch(blind.text, leak, `an internal label reached the text: ${leak}`)
+  })
+}
 
 test('what doctor runs: no VPN query at all (D49), only the read of the network facts and nothing else — no `which`, no systemctl / launchctl / loginctl, nothing that starts, stops or changes a thing (the trust-store check and the process table are the other two queries; both are replaced here)', async () => {
   const s = await installedHome()

@@ -4,7 +4,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readRecords } from '../../src/etl/ingest.mjs';
-import { checkDeps, qCapturing, qCorrect, qNoLeak, qFilePerms, qUserTrustOnly, runSelfTest } from '../../src/capture/selftest.mjs';
+import { checkDeps, qCapturing, qCorrect, qNoLeak, qFilePerms, runSelfTest } from '../../src/capture/selftest.mjs';
 import { fixtureGate } from '../helpers/fixture.mjs';
 
 const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');
@@ -68,19 +68,6 @@ test('qNoLeak: a raw sk-ant token in a request BODY is a warning, not a hard fai
   const q = qNoLeak([{ req_headers: { authorization: '<redacted>' }, req_body: '{"messages":[{"text":"my key is sk-ant-oat-PASTED12345"}]}' }]);
   assert.equal(q.ok, true, 'body-content token does not breach the firewall gate');
   assert.equal(q.tokenCount, 1, 'but it IS surfaced as a warning');
-});
-
-// ④ 没弱化全机 TLS
-test('qUserTrustOnly: verify()=true → ok; false → not onboarded; throw → captured', () => {
-  assert.equal(qUserTrustOnly(() => true).ok, true);
-  const off = qUserTrustOnly(() => false);
-  assert.equal(off.ok, false);
-  assert.match(off.note, /not onboarded|user-level/);
-  assert.match(off.note, /only the board's monitor toggle puts there any more[^;]*; the collector's own CA \(`asight on`\) is in no trust store by design/, 'the item is the old capture\'s CA: `asight on` cannot fix it, so it must not be what the note tells you to run (1.6 §2, §4)');
-  assert.doesNotMatch(off.note, /run: asight on/);
-  const boom = qUserTrustOnly(() => { throw new Error('nss missing'); });
-  assert.equal(boom.ok, false);
-  assert.match(boom.note, /errored: nss missing/);
 });
 
 // assembled (R4): three outcomes, never mixed. failed = a capture file others can read (exit 1) · undetermined = nothing examined, or not all of it (exit 3) · otherwise ok (exit 0).
