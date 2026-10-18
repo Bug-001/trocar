@@ -14,6 +14,14 @@ import { openSealed } from '../raw/reader.mjs';
 import { R, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 import { allSegments, segmentIndex } from './index-build.mjs';
 import { asightHome } from '../paths.mjs';
+import { rowsKey, warmCache, fsTag } from './warm.mjs';
+
+// WARM (D63 ①, 1.6 §4.1 附近的查询): one entry per row list, kept against THAT list. A session's pages, the block of
+// one of its steps and its calls ask for the same rows again, so the second query of an open session reads no record
+// file at all; a session that got a new record has a new list and is read again (never stale). The key is the list,
+// which is why the daemon appending to ANOTHER session costs this entry nothing.
+const readBack = warmCache({ maxBytes: 96 * 1024 * 1024, bytes: (v) => v.bytes });
+const listKey = (home, rows, fs) => { const k = rowsKey(rows); return { id: `${fsTag(fs)}\n${home}\n${k.id}`, bytes: k.bytes }; };
 
 const NL = 0x0a;
 
@@ -74,6 +82,17 @@ export async function allRecords({ home = asightHome(), fs = nodeFs, errors = []
  * A row whose record cannot be read goes into `errors` (D38), never silently missing.
  */
 export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors = [] } = {}) {
+  const { id, bytes } = listKey(home, rows, fs);
+  // The stamp IS the key here: a row list names the exact bytes it stands for, and those bytes never change
+  // (invariant 2: a record is appended once and never rewritten). A shallow copy goes out, so a caller that
+  // sorts or trims its result cannot reach into the cache.
+  const got = readBack.get(id, id, () => ({ ...readRows({ home, fs, rows }), bytes }));
+  errors.push(...got.errors);
+  return [...got.out];
+}
+
+function readRows({ home, fs, rows }) {
+  const errors = [];
   const bySegment = new Map();
   for (const r of rows) { if (!bySegment.has(r.segment)) bySegment.set(r.segment, []); bySegment.get(r.segment).push(r); }
   const out = [];
@@ -90,9 +109,8 @@ export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors 
       }
     } finally { read.close(); }
   }
-  return out;
+  return { out, errors };
 }
-
 // The plaintext at a row's own offset, exactly its stored bytes; a row from an index that has no offset
 // (a segment sealed when the row was written) falls back to the line scan.
 function plainReader(file, fs) {

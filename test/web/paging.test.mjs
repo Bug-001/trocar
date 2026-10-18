@@ -152,9 +152,9 @@ function harness({ view, serverLimit = null, totalCalls = null }) {
     if (u.startsWith('/api/sessions')) return Promise.resolve({ ok: true, json: () => Promise.resolve(PROJECTS) });
     if (u.startsWith('/api/session')) {
       const sp = new URL('http://x' + u).searchParams;
-      const cursor = sp.get('cursor') == null ? 0 : Number(sp.get('cursor'));
+      const cursor = sp.get('after') == null ? 0 : Number(sp.get('after'));
       const limit = serverLimit != null ? serverLimit : (sp.get('limit') == null ? Infinity : Number(sp.get('limit')));
-      const paged = sp.get('cursor') == null && sp.get('limit') == null ? view : pageView(view, { cursor, limit });
+      const paged = sp.get('after') == null && sp.get('limit') == null ? view : pageView(view, { cursor, limit });
       const wire = wireOf(paged); // what src/server.mjs:313 actually sends
       served.push(wire);
       return Promise.resolve({ ok: true, json: () => Promise.resolve(wire) });
@@ -194,7 +194,7 @@ test('A · /api/session is requested as a cursor/limit WINDOW, not as the whole 
   assert.ok(reqs.length > 0, 'no /api/session request was made at all');
   for (const u of reqs) {
     assert.match(u, /[?&]limit=\d+/, `board asked for an UNBOUNDED session: ${u}`);
-    assert.match(u, /[?&]cursor=\d+/, `board asked without a cursor: ${u}`);
+    assert.match(u, /[?&]after=\d+/, `board asked without an --after window: ${u}`);
   }
   // The payload really WAS the slim wire shape — otherwise the rest of this file would be exercising
   // the in-process view (objects in lanes, `streams` present) that no browser ever receives, and the
@@ -255,7 +255,7 @@ test('C · scrubbing outside the loaded window re-aims the cursor and re-fetches
   const after = h.sessionUrls().slice(before);
   assert.ok(after.length > 0, 'scrubbing onto an unloaded call fetched nothing — the window never moves');
   const last = after[after.length - 1];
-  const c = Number(new URL('http://x' + last).searchParams.get('cursor'));
+  const c = Number(new URL('http://x' + last).searchParams.get('after'));
   const lim = Number(new URL('http://x' + last).searchParams.get('limit'));
   assert.ok(gi >= c && gi < c + lim,
     `the re-aimed window [${c},${c + lim}) does not contain the call the user scrubbed to (gi=${gi})`);

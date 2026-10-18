@@ -609,7 +609,7 @@ let lastCheapSig=null   // poll skips the whole /api/session fetch when calls/la
 let navSeenExpanded=false
 
 // ── BUG 1: cursor paging, browser half (3.5 游标契约 · 4.4:88②) ────────────
-// The server has shipped `?cursor=<gi>&limit=<n>` since 2026-07-16 and the board never once called
+// The server has shipped `?after=<gi>&limit=<n>` since 2026-07-16 (named `?cursor=` until 2026-10-20) and the board never once called
 // it, so it could only ever ask for the WHOLE session — which cannot be shipped, so the server
 // tail-bounds the view and the user sees a handful of calls out of hundreds. We now request a
 // WINDOW: every call still arrives with its cheap meta (ctx/usage/cacheBreak/gi — the timeline and
@@ -717,7 +717,7 @@ async function poll(){
       lastCheapSig=cs }
     // Distinguish FAILED-to-load from genuinely-empty: a 500 (or a dead server) used to fall through
     // to raw=[] and render "No LLM calls traced yet", which LIES about a session that has calls.
-    const res=await fetch(`/api/session?id=${encodeURIComponent(id)}&cursor=${pageCur|0}&limit=${PAGE_LIMIT}`).catch(e=>({ok:false,status:0,_err:String(e&&e.message||e)}))
+    const res=await fetch(`/api/session?id=${encodeURIComponent(id)}&after=${pageCur|0}&limit=${PAGE_LIMIT}`).catch(e=>({ok:false,status:0,_err:String(e&&e.message||e)}))
     const d=res.ok?await res.json().catch(e=>({error:'malformed JSON from server: '+(e&&e.message||e)})):{error:res._err||('HTTP '+res.status)}
     if(d.error){
       const eb=document.getElementById('truncbar')

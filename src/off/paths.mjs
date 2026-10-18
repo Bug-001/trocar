@@ -9,7 +9,10 @@ import path from 'node:path'
 /** ~/.asight (D27; the v0 prototype's ~/.atrace is read, never written, and is not here). */
 export const asightHome = (home = os.homedir()) => path.join(home, '.asight')
 /** ~/.asight/collector: the manifest, state.json, the lock, the CA, the daemon's records. */
-export const collectorDir = (home = os.homedir()) => path.join(asightHome(home), 'collector')
+export const collectorDir = (home = os.homedir()) => collectorIn(asightHome(home))
+/** The same directory named from the ASIGHT home instead of the user's (whoever already holds ~/.asight: the board's
+ *  server, src/server.mjs — so a server given a sandbox home asks THAT sandbox's daemon and no other). */
+export const collectorIn = (home) => path.join(home, 'collector')
 /** ~/.asight/backup: what asight saved of a user's file before changing it (1.6 R2; 0700, the files 0600). */
 export const backupDir = (home = os.homedir()) => path.join(asightHome(home), 'backup')
 /** ~/.asight/bin/asight-off: the single-file copy of src/off that runs without the repo (1.6 R3). */

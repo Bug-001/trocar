@@ -89,7 +89,12 @@ export async function startControlServer({ socketPath, routes, maxBody = 64 * 10
       let body = null
       if (chunks.length) { try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return send(res, 400, { error: 'body is not JSON' }) } }
       // a handler may refuse a request with `status` 4xx (a body it cannot act on); anything else it throws is a 500
-      try { send(res, 200, await handler({ query: url.searchParams, body })) } catch (e) { send(res, e && Number.isInteger(e.status) && e.status >= 400 && e.status < 500 ? e.status : 500, { error: String((e && e.message) || e) }) }
+      // A handler that took `res` and wrote the reply itself returns undefined (the query route, D63: the document's bytes
+      // stream from the worker to the socket and are never a value in this process); after that nothing more is sent.
+      try { const r = await handler({ query: url.searchParams, body, res }); if (r !== undefined) send(res, 200, r) } catch (e) {
+        if (!res.headersSent) send(res, e && Number.isInteger(e.status) && e.status >= 400 && e.status < 500 ? e.status : 500, { error: String((e && e.message) || e) })
+        else try { res.end() } catch { /* the socket went with the failure */ }
+      }
     })
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve) })

@@ -6,24 +6,24 @@
 import { stampSynthKeys } from '../../dissect/synth-key.mjs';
 import { sessionIdOf } from '../../view/assemble.mjs';
 import { controlRecordWire, CONTROL_DETAIL_RECORDS } from '../../view/control-wire.mjs';
-import { allSegments, segmentIndex } from '../index-build.mjs';
 import { allRecords } from '../records.mjs';
+import { indexRows } from '../rows.mjs';
 import { listOf, paginate, tsFilter } from './index.mjs';
 
-export const params = Object.freeze(['class', 'harness', 'session', 'since', 'until', 'limit', 'cursor']);
+export const params = Object.freeze(['class', 'harness', 'session', 'since', 'until', 'limit', 'after']);
 
 export async function run({ home, fs, now, params: p, errors }) {
   const keep = tsFilter(p, now), cls = listOf(p.class), harness = listOf(p.harness), sess = listOf(p.session);
 
   if (!cls) {
+    // Through the ONE warm, stat-revalidated reading of the index (src/query/rows.mjs, which `sessions` and
+    // `session` ask too): read straight from `segmentIndex` here, this branch re-read and re-parsed the whole index
+    // on every call — measured 409 ms on a 60 MB corpus where the warm reading is 1 ms, and the class table is a
+    // nearby query like any other (1.6 §4.1 ≤ 50 ms).
     const counts = new Map();
-    for (const s of await allSegments({ home, fs })) {
-      for (const pr of s.problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
-      const { records } = await segmentIndex({ home, segment: s.segment, fs });
-      for (const r of records) {
-        if (!keep(r.ts) || (harness && !harness.has(r.harness)) || (sess && !sess.has(r.session_key))) continue;
-        counts.set(r.class, (counts.get(r.class) || 0) + 1);
-      }
+    for (const r of await indexRows({ home, fs, errors })) {
+      if (!keep(r.ts) || (harness && !harness.has(r.harness)) || (sess && !sess.has(r.session_key))) continue;
+      counts.set(r.class, (counts.get(r.class) || 0) + 1);
     }
     return { classes: [...counts].map(([c, count]) => ({ class: c, count })) };
   }

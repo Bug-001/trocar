@@ -1,5 +1,5 @@
 // test/query/paging.test.mjs — §4.1 分页 over the named queries: `--limit` defaults to 50 and is capped
-// at 500, `next` IS the next page's `--cursor`, `has_more` says whether there is one; plus the two
+// at 500, `next` IS the next page's `--after`, `has_more` says whether there is one; plus the two
 // shapes of `calls` (with `--class` the calls, without it the class table).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -18,12 +18,12 @@ const homeWith = (n, extra = []) => {
   return home
 }
 
-test('--limit 默认 50、上限 500;next 就是下一页的 --cursor,has_more 说清还有没有', async () => {
+test('--limit 默认 50、上限 500;next 就是下一页的 --after,has_more 说清还有没有', async () => {
   const home = homeWith(LIMIT_DEFAULT + 3)
   const first = await runQuery('sessions', {}, { home })
   assert.deepEqual([first.sessions.length, first.next, first.has_more], [LIMIT_DEFAULT, String(LIMIT_DEFAULT), true])
-  // next 当 --cursor 用,接着上一页往下,不重不漏
-  const second = await runQuery('sessions', { cursor: first.next }, { home })
+  // next 当 --after 用,接着上一页往下,不重不漏
+  const second = await runQuery('sessions', { after: first.next }, { home })
   assert.deepEqual([second.sessions.length, second.next, second.has_more], [3, null, false])
   const ids = [...first.sessions, ...second.sessions].map((s) => s.session_id)
   assert.equal(new Set(ids).size, LIMIT_DEFAULT + 3)
@@ -32,7 +32,7 @@ test('--limit 默认 50、上限 500;next 就是下一页的 --cursor,has_more �
   // --limit 自己说多少就多少,但不超上限
   assert.equal((await runQuery('sessions', { limit: 2 }, { home })).sessions.length, 2)
   assert.equal((await runQuery('sessions', { limit: LIMIT_MAX + 1000 }, { home })).sessions.length, LIMIT_DEFAULT + 3)
-  assert.equal((await runQuery('sessions', { limit: 2, cursor: LIMIT_DEFAULT + 2 }, { home })).has_more, false)
+  assert.equal((await runQuery('sessions', { limit: 2, after: LIMIT_DEFAULT + 2 }, { home })).has_more, false)
 })
 
 test('session 的 page 也照分页写:cursor / limit / next / has_more', async () => {
@@ -41,7 +41,7 @@ test('session 的 page 也照分页写:cursor / limit / next / has_more', async 
   writeSegment(home, SEG, [0, 1, 2].map((i) => ({ ts: at(i), sessionKey: 's-1', harness: 'opencode' })))
   const p1 = await runQuery('session', { id: 's-1', limit: 2 }, { home })
   assert.deepEqual([p1.page.cursor, p1.page.limit, p1.page.total, p1.page.next, p1.page.has_more], [0, 2, 3, '2', true])
-  const p2 = await runQuery('session', { id: 's-1', cursor: p1.page.next, limit: 2 }, { home })
+  const p2 = await runQuery('session', { id: 's-1', after: p1.page.next, limit: 2 }, { home })
   assert.deepEqual([p2.page.cursor, p2.page.next, p2.page.has_more], [2, null, false])
 })
 

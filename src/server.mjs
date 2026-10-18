@@ -9,7 +9,9 @@ import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { QUERIES, QueryArgError, runQuery } from './query/named/index.mjs';
+import { collectorDir, collectorIn } from './off/paths.mjs';
+import { queryDocument } from './query/client.mjs';
+import { QUERIES } from './query/named/index.mjs';
 
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
 const MIME = {
@@ -21,7 +23,10 @@ const MIME = {
 
 // no-store is a CORRECTNESS requirement: the live poll MUST never be served a stale cached answer.
 function sendJson(res, status, obj) {
-  const body = JSON.stringify(obj);
+  sendText(res, status, JSON.stringify(obj));
+}
+
+function sendText(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(body) });
   res.end(body);
 }
@@ -55,7 +60,10 @@ async function serveStatic(res, urlPath) {
   } catch { sendJson(res, 404, { error: 'not found' }); }
 }
 
-export function createServer({ home, fs, now } = {}) {
+// `dir` (where this platform's daemon says how to reach it) comes from the home this server was GIVEN: with
+// `collectorDir()` it was always the real `os.homedir()`'s, so a server created on a sandbox home asked the
+// machine's own daemon and could have answered out of its corpus (and a test could have reached the real HOME).
+export function createServer({ home, fs, now, dir = home ? collectorIn(home) : collectorDir(), platform, env } = {}) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
@@ -65,8 +73,10 @@ export function createServer({ home, fs, now } = {}) {
       if (!name) return url.pathname.startsWith('/api/') ? sendJson(res, 404, { error: 'unknown endpoint' }) : serveStatic(res, url.pathname);
       if (!QUERIES[name[1]]) return sendJson(res, 404, { error: `no query called ${JSON.stringify(name[1])}` });
       if (req.method !== 'GET') return sendJson(res, 405, { error: 'method not allowed — the board is read-only' });
-      try { return sendJson(res, 200, await runQuery(name[1], paramsOf(url), { home, fs, now })); }
-      catch (e) { if (e instanceof QueryArgError) return sendJson(res, 400, { error: e.message }); throw e; }
+      // The same read path `asight query` takes (D63): the daemon's warm worker when one answers, this process
+      // otherwise. The document is serialized once, by whoever computed it, and written on as it stands.
+      try { return sendText(res, 200, (await queryDocument(name[1], paramsOf(url), { home, fs, now, dir, platform, env })).text); }
+      catch (e) { if (e && e.name === 'QueryArgError') return sendJson(res, 400, { error: e.message }); throw e; }
     } catch (e) {
       // Never let one bad request take the instrument down — respond 500, stay up.
       if (!res.headersSent) sendJson(res, 500, { error: String((e && e.message) || e) });

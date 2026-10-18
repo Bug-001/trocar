@@ -266,11 +266,16 @@ export function sessionView(records, sessionId, { enrich, bound, page, maxBytes 
 // keep everything the timeline/overview reads (ctx/usage/gi/cacheBreak/error/compaction) plus the model
 // (so cost + labels still resolve). Non-mutating: returns a NEW object, leaves the source call intact.
 function slimCall(c) {
-  const { rec, flat, norm, _comp, ...rest } = c;
+  const { rec, flat, norm, _comp, nonBlockKeys, ...rest } = c;
   return {
     ...rest,
     paged_out: true, // invariant 4: this call's body was not shipped on this page
     flat: [],
+    // Same as `flat`: a key list with byte refs into the request body is the body's shape, which this page does not
+    // ship. It is also what made a slimmed call differ from one the assembler never flattened (`keepFlat`), and the
+    // two MUST be the same document: the warm path pages an assembly built whole, the cold one assembles the window
+    // only (D63; src/query/named/session.mjs).
+    nonBlockKeys: nonBlockKeys ? [] : nonBlockKeys,
     norm: norm ? { usage: norm.usage } : norm,
     rec: rec ? { id: rec.id, request: { model: rec.request && rec.request.model } } : rec,
   };

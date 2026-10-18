@@ -64,8 +64,10 @@ export function controlEndpointFor({ platform = process.platform, dir, env = pro
 
 /** One request → the parsed JSON reply. A non-2xx reply rejects with `status`; a socket that is absent / refuses has `code` ENOENT / ECONNREFUSED;
  *  no answer within `timeoutMs` rejects with code ETIMEDOUT. `token`: the secret a token-guarded endpoint (a Windows pipe) expects in
- *  CONTROL_TOKEN_HEADER; null (the Linux unix socket) sends none. A Windows pipe path reaches Node's http through the same `socketPath`. */
-export function controlRequest({ socketPath, method = 'GET', path: p = '/status', body = null, token = null, timeoutMs = 10000 }) {
+ *  CONTROL_TOKEN_HEADER; null (the Linux unix socket) sends none. A Windows pipe path reaches Node's http through the same `socketPath`.
+ *  `raw`: resolve with the reply's BYTES instead of a parsed object — a query document is written on as it stands and must not be
+ *  re-encoded on the way (D63 ②: the daemon path and the local path print the same bytes). A non-2xx reply still rejects with its message. */
+export function controlRequest({ socketPath, method = 'GET', path: p = '/status', body = null, token = null, timeoutMs = 10000, raw = false }) {
   return new Promise((resolve, reject) => {
     const payload = body == null ? null : JSON.stringify(body)
     const headers = payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {}
@@ -74,9 +76,12 @@ export function controlRequest({ socketPath, method = 'GET', path: p = '/status'
       const chunks = []
       res.on('data', (c) => chunks.push(c))
       res.on('end', () => {
+        const bytes = Buffer.concat(chunks)
+        const ok = res.statusCode >= 200 && res.statusCode < 300
+        if (ok && raw) return resolve(bytes)
         let obj = null
-        try { obj = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { obj = { error: 'non-JSON reply' } }
-        if (res.statusCode >= 200 && res.statusCode < 300) resolve(obj)
+        try { obj = JSON.parse(bytes.toString('utf8')) } catch { obj = { error: 'non-JSON reply' } }
+        if (ok) resolve(obj)
         else reject(Object.assign(new Error(`${res.statusCode}: ${obj && obj.error}`), { status: res.statusCode }))
       })
     })

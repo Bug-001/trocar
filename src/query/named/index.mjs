@@ -55,12 +55,13 @@ const whole = (v, name, dflt) => {
   if (!Number.isInteger(n) || n < 0) throw new QueryArgError(`--${name}: ${JSON.stringify(v)} is not a whole number`);
   return n;
 };
-/** `--limit` (default 50, at most 500) and `--cursor` as one window. */
+/** `--limit` (default 50, at most 500) and `--after` as one window (the parameter is `--after` on the CLI and
+ *  `?after=` on the board — ONE name, §4.1). */
 export const pageSpec = (p = {}) => ({
-  cursor: whole(p.cursor, 'cursor', 0),
+  cursor: whole(p.after, 'after', 0),
   limit: Math.min(LIMIT_MAX, Math.max(1, whole(p.limit, 'limit', LIMIT_DEFAULT))),
 });
-/** One page of `list` → {items, next, has_more}: `next` IS the next page's `--cursor`. */
+/** One page of `list` → {items, next, has_more}: `next` IS the next page's `--after`. */
 export function paginate(list, p = {}) {
   const { cursor, limit } = pageSpec(p);
   const to = cursor + limit;
