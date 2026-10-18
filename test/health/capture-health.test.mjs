@@ -204,7 +204,7 @@ test('conditions folded without the last daemon-start are partial: unknown, neve
     let r = b.health({ maxBytes: 64 << 10 })
     assert.deepEqual([r.read.truncated, r.collector.conditions_partial, r.collector.conditions.length], [true, true, 0], 'precondition: the start and the untrusted agent are outside what was read')
     assert.deepEqual([r.summary.state, r.summary.partial], ['unknown', true], 'never ✓ 采集中')
-    assert.match(formatHealth(r, { daemonLine: false }).join('\n'), /conditions are partial/)
+    assert.match(formatHealth(r, { daemonLine: false }).join('\n'), /unknown \(the current conditions could not be read whole/)
     b.state('off', at(H))
     assert.equal(b.health({ maxBytes: 64 << 10 }).summary.state, 'unknown', 'nor ○ 采集关')
     b.state('on', at(72 * H))

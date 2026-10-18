@@ -102,7 +102,7 @@ test('linuxNetFacts: a harness that is off — the daemon lists its agent as `of
   assert.equal(named.name, 'claude', 'the table names it: unchanged')
   // and it is that name the topology draws for the harness that is off
   const t = buildTopology(facts('claude-code', { desired: { 'claude-code': 'off' } }, { procs: [{ ...unnamed, trusted: false }] }))['claude-code']
-  assert.match(renderCompact(t)[0], /^claude-code 4121 → /)
+  assert.match(renderCompact(t)[0], /^claude-code \(pid 4121\) -> /)
 })
 
 test('linuxNetFacts: the proxy a process was started with is read from its environment and compared with what a new one reads now — the same is null, another is redacted with a hash, none is a null value, an unreadable environment is unknown', async () => {

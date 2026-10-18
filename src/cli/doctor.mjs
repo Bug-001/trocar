@@ -103,6 +103,7 @@ async function collect({ home, env, sourceFlags, deps }) {
 /** The things `doctor` looked at and could not judge (附录 C.4 `undetermined`), in English, from the structured result — never a reason string of another module. */
 function undeterminedOf(res, readErrors, { files = 0, records = 0 } = {}) {
   const out = []
+  if (res.q4.err) out.push({ what: 'the user trust store', reason: res.q4.err }) // the trust check threw: say why, never silence (D38)
   if (res.q4b.checked === 0) out.push({ what: 'file permissions', reason: 'no captured data yet' }) // §3.7: having no captured data is not 「cannot judge」
   if (res.q4b.unreadable.length) out.push({ what: 'file permissions', reason: `the permissions of ${res.q4b.unreadable.length} file(s) could not be read` })
   // a capture file that is there and yielded no record at all: the read failed without saying so (the D27 array-source defect certified a capture it had read nothing from)

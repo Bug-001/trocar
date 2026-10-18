@@ -454,9 +454,11 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
     const home = tmpDir('asight-v39-'); seedClaude(home); await installFirst(home)
     const io = fakeIo(), exec = recordingExec(), ctx = onCtx(home, io, { exec, deps: { lingerRead, linger: undefined } })
     assert.equal(await runOnCli(['--yes'], ctx), 0, io.text())
-    if (want === false) assert.match(io.stdoutText(), /^登出后停采\(未开 linger\): 要登出后继续采集,跑 loginctl enable-linger alice$/m)
-    else if (want === true) assert.ok(!/linger|登出/.test(io.stdoutText()))
-    else { assert.match(io.stdoutText(), /^登出后停采: 不知道\(\/var\/lib\/systemd\/linger\/alice: EACCES\)$/m); assert.ok(!/已开/.test(io.stdoutText())) }
+    // the receipt's English line (src/cli/receipt.mjs lingerText) is wrapped to 80 columns: the fact is matched, not the layout
+    const flat = io.stdoutText().replace(/\s+/g, ' ')
+    if (want === false) assert.match(flat, /Capture stops when you log out\. To keep it on: loginctl enable-linger alice/)
+    else if (want === true) assert.ok(!/linger|log out|logout/.test(io.stdoutText()))
+    else { assert.match(flat, /Whether capture survives a logout is unknown \(\/var\/lib\/systemd\/linger\/alice: EACCES\)/); assert.ok(!/Capture stops when you log out/.test(flat), 'unreadable never claims capture is kept or lost') }
     const j = fakeIo(); const home2 = tmpDir('asight-v39-'); seedClaude(home2); await installFirst(home2); const exec2 = recordingExec()
     assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { exec: exec2, deps: { lingerRead, linger: undefined } })), 0)
     for (const e of [exec, exec2]) {
