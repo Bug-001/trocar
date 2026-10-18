@@ -115,7 +115,7 @@ function undeterminedOf(res, readErrors, { files = 0, records = 0 } = {}) {
 const realUndetermined = (u) => u.filter((x) => x.reason !== 'no captured data yet')
 
 /** The 附录 C.4 document. `status`'s own document is folded in under `status`, so one read answers both. */
-async function doctorDoc({ names = null, home = nodeOs.homedir(), env = process.env, platform = process.platform, deps = {} } = {}) {
+export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = process.env, platform = process.platform, deps = {} } = {}) {
   const fs = deps.fs || nodeFs
   const c = await collect({ home, env, sourceFlags: [], deps })
   const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
