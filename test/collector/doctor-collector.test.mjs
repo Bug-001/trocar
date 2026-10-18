@@ -15,7 +15,8 @@ import { appendEvent } from '../../src/collector/core/events.mjs'
 import { createCa } from '../../src/collector/core/tls/ca.mjs'
 import { formatInstallNotes } from '../../src/cli/status-text.mjs'
 import { writeStandalone } from '../../src/off/standalone.mjs'
-import { doctorDoc, runDoctor } from '../../src/cli/doctor.mjs'
+import { runDoctor } from '../../src/cli/doctor.mjs'
+import { tmpDir } from '../helpers/tmp.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
 
 const CLI = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
@@ -79,18 +80,16 @@ test('formatInstallNotes: the notes of the last install without its result line;
 // D38 (§3.7 「只读」, 附录 C.4 `undetermined`): the trust-store check is a system query that can throw (a locked keychain, a tool that is not there).
 // `doctor` must say so — an `undetermined` item with the reason, in the document and in the text — and never pass over it in silence.
 test('D38 a trust check that throws is an undetermined item with its reason, in the document and in the text', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-doc-'))
-  try {
-    const env = { ...process.env, HOME: home, PATH: OS_PATH, XDG_RUNTIME_DIR: '', ASIGHT_SOURCE: cleanSource(home) }
-    const deps = { verify: () => { throw new Error('the keychain is locked') } }
-    const doc = await doctorDoc({ home, env, deps })
-    assert.deepEqual(doc.undetermined.filter((u) => u.what === 'the user trust store'), [{ what: 'the user trust store', reason: 'the keychain is locked' }])
-    assert.equal(doc.exit, 3, 'it could not judge, so it is not a pass')
-    const lines = []
-    assert.equal(await runDoctor([], { io: { out: (s) => lines.push(s), err: (s) => lines.push(s) }, home, env, deps }), 3)
-    assert.match(lines.join('\n'), /^Could not judge the user trust store: the keychain is locked$/m)
-    // and a check that answers says nothing of the kind
-    const okDoc = await doctorDoc({ home, env, deps: { verify: () => true } })
-    assert.deepEqual(okDoc.undetermined.filter((u) => u.what === 'the user trust store'), [])
-  } finally { fs.rmSync(home, { recursive: true, force: true }) }
+  const home = tmpDir('asight-doc-')
+  const env = { ...process.env, HOME: home, PATH: OS_PATH, XDG_RUNTIME_DIR: '', ASIGHT_SOURCE: cleanSource(home) }
+  const run = async (argv, deps) => { const lines = []; const exit = await runDoctor(argv, { io: { out: (s) => lines.push(s), err: (s) => lines.push(s) }, home, env, deps }); return { exit, text: lines.join('\n') } }
+  const threw = { verify: () => { throw new Error('the keychain is locked') } }
+  const j = await run(['--json'], threw)
+  assert.deepEqual(JSON.parse(j.text).undetermined.filter((u) => u.what === 'the user trust store'), [{ what: 'the user trust store', reason: 'the keychain is locked' }])
+  assert.equal(j.exit, 3, 'it could not judge, so it is not a pass')
+  const t = await run([], threw)
+  assert.equal(t.exit, 3)
+  assert.match(t.text, /^Could not judge the user trust store: the keychain is locked$/m)
+  // and a check that answers says nothing of the kind
+  assert.deepEqual(JSON.parse((await run(['--json'], { verify: () => true })).text).undetermined.filter((u) => u.what === 'the user trust store'), [])
 })

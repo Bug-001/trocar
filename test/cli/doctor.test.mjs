@@ -143,7 +143,7 @@ test('④b: the export directory, a session directory in it, and the sessions di
 const NET_READ = /^(ss -ltnpH|ip -j (route get 1\.1\.1\.1|-d link show dev \S+))$/
 const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !NET_READ.test(c))
 
-test('the old `verify` is read-only and never decides the exit: in the store, not in it, or a check that threw — all exit 0, and no OS tool runs (§3.7 prints no line of its own for it)', async () => {
+test('the old `verify` is read-only: in the store or not in it is exit 0; a check that threw is something doctor could not read — exit 3 with the reason (§3.7, D38); no OS tool runs', async () => {
   const s = plain()
   const src = path.join(s.home, 'src'); capture(src)
   let r = await doctor(s, [], { source: src, deps: { verify: () => true } })
@@ -151,7 +151,7 @@ test('the old `verify` is read-only and never decides the exit: in the store, no
   r = await doctor(s, [], { source: src, deps: { verify: () => false } })
   assert.doesNotMatch(r.out, /run: asight on/, 'the item is the old capture\'s CA: `asight on` cannot fix it'); assert.equal(r.exit, 0)
   r = await doctor(s, [], { source: src, deps: { verify: () => { throw new Error('security: the keychain could not be opened') } } })
-  assert.equal(r.exit, 0, r.text)
+  assert.equal(r.exit, 3, r.text); assert.match(r.out, /Could not judge the user trust store: security: the keychain could not be opened/)
   assert.deepEqual(ranBesides(s), [], 'with the trust-store check, and the process table injected, no OS tool ran at all')
 })
 
