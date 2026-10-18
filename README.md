@@ -218,7 +218,7 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | root / CA (per user) | Linux: `~/.asight/collector/ca/` (key 0600), in **no** trust store · macOS: login keychain key + user trust · Windows: CNG key + `CurrentUser\Root`; `~/.asight/collector/ca/asight-ca.pem` is the public certificate | `asight uninstall` |
 | certificate carriers (`install`) | Linux: each agent's trust entry, written by `install` (Claude Code `env.NODE_EXTRA_CA_CERTS`, OpenCode / dsh plugins, Codex / Hermes `.env` blocks, Z-Code `network.caCertFile`, combined bundles `combined-<agent>.pem`) · macOS / Windows: the carriers above | `asight uninstall` |
 | proxy entries (`on`) | macOS / Windows: the proxy keys and switch files above; Linux: none (the helper steers) | `asight off` |
-| autostart unit (per user) | Linux: `~/.config/systemd/user/asight-collector.service` · macOS: `~/Library/LaunchAgents/com.asight.collector.plist` · Windows: the scheduled task `\asight\collector`; each runs `asight daemon` | `asight off` with no names disables it, `asight uninstall` removes it (`on --no-unit` skips it) |
+| autostart unit (per user) | Linux: `~/.config/systemd/user/asight-collector.service` · macOS: `~/Library/LaunchAgents/com.asight.collector.plist` · Windows: the scheduled task `\asight\collector`; each runs `asight daemon` | `asight off` with no names disables it, `asight uninstall` removes it (`on --no-autostart` writes none at all) |
 | install manifest | `~/.asight/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `asight uninstall` |
 | backups of your files | `~/.asight/backup/` (0700, files 0600): the file as it was before asight changed it — API keys included | `off` leaves them; `uninstall` deletes them all |
 | the standalone undo | `~/.asight/bin/asight-off`, written by `install`; `asight doctor` checks it is current | `asight uninstall` |
@@ -228,7 +228,7 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 sudo asight setup-helper      # Linux, once per machine
 asight install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
 asight on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
-asight on --no-unit           # no autostart unit: start the daemon yourself, with `asight daemon` in the foreground
+asight on --no-autostart      # no autostart entry: the daemon is started this once, and by you (`asight daemon`) after that
 asight status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
 asight off                    # every trace of it is off your agents' path (off claude-code: only that one)
 asight serve                  # the captures appear on the board
@@ -276,8 +276,8 @@ and the trust entry asight believed was in effect. It goes to the daemon's log t
 
 A relay or proxy with a private CA keeps working. On Linux `install` carries the CA you already gave Claude Code into
 `extra-cc.pem` (the other agents' CAs into their bundles), and the daemon verifies upstreams with Node's store plus
-`NODE_EXTRA_CA_CERTS` (the Linux unit carries the value of the shell you install from; with `--no-unit`, start the
-daemon from a shell that has it). On macOS and Windows the door verifies an upstream with that agent's own trust set —
+`NODE_EXTRA_CA_CERTS` (the Linux unit carries the value of the shell you install from; with `--no-autostart`, the
+daemon takes it from the shell you run `on` in). On macOS and Windows the door verifies an upstream with that agent's own trust set —
 the OS roots, Node's, and the files its certificate variables name — never with the asight root (RFC 4.11 §3 ⑭).
 asight does not count on a Claude Code process that was already
 running at install picking up the new trust entry (not verified for every mode), so `status` reports it
@@ -394,7 +394,7 @@ not the collector's switch; `asight off` is.
 ```sh
 # common
 asight install [--yes] [--dry-run] [--json]   # once: the certificates (D55); prints the plan and asks first
-asight on [<harness>...] [--no-autostart] [--no-unit] [--yes] [--dry-run] [--json]
+asight on [<harness>...] [--no-autostart] [--yes] [--dry-run] [--json]
 asight off [<harness>...] [--now] [--yes] [--dry-run] [--json]
 asight status [<harness>...] [--failures] [--json]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
 asight uninstall [--purge-data] [--yes] [--dry-run] [--json]
