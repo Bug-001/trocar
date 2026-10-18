@@ -18,9 +18,6 @@ export const QUERIES = Object.freeze({
   classes: { params: classes.params, run: classes.run },
 });
 
-export const DEFAULT_LIMIT = 50;
-export const MAX_LIMIT = 500;
-
 const REL = /^(\d+)([mhd])$/;
 const MS = { m: 60e3, h: 3600e3, d: 86400e3 };
 /** ISO 8601, or a relative `30m` / `24h` / `7d` before `now` → ms since the epoch. Throws QueryArgError. */

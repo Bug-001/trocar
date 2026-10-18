@@ -8,9 +8,9 @@ import path from 'node:path';
 import { TRAFFIC_CLASSES } from '../capture/envelope.mjs';
 import { asightHome } from '../paths.mjs';
 
-export const BUILTIN = Object.freeze(TRAFFIC_CLASSES.map((c) => Object.freeze({ class: c, keep: 'full', builtin: true, rules: [] })));
+const BUILTIN = Object.freeze(TRAFFIC_CLASSES.map((c) => Object.freeze({ class: c, keep: 'full', builtin: true, rules: [] })));
 
-export const classesFile = (home = asightHome()) => path.join(home, 'classes.json');
+const classesFile = (home) => path.join(home, 'classes.json');
 
 /** → `{ classes, file, lastChange, problems }`. No file (or an unreadable one) = the builtin table, and the reason is in `problems`. */
 export function readTable({ home = asightHome(), fs = nodeFs } = {}) {

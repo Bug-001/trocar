@@ -25,7 +25,7 @@ import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 import { asightHome, collectorHome } from '../paths.mjs';
 import { readDaemonLock } from '../off/daemon-stop.mjs';
 
-export const rawDir = (home = asightHome()) => path.join(home, 'raw');
+const rawDir = (home = asightHome()) => path.join(home, 'raw');
 export const indexDir = (home = asightHome()) => path.join(home, 'index');
 const INDEX_V = 1;
 const CHUNK = 1 << 20;
