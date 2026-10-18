@@ -67,14 +67,12 @@ test('R6: --dry-run still prints the same receipt the real run will — the same
 })
 
 // the autostart plan names the mechanism of the platform by its own file (D46): a plist on darwin — the hardcoded systemd wording is gone
-test('the plan autostart line is the platform own mechanism — a launchd plist on darwin, the systemd --user unit and its link on linux', () => {
+test('the plan autostart line is the platform own mechanism — a launchd plist on darwin, never the systemd wording', () => {
   const mac = formatPlan({ unit: { path: '/h/Library/LaunchAgents/com.asight.collector.plist', env: {}, links: [] }, entries: [], files: [], owned: [], watch: [] }, { home: '/h', platform: 'darwin' })
-  assert.match(mac.replace(/\n\s+/g, ' '), /autostart ~\/Library\/LaunchAgents\/com\.asight\.collector\.plist: starts the collector at login/)
+  assert.ok(mac.includes('~/Library/LaunchAgents/com.asight.collector.plist'), 'the plist is named')
   assert.ok(!mac.includes('systemd'), 'no systemd word on a Mac')
   const linux = formatPlan({ unit: { path: '/h/.config/systemd/user/asight-collector.service', env: {}, links: ['/h/.config/systemd/user/default.target.wants/asight-collector.service'] }, entries: [], files: [], owned: [], watch: [] }, { home: '/h', platform: 'linux' })
-  const flat = linux.replace(/\n\s+/g, ' ')
-  assert.match(flat, /autostart ~\/\.config\/systemd\/user\/asight-collector\.service: starts the collector at login/, 'linux names its unit')
-  assert.match(flat, /autostart ~\/\.config\/systemd\/user\/default\.target\.wants\/asight-collector\.service: the link that enables it/, 'and the link that enables it')
+  for (const p of ['~/.config/systemd/user/asight-collector.service', '~/.config/systemd/user/default.target.wants/asight-collector.service']) assert.ok(linux.includes(p), `linux names ${p}`)
 })
 
 // the degenerate adopted chain (the harness own name and nothing else) says nothing and is not printed

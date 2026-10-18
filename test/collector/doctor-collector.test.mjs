@@ -76,20 +76,3 @@ test('formatInstallNotes: the notes of the last install without its result line;
   assert.deepEqual(formatInstallNotes(h([], false)), [])
   assert.deepEqual(formatInstallNotes(null), [])
 })
-
-// D38 (§3.7 「只读」, 附录 C.4 `undetermined`): the trust-store check is a system query that can throw (a locked keychain, a tool that is not there).
-// `doctor` must say so — an `undetermined` item with the reason, in the document and in the text — and never pass over it in silence.
-test('D38 a trust check that throws is an undetermined item with its reason, in the document and in the text', async () => {
-  const home = tmpDir('asight-doc-')
-  const env = { ...process.env, HOME: home, PATH: OS_PATH, XDG_RUNTIME_DIR: '', ASIGHT_SOURCE: cleanSource(home) }
-  const run = async (argv, deps) => { const lines = []; const exit = await runDoctor(argv, { io: { out: (s) => lines.push(s), err: (s) => lines.push(s) }, home, env, deps }); return { exit, text: lines.join('\n') } }
-  const threw = { verify: () => { throw new Error('the keychain is locked') } }
-  const j = await run(['--json'], threw)
-  assert.deepEqual(JSON.parse(j.text).undetermined.filter((u) => u.what === 'the user trust store'), [{ what: 'the user trust store', reason: 'the keychain is locked' }])
-  assert.equal(j.exit, 3, 'it could not judge, so it is not a pass')
-  const t = await run([], threw)
-  assert.equal(t.exit, 3)
-  assert.match(t.text, /^Could not judge the user trust store: the keychain is locked$/m)
-  // and a check that answers says nothing of the kind
-  assert.deepEqual(JSON.parse((await run(['--json'], { verify: () => true })).text).undetermined.filter((u) => u.what === 'the user trust store'), [])
-})

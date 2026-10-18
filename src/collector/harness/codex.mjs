@@ -96,7 +96,7 @@ const proxyMode = {
     { id: 'codex.wsl', os: ['win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'wsl' }], verified: { win32: { reason: 'out-of-scope' } } }, // D56⑥
   ],
   routes: {
-    env: { kind: 'dotenv-block', file: ENV_FILE, proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'create', takesEffect: '重启 codex 和它托管的 app-server 后生效(它只在启动时读 .env)' },
+    env: { kind: 'dotenv-block', file: ENV_FILE, proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'create', takesEffect: 'takes effect once you restart codex and the app-server it runs (it reads .env at start only)' },
   },
   certs: {},
   trusts: {

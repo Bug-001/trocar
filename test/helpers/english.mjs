@@ -13,11 +13,17 @@ const BAD = [
   [/\n\s+at [^\s]+:\d+:\d+/, 'a stack trace'],
 ]
 
-/** Asserts `text` is output a person can read (D58): English, ASCII, no internal numbers, no unread value, every line inside 80 columns. */
-export function assertEnglish(text, where = 'the output') {
+/** Asserts `text` is output a person can read (D58): English, ASCII, no internal numbers, no unread value, every line inside 80 columns.
+ *  `placeholders`: the text IS a usage line, where `<name>` is what the reader has to type. `width`: false for a sentence a renderer wraps
+ *  itself (a harness descriptor's, say) — the column rule is the printed line's. */
+export function assertEnglish(text, where = 'the output', { placeholders = false, width = true } = {}) {
   const bare = String(text).replace(/\u001b\[\d+m/g, '')
-  for (const [re, what] of BAD) assert.ok(!re.test(bare), `${where} holds ${what}:\n${bare}`)
+  for (const [re, what] of BAD) {
+    if (placeholders && what === 'an unfilled placeholder') continue
+    assert.ok(!re.test(bare), `${where} holds ${what}:\n${bare}`)
+  }
   for (const ch of bare) assert.ok(ch.codePointAt(0) < 128, `${where} is not ASCII (${JSON.stringify(ch)}):\n${bare}`)
+  if (!width) return
   for (const line of bare.split('\n')) {
     if (!line.trim().includes(' ')) continue // §1.1⑥: one long value (a path, a command) keeps its own line unbroken, however long it is
     assert.ok(line.length <= WIDTH, `${where} has a line of ${line.length} columns (max ${WIDTH}):\n${line}`)

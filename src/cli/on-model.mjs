@@ -25,7 +25,7 @@ const refusedLine = (r) => `${r.harness} was not turned on: ${r.reason}${r.path 
 /** → the exit code. `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
 export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, json }) {
   const fs = deps.fs || nodeFs
-  const say = json ? io.err : io.out
+  const say = json ? () => {} : io.out // §1.2: with --json stderr stays empty and the plan is the `planned` key of the one document on stdout (a macOS test machine 2026-10-18: it went to stderr)
   const dir = path.join(home, '.asight', 'collector')
   const put = (rec) => { try { if (fs.existsSync(dir)) appendEvent(dir, rec) } catch { /* the receipt carries it (R11) */ } }
   const [{ turnOnModel }, { backendsFor, sourcesCtx }, { renderHook }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs')])
@@ -44,7 +44,13 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   }
   const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...(r.code ? { code: r.code } : {}), ...extra })
   const plan = await turnOnModel({ ...args, dryRun: true })
-  if (plan.code) return out(receiptOf(plan), EXIT.incomplete)
+  // 附录 C.2: a `--dry-run` goes as expected even when the real run would stop before writing — it exits 0, and what would stop it is `blocked`
+  // (a Windows test machine 2026-10-18: with nothing installed it exited 1 with a top-level `code` and no `planned`)
+  if (plan.code) {
+    const blocked = (plan.problems.length ? plan.problems : [plan.code]).map((reason) => ({ what: 'asight on', reason }))
+    if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned || [], blocked }), EXIT.ok)
+    return out(receiptOf(plan, { blocked }), EXIT.incomplete)
+  }
   const m = readManifest(dir, fs)
   const seen = new Set(m.confirmed_paths || [])
   const fresh = [...new Set(plan.planned.flatMap((p) => p.paths))].filter((p) => !seen.has(p))

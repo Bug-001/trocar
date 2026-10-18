@@ -32,15 +32,22 @@ export function columns(rows, { gap = 2 } = {}) {
   return rows.map((row) => row.map((cell, i) => (i === row.length - 1 ? String(cell ?? '') : String(cell ?? '').padEnd(width[i]))).join(' '.repeat(gap)).trimEnd())
 }
 
-/** `[[label, value], …]` → an indented two-column block; a value that would not fit in `WIDTH` goes on its own line, unbroken (§1.1⑥). */
+/** `[[label, value], …]` → an indented two-column block; a value too long for `width` is folded under its own column, so the row still reads as one
+ *  row (a Windows test machine 2026-10-18: it used to drop to a second line at indent 2, and `fit` then folded that to column 0). A word longer than the room
+ *  left beside the label (a path, a command) keeps its own line unbroken, with the label alone above it (§1.1⑥). */
 export function pairs(rows, { indent = 2, gap = 2, width = WIDTH } = {}) {
   const pad = ' '.repeat(indent)
   const label = Math.max(0, ...rows.map(([l]) => String(l).length))
+  const col = indent + label + gap
   return rows.flatMap(([l, v]) => {
     const value = String(v ?? '')
-    return indent + label + gap + value.length <= width
-      ? [`${pad}${String(l).padEnd(label)}${' '.repeat(gap)}${value}`.trimEnd()]
-      : [`${pad}${l}`, `${pad}${value}`]
+    const head = `${pad}${String(l).padEnd(label)}${' '.repeat(gap)}`
+    if (col + value.length <= width) return [`${head}${value}`.trimEnd()]
+    const first = value.split(/\s+/)[0]
+    // a word that does not even fit beside the label (a path, a command) keeps its own line unbroken, under the label (§1.1⑥)
+    if (col + first.length > width) return [`${pad}${l}`, ...wrap(value, width - indent, pad).map((line, i) => (i ? line : pad + line))]
+    const [head1, ...more] = wrap(value, width - col, ' '.repeat(col))
+    return [`${head}${head1}`, ...more]
   })
 }
 

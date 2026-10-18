@@ -150,7 +150,7 @@ const proxyMode = {
     form('z-code.web', [APP], { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } }), // the shipped build has no web mode
   ],
   routes: {
-    'cli-config': { kind: 'json-key', file: CLI_CONFIG, format: 'jsonc', proxyKeys: [['network', 'httpProxy']], value: 'door-url', rereads: true, absent: 'create', takesEffect: '下一个会话生效,不用重启' },
+    'cli-config': { kind: 'json-key', file: CLI_CONFIG, format: 'jsonc', proxyKeys: [['network', 'httpProxy']], value: 'door-url', rereads: true, absent: 'create', takesEffect: 'takes effect for your next session; no restart needed' },
   },
   certs: {
     bundle: { kind: 'config-key', ...CA_KEY, semantics: 'replace' },
