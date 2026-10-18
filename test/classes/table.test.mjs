@@ -40,7 +40,7 @@ test('归类:首个匹配、host 整串、path 从开头、harness 限定,都不
   assert.equal(of({ host: 'oastify.sentry.io', path: '/x' }), 'telemetry') // shared table: any harness
   assert.equal(of({ host: 'evil-api.anthropic.com.example', path: '/v1/files' }), 'other') // host matches whole
   assert.equal(of({ host: 'example.com', path: '/x' }), 'other')
-  assert.equal(keepOf({ classes: BUILTIN }, 'telemetry'), 'log')
+  assert.ok(BUILTIN.every((c) => c.keep === 'full'), 'every built-in class keeps everything (D40: the default is full; log is the user\'s choice)')
   assert.equal(keepOf({ classes: BUILTIN }, 'nope'), 'full')
 })
 

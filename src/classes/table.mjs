@@ -26,7 +26,6 @@ const CLASS_NAME = /^[a-z0-9-]+$/
 const KEEP_LEVELS = RETENTION_LEVELS
 /** The classes whose rules come from host + path data, in table order. */
 const DATA_CLASSES = ['session-sync', 'telemetry', 'files', 'account']
-const LOG_BY_DEFAULT = new Set(['telemetry'])
 
 export class ClassArgError extends Error {
   constructor(message) { super(message); this.name = 'ClassArgError'; this.code = 'bad-args' }
@@ -49,7 +48,7 @@ function builtinTable() {
       if (e.class === name) rules.push(rule(hostSource(e.host), e.path || null, row.id))
     }
     if (name === 'telemetry') for (const h of THIRD_PARTY_TELEMETRY) rules.push(rule(hostSource(h)))
-    out.push(cls(name, LOG_BY_DEFAULT.has(name) ? 'log' : 'full', rules))
+    out.push(cls(name, 'full', rules))
   }
   out.push(cls('other', 'full', []))
   return Object.freeze(out)
