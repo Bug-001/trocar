@@ -92,6 +92,10 @@ function hydrateForBoard(r) {
   // says WHICH capture file its bytes are in. Silent, because the result is simply a missing locator.
   const out = { ...r, request, response: r.response || r.resp || {} };
   if (r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true });
+  // The body parsed, and we hold the result: say so, so the label side (capture-labels.bodyUnparsedOf,
+  // reached through contextStateOf below) does not JSON.parse the same 0.8 MB a second time. Same
+  // non-enumerable discipline as `_stream`: never stored, never shipped.
+  Object.defineProperty(out, '_reqParsed', { value: true, enumerable: false, configurable: true });
   return out;
 }
 
@@ -527,13 +531,21 @@ function assembleAnalyzed(records, opts = {}) {
   const hydrated = records.map(hydrateForBoard);
   const giOfHydrated = opts.giOf ? new Map(hydrated.map((h, i) => [h, opts.giOf(records[i])])) : null;
   const A = analyze(hydrated, giOfHydrated ? { giOf: (h) => giOfHydrated.get(h) } : {});
+  // Every parsed body is reachable from its call's `rec` from here on, and an out-of-window call drops
+  // that reference below. Letting go of these two is what makes the drop actually free the body: a
+  // 115-call session holds ~0.8 MB of parsed request per call, which is the peak RSS (1.6 §3.1 ≤ 200 MB).
+  hydrated.length = 0;
+  if (giOfHydrated) giOfHydrated.clear();
+  // Block keys of one session: the same context is re-sent every turn, so the per-text hash is asked for
+  // once per call. One map per assembly, dropped with it (see analyze.mjs::blkKey).
+  const keyMemo = new Map();
   for (const lane of A.lanes || []) {
     let prevFlat = null, prevChain = null;
     for (const call of lane.calls || []) {
       if (!call.rec || !call.rec.request) { call.flat = []; call.cacheBreak = null; call.gt = null; call.wire = null; continue; }
       call.wire = wireOf(call.rec, 'anthropic'); // cheap meta: rides on out-of-window calls too
       call.respRefs = respRefsOf(call.rec); // locators only (a few dozen bytes each), never the reply body
-      const flat = linearContext(call.rec.request);
+      const flat = linearContext(call.rec.request, keyMemo);
       // Tag per-block faithfulness SERVER-SIDE (reads provider block shape here, not in the browser →
       // invariant 3). opaque = encrypted/redacted reasoning replayed as signature-only, no plaintext on
       // the wire (thinking/redacted_thinking with a signature but empty text). The board renders a badge
@@ -586,8 +598,10 @@ function assembleAnalyzed(records, opts = {}) {
       // hatching everything outside the current page as "composition unknown".
       call.comp = compBuckets(flat);
       // Blocks kept only inside the retention window; `prevFlat` above still holds the real array, so
-      // the NEXT call's diff is computed against the true baseline, not against an emptied one.
-      if (opts.keepFlat && !opts.keepFlat(call.gi)) { call.flat = []; call.nonBlockKeys = []; call.paged_out = true; continue; }
+      // the NEXT call's diff is computed against the true baseline, not against an emptied one. `rec` is
+      // slimmed here too: the page ships a paged-out call's rec as `{id, request:{model}}` either way
+      // (board.mjs::slimCall), so holding the whole parsed body until then only raises peak RSS.
+      if (opts.keepFlat && !opts.keepFlat(call.gi)) { call.flat = []; call.nonBlockKeys = []; call.paged_out = true; call.rec = slimRec(call.rec); continue; }
       // SHIP METADATA + A LOCATOR, NEVER THE BODY (RFC 4.2:55 「看全文=回源」 · 1.4:35 「点开惰性填正文」).
       // Everything above this line needed the real text — the diff chain, the prefix sha-256, the
       // byte weights — and all of it has now been computed. What leaves the process is the collapsed

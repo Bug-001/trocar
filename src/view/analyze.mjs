@@ -667,7 +667,17 @@ function blkHashText(b, cap = Infinity) {
 }
 // hash a bounded prefix — plenty to distinguish blocks, and O(1) per block regardless of size
 const BLK_KEY_CAP = 4096
-const blkKey = (prefix, b) => prefix + hash(blkHashText(b, BLK_KEY_CAP))
+// `memo` (one Map per session assembly, from the caller) is NOT a cache of results across queries: an
+// append-only conversation re-sends its whole context every turn, so one session asks for the key of the
+// SAME block text once per call — measured 17 594 block keys over 494 distinct contents. Hashing the 17 100
+// repeats was 89 ms of a 115-call session's 305 ms. Same text in, same key out; the map dies with the call.
+const blkKey = (prefix, b, memo) => {
+  const t = blkHashText(b, BLK_KEY_CAP)
+  if (!memo) return prefix + hash(t)
+  let h = memo.get(t)
+  if (h === undefined) memo.set(t, (h = hash(t)))
+  return prefix + h
+}
 
 // Flatten a captured request into ordered block descriptors — the board's PROJECTION of the shared
 // CC dissector's canonical spine (src/dissect/cc.mjs · D25). Each descriptor carries a stable content
@@ -685,7 +695,7 @@ function truncNote(text) {
   return m ? m[m.length - 1] : null
 }
 
-export function linearContext(request) {
+export function linearContext(request, keyMemo = null) {
   const flat = []
   // ── resource ↔ RESULT linking ────────────────────────────────────────
   // The 📂 resource explorer promises "the bytes that entered the context". The dissector keys a
@@ -726,14 +736,14 @@ export function linearContext(request) {
       })
     } else if (e.section === 'system') {
       const b = e.parsed, text = b?.text || ''
-      flat.push({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }) })
+      flat.push({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }, keyMemo) })
     } else {
       const b = e.parsed, type = typeof b === 'string' ? 'text' : (b?.type || 'text')
       const d = {
         sec: 'messages', kind: type, role: e.role, mi: e.path.mi, bi: e.path.bi, block: b,
         toolName: type === 'tool_use' || type === 'server_tool_use' ? (b.name || '') : '',
         cc: (b && b.cache_control) || null,
-        resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b),
+        resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b, keyMemo),
       }
       // `key` above is UNCHANGED — the cache-prefix chain diffs on it, so the linking below only
       // ever ADDS descriptive fields.
