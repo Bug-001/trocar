@@ -44,18 +44,18 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   const t = (x) => tilde(x, home)
   const items = []
   const add = (what, path_, detail) => items.push({ what, path: path_ || null, detail })
-  if (p.manifest) add('record', p.manifest, `${t(p.manifest)}: what was installed, so it can all be taken out again`)
+  if (p.manifest) add('record', p.manifest, `${t(p.manifest)}: what was installed`)
   if (p.state) add('record', p.state, `${t(p.state)}: which agents are on`)
-  if (p.standalone) add('undo', p.standalone, `${t(p.standalone)}: the undo that works without this source tree`)
-  for (const c of p.ca || []) add('certificate', c, `${t(c)}: this machine's own certificate authority, in no trust store`)
-  if (p.run) add('record', p.run, `${t(p.run)}/: where the plugins report what they trust`)
-  for (const f of p.files || []) add(f.harness, f.path, `${t(f.path)}: ${f.sources.length ? `the certificates of ${f.sources.map(t).join(', ')} plus ` : ''}asight's own`)
+  if (p.standalone) add('undo', p.standalone, `${t(p.standalone)}: works without this source tree`)
+  for (const c of p.ca || []) add('certificate', c, `${t(c)}: in no trust store`)
+  if (p.run) add('record', p.run, `${t(p.run)}/: what the plugins trust`)
+  for (const f of p.files || []) add(f.harness, f.path, `${t(f.path)}: ${f.sources.length ? `the certificates of ${f.sources.map((x) => String(x).split(/[\\/]/).pop()).join(', ')} plus asight's` : "asight's certificate"}`)
   for (const o of p.owned || []) add(o.harness, o.path, `${t(o.path)}: asight's ${o.role}`)
-  for (const e of p.entries || []) add(e.harness, e.path, `${t(e.path)}${e.real_path ? ` -> ${t(e.real_path)}` : ''}: ${e.what || `${e.keys.join('.')} = ${t(e.value)}`}`)
-  if (p.unit) add('autostart', p.unit.path, `${t(p.unit.path)}: ${platform === 'darwin' ? 'starts the collector at login (launchd)' : platform === 'win32' ? 'starts the collector at login (a scheduled task)' : 'starts the collector at login (systemd --user)'}`)
-  for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output, made once and never rewritten`)
-  if (p.records) add('record', p.records, `${t(p.records)}/: what each run of install, on and off did`)
-  else if (p.events) add('record', p.events, `${t(p.events)}: what each run of install, on and off did`)
+  for (const e of p.entries || []) add(e.harness, e.path, `${t(e.path)}${e.real_path ? ` -> ${t(e.real_path)}` : ''}: ${e.what || e.keys.join('.')}`)
+  if (p.unit) add('autostart', p.unit.path, `${t(p.unit.path)}: starts the collector at login`)
+  for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output`)
+  if (p.records) add('record', p.records, `${t(p.records)}/: what each run did`)
+  else if (p.events) add('record', p.events, `${t(p.events)}: what each run did`)
   return items
 }
 
