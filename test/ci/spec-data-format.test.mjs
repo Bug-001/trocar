@@ -18,6 +18,7 @@ test('D59 · D60: no data-format unit presents DuckDB, the ETL pipeline, `asight
   const hits = []
   for (const unit of UNITS) {
     read(unit).split('\n').forEach((line, i) => {
+      if (/^\| D(59|60) \|/.test(line)) return // the two decision rows say what was removed; everywhere else states the current design only
       for (const re of RETIRED) if (re.test(line)) hits.push(`${unit}:${i + 1} ${re.source}`)
     })
   }
