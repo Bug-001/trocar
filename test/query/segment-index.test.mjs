@@ -103,3 +103,22 @@ test('封存后记录 id 与索引字段不变,封存件里每条记录按 id �
   assert.equal(seg.sealed_bytes, fs.statSync(path.join(home, 'raw', `${SEG}.sealed`)).size)
   assert.equal(seg.bytes, before.records.reduce((n, r) => n + r.stored_bytes + 1, 0)) // the plaintext bytes, from the sealed index
 })
+
+// 4.2:30 崩溃残留:明文与封存件并存 = 上次封存断在 rename 之后、删明文之前。明文为准 —— 读取侧每一条路都得这么说,
+// 不然 128 MB 明文还在盘上,状态却报 `sealed`(2026-10-18 Windows run P1)。
+test('明文与封存件并存时:状态不是 sealed,读的是明文的字节', async () => {
+  const { sealSegment } = await import('../../src/raw/seal.mjs')
+  const { segmentLines, allRecords } = await import('../../src/query/records.mjs')
+  const home = rawHome()
+  writeSegment(home, SEG, [{ id: 'a' }])
+  await sealSegment(path.join(home, 'raw', `${SEG}.ndjson`), { lockFile: path.join(home, 'collector', 'lock'), journal: null })
+  writeSegment(home, SEG, [{ id: 'a' }, { id: 'b', ts: '2026-10-18T10:00:02.000Z' }]) // the plaintext the crash left, grown by one record
+  const [seg] = await allSegments({ home, lockState: () => ({ state: 'none' }) })
+  assert.equal(seg.state, 'closed')
+  assert.equal(seg.path, path.join(home, 'raw', `${SEG}.ndjson`))
+  assert.equal(seg.records, 2)
+  assert.equal(seg.bytes, fs.statSync(path.join(home, 'raw', `${SEG}.ndjson`)).size)
+  assert.equal((await segmentIndex({ home, segment: SEG })).source, seg.path)
+  assert.equal([...segmentLines({ home, segment: SEG })].length, 2)
+  assert.deepEqual((await allRecords({ home })).map((r) => r.id), [`${SEG}:1`, `${SEG}:2`])
+})

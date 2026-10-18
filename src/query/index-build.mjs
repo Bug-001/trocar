@@ -190,6 +190,9 @@ export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs }
 // other plaintext segment is closed; one with a `.sealed` beside it is sealed.
 const defaultLockState = (home, fs) => readDaemonLock({ file: path.join(collectorHome(home), 'lock'), fs });
 
+// A segment that has BOTH files was interrupted after the rename and before the plaintext was deleted: the plaintext
+// wins (4.2:30), so it is the source, it gives the bytes, and the state is `closed` — not `sealed`, which would say the
+// long-term copy is the sealed one while 128 MB of plaintext is still on disk (tested 2026-10-18).
 /** allSegments({home}) → [{ segment, state, path, records, bytes, sealed_bytes, from, to, problems }], oldest first. */
 export async function allSegments({ home = asightHome(), fs = nodeFs, lockState = () => defaultLockState(home, fs) } = {}) {
   let names;
@@ -210,7 +213,7 @@ export async function allSegments({ home = asightHome(), fs = nodeFs, lockState 
     const sealedBytes = at.sealed ? sizeOf(fs, path.join(rawDir(home), `${segment}.sealed`)) : null;
     const bytes = at.plain ? sizeOf(fs, path.join(rawDir(home), `${segment}.ndjson`)) : records.reduce((n, r) => n + r.stored_bytes + 1, 0);
     const stamps = records.map((r) => r.ts).filter(Boolean).sort();
-    out.push({ segment, state: at.sealed ? 'sealed' : segment === current ? 'writing' : 'closed', path: source,
+    out.push({ segment, state: at.plain ? (segment === current ? 'writing' : 'closed') : 'sealed', path: source,
       records: records.length, bytes, sealed_bytes: sealedBytes, from: stamps[0] ?? null, to: stamps[stamps.length - 1] ?? null, problems });
   }
   return out;

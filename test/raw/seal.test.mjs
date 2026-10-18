@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { sealSegment, SealRefused } from '../../src/raw/seal.mjs';
 import { recordId } from '../../src/collector/core/record/segments.mjs';
 import { tmpDir, e1Lines, writeShard, listFiles, decodeAll } from './helpers.mjs';
+import { segmentLines } from '../../src/query/records.mjs';
 
 const SEAL = fileURLToPath(new URL('../../src/raw/seal.mjs', import.meta.url));
 const SEGMENT = '20261005T100000Z';
@@ -112,3 +113,18 @@ await sealSegment(file, { lockFile: lock, journal: null, onPhase: (p) => { if (p
     assert.equal(decodeAll([res.sealed]).size, b.lines.length);
   });
 }
+
+// A file system that cannot fsync a DIRECTORY (Windows: EPERM on the directory fd; some network file systems:
+// EINVAL / ENOTSUP) must not stop the seal: the rename is already done, and refusing here is what left every
+// Windows segment with its 128 MB plaintext beside the sealed file and re-sealed it on every daemon start
+// (test-machine run, 2026-10-18). An error that is NOT one of those codes still aborts (test/off/fsutil tests).
+test('a directory fsync that fails with EPERM (win32) still deletes the plaintext, and the segment reads back verbatim', async () => {
+  const b = box();
+  const spy = { ...fs, fsyncSync(fd) { if (fs.fstatSync(fd).isDirectory()) { const e = new Error('EPERM: operation not permitted, fsync'); e.code = 'EPERM'; throw e; } return fs.fsyncSync(fd); } };
+  const res = await sealSegment(b.file, { lockFile: b.lock, journal: b.journal, fs: spy });
+  assert.equal(fs.existsSync(b.file), false, 'the plaintext is deleted even though the directory could not be fsynced');
+  assert.deepEqual(listFiles(b.raw), [res.sealed]);
+  const want = b.lines.map((l) => l.toString('utf8').replace(/\n$/, '')).filter((s) => s.length);
+  assert.deepEqual([...segmentLines({ home: b.home, segment: SEGMENT })].map(([, text]) => text), want, 'every original line, verbatim, out of the sealed file');
+  assert.equal(JSON.parse(fs.readFileSync(b.journal, 'utf8').trim().split('\n').pop()).outcome, 'ok');
+});

@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathKey, writeDurable, TMP_MARK } from '../../src/off/fsutil.mjs'
+import { pathKey, writeDurable, fsyncDir, TMP_MARK } from '../../src/off/fsutil.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const errno = (code) => Object.assign(new Error(`${code}: rename`), { code })
@@ -111,4 +111,19 @@ test('pathKey(linux): case matters, a symlinked directory still resolves', () =>
 test('pathKey: keying a win32 path on another host does not consult the host file system (no injected fs)', () => {
   if (process.platform === 'win32') return
   assert.equal(pathKey('C:\\Users\\A\\.codex\\config.toml', { platform: 'win32' }), 'c:/users/a/.codex/config.toml')
+})
+
+// fsyncDir is the repo's ONE directory fsync (the platform-seam rule): a platform that cannot fsync a directory is not a
+// failed write — but a real error must still be thrown, or a seal "succeeds" and keeps its plaintext (test-machine run P1).
+for (const code of ['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR', 'EBADF']) {
+  test(`fsyncDir: ${code} on the directory fd is tolerated, and the fd is closed`, () => {
+    const dir = tmpDir('asight-fsy-')
+    let closed = 0
+    fsyncDir({ ...fs, fsyncSync: () => { throw errno(code) }, closeSync: (fd) => { closed++; return fs.closeSync(fd) } }, dir)
+    assert.equal(closed, 1)
+  })
+}
+test('fsyncDir: any other error is thrown', () => {
+  const dir = tmpDir('asight-fsy-')
+  assert.throws(() => fsyncDir({ ...fs, fsyncSync: () => { throw errno('EIO') } }, dir), /EIO/)
 })

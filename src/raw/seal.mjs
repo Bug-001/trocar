@@ -18,16 +18,12 @@ import { createSealWriter, FRAME_BYTES } from './writer.mjs';
 import { openSealed, createFrameCache } from './reader.mjs';
 import { appendJournal, defaultJournalPath } from './journal.mjs';
 import { parseSegment } from '../collector/core/record/segments.mjs';
+import { fsyncDir } from '../off/fsutil.mjs';
 
 export class SealRefused extends Error { constructor(m) { super(m); this.name = 'SealRefused'; this.code = 'SEAL_REFUSED'; } }
 
 export const SEALED_EXT = '.sealed';
 const CHUNK = 8 << 20;
-
-export function fsyncDir(fs, dir) {
-  const fd = fs.openSync(dir, 'r');
-  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-}
 
 // The segment the live daemon is appending to, from its lock (4.6 §控制面 `lock`), or null when there is no readable
 // lock. A lock that cannot be read never licenses a seal: `sealOne` only compares, and an unknown live segment leaves
