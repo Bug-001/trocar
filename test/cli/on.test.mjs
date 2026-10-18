@@ -356,14 +356,14 @@ test('R1 / R6: an `on` that stopped before writing anything says so — no chang
   const s = await sandbox(); const before = snapshot(s.home)
   const r = await s.run({ helperState: noHelper })
   const bare = (x) => [x.exit, x.receipt.ok, x.receipt.changed, x.receipt.created, x.receipt.undo, x.receipt.log, 'standalone' in x.receipt]
-  assert.deepEqual(bare(r), [1, false, [], [], [], null, false])
+  assert.deepEqual(bare(r), [1, false, [], [], null, null, false])
   assert.deepEqual(validateReceipt(r.receipt), [])
   assert.ok(!JSON.stringify(r.receipt).includes('asight-off') && !JSON.stringify(r.receipt).includes('flows'), 'neither the undo program nor the log is named: neither is there')
   assert.deepEqual(snapshot(s.home), before)
   // no agent to capture
   const empty = await sandbox(); fs.rmSync(path.join(empty.home, '.claude'), { recursive: true, force: true })
   const none = await empty.run({ ids: ['claude-code'], harnesses: [] })
-  assert.deepEqual(bare(none), [1, false, [], [], [], null, false])
+  assert.deepEqual(bare(none), [1, false, [], [], null, null, false])
   // another command holds the lock (a live pid, a lock written just now): `on` waits, gives up, and has written nothing — its receipt lists no change it did not make
   const held = await sandbox()
   const settingsBefore = fs.readFileSync(path.join(held.home, '.claude', 'settings.json'), 'utf8')
@@ -371,7 +371,7 @@ test('R1 / R6: an `on` that stopped before writing anything says so — no chang
   const busy = await held.run({ lockWaitMs: 30 })
   assert.equal(busy.exit, 1)
   assert.match(busy.receipt.notes.join(' '), /another asight command \(pid \d+\) holds/)
-  assert.deepEqual([busy.receipt.changed, busy.receipt.created, busy.receipt.undo, busy.receipt.log], [[], [], [], null], 'the plan listed changes and files; none was made, so none is claimed')
+  assert.deepEqual([busy.receipt.changed, busy.receipt.created, busy.receipt.undo, busy.receipt.log], [[], [], null, null], 'the plan listed changes and files; none was made, so none is claimed')
   assert.equal(fs.readFileSync(path.join(held.home, '.claude', 'settings.json'), 'utf8'), settingsBefore, 'and none was')
 })
 
