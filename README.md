@@ -203,8 +203,8 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
   changed yourself keeps your value. It kills and restarts nothing: a process started while capture was on keeps its
   door, which now only forwards (no decryption, no record), and `asight status` says how many are left.
 - *macOS*: the autostart unit is the LaunchAgent `com.asight.collector` in `~/Library/LaunchAgents` (`RunAtLoad` +
-  `KeepAlive` — logout stops it). *Windows*: a scheduled task run by a supervisor that re-pulls the daemon. `asight off`
-  with no names stops both.
+  `KeepAlive` — logout stops it). *Windows*: a scheduled task run by a supervisor that re-pulls the daemon. `install`
+  registers the entry and `uninstall` removes it; `on` and `off` leave it alone, so on and off both survive a reboot.
 
 What it keeps (D40): for a trusted agent it decrypts **every** host it talks to by default (policy `all`), not just the
 model API, and stores every call verbatim — telemetry, uploads, account calls, session sync, downloads — so you can see
@@ -279,7 +279,7 @@ and the trust entry asight believed was in effect. It goes to the daemon's log t
 
 A relay or proxy with a private CA keeps working. On Linux `install` carries the CA you already gave Claude Code into
 `extra-cc.pem` (the other agents' CAs into their bundles), and the daemon verifies upstreams with Node's store plus
-`NODE_EXTRA_CA_CERTS` (the Linux unit carries the value of the shell you install from; when `on` has to start the
+`NODE_EXTRA_CA_CERTS` (the login entry — the Linux unit, the macOS LaunchAgent — carries the value of the shell you install from; when `on` has to start the
 daemon itself because the login mechanism refused, it carries the value of the shell you run `on` in). On macOS and Windows the door verifies an upstream with that agent's own trust set —
 the OS roots, Node's, and the files its certificate variables name — never with the asight root (RFC 4.11 §3 ⑭).
 asight does not count on a Claude Code process that was already
