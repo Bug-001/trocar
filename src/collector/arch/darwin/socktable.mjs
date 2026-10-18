@@ -19,7 +19,7 @@
 const TABLE_HANG_MS = 10_000
 
 /** Where the owner is in a row, from the header: `process:pid` (a name that may hold spaces, then `:<pid>`) or a plain `pid` column. */
-function ownerColumn(header) {
+export function ownerColumn(header) {
   const cols = header.replace('Local Address', 'Local').replace('Foreign Address', 'Foreign').trim().split(/\s+/)
   const named = cols.indexOf('process:pid')
   if (named >= 0) return { at: named, named: true }
@@ -27,10 +27,15 @@ function ownerColumn(header) {
   return plain >= 0 ? { at: plain, named: false } : null
 }
 
-function pidAt(tokens, col) {
-  if (!col.named) return /^\d+$/.test(tokens[col.at] || '') ? Number(tokens[col.at]) : null
-  for (let k = col.at; k < tokens.length; k++) { const m = /:(\d+)$/.exec(tokens[k]); if (m) return Number(m[1]) } // the name ends at its `:<pid>`
-  return null
+/** The owner on one row: { pid, name } — `name` is the program of a `process:pid` column (its spaces kept, as the kernel cut it to 16
+ *  characters), null where the column is a plain `pid`. Both null when the row names no owner. */
+export function ownerAt(tokens, col) {
+  if (!col.named) return { pid: /^\d+$/.test(tokens[col.at] || '') ? Number(tokens[col.at]) : null, name: null }
+  for (let k = col.at; k < tokens.length; k++) { // the name ends at its `:<pid>`
+    const m = /^(.*):(\d+)$/.exec(tokens[k])
+    if (m) return { pid: Number(m[2]), name: [...tokens.slice(col.at, k), m[1]].join(' ') || null }
+  }
+  return { pid: null, name: null }
 }
 
 /** ownerOfSocket({ exec, peer: {address, port}, timeoutMs, now, onFailure }) → { pid, source, ms }
@@ -67,7 +72,7 @@ export async function ownerOfSocket({ exec, peer, timeoutMs = TABLE_HANG_MS, now
   for (const line of lines) {
     const t = line.trim().split(/\s+/)
     if (!/^tcp4/.test(t[0] || '') || t[3] !== local) continue
-    const pid = pidAt(t, col)
+    const pid = ownerAt(t, col).pid
     if (pid != null && pid > 0) holders.add(pid) // pid 0: a row no process holds (TIME_WAIT) is nobody's
   }
   const mine = [...holders].filter((p) => p !== process.pid) // the engine's accepted socket names the peer as its FOREIGN end and is not in `holders`; the pid exclusion is belt and braces

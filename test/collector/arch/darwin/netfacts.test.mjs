@@ -3,7 +3,7 @@
 // flag; the per-form half (certificate, proxy, the doors) is the model's (core/proxymode/status-facts.mjs). Everything is injected: a fake `lsof` / `scutil` / `ps` runner; nothing reads the machine and nothing is spawned.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { darwinNetFacts as gather, parseLsof, processName, versionOf } from '../../../../src/collector/arch/darwin/netfacts.mjs'
+import { darwinNetFacts as gather, parseListeners, processName, versionOf } from '../../../../src/collector/arch/darwin/netfacts.mjs'
 import { settingSha } from '../../../../src/netenv/redact.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { buildTopology, renderCompact } from '../../../../src/netenv/topology.mjs'
@@ -12,28 +12,38 @@ import { facts } from '../../../netenv/fixtures/rows.mjs'
 const HOME = tmpDir('darwin-netfacts') // an empty HOME: nothing installed, so the per-form half (core/proxymode/status-facts.mjs) has no form to read
 const darwinNetFacts = (ctx, deps) => gather({ home: HOME, ...ctx }, deps)
 
-const LSOF = [
-  'mihomo   777 user    7u  IPv4 0x2fa994562d6e90a6      0t0  TCP 127.0.0.1:7890 (LISTEN)',
-  'mihomo   777 user    8u  IPv6 0xf88899a95ce14746      0t0  TCP [::1]:9090 (LISTEN)',
-  'ControlCe  787 user    9u  IPv4 0xc2b53e0384067da2      0t0  TCP *:7000 (LISTEN)',
-  '                  user    3u  IPv4 0xabe      0t0  TCP *:22 (LISTEN)', // a LISTEN row with no owner: not a shape lsof's answer has on macOS (a listener of another user is not in the answer at all) — kept for the shared listener shape, the linux twin's owner-unreadable
+// `netstat -anv -p tcp` as recorded on a macOS machine (read-only): the header that says where the owner is, then LISTEN rows — a loopback
+// one, an IPv6 one (`::1.31080`, no brackets where lsof wrote them), an all-interfaces one (`*.5000`), an owner whose name holds spaces and was cut to
+// 16 characters (`Code Helper (Plu:64005`), and a row whose owner column holds no pid (`:0`: a socket no process the kernel names holds).
+const NETSTAT = [
+  'Active Internet connections (including servers)',
+  'Proto Recv-Q Send-Q  Local Address                                 Foreign Address                               (state)          rxbytes      txbytes  rhiwat  shiwat          process:pid    state  options           gencnt    flags   flags1 usecnt rtncnt fltrs',
+  'tcp4       0      0  127.0.0.1.7890         *.*                    LISTEN                 0            0  131072  131072           mihomo:777    00100 00000106 0000000000d410b8 00000001 00000800      1      0 000000',
+  'tcp6       0      0  ::1.9090               *.*                    LISTEN                 0            0  131072  131072           mihomo:777    00180 00000006 0000000000d63f03 00000000 00000800      1      0 000000',
+  'tcp4       0      0  *.5000                 *.*                    LISTEN                 0            0  131072  131072    ControlCenter:787    00100 00000006 0000000000bfcf3e 00000001 00000800      1      0 000000',
+  'tcp4       0      0  127.0.0.1.65369        *.*                    LISTEN                 0            0  131072  131072 Code Helper (Plu:64005  00100 00000106 0000000000aa557e 00000001 00000800      1      0 000000',
+  'tcp4       0      0  127.0.0.1.22           *.*                    LISTEN                 0            0  131072  131072                  :0    00100 00000106 0000000000aa557f 00000001 00000800      1      0 000000',
+  'tcp4       0      0  192.168.1.9.52788      17.57.144.22.5223      ESTABLISHED       131072       131072  131072  131072            apsd:291    00102 00000004 0000000000bd06f2 00000000 00000800      1      0 000000',
 ].join('\n')
 
-/** The runner of `lsof` / `scutil` / `ps`: spawnSync-shaped, answers from a table, records what it was asked. */
+/** The runner of `netstat` / `scutil` / `ps`: spawnSync-shaped, answers from a table, records what it was asked. */
 const runner = (table, calls = []) => (file, args) => {
   calls.push([file, ...args].join(' '))
   const r = table[[file, ...args].join(' ')] ?? { status: null, stdout: '', stderr: '', error: new Error(`spawnSync ${file} ENOENT`) }
   return { status: 0, stdout: '', stderr: '', ...r }
 }
 const SCUTIL_OFF = '<dictionary> {\n  HTTPSEnable : 0\n}'
-const TABLE = { 'lsof -nP -iTCP -sTCP:LISTEN': { stdout: LSOF }, 'scutil --proxy': { stdout: SCUTIL_OFF } }
+const LISTENERS = 'netstat -anv -p tcp'
+const TABLE = { [LISTENERS]: { stdout: NETSTAT }, 'scutil --proxy': { stdout: SCUTIL_OFF } }
 const row = (pid, over = {}) => ({ pid, trusted: true, reason: null, negative: false, startedAt: Date.parse('2026-10-07T09:30:00Z'), ...over })
 const statusOf = (rows, reply = { agents: [{ pid: 4121, decrypt: true }] }, matched = []) => ({ daemon: { state: 'running', reply }, harnesses: [{ id: 'claude-code', procs: rows }], matched })
 const current = (value = null, over = {}) => ({ value, scheme: null, host: null, port: null, source: [], sha256: value ? settingSha(value) : null, changedAt: null, ...over })
 
-test('parseLsof: address and port, the owner when lsof shows one, IPv6 without brackets and the all-interfaces star; a line it does not know is skipped, and a row with no owner is kept for the shape the topology reads (not a shape lsof prints on macOS)', () => {
-  assert.deepEqual(parseLsof(`${LSOF}\nsomething else\n`), [
-    { addr: '127.0.0.1', port: 7890, pid: 777, comm: 'mihomo' }, { addr: '::1', port: 9090, pid: 777, comm: 'mihomo' }, { addr: '*', port: 7000, pid: 787, comm: 'ControlCe' }, { addr: '*', port: 22 }])
+test('parseListeners: the LISTEN rows of the kernel\'s TCP table — address and port, the owner from the `process:pid` column (a name with spaces ends at its `:<pid>`), an IPv6 address and the all-interfaces star; a row that is not a LISTEN one is skipped, and a row with no owner is kept for the shape the topology reads', () => {
+  assert.deepEqual(parseListeners(`${NETSTAT}\nsomething else\n`), [
+    { addr: '127.0.0.1', port: 7890, pid: 777, comm: 'mihomo' }, { addr: '::1', port: 9090, pid: 777, comm: 'mihomo' }, { addr: '*', port: 5000, pid: 787, comm: 'ControlCenter' },
+    { addr: '127.0.0.1', port: 65369, pid: 64005, comm: 'Code Helper (Plu' }, { addr: '127.0.0.1', port: 22 }])
+  assert.equal(parseListeners('Active Internet connections\ntcp4 0 0 127.0.0.1.22 *.* LISTEN\n'), null, 'no header line, so no owner column: the fact cannot be read, which is not an empty list')
 })
 
 test('processName / versionOf: the program (and its sub-command), a runtime named for the harness, the version from the path', () => {
@@ -50,29 +60,32 @@ test('processName / versionOf: the program (and its sub-command), a runtime name
   assert.equal(versionOf('/opt/homebrew/bin/mihomo'), null)
 })
 
-test('darwinNetFacts: routing is proxy; the listeners are named by their owner (the exe from the process table, else the name lsof gave), a row lsof gives no owner for says so; no TUN / route fact (D49); the OS proxy is scutil\'s dictionary with PAC\'s own flag', async () => {
+test('darwinNetFacts: routing is proxy; the listeners are named by their owner (the exe from the process table, else the name the kernel kept), a row with no owner says so; no TUN / route fact (D49); the OS proxy is scutil\'s dictionary with PAC\'s own flag', async () => {
   const matched = [{ h: null, p: { pid: 777, exe: '/opt/homebrew/bin/mihomo', argv: ['mihomo'], uid: 501, startedAt: Date.parse('2026-10-07T09:30:00Z') } }] // a process of no harness: the listener's owner
   const calls = []
   const f = await darwinNetFacts({ status: statusOf([], { agents: [] }, matched), settings: {}, env: {} }, { exec: runner(TABLE, calls) })
   assert.equal(f.routing, 'proxy')
   assert.deepEqual(f.listeners, [
     { addr: '127.0.0.1', port: 7890, pid: 777, exe: '/opt/homebrew/bin/mihomo' }, { addr: '::1', port: 9090, pid: 777, exe: '/opt/homebrew/bin/mihomo' },
-    { addr: '*', port: 7000, pid: 787, exe: 'ControlCe' }, // not in the process table: the name lsof gave (lsof truncates it to the column's width)
-    { addr: '*', port: 22, unknown: { reason: 'owner-unreadable', detail: "lsof names no process for it — not a shape its answer has on macOS; a listener of another user is not in the answer at all, for without privilege lsof cannot open its fd table" } }])
+    { addr: '*', port: 5000, pid: 787, exe: 'ControlCenter' }, // not in the process table: the name the kernel kept (cut to 16 characters)
+    { addr: '127.0.0.1', port: 65369, pid: 64005, exe: 'Code Helper (Plu' },
+    { addr: '127.0.0.1', port: 22, unknown: { reason: 'owner-unreadable', detail: "netstat's owner column holds no pid for it — the socket is held by no process the kernel names" } }])
   assert.deepEqual(f.systemProxy, { value: null, pac: false })
   assert.ok(!('tun' in f), 'D49: no TUN fact')
   assert.deepEqual(f.unknowns, [])
-  assert.deepEqual(calls, ['lsof -nP -iTCP -sTCP:LISTEN', 'scutil --proxy'], 'only these two reads: no route / ifconfig lookup, nothing is resolved, nothing goes out')
+  assert.deepEqual(calls, [LISTENERS, 'scutil --proxy'], 'only these two reads: no route / ifconfig lookup, nothing is resolved, nothing goes out')
 })
 
 test('darwinNetFacts: a tool that is not there, is refused or prints what it should not leaves the fact unknown with the reason (never an empty list)', async () => {
   const f = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({}) })
   assert.deepEqual(f.listeners, [])
   assert.deepEqual(f.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'absent'], ['systemProxy', 'absent']])
-  const refused = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ 'lsof -nP -iTCP -sTCP:LISTEN': { status: 1, stderr: 'permission denied' } }) })
-  assert.deepEqual([refused.unknowns[0].fact, refused.unknowns[0].reason, refused.unknowns[0].detail], ['listeners', 'denied', 'lsof -nP -iTCP -sTCP:LISTEN: permission denied'])
-  assert.match(f.unknowns[0].detail, /^lsof -nP -iTCP -sTCP:LISTEN: /)
-  const timed = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ 'lsof -nP -iTCP -sTCP:LISTEN': { status: null, stderr: 'spawnSync lsof ETIMEDOUT' } }) })
+  const refused = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ [LISTENERS]: { status: 1, stderr: 'permission denied' } }) })
+  assert.deepEqual([refused.unknowns[0].fact, refused.unknowns[0].reason, refused.unknowns[0].detail], ['listeners', 'denied', `${LISTENERS}: permission denied`])
+  assert.match(f.unknowns[0].detail, /^netstat -anv -p tcp: /)
+  const unreadable = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ [LISTENERS]: { stdout: 'Active Internet connections\ntcp4 0 0 127.0.0.1.22 *.* LISTEN\n' } }) })
+  assert.deepEqual([unreadable.listeners, unreadable.unknowns[0].fact, unreadable.unknowns[0].reason], [[], 'listeners', 'unparseable'], 'a table with no owner column: the fact is not known, never an empty list')
+  const timed = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ [LISTENERS]: { status: null, stderr: 'spawnSync netstat ETIMEDOUT' } }) })
   assert.deepEqual(timed.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'timeout'], ['systemProxy', 'absent']])
   assert.deepEqual(timed.systemProxy, { unknown: { reason: 'absent', detail: 'scutil --proxy: spawnSync scutil ENOENT' } })
   const unparsable = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ ...TABLE, 'scutil --proxy': { stdout: 'garbage' } }) })
@@ -123,7 +136,7 @@ test('darwinNetFacts: elevation is euid/root — the process table\'s uid answer
   assert.equal((await ask(proc(0))).elevated, true, 'root in the table (a sudo-launched agent)')
   const calls = []
   assert.equal((await ask([], { ...TABLE, 'ps -o uid= -p 4121': { stdout: '0' } }, calls)).elevated, true, 'a process only the daemon listed: ps is asked for its uid')
-  assert.deepEqual(calls, ['ps -o uid= -p 4121', 'lsof -nP -iTCP -sTCP:LISTEN', 'scutil --proxy'], 'one ps ask, then the reads of the machine')
+  assert.deepEqual(calls, ['ps -o uid= -p 4121', LISTENERS, 'scutil --proxy'], 'one ps ask, then the reads of the machine')
   assert.equal((await ask([], { ...TABLE, 'ps -o uid= -p 4121': { stdout: '501' } })).elevated, false)
   assert.equal((await ask([], TABLE)).elevated, null, 'ps did not answer: not known, not "not elevated"')
   assert.equal((await ask(proc(undefined))).elevated, null, 'a table row with no uid says not-known (the ask is for processes the table does not have)')
