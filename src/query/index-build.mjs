@@ -33,7 +33,7 @@ import { harnessOf, sessionKeyOf, headerOf } from '../dissect/harnesses.mjs';
 import { synthFactsOf } from '../dissect/synth-key.mjs';
 import { isLogOnly } from '../dissect/capture-labels.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { fpRanges, readRangeSync } from './source.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
@@ -227,6 +227,7 @@ function asArray(buf) {
   return out.toString('utf8');
 }
 
+let tmpSeq = 0; // see storeIndex: the temp name is unique per call, not only per pid
 const TAIL = 64 << 10; // a mark line is a few hundred bytes: room for it plus a torn batch, and widened if not
 // The last complete mark line WITHOUT the entries, for the keeper: all it needs is where its last pass ended (and
 // what to cut back), so its CPU per pass does not grow with the segment's record count either (D62).
@@ -279,16 +280,26 @@ function sameBytesBefore(fs, source, m) {
 
 // This pass's lines → disk. `at` null: the whole document, through a temp file and a rename (a sealed segment's
 // index, or a plaintext one being rebuilt), so two writers of the same content cannot interleave. `at` a number: the
-// keeper appending to the index it owns, after cutting a torn batch back to the last mark (4.2 §段索引 谁写哪一笔).
+// keeper appending to the index it owns, after cutting the file back to its last mark (4.2 §段索引 谁写哪一笔).
+//
+// WHAT A CRASH CAN LEAVE, exactly: this file is never fsync'd (it is a cache; paying fsync per pass would put the
+// index on the record's own cost). So a crash or a power cut can leave the page cache's tail unwritten — including
+// HOLES: zeroed pages before bytes that did reach the disk. Cutting back to `at` therefore does NOT mean the file is
+// "truncated back to the last mark": the next pass appends after the last mark it can still PARSE, and whatever came
+// after that mark (hole or garbage) is simply dead weight in the file, ignored by every reader (readIndex and
+// tailMark both stop at the last complete mark). The ANSWER stays right — the records those lost entries describe are
+// re-indexed from the segment — and the cost is that the segment reads cold until sealing rewrites its index whole.
 function storeIndex(fs, file, lines, problems, at = null) {
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     if (at === null) {
-      const tmp = `${file}.tmp-${process.pid}`;
+      // unique per writer AND per call: two processes with the same pid in different namespaces (or one process
+      // rebuilding two indexes at once) must not share a temp name
+      const tmp = `${file}.tmp-${process.pid}-${(tmpSeq++).toString(36)}-${randomBytes(4).toString('hex')}`;
       fs.writeFileSync(tmp, lines.join(''), { mode: 0o600 });
       fs.renameSync(tmp, file);
     } else {
-      if (at !== sizeOf(fs, file)) fs.truncateSync(file, at); // a torn batch of an earlier pass
+      if (at !== sizeOf(fs, file)) fs.truncateSync(file, at); // the tail after the last parsable mark: a torn or holed batch
       fs.appendFileSync(file, lines.join(''), { mode: 0o600 });
     }
   } catch (e) {
