@@ -356,7 +356,7 @@ async function procsOfWin({ exec, env }) {
         return rows
       }
       m.notes.push('the daemon answered the process snapshot with no rows')
-    } catch (e) { m.notes.push(String((e && e.reason) || (e && e.message) || e)) }
+    } catch (e) { m.notes.push(String((e && e.message) || e)) }
   }
   return procsOfWinLocal({ exec, env })
 }

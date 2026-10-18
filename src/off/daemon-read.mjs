@@ -34,14 +34,20 @@ export function daemonReader({ platform = process.platform, dir, env = process.e
   }
   if (!sock) return null
   let self = null
+  // one question, one answer for the life of this client (as src/off/proc.mjs's memo scope does for the OS): a read-only command reports ONE
+  // moment, and the platform's network facts ask for the same process snapshot the table came from (4.8 §10.1). Only answers are kept.
+  const answers = new Map()
   async function call(verb, args = {}, { timeoutMs: ms = timeoutMs } = {}) {
     if (!DAEMON_READ_VERBS.includes(verb)) throw err(`${JSON.stringify(verb)} is not one of the daemon's read verbs`, 'daemon-read-unknown-verb')
+    const key = `${verb}|${JSON.stringify(args ?? {})}`
+    if (answers.has(key)) return answers.get(key)
     let r
     try { r = await ask({ socketPath: sock, method: 'POST', path: '/helper', body: { verb, args }, timeoutMs: ms }) } catch (e) {
       throw err(`${verb}: ${String((e && (e.code || e.message)) || e)}`)
     }
     if (r && r.self && Number.isInteger(r.self.pid)) self = { pid: r.self.pid, start_time: r.self.start_time ?? null, boot_id: r.self.boot_id ?? null }
-    if (!r || r.ok !== true) throw err(`${verb}: ${(r && r.error) || 'the reply does not say it worked'}`)
+    if (!r || r.ok !== true) throw err(String((r && r.error) || `${verb}: the reply does not say it worked`))
+    answers.set(key, r.data)
     return r.data
   }
   return { call, ready: Promise.resolve({ ready: true, via: 'daemon' }), close: async () => {}, self: () => self }
