@@ -14,6 +14,7 @@ import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef, fieldTextOf, TEXT_REF_FIELD } from '../etl/orchestrator.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf } from '../dissect/registry.mjs';
+import { parsedRequestBody } from '../dissect/request-body.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { cacheSemanticsKnown } from '../cache/cache-events.mjs';
 import { requestEncodingOf } from '../dissect/request-body.mjs';
@@ -72,8 +73,8 @@ function realGroundTruth(prefixByteIdentical, read, create) {
 // wire req_body, so AC-1 holds MORE directly for D10 than v0. No-op for records already in v0 shape.
 function hydrateForBoard(r) {
   if (!r || r.request !== undefined || typeof r.req_body !== 'string') return r; // already v0 / not a D10 body
-  let body;
-  try { body = JSON.parse(r.req_body); } catch { return r; } // unparseable → leave (analyze filters it)
+  const body = parsedRequestBody(r);            // parsed once per record (src/dissect/request-body.mjs)
+  if (!body || typeof body !== 'object') return r; // unparseable → leave (analyze filters it)
   const system = Array.isArray(body.system) ? body.system
     : (typeof body.system === 'string' ? [{ type: 'text', text: body.system }] : []);
   const messages = Array.isArray(body.messages) ? body.messages : [];

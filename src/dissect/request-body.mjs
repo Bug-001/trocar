@@ -20,6 +20,26 @@ export const MAX_DECODED_BYTES = 256 * 1024 * 1024;
 export const NON_INFERENCE_MAX_DECODED_BYTES = 1024 * 1024;
 export const decodeLimitOf = (rec) => (rec && rec.is_llm_call === true ? MAX_DECODED_BYTES : NON_INFERENCE_MAX_DECODED_BYTES);
 
+// ONE parse per record, however many readers ask (D62 A2). A session's cold answer ran JSON.parse over the SAME
+// request-body string three times — src/dissect/cc.mjs `detect`, src/dissect/openai.mjs `bodyOf` and
+// src/view/assemble.mjs `hydrateForBoard` each parsed it — which on the reference dataset's 112-call session
+// (42 MB of bodies) was 213 of the 434 ms the query cost locally. The cache is a WeakMap on the record OBJECT, so it
+// lives exactly as long as the record the answer is being built from, and a record read back again (a new object) is
+// parsed again — never a cache keyed by a record id, which could outlive or mis-name the bytes.
+// READ-ONLY by contract: callers treat the parsed body as source truth and copy before changing anything (the v0
+// `request` object was already shared this way).
+const parsedBodies = new WeakMap();
+export function parsedRequestBody(rec) {
+  if (!rec || typeof rec !== 'object') return null;
+  if (rec.request && typeof rec.request === 'object') return rec.request;   // v0 shape / already hydrated
+  if (parsedBodies.has(rec)) return parsedBodies.get(rec);
+  let body = null;
+  const text = rec.req_body;                     // read once: the stored body can be megabytes
+  if (typeof text === 'string') { try { body = JSON.parse(text); } catch { body = null; } }
+  parsedBodies.set(rec, body);   // a body that did not parse is remembered as null: it will not parse next time either
+  return body;
+}
+
 // The wire content-encoding of the request body, or null (no encoding, or `identity`).
 export function requestEncodingOf(rec) {
   const e = rec && rec.req_content_encoding;

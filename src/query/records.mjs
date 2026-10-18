@@ -176,21 +176,32 @@ function segmentFile({ home, fs, segment }) {
 }
 
 /**
- * segmentLines({home, segment}) → [lineNo, bytes] of one segment, the bytes exactly as they are stored (`asight raw`,
- * 1.6 §5.1): each line with its newline, a half line a crash left without one, an empty line as itself; a sealed
- * segment is decoded first, and nothing is parsed or re-encoded. Throws when there is no such segment.
+ * segmentLines({home, segment, from, to}) → [lineNo, bytes] of one segment, the bytes exactly as they are stored
+ * (`asight raw`, 1.6 §5.1): each line with its newline, a half line a crash left without one, an empty line as
+ * itself; a sealed segment is decoded first, and nothing is parsed or re-encoded. Throws when there is no such
+ * segment.
+ * `from`/`to` are the RECORD NUMBERS the caller will print (1-based, inclusive). They are not a filter over the
+ * whole file: a sealed segment decodes only the frames those records sit in (plus their delta chains, which its
+ * own index names), so printing the last record of a 128 MB segment costs one frame instead of all 32 — which is
+ * what made `asight raw <seg:N>` on a sealed segment 5× slower than on the plaintext one (D62 A1).
  */
-export function* segmentLines({ home = asightHome(), fs = nodeFs, segment } = {}) {
+export function* segmentLines({ home = asightHome(), fs = nodeFs, segment, from = 1, to = Infinity } = {}) {
   const file = segmentFile({ home, fs, segment });
   if (file.endsWith('.sealed')) {
     const sf = openSealed(file, { fs });
-    try { for (let i = 0; i < sf.count; i++) yield [Number(sf.records[i][R.lineNo]) + 1, sf.lineAt(i)]; } finally { sf.close(); }
+    try {
+      for (let i = 0; i < sf.count; i++) {
+        const no = Number(sf.records[i][R.lineNo]) + 1;
+        if (no < from || no > to) continue;   // its frame is never decoded: this record is not in the answer
+        yield [no, sf.lineAt(i)];
+      }
+    } finally { sf.close(); }
     return;
   }
   const buf = fs.readFileSync(file);
   for (let start = 0, no = 1; start < buf.length; no++) {
     const nl = buf.indexOf(NL, start), end = nl === -1 ? buf.length : nl + 1;
-    yield [no, buf.subarray(start, end)];
+    if (no >= from && no <= to) yield [no, buf.subarray(start, end)];
     start = end;
   }
 }
