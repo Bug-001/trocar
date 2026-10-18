@@ -86,7 +86,7 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     }
     if (model) return await runModelOn({ io, env, home, os: parts.os, deps, parts, flags, ids: named.ids, json })
     const script = deps.script || process.argv[1]
-    const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script, run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }) // `deps.spawn`: the `--no-autostart` start is a real spawn, so a test hands in its own (0.1 §3)
+    const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script, run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }) // `deps.spawn`: the direct start (D61: `on`'s fallback when the login mechanism refuses) is a real spawn, so a test hands in its own (0.1 §3)
     const helperState = deps.helperState || (parts.arch && parts.arch.install && parts.arch.install.helperState ? () => parts.arch.install.helperState() : null)
     const yes = flags.has('--yes')
     const confirm = async (plan) => {

@@ -115,6 +115,8 @@ const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
 const shortLine = (l) => String(l).split(' # ')[0].trim()
 const RESTART_REASONS = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1)
 const DAEMON_CMD = 'asight daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
+/** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
+const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\asight\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.asight.collector'}` : 'the systemd user unit asight-collector.service')
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
 export function changeText(e, prior = null) {

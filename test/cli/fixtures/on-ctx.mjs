@@ -87,7 +87,7 @@ export function fakeDaemon({ up = true, agents = [], actual = 'on', onOn = null,
   return { request, calls, state, isRecording: (h) => state.on.has(h) }
 }
 
-/** A `spawn` no test's daemon is ever really started by (0.1 §3): it records `node <script> daemon` and brings `daemon` up, as the real `--no-autostart` start does. Calls: `spawn.calls`. */
+/** A `spawn` no test's daemon is ever really started by (0.1 §3): it records `node <script> daemon` and brings `daemon` up, as the real direct start does. Calls: `spawn.calls`. */
 export function fakeSpawn(daemon) {
   const spawn = (exe, args, opts) => { spawn.calls.push([exe, ...args].join(' ')); spawn.opts.push(opts || {}); daemon.state.up = true; return { pid: 4242, unref: () => {}, on: () => {} } }
   spawn.calls = []
@@ -98,7 +98,7 @@ export function fakeSpawn(daemon) {
 /** The second argument of runOnCli, for a sandbox HOME. `deps` overrides what a test wants to see. */
 export function onCtx(home, io, { exec = recordingExec(), daemon = fakeDaemon(), harnesses = [cc], deps = {}, env = {} } = {}) {
   const parts = { os: 'none', harnesses, scan: async () => [], match: () => ({ agent: null }), arch: { unit } }
-  // `--no-autostart` really spawns `node <script> daemon` (1.6 §3.3): every ctx hands in its own spawn, so no test starts a daemon.
+  // the direct start really spawns `node <script> daemon` (D61: `on`'s fallback when the login mechanism refuses): every ctx hands in its own spawn, so no test starts a daemon.
   const spawn = fakeSpawn(daemon)
   return {
     io, home, platform: 'linux',
