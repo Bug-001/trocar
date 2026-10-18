@@ -25,17 +25,6 @@
   body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13px;line-height:1.5;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
   .mono{font-family:var(--mono);}
   header{display:flex;align-items:center;gap:14px;padding:9px 16px;background:var(--panel);border-bottom:1px solid var(--border);flex-wrap:wrap;}
-  /* D26 transparent-monitoring control (only shown when the server's control plane is enabled) */
-  .monctl{display:inline-flex;align-items:center;gap:7px;font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg);}
-  .monctl .mondot{width:8px;height:8px;border-radius:50%;background:var(--dimmer);box-shadow:0 0 0 2px var(--panel);}
-  .monctl .mondot.on{background:#39d353;}
-  .monbtn{font:inherit;font-size:11px;cursor:pointer;background:var(--panel);color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:2px 8px;}
-  .monbtn:hover{border-color:var(--fg);}
-  .monwhere{color:var(--dim);font-family:var(--mono,monospace);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .monbadge{color:var(--dimmer);font-size:9px;border:1px solid var(--border);border-radius:4px;padding:0 4px;}
-  /* D38 capture health (1.2 顶栏 / 1.5): never empty; a disclosure, not an alert — no blinking, no sound */
-  .caphealth{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--dim);cursor:pointer;white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis;}
-  .caphealth.ok{color:var(--green);} .caphealth.warn{color:var(--amber);border-color:var(--amber);} .caphealth.bad{color:var(--red);border-color:var(--red);}
   h1{font-family:var(--mono);font-size:16px;margin:0;letter-spacing:.5px;font-weight:600;}
   h1 b{color:var(--accent);}
   .spacer{flex:1;}
@@ -646,29 +635,17 @@ let projSource=null // last `query sessions` errors: the session and control vie
 // the errors of the view on screen, kept: a poll that skips the session fetch (nothing changed) still
 // shows them, instead of dropping back to the projects' own until the session changes
 let viewErrors={sel:null,list:[]}
+// Each document's `errors: [{where, reason}]` (C.5 · D38 · invariant 4): what a query could not read,
+// or read only in part, is said on screen — never a silently smaller board. `more` is the errors of
+// the view on screen (a session, the class view), shown beside the session list's own.
 function renderSourceHealth(h,more){
   const bar=document.getElementById('srcbar'); if(!bar)return
-  const sk=(h&&h.skipped)||[], warn=sk.filter(x=>x.attention), rest=sk.length-warn.length
-  const corrupt=Object.entries((h&&h.corrupt_lines)||{}), resets=(h&&h.resets)||[], unid=(h&&h.unidentified_lines)||0
-  const byFile=new Map(); for(const e of [...((h&&h.errors)||[]),...(more||[])]) if(e&&e.file&&!byFile.has(e.file)) byFile.set(e.file,e)
-  const parts=[]
-  if(warn.length) parts.push(`${warn.length} capture file${warn.length!==1?'s':''} not read: `+warn.slice(0,4).map(x=>`<b>${esc(x.name)}</b> (${esc(x.reason)})`).join(', ')+(warn.length>4?` +${warn.length-4} more`:''))
-  if(corrupt.length) parts.push(`${corrupt.reduce((n,[,c])=>n+c,0)} unparseable line(s) in `+corrupt.slice(0,3).map(([f,c])=>`<b>${esc(f.split('/').pop())}</b> ×${c}`).join(', '))
-  if(resets.length) parts.push(`${resets.length} file(s) shrank and were re-read`)
-  const pend=Object.keys((h&&h.tail_pending)||{}); if(pend.length) parts.push(`${pend.length} file(s) end in an incomplete line (a write in progress, or a writer that stopped mid-line): `+pend.slice(0,3).map(f=>`<b>${esc(f.split('/').pop())}</b>`).join(', '))
-  if(unid) parts.push(`${unid} record(s) without an id (listed; their blocks cannot open)`)
-  // shard mode does not count bad lines in session shards yet: say so, never let silence read as "none"
-  if(h&&h.corrupt_lines===null) parts.push('bad lines in session shards are not counted yet (shard mode)')
-  if(!parts.length&&!byFile.size){ bar.style.display='none'; bar.innerHTML=''; bar.title=''; return }
-  const errTitle=[...byFile.values()].map(e=>`${e.file} — ${e.reason||''}`)
-  bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}${x.of?' (same file as '+x.of+')':''}${x.error?' · '+x.error:''}`).concat(corrupt.map(([f,c])=>`${f} — ${c} unparseable line(s)`)).concat(errTitle).join('\n')
-  // "not measured" alone is not a loss: say what it is, without claiming something is missing
-  if(!byFile.size&&parts.length===1&&h.corrupt_lines===null){ bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}`).join('\n'); bar.innerHTML=`ⓘ 未计数 · ${parts[0]}: a shard line that does not parse is left out of its session without a count${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (hover for the list)`:''}.`; bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #3d4a5c;background:#141b24;color:#9fb3c8;border-radius:5px;font-size:11px;line-height:1.45'; return }
-  const notAll=parts.length?`⚠ 源未全读 · not everything in the capture source is on this board: ${parts.join(' · ')}${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (files that are not *.ndjson, subdirectories; hover for the list)`:''} — the raw files on disk are untouched.`:''
-  if(!byFile.size){ bar.innerHTML=notAll; bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'; return }
-  bar.innerHTML=`⚠ 源文件读不全 · ${byFile.size} capture file(s) could not be read as-is — the view below is missing what they hold or shows both copies; the files stay on disk (check with <code>asight raw verify</code>):<br>`
-    +[...byFile.values()].map(e=>`<b>${esc(String(e.file).split('/').pop())}</b> — ${e.kind==='coexist-mismatch'?'original and sealed copy differ, both shown':(e.unreadableRecords!=null?e.unreadableRecords+' record(s) unreadable':'unreadable')}: ${esc(String(e.reason||''))}`).join('<br>')
-    +(notAll?'<br>'+notAll:'')
+  const all=[...((h&&h.errors)||[]),...(more||[])].filter(Boolean)
+  if(!all.length){ bar.style.display='none'; bar.innerHTML=''; bar.title=''; return }
+  const seen=new Map(); for(const e of all) if(!seen.has(e.where)) seen.set(e.where,e)
+  bar.title=[...seen.values()].map(e=>`${e.where} — ${e.reason||''}`).join('\n')
+  bar.innerHTML=`⚠ 源未全读 · ${seen.size} thing(s) the capture could not be read from — the view below is missing what they hold; the files stay on disk:<br>`
+    +[...seen.values()].map(e=>`<b>${esc(String(e.where))}</b> — ${esc(String(e.reason||''))}`).join('<br>')
   bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a2b18;background:#2a1210;color:#f08a6a;border-radius:5px;font-size:11px;line-height:1.45'
 }
 

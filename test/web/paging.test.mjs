@@ -142,19 +142,14 @@ function harness({ view, serverLimit = null, totalCalls = null }) {
 
   const urls = [];
   const served = []; // the exact wire payloads the fake server handed the board
-  const PROJECTS = {
-    projects: [{
-      slug: 'P', name: 'P', path: '/p', last_ts: 'T1',
-      sessions: [{
+  const PROJECTS = { sessions: [{
         project_slug: 'P', session_id: DEMO_SID, title: 'demo', entrypoint: 'cli',
         calls: totalCalls == null ? callCount(view) : totalCalls, probes: 0, last_ts: 'T1',
-      }],
-    }],
-  };
+      }] };
   globalThis.fetch = (url) => {
     const u = String(url);
     urls.push(u);
-    if (u.startsWith('/api/projects')) return Promise.resolve({ ok: true, json: () => Promise.resolve(PROJECTS) });
+    if (u.startsWith('/api/sessions')) return Promise.resolve({ ok: true, json: () => Promise.resolve(PROJECTS) });
     if (u.startsWith('/api/session')) {
       const sp = new URL('http://x' + u).searchParams;
       const cursor = sp.get('cursor') == null ? 0 : Number(sp.get('cursor'));
@@ -166,7 +161,7 @@ function harness({ view, serverLimit = null, totalCalls = null }) {
     }
     return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
   };
-  const sessionUrls = () => urls.filter((u) => u.startsWith('/api/session'));
+  const sessionUrls = () => urls.filter((u) => u.startsWith('/api/session?'));
   return { getEl, urls, sessionUrls, served };
 }
 
@@ -387,7 +382,7 @@ test('D · a small session is UNCHANGED — one page holds it, nothing renders a
 
 test('E · a window past what the server assembled self-corrects instead of rendering blank', async () => {
   const v = await fullView(); // 8 calls
-  // The cheap projects list claims 900 calls (this is REAL: /api/projects counts the whole session
+  // The cheap projects list claims 900 calls (this is REAL: /api/sessions counts the whole session
   // while /api/session is tail-bounded server-side), so the tail window the board picks lands far
   // beyond anything the server assembled → returned:0 → an all-paged_out board unless it re-aims.
   const h = harness({ view: v, totalCalls: 900 });
