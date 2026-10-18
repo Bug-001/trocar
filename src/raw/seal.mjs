@@ -16,7 +16,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { createSealWriter, FRAME_BYTES } from './writer.mjs';
 import { openSealed, createFrameCache } from './reader.mjs';
-import { appendJournal, defaultJournalPath } from './journal.mjs';
+import { appendJournal } from './journal.mjs';
 import { parseSegment } from '../collector/core/record/segments.mjs';
 import { fsyncDir } from '../off/fsutil.mjs';
 
@@ -34,7 +34,9 @@ export function liveSegment(lockFile, { fs = nodeFs } = {}) {
 
 /** The one entry. Every outcome — ok, refused, failed — is appended to the raw journal (D38, no silent failures).
  *  A segment whose file is gone (ENOENT) is nothing to do: `{ gone: true }`, no journal line. */
-export async function sealSegment(file, { lockFile, journal = defaultJournalPath(), fs = nodeFs, frameBytes = FRAME_BYTES, onPhase = () => {} } = {}) {
+// The journal lies beside the segment it speaks of: the raw/ that holds the segment, never a home derived from the
+// environment (a test sealing in a temp dir wrote 146 lines into the developer's real ~/.asight/raw/journal.jsonl, 2026-10-18).
+export async function sealSegment(file, { lockFile, journal = path.join(path.dirname(file), 'journal.jsonl'), fs = nodeFs, frameBytes = FRAME_BYTES, onPhase = () => {} } = {}) {
   if (!lockFile) throw new Error('sealSegment: lockFile is required — the live segment must be refused, not guessed');
   const seg = parseSegment(path.basename(file));
   const t0 = Date.now();
