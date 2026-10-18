@@ -79,7 +79,7 @@ const proxy = {
   unsupported: { socks4: 'silent-direct', socks5: 'silent-direct', socks5h: 'silent-direct' },
   branches: ['http', 'ws'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '关掉所有 codex 窗口,再结束托管的 codex app-server --managed-daemon 进程(它沿用第一个 TUI 的环境),之后新开的 codex 才会重读代理设置', processes: 'codex app-server --managed-daemon', managed: true },
+  restart: { hint: 'Quit every codex window, then end the managed codex app-server --managed-daemon process (it keeps the environment of the first TUI); only then does a new codex read the proxy setting again', processes: 'codex app-server --managed-daemon', managed: true },
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (every form reads $CODEX_HOME/.env, the app's

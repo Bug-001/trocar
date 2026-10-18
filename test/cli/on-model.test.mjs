@@ -8,6 +8,7 @@ import path from 'node:path'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
+import { assertEnglish } from '../helpers/english.mjs'
 
 function fakeIo() {
   const out = [], err = []
@@ -36,10 +37,12 @@ for (const os of ['darwin', 'win32']) {
     const before = fs.readFileSync(manifest)
     const dry = await on(w, os, ['--dry-run'])
     assert.equal(dry.exit, 0, dry.io.text())
-    assert.match(dry.io.text(), /codex · env: dotenv-block .*\.codex[/\\]\.env/)
+    assert.match(dry.io.text(), /codex +.*\.codex[/\\]\.env/, 'the plan names the harness and the file it would change')
+    assertEnglish(dry.io.text(), 'the dry-run plan of on')
     const ask = await on(w, os, [])
     assert.equal(ask.exit, 2, ask.io.text())
-    assert.match(ask.io.text(), /没有 --yes/)
+    assert.match(ask.io.text(), /run it again with --yes/)
+    assertEnglish(ask.io.text(), 'the refusal of on without --yes')
     assert.equal((await on(w, os, ['--opt-in', 'codex.cli'])).exit, 2)
     assert.deepEqual(fs.readFileSync(manifest), before, 'the manifest is as install left it')
     assert.equal(fs.existsSync(path.join(w.dir, 'state.json')), false, 'no desired state written')

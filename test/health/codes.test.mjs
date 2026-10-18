@@ -147,7 +147,7 @@ function producers() {
 }
 test('4.11 §3 ⑱ every code of the closed table has a producer in src/, or is named as reader-only / doctor-derived; the retired ones are in no writer list', () => {
   const has = producers()
-  const all = [...new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS])]
+  const all = [...new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS])] // CODES holds doctor's own findings too (1.6 §3.7) are produced by src/cli/doctor.mjs
   assert.deepEqual(all.filter((c) => !has(c) && !READER_ONLY.includes(c) && !DOCTOR_DERIVED.includes(c)), [], 'a code nothing writes: delete it from src/health/codes.mjs (and its finding), or name why it stays')
   assert.deepEqual(WIN32_OLD.filter((c) => !has(c)), [], 'the old win32 producer of this code is gone: drop the code from the table, the findings and this list (4.11 §3 ⑱)')
   const writers = new Set([...CODES.filter((c) => !READER_ONLY.includes(c)), ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES, ...STATUS_REASONS, ...TRUST_REASONS, ...Object.values(CODE), ...Object.keys(TRUST_REASON)])

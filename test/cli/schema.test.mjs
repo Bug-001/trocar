@@ -137,7 +137,7 @@ test('topology schema: the closed sets are the ones of 1.6 §9.4, proxy mode and
   assert.deepEqual([...TOPOLOGY_KINDS], ['agent', 'proxy', 'asight-engine', 'asight-forwarder', 'legacy-mitm', 'upstream', 'egress', 'unknown'])
   assert.deepEqual([...TOPOLOGY_VIA], ['direct', 'proxy-http', 'proxy-socks', 'proxy-https', 'system-proxy', 'ebpf', 'forward', 'egress', 'unknown'])
   assert.deepEqual([...UNKNOWN_REASONS], ['denied', 'timeout', 'absent', 'unparseable', 'owner-unreadable', 'pac', 'kernel-filter-invisible', 'env-unreadable'])
-  assert.deepEqual([...FINDING_CLASSES], ['failure', 'expected', 'hint'])
+  assert.deepEqual([...FINDING_CLASSES], ['problem', 'expected', 'note'])
 })
 
 test('validateTopology: a topology is valid, and every rule has a bad input that says so', () => {
@@ -170,9 +170,9 @@ test('validateTopology: a topology is valid, and every rule has a bad input that
 
 test('validateFinding (1.6 §9.6, V49): a code in the closed sets, a class, a what and a why that say something, commands that are whole lines with a known shell and no <…>, a verify; a hint may have no command, a failure may not', async () => {
   const { validateFinding } = await import('../../src/cli/schema.mjs')
-  const ok = { code: 'proxy-dead', class: 'failure', harness: 'codex', what: 'w', why: 'y', commands: [{ run: 'asight status codex', shell: 'sh' }], verify: 'v' }
+  const ok = { code: 'proxy-dead', class: 'problem', harness: 'codex', what: 'w', why: 'y', commands: [{ run: 'asight status codex', shell: 'sh' }], verify: 'v' }
   assert.deepEqual(validateFinding(ok), [])
-  assert.deepEqual(validateFinding({ ...ok, class: 'hint', commands: [] }), [])
+  assert.deepEqual(validateFinding({ ...ok, class: 'note', commands: [] }), [])
   const bad = (over) => validateFinding({ ...ok, ...over })
   assert.match(bad({ code: 'nope' })[0], /code/)
   assert.match(bad({ class: 'loud' })[0], /class/)

@@ -44,7 +44,7 @@ export function refuseElevatedByWhoami(opts = {}) {
   return e.elevated === true ? elevatedRefusal(e.why === 'system') : null
 }
 /** The refusal of an elevated (`system` false) or SYSTEM token, the same words for every command (R7). */
-export const elevatedRefusal = (system) => ({ code: 'elevated-token', reason: `用你自己的账号跑,不要「以管理员身份运行」,也不要用 SYSTEM(R7:asight 不以提升的令牌运行;这个令牌是${system ? ' SYSTEM' : '高完整性级别'})` })
+export const elevatedRefusal = (system) => ({ code: 'elevated-token', reason: `run this as your own user, not as ${system ? 'SYSTEM' : 'an administrator'}` })
 
 // ── the collector's undo pieces (plan Task 9(b); RFC 4.8 §4.2, §7) ───────────────────────────────────────────────────────────
 // src/off cannot import arch/, so the task and Run-value undo are inlined here with the SAME fixed questions, the SAME verbs and the

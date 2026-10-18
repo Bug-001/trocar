@@ -2,6 +2,7 @@
 // no terminal and no --yes → the plan only, exit 2, nothing written; --yes → the model install, its receipt and an install-note; exit 0 / 1.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { assertEnglish } from '../helpers/english.mjs'
 import fs from 'node:fs'
 import path from 'node:path'
 import { runInstallCli } from '../../src/cli/install.mjs'
@@ -27,16 +28,22 @@ test('install is a command of its own (and the hidden `collector install` alias 
   assert.equal(commandNamed('collector'), undefined)
 })
 
-test('1.6 §1.6: as root, install refuses before it reads anything — exit 1, no ~/.asight', async () => {
-  const { w, exit } = await cli(['--yes'], { over: { getuid: () => 0 } })
-  assert.equal(exit, 1)
+test('1.6 §1.5: as root, install refuses before it reads anything — exit 2 with the manual\'s one line, no ~/.asight', async () => {
+  const { w, exit, io } = await cli(['--yes'], { over: { getuid: () => 0 } })
+  assert.equal(exit, 2)
+  assert.match(io.text(), /^asight install: run this as your own user, not as root\.$/m)
+  assertEnglish(io.text(), 'the root refusal')
   assert.equal(fs.existsSync(path.join(w.home, '.asight')), false)
 })
 
 test('1.6 §1.6: no terminal and no --yes → the plan (cost and residual-risk lines) and exit 2, nothing written; --dry-run → exit 0, nothing written', async () => {
   const a = await cli([])
   assert.equal(a.exit, 2)
-  assert.match(a.io.text(), /代价:证书在时/); assert.match(a.io.text(), /剩余风险:/); assert.match(a.io.text(), /codex\.cli/)
+  assert.match(a.io.text(), /^While installed, programs you run trust certificates issued by this/m) // the cost line (§3.2)
+  assert.match(a.io.text(), /^Any program running as you can ask asight to issue a trusted certificate/m) // the residual risk of a same-user root
+  assert.match(a.io.text(), /^  codex +reads your user trust store$/m, 'every agent found is a line of the plan')
+  assert.match(a.io.text(), /Nothing was changed\. Read the plan above, then run it again with --yes/)
+  assertEnglish(a.io.text(), 'the install plan')
   assert.equal(fs.existsSync(path.join(a.w.home, '.asight', 'collector', 'install-manifest.json')), false)
   const b = await cli(['--dry-run'])
   assert.equal(b.exit, 0)

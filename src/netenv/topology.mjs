@@ -53,7 +53,7 @@ function proxyNode(g, F, host, port) {
 /** What follows the proxy: where the connection comes out; unknown when the proxy was. */
 function egressOf(g, p) {
   const n = g.nodes.find((x) => x.id === p)
-  return g.node({ kind: 'egress', name: '出口', ...(n.unknown ? { unknown: n.unknown } : {}) })
+  return g.node({ kind: 'egress', name: 'internet', ...(n.unknown ? { unknown: n.unknown } : {}) })
 }
 
 const sourceKey = (s) => (s.kind === 'env' ? `env:${s.where}` : s.kind === 'file' ? `file:${s.where}${s.key ? `#${s.key}` : ''}` : s.kind)
@@ -63,7 +63,7 @@ const sourceKey = (s) => (s.kind === 'env' ? `env:${s.where}` : s.kind === 'file
  * → { ids: [node ids in order], first: { via, evidence } } — the edge into `ids[0]` is the caller's, since it comes from the agent or from asight. The edges between the hops are made here.
  */
 function tail(g, F, hf, setting, follow) {
-  if (setting.unknown) return { ids: [g.node({ kind: 'unknown', name: '代理设置', unknown: setting.unknown, ...(setting.inferred === true ? { inferred: true } : {}) })], first: { via: 'unknown', evidence: [] } }
+  if (setting.unknown) return { ids: [g.node({ kind: 'unknown', name: 'proxy setting', unknown: setting.unknown, ...(setting.inferred === true ? { inferred: true } : {}) })], first: { via: 'unknown', evidence: [] } }
   const ignored = setting.value && hf.behaviour && hf.behaviour.unsupported && hf.behaviour.unsupported[setting.scheme] === 'silent-direct' // the agent does not fail on a scheme it cannot speak: it goes straight out
   if (setting.value && !ignored) {
     const p = proxyNode(g, F, setting.host, setting.port), x = g.edge(p, egressOf(g, p), 'egress')
@@ -72,7 +72,7 @@ function tail(g, F, hf, setting, follow) {
   const sys = hf.systemProxy
   if (follow && sys) {
     const evidence = ['system-proxy']
-    if (sys.unknown) return { ids: [g.node({ kind: 'unknown', name: '系统代理', unknown: sys.unknown })], first: { via: 'system-proxy', evidence } }
+    if (sys.unknown) return { ids: [g.node({ kind: 'unknown', name: 'system proxy', unknown: sys.unknown })], first: { via: 'system-proxy', evidence } }
     if (sys.pac) return { ids: [g.node({ kind: 'unknown', name: 'PAC', unknown: { reason: 'pac', detail: 'the OS proxy is a PAC script; asight does not run it' } })], first: { via: 'system-proxy', evidence } }
     if (sys.value) {
       const u = parseProxyUrl(sys.value)
@@ -122,7 +122,7 @@ function driverTopology(F, h, hf) {
   const steered = main ? steeredOf(main) : entryIntact(hf)
   const asight = up === false || steered === false ? false : up === null || steered === null ? null : true
   const negative = main ? hf.negatives.filter((n) => n.pid === main.pid) : []
-  const engine = () => g.node({ kind: 'asight-engine', name: 'asight 引擎', pid: F.daemon.pid, addr: '127.0.0.1', port: F.daemon.enginePort, mode: 'decrypt', asight: true, passthrough: negative.length ? { reason: 'negative-cache', hosts: negative.map((n) => n.host) } : undefined })
+  const engine = () => g.node({ kind: 'asight-engine', name: 'asight', pid: F.daemon.pid, addr: '127.0.0.1', port: F.daemon.enginePort, mode: 'decrypt', asight: true, passthrough: negative.length ? { reason: 'negative-cache', hosts: negative.map((n) => n.host) } : undefined })
   const evidenceEbpf = [...(F.link.ids || []).slice(0, 1).map((id) => `link:${id}`), ...(main ? [`watch:${main.pid}`] : [])]
   const build = (p, setting, withAsight, follow) => {
     const a = agentOf(g, h, p), t = tail(g, F, hf, setting, follow)
@@ -146,7 +146,7 @@ function driverTopology(F, h, hf) {
   }
   // NO_PROXY: an agent with a proxy of its own may keep its API host off it. Whether this agent honours the variable is not measured, so the path is drawn by its proxy setting and the note says what may differ.
   const bypass = main && Array.isArray(main.noProxy) ? main.noProxy : hf.noProxy || []
-  if (bypass.length && hf.setting && hf.setting.value) notes.add(`NO_PROXY 里写了 ${bypass.join('、')}:${h} 对它可能不经代理直连(各 harness 认不认 NO_PROXY 还没逐个测),这里按它的代理设置画`)
+  if (bypass.length && hf.setting && hf.setting.value) notes.add(`NO_PROXY lists ${bypass.join(', ')}: ${h} may reach those without a proxy; the path below follows its proxy setting`)
   return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: branches[0].on_path, captured: v.captured, reason: v.reason, nodes: g.nodes, edges: g.edges, branches, running, notes: [...notes], findings: [] }
 }
 
@@ -184,7 +184,7 @@ function formVerdict(F, h, hf, fm, fwf) {
 function upstreamTail(g, F, hf, fm, fwf) {
   if (fwf.upstream === 'DIRECT' || fwf.source === 'direct') return tail(g, F, hf, { value: null, source: [] }, false)
   const u = parseProxyUrl(fwf.upstream)
-  if (!u) return { ids: [g.node({ kind: 'unknown', name: '上游', unknown: { reason: 'unparseable', detail: 'the upstream asight dials is not a URL' } })], first: { via: 'unknown', evidence: [] } }
+  if (!u) return { ids: [g.node({ kind: 'unknown', name: 'upstream', unknown: { reason: 'unparseable', detail: 'the upstream asight dials is not a URL' } })], first: { via: 'unknown', evidence: [] } }
   if (fwf.source === 'system-proxy') return tail(g, F, { ...hf, systemProxy: { value: fwf.upstream, pac: false } }, { value: null, source: [] }, true)
   return tail(g, F, hf, { value: fwf.upstream, ...u, source: fm.setting.source || [] }, false)
 }
@@ -202,19 +202,19 @@ function proxyTopology(F, h, hf) {
       && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : !fm.hook && fm.entry && fm.entry.intact === true))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
-    if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`还有 ${fwf.clients.length} 个 agent 连着 asight 的门,重启它们之后 asight 就完全退出`)
+    if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`${fwf.clients.length} process(es) are still connected through asight, forwarded only; asight exits once they do`)
     if (fm.hosts && wired) {
       // the host-tree lines of 4.8 §3 (W69): the host program's other connections only forward, only the form's host set reaches the engine; the extension's own settings, when they
       // cannot be read, leave the set at the defaults and extra_hosts (said, never silent); and a fresh read that differs from what the daemon reports as applied means the door's
       // set is old — the line names the command that recomputes it, `status` itself changes nothing (read-only).
-      const program = fm.hosts.program || '宿主程序', extension = fm.hosts.extension || '这个形态'
-      notes.push(`${program} 别的连接经 asight 的门(只转发),只有到 ${extension} 的 host 集的连接进引擎`)
+      const program = fm.hosts.program || 'the host program', extension = fm.hosts.extension || 'this form'
+      notes.push(`${program}'s other connections are forwarded only; only the hosts of ${extension} are captured`)
       if (fm.hosts.settings && fm.hosts.settings.unreadable) {
         const u = fm.hosts.settings.unreadable
-        notes.push(`读不到 ${extension} 扩展的设置(${u.reason}${u.detail ? `:${u.detail}` : ''}):只采默认 host(${(fm.hosts.defaults || []).join('、')})与 extra_hosts;到你在那里配的中转站 host 的连接不采`)
+        notes.push(`${extension}'s own settings could not be read (${u.reason}${u.detail ? `: ${u.detail}` : ''}): only its default hosts (${(fm.hosts.defaults || []).join(', ')}) are captured`)
       }
       if (Array.isArray(fm.hosts.applied) && [...fm.hosts.applied].sort().join('|') !== [...fm.hosts.hosts].sort().join('|')) {
-        notes.push(`门里的 host 集是旧的(你 on 之后改过 ${extension} 的设置): 跑 asight on ${h} 重算集;status 只读,不改任何东西`)
+        notes.push(`the host set in use is older than ${extension}'s settings; to bring it up to date run: asight on ${h}`)
       }
     }
     for (const name of split ? ['http', 'ws'] : ['all']) {
@@ -223,13 +223,13 @@ function proxyTopology(F, h, hf) {
       g.edge(a, off.ids[0], off.first.via, { evidence: off.first.evidence, inferred: off.first.inferred })
       if (wired) {
         const forwardOnly = F.desired[h] === 'off' || vd.reason === 'elevated-agent' || !vd.engine && vd.on
-        const f = g.node({ kind: 'asight-forwarder', name: 'asight 本地代理', pid: F.forwarder.pid, addr: '127.0.0.1', port: fwf.port, asight: true, mode: vd.reason === 'forwarder-down' ? 'down' : forwardOnly ? 'forward-only' : 'on' })
+        const f = g.node({ kind: 'asight-forwarder', name: 'asight', pid: F.forwarder.pid, addr: '127.0.0.1', port: fwf.port, asight: true, mode: vd.reason === 'forwarder-down' ? 'down' : forwardOnly ? 'forward-only' : 'on' })
         g.edge(a, f, 'proxy-http', { asight: true, ...(fm.entry ? { entry: { where: fm.entry.where, opt_in: fm.entry.opt_in === true } } : {}) })
         if (vd.reason === 'forwarder-down') path = [a, f]
         else {
           const up = upstreamTail(g, F, hfSys, fm, fwf)
           if (vd.engine) {
-            const e = g.node({ kind: 'asight-engine', name: 'asight 引擎', pid: F.daemon.pid, addr: '127.0.0.1', port: F.daemon.enginePort, mode: 'decrypt', asight: true })
+            const e = g.node({ kind: 'asight-engine', name: 'asight', pid: F.daemon.pid, addr: '127.0.0.1', port: F.daemon.enginePort, mode: 'decrypt', asight: true })
             g.edge(f, e, 'forward'); g.edge(e, up.ids[0], up.first.via, { evidence: up.first.evidence, inferred: up.first.inferred }); path = [a, f, e, ...up.ids]
           } else { g.edge(f, up.ids[0], up.first.via, { evidence: up.first.evidence, inferred: up.first.inferred }); path = [a, f, ...up.ids] }
         }
@@ -240,8 +240,8 @@ function proxyTopology(F, h, hf) {
   if (!branches.length) throw new Error('the harness has no form to draw')
   // the drift of a field asight owns (4.8 §10.3): the user changed the entry's key, asight is bypassed — the line names the one command that re-adopts it. Driver mode's proxy-changed is
   // expected (the kernel steers whatever the setting says; 1.6 §9.6 gives it no command), so the note is this drawing's, said once per harness however many forms share the group.
-  if (branches.some((x) => x.reason === 'proxy-changed')) notes.push(`接上: asight on ${h}`)
-  for (const u of F.unknowns.filter((x) => x.reason === 'kernel-filter-invisible')) notes.push(`WFP 一类的内核过滤器本用户看不见(${u.reason}),所以路上有没有这样的过滤器不知道`)
+  if (branches.some((x) => x.reason === 'proxy-changed')) notes.push(`To put asight back on its path: asight on ${h}`)
+  for (const u of F.unknowns.filter((x) => x.reason === 'kernel-filter-invisible')) notes.push('A kernel filter such as WFP is not visible to your user.')
   const b = branches[0]
   return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: b.on_path, captured: b.captured, reason: b.reason, nodes: g.nodes, edges: g.edges, branches, running: [], notes: [...new Set(notes)], findings: [] }
 }
@@ -257,7 +257,7 @@ function legacyTopology(F, h, hf) {
   g.edge(a, p, 'system-proxy', { evidence: ['system-proxy'] })
   let path = off
   if (l.mitm && l.on_path !== false) {
-    const m = g.node({ kind: 'legacy-mitm', name: 'asight 旧 MITM', pid: l.mitm.pid, addr: l.mitm.addr, port: l.mitm.port, asight: true })
+    const m = g.node({ kind: 'legacy-mitm', name: 'asight old MITM', pid: l.mitm.pid, addr: l.mitm.addr, port: l.mitm.port, asight: true })
     const pn = g.nodes.find((n) => n.id === p), p2 = g.node({ ...pn, id: undefined, role: 'upstream', unknown: pn.unknown })
     g.edge(p, m, 'proxy-http', { evidence: ['legacy-block'] }); g.edge(m, p2, 'proxy-http', { evidence: [] }); g.edge(p2, x, 'egress')
     path = [a, p, m, p2, x]

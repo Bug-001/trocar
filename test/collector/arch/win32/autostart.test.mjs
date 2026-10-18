@@ -172,7 +172,7 @@ test('W25 off and uninstall (no helper, no source): the check is `whoami /groups
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('强制性标签\\High Mandatory Level')) }), { elevated: true, why: 'high-integrity' }, 'a localised label name does not matter: the SID decides')
   const r = refuseElevatedByWhoami({ run: runner(WHOAMI('Mandatory Label\\High Mandatory Level')) })
   assert.equal(r.code, 'elevated-token')
-  assert.match(r.reason, /R7/)
+  assert.match(r.reason, /not as an administrator/) // human text names no spec rule (D58)
   assert.equal(refuseElevatedByWhoami({ run: runner(WHOAMI('Mandatory Label\\Medium Mandatory Level')) }), null)
 })
 

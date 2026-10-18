@@ -32,6 +32,8 @@ function checkHarnessIds(v, at, bad, seen) {
     const here = at ? `${at}.${k}` : k
     if (k === 'harness' && !HARNESS_IDS.includes(x)) bad.push(`${here}: ${JSON.stringify(x)} is not a harness id (the code id is printed, never an alias)`)
     else if (k === 'harnesses' && Array.isArray(x)) x.forEach((id, i) => { if (isString(id) && !HARNESS_IDS.includes(id)) bad.push(`${here}[${i}]: ${JSON.stringify(id)} is not a harness id`) })
+    // 附录 C.3: `status`'s own `harnesses` is an object KEYED by the harness — the keys are ids too
+    else if (k === 'harnesses' && isObject(x)) for (const id of Object.keys(x)) if (!HARNESS_IDS.includes(id)) bad.push(`${here}.${id}: ${JSON.stringify(id)} is not a harness id`)
     checkHarnessIds(x, here, bad, seen)
   }
 }
@@ -72,6 +74,7 @@ export function validateReceipt(r) {
   if ('linger' in r && !(r.linger === true || r.linger === false || r.linger === 'unknown')) bad.push('linger: not true, false or "unknown"')
   if ('agent_list' in r) bad.push(...validateAgentList(r.agent_list))
   if (Array.isArray(r.harnesses)) r.harnesses.forEach((h, i) => { if (isObject(h) && h.identity !== undefined) bad.push(...validateIdentity(h.identity).map((x) => `harnesses[${i}].${x}`)) })
+  else if (isObject(r.harnesses)) for (const [h, x] of Object.entries(r.harnesses)) if (isObject(x) && x.identity !== undefined) bad.push(...validateIdentity(x.identity).map((y) => `harnesses.${h}.${y}`))
   if ('install' in r || 'cert' in r) bad.push(...validateInstallCert(r))
   if ('forms' in r) bad.push(...validateForms(r.forms))
   checkHarnessIds(r, '', bad, new WeakSet())
@@ -160,7 +163,7 @@ export const UNKNOWN_REASONS = Object.freeze(['denied', 'timeout', 'absent', 'un
 export const BRANCH_NAMES = Object.freeze(['all', 'http', 'ws'])
 /** What a running process's line says about it: it still goes by the setting it started with, or asight is not on its path. */
 export const RUNNING_NOTES = Object.freeze(['start-time-settings', 'not-steered'])
-export const FINDING_CLASSES = Object.freeze(['failure', 'expected', 'hint'])
+export const FINDING_CLASSES = Object.freeze(['problem', 'expected', 'note']) // 附录 B
 
 const TRI = [true, false, null]
 const isId = (v) => typeof v === 'string' && v !== ''
@@ -241,7 +244,7 @@ export function validateFinding(f) {
   for (const k of ['what', 'why', 'verify']) if (!isString(f[k]) || f[k].trim() === '') bad.push(`${k}: empty`)
   if (!Array.isArray(f.commands)) bad.push('commands: not a list')
   else {
-    if (f.class !== 'hint' && f.commands.length === 0) bad.push('commands: a failure or an expected finding says what to do')
+    if (f.class !== 'note' && f.commands.length === 0) bad.push('commands: a problem or an expected finding says what to do')
     f.commands.forEach((c, i) => {
       if (!isObject(c) || !isString(c.run) || c.run.trim() === '') bad.push(`commands[${i}].run: empty`)
       else if (/<[^<>\n]+>/.test(c.run)) bad.push(`commands[${i}].run: has a <…> placeholder left`)

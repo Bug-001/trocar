@@ -745,7 +745,7 @@ test('daemon: the Linux arch\'s OS roots — none on the machine is a bundle fai
     const st = await req(s.sock, 'GET', '/status')
     const g = st.health.collector.failures.find((x) => x.last.where === 'bundle' && x.last.code === 'system-roots-unavailable')
     assert.ok(g, 'status (the board\'s reader) shows it')
-    assert.match(failureBrief(g), /^合并包里没有系统根证书\(/, 'in the words status prints')
+    assert.match(failureBrief(g), /^the certificate bundle has no system roots \(/, 'in the words status prints')
     assert.ok(!fs.readFileSync(bundle, 'utf8').includes(fedora.certPem.trim()))
     disk.set('/etc/pki/tls/certs/ca-bundle.crt', fedora.certPem) // the machine is a Fedora one after all (or ca-certificates got installed): the next rebuild reads it
     await until(() => fs.readFileSync(bundle, 'utf8').includes(fedora.certPem.trim()))
@@ -790,8 +790,8 @@ test('daemon: OS roots the reader dropped as unparsable, or a roots source that 
     const st = await req(s.sock, 'GET', '/status')
     const g = (code) => st.health.collector.failures.find((x) => x.last.where === 'bundle' && x.last.code === code)
     assert.ok(g('system-roots-unparsable') && g('system-roots-partial'), 'status (the board\'s reader) shows both')
-    assert.match(failureBrief(g('system-roots-unparsable')), /^有系统根证书解析不了,没进合并包\(/, 'in the words status prints')
-    assert.match(failureBrief(g('system-roots-partial')), /^合并包少了一部分系统根证书\(/)
+    assert.match(failureBrief(g('system-roots-unparsable')), /^some system roots would not parse and are not in the bundle \(/, 'in the words status prints')
+    assert.match(failureBrief(g('system-roots-partial')), /^the certificate bundle is missing some system roots \(/)
   } finally { await d.stop(); p.done(); s.done() }
 })
 

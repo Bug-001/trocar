@@ -19,6 +19,7 @@ import codex from '../../src/collector/harness/codex.mjs'
 import * as unit from '../../src/collector/arch/linux/unit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo, onCtx, snapshot, changedFiles, seedClaude, fakeSystem, fakeDaemon, installFirst } from './fixtures/on-ctx.mjs'
+import { assertEnglish } from '../helpers/english.mjs'
 import { installedHome, flowEvents } from '../off/fixtures/off-ctx.mjs'
 import { runStatus, down, reply, asDaemon } from './fixtures/status-ctx.mjs'
 
@@ -30,10 +31,11 @@ test('V7: a first install outside a terminal without --yes prints the plan, writ
   const home = tmpDir('asight-v7-'); seedClaude(home); const before = snapshot(home)
   const io = fakeIo({ tty: false })
   assert.equal(await runInstallCli([], onCtx(home, io)), 2)
-  assert.match(io.text(), /^asight install · 将写/m, 'the plan is install\'s')
+  assert.match(io.text(), /^asight install will write \d+ files:/m, 'the plan is install\'s')
   assert.match(io.text(), /~\/\.claude\/settings\.json/, 'the plan names the file it would change, as the user knows the path')
   assert.match(io.text(), /--yes/, 'and says how to go on')
-  for (const [re, what] of [[/install manifest: ~\/\.asight\/collector\/install-manifest\.json/, 'the manifest'], [/collector CA[^\n]*ca\.key/, 'the CA'], [/runtime directory[^\n]*~\/\.asight\/collector\/run\/trust\//, 'the runtime directory'], [/backups[^\n]*~\/\.asight\/backup\//, 'the backups of the files it changes (R2)']]) assert.match(io.text(), re, `the plan lists ${what}`)
+  assertEnglish(io.text(), 'the install plan')
+  for (const [re, what] of [[/record +~\/\.asight\/collector\/install-manifest\.json/, 'the manifest'], [/certificate +~\/\.asight\/collector\/ca\/ca\.key/, 'the CA'], [/record +~\/\.asight\/collector\/run\/trust\//, 'the runtime directory'], [/goes to ~\/\.asight\/backup\//, 'the backups of the files it changes (R2)']]) assert.match(io.text(), re, `the plan lists ${what}`)
   assert.deepEqual(snapshot(home), before, 'exit 2: not one byte written, no directory made')
 
   const dry = fakeIo({ tty: false })
@@ -74,7 +76,13 @@ test('V7: install in a terminal asks once, only the first time; "n" writes nothi
   const yes = fakeIo({ tty: true, answers: ['y'] })
   assert.equal(await runInstallCli([], onCtx(home, yes)), 0)
   assert.equal(yes.asked.length, 1)
-  assert.match(yes.stdoutText(), /asight on[\s\S]*asight off[\s\S]*asight status[\s\S]*asight uninstall/, 'the receipt names the four commands (R1, 1.6 §1.6)')
+  // §1.1③ gives one or two next steps, so the text names the next command and the undo; the four commands live in `--json`'s `commands` (appendix C install)
+  assert.match(yes.stdoutText(), /Next: asight on/, 'the receipt names the next step (R1, 1.6 §3.2)')
+  assert.match(yes.stdoutText(), /If asight itself breaks: /, 'and the undo that works without this source tree')
+  assertEnglish(yes.stdoutText(), 'the install receipt')
+  const asJson = fakeIo({ tty: false })
+  assert.equal(await runInstallCli(['--json'], onCtx(home, asJson)), 0)
+  assert.deepEqual(asJson.json().commands, ['asight on', 'asight off', 'asight status', 'asight uninstall'], 'the four commands are in --json')
 
   for (const [run, what] of [[runInstallCli, 'install'], [runOnCli, 'on'], [runOnCli, 'on again']]) {
     const again = fakeIo({ tty: true, answers: [] })
@@ -97,7 +105,7 @@ test('V7: an install that would change files beyond the confirmed ones lists onl
   const quiet = fakeIo({ tty: false })
   assert.equal(await runInstallCli([], ctx(quiet)), 2, 'a file nobody confirmed yet, and nobody to ask')
   assert.match(quiet.text(), /~\/\.codex\/\.env/, 'the plan names what is new')
-  assert.doesNotMatch(quiet.text(), /settings\.json|collector CA \(in no trust store\)|runtime directory/, 'and nothing of what was confirmed, or is there already and is not written again')
+  assert.doesNotMatch(quiet.text(), /settings\.json|in no trust store|what the plugins trust/, 'and nothing of what was confirmed, or is there already and is not written again')
   assert.match(quiet.text(), /--yes/)
   assert.deepEqual(snapshot(home), snap, 'exit 2: not one byte written')
 
@@ -116,16 +124,17 @@ test('V7: an install that would change files beyond the confirmed ones lists onl
   assert.equal(done.asked.length, 0, 'now nothing is new: no question')
 })
 
-test('V7: --json keeps stdout for the one JSON; the plan of a terminal run goes to stderr', async () => {
+test('V7: --json keeps stdout for the one JSON and stderr empty; the plan is the document\'s `planned` (1.6 §1.2)', async () => {
   const home = tmpDir('asight-v7j-'); seedClaude(home)
   const io = fakeIo({ tty: false })
   assert.equal(await runInstallCli(['--json'], onCtx(home, io)), 2)
   const r = io.json() // parses: only one document on stdout
   assert.deepEqual([r.command, r.ok, r.needs_yes], ['install', false, true])
-  assert.match(io.stderrText(), /~\/\.claude\/settings\.json/)
+  assert.equal(io.stderrText(), '', 'nothing on stderr under --json')
+  assert.ok(r.planned.some((p) => p.detail.includes('~/.claude/settings.json')), 'the plan is in the document')
 })
 
-test('on: usage errors exit 2 and touch nothing — an unknown harness lists the names, the retired --proxy is a plain unknown option, --no-autostart with --no-unit, an unknown flag', async () => {
+test('on: usage errors exit 2 and touch nothing — an unknown harness lists the names, the retired --proxy and the retired --no-unit are plain unknown options, an unknown flag', async () => {
   const home = tmpDir('asight-on-usage-'); seedClaude(home); const before = snapshot(home)
   let io = fakeIo(); assert.equal(await runOnCli(['clade'], onCtx(home, io)), 2)
   assert.match(io.text(), /clade/); assert.match(io.text(), /claude-code/); assert.match(io.text(), /dsh/)
@@ -133,14 +142,15 @@ test('on: usage errors exit 2 and touch nothing — an unknown harness lists the
   // 1.6 §2 has no `--proxy` on `on`, so it is the one usage error of §1.3: `asight on: unknown option '--proxy'`
   assert.match(io.text(), /unknown option '--proxy'/)
   io = fakeIo(); assert.equal(await runOnCli(['--no-autostart', '--no-unit', '--yes'], onCtx(home, io)), 2)
+  assert.match(io.text(), /unknown option '--no-unit'/, '--no-unit is gone: --no-autostart is the one flag (1.6 §3.3)')
   io = fakeIo(); assert.equal(await runOnCli(['--yess'], onCtx(home, io)), 2)
   assert.deepEqual(snapshot(home), before)
 })
 
 test('on: refused as root (R7), with the helper missing it writes nothing and says sudo asight setup-helper', async () => {
   const home = tmpDir('asight-on-refuse-'); seedClaude(home); await installFirst(home); const before = snapshot(home)
-  let io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { getuid: () => 0 } })), 1)
-  assert.match(io.text(), /root/)
+  let io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { getuid: () => 0 } })), 2, 'root: §1.4 — nothing read or written, exit 2')
+  assert.match(io.text(), /^asight on: run this as your own user, not as root\.$/m)
   io = fakeIo(); assert.equal(await runOnCli(['--yes'], onCtx(home, io, { deps: { helperState: () => ({ ok: false, reason: 'no helper at /usr/local/libexec/asight/asight-redirector' }) } })), 1)
   assert.match(io.text(), /sudo asight setup-helper/)
   assert.deepEqual(snapshot(home), before, 'nothing written, not even the manifest')
@@ -148,22 +158,27 @@ test('on: refused as root (R7), with the helper missing it writes nothing and sa
   for (const platform of ['win32', 'darwin', 'freebsd']) {
     io = fakeIo(); const bare = onCtx(home, io); bare.platform = platform
     assert.equal(await runOnCli(['--dry-run'], bare), 0, `${platform}: ${io.text()}`)
-    assert.match(io.text(), /asight 将打开采集/, `${platform}: the new collector's plan, not a refusal`)
-    assert.ok(!/本平台未实现|驱动旧采集/.test(io.text()), `${platform} is not told it has no collector any more`)
+    assert.match(io.text(), /^asight will start capturing /m, `${platform}: the new collector's plan, not a refusal`)
+    assertEnglish(io.text(), `the dry-run plan of on on ${platform}`)
   }
   assert.deepEqual(snapshot(home), before)
 })
 
-test('on --no-unit with no daemon answering: everything is written and it exits 0, but the text says nothing is captured yet and how to start the daemon — never "已打开采集"', async () => {
+test('on --no-autostart with no daemon answering: everything is written and it exits 0, but the text says nothing is captured yet and how to start the daemon — never "Capturing"', async () => {
   const home = tmpDir('asight-on-idle-'); seedClaude(home); await installFirst(home)
   const io = fakeIo()
-  assert.equal(await runOnCli(['--yes', '--no-unit'], onCtx(home, io, { daemon: fakeDaemon({ up: false }) })), 0)
-  assert.match(io.stdoutText(), /^asight 已写好入口与期望态,但守护进程没在跑/m)
-  assert.doesNotMatch(io.stdoutText(), /已打开采集/)
-  assert.match(io.stdoutText(), /守护进程: 没在跑,什么都没有被采集/)
+  const ctx = onCtx(home, io, { daemon: fakeDaemon({ up: false }) })
+  ctx.deps.parts = { ...ctx.deps.parts, arch: {} } // a platform with no autostart entry at all: nothing starts the collector, so nothing is captured yet
+  assert.equal(await runOnCli(['--yes', '--no-autostart'], ctx), 0)
+  assert.match(io.stdoutText(), /^The settings are in place, but no collector is running/m)
+  assert.doesNotMatch(io.stdoutText(), /^Capturing /m)
+  assert.match(io.stdoutText(), /The collector is not running, so nothing is captured yet/)
   assert.match(io.stdoutText(), /asight daemon/, 'and how to start it')
+  assertEnglish(io.stdoutText(), 'the receipt of an on with no collector running')
   const j = fakeIo()
-  assert.equal(await runOnCli(['--no-unit', '--json'], onCtx(home, j, { daemon: fakeDaemon({ up: false }) })), 0)
+  const jctx = onCtx(home, j, { daemon: fakeDaemon({ up: false }) })
+  jctx.deps.parts = { ...jctx.deps.parts, arch: {} }
+  assert.equal(await runOnCli(['--no-autostart', '--json'], jctx), 0)
   assert.equal(j.json().daemon.state, 'not-running', '--json says the same, as a field')
 })
 
@@ -191,31 +206,33 @@ test('formatOnReceipt: past and future tense, the four commands, the restart lis
   const home = '/home/alice'
   const r = {
     ...newReceipt('on'), user: 'alice', relayed: { closing: 0, waiting: 0, cut: 0 }, linger: false,
-    changed: [{ path: '/home/alice/.claude/settings.json', change: '加 env.NODE_EXTRA_CA_CERTS', backup: '/home/alice/.asight/backup/aa-bb' }],
+    changed: [{ path: '/home/alice/.claude/settings.json', change: 'env.NODE_EXTRA_CA_CERTS added', backup: '/home/alice/.asight/backup/aa-bb' }],
     created: ['/home/alice/.asight/collector/install-manifest.json'],
-    skipped: [{ what: 'hermes', reason: '~/.hermes 不存在' }],
+    skipped: [{ what: 'hermes', reason: '~/.hermes does not exist' }],
     restart: [{ harness: 'claude-code', pid: 4121, reason: 'config-after-start' }],
     undo: ['asight off'], log: '/home/alice/.asight/collector/flows',
   }
   const past = formatOnReceipt(r, { tense: 'past', home })
-  assert.match(past, /^✔ 入口已写/)
-  assert.match(past, /~\/\.claude\/settings\.json +加 env\.NODE_EXTRA_CA_CERTS +备份 ~\/\.asight\/backup\/aa-bb/)
-  assert.match(past, /跳过: hermes\(~\/\.hermes 不存在\)/)
-  assert.match(past, /登出后停采\(未开 linger\)[^\n]*loginctl enable-linger alice/)
-  assert.match(past, /正在跑的 claude-code\(pid 4121\)重启后才会被采集\(启动早于证书\)/, '1.6 §1.1: on names each process with the phrase status uses')
-  for (const c of ['asight on', 'asight off', 'asight status', 'asight uninstall']) assert.ok(past.includes(c), c)
+  assert.match(past, /^Capturing /)
+  assert.match(past, /~\/\.claude\/settings\.json\n +env\.NODE_EXTRA_CA_CERTS added \(backup ~\/\.asight\/backup\/aa-bb\)/)
+  assert.match(past, /Skipped: hermes \(~\/\.hermes does not exist\)/)
+  assert.match(past, /Capture stops when you log out[^\n]*loginctl enable-linger alice/)
+  assert.match(past, /Restart to capture: claude-code \(pid 4121 started before the[\s\S]*was\n? *there\)/, '1.6 §1.1: on names each process with the phrase status uses')
+  for (const c of ['asight off', 'asight status', 'asight uninstall']) assert.ok(past.includes(c), c)
+  assertEnglish(past, 'the receipt of on')
   const future = formatOnReceipt({ ...r, dry_run: true }, { tense: 'future', home })
-  assert.match(future, /^asight 将打开采集/); assert.match(future, /将改这些文件/)
+  assert.match(future, /^asight will start capturing /); assert.match(future, /Will change:/)
+  assertEnglish(future, 'the dry-run receipt of on')
   assert.doesNotMatch(formatOnReceipt({ ...r, linger: true }, { home }), /linger/)
-  assert.match(formatOnReceipt({ ...r, linger: 'unknown', linger_reason: 'EACCES' }, { home }), /登出后停采[^\n]*不知道[^\n]*EACCES/)
-  assert.doesNotMatch(formatOnReceipt({ ...r, linger: 'unknown', linger_reason: 'EACCES' }, { home }), /已开/)
-  assert.match(formatOnReceipt({ ...r, ok: false, notes: ['守护进程没有应答'] }, { home }), /没有做完[\s\S]*守护进程没有应答/)
-  // --no-unit with nothing answering: done, exit 0, but nothing is captured: the header and the daemon line say so, never 已打开采集
+  assert.match(formatOnReceipt({ ...r, linger: 'unknown', linger_reason: 'EACCES' }, { home }), /Whether capture survives a logout is unknown \(EACCES\)/)
+  assert.match(formatOnReceipt({ ...r, ok: false, notes: ['the collector does not answer'] }, { home }), /did not finish[\s\S]*the collector does not answer/)
+  // --no-autostart with nothing answering: done, exit 0, but nothing is captured: the header and the daemon line say so, never "Capturing"
   const idle = formatOnReceipt({ ...r, ok: true, daemon: { state: 'not-running', started: false }, unit: null }, { home })
-  assert.match(idle, /^asight 已写好入口与期望态,但守护进程没在跑[^\n]*什么都不会被采集/)
-  assert.doesNotMatch(idle, /已打开采集/)
-  assert.match(idle, /守护进程: 没在跑,什么都没有被采集/)
-  assert.match(formatOnReceipt({ ...r, ok: true, daemon: { state: 'running', pid: 77, started: true } }, { home }), /^✔ 入口已写 · 守护进程在跑\(pid 77\),这次拉起的/, 'a daemon that runs: the verdict line says it')
+  assert.match(idle, /^The settings are in place, but no collector is running: nothing is\n? *captured\n? *until it is./)
+  assert.doesNotMatch(idle, /^Capturing /m)
+  assert.match(idle, /The collector is not running, so nothing is captured yet\.\nStart it: asight daemon/)
+  assertEnglish(idle, 'the receipt of an on with no collector running')
+  assert.match(formatOnReceipt({ ...r, ok: true, daemon: { state: 'running', pid: 77, started: true } }, { home }), /^Capturing [^\n]*Collector running \(pid 77\), started by this run\./m, 'a daemon that runs: the verdict line says it')
 })
 
 test('formatPlan: every file the first on will write is listed before any is written — the CA, the trust file and whose certificates it carries, a link by the file that really changes, an owned file by its role, a text entry by what it adds, the unit and its env, the event log, what the agent may write itself', () => {
@@ -229,23 +246,27 @@ test('formatPlan: every file the first on will write is listed before any is wri
     state: '/h/.asight/collector/state.json', run: '/h/.asight/collector/run/trust', backups: '/h/.asight/backup',
   }
   const text = formatPlan(plan, { home: '/h', autostart: true })
-  assert.match(text, /state file \(which agents are on\): ~\/\.asight\/collector\/state\.json/, 'the file `on` writes first')
-  assert.match(text, /runtime directory[^\n]*: ~\/\.asight\/collector\/run\/trust\//)
-  assert.match(text, /backups[^\n]*: ~\/\.asight\/backup\/\n/, 'where the copies of the changed files go')
+  assert.match(text, /record +~\/\.asight\/collector\/state\.json: which agents are on/, 'the file `on` writes first')
+  assert.match(text, /record +~\/\.asight\/collector\/run\/trust\/: what the plugins trust/)
+  assert.match(text, /goes to ~\/\.asight\/backup\/ first\./, 'where the copies of the changed files go')
+  assertEnglish(text, 'the plan of on')
   const quietPlan = formatPlan({ ...plan, manifest: null, ca: [], run: null, backups: null, files: [], owned: [], entries: [], unit: null, watch: [], first: false }, { home: '/h' })
-  assert.doesNotMatch(quietPlan, /install manifest|collector CA|runtime directory|backups/, 'what is not written is not listed')
-  assert.match(quietPlan, /state file/, 'an on that only writes the state file says so')
-  assert.match(text, /collector CA \(in no trust store\): ~\/\.asight\/collector\/ca\/ca\.key, ~\/\.asight\/collector\/ca\/asight-ca\.pem/)
-  assert.match(text, /h: ~\/\.asight\/collector\/ca\/extra-h\.pem = the certificates of \/corp\/ca\.pem \+ the collector CA/, 'whose certificates the trust file carries (G8 merge path)')
-  assert.match(text, /h: ~\/s\.json → \/dot\/s\.json env\.K = ~\/\.asight\/collector\/ca\/extra-h\.pem/, 'a link is shown with the file that actually changes')
-  assert.match(text, /d: ~\/\.asight\/collector\/plugins\/d\/index\.js \(asight's plugin\)\n  h: /)
-  assert.match(text, /d: ~\/\.d\/patch\.yml line "- insert: x"/)
-  assert.match(text, /autostart unit \(systemd --user, enabled --now\): ~\/\.config\/systemd\/user\/asight-collector\.service with NODE_EXTRA_CA_CERTS=\/corp\/ca\.pem for the daemon alone/, 'the env the unit gives the daemon is listed')
-  assert.match(text, /autostart link \(made by systemctl --user enable\): ~\/\.config\/systemd\/user\/default\.target\.wants\/asight-collector\.service/, 'the link enable makes is listed too')
-  assert.match(text, /install notes \(event log\): ~\/\.asight\/collector\/flows\/\n  o itself may write ~\/\.config\/o\/node_modules \(npm install\); uninstall reports it, never deletes it$/)
+  assert.doesNotMatch(quietPlan, /install-manifest\.json|in no trust store|what the plugins trust/, 'what is not written is not listed')
+  assert.match(quietPlan, /state\.json: which agents are on/, 'an on that only writes the state file says so')
+  assert.match(text, /certificate +~\/\.asight\/collector\/ca\/ca\.key: in no trust store/)
+  assert.match(text, /certificate +~\/\.asight\/collector\/ca\/asight-ca\.pem: in no trust store/)
+  assert.match(text, /~\/\.asight\/collector\/ca\/extra-h\.pem: the certificates of ca\.pem plus\n? *asight's/, 'whose certificates the trust file carries (G8 merge path)')
+  assert.match(text, /~\/s\.json -> \/dot\/s\.json: env\.K/, 'a link is shown with the file that actually changes')
+  assert.match(text, /d +~\/\.asight\/collector\/plugins\/d\/index\.js: asight's plugin/)
+  assert.match(text, /d +~\/\.d\/patch\.yml: line "- insert: x"/)
+  assert.match(text, /~\/\.config\/systemd\/user\/asight-collector\.service: starts the collector\n? *at login/, 'the autostart unit is listed')
+  assert.match(text, /~\/\.config\/systemd\/user\/default\.target\.wants\/asight-collector\.service: the\n? *link that enables it/, 'the link enable makes is listed too')
+  assert.match(text, /record +~\/\.asight\/collector\/flows\/: what each run did/, 'the event log is listed')
+  assert.match(text, /o itself may write ~\/\.config\/o\/node_modules \(npm install\); uninstall[\s\S]*never deletes it$/)
   const once = formatPlan(plan, { home: '/h', autostart: false })
-  assert.match(once, /started, not enabled/, '--no-autostart: the unit is started once, not enabled')
-  assert.doesNotMatch(once, /autostart link/, 'and no link is made')
+  assert.match(once, /The collector is started this once; nothing is added to your login\./, '--no-autostart: started once, nothing at login')
+  assert.doesNotMatch(once, /default\.target\.wants/, 'and no link is made')
+  assertEnglish(once, 'the plan of on --no-autostart')
 })
 
 // ── T07: what off and uninstall print is what they did (V3, V29) ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -284,7 +305,7 @@ test('V3 (uninstall): the receipt lists what changed and what asight removed —
   fs.mkdirSync(path.join(s.dir, 'audit'), { recursive: true }); fs.writeFileSync(path.join(s.dir, 'audit', 'a.ndjson'), '{}\n') // a capture: kept, so not in the receipt
   const before = snapshot(s.home)
   const io = fakeIo()
-  assert.equal(await runUninstallCli(['--json'], ctxOf(s, io)), 0, io.text())
+  assert.equal(await runUninstallCli(['--json', '--yes'], ctxOf(s, io)), 0, io.text()) // §3.6: it always asks, and --json never prompts — so --yes is the answer
   const r = io.json()
   const diff = changedFiles(before, snapshot(s.home)).filter((rel) => !/^\.asight\/collector\/(flows|audit)\//.test(rel) && !/^\.asight\/backup\//.test(rel) && !/(^|\/)op\.lock$/.test(rel)).map((rel) => path.join(s.home, rel))
   const listed = listedPaths(r)
@@ -315,9 +336,9 @@ test('V3 (uninstall — the certificate entries are its, D55① — the install 
   const b = await setup(); const io2 = fakeIo()
   assert.equal(await runUninstallCli(['--yes'], ctxOf(b.s, io2, { fs: b.full })), 1)
   const text = io2.stdoutText(), shown = (f) => f.replace(b.s.home, '~')
-  assert.doesNotMatch(text, /没有改任何用户文件/, 'the text does not say nothing changed over files that were put back')
+  assert.doesNotMatch(text, /No file of yours was changed/, 'the text does not say nothing changed over files that were put back')
   assert.deepEqual(diffOf(b.s, b.before).filter((f) => !text.includes(shown(f))), [], 'every changed file is in the text')
-  assert.match(text, /问题: undoing the entries stopped: ENOSPC/)
+  assert.match(text, /Problem: undoing the entries stopped: ENOSPC/)
   b.state.broken = false // space again: what the receipt said to do
   const finished = await runUninstallCli(['--yes'], ctxOf(b.s, fakeIo(), { fs: b.full }))
   assert.equal(finished, 0, 'the second uninstall finishes: an entry that is back as it was reads as already restored')
@@ -352,27 +373,29 @@ test('V29: the on receipt after install, in the text and in --json, carries the 
   }
 })
 
-// V10 (1.6 R11, §6, D49): what `status` could not read is 「不知道」 with the reason — the connections still relayed (a daemon whose reply carries no count), the
-// daemon itself (a lock that cannot be read) — and never `0 条` or 「无」, in the text and in --json
-test('V10: status says 不知道 with the reason for connections the daemon did not count, and a lock that could not be read — never 0 条 or 无', async () => {
+// V10 (1.6 R11, §6, D49): what `status` could not read is `unknown (<reason>)` — the connections still relayed (a daemon whose reply carries no count), the
+// daemon itself (a lock that cannot be read) — and never a confident 0 or none, in the text and in --json
+test('V10: status says unknown with the reason for connections the daemon did not count, and a lock that could not be read — never 0 or none', async () => {
   const s = await installedHome()
   // the daemon answers, but its reply has no `relayed`
   let r = await runStatus(s, [], { request: asDaemon(reply({ relayed: undefined })) })
-  const line = (text, head) => text.split('\n').find((l) => l.startsWith(head)) || ''
-  assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(the daemon's reply does not carry the connection counts\)$/)
-  assert.ok(!/0 条|无/.test(line(r.text, '仍经 asight 的连接')), 'never 0 条 or 无')
+  const flat = (text) => text.replace(/\s+/g, ' ') // a row's value may wrap onto the next line (§1.1 width)
+  assert.match(flat(r.text), /Connections unknown \(the daemon's reply does not carry the connection counts\)/)
+  assert.ok(!/Connections (0|none|no )/.test(flat(r.text)), 'never a confident 0 or none')
   // the lock cannot be read and nothing answers
   const lock = path.join(s.dir, 'lock'); fs.writeFileSync(lock, '{}')
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === lock) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
   r = await runStatus(s, [], { request: down(), fs: broken })
-  assert.match(r.text, new RegExp(`守护进程 不知道\\([^\\n]*${lock.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}[^\\n]*EACCES`))
-  assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(whether a daemon runs is not known/)
-  assert.ok(!/0 条|无/.test(line(r.text, '仍经 asight 的连接'))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  assert.match(flat(r.text), new RegExp(`Daemon: unknown \\(${esc(lock)}: EACCES`))
+  assert.match(flat(r.text), /Connections unknown \(whether a daemon runs is not known/)
+  assert.ok(!/Connections (0|none|no )/.test(flat(r.text))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
   // --json: the same, as data
   const j = await runStatus(s, ['--json'], { request: down(), fs: broken })
   const doc = j.io.json()
   assert.deepEqual(validateReceipt(doc), [])
-  assert.deepEqual([doc.relayed, typeof doc.relayed_reason, 'netenv' in doc, doc.daemon.state], ['unknown', 'string', false, 'unknown'])
+  // the C.3 document says a state it could not read as null plus the reason — never false, never 0
+  assert.deepEqual([doc.relayed, typeof doc.relayed_reason, 'netenv' in doc, doc.daemon.running, typeof doc.daemon.error], ['unknown', 'string', false, null, 'string'])
 })
 
 // D49 (1.6 §6): `on` looks at no VPN / proxy software — no 本机网络环境 line in the plan or the receipt, no `netenv` key in --json, and it writes no netenv.json when it has nothing to adopt (the receipt lists

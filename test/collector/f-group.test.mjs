@@ -176,8 +176,8 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
   } finally { await d.stop() }
   let st = await statusOffline(s)
   assert.match(st.text, /not running/)
-  assert.match(st.text, /negative-cache/, '(iii) status lists the condition with no daemon')
-  assert.match(st.text, /client-rejected-leaf/)
+  assert.match(st.text, /refused asight's certificate, so that host is forwarded only/, '(iii) status lists the condition with no daemon, in the words it prints (the code is in --json)')
+  assert.match(st.text, /a connection whose program refused asight's certificate/)
   d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc], upstreamCa: up.ca.certPem })
   try {
     const h = await endpoint(s)
@@ -297,8 +297,9 @@ test('F3 parts: off, a helper death (degraded), a SIGHUP stop and its clean rest
   assert.deepEqual([h.collector.daemon.state, h.summary.state], ['not-running', 'not-running'])
   assert.equal(h.collector.daemon.last_stop.signal, 'SIGHUP')
   const st = await statusOffline(s)
-  assert.match(st.text, /SIGHUP/)
-  assert.match(st.text, /degraded/, '(iii) the condition as of the stop')
+  // the stop and its signal are the endpoint's facts above; the offline text says the daemon is not running and what went wrong before it stopped
+  assert.match(st.text, /Daemon not running[^\n]*; nothing is captured/)
+  assert.match(st.text, /helper-down loader killed by SIGKILL/, '(iii) the condition as of the stop')
   // (d) a helper speaking another protocol: never attaches; no "unclean stop" after a SIGHUP (h)
   d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, { ASIGHT_FAKE_PROTO: '3' }).arch, harnesses: [cc] })
   try {
@@ -392,7 +393,8 @@ test('F6 install / uninstall: an entry uninstall cannot undo → exit-worthy `le
   assert.deepEqual([h.summary.state, h.summary.n], ['residue', 1], '未安装 · 残留 1 项')
   assert.ok(keys(h).includes('uninstall/left-unparsable'))
   const st = await statusOffline(s)
-  assert.match(st.text, /not installed — an uninstall left 1 item/)
+  assert.match(st.text, /^ {2}Certificate {2}not installed; run: asight install$/m, 'not "installed"')
+  assert.match(st.text, /an uninstall left an item behind/, 'the item left behind is said, not silence (D38)')
   s.done()
 })
 

@@ -203,6 +203,6 @@ test('D55 / 4.11 P13 the new kinds: known, each with a sentence of undo by hand;
 
 // T11 (plan §E.5 #1): the undo knows the collector model's kinds (root-key, wrapper / switch / config-entry, pem-block, a real json-array-item undo) and refuses a
 // v2 manifest and an unknown kind before it changes anything; a copy written by 12 lists those kinds as unknown and would undo a v2 manifest it no longer reads right.
-test('OFF_VERSION is 15 — the copy that refuses an optin-* item is told apart from 14, which knew those kinds; the manifest stays version 3', () => {
-  assert.equal(OFF_VERSION, 15); assert.equal(MANIFEST_VERSION, 3)
+test('OFF_VERSION is 16 — the copy whose words are English, in the §3.4 layout, is told apart from 15, which printed Chinese; the manifest stays version 3', () => {
+  assert.equal(OFF_VERSION, 16); assert.equal(MANIFEST_VERSION, 3)
 })

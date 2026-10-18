@@ -2,6 +2,7 @@
 // no unit, no state, no daemon. The `on` that follows finds every certificate item intact and touches none of their bytes (D55①).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { assertEnglish } from '../helpers/english.mjs'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -19,9 +20,10 @@ test('Linux install: CA + trust entries (phase install) + asight-off, no unit, n
   const io = fakeIo()
   assert.equal(await runInstallCli(['--yes'], ctx(io)), 0, io.text())
   // R1: the receipt says each user file it changed — path, what was changed, where the backup is — not only the plan before the yes
-  const receipt = io.text().slice(io.text().indexOf('asight install 完成'))
-  assert.match(receipt, /~\/\.claude\/settings\.json +加 env\.NODE_EXTRA_CA_CERTS +备份 ~\/\.asight\/backup\//, receipt)
-  assert.match(receipt, /asight 自己建的: .*asight-off/, receipt)
+  const receipt = io.text().slice(io.text().indexOf("Installed. asight's certificates are in place."))
+  assert.match(receipt, /~\/\.claude\/settings\.json\n\s+env\.NODE_EXTRA_CA_CERTS added \(backup/, receipt)
+  assert.match(receipt, /asight's own files: .*asight-off/, receipt)
+  assertEnglish(io.text(), 'the Linux install plan and receipt')
   const dir = path.join(home, '.asight', 'collector')
   const m = readManifest(dir)
   assert.equal(m.install.state, 'complete')
@@ -33,7 +35,7 @@ test('Linux install: CA + trust entries (phase install) + asight-off, no unit, n
   const certs = certBytes(home)
   const again = fakeIo()
   assert.equal(await runInstallCli(['--yes'], ctx(again)), 0)
-  assert.match(again.text(), /已经装好/)
+  assert.match(again.text(), /^Already installed\. Nothing was changed\.$/m); assertEnglish(again.text(), 'the second install')
   const onIo = fakeIo()
   assert.equal(await runOnCli(['--yes'], onCtx(home, onIo)), 0, onIo.text())
   assert.deepEqual(certBytes(home), certs, 'on wrote no certificate byte')
@@ -45,7 +47,8 @@ test('Linux install: no terminal and no --yes → the plan with D55\'s cost line
   const before = snapshot(home)
   const io = fakeIo()
   assert.equal(await runInstallCli([], { ...onCtx(home, io), platform: 'linux' }), 2)
-  assert.match(io.text(), /代价:证书在时/)
+  assert.match(io.text(), /^While installed, programs you run trust certificates issued by this/m)
+  assertEnglish(io.text(), 'the Linux install plan')
   assert.deepEqual(snapshot(home), before)
   assert.equal(await runInstallCli(['--dry-run'], { ...onCtx(home, fakeIo()), platform: 'linux' }), 0)
   assert.deepEqual(snapshot(home), before)

@@ -93,7 +93,7 @@ const proxy = {
   unsupported: {},
   branches: ['all'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '退出这个 kimi,在新开的终端里以 `kimi` 重新启动(经 asight 的启动脚本,在那里读代理环境变量)', processes: processes.names[0].name },
+  restart: { hint: 'Quit this kimi, then start it again as `kimi` from a new terminal (through the launch script asight installed, where it reads the proxy variables)', processes: processes.names[0].name },
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts — the CLI forms through the install-folder

@@ -254,7 +254,9 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     const { runStatusCli } = await import('../../src/cli/status.mjs')
     const out = []; const err = []
     const code = await runStatusCli(['--failures'], { io: { out: (x) => out.push(x), err: (x) => err.push(x) }, home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux',
-      deps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test' }] }) } })
+      // the control socket is asked through an injected `request` (0.1 §3): the sandbox HOME's socket path is longer than an AF_UNIX path may be on macOS,
+      // so a real connect there fails with EINVAL ("does not answer") instead of the ENOENT of a daemon that is simply not running
+      deps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test' }] }), request: async () => { throw Object.assign(new Error('no such socket'), { code: 'ENOENT' }) } } })
     assert.equal(code, 1, 'a failure in the last 24 h (R4: 1; the old 3 was for "no daemon")')
     assert.match(out.join('\n'), /守护进程 没在跑/)
     assert.match(out.join('\n'), /collector: not installed — an uninstall left 1 item\(s\): .*settings\.json \(left-unparsable\)\ncapture health:/, 'the residue is said first (D-18), never plain "not installed"')
@@ -952,21 +954,22 @@ test('a descriptor whose afterUninstall is a string that is no known "until" is 
 
 // ── asight on: the unit, and a harness turned on again (1.6 §1.6 · §1.1; V33, V16 unit half) ───────────────────────────────────────────────
 const onBase = (b, o = {}) => ({ home: b.home, env: { HOME: b.home, XDG_RUNTIME_DIR: path.join(b.home, 'run') }, osName: 'none', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, confirm: async () => true, sleep: async () => {}, linger: () => true, ...o })
-const unitOf = (b, run) => userUnit({ home: b.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run })
+const unitOf = (b, run, spawn = () => { throw new Error('no test starts a daemon: hand in a spawn') }) => userUnit({ home: b.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run, spawn })
 
-test('V33: on --no-autostart writes the unit and starts it without enable, the daemon is then running; on --no-unit writes no unit and the manifest lists none', async () => {
+test('V33: on --no-autostart writes no login entry at all and starts the daemon itself through spawn, the daemon is then running and the manifest lists no unit; an arch without a unit writes none either', async () => {
   const b = box()
   try {
     const sys = fakeSystem()
     await installCollector({ ...onBase(b), unit: null }) // D55: on writes no certificate, install comes first
-    const r = await turnOn(onBase(b, { unit: unitOf(b, sys.exec.run), request: sys.daemon.request, autostart: false }))
+    const r = await turnOn(onBase(b, { unit: unitOf(b, sys.exec.run, sys.spawn), request: sys.daemon.request, autostart: false }))
     assert.equal(r.exit, 0)
     const unitFile = path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service')
-    assert.ok(fs.existsSync(unitFile), 'the unit is installed')
-    assert.deepEqual(sys.exec.calls, ['systemctl --user start asight-collector.service'], 'started for this run, and never enabled: is-enabled would not say enabled')
-    assert.equal(sys.exec.calls.some((c) => /enable/.test(c)), false)
+    assert.equal(fs.existsSync(unitFile), false, '--no-autostart writes no unit (1.6 §3.3)')
+    assert.deepEqual(sys.exec.calls, [], 'no systemctl at all: nothing to write, enable or start through systemd')
+    assert.deepEqual(sys.spawn.calls, ['/usr/bin/node /repo/bin/asight.mjs daemon'], 'started directly, this once')
     assert.equal(sys.daemon.state.up, true, 'the daemon is running')
-    assert.deepEqual(readManifest(b.dir).files.filter((f) => f.role === 'unit').map((f) => f.path), [unitFile], 'and listed: uninstall removes it')
+    assert.deepEqual(readManifest(b.dir).files.filter((f) => f.role === 'unit'), [], 'and nothing of an autostart is listed: there is none to remove')
+    assert.equal(r.receipt.unit, null, 'the receipt names no login entry either')
   } finally { b.done() }
   const c = box()
   try {
@@ -974,7 +977,7 @@ test('V33: on --no-autostart writes the unit and starts it without enable, the d
     await installCollector({ ...onBase(c), unit: null })
     const r = await turnOn(onBase(c, { unit: null, request: fakeDaemon({ up: false }).request }))
     assert.equal(r.exit, 0)
-    assert.ok(!fs.existsSync(path.join(c.home, '.config')), '--no-unit writes no unit')
+    assert.ok(!fs.existsSync(path.join(c.home, '.config')), 'an arch with no unit writes none')
     assert.deepEqual(readManifest(c.dir).files.filter((f) => f.role === 'unit'), [], 'the manifest lists none')
     assert.deepEqual(ex.calls, [])
   } finally { c.done() }

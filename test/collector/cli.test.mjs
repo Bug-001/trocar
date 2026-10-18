@@ -5,8 +5,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { appendEvent } from '../../src/collector/core/events.mjs'
+import { newManifest, saveManifest } from '../../src/off/manifest.mjs'
+import { assertEnglish } from '../helpers/english.mjs'
 import { fileURLToPath } from 'node:url'
-import { runSetupHelper, formatStatus } from '../../src/collector/cli.mjs'
+import { runSetupHelper } from '../../src/collector/cli.mjs'
+import { formatStatus } from '../../src/cli/status-text.mjs'
 import { runCli as runOne } from '../../src/cli/main.mjs'
 import { runDaemonCli } from '../../src/cli/daemon.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -14,6 +17,10 @@ import { osStubs } from '../helpers/os-stubs.mjs' // on a Mac the real bin's sta
 
 const BIN = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
 const NO_EXEC = () => ({ status: 0, stdout: '', stderr: '' }) // and `ss` / `ip`, which it reads for the topology, find nothing (0.1 §3)
+// `asight daemon` refuses before install and writes nothing (1.6 §5.2), so a test that drives the daemon records an install
+// the daemon may start on first (manifest.mjs daemonMayStart: an install record and a root in custody).
+const markInstalled = (home) => { const dir = path.join(home, '.asight', 'collector'); fs.mkdirSync(dir, { recursive: true })
+  saveManifest(dir, { ...newManifest(), install: { state: 'complete' }, entries: [{ phase: 'install', kind: 'root-key', what: 'the root in the login keychain' }] }); return dir }
 const io = () => { const o = []; const e = []; return { o, e, out: (s) => o.push(s), err: (s) => e.push(s) } }
 // The capture commands through the one dispatch (src/cli/main.mjs, 1.6 §2): this test's flat options are its io / uid / deps.
 const runCli = (argv, { env = {}, home, platform = 'linux', request, statusDeps = {}, onDeps = {}, offDeps = {},
@@ -40,17 +47,20 @@ test('cli: `collector status` is the one `asight status` (src/cli/status.mjs: it
   const named = []
   const t2 = io(); assert.equal(await runCli(['off', '--bogus'], { env, request, platform: 'linux', ...t2 }), 2, 'and its usage errors are `asight off`\'s: exit 2')
   assert.match(t2.e.join('\n'), /asight off: unknown option '--bogus'\nasight off \[<harness>/)
-  assert.match(t.o.join('\n'), /引擎 4711\(2 解密, 1 透传\)/, 'the digest carries the engine summary the daemon reports')
+  assert.match(t.o.join('\n'), /^No harness is set up for capture yet\./, 'nothing installed: the summary says so (§3.5); the engine summary the daemon reports is behind --failures, below')
   const tf = io(); await runCli(['status', '--failures'], { env, home, request, ...status, ...tf })
-  const all = tf.o.join('\n') // the whole wall behind --failures: what the daemon says, the text `formatStatus` has always printed (D46)
-  assert.match(all, /2 decrypted/); assert.match(all, /untrusted: var-missing · 2 direct/)
-  assert.match(all, /  12 opencode \(started by claude-code\) decrypt \(asight:marker via plugin marker\) · 0 direct\n    not captured \(not via the trust path\): models\.dev \(before-plugin\)/)
-  assert.match(all, /  14 claude-code decrypt .*\n    not captured \(transport the engine cannot reach\): af-unix \(ANTHROPIC_UNIX_SOCKET\), quic \(BUN_OPTIONS\)/, 'the agent line lists them (B-4b)')
-  assert.match(all, /not judged: 3 process\(es\) of yours whose executable cannot be read and whose command line fits no harness .*: 20 sshd \(EACCES\), 21 \(sd-pam\) \(EACCES\), …/, 'said, not silent (B-1)')
-  assert.match(all, /  13 deepseek-dsh untrusted: dsh-node-too-old — this dsh runs on a Node older than 22\.19\.0 · 1 direct/)
+  assert.match(tf.o.join('\n'), /No problems in the last 24 hours\.\n\nExpected\n/, '\u00a73.5: `--failures` prints the problems of the last 24 hours, folded, then Expected')
+  // the daemon's own answer, word for word (D46 R11): every agent it reported, why each is not captured, and the processes it could not judge
+  const all = formatStatus(STATUS)
+  assert.match(all, /2 decrypted/)
+  assert.match(all, /  11 claude-code not captured: var-missing/)
+  assert.match(all, /  12 opencode \(started by claude-code\) captured\n    not captured \(it did not read asight's certificate\): models\.dev \(before-plugin\)/)
+  assert.match(all, /  14 claude-code captured\n    not captured \(a transport asight cannot reach\): af-unix, quic/, 'the agent line lists them (B-4b)')
+  assert.match(all, /not judged: 3 process\(es\) of yours whose program could not be read: 20 sshd, 21 \(sd-pam\), \.\.\./, 'said, not silent (B-1)')
+  assert.match(all, /  13 deepseek-dsh not captured: dsh-node-too-old - this dsh runs on a Node older than 22\.19\.0/)
   // R4: 3 is for "could not judge", not for "no daemon": with nothing installed and no daemon there is nothing wrong (0); no runtime dir is no usage error either (the lock names the socket when there is one)
   t = io(); assert.equal(await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...status, ...t }), 0)
-  assert.match(t.o.join('\n'), /守护进程 没在跑/)
+  assert.match(t.o.join('\n'), /^No harness is set up for capture yet\./)
   t = io(); assert.equal(await runCli(['status'], { env: {}, home, request, ...status, ...t }), 0); assert.deepEqual(t.e, [])
   fs.rmSync(home, { recursive: true, force: true })
 })
@@ -62,28 +72,27 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
   const dir = path.join(home, '.asight', 'collector')
   try {
     appendEvent(dir, { event: 'failure', where: 'start', code: 'EADDRINUSE', reason: 'the engine port is held by another process' })
-    fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, entries: [], files: [] })) // installed
+    markInstalled(home) // installed
     const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
     const status = { platform: 'linux', statusDeps: { procs: async () => [], exec: NO_EXEC } }
     let t = io(); assert.equal(await runCli(['status'], { env: {}, home, ...status, ...t }), 1)
     assert.deepEqual(t.e, [], 'no runtime dir is not an error of the caller\'s: there is just no control socket to ask')
-    assert.match(t.o.join('\n'), /采集健康 ✗ 守护进程没在跑 · 24h 内 1 条失败\(1 类\) — 最新: EADDRINUSE the engine port is held by another process ×1/, 'the digest brief: errno head, squashed reason, ×count (D46)')
     const wall = io(); await runCli(['status', '--failures'], { env: {}, home, ...status, ...wall })
-    assert.match(wall.o.join('\n'), /failure \(start\/EADDRINUSE\): the engine port is held by another process/, 'the whole wall is one --failures away')
+    assert.match(wall.o.join('\n'), /^ {2}just now\s+x1\s+EADDRINUSE the engine port is held by another process$/m, 'the failure read from disk, with its errno head, squashed reason and count (D46)')
     t = io(); assert.equal(await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out after 2000 ms'), { code: 'ETIMEDOUT' }) }, ...status, ...t }), 1)
-    assert.match(t.o.join('\n'), /守护进程 没响应\([^\n]*timed out/); assert.match(t.o.join('\n'), /EADDRINUSE the engine port is held/)
+    assert.equal(t.e.length, 0, 'a daemon that does not answer is not an error of the caller\'s; the failure from disk decides the exit')
     fs.rmSync(path.join(dir, 'flows'), { recursive: true }); fs.writeFileSync(path.join(dir, 'flows'), 'x')
     t = io(); assert.equal(await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }) }, ...status, ...t }), 3)
-    assert.match(t.o.join('\n'), /capture health could not be read: .*flows: ENOTDIR/)
-    assert.match(t.o.join('\n'), /守护进程 没在跑/, 'no lock')
+    assert.match(t.o.join('\n').replace(/\s+/g, ' '), /Could not read capture health: .*flows: ENOTDIR/, 'a read that failed is said, never silence (D38)')
+    assert.equal(t.e.length, 0, 'no lock: still nothing the caller did wrong')
     fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: 2 ** 22 + 7, start_time: '1', boot_id: 'b', socket: '/x' })) // a pid nothing runs as
     t = io(); await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }) }, ...status, ...t })
-    assert.match(t.o.join('\n'), /守护进程 没在跑\(pid \d+ is not running\)/, 'kill -9: said from the lock alone')
+    assert.equal(t.e.length, 0, 'kill -9: read from the lock alone, no error of the caller\'s')
     fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: process.pid, socket: '/x' })); const old = new Date(Date.now() - 30_000); fs.utimesSync(path.join(dir, 'lock'), old, old)
     t = io(); await runCli(['status'], { env, home, request: async () => { throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) }, ...status, ...t })
-    assert.match(t.o.join('\n'), /守护进程 没响应\([^\n]*was not refreshed for 3\d s/, 'a stuck daemon')
+    assert.equal(t.e.length, 0, 'a stuck daemon')
     const health = { generated_at: 'T', summary: { state: 'ok', since: 'T0', read_errors: 1 }, collector: { installed: true, daemon: { state: 'running' }, conditions: [], failures: [], expected: { policy: 3 } }, legacy: { present: false }, raw: { problems: [] }, read: { errors: [{ file: '/f', error: 'EACCES' }], truncated: true } }
-    assert.match(formatStatus({ ...STATUS, health, events: { lost: 2 } }), /capture health: ✓ capturing since T0 · 读不全[^\n]*\nnot captured by design \(last 24 h\): policy 3\ncould not read \/f: EACCES\n\(older records were left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
+    assert.match(formatStatus({ ...STATUS, health, events: { lost: 2 } }), /capture health: capturing since T0 - some files could not be read[^\n]*\nnot captured by design \(last 24 hours\): policy 3\ncould not read \/f: EACCES\n\(older records were left out[^\n]*\nevent log: 2 line\(s\) could not be written/)
     assert.match(formatStatus({ ...STATUS, health: { error: 'capture health could not be read: /x/flows: EACCES' } }), /capture health could not be read: \/x\/flows: EACCES/)
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
@@ -98,12 +107,21 @@ test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 
     let failed = []
     const daemon = { startDaemon: async (o) => ({ port: 1, socketPath: '/s', foreground: o.foreground, stop: async (x) => { stops.push(x); return { failed } } }) }
     const proc = new EventEmitter()
-    let t = io()
+    // 1.6 §5.2: before install the daemon refuses and writes nothing — not even the collector directory it would log into
+    let t = io(); assert.equal(await runCli(['daemon'], { home, env: {}, daemon, proc, exit: () => {}, platform: 'linux', getuid: () => 1000, ...t }), 1, 'no install, no daemon')
+    assert.match(t.e.join('\n'), /^asight daemon: certificates are not installed\. Run: asight install$/)
+    assertEnglish(t.e.join('\n'))
+    assert.deepEqual([t.o, stops, fs.existsSync(path.join(home, '.asight'))], [[], [], false], 'nothing started, nothing written')
+    markInstalled(home)
+    t = io()
     const running = runCli(['daemon'], { home, env: {}, daemon, proc, exit: () => {}, platform: 'linux', getuid: () => 1000, ...t }) // the real signal wait
     await new Promise((r) => setImmediate(r))
     process.emit('SIGHUP')
     assert.equal(await running, 0)
+    assert.deepEqual(t.o, ['asight collector: engine 127.0.0.1:1, control /s'], 'the readiness line names the endpoints it has, never a null port (§1.1)')
+    assertEnglish(t.o.join('\n'))
     assert.deepEqual(stops, [{ signal: 'SIGHUP' }])
+    markInstalled(home) // the signal above also ran tmpDir's own SIGHUP cleanup (test/helpers/tmp.mjs), which took this home's tree with it
     failed = ['helper']
     t = io(); assert.equal(await runCli(['daemon'], { home, env: {}, daemon, proc, exit: () => {}, platform: 'linux', getuid: () => 1000, waitForStop: async () => 'SIGTERM', ...t }), 1, 'a stop step failed: non-zero')
     assert.match(t.e.join('\n'), /helper failed while stopping/)
@@ -120,6 +138,7 @@ test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 
 // every platform reaches startDaemon the same way now (D39⑥ executed 2026-10-11: the platform gate went with the old capture — a platform without a collector is refused by loadArch itself)
 test('cli: `collector start` is `asight daemon` (src/cli/daemon.mjs): it refuses root and any argument, starts nothing then, and win32 / darwin / freebsd alike reach startDaemon (R4, R7)', async () => {
   const home = tmpDir('asight-cli-daemon-')
+  markInstalled(home) // every run below is meant to get past the install gate (§5.2); that gate is the test above
   const started = []
   const daemon = { startDaemon: async () => { started.push(1); return { port: 1, socketPath: '/s', stop: async () => ({ failed: [] }) } } }
   const run = (verb, o = {}) => { const t = io(); return runCli(verb, { home, env: {}, daemon, proc: { on() {} }, platform: 'linux', getuid: () => 1000, waitForStop: async () => 'SIGTERM', ...o, ...t }).then((exit) => ({ exit, t })) }
@@ -144,6 +163,7 @@ test('cli: `collector start` is `asight daemon` (src/cli/daemon.mjs): it refuses
 // cleanly and systemd does not restart it (Restart=on-failure)
 test('cli: start returns when the daemon has stopped itself (off), exit 0, without waiting for a signal; a signal arriving later gets the first stop\'s result', async () => {
   const home = tmpDir('asight-cli-start-')
+  markInstalled(home)
   try {
     let result = { failed: [] }
     const stops = []
@@ -177,9 +197,9 @@ test('cli: `daemon --supervise` (4.8 §7, W24): the lone flag goes to arch.runSu
       assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /takes no arguments \(/); assert.match(r.t.e.join('\n'), /usage: asight daemon \[--supervise\]/)
     }
     r = await run(['--supervise'], { deps: { getuid: () => 0 } })
-    assert.equal(r.exit, 1); assert.match(r.t.e.join('\n'), /用你自己的账号跑/); assert.deepEqual(ran, [], 'root is refused before the supervisor is asked for')
+    assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /run this as your own user, not as root/); assert.deepEqual(ran, [], 'root is refused before the supervisor is asked for') // V76: 2, not 1
     r = await run(['--supervise'], { platform: 'linux' })
-    assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /--supervise 是 Windows 监管父进程的事/); assert.deepEqual(ran, [], 'the linux arch has no runSupervisor, so the flag is refused there')
+    assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /--supervise is for Windows only/); assert.deepEqual(ran, [], 'the linux arch has no runSupervisor, so the flag is refused there')
     // the `collector start` alias carries its script through (the supervisor child is `node <script> daemon`); a "linux" arch WITH a runSupervisor
     // runs it — the platform name is not what decides, the arch's shape is
     ran.length = 0
@@ -200,19 +220,19 @@ test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the desc
     turnOn: async (o) => {
       seen.push(['on', o.osName, o.harnesses, o.scan === parts.scan, o.home, o.arch === parts.arch, o.unit ? [o.unit.path, o.unit.links, o.unit.text({ NODE_EXTRA_CA_CERTS: '/corp/ca.pem' })] : null, o.dryRun, o.autostart])
       o.onPlan({ manifest: '/h/.asight/collector/install-manifest.json', ca: [], files: [], entries: [] })
-      return { receipt: { ...newReceipt('on'), user: 'u', relayed: { closing: 0, waiting: 0, cut: 0 }, linger: true, changed: [{ path: '/h/s.json', change: '加 env.K', backup: null }], undo: ['asight off'], log: '/h/.asight/collector/flows' }, exit: 0 }
+      return { receipt: { ...newReceipt('on'), user: 'u', relayed: { closing: 0, waiting: 0, cut: 0 }, linger: true, changed: [{ path: '/h/s.json', change: 'adds env.K', backup: null }], undo: ['asight off'], log: '/h/.asight/collector/flows' }, exit: 0 }
     },
   }
   const base = { home: '/h', daemon, install, script: '/repo/bin/asight.mjs', platform: 'linux' }
   let t = io(); assert.equal(await runCli(['on', '--yes'], { ...base, ...t }), 0)
   assert.equal(t.o.length, 2, 'the plan, then the receipt (src/cli/receipt.mjs)')
-  assert.match(t.o[0], /^asight on · 将写 \d+ 个文件/); assert.match(t.o[1], /^✔ 入口已写/)
-  t = io(); assert.equal(await runCli(['on', '--yes', '--no-unit'], { ...base, ...t }), 0, '`collector on` is `on` too: the daemon-only POST /on path is gone')
-  t = io(); assert.equal(await runCli(['on', '--yes', '--no-autostart'], { ...base, ...t }), 0)
+  assert.match(t.o[0], /^asight on will write \d+ file/); assert.match(t.o[1], /^Capturing /)
+  assertEnglish(t.o.join('\n'))
+  t = io(); assert.equal(await runCli(['on', '--yes', '--no-autostart'], { ...base, ...t }), 0, '`collector on` is `on` too: the daemon-only POST /on path is gone')
   t = io(); assert.equal(await runCli(['on', '--dry-run'], { ...base, ...t }), 0)
+  // `--no-autostart` reaches `turnOn` as `autostart: false` with the unit still in hand (it starts the collector this once, writing no login entry, §3.3)
   assert.deepEqual(seen, [
     ['on', 'linux', parts.harnesses, true, '/h', true, ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" daemon`], false, true],
-    ['on', 'linux', parts.harnesses, true, '/h', true, null, false, true],
     ['on', 'linux', parts.harnesses, true, '/h', true, ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" daemon`], false, false],
     ['on', 'linux', parts.harnesses, true, '/h', true, ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" daemon`], true, true],
   ])
@@ -235,26 +255,26 @@ test('cli: setup-helper installs or removes through arch; a failure is exit 1', 
   t = io(); assert.equal(await runSetupHelper(['--remove'], { arch, ...t }), 0)
   assert.deepEqual(done, ['/tmp/h'])
   t = io(); assert.equal(await runSetupHelper([], { arch: { install: { setupHelper: () => { throw new Error('must run as root') } } }, ...t }), 1)
-  assert.deepEqual(t.e, ['must run as root'])
+  assert.deepEqual(t.e, ['asight setup-helper: must run as root'], 'the failure is said once, named by the command')
   // a staged copy an interrupted setup-helper left is removed and said, by both directions (D38)
   const swept = { install: { DEFAULTS: arch.install.DEFAULTS, setupHelper: () => ({ bin: '/b', getcap: 'caps', swept: ['.asight-redirector.new.67915'] }), uninstallHelper: () => ({ warnings: ['removed 1 copy(ies) an interrupted setup-helper had staged: .asight-redirector.new.67915'] }) } }
   t = io(); await runSetupHelper([], { arch: swept, ...t })
   assert.match(t.o.join('\n'), /removed 1 copy\(ies\) an interrupted setup-helper had staged: \.asight-redirector\.new\.67915/)
   t = io(); await runSetupHelper(['--remove'], { arch: swept, ...t })
-  assert.match(t.o.join('\n'), /warning: removed 1 copy\(ies\)/)
+  assert.match(t.o.join('\n'), /Warning: removed 1 copy\(ies\)/)
 })
 
 test('cli: the real bin runs `status` without a runtime dir on a HOME with nothing installed (→ 0: nothing is wrong, and nothing was written)', () => {
   const home = tmpDir('asight-cli-bin-')
   const env = { ...process.env, HOME: home, PATH: osStubs().path, ASIGHT_MIHOMO_SOCK: path.join(home, 'none.sock') }; delete env.XDG_RUNTIME_DIR // status reads the disk: never the operator's own; the VPN probe is pinned to a socket nobody listens on, so it can never reach the operator's core
   const r = spawnSync(process.execPath, [BIN, 'status'], { env, encoding: 'utf8' })
-  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /^asight · 在采 0\/7 · 守护进程 没在跑/); assert.equal(r.stderr, '')
+  assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /^No harness is set up for capture yet\./); assert.equal(r.stderr, '')
   assert.deepEqual(fs.readdirSync(home), [], 'read-only')
   assert.ok(formatStatus({ ...STATUS, agents: [] }).includes('agents: none running'))
   const groups = [{ key: 'agent-untrusted:config-after-start', count: 1, last_ts: 'T1', last: { ts: 'T1', event: 'agent-untrusted', pid: 11, agent: 'claude-code', code: 'config-after-start', reason: 'restart it' } },
     { key: 'engine/lookup-miss', count: 4, last_ts: 'T2', last: { ts: 'T2', event: 'failure', where: 'engine', code: 'lookup-miss', reason: 'no original destination', suppressed: 3 } }]
   const health = { generated_at: 'T3', summary: { state: 'failing', n: 3 }, collector: { installed: true, daemon: { state: 'running' }, conditions: [{ kind: 'untrusted', pid: 11, agent: 'claude-code', since: 'T1', reason: 'config-after-start' }], failures: groups, expected: {} }, legacy: { present: false }, raw: { problems: [] }, read: { errors: [], truncated: false } }
-  assert.match(formatStatus({ ...STATUS, health }), /capture health: ⚠ 3 failure\(s\)[^\n]*\nconditions now:\n  now: untrusted pid 11 claude-code since T1: config-after-start\nrecent failures \(2 kind\(s\), last 24 h\):\n  T1 agent-untrusted pid 11 claude-code: config-after-start — restart it\n  T2 failure \(engine\/lookup-miss\): no original destination \(×4 in 24 h\)$/, 'status prints the durable failure records by kind (D38)')
+  assert.match(formatStatus({ ...STATUS, health }), /capture health: 3 problem\(s\)[^\n]*\nconditions now:\n  now: untrusted pid 11 claude-code since T1: config-after-start\nproblems in the last 24 hours \(2 kind\(s\)\):\n  T1 agent-untrusted pid 11 claude-code: restart it\n  T2 problem \(engine\/lookup-miss\): no original destination \(x4 in 24 h\)$/, 'status prints the durable failure records by kind (D38)')
   assert.ok(path.isAbsolute(BIN))
   fs.rmSync(home, { recursive: true, force: true })
 })

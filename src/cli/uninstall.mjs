@@ -80,7 +80,7 @@ function planUninstall(w, m) {
   const usable = m && !m.unsupported
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
-    changed: entries.map((e) => ({ path: e.path, change: `去掉 ${e.kind === 'text' ? 'asight 加的文字' : (e.keys || []).join('.')}`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
+    changed: entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "asight's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
     removed: [...(usable ? m.files.map((f) => f.path) : []), path.join(w.dir, 'state.json'), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(m ? [manifestPath(w.dir)] : [])],
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
@@ -90,7 +90,7 @@ function planUninstall(w, m) {
 /** `asight uninstall` (see the header). Refuses root by throwing (R7). → `{ receipt, exit }`: 0 done · 1 not done or a problem · 2 `--purge-data` without a terminal and
  *  without `--yes` (nothing was done, the plan is in the receipt). */
 export async function runUninstall({ home = nodeOs.homedir(), env = process.env, purgeData = false, yes = false, dryRun = false, interactive = false, io = null, say = null, deps = {} } = {}) {
-  if ((deps.getuid || processUid)() === 0) throw new Error('asight uninstall: run it as the user whose agents you capture, not as root (D36); 用你自己的账号跑')
+  if ((deps.getuid || processUid)() === 0) throw new Error('asight uninstall: run this as your own user, not as root.')
   const w = offWorld({ home, env, deps })
   const fs = w.fs
   const run = w.clock().toISOString()
@@ -107,15 +107,20 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
   const read = () => { try { return { m: readManifest(w.dir, fs), merr: null } } catch (e) { return { m: null, merr: e } } }
   let { m, merr } = read()
   receipt.harnesses = harnessIdsOf(m)
-  const plan = () => Object.assign(receipt, { dry_run: true, planned: true }, planUninstall(w, m))
+  // §1.4 / appendix C: the plan itself is a key of the JSON document — every file by its full path and what would happen to it
+  const plannedItems = (p) => [...p.changed.map((c) => ({ path: c.path, change: c.change, harness: c.harness ?? null })), ...p.removed.map((x) => ({ path: x, change: 'removed' }))]
+  const plan = () => { const p = planUninstall(w, m); return Object.assign(receipt, { dry_run: true }, p, { planned: plannedItems(p) }) }
   if (dryRun) { plan(); return { receipt, exit: EXIT.ok } }
-  if (purgeData && !yes) { // R6: `--purge-data` deletes what nothing else can bring back: a yes is asked for, or given
-    const ok = interactive && io ? await confirm(io, '--purge-data 会删掉全部采集数据(capture-*.ndjson、flows/、audit/、replays/),删了就没有了。继续?') : null
+  // §3.6: uninstall always prints its plan and asks — it takes certificates out of your trust settings and removes files of yours. Not a terminal
+  // and no --yes: the plan only, nothing changed, exit 2 (§1.4).
+  if (!yes) {
+    if (say) say(formatUninstallReceipt({ ...receipt, ...planUninstall(w, m), notes: [] }, { home, tense: 'future' }))
+    const ok = interactive && io ? await confirm(io, purgeData ? 'This also deletes every captured record, for good. Proceed?' : 'Proceed?') : null
     if (ok !== true) {
       plan()
       receipt.ok = false
-      if (ok === null) { receipt.needs_yes = true; receipt.notes.push('不在终端里,没有 --yes:只打印了计划,什么都没动。确认要删采集数据,就加 --yes 再跑一次') }
-      else { receipt.declined = true; receipt.notes.push('没有确认:什么都没动') }
+      if (ok === null) { receipt.needs_yes = true; receipt.notes.push('Nothing was changed. Read the plan above, then run it again with --yes') }
+      else { receipt.declined = true; receipt.notes.push('You said no: nothing was changed') }
       return { receipt, exit: ok === null ? EXIT.usage : EXIT.incomplete }
     }
   }
@@ -139,8 +144,8 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     const online = isModelOs(w.platform) && m && !m.unsupported ? await captureOnline(w, m) : null
     if (online) {
       receipt.ok = false; receipt.code = 'collectors-online'; receipt.purge_data = false; receipt.kept_captures = true // nothing changed: --purge-data deleted nothing either
-      receipt.problems.push([online.on.length ? `还开着: ${online.on.join(', ')}` : null, online.holders.length ? `还有持有者: ${online.holders.map((x) => `pid ${x.pid} (${x.harness})`).join(', ')}` : null, online.unknown ? `不知道有没有持有者: ${online.unknown}` : null].filter(Boolean).join(';') + '。什么都没改;先 asight off,等持有者退出后再 asight uninstall(uninstall 从不代做 off)')
-      receipt.problems.push(`先跑 ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(',再 ')}`) // the doctor's own steps for the code (1.6 §9.6)
+      receipt.problems.push([online.on.length ? `capture is still on for ${online.on.join(', ')}` : null, online.holders.length ? `these processes still have asight in their environment: ${online.holders.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}` : null, online.unknown ? `whether any process still has asight in its environment is unknown (${online.unknown})` : null].filter(Boolean).join('; ') + '. Nothing was changed. Run: asight off, wait for those processes to quit, then run asight uninstall again')
+      receipt.problems.push(`Run: ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(', then: ')}`) // the doctor's own steps for the code (1.6 §9.6)
       put({ event: 'failure', code: 'collectors-online', reason: receipt.problems.at(-2) })
       put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${receipt.problems.at(-2)}` })
       return { receipt, exit: EXIT.incomplete }
@@ -270,7 +275,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     // Only when every step above succeeded (invariant 2; 1.6 §1.1): a run that leaves an item, has a problem or a failure keeps every capture
     // and says so — the captures are what nothing brings back, and the next uninstall can still purge them.
     const purgeHeld = purgeData && (blocked || receipt.left.length > 0 || receipt.problems.length > 0 || failed.length > 0)
-    if (purgeHeld) { receipt.purge_data = false; receipt.kept_captures = true; receipt.notes.push('uninstall 没有全部完成:采集数据一个都没删(--purge-data 只在其余各步都成功后才删);修好上面的问题后再跑 asight uninstall --purge-data') }
+    if (purgeHeld) { receipt.purge_data = false; receipt.kept_captures = true; receipt.notes.push('This run did not finish, so not one captured record was deleted (--purge-data deletes them only when every other step succeeded). Fix what is above, then run: asight uninstall --purge-data') }
     if (purgeData && !purgeHeld) {
       for (const n of (() => { try { return fs.readdirSync(w.dir) } catch { return [] } })()) if (/^capture-.*\.ndjson$/.test(n)) rm(path.join(w.dir, n))
       for (const sub of ['flows', 'audit', 'replays', 'kernel', 'kernel-archive', 'forwarder']) rm(path.join(w.dir, sub))
@@ -306,7 +311,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errText(e)}), so the asight processes you started yourself are not listed`) }
     receipt.user_processes = userProcessesOf(list)
     receipt.ok = receipt.problems.length === 0 && left === 0
-    if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${left} item(s) could not be undone; the install manifest is kept — fix them, then run asight uninstall again`)
+    if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${left} item(s) could not be undone; the install manifest is kept. Fix them, then run asight uninstall again`)
     return { receipt, exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
   } catch (e) { // an error that is not a step's own: recorded where status finds it, then thrown (4.6: a failed run ends with outcome 'failed')
     try { if (fs.existsSync(w.dir)) { put({ event: 'failure', code: (e && e.code) || 'uninstall-error', reason: errText(e) }); put({ kind: 'result', outcome: 'failed', reason: `uninstall failed: ${errText(e)}` }) } } catch { /* the original error is the one that matters */ }
@@ -326,14 +331,14 @@ export async function runUninstallCli(argv, { io, env = process.env, home = node
     flags.add(a)
   }
   const json = flags.has('--json')
-  if ((deps.getuid || processUid)() === 0) { io.err('asight uninstall: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
+  if ((deps.getuid || processUid)() === 0) { io.err('asight uninstall: run this as your own user, not as root.'); return EXIT.usage }
   try {
     // a platform without a collector reaches runUninstall the same way and finds nothing to undo (D39⑥ executed 2026-10-11: the old capture's own uninstall went with it)
     // the root's key goes last through its custody (4.11 P13): the platform's backend unless a test hands one in
     if (deps.custody === undefined && isModelOs(platform)) deps = { ...deps, custody: (await (await import('../collector/arch/model-backends.mjs')).backendsFor({ os: platform, home, run: deps.exec || null, env })).custody }
-    const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say: json ? io.err : io.out, deps: { platform, ...deps } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
+    const { receipt, exit } = await runUninstall({ home, env, purgeData: flags.has('--purge-data'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: !json && isInteractive(io), io: { ...io, prompt: io.stdout }, say: json ? null : io.out, deps: { platform, ...deps } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins) — the same seam `off` has
     if (json) io.out(JSON.stringify(receipt, null, 2))
-    else if (receipt.needs_yes || receipt.declined) { io.out(formatUninstallReceipt({ ...receipt, notes: [] }, { home, tense: 'future' })); for (const n of receipt.notes) io.err(n) } // the plan, then why nothing was done (R6)
+    else if (receipt.needs_yes || receipt.declined) { for (const n of receipt.notes) io.err(n) } // the plan went out before the question was asked; what is left to say is why nothing was done (R6)
     else io.out(formatUninstallReceipt(receipt, { home }))
     return exit
   } catch (e) {

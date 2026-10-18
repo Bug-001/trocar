@@ -82,6 +82,7 @@ export const CODES_BY_PART = Object.freeze({
   ca: ['ca-invalid', 'cert-key-missing', 'cert-intermediate-unavailable'], // the last two: the issuer's (4.11 P2, ⑱): the root key is not in its custody; the custody did not issue an intermediate
   install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'not-users-file', 'cert-not-installed', 'install-pending', 'collectors-online'], // not-users-file: install skipped a P8 install-folder wrapper, the program is not this user's one native file (4.11 P8) (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
   // names no writer produces any more, kept so old records still read (4.8 §12 「旧 flows/ 行照读」): the old MITM's, and macOS Hermes' route-without-ca (4.11 §3 ⑱)
+  doctor: ['file-readable-by-others', 'standalone-unreadable', 'standalone-stale', 'backup-unclaimed'], // doctor's own findings (1.6 §3.7), beside the network ones of 附录 B
   legacy: ['retention-unparsable', 'retention-unreadable', 'retention-log-failed', 'route-without-ca', 'tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
@@ -142,8 +143,13 @@ export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing',
   'cert-not-installed', 'cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file']) // the cert group's status reasons that have a producer (1.6 §9.7, 4.11 §3 ⑱)
 export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...ROUTE_STATUS_REASONS, ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 
+// What `asight status` and `asight doctor` name in their own documents (RFC 1.6 附录 C.3 / C.4 / C.5), a block of its own like the ones above: the `where` of an
+// `errors[]` entry is the part of the picture that could not be read, in the words the text prints; the codes are `doctor`'s own findings, the ones §3.7 asks it
+// to look at beside the network (附录 B owns the rest, src/netenv/findings.mjs). They are no D38 record of a collector writer, and they are closed all the same.
+const DOC_WHERE = Object.freeze(['the on/off state', 'the install record', 'capture health', 'the agent name list', 'the process table', 'a captured file'])
+
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), written as they are
-const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS, ...ROUTE_EVENTS, ...NET_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE, ...ROUTE_WHERE, ...NET_WHERE]),
+const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS, ...ROUTE_EVENTS, ...NET_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE, ...ROUTE_WHERE, ...NET_WHERE, ...DOC_WHERE]),
   code: new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES]) }
 
 export const isCode = (c) => sets.code.has(c) || ERRNO.test(String(c))

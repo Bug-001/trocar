@@ -9,7 +9,6 @@ import nodeOs from 'node:os'
 import path from 'node:path'
 import { STATUS_REASONS } from '../health/codes.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
-import { lingerText } from './receipt.mjs'
 import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
@@ -24,16 +23,16 @@ import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
 import { userProcessesOf } from '../off/orchestrate.mjs'
-import { netenvFile, writeNetenv } from '../netenv/index.mjs'
+
 import { judgeHarness, certOfForms } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
 import { readAdopted } from '../netenv/adopt.mjs'
-import { buildTopology, renderPathBlock, renderDetail } from '../netenv/topology.mjs'
+import { buildTopology } from '../netenv/topology.mjs'
 import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
-import { formatStatus, formatHealth } from '../collector/cli.mjs'
-import { colors, noColor } from './text.mjs'
+import { formatStatus, formatHealth, failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
+import { colors, noColor, unknown as unknownText2 } from './text.mjs'
 import { failureBrief } from './words.mjs'
 import { tilde } from './receipt.mjs'
 
@@ -279,40 +278,22 @@ export async function gatherTopology(f, { home, env, platform, deps = {} }) {
   } catch (e) { rethrowSandbox(e); return { topology_error: errMessage(e) } }
 }
 
-/** The board's copy (~/.asight/netenv.json): the topology, written once, only where asight already has a home. A failed write is `netenv_write_error` (file and errno), said by status (the board would keep showing the old one). */
-export function recordNetenv(f, { home, deps = {} }) {
-  const fs = deps.fs || nodeFs
-  if (!f.topology) return
-  try { if (fs.existsSync(asightHome(home))) writeNetenv(home, { topology: f.topology }, { fs }) } catch (e) { rethrowSandbox(e); f.netenv_write_error = `${netenvFile(home)}: ${errText(e)}` }
-}
+// `status` and `doctor` write nothing (§3.5 · §3.7): the drift and the topology they draw are reported, never recorded. Only the daemon writes netenv-change.
 
-// ── what it says ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-const REASON_TEXT = {
-  'desired-off': '期望态是 off(asight on <harness> 才开)', 'entry-missing': '信任入口不在了(asight on 重写它)', 'entry-changed': '信任入口被改成了别的(asight off 再 asight on 重写它)',
-  'link-missing': '期望开,内核里没有本实例的 link(asight on)', 'daemon-not-running': '守护进程没在跑(asight on)', 'daemon-not-responding': '守护进程没响应',
-  'helper-missing': '能力助手缺失或版本不对(sudo asight setup-helper)', 'negative-cache': '进程拒绝了 asight 的证书,那个 host 之后透传(重启这个 agent 再试)',
-  'config-after-start': '它在信任入口写好之前就启动了,重启后才会被采集',
-  'forwarder-down': 'agent 的代理入口指着 asight 的门,门随守护进程一起没了,连不上(asight on 拉起它;马上要用:asight off <harness>)',
-  'cert-not-installed': 'asight 的根证书没装,agent 不认 asight 的证书(asight install)', 'cert-root-missing': 'asight 的根证书装过、已不在你的证书库里(asight install)',
-  'cert-root-pending': 'asight 的根证书还等你在系统弹窗里确认(asight install)', 'cert-root-declined': '你拒绝了把 asight 的根证书放进证书库(asight install 再来一次)',
-}
-const reasonText = (r, hint) => REASON_TEXT[r] || hint || trustReasonText(r) || ''
+// ── the document (附录 C.3) and the words (§3.5) ───────────────────────────────────────────────────────────────────
 const reasonOf = (j) => (j.rows.find((r) => r.reason) || {}).reason ?? null // the harness's own reason: the first one a row has
-const said = (j) => (j.captured === true ? '正在被采集' : j.captured === false ? `没有: ${reasonOf(j) ?? '(没给原因)'}` : '不知道')
+const RESTART_SET = RESTART
 
-// the agents a restart fixes (1.6 §1.1: the same list `on` prints), from the rows
-const restartOf = (f) => f.harnesses.flatMap((h) => h.judged.rows.filter((r) => r.pid != null && RESTART.has(r.reason)).map((r) => ({ harness: h.id, pid: r.pid, reason: r.reason })))
+/** The agents a restart fixes (§3.3: the same list `on` prints), from the rows. */
+const restartOf = (f) => f.harnesses.flatMap((h) => h.judged.rows.filter((r) => r.pid != null && RESTART_SET.has(r.reason)).map((r) => ({ harness: h.id, pid: r.pid, reason: r.reason })))
 
-const relayedText = (f) => f.relayed === 'unknown' ? `仍经 asight 的连接: 不知道(${f.relayed_reason})`
-  : f.relayed.closing + f.relayed.waiting === 0 ? '仍经 asight 的连接: 没有(没有 harness 被关掉后还连着的)'
-  : `仍经 asight 的连接: ${f.relayed.closing} 条仍经 asight 中转,本次响应(或本轮)结束后关闭${f.relayed.waiting ? `;另 ${f.relayed.waiting} 条等它自己关闭(asight off --now 立即切断)` : ''}`
-const netenvWriteText = (f) => (f.netenv_write_error ? [`本机网络环境的副本没写成: ${f.netenv_write_error};看板读的是它,会一直显示旧的`] : [])
-const userProcsText = (u) => (u.error ? [`你自己起的 asight 进程: 不知道(${u.error})`] : u.list.length ? [`你自己起的 asight 进程仍在跑: ${u.list.map((p) => `${p.command}(pid ${p.pid},${p.note})`).join('、')}`] : [])
+/** The health the document counts from: the daemon's own read when it answered, else the disk's. A reply whose read failed carries `{ error }` — that is a health that could not be read, never "no problems". */
+const effectiveHealth = (f) => (f.daemon && f.daemon.reply && f.daemon.reply.health ? { health: f.daemon.reply.health.error ? null : f.daemon.reply.health, error: f.daemon.reply.health.error || null } : { health: f.health, error: f.health_error })
+/** The critical conditions (D51④: a program refused asight's certificate), in the health's own order. */
+const criticalOf = (f) => { const h = effectiveHealth(f).health; return ((h && h.collector && h.collector.conditions) || []).filter((x) => x.level === 'critical') }
 
-/** The lines of `asight status <harness…>` — the detail view: every named harness's own row, its pid rows, its path detail. `colors` is the TTY palette
- *  (src/cli/text.mjs); the pure call keeps it off. The unnamed `asight status` prints `renderStatusDigest` instead (D46). */
-/** 1.6 §9.4: each form's `certificate` and `proxy` (proxy mode), as the facts the topology was drawn from carry them (core/proxymode/status-facts.mjs); `notes` = its
- *  harness-notes (4.11 CM31 / CM32). null where no form has them (Linux, nothing installed). */
+
+/** Each form's `certificate` and `proxy` (proxy mode, 附录 C.3), as the facts the topology was drawn from carry them. */
 function formsOf(f) {
   const out = {}
   for (const [h, hf] of Object.entries((f.facts && f.facts.harnesses) || {})) {
@@ -322,219 +303,99 @@ function formsOf(f) {
   return Object.keys(out).length ? out : null
 }
 
-/** `status <h>`'s per-form lines, rendered from the JSON (V43): the two axes apart (V32), what asight wrote beside what the user had (CM21, V70). */
-function formLines(forms, h) {
-  return ((forms && forms[h]) || []).flatMap(({ form, certificate: c, proxy: p, notes = [] }) => [`  ${form}`,
-    `    certificate: ${c.in_effect ? `生效 · ${c.carrier}${c.since ? ` · 自 ${c.since}` : ''}` : `不生效 · ${c.code || '不知道(读不到你的根证书库)'} — 跑 ${c.command}`}${c.user_file ? ` · 你的证书文件 ${c.user_file.path}(${c.user_file.state})` : ''}`,
-    `    proxy: ${p.connected ? '接上' : '没接上'} · 入口${p.entry_intact ? '完好' : '不完好'} · 门${p.door_up ? '在听' : '没在听'} · 上游 ${p.upstream.url_redacted ?? '直连'}(${p.upstream.source}${p.upstream.code ? ` · ${p.upstream.code}` : ''})`,
-    `    asight 写的: ${p.written ?? '没有'}   你原来的: ${p.prior ?? '没有'}`,
-    ...notes.map((n) => `    ${n.code}: ${n.text}`)])
-}
-
-export function renderStatus(f, { home = null, detail = [], now = null, colors: c = noColor() } = {}) {
-  const d = f.daemon, lines = [c.bold(`asight 状态(本用户 ${f.user})`)]
-  lines.push(d.state === 'running' ? `守护进程: 在跑${d.pid ? `(pid ${d.pid})` : ''}${f.daemon.reply && f.daemon.reply.helper ? (f.link.helper === 'missing' ? `;助手有问题: ${f.link.helper_reason}` : `;助手 pid ${f.daemon.reply.helper.pid}`) : ''}`
-    : d.state === 'not-running' ? `守护进程: 没在跑${d.reason ? `(${d.reason})` : ''}:什么都没有被采集;asight on 拉起它`
-    : d.state === 'not-responding' ? `守护进程: 没响应(${d.reason});新连接已因心跳过期直连,asight off 会停掉它`
-    : `守护进程: 不知道(${d.reason})`)
-  if (f.state && f.state.error) lines.push(`期望态: 不知道(${f.state.error})`)
-  if (f.manifest.error) lines.push(`安装清单: 不知道(${f.manifest.error})`)
-  if (!f.harnesses.length && !(f.state && f.state.error) && !f.manifest.error && f.platform === 'linux') lines.push('还没有装任何 harness 的信任入口;asight on 开始采集。')
-  for (const h of f.harnesses) {
-    const j = h.judged
-    const meta = [h.desired ? `期望 ${h.desired}` : '期望态: 不知道', ...(h.desired === 'on' && d.state === 'running' && f.link.attached !== null ? [`link ${f.link.attached ? '已挂' : '没挂'}`] : []), h.entry.state === 'unknown' ? `信任入口: 不知道(${h.entry.why})` : !h.installed ? '没有装入口(asight on 才装)' : h.entry.state === 'intact' ? '信任入口完好' : `信任入口${h.entry.state === 'missing' ? '不在了' : '被改过'}(${h.entry.why})`]
-    lines.push(`  ${h.id.padEnd(13)} ${said(j)}${j.captured === false && !j.rows.some((r) => r.pid != null) ? ` — ${reasonText(reasonOf(j))}` : ''}${j.captured === null ? `(${h.why.join('; ') || '读不到'})` : ''}   ${meta.join(' · ')}`)
-    for (const r of j.rows.filter((x) => x.pid != null)) {
-      const p = h.procs.find((x) => x.pid === r.pid)
-      const byEntry = p && p.trusted === null // the daemon has not judged this one: the entry and when it started say
-      lines.push(`      ${r.name ? `${r.name} ` : ''}pid ${r.pid}  ${r.captured === true ? `已被采集${byEntry ? '(守护进程还没判过它,这是按信任入口与启动时间判的)' : ''}` : r.captured === false ? `没有: ${r.reason ?? '(没给原因)'} — ${reasonText(r.reason, p && p.hint)}` : '不知道(守护进程没判过它)'}`)
-    }
-    lines.push(...identityLines(f, h.id))
-  }
-  lines.push(...listProblemLines(f))
-  if (f.topology) lines.push(...renderPathBlock(f.topology, { ids: f.harnesses.map((h) => h.id), now }), ...detail.filter((id) => f.topology[id]).flatMap((id) => ['', ...renderDetail(f.topology[id], { now }), ...formLines(formsOf(f), id)]))
-  else if (f.topology_error) lines.push(`各 harness 的路: 不知道(${f.topology_error})`)
-  lines.push(relayedText(f), ...(f.linger && lingerText({ ...f.linger, user: f.user }) ? [lingerText({ ...f.linger, user: f.user })] : []), ...netenvWriteText(f), ...userProcsText(f.userProcs))
-  const holders = f.holders || []
-  if (holders.length) lines.push(`还剩 ${new Set(holders.map((x) => x.pid)).size} 个进程可能还在用门(关掉后守护进程等它们退出): ${holders.map((x) => `${x.harness} pid ${x.pid}`).join('、')}`)
-  const restart = restartOf(f)
-  if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
-  return lines
-}
-
-// the name list of one harness (1.6 §9.7): the names in effect with their source, the ignored presets, the processes on no list that used its door
-const SOURCE_TEXT = { preset: '预设', custom: '自定' }
-const nameText = (n) => `${n.name}(${SOURCE_TEXT[n.source] || n.source}${n.args ? `, args ${n.args}` : ''}${n.entry ? `, entry ${n.entry}` : ''})`
-const unknownText = (u) => `${u.name ?? '不知道名字'}(pid ${u.pid ?? '不知道'}${u.named ? ';名字在名单上、参数没对上' : ''})`
-function identityLines(f, id) {
-  if (!f.identity) return f.identity_error ? [`      名单: 不知道(${f.identity_error})`] : []
-  const x = f.identity[id]
-  if (!x) return []
-  return [`      名单: ${x.names.length ? x.names.map(nameText).join(' · ') : '(空:没有名字认它的进程)'}`, ...(x.ignored.length ? [`      忽略的预设: ${x.ignored.map(nameText).join(' · ')}`] : []),
-    ...(x.unknown.length ? [`      不在名单上、用了它的入口: ${x.unknown.map(unknownText).join('、')}(只转发;doctor ${id} 给出加进名单的那一行)`] : [])]
-}
-/** agents.json's own problems (once: the file is one for every harness) — a bad item does not apply, the others do (4.6 §识别进程). */
-function listProblemLines(f) {
-  const x = f.agent_list
-  if (!x || !x.problems.length) return []
-  return [`名单文件 ${x.path}: ${x.state === 'ok' ? '有坏项(坏项不生效,其余照用)' : `${x.state}(只用预设)`}`, ...x.problems.map((p) => `  agents.json ${p.index == null ? '整个文件' : `第 ${p.index + 1} 项(agents[${p.index}])`}: ${p.code} — ${p.detail}`)]
-}
-
-// ── the digest of the unnamed `asight status` (D46: one screen of conclusions) ──────────────────────────────────────────────────────────────────────────────
-// The long tail moved, not away: the failure wall is `--failures`, the per-pid rows and the per-harness path detail are `status <harness>`, the English
-// reasons and every field are `--json`, the install notes are `doctor` (R11: relocated with a pointer, never dropped).
-
-/** A topology branch that carries information: more than the agent's own node on its path (or the path with asight taken out). The one-node topology
- *  `buildTopology`'s catch leaves is drawn as 「不知道」, not as a chain that says nothing (spec 1.6 §9.2: a build that failed prints one line). */
-const hasPathInfo = (t) => !!(t && Array.isArray(t.branches) && t.branches.some((b) => ((b.path || []).length > 1) || ((b.off_path || []).length > 1)))
-const baseName = (p) => String(p || '').split(/[\\/]/).pop()
-
-/** The harness's own annotation on the 在采 row: its (first, trusted first) process, with the process's name when the table gave one — `(Desktop pid 25880)`,
- *  `(claude pid 4121)` — and nothing when no process of it runs. */
-function procLabel(f, h) {
-  const pids = (h.procs || []).filter((p) => p && p.pid != null)
-  if (!pids.length) return ''
-  const p = pids.find((x) => x.trusted === true) || pids[0]
-  const row = (f.matched || []).find((x) => x.h === h.id && x.p && x.p.pid === p.pid)
-  const name = row ? baseName(row.p.argv && row.p.argv[0]) || baseName(row.p.exe) : ''
-  return `(${name ? `${name} ` : ''}pid ${p.pid})`
-}
-
-/** The health the digest judges from: the daemon's own read when it answered (`reply.health`, what the old wall printed), else the disk's. A reply whose
- *  read failed carries `{ error }` — that is a health that could not be read, never "no failures". */
-const effectiveHealth = (f) => (f.daemon && f.daemon.reply && f.daemon.reply.health ? { health: f.daemon.reply.health.error ? null : f.daemon.reply.health, error: f.daemon.reply.health.error || null } : { health: f.health, error: f.health_error })
-
-/** 采集健康 as one or two lines: the state, the 24 h failure count by kind, the newest failure as ONE squashed brief (src/cli/words.mjs) — and where the
- *  whole wall lives. Zero failures is a ✓ line; a health that could not be read keeps its error verbatim (R11). */
-/** The critical conditions (D51④: a decrypted client refused asight's certificate), first in the health's own order: `status` puts them at the top. */
-const criticalOf = (f) => { const h = effectiveHealth(f).health; return ((h && h.collector && h.collector.conditions) || []).filter((x) => x.level === 'critical') }
-const criticalLine = (x, c) => `${c.red('‼ 严重')} ${x.harness || x.agent || '?'}${x.pid != null ? ` pid ${x.pid}` : ''} 拒了 asight 的证书(${x.host || '?'} · ${x.alert || '?'})${x.trust_entry && x.trust_entry.var ? ` · 信任入口 ${x.trust_entry.var}${x.trust_entry.file ? ` ${x.trust_entry.file}` : ''}` : ''} · 自 ${x.since}`
-export function healthSummary(f, c = noColor()) {
-  const crit = criticalOf(f).map((x) => criticalLine(x, c))
-  return [...crit, ...healthLines(f, c)]
-}
-function healthLines(f, c) {
-  const eff = effectiveHealth(f), h = eff.health
-  if (!h) return [`采集健康 ${c.red('?')} 读不到(capture health could not be read: ${eff.error})`] // the reader's own phrase, kept verbatim (R11)
-  const s = h.summary || {}
+/** `failures` of the document: how many problems, how many expected and note findings, since when and the newest. Counts only real problems (§3.5). */
+function failuresOf(f) {
+  const h = effectiveHealth(f).health
+  if (!h) return null
   const groups = [...((h.collector && h.collector.failures) || []), ...((h.legacy && h.legacy.failures) || []), ...((h.raw && h.raw.failures) || [])]
-  const n = groups.reduce((k, g) => k + (g.count || 1), 0)
-  const mark = { ok: c.green('✓'), off: '○', stopped: '○', failing: c.yellow('⚠'), 'not-running': c.red('✗'), 'not-responding': c.red('✗'), unknown: '?', 'no-events': '?', residue: '–', 'not-installed': '–' }[s.state] || '?'
-  const word = { ok: null, off: '采集关着', stopped: '旧采集已停', failing: null, 'not-running': '守护进程没在跑', 'not-responding': '守护进程没响应', unknown: `状态不知道(${s.reason || '读不到'})`, 'no-events': '旧采集没有事件文件', residue: '没卸净(有残留)', 'not-installed': '没装' }[s.state] ?? String(s.state)
-  const unread = s.read_errors ? ` · 读不全(${s.read_errors} 个文件,明细: --json)` : ''
-  const hint = `        ${c.dim('全部明细: asight status --failures · 看板「采集健康」')}`
-  if (s.state === 'ok' && !n) return [`采集健康 ${mark}(24 h 内无失败)${unread}`]
-  if (n) {
-    let latest = groups[0]; for (const g of groups.slice(1)) if (String(g.last_ts || '') >= String(latest.last_ts || '')) latest = g // >= : on an equal timestamp the group whose record came last wins (the fold's own order)
-    const head = [`采集健康 ${mark} 24h 内 ${n} 条失败(${groups.length} 类) — 最新: ${failureBrief(latest)} ×${latest.count || 1}`, hint]
-    if (s.state !== 'failing') head[0] = `采集健康 ${mark} ${word} · 24h 内 ${n} 条失败(${groups.length} 类) — 最新: ${failureBrief(latest)} ×${latest.count || 1}`
-    head[0] += unread
-    return head
-  }
-  return [`采集健康 ${mark} ${word}${unread}`, ...(s.state === 'off' || s.state === 'stopped' || s.state === 'not-installed' ? [] : [hint])]
+  const expected = Object.values((h.collector && h.collector.expected) || {}).reduce((n, x) => n + (Number(x) || 0), 0)
+  let latest = null
+  for (const g of groups) if (String(g.last_ts || '') >= String(latest || '')) latest = g.last_ts || null
+  return { problem: groups.reduce((n, g) => n + (g.count || 1), 0), expected, note: (h.collector && h.collector.conditions ? h.collector.conditions.length : 0), since: h.read && h.read.since ? h.read.since : null, latest }
 }
 
-/** The unnamed `asight status`: ≤10 lines in the steady world, one screen of conclusions (D46). The rare warning lines (relayed connections, restarts,
- *  linger, your own asight processes) still print — they are things to act on, not decoration. */
-export function renderStatusDigest(f, { home = null, now = null, colors: c = noColor() } = {}) {
-  const d = f.daemon, reply = d.reply
-  const captured = f.harnesses.filter((h) => h.judged.captured === true)
-  const daemonBit = d.state === 'running'
-    ? `守护进程${d.pid ? ` pid ${d.pid}` : ' 在跑'}`
-    : d.state === 'not-running' ? `守护进程 没在跑${d.reason ? `(${d.reason})` : ''} · 什么都没有被采集(asight on 拉起它)`
-      : d.state === 'not-responding' ? `守护进程 没响应(${d.reason})`
-        : `守护进程 不知道(${d.reason})`
-  const engineBit = reply && reply.engine ? ` · 引擎 ${reply.engine.port}(${reply.engine.decrypted ?? 0} 解密, ${reply.engine.spliced ?? 0} 透传)` : ''
-  const lines = [c.bold(`asight · 在采 ${captured.length}/${HARNESS_IDS.length || f.harnesses.length} · ${daemonBit}${engineBit}`)]
-  if (captured.length) lines.push(`  ${c.green('在采')}   ${captured.map((h) => `${h.id}${procLabel(f, h)}`).join(' · ')}`)
-  const closed = f.harnesses.filter((h) => h.desired === 'off' && h.judged.captured === false)
-  if (closed.length) lines.push(`  ${c.dim('已关')}   ${closed.map((h) => h.id).join(' · ')}(期望态 off,asight on <harness> 才开)`)
-  const missing = f.harnesses.filter((h) => h.judged.captured === false && h.desired !== 'off')
-  if (missing.length) lines.push(`  ${c.yellow('没采')}   ${missing.map((h) => `${h.id}(${reasonText(reasonOf(h.judged)) || '没给原因'})`).join(' · ')}`)
-  const unknown = f.harnesses.filter((h) => h.judged.captured === null)
-  if (unknown.length) lines.push(`  ${c.yellow('不知道')} ${unknown.map((h) => `${h.id}(${h.why.join('; ') || '读不到'})`).join(' · ')}`)
-  const notInstalled = HARNESS_IDS.filter((id) => !f.harnesses.some((h) => h.id === id && h.installed))
-  if (notInstalled.length) lines.push(`  ${c.dim('未装')}   ${notInstalled.join(' · ')}`)
-  if (f.state && f.state.error) lines.push(`期望态: 不知道(${f.state.error})`)
-  if (f.manifest.error) lines.push(`安装清单: 不知道(${f.manifest.error})`)
-  if (f.topology_error) lines.push(`各 harness 的路: 不知道(${f.topology_error})`)
-  else if (f.topology) {
-    const ids = f.harnesses.map((h) => h.id)
-    const drawn = ids.filter((id) => hasPathInfo(f.topology[id]))
-    const rest = ids.filter((id) => f.topology[id] && !hasPathInfo(f.topology[id]))
-    if (drawn.length) lines.push(...renderPathBlock(f.topology, { ids: drawn, now })) // header and rows: the 各 harness 的路 line is the block's own
-    if (rest.length) lines.push(`各 harness 的路: 不知道(${[...new Set(rest.flatMap((id) => f.topology[id].notes || []))].join('; ') || '画不出来(读不到足够的事实)'};细节: asight status <harness>)`)
-  }
-  const outsiders = f.identity ? Object.entries(f.identity).filter(([, x]) => x.unknown.length) : []
-  if (outsiders.length) lines.push(`不在名单上、用了入口(只转发): ${outsiders.map(([id, x]) => `${id}: ${x.unknown.map(unknownText).join('、')}`).join(' · ')};细节: asight status <harness>`)
-  lines.push(...listProblemLines(f))
-  lines.push(...healthSummary(f, c))
-  lines.push(`日志     ${c.dim(tilde(path.join(f.dir, 'logs'), home))} · 记录 ${c.dim(tilde(path.dirname(f.dir), home))} · 关闭 asight off`)
-  if (f.relayed !== 'unknown' && f.relayed.closing + f.relayed.waiting > 0) lines.push(relayedText(f))
-  if (f.relayed === 'unknown') lines.push(relayedText(f))
-  const holders = f.holders || []
-  if (holders.length) lines.push(`还剩 ${new Set(holders.map((x) => x.pid)).size} 个进程可能还在用门(关掉后守护进程等它们退出): ${holders.map((x) => `${x.harness} pid ${x.pid}`).join('、')}`)
-  const restart = restartOf(f)
-  if (restart.length) lines.push(`需要你做的: ${restart.map((x) => `正在跑的 ${x.harness}(pid ${x.pid})重启后才会被采集`).join(';')};在那之前照常直连`)
-  if (f.linger && lingerText({ ...f.linger, user: f.user })) lines.push(lingerText({ ...f.linger, user: f.user }))
-  lines.push(...netenvWriteText(f), ...userProcsText(f.userProcs))
-  return lines
+/** The exit code of `status` (§3.5): 0 every harness that is on is captured · 1 some are not · 3 that cannot be judged. A stale record never decides it: the daemon's own answer does. */
+export function statusExit(f) {
+  if (f.health_error) return EXIT.unknown // the capture health could not be read: it cannot be judged, and that is never a pass (D-2, R4)
+  if (f.harnesses.some((h) => h.judged.captured === null)) return EXIT.unknown
+  const failing = f.harnesses.some((h) => h.desired === 'on' && h.judged.captured === false) || certNeedsUser(f)
+  return failing ? EXIT.incomplete : EXIT.ok
 }
 
-// a failure in the last 24 h (D38⑦): of the collector, the old capture or the raw layer — the summary state names only the worst part, and a daemon that is not running outranks a failure
-const failedIn24h = (h) => !!h && [h.collector && h.collector.failures, h.legacy && h.legacy.failures, h.raw && h.raw.failures].some((l) => Array.isArray(l) && l.length > 0)
+/** The 附录 C.3 document of a read: `status --json` and `asight query status` print exactly this. */
+export function statusDocOf(f) {
+  const d = f.daemon, forms = formsOf(f) || {}
+  const errors = [
+    ...(f.state && f.state.error ? [{ where: 'the on/off state', reason: f.state.error }] : []),
+    ...(f.manifest.error ? [{ where: 'the install record', reason: f.manifest.error }] : []),
+    ...(f.health_error ? [{ where: 'capture health', reason: f.health_error }] : []),
+    ...(f.identity_error ? [{ where: 'the agent name list', reason: f.identity_error }] : []),
+    ...(f.userProcs && f.userProcs.error ? [{ where: 'the process table', reason: f.userProcs.error }] : []),
+  ]
+  const doc = {
+    ...newReceipt('status'), ok: statusExit(f) === EXIT.ok,
+    daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, error: d.reason || null },
+    harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
+      desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why,
+      forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null })),
+      ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}),
+    }])),
+    ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
+    install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
+    ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures: failuresOf(f), errors,
+  }
+  return doc
+}
 
-const USAGE = 'usage: asight status [harness…] [--json] [--failures]'
+/** What `status` read: the facts, the topology drawn on them, and the certificate axis folded into each verdict. Nothing is written. */
+export async function statusFacts({ names = null, home = nodeOs.homedir(), env = process.env, platform = process.platform, deps = {} } = {}) {
+  const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names })
+  Object.assign(f, await gatherTopology(f, { home, env, platform, deps }))
+  judgeCertificates(f)
+  return f
+}
 
-// The old capture's own status branch — the platform gate and the claude-code Desktop/CLI rows of src/cli/legacy-status.mjs — went
-// with the old capture (D39⑥ executed 2026-10-11). Every platform runs the collector's status; a platform without a collector
-// reads the same facts and finds nothing installed. What the old capture left on a machine still shows in the health rows
-// (src/health/read.mjs reads ~/.asight/logs/mitm-events.ndjson) and is cleaned by hand (README).
+/** `asight query status` (附录 C.3 / C.5): the document, for the data side and for `--json`. */
+export async function statusDoc(opts = {}) { return statusDocOf(await statusFacts(opts)) }
 
-/** → the exit code (R4). `argv` is what follows `status`. `io` = { out, err } (src/off/io.mjs makeIo). */
+/** The findings of one harness, from the one catalogue (附录 B), so `status` and `doctor` never explain the same thing in two ways. */
+function findingsFor(f, ids) {
+  if (!f.facts || !f.topology) return []
+  try { return diagnose({ facts: f.facts, topology: f.topology, harnesses: ids, user: f.user }) } catch (e) { rethrowSandbox(e); return [] }
+}
+
+const USAGE = 'usage: asight status [<harness>...] [--failures] [--json]'
+
+/** → the exit code (§3.5). `argv` is what follows `status`. `io` = { out, err }. */
 export async function runStatusCli(argv, ctx = {}) { return (await statusRun(argv, ctx)).exit }
 
-/** `runStatusCli` that also hands back what it read: `{ exit, f }` (`f`: the facts of gatherStatus with `facts` / `topology` on them). `doctor` reads the same facts for its findings, so the daemon
- *  is asked once and the topology it prints and the one it diagnoses are the same object. */
+/** `runStatusCli` that also hands back what it read: `{ exit, f }`. `doctor` reads the same facts for its findings, so the daemon is asked once. */
 export async function statusRun(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const names = []
   let json = false, failures = false
   for (const a of argv) {
     if (a === '--json') json = true
-    else if (a === '--failures') failures = true // D46: the whole failure wall, the format it always had (the digest prints count + newest only)
-    else if (a.startsWith('-')) { io.err(`asight status: unknown option ${a}\n${USAGE}`); return { exit: EXIT.usage, f: null } }
+    else if (a === '--failures') failures = true
+    else if (a.startsWith('-')) { io.err(`asight status: unknown option '${a}'\n${USAGE}`); return { exit: EXIT.usage, f: null } }
     else names.push(a)
   }
   const named = resolveHarnesses(names)
-  if (!named.ok) { io.err(`asight status: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return { exit: EXIT.usage, f: null } }
-  const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names: named.ids })
-  Object.assign(f, await gatherTopology(f, { home, env, platform, deps }))
-  judgeCertificates(f)
-  recordNetenv(f, { home, deps })
-  const wanted = f.harnesses.filter((h) => h.desired === 'on')
-  const unreadable = f.harnesses.some((h) => h.judged.captured === null) || !!(f.state && f.state.error) || !!f.manifest.error || !!f.health_error
-  const failing = wanted.some((h) => h.judged.captured === false) || failedIn24h(f.health) || certNeedsUser(f)
-  const exit = unreadable ? EXIT.unknown : failing ? EXIT.incomplete : EXIT.ok
-  const restart = restartOf(f)
-  if (json) {
-    const r = { ...newReceipt('status'), ok: exit === EXIT.ok, user: f.user, ...(f.linger || {}), daemon: { state: f.daemon.state, pid: f.daemon.pid, reason: f.daemon.reason }, harnesses: f.harnesses.map((h) => ({ harness: h.id, desired: h.desired ?? 'unknown', captured: h.judged.captured, reason: reasonOf(h.judged), entry: h.entry.state, ...(h.entry.why ? { entry_why: h.entry.why } : {}), why: h.why, rows: h.judged.rows, ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}) })), agent_list: f.agent_list, ...(f.identity_error ? { identity_error: f.identity_error } : {}), ...(f.state && f.state.error ? { state_error: f.state.error } : {}), ...(f.manifest.error ? { manifest_error: f.manifest.error } : {}), ...(f.health_error ? { health_error: f.health_error } : {}), restart, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}), ...(f.netenv_write_error ? { netenv_write_error: f.netenv_write_error } : {}), ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}), user_processes: f.userProcs.error ? 'unknown' : f.userProcs.list, critical: criticalOf(f), log: path.join(f.dir, 'flows') }
-    const forms = formsOf(f); if (forms) r.forms = forms // 1.6 §9.4: per form, the certificate and the proxy apart
-    r.install = f.install; r.cert = f.cert // 1.6 §9.4 (D55): the certificate axis, apart from the harnesses' verdicts
-    r.holders = f.holders // P12: 「还剩 N 个」, with pids (null: the table or the manifest could not be read)
-    io.out(JSON.stringify(r, null, 2))
-    return { exit, f }
-  }
-  const c = colors(io) // zero ANSI bytes when stdout is not a TTY or NO_COLOR is set; --json never gets here (src/cli/text.mjs, D46)
+  if (!named.ok) { io.err(`asight status: unknown harness '${named.unknown.join(', ')}'. Known: ${named.known.join(', ')}`); return { exit: EXIT.usage, f: null } }
+  const f = await statusFacts({ names: named.ids, home, env, platform, deps })
+  const exit = statusExit(f)
+  const doc = statusDocOf(f)
+  if (json) { io.out(JSON.stringify(doc, null, 2)); return { exit, f } }
+  const c = colors(io) // zero ANSI bytes when stdout is not a TTY or NO_COLOR is set (src/cli/text.mjs)
   const now = (deps.ms || Date.now)()
   const detail = named.ids || []
-  if (detail.length) for (const l of renderStatus(f, { home, detail, now, colors: c })) io.out(l) // `now`: how long ago the paths were probed (§9.2 「N 秒前探测」)
-  else for (const l of renderStatusDigest(f, { home, now, colors: c })) io.out(l)
-  if (detail.length && !failures) for (const l of healthSummary(f, c)) io.out(l)
-  if (failures) {
-    // the whole wall, the format it always had (R11: the digest's count + newest points here)
-    if (f.daemon.reply) for (const l of ['', ...formatStatus(f.daemon.reply).split('\n')]) io.out(l)
-    else if (f.health) for (const l of ['', ...formatHealth(f.health)]) io.out(l)
-    else io.out(`\ncapture health could not be read: ${f.health_error}`)
-  }
+  if (detail.length) {
+    const found = findingsFor(f, detail)
+    detail.forEach((h, i) => {
+      if (i) io.out('')
+      const finding = found.find((x) => x.harness === h && x.class !== 'note') || null
+      for (const l of statusDetail(doc, h, { finding, now, colors: c })) io.out(l)
+    })
+  } else for (const l of statusSummary(doc, { now, colors: c })) io.out(l)
+  if (failures) { io.out(''); for (const l of failuresBlock(effectiveHealth(f).health, { now })) io.out(l) }
   return { exit, f }
 }

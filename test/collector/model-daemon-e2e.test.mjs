@@ -65,22 +65,23 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(sr.exit, STATUS_EXIT, io3.text())
         const sj = JSON.parse(io3.text().slice(io3.text().indexOf('{')))
         assert.deepEqual(validateReceipt(sj), [], 'status --json validates')
-        assert.equal(sj.harnesses.find((h) => h.harness === 'codex').captured, true, io3.text())
+        assert.equal(sj.harnesses.codex.captured, true, io3.text()) // 附录 C.3: the harnesses are a map, each with its own forms
         assert.equal(sj.cert.intermediate.state, 'current'); assert.match(sj.cert.intermediate.expires, /^\d{4}-/)
         assert.equal(sj.install.state, 'complete')
         assert.equal(sj.cert.root.state, 'in-place', 'the root read back from the store install put it in')
         assert.deepEqual(sj.holders, [], 'the daemon\'s holder poll (GET /holders): none while on')
         // CM21 through the real endpoint: the per-form facts and the chain are the daemon's doors and the entry the CLI wrote
-        const cf = (sj.forms || {}).codex || []
-        assert.ok(cf.length > 0, `status --json has codex's forms: ${JSON.stringify(sj.forms)} ${sj.topology_error || ''}`)
+        const cf = (sj.harnesses.codex || {}).forms || []
+        assert.ok(cf.length > 0, `status --json has codex's forms: ${JSON.stringify(sj.harnesses.codex)} ${sj.topology_error || ''}`)
         assert.equal(cf[0].proxy.connected, true, JSON.stringify(cf[0]))
         assert.ok(['hook', 'config-prior', 'process-env', 'system-proxy', 'direct', 'unknown'].includes(cf[0].proxy.upstream.source), cf[0].proxy.upstream.source)
         assert.match(cf[0].proxy.written, new RegExp(`^http://\\*\\*\\*@127\\.0\\.0\\.1:${port}$`), 'what asight wrote, redacted')
         assert.ok(sj.topology.codex.nodes.some((n) => n.kind === 'asight-forwarder' && n.port === port), `the chain is drawn through the door: ${JSON.stringify(sj.topology.codex.notes)}`)
         const io5 = fakeIo()
         await statusRun(['codex'], { io: io5, env: w.env, home: w.home, platform, deps: { platform, procs: async () => [], identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: archOf(platform) }), rootStore: w.store } })
-        assert.ok(io5.text().includes(`asight 写的: http://***@127.0.0.1:${port}   你原来的: ${cf[0].proxy.prior ?? '没有'}`), `status codex prints written and prior side by side (V70): ${io5.text()}`)
-        assert.match(io5.text(), new RegExp(`  ${cf[0].form}\\n    certificate: [^\\n]+\\n    proxy: 接上`), 'the two axes, one line each (V32)')
+        const esc = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        assert.match(io5.text(), new RegExp(`proxy\\s+points at asight ${esc(cf[0].proxy.written)}\\n\\s+\\(was: ${esc(cf[0].proxy.prior ?? 'none')}\\)`), `status codex prints what asight wrote (masked) and what was there before (V70): ${io5.text()}`)
+        assert.match(io5.text(), new RegExp(`  ${esc(cf[0].form)}\\s+certificate  [^\\n]+\\n\\s+proxy        `), 'the two axes, one line each (V32)')
         // the model daemon runs no driftCheck, so the entry the CLI wrote is never read back as the user's change
         const log = fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : ''
         assert.ok(!/"code":"proxy-changed"|"event":"netenv-change"/.test(log), 'no proxy-changed / netenv-change after on')
@@ -146,11 +147,11 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(await runOffCli([], { io: io2, home: w.home, env: w.env, platform, deps }), 0, io2.text())
         const uninstall = async () => { const o = fakeIo(); const exit = await runUninstallCli(['--yes'], { io: o, env: w.env, home: w.home, platform, deps: { ...deps, custody: w.custody } }); return { exit, text: o.text() } }
         const up = await uninstall()
-        assert.equal(up.exit, 1, up.text); assert.match(up.text, /pid 4711 \(codex\)/, 'daemon up: GET /holders names it')
+        assert.equal(up.exit, 1, up.text); assert.match(up.text.replace(/\n\s+/g, ' '), /codex \(pid 4711\)/, 'daemon up: GET /holders names it')
         await box.stop()
         http.globalAgent.destroy() // a CLI is a new process: no kept-alive socket to the stopped daemon's server
         const down = await uninstall()
-        assert.equal(down.exit, 1, down.text); assert.match(down.text, /pid 4711 \(codex\)/, 'daemon down: the CLI judges it from the manifest\'s window and the table')
+        assert.equal(down.exit, 1, down.text); assert.match(down.text.replace(/\n\s+/g, ' '), /codex \(pid 4711\)/, 'daemon down: the CLI judges it from the manifest\'s window and the table')
         assert.equal(readManifest(w.dir).install.state, 'complete', 'nothing was undone')
         assert.ok(readManifest(w.dir).liveness.codex.off_at, 'the real off closed the window in the manifest')
         table = []

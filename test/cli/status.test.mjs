@@ -190,29 +190,35 @@ const run = runStatus
 test('the daemon answers: each agent is captured or says why, and the exit code is 1 while one is not; every agent captured is exit 0', async () => {
   const s = await installedHome()
   const agents = [{ pid: 4121, agent: 'claude-code', trusted: true }, { pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: 'the trust entry was written after this process started; restart it once' }]
+  const docOf = async (argv, o) => (await run(s, [...argv, '--json'], o)).io.json()
   let r = await run(s, [], { request: asDaemon(reply({ agents })) })
   assert.equal(r.exit, 1, r.text)
-  // the unnamed digest (D46): one row per verdict, the pid-level detail in `status <harness>`
-  assert.match(r.text, /^  没采   claude-code\([^)]*重启后才会被采集\)$/m)
-  assert.match(r.text, /^  在采   codex$/m)
+  // the summary (§3.5): one row per harness — the verdict and one short clause, the pid-level detail in the document
+  assert.match(r.text, /^  claude-code {2}no {8}pid 4388 started before capture was on; restart claude-code$/m)
+  assert.match(r.text, /^  codex {8}yes$/m)
   const detail = await run(s, ['claude-code'], { request: asDaemon(reply({ agents })) })
-  assert.match(detail.text, /claude-code\s+没有: config-after-start[^\n]*期望 on/)
-  assert.match(detail.text, /pid 4121\s+已被采集/)
-  assert.match(detail.text, /pid 4388\s+没有: config-after-start — [^\n]*重启后才会被采集/)
+  assert.match(detail.text, /^claude-code: on, not captured$/m)
+  assert.match(detail.text, /^ {2}Why {4}claude-code is not captured: pid 4388 started before capture was on\.$/m)
+  const one = (await docOf(['claude-code'], { request: asDaemon(reply({ agents })) })).harnesses['claude-code']
+  assert.deepEqual([one.captured, one.reason], [false, 'config-after-start'])
+  assert.deepEqual(one.processes.map((p) => [p.pid, p.captured, p.reason]), [[4121, true, null], [4388, false, 'config-after-start']])
   r = await run(s, [], { request: asDaemon(reply({ agents: agents.slice(0, 1) })), procs: async () => [claudeProc(4121, Date.now() + 5000)] })
   assert.equal(r.exit, 0, r.text)
-  assert.match(r.text, /^  在采   claude-code\(claude pid 4121\) · codex$/m, 'the digest annotates the captured harness with its process')
+  assert.match(r.text, /^Capturing 2 of 2 installed harnesses\./m)
+  assert.match(r.text, /^ {2}claude-code {2}yes$/m)
   r = await run(s, ['claude'], { request: asDaemon(reply()) })
-  assert.ok(!/codex/.test(r.text.split('\n').filter((l) => /^ {2}\w/.test(l)).join('\n')), 'a name restricts the table (the alias claude is claude-code)')
+  assert.match(r.text, /^claude-code: on, /m, 'the alias claude is claude-code')
+  assert.ok(!/^codex:/m.test(r.text), 'a name restricts the output to it')
+  const reasonsOf = (doc) => Object.fromEntries(Object.entries(doc.harnesses).map(([h, x]) => [h, x.reason]))
   r = await run(s, [], { request: asDaemon(reply({ actual: 'off', mismatch: true })) })
-  assert.match(r.text, /claude-code\(期望开,内核里没有本实例的 link/); assert.equal(r.exit, 1)
-  r = await run(s, [], { request: asDaemon(reply({ helper: { pid: null, proto: null, ok: false, down: 'ENOENT', expected_proto: 1 } })) })
-  assert.match(r.text, /claude-code\(能力助手缺失或版本不对\(sudo asight setup-helper\)/)
-  r = await run(s, [], { request: asDaemon(reply({ actual: 'off', mismatch: true, helper: { pid: null, proto: null, ok: false, down: 'ENOENT', expected_proto: 1 } })) })
-  assert.match(r.text, /claude-code\(能力助手缺失或版本不对\(sudo asight setup-helper\)/, 'a dead helper leaves the kernel with no link: the reason is the helper, not the link')
-  assert.ok(!/内核里没有本实例的 link/.test(r.text), r.text)
-  r = await run(s, ['claude-code'], { request: asDaemon(reply({ agents: [{ pid: 4121, agent: 'claude-code', trusted: true }], negatives: [{ pid: 4121, host: 'api.anthropic.com', cause: 'client-rejected-leaf' }] })) })
-  assert.match(r.text, /pid 4121\s+没有: negative-cache/)
+  assert.match(r.text, /^ {2}claude-code {2}no {8}asight is not attached$/m); assert.equal(r.exit, 1)
+  assert.deepEqual(reasonsOf(await docOf([], { request: asDaemon(reply({ actual: 'off', mismatch: true })) })), { 'claude-code': 'link-missing', codex: 'link-missing' })
+  const helperDown = { helper: { pid: null, proto: null, ok: false, down: 'ENOENT', expected_proto: 1 } }
+  r = await run(s, [], { request: asDaemon(reply(helperDown)) })
+  assert.match(r.text, /^ {2}claude-code {2}no {8}asight's capture helper is missing or is the wrong version$/m)
+  assert.deepEqual(reasonsOf(await docOf([], { request: asDaemon(reply({ actual: 'off', mismatch: true, ...helperDown })) })), { 'claude-code': 'helper-missing', codex: 'helper-missing' }, 'a dead helper leaves the kernel with no link: the reason is the helper, not the link')
+  const neg = await docOf(['claude-code'], { request: asDaemon(reply({ agents: [{ pid: 4121, agent: 'claude-code', trusted: true }], negatives: [{ pid: 4121, host: 'api.anthropic.com', cause: 'client-rejected-leaf' }] })) })
+  assert.deepEqual(neg.harnesses['claude-code'].processes.map((p) => [p.pid, p.reason]), [[4121, 'negative-cache']])
 })
 
 test('the entry on disk decides when no process does: intact when the value is there (the file may have been rewritten), entry-missing when it is gone, entry-changed when it is something else', async () => {
@@ -220,18 +226,21 @@ test('the entry on disk decides when no process does: intact when the value is t
   const settings = path.join(s.home, '.claude', 'settings.json')
   const ok = JSON.parse(fs.readFileSync(settings, 'utf8'))
   fs.writeFileSync(settings, JSON.stringify({ ...ok, theme: 'dark' }, null, 4)) // Claude Code rewrote the file: the key is still there
-  let r = await run(s, ['claude-code'], { request: asDaemon(reply()) })
-  assert.match(r.text, /claude-code\s+正在被采集[^\n]*信任入口完好/); assert.equal(r.exit, 0)
+  const verdict = async () => {
+    const r = await run(s, ['claude-code', '--json'], { request: asDaemon(reply()) })
+    const h = r.io.json().harnesses['claude-code']
+    return [h.captured, h.reason, r.exit]
+  }
+  assert.deepEqual(await verdict(), [true, null, 0])
   const cur = JSON.parse(fs.readFileSync(settings, 'utf8'))
   fs.writeFileSync(settings, JSON.stringify({ ...cur, env: { ...cur.env, NODE_EXTRA_CA_CERTS: '/elsewhere/ca.pem' } }))
-  r = await run(s, ['claude-code'], { request: asDaemon(reply()) })
-  assert.match(r.text, /claude-code\s+没有: entry-changed[^\n]*信任入口被改过/); assert.equal(r.exit, 1)
+  assert.deepEqual(await verdict(), [false, 'entry-changed', 1])
+  // the summary says it in words, once (§3.5: one short clause per row, no code name)
+  assert.match((await run(s, [], { request: asDaemon(reply()) })).text, /^ {2}claude-code {2}no {8}the setting that points at asight holds something else$/m)
   fs.writeFileSync(settings, JSON.stringify({ theme: 'dark' }))
-  r = await run(s, ['claude-code'], { request: asDaemon(reply()) })
-  assert.match(r.text, /claude-code\s+没有: entry-missing[^\n]*信任入口不在了/)
+  assert.deepEqual(await verdict(), [false, 'entry-missing', 1])
   fs.rmSync(settings)
-  r = await run(s, ['claude-code'], { request: asDaemon(reply()) })
-  assert.match(r.text, /entry-missing/)
+  assert.deepEqual(await verdict(), [false, 'entry-missing', 1])
 })
 
 test('no daemon: nothing is captured (daemon-not-running), read from the disk, with the processes found by the manifest\'s signatures — each one says the daemon is not running, whenever it started (the entry and the start time only come into it once a daemon answers)', async () => {
@@ -239,12 +248,14 @@ test('no daemon: nothing is captured (daemon-not-running), read from the disk, w
   const old = Date.now() - 3600e3
   const r = await run(s, [], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })
   assert.equal(r.exit, 1, r.text)
-  assert.match(r.text, /^asight · 在采 0\/7 · 守护进程 没在跑/m)
-  assert.match(r.text, /^  没采   claude-code\(守护进程没在跑/m)
-  const detail = await run(s, ['claude-code'], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })
-  assert.match(detail.text, /claude-code\s+没有: daemon-not-running/)
-  assert.match(detail.text, /pid 5000\s+没有: daemon-not-running/); assert.match(detail.text, /pid 5001\s+没有: daemon-not-running/)
-  assert.match(r.text, /采集健康/, 'and the capture health read from disk follows (the digest names the state; the wall is --failures)')
+  assert.match(r.text, /^Capturing 0 of 2 installed harnesses\.$/m)
+  assert.match(r.text, /^Daemon not running; nothing is captured\. Start it: asight on$/m)
+  assert.match(r.text, /^ {2}claude-code {2}no {8}asight is not running in the background$/m)
+  const doc = (await run(s, ['claude-code', '--json'], { procs: async () => [claudeProc(5000, old), claudeProc(5001, Date.now() + 5000)] })).io.json()
+  const h = doc.harnesses['claude-code']
+  assert.deepEqual([h.captured, h.reason], [false, 'daemon-not-running'])
+  assert.deepEqual(h.processes.map((p) => [p.pid, p.reason]).sort((a, b) => a[0] - b[0]), [[5000, 'daemon-not-running'], [5001, 'daemon-not-running']])
+  assert.match(r.text, /^ {2}Problems {5}(none in the last 24 hours|\d)/m, 'and the capture health read from disk follows (the summary names it; the wall is --failures)')
 })
 
 test('the daemon answers but has not listed a process of a harness (it started since the daemon last looked): the entry and when it started decide (V32) — older than the entry: config-after-start and told to restart; newer: captured, and said to be by entry and start time; entry gone: entry-missing; a pid the daemon lists is not added twice', async () => {
@@ -254,22 +265,18 @@ test('the daemon answers but has not listed a process of a harness (it started s
   const request = asDaemon(reply({ agents: [{ pid: 5002, agent: 'claude-code', trusted: true }] }))
   let r = await run(s, [], { procs, request })
   assert.equal(r.exit, 1, r.text)
-  assert.match(r.text, /需要你做的: 正在跑的 claude-code\(pid 5000\)重启后才会被采集/)
-  const detail = await run(s, ['claude-code'], { procs, request })
-  assert.match(detail.text, /pid 5000\s+没有: config-after-start — [^\n]*重启后才会被采集/)
-  assert.match(detail.text, /pid 5001\s+已被采集\(守护进程还没判过它,这是按信任入口与启动时间判的\)/)
-  assert.match(detail.text, /pid 5002\s+已被采集$/m, 'the daemon\'s own verdict carries no caveat')
-  const doc = (await run(s, ['--json'], { procs, request })).io.json()
-  const rows = doc.harnesses.find((h) => h.harness === 'claude-code').rows.map((x) => [x.pid, x.captured, x.reason]).sort((a, b) => a[0] - b[0])
+  assert.match(r.text, /^ {2}claude-code {2}no {8}pid 5000 started before capture was on; restart claude-code$/m)
+  const doc = (await run(s, ['claude-code', '--json'], { procs, request })).io.json()
+  const rows = doc.harnesses['claude-code'].processes.map((x) => [x.pid, x.captured, x.reason]).sort((a, b) => a[0] - b[0])
   assert.deepEqual(rows, [[5000, false, 'config-after-start'], [5001, true, null], [5002, true, null]], 'three rows: the listed pid once')
   assert.deepEqual(doc.restart, [{ harness: 'claude-code', pid: 5000, reason: 'config-after-start' }])
   // the entry is gone: a restart would not help, so it is the entry that is said — for the one the daemon has not judged only (the daemon turns its own untrusted by itself)
   fs.rmSync(path.join(s.home, '.claude', 'settings.json'))
-  const gone = await run(s, ['claude-code'], { procs, request })
-  assert.match(gone.text, /pid 5001\s+没有: entry-missing/); assert.match(gone.text, /pid 5000\s+没有: entry-missing/); assert.match(gone.text, /pid 5002\s+已被采集$/m)
+  const gone = (await run(s, ['claude-code', '--json'], { procs, request })).io.json().harnesses['claude-code']
+  assert.deepEqual(gone.processes.map((x) => [x.pid, x.reason]).sort((a, b) => a[0] - b[0]), [[5000, 'entry-missing'], [5001, 'entry-missing'], [5002, null]])
   // a process of another harness, or one that matches no signature, is not added to this one
-  r = await run(s, ['codex'], { procs, request: asDaemon(reply()) })
-  assert.ok(!/pid 500\d/.test(r.text.split('\n').filter((l) => /^ {2}\w|^ {6}pid/.test(l)).join('\n')), r.text)
+  const other = (await run(s, ['codex', '--json'], { procs, request: asDaemon(reply()) })).io.json().harnesses.codex
+  assert.deepEqual(other.processes, [], JSON.stringify(other.processes))
 })
 
 test('off: every harness is desired-off, exit 0 — nothing is wrong with a switch that is off', async () => {
@@ -277,9 +284,12 @@ test('off: every harness is desired-off, exit 0 — nothing is wrong with a swit
   const off = await s.off(); assert.equal(off.exit, 0)
   const r = await run(s)
   assert.equal(r.exit, 0, r.text)
-  assert.match(r.text, /^  已关   claude-code · codex\(期望态 off/m)
+  assert.match(r.text, /^ {2}claude-code {2}off$/m)
+  assert.match(r.text, /^ {2}codex {8}off$/m)
   const detail = await run(s, ['claude-code', 'codex'])
-  assert.match(detail.text, /claude-code\s+没有: desired-off[^\n]*期望态是 off/); assert.match(detail.text, /codex\s+没有: desired-off/)
+  assert.match(detail.text, /^claude-code: off, capture is off$/m); assert.match(detail.text, /^codex: off, capture is off$/m)
+  const doc = (await run(s, ['--json'])).io.json()
+  assert.deepEqual(Object.entries(doc.harnesses).map(([h, x]) => [h, x.desired, x.reason]), [['claude-code', 'off', 'desired-off'], ['codex', 'off', 'desired-off']])
 })
 
 test('V32: no daemon and state.json unreadable: 不知道 with the file and the errno for every harness, exit 3 — and --json says the same (captured null)', async () => {
@@ -288,17 +298,17 @@ test('V32: no daemon and state.json unreadable: 不知道 with the file and the 
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === stateF) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
   const r = await run(s, [], { fs: broken })
   assert.equal(r.exit, 3, r.text)
-  assert.match(r.text, new RegExp(`期望态: 不知道[^\\n]*${stateF.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^\\n]*EACCES`))
-  assert.match(r.text, /^  不知道 claude-code\([^)]*EACCES/m)
+  assert.match(r.text, new RegExp(`^ {2}claude-code {2}unknown {3}unknown \\(${stateF.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: EACCES\\)$`, 'm'))
+  assert.match((await run(s, ['claude-code'], { fs: broken })).text, /^claude-code: unknown \(its on\/off state could not be read\), unknown \(/m)
   const j = await run(s, ['--json'], { fs: broken })
   assert.equal(j.exit, 3)
   const doc = j.io.json()
   assert.deepEqual(validateReceipt(doc), [])
-  assert.deepEqual([doc.command, doc.ok, doc.harnesses.map((h) => [h.harness, h.captured, h.desired])], ['status', false, [['claude-code', null, 'unknown'], ['codex', null, 'unknown']]])
-  // R11: 不知道 carries its reason in the JSON too — the file and the errno, at the top and for every harness that waits on it
-  assert.ok(doc.state_error.includes(stateF) && doc.state_error.includes('EACCES'), doc.state_error)
-  for (const h of doc.harnesses) assert.ok(h.why.some((w) => w.includes(stateF) && w.includes('EACCES')), `${h.harness}: ${JSON.stringify(h.why)}`)
-  assert.ok(!('manifest_error' in doc) && !('health_error' in doc), 'what could be read has no error key')
+  assert.deepEqual([doc.command, doc.ok, Object.entries(doc.harnesses).map(([h, x]) => [h, x.captured, x.desired])], ['status', false, [['claude-code', null, null], ['codex', null, null]]])
+  // R11: unknown carries its reason in the JSON too — the file and the errno, in `errors` and for every harness that waits on it
+  assert.deepEqual(doc.errors.filter((e) => e.where === 'the on/off state').map((e) => e.reason.includes(stateF) && e.reason.includes('EACCES')), [true], JSON.stringify(doc.errors))
+  for (const [h, x] of Object.entries(doc.harnesses)) assert.ok(x.why.some((w) => w.includes(stateF) && w.includes('EACCES')), `${h}: ${JSON.stringify(x.why)}`)
+  assert.deepEqual(doc.errors.filter((e) => ['the install record', 'capture health'].includes(e.where)), [], 'what could be read has no error entry')
 })
 
 test('R11: the daemon answers but could not read the kernel state: every harness that is on is 不知道 with the daemon\'s error and its code — in the text and in --json — exit 3, never 没有 and never 正在被采集', async () => {
@@ -306,43 +316,42 @@ test('R11: the daemon answers but could not read the kernel state: every harness
   const bad = (o) => asDaemon(reply({ actual: 'unknown', ...o }))
   let r = await run(s, [], { request: bad({ error: 'helper socket: connect EACCES /run/asight/helper.sock', error_code: 'EACCES' }) })
   assert.equal(r.exit, 3, r.text)
-  assert.match(r.text, /claude-code\(the daemon could not read the kernel state: helper socket: connect EACCES \/run\/asight\/helper\.sock\)/)
-  assert.match(r.text, /codex\(the daemon could not read the kernel state/)
-  assert.ok(!/正在被采集|在采\s+claude-code|\(期望开,内核里没有本实例的 link/.test(r.text.split('\n').filter((l) => l.startsWith('  不知道')).join('\n')), r.text)
+  assert.match(r.text, /^ {2}claude-code {2}unknown {3}unknown \(the daemon could not read the kernel state: helper socket: connect EACCES \/run\/asight\/helper\.sock\)$/m)
+  assert.match(r.text, /^ {2}codex {8}unknown {3}unknown \(the daemon could not read the kernel state/m)
+  assert.ok(!/ (yes|no) /.test(r.text.split('\n').filter((l) => /^ {2}(claude-code|codex) /.test(l)).join('\n')), r.text)
   r = await run(s, ['--json'], { request: bad({ error: 'the helper did not answer', error_code: 'ETIMEDOUT' }) })
   const doc = r.io.json()
   assert.equal(r.exit, 3)
-  assert.deepEqual(doc.harnesses.map((h) => [h.harness, h.captured, h.desired]), [['claude-code', null, 'on'], ['codex', null, 'on']])
-  for (const h of doc.harnesses) assert.deepEqual(h.why, ['the daemon could not read the kernel state: the helper did not answer (ETIMEDOUT)'], 'a code the message does not name is added')
+  assert.deepEqual(Object.entries(doc.harnesses).map(([h, x]) => [h, x.captured, x.desired]), [['claude-code', null, 'on'], ['codex', null, 'on']])
+  for (const [h, x] of Object.entries(doc.harnesses)) assert.deepEqual(x.why, ['the daemon could not read the kernel state: the helper did not answer (ETIMEDOUT)'], `${h}: a code the message does not name is added`)
   r = await run(s, ['codex'], { request: bad({}) })
-  assert.match(r.text, /codex\s+不知道\(the daemon could not read the kernel state: it gave no reason\)/)
+  assert.match(r.text, /^codex: on, unknown \(the daemon could not read the kernel state: it gave no reason\)$/m)
   // a reply that carries no kernel state at all is not known either, and says what it carried
   r = await run(s, ['codex'], { request: asDaemon({ ...reply(), actual: undefined }) })
-  assert.match(r.text, /codex\s+不知道\([^)]*does not say whether the kernel has this instance's link/); assert.equal(r.exit, 3)
+  assert.match(r.text, /^codex: on, unknown \([^)]*does not say whether the kernel has this instance's link/m); assert.equal(r.exit, 3)
 })
 
 test('a daemon that does not answer is daemon-not-responding; --json is one document that validates, with the code ids and the restart list', async () => {
   const s = await installedHome()
   const r = await run(s, [], { request: down('ETIMEDOUT') })
-  assert.match(r.text, /守护进程 没响应\(/); assert.match(r.text, /^  没采   claude-code\(守护进程没响应\)/m); assert.equal(r.exit, 1)
+  assert.match(r.text, /^Daemon does not answer \([^)]*ETIMEDOUT/m); assert.match(r.text, /^ {2}claude-code {2}no {8}asight runs in the background but does not answer$/m); assert.equal(r.exit, 1)
   const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start' }]
   const j = await run(s, ['--json'], { request: asDaemon(reply({ agents })) })
   const doc = j.io.json()
   assert.deepEqual(validateReceipt(doc), [])
   assert.deepEqual(doc.restart, [{ harness: 'claude-code', pid: 4388, reason: 'config-after-start' }])
-  assert.deepEqual(doc.harnesses.map((h) => [h.harness, h.captured, h.reason]), [['claude-code', false, 'config-after-start'], ['codex', true, null]])
+  assert.deepEqual(Object.entries(doc.harnesses).map(([h, x]) => [h, x.captured, x.reason]), [['claude-code', false, 'config-after-start'], ['codex', true, null]])
   assert.equal(j.io.stderrText(), '', 'stdout carries the one JSON, nothing leaks to stderr')
 })
 
-test('status changes nothing in the HOME but ~/.asight/netenv.json (the board\'s copy of the topology, 0600), and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', async () => {
+test('status writes nothing at all (§3.5), and usage errors (an unknown harness, an unknown option) exit 2 before anything is read', async () => {
   const s = await installedHome()
   const before = snapshot(s.home)
   await run(s); await run(s, ['--json']); await run(s, [], { request: asDaemon(reply()) })
-  assert.deepEqual(changedFiles(before, snapshot(s.home)), [path.join('.asight', 'netenv.json')], 'read-only, but for the one cache')
-  assert.equal(fs.statSync(path.join(s.home, '.asight', 'netenv.json')).mode & 0o777, 0o600)
-  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(s.home, '.asight', 'netenv.json'), 'utf8'))).sort(), ['schema', 'topology'], 'D49: schema and topology, no probe result')
-  let r = await run(s, ['claud']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown harness claud[^\n]*claude-code/); assert.equal(r.text, '')
-  r = await run(s, ['--nope']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown option --nope/)
+  assert.deepEqual(changedFiles(before, snapshot(s.home)), [], 'read-only: not even a cache of the topology')
+  assert.ok(!fs.existsSync(path.join(s.home, '.asight', 'netenv.json')), 'the board\'s copy is the daemon\'s to write, not status\'s')
+  let r = await run(s, ['claud']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown harness 'claud'[^\n]*claude-code/); assert.equal(r.text, '')
+  r = await run(s, ['--nope']); assert.equal(r.exit, 2); assert.match(r.io.stderrText(), /unknown option '--nope'/)
   const fresh = tmpDir('asight-fresh-')
   const f = await runStatusCli([], { io: fakeIo(), home: fresh, platform: 'linux', env: { HOME: fresh }, deps: { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }) } })
   assert.equal(f, 0); assert.deepEqual(fs.readdirSync(fresh), [], 'on a machine with nothing installed it prints so, exits 0, and creates nothing')
@@ -388,11 +397,13 @@ test('the flip (4.9 §4, 1.6 §4): darwin status is the NEW status — no opt-in
 test('connections still relayed after an off: N closing and M waiting, in the text and in --json (cut is 0: only off --now cuts); none is said as none, with no daemon there is no engine', async () => {
   const s = await installedHome()
   let r = await run(s, [], { request: asDaemon(reply({ relayed: { closing: 2, waiting: 1 } })) })
-  assert.match(r.text, /^仍经 asight 的连接: 2 条仍经 asight 中转,本次响应\(或本轮\)结束后关闭;另 1 条等它自己关闭\(asight off --now 立即切断\)$/m)
+  assert.match(r.text, /^ {2}Connections {2}3 open through asight$/m)
   assert.deepEqual((await run(s, ['--json'], { request: asDaemon(reply({ relayed: { closing: 2, waiting: 1 } })) })).io.json().relayed, { closing: 2, waiting: 1, cut: 0 })
   r = await run(s, [], { request: asDaemon(reply()) })
-  assert.ok(!/仍经 asight/.test(r.text), 'a known zero needs no line of its own in the digest (D46: one screen of what matters)')
-  assert.match((await run(s, ['claude-code'], { request: asDaemon(reply()) })).text, /^仍经 asight 的连接: 没有/m, 'the detail view still says none, spelled out')
+  assert.match(r.text, /^ {2}Connections {2}0 open through asight$/m, 'a known zero is said as a zero, never left out')
+  const noresp = await run(s, [], { request: down('ETIMEDOUT') })
+  assert.match(noresp.text, /^ {2}Connections$\n^ {2}unknown \([^)]*ETIMEDOUT/m, 'a daemon that does not answer cannot say: unknown with the reason, never 0 (R11)')
+  assert.equal((await run(s, ['--json'], { request: down('ETIMEDOUT') })).io.json().relayed, 'unknown')
   assert.deepEqual((await run(s, ['--json'])).io.json().relayed, { closing: 0, waiting: 0, cut: 0 }, 'no daemon: no engine, so none — a known zero')
 })
 
@@ -406,56 +417,35 @@ test('D49: status looks at no VPN software — the digest has no 路径 row and 
   assert.ok(!('netenv' in j), 'no netenv key')
 })
 
-test('a harness process\'s proxy credentials are never printed; an asight serve you started is listed, not killed', async () => {
+test('a harness process\'s proxy credentials are never printed, in the text or in the document; a process table that could not be read is an error entry with its reason (R11)', async () => {
   const s = await installedHome()
   const procs = async () => [claudeProc(5000, Date.now() + 5000, new Map([['HTTPS_PROXY', 'http://alice:pw@127.0.0.1:7897']])), { pid: 5310, ppid: 1, uid: 1000, startedAt: 1, exe: '/usr/bin/node', argv: ['node', '/repo/bin/asight.mjs', 'serve'], env: () => new Map() }]
   const r = await run(s, [], { procs, request: asDaemon(reply()) })
-  assert.ok(!r.text.includes('alice:pw'))
-  assert.match(r.text, /^你自己起的 asight 进程仍在跑: asight serve\(pid 5310,只读看板,不在 agent 路径上\)$/m)
-  const down2 = await run(s, [], { procs: async () => { throw new Error('the process table /proc cannot be read (EACCES)') } })
-  assert.match(down2.text, /^你自己起的 asight 进程: 不知道\(the process table/m)
-})
-
-// R11 / D38: the copy of the topology the board reads is a cache; that it could not be refreshed is said, not dropped (a board that keeps showing the old one is a silent failure)
-const rootCanWrite = typeof process.getuid === 'function' && process.getuid() === 0 ? 'root can write into a directory with no write bit' : false
-test('a netenv.json that could not be written is said: a line in the text, netenv_write_error (the file and the errno) in --json; the verdicts and the exit code do not change', { skip: rootCanWrite }, async () => {
-  const s = await installedHome()
-  const home = path.join(s.home, '.asight')
-  const control = await run(s, [])
-  assert.ok(!/没写成/.test(control.text), 'written: nothing to say')
-  assert.ok(!('netenv_write_error' in (await run(s, ['--json'])).io.json()))
-  fs.rmSync(path.join(home, 'netenv.json'))
-  fs.chmodSync(home, 0o500)
-  try {
-    const r = await run(s, [])
-    assert.match(r.text, new RegExp(`^本机网络环境的副本没写成: ${path.join(home, 'netenv.json').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: EACCES;看板读的是它,会一直显示旧的$`, 'm'))
-    assert.equal(r.exit, control.exit)
-    const j = await run(s, ['--json'])
-    assert.equal(j.io.json().netenv_write_error, `${path.join(home, 'netenv.json')}: EACCES`)
-    assert.equal(j.exit, control.exit)
-    assert.deepEqual(validateReceipt(j.io.json()), [])
-  } finally { fs.chmodSync(home, 0o700) }
+  assert.ok(!r.text.includes('alice:pw'), r.text)
+  assert.ok(!JSON.stringify((await run(s, ['--json'], { procs, request: asDaemon(reply()) })).io.json()).includes('alice:pw'))
+  const down2 = await run(s, ['--json'], { procs: async () => { throw new Error('the process table /proc cannot be read (EACCES)') } })
+  assert.deepEqual(down2.io.json().errors.filter((e) => e.where === 'the process table').map((e) => e.reason), ['the process table /proc cannot be read (EACCES)'])
 })
 
 // ── V39: logging out stops the daemon unless linger is on (1.6 §1.1) — `on` and `status` say so, give the command, and never run loginctl (R8) ───────────────────────────────────────────────────
 import { runOnCli } from '../../src/cli/on.mjs'
 import { onCtx, seedClaude, recordingExec, installFirst } from './fixtures/on-ctx.mjs'
 
-test('V39 status: linger off says 登出后停采(未开 linger) and loginctl enable-linger <user>, --json linger false; on says nothing; unreadable says 不知道 with the file and the errno, never 已开', async () => {
+test('V39 status: linger off says capture stops when you log out and gives loginctl enable-linger <user>, --json linger false; on says nothing; unreadable says unknown with the file and the errno, never "on"', async () => {
   const s = await installedHome()
   const noLoginctl = () => assert.ok(!s.sys.exec.calls.some((c) => /loginctl/.test(c)), 'loginctl is not run: asight says how, it does not do it')
   let r = await run(s, [], { lingerRead: () => ({ state: false }) })
-  assert.match(r.text, /^登出后停采\(未开 linger\): 要登出后继续采集,跑 loginctl enable-linger alice$/m)
+  assert.match(r.text, /^ {2}Logging out {2}capture stops when you log out; run: loginctl enable-linger alice$/m)
   assert.equal((await run(s, ['--json'], { lingerRead: () => ({ state: false }) })).io.json().linger, false)
   r = await run(s, [], { lingerRead: () => ({ state: true }) })
-  assert.ok(!/linger|登出/.test(r.text), 'on: no line')
+  assert.ok(!/linger|Logging out/.test(r.text), 'on: no line')
   assert.equal((await run(s, ['--json'], { lingerRead: () => ({ state: true }) })).io.json().linger, true)
   r = await run(s, [], { lingerRead: () => ({ state: null, error: '/var/lib/systemd/linger/alice: EACCES' }) })
-  assert.match(r.text, /^登出后停采: 不知道\(\/var\/lib\/systemd\/linger\/alice: EACCES\)$/m); assert.ok(!/已开/.test(r.text))
+  assert.match(r.text, /^ {2}Logging out {2}unknown \(\/var\/lib\/systemd\/linger\/alice: EACCES\)$/m); assert.ok(!/capture stops when you log out/.test(r.text))
   const j = (await run(s, ['--json'], { lingerRead: () => ({ state: null, error: 'EACCES' }) })).io.json()
   assert.deepEqual([j.linger, validateReceipt(j)], ['unknown', []])
   r = await run(s, [], { lingerRead: () => { throw new Error('the reader broke') } })
-  assert.match(r.text, /^登出后停采: 不知道\(the reader broke\)$/m)
+  assert.match(r.text, /^ {2}Logging out {2}unknown \(the reader broke\)$/m)
   noLoginctl()
 })
 
@@ -464,9 +454,11 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
     const home = tmpDir('asight-v39-'); seedClaude(home); await installFirst(home)
     const io = fakeIo(), exec = recordingExec(), ctx = onCtx(home, io, { exec, deps: { lingerRead, linger: undefined } })
     assert.equal(await runOnCli(['--yes'], ctx), 0, io.text())
-    if (want === false) assert.match(io.stdoutText(), /^登出后停采\(未开 linger\): 要登出后继续采集,跑 loginctl enable-linger alice$/m)
-    else if (want === true) assert.ok(!/linger|登出/.test(io.stdoutText()))
-    else { assert.match(io.stdoutText(), /^登出后停采: 不知道\(\/var\/lib\/systemd\/linger\/alice: EACCES\)$/m); assert.ok(!/已开/.test(io.stdoutText())) }
+    // the receipt's English line (src/cli/receipt.mjs lingerText) is wrapped to 80 columns: the fact is matched, not the layout
+    const flat = io.stdoutText().replace(/\s+/g, ' ')
+    if (want === false) assert.match(flat, /Capture stops when you log out\. To keep it on: loginctl enable-linger alice/)
+    else if (want === true) assert.ok(!/linger|log out|logout/.test(io.stdoutText()))
+    else { assert.match(flat, /Whether capture survives a logout is unknown \(\/var\/lib\/systemd\/linger\/alice: EACCES\)/); assert.ok(!/Capture stops when you log out/.test(flat), 'unreadable never claims capture is kept or lost') }
     const j = fakeIo(); const home2 = tmpDir('asight-v39-'); seedClaude(home2); await installFirst(home2); const exec2 = recordingExec()
     assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { exec: exec2, deps: { lingerRead, linger: undefined } })), 0)
     for (const e of [exec, exec2]) {
@@ -481,42 +473,38 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
 
 // the old capture's own status test went with it (D39⑥ executed 2026-10-11): status.mjs no longer has the legacy
 // branch; every platform prints the collector's status, and the VPN lines it prints are the same cells above and below.
-test('semantics 2: an install manifest that parses but is not a manifest ({"version":3}, entries as an object) is 不知道 with the file and the reason — exit 3, no stack trace, never "没有装入口" — in the text and in --json', async () => {
+test('semantics 2: an install manifest that parses but is not a manifest ({"version":3}, entries as an object) is unknown with the file and the reason — exit 3, no stack trace, never "nothing is installed" — in the text and in --json', async () => {
   for (const body of ['{"version":3}', (m) => ({ ...m, entries: { a: 1 } })]) {
     const s = await installedHome()
     const file = path.join(s.dir, 'install-manifest.json')
     fs.writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body(JSON.parse(fs.readFileSync(file, 'utf8')))))
     const r = await run(s, [], { request: asDaemon(reply()) })
     assert.equal(r.exit, 3, r.text)
-    assert.match(r.text, /安装清单: 不知道\([^)]*install-manifest\.json[^)]*not an install manifest this build can use/)
-    assert.ok(!/没有装入口/.test(r.text), 'a manifest nobody can read does not say "nothing is installed"')
+    assert.match(r.text, /^ {2}claude-code {2}unknown {3}unknown \([^\n]*install-manifest\.json[^\n]*not an install manifest this build can use/m)
+    assert.ok(!/No harness is set up for capture yet/.test(r.text), 'a manifest nobody can read does not say "nothing is installed"')
     const doc = (await run(s, ['--json'], { request: asDaemon(reply()) })).io.json()
     assert.deepEqual(validateReceipt(doc), [])
-    assert.match(doc.manifest_error, /install-manifest\.json.*not an install manifest this build can use/)
+    assert.deepEqual(doc.errors.filter((e) => e.where === 'the install record').map((e) => /install-manifest\.json.*not an install manifest this build can use/.test(e.reason)), [true], JSON.stringify(doc.errors))
   }
 })
 
-// audit rule-b 6 (R11): with no daemon and no manifest — a fresh machine, or after uninstall — `status` printed 「你自己起的 asight 进程: 不知道」 although the processes a user started
-// themselves are found by their command line alone: the table was not read because the MANIFEST (needed only to match processes to harnesses) was missing.
-test('R11: with no daemon and no install manifest the asight processes the user started themselves are still listed — the process table is read, only the matching to harnesses is not known', async () => {
+// audit rule-b 6 (R11): with no daemon and no manifest — a fresh machine, or after uninstall — the process table is read all the same (the MANIFEST is needed only to match
+// processes to harnesses), and what could not be read is said with its reason, never silently dropped.
+test('R11: with no daemon and no install manifest the process table is still read — only the matching to harnesses is not known, and a table that could not be read is an error entry', async () => {
   const s = await installedHome()
   const out = await s.uninstall({ yes: true })
   assert.equal(out.exit, 0, JSON.stringify(out.receipt.problems))
   assert.ok(!fs.existsSync(path.join(s.dir, 'install-manifest.json')), 'nothing is installed any more')
   const serve = { pid: 7001, ppid: 1, uid: 1000, startedAt: Date.now() - 1000, exe: '/usr/bin/node', argv: ['/usr/bin/node', '/home/u/asight/bin/asight.mjs', 'serve', '--port', '4000'], env: () => null }
   const unrelated = { pid: 7002, ppid: 1, uid: 1000, startedAt: Date.now() - 1000, exe: '/usr/bin/vim', argv: ['vim'], env: () => null }
-  const r = await run(s, [], { procs: async () => [serve, unrelated] })
-  assert.match(r.text, /你自己起的 asight 进程仍在跑: asight serve\(pid 7001,/)
-  assert.ok(!/你自己起的 asight 进程: 不知道/.test(r.text), r.text)
   const doc = (await run(s, ['--json'], { procs: async () => [serve, unrelated] })).io.json()
-  assert.deepEqual(doc.user_processes.map((p) => [p.pid, p.command]), [[7001, 'asight serve']])
-  // a table that cannot be read is still 不知道, with the reason
-  const bad = await run(s, [], { procs: async () => { throw new Error('ps failed (exit 1: nope)') } })
-  assert.match(bad.text, /你自己起的 asight 进程: 不知道\(ps failed \(exit 1: nope\)\)/)
+  assert.deepEqual(doc.errors.filter((e) => e.where === 'the process table'), [], 'the table was read without a manifest')
+  // a table that cannot be read is said, with the reason
+  const bad = (await run(s, ['--json'], { procs: async () => { throw new Error('ps failed (exit 1: nope)') } })).io.json()
+  assert.deepEqual(bad.errors.filter((e) => e.where === 'the process table').map((e) => e.reason), ['ps failed (exit 1: nope)'])
   // what needs the manifest is still said as not known, with the reason: a named harness's entry
-  const named = await run(s, ['codex'], { procs: async () => [serve] })
-  assert.match(named.text, /codex\s+没有: desired-off[^\n]*信任入口: 不知道\(no install manifest in /)
-  assert.match(named.text, /你自己起的 asight 进程仍在跑: asight serve\(pid 7001,/)
+  const named = (await run(s, ['codex', '--json'], { procs: async () => [serve] })).io.json().harnesses.codex
+  assert.ok(named.why.some((w) => w.includes('no install manifest in')), JSON.stringify(named.why))
 })
 
 // Accepted, not undone (D43⑦ · D47): in proxy mode the agents' proxy entries name asight's door, and the door lives in the daemon. With the daemon
@@ -527,8 +515,8 @@ test('proxy mode, daemon down, desired on: the reason is forwarder-down (the ent
   assert.equal(judgeHarness({ desired: 'on', daemon: 'not-running' }).rows[0].reason, 'daemon-not-running')
   const s = await installedHome()
   const io = fakeIo()
-  await runStatusCli(['claude-code'], { io, home: s.home, platform: 'darwin', env: { ...s.sh.env }, deps: { request: down(), socketPath: SOCK, procs: async () => [], lingerRead: () => ({ state: true }), exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: { arch: {}, harnesses: [] } } })
-  assert.match(io.stdoutText(), /claude-code\s+没有: forwarder-down[^\n]*asight on/)
+  await runStatusCli(['claude-code', '--json'], { io, home: s.home, platform: 'darwin', env: { ...s.sh.env }, deps: { request: down(), socketPath: SOCK, procs: async () => [], lingerRead: () => ({ state: true }), exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: { arch: {}, harnesses: [] } } })
+  assert.equal(JSON.parse(io.stdoutText()).harnesses['claude-code'].reason, 'forwarder-down')
 })
 
 // ── proxy mode (macOS / Windows): the two axes of V32 apart, generated over desired × daemon × door × the certificate's state, with literal expected codes ──────────────────────────
@@ -582,11 +570,11 @@ test('V32 proxy mode: desired × daemon × door × certificate state — the ver
       const { j } = await modelStatus(w, { desired, daemon, door, key, st, root })
       const at = `${pk} × ${ck}`
       assert.deepEqual(validateReceipt(j), [], at)
-      const h = j.harnesses.find((x) => x.harness === 'codex')
+      const h = j.harnesses.codex
       assert.deepEqual({ captured: h.captured, reason: h.reason }, pcell === 'T' && root === 'out' ? { captured: false, reason: 'cert-root-missing' } : said(pcell), at)
-      assert.ok(j.forms && j.forms.codex.length, `${at}: codex's forms are read`)
-      for (const x of j.forms.codex) assert.deepEqual([x.certificate.carrier, x.certificate.in_effect, x.certificate.code], ['root', root === 'in', root === 'in' ? null : 'cert-root-missing'], `${at} ${x.form}`)
-      proxies.add(JSON.stringify(j.forms.codex.map((x) => x.proxy)))
+      assert.ok(h.forms && h.forms.length, `${at}: codex's forms are read`)
+      for (const x of h.forms) assert.deepEqual([x.certificate.carrier, x.certificate.in_effect, x.certificate.code], ['root', root === 'in', root === 'in' ? null : 'cert-root-missing'], `${at} ${x.form}`)
+      proxies.add(JSON.stringify(h.forms.map((x) => x.proxy)))
       const up = daemon === 'running'
       assert.deepEqual([j.cert.key.code, j.cert.intermediate.code, j.cert.root.code], up ? codes.map(code) : [null, null, code(codes[2])], at)
       assert.equal(j.cert.key.state, up ? { present: 'present', missing: 'missing', unknown: 'unknown' }[key] : 'unknown', at)
@@ -618,12 +606,12 @@ test('V26 proxy mode: status exits by the judgement — 0 with the door up, 1 wi
   for (const [cert, exit, said] of [[{ key: 'missing', st: 'key-missing' }, EXIT.incomplete, [true, null]], [{ root: 'out' }, EXIT.incomplete, [false, 'cert-root-missing']], [{ st: 'unavailable', key: 'unknown' }, EXIT.ok, [true, null]]]) {
     const r = await modelStatus(w, { ...base, door: 'up', ...cert })
     assert.equal(r.exit, exit, `1.6 §9.7 / R4: a certificate state the user must act on exits 1: ${JSON.stringify(cert)}`)
-    const h = r.j.harnesses.find((x) => x.harness === 'codex')
+    const h = r.j.harnesses.codex
     assert.deepEqual([h.captured, h.reason], said, `V32: a root-carrier form with the root out is not captured; the issuer's key is the doors', not the agent's trust: ${JSON.stringify(cert)}`)
   }
   const r = await modelStatus(w, { ...base, door: 'unknown' })
   assert.equal(r.exit, EXIT.unknown)
-  const h = r.j.harnesses.find((x) => x.harness === 'codex')
+  const h = r.j.harnesses.codex
   assert.equal(h.captured, null)
   assert.ok(h.why.some((x) => /doors listen/.test(x)), `不知道 says why: ${JSON.stringify(h.why)}`)
 })
@@ -641,7 +629,7 @@ test('1.6 §9.4 / §9.6 cert.root: the code follows the state — pending / decl
     fs.writeFileSync(mf, JSON.stringify({ ...m0, install }))
     const r = await modelStatus(w, base)
     assert.deepEqual([r.j.cert.root.state, r.j.cert.root.code, r.exit], [state, code, exit], code)
-    const h = r.j.harnesses.find((x) => x.harness === 'codex') // the topology's per-form verdict on the same facts: test/netenv/model-rows.test.mjs (V32 rows)
+    const h = r.j.harnesses.codex // the topology's per-form verdict on the same facts: test/netenv/model-rows.test.mjs (V32 rows)
     const want = install ? [false, code] : [true, null] // never installed: no install record, no forms to carry a root (the cert block says cert-not-installed)
     assert.deepEqual([h.captured, h.reason], want, `V32: the harness verdict carries the root's code: ${code}`)
     assert.deepEqual(validateReceipt(r.j), [], code)

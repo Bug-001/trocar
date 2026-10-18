@@ -28,7 +28,7 @@ export function refuseElevatedByUid({ getuid = processUid, geteuid = processUid 
   const uid = getuid()
   const euid = geteuid()
   if (uid !== 0 && euid !== 0) return null
-  return { code: 'root-token', reason: `用你自己的账号跑,不要用 sudo(R7:asight 不以 root 运行;${euid === 0 && uid !== 0 ? 'euid 是 0' : 'uid 是 0'})` }
+  return { code: 'root-token', reason: 'run this as your own user, not as root' }
 }
 
 /** Is the agent loaded in this user's session? The arch module's rule (never a localised error text): `launchctl print gui/<uid>/<label>` — exit 0 = there, any other exit = not there,
