@@ -11,22 +11,15 @@
 import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
-import { EXIT, newReceipt } from './schema.mjs'
+import { EXIT, newReceipt } from '../off/schema.mjs' // as in status.mjs: the keys and the exit codes, not ./schema.mjs's checker (D62)
 import { unknown } from './text.mjs'
 import { resolveHarnesses } from './harness-names.mjs'
 import { statusFacts, statusDocOf } from './status.mjs'
 import { diagnose, renderFindings } from '../netenv/findings.mjs'
-import { checkDeps, runSelfTest } from '../capture/selftest.mjs'
-import { readRecords } from '../etl/ingest.mjs'
 import { serveSource } from '../paths.mjs'
-import { sealedReadProblem } from '../raw/journal.mjs'
-import { listSources } from '../raw/discover.mjs'
-import { captureHealth } from '../health/read.mjs'
 import { formatInstallNotes } from './status-text.mjs'
 import { asightHome, backupDir, collectorDir, standaloneCommand } from '../off/paths.mjs'
-import { orphanBackups } from '../off/backup.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
-import { checkStandalone } from '../off/standalone.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 
 const USAGE = 'usage: asight doctor [<harness>...] [--json]'
@@ -60,7 +53,8 @@ function filesIn(dir, fs) {
  *  src/raw/discover.mjs): a root is usually a DIRECTORY and `serveSource()` returns a list of them (D27) — the day `fs.statSync(list)` threw, the catch swallowed it and doctor
  *  certified a capture it had read nothing from. The resolver itself, never server.mjs: a self-check that dies on a package it does not need says nothing at all — on a tree
  *  without node_modules (a test machine's) `asight doctor` printed only ERR_MODULE_NOT_FOUND (tested 2026-10-14). */
-async function collect({ home, env, sourceFlags, deps }) {
+async function collect({ home, env, sourceFlags, deps, capture }) {
+  const { listSources, readRecords, sealedReadProblem } = await capture
   const fs = deps.fs || nodeFs, ah = asightHome(home)
   const flagged = sourceFlags.filter(Boolean)
   const sources = [].concat(flagged.length ? flagged : env.ASIGHT_SOURCE || serveSource({ home: ah, collector: collectorDir(home) })).filter(Boolean)
@@ -120,13 +114,18 @@ export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = p
 }
 async function doctorDocOf({ names, home, env, platform, deps }) {
   const fs = deps.fs || nodeFs
+  // the capture half of this command is sixteen modules `status` never touches (D62): start loading it, then ask the OS — it compiles while the daemon answers
+  const capture = deps.capture || import('./doctor-deps.mjs')
   // the capture files and what `status` reads are independent: the disk walk and the OS questions run together (D62 task E)
-  const [c, f] = await Promise.all([collect({ home, env, sourceFlags: [], deps }), statusFacts({ names, home, env, platform, deps })])
+  const [c, f] = await Promise.all([collect({ home, env, sourceFlags: [], deps, capture }), statusFacts({ names, home, env, platform, deps })])
+  const { checkDeps, runSelfTest, orphanBackups, checkStandalone } = await capture
   const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
   const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors, platform })
   const status = statusDocOf(f)
   let findings = null, findingsError = null
-  if (f.facts) { try { findings = diagnose({ facts: f.facts, topology: f.topology, harnesses: names, user: f.user }) } catch (e) { rethrowSandbox(e); findingsError = errText(e) } }
+  // the same facts were already diagnosed once, to put each harness's codes on its topology (gatherTopology): with no harness named this is
+  // that very list, and diagnosing it twice is one command asking one question twice (D62). A named harness asks its own, narrower question.
+  if (f.facts) { try { findings = (!names || !names.length) && f.diagnosed ? f.diagnosed : diagnose({ facts: f.facts, topology: f.topology, harnesses: names, user: f.user }) } catch (e) { rethrowSandbox(e); findingsError = errText(e) } }
   else findingsError = f.topology_error || 'the network facts could not be read on this platform'
   // what `doctor` looks at besides the network: the files only you may read, the copy of the undo program, the backups no install record names
   const extra = []
@@ -145,7 +144,9 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   const undetermined = undeterminedOf(res, c.readErrors, { files: c.files.length, records: c.records.length, root: (status.cert || {}).root || null })
   const exit = summary && summary.problem ? EXIT.incomplete : realUndetermined(undetermined).length ? EXIT.unknown : EXIT.ok
   let notes = []
-  try { notes = formatInstallNotes((deps.captureHealth || captureHealth)({ home: asightHome(home), ...(deps.captureHealth ? {} : { fs }) })) } catch (e) { rethrowSandbox(e) }
+  // the capture health `status` already read of the same files (gatherStatus): one command, one read (D62). A read that failed is `null` there and
+  // is already reported in `status.errors` — it must not be tried again here, where its failure would have nowhere to go.
+  try { notes = f.health ? formatInstallNotes(f.health) : [] } catch (e) { rethrowSandbox(e) }
   return {
     ...newReceipt('doctor'), ok: exit === EXIT.ok, findings: all, ...(findingsError ? { findings_error: findingsError } : {}),
     summary, undetermined, status, install_notes: notes, errors: [...c.readErrors.map((e) => ({ where: 'a captured file', reason: e })), ...(status.errors || [])], exit,
