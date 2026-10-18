@@ -50,8 +50,8 @@ test('receipt schema: not an object at all', () => {
 })
 
 test('receipt schema: schema is the current integer, command a non-empty string, ok a boolean', () => {
-  assert.ok(problems((r) => { r.schema = 2 }).some((s) => s.includes('schema')))
-  assert.ok(problems((r) => { r.schema = '1' }).some((s) => s.includes('schema')))
+  assert.ok(problems((r) => { r.schema = 3 }).some((s) => s.includes('schema')), 'another integer than this manual\'s shape (2) is a problem')
+  assert.ok(problems((r) => { r.schema = '2' }).some((s) => s.includes('schema')))
   assert.ok(problems((r) => { r.command = '' }).some((s) => s.includes('command')))
   assert.ok(problems((r) => { r.command = 7 }).some((s) => s.includes('command')))
   assert.ok(problems((r) => { r.ok = 'yes' }).some((s) => s.includes('ok')))

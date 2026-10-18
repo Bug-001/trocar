@@ -23,7 +23,8 @@ import { startDaemon } from '../../src/collector/daemon.mjs'
 import { installCollector } from '../../src/collector/install.mjs'
 import { uninstallCollector } from '../helpers/uninstall.mjs'
 import { controlRequest } from '../../src/collector/core/control.mjs'
-import { runCollector } from '../../src/collector/cli.mjs'
+import { runStatusCli } from '../../src/cli/status.mjs'
+import { runDaemonCli } from '../../src/cli/daemon.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { osRootsFor } from '../../src/off/os-roots.mjs'
 const osBundleRoots = osRootsFor('linux') // the Linux reader, through the one table
@@ -84,7 +85,8 @@ async function endpoint(s) {
 // (iii): `asight collector status` with no daemon answering — it reads the disk
 async function statusOffline(s) {
   const o = []
-  const code = await runCollector(['status', '--failures'], { env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home, request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, statusDeps: { exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test: nothing looked at' }] }) }, out: (l) => o.push(l), err: (l) => o.push(l) }) // on a Mac status asks launchd and the keychain (read-only): the runner is the test's
+  const code = await runStatusCli(['--failures'], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home,
+    deps: { request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test: nothing looked at' }] }) } }) // on a Mac status asks launchd and the keychain (read-only): the runner is the test's
   return { code, text: o.join('\n') }
 }
 const keys = (h) => (h.collector.failures || []).map((g) => g.key)
@@ -313,7 +315,8 @@ test('F3 parts: off, a helper death (degraded), a SIGHUP stop and its clean rest
     h = await endpoint(s)
     assert.ok(keys(h).some((k) => k.startsWith('start/')), `(d) the endpoint lists the refusal: ${keys(h)}`)
     const o = []
-    assert.equal(await runCollector(['start'], { env: {}, home: s.home, daemon: { startDaemon: () => startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] }) }, out: (l) => o.push(l), err: (l) => o.push(l), proc: { on() {}, stdin: null }, waitForStop: async () => 'SIGTERM' }), 1, '(d) the CLI exits non-0')
+    assert.equal(await runDaemonCli([], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: {}, home: s.home,
+      deps: { daemon: { startDaemon: () => startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc] }) }, proc: { on() {}, stdin: null }, getuid: () => 1000, waitForStop: async () => 'SIGTERM' } }), 1, '(d) the CLI exits non-0')
   } finally { squat.close(); p.done(); s.done() }
 })
 
