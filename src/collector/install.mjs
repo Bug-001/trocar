@@ -424,7 +424,7 @@ export async function turnOn(opts = {}) {
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) return { receipt: unwritten({ ...fresh(), ok: false, code: CODE.certNotInstalled, notes: ['certificates are not installed. Run: asight install'] }), manifest: plan._.prior, plan, exit: 1 }
     // the copy of the undo side that needs no source tree (R3) is one more file asight writes: listed in the plan and the dry run when it is missing or not what src/off generates now
-    const standaloneCheck = checkStandalone({ home, version: OFF_VERSION, fs })
+    const standaloneCheck = checkStandalone({ home, version: OFF_VERSION, platform: osName, fs })
     if (!standaloneCheck.ok) { plan.created = [...plan.created, standaloneCheck.path]; plan.standalone = standaloneCheck.path }
     // A version 1 file (what `collector on|off` wrote before D39) is read for the harnesses installed before and the ones this run turns on, the same set
     // the guard below reads it for — and is written back as version 2 here, before the first guard: the guard must never see a file the daemon's reader

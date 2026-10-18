@@ -286,6 +286,16 @@ test('V35: a manifest newer than the copy knows is left alone — ok:false, exit
   assert.ok(!/run `asight off`/.test(io.json().problems.join('\n')), '`asight off` does not send anyone to itself')
 })
 
+test('the execute bit is only a POSIX fact: on win32 a copy without it is current, on linux it is not (Windows test machine run 2, 2026-10-18 Q4)', () => {
+  const home = tmpDir('asight-chk-win-')
+  writeStandalone({ home, version: OFF_VERSION })
+  fs.chmodSync(standalonePath(home), 0o600) // what Windows reports for a file install just wrote
+  assert.equal(checkStandalone({ home, version: OFF_VERSION, platform: 'win32' }).ok, true, 'win32: nothing carries an execute bit, so it says nothing')
+  const posix = checkStandalone({ home, version: OFF_VERSION, platform: 'linux' })
+  assert.equal(posix.ok, false)
+  assert.match(posix.reason, /not executable/)
+})
+
 test('V35: the check reports a copy that is stale, missing or not what src/off generates; writing it makes it equal; a second write changes nothing', async () => {
   const home = tmpDir('asight-chk-')
   const file = standalonePath(home)

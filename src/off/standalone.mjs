@@ -233,7 +233,7 @@ export function writeStandalone({ home = nodeOs.homedir(), version = OFF_VERSION
 
 /** Is the copy on disk what `asight on` would write now? → `{ ok, path, found, expected, reason? }`: `found` is the version on its first lines (null: none, or no file), `expected` the
  *  version asked for (default OFF_VERSION). Reads only. A version that differs, a text that differs under the same version, a file that is not executable, one that is not there or cannot be read: each is `ok: false` with `reason`. */
-export function checkStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, fs = nodeFs } = {}) {
+export function checkStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, platform = process.platform, fs = nodeFs } = {}) {
   const file = standalonePath(home), expected = String(version)
   const no = (found, reason) => ({ ok: false, path: file, found, expected, reason })
   let text, mode
@@ -246,6 +246,8 @@ export function checkStandalone({ home = nodeOs.homedir(), version = OFF_VERSION
   let want
   try { want = buildStandalone({ srcDir, version, fs }) } catch (e) { return no(found, `${file} could not be compared with what src/off generates: ${(e && e.message) || e}`) }
   if (text !== want) return no(found, `${file} says version ${found} but its bytes differ from what src/off generates now; asight on writes it again`)
-  if (!(mode & 0o100)) return no(found, `${file} is not executable; asight on writes it again`)
+  // the execute bit is a POSIX fact: on Windows nothing carries one (the file is run as `node "<path>"`, which is what the undo line says),
+  // so checking it there called a good copy stale right after install (a Windows test machine 2026-10-18)
+  if (platform !== 'win32' && !(mode & 0o100)) return no(found, `${file} is not executable; asight on writes it again`)
   return { ok: true, path: file, found, expected }
 }
