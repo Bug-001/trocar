@@ -222,18 +222,41 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
 export function renderFindings(findings, { width = 80 } = {}) {
   const lines = []
   let n = 0
-  for (const f of findings) {
+  for (const f of fold(findings)) {
     const head = f.class === 'note' ? 'Note: ' : `${(n += 1)}. `
     const pad = ' '.repeat(head.length)
     lines.push(...wrap(`${f.what}`, width - head.length).map((l, i) => (i ? pad : head) + l))
     if (f.why) lines.push(...wrap(f.why, width - head.length).map((l) => pad + l))
     f.commands.forEach((c, i) => {
-      const label = i === 0 ? `${pad}Fix    ` : `${pad}       `
+      // a note is not a problem, so what it offers is not a `Fix` (a macOS test machine 2026-10-18: a Fix sat under the headline "no problems")
+      const label = i === 0 ? `${pad}${f.class === 'note' ? 'Option' : 'Fix   '} ` : `${pad}       `
       wrap(c.run, width - label.length).forEach((l, k) => lines.push((k ? `${pad}       ` : label) + l))
     })
     if (f.verify) lines.push(`${pad}Check  ${f.verify}`)
   }
   return lines
+}
+
+const nameList = (l) => (l.length === 1 ? l[0] : `${l.slice(0, -1).join(', ')} and ${l[l.length - 1]}`)
+/**
+ * §3.7: one line per fact, not per harness. Several harnesses whose note is the same fact with the same reason and nothing to do about it
+ * (the same sentence four times on a macOS test machine, 2026-10-18) become one note that names them. The document keeps a finding per
+ * harness — this is how it is read out. Notes that carry a command are never folded: what to do is about one harness.
+ */
+function fold(findings) {
+  const key = (f) => (f.class === 'note' && f.harness && !f.commands.length ? [f.code, f.why, f.verify].join('\u0000') : null)
+  const groups = new Map()
+  for (const f of findings) { const k = key(f); if (k) groups.set(k, [...(groups.get(k) || []), f]) }
+  const done = new Set(), out = []
+  for (const f of findings) {
+    const k = key(f)
+    if (!k) { out.push(f); continue }
+    if (done.has(k)) continue
+    done.add(k)
+    const g = groups.get(k)
+    out.push(g.length === 1 ? f : { ...f, what: f.what.replace(f.harness, nameList(g.map((x) => x.harness))) })
+  }
+  return out
 }
 
 /** `text` into lines of at most `width` columns, broken on spaces; a word longer than the line keeps its own line. */
