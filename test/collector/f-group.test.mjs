@@ -39,7 +39,7 @@ import { createRedirectorClient } from '../../src/collector/arch/linux/redirecto
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
-import { createServer } from '../../src/server.mjs'
+import { captureHealth, HealthUnreadable } from '../../src/health/read.mjs'
 import { sealSegment } from '../../src/raw/seal.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
@@ -74,15 +74,13 @@ const flowsOf = (s) => {
   for (const l of lines) assert.deepEqual(checkRecord(l), [], `outside the closed sets: ${JSON.stringify(l)}`)
   return lines
 }
-// (ii): the endpoint, over HTTP, from a real board server reading this home
+// (ii): the reader `asight status` prints from — the board has no capture-health route of its own any
+// more (D59: it reads the named queries, and this document is the `status` command's). A home it
+// cannot read throws, which the command states; here that is reported as the same 503 shape the HTTP
+// route used to answer, so every assertion below still reads one way.
 async function endpoint(s) {
-  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: null, healthHome: s.asight })
-  server.listen(0, '127.0.0.1'); await once(server, 'listening')
-  try {
-    return await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: server.address().port, path: '/api/capture-health' }, (res) => {
-      let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, ...JSON.parse(b) }))
-    }).on('error', reject))
-  } finally { server.close() }
+  try { return { status: 200, ...captureHealth({ home: s.asight }) } }
+  catch (e) { if (e instanceof HealthUnreadable) return { status: 503, error: `capture health could not be read: ${e.message}` }; throw e }
 }
 // (iii): `asight collector status` with no daemon answering — it reads the disk
 async function statusOffline(s) {
