@@ -78,6 +78,9 @@ export function planItems(p, { home = null, platform = 'linux' } = {}) {
   for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output`)
   if (p.records) add('record', p.records, `${t(p.records)}${sep}: what each run did`)
   else if (p.events) add('record', p.events, `${t(p.events)}: what each run did`)
+  // V85 / §1.4「计划写全」: asight's own tree is ONE line, as it is in the model install's plan — every run of asight keeps its record, its
+  // desired state and its own logs there, and `asight uninstall` takes all of it back. Every file of YOURS is its own line, above.
+  if (home) add('asight', path.join(home, '.asight'), `${t(path.join(home, '.asight'))}${sep}: asight's own files (its install record, what is turned on, its logs); asight uninstall takes all of it back`)
   return items
 }
 

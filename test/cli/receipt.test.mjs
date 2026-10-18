@@ -62,7 +62,7 @@ test('V7: a first install outside a terminal without --yes prints the plan, writ
   assert.equal(readStateFile(path.join(home, '.asight', 'collector', 'state.json')).state.harnesses['claude-code'].desired, 'on')
   // D61: `on` registers nothing — it starts the daemon through the mechanism `install` registered
   assert.ok(ex.has(/^systemctl --user start asight-collector\.service$/), `no daemon answered: on starts it through the login entry (${ex.calls.join(' | ')})`)
-  assert.ok(!ex.calls.some((c) => /enable|disable/.test(c)), `and enables or disables nothing (${ex.calls.join(' | ')})`)
+  assert.ok(!ex.calls.some((c) => /^systemctl --user (enable|disable)/.test(c)), `and enables or disables nothing — \`is-enabled\` is a read (1.6 §3.3) (${ex.calls.join(' | ')})`)
   assert.deepEqual(daemon.calls.filter((c) => c.startsWith('POST')), ['POST /on {"harnesses":["claude-code"]}'], 'and the daemon is asked to attach, by name')
   assert.deepEqual(b.relayed, { closing: 0, waiting: 0, cut: 0 }, 'on relays nothing: zeros on purpose, not "unknown"')
   assert.equal(b.linger, true)

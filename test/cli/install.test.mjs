@@ -11,6 +11,7 @@ import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { ERROR_CODES } from '../../src/cli/json.mjs'
+import { validateReceipt } from '../../src/cli/schema.mjs'
 
 function fakeIo({ tty = false } = {}) {
   const out = [], err = []
@@ -81,6 +82,9 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
   // D61: install registers the login autostart, enables it (an `enable` clears a disable an earlier version left) and starts the daemon now
   assert.deepEqual(launchctl.calls.filter((c) => /enable|bootstrap/.test(c)), ['launchctl enable gui/501/com.asight.collector', `launchctl bootstrap gui/501 ${path.join(w.home, 'Library', 'LaunchAgents', 'com.asight.collector.plist')}`], launchctl.calls.join(' | '))
   assert.deepEqual([r.daemon.state, r.daemon.started], ['running', true])
+  // 附录 C.2: the receipt confirms the login entry it registered, and carries no key C.2 does not name (H-1)
+  assert.deepEqual(r.autostart, { entry: path.join(w.home, 'Library', 'LaunchAgents', 'com.asight.collector.plist'), enabled: true })
+  assert.deepEqual(validateReceipt(r), [])
   const day = fs.readdirSync(path.join(w.dir, 'flows')).find((n) => n.endsWith('.ndjson'))
   assert.ok(fs.readFileSync(path.join(w.dir, 'flows', day), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).some((e) => e.event === 'install-note' && e.kind === 'result'))
   w.store.answer = 'declined'

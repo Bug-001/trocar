@@ -9,15 +9,17 @@ import { modelWorld } from '../helpers/model-world.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { assertEnglish } from '../helpers/english.mjs'
+import { snapshot } from './fixtures/on-ctx.mjs'
 
 function fakeIo() {
   const out = [], err = []
   return { out: (s) => out.push(s), err: (s) => err.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {}, text: () => [...out, ...err].join('\n'), json: () => JSON.parse(out.join('\n')) }
 }
-const neverStarts = { path: '/nowhere/unit', text: () => '', enable: () => { throw new Error('the unit must not be touched') }, start: () => { throw new Error('the unit must not be touched') } }
-const on = (w, os, argv) => {
+// `registered()` is a READ (1.6 §3.3: `on` asks before it writes) — the login entry install made is there; nothing of it may be changed
+const neverStarts = { path: '/nowhere/unit', text: () => '', registered: () => ({ state: 'present' }), enable: () => { throw new Error('the unit must not be touched') }, start: () => { throw new Error('the unit must not be touched') }, startNow: () => { throw new Error('the unit must not be touched') } }
+const on = (w, os, argv, unit = neverStarts) => {
   const io = fakeIo()
-  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => neverStarts } } } }
+  const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
   return runOnCli(argv, { io, env: w.env, home: w.home, platform: os, deps }).then((exit) => ({ exit, io }))
 }
 
@@ -47,5 +49,27 @@ for (const os of ['darwin', 'win32']) {
     assert.deepEqual(fs.readFileSync(manifest), before, 'the manifest is as install left it')
     assert.equal(fs.existsSync(path.join(w.dir, 'state.json')), false, 'no desired state written')
     assert.equal(fs.existsSync(path.join(w.home, '.codex', '.env')), false, 'no entry written')
+  })
+
+  // D61 / 1.6 §3.3 (H-2): the login entry is install's, so an `on` with none would leave the agents pointing at doors nobody opens
+  // after the next login — it refuses before its first write. A --dry-run says so in `blocked` and still exits 0.
+  test(`1.6 §3.3 (${os}): no login entry registered → autostart-missing, exit 2, HOME byte for byte unchanged; --dry-run exits 0 with it in blocked`, async () => {
+    const w = await modelWorld({ os, commands: ['codex'] })
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    const gone = { ...neverStarts, registered: () => ({ state: 'absent' }) }
+    const mine = (h) => Object.fromEntries(Object.entries(snapshot(h)).filter(([k]) => !k.includes('collector/flows'))) // everything but asight's own record of the refusal (D38: a failure is never silent)
+    const before = mine(w.home)
+    const r = await on(w, os, ['--yes', '--json'], gone)
+    assert.deepEqual([r.exit, r.io.json().error.code, r.io.json().ok], [2, 'autostart-missing', false], r.io.text())
+    assert.match(r.io.json().error.message, /asight install/)
+    assert.deepEqual(mine(w.home), before, 'nothing of yours and no state of asight\'s was written')
+    assert.match(fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join(''), /"code":"autostart-missing"/, 'D38: the refusal is recorded')
+    const dry = await on(w, os, ['--dry-run', '--json'], gone)
+    assert.deepEqual([dry.exit, dry.io.json().blocked.map((b) => b.what)], [0, ['asight on']], dry.io.text())
+    assert.equal(dry.io.json().error, undefined, 'a dry run carries no error: nothing went wrong')
+    // an answer that could not be read is not a yes either (the unit's `unknown`)
+    const unreadable = await on(w, os, ['--yes', '--json'], { ...neverStarts, registered: () => ({ state: 'unknown', err: 'launchctl print did not run' }) })
+    assert.deepEqual([unreadable.exit, unreadable.io.json().error.code], [2, 'autostart-missing'], unreadable.io.text())
+    assert.deepEqual(mine(w.home), before)
   })
 }

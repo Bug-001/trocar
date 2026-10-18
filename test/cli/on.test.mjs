@@ -128,8 +128,9 @@ test('R9: a second on on a complete install leaves installed_at, inode and mtime
   assert.deepEqual(files.map((f) => [f, fs.statSync(f).ino, mtime(f)]), marks, 'no file of asight was written again either')
   assert.equal(s.sys.daemon.calls.filter((c) => c.startsWith('POST /on')).length, 2, 'each on still asks the daemon to attach (it is idempotent there)')
   // D61: `on` touches no registration, and a daemon that answers is not started again (拉起不是重启): the one start is the FIRST on's, when nothing answered
-  assert.deepEqual(s.sys.exec.calls, ['systemctl --user start asight-collector.service'], `only the first on started the daemon (${s.sys.exec.calls.join(' | ')})`)
-  assert.ok(!s.sys.exec.calls.some((c) => /enable|disable/.test(c)), 'and the login entry is install\'s: on enables and disables nothing')
+  // every `on` READS the registration before it writes anything (1.6 §3.3: `is-enabled`); only the first STARTED the daemon
+  assert.deepEqual(s.sys.exec.calls, ['systemctl --user is-enabled asight-collector.service', 'systemctl --user start asight-collector.service', 'systemctl --user is-enabled asight-collector.service'], `only the first on started the daemon (${s.sys.exec.calls.join(' | ')})`)
+  assert.ok(!s.sys.exec.calls.some((c) => /^systemctl --user (enable|disable)/.test(c)), 'and the login entry is install\'s: on enables and disables nothing — `is-enabled` is a read (1.6 §3.3)')
 })
 
 test('R9: an entry the operator changed after asight wrote it is reported and left; on never overwrites it, and off then on writes it again', async () => {
@@ -284,7 +285,7 @@ test('on: a unit systemd refuses to enable, a daemon that never answers, a kerne
   const ex = recordingExec({ fail: (cmd) => (/start/.test(cmd) ? { status: 1, stderr: 'Failed to connect to bus' } : null) })
   let r = await refused.run({ unit: userUnit({ home: refused.home, node: '/n', script: '/s', run: ex.run, spawn: fakeSpawn() }), request: sys.daemon.request })
   assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /Failed to connect to bus/)
-  assert.ok(!ex.calls.some((c) => /enable/.test(c)), `and nothing is enabled (${ex.calls.join(' | ')})`)
+  assert.ok(!ex.calls.some((c) => /^systemctl --user enable/.test(c)), `and nothing is enabled — is-enabled is a read, not a change (${ex.calls.join(' | ')})`)
   assert.equal(readManifest(refused.dir).install?.state, 'complete', 'the install itself is complete; only the start is not')
 
   const silent = await sandbox(); const dead = fakeDaemon({ up: false })
@@ -381,7 +382,8 @@ test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and 
   assert.deepEqual([dry.exit, dry.receipt.ok, dry.receipt.dry_run], [0, true, true])
   assert.deepEqual([dry.receipt.changed, dry.receipt.created], [ok.receipt.changed, ok.receipt.created], 'the plan is the one a user with a helper would get')
   assert.ok(dry.receipt.created.length > 0, 'and it is a real plan (the unit; every certificate item is install\'s)')
-  assert.match(dry.receipt.blocked, /capability helper is missing.*sudo asight setup-helper/)
+  assert.deepEqual(dry.receipt.blocked.map((b) => b.what), ['asight on']) // 附录 C.1: blocked:[{what, reason}]
+  assert.match(dry.receipt.blocked[0].reason, /capability helper is missing.*sudo asight setup-helper/)
   assert.match(dry.receipt.notes.join('\n'), /sudo asight setup-helper.*a real asight on stops there/)
   assert.deepEqual(validateReceipt(dry.receipt), [])
   assert.deepEqual(snapshot(s.home), before, 'a dry run writes nothing')

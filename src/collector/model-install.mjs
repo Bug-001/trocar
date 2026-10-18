@@ -64,7 +64,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const m = readManifest(dir, fs) || newManifest(now())
   const before = JSON.stringify(m)
   const items = [], carriers = [], pending = [], problems = [], installedHarnesses = [] // the last: read by finish(), which an install with no root reaches early
-  const said = (item, state, extra = {}) => items.push({ item, state, ...extra })
+  // R5 / 附录 C.1: an item that is about no harness carries NO harness field (a `harness: null` is drift validateReceipt reports, a Windows test machine 2026-10-18)
+  const said = (item, state, { harness = null, ...extra } = {}) => items.push({ item, state, ...extra, ...(harness ? { harness } : {}) })
   const save = () => saveManifest(dir, m, fs)
   if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); save() }
   const stdl = writeStandalone({ home, version: OFF_VERSION, fs }) // the way back first (R3)
