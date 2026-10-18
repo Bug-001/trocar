@@ -79,7 +79,25 @@ function bodyTextOf(b) {
 }
 
 const PREVIEW_MAX = 90;
-const shorten = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, PREVIEW_MAX);
+// JS's own `\s` class — and exactly what String.trim removes, so ONE definition drives the scan below.
+const WS = /\s/;
+// `String(s).replace(/\s+/g, ' ').trim().slice(0, PREVIEW_MAX)`, BOUNDED: the regex form built a whole
+// second copy of every block body — a 200 KB tool_result collapsed in full to keep 90 chars of it, 243 ms
+// of a 115-call session plus the garbage behind its peak RSS. This scans the source once and stops at
+// PREVIEW_MAX, which on normal text means reading ~90 chars instead of 200 000. Same string out: leading
+// whitespace is skipped (trim), each whitespace RUN becomes one space, and a run with nothing after it is
+// never emitted (trim again).
+const shorten = (s) => {
+  const t = String(s || '');
+  let out = '', pending = false;
+  for (let i = 0; i < t.length && out.length < PREVIEW_MAX; i++) {
+    const c = t[i];
+    if (WS.test(c)) { if (out) pending = true; continue; }
+    if (pending) { out += ' '; pending = false; if (out.length >= PREVIEW_MAX) break; }
+    out += c;
+  }
+  return out;
+};
 
 // Short arg preview for a tool_use header: the ONE field that says what the call is doing.
 function argPreview(bl) {
@@ -175,8 +193,11 @@ export function compBuckets(flat) {
  * is Claude-Code-shaped knowledge, and the browser must not branch on a harness's wire shape.
  */
 export function blockQuery(b) {
+  return queryOf(b, bodyTextOf(b));
+}
+// …over a body text the caller already has (slimBlock builds it once for chars, preview and this).
+function queryOf(b, raw) {
   if (!b || b.sec !== 'messages' || b.role !== 'user' || b.kind !== 'text') return null;
-  const raw = bodyTextOf(b);
   const human = String(raw || '').replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   return human ? shorten(human) : null;
 }
@@ -210,11 +231,12 @@ const HEAVY = ['text', 'block', 'desc', 'schema', 'props'];
  */
 export function slimBlock(b, textRef, why = null) {
   const out = { ...b };
+  const body = bodyTextOf(b); // built ONCE: chars, the preview and the turn test all read this one string
   out.bytes = blockBytes(b);
-  out.chars = blockChars(b);
+  out.chars = body == null ? 0 : String(body).length;
   out.head = blockHead(b);
-  out.preview = blockPreview(b);
-  const q = blockQuery(b);
+  out.preview = shorten(body);
+  const q = queryOf(b, body);
   if (q) out.query = q;   // turn boundary + outline row; see blockQuery for why it is not the browser's job
   if (textRef) {
     // Addressable: drop the body, ship the locator. The browser fetches it on expand.
