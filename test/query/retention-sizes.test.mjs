@@ -11,7 +11,6 @@ import { DuckDBInstance } from '@duckdb/node-api'
 import fs from 'node:fs'
 import path from 'node:path'
 import { etlFile } from '../../src/etl/cli.mjs'
-import { retentionReport } from '../../src/query/retention.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { line } from '../fixtures/d40-records.mjs'
 import { preD40, full, logged, inference, sized } from '../fixtures/d40-records.mjs'
@@ -101,9 +100,6 @@ test('a version-3 store that `asight etl` has already ALTERed (the six columns t
   const db2 = await DuckDBInstance.create(dbPath); const c2 = await db2.connect()
   try {
     await assert.rejects(retentionSizes(c2, { now: NOW }), (e) => e.code === 'predates-d40' && /projection version 3/.test(e.message) && /--rebuild/.test(e.message))
-    const rep = await retentionReport({ home: dir, conn: c2, now: NOW })
-    assert.equal(rep.sizes, null, 'no sizes: not a table of `unknown · other · full` rows')
-    assert.match(rep.sizes_reason, /需要重建.*projection version 3/)
     // after the rebuild the same store reads again, with the real values
     await etlFile(file, { dbPath, rebuild: true })
   } finally { c2.closeSync?.(); db2.closeSync?.() }

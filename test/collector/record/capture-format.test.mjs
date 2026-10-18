@@ -51,7 +51,8 @@ function origin(t) {
   })
   return listen(srv).then(() => { t.after(() => srv.close()); return srv.address().port })
 }
-const call = (stream) => { const b = JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 16, stream, messages: [{ role: 'user', content: stream ? 'stream me' : 'hello' }] }); return `POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\nContent-Type: application/json\r\nx-api-key: sk-ant-FAKE\r\nContent-Length: ${Buffer.byteLength(b)}\r\n\r\n${b}` }
+const callBody = (stream) => JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 16, stream, messages: [{ role: 'user', content: stream ? 'stream me' : 'hello' }] })
+const call = (stream) => { const b = callBody(stream); return `POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\nContent-Type: application/json\r\nx-api-key: sk-ant-FAKE\r\nContent-Length: ${Buffer.byteLength(b)}\r\n\r\n${b}` }
 // the agent: two calls on one TLS connection, read to the end of each response
 function agent(socket) {
   return within(new Promise((resolve, reject) => {
@@ -76,7 +77,7 @@ const strip = (env) => {
 }
 const stripRow = (row, extra = []) => { const r = structuredClone(row); for (const k of ['ts', 'flow_id', 'duration_ms', 'dst', 'pid', ...extra]) delete r[k]; return r }
 
-async function run(t, door, capture) {
+async function run(t, door, capture, retention = null) {
   const port = await origin(t)
   const envelopes = [], flows = [], failures = []
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port, family: 4 }, pid: 4242, agent: 'claude-code', decrypt: true })
@@ -84,7 +85,7 @@ async function run(t, door, capture) {
   redirector.setIngress('of.claude-code.cli', meta)
   const engine = createEngine({
     redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: originCa.certPem, ingressToken: TOKEN,
-    store: { envelope: (e) => { envelopes.push(structuredClone(e)); return { ok: true, id: `20261007T000000Z:${envelopes.length}` } }, flow: (f) => { flows.push(structuredClone(f)); return true } }, onFailure: (f) => failures.push(f),
+    store: { envelope: (e) => { envelopes.push(structuredClone(e)); return { ok: true, id: `20261007T000000Z:${envelopes.length}` } }, flow: (f) => { flows.push(structuredClone(f)); return true } }, onFailure: (f) => failures.push(f), retention,
   })
   const { port: enginePort, ingressPort } = await engine.listen({ ingress: door === 'ingress' ? { port: 0 } : null })
   t.after(() => closeWithin(engine))
@@ -179,4 +180,23 @@ test('W18 the read side of both capture kinds: a pid-null proxy envelope ETLs to
   assert.ok(/门/.test(label.label) && /door/.test(label.text), 'the label names the entity the call came through: asight\'s door (D47), not only the name')
   assert.ok(!/内核|kernel/.test(label.label + label.text), 'macOS and Windows have no kernel since D47')
   assert.equal(routing(envelopeOf('transparent', 4242)), null, 'the transparent default carries no routing label')
+})
+
+// D60③ (1.6 §4.2, 4.6 §记录「保存级别」): what the class table's verdict does to the record — the one thing the format has to say about it.
+// `traffic_class` is the class NAME, whatever the operator called it (the names are their table's, not a closed set), and a class
+// kept at `log` carries `body_retention:'log'` in the shape a log-level call has: headers and sizes, no body, in neither direction.
+test('W14 the class the table gives a call is its traffic_class, and a class kept at `log` carries body_retention:\'log\' with sizes and headers only', T, async (t) => {
+  const asked = []
+  const r = await run(t, 'transparent', 'transparent', (proc, host, method, p) => { asked.push([host, method, p]); return { class: 'catalog', level: 'log' } })
+  assert.deepEqual(asked, [['api.anthropic.com', 'POST', '/v1/messages'], ['api.anthropic.com', 'POST', '/v1/messages']], 'sampled once per call, at its start')
+  const [e, sse] = r.envelopes
+  assert.deepEqual([e.traffic_class, e.body_retention], ['catalog', 'log'], 'a class the operator added: the name is recorded as it is')
+  assert.deepEqual(e.req_body, { raw_chars: Buffer.byteLength(callBody(false)), verbatim: false })
+  assert.deepEqual([e.body_wire_bytes.req, e.req_headers['x-api-key']], [Buffer.byteLength(callBody(false)), 'sk-ant-FAKE'], 'the size and the headers stay')
+  assert.ok(e.req_head_raw.startsWith('POST /v1/messages HTTP/1.1\r\n'), 'the verbatim head is metadata, not the body')
+  assert.equal(e.resp.verbatim, false); assert.equal('body' in e.resp || 'raw' in e.resp, false, 'no response body either')
+  assert.deepEqual([sse.body_retention, sse.resp.verbatim], ['log', false], 'the streamed call too')
+  // the same two calls with no table in the way: the endpoint alone says `llm`, and everything is kept
+  const full = await run(t, 'transparent', 'transparent')
+  assert.deepEqual(full.envelopes.map((x) => [x.traffic_class, 'body_retention' in x]), [['llm', false], ['llm', false]])
 })

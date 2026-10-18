@@ -204,6 +204,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
   // a negative-cache pair is (neg_key ?? pid, host): "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5, W17), so two forms with
   // no pid are listed apart, and a clearing removes only its own key
   const clearNeg = (who) => { for (const m of [neg, rejected]) for (const k of [...m.keys()]) if (k.slice(0, k.indexOf('\u0000')) === who) m.delete(k) }
+  // `retention` holds the class table's condition (D60③) and the retired retention.json's, named by its `where`
   let degraded = null, version = null, mismatch = null, ca = null, retention = null, agentList = null
   // D51⑥: a process on no name list used a door — a fact of this daemon life per (harness, name), the newest pid kept; expected, so not a condition (no ⚠)
   const unknownProcs = new Map()
@@ -222,12 +223,13 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     else if (r.event === 'failure' && r.code === 'trust-rejected') rejected.set(`${r.neg_key ?? r.pid}\u0000${r.host}`, { kind: 'trust-rejected', ...pick(r), since: r.ts })
     else if (r.event === 'failure' && r.code === 'ca-invalid') ca = { kind: 'ca-invalid', ...pick(r), since: r.ts }
     else if (r.event === 'ca-ok') ca = null // the daemon found the CA usable again and rebuilt what it signs with (D1-2)
-    // D40: ~/.asight/retention.json cannot be read or parsed (or holds a bad cell): every call is kept in full meanwhile,
-    // and that is a condition until retention-ok. A traffic pattern that does not compile, or a classifier that threw, is a
-    // failure of its own (the groups below), not this condition: retention-ok does not say they are fixed. (A change-log line that could not be
-    // written, `retention-log-failed`, is likewise its own failure: the settings file is fine.)
-    else if (r.event === 'failure' && r.where === 'retention' && r.code !== 'pattern-invalid' && r.code !== 'classify-failed' && r.code !== 'retention-log-failed') retention = { kind: 'retention', ...pick(r), since: r.ts }
-    else if (r.event === 'retention-ok') retention = null
+    // D60③: ~/.asight/classes.json cannot be read or parsed (or holds an entry that is not a class): the builtin class
+    // table applies meanwhile, and that is a condition until classes-ok. A rule that does not compile (`pattern-invalid`),
+    // or a classifier that threw, is a failure of its own (the groups below), not this condition: classes-ok does not say
+    // they are fixed. (A change-log line that could not be written, `classes-log-failed`, is likewise its own failure:
+    // the table itself is fine.) The retired retention.json's own condition read the same way: old flows/ still show it.
+    else if (r.event === 'failure' && (r.where === 'classes' || r.where === 'retention') && !['pattern-invalid', 'classify-failed', 'retention-log-failed', 'classes-log-failed'].includes(r.code)) retention = { kind: r.where, ...pick(r), since: r.ts }
+    else if (r.event === 'classes-ok' || r.event === 'retention-ok') retention = null
     // D51③: ~/.asight/agents.json cannot be read or parsed, or holds bad items (the good ones and the presets apply meanwhile): a condition until agent-list-ok
     else if (r.event === 'failure' && r.code === 'agent-list-invalid') agentList = { kind: 'agent-list', ...pick(r), since: r.ts }
     else if (r.event === 'agent-list-ok') agentList = null

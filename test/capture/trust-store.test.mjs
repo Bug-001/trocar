@@ -4,7 +4,6 @@ import {
   getTrustStoreInstaller, darwinInstaller, linuxInstaller, defaultRun,
   CA_CN, CA_NICKNAME,
 } from '../../src/capture/trust-store.mjs'
-import { monitoringStatus } from '../../src/capture/control.mjs'
 
 // A recording runner: captures (file,args) and returns an injectable canned result,
 // so the whole unit is exercised WITHOUT mutating any real trust store.
@@ -77,8 +76,8 @@ test('linux: verify/uninstall target the nickname in the user db', () => {
 })
 
 // 4.1 落地细节 (6): only the store's own "not found" answer is false; anything else — the tool missing
-// (ENOENT), a keychain or NSS db that cannot be opened — could not be checked: it throws with the reason, so
-// /control/status says caTrusted:null + caError ("CA ? reason"), never "not trusted".
+// (ENOENT), a keychain or NSS db that cannot be opened — could not be checked: it throws with the reason, so a
+// reader can say "could not be checked", never "not trusted".
 test('verify: only the store\'s own not-found is false; a tool that is missing or fails is "could not be checked"', () => {
   assert.equal(linuxInstaller({ run: () => ({ status: 255, stderr: 'certutil: Could not find cert: asight-ca\n: PR_FILE_NOT_FOUND_ERROR: File not found' }) }).verifyUserTrustOnly(), false)
   const enoent = defaultRun('asight-no-such-tool-d2-08', ['-L'])
@@ -89,8 +88,5 @@ test('verify: only the store\'s own not-found is false; a tool that is missing o
     ['keychain unreadable', darwinInstaller({ run: () => ({ status: 50, stderr: 'security: SecKeychainSearchCopyNext: The user name or passphrase you entered is not correct.' }), keychain: '/k' })],
   ]) {
     assert.throws(() => inst.verifyUserTrustOnly(), /could not be checked/, name)
-    const st = monitoringStatus({ onboard: { verifyUserTrustOnly: () => inst.verifyUserTrustOnly() }, autostart: { platform: 'linux', status: () => ({ installed: false }) }, settingsPath: '/nonexistent/settings.json', getenv: null, caPath: '/nonexistent/ca.crt' })
-    assert.equal(st.caTrusted, null, `${name}: caTrusted is null, not false`)
-    assert.match(st.caError, /could not be checked/, name)
   }
 })

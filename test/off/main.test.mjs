@@ -99,6 +99,22 @@ test('1.6 §7: the receipt text of an off with no names — no certificate item 
   assert.match(bad, /没撤掉: ~\/\.codex\/\.env\(is no longer valid JSON\)/)
 })
 
+// V82 · 1.6 §4.2「与开关无关」/ §3.6「流量类别表不删」: the class table says what to keep of FUTURE calls — it is not asight's
+// effect on an agent, so neither `off` nor `uninstall --purge-data` (test/cli/uninstall.test.mjs R6) may touch it or its change log.
+test('V82: `off` leaves ~/.asight/classes.json and logs/classes.ndjson byte for byte — the table is not part of what off undoes', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const file = path.join(s.home, '.asight', 'classes.json'), log = path.join(s.home, '.asight', 'logs', 'classes.ndjson')
+  fs.mkdirSync(path.dirname(log), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({ version: 1, classes: [{ class: 'catalog', keep: 'log', rules: [{ host: 'models\\.opencode\\.ai' }] }] }, null, 2) + '\n')
+  fs.writeFileSync(log, '{"ts":"2026-10-18T00:00:00.000Z","op":"set","class":"catalog"}\n')
+  const bytes = () => [fs.readFileSync(file), fs.readFileSync(log)]
+  const before = bytes()
+  const io = fakeIo()
+  assert.equal(await runOffCli(['--json'], ctx(s, io)), 0, io.text())
+  assert.deepEqual(bytes(), before, 'both files are untouched, to the byte')
+  assert.deepEqual(io.json().changed.filter((c) => /classes/.test(c.path)), [], 'the receipt names neither of them')
+})
+
 test('R6 · R5: with --json a question about the marks goes to stderr and stdout stays one JSON document; with no manifest and no terminal the plan is in the receipt and the exit is 1', async () => {
   const s = await installedHome({ names: ['codex'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json'))
   const io = fakeIo({ tty: false })

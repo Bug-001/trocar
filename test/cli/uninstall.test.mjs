@@ -21,6 +21,10 @@ async function cli(s, argv, { io = fakeIo(), deps = {}, platform = 'linux' } = {
 }
 const keep = (s) => { for (const k of ['capture-2026-10-06.ndjson', 'audit/a.ndjson', 'replays/r.ndjson']) { fs.mkdirSync(path.dirname(path.join(s.dir, k)), { recursive: true }); fs.writeFileSync(path.join(s.dir, k), '{"keep":true}\n') } }
 const kept = (s) => ['capture-2026-10-06.ndjson', 'audit/a.ndjson', 'replays/r.ndjson'].map((k) => fs.existsSync(path.join(s.dir, k)))
+const CLASSES = '{"version":1,"classes":[]}\n', CLASSES_LOG = '{"ts":"2026-10-18T00:00:00.000Z","op":"reset"}\n'
+/** the class table and its change log, seeded in ~/.asight (above the collector dir) and read back */
+const seedClasses = (s) => { const h = path.dirname(s.dir); fs.mkdirSync(path.join(h, 'logs'), { recursive: true }); fs.writeFileSync(path.join(h, 'classes.json'), CLASSES); fs.writeFileSync(path.join(h, 'logs', 'classes.ndjson'), CLASSES_LOG) }
+const classTable = (s) => { const h = path.dirname(s.dir); return [path.join(h, 'classes.json'), path.join(h, 'logs', 'classes.ndjson')].map((f) => { try { return fs.readFileSync(f, 'utf8') } catch (e) { return `MISSING (${e.code})` } }) }
 const asightFiles = (s) => ['ca', 'run', 'state.json', 'install-manifest.json', 'op.lock', 'lock'].filter((n) => fs.existsSync(path.join(s.dir, n)))
 
 test('uninstall: every entry is back as it was, asight\'s own files are gone, the captures and the records stay, and the receipt says so in the past tense (exit 0, --json validates)', async () => {
@@ -64,10 +68,12 @@ test('R6: --purge-data takes the collector machine with the data — kernel/, ke
   const leftovers = (s) => { for (const k of ['kernel/asight-forwarder.exe', 'kernel-archive/mihomo.zip', 'forwarder/config.json', 'forwarder/home/db.sql', 'control.json', 'ingress.json']) { const f = path.join(s.dir, k); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '{"left":true}\n') } }
   const names = ['kernel', 'kernel-archive', 'forwarder', 'control.json', 'ingress.json']
   const there = (s) => names.map((n) => fs.existsSync(path.join(s.dir, n)))
-  const purged = await installedHome({ names: ['claude-code'] }); keep(purged); leftovers(purged)
+  const purged = await installedHome({ names: ['claude-code'] }); keep(purged); leftovers(purged); seedClasses(purged)
   const r = await cli(purged, ['--purge-data', '--yes'])
   assert.equal(r.exit, 0, r.io.text())
   assert.deepEqual(there(purged), [false, false, false, false, false], 'the kernel, its cache, the forwarder state and the two endpoint files go with the data')
+  // §3.6「流量类别表不删」(V82): the class table and its change log say what to keep of FUTURE calls, so not even --purge-data deletes them
+  assert.deepEqual(classTable(purged), [CLASSES, CLASSES_LOG], '~/.asight/classes.json and logs/classes.ndjson are byte for byte what they were')
   const plain = await installedHome({ names: ['claude-code'] }); keep(plain); leftovers(plain)
   const p = await cli(plain, ['--yes'])
   assert.equal(p.exit, 0, p.io.text())

@@ -11,7 +11,7 @@ import { randomBytes } from 'node:crypto'
 import { createFramer, asksUpgrade } from '../http1/framer.mjs'
 import { buildTransparentEnvelope } from '../record/envelope.mjs'
 import { createWsRecorder } from '../ws/recorder.mjs'
-import { sampleRetention } from '../../../capture/retention.mjs'
+import { endpointClass } from '../../../capture/envelope.mjs'
 
 const defaultRunTag = () => Date.now().toString(36).slice(-4) + randomBytes(2).toString('hex')
 
@@ -43,12 +43,18 @@ const errOf = (e) => (e ? { type: e.code || e.type || 'error', message: String(e
  * (body_wire_bytes). No callback: every call is `full`, its class told by the endpoint alone. */
 export const noFailureSink = (r) => { throw Object.assign(new Error(`capture failure with nowhere to be recorded: ${r.code}: ${r.reason}`), { code: r.code }) } // a wiring fault: loud, never dropped
 export function createExchangeTee({ flow, recordStore, isRecording = () => true, maxBodyBytes = 64 << 20, newId, wsTerminal = null, retention = null, onFailure = noFailureSink, onTurnEnd = () => {} }) {
-  // the retention callback as the old capture's sampler wants it: one query object; a throw or a nonsense answer is `full`
-  // (never throws into the framer: a bad flow object is asight's own bug, reported where the envelope is built, not here)
+  // the retention callback, sampled once per call: a throw or a nonsense answer is `full`, its class told by the
+  // endpoint alone (never throws into the framer: a bad flow object is asight's own bug, reported where the envelope
+  // is built, not here). Class names are the operator's table's, so any non-empty name is taken as it is (D60③).
   const sample = (method, target) => {
     let host = null
     try { host = flow.host } catch { /* the envelope build reports it */ }
-    return sampleRetention(retention ? (q) => retention(flow.proc, q.host, q.method, q.endpoint) : null, { host, method, endpoint: target })
+    const fallback = () => ({ class: endpointClass(target) || 'other', level: 'full' })
+    if (typeof retention !== 'function') return fallback()
+    try {
+      const r = retention(flow.proc, host, method, target)
+      return { class: r && typeof r.class === 'string' && r.class ? r.class : 'other', level: r && r.level === 'log' ? 'log' : 'full' }
+    } catch { return fallback() }
   }
   const stats = { exchanges: 0, recorded: 0 }
   const run = defaultRunTag()

@@ -1,8 +1,8 @@
-// test/collector/retention-daemon.test.mjs — D40 through the PRODUCT path: the daemon over the fake helper and a synthetic /proc,
+// test/collector/classes-daemon.test.mjs — D40 through the PRODUCT path: the daemon over the fake helper and a synthetic /proc,
 // a trusted agent, a mock upstream behind a lab CA (RFC 4.6 acceptance T17 + K2 / K3 at the daemon):
 //   - the default decrypt policy is `all` (an agent's non-model traffic is seen), `auto` stays when the install already wrote it;
 //   - a client that does not trust the asight CA costs two failed connections per (pid, host), then passes through byte-exact;
-//   - retention.json is read by the daemon's engine, hot, per call; a bad file keeps everything in full and says so.
+//   - classes.json is read by the daemon's engine, hot, per call; a bad file keeps the builtin table and says so.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -22,6 +22,7 @@ import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { startMockUpstream } from '../lab/mock-upstream/server.mjs'
 import { makeLabCa } from '../lab/mock-upstream/lab-ca.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
+import { BUILTIN } from '../../src/classes/table.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
@@ -37,7 +38,7 @@ const flowsOf = (dir) => { const d = path.join(dir, 'flows'); return fs.existsSy
 const capturesOf = (dir) => { const raw = path.join(path.dirname(dir), 'raw'); return fs.existsSync(raw) ? fs.readdirSync(raw).flatMap((n) => ndjson(path.join(raw, n))) : [] }
 const b64 = (s) => Buffer.from(s, 'base64')
 
-async function scene({ state = null, trafficRows = undefined } = {}) {
+async function scene({ state = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'as-rd-')) // short: unix socket paths are length-limited
   const home = path.join(root, 'home'); fs.mkdirSync(home)
   const dir = path.join(home, '.asight', 'collector'), sock = path.join(root, 'run', 'c.sock')
@@ -49,7 +50,7 @@ async function scene({ state = null, trafficRows = undefined } = {}) {
   if (state) fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(state))
   const clients = []
   const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ procRoot: p.root, uid: UID, makeClient: () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c } }) }
-  const d = await startDaemon({ dir, socketPath: sock, arch, harnesses: [cc], trafficRows, env: { ...process.env, HOME: home }, upstreamCa: fs.readFileSync(labCa.caCert, 'utf8') })
+  const d = await startDaemon({ dir, socketPath: sock, arch, harnesses: [cc], env: { ...process.env, HOME: home }, upstreamCa: fs.readFileSync(labCa.caCert, 'utf8') })
   await req(sock, 'POST', '/on', {})
   p.add(4343, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: home, env: { HOME: home }, startTicks: nowTicks(p) })
   await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4343, pid: 4343, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
@@ -118,62 +119,43 @@ test('T17 a client that does not trust the asight CA (a sandboxed child): two ro
   } finally { await s.done() }
 })
 
-test('K2 / K3 at the daemon: retention.json is read per call, hot (≤ 1 s); `cc · telemetry = log` keeps sizes and headers; a bad file keeps everything in full, says so (⚠), and says when it is fine again', async () => {
+test('D60③ at the daemon: classes.json is read per call, hot (≤ 1 s); `telemetry` at `log` keeps headers and sizes only; an unparsable file keeps the builtin table, says so (⚠), and says when it is fine again', async () => {
   const s = await scene()
-  const file = path.join(s.home, '.asight', 'retention.json')
+  const file = path.join(s.home, '.asight', 'classes.json')
+  const setKeep = (keep) => fs.writeFileSync(file, JSON.stringify({ version: 1, classes: BUILTIN.map((c) => (c.class === 'telemetry' ? { ...c, keep } : c)) }))
   const batch = (n) => ({ host: API, body: JSON.stringify({ events: ['e'.repeat(n)] }) })
   const last = (path_) => capturesOf(s.dir).filter((x) => x.endpoint === path_).at(-1)
   const T = '/api/event_logging/v2/batch'
+  const settle = () => new Promise((r) => setTimeout(r, 1150)) // past the daemon's 1 s recheck
   try {
     await s.call({ ...batch(40), path: T })
-    assert.deepEqual([last(T).traffic_class, 'body_retention' in last(T), typeof last(T).req_body], ['telemetry', false, 'string'], 'the default is full; the cc row classes event_logging as telemetry')
-    fs.writeFileSync(file, JSON.stringify({ version: 1, levels: { cc: { telemetry: 'log' } } }))
-    await new Promise((r) => setTimeout(r, 1150))
+    assert.deepEqual([last(T).traffic_class, 'body_retention' in last(T), typeof last(T).req_body], ['telemetry', false, 'string'], 'no file: the builtin table, every class full; the cc row classes event_logging as telemetry')
+    setKeep('log')
+    await settle()
     const b = batch(40); const r = await s.call({ ...b, path: T })
     assert.equal(b64(lastRequest(s.mock).req_raw_b64).toString('latin1'), r.REQ, 'what is forwarded is unchanged')
     await until(() => capturesOf(s.dir).filter((x) => x.endpoint === T).length >= 2)
     const lg = last(T)
-    assert.deepEqual([lg.body_retention, lg.req_body, lg.body_wire_bytes.req, lg.req_headers.authorization], ['log', { raw_chars: Buffer.byteLength(b.body), verbatim: false }, Buffer.byteLength(b.body), 'Bearer sk-ant-oat-SECRET'])
+    assert.deepEqual([lg.traffic_class, lg.body_retention, lg.req_body, lg.body_wire_bytes.req, lg.req_headers.authorization], ['telemetry', 'log', { raw_chars: Buffer.byteLength(b.body), verbatim: false }, Buffer.byteLength(b.body), 'Bearer sk-ant-oat-SECRET'])
     assert.equal('body' in lg.resp || 'raw' in lg.resp, false); assert.equal(lg.resp.verbatim, false)
-    // M3 (review): the hand edit is itself an event with the old and new value — written by the daemon, source:file
-    const changeLog = () => { try { return ndjson(path.join(s.home, '.asight', 'logs', 'retention.ndjson')).map((c) => `${c.harness}/${c.class} ${c.from}→${c.to} ${c.source}`) } catch { return [] } }
-    assert.deepEqual(changeLog(), ['cc/telemetry full→log file'])
     await s.call({ host: API, path: '/v1/messages/count_tokens', body: '{"model":"m","messages":[]}' })
     const ct = await until(() => last('/v1/messages/count_tokens'))
-    assert.deepEqual([ct.traffic_class, ct.req_body, 'body_retention' in ct], ['token-count', '{"model":"m","messages":[]}', false], 'token-count is full by default')
-    // a bad file: everything is full, one failure event, the board's health says ⚠
-    fs.writeFileSync(file, '{ torn'); await new Promise((r2) => setTimeout(r2, 1150))
+    assert.deepEqual([ct.traffic_class, ct.req_body, 'body_retention' in ct], ['token-count', '{"model":"m","messages":[]}', false], 'another class is untouched by the edit: token-count is full')
+    // a file that cannot be parsed: the builtin table applies (nothing is kept less than full), one failure event, the board's health says ⚠
+    fs.writeFileSync(file, '{ torn'); await settle()
     await s.call({ ...batch(5), path: T })
     await until(() => capturesOf(s.dir).filter((x) => x.endpoint === T).length >= 3)
-    assert.equal(typeof last(T).req_body, 'string', 'unparsable → kept in full')
-    const ev = await until(() => flowsOf(s.dir).find((f) => f.event === 'failure' && f.where === 'retention'))
-    assert.equal(ev.code, 'retention-unparsable'); assert.match(ev.reason, /kept in full/)
+    assert.equal(typeof last(T).req_body, 'string', 'unparsable → the builtin level, full')
+    const ev = await until(() => flowsOf(s.dir).find((f) => f.event === 'failure' && f.where === 'classes'))
+    assert.equal(ev.code, 'classes-unparsable'); assert.match(ev.reason, /builtin class table applies/)
+    assert.equal(flowsOf(s.dir).filter((f) => f.event === 'failure' && f.where === 'classes').length, 1, 'one event per state change, not one per call')
     const bad = captureHealth({ home: path.join(s.home, '.asight') })
-    assert.ok(bad.collector.conditions.some((c) => c.kind === 'retention'), 'a current condition: the top bar is ⚠'); assert.equal(bad.summary.state, 'failing')
-    // fixed: retention-ok, the condition is gone
-    fs.writeFileSync(file, JSON.stringify({ version: 1, levels: {} })); await new Promise((r2) => setTimeout(r2, 1150))
+    assert.ok(bad.collector.conditions.some((c) => c.kind === 'classes'), 'a current condition: the top bar is ⚠'); assert.equal(bad.summary.state, 'failing')
+    // fixed: classes-ok, the condition is gone
+    setKeep('full'); await settle()
     await s.call({ ...batch(5), path: T })
-    await until(() => flowsOf(s.dir).find((f) => f.event === 'retention-ok'))
-    assert.equal(captureHealth({ home: path.join(s.home, '.asight') }).collector.conditions.some((c) => c.kind === 'retention'), false)
-    assert.deepEqual(changeLog(), ['cc/telemetry full→log file', 'cc/telemetry log→full file'], 'the torn file was no change; its repair to {} is the second edit')
-  } finally { await s.done() }
-})
-
-// review (F10): D38 — a config error of asight's own is never silent. A traffic pattern of the read-side table that cannot be used is skipped, and
-// that is a `pattern-invalid` failure line in flows/ (the top bar goes ⚠); replacing `onInvalid` with a no-op in the daemon left every test green.
-test('F10 — a traffic pattern that cannot be used is a pattern-invalid failure in flows/ (the health reader shows it); the daemon runs on and the usable patterns still classify', async () => {
-  const rows = [{ id: 'cc', traffic: [{ host: OTHER, class: 'telemetry', path: '(' /* does not compile */ }, { host: OTHER, class: 'files', path: '^/up' }] }]
-  const s = await scene({ trafficRows: rows })
-  try {
-    const inv = flowsOf(s.dir).filter((e) => e.where === 'retention' && e.code === 'pattern-invalid')
-    assert.equal(inv.length, 1, 'one line for the one bad pattern')
-    assert.equal(inv[0].event, 'failure')
-    assert.match(inv[0].reason, /a traffic pattern of cc is skipped \(.*\): .*"path":"\("/)
-    assert.equal(captureHealth({ home: path.join(s.home, '.asight') }).summary.state, 'failing', 'the top bar says so')
-    // the daemon runs on: a call to the host is captured, classified by the pattern that does compile
-    const r = await s.call({ path: '/up/x.bin', body: 'abc' })
-    assert.equal(r.ok, true)
-    await until(() => capturesOf(s.dir).some((e) => e.endpoint === '/up/x.bin'))
-    assert.equal(capturesOf(s.dir).find((e) => e.endpoint === '/up/x.bin').traffic_class, 'files')
+    await until(() => flowsOf(s.dir).find((f) => f.event === 'classes-ok'))
+    assert.equal(captureHealth({ home: path.join(s.home, '.asight') }).collector.conditions.some((c) => c.kind === 'classes'), false)
+    assert.equal('body_retention' in last(T), false, 'back to full from the next call on')
   } finally { await s.done() }
 })

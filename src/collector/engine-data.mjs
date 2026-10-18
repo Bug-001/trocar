@@ -1,22 +1,20 @@
 // engine-data.mjs — what the engine samples per call and per flow from the daemon's data, built the one way both daemons build it (Linux's runDaemon and the
-// model's runModelDaemon on macOS / Windows): retention (D40, 4.6 §记录「保存级别」) and a harness's WebSocket turn terminators (FlowExtras, Plan 3c §2).
-import { createRetention } from '../capture/retention.mjs'
-import { endpointClass } from '../capture/envelope.mjs'
-import { makeClassifier, harnessIdOfAgent } from '../dissect/traffic.mjs'
+// model's runModelDaemon on macOS / Windows): the traffic class and its keep level (D60③, 4.6 §记录「保存级别」) and a harness's WebSocket turn terminators (FlowExtras, Plan 3c §2).
+import { createClassSource } from '../classes/source.mjs'
+import { harnessIdOfAgent } from '../dissect/traffic.mjs'
 
 /**
- * The engine's `retention(meta, host, method, path)` → {class, level}. The settings file is read at the start of every request (re-checked at most once a
- * second, no restart) and a problem with it is a failure event (flows/, folded) — the call is kept in full meanwhile. The class patterns are the read-side
- * harness table's data (src/dissect), handed in as a function: the core names no harness (D20, 0.1 §5). `failure`: the daemon's recorder (event / write).
+ * The engine's `retention(meta, host, method, path)` → {class, level}. The class table (~/.asight/classes.json, else the builtin one) is read at the start of
+ * every call (re-checked at most once a second, no restart) and a problem with it is a failure event (flows/, folded) — the builtin table applies meanwhile.
+ * The class and its level are sampled together, so an in-flight call keeps what it started with. The core names no harness (D20, 0.1 §5): the harness of a
+ * call is resolved here, from the read side's id table. `failure`: the daemon's recorder (event / write).
  */
-export function retentionHook({ file, rows = undefined, failure }) {
-  const keep = createRetention({
-    file,
-    classify: makeClassifier({ endpointClass, rows, onInvalid: (b) => failure.event({ where: 'retention', code: 'pattern-invalid', reason: `a traffic pattern of ${b.harness} is skipped (${b.reason}): ${JSON.stringify(b.entry)}` }) }),
-    onFailure: (rec) => failure.event(rec),
-    onOk: (rec) => failure.write(rec),
-  })
-  return (meta, host, method, endpoint) => keep.decide({ harness: harnessIdOfAgent(meta && meta.agent), host, method, endpoint })
+export function classesHook({ home, failure }) {
+  const src = createClassSource({ home, onFailure: (rec) => failure.event(rec), onOk: (rec) => failure.write(rec) })
+  return (meta, host, method, endpoint) => {
+    const cls = src.classOf({ host, path: endpoint, harness: harnessIdOfAgent(meta && meta.agent) })
+    return { class: cls, level: src.keepOf(cls) }
+  }
 }
 
 /** The engine's `describe(meta)` where no tracker knows the process (the model's doors): the descriptor's WebSocket terminators, data only. */
