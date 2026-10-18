@@ -27,11 +27,21 @@ import path from 'node:path';
 import { readIndex } from './format.mjs';
 import { copyRelation } from './relation.mjs';
 import { isCaptureFile, skipReason } from '../paths.mjs';
+import { parseSegment } from '../collector/core/record/segments.mjs';
 
 export const SEALED_EXT = '.sealed';
 const SEG = /^(.+)\.(\d{4,})\.sealed$/;
-export const isSealedPath = (p) => SEG.test(path.basename(p));
-export const streamOfSealed = (name) => { const m = SEG.exec(path.basename(name)); return m ? m[1] : null; };
+// Two sealed names: the raw layer's `<segment>.sealed` (D60: one sealed file per segment, the only shape the daemon
+// writes), and the older `<stream>.<NNNN>.sealed` of the per-shard sealer. A reader that knew only the second skipped
+// every segment the daemon sealed — its records would have been unreadable (invariant 2).
+const sealedSegment = (n) => { const s = parseSegment(n); return s && s.sealed ? s.segment : null; };
+export const isSealedPath = (p) => SEG.test(path.basename(p)) || !!sealedSegment(path.basename(p));
+export const streamOfSealed = (name) => {
+  const n = path.basename(name), m = SEG.exec(n);
+  if (m) return m[1];
+  const seg = sealedSegment(n);
+  return seg ? `${seg}.ndjson` : null; // the segment's plaintext name: what the sealed file's source-segment table holds
+};
 
 // The order a reader reads one directory's files in (4.2 「watermark」: a session's record sequence is
 // the same before and after sealing). By stream — `streams` first, in that order, then any other
@@ -41,7 +51,7 @@ export const streamOfSealed = (name) => { const m = SEG.exec(path.basename(name)
 // sealed `probes`, unlike the originals (review 3 F2). Stable for files of one stream in several dirs.
 export function orderInputs(files, streams = []) {
   const rank = (f) => {
-    const n = path.basename(f), m = SEG.exec(n), stream = m ? m[1] : n, k = streams.indexOf(stream);
+    const n = path.basename(f), m = SEG.exec(n), stream = m ? m[1] : (streamOfSealed(n) || n), k = streams.indexOf(stream);
     return { k: k < 0 ? streams.length : k, stream, seg: m ? Number(m[2]) : Infinity };
   };
   const cmp = (a, b) => a.k - b.k || (a.stream < b.stream ? -1 : a.stream > b.stream ? 1 : 0) || (a.seg === b.seg ? 0 : a.seg < b.seg ? -1 : 1);

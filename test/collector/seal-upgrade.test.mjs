@@ -61,3 +61,23 @@ test('6: a name another segment already holds takes -2; the upgrade runs before 
   await q.idle()
   assert.deepEqual(fs.readdirSync(b2.raw), ['20261017T000000Z.sealed'], 'the upgraded capture was sealed by the start scan')
 })
+
+test('6: a rename the filesystem refuses (EXDEV) is ONE failure, the capture stays where it is, and the capture goes on', async () => {
+  const b = oldHome()
+  const failures = []
+  const hooked = { ...fs, renameSync(from, to) { if (String(from).includes('capture-')) throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' }); return fs.renameSync(from, to) } }
+  assert.deepEqual(upgradeCaptures({ collectorDir: b.collector, raw: b.raw, fs: hooked, failure: (where, e, extra) => failures.push({ where, code: e.code, reason: e.message, ...extra }) }), [])
+  assert.equal(failures.length, 1)
+  assert.deepEqual([failures[0].where, failures[0].code, failures[0].file], ['raw', 'upgrade-failed', b.capture])
+  assert.match(failures[0].reason, /cross-device link/)
+  assert.deepEqual(fs.readFileSync(b.capture), CAPTURE, 'the capture is left where it is, byte for byte')
+  // the start goes on: a segment this run closes is still sealed (sealing MUST NOT stop the capture)
+  const closed = path.join(b.raw, '20261017T100000Z.ndjson')
+  fs.mkdirSync(b.raw, { recursive: true, mode: 0o700 })
+  fs.writeFileSync(closed, CAPTURE, { mode: 0o600 })
+  const store = { currentSegment: null, onSegmentClosed() {} }
+  const q = startSealing({ store, raw: b.raw, collectorDir: b.collector, lockFile: b.lock, journal: null, fs: hooked, failure: (where, e) => failures.push({ where, code: e.code }) })
+  await q.idle()
+  assert.equal(fs.existsSync(closed), false, 'the closed segment was sealed anyway')
+  assert.deepEqual(failures.map((f) => f.code), ['upgrade-failed', 'upgrade-failed'], 'one failure per start, and no seal failure')
+})

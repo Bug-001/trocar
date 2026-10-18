@@ -14,6 +14,9 @@ const WORKER = fileURLToPath(new URL('./seal-worker.mjs', import.meta.url))
 const TEMP = /^\..*\.tmp$/ // a temp an interrupted seal left in raw/ (seal.mjs names them `.<segment>.<pid>-<hex>.tmp`)
 // `capture-<YYYY-MM-DD>.ndjson` from a version before D60, plus the close marker that version left beside it
 const CAPTURE = /^capture-(\d{4})-(\d{2})-(\d{2})\.ndjson$/
+/** The worker's exit code for "my parent is gone": the daemon is stopping, so this is not a seal failure — nothing is
+ *  recorded and the next start's scan seals the segment (4.2 §自动封存). */
+export const WORKER_GONE_EXIT = 75
 
 /** Seal `file` in a child process → { code, reason }. The child exits as soon as this parent disconnects. */
 const forkWorker = (file, { lockFile, journal }) => new Promise((resolve) => {
@@ -26,13 +29,13 @@ const forkWorker = (file, { lockFile, journal }) => new Promise((resolve) => {
 
 export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeFs, fork: run = forkWorker, onFailure = () => {} }) {
   const queued = [], failed = new Set() // failed: not sealed again before the next start (no retry loop)
-  let running = null, idlePromise = null, markIdle = null
+  let running = null, idlePromise = null, markIdle = null, stopping = false
 
   function pump() {
     if (running || !queued.length) { if (!running && markIdle) { markIdle(); idlePromise = null; markIdle = null } return }
     const file = running = queued.shift()
     Promise.resolve(run(file, { lockFile, journal })).then((r) => r, (e) => ({ code: -1, reason: e.message })).then(({ code, reason }) => {
-      if (code !== 0) {
+      if (code !== 0 && code !== WORKER_GONE_EXIT && !stopping) {
         failed.add(file)
         onFailure({ file, reason: reason || `the sealer exited with ${code}` }) // the worker wrote the journal line; this is the collector-side `failure` (D38)
       }
@@ -43,13 +46,14 @@ export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeF
 
   /** Queue one closed segment. Idempotent; a segment this run already failed on is not tried again. */
   function add(file) {
-    if (failed.has(file) || file === running || queued.includes(file)) return
+    if (stopping || failed.has(file) || file === running || queued.includes(file)) return
     queued.push(file)
     pump()
   }
 
   /** At start: drop leftover temps, then queue every plaintext segment in raw/ that is not the live one. */
   function scan({ current = null } = {}) {
+    clearLockSegment()
     let names
     try { names = fs.readdirSync(raw) } catch { return [] } // no raw/ yet: nothing was ever written
     const took = []
@@ -65,6 +69,19 @@ export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeF
     return took
   }
 
+  /** The crashed run's lock still names the segment it was appending to, and that run is gone (this daemon's
+   *  single-instance gate proved it before the scan): clear `segment`, or the worker would refuse that segment for
+   *  ever. Only this field changes; the rest is left for the start's unclean-stop line. A lock that cannot be
+   *  rewritten costs one refused seal, retried at the next start. */
+  function clearLockSegment() {
+    let lock
+    try { lock = JSON.parse(fs.readFileSync(lockFile, 'utf8')) } catch { return } // no lock, or unreadable: it names no segment
+    if (lock.segment == null) return
+    const tmp = `${lockFile}.seal-queue.tmp`
+    try { fs.writeFileSync(tmp, JSON.stringify({ ...lock, segment: null }) + '\n', { mode: 0o600 }); fs.renameSync(tmp, lockFile) }
+    catch { try { fs.unlinkSync(tmp) } catch { /* never written */ } }
+  }
+
   /** Resolves once nothing is queued or running. */
   function idle() {
     if (!running && !queued.length) return Promise.resolve()
@@ -72,13 +89,17 @@ export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeF
     return idlePromise
   }
 
-  return { add, scan, idle }
+  /** The daemon is stopping: the segment the store closes now is NOT sealed (the next start's scan takes it), and a
+   *  worker this stop cuts off is not a failure (4.2 §自动封存). */
+  function stop() { stopping = true }
+
+  return { add, scan, idle, stop }
 }
 
 /** Upgrade (4.2 §自动封存 「升级」): every `<collector>/capture-<YYYY-MM-DD>.ndjson` becomes the ordinary closed segment
  *  `<raw>/<YYYYMMDD>T000000Z.ndjson` by a same-device rename — the bytes are untouched (invariant 2, D27③) — and the
  *  close marker that version left beside it goes. Nothing older is read or touched. → the segment paths it made. */
-export function upgradeCaptures({ collectorDir, raw, fs = nodeFs }) {
+export function upgradeCaptures({ collectorDir, raw, fs = nodeFs, failure = () => {} }) {
   let names
   try { names = fs.readdirSync(collectorDir) } catch { return [] }
   const made = []
@@ -90,7 +111,12 @@ export function upgradeCaptures({ collectorDir, raw, fs = nodeFs }) {
     let name = base
     for (let k = 2; fs.existsSync(path.join(raw, `${name}.ndjson`)) || fs.existsSync(path.join(raw, `${name}.sealed`)); k++) name = `${base}-${k}`
     const to = path.join(raw, `${name}.ndjson`)
-    try { fs.renameSync(path.join(collectorDir, n), to) } catch (e) { if (e.code !== 'ENOENT') throw e; continue }
+    // The capture stays where it is and the daemon goes on capturing: a rename that cannot be done (EXDEV, EACCES,
+    // EROFS …) is said (D38), never a failed start — sealing MUST NOT stop the capture.
+    try { fs.renameSync(path.join(collectorDir, n), to) } catch (e) {
+      if (e.code !== 'ENOENT') failure('raw', Object.assign(new Error(`moving the older version's capture ${path.join(collectorDir, n)} into the raw layer failed (${(e && e.message) || e}); it is left where it is and is not read, and capture goes on`), { code: 'upgrade-failed' }), { file: path.join(collectorDir, n) })
+      continue
+    }
     try { fs.unlinkSync(path.join(collectorDir, `${n}.closed`)) } catch { /* no marker, or gone */ }
     made.push(to)
   }
@@ -101,7 +127,7 @@ export function upgradeCaptures({ collectorDir, raw, fs = nodeFs }) {
 export function startSealing({ store, raw, collectorDir, lockFile, journal, fork: run, fs = nodeFs, failure }) {
   const queue = createSealQueue({ raw, lockFile, journal, fs, fork: run,
     onFailure: ({ file, reason }) => failure('raw', Object.assign(new Error(`sealing ${file} failed (${reason}); its plaintext is kept, and it is not sealed again before the next start`), { code: 'seal-failed' }), { file }) })
-  upgradeCaptures({ collectorDir, raw, fs })
+  upgradeCaptures({ collectorDir, raw, fs, failure })
   queue.scan({ current: store.currentSegment })
   store.onSegmentClosed(queue.add)
   return queue

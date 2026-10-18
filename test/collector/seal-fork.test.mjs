@@ -7,7 +7,7 @@ import path from 'node:path'
 import { fork } from 'node:child_process'
 import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
-import { createSealQueue } from '../../src/collector/seal-queue.mjs'
+import { createSealQueue, WORKER_GONE_EXIT } from '../../src/collector/seal-queue.mjs'
 import { openSealed } from '../../src/raw/reader.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
@@ -44,6 +44,6 @@ test('a worker whose parent disconnects exits, and leaves the plaintext whole', 
   const child = fork(WORKER, [b.file, b.lock, b.journal], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
   child.disconnect()
   const [code] = await once(child, 'exit')
-  assert.equal(code, 1, 'the sealer does not outlive the daemon that owns the queue')
+  assert.equal(code, WORKER_GONE_EXIT, 'the sealer does not outlive the daemon that owns the queue, and says so with its own exit code (never counted as seal-failed)')
   assert.deepEqual(fs.readFileSync(b.file), before, 'the plaintext is byte for byte what it was')
 })

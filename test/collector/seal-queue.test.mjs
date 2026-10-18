@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createSealQueue } from '../../src/collector/seal-queue.mjs'
+import { createSealQueue, WORKER_GONE_EXIT } from '../../src/collector/seal-queue.mjs'
 import { sealSegment } from '../../src/raw/seal.mjs'
 import { openSealed } from '../../src/raw/reader.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -106,4 +106,50 @@ test('a raw/ that is not there, and a segment whose file is gone, are nothing to
   const q = createSealQueue({ raw: path.join(home, 'raw'), lockFile: path.join(home, 'collector', 'lock'), journal: null, fork: () => { throw new Error('nothing to seal') } })
   assert.deepEqual(q.scan({ current: null }), [])
   await q.idle()
+})
+
+test('5: the crashed run\'s last segment is sealed at the next start — the stale lock still names it, and the scan clears that field first', async () => {
+  const b = box({ live: SEGMENTS[0], segments: [SEGMENTS[0]] }) // the lock a crash left: `segment` = the segment it was appending to
+  const q = createSealQueue({ raw: b.raw, lockFile: b.lock, journal: b.journal, fork: inProcess(b) })
+  assert.deepEqual(q.scan({ current: null }).map((f) => path.basename(f)), [`${SEGMENTS[0]}.ndjson`], 'only the NEW daemon\'s own current segment is excluded')
+  await q.idle()
+  assert.equal(fs.existsSync(path.join(b.raw, `${SEGMENTS[0]}.ndjson`)), false, 'the worker did not refuse it over a dead run\'s lock')
+  assert.equal(JSON.parse(fs.readFileSync(b.lock, 'utf8')).segment, null, 'the lock is rewritten with segment null; its other fields stay')
+  assert.equal(JSON.parse(fs.readFileSync(b.lock, 'utf8')).pid, process.pid)
+})
+
+test('a stop seals nothing: the segment it closes is left to the next start, and a worker it cuts off is no failure', async () => {
+  const b = box({ segments: SEGMENTS })
+  const failures = []
+  let runs = 0
+  const q = createSealQueue({ raw: b.raw, lockFile: b.lock, journal: b.journal, onFailure: (f) => failures.push(f), fork: (f, o) => { runs++; return inProcess(b)(f, o) } })
+  q.stop()
+  q.add(path.join(b.raw, `${SEGMENTS[0]}.ndjson`)) // what store.close() does at the stop
+  q.scan({ current: null })
+  await q.idle()
+  assert.equal(runs, 0, 'no sealer is started while stopping')
+  assert.deepEqual(failures, [])
+  for (const s of SEGMENTS) assert.equal(fs.existsSync(path.join(b.raw, `${s}.ndjson`)), true, 'the plaintext is kept for the next start')
+  // and the next start seals it
+  const q2 = createSealQueue({ raw: b.raw, lockFile: b.lock, journal: b.journal, fork: inProcess(b) })
+  q2.scan({ current: null })
+  await q2.idle()
+  assert.deepEqual(fs.readdirSync(b.raw).filter((n) => n.endsWith('.ndjson')), [], 'both are sealed at the next start')
+})
+
+test('a worker that exits because its parent is gone is not a seal failure, and the segment is not marked failed', async () => {
+  const b = box({ segments: [SEGMENTS[0]] })
+  const file = path.join(b.raw, `${SEGMENTS[0]}.ndjson`)
+  const failures = []
+  let gone = true
+  const q = createSealQueue({ raw: b.raw, lockFile: b.lock, journal: b.journal, onFailure: (f) => failures.push(f),
+    fork: (f, o) => (gone ? Promise.resolve({ code: WORKER_GONE_EXIT, reason: '' }) : inProcess(b)(f, o)) })
+  q.scan({ current: null })
+  await q.idle()
+  assert.deepEqual(failures, [], 'the daemon going is not a failure of the segment (nothing is recorded)')
+  assert.equal(fs.existsSync(file), true)
+  gone = false
+  q.add(file) // not in `failed`: the same run may seal it (the usual case is the next start's scan)
+  await q.idle()
+  assert.equal(fs.existsSync(file), false)
 })

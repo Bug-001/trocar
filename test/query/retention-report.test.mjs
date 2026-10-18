@@ -9,7 +9,7 @@ import { runEtl } from '../../src/etl/orchestrator.mjs'
 import { diskUsage, sealStats, groupOf, DISK_GROUPS } from '../../src/query/disk.mjs'
 import { retentionReport, readChanges } from '../../src/query/retention.mjs'
 import { setRetention } from '../../src/capture/retention.mjs'
-import { sealUnchecked } from '../../src/raw/seal.mjs'
+import { sealSegment } from '../../src/raw/seal.mjs'
 import { freshConn } from '../etl/helpers.mjs'
 import { tmpDir, writeShard, toLine, envelope, listFiles } from '../raw/helpers.mjs'
 import { full, logged, preD40, sized } from '../fixtures/d40-records.mjs'
@@ -61,11 +61,11 @@ test('a home that does not exist is an empty home, not an error: nothing to add 
 test('the seal ratio is what the sealed files say: sealed bytes over the bytes of the lines before sealing; an unreadable one is listed and left out', async () => {
   const root = tmpDir('asight-ratio-')
   const recs = Array.from({ length: 30 }, (_, i) => envelope({ id: `r${String(i).padStart(3, '0')}`, body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'lorem ipsum '.repeat(40) + i }] }), llm: true }))
-  const shard = writeShard(path.join(root, 'collector', 'capture-2026-10-05.ndjson'), recs.map((r) => toLine(r)))
+  const shard = writeShard(path.join(root, 'raw', '20261005T100000Z.ndjson'), recs.map((r) => toLine(r)))
   const original = fs.statSync(shard).size
-  await sealUnchecked(shard, { split: false, deleteOriginal: false })
+  await sealSegment(shard, { lockFile: path.join(root, 'collector', 'lock'), journal: null }) // the only sealer there is: one closed segment → <segment>.sealed
   const [sealed] = listFiles(root)
-  fs.writeFileSync(path.join(root, 'collector', 'broken.0001.sealed'), 'not a sealed file at all, only text that is long enough to look like one for a while')
+  fs.writeFileSync(path.join(root, 'raw', 'broken.0001.sealed'), 'not a sealed file at all, only text that is long enough to look like one for a while')
   const d = await diskUsage({ home: root })
   const s = await sealStats(d.sealed_paths)
   assert.equal(s.files, 1)
@@ -120,8 +120,8 @@ test('the report: sizes with their totals (legacy-meta apart), the estimate mark
 
   // with a sealed file the estimate appears, marked, as stored bytes × the global ratio
   const recs = Array.from({ length: 20 }, (_, i) => envelope({ id: `r${i}`, body: JSON.stringify({ messages: [{ role: 'user', content: 'lorem '.repeat(200) + i }] }), llm: true }))
-  const shard = writeShard(path.join(home, 'collector', 'capture-2026-10-05.ndjson'), recs.map((x) => toLine(x)))
-  await sealUnchecked(shard, { split: false, deleteOriginal: true })
+  const shard = writeShard(path.join(home, 'raw', '20261005T100000Z.ndjson'), recs.map((x) => toLine(x)))
+  await sealSegment(shard, { lockFile: path.join(home, 'collector', 'lock'), journal: null })
   const e = await retentionReport({ home, conn, now: NOW })
   assert.equal(e.sizes.estimate.estimate, true)
   assert.equal(e.sizes.estimate.ratio, e.seal.ratio)
