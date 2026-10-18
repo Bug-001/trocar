@@ -11,7 +11,7 @@ import { appendEvent } from '../collector/core/events.mjs'
 import { collectorHome } from '../paths.mjs'
 import nodeFs from 'node:fs'
 import { daemonMayStart, readManifest as readInstallManifest } from '../off/manifest.mjs'
-import { DAEMON_ALREADY_UP } from '../collector/core/control.mjs'
+import { DAEMON_ALREADY_UP, DAEMON_ENDPOINT_BUSY } from '../collector/core/control.mjs'
 
 
 const USAGE = 'usage: asight daemon [--supervise]'
@@ -68,7 +68,16 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
     // D62 ⑥: a daemon that finds another one answering is already as asked, not a failure. It says so once (the line above goes to the daemon log, D46)
     // and exits 0, because the platform retries a non-zero exit for as long as the other daemon lives — launchd's KeepAlive {SuccessfulExit: false} every
     // ThrottleInterval, the Windows supervisor on its backoff (4.8 §7: 0 = it was asked to stop, do not re-pull) — which is a loop nobody sees.
-    return e && e[DAEMON_ALREADY_UP] ? EXIT.ok : EXIT.incomplete
+    if (e && e[DAEMON_ALREADY_UP]) return EXIT.ok
+    // An endpoint held by something that does NOT answer is the opposite case (D38): exiting 0 here would leave the machine with no working collector
+    // until the next login, and no record of why. One failure record naming the pid the lock claims, then a non-zero exit, so the platform retries at
+    // its own throttle and `asight status` / `asight doctor` show it.
+    if (e && e[DAEMON_ENDPOINT_BUSY]) {
+      const held = (() => { try { return JSON.parse((deps.fs || nodeFs).readFileSync(D.collectorPaths(dir).lock, 'utf8')).pid ?? null } catch { return null } })()
+      try { appendEvent(dir, { event: 'failure', where: 'start', code: 'control-endpoint-held', reason: `${e.message}; ${held == null ? 'no pid is on record' : `the lock says pid ${held} holds it`}` }) } catch (w) { io.err(`[events] ${String((w && w.message) || w)}`) }
+      return EXIT.incomplete
+    }
+    return EXIT.incomplete
   }
   // the readiness line (whatever script starts the daemon waits for it): a port or an endpoint that is not known is left out, never printed as `null` (§1.1)
   io.out(`asight collector: ${[d.port ? `engine 127.0.0.1:${d.port}` : 'engine: no port of its own', d.socketPath ? `control ${d.socketPath}` : null].filter(Boolean).join(', ')}`)
