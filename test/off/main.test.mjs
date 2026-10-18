@@ -117,13 +117,18 @@ test('V82: `off` leaves ~/.asight/classes.json and logs/classes.ndjson byte for 
   assert.deepEqual(io.json().changed.filter((c) => /classes/.test(c.path)), [], 'the receipt names neither of them')
 })
 
-test('R6 · R5: with --json a question about the marks goes to stderr and stdout stays one JSON document; with no manifest and no terminal the plan is in the receipt and the exit is 1', async () => {
-  const s = await installedHome({ names: ['codex'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json'))
-  const io = fakeIo({ tty: false })
-  assert.equal(await runOffCli(['--json'], ctx(s, io)), 1)
-  const r = io.json()
-  assert.deepEqual([r.ok, r.pending.map((p) => path.basename(p.path)), validateReceipt(r)], [false, ['.env'], []])
-  assert.equal(flowEvents(s.dir).at(-1).outcome, 'partial')
+test('§1.2 · R6: with no install manifest and --json, off asks nothing and writes no stderr at all — stdout is one document whose `planned` holds the plan, exit 1; the same on a terminal', async () => {
+  for (const tty of [false, true]) { // on a terminal the plan used to go to stderr and the run waited on stdin, with --json (review 2026-10-18)
+    const s = await installedHome({ names: ['codex'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json'))
+    const io = fakeIo({ tty })
+    assert.equal(await runOffCli(['--json'], ctx(s, io)), 1, `tty ${tty}: nothing was undone`)
+    const r = io.json()
+    assert.deepEqual([r.ok, r.pending.map((p) => path.basename(p.path)), validateReceipt(r)], [false, ['.env'], []])
+    assert.deepEqual(r.planned.map((p) => [path.basename(p.path), typeof p.change]), [['.env', 'string']], '附录 C.2: the plan is in `planned`, each item {path, change}')
+    assert.equal(io.stderrText(), '', '§1.2: stderr is empty under --json')
+    assert.deepEqual(io.asked, [], 'and no question was asked')
+    assert.equal(flowEvents(s.dir).at(-1).outcome, 'partial')
+  }
 })
 
 test('the standalone asight-off passes no io: the process\'s own stdout and stderr are what it prints on', async () => {

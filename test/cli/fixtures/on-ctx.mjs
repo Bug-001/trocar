@@ -89,8 +89,9 @@ export function fakeDaemon({ up = true, agents = [], actual = 'on', onOn = null,
 
 /** A `spawn` no test's daemon is ever really started by (0.1 §3): it records `node <script> daemon` and brings `daemon` up, as the real `--no-autostart` start does. Calls: `spawn.calls`. */
 export function fakeSpawn(daemon) {
-  const spawn = (exe, args) => { spawn.calls.push([exe, ...args].join(' ')); daemon.state.up = true; return { pid: 4242, unref: () => {}, on: () => {} } }
+  const spawn = (exe, args, opts) => { spawn.calls.push([exe, ...args].join(' ')); spawn.opts.push(opts || {}); daemon.state.up = true; return { pid: 4242, unref: () => {}, on: () => {} } }
   spawn.calls = []
+  spawn.opts = [] // the third argument too: the direct start's environment and its stdio are what a test checks (review 2026-10-18, items 2 and 3)
   return spawn
 }
 

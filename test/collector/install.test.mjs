@@ -257,10 +257,16 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
       // the control socket is asked through an injected `request` (0.1 §3): the sandbox HOME's socket path is longer than an AF_UNIX path may be on macOS,
       // so a real connect there fails with EINVAL ("does not answer") instead of the ENOENT of a daemon that is simply not running
       deps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test' }] }), request: async () => { throw Object.assign(new Error('no such socket'), { code: 'ENOENT' }) } } })
-    assert.equal(code, 1, 'a failure in the last 24 h (R4: 1; the old 3 was for "no daemon")')
-    assert.match(out.join('\n'), /守护进程 没在跑/)
-    assert.match(out.join('\n'), /collector: not installed — an uninstall left 1 item\(s\): .*settings\.json \(left-unparsable\)\ncapture health:/, 'the residue is said first (D-18), never plain "not installed"')
-    assert.match(out.join('\n'), /capture health: – not installed · 1 item\(s\) left behind\nrecent failures \(1 kind\(s\), last 24 h\):\n  \S+ failure \(uninstall\/left-unparsable\): .*asight cannot read it/, 'read from disk, with no daemon')
+    // §3.5: the exit code counts only the harnesses that are on and not captured NOW — nothing is on here, so a clean 0; a failure in the last
+    // 24 h is a Problems line, never an exit code (the old assertion was 1, from when "no daemon" decided it)
+    assert.equal(code, 0, 'nothing is on, so nothing is uncaptured: the failure below does not decide the exit code (§3.5)')
+    assert.match(out.join('\n'), /^Daemon not running; nothing is captured\. Start it: asight on$/m)
+    assert.match(out.join('\n'), /^ {2}Problems {4,}1 in the last 24 hours, latest just now$/m, 'the uninstall residue reaches the Problems line')
+    // D38: what the uninstall left behind is still named — in the text (--failures) and in the document (`failures`)
+    assert.match(out.join('\n'), /an uninstall left an item behind \(.*\.claude.sett/, 'the residue, with its path, is in the text')
+    const doc = []
+    assert.equal(await runStatusCli(['--json'], { io: { out: (x) => doc.push(x), err: (x) => err.push(x) }, home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux', deps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [] }), request: async () => { throw Object.assign(new Error('no such socket'), { code: 'ENOENT' }) } } }), 0)
+    assert.equal(JSON.parse(doc.join('\n')).failures.problem, 1, 'and in the document')
   } finally { b.done() }
 })
 
@@ -664,8 +670,8 @@ test('daemonEnv: the install shell\'s NODE_EXTRA_CA_CERTS goes to the unit when 
     const unit = { path: path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service'), links: [], text: (env) => JSON.stringify(env), enable: () => ({ code: 0 }), disable: () => ({ code: 0 }), stop: () => {}, removeWants: () => [] }
     let listed = null
     const r = await installCollector(base(b, { unit, env: { HOME: b.home, NODE_EXTRA_CA_CERTS: 'rel/ca.pem' }, onPlan: (p) => { listed = p } }))
-    assert.ok(listed.notes.some((n) => /\(rel\/ca\.pem\) is not given to the autostart unit/.test(n)), 'said in the list printed before anything is written')
-    assert.ok(r.plan.notes.some((n) => /\(rel\/ca\.pem\) is not given to the autostart unit/.test(n)))
+    assert.ok(listed.notes.some((n) => /\(rel\/ca\.pem\) is not given to the daemon asight starts/.test(n)), 'said in the list printed before anything is written')
+    assert.ok(r.plan.notes.some((n) => /\(rel\/ca\.pem\) is not given to the daemon asight starts/.test(n)))
     assert.deepEqual(readEvents(b.dir).filter((e) => e.code === 'unit-env-not-carried').map((e) => e.event), ['install-note'])
   } finally { b.done() }
 })
@@ -954,7 +960,7 @@ test('a descriptor whose afterUninstall is a string that is no known "until" is 
 
 // ── asight on: the unit, and a harness turned on again (1.6 §1.6 · §1.1; V33, V16 unit half) ───────────────────────────────────────────────
 const onBase = (b, o = {}) => ({ home: b.home, env: { HOME: b.home, XDG_RUNTIME_DIR: path.join(b.home, 'run') }, osName: 'none', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, confirm: async () => true, sleep: async () => {}, linger: () => true, ...o })
-const unitOf = (b, run, spawn = () => { throw new Error('no test starts a daemon: hand in a spawn') }) => userUnit({ home: b.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run, spawn })
+const unitOf = (b, run, spawn = () => { throw new Error('no test starts a daemon: hand in a spawn') }, env = undefined) => userUnit({ home: b.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run, spawn, ...(env ? { env } : {}) })
 
 test('V33: on --no-autostart writes no login entry at all and starts the daemon itself through spawn, the daemon is then running and the manifest lists no unit; an arch without a unit writes none either', async () => {
   const b = box()
@@ -981,6 +987,46 @@ test('V33: on --no-autostart writes no login entry at all and starts the daemon 
     assert.deepEqual(readManifest(c.dir).files.filter((f) => f.role === 'unit'), [], 'the manifest lists none')
     assert.deepEqual(ex.calls, [])
   } finally { c.done() }
+})
+
+test('on --no-autostart: the direct start carries the daemon environment the login entry would carry and writes to the same two log files; a value it cannot carry is said, and a login entry an earlier `on` left is reported, not removed', async () => {
+  const b = box()
+  try {
+    const sys = fakeSystem()
+    const corp = path.join(b.home, 'corp.pem'); fs.writeFileSync(corp, createCa({ commonName: 'corp relay CA' }).certPem)
+    const env = { HOME: b.home, XDG_RUNTIME_DIR: path.join(b.home, 'run'), NODE_EXTRA_CA_CERTS: corp, HTTPS_PROXY: 'http://relay:8080' }
+    await installCollector({ ...onBase(b), unit: null, env })
+    const r = await turnOn(onBase(b, { unit: unitOf(b, sys.exec.run, sys.spawn, env), request: sys.daemon.request, autostart: false, env }))
+    assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+    const o = sys.spawn.opts[0]
+    // item 2: without it the daemon checks a relay behind a corporate MITM with Node's roots only and capture breaks, saying nothing
+    assert.equal(o.env.NODE_EXTRA_CA_CERTS, corp, 'the direct start carries what the systemd unit carries (install.mjs daemonEnv)')
+    assert.equal(o.env.HTTPS_PROXY, undefined, 'and still drops the proxy variables a login-started daemon would not have (directStartEnv)')
+    // item 3: stdio 'ignore' left a daemon that exits at once with its reason nowhere (D46)
+    const logs = [path.join(b.home, '.asight', 'collector', 'logs', 'daemon-out.log'), path.join(b.home, '.asight', 'collector', 'logs', 'daemon-err.log')]
+    assert.deepEqual(logs.map((f) => fs.existsSync(f)), [true, true], 'the two daemon log files are there')
+    assert.equal(o.stdio[0], 'ignore')
+    assert.deepEqual(o.stdio.slice(1).map((x) => typeof x), ['number', 'number'], 'stdout and stderr are the two appended log files, not /dev/null')
+  } finally { b.done() }
+  const c = box()
+  try { // the same note the unit gets when this shell's value cannot be carried (review 3 #1, D38)
+    const sys = fakeSystem()
+    await installCollector({ ...onBase(c), unit: null })
+    const r = await turnOn(onBase(c, { unit: unitOf(c, sys.exec.run, sys.spawn, { HOME: c.home, XDG_RUNTIME_DIR: path.join(c.home, 'run'), NODE_EXTRA_CA_CERTS: 'rel/ca.pem' }), request: sys.daemon.request, autostart: false, env: { HOME: c.home, XDG_RUNTIME_DIR: path.join(c.home, 'run'), NODE_EXTRA_CA_CERTS: 'rel/ca.pem' } }))
+    assert.equal(sys.spawn.opts[0].env.NODE_EXTRA_CA_CERTS, undefined)
+    assert.ok(r.receipt.notes.some((n) => /\(rel\/ca\.pem\) is not given to the daemon asight starts \(it is a relative path\)/.test(String(n && n.text ? n.text : n))), `said, never dropped silently: ${JSON.stringify(r.receipt.notes)}`)
+  } finally { c.done() }
+  const d = box()
+  try { // item 5: an autostart entry an earlier `on` installed stays; --no-autostart must say it is there and where
+    const sys = fakeSystem()
+    await installCollector({ ...onBase(d), unit: null })
+    const left = path.join(d.home, '.config', 'systemd', 'user', 'asight-collector.service')
+    fs.mkdirSync(path.dirname(left), { recursive: true }); fs.writeFileSync(left, '[Service]\n')
+    const r = await turnOn(onBase(d, { unit: unitOf(d, sys.exec.run, sys.spawn), request: sys.daemon.request, autostart: false }))
+    assert.equal(r.exit, 0)
+    assert.ok(r.receipt.notes.some((n) => new RegExp(`an autostart entry .*is still there \\(${left.replace(/[.\\/]/g, '\\$&')}\\)`).test(String(n && n.text ? n.text : n))), `the entry is reported with its path: ${JSON.stringify(r.receipt.notes)}`)
+    assert.equal(fs.existsSync(left), true, 'and is not removed: that is `asight off`')
+  } finally { d.done() }
 })
 
 // A keep-alive TLS relay for relay.asight.test with its own private CA (the shape daemon.test.mjs uses): answers every complete request with a fixed message.

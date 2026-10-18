@@ -8,7 +8,7 @@
 // this module's verbs return before the caller stops anything). launchctl runs only through execTool, so a test injects the runner; the spawn, the uid and the fs are parameters too,
 // and every piece runs on any OS against a temp directory. Node built-ins and src/off/exec.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
-import { directStartEnv } from '../direct-start.mjs'
+import { directStartEnv, startDaemonDirect } from '../direct-start.mjs'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
@@ -167,14 +167,8 @@ const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, uid = null } = {}) {
   const file = plistPath(home)
   const tools = { run, env, uid: uid ?? processUid() }
-  function startDirect() {
-    let child
-    try { child = spawn(node, [script, 'daemon'], { detached: true, stdio: 'ignore', env: directStartEnv(env) }) } catch (e) { return { code: null, out: '', err: `the daemon could not be started (${(e && e.code) || (e && e.message) || e})` } }
-    if (!child || child.pid === undefined) return { code: null, out: '', err: 'the daemon did not start' }
-    if (typeof child.on === 'function') child.on('error', () => {}) // a late spawn error is not an uncaught exception; the daemon that never answers is what `on` reports
-    child.unref()
-    return { ...ok, via: 'direct', pid: child.pid }
-  }
+  // the daemon this run starts itself: the LaunchAgent's own environment and the LaunchAgent's own log files (direct-start.mjs)
+  const startDirect = (carry) => ({ ...ok, ...startDaemonDirect({ home, env, carry, command: node, argv: [script, 'daemon'], spawn, fs }) })
   // the agent is booted out of the session and the plist out of LaunchAgents, in that order (see the userUnit header); each half says what it did
   const undo = () => {
     const q = agentState(tools)
@@ -204,7 +198,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       if (r.code === 0) return r
       return { ...r, code: r.code ?? 1, event: { event: 'failure', where: 'install', code: 'launchd-register-failed', reason: `launchctl bootstrap was refused (${r.code === null ? 'it did not run' : `exit ${r.code}`}${r.err ? `: ${r.err}` : ''}); launchd is the only autostart, so asight does not start at login` } }
     },
-    start: startDirect,
+    start: (carry = null) => startDirect(carry),
     reload: () => ({ ...ok }),
     // a no-names off: launchctl disable, never a bootout of a draining daemon — the same call as src/off/darwin.mjs disableAgent; the plist stays
     disable: () => { const r = launchctl(['disable', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools); return { ...r, code: r.code ?? 1, state: r.code === 0 ? 'disabled' : 'failed' } },
