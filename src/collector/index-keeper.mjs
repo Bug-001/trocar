@@ -14,10 +14,12 @@
 // `flush()` brings it up to date one last time and hands it over; from there it is the seal worker's (seal-worker.mjs),
 // in the child process that sealed it, so the daemon's event loop never parses a whole segment. The two never write the
 // same file at the same time: seal-queue.mjs awaits this flush before it queues the segment for sealing, and one pass
-// runs at a time here (the chain below).
+// runs at a time here (the chain below). A query never writes that file at all (4.2 §段索引 谁写哪一笔).
 //
-// shortcut: a catch-up rewrites the segment's whole index document, so the index bytes written grow with the segment's
-// record count; upgrade to an append-only index document (an INDEX_V bump) if the measured amplification matters.
+// WHAT A PASS COSTS: the index document is append-only NDJSON (INDEX_V 4), so a pass writes its new entries plus one
+// mark line and reads only the file's last mark — both proportional to the NEW records, not to the segment. The
+// whole-document format this replaces made a pass cost the segment's record count in both, which with sparse real
+// traffic (a pass per record) came to ≈ e·N²/2 index bytes per segment.
 //
 // MEASURED (458 MB / 1 436 records / 8 segments of the 附录 D dataset replayed through this exact wiring —
 // the real record store + this keeper, one turn of the loop per record, 2026-10-19):

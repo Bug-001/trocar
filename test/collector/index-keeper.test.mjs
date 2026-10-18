@@ -21,7 +21,12 @@ function home() {
 }
 const append = (h, n, from = 0, body) => { fs.appendFileSync(path.join(h, 'raw', `${SEG}.ndjson`), Array.from({ length: n }, (_, i) => line(from + i, body)).join('')) ; return n }
 const idxFile = (h, seg = SEG) => path.join(indexDir(h), `${seg}.json`)
-const stored = (h, seg = SEG) => JSON.parse(fs.readFileSync(idxFile(h, seg), 'utf8'))
+// The append-only index document (4.2 §段索引): entry lines, problem lines and one mark line per pass, up to the
+// last complete mark.
+const stored = (h, seg = SEG) => {
+  const lines = fs.readFileSync(idxFile(h, seg), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  return { records: lines.filter((o) => !o.m && !o.p), mark: lines.filter((o) => o.m).pop().m }
+}
 const tick = () => new Promise((r) => setTimeout(r, 20))
 
 test('what the daemon wrote is in the index before any query reads it: a query then reads 0 bytes of the segment', async () => {
@@ -75,21 +80,25 @@ test('a backlog is indexed in chunks, the event loop free between them, and the 
   clearInterval(beat)
   assert.ok(turns > 1, `the loop ran while the backlog was indexed (${turns} turns)`)
   assert.equal(stored(h).records.length, n)
-  // byte for byte what one uninterrupted build would have stored (the index is a projection, invariant 2)
-  const chunked = fs.readFileSync(idxFile(h))
+  // the records one uninterrupted build would have stored (the index is a projection, invariant 2; the file itself
+  // carries one more mark line per chunk, which is what makes keeping it current cost the new bytes only)
+  const chunked = stored(h).records
   fs.rmSync(indexDir(h), { recursive: true })
   await segmentIndex({ home: h, segment: SEG, owner: true })
-  assert.ok(chunked.equals(fs.readFileSync(idxFile(h))), 'a chunked catch-up stores what one pass stores')
+  assert.deepEqual(chunked, stored(h).records, 'a chunked catch-up stores what one pass stores')
 })
 
-test('a segment that grew since the last pass costs only its new bytes', async () => {
+test('a segment that grew since the last pass costs only its new bytes, and the index file is only appended to', async () => {
   const h = home()
   const keeper = createIndexKeeper({ home: h, debounceMs: 1 })
   append(h, 2)
   keeper.wrote(SEG); await tick(); await keeper.idle()
   const first = stored(h).mark.end
+  const was = fs.readFileSync(idxFile(h))
   append(h, 2, 2)
   keeper.wrote(SEG); await tick(); await keeper.idle()
+  const now = fs.readFileSync(idxFile(h))
+  assert.ok(now.length > was.length && now.subarray(0, was.length).equals(was), 'the second pass rewrote bytes the first had written (D62: the cost must be the new records only)')
   const read = await segmentIndex({ home: h, segment: SEG })
   assert.equal(read.records.length, 4)
   assert.equal(read.bytesRead, 0)
