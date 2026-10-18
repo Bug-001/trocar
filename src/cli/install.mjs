@@ -16,7 +16,7 @@ import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT } from '../collector/core/codes.mjs'
 
-const NEEDS_YES = 'Nothing was changed: this is not a terminal, so the plan above is all. Read it, then run the same command with --yes'
+const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 // R5 / R6: no terminal and no --yes — the plan was printed, nothing written, exit 2; with --json stdout is the one receipt, with the plan in `planned`
 function needsYes(io, json, planned = []) {
   if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, planned, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES)
@@ -68,7 +68,9 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
         : `path not known yet: the place of its ${r.carrier} could not be resolved on this machine`)
     const planned = [
       { what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" },
-      ...rows.map((r) => ({ harness: r.harness, form: r.form, carrier: r.carrier, paths: r.paths, keys: r.keys, what: r.harness, detail: carrierOf(r) })),
+      // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
+      ...[...rows.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
+        .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, what: group[0].harness, detail: carrierOf(group[0]) })),
       { what: 'undo', detail: `${tilde(standalonePath(home), home)}: the undo that works without this source tree` },
     ]
     say(fit([`asight install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,

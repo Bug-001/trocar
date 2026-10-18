@@ -119,7 +119,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
     if (ok !== true) {
       plan()
       receipt.ok = false
-      if (ok === null) { receipt.needs_yes = true; receipt.notes.push('Nothing was changed: this is not a terminal, so the plan above is all. Read it, then run the same command with --yes') }
+      if (ok === null) { receipt.needs_yes = true; receipt.notes.push('Nothing was changed. Read the plan above, then run it again with --yes') }
       else { receipt.declined = true; receipt.notes.push('You said no: nothing was changed') }
       return { receipt, exit: ok === null ? EXIT.usage : EXIT.incomplete }
     }

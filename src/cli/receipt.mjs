@@ -18,8 +18,9 @@ const BARE = /\u001b\[\d+m/g
 export const fit = (lines) => lines.flatMap((l) => {
   const s = String(l)
   if (s.length <= WIDTH || BARE.test(s)) return [s]
-  const indent = ' '.repeat(Math.min(s.length - s.trimStart().length + 2, 8))
-  return wrap(s, WIDTH, indent)
+  const own = ' '.repeat(s.length - s.trimStart().length)
+  const [first, ...more] = wrap(s.trimStart(), WIDTH - own.length - 2, `${own}  `)
+  return [own + first, ...more]
 })
 
 /** One harness's chain after `on` (§3.3): where a new connection goes, and the proxy setting it was drawn from (credentials masked). */
@@ -73,7 +74,7 @@ export function formatPlan(p, { home = null, autostart = true, platform = 'linux
     ...(p.edited || []).map((e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (asight left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at asight.`),
     ...(p.adopted || []).filter(saysSomething).map((x) => adoptedLine(x.harness, x)),
     ...(p.restart && p.restart.length ? [`Restart to capture: ${p.restart.map((x) => `${x.harness} (pid ${x.pid})`).join(', ')}. Until then they connect as they do now.`] : []),
-  ].filter((l) => l !== null))
+  ].filter((l) => l !== null)).join('\n')
 }
 
 /** The line about logging out (§3.3): linger off says what happens and how to change it (never done for the user); unreadable says unknown and why;

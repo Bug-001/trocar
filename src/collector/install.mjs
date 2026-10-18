@@ -443,7 +443,7 @@ export async function turnOn(opts = {}) {
     if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
     if (plan.first || plan.newPaths.length || edited.length) {
       const verdict = confirm ? await confirm(plan) : null
-      if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, 'Nothing was changed: this is not a terminal, so the plan above is all. Read it, then run the same command with --yes'] }, manifest: plan._.prior, plan, exit: 2 }
+      if (verdict == null) return { receipt: { ...r, ok: false, planned: true, needs_yes: true, notes: [...r.notes, 'Nothing was changed. Read the plan above, then run it again with --yes'] }, manifest: plan._.prior, plan, exit: 2 }
       if (verdict === false) return { receipt: { ...r, ok: false, planned: true, declined: true, notes: [...r.notes, 'You said no: nothing was changed'] }, manifest: plan._.prior, plan, exit: 1 }
     }
 

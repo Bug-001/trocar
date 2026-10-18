@@ -15,7 +15,7 @@ import { fit, tilde } from './receipt.mjs'
 import { pairs } from './text.mjs'
 
 const errText = (e) => String((e && e.message) || e)
-const NEEDS_YES = 'Nothing was changed: this is not a terminal, so the plan above is all. Read it, then run the same command with --yes'
+const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 
 // §1.4「计划写全」: every planned route by the full path (and key) it will write; a route that writes no file of yours says why instead
 const planLine = (p, home) => [p.harness, `${p.paths.length ? p.paths.map((x) => tilde(x, home)).join(', ') : `no file of yours: asight hands ${p.harness} the setting as it starts`}${p.keys && p.keys.length ? `: ${p.keys.join('.')}` : ''}`]
@@ -59,7 +59,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   let lock
   try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) { io.err(`asight on: ${e.message}`); return EXIT.incomplete } throw e }
   try {
-    const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
+    const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
     const { ensureDaemonUp } = await import('../collector/install.mjs')
     const up = await ensureDaemonUp({ osName: os, dir, env, fs, unit, autostart: !flags.has('--no-autostart'), put, ...(deps.sleep ? { pause: deps.sleep } : {}) })
     const r = up.up ? await turnOnModel(args) : { ...plan, routes: [], problems: up.problems.length ? up.problems : up.notes, exit: EXIT.incomplete }
