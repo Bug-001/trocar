@@ -246,3 +246,22 @@ test('明文与封存件并存时:状态不是 sealed,读的是明文的字节',
   assert.equal([...segmentLines({ home, segment: SEG })].length, 2)
   assert.deepEqual((await allRecords({ home })).map((r) => r.id), [`${SEG}:1`, `${SEG}:2`])
 })
+
+// A whole-document write goes through a temp next to the index and a rename. The temp name was the pid alone, so two
+// whole writes of the same index at the same time (two processes with the same pid in different namespaces or
+// containers, a rebuild and a sealer, one process rebuilding after a format bump) would write one file through one
+// another's temp. The name has to be unique per CALL.
+test('the temp of a whole-document index write is unique per call, not per pid', async () => {
+  const h = rawHome()
+  writeSegment(h, SEG, [envLine({ id: 'req_1' })])
+  const temps = []
+  const spy = { ...fs, writeFileSync: (f, ...rest) => { if (String(f).includes('.tmp-')) temps.push(String(f)); return fs.writeFileSync(f, ...rest) } }
+  // a reader rebuilding a SEALED index writes the document whole (the plaintext case the keeper owns appends)
+  const { sealSegment } = await import('../../src/raw/seal.mjs')
+  await sealSegment(path.join(h, 'raw', `${SEG}.ndjson`), { lockFile: path.join(h, 'collector', 'lock') })
+  await segmentIndex({ home: h, segment: SEG, fs: spy })
+  fs.rmSync(indexDir(h), { recursive: true, force: true })
+  await segmentIndex({ home: h, segment: SEG, fs: spy })
+  assert.equal(temps.length, 2, 'both builds wrote the document whole, through a temp')
+  assert.notEqual(temps[0], temps[1], 'two whole writes of one index must not share a temp name')
+})

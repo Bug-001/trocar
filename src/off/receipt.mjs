@@ -56,7 +56,7 @@ function daemonLines(r, past, cutNote) {
   const pid = d.pid == null ? '' : ` (pid ${d.pid})`
   if (d.state === 'draining') lines.push(rel && rel.closing > 0 ? `The daemon${pid} exits after ${rel.closing} open response${rel.closing === 1 ? '' : 's'} finish${rel.closing === 1 ? 'es' : ''}.` : `The daemon${pid} exits once it has drained.`)
   else if (d.state === 'stopped') lines.push(`The daemon${pid} was stopped.`)
-  else if (d.state === 'running' && d.pid) lines.push(`The daemon${pid} keeps serving the other harnesses.`)
+  else if (d.state === 'running' && d.pid) lines.push(r.all ? `The daemon${pid} keeps running, with no door open.` : `The daemon${pid} keeps serving the other harnesses.`) // D62 ⑥: an off with no names closes the doors and leaves it idling, so the next `on` just asks it
   else if (d.state === 'unresponsive') lines.push(`The daemon${pid} does not answer and could not be stopped.`, `Stop it by hand: kill -9 ${d.pid}`)
   if (r.relayed === 'unknown') lines.push(...fit(`Connections still going through asight: unknown (${r.relayed_reason || 'they could not be read'}).`))
   else if (rel) {

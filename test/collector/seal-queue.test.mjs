@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createSealQueue, WORKER_GONE_EXIT } from '../../src/collector/seal-queue.mjs'
+import { createSealQueue, startSealing, WORKER_GONE_EXIT } from '../../src/collector/seal-queue.mjs'
 import { sealSegment } from '../../src/raw/seal.mjs'
 import { openSealed } from '../../src/raw/reader.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -152,4 +152,23 @@ test('a worker that exits because its parent is gone is not a seal failure, and 
   q.add(file) // not in `failed`: the same run may seal it (the usual case is the next start's scan)
   await q.idle()
   assert.equal(fs.existsSync(file), false)
+})
+
+// D62: the keeper's catch-up before a seal is a cache being brought up to date, so it gets a deadline. Without one a
+// chain that never settles would leave the segment unsealed for as long as the daemon runs.
+test('a catch-up that never comes back does not hold the seal: the segment is queued anyway, and said once (D38)', async () => {
+  const b = box({ segments: [] })
+  const file = path.join(b.raw, `${SEGMENTS[0]}.ndjson`)
+  const sealed = [], said = []
+  let closed = null
+  startSealing({ store: { currentSegment: '20261005T120000Z', onSegmentClosed: (cb) => { closed = cb } },
+    raw: b.raw, lockFile: b.lock, journal: b.journal, beforeSealMs: 20,
+    beforeSeal: () => new Promise(() => {}), // the keeper's chain, stuck
+    failure: (where, err, fields) => said.push([where, err.code, fields.segment]),
+    fork: (f) => { sealed.push(path.basename(f)); return Promise.resolve({ code: 0, reason: '' }) } })
+  fs.writeFileSync(file, LINE(1), { mode: 0o600 }) // closed only now: the start's scan must not be the one that seals it
+  closed(file)
+  await new Promise((r) => setTimeout(r, 120))
+  assert.deepEqual(sealed, [`${SEGMENTS[0]}.ndjson`], 'sealed without the catch-up')
+  assert.deepEqual(said, [['raw', 'index-failed', SEGMENTS[0]]], 'and the wait is on the record, once')
 })

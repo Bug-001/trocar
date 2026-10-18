@@ -21,21 +21,11 @@
 // whole-document format this replaces made a pass cost the segment's record count in both, which with sparse real
 // traffic (a pass per record) came to ≈ e·N²/2 index bytes per segment.
 //
-// MEASURED, SPARSE arrival (found in development): one record per debounce window — what real traffic looks like
-// (OpenCode: an LLM call every few seconds plus small non-LLM records) — with the mix 70 % ≈ 1.5 KB / 30 % ≈ 100 KB,
-// 2 000 records / 63 MB, through this keeper with the index bytes counted at `segmentIndex`'s fs seam:
-//   index bytes written per captured byte: 13.03 with the whole-document format (v3) → 0.018 here
-//     (D62 asks ≤ 1.1 for plaintext + index together);
-//   the keeper's CPU per record, first 100 → last 100: 1.21 → 3.46 ms with v3 (it grew with the record count),
-//     0.89 → 1.58 ms here, and 0.75 → 1.27 ms over 4 000 records — flat, inside D62's ≤ 5 ms per request;
-//   what a query pays to READ a current index (20 000 entries): 12.6 ms v3 → 14.5 ms here.
-// MEASURED, queries (the dense replay of the 458 MB / 1 436 records / 8 segments of the 附录 D dataset through the
-// real record store + this keeper, 2026-10-19; unchanged by the format, whose read path is 2 ms per 20 k entries):
-//   cold `query sessions` 2 024 ms → 176 ms first run / 123 ms p50, and 0 `index-cold` errors (8 before);
-//   cold `query session --id` 2 587 ms → 723 ms (what is left is the session view's own cost, not the index's);
-//   daemon CPU: 1 731 ms per 1 000 appended records without the keeper, 3 290-3 513 ms with it.
-//   On a 300 MB generated dataset with the index as this keeper leaves it: `query sessions` 11 ms first / 3 ms warm,
-//   `query session` 495 ms, 0 errors.
+// WHAT IT COSTS, MEASURED: the numbers (write amplification on the reference mix and per record in the worst arrival
+// shape, the CPU per pass, what a query pays to read a current index, the cold query times this removed) are measured, not
+// estimated: `scripts/perf-cli.mjs --write-amp <HOME>` reproduces the two write-amplification numbers on a dataset
+// `scripts/gen-dataset.mjs` generates, and the spec's two lines are 1.6 §3.1. A measurement does not belong in a
+// source comment, where it rots.
 import { segmentIndex, KEEPER_CHUNK_BYTES } from '../query/index-build.mjs'
 
 export const DEBOUNCE_MS = 1_000 // one pass per burst; the tail a query may still have to resume is this much traffic
@@ -47,7 +37,8 @@ export const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of t
  *   flush(segment):  index it fully, and never touch it again — the segment is closed. → the chain's promise.
  *   pause():         the daemon is stopping: no new debounce is armed (the segment the stop closes still flushes).
  *   idle():          resolves when every queued pass is done (the stop awaits it after the store closed).
- *   stop():          nothing more is indexed, and nothing of this keeper's is written after it.
+ *   stop():          → a promise. Nothing more is queued, and when it settles the pass that was in flight is over:
+ *                    after that this keeper has written its last byte. The daemon's stop awaits it.
  * `index` / `debounceMs` / `chunkBytes` are test seams.
  */
 export function createIndexKeeper({ home, failure = () => {}, index = segmentIndex, debounceMs = DEBOUNCE_MS, chunkBytes = CHUNK_BYTES }) {
@@ -56,6 +47,9 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
   let timer = null, chain = Promise.resolve(), stopped = false, paused = false
 
   const after = (fn) => (chain = chain.then(fn, fn)) // one pass at a time, in the order they were asked for
+  // What the keeper's own failure is (D38): the raw layer's `index-failed`, NEVER a record error — the record is
+  // written, and the index is a cache the next query rebuilds (it then says `index-cold`).
+  const indexFailed = (segment, what) => failure('raw', Object.assign(new Error(`${what}; the records are on disk, and the next query indexes them itself, which costs that query the build`), { code: 'index-failed' }), { segment })
   const arm = () => {
     if (paused || stopped || timer || !pending.size) return
     timer = setTimeout(() => { timer = null; after(drain) }, debounceMs)
@@ -72,13 +66,13 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
     while (!stopped) {
       let r
       try { r = await index({ home, segment, maxBytes: chunkBytes, owner: true }) } catch (e) {
-        failure('raw', Object.assign(new Error(`keeping the index of ${segment} current failed (${String((e && e.message) || e)}); the records are on disk, and the next query indexes them itself, which costs that query the build`), { code: 'index-failed' }), { segment })
+        indexFailed(segment, `keeping the index of ${segment} current failed (${String((e && e.message) || e)})`)
         return
       }
       // the other problems are stored in the index document, so a reader says them; this one is about the write
       const unwritable = r.problems.find((p) => p.code === 'index-unwritable')
       if (unwritable) {
-        failure('raw', Object.assign(new Error(`${unwritable.reason}; the next query indexes ${segment} itself, which costs that query the build`), { code: 'index-failed' }), { segment })
+        indexFailed(segment, unwritable.reason)
         return // another pass would only repeat it
       }
       if (r.done) return
@@ -87,14 +81,27 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
   }
 
   return {
-    wrote(segment) { if (paused || stopped || !segment || handed.has(segment)) return; pending.add(segment); arm() },
+    wrote(segment) {
+      if (paused || stopped || !segment || handed.has(segment)) return
+      // This runs ON the record's write path (store.mjs onRecord). It MUST NOT throw there: the store would count the
+      // keeper's failure as `record-error` (the wrong D38 class — the record itself is on disk) and set it as the
+      // store's last error. So whatever fails here is said as the raw layer's `index-failed` instead, and the record
+      // write is left alone.
+      try { pending.add(segment); arm() } catch (e) { indexFailed(segment, `arming the index catch-up of ${segment} failed (${String((e && e.message) || e)})`) }
+    },
     flush(segment) {
       if (stopped || !segment) return chain
       if (!handed.has(segment)) { pending.delete(segment); handed.add(segment); after(() => catchUp(segment)) }
       return chain
     },
     pause() { paused = true; clearTimeout(timer); timer = null },
+    // Best effort, for the stop's convenience: the guarantee that nothing more is written is stop()'s, not this one's.
     async idle() { for (let i = 0; i < 100; i++) { const c = chain; await c.catch(() => {}); if (c === chain) return } },
-    stop() { stopped = true; paused = true; clearTimeout(timer); timer = null },
+    stop() {
+      stopped = true; paused = true; clearTimeout(timer); timer = null; pending.clear()
+      // `wrote` and `flush` add nothing to the chain once stopped, so this IS the last pass: when it settles (its own
+      // failure included — a failed pass has already been reported), nothing of this keeper's can still be written.
+      return chain.then(() => {}, () => {})
+    },
   }
 }

@@ -20,6 +20,7 @@ function fakeIo() {
   const out = [], err = []
   return { out: (s) => out.push(s), err: (s) => err.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {}, text: () => [...out, ...err].join('\n') }
 }
+const within = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timed out: ${what}`)), ms))])
 const canConnect = (port) => new Promise((resolve) => { const s = net.connect(port, '127.0.0.1'); s.once('connect', () => { s.destroy(); resolve(true) }); s.once('error', () => resolve(false)) })
 const squat = (port) => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(port, '127.0.0.1', () => resolve(s)) })
 const events = (w) => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n')).filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return {} } }) : [])
@@ -43,9 +44,9 @@ for (const platform of ['darwin', 'win32']) {
         assert.doesNotMatch(io1.text(), /engine-port-taken/)
         const io2 = fakeIo()
         assert.equal(await runOffCli([], { io: io2, home: w.home, env: w.env, platform, deps: offDeps }), 0, io2.text())
-        assert.ok(await Promise.race([box.daemon.exited.then(() => true), new Promise((res) => setTimeout(() => res(false), 5000))]), 'the daemon exited after off')
-        box.daemon = null; box.starting = null // the unit brings a fresh daemon at the next on
-        http.globalAgent.destroy() // this test process kept-alive sockets to the stopped daemon (a CLI asks one daemon per run)
+        // D62 ⑥: off closes the doors and the daemon keeps running, so the port is free for another program to take and the SAME daemon meets it
+        assert.equal(await Promise.race([box.daemon.exited.then(() => 'exited'), new Promise((res) => setTimeout(() => res('up'), 1000))]), 'up', 'the daemon was not asked to exit')
+        await within((async () => { for (;;) { if (!(await canConnect(port))) return true; await new Promise((r) => setTimeout(r, 100)) } })(), 10_000, 'the door closed, so the port can be taken')
         held = await squat(port)
         const io3 = fakeIo()
         assert.equal(await runOnCli(['--yes'], { io: io3, env: w.env, home: w.home, platform, deps }), 0, io3.text())

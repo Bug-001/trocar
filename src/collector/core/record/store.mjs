@@ -111,6 +111,8 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
         segBytes += Buffer.byteLength(line); segLines++
         const id = recordId(segment, segLines)
         // before the rollover below, so the name is the segment this line went into, never null (D62)
+        // the keeper hangs here (D62) and never throws (index-keeper.mjs `wrote`): a listener that did would be
+        // counted below as a `record-error`, which this line is not — the record is already in the segment.
         for (const cb of onWrote) { try { cb(segment) } catch (e) { report(e, segFile) } }
         if (segBytes >= segmentBytes) closeSegment()
         return { ok: true, id }

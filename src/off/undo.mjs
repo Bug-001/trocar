@@ -94,7 +94,7 @@ const removeKernelCopy = (exe, fs) => {
     try { fs.rmSync(path.join(path.dirname(dir), 'kernel-archive'), { recursive: true, force: true }) } catch (e) { return { ok: false, reason: `${exe} was removed, but the verified-archive cache beside it could not be (${errText(e)}); remove it by hand` } }
     return { ok: true }
   } catch (e) {
-    return { ok: false, reason: `${exe} could not be removed (${errText(e)}); a kernel still running holds it — stop it (asight off --now), then run this again` }
+    return { ok: false, reason: `${exe} could not be removed (${errText(e)}); a kernel still running holds it; stop it (asight off --now), then run this again` }
   }
 }
 

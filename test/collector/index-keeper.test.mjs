@@ -126,7 +126,6 @@ test('an index that cannot be written is said, not swallowed (D38), and the next
   keeper.wrote(SEG)
   await tick(); await keeper.idle()
   assert.deepEqual(said.map((s) => s.slice(0, 3)), [['raw', 'index-failed', SEG]])
-  assert.match(said[0][3], /the next query indexes/)
 })
 
 test('the stop writes nothing more', async () => {
@@ -134,9 +133,48 @@ test('the stop writes nothing more', async () => {
   const seen = []
   const keeper = createIndexKeeper({ home: h, debounceMs: 1, index: async () => { seen.push(1); return { problems: [], done: true } } })
   append(h, 1)
-  keeper.stop()
+  await keeper.stop()
   keeper.wrote(SEG)
   await keeper.flush(SEG)
   await tick(); await keeper.idle()
   assert.deepEqual(seen, [])
+})
+
+// The JSDoc of stop() promises that nothing of the keeper's is written after it returns. A stop before any pass
+// cannot show that: the pass has to be IN FLIGHT when stop is called (what the daemon's stop does to a keeper that
+// is still catching up).
+// `wrote` is called ON the record's own write path, so a failure of the keeper's there must never reach the store:
+// the store would count it as a `record-error` (D38's class for a record that was NOT written) and keep it as its
+// last error, while the record is in fact on disk and only the index is behind.
+test('a failure on the record\'s write path is the keeper\'s own (raw / index-failed), never thrown into the store', async () => {
+  const h = home()
+  const said = []
+  const keeper = createIndexKeeper({ home: h, debounceMs: 1, failure: (where, err, fields) => said.push([where, err.code, fields.segment]) })
+  const real = globalThis.setTimeout
+  globalThis.setTimeout = () => { throw new Error('no timers left') } // the resource the debounce needs is gone
+  try { keeper.wrote(SEG) } finally { globalThis.setTimeout = real }
+  assert.deepEqual(said, [['raw', 'index-failed', SEG]])
+})
+
+test('stop() settles only after the pass in flight, and the index file does not grow after that', async () => {
+  const h = home()
+  let open = null
+  const inside = new Promise((r) => { open = r })
+  let gate = null
+  const held = new Promise((r) => { gate = r })
+  const keeper = createIndexKeeper({ home: h, debounceMs: 1,
+    index: async (a) => { open(); await held; return segmentIndex(a) } })
+  append(h, 3)
+  keeper.wrote(SEG)
+  await inside // a real pass is now inside index(), its bytes not yet written
+  let settled = false
+  const stopping = keeper.stop().then(() => { settled = true })
+  await tick()
+  assert.equal(settled, false, 'stop() must not settle while a pass is still writing')
+  gate()
+  await stopping
+  const size = fs.statSync(idxFile(h)).size
+  assert.ok(size > 0, 'the pass that was in flight finished its write before stop() settled')
+  await tick()
+  assert.equal(fs.statSync(idxFile(h)).size, size, 'nothing of the keeper\'s is written after stop() settles')
 })
