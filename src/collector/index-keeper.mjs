@@ -63,12 +63,21 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
     for (const segment of pending) { pending.delete(segment); await catchUp(segment) }
   }
 
+  // Measurement seam for scripts/perf-capture.mjs (D62): nothing is installed unless that script set the hook, so
+  // the product path is one `typeof` per pass.
+  const measured = async (fn) => {
+    const hook = globalThis.__asightPerfHook
+    if (typeof hook !== 'function') return fn()
+    const c = process.cpuUsage()
+    try { return await fn() } finally { const d = process.cpuUsage(c); hook((d.user + d.system) / 1000) }
+  }
+
   // One segment, chunk by chunk, until its index covers every complete line it has. A failure is the daemon's to
   // report (D38); the answer stays correct, because the next query builds what is missing and says `index-cold`.
   async function catchUp(segment) {
     while (!stopped && !given.has(segment)) {
       let r
-      try { r = await index({ home, segment, maxBytes: chunkBytes, owner: true }) } catch (e) {
+      try { r = await measured(() => index({ home, segment, maxBytes: chunkBytes, owner: true })) } catch (e) {
         indexFailed(segment, `keeping the index of ${segment} current failed (${String((e && e.message) || e)})`)
         return
       }
