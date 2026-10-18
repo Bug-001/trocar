@@ -41,7 +41,7 @@ function wantsLinksLeft(home, fs) {
 }
 
 /** No autostart any more: `systemctl --user disable` (not `--now`: stopping the daemon is the caller's next step) and the wants/ links removed.
- *  No unit file = nothing to disable (`--no-unit`, or never installed): done, said. → `{ disabled, removed: [links], error?, note? }`; `disabled` is
+ *  No unit file = nothing to disable (`--no-autostart`, or never installed): done, said. → `{ disabled, removed: [links], error?, note? }`; `disabled` is
  *  true when no link is left, whichever of the two did it; `error` is what systemctl said when it failed (the manager down: the links are removed by
  *  hand all the same, and the caller records it). */
 export function disableAutostart({ home, exec = null, env = process.env, fs = nodeFs } = {}) {

@@ -252,13 +252,22 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] != null).map((k) => [k, o[k]]))
 
 /** What install would place, read only (the plan 1.6 §1.6 prints before it asks): one row per present form → { harness, form, carrier }. */
+// The certificate carrier of one form, as a path and a key: whatever shape the descriptor uses for it (a config file and its keys, a plugin's
+// directory and its loader, a wrapper's bin directory) resolved the way `on` and `install` resolve it — so the plan names the file it will change
+// (1.6 §1.4「计划写全」) instead of a kind alone. A carrier whose place cannot be resolved on this machine says so, and why.
+const carrierLoc = (c) => c.file || (c.loader && c.loader.file) || c.dir || c.binDir || null
+const carrierKeys = (c) => c.keys || (c.loader && c.loader.keys) || (c.file && c.file.keys) || null
+
 export function planInstall({ os, harnesses, ctx }) {
   const rows = []
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
     for (const f of desc.proxyMode.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
       const c = f.cert === 'root' ? null : desc.proxyMode.certs[f.cert]
       const when = c && c.when ? holds(c.when, ctx) : true
-      rows.push({ harness: desc.name, form: f.id, carrier: !c || when === false ? 'root' : c.kind })
+      const carrier = !c || when === false ? 'root' : c.kind
+      const loc = carrier === 'root' ? null : carrierLoc(c)
+      const paths = loc ? resolveLoc(loc, ctx) : []
+      rows.push({ harness: desc.name, form: f.id, carrier, paths, keys: carrierKeys(c || {}) || null })
     }
   }
   return rows

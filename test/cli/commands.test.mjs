@@ -62,7 +62,7 @@ test('§1.1: help is laid out for 80 columns, in the three groups in order, and 
 
 test('§5.4: one command\'s help is its usage, its summary, its options with a line each, and its exit codes; a name that is no command throws', () => {
   const one = helpText('on')
-  assert.equal(one.split('\n').slice(0, 2).join(' ').replace(/ +/g, ' '), 'asight on [<harness>...] [--no-autostart] [--no-unit] [--yes] [--dry-run] [--json]')
+  assert.equal(one.split('\n').slice(0, 2).join(' ').replace(/ +/g, ' ').trim(), 'asight on [<harness>...] [--no-autostart] [--yes] [--dry-run] [--json]')
   for (const text of [one, helpText(), helpText('classes')]) for (const line of text.split('\n')) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`)
   assert.match(one, /\nOptions\n/); assert.match(one, /\nExit codes\n/)
   for (const o of optionsOf(commandNamed('on')).keys()) assert.match(one, new RegExp(`^ {2}${o}\\b`, 'm'), `${o} has its own line`)

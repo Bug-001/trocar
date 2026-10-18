@@ -4,6 +4,8 @@
 // file-capability exec and either would strip its capabilities.
 import nodeFs from 'node:fs'
 import path from 'node:path'
+import { spawn as nodeSpawn } from 'node:child_process'
+import { directStartEnv } from '../direct-start.mjs'
 import { execTool } from '../../../off/exec.mjs'
 import { removeWantsLinks } from '../../../off/autostart.mjs'
 import { daemonLogPaths, ensureDaemonLogs } from '../daemon-logs.mjs'
@@ -46,8 +48,19 @@ export { removeWantsLinks } from '../../../off/autostart.mjs'
 // given daemon environment) and the few systemctl verbs they need, each returning { code, out, err }. 1.6 §2: `on` enables AND starts it (`enable
 // --now`) when no daemon answers, only enables when one does (拉起不是重启: a daemon someone started by hand is never started a second time), and
 // with `--no-autostart` only starts it (`start`: this run, nothing at login). `reload` is for a unit file rewritten under a loaded unit.
-export function userUnit({ home, node, script, run = null, env = process.env }) {
+// with `--no-autostart` nothing is written and nothing is enabled: `start()` starts the daemon itself, this once (1.6 §3.3), the same
+// meaning `start()` has on macOS and Windows. `reload` is for a unit file rewritten under a loaded unit.
+export function userUnit({ home, node, script, run = null, env = process.env, spawn = nodeSpawn }) {
   const sc = (args) => systemctl(args, { run, env })
+  // this run's own daemon: no systemd unit is involved, so a user with no systemd --user bus gets a collector all the same
+  const startDirect = () => {
+    let child
+    try { child = spawn(node, [script, 'daemon'], { detached: true, stdio: 'ignore', env: directStartEnv(env) }) } catch (e) { return { code: null, out: '', err: `the daemon could not be started (${(e && e.code) || (e && e.message) || e})` } }
+    if (!child || child.pid === undefined) return { code: null, out: '', err: 'the daemon did not start' }
+    if (typeof child.on === 'function') child.on('error', () => {}) // a late spawn error is not an uncaught exception; the daemon that never answers is what `on` reports
+    child.unref()
+    return { code: 0, out: '', err: '', via: 'direct', pid: child.pid }
+  }
   return {
     name: UNIT_NAME, path: unitPath(home), links: [wantsLink(home)],
     text: (e) => unitText({ node, script, env: e, logs: daemonLogPaths(home) }),
@@ -55,7 +68,7 @@ export function userUnit({ home, node, script, run = null, env = process.env }) 
     logFiles: () => { const { out, err } = daemonLogPaths(home); return [{ path: out }, { path: err }] },
     ensureLogs: () => ensureDaemonLogs(home, { fs: nodeFs }),
     enable: ({ now = true } = {}) => sc(now ? ['enable', '--now', UNIT_NAME] : ['enable', UNIT_NAME]),
-    start: () => sc(['start', UNIT_NAME]),
+    start: () => startDirect(),
     reload: () => sc(['daemon-reload']),
     disable: () => sc(['disable', '--now', UNIT_NAME]),
     stop: () => sc(['stop', UNIT_NAME]),

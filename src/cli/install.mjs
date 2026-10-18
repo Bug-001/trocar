@@ -11,28 +11,31 @@ import { refuseOldManifest } from '../off/manifest.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
+import { fit, tilde, planItems } from './receipt.mjs'
+import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT } from '../collector/core/codes.mjs'
 
-const NEEDS_YES = '不在终端里,没有 --yes:只打印了计划,什么都没改。看过计划之后加 --yes 再跑一次'
-// R5 / R6: no terminal and no --yes — the plan was printed, nothing written, exit 2; with --json stdout is the one receipt that says so
-function needsYes(io, json) {
-  if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, planned: true, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES)
+const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
+// R5 / R6: no terminal and no --yes — the plan was printed, nothing written, exit 2; with --json stdout is the one receipt, with the plan in `planned`
+function needsYes(io, json, planned = []) {
+  if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, planned, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES)
   return EXIT.usage
 }
 const USAGE = 'usage: asight install [--dry-run] [--yes] [--json]'
 const FLAGS = new Set(['--dry-run', '--yes', '--json'])
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
-// 1.6 §1.6: the two lines every plan prints — D55's cost, and on macOS / Windows the same-user residual risk (4.11 §1 install)
-const COST = '证书在时,本用户所有读系统信任库或读这些变量的程序都信任这张 CA,直到 `asight uninstall`'
-const RISK = '本用户名下的任何程序都能借 asight 的签名助手(macOS)或直接调用这把密钥(Windows)签出被信任的证书,也能删掉它,只是拿不走私钥;怀疑被用过时,uninstall 再 install'
+// 1.6 §3.2: the two lines every plan prints — what being installed costs, and on macOS / Windows the same-user residual risk
+const COST = "While installed, programs you run trust certificates issued by this machine's asight root. Remove it: asight uninstall"
+const RISK = 'Any program running as you can ask asight to issue a trusted certificate, but cannot copy the key. If you suspect misuse: asight uninstall, then asight install.'
 
 export async function runInstallCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set()
-  for (const a of argv) { if (!FLAGS.has(a)) { io.err(`asight install: ${a.startsWith('-') ? `unknown option ${a}` : 'install takes no harness names (it installs for every harness found, D55⑥)'}\n${USAGE}`); return EXIT.usage } flags.add(a) }
+  for (const a of argv) { if (!FLAGS.has(a)) { io.err(`asight install: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: it installs for every agent found on this machine'}\n${USAGE}`); return EXIT.usage } flags.add(a) }
   const json = flags.has('--json')
-  const say = json ? io.err : io.out
-  if ((deps.getuid || processUid)() === 0) { io.err('asight install: 用你自己的账号跑,不要用 root / sudo(每一项都是用户级,D55②)'); return EXIT.incomplete }
+  const lines = [] // §1.2: with --json stderr stays empty — the plan is a key of the one document on stdout
+  const say = json ? (s) => lines.push(s) : io.out
+  if ((deps.getuid || processUid)() === 0) { io.err('asight install: run this as your own user, not as root.'); return EXIT.usage }
   const fs = deps.fs || nodeFs
   const old = refuseOldManifest({ home, platform, fs })
   if (old) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [old.message] }, null, 2)); else io.err(`asight install: ${old.message}`); return EXIT.incomplete }
@@ -58,32 +61,48 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     const rows = planInstall({ os: platform, harnesses, ctx })
     // the autostart unit is install's, inert until `on` enables it (4.11 §1 install d; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
     const unit = deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch(platform)).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
-    say(['asight install 的计划:', '  · 生成本机的 asight 根(私钥不能导出),装成用户级根证书(系统会弹一次框,等 120 秒)',
-      ...rows.map((r) => `  · ${r.harness} · ${r.form}: ${r.carrier === 'root' ? '靠用户级根' : `证书载体 ${r.carrier}`}`),
-      ...(rows.length ? [] : ['  · 本机没找到任何 harness 的形态:只装根']),
-      `  · 独立撤销程序 ${standalonePath(home)}`, `代价:${COST}`, `剩余风险:${RISK}`].join('\n'))
-    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned: rows }, null, 2)); return EXIT.ok }
+    const carrierOf = (r) => (r.carrier === 'root'
+      ? 'reads your user trust store'
+      : r.paths && r.paths.length
+        ? `${r.paths.map((p) => tilde(p, home)).join(', ')}${r.keys ? `: ${r.keys.join('.')}` : ''}`
+        : `path not known yet: the place of its ${r.carrier} could not be resolved on this machine`)
+    const planned = [
+      { what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" },
+      // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
+      ...[...rows.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
+        .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, what: group[0].harness, detail: carrierOf(group[0]) })),
+      { what: 'undo', detail: `${tilde(standalonePath(home), home)}: the undo that works without this source tree` },
+    ]
+    say(fit([`asight install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
+      ...pairs(planned.map((p) => [p.what, p.detail])),
+      ...(rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
+      ...wrap(COST), ...wrap(RISK)]).join('\n'))
+    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned }, null, 2)); return EXIT.ok }
     if (!flags.has('--yes')) {
-      if (!isInteractive(io)) return needsYes(io, json)
-      if (!(await confirm({ ...io, prompt: json ? io.stderr : io.stdout }, 'asight 将按上面的计划安装。继续?'))) { io.err('没有确认:什么都没改'); return EXIT.incomplete }
+      if (json || !isInteractive(io)) return needsYes(io, json, planned)
+      if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
     }
     const r = await locked(() => runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
       wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) }))
     if (!r) return EXIT.incomplete
     const receipt = { ...newReceipt('install'), ok: r.exit === 0, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: r.pending, problems: r.problems, standalone: standalonePath(home), residual_risk: RISK,
-      commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
+      planned, commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
     const dir = path.join(home, '.asight', 'collector')
     try { appendEvent(dir, { event: EVENT.installNote, where: 'install', kind: 'result', outcome: receipt.ok ? 'installed' : 'partial', reason: `install: root ${r.fp256 || 'not made'}; ${r.carriers.length} carrier row(s); ${r.pending.length} pending` }) } catch (e) { r.problems.push(`the install-note could not be written (${e.message})`) }
     if (json) io.out(JSON.stringify(receipt, null, 2))
-    else io.out([`asight install ${receipt.ok ? '完成' : '没有全部完成'}。根的指纹 ${r.fp256 || '(没有生成)'}`,
-      ...r.carriers.map((c) => `  · ${c.harness}${c.form ? ` · ${c.form}` : ''}: ${c.carrier}${c.state ? ` ${c.state}` : ''}${c.code ? ` (${c.code}: ${c.why})` : ''}${c.path ? ` ${c.path}` : ''}`),
-      ...r.pending.map((p) => `  · ${p.item}: ${p.state} — ${p.reason};再跑一次 asight install`), ...r.problems.map((p) => `  问题: ${p}`),
-      `剩余风险:${RISK}`, `开 asight on · 关 asight off · 状态 asight status · 卸载 asight uninstall · 独立撤销 ${standalonePath(home)}`].join('\n'))
+    else io.out(fit([receipt.ok ? "Installed. asight's root certificate is trusted by your user." : 'asight install did not finish. What is missing is below.',
+      ...pairs([['Fingerprint', r.fp256 ? `SHA-256 ${r.fp256}` : 'unknown (no root was made)'],
+        ...r.carriers.map((c) => [c.harness || 'root', `${c.carrier}${c.state ? ` ${c.state}` : ''}${c.path ? ` ${tilde(c.path, home)}` : ''}${c.why ? ` (${c.why})` : ''}`])]),
+      ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: asight install`),
+      ...r.problems.map((p) => `Problem: ${p}`),
+      ...wrap(RISK),
+      'Next: asight on',
+      `If asight itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
     return r.exit
   }
 }
 
-// Linux (override #15; 1.6 §1.6 步骤): the CA (ca/ca.key, 0600, made here and nowhere else), asight's own files (asight-ca.pem, the combined bundles, the
+// Linux (override #15; 1.6 §3.2 steps): the CA (ca/ca.key, 0600, made here and nowhere else), asight's own files (asight-ca.pem, the combined bundles, the
 // (d)-level plugins) and the (c)-level config keys — every item phase 'install', as `on` wrote them before — plus asight-off and the liveness record.
 // No unit, no state, no daemon: those are `on`'s. The plan printed is the one `on` used to print (formatPlan) with D55's cost line.
 async function linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked }) {
@@ -95,22 +114,22 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const inst = await import('../collector/install.mjs')
   const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}) }
   let plan
-  try { plan = await inst.planOn(args) } catch (e) { io.err(`asight install 没有做:${String((e && e.message) || e)}。什么都没改`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
+  try { plan = await inst.planOn(args) } catch (e) { io.err(`asight install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
   // asight-off (R3) is install's: named in the plan and the dry run when this run would write it, i.e. when it is not already what src/off generates
   const stdPath = standalonePath(home)
   let stdNew = true
   try { stdNew = fs.readFileSync(stdPath, 'utf8') !== buildStandalone({ version: OFF_VERSION, fs }) } catch { stdNew = true }
-  say(`${formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, autostart: false, platform, command: 'install' })}\n代价:${COST}`)
-  if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, harnesses: plan.targets, changed: plan.changed, created: [...(stdNew ? [stdPath] : []), ...plan.created] }, null, 2)); return EXIT.ok }
+  say([formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, autostart: false, platform, command: 'install' }), ...wrap(COST)].join('\n'))
+  if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), harnesses: plan.targets, changed: plan.changed, created: [...(stdNew ? [stdPath] : []), ...plan.created] }, null, 2)); return EXIT.ok }
   if ((plan.writing || stdNew) && !flags.has('--yes')) {
-    if (!isInteractive(io)) return needsYes(io, json)
-    if (!(await confirm({ ...io, prompt: json ? io.stderr : io.stdout }, 'asight 将按上面的计划安装。继续?'))) { io.err('没有确认:什么都没改'); return EXIT.incomplete }
+    if (json || !isInteractive(io)) return needsYes(io, json, planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }))
+    if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
   }
   // the undo that needs no source tree comes before the first thing it undoes (R3): a copy that cannot be written stops the install here, with a failure line (R11)
   const done = await locked(async () => {
     let stdl
     try { stdl = writeStandalone({ home, version: OFF_VERSION, fs }) } catch (e) {
-      const reason = `${stdPath}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed — put that right, then run asight install again`
+      const reason = `${stdPath}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed. Put that right, then run asight install again`
       try { appendEvent(path.join(home, '.asight', 'collector'), { event: EVENT.failure, where: 'install', code: (e && e.code) || 'install-error', reason }) } catch {}
       return { failed: reason }
     }
@@ -119,8 +138,12 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   if (!done) return EXIT.incomplete
   if (done.failed) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [done.failed] }, null, 2)); else io.err(`asight install: ${done.failed}`); return EXIT.incomplete }
   const { stdl, r } = done
-  const receipt = { ...newReceipt('install'), ok: true, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created)], standalone: standalonePath(home), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], notes: r.plan ? r.plan.notes : [] }
+  const receipt = { ...newReceipt('install'), ok: true, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created)], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], notes: r.plan ? r.plan.notes : [] }
   if (json) io.out(JSON.stringify(receipt, null, 2))
-  else io.out([`asight install ${r.already ? '已经装好,什么都没改' : '完成'}。`, ...(r.already ? [] : changeLines(receipt, { home })), ...receipt.notes.map((n) => `  · ${n}`), `开 asight on · 关 asight off · 状态 asight status · 卸载 asight uninstall · 独立撤销 ${standalonePath(home)}`].join('\n'))
+  else io.out(fit([r.already ? 'Already installed. Nothing was changed.' : "Installed. asight's certificates are in place.",
+    ...(r.already ? [] : changeLines(receipt, { home })),
+    ...receipt.notes.map((n) => `Note: ${n}`),
+    'Next: asight on',
+    `If asight itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
   return EXIT.ok
 }

@@ -11,12 +11,15 @@ import { validateReceipt } from '../../src/cli/schema.mjs'
 import { standalonePath } from '../../src/off/paths.mjs'
 import { installedHome, writeDaemonLock, flowEvents, procTable, fakeClock, DAEMON_ROWS, hangsOnStatus, snapshot } from '../off/fixtures/off-ctx.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
+import { assertEnglish } from '../helpers/english.mjs'
 import { runStatus } from './fixtures/status-ctx.mjs'
 
 const BASE = new Date('2026-10-07T00:00:00Z')
-/** `asight uninstall <argv>` over a sandbox: the exit code, and what it printed. */
-async function cli(s, argv, { io = fakeIo(), deps = {}, platform = 'linux' } = {}) {
-  const exit = await runUninstallCli(argv, { io, env: s.sh.env, home: s.home, platform, deps: s.offDeps({ getuid: () => 1000, ...deps }) })
+/** `asight uninstall <argv>` over a sandbox: the exit code, and what it printed. §3.6 — uninstall always asks, so a case that is not about
+ *  the question is answered with `--yes` (the plan-and-refusal cases pass `ask: true`). */
+async function cli(s, argv, { io = fakeIo(), deps = {}, platform = 'linux', ask = false } = {}) {
+  const args = ask || argv.includes('--yes') || argv.includes('--dry-run') ? argv : [...argv, '--yes']
+  const exit = await runUninstallCli(args, { io, env: s.sh.env, home: s.home, platform, deps: s.offDeps({ getuid: () => 1000, ...deps }) })
   return { exit, io }
 }
 const keep = (s) => { for (const k of ['capture-2026-10-06.ndjson', 'audit/a.ndjson', 'replays/r.ndjson']) { fs.mkdirSync(path.dirname(path.join(s.dir, k)), { recursive: true }); fs.writeFileSync(path.join(s.dir, k), '{"keep":true}\n') } }
@@ -41,9 +44,10 @@ test('uninstall: every entry is back as it was, asight\'s own files are gone, th
   assert.ok(r.removed.includes(path.join(s.dir, 'install-manifest.json')), 'the manifest is in the list of what asight removed')
   const text = await cli(await installedHome({ names: ['claude-code'] }), [])
   assert.equal(text.exit, 0)
-  assert.match(text.io.stdoutText(), /^asight 已卸载\(本用户\)。/)
-  assert.match(text.io.stdoutText(), /采集数据保留在 .*collector\/ \(flows\/、audit\/、capture-\*\.ndjson\);--purge-data 才删。/)
-  assert.match(text.io.stdoutText(), /再装  asight on/)
+  assert.match(text.io.stdoutText(), /^Uninstalled\. asight is no longer on your agents' path/)
+  assert.match(text.io.stdoutText(), /Kept\n +your captured records, in .*collector\//)
+  assert.match(text.io.stdoutText(), /Delete the captured records: asight uninstall --purge-data/)
+  // no assertEnglish here: the `change` words of each row come from `off` (src/off/orchestrate.mjs), whose output is not this task's (1.6 §3.4)
 })
 
 test('uninstall --dry-run writes nothing and asks the daemon nothing: the same receipt in the future tense, exit 0 (R6)', async () => {
@@ -52,9 +56,10 @@ test('uninstall --dry-run writes nothing and asks the daemon nothing: the same r
   const { exit, io } = await cli(s, ['--dry-run'])
   assert.equal(exit, 0)
   assert.deepEqual([snapshot(s.home), s.sys.daemon.calls.length, s.sys.exec.calls.length], [snap, asked, ran])
-  assert.match(io.stdoutText(), /^asight 将卸载\(本用户\)/)
-  assert.match(io.stdoutText(), /将撤掉:[\s\S]*改前副本/)
-  assert.match(io.stdoutText(), /去掉 --dry-run 才会真的做。/)
+  assert.match(io.stdoutText(), /^asight uninstall will take out everything install put on this machine/)
+  assert.match(io.stdoutText(), /Will remove[\s\S]*backup/)
+  assert.match(io.stdoutText(), /Nothing was changed\. Run it with --yes to do it\./)
+  assertEnglish(io.stdoutText(), 'the dry-run plan of uninstall')
   const json = (await cli(s, ['--dry-run', '--json'])).io.json()
   assert.deepEqual([json.dry_run, json.ok, validateReceipt(json)], [true, true, []])
   assert.ok(json.removed.includes(standalonePath(s.home)) && json.removed.includes(path.join(s.dir, 'install-manifest.json')))
@@ -74,30 +79,32 @@ test('R6: --purge-data takes the collector machine with the data — kernel/, ke
   assert.deepEqual(there(plain), [true, true, true, true, false], 'a plain uninstall keeps them (the kernel may be draining; the next on reuses the cache), but not ingress.json')
 })
 
-test('R6: --purge-data deletes what nothing brings back, so a yes is asked for — no terminal and no --yes prints the plan and exits 2 with nothing done; a terminal asks once (n: nothing, exit 1); --yes goes; a plain uninstall never asks', async () => {
+test('R6 · §3.6: uninstall always asks — no terminal and no --yes prints the plan and exits 2 with nothing done; a terminal asks once (n: nothing, exit 1); --yes goes; --purge-data says the records go for good', async () => {
   const s = await installedHome({ names: ['claude-code'] }); keep(s)
   const snap = snapshot(s.home), ran = s.sys.exec.calls.length
-  const noTty = await cli(s, ['--purge-data'])
+  const noTty = await cli(s, ['--purge-data'], { ask: true })
   assert.equal(noTty.exit, 2)
   assert.deepEqual([snapshot(s.home), s.sys.exec.calls.length], [snap, ran], 'nothing was done')
-  assert.match(noTty.io.stdoutText(), /^asight 将卸载\(本用户\)/, 'the plan is printed')
-  assert.match(noTty.io.stdoutText(), /采集数据\(capture-\*\.ndjson、flows\/、audit\/、replays\/\)将删/)
-  assert.match(noTty.io.stderrText(), /不在终端里,没有 --yes:只打印了计划,什么都没动/)
-  const json = await cli(s, ['--purge-data', '--json'])
+  assert.match(noTty.io.stdoutText(), /^asight uninstall will take out everything install put on this machine/, 'the plan is printed')
+  assert.match(noTty.io.stdoutText(), /your captured records \(--purge-data\)/)
+  assert.match(noTty.io.stderrText(), /Nothing was changed\. Read the plan above, then run it again with --yes/)
+  assertEnglish(noTty.io.text(), 'the plan and refusal of uninstall')
+  const json = await cli(s, ['--purge-data', '--json'], { ask: true })
   assert.deepEqual([json.exit, json.io.json().needs_yes, json.io.json().ok], [2, true, false])
-  const no = await cli(s, ['--purge-data'], { io: fakeIo({ tty: true, answers: ['n'] }) })
+  assert.equal(json.io.stderrText(), '', 'nothing on stderr under --json')
+  const no = await cli(s, ['--purge-data'], { io: fakeIo({ tty: true, answers: ['n'] }), ask: true })
   assert.deepEqual([no.exit, no.io.asked.length, snapshot(s.home)], [1, 1, snap])
-  assert.match(no.io.asked[0], /--purge-data 会删掉全部采集数据/)
+  assert.match(no.io.asked[0], /This also deletes every captured record, for good\. Proceed\?/)
   const yes = await cli(s, ['--purge-data', '--yes'])
   assert.equal(yes.exit, 0, yes.io.text())
   assert.deepEqual([fs.existsSync(path.join(s.home, '.asight')), kept(s)], [false, [false, false, false]], 'everything of asight\'s is gone, the captures too')
   const plain = await installedHome({ names: ['claude-code'] }); keep(plain)
-  const t = fakeIo({ tty: true })
-  assert.equal((await cli(plain, [], { io: t })).exit, 0)
-  assert.deepEqual([t.asked.length, kept(plain)], [0, [true, true, true]], 'a plain uninstall asks nothing and keeps the captures')
+  const t = fakeIo({ tty: true, answers: ['y'] })
+  assert.equal((await cli(plain, [], { io: t, ask: true })).exit, 0)
+  assert.deepEqual([t.asked.length, t.asked[0].trim(), kept(plain)], [1, 'Proceed? [y/N]', [true, true, true]], 'a plain uninstall asks too, without the data question, and keeps the captures')
   const terminal = await installedHome({ names: ['claude-code'] }); keep(terminal)
   const y = fakeIo({ tty: true, answers: ['y'] })
-  assert.equal((await cli(terminal, ['--purge-data'], { io: y })).exit, 0)
+  assert.equal((await cli(terminal, ['--purge-data'], { io: y, ask: true })).exit, 0)
   assert.deepEqual([y.asked.length, fs.existsSync(path.join(terminal.home, '.asight'))], [1, false])
 })
 
@@ -106,7 +113,7 @@ test('uninstall --purge-data after a plain uninstall still drops the captures it
   assert.equal((await cli(s, [])).exit, 0)
   const again = await cli(s, [])
   assert.equal(again.exit, 0)
-  assert.match(again.io.stdoutText(), /说明: nothing is installed for this user/)
+  assert.match(again.io.stdoutText(), /Note: nothing is installed for this user/)
   assert.deepEqual(kept(s), [true, true, true])
   assert.equal((await cli(s, ['--purge-data', '--yes'])).exit, 0)
   assert.deepEqual([fs.existsSync(path.join(s.home, '.asight')), kept(s)], [false, [false, false, false]])
@@ -125,7 +132,7 @@ test('1.6 §1.1: the daemon is asked to exit and is waited for while it closes t
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
   assert.deepEqual([polls, stopped], [3, [3]], 'it looked until nothing was closing, and only then stopped the daemon')
   assert.deepEqual([r.receipt.relayed, r.receipt.daemon], [{ closing: 0, waiting: 0, cut: 1 }, { pid: 4242, state: 'stopped' }], 'the one connection that waits for itself was cut and counted')
-  assert.match(formatUninstallReceipt(r.receipt, { home: s.home }), /守护进程\(pid 4242\)已停掉: 已切断 1 条连接/)
+  assert.match(formatUninstallReceipt(r.receipt, { home: s.home }), /The collector \(pid 4242\) was stopped\.\n1 connection that would not end by itself was cut\./)
   assert.doesNotMatch(formatUninstallReceipt(r.receipt, { home: s.home }), /--now/, 'uninstall has no --now: it cuts them as a matter of course')
 })
 
@@ -271,17 +278,16 @@ test('V24 (uninstall): with the install manifest gone and no terminal, uninstall
   const settingsOriginal = `{\n  "env": { "NODE_EXTRA_CA_CERTS": "${s.sh.corp}" }\n}\n`
   fs.rmSync(path.join(s.dir, 'install-manifest.json'))
   const installed = s.userFiles()
+  // §3.6: no terminal and no --yes is the plan and nothing else now — not even the routing is touched, and the exit is 2 (§1.4)
   const first = await s.uninstall({ yes: false, interactive: false })
-  assert.equal(first.exit, 1)
+  assert.deepEqual([first.exit, first.receipt.needs_yes], [2, true])
   assert.deepEqual(s.userFiles(), installed, 'nothing is changed without a yes')
-  assert.deepEqual(first.receipt.pending.map((p) => path.relative(s.home, p.path)).sort(), ['.claude/settings.json', '.codex/.env'])
-  assert.match(first.receipt.problems.join('\n'), /manifest is missing.*asight off --yes/)
-  assert.match(first.receipt.problems.join('\n'), /asight's own files were left in place \(the entries above are not all undone\)/)
   assert.deepEqual(['ca', 'state.json'].map((n) => fs.existsSync(path.join(s.dir, n))), [true, true], 'the CA and the state are still there')
-  assert.deepEqual([first.receipt.routing.confirmed, first.receipt.daemon.state, s.sys.exec.calls.filter((c) => /stop /.test(c)).length], [true, 'stopped', 1], 'the routing is off and the daemon stopped: none of it needs the manifest')
-  assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'failed'])
+  assert.deepEqual([first.receipt.daemon ? first.receipt.daemon.state : 'none', s.sys.exec.calls.filter((c) => /stop /.test(c)).length], ['none', 0], 'the daemon was not stopped either: nothing was done')
   const second = await s.uninstall({ yes: true })
   assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))
+  assert.match(second.receipt.notes.join('\n'), /found by asight's mark; there is no manifest to say what it was before/, 'the entries went by asight\'s own marks')
+  assert.deepEqual([second.receipt.routing.confirmed, second.receipt.daemon.state], [true, 'stopped'], 'the routing is off and the daemon stopped')
   assert.equal(fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8'), codexOriginal, 'the block is out and the commented user line is back')
   assert.equal(fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8'), settingsOriginal, 'the JSON value is back, taken from the backup')
   assert.deepEqual(asightFiles(s), [], 'and asight\'s own files are gone by name')
@@ -318,7 +324,7 @@ test('V8 (uninstall): every backup goes, the ones of files the user edited after
   assert.ok(!fs.existsSync(path.join(s.home, '.asight', 'backup')), '~/.asight/backup/ is gone')
   assert.ok(r.receipt.dropped_backups.includes(backup))
   assert.deepEqual(r.receipt.non_identical.map((n) => [n.path, n.backup]), [[codexEnv, backup]], 'the receipt names the one that is not byte for byte')
-  assert.match(formatUninstallReceipt(r.receipt, { home: s.home }), /不逐字节相同的[^\n]*~\/\.codex\/\.env\(备份 ~\/\.asight\/backup\//)
+  assert.match(formatUninstallReceipt(r.receipt, { home: s.home }), /Not byte for byte what it was[\s\S]*~\/\.codex\/\.env \(backup[\s\S]*~\/\.asight\/backup\//)
   assert.equal(fs.readFileSync(codexEnv, 'utf8').includes('EXTRA=1'), true, 'and the user\'s own edit is untouched')
   // a backup that cannot be removed is a note, never silence, and its directory stays
   const t = await installedHome({ names: ['claude-code'] })
@@ -370,14 +376,15 @@ test('uninstall: the arguments — a harness name, an unknown option, root and a
   const flag = await cli(s, ['--now'])
   assert.deepEqual([flag.exit, snapshot(s.home)], [2, snap]); assert.match(flag.io.stderrText(), /unknown option --now/)
   const root = await cli(s, [], { deps: { getuid: () => 0 } })
-  assert.deepEqual([root.exit, snapshot(s.home)], [1, snap]); assert.match(root.io.stderrText(), /不要用 root \/ sudo/)
+  assert.deepEqual([root.exit, snapshot(s.home)], [2, snap], '§1.5: root is refused before anything is read, exit 2')
+  assert.match(root.io.stderrText(), /^asight uninstall: run this as your own user, not as root\.$/m)
   // D39⑥ executed 2026-10-11: the old capture's own uninstall went with it — every platform (win32 and darwin included, and a
   // platform with no collector at all) runs the NEW uninstall; there is no legacy hook any more.
   for (const platform of ['win32', 'darwin', 'freebsd']) {
     const w = await installedHome({ names: ['claude-code'] })
     const r = await cli(w, ['--yes'], { platform })
     assert.equal(r.exit, 0, `${platform}: ${r.io.text()}`)
-    assert.match(r.io.stdoutText(), /^asight 已卸载\(本用户\)。/, `${platform}: the NEW uninstall ran`)
+    assert.match(r.io.stdoutText(), /^Uninstalled\. asight is no longer on your agents' path/, `${platform}: the NEW uninstall ran`)
     assert.equal(fs.existsSync(path.join(w.dir, 'install-manifest.json')), false, `${platform}: and finished: asight\'s own files are gone`)
   }
 })
@@ -391,14 +398,16 @@ test('formatUninstallReceipt: not done says so and what to do; the entries left 
     kept_bundles: [{ path: '/home/u/.asight/collector/ca/combined-codex.pem', pids: [5], holds_ca: false }],
   }
   const text = formatUninstallReceipt(r, { home })
-  assert.match(text, /^asight 没有卸完/)
-  assert.match(text, /没撤掉: ~\/\.codex\/\.env\(no longer valid\)/)
-  assert.match(text, /保留了 ~\/\.asight\/collector\/ca\/combined-codex\.pem\(已去掉 asight CA\):pid 5 可能加载过它/)
-  assert.match(text, /问题: 1 item\(s\) could not be undone/)
-  assert.match(text, /修好上面的问题后再跑  asight uninstall$/)
-  assert.doesNotMatch(text, /再装  asight on/)
+  assert.match(text, /^asight uninstall did not finish\. What is left is below\./)
+  assert.match(text, /Left in place: ~\/\.codex\/\.env: no longer valid/)
+  assert.match(text, /~\/\.asight\/collector\/ca\/combined-codex\.pem \(asight's certificate[\s\S]*taken out\):[\s\S]*pid 5 may have loaded it/)
+  assert.match(text, /Problem: 1 item\(s\) could not be undone/)
+  assert.match(text, /Fix what is above, then run: asight uninstall$/)
+  assert.doesNotMatch(text, /Install it again/)
+  assertEnglish(text, 'the receipt of an uninstall that did not finish')
   const purged = formatUninstallReceipt({ ...r, ok: true, left: [], problems: [], kept_bundles: [], purge_data: true, kept_captures: false }, { home })
-  assert.match(purged, /^asight 已卸载/); assert.match(purged, /采集数据已删\(--purge-data\)。/); assert.doesNotMatch(purged, /保留在/)
+  assert.match(purged, /^Uninstalled\./); assert.match(purged, /your captured records \(--purge-data\)/); assert.doesNotMatch(purged, /Kept/)
+  assertEnglish(purged, 'the receipt of uninstall --purge-data')
 })
 
 test('semantics 2: an install manifest of the wrong shape is treated as unreadable by uninstall too — the entries go by their marks (after a yes), a receipt is printed, and the way on is named when asight on then refuses', async () => {
@@ -408,11 +417,11 @@ test('semantics 2: an install manifest of the wrong shape is treated as unreadab
   fs.writeFileSync(file, '{"version":3}')
   const before = s.userFiles()
   const no = await s.uninstall({}) // not a terminal, no yes
-  assert.equal(no.exit, 1)
+  assert.deepEqual([no.exit, no.receipt.needs_yes], [2, true], '§3.6: the plan only, exit 2')
   assert.deepEqual(s.userFiles(), before, 'no file is touched without a yes')
-  assert.match(no.receipt.notes.join('\n'), /the install manifest cannot be read .*not an install manifest this build can use/)
   const r = await s.uninstall({ yes: true })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
+  assert.match(r.receipt.notes.join('\n'), /the install manifest cannot be read .*not an install manifest this build can use/)
   assert.ok(!fs.readFileSync(path.join(s.home, '.claude', 'settings.json'), 'utf8').includes('asight') && !fs.readFileSync(path.join(s.home, '.codex', '.env'), 'utf8').includes('asight collector'), 'the entries went by their marks')
   // `on` does not write over a manifest it cannot read, and says what to do
   const t = await installedHome({ names: ['claude-code'] })
@@ -440,8 +449,8 @@ test('uninstall removes ~/.asight/netenv.json with the rest of asight\'s own fil
   const walk = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)])) : [])
   assert.deepEqual(walk(path.join(s.home, '.asight')).map((f) => path.relative(path.join(s.home, '.asight'), f)).filter((f) => !/^collector[\\/](capture-|audit|replays|flows)/.test(f)), [], 'nothing of asight\'s own is left: only the captures and the records')
   assert.deepEqual([r.daemon.state, r.daemon.pid], ['none', null], 'there was no daemon: none is the state, not "stopped" with no pid')
-  assert.ok(!/pid null/.test(formatUninstallReceipt(r, { home: s.home })) && !/守护进程\(pid null\)/.test(io.text()), 'and the text does not say it')
-  assert.match(formatUninstallReceipt({ ...r, daemon: { pid: null, state: 'stopped' } }, { home: s.home }), /守护进程已停掉/, 'a stopped daemon whose pid is not known is said without one, never "(pid null)"')
+  assert.ok(!/pid null/.test(formatUninstallReceipt(r, { home: s.home })) && !/pid null/.test(io.text()), 'and the text does not say it')
+  assert.match(formatUninstallReceipt({ ...r, daemon: { pid: null, state: 'stopped' } }, { home: s.home }), /^The collector was stopped\.$/m, 'a stopped daemon whose pid is not known is said without one, never "(pid null)"')
   // a daemon that was running is still said to be stopped, with its pid
   const t = await installedHome({ names: ['claude-code'] })
   const run = await cli(t, ['--json'])

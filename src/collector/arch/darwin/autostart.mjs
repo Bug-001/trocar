@@ -8,6 +8,7 @@
 // this module's verbs return before the caller stops anything). launchctl runs only through execTool, so a test injects the runner; the spawn, the uid and the fs are parameters too,
 // and every piece runs on any OS against a temp directory. Node built-ins and src/off/exec.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
+import { directStartEnv } from '../direct-start.mjs'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
@@ -127,7 +128,6 @@ const agentState = ({ run, env, uid }) => {
   return { state: 'absent' }
 }
 
-const TRUST_AND_PROXY = /^(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_USE_SYSTEM_CA|NODE_USE_ENV_PROXY|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_FILE|SSL_CERT_DIR|(HTTPS?|ALL|NO|FTP|WSS?)_PROXY)$/i
 /**
  * The environment of a daemon that is started directly (`start()`, the `--no-autostart` run): the installer shell's, without the variables that change what the daemon trusts or whom it
  * dials (Node's CA, TLS and proxy switches, OpenSSL's CA file and directory, the `*_PROXY` family, any case — on darwin names are case sensitive and the lowercase spellings
@@ -137,11 +137,7 @@ const TRUST_AND_PROXY = /^(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_USE_SYSTEM_CA|N
  * darwin the engine verifies an upstream with the merged bundle (4.9 §5), so what the daemon trusts does not turn on it. What is not in this list stays: the user-level variables a login
  * job carries (`CODEX_HOME`, `PATH`, `HOME`, `TMPDIR`) are in the shell's environment too.
  */
-export function directStartEnv(env = process.env) {
-  const out = {}
-  for (const [k, v] of Object.entries(env)) if (!TRUST_AND_PROXY.test(k)) out[k] = v
-  return out
-}
+export { directStartEnv }
 
 // the two parts of an undo as one answer; a tool that did not run (code null) is code 1, a failure that a caller's `if (r.code)` sees (the win32 settle's rule)
 const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist.code) ?? 1, out: [agent.out, plist.out].filter(Boolean).join('\n'), err: [agent.err, plist.err].filter(Boolean).join('; '), agent: agent.state, plist: plist.state })
