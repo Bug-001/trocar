@@ -134,11 +134,10 @@ the board is the HTTP shell (D59); there is no separate ETL step and no database
 
 ## What it touches, and what lands on disk
 
-Everything asight writes lives under `~/.asight/`, and every record under `~/.asight/raw/`. At its
-first start after an upgrade the daemon moves the previous version's
-`~/.asight/collector/capture-<date>.ndjson` files in there itself (see 「Shrinking the raw logs」), so
-upgrading costs you nothing and no session. Roots older than that (`~/.asight/sessions/`, the v0
-`~/.atrace`) are neither read nor touched.
+Everything asight writes lives under `~/.asight/`, and every record under `~/.asight/raw/`. This version is
+**not** backwards compatible: records the previous version wrote to
+`~/.asight/collector/capture-<date>.ndjson`, and older roots (`~/.asight/sessions/`, the v0 `~/.atrace`),
+are neither read nor moved nor touched. If you still want what is in them, keep a copy yourself.
 
 `asight on` arranges a local, observe-only tap **on your user account only**. It never changes your
 system proxy, never adds machine-wide trust, never needs root (Linux's one-time `setup-helper` is the
@@ -321,9 +320,8 @@ no manual seal command.
 asight raw <segment>[:<from>[-<to>]]   # print records byte for byte, sealed or not
 ```
 
-On its first start after an upgrade, the daemon renames the previous version's
-`~/.asight/collector/capture-<date>.ndjson` files into `~/.asight/raw/` (bytes untouched); from then on
-they are ordinary segments. Older roots such as `~/.atrace` are neither read nor touched. Segments hold
+Records the previous version wrote to `~/.asight/collector/capture-<date>.ndjson`, and older roots such as
+`~/.atrace`, are neither read nor moved nor touched. Segments hold
 the same plaintext and credentials as the traffic and are owner-only (0600).
 
 ## Claude Desktop
@@ -356,8 +354,7 @@ The old CC-CLI steer (`HTTPS_PROXY` / `NO_PROXY` in `~/.claude/settings.json`) a
 Verge's `Script.js` are yours to revert the same way they were written; v0 leftovers
 (`com.atrace.serve`, `~/.local/share/atrace`, `.atrace-bak`) are only ever reported, never touched.
 
-Captures the earlier capture wrote are **not** read: only `~/.asight/raw/` is (the one exception is the
-upgrade move above, from `~/.asight/collector/capture-<date>.ndjson`). The board's 监测 toggle steers only the old CC-CLI steer — it is labelled 「只管旧 CC-CLI steer」 — and is
+Captures the earlier capture wrote are **not** read: only `~/.asight/raw/` is. The board's 监测 toggle steers only the old CC-CLI steer — it is labelled 「只管旧 CC-CLI steer」 — and is
 not the collector's switch; `asight off` is.
 
 ## Limits
