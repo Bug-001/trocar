@@ -71,7 +71,8 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
       // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
       ...[...rows.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
         .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, what: group[0].harness, detail: carrierOf(group[0]) })),
-      { what: 'undo', detail: `${tilde(standalonePath(home), home)}: the undo that works without this source tree` },
+      // V85: asight's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
+      { what: 'asight', detail: `${tilde(path.join(home, '.asight'), home)}/: asight's own files (its root certificate and key, the install record, and ${tilde(standalonePath(home), home)}, the undo that works without this source tree)` },
     ]
     say(fit([`asight install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
       ...pairs(planned.map((p) => [p.what, p.detail])),

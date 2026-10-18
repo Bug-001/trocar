@@ -138,3 +138,16 @@ test('the install receipt prints each (agent, carrier, file) fact once, in words
   for (const id of forms) assert.ok(!text.includes(id), `the receipt prints the form id ${id} instead of what the form is`)
   assertEnglish(text, 'the install receipt')
 })
+
+// V85 (the model path): the plan names every file of yours outside ~/.asight by full path, and asight's own tree in one line — the line the
+// model path had no equivalent of (it listed the carriers and the root, and nothing about ~/.asight at all).
+test('V85: the model install plan names asight\'s own tree in one line and every carrier of yours by path', async () => {
+  const { io, exit, w } = await cli(['--dry-run', '--json'])
+  assert.equal(exit, 0)
+  const plan = io.json().planned
+  const asightLine = plan.filter((p) => p.detail.includes('~/.asight/:'))
+  assert.equal(asightLine.length, 1, `asight's own tree is one line, not ${asightLine.length}: ${JSON.stringify(plan)}`)
+  assert.match(asightLine[0].detail, /asight-off/, 'and that line names the undo program, so the plan is readable without a second lookup')
+  assert.equal(plan.filter((p) => p.detail.includes(w.home)).length, 0, 'every path is written under ~, never the home twice')
+  for (const item of plan) assert.ok(item.detail.length > 0 && item.what, 'every planned item says what it is about')
+})

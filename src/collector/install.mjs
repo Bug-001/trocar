@@ -583,7 +583,10 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
         else {
           // the start question in the platform's own words: win32's unit is a scheduled task (\asight\collector, autostart.mjs), darwin's a LaunchAgent,
           // and the systemd wording is Linux's alone — a Windows user told to run `systemctl --user status` has been handed nothing (tested 2026-10-11)
-          unitFailed = osName === 'win32' ? `the scheduled task \\asight\\collector was not registered or run (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}"`
+          const daemonLog = typeof unit.logFiles === 'function' ? (unit.logFiles()[1] || {}).path : null
+          const entry = osName === 'win32' ? 'the scheduled task \\asight\\collector' : osName === 'darwin' ? `the LaunchAgent ${unit.path}` : null
+          unitFailed = entry // a systemd line is Linux's alone: a Mac or Windows user told to run `systemctl --user` has been handed nothing (tested on Windows 2026-10-11 and macOS 2026-10-18)
+            ? `${entry} was not registered or run (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}"${daemonLog ? `, and ${daemonLog} says why it did not start` : ''}`
             : `${unit.path} is written but "systemctl --user enable${was.up ? '' : ' --now'}" failed (${rr.err || `exit ${rr.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
           put({ event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed })
         }
