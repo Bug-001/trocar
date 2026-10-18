@@ -69,7 +69,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
   let clientMid = false // client bytes arrived and no request head has been completed from them yet
   // the WebSocket recorder writes through this, so its lost envelopes are counted on the row too
   const counted = {
-    envelope(env) { let ok; try { ok = recordStore.envelope(env) } catch (e) { writeFailed++; throw e } if (ok === false) writeFailed++; return ok },
+    envelope(env) { let r; try { r = recordStore.envelope(env) } catch (e) { writeFailed++; throw e } if (!r || !r.ok) writeFailed++; return r },
     get lastError() { return recordStore.lastError },
   }
 
@@ -173,7 +173,7 @@ export function createExchangeTee({ flow, recordStore, isRecording = () => true,
     } catch (e) { onFailure({ code: 'engine-error', flow_id: flow.id, seq: ex.seq, reason: `recording failed: ${String((e && e.message) || e)}` }); return }
     if (ex.added) env.asight_added = [...ex.added] // after every other key: what asight put into the bytes the client got (4.6 §记录, invariant 4)
     let ok = true
-    try { ok = recordStore.envelope(env) !== false } catch { ok = false } // the store counts and reports its own failures
+    try { ok = recordStore.envelope(env).ok === true } catch { ok = false } // the store counts and reports its own failures
     if (!ok) { writeFailed++; return }
     stats.recorded++
   }

@@ -149,6 +149,22 @@ function noteUncleanStop(lock, failure) {
   else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
 }
 
+/** The lock a live daemon holds (4.6 §控制面, D-25): `fields` (pid, start time, boot id …) plus `segment`, the raw-layer
+ *  segment it is appending to right now (D60: readers and the sealer leave that one alone, and may take every other). The
+ *  returned refresh is called on a timer: the mtime says the daemon answers, and the file is rewritten only when the
+ *  segment changed (a rollover, a stop) — a reader never sees a segment named here that is already closed. */
+export function lockKeeper({ file, fields, segmentOf = () => null }) {
+  let written = false, segment = null
+  return () => {
+    const seg = segmentOf()
+    if (written && seg === segment) { const t = new Date(); fs.utimesSync(file, t, t); return }
+    segment = seg; written = true
+    const tmp = `${file}.tmp-${process.pid}`
+    fs.writeFileSync(tmp, JSON.stringify({ ...fields, segment }) + '\n', { mode: 0o600 })
+    fs.renameSync(tmp, file)
+  }
+}
+
 async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {} }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
@@ -438,9 +454,9 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
     // mtime is refreshed every second, so a stuck daemon shows as unresponsive within 5 s — read from disk alone
     const me = identity(process.pid)
-    fs.writeFileSync(`${P.lock}.tmp-${process.pid}`, JSON.stringify({ pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }) + '\n', { mode: 0o600 })
-    fs.renameSync(`${P.lock}.tmp-${process.pid}`, P.lock)
-    const lockTimer = setInterval(() => { try { const t = new Date(); fs.utimesSync(P.lock, t, t) } catch (e) { failure('daemon', coded(new Error(`the lock ${P.lock} could not be refreshed (${errText(e)}); readers will judge this daemon unresponsive`), e && e.code ? e.code : 'record-error')) } }, lockRefreshMs)
+    const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }, segmentOf: () => store.currentSegment })
+    refreshLock()
+    const lockTimer = setInterval(() => { try { refreshLock() } catch (e) { failure('daemon', coded(new Error(`the lock ${P.lock} could not be refreshed (${errText(e)}); readers will judge this daemon unresponsive`), e && e.code ? e.code : 'record-error')) } }, lockRefreshMs)
     lockTimer.unref()
     // lifecycle (D-24): readers fold conditions from the last daemon-start; upstream_ca = the daemon's own
     // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon
@@ -677,9 +693,9 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     await collector.start()
     markReady()
     const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
-    fs.writeFileSync(`${P.lock}.tmp-${process.pid}`, JSON.stringify({ pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }) + '\n', { mode: 0o600 })
-    fs.renameSync(`${P.lock}.tmp-${process.pid}`, P.lock)
-    const lockTimer = setInterval(() => { try { const t = new Date(); fs.utimesSync(P.lock, t, t) } catch (e) { failure('daemon', coded(e, 'record-error')) } }, lockRefreshMs); lockTimer.unref()
+    const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
+    refreshLock()
+    const lockTimer = setInterval(() => { try { refreshLock() } catch (e) { failure('daemon', coded(e, 'record-error')) } }, lockRefreshMs); lockTimer.unref()
     const listTimer = setInterval(() => { const l = nextAgentList(); if (l) { agents = l.entries; registry.replaceAgentList(agents) } }, 5000); listTimer.unref()
     failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: VERSION, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
     let stopping = null, markExited

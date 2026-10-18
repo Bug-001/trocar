@@ -39,6 +39,9 @@ export const mitmOut = () => path.join(asightHome(), 'claude-capture.ndjson');
 // root's scan only descends into <sub>/calls.ndjson (server.mjs scanRoots), and `asight etl <dir>`
 // does not descend at all. It needs a root of its own: the home's one-level scan never reaches it.
 export const collectorHome = (home = asightHome()) => path.join(home, 'collector');
+// The raw layer (D60①, 1.6 §1.7): the daemon's segments `<here>/<segment>.ndjson`, their sealed form `<segment>.sealed`,
+// and the seal journal. Only envelopes live here — the collector's own logs stay under collectorHome().
+export const rawHome = (home = asightHome()) => path.join(home, 'raw');
 // D40 (RFC 4.6 §记录「保存级别」): what to keep of each call, per harness × traffic class — one per-user file read by BOTH
 // capture paths (src/capture/retention.mjs) — and the log of every change to it. Not in the collector's state.json: the
 // old MITM reads it too, and state.json is the collector's own.

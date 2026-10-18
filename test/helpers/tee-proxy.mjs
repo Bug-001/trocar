@@ -15,7 +15,7 @@ export async function startTeeProxy({ upstreamPort, dir, flow = {}, wsTerminal, 
   const store = createRecordStore({ root: dir });
   const envelopes = [], failures = [];
   const recordStore = {
-    envelope: (e) => { envelopes.push(e); store.envelope(e); return true; },
+    envelope: (e) => { envelopes.push(e); return store.envelope(e); },
     flow: (e) => store.flow(e), audit: (e) => store.audit(e), replay: (e) => store.replay(e),
     // capture failures (D38): written like the engine writes them, and kept so a test can assert there were none
     failure: (r) => { failures.push(r); return store.failure(r); },

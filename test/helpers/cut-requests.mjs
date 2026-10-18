@@ -18,7 +18,7 @@ const OK = 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length:
 // One connection per exchange: an early final response leaves the request framer mid-body.
 async function exchange(store, client, upstream, opts = {}) {
   const out = [];
-  const t = createExchangeTee({ flow: FLOW, recordStore: { envelope: (e) => { out.push(e); if (store) store.envelope(e); } }, ...opts });
+  const t = createExchangeTee({ flow: FLOW, recordStore: { envelope: (e) => { out.push(e); return store ? store.envelope(e) : { ok: true, id: `20261007T000000Z:${out.length}` }; } }, ...opts });
   t.fromClient(Buffer.from(client));
   t.fromUpstream(Buffer.from(upstream));
   await sleep(3); // distinct ts_request, so the board's step order is the order written here
