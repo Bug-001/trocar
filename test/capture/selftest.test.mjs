@@ -76,7 +76,7 @@ test('qUserTrustOnly: verify()=true → ok; false → not onboarded; throw → c
   const off = qUserTrustOnly(() => false);
   assert.equal(off.ok, false);
   assert.match(off.note, /not onboarded|user-level/);
-  assert.match(off.note, /only the board's 监测 toggle puts there any more[^;]*; the collector's own CA \(`asight on`\) is in no trust store by design/, 'the item is the old capture\'s CA: `asight on` cannot fix it, so it must not be what the note tells you to run (1.6 §2, §4)');
+  assert.match(off.note, /only the board's monitor toggle puts there any more[^;]*; the collector's own CA \(`asight on`\) is in no trust store by design/, 'the item is the old capture\'s CA: `asight on` cannot fix it, so it must not be what the note tells you to run (1.6 §2, §4)');
   assert.doesNotMatch(off.note, /run: asight on/);
   const boom = qUserTrustOnly(() => { throw new Error('nss missing'); });
   assert.equal(boom.ok, false);
@@ -101,13 +101,13 @@ test('runSelfTest: failed on a file others can read; undetermined on a scan that
     fs.chmodSync(okFile, 0o644);
     const loose = runSelfTest({ records: recs, srcMeta: { exists: true }, files: [okFile], verify: () => true });
     assert.deepEqual(verdict(loose), [true, false, true], 'a 0644 capture full of live credentials fails');
-    assert.match(loose.q4b.note, /采集文件可被他人读取/);
+    assert.match(loose.q4b.note, /capture files others can read/);
 
     // …and examining nothing is not a pass either: it is 无法判定 (exit 3), not a failure and not an all-clear.
     fs.chmodSync(okFile, 0o600);
     const vacuous = runSelfTest({ records: [], srcMeta: { exists: true }, files: [okFile], verify: () => true });
     assert.deepEqual(verdict(vacuous), [false, true, false], 'a scan of zero records must never be ok');
-    assert.match(vacuous.undeterminedWhy.join(' '), /没有核到任何记录/);
+    assert.match(vacuous.undeterminedWhy.join(' '), /no records were examined/);
     const noFiles = runSelfTest({ records: recs, srcMeta: { exists: true }, files: [], verify: () => true });
     assert.deepEqual(verdict(noFiles), [false, true, false], 'records but no file whose permissions were checked: ④b certifies nothing');
 
@@ -123,7 +123,7 @@ test('runSelfTest: failed on a file others can read; undetermined on a scan that
 });
 
 // ④b: bad modes, files whose mode could not be read, and nothing examined are three different answers (R11)
-test('qFilePerms: others-readable is a failure; a file whose permissions cannot be read is 不知道 with the file and the errno (never "readable by others", never ok); the fix line quotes the path', () => {
+test('qFilePerms: others-readable is a failure; a file whose permissions cannot be read is unknown with the file and the errno (never "readable by others", never ok); the fix line quotes the path', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-qfp-'));
   try {
     const loose = path.join(dir, "it's here.ndjson"); fs.writeFileSync(loose, '{}\n'); fs.chmodSync(loose, 0o640);
@@ -131,17 +131,17 @@ test('qFilePerms: others-readable is a failure; a file whose permissions cannot 
     const gone = path.join(dir, 'gone.ndjson');
     const a = qFilePerms([loose, tight]);
     assert.deepEqual([a.ok, a.bad.map((b) => b.mode), a.unreadable.length], [false, ['0640'], 0]);
-    assert.match(a.note, /采集文件可被他人读取: 1 个 \[it's here\.ndjson 0640\]/);
+    assert.match(a.note, /capture files others can read: 1 \[it's here\.ndjson 0640\]/);
     assert.ok(a.note.includes(`chmod 600 '${loose.replace(/'/g, `'\\''`)}'`), `quoted for the shell: ${a.note}`);
     const b = qFilePerms([tight, gone]);
     assert.deepEqual([b.ok, b.bad.length, b.unreadable.map((u) => [u.file, u.error])], [false, 0, [[gone, 'ENOENT']]]);
-    assert.match(b.note, /不知道/); assert.ok(b.note.includes(gone) && b.note.includes('ENOENT'));
-    assert.ok(!/采集文件可被他人读取/.test(b.note), 'a file that could not be looked at is not "readable by others"');
+    assert.match(b.note, /\? unknown: the permissions of 1 file\(s\) could not be read/); assert.ok(b.note.includes(gone) && b.note.includes('ENOENT'));
+    assert.ok(!/capture files others can read/.test(b.note), 'a file that could not be looked at is not "readable by others"');
     const c = runSelfTest({ records: [{ endpoint: '/x' }], srcMeta: { exists: true }, files: [tight, gone], verify: () => true });
     assert.deepEqual([c.failed, c.undetermined], [false, true]);
-    assert.match(c.undeterminedWhy.join(' '), /1 个文件的权限读不出来/);
+    assert.match(c.undeterminedWhy.join(' '), /the permissions of 1 file\(s\) could not be read/);
     assert.deepEqual([qFilePerms([tight]).ok, qFilePerms([]).ok], [true, false]);
-    assert.match(qFilePerms([]).note, /无法判定/);
+    assert.match(qFilePerms([]).note, /no capture files were examined, so permissions cannot be certified \(undetermined\)/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

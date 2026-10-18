@@ -35,6 +35,7 @@ const LIMIT = 5000 // records sampled (the head of the capture)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 const errText = (e) => String((e && (e.code || e.message)) || e)
 const mark = (ok, warn) => (ok ? '✓' : warn ? '⚠' : '✗')
+const shq = (s) => (/^[\w@%+=:,./-]+$/.test(String(s)) ? String(s) : `'${String(s).replace(/'/g, "'\\''")}'`) // a path with a space or a quote stays one argument of the chmod line
 const indent = (s) => String(s).split('\n').map((l) => `  ${l}`).join('\n')
 
 /** Is `bin` an executable on PATH? Looked up in the files (no `which`: no process to start), `PATHEXT` on Windows. */
@@ -100,10 +101,12 @@ async function collect({ home, env, sourceFlags, deps }) {
 }
 
 /** The things `doctor` looked at and could not judge (附录 C.4 `undetermined`), in English, from the structured result — never a reason string of another module. */
-function undeterminedOf(res, readErrors) {
+function undeterminedOf(res, readErrors, { files = 0, records = 0 } = {}) {
   const out = []
   if (res.q4b.checked === 0) out.push({ what: 'file permissions', reason: 'no captured data yet' }) // §3.7: having no captured data is not 「cannot judge」
   if (res.q4b.unreadable.length) out.push({ what: 'file permissions', reason: `the permissions of ${res.q4b.unreadable.length} file(s) could not be read` })
+  // a capture file that is there and yielded no record at all: the read failed without saying so (the D27 array-source defect certified a capture it had read nothing from)
+  if (files > 0 && records === 0) out.push({ what: 'the captured records', reason: `${files} capture file(s) are there and no record could be read from them` })
   for (const e of readErrors) out.push({ what: 'a captured file', reason: e })
   return out
 }
@@ -124,7 +127,7 @@ export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = p
   else findingsError = f.topology_error || 'the network facts could not be read on this platform'
   // what `doctor` looks at besides the network: the files only you may read, the copy of the undo program, the backups no install record names
   const extra = []
-  for (const bad of res.q4b.bad) extra.push({ code: 'file-readable-by-others', class: 'problem', what: `${bad.path || bad} can be read by someone else, and captured files hold live credentials.`, why: 'Only you may read what asight captured.', commands: [{ run: `chmod 600 ${bad.path || bad}`, shell: 'sh' }], verify: 'asight doctor' })
+  for (const bad of res.q4b.bad) extra.push({ code: 'file-readable-by-others', class: 'problem', what: `${bad.file} (mode ${bad.mode}) can be read by someone else, and captured files hold live credentials.`, why: 'Only you may read what asight captured.', commands: [{ run: `chmod 600 ${shq(bad.file)}`, shell: 'sh' }], verify: 'asight doctor' })
   // the copy of the undo program is `install`'s; a machine where nothing was installed has nothing to check (§3.7)
   const installed = !!(status.install && status.install.state)
   const standalone = installed ? (() => { try { return checkStandalone({ home, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })() : { ok: true }
@@ -136,7 +139,7 @@ export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = p
   if (orphansError) extra.push({ code: 'backup-unclaimed', class: 'note', what: `Whether any backup belongs to no install record is ${unknown(orphansError)}.`, why: 'The install record could not be read.', commands: [], verify: 'asight doctor' })
   const all = findings === null ? null : [...extra.filter((x) => x.class === 'problem'), ...findings, ...extra.filter((x) => x.class !== 'problem')]
   const summary = all === null ? null : { problem: all.filter((x) => x.class === 'problem').length, expected: all.filter((x) => x.class === 'expected').length, note: all.filter((x) => x.class === 'note').length }
-  const undetermined = undeterminedOf(res, c.readErrors)
+  const undetermined = undeterminedOf(res, c.readErrors, { files: c.files.length, records: c.records.length })
   const exit = summary && summary.problem ? EXIT.incomplete : realUndetermined(undetermined).length ? EXIT.unknown : EXIT.ok
   let notes = []
   try { notes = formatInstallNotes((deps.captureHealth || captureHealth)({ home: asightHome(home), ...(deps.captureHealth ? {} : { fs }) })) } catch (e) { rethrowSandbox(e) }
