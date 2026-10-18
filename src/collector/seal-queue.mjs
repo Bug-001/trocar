@@ -12,8 +12,6 @@ import { parseSegment } from './core/record/segments.mjs'
 
 const WORKER = fileURLToPath(new URL('./seal-worker.mjs', import.meta.url))
 const TEMP = /^\..*\.tmp$/ // a temp an interrupted seal left in raw/ (seal.mjs names them `.<segment>.<pid>-<hex>.tmp`)
-// `capture-<YYYY-MM-DD>.ndjson` from a version before D60, plus the close marker that version left beside it
-const CAPTURE = /^capture-(\d{4})-(\d{2})-(\d{2})\.ndjson$/
 /** The worker's exit code for "my parent is gone": the daemon is stopping, so this is not a seal failure — nothing is
  *  recorded and the next start's scan seals the segment (4.2 §自动封存). */
 export const WORKER_GONE_EXIT = 75
@@ -96,38 +94,12 @@ export function createSealQueue({ raw, lockFile, journal = undefined, fs = nodeF
   return { add, scan, idle, stop }
 }
 
-/** Upgrade (4.2 §自动封存 「升级」): every `<collector>/capture-<YYYY-MM-DD>.ndjson` becomes the ordinary closed segment
- *  `<raw>/<YYYYMMDD>T000000Z.ndjson` by a same-device rename — the bytes are untouched (invariant 2, D27③) — and the
- *  close marker that version left beside it goes. Nothing older is read or touched. → the segment paths it made. */
-export function upgradeCaptures({ collectorDir, raw, fs = nodeFs, failure = () => {} }) {
-  let names
-  try { names = fs.readdirSync(collectorDir) } catch { return [] }
-  const made = []
-  for (const n of names.sort()) {
-    const m = CAPTURE.exec(n)
-    if (!m) continue
-    fs.mkdirSync(raw, { recursive: true, mode: 0o700 })
-    const base = `${m[1]}${m[2]}${m[3]}T000000Z`
-    let name = base
-    for (let k = 2; fs.existsSync(path.join(raw, `${name}.ndjson`)) || fs.existsSync(path.join(raw, `${name}.sealed`)); k++) name = `${base}-${k}`
-    const to = path.join(raw, `${name}.ndjson`)
-    // The capture stays where it is and the daemon goes on capturing: a rename that cannot be done (EXDEV, EACCES,
-    // EROFS …) is said (D38), never a failed start — sealing MUST NOT stop the capture.
-    try { fs.renameSync(path.join(collectorDir, n), to) } catch (e) {
-      if (e.code !== 'ENOENT') failure('raw', Object.assign(new Error(`moving the older version's capture ${path.join(collectorDir, n)} into the raw layer failed (${(e && e.message) || e}); it is left where it is and is not read, and capture goes on`), { code: 'upgrade-failed' }), { file: path.join(collectorDir, n) })
-      continue
-    }
-    try { fs.unlinkSync(path.join(collectorDir, `${n}.closed`)) } catch { /* no marker, or gone */ }
-    made.push(to)
-  }
-  return made
-}
-
-/** What the daemon calls once at start: upgrade, scan (temps and leftovers), then seal every segment the store closes. */
-export function startSealing({ store, raw, collectorDir, lockFile, journal, fork: run, fs = nodeFs, failure }) {
+/** What the daemon calls once at start: scan (temps and leftovers), then seal every segment the store closes. This
+ *  version is not backwards compatible: records an earlier version wrote elsewhere are not read,
+ *  not moved and not touched. */
+export function startSealing({ store, raw, lockFile, journal, fork: run, fs = nodeFs, failure }) {
   const queue = createSealQueue({ raw, lockFile, journal, fs, fork: run,
     onFailure: ({ file, reason }) => failure('raw', Object.assign(new Error(`sealing ${file} failed (${reason}); its plaintext is kept, and it is not sealed again before the next start`), { code: 'seal-failed' }), { file }) })
-  upgradeCaptures({ collectorDir, raw, fs, failure })
   queue.scan({ current: store.currentSegment })
   store.onSegmentClosed(queue.add)
   return queue
