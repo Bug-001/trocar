@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { rawHome, writeSegment, requiredFor } from './raw-home.mjs'
+import { rawHome, writeSegment, requiredFor, DATA_QUERIES } from './raw-home.mjs'
 import { QUERIES, runQuery, parseTime, QueryArgError } from '../../src/query/named/index.mjs'
 import { validateQueryDoc } from '../../src/cli/schema.mjs'
 
@@ -27,7 +27,7 @@ const homeWithData = () => {
 
 test('每个文档过 schema', async () => {
   const home = homeWithData()
-  for (const name of Object.keys(QUERIES)) {
+  for (const name of DATA_QUERIES) {
     const doc = await runQuery(name, required(name), { home })
     assert.deepEqual(validateQueryDoc(doc, name), [], `${name}: ${JSON.stringify(doc)}`)
   }
@@ -42,13 +42,11 @@ const specNames = () => {
   return table.split('\n').map((l) => /^\| `([a-z]+)` \|/.exec(l)).filter(Boolean).map((m) => m[1])
 }
 
-test('QUERIES 的键集合 == §4.1 表的名字(status / doctor 在产出处注册)', () => {
+test('QUERIES 的键集合 == §4.1 表的名字', () => {
   const names = specNames()
   assert.equal(names.length, 9, JSON.stringify(names))
-  const have = Object.keys(QUERIES)
-  assert.deepEqual(have.filter((n) => !names.includes(n)), [], 'a query the name table does not have')
-  // `status` / `doctor` 的文档就是那两个命令印的,注册在产出处(CLI 侧);其余一个都不许缺。
-  assert.deepEqual(names.filter((n) => !have.includes(n)).sort(), ['doctor', 'status'])
+  // `status` / `doctor` 的文档就是那两个命令印的(src/cli/{status,doctor}.mjs),也在表里:一个都不许缺、不许多。
+  assert.deepEqual(Object.keys(QUERIES).sort(), [...names].sort())
 })
 
 test('sessions / session / block / pricing 的顶层键照 C.5', async () => {
@@ -143,7 +141,7 @@ test('classes 的顶层键与每类的键照 C.5,条数与大小来自段索引'
 
 test('盘上没有数据时每个文档照样出,退 0 的形状', async () => {
   const home = rawHome()
-  for (const name of Object.keys(QUERIES)) {
+  for (const name of DATA_QUERIES) {
     const doc = await runQuery(name, required(name), { home })
     assert.deepEqual(validateQueryDoc(doc, name), [])
     // a name whose required parameter names something that is not there says so (D38), and still answers

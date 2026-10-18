@@ -128,6 +128,13 @@ test('V20: install / on / off / uninstall / daemon and the subcommands that chan
     assert.equal(await runCli(argv, c), 0, `${argv.join(' ')} as root`)
     assert.equal(c.io.stderrText(), '', `${argv.join(' ')} is not refused`)
   }
+  // and the real `classes` shown and `raw` as root: they read and answer, they are never the root refusal (§4.2, §5.1)
+  const s = sandbox({ install: false })
+  for (const argv of [['query'], ['classes'], ['raw', 'no-such-segment']]) {
+    const { exit, io } = await s.run(argv, { uid: 0 })
+    assert.ok([0, 1].includes(exit), `${argv.join(' ')} as root: exit ${exit}: ${io.text()}`)
+    assert.ok(!/not as root/.test(io.text()), `${argv.join(' ')} as root was refused: ${io.text()}`)
+  }
 })
 
 test('V9: status, off, on, doctor and uninstall with --json print one JSON value that passes validateReceipt, its `command` is the command, and what is said besides goes to stderr', async () => {

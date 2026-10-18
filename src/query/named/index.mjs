@@ -19,8 +19,10 @@ import * as pricing from './pricing.mjs';
 export class QueryArgError extends Error { constructor(m) { super(m); this.name = 'QueryArgError'; } }
 
 export const QUERIES = Object.freeze({
-  // `status` and `doctor` are the same documents the two commands print; they are registered where
-  // they are produced (src/cli/status.mjs / doctor.mjs, the CLI task), so there is one answer per name.
+  // `status` and `doctor` are the same documents the two commands print: the query IS that document
+  // (src/cli/status.mjs statusDoc / doctor.mjs doctorDoc), so the two can never disagree.
+  status: { params: Object.freeze(['harness']), run: (c) => verdict('status', c) },
+  doctor: { params: Object.freeze(['harness']), run: (c) => verdict('doctor', c) },
   sessions: { params: sessions.params, run: sessions.run },
   session: { params: session.params, run: session.run },
   calls: { params: calls.params, run: calls.run },
@@ -29,6 +31,21 @@ export const QUERIES = Object.freeze({
   segments: { params: segments.params, run: segments.run },
   pricing: { params: pricing.params, run: pricing.run },
 });
+
+/**
+ * The two documents a command produces, asked for by name, with the same `--harness` the command takes.
+ * The module is imported on use, so a read of captured data does not pull the whole CLI in.
+ */
+async function verdict(name, { params, errors, userHome, env, platform, deps }) {
+  const { resolveHarnesses } = await import('../../cli/harness-names.mjs');
+  const named = resolveHarnesses(params.harness == null ? [] : [...listOf(params.harness)]);
+  if (!named.ok) throw new QueryArgError(`asight query ${name}: --harness: no agent called ${named.unknown.join(', ')} (known: ${named.known.join(', ')})`);
+  const mod = await import(name === 'status' ? '../../cli/status.mjs' : '../../cli/doctor.mjs');
+  // `exit` is the command's own exit code, not part of the document (runDoctor drops it too).
+  const { errors: own = [], exit: _exit, ...doc } = await (name === 'status' ? mod.statusDoc : mod.doctorDoc)({ names: named.ids, home: userHome, env, platform, deps });
+  errors.push(...own);
+  return doc;
+}
 
 // ── parameters every list query shares (§4.1 参数) ────────────────────────────
 export const LIMIT_DEFAULT = 50, LIMIT_MAX = 500;
@@ -75,14 +92,17 @@ export function parseTime(v, { name = 'time', now = Date.now() } = {}) {
 }
 
 /**
- * runQuery(name, params, {home, fs, now}) → the document.
+ * runQuery(name, params, {home, fs, now, userHome, env, platform, deps}) → the document.
+ * `home` is ~/.asight; the rest of the context is handed to the query as it is, for `status` / `doctor`,
+ * which read the machine (`userHome` = the user's home, and whatever a test injects in `deps`).
  * Throws QueryArgError for an unknown name or parameter; everything else it cannot read is in `errors`.
  */
-export async function runQuery(name, params = {}, { home = asightHome(), fs = nodeFs, now = Date.now } = {}) {
+export async function runQuery(name, params = {}, ctx = {}) {
+  const { home = asightHome(), fs = nodeFs, now = Date.now } = ctx;
   const q = QUERIES[name];
   if (!q) throw new QueryArgError(`asight query: no query called ${JSON.stringify(name)} (names: ${Object.keys(QUERIES).join(', ')})`);
   for (const k of Object.keys(params)) if (!q.params.includes(k)) throw new QueryArgError(`asight query ${name}: no parameter --${k} (its parameters: ${q.params.length ? q.params.map((p) => '--' + p).join(' ') : 'none'})`);
   const errors = [];
-  const body = await q.run({ home, fs, now, params, errors });
+  const body = await q.run({ ...ctx, home, fs, now, params, errors });
   return { schema: SCHEMA_VERSION, command: name, ok: errors.length === 0, ...body, errors };
 }

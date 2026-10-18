@@ -2,6 +2,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { QUERIES } from '../../src/query/named/index.mjs'
+
+/** The query names whose answer is on disk. `status` and `doctor` read the machine (the daemon, the process table, the
+ *  trust store), so they are exercised with injected deps in test/cli/data-commands.test.mjs, never by a loop over a HOME. */
+export const DATA_QUERIES = Object.keys(QUERIES).filter((n) => !['status', 'doctor'].includes(n))
 
 /** One envelope line as the collector writes it (src/capture/envelope.mjs field names). */
 export const envLine = (o = {}) => JSON.stringify({

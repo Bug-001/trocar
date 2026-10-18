@@ -4,8 +4,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { rawHome, writeSegment, snapshot, requiredFor } from './raw-home.mjs'
-import { QUERIES, runQuery } from '../../src/query/named/index.mjs'
+import { rawHome, writeSegment, snapshot, requiredFor, DATA_QUERIES } from './raw-home.mjs'
+import { runQuery } from '../../src/query/named/index.mjs'
 import { validateQueryDoc } from '../../src/cli/schema.mjs'
 import { indexDir } from '../../src/query/index-build.mjs'
 
@@ -18,7 +18,7 @@ test('跑前跑后 HOME 快照只差 index/', async () => {
   fs.writeFileSync(path.join(home, 'logs', 'classes.ndjson'), '{"op":"set"}\n')
   fs.writeFileSync(path.join(home, 'capture-2026-10-01.ndjson'), '{"id":"old"}\n') // an older location: read, never touched
   const before = snapshot(home)
-  for (const name of Object.keys(QUERIES)) assert.deepEqual(validateQueryDoc(await runQuery(name, requiredFor(name, { segment: SEG }), { home }), name), [])
+  for (const name of DATA_QUERIES) assert.deepEqual(validateQueryDoc(await runQuery(name, requiredFor(name, { segment: SEG }), { home }), name), [])
   const after = snapshot(home)
   for (const k of Object.keys(before)) assert.deepEqual(after[k], before[k], `${k} changed`)
   const added = Object.keys(after).filter((k) => !(k in before))
