@@ -67,13 +67,15 @@ From a Release: not published yet.
 
 ```sh
 asight off                     # first: uninstall refuses while capture is on
-asight uninstall               # removes all of asight's changes, keeps captures
-asight uninstall --purge-data  # also deletes capture data (asks first)
+asight uninstall               # removes all of asight's changes; keeps your records (~/.asight/raw)
+asight uninstall --purge-data  # also deletes the records and their index (asks first)
 ```
 
 `uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
 nothing and exits 2. `uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
 holds a door, it changes nothing, exits 1 with `error.code` `collectors-online` and names the harnesses and the pids.
+If the system's prompt to remove asight's root certificate is not answered, `uninstall` exits 1, names the
+certificate and the command to remove it by hand, and the next `asight uninstall` tries again.
 
 ## What you see
 
