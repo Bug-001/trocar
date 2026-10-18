@@ -48,7 +48,7 @@ export function noteText(code, { harness = '', pid = null } = {}) {
 const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinite(t)) return null; const s = Math.max(0, Math.round((now - t) / 1000)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m` }
 
 /** The daemon in one clause, from the daemon's own answer — never a stale pid as the present state (§1.1). */
-export function daemonClause(d, now) {
+function daemonClause(d, now) {
   if (d.running === true) { const up = d.since ? upFor(d.since, now) : null; return `Daemon running (pid ${d.pid ?? unknown('no pid recorded')}${up ? `, up ${up}` : ''}).` }
   if (d.running === false) return `Daemon not running${d.error ? ` (${d.error})` : ''}; nothing is captured. Start it: asight on`
   if (d.responding === false) return `Daemon does not answer${d.error ? ` (${d.error})` : ''}; new connections are not captured.`

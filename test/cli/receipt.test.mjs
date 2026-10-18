@@ -373,22 +373,23 @@ test('V29: the on receipt after install, in the text and in --json, carries the 
   }
 })
 
-// V10 (1.6 R11, §6, D49): what `status` could not read is 「不知道」 with the reason — the connections still relayed (a daemon whose reply carries no count), the
-// daemon itself (a lock that cannot be read) — and never `0 条` or 「无」, in the text and in --json
-test('V10: status says 不知道 with the reason for connections the daemon did not count, and a lock that could not be read — never 0 条 or 无', async () => {
+// V10 (1.6 R11, §6, D49): what `status` could not read is `unknown (<reason>)` — the connections still relayed (a daemon whose reply carries no count), the
+// daemon itself (a lock that cannot be read) — and never a confident 0 or none, in the text and in --json
+test('V10: status says unknown with the reason for connections the daemon did not count, and a lock that could not be read — never 0 or none', async () => {
   const s = await installedHome()
   // the daemon answers, but its reply has no `relayed`
   let r = await runStatus(s, [], { request: asDaemon(reply({ relayed: undefined })) })
-  const line = (text, head) => text.split('\n').find((l) => l.startsWith(head)) || ''
-  assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(the daemon's reply does not carry the connection counts\)$/)
-  assert.ok(!/0 条|无/.test(line(r.text, '仍经 asight 的连接')), 'never 0 条 or 无')
+  const flat = (text) => text.replace(/\s+/g, ' ') // a row's value may wrap onto the next line (§1.1 width)
+  assert.match(flat(r.text), /Connections unknown \(the daemon's reply does not carry the connection counts\)/)
+  assert.ok(!/Connections (0|none|no )/.test(flat(r.text)), 'never a confident 0 or none')
   // the lock cannot be read and nothing answers
   const lock = path.join(s.dir, 'lock'); fs.writeFileSync(lock, '{}')
   const broken = { ...fs, readFileSync: (f, ...a) => { if (f === lock) throw Object.assign(new Error(`EACCES: permission denied, open '${f}'`), { code: 'EACCES' }); return fs.readFileSync(f, ...a) } }
   r = await runStatus(s, [], { request: down(), fs: broken })
-  assert.match(r.text, new RegExp(`守护进程 不知道\\([^\\n]*${lock.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}[^\\n]*EACCES`))
-  assert.match(line(r.text, '仍经 asight 的连接'), /^仍经 asight 的连接: 不知道\(whether a daemon runs is not known/)
-  assert.ok(!/0 条|无/.test(line(r.text, '仍经 asight 的连接'))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  assert.match(flat(r.text), new RegExp(`Daemon: unknown \\(${esc(lock)}: EACCES`))
+  assert.match(flat(r.text), /Connections unknown \(whether a daemon runs is not known/)
+  assert.ok(!/Connections (0|none|no )/.test(flat(r.text))); assert.equal(r.exit, 3, 'and the agents it cannot judge make it 3')
   // --json: the same, as data
   const j = await runStatus(s, ['--json'], { request: down(), fs: broken })
   const doc = j.io.json()

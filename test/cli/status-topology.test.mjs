@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { validateReceipt, validateTopology, validateFinding } from '../../src/cli/schema.mjs'
-import { renderRoutes, routeRows } from '../../src/netenv/topology-text.mjs'
+import { renderRoutes } from '../../src/netenv/topology-text.mjs'
 import { installedViaCli, snapshot } from './fixtures/dispatch-ctx.mjs'
 import { claudeProc } from './fixtures/status-ctx.mjs'
 
@@ -46,7 +46,9 @@ test('V43: every hop name in the text is some node\'s name — the `Routes` rows
   for (const h of ids) {
     const t = doc.topology[h]
     for (const line of renderRoutes(t)) assert.ok(text.includes(line), `${h}: the text has the row as the topology draws it: ${line}`)
-    for (const [, c] of routeRows(t)) for (const hop of c.split(' -> ').map((x) => x.replace(/^\[[^\]]*\] /, ''))) assert.ok(t.nodes.some((n) => hop.startsWith(n.name)), `${h}: ${hop} is a node`)
+    // through the renderer, not its row helper: a row's chain is what follows the label's padding (a chain holds no double space)
+    for (const line of renderRoutes(t)) { if (!line.includes(' -> ')) continue
+      for (const hop of line.split(/ {2,}/).pop().split(' -> ').map((x) => x.replace(/^\[[^\]]*\] /, ''))) assert.ok(t.nodes.some((n) => hop.startsWith(n.name)), `${h}: ${hop} is a node`) }
   }
 })
 

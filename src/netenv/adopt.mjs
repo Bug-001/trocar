@@ -117,7 +117,7 @@ export function detectDrift({ adopted, h, setting, routing, scope = 'all' }) {
 export function recordDrift({ drift, h, desired, appendEvent }) {
   const reason = drift.code === 'proxy-changed'
     ? `${h}'s proxy setting is now ${drift.to ?? 'none'}${drift.captured === false ? `, not what asight put there: its new connections go round asight` : ' (it was ' + (drift.from ?? 'none') + ')'}`
-    : `the machine's network environment changed: ${drift.from} → ${drift.to}`
+    : `the machine's network environment changed: ${drift.from} -> ${drift.to}`
   appendEvent({ event: 'netenv-change', where: 'netenv', harness: h, code: drift.code, from: drift.from ?? null, to: drift.to ?? null, captured: drift.captured, reason })
   if (desired === 'on' && drift.captured === false) appendEvent({ event: 'failure', where: 'netenv', harness: h, code: drift.code, reason })
 }

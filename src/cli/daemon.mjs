@@ -43,6 +43,10 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   // 1.6 §5.2: no install, no daemon — it is refused before anything of asight's is made or written (an empty collector directory and a netenv.json
   // left behind by a daemon that could not run is residue of a run that never should have begun). The gate is the daemon's own (daemonMayStart):
   // an install that left a root but could not finish (a root store still pending) routes, and this daemon starts, as src/collector/daemon.mjs does.
+  const D = await (deps.daemon || import('../collector/daemon.mjs'))
+  // V14 first: a platform with no collector is refused before anything starts or is written — loadArch's own error, so the CLI holds no platform list
+  // (ahead of the install gate: on such a platform "not supported yet" is the honest answer, installing would not help)
+  if (typeof D.loadArch === 'function') { try { await D.loadArch(platform) } catch (e) { io.err(`asight daemon: ${e.message}`); return EXIT.incomplete } } // an injected daemon without one answers for the platform itself
   if (!daemonMayStart(readInstallManifest(dir, deps.fs || nodeFs))) { io.err('asight daemon: certificates are not installed. Run: asight install'); return EXIT.incomplete }
   let crashed
   const crashedFirst = new Promise((resolve) => { crashed = resolve })
@@ -56,9 +60,6 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   }
   proc.on('uncaughtException', crash); proc.on('unhandledRejection', crash)
   const foreground = !env.INVOCATION_ID && !!(proc.stdin && proc.stdin.isTTY) // not under systemd, at a terminal: closing it stops the daemon
-  const D = await (deps.daemon || import('../collector/daemon.mjs'))
-  // V14: a platform with no collector is refused before anything starts or is written — loadArch's own error, so the CLI holds no platform list
-  if (typeof D.loadArch === 'function') { try { await D.loadArch(platform) } catch (e) { io.err(`asight daemon: ${e.message}`); return EXIT.incomplete } } // an injected daemon without one answers for the platform itself
   const start = deps.startDaemon || D.startDaemon
   let d
   try { d = await start({ dir, env, foreground, log: (where, e) => io.err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) { io.err(`asight daemon: ${e.message}`); return EXIT.incomplete }

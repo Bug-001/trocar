@@ -4,7 +4,7 @@
 // dials exactly as the one a login entry would start. What is not in this list stays: the user-level variables a login job carries too (`CODEX_HOME`,
 // `PATH`, `HOME`, `TMPDIR` — the control socket lives under it).
 // One list in one place: three archs had their own copy of it.
-export const TRUST_AND_PROXY = /^(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_USE_SYSTEM_CA|NODE_USE_ENV_PROXY|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_FILE|SSL_CERT_DIR|(HTTPS?|ALL|NO|FTP|WSS?)_PROXY)$/i
+const TRUST_AND_PROXY = /^(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_USE_SYSTEM_CA|NODE_USE_ENV_PROXY|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_FILE|SSL_CERT_DIR|(HTTPS?|ALL|NO|FTP|WSS?)_PROXY)$/i
 
 export function directStartEnv(env = process.env) {
   const out = {}
