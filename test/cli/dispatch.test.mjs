@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runCli } from '../../src/cli/main.mjs'
 import { COMMANDS, helpText, commandNamed, usageLine } from '../../src/cli/commands.mjs'
+import { WIDTH } from '../../src/cli/text.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
@@ -103,10 +104,16 @@ test('V6: an unknown command, an unknown option, an unknown harness and a flag t
   assert.equal(unknownOption.io.stderrText().trim(), `asight status: unknown option '--frob'\n${usageLine(commandNamed('status'))}`)
   const unknownCommand = await sandbox().run(['nope'])
   assert.equal(unknownCommand.io.stderrText().trim(), "asight: unknown command 'nope'. Run: asight help")
+  // §1.1⑥: a usage line longer than 80 columns folds under itself here as it does in help, it is not printed ragged
+  const long = await sandbox({ install: false }).run(['on', '--bogus'])
+  const lines = long.io.stderrText().trimEnd().split('\n')
+  assert.equal(lines[0], "asight on: unknown option '--bogus'")
+  for (const line of lines) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`)
+  assert.equal(lines.slice(1).join(' ').replace(/\s+/g, ' ').trim(), usageLine(commandNamed('on')), 'the whole usage line is there, folded')
 })
 
-test('V20: install / on / off / uninstall / daemon and the subcommands that change state (classes set, raw seal) refuse root and write nothing; what changes nothing of yours is not refused (§1.5)', async () => {
-  for (const argv of [['install'], ['on'], ['off'], ['uninstall'], ['daemon'], ['raw', 'seal'], ['on', '--yes'], ['off', 'clade'],
+test('V20: install / on / off / uninstall / daemon and the subcommands that change state (classes set|add|rm|reset) refuse root and write nothing; what changes nothing of yours is not refused (§1.5)', async () => {
+  for (const argv of [['install'], ['on'], ['off'], ['uninstall'], ['daemon'], ['on', '--yes'], ['off', 'clade'],
     ['classes', 'set', 'models', 'log'], ['classes', 'add', 'models', 'x'], ['classes', 'rm', 'models'], ['classes', 'reset']]) {
     const s = sandbox({ install: false }); const before = snapshot(s.home)
     const { exit, io } = await s.run(argv, { uid: 0 })
@@ -115,8 +122,8 @@ test('V20: install / on / off / uninstall / daemon and the subcommands that chan
     assert.equal(io.stdoutText(), '')
     assert.deepEqual(snapshot(s.home), before, `${argv.join(' ')} wrote nothing`); assert.equal(s.sys.exec.calls.length, 0, 'and ran no tool')
   }
-  // only reading: `classes` shown, `raw verify` and `raw cat` are the same command names as above, and they run as root like any other read
-  for (const argv of [['help'], ['--version'], ['status'], ['doctor'], ['query'], ['classes'], ['classes', 'models'], ['raw', 'verify'], ['raw', 'cat', 'seg-1']]) {
+  // only reading: `classes` shown and `raw` run as root like any other read
+  for (const argv of [['help'], ['--version'], ['status'], ['doctor'], ['query'], ['classes'], ['classes', 'models'], ['raw', 'seg-1']]) {
     const c = spying([]); c.uid = 0
     assert.equal(await runCli(argv, c), 0, `${argv.join(' ')} as root`)
     assert.equal(c.io.stderrText(), '', `${argv.join(' ')} is not refused`)

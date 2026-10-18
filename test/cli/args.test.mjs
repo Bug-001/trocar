@@ -37,4 +37,7 @@ test('parseArgs: a command with open options (query, whose parameters are the qu
   assert.deepEqual(parseArgs(open, ['sessions', '--since', '7d', '--limit', '10']), { positionals: ['sessions'], flags: { since: '7d', limit: '10' }, error: null })
   assert.deepEqual(parseArgs(open, ['sessions', '--verbose']).flags, { verbose: true }, 'an option with no value is true')
   assert.equal(parseArgs(open, ['--json']).error, null)
+  assert.deepEqual(parseArgs(open, ['sessions', '--limit', '-1', '--ratio', '-0.5', '-2']),
+    { positionals: ['sessions', '-2'], flags: { limit: '-1', ratio: '-0.5' }, error: null },
+    'a negative number is a value (and a positional), not an option name nobody declared')
 })

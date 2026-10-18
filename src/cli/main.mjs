@@ -14,6 +14,7 @@ import os from 'node:os'
 import { makeIo } from '../off/io.mjs'
 import { commandNamed, helpText, usageLine } from './commands.mjs'
 import { parseArgs } from './args.mjs'
+import { wrap, WIDTH } from './text.mjs'
 import { printJson, errorDoc } from './json.mjs'
 import { EXIT } from './schema.mjs'
 
@@ -26,7 +27,7 @@ export async function runCli(argv, { io = makeIo({ stdin: process.stdin, stdout:
   /** One answer that is not an answer: a JSON document on stdout, or a line (and the usage line, when there is one) on stderr. */
   const refuse = (command, code, message, { usage = null, detail = null, exit = EXIT.usage } = {}) => {
     if (json) printJson(io, errorDoc(command, code, message, detail))
-    else { io.err(message); if (usage) io.err(usage) }
+    else { io.err(message); if (usage) for (const line of wrap(usage, WIDTH, '  ')) io.err(line) } // §1.1⑥: the usage line folds like help's, it does not pass 80 columns
     return exit
   }
   const [first, ...rest] = argv
