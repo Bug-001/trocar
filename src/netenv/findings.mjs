@@ -46,7 +46,9 @@ function removeAt(h, place) {
   if (place.kind === 'system') return 'Turn off your system proxy'
   return place.format === 'json' ? `Remove ${place.key} from ${place.path}` : `Remove the ${place.key}= line from ${place.path}`
 }
-const portCheck = (ctx, port) => os(ctx, { linux: `ss -ltnp 'sport = :${port}'`, darwin: `lsof -nP -iTCP:${port} -sTCP:LISTEN`, win32: `netstat -ano -p TCP | findstr ":${port}"` })
+// darwin: the kernel's own TCP table, the one `status` reads (arch/darwin/netfacts.mjs) — `lsof -nP -iTCP:<port> -sTCP:LISTEN` names only the
+// processes whose fd table this user may open, so a port held by ANOTHER user's program came back empty, which is the case this step is for.
+const portCheck = (ctx, port) => os(ctx, { linux: `ss -ltnp 'sport = :${port}'`, darwin: `netstat -anv -p tcp | grep -E '\\.${port} .*LISTEN'`, win32: `netstat -ano -p TCP | findstr ":${port}"` })
 /** The steps that make an agent read its settings again: the harness's own words (the application step), and, where the harness keeps its settings in a managed process its windows do not end (`restart.managed`),
  *  the command that ends it, with the pid the facts hold. A managed process that is not running has nothing to end. */
 function restartSteps(ctx) {
