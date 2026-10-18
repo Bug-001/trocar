@@ -57,6 +57,9 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
   let timer = null, chain = Promise.resolve(), stopped = false, paused = false
 
   const after = (fn) => (chain = chain.then(fn, fn)) // one pass at a time, in the order they were asked for
+  // What the keeper's own failure is (D38): the raw layer's `index-failed`, NEVER a record error — the record is
+  // written, and the index is a cache the next query rebuilds (it then says `index-cold`).
+  const indexFailed = (segment, what) => failure('raw', Object.assign(new Error(`${what}; the records are on disk, and the next query indexes them itself, which costs that query the build`), { code: 'index-failed' }), { segment })
   const arm = () => {
     if (paused || stopped || timer || !pending.size) return
     timer = setTimeout(() => { timer = null; after(drain) }, debounceMs)
@@ -73,13 +76,13 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
     while (!stopped) {
       let r
       try { r = await index({ home, segment, maxBytes: chunkBytes, owner: true }) } catch (e) {
-        failure('raw', Object.assign(new Error(`keeping the index of ${segment} current failed (${String((e && e.message) || e)}); the records are on disk, and the next query indexes them itself, which costs that query the build`), { code: 'index-failed' }), { segment })
+        indexFailed(segment, `keeping the index of ${segment} current failed (${String((e && e.message) || e)})`)
         return
       }
       // the other problems are stored in the index document, so a reader says them; this one is about the write
       const unwritable = r.problems.find((p) => p.code === 'index-unwritable')
       if (unwritable) {
-        failure('raw', Object.assign(new Error(`${unwritable.reason}; the next query indexes ${segment} itself, which costs that query the build`), { code: 'index-failed' }), { segment })
+        indexFailed(segment, unwritable.reason)
         return // another pass would only repeat it
       }
       if (r.done) return
@@ -88,7 +91,14 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
   }
 
   return {
-    wrote(segment) { if (paused || stopped || !segment || handed.has(segment)) return; pending.add(segment); arm() },
+    wrote(segment) {
+      if (paused || stopped || !segment || handed.has(segment)) return
+      // This runs ON the record's write path (store.mjs onRecord). It MUST NOT throw there: the store would count the
+      // keeper's failure as `record-error` (the wrong D38 class — the record itself is on disk) and set it as the
+      // store's last error. So whatever fails here is said as the raw layer's `index-failed` instead, and the record
+      // write is left alone.
+      try { pending.add(segment); arm() } catch (e) { indexFailed(segment, `arming the index catch-up of ${segment} failed (${String((e && e.message) || e)})`) }
+    },
     flush(segment) {
       if (stopped || !segment) return chain
       if (!handed.has(segment)) { pending.delete(segment); handed.add(segment); after(() => catchUp(segment)) }

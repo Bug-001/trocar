@@ -143,6 +143,19 @@ test('the stop writes nothing more', async () => {
 // The JSDoc of stop() promises that nothing of the keeper's is written after it returns. A stop before any pass
 // cannot show that: the pass has to be IN FLIGHT when stop is called (what the daemon's stop does to a keeper that
 // is still catching up).
+// `wrote` is called ON the record's own write path, so a failure of the keeper's there must never reach the store:
+// the store would count it as a `record-error` (D38's class for a record that was NOT written) and keep it as its
+// last error, while the record is in fact on disk and only the index is behind.
+test('a failure on the record\'s write path is the keeper\'s own (raw / index-failed), never thrown into the store', async () => {
+  const h = home()
+  const said = []
+  const keeper = createIndexKeeper({ home: h, debounceMs: 1, failure: (where, err, fields) => said.push([where, err.code, fields.segment]) })
+  const real = globalThis.setTimeout
+  globalThis.setTimeout = () => { throw new Error('no timers left') } // the resource the debounce needs is gone
+  try { keeper.wrote(SEG) } finally { globalThis.setTimeout = real }
+  assert.deepEqual(said, [['raw', 'index-failed', SEG]])
+})
+
 test('stop() settles only after the pass in flight, and the index file does not grow after that', async () => {
   const h = home()
   let open = null
