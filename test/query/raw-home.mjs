@@ -1,0 +1,46 @@
+// test/query/raw-home.mjs — a ~/.asight with raw/ segments in it, for the segment-index tests.
+import fs from 'node:fs'
+import path from 'node:path'
+import { tmpDir } from '../helpers/tmp.mjs'
+
+/** One envelope line as the collector writes it (src/capture/envelope.mjs field names). */
+export const envLine = (o = {}) => JSON.stringify({
+  ts: o.ts ?? '2026-10-18T10:00:00.000Z',
+  endpoint: o.path ?? '/v1/messages',
+  method: 'POST',
+  req_headers: { 'content-type': 'application/json', ...(o.sessionKey ? { 'x-session-id': o.sessionKey } : {}) },
+  req_body: '{"model":"m"}',
+  resp: { status: o.status ?? 200, kind: 'json' },
+  id: o.id ?? 'req_00001',
+  ts_request: o.ts ?? '2026-10-18T10:00:00.000Z',
+  is_llm_call: o.is_llm ?? true,
+  capture: 'transparent',
+  host: o.host ?? 'api.anthropic.com',
+  traffic_class: o.class ?? 'llm',
+  body_wire_bytes: { req: o.wireReq ?? 10, resp: o.wireResp ?? 20 },
+  proc: { pid: 7, exe: '/x', agent: o.harness ?? 'claude-code' },
+})
+
+export function rawHome(prefix = 'asight-t6-') {
+  const home = tmpDir(prefix)
+  fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
+  return home
+}
+
+/** Appends `lines` (objects for envLine, or ready strings) to ~/.asight/raw/<segment>.ndjson. */
+export function writeSegment(home, segment, lines) {
+  const f = path.join(home, 'raw', `${segment}.ndjson`)
+  fs.appendFileSync(f, lines.map((l) => (typeof l === 'string' ? l : envLine(l))).join('\n') + '\n', { mode: 0o600 })
+  return f
+}
+
+/** Every file under `dir`, relative path → bytes + mode, for a before/after snapshot. */
+export function snapshot(dir, rel = '') {
+  const out = {}
+  for (const ent of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+    const r = rel ? `${rel}/${ent.name}` : ent.name
+    if (ent.isDirectory()) Object.assign(out, snapshot(dir, r))
+    else { const st = fs.lstatSync(path.join(dir, r)); out[r] = `${st.size}:${(st.mode & 0o777).toString(8)}:${fs.readFileSync(path.join(dir, r)).toString('base64')}` }
+  }
+  return out
+}
