@@ -11,6 +11,25 @@ import { HARNESS_IDS } from './harness-names.mjs'
 /** `/home/alice/.claude/x` → `~/.claude/x` when `p` is under `home`. */
 export const tilde = (p, home) => (home && typeof p === 'string' && (p === home || p.startsWith(home + path.sep)) ? `~${p.slice(home.length)}` : p)
 
+// §1.1 / D58: a form id and a carrier kind are asight's own words (4.11's primitives). A receipt prints what they MEAN to the reader. One
+// vocabulary, here, for every command: a name that is not in it is read out as its own words (`desktop-prebuilt` → "desktop prebuilt"), never
+// a refusal and never an id — adding a form or a carrier stays descriptor data (D57⑥).
+const FORM_WORDS = Object.freeze({
+  cli: 'the command line', 'cli-standalone': 'the standalone command line', 'cli-node': 'the command line (the node build)', 'cli-v2': 'the command line (version 2)',
+  vscode: 'the VS Code extension', app: 'the desktop app', desktop: 'the desktop app', 'desktop-cli': "the desktop app's command line",
+  'desktop-prebuilt': 'the prebuilt desktop app', acp: 'the editor plug-in', web: 'the web interface', npx: 'a run through npx',
+  wsl: 'the Windows Subsystem for Linux', gateway: 'the gateway', dashboard: 'the dashboard',
+})
+const CARRIER_WORDS = Object.freeze({
+  root: 'reads your user trust store', 'config-key': "the certificate setting of its own configuration", 'pem-block': 'a block in your certificate file',
+  plugin: 'a plug-in asight installed', wrapper: 'a launch command asight installed', 'switch-file': "asight's switch file",
+  bundle: 'a certificate bundle asight wrote', env: 'the certificate variable of its settings',
+})
+/** A form id (`codex.vscode`) as the form a user would name it by — the harness prefix goes. */
+export const formWords = (id) => { const s = String(id ?? '').split('.').slice(1).join('.'); return FORM_WORDS[s] || s.replace(/-/g, ' ') || String(id ?? '') }
+/** A certificate carrier kind (`config-key`, `pem-block`) as what it is to the reader. */
+export const carrierWords = (kind) => CARRIER_WORDS[kind] || String(kind ?? '').replace(/-/g, ' ')
+
 const BARE = /\u001b\[\d+m/g
 
 /** §1.1⑥: every line fits 80 columns — one that does not is folded on spaces, indented to its own indent, and a word that is longer than the line

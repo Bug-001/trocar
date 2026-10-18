@@ -122,3 +122,19 @@ for (const platform of ['darwin', 'win32']) {
     assert.equal(doc.fp256, null, 'no root was made')
   })
 }
+
+// §1.1 / D58 (macOS and Windows test machines, 2026-10-18): a receipt has no two identical rows, and it never prints asight's own ids at a person — a form id
+// (`codex.vscode`) and a carrier kind (`config-key`) are read out in words (src/cli/receipt.mjs formWords / carrierWords, one vocabulary).
+test('the install receipt prints each (agent, carrier, file) fact once, in words — never one row per form, never a form or carrier id', async () => {
+  const w = await modelWorld({ os: 'darwin', commands: ['claude', 'codex', 'dsh', 'kimi', 'opencode', 'hermes'] })
+  const io = fakeIo()
+  const deps = { getuid: () => 501, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, unit: null }
+  assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), 0, io.text())
+  const text = io.text().slice(io.text().indexOf('Installed.')) // the receipt alone: the plan above it is a screen of its own, printed before anything was written
+  const rows = text.split('\n').filter((l) => /^ {2}\S/.test(l))
+  assert.deepEqual(rows.filter((l, i) => rows.indexOf(l) !== i), [], `a row is printed twice:\n${text}`)
+  const forms = w.harnesses.flatMap((d) => ((d.proxyMode && d.proxyMode.forms) || []).map((f) => f.id))
+  assert.ok(forms.length > 0, 'the world has forms to name')
+  for (const id of forms) assert.ok(!text.includes(id), `the receipt prints the form id ${id} instead of what the form is`)
+  assertEnglish(text, 'the install receipt')
+})

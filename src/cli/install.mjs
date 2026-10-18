@@ -11,7 +11,7 @@ import { refuseOldManifest } from '../off/manifest.mjs'
 import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile, standalonePath } from '../off/paths.mjs'
 import { isInteractive, confirm } from '../off/io.mjs'
-import { fit, tilde, planItems } from './receipt.mjs'
+import { fit, tilde, planItems, formWords, carrierWords } from './receipt.mjs'
 import { pairs, wrap } from './text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { EVENT } from '../collector/core/codes.mjs'
@@ -92,12 +92,27 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
       planned, commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
     const dir = path.join(home, '.asight', 'collector')
     try { appendEvent(dir, { event: EVENT.installNote, where: 'install', kind: 'result', outcome: receipt.ok ? 'installed' : 'partial', reason: `install: root ${r.fp256 || 'not made'}; ${r.carriers.length} carrier row(s); ${r.pending.length} pending` }) } catch (e) { r.problems.push(`the install-note could not be written (${e.message})`) }
+    // §1.1: no two rows of a receipt are the same line. One carrier reached through five forms of one agent was five identical rows (a Windows test machine
+    // 2026-10-18: `codex root` five times): the rows are the DISTINCT (agent, carrier, state, file) facts, and when the forms of an
+    // agent do not all share one, the row names the forms it is about, in words (formWords).
+    const formsOf = (h) => r.carriers.filter((c) => c.harness === h && c.form).map((c) => c.form)
+    const groups = [...r.carriers.reduce((by, c) => {
+      const k = [c.harness || 'root', c.carrier, c.state || '', c.path || '', c.why || ''].join('|')
+      return by.set(k, [...(by.get(k) || []), c])
+    }, new Map()).values()]
+    const carrierRows = groups.map((g) => {
+      const c = g[0]
+      const forms = g.map((x) => x.form).filter(Boolean)
+      const all = formsOf(c.harness)
+      const which = forms.length && forms.length < all.length ? ` (${forms.map(formWords).join(', ')})` : ''
+      return [c.harness || 'root', `${carrierWords(c.carrier)}${c.state ? `, ${c.state}` : ''}${c.path ? `: ${tilde(c.path, home)}` : ''}${c.why ? ` (${c.why})` : ''}${which}`]
+    })
     if (json) io.out(JSON.stringify(receipt, null, 2))
     // a refusal installed nothing: the fingerprint, the risk of an installed root and "Next" would all be untrue, so the stop and its reason are the whole receipt
     else if (refusal) io.out(fit([`asight install stopped: ${refusal.message || refusal.reason}`, 'Nothing of yours was changed.']).join('\n'))
     else io.out(fit([receipt.ok ? "Installed. asight's root certificate is trusted by your user." : 'asight install did not finish. What is missing is below.',
-      ...pairs([['Fingerprint', r.fp256 ? `SHA-256 ${r.fp256}` : 'unknown (no root was made)'],
-        ...r.carriers.map((c) => [c.harness || 'root', `${c.carrier}${c.state ? ` ${c.state}` : ''}${c.path ? ` ${tilde(c.path, home)}` : ''}${c.why ? ` (${c.why})` : ''}`])]),
+      ...pairs([['Fingerprint (SHA-256)', r.fp256 || 'unknown (no root was made)']]), // the hex is one unbroken word under its label: one block, and in a block of its own, so it does not widen the rows below
+      ...pairs(carrierRows),
       ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: asight install`),
       ...r.problems.map((p) => `Problem: ${p}`),
       ...wrap(RISK),

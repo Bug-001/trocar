@@ -11,7 +11,7 @@ import { acquireOpLock, LOCK_BUSY } from '../off/lock.mjs'
 import { opLockFile } from '../off/paths.mjs'
 import { readManifest, saveManifest } from '../collector/core/trust/journal.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
-import { fit, tilde } from './receipt.mjs'
+import { fit, tilde, formWords } from './receipt.mjs'
 import { pairs } from './text.mjs'
 
 const errText = (e) => String((e && e.message) || e)
@@ -38,7 +38,12 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
       : exit === 0 ? `Capturing ${receipt.harnesses.join(', ') || 'no agent'}.${receipt.daemon && receipt.daemon.state === 'running' ? ' The collector is running.' : ''}`
         : `asight on did not finish${receipt.harnesses.length ? ` for all of ${receipt.harnesses.join(', ')}` : ''}. What stopped it is below.`,
       ...receipt.refused.map(refusedLine),
-      ...pairs((receipt.routes || []).map((r) => [r.harness, r.ok ? 'the setting is in place' : `not written (${r.reason})`])),
+      // §1.1: no two rows the same. One agent with several routes (Claude Code's settings and its config library) said "the setting is in place"
+      // twice (a Windows test machine 2026-10-18): the row names the file the setting is in, so each row is the fact it reports
+      ...pairs([...new Map((receipt.routes || []).map((r) => {
+        const where = r.at ? tilde(r.at, home) : r.route ? formWords(`.${r.route}`) : ''
+        return [`${r.harness}|${where}|${r.ok}|${r.reason || ''}`, [r.harness, `${where ? `${where}: ` : ''}${r.ok ? 'the setting is in place' : `not written (${r.reason})`}`]]
+      })).values()]),
       ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)]).join('\n'))
     return exit
   }
