@@ -129,5 +129,7 @@ export async function run(argv, { io, json, args, home, deps = {} }) {
   const now = (deps.ms || Date.now)()
   for (const line of name === undefined ? classesTable(doc, { home, colors: c }) : classDetail(doc, name, { now, colors: c })) io.out(line)
   for (const e of doc.errors) io.err(`Could not read ${e.where}: ${e.reason}`)
-  return doc.ok ? EXIT.ok : EXIT.incomplete
+  // §4.1: the exit code says whether a document could be given, not whether it was whole — the document above was given,
+  // its `errors` are on stderr, so this is 0 in both modes (a macOS test machine 2026-10-18: the text form exited 1, `--json` 0).
+  return EXIT.ok
 }

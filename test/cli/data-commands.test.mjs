@@ -172,6 +172,20 @@ test('V83: `asight classes` shows the table and one class; an edit prints the re
   assert.deepEqual(receipt.changed.map((c) => c.change), ['written', 'appended'])
 })
 
+test('§4.1: a document with a non-fatal `errors[]` is exit 0 in both modes — the code says whether a document could be given', async () => {
+  const { home } = await dataHome()
+  fs.writeFileSync(path.join(home, '.asight', 'raw', '20261018T120000Z.ndjson'), '{"not":"a record"\n')
+  const doc = await runQuery('classes', {}, { home: path.join(home, '.asight') })
+  assert.equal(doc.ok, false, 'the document itself says it is not whole')
+  assert.ok(doc.errors.length > 0)
+  for (const argv of [['classes'], ['classes', '--json'], ['query', 'classes']]) {
+    const r = await run(argv, home)
+    assert.equal(r.exit, 0, argv.join(' '))
+    assert.ok(r.out.trim().length > 0, `${argv.join(' ')}: the document was given`)
+  }
+  assert.match((await run(['classes'], home)).err, /20261018T120000Z/, 'and the error is said on stderr, never silently (D38)')
+})
+
 test('V83: a class, a regex or a rule number that is not there is exit 2, one line, and nothing is written', async () => {
   const { home } = await dataHome()
   const before = stable(path.join(home, '.asight'))
