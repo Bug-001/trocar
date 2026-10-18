@@ -1,0 +1,50 @@
+// src/query/named/block.mjs — `asight query block --ref <ref>` (RFC 1.6 §4.1, 附录 C.5).
+//
+// One block's bytes, read back from the record they were captured in. A ref names its record as
+// `<segment>:<line>` (D60) and, optionally, a field and a byte span inside it — the same text_ref the
+// session view mints (src/etl/orchestrator.mjs). The fidelity of what comes back is NOT smoothed over
+// (invariant 4): it is classified by the resolver's own classifier, and the capture's own
+// incompleteness labels are carried through as they are.
+import { parseRecordId } from '../../collector/core/record/segments.mjs';
+import { parseTextRef, TEXT_REF_FIELD, fieldTextOf } from '../../etl/orchestrator.mjs';
+import { normalizeRecord } from '../../etl/ingest.mjs';
+import { requestEncodingOf } from '../../dissect/request-body.mjs';
+import { reqIncompleteOf } from '../../dissect/capture-labels.mjs';
+import { classifyFidelity } from '../source.mjs';
+import { readRecord } from '../records.mjs';
+import { QueryArgError } from './index.mjs';
+
+export const params = Object.freeze(['ref']);
+
+// What a reader must be told about bytes that are not the wire's own (src/query/source.mjs classifyFidelity).
+const NOTE = {
+  decoded: 'the wire carried this body compressed; these are its exact decompressed bytes',
+  reserialized: 'the capture stored the request as parsed JSON: these bytes were re-serialized from it, not taken off the wire',
+};
+
+export async function run({ home, fs, params: p, errors }) {
+  if (p.ref == null || p.ref === '') throw new QueryArgError('asight query block: --ref is required (a block\'s ref, as `asight query session` gives it)');
+  const ref = String(p.ref);
+  const { recordId, field, start, end } = parseTextRef(ref);
+  const at = parseRecordId(recordId);
+  if (!at) throw new QueryArgError(`asight query block: --ref ${JSON.stringify(ref)} names no record — a record is \`<segment>:<line>\``);
+  if (field != null && !TEXT_REF_FIELD.test(field)) throw new QueryArgError(`asight query block: "${field}" is not a ref field (RFC 4.2:40: resp.raw | resp.messages.<j> | req_extra_messages.<k>)`);
+
+  const miss = (reason) => { errors.push({ where: ref, reason }); return { ref, bytes: null, encoding: null, fidelity: null, truncated: null }; };
+  let raw;
+  try { raw = readRecord({ home, fs, ...at }); } catch (e) { return miss(`record ${recordId} could not be read back: ${String((e && e.message) || e)}`); }
+  if (!raw) return miss(`no record ${recordId} in this home's raw segments`);
+
+  // A field of a record is the stored decoded text itself (4.6 §记录), so it is verbatim as it stands.
+  const got = field ? fieldTextOf(raw, field) : { text: normalizeRecord(raw).req_body };
+  const fidelity = field ? 'verbatim' : classifyFidelity(raw);
+  const truncated = reqIncompleteOf(raw);
+  if (typeof got.text !== 'string') return { ...miss(`record ${recordId} ${got.missing || 'carries no request body'}`), truncated };
+  const bytes = start == null || end == null ? got.text : got.text.slice(start, end);
+  return {
+    ref, bytes,
+    encoding: requestEncodingOf(raw) || 'identity',
+    fidelity: { verbatim: fidelity !== 'reserialized', ...(NOTE[fidelity] ? { note: NOTE[fidelity] } : {}) },
+    truncated,
+  };
+}

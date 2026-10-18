@@ -21,6 +21,13 @@ export const envLine = (o = {}) => JSON.stringify({
   proc: { pid: 7, exe: '/x', agent: o.harness ?? 'claude-code' },
 })
 
+/**
+ * The parameters §4.1 marks required, for a test that loops over every query name (`session --id`,
+ * `block --ref`). One place, so a new required parameter is added once.
+ */
+export const requiredFor = (name, { segment = '20261018T100000Z', session = 'no-such-session' } = {}) =>
+  ({ session: { id: session }, block: { ref: `${segment}:1` } })[name] || {}
+
 export function rawHome(prefix = 'asight-t6-') {
   const home = tmpDir(prefix)
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })

@@ -55,7 +55,7 @@ const streamOfRawRef = (rawRef) => rawRef.slice(rawRef.indexOf('/') + 1, rawRef.
 // re-serialized ones verbatim too — presenting a reconstruction as the source truth, which is
 // exactly the promise this tool exists to keep. So classify, and let every consumer label it.
 // This is a CLASSIFIER only: it mirrors normalizeRecord's branches, it never rewrites anything.
-function classifyFidelity(raw) {
+export function classifyFidelity(raw) {
   // D10: the captured wire string — or, when the wire carried it compressed, its exact decompressed text (4.6 §记录)
   if (typeof raw.req_body === 'string') return requestEncodingOf(raw) ? 'decoded' : 'verbatim';
   if (raw.request === undefined) return null;                // not an llm record — no body at all

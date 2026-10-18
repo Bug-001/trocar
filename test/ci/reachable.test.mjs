@@ -47,6 +47,12 @@ export const UNREACHED = Object.freeze({
   'src/query/named/index.mjs': 'the named-query registry (QUERIES / runQuery); same two entries, T8 and T9',
   'src/query/named/segments.mjs': 'a named query, reached only through src/query/named/index.mjs',
   'src/query/named/classes.mjs': 'a named query, reached only through src/query/named/index.mjs',
+  'src/query/named/sessions.mjs': 'a named query, reached only through src/query/named/index.mjs',
+  'src/query/named/session.mjs': 'a named query, reached only through src/query/named/index.mjs',
+  'src/query/named/calls.mjs': 'a named query, reached only through src/query/named/index.mjs',
+  'src/query/named/block.mjs': 'a named query, reached only through src/query/named/index.mjs',
+  'src/query/named/pricing.mjs': 'a named query, reached only through src/query/named/index.mjs',
+  'src/query/records.mjs': 'the queries\' record reader, reached only through those named queries',
   'src/raw/closed.mjs': "the old shard's closed marker: T2's segment write path dropped its last reached caller (core/record/store.mjs), so only seal.mjs / legacy.mjs name it, and both are already here",
 })
 
