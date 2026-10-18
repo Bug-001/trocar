@@ -31,8 +31,9 @@ export async function loadIndex(session, expose) {
     console: { ...console, error() {} },
     fetch: (url) => {
       const u = String(url);
-      const projects = { projects: [{ slug: 'P', name: 'P', path: '/p', last_ts: 'T1', sessions: [{ project_slug: 'P', session_id: 'S', title: 'T', calls: 1, probes: 0, last_ts: 'T1' }] }] };
-      const body = u.startsWith('/api/projects') ? projects : u.startsWith('/api/session') ? session : {};
+      // the flat list `query sessions` answers (C.5); the picker groups it itself
+      const sessions = { sessions: [{ project_slug: 'P', project_path: '/p', session_id: 'S', title: 'T', calls: 1, probes: 0, last_ts: 'T1' }] };
+      const body = u.startsWith('/api/sessions') ? sessions : u.startsWith('/api/session') ? session : {};
       return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
     },
   });

@@ -151,8 +151,11 @@ test('the reply is listed with one locator per piece; a piece without one says w
 
 test('decoded bytes get their own badge, distinct from verbatim and from re-serialized', async () => {
   const { M } = await loadIndex(session(call(W)), ['resolvedBody']);
-  assert.match(M.resolvedBody({ status: 'ok', text: 'x', fidelity: 'decoded' }, {}), /解码后逐字/);
-  assert.doesNotMatch(M.resolvedBody({ status: 'ok', text: 'x', fidelity: 'decoded' }, {}), /not byte-verbatim/);
-  assert.match(M.resolvedBody({ status: 'ok', text: 'x', fidelity: 'verbatim' }, {}), /逐字回源/);
-  assert.match(M.resolvedBody({ status: 'ok', text: 'x', fidelity: 'reserialized' }, {}), /not byte-verbatim/);
+  // `query block` (C.5) states fidelity as {verbatim, note?}: the note is why these bytes are not the
+  // wire's own bytes (decompressed), while `verbatim:false` is a re-serialized body.
+  const decoded = { ok: true, bytes: 'x', fidelity: { verbatim: true, note: 'the wire carried this body compressed; these are its exact decompressed bytes' } };
+  assert.match(M.resolvedBody(decoded, {}), /解码后逐字/);
+  assert.doesNotMatch(M.resolvedBody(decoded, {}), /not byte-verbatim/);
+  assert.match(M.resolvedBody({ ok: true, bytes: 'x', fidelity: { verbatim: true } }, {}), /逐字回源/);
+  assert.match(M.resolvedBody({ ok: true, bytes: 'x', fidelity: { verbatim: false, note: 'the capture stored the request as parsed JSON' } }, {}), /not byte-verbatim/);
 });

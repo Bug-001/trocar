@@ -111,8 +111,6 @@ const COUNT_PINS = {
   'test/dissect/request-body.test.mjs': 1,
   'test/query/source-refresh.test.mjs': 2,
   'test/view/analyze-admission.test.mjs': 1,
-  'test/view/control-wire.test.mjs': 1,
-  'test/view/session-paging.test.mjs': 5,
 }
 export const countPins = (t) => (t.match(/\.length,\s*\d{2,}\s*\)|\.(?:size|length)\)?\s*,\s*\d{2,}\s*[,)]/g) || []).length
 

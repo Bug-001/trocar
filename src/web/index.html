@@ -25,17 +25,6 @@
   body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13px;line-height:1.5;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
   .mono{font-family:var(--mono);}
   header{display:flex;align-items:center;gap:14px;padding:9px 16px;background:var(--panel);border-bottom:1px solid var(--border);flex-wrap:wrap;}
-  /* D26 transparent-monitoring control (only shown when the server's control plane is enabled) */
-  .monctl{display:inline-flex;align-items:center;gap:7px;font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg);}
-  .monctl .mondot{width:8px;height:8px;border-radius:50%;background:var(--dimmer);box-shadow:0 0 0 2px var(--panel);}
-  .monctl .mondot.on{background:#39d353;}
-  .monbtn{font:inherit;font-size:11px;cursor:pointer;background:var(--panel);color:var(--fg);border:1px solid var(--border);border-radius:5px;padding:2px 8px;}
-  .monbtn:hover{border-color:var(--fg);}
-  .monwhere{color:var(--dim);font-family:var(--mono,monospace);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .monbadge{color:var(--dimmer);font-size:9px;border:1px solid var(--border);border-radius:4px;padding:0 4px;}
-  /* D38 capture health (1.2 顶栏 / 1.5): never empty; a disclosure, not an alert — no blinking, no sound */
-  .caphealth{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--dim);cursor:pointer;white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis;}
-  .caphealth.ok{color:var(--green);} .caphealth.warn{color:var(--amber);border-color:var(--amber);} .caphealth.bad{color:var(--red);border-color:var(--red);}
   h1{font-family:var(--mono);font-size:16px;margin:0;letter-spacing:.5px;font-weight:600;}
   h1 b{color:var(--accent);}
   .spacer{flex:1;}
@@ -448,8 +437,6 @@
     <span class="forkchip" id="forkChip" style="display:none"></span>
   </div>
   <div class="live"><span class="dot" id="dot"></span><label><input type="checkbox" id="liveChk" checked style="vertical-align:middle"> live</label></div>
-  <span class="monctl" id="monctl" style="display:none"></span>
-  <span class="caphealth" id="caphealth" title="capture health (D38) — reading…">? 采集健康 · 读取中</span>
   <div class="spacer"></div>
   <div class="stats" id="stats"></div>
 </header>
@@ -638,39 +625,27 @@ let pageReaimed=false // guard: the "window past what the server assembled" re-a
 
 // 4.4:83 · invariant 4 · D38: what the board did not read, or read only in part, is said on screen —
 // in ONE bar (D38 R-7a: two branches' reports, `source` and `source_errors`, had two bars). It shows
-// /api/projects `source`: entries not read (`skipped`), lines that would not parse, and `errors` —
+// each document's `errors` (C.5): entries not read, lines that would not parse, and files —
 // files read but not in full (a damaged sealed file, D35; a capture-looking file not read; an
 // original and its sealed copy that differ) — plus the `source.errors` of the session or control view
 // on screen (`more`). Only what may hold capture bytes raises the bar; the rest (config files, the CA,
 // subdirectories) is counted in it and listed in its tooltip. A file not read in full turns it red:
 // the view below is missing what it holds, never a smaller-but-healthy board.
-let projSource=null // last /api/projects `source`: the session and control views add their own errors
+let projSource=null // last `query sessions` errors: the session and control views add their own
 // the errors of the view on screen, kept: a poll that skips the session fetch (nothing changed) still
 // shows them, instead of dropping back to the projects' own until the session changes
 let viewErrors={sel:null,list:[]}
+// Each document's `errors: [{where, reason}]` (C.5 · D38 · invariant 4): what a query could not read,
+// or read only in part, is said on screen — never a silently smaller board. `more` is the errors of
+// the view on screen (a session, the class view), shown beside the session list's own.
 function renderSourceHealth(h,more){
   const bar=document.getElementById('srcbar'); if(!bar)return
-  const sk=(h&&h.skipped)||[], warn=sk.filter(x=>x.attention), rest=sk.length-warn.length
-  const corrupt=Object.entries((h&&h.corrupt_lines)||{}), resets=(h&&h.resets)||[], unid=(h&&h.unidentified_lines)||0
-  const byFile=new Map(); for(const e of [...((h&&h.errors)||[]),...(more||[])]) if(e&&e.file&&!byFile.has(e.file)) byFile.set(e.file,e)
-  const parts=[]
-  if(warn.length) parts.push(`${warn.length} capture file${warn.length!==1?'s':''} not read: `+warn.slice(0,4).map(x=>`<b>${esc(x.name)}</b> (${esc(x.reason)})`).join(', ')+(warn.length>4?` +${warn.length-4} more`:''))
-  if(corrupt.length) parts.push(`${corrupt.reduce((n,[,c])=>n+c,0)} unparseable line(s) in `+corrupt.slice(0,3).map(([f,c])=>`<b>${esc(f.split('/').pop())}</b> ×${c}`).join(', '))
-  if(resets.length) parts.push(`${resets.length} file(s) shrank and were re-read`)
-  const pend=Object.keys((h&&h.tail_pending)||{}); if(pend.length) parts.push(`${pend.length} file(s) end in an incomplete line (a write in progress, or a writer that stopped mid-line): `+pend.slice(0,3).map(f=>`<b>${esc(f.split('/').pop())}</b>`).join(', '))
-  if(unid) parts.push(`${unid} record(s) without an id (listed; their blocks cannot open)`)
-  // shard mode does not count bad lines in session shards yet: say so, never let silence read as "none"
-  if(h&&h.corrupt_lines===null) parts.push('bad lines in session shards are not counted yet (shard mode)')
-  if(!parts.length&&!byFile.size){ bar.style.display='none'; bar.innerHTML=''; bar.title=''; return }
-  const errTitle=[...byFile.values()].map(e=>`${e.file} — ${e.reason||''}`)
-  bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}${x.of?' (same file as '+x.of+')':''}${x.error?' · '+x.error:''}`).concat(corrupt.map(([f,c])=>`${f} — ${c} unparseable line(s)`)).concat(errTitle).join('\n')
-  // "not measured" alone is not a loss: say what it is, without claiming something is missing
-  if(!byFile.size&&parts.length===1&&h.corrupt_lines===null){ bar.title=sk.map(x=>`${x.root}/${x.name} — ${x.reason}`).join('\n'); bar.innerHTML=`ⓘ 未计数 · ${parts[0]}: a shard line that does not parse is left out of its session without a count${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (hover for the list)`:''}.`; bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #3d4a5c;background:#141b24;color:#9fb3c8;border-radius:5px;font-size:11px;line-height:1.45'; return }
-  const notAll=parts.length?`⚠ 源未全读 · not everything in the capture source is on this board: ${parts.join(' · ')}${rest?` · ${rest} other entr${rest!==1?'ies':'y'} not read (files that are not *.ndjson, subdirectories; hover for the list)`:''} — the raw files on disk are untouched.`:''
-  if(!byFile.size){ bar.innerHTML=notAll; bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a5b18;background:#241d0b;color:#e8c15a;border-radius:5px;font-size:11px;line-height:1.45'; return }
-  bar.innerHTML=`⚠ 源文件读不全 · ${byFile.size} capture file(s) could not be read as-is — the view below is missing what they hold or shows both copies; the files stay on disk (check with <code>asight raw verify</code>):<br>`
-    +[...byFile.values()].map(e=>`<b>${esc(String(e.file).split('/').pop())}</b> — ${e.kind==='coexist-mismatch'?'original and sealed copy differ, both shown':(e.unreadableRecords!=null?e.unreadableRecords+' record(s) unreadable':'unreadable')}: ${esc(String(e.reason||''))}`).join('<br>')
-    +(notAll?'<br>'+notAll:'')
+  const all=[...((h&&h.errors)||[]),...(more||[])].filter(Boolean)
+  if(!all.length){ bar.style.display='none'; bar.innerHTML=''; bar.title=''; return }
+  const seen=new Map(); for(const e of all) if(!seen.has(e.where)) seen.set(e.where,e)
+  bar.title=[...seen.values()].map(e=>`${e.where} — ${e.reason||''}`).join('\n')
+  bar.innerHTML=`⚠ 源未全读 · ${seen.size} thing(s) the capture could not be read from — the view below is missing what they hold; the files stay on disk:<br>`
+    +[...seen.values()].map(e=>`<b>${esc(String(e.where))}</b> — ${esc(String(e.reason||''))}`).join('<br>')
   bar.style.cssText='margin:4px 12px 0;padding:5px 10px;border:1px solid #7a2b18;background:#2a1210;color:#f08a6a;border-radius:5px;font-size:11px;line-height:1.45'
 }
 
@@ -679,7 +654,7 @@ async function poll(){
     const sel=document.getElementById('fileSel')
     // A failed listing is NOT an empty one (invariant 4): the server answers 500 {error} when a capture
     // source cannot be read, and swallowing it here rendered "No sessions captured yet".
-    const pj=await fetch('/api/projects').then(r=>r.json().catch(()=>({})).then(j=>r.ok===false||(j.error&&!j.projects)?{error:j.error||('HTTP '+r.status)}:j)).catch(e=>({error:String(e&&e.message||e)}))
+    const pj=await fetch('/api/sessions').then(r=>r.json().catch(()=>({})).then(j=>r.ok===false||(j.error&&!j.sessions)?{error:j.error||('HTTP '+r.status)}:j)).catch(e=>({error:String(e&&e.message||e)}))
     if(pj.error){
       const bar=document.getElementById('srcbar')
       if(bar){ bar.title=''; bar.innerHTML=`⚠ 无法列出会话 · could not list the sessions: <b>${esc(pj.error)}</b> — the capture files on disk are untouched; fix the source or restart the server.`
@@ -688,8 +663,15 @@ async function poll(){
       lastCheapSig=null; lastRenderSig=null; document.getElementById('dot').classList.remove('on')
       return
     }
-    const projects=pj.projects||[]
-    projSource=pj.source||null
+    // `query sessions` is a FLAT, newest-first list (C.5); the picker groups it by project itself.
+    const projects=[]
+    for(const s of pj.sessions||[]){
+      const slug=s.project_slug||'_unresolved'
+      let p=projects.find(x=>x.slug===slug)
+      if(!p) projects.push(p={slug,name:s.project_path||slug,sessions:[]})
+      p.sessions.push({...s,project_slug:slug})
+    }
+    projSource={errors:pj.errors||[]}
     renderSourceHealth(projSource,viewErrors.sel===curSel?viewErrors.list:null) // before any early return: "no sessions" next to "2 files not read" is the point
     projectsFlat=projects.flatMap(p=>p.sessions||[])
     const realP=projects.filter(p=>p.slug!=='_unresolved'), unres=projects.filter(p=>p.slug==='_unresolved')
@@ -701,24 +683,23 @@ async function poll(){
     }
     const grp=p=>`<optgroup label="${esc(p.name)}">${p.sessions.map(optFor).join('')}</optgroup>`
     const opts=realP.map(grp).join('')+unres.map(p=>`<optgroup label="⋯ ${esc(p.name)}">${p.sessions.map(optFor).join('')}</optgroup>`).join('')
-      +`<optgroup label="⚙ session-less"><option value="__control__">⚙ control-plane (telemetry · flags · account · registry)</option><option value="__caphealth__">${esc(capHealthLabel())}</option><option value="__retention__">保存什么 · what is kept</option></optgroup>`
+      +`<optgroup label="⚙ session-less"><option value="__control__">⚙ control-plane (telemetry · flags · account · registry)</option><option value="__classes__">保存什么 · what is kept</option></optgroup>`
     if(sel.dataset.sig!==opts){ sel.innerHTML=opts; sel.dataset.sig=opts; if(curSel)sel.value=curSel }
     if(!curSel){ const p0=realP[0]||unres[0]; if(p0)curSel=`${p0.sessions[0].project_slug}::${p0.sessions[0].session_id}`; if(curSel)sel.value=curSel }
     boardEmpty=!curSel
     if(!curSel){ renderEmpty(emptyMessage()); return }
-    // the control and capture-health views replace the session's timeline: coming back must fetch and render the
+    // the control and class views replace the session's timeline: coming back must fetch and render the
     // session again (and show its own errors), not short-circuit on the sigs of the render it replaced
-    if(curSel==='__caphealth__'){ document.body.classList.add('ctrlmode'); controlSig=null; lastCheapSig=null; lastRenderSig=null; renderCapHealthView(); return }
-    if(curSel==='__retention__'){ document.body.classList.add('ctrlmode'); controlSig=null; lastCheapSig=null; lastRenderSig=null; renderRetentionView(); return } // D40 保存什么
+    if(curSel==='__classes__'){ document.body.classList.add('ctrlmode'); controlSig=null; lastCheapSig=null; lastRenderSig=null; renderClassesView(); return }
     if(curSel==='__control__'){ document.body.classList.add('ctrlmode'); lastCheapSig=null; lastRenderSig=null; await renderControlView(); return }
     document.body.classList.remove('ctrlmode'); controlSig=null // leaving control view: force a full re-render next time (else a stale session header sticks)
     hideSessionChrome(false)
     const [slug,id]=curSel.split('::')
-    // cheap short-circuit: the /api/projects list (already fetched above) carries each
+    // cheap short-circuit: the /api/sessions list (already fetched above) carries each
     // session's live calls-count + last_ts. If ours is unchanged, skip the heavy
     // /api/session fetch entirely — a big session no longer re-ships every poll.
     const cur=projectsFlat.find(s=>s.project_slug===slug&&s.session_id===id)
-    // BUG 1: pick the WINDOW before the fetch. /api/projects already carries this session's true
+    // BUG 1: pick the WINDOW before the fetch. /api/sessions already carries this session's true
     // call count (it counts the whole session, unbounded), so the tail window is known without a
     // round-trip. On a session switch — and while live-following — the window parks on the tail:
     // that is where `follow` sits and what the user is watching. A manual scrub off the live end
@@ -736,7 +717,7 @@ async function poll(){
       lastCheapSig=cs }
     // Distinguish FAILED-to-load from genuinely-empty: a 500 (or a dead server) used to fall through
     // to raw=[] and render "No LLM calls traced yet", which LIES about a session that has calls.
-    const res=await fetch(`/api/session?project=${encodeURIComponent(slug)}&id=${encodeURIComponent(id)}&cursor=${pageCur|0}&limit=${PAGE_LIMIT}`).catch(e=>({ok:false,status:0,_err:String(e&&e.message||e)}))
+    const res=await fetch(`/api/session?id=${encodeURIComponent(id)}&cursor=${pageCur|0}&limit=${PAGE_LIMIT}`).catch(e=>({ok:false,status:0,_err:String(e&&e.message||e)}))
     const d=res.ok?await res.json().catch(e=>({error:'malformed JSON from server: '+(e&&e.message||e)})):{error:res._err||('HTTP '+res.status)}
     if(d.error){
       const eb=document.getElementById('truncbar')
@@ -754,9 +735,9 @@ async function poll(){
       return
     }
     pageInfo=d.page||null
-    viewErrors={sel:curSel,list:(d.source&&d.source.errors)||[]}
+    viewErrors={sel:curSel,list:d.errors||[]}
     renderSourceHealth(projSource,viewErrors.list) // this session's files it could not read in full
-    // BUG 1 · self-correct. The server may assemble FEWER calls than /api/projects counted (a large
+    // BUG 1 · self-correct. The server may assemble FEWER calls than /api/sessions counted (a large
     // session is tail-bounded server-side BEFORE paging is applied — see the WIRING GAP note in the
     // audit). If our window landed entirely past what it actually assembled, every call would render
     // paged_out and the board would go BLANK — strictly worse than the pre-paging behaviour of
@@ -852,15 +833,14 @@ const CTRL_ORDER=['control','account','registry','telemetry','other']
 async function renderControlView(){
   hideSessionChrome(true)
   document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked)
-  const list=await fetch('/api/control').then(r=>r.json()).catch(()=>({classes:[]}))
-  viewErrors={sel:'__control__',list:(list.source&&list.source.errors)||[]}
-  renderSourceHealth(projSource,viewErrors.list) // control/ files it could not read in full
+  const list=await fetch('/api/calls').then(r=>r.json()).catch(()=>({classes:[]}))
+  viewErrors={sel:'__control__',list:list.errors||[]}
+  renderSourceHealth(projSource,viewErrors.list) // what `query calls` could not read in full
   const sig=JSON.stringify(list.classes)
   const tl=document.getElementById('timeline')
   if(sig===controlSig && tl.dataset.mode==='control') return
-  capHSig=null
   controlSig=sig
-  const got=await Promise.all((list.classes||[]).map(c=>fetch('/api/control?class='+encodeURIComponent(c.class)).then(r=>r.json()).then(d=>({class:c.class,records:d.records||[],limit:d.detail_limit||80})).catch(()=>({class:c.class,records:[],limit:80}))))
+  const got=await Promise.all((list.classes||[]).map(c=>fetch('/api/calls?class='+encodeURIComponent(c.class)).then(r=>r.json()).then(d=>({class:c.class,records:d.records||[],limit:d.detail_limit||80})).catch(()=>({class:c.class,records:[],limit:80}))))
   controlData={}; got.forEach(c=>controlData[c.class]=c.records)
   const total=got.reduce((a,c)=>a+c.records.length,0)
   document.getElementById('agentChip').textContent='⚙ control-plane'
@@ -954,92 +934,11 @@ function openControlDetail(cls,i){
     (slim?'':(req?ctlBodyHtml(req,'request body',key+':req'):'')+ctlBodyHtml(rv,'response body'+(rv.kind==='json'?' (JSON, as stored)':''),key))
 }
 
-// ── D38 采集健康 (2.6 §C session-less group · 1.5): the ctrlmode grid over /api/capture-health — the timeline lists
-// failures by reason (24 h), the ledger what holds now, each agent's last capture and last failure, the daemon, the
-// last install / uninstall; a row opens its metadata in #detail. Not a session: the data is capture metadata, not
-// normalized rows. Every name shown (agent, where, code) comes from the payload: no harness or provider is named here.
 const NO_SESSIONS='No sessions captured yet. Start the collector with `asight on` (it lists every file it will change and asks first), then run your agent. Check what is arranged with `asight status`.'
-let boardEmpty=false, capHSig=null, capHRows=[]
-// an empty board while capture fails or the collector is not running says so (0.1 §0 #5), never "not started yet"
-function emptyMessage(){
-  const s=capH&&capH.summary
-  if(capH&&capH.unreadable) return `没采到会话 · no sessions — and capture health could not be read (${capH.unreadable}); see 采集健康`
-  if(!s) return NO_SESSIONS
-  const who=s.part==='legacy'?'旧 MITM / the old capture':'采集器 / the collector'
-  if(s.state==='failing') return `没采到会话:${s.n} 个采集失败,见采集健康 · no sessions: ${s.n} capture failure(s), see 采集健康 (top bar / ⚙ session-less)`
-  if(s.state==='not-running'||s.state==='not-responding') return `没采到会话:${who}${s.state==='not-running'?'没在跑':'没响应'},见采集健康 · no sessions: ${s.part==='legacy'?'the old capture':'the collector'} is ${s.state==='not-running'?'not running':'not responding'} — see 采集健康`
-  return NO_SESSIONS
-}
-function capHealthLabel(){
-  const s=capH&&capH.summary
-  if(capH&&capH.unreadable) return '? 采集健康 · capture health (unreadable)'
-  if(!s) return '采集健康 · capture health'
-  return s.state==='failing'?`⚠ 采集健康 (${s.n}) · capture health`:'采集健康 · capture health'
-}
-const chRow=(i,tm,what,count,reason,cls='')=>`<div class="ctrlrow" data-ch="${i}"><span class="tm">${esc(tm)}</span><span class="m">${esc(count)}</span><span class="ep" title="${esc(reason)}">${esc(what)} — ${esc(reason)}</span><span class="st ${cls}"></span></div>`
-const groupWhat=g=>g.last&&g.last.event==='failure'?`${g.last.where}/${g.last.code}`:g.key
-function renderCapHealthView(){
-  hideSessionChrome(true)
-  document.getElementById('agentChip').textContent='⚙ 采集健康'
-  document.getElementById('forkChip').style.display='none'
-  document.getElementById('sessTitle').textContent='capture health · 采集健康'
-  const tl=document.getElementById('timeline'), led=document.getElementById('ledger')
-  if(!capH){ tl.dataset.mode='caphealth'; tl.innerHTML='<div class="ctrlhdr">reading /api/capture-health …</div>'; led.innerHTML=''; return }
-  const sig=JSON.stringify({...capH,generated_at:null})
-  if(sig===capHSig&&tl.dataset.mode==='caphealth') return
-  capHSig=sig
-  document.getElementById('sessMeta').textContent=`read from disk at ${fmtWhen(capH.generated_at)}`
-  if(capH.unreadable){ tl.dataset.mode='caphealth'; tl.innerHTML=`<div class="ctrlhdr">⚠ <b>capture health could not be read</b> — ${esc(capH.unreadable)}. Nothing below can be trusted to be complete; the files on disk are untouched.</div>`; led.innerHTML=''; return }
-  const c=capH.collector||{}, l=capH.legacy||{}, r=capH.raw||{}, rd=capH.read||{}
-  capHRows=[]
-  const row=(rec,tm,what,count,reason,cls)=>{ capHRows.push(rec); return chRow(capHRows.length-1,tm,what,count,reason,cls) }
-  const sec=(title,n,body,open)=>`<details class="ctrlsec" ${open?'open':''}><summary><b>${esc(title)}</b> <span class="cc">${n}</span></summary>${body||'<div class="ctrlrow" style="cursor:default;color:var(--dimmer)">none</div>'}</details>`
-  const fails=(c.failures||[]).slice().sort((a,b)=>String(b.last_ts).localeCompare(String(a.last_ts)))
-  let html=`<div class="ctrlhdr">⚙ <b>采集健康 · capture health</b> — every capture failure asight recorded, read from disk (the collector's <code>flows/</code>, its lock and install manifest, the raw journal, the old capture's events). A disclosure, not an alert: failures of the last ${esc(rd.window_hours||24)} h by reason; what was not captured by design is only counted. Click a row for its metadata (never record bytes).</div>`
-  if((rd.errors||[]).length) html+=`<div class="ctrlhdr" style="color:var(--amber)">⚠ 读不全 · could not read: ${rd.errors.map(e=>`<code>${esc(e.file)}</code> (${esc(e.error)})`).join(', ')} — what they hold is missing below.</div>`
-  if(rd.truncated) html+=`<div class="ctrlhdr">only the most recent part of <code>flows/</code> was read (older records left out).</div>`
-  html+=sec('failures · last 24 h',fails.length,fails.map(g=>row(g.last,fmtWhen(g.last_ts),groupWhat(g),'×'+g.count,(g.last&&(g.last.reason||(g.last.error&&g.last.error.message)))||'','err')).join(''),true)
-  if(l.present) html+=sec('old capture (MITM / reverse proxy) · '+l.state,(l.failures||[]).length,(l.failures||[]).map(g=>row(g.last,fmtWhen(g.last_ts),groupWhat(g),'×'+g.count,(g.last&&g.last.reason)||'','err')).join(''),(l.failures||[]).length>0)
-  html+=sec('raw layer (seal / verify / read)',(r.problems||[]).length,(r.problems||[]).map(p=>row(p,fmtWhen(p.ts),`${p.op} ${p.outcome}`,'',`${p.file||p.target||''} ${p.reason||''}`,'err')).join(''),(r.problems||[]).length>0)
-  const exp=Object.entries(c.expected||{})
-  html+=sec('not captured by design · counted',exp.reduce((n,[,k])=>n+k,0),exp.map(([k,n])=>`<div class="ctrlrow" style="cursor:default"><span class="tm"></span><span class="m">×${n}</span><span class="ep">${esc(k)}</span><span class="st"></span></div>`).join(''),false)
-  tl.dataset.mode='caphealth'; tl.innerHTML=html
-  document.querySelectorAll('#timeline .ctrlrow[data-ch]').forEach(el=>el.onclick=()=>openCapHealthDetail(+el.dataset.ch))
-  led.innerHTML=capHealthLedger(c,l)
-  document.querySelectorAll('#ledger .res[data-ch]').forEach(el=>el.onclick=()=>openCapHealthDetail(+el.dataset.ch))
-  document.getElementById('stats').innerHTML=`<span><b>${fails.length}</b> failure kinds</span><span><b>${(c.conditions||[]).length}</b> holding now</span>`
-}
-function capHealthLedger(c,l){
-  const d=c.daemon||{}
-  const item=(rec,nm,via,sub)=>{ capHRows.push(rec); return `<div class="res" data-ch="${capHRows.length-1}"><div class="top"><span class="nm" title="${esc(nm)}">${esc(nm)}</span><span class="via">${esc(via||'')}</span></div>${sub?`<div class="sub" style="font-size:10px;color:var(--dim)">${esc(sub)}</div>`:''}</div>` }
-  let html=`<div class="curmeta">${esc(capHealthView(capH,{okAt:capHOkAt,err:null,now:capHOkAt||0}).text)}</div>`
-  html+=`<h2><span class="gi" style="background:var(--red)"></span>holding now <span class="ct">(${(c.conditions||[]).length})</span></h2>`
-  if(c.conditions_as_of) html+=`<div style="color:var(--dim);font-size:10px">as of ${esc(fmtWhen(c.conditions_as_of))} — the collector daemon is not running</div>`
-  if(c.conditions_partial) html+=`<div style="color:var(--amber);font-size:10px">读不全 · partial — the last daemon-start is older than the part of flows/ read: conditions that still hold may be missing here</div>`
-  html+=(c.conditions||[]).map(x=>item(x,`${x.kind}${x.pid!=null?' pid '+x.pid:''}${x.agent?' '+x.agent:''}${x.host?' '+x.host:''}`,'since '+fmtWhen(x.since),x.reason)).join('')||'<div style="color:var(--dimmer);font-size:10px">nothing</div>'
-  html+=`<h2><span class="gi" style="background:var(--accent)"></span>collector daemon</h2>`
-  html+=c.installed===false?item(c,c.residue&&c.residue.length?`not installed · ${c.residue.length} item(s) left`:'not installed','',(c.residue||[]).map(x=>`${x.path} (${x.result})`).join(' · ')):item(d,`${d.state||'?'}${d.pid?' · pid '+d.pid:''}`,c.switch&&c.switch.desired?'switch '+c.switch.desired:'',[d.last_start&&`started ${fmtWhen(d.last_start.ts)}${d.last_start.foreground?' (foreground: closing its terminal stops it)':''}`,d.last_stop&&`stopped ${fmtWhen(d.last_stop.ts)}${d.last_stop.signal?' by '+d.last_stop.signal:''}`,d.why,d.error,d.last_record_at&&`last record ${fmtWhen(d.last_record_at)}`].filter(Boolean).join(' · '))
-  if((c.agents||[]).length){
-    html+=`<h2><span class="gi" style="background:var(--green)"></span>agents · last 24 h</h2>`
-    html+=c.agents.map(a=>item(a,a.agent,'',`last captured ${a.last_captured?fmtWhen(a.last_captured):'—'} · last failure ${a.last_failure?fmtWhen(a.last_failure)+' ('+a.last_failure_key+')':'—'}`)).join('')
-  }
-  const notes=(c.install&&[...(c.install.install||[]),...(c.install.uninstall||[])])||[]
-  if(notes.length){
-    html+=`<h2><span class="gi" style="background:var(--amber)"></span>last install / uninstall</h2>`
-    html+=notes.map(n=>item(n,`${n.event} · ${n.kind||''}`,fmtWhen(n.ts),n.reason)).join('')
-  }
-  if(l.present&&l.state!=='none') html+=`<h2><span class="gi" style="background:var(--purple)"></span>old capture</h2>`+((l.sources||[]).length
-    ? l.sources.map(x=>item(x,`${x.source==='proxy'?'reverse proxy':'MITM'} · ${x.state==='gone'?'gone without a clean stop':x.state}`,x.last_start&&x.last_start.pid!=null?'pid '+x.last_start.pid:'',[x.last_start&&`started ${fmtWhen(x.last_start.ts)}`,x.last_stop&&`stopped ${fmtWhen(x.last_stop.ts)}${x.last_stop.signal?' by '+x.last_stop.signal:''}`].filter(Boolean).join(' · '))).join('')
-    : item(l,l.state,l.last_start?'started '+fmtWhen(l.last_start.ts):'',l.capture?`${l.capture.file} written ${fmtWhen(l.capture.mtime)}, no events file`:(l.error||'')))
-  return html
-}
-function openCapHealthDetail(i){
-  const rec=capHRows[i]; if(!rec) return
-  const det=document.getElementById('detail'), txt=JSON.stringify(rec,null,2)
-  det.className='open'
-  det.innerHTML=`<div class="dclose" id="dclose">✕ close</div><h3>采集健康 · ${esc(rec.event||rec.kind||rec.op||rec.state||rec.agent||'record')}</h3><div class="din">metadata only — asight's capture records never carry request or response bytes here</div>`+collapse('<pre>'+esc(txt)+'</pre>',txt.length,'caph:'+i)
-}
-
+let boardEmpty=false
+// capture health is `asight status` now (a CLI command, not a board panel), so an empty board says
+// only what it can see itself.
+const emptyMessage=()=>NO_SESSIONS
 function buildLanes(A,probes){
   // D18a Option-2: `analyzed` arrives as JSON from the server, so each lane's giLocal (a Map in
   // analyze()) deserialized to {}. Rebuild it here from the lane's calls (a pure derived index —
@@ -1657,30 +1556,29 @@ function ctxBlock(b,i,prevKeys){
 // resolver the analysis path also uses. Resolved bodies are cached by ref, because an append-only
 // conversation re-sends the same block on every call — 17,594 blocks carried only 494 distinct
 // contents on a real session, so the cache hit rate here is ~97%.
-const bodyCache=new Map()   // text_ref -> {status, text, fidelity, error}
+const bodyCache=new Map()   // text_ref -> the `query block` document (C.5)
 // A body that has not arrived MUST NOT render as blank: an empty <pre> reads as "the model saw
 // nothing here", which is the invariant-4 failure the whole locator design exists to avoid.
 function pendingBody(b){
   return `<pre class="cbpre" data-ref="${esc(b.text_ref)}">↻ 回源中 — fetching these bytes from the raw capture…</pre>`
 }
 function resolvedBody(got,b){
-  if(!got||got.status!=='ok'){
-    const why=(got&&(got.error||got.reason))||'the capture could not be read'
+  // `query block` (C.5): {ref, bytes, encoding, fidelity:{verbatim, note?}, truncated} — and `ok:false`
+  // with `errors` when the record behind the ref could not be read back.
+  if(!got||got.ok===false||typeof got.bytes!=='string'){
+    const why=(got&&(got.error||(got.errors||[]).map(e=>e.reason).join(' · ')))||'the capture could not be read'
     // State the failure in place, with the locator, so it is diagnosable rather than mysterious.
     return `<pre class="cbpre">⚠ 无法回源 — could not fetch this block's bytes from the capture.\n\n${esc(why)}\n\nlocator: ${esc(b.text_ref||'—')}</pre>`
   }
-  const t=String(got.text||'')
+  const t=String(got.bytes)
   const shown=t.length>20000?t.slice(0,20000)+`\n… (${kf(t.length)} chars total)`:t
   // 保真标 (invariant 4): bytes sliced verbatim from the capture and bytes that were re-serialized on
   // the way in are not equally trustworthy, and rendering them identically is exactly what the
   // resolver's fidelity classification exists to prevent.
-  const badge=got.fidelity==='verbatim'
-    ? `<div class="cbsrc" title="resolved by 「定位源记录 → slice(start,end)」 over the raw NDJSON — the bytes the model received (AC-1)">✓ 逐字回源 · verbatim from capture</div>`
-    : got.fidelity==='decoded'
-      ? `<div class="cbsrc" title="the wire carried these bytes compressed; this is the exact text after decompression, not the exact wire bytes">↺ 解码后逐字 · verbatim after decompression</div>`
-    : got.fidelity
-      ? `<div class="cbsrc" title="these bytes were re-serialized on the way into the capture, so they are NOT a byte-verbatim record of the wire">⚠ ${esc(got.fidelity)} — not byte-verbatim</div>`
-      : ''
+  const f=got.fidelity||{}
+  const badge=f.verbatim
+    ? `<div class="cbsrc" title="${esc(f.note||'resolved by 「定位源记录 → slice(start,end)」 over the raw NDJSON — the bytes the model received (AC-1)')}">${f.note?'↺ 解码后逐字 · verbatim after decompression':'✓ 逐字回源 · verbatim from capture'}</div>`
+    : `<div class="cbsrc" title="${esc(f.note||'these bytes were re-serialized on the way into the capture, so they are NOT a byte-verbatim record of the wire')}">⚠ not byte-verbatim</div>`
   return badge+`<pre class="cbpre">${esc(shown)}</pre>`
 }
 async function fetchBody(b,bc){
@@ -1689,9 +1587,9 @@ async function fetchBody(b,bc){
   let got
   try{
     const r=await fetch('/api/block?ref='+encodeURIComponent(ref))
-    got=await r.json().catch(()=>({status:'error',error:'response was not JSON'}))
-    if(!r.ok&&!got.error) got={status:'error',error:'HTTP '+r.status}
-  }catch(e){ got={status:'error',error:String((e&&e.message)||e)} }
+    got=await r.json().catch(()=>({ok:false,error:'response was not JSON'}))
+    if(!r.ok&&!got.error) got={ok:false,error:'HTTP '+r.status}
+  }catch(e){ got={ok:false,error:String((e&&e.message)||e)} }
   bodyCache.set(ref,got)
   bc.innerHTML=resolvedBody(got,b)
 }
@@ -2352,241 +2250,63 @@ document.getElementById('liveChk').onchange=e=>{if(e.target.checked){follow=true
 })()
 
 // D14: pull the editable unit-price config once (falls back to the hardcoded defaults on failure)
-;(async()=>{ try{ const d=await fetch('/api/pricing').then(r=>r.json()); if(d&&d.pricing&&typeof d.pricing==='object') PRICING=d.pricing }catch{} })()
+;(async()=>{ try{ const d=await fetch('/api/pricing').then(r=>r.json())
+  // `query pricing` lists one row per model (C.5); PRICING is keyed by model, [in, out, cache_write, cache_read].
+  if(d&&Array.isArray(d.models)) PRICING=Object.fromEntries(d.models.map(m=>[m.model,[m.input,m.output,m.cache_write,m.cache_read]]))
+}catch{} })()
 
-// D26: transparent-monitoring control. Only appears when the server was started with --control;
-// otherwise (plain read-only viewer) the pill stays hidden. The toggle POSTs the CSRF token the
-// status endpoint issues. Non-destructive on a read-only server — /control/status simply 404/errs.
-function renderMon(el,d){
-  const m=(d&&d.monitoring)||{}, on=!!m.active
-  el.innerHTML=`<span class="mondot ${on?'on':''}" title="透明监测 ${on?'开启中':'已关闭'}"></span>`
-    +`<button class="monbtn" id="monBtn"${m.offNote?` title="${esc('关: '+m.offNote)}"`:''}>监测 ${on?'ON':'OFF'}</button>`
-    +(d&&d.offProblem?`<span class="monbadge" style="color:var(--red)" title="${esc(d.offProblem)}">关闭没做完 ✗</span>`:'')
-    +`<span class="monwhere" title="透明监测把被测流量转发到的真实上游端点">→ ${esc(m.forwardingTarget||'—')}</span>`
-    +(m.autostart?`<span class="monbadge" title="已加入用户级开机自启(非全机)">开机自启</span>`:m.autostartError?`<span class="monbadge" style="color:var(--amber)" title="${esc(m.autostartError)}">开机自启 ?</span>`:'')
-    +(m.caTrusted===true?`<span class="monbadge" title="采集 CA 已装入用户级信任库(非全机弱化 TLS)">CA✓</span>`
-      :m.caTrusted===false?`<span class="monbadge" style="color:var(--red)" title="采集 CA 不在用户级信任库里 · the capture CA is not in the user trust store">CA ✗</span>`
-      :m.caTrusted===null?`<span class="monbadge" style="color:var(--amber)" title="CA 信任态查不出 · could not check the CA trust">CA ? ${esc(m.caError||'')}</span>`:'')
-    +(m.nodeExtraCaCerts&&m.nodeExtraCaCerts.matches===false?`<span class="monbadge" style="color:var(--red)" title="node 版 agent 实际信任的是登录会话的 NODE_EXTRA_CA_CERTS:现为 ${esc(m.nodeExtraCaCerts.value||'(未设)')},应为 ${esc(m.nodeExtraCaCerts.expected||'')}">NODE_EXTRA_CA_CERTS ✗</span>`
-      :m.nodeExtraCaCerts&&m.nodeExtraCaCerts.matches===null?`<span class="monbadge" style="color:var(--amber)" title="${esc(m.nodeExtraCaCerts.error||'')}">NODE_EXTRA_CA_CERTS ?</span>`:'')
-    +(m.steerError?`<span class="monbadge" style="color:var(--amber)" title="${esc(m.steerError)}">steer ? 读不出</span>`:'')
-  const btn=document.getElementById('monBtn'); if(!btn) return
-  btn.onclick=async()=>{ // 开就是开、关就是关 — 直接切,无确认框(服务端 CSRF/Host/Origin 门才是护栏)
-    const action=on?'off':'on'
-    btn.textContent='…'; btn.disabled=true
-    try{
-      const pr=await fetch('/control/monitoring',{method:'POST',headers:{'content-type':'application/json','x-asight-csrf':d.csrf},body:JSON.stringify({action})})
-      // where the server runs `asight off` (1.6 §4, V40) an off that is not done says so and why (D38: never a silent switch back to OFF)
-      let pb=null; try{ pb=await pr.json() }catch(e){ pb=null }
-      const s=await fetch('/control/status',{cache:'no-store'})
-      if(s.ok){ const sd=await s.json(); if(action==='off'&&(!pr.ok||(pb&&pb.ok===false))) sd.offProblem=((pb&&(pb.error||(pb.receipt&&((pb.receipt.problems&&pb.receipt.problems[0])||(pb.receipt.notes&&pb.receipt.notes[0])))||pb.stderr))||`HTTP ${pr.status}`); renderMon(el, sd) }
-    }catch(e){ btn.disabled=false; btn.textContent='监测 ✗' }
-  }
-}
-// BUG 3: probed EXACTLY ONCE, at boot — never from poll()'s 1.5s loop (a 404-per-cycle
-// was suspected; measured, it was already one-shot, and control-availability.test.mjs
-// now pins that). The real defect was the failure path: a bare `return` left the pill
-// `display:none` forever, so on a read-only server (D26 control is opt-in) the user could not tell
-// "monitoring control is off" from "this build has no such feature" — a silent failure, which is
-// what 不变式4 forbids the UI to do. Now it says so once and stays inert: no toggle is rendered,
-// because a button that cannot work is worse than no button.
-;(async()=>{ const el=document.getElementById('monctl'); if(!el) return
-  let r=null
-  try{ r=await fetch('/control/status',{cache:'no-store'}) }catch(e){ r=null }
-  if(r&&r.ok){ try{ const d=await r.json(); el.style.display=''; renderMon(el,d); return }catch(e){ /* malformed → fall through to the honest unavailable pill */ } }
-  el.style.display=''
-  el.innerHTML=`<span class="mondot" title="监测控制未启用"></span>`
-    +`<span class="monwhere" title="This board was started read-only, so the D26 control endpoints are not mounted. Restart the server with --control to arrange transparent monitoring from here. Either way the board keeps showing what was captured — only the on/off switch is absent.">监测控制未启用 · control not enabled${r?` · HTTP ${r.status}`:''} — read-only board</span>`
-})()
-
-// ── D40 保存什么 (2.6 §D · 4.4 GET /api/retention, POST /control/retention) ──────────────────────────────────────────────
-// What is kept of each call, per harness × traffic class: `全部` (the bodies verbatim, 64 MiB cap) or `只记日志` (headers and sizes, no body), with
-// what each class takes. Every harness and class name comes from the payload (closed sets, normalized ids): no host or endpoint is named here (不变式 3).
-// The numbers say where they come from: per-class numbers are the analytics store AS OF the last `asight etl` ("需要先跑 asight etl" when there is
-// none — never 0), the disk total is lstat sizes (live), the once-sealed size is an estimate and says so. A change reaches the calls that start after
-// it; what is stored is never deleted (不变式 2). Changing a level goes through POST /control/retention, which exists only under `serve --control`:
-// without it the switches are greyed and the command to run is shown.
-const RET_MS=10000
-let retH=null, retHAt=0, retHErr=null, retBusy=false, retMsg=null, retSig=null, retWin='all'
-try{ const w=localStorage.getItem('asight.retWin'); if(w==='24h'||w==='7d'||w==='all') retWin=w }catch{}
-const RET_WINS=[['24h','24 h'],['7d','7 d'],['all','全部 · all']]
+// ── 保存什么 · what is kept (2.6 §D · RFC 1.6 §4.2): the class table as `asight query classes` reports it.
+// READ-ONLY (D59③): the board does not change a level — it prints the command that does.
+const CLS_MS=10000
+let clsDoc=null, clsAt=0, clsErr=null, clsBusy=false, clsSig=null
 const RET_LABEL={full:'全部',log:'只记日志'}
 const fmtB=n=>n==null?'—':n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KiB':n<1073741824?(n/1048576).toFixed(1)+' MiB':(n/1073741824).toFixed(2)+' GiB'
-async function pollRetention(force){
-  if(retBusy) return
-  if(!force&&retHAt&&Date.now()-retHAt<RET_MS) return // a failed read waits its turn too: no retry loop against a server that is down
-  retBusy=true
+async function pollClasses(force){
+  if(clsBusy) return
+  if(!force&&clsAt&&Date.now()-clsAt<CLS_MS) return // a failed read waits its turn too: no retry loop against a server that is down
+  clsBusy=true
   try{
-    const r=await fetch('/api/retention',{cache:'no-store'})
+    const r=await fetch('/api/classes',{cache:'no-store'})
     const j=await r.json().catch(()=>null)
-    if(r.ok&&j&&j.classes){ retH=j; retHErr=null }
-    else retHErr=(j&&j.error)||('HTTP '+r.status)
-  }catch(e){ retHErr=String(e&&e.message||e) }
-  finally{ retBusy=false; retHAt=Date.now() }
-  if(curSel==='__retention__') renderRetentionView()
+    if(r.ok&&j&&j.classes){ clsDoc=j; clsErr=null } else clsErr=(j&&j.error)||('HTTP '+r.status)
+  }catch(e){ clsErr=String(e&&e.message||e) }
+  finally{ clsBusy=false; clsAt=Date.now() }
+  if(curSel==='__classes__') renderClassesView()
 }
-async function setRetentionLevel(h,c,level){
-  retMsg=null
-  try{
-    const st=await fetch('/control/status',{cache:'no-store'})
-    if(!st.ok) throw new Error('the control plane is off (HTTP '+st.status+') — start the server with --control')
-    const csrf=(await st.json()).csrf
-    const r=await fetch('/control/retention',{method:'POST',headers:{'content-type':'application/json','x-asight-csrf':csrf},body:JSON.stringify({harness:h,class:c,level})})
-    const j=await r.json().catch(()=>({}))
-    if(!r.ok) throw new Error(j.error||('HTTP '+r.status))
-    const ch=(j.changed||[])[0]
-    retMsg={cls:'ok',text:ch?`${h} · ${c}: ${RET_LABEL[ch.from]||ch.from} → ${RET_LABEL[ch.to]||ch.to} — applies to the calls that start from now on (within a second); what is already stored is not changed`:`${h} · ${c} was already ${RET_LABEL[level]||level}`}
-    if(j.log_error) retMsg={cls:'warn',text:retMsg.text+` — but its record in the change log could not be written (${j.log_error})`}
-  }catch(e){ retMsg={cls:'err',text:`could not change ${h} · ${c}: ${String(e&&e.message||e)}`} }
-  retSig=null
-  await pollRetention(true)
-  renderRetentionView()
-}
-const sumWin=(rows,win)=>rows.reduce((a,r)=>{ const w=r.windows[win]; for(const k in w) a[k]=(a[k]||0)+w[k]; return a },{calls:0,request_bytes:0,response_bytes:0,response_unrecorded:0,stored_bytes:0,stored_unrecorded:0})
-function retNums(w){
-  if(!w) return ''
-  const unrec=w.response_unrecorded?` +响应未记录 ×${w.response_unrecorded}`:''
-  const stored=w.stored_unrecorded?'≥'+fmtB(w.stored_bytes):fmtB(w.stored_bytes)
-  return `<div class="num">${w.calls} 条 · 线上 ${fmtB(w.request_bytes+w.response_bytes)}${unrec}</div>`+
-    `<div class="num">存 ${stored}${w.sealed_estimate_bytes!=null?` · 封存后 ≈${fmtB(w.sealed_estimate_bytes)} <span class="est">估计</span>`:''}</div>`
-}
-function renderRetentionView(){
+function renderClassesView(){
   hideSessionChrome(true)
   document.getElementById('agentChip').textContent='⚙ 保存什么'
   document.getElementById('forkChip').style.display='none'
   document.getElementById('sessTitle').textContent='what is kept · 保存什么'
   const tl=document.getElementById('timeline'), led=document.getElementById('ledger')
   document.getElementById('dot').classList.toggle('on',document.getElementById('liveChk').checked)
-  if(!retH){
-    tl.dataset.mode='retention'; led.innerHTML=''
-    tl.innerHTML=retHErr?`<div class="ctrlhdr">⚠ <b>保存什么 could not be read</b> — ${esc(retHErr)}. The settings and the captured files are untouched.</div>`:'<div class="ctrlhdr">reading /api/retention …</div>'
-    pollRetention(); return
+  if(!clsDoc){
+    tl.dataset.mode='classes'; led.innerHTML=''
+    tl.innerHTML=clsErr?`<div class="ctrlhdr">⚠ <b>保存什么 could not be read</b> — ${esc(clsErr)}. The settings and the captured files are untouched.</div>`:'<div class="ctrlhdr">reading /api/classes …</div>'
+    pollClasses(); return
   }
-  const sig=JSON.stringify([{...retH,generated_at:null},retWin,retMsg,retHErr])
-  if(sig===retSig&&tl.dataset.mode==='retention'){ pollRetention(); return }
-  retSig=sig
-  const R=retH, sz=R.sizes, T=R.totals, win=retWin
-  document.getElementById('sessMeta').textContent=sz?`sizes: newest call in the store ${sz.as_of||'(empty store)'}`:'sizes: 需要先跑 asight etl'
-  const rowsOf=(h,c)=>sz?sz.rows.filter(r=>r.harness===h&&r.class===c&&r.retention!=='legacy-meta'):[]
-  const need='<div class="need">需要先跑 asight etl</div>'
-  const cmd=(h,c,to)=>`asight keep ${h} ${c} ${to}`
-  let html=`<div class="ctrlhdr">⚙ <b>保存什么 · what is kept</b> — per harness × traffic class: <b>全部</b> keeps the bodies verbatim (64 MiB cap per body), <b>只记日志</b> keeps one line per call (headers and sizes, no body). `+
-    `<b>改动只影响之后开始的调用;已存的数据不删</b> · a change reaches the calls that start after it; what is already stored is never deleted or rewritten.</div>`
-  if(retHErr) html+=`<div class="retmsg err">⚠ could not refresh: ${esc(retHErr)} — the table below is the last one read</div>`
-  if(R.settings&&!R.settings.ok) html+=`<div class="retmsg warn">⚠ 设置文件读不出 · the settings file has a problem: ${esc((R.settings.problems||[]).map(p=>p.reason).join('; '))} — 两条采集路径现在按全部保存 · both capture paths keep everything in full until it is fixed</div>`
-  if(!R.control) html+=`<div class="retmsg warn">控制面没开 · the control plane is off, so the switches are greyed. Start the server with <code>asight serve --control</code> to change them here, or run <code>asight keep &lt;harness&gt; &lt;class&gt; &lt;full|log&gt;</code> in a terminal.</div>`
-  if(retMsg) html+=`<div class="retmsg ${retMsg.cls}">${esc(retMsg.text)}</div>`
-  if(!sz) html+=`<div class="retmsg warn">${esc(R.sizes_reason||'需要先跑 asight etl')}</div>`
-  html+=`<div class="retwin">${RET_WINS.map(([k,l])=>`<button data-win="${k}" class="${k===win?'on':''}">${esc(l)}</button>`).join('')}</div>`
-  html+=`<div class="retscroll"><table class="rettbl"><thead><tr><th>harness</th>${R.classes.map(c=>`<th>${esc(c)}</th>`).join('')}<th>合计 · total</th></tr></thead><tbody>`
-  for(const h of R.harnesses){
-    html+=`<tr><th>${esc(h)}</th>`
-    for(const c of R.classes){
-      const lv=(R.levels[h]&&R.levels[h][c])||'full', to=lv==='full'?'log':'full', rows=rowsOf(h,c)
-      const parts=rows.map(r=>`${RET_LABEL[r.retention]||r.retention}: ${r.windows[win].calls} 条`).join(' · ')
-      const title=R.control?`${h} · ${c}: ${RET_LABEL[lv]} — click to set ${RET_LABEL[to]}${parts?'\n'+parts:''}`:`${h} · ${c}: ${RET_LABEL[lv]}\n控制面没开 · to change: ${cmd(h,c,to)}${parts?'\n'+parts:''}`
-      // what is stored may not be what the switch says now: a change reaches only the calls after it, so a cell with calls kept both ways says how many each
-      const mixed=sz&&rows.filter(r=>r.windows[win].calls).length>1||sz&&rows.some(r=>r.windows[win].calls&&r.retention!==lv)
-      const split=mixed?`<div class="num mix">已存 · stored: ${rows.filter(r=>r.windows[win].calls).map(r=>`${RET_LABEL[r.retention]||r.retention} ${r.windows[win].calls} 条`).join(' · ')}</div>`:''
-      // a cell no pattern of this harness's table row can ever fill: the switch stores the setting, but no call is ever classed so (4.6 §记录「保存级别」)
-      const nopat=(R.unmatched&&R.unmatched[h]||[]).includes(c)
-      const nopatNote=nopat?`<div class="num nopat" style="color:var(--amber)">无模式 · no pattern: never matches</div>`:''
-      html+=`<td title="${esc(title+(nopat?'\n无模式 · this harness has no pattern for '+c+': no call is ever classed so, the setting changes nothing yet':''))}"${nopat?' class="nopatcell" style="opacity:.6"':''}><button class="lvl ${lv}" data-h="${esc(h)}" data-c="${esc(c)}" data-to="${to}"${R.control?'':' disabled'}>${RET_LABEL[lv]}</button>${nopatNote}${sz?retNums(sumWin(rows,win))+split:need}</td>`
-    }
-    html+=`<td>${sz?retNums(T&&T.by_harness[h]&&T.by_harness[h][win]?{...T.by_harness[h][win]}:sumWin([],win)):need}</td></tr>`
-  }
-  if(sz){
-    const leg=sz.rows.filter(r=>r.retention==='legacy-meta')
-    if(leg.length){
-      html+=`<tr class="legacy"><th>D40 之前 · 只存了长度</th>`
-      for(const c of R.classes){
-        const w=sumWin(leg.filter(r=>r.class===c),win)
-        html+=`<td>${w.calls?`<div class="num">${w.calls} 条 · 请求 ${fmtB(w.request_bytes)}</div><div class="num">响应体 未记录 · 存 ${w.stored_unrecorded?'≥':''}${fmtB(w.stored_bytes)}</div>`:'<div class="num">—</div>'}</td>`
-      }
-      const lw=sumWin(leg,win)
-      html+=`<td><div class="num">${lw.calls} 条 · 请求 ${fmtB(lw.request_bytes)}</div><div class="num">响应体 未记录</div></td></tr>`
-    }
-    html+=`<tr class="total"><th>合计 · total</th>${R.classes.map(c=>`<td>${retNums(T.by_class[c]&&T.by_class[c][win]?T.by_class[c][win]:sumWin([],win))}</td>`).join('')}<td>${retNums(T.all[win])}</td></tr>`
+  const sig=JSON.stringify([clsDoc,clsErr])
+  if(sig===clsSig&&tl.dataset.mode==='classes'){ pollClasses(); return }
+  clsSig=sig
+  const d=clsDoc.disk||{}
+  let html=`<div class="ctrlhdr">⚙ <b>保存什么 · what is kept</b> — per traffic class: <b>全部</b> keeps whole requests and responses, <b>只记日志</b> keeps headers and sizes only. The board is read-only: change a level with <code>asight classes set &lt;class&gt; full|log</code>${clsDoc.file?` (the table lives in <code>${esc(clsDoc.file)}</code>)`:''}.</div>`
+  if((clsDoc.errors||[]).length) html+=`<div class="ctrlhdr" style="color:var(--amber)">⚠ 读不全 · ${clsDoc.errors.map(e=>esc(e.where+': '+e.reason)).join(' · ')}</div>`
+  html+=`<div class="rettbl"><table><thead><tr><th>class</th><th>保存 · keep</th><th>24 h</th><th>7 d</th><th>全部 · all</th><th>change</th></tr></thead><tbody>`
+  for(const c of clsDoc.classes){
+    const n=w=>w?`${w.calls} 条 · ${fmtB(w.bytes)}`:'—'
+    html+=`<tr><th>${esc(c.class)}${c.builtin?'':' <span class="est">yours</span>'}</th><td>${esc(RET_LABEL[c.keep]||c.keep)}</td>`
+      +`<td><div class="num">${n(c.counts&&c.counts.h24)}</div></td><td><div class="num">${n(c.counts&&c.counts.d7)}</div></td><td><div class="num">${n(c.counts&&c.counts.all)}</div></td>`
+      +`<td><code>asight classes set ${esc(c.class)} ${c.keep==='full'?'log':'full'}</code></td></tr>`
   }
   html+=`</tbody></table></div>`
-  html+=`<div class="ctrlhdr" style="margin-top:10px">线上 = request + response bodies as they went over the wire (also past the 64 MiB cap); 存 = the NDJSON lines stored, before sealing; 封存后 = 存 × the sealed files' overall ratio — one global number, so only an <b>估计</b> for any one class. `+
-    `Harnesses not listed have no calls yet: <code>asight keep ${esc(R.known_harnesses.filter(h=>!R.harnesses.includes(h)).join('|')||'<harness>')} &lt;class&gt; &lt;full|log&gt;</code> sets them in advance.</div>`
-  tl.dataset.mode='retention'; tl.innerHTML=html
-  // the ledger: where each number comes from, the disk, what changed lately
-  const D=R.disk||{}, g=D.groups||{}, S=R.seal||{}
-  let L=`<div class="curmeta">⚙ 保存什么 · where the numbers come from</div>`
-  L+=sz?`<div style="color:var(--dim);font-size:10px;margin-bottom:6px">按类数字截至库里最新一条调用 ${esc(sz.as_of||'—')}(不是 <code>asight etl</code> 跑的时刻;之后的调用要再跑一次才计入)· newest call in the store, not live · windows end ${esc(fmtWhen(sz.windows_end))}</div>`:`<div style="color:var(--amber);font-size:10px;margin-bottom:6px">${esc(R.sizes_reason||'需要先跑 asight etl')}</div>`
-  L+=`<h2><span class="gi" style="background:var(--accent)"></span><span style="text-transform:none">~/.asight</span> 盘上占用 <span class="ct">${fmtB(D.total_bytes)}</span></h2><div style="color:var(--dim);font-size:10px">lstat file sizes, live · ${D.files??0} files</div>`
-  for(const [k,l] of [['captures','采集文件 · captures'],['sealed','封存文件 · sealed'],['sessions','sessions/ 分片副本 · shard copies'],['duckdb','DuckDB'],['logs','日志 · logs'],['other','其他 · other']]) L+=`<div class="res"><div class="top"><span class="nm">${esc(l)}</span><span class="via">${fmtB(g[k]&&g[k].bytes)}</span></div></div>`
-  if((D.unreadable||[]).length) L+=`<div style="color:var(--amber);font-size:10px">⚠ ${D.unreadable.length} path(s) could not be read, so the total is a floor: ${esc(D.unreadable.slice(0,3).map(u=>u.path).join(', '))}</div>`
-  if(R.db&&R.db.path) L+=`<div style="color:var(--dim);font-size:10px">analytics store ${esc(R.db.path)}${R.db.bytes!=null?' · '+fmtB(R.db.bytes):''} (it holds no bodies)</div>`
-  L+=`<div style="color:var(--dim);font-size:10px;margin-top:4px">${S.ratio!=null?`封存比 · seal ratio ${S.ratio.toFixed(3)} over ${S.files} sealed file(s) — 估计 only`:'没有可读的封存文件 · no readable sealed file: no once-sealed estimate'}</div>`
-  L+=`<h2><span class="gi" style="background:var(--green)"></span>最近的修改 · recent changes <span class="ct">${(R.changes||[]).length}</span></h2>`
-  L+=(R.changes||[]).slice().reverse().map(c=>`<div class="res"><div class="top"><span class="nm">${esc(c.harness)} · ${esc(c.class)}</span><span class="via">${esc(RET_LABEL[c.from]||c.from)} → ${esc(RET_LABEL[c.to]||c.to)}</span></div><div class="sub" style="font-size:10px;color:var(--dim)">${esc(fmtWhen(c.ts))} · ${esc(c.source||'?')}</div></div>`).join('')||'<div style="color:var(--dimmer);font-size:10px">none yet</div>'
-  if(R.changes_error) L+=`<div style="color:var(--amber);font-size:10px">⚠ the change log could not be read: ${esc(R.changes_error)}</div>`
-  led.innerHTML=L
-  document.getElementById('stats').innerHTML=sz?`<span><b>${T.all.all.calls}</b> calls kept</span><span><b>${fmtB(T.all.all.stored_bytes)}</b> stored</span>`:`<span>sizes: 需要先跑 asight etl</span>`
-  document.querySelectorAll('#timeline .retwin button').forEach(b=>b.onclick=()=>{ retWin=b.dataset.win; try{ localStorage.setItem('asight.retWin',retWin) }catch{} retSig=null; renderRetentionView() })
-  document.querySelectorAll('#timeline .lvl').forEach(b=>b.onclick=()=>{ if(b.disabled) return; b.disabled=true; setRetentionLevel(b.dataset.h,b.dataset.c,b.dataset.to) })
-  pollRetention()
+  tl.dataset.mode='classes'; tl.innerHTML=html
+  led.innerHTML=`<div class="curmeta">⚙ 保存什么 · <span style="text-transform:none">~/.asight</span> 盘上占用 <span class="ct">${fmtB(d.asight_bytes)}</span></div>`
+    +`<div class="res"><div class="top"><span class="nm">采集记录 · records</span><span class="via">${fmtB(d.records_bytes)}</span></div></div>`
+    +`<div class="res"><div class="top"><span class="nm">封存文件 · sealed</span><span class="via">${fmtB(d.sealed_bytes)}</span></div></div>`
+    +(clsDoc.last_change?`<div style="color:var(--dim);font-size:10px;margin-top:4px">last change ${esc(String(clsDoc.last_change))}</div>`:'')
+  document.getElementById('stats').innerHTML=`<span><b>${clsDoc.classes.length}</b> classes</span><span><b>${fmtB(d.records_bytes)}</b> stored</span>`
+  pollClasses()
 }
-
-// ── D38 capture health (1.2 顶栏 #caphealth · 1.5 状态矩阵 · 4.4 /api/capture-health) ─────────────────────────
-// Its OWN 1.5 s timer: not the "live" checkbox, not poll() (which returns early on an empty board, in the control view
-// and when the session did not change — a capture that stopped would leave the last ✓ frozen there). Never empty;
-// no "seen" state, no alert (Non-Goal): it says what holds now and what failed in 24 h. The state and N come from
-// the server (src/health/, the reader `asight collector status` uses); this only words them.
-const CAPH_MS=1500
-let capH=null, capHOkAt=null, capHErr=null, capHBusy=false
-const fmtWhen=ts=>{ if(!ts) return '—'; const d=new Date(ts); if(isNaN(d)) return String(ts); return d.toDateString()===new Date().toDateString()?d.toLocaleTimeString():d.toLocaleString() }
-// → {cls, text}: cls ok | warn | bad | dim
-function capHealthView(h,{okAt,err,now}){
-  if(okAt!=null&&now-okAt>2*CAPH_MS) return {cls:'warn',text:`? 未刷新 · 截至 ${fmtWhen(okAt)}`}
-  if(err&&okAt==null) return {cls:'warn',text:`? 未刷新 · 截至 —`}
-  if(!h) return {cls:'dim',text:'? 采集健康 · 读取中'}
-  if(h.unreadable) return {cls:'warn',text:`? 健康读不出:${h.unreadable}`}
-  const s=h.summary||{}, legacy=s.part==='legacy', tail=s.read_errors?' · 读不全':'', oldName=s.source==='proxy'?'旧反代':'旧 MITM'
-  const t={
-    ok:()=>({cls:'ok',text:legacy?`✓ ${oldName} · 最后启动于 ${fmtWhen(s.since)}`:`✓ 采集中 · 自 ${fmtWhen(s.since)} 起`}),
-    failing:()=>({cls:'bad',text:`⚠ ${s.n}`}),
-    off:()=>({cls:'dim',text:`○ 采集关 · 自 ${fmtWhen(s.since)} 起`}),
-    'not-running':()=>({cls:'bad',text:`✗ ${legacy?oldName:'采集器'}没在跑 · 最后记录于 ${fmtWhen(s.since)}${s.signal?` · 因 ${s.signal}`:''}`}),
-    stopped:()=>({cls:'dim',text:`○ 旧采集停了 · 自 ${fmtWhen(s.since)} 起`}),
-    'not-responding':()=>({cls:'bad',text:`✗ 采集器没响应 · 最后心跳 ${fmtWhen(s.since)}`}),
-    unknown:()=>({cls:'warn',text:`? ${legacy?'旧采集':'采集器'}状态不明 · ${s.reason||''}`}),
-    'no-events':()=>({cls:'warn',text:'? 旧采集 · 没有事件记录(重启后才有)'}),
-    residue:()=>({cls:'warn',text:`– 未安装 · 残留 ${s.n} 项`}),
-    'not-installed':()=>({cls:'dim',text:'– 未安装'}),
-  }[s.state]
-  const v=t?t():{cls:'warn',text:`? ${s.state||'unknown state'}`}
-  return {cls:v.cls,text:v.text+tail}
-}
-function renderCapHealth(){
-  const el=document.getElementById('caphealth'); if(!el) return
-  const v=capHealthView(capH,{okAt:capHOkAt,err:capHErr,now:Date.now()})
-  el.className='caphealth '+v.cls; el.textContent=v.text
-  el.title=`capture health (D38) — ${v.text}${capHErr?`\nlast attempt failed: ${capHErr}`:''}${capHOkAt?`\nread at ${fmtWhen(capHOkAt)}`:''}\nclick: the 采集健康 list (⚙ session-less)`
-}
-async function pollCapHealth(){
-  renderCapHealth() // a request that hangs still lets "未刷新" appear on time
-  if(capHBusy) return
-  capHBusy=true
-  try{
-    const r=await fetch('/api/capture-health',{cache:'no-store'})
-    const j=await r.json().catch(()=>null)
-    if(r.status===503&&j&&j.error){ capH={unreadable:j.error}; capHOkAt=Date.now(); capHErr=null }
-    else if(r.ok&&j&&j.summary){ capH=j; capHOkAt=Date.now(); capHErr=null }
-    else capHErr=(j&&j.error)||('HTTP '+r.status)
-  }catch(e){ capHErr=String(e&&e.message||e) }
-  finally{ capHBusy=false }
-  renderCapHealth()
-  if(curSel==='__caphealth__') renderCapHealthView() // its own data: refreshed even with "live" unchecked
-  else if(boardEmpty) renderEmpty(emptyMessage())
-}
-document.getElementById('caphealth').onclick=()=>{ curSel='__caphealth__'; const sel=document.getElementById('fileSel'); sel.dataset.sig=''; closeDetail(); poll() }
-pollCapHealth()
-setInterval(pollCapHealth,CAPH_MS)
-
 poll()
 setInterval(()=>{if(document.getElementById('liveChk').checked)poll()},1500)
 

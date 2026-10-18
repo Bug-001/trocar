@@ -74,13 +74,10 @@ function harness(session) {
   globalThis.setTimeout = () => 0;
   globalThis.console = { ...console, error() {} };
   globalThis.requestAnimationFrame = () => 0;
-  const PROJECTS = { projects: [{
-    slug: 'P', name: 'P', path: '/p', last_ts: 'T1',
-    sessions: [{ project_slug: 'P', session_id: 'S', title: 'T', calls: 2, probes: 0, last_ts: 'T1', entrypoint: 'cli' }],
-  }] };
+  const PROJECTS = { sessions: [{ project_slug: 'P', session_id: 'S', title: 'T', calls: 2, probes: 0, last_ts: 'T1', entrypoint: 'cli' }] };
   globalThis.fetch = (url) => {
     const u = String(url);
-    if (u.startsWith('/api/projects')) return Promise.resolve({ ok: true, json: () => Promise.resolve(PROJECTS) });
+    if (u.startsWith('/api/sessions')) return Promise.resolve({ ok: true, json: () => Promise.resolve(PROJECTS) });
     if (u.startsWith('/api/session')) return Promise.resolve({ ok: true, json: () => Promise.resolve(session) });
     // /api/pricing: the module's own bootstrap — leave the built-in defaults in place
     return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });

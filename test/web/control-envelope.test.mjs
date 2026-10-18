@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // R1 (frontend half) · ENVELOPE DRIFT in the control-plane view (src/web/index.html).
-// /api/control ships RAW records. The D10 envelope stores the response under `resp` and headers
+// /api/calls ships RAW records. The D10 envelope stores the response under `resp` and headers
 // under `req_headers`, but the control view read the v0 names `response` / `request_headers` /
 // `request.raw_chars`. On real captures that meant: every status cell rendered `?` (measured
 // 260/260 rows), the "Feature flags observed" section never rendered at all, and the detail panel
@@ -59,9 +59,9 @@ function harness() {
   globalThis.console = { ...console, error() {} }; globalThis.requestAnimationFrame = () => 0;
   globalThis.fetch = (url) => {
     const u = String(url);
-    if (u.startsWith('/api/projects')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ projects: [] }) });
-    if (u.startsWith('/api/control?class=')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ records: [D10_CONTROL] }) });
-    if (u.startsWith('/api/control')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ classes: [{ class: 'control', count: 1 }] }) });
+    if (u.startsWith('/api/sessions')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ sessions: [] }) });
+    if (u.startsWith('/api/calls?class=')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ records: [D10_CONTROL] }) });
+    if (u.startsWith('/api/calls')) return Promise.resolve({ ok: true, json: () => Promise.resolve({ classes: [{ class: 'control', count: 1 }] }) });
     return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
   };
   return { getEl };
