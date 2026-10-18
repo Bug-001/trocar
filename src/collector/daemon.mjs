@@ -717,14 +717,12 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       return r
     }),
   } })
+  // only now: the control server refuses a start while another daemon answers, so a lock read before it may be a live daemon's (runDaemon's order)
+  noteUncleanStop(P.lock, failure)
+  seal.start() // only now (the gate claimed the collector): the lock read before this could have been a live daemon's
   try {
     await collector.start()
     markReady()
-    // only after the doors listen (D61): neither decides a door's behaviour, and a login's first seconds are the daemon's scarcest CPU — a door
-    // that is not up yet is an agent dialling into nothing (the first request after a real login took 21.2 s). Both still come
-    // after the control server above, which is what makes the lock safe to read (it refuses this start while another daemon answers; runDaemon's order).
-    noteUncleanStop(P.lock, failure)
-    seal.start()
     const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
     const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
     refreshLock()
