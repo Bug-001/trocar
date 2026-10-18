@@ -592,15 +592,16 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       let rr = register ? unit.enable({ now: !was.up }) : (was.up ? null : unit.startNow())
       if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
         const direct = unit.start(daemonEnv(env, dir)) // the direct start carries what the login entry's Environment= would carry
-        if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); asight started it directly this run — the login entry starts it at the next login`); rr = direct }
+        if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); asight started it directly this run; the login entry starts it at the next login`); rr = direct }
       }
       started = !was.up
       // D62 / D38: the OS mechanism can hold the spawn back, and that wait is asight's to SAY, not to hide. `launchctl kickstart` does not return
-      // until launchd spawned the job, and launchd spawns one at most once every ThrottleInterval seconds (10 s by default): measured 8 630 ms on
-      // measured — the whole of the 9.7 s an `off` → `on` cycle took there. The plist asight writes asks for 1 s (darwin/autostart.mjs),
-      // so a wait this long now means a plist an older install left behind, and the note says what to run.
+      // until launchd spawned the job, and launchd spawns one at most once every ThrottleInterval seconds (10 s, launchd's default: asight writes no
+      // ThrottleInterval, D62 ⑥ and darwin/autostart.mjs). An `off` no longer asks the daemon to exit, so `on` normally finds it already up and never
+      // gets here; this note is what says so when it does. No "run asight install" in it: install does not reload a loaded job (reload() is a no-op),
+      // so that advice would loop.
       const startMs = ms() - startAt
-      if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms — asight waited on the OS, not on work of its own${osName === 'darwin' ? '; launchd spawns a job at most once every ThrottleInterval seconds (10 s by default, and the plist asight writes asks for less): run "asight install" to rewrite a plist an older install left' : ''}`)
+      if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms; asight waited on the OS, not on work of its own${osName === 'darwin' ? ' (launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default)' : ''}`)
       if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // the arch's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
       if (rr && rr.code !== 0) {
         // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —

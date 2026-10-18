@@ -1,7 +1,7 @@
 // daemon.mjs — `asight daemon` (RFC 1.6 §2, R4, R7; 4.6 §控制面): the per-user collector daemon in the foreground until SIGTERM / SIGINT / SIGHUP / SIGQUIT, or until it has stopped itself (after an `off` with no
 // names, once nothing is relayed). `--supervise` (win32, 4.8 §7) is the other mode: the scheduled task runs it — the supervisor parent that pulls the real `node <asight> daemon` and re-pulls it on a non-zero
 // exit; it owns no crash records (stderr only), so that mode returns as soon as arch.runSupervisor does. The autostart unit's ExecStart is this command; `asight collector start` is its old name (a hidden alias, §2: units already installed run it). Exit codes (R4): 0 stopped
-// cleanly · 1 it could not start, or a step of the stop failed · 2 a usage error, root included (V76) · 70 an uncaught exception or rejection, recorded as a
+// cleanly, or another daemon already answers on the control channel (D62 ⑥: already as asked; a non-zero exit would be retried by the platform for as long as that one lives) · 1 it could not start, or a step of the stop failed · 2 a usage error, root included (V76) · 70 an uncaught exception or rejection, recorded as a
 // `crash` first. Everything the world gives is a `deps` entry a test replaces (0.1 §3): `daemon` (the module with `startDaemon`; the real one is src/collector/daemon.mjs) or `startDaemon` itself, `waitForStop`,
 // `proc` (the process whose uncaught errors are caught), `exit`, `getuid`.
 import os from 'node:os'
@@ -11,6 +11,7 @@ import { appendEvent } from '../collector/core/events.mjs'
 import { collectorHome } from '../paths.mjs'
 import nodeFs from 'node:fs'
 import { daemonMayStart, readManifest as readInstallManifest } from '../off/manifest.mjs'
+import { DAEMON_ALREADY_UP } from '../collector/core/control.mjs'
 
 
 const USAGE = 'usage: asight daemon [--supervise]'
@@ -62,7 +63,13 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
   const foreground = !env.INVOCATION_ID && !!(proc.stdin && proc.stdin.isTTY) // not under systemd, at a terminal: closing it stops the daemon
   const start = deps.startDaemon || D.startDaemon
   let d
-  try { d = await start({ dir, env, foreground, log: (where, e) => io.err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) { io.err(`asight daemon: ${e.message}`); return EXIT.incomplete }
+  try { d = await start({ dir, env, foreground, log: (where, e) => io.err(`[${where}] ${e && e.message ? e.message : e}`) }) } catch (e) {
+    io.err(`asight daemon: ${e.message}`)
+    // D62 ⑥: a daemon that finds another one answering is already as asked, not a failure. It says so once (the line above goes to the daemon log, D46)
+    // and exits 0, because the platform retries a non-zero exit for as long as the other daemon lives — launchd's KeepAlive {SuccessfulExit: false} every
+    // ThrottleInterval, the Windows supervisor on its backoff (4.8 §7: 0 = it was asked to stop, do not re-pull) — which is a loop nobody sees.
+    return e && e.code === DAEMON_ALREADY_UP ? EXIT.ok : EXIT.incomplete
+  }
   // the readiness line (whatever script starts the daemon waits for it): a port or an endpoint that is not known is left out, never printed as `null` (§1.1)
   io.out(`asight collector: ${[d.port ? `engine 127.0.0.1:${d.port}` : 'engine: no port of its own', d.socketPath ? `control ${d.socketPath}` : null].filter(Boolean).join(', ')}`)
   // a signal, or the daemon stopping itself (after `off` with no names, once nothing is relayed: 1.6 §1.4 5; exit 0 so systemd does not restart it)

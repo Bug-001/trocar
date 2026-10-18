@@ -288,7 +288,7 @@ export function makeClash({ fs = nodeFs, scriptPath, runtimePath, mergePath, soc
       return {
         ok: false,
         // Once the block is really gone from Script.js, a Verge regen drops the live route too — so that is the by-hand fix. While the block is still there, reactivating would RE-APPLY it.
-        reason: `desktop steer NOT fully removed — ${why.join('; ')}. CC-Desktop traffic may STILL be routed into the MITM; ${st.scriptInstalled === false
+        reason: `desktop steer NOT fully removed: ${why.join('; ')}. CC-Desktop traffic may STILL be routed into the MITM; ${st.scriptInstalled === false
           ? `the atrace block IS gone from Script.js — to drop the live route now, ${REACTIVATE_HINT}`
           : 're-run `asight desktop off` and check `asight desktop status`'}.`,
         reload: reloaded, status: st, ...(mergeCleanup ? { mergeCleanup } : {}),
