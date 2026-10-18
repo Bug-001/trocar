@@ -253,7 +253,7 @@ async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
 async function descriptorsOf({ platform, env, deps }) {
   if (deps.harnesses) return deps.harnesses
   if (deps.netFactsDeps) return (await deps.netFactsDeps()).harnesses
-  const mod = await (deps.daemon || import('../collector/daemon.mjs'))
+  const mod = await (deps.daemon || import('../collector/net-deps.mjs'))
   if (typeof mod.netFactsDeps !== 'function') throw new Error('no reader of the harness descriptors is wired into this build')
   return (await mod.netFactsDeps({ platform, env })).harnesses
 }
@@ -286,7 +286,7 @@ function identityBlocks({ ids, merged, health }) {
 export async function gatherTopology(f, { home, env, platform, deps = {} }) {
   try {
     const fs = deps.fs || nodeFs
-    const mod = deps.netFactsDeps ? null : await (deps.daemon || import('../collector/daemon.mjs'))
+    const mod = deps.netFactsDeps ? null : await (deps.daemon || import('../collector/net-deps.mjs'))
     const nd = deps.netFactsDeps ? await deps.netFactsDeps() : mod && typeof mod.netFactsDeps === 'function' ? await mod.netFactsDeps({ platform }) : null
     if (!nd) return { topology_error: 'no reader of the network facts is wired into this build' }
     // the platform's own reader of the network facts (the Windows helper): the DAEMON's warm one when it answers on the control channel, so this
