@@ -36,23 +36,36 @@ const hashOf = (rec) => {
 };
 
 export function createSynthKeys({ gapMs = SYNTH_GAP_MS } = {}) {
+  const assign = createSynthAssigner({ gapMs });
+  return { keyOf: (rec) => assign(synthFactsOf(rec)) };
+}
+
+/** The three facts a keyless call brings to the rule, or null when it gets no synthesized key at all.
+ *  A reader that cannot afford the body later (the segment index, 1.6 §4.1) stores `hash` and asks the
+ *  assigner below with the harness and time it already has. */
+export function synthFactsOf(rec) {
+  // a call kept as a log line only (D40) has no system text to anchor a task by: it stays keyless, and is shown as such
+  if (!rec || rec.is_llm_call !== true || rec.body_retention === 'log' || sessionKeyOf(rec).key) return null;
+  const h = harnessOf(rec);
+  if (!h.row || h.row.synth !== true) return null;
+  const ms = Date.parse(rec.ts_request || rec.ts || '');
+  if (!Number.isFinite(ms)) return null; // no time, no window: the call stays keyless (and is shown as such)
+  return { harness: h.id, hash: hashOf(rec), ms };
+}
+
+/** The rule itself (gate G11), over those facts in the order the calls were captured: same harness + same
+ *  system-prompt hash within `gapMs` of the open session's latest call → that session; else a new one. */
+export function createSynthAssigner({ gapMs = SYNTH_GAP_MS } = {}) {
   const open = new Map(); // `${harness}\0${hash}` → { key, lastMs }
-  return {
-    keyOf(rec) {
-      // a call kept as a log line only (D40) has no system text to anchor a task by: it stays keyless, and is shown as such
-      if (!rec || rec.is_llm_call !== true || rec.body_retention === 'log' || sessionKeyOf(rec).key) return null;
-      const h = harnessOf(rec);
-      if (!h.row || h.row.synth !== true) return null;
-      const ms = Date.parse(rec.ts_request || rec.ts || '');
-      if (!Number.isFinite(ms)) return null; // no time, no window: the call stays keyless (and is shown as such)
-      const hash = hashOf(rec);
-      const g = h.id + '\0' + hash;
-      const cur = open.get(g);
-      if (cur && Math.abs(ms - cur.lastMs) <= gapMs) { cur.lastMs = Math.max(cur.lastMs, ms); return cur.key; }
-      const key = `synth-${h.id}-${hash.slice(0, 12)}-${stampOf(ms)}`;
-      open.set(g, { key, lastMs: ms });
-      return key;
-    },
+  return (facts) => {
+    if (!facts || !facts.harness || facts.hash == null || !Number.isFinite(facts.ms)) return null;
+    const { harness, hash, ms } = facts;
+    const g = harness + '\0' + hash;
+    const cur = open.get(g);
+    if (cur && Math.abs(ms - cur.lastMs) <= gapMs) { cur.lastMs = Math.max(cur.lastMs, ms); return cur.key; }
+    const key = `synth-${harness}-${hash.slice(0, 12)}-${stampOf(ms)}`;
+    open.set(g, { key, lastMs: ms });
+    return key;
   };
 }
 

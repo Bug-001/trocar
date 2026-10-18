@@ -32,7 +32,7 @@ export async function run({ home, fs, params: p, errors }) {
 
   const miss = (reason) => { errors.push({ where: ref, reason }); return { ref, bytes: null, encoding: null, fidelity: null, truncated: null }; };
   let raw;
-  try { raw = readRecord({ home, fs, ...at }); } catch (e) { return miss(`record ${recordId} could not be read back: ${String((e && e.message) || e)}`); }
+  try { raw = await readRecord({ home, fs, ...at }); } catch (e) { return miss(`record ${recordId} could not be read back: ${String((e && e.message) || e)}`); }
   if (!raw) return miss(`no record ${recordId} in this home's raw segments`);
 
   // A field of a record is the stored decoded text itself (4.6 §记录), so it is verbatim as it stands.

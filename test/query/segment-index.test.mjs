@@ -14,7 +14,12 @@ test('记录 id 从 1 起,索引第一次读到段时建在 index/ 里', async (
   writeSegment(home, SEG, [{ ts: '2026-10-18T10:00:00.000Z' }, { ts: '2026-10-18T10:00:01.000Z', class: 'telemetry', is_llm: false, status: 204 }])
   const { records } = await segmentIndex({ home, segment: SEG })
   assert.deepEqual(records.map((r) => r.id), [`${SEG}:1`, `${SEG}:2`])
-  assert.deepEqual(records[1], { id: `${SEG}:2`, ts: '2026-10-18T10:00:01.000Z', harness: 'claude-code', class: 'telemetry', host: 'api.anthropic.com', path: '/v1/messages', status: 204, stored_bytes: records[1].stored_bytes, wire_bytes: 30, session_key: null, is_llm: false })
+  assert.deepEqual(records[1], { id: `${SEG}:2`, ts: '2026-10-18T10:00:01.000Z', harness: 'claude-code', class: 'telemetry', host: 'api.anthropic.com', path: '/v1/messages', status: 204, stored_bytes: records[1].stored_bytes, wire_bytes: 30, session_key: null, is_llm: false,
+    // the session facts, so `sessions` never reads a record back (1.6 §4.1 ≤ 1 s): the harness the board decides,
+    // where the record's bytes are, and the kind of call it is
+    harness_id: 'cc', has_proc: true, has_headers: true, harness_inferred: false, entrypoint: null, log_only: false, subagent: false, synth_hash: null, offset: records[1].offset })
+  assert.equal(records[0].offset, 0)
+  assert.equal(records[1].offset, records[0].stored_bytes + 1) // the byte the line starts at, newline included
   assert.equal(fs.existsSync(path.join(indexDir(home), `${SEG}.json`)), true)
 })
 
@@ -54,7 +59,7 @@ test('段被改写(不是追加)时整段重建', async () => {
 
 test('删掉 index/ 后重建,结果逐字段相等', async () => {
   const home = rawHome()
-  writeSegment(home, SEG, [{ id: 'a', sessionKey: 's-1' }, { id: 'b', class: 'account' }])
+  writeSegment(home, SEG, [{ id: 'a', sessionKey: 's-1', harness: 'opencode' }, { id: 'b', class: 'account' }])
   const withIndex = await segmentIndex({ home, segment: SEG })
   fs.rmSync(indexDir(home), { recursive: true })
   const rebuilt = await segmentIndex({ home, segment: SEG })
@@ -81,7 +86,7 @@ test('封存后记录 id 与索引字段不变,封存件里每条记录按 id �
   const { sealSegment } = await import('../../src/raw/seal.mjs')
   const { buildResolver } = await import('../../src/query/source.mjs')
   const home = rawHome()
-  const f = writeSegment(home, SEG, [{ id: 'a', sessionKey: 's-1' }, { id: 'b', class: 'files', is_llm: false, status: 404 }])
+  const f = writeSegment(home, SEG, [{ id: 'a', sessionKey: 's-1', harness: 'opencode' }, { id: 'b', class: 'files', is_llm: false, status: 404 }])
   const before = await segmentIndex({ home, segment: SEG })
   const refs = ['a', 'b'].map((id) => `_/${SEG}.ndjson#${id}`) // raw_ref (4.2 §回源指针); the stream name does not change when the segment is sealed
   const plain = await buildResolver(path.join(home, 'raw'))
@@ -92,7 +97,11 @@ test('封存后记录 id 与索引字段不变,封存件里每条记录按 id �
   assert.equal(fs.existsSync(f), false, 'the plaintext is gone: only the sealed file is left to read')
   fs.rmSync(indexDir(home), { recursive: true })
   const after = await segmentIndex({ home, segment: SEG })
-  assert.deepEqual(after.records, before.records)
+  // every field of the record is what it was; `offset` is not a field OF the record but where its bytes are in
+  // the file the row was built from, and a sealed segment addresses them by line number instead (null)
+  const noOffset = (rs) => rs.map(({ offset, ...r }) => r)
+  assert.deepEqual(noOffset(after.records), noOffset(before.records))
+  assert.deepEqual(after.records.map((r) => r.offset), [null, null])
   assert.deepEqual(after.problems, [])
   // the read side end to end: every record is found by its id in the SEALED file, byte for byte
   const sealedResolve = await buildResolver(path.join(home, 'raw'))
