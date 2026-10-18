@@ -18,7 +18,6 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { parseSegment, recordId } from '../collector/core/record/segments.mjs';
-import { sessionKeyOfLine } from '../raw/session-key.mjs';
 import { fpRanges, readRangeSync, sameFileAs } from './source.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
@@ -30,6 +29,15 @@ export const indexDir = (home = asightHome()) => path.join(home, 'index');
 const INDEX_V = 1;
 const CHUNK = 1 << 20;
 const NL = 0x0a;
+// The request headers that name a session, in priority order (RFC 3.4:21). Only HEADER keys: a query never
+// judges identity from a body.
+const SESSION_HEADER_KEYS = ['x-claude-code-session-id', 'x-session-id', 'session-id', 'thread-id'];
+const sessionKeyOf = (e) => {
+  const h = e.req_headers || e.request_headers;
+  if (!h || typeof h !== 'object') return null;
+  for (const k of SESSION_HEADER_KEYS) if (h[k]) return String(h[k]);
+  return null;
+};
 
 // ── one line → one index record ───────────────────────────────────────────
 // A line that is not JSON can never be indexed (its bytes are still on disk and `raw cat` still prints
@@ -51,7 +59,7 @@ function recordOf(lineBuf, segment, lineNo, problems) {
     status: (e.resp && e.resp.status) ?? null,
     stored_bytes: lineBuf.length,
     wire_bytes: (Number(wire.req) || 0) + (Number(wire.resp) || 0),
-    session_key: sessionKeyOfLine(lineBuf),
+    session_key: sessionKeyOf(e),
     is_llm: !!e.is_llm_call,
   };
 }
