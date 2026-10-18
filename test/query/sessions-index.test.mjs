@@ -72,6 +72,28 @@ test('a request body stored compressed names the same session in the list as on 
   assert.deepEqual(doc.sessions, want.slice(0, 500))
 })
 
+// The resident worker keeps one entry per row list, stamped with the list itself — and a row list cannot move (its
+// records were appended once). So a result that carried ERRORS must never be the remembered one: a first read that
+// landed in the seal rename window, or hit one EIO, would otherwise pin its incomplete answer until the worker exits,
+// which is exactly the 「不答陈旧」 of 3.5 §访问模式 (review of D63, 2026-10-20).
+test('a read that failed once is not remembered: the next query in the same process gives the whole answer', async () => {
+  const home = dataset(1_000_000)
+  const rows = (await indexRows({ home })).slice(0, 5)
+  let fail = true
+  const flaky = { ...fs, openSync: (...a) => {
+    if (fail && String(a[0]).endsWith('.ndjson')) { fail = false; throw Object.assign(new Error('EIO: a transient read error'), { code: 'EIO' }) }
+    return fs.openSync(...a)
+  } }
+  const firstErrors = []
+  const first = recordsAt({ home, fs: flaky, rows, errors: firstErrors })
+  assert.deepEqual(first, [], 'the segment could not be opened at all')
+  assert.equal(firstErrors.length, rows.length)
+  const errors = []
+  const second = recordsAt({ home, fs: flaky, rows, errors })
+  assert.deepEqual(second.map((r) => r.id), rows.map((r) => r.id))
+  assert.deepEqual(errors, [])
+})
+
 test('a row whose offset no longer lands on its line is read by the scan, never as another record', async () => {
   const home = dataset()
   const rows = (await indexRows({ home })).filter((r) => r.offset != null).slice(0, 20)
