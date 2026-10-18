@@ -39,20 +39,20 @@ test('listProcs fails loudly when the table cannot be read, and on a platform it
   await assert.rejects(listProcs({ uid: 1000, platform: 'freebsd' }), /freebsd/)
 })
 
-test('listProcs on macOS: `ps` for the table and the command line, then one `lsof` for every process\'s real executable; its environment is not readable there (envRead false)', async () => {
+test('listProcs on macOS: `ps` for the table and the command line, then one `ps -Axo pid=,comm=` for every process\'s executable (argv[0] whole, spaces and all); its environment is not readable there (envRead false)', async () => {
   const at = new Date(2026, 9, 7, 4, 27, 0)
   const helper = '/Applications/ZCode.app/Contents/Frameworks/ZCode Helper.app/Contents/MacOS/ZCode Helper'
   const t = darwinTools([
     { pid: 501, at, exe: '/Applications/Claude.app/Contents/MacOS/claude', cmdline: '/Applications/Claude.app/Contents/MacOS/claude --flag x' },
     { pid: 777, uid: 0, at, exe: '/usr/sbin/mDNSResponder' },
     { pid: 502, ppid: 501, at, exe: '/Users/u/.local/share/codex/bin/codex', cmdline: 'codex app-server' }, // started through PATH: ps has the bare word
-    { pid: 503, at, exe: helper, cmdline: `${helper} --type=utility zcode-cli` }, // a space in the path: ps's line starts with lsof's exe, so argv[0] stays whole
+    { pid: 503, at, exe: helper, cmdline: `${helper} --type=utility zcode-cli` }, // a space in the path: the command line starts with comm's exe, so argv[0] stays whole
   ])
   const got = await listProcs({ uid: 501, platform: 'darwin', exec: t.run })
-  assert.deepEqual(t.calls.map((c) => c[0]), ['ps', 'lsof'], 'two questions for the whole table, whatever its size')
-  assert.deepEqual(t.calls[1].slice(1), ['-a', '-u', '501', '-d', 'txt', '-Fpn'], 'lsof is asked about this user\'s processes only')
+  assert.deepEqual(t.calls.map((c) => c[0]), ['ps', 'ps'], 'two questions for the whole table, whatever its size')
+  assert.deepEqual(t.calls[1].slice(1), ['-Axo', 'pid=,comm='], 'the executables ask: `comm` alone, so it is not cut to 16 characters')
   assert.deepEqual(got.map((f) => [f.pid, f.ppid, f.uid]), [[501, 1, 501], [502, 501, 501], [503, 1, 501]])
-  assert.deepEqual(got.map((f) => f.exe), ['/Applications/Claude.app/Contents/MacOS/claude', '/Users/u/.local/share/codex/bin/codex', helper], 'the executable is lsof\'s, not the word ps repeats')
+  assert.deepEqual(got.map((f) => f.exe), ['/Applications/Claude.app/Contents/MacOS/claude', '/Users/u/.local/share/codex/bin/codex', helper], 'the executable is comm\'s word, not the one the command line repeats')
   assert.deepEqual(got.map((f) => [f.argv[0], f.cmdline]), [['/Applications/Claude.app/Contents/MacOS/claude', '/Applications/Claude.app/Contents/MacOS/claude --flag x'], ['codex', 'codex app-server'], [helper, `${helper} --type=utility zcode-cli`]])
   assert.deepEqual(got.map((f) => f.argvSplit), [true, true, true], 'the rest of the line is split on white space, and the facts say so (identity.mjs entryOf)')
   assert.equal(got[0].startedAt, at.getTime(), 'lstart is local time')
@@ -60,22 +60,25 @@ test('listProcs on macOS: `ps` for the table and the command line, then one `lso
   await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: () => ({ status: 1, stdout: '', stderr: 'ps: nope' }) }), /ps.*nope/)
 })
 
-test('listProcs on macOS: an lsof that names no process while ps listed some, or that did not finish, is a table that cannot be read — never one whose executables are ps\'s words (a word no form path meets would read as "nobody holds it"); a table over 1 MiB is read whole', async () => {
-  const t = darwinTools([{ pid: 501, at: new Date(), exe: '/x/codex' }], { lsof: false })
-  await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: t.run }), /lsof named no process \(exit 1\).*1 process\(es\).*not known/)
+test('listProcs on macOS: an executables ask that names no process while the table listed some, or that did not finish, is a table that cannot be read — never one whose executables are the command lines\' words (a word no form path meets would read as "nobody holds it"); a table over 1 MiB is read whole', async () => {
+  const t = darwinTools([{ pid: 501, at: new Date(), exe: '/x/codex' }], { comm: false })
+  await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: t.run }), /failed \(exit 1\).*1 process\(es\).*not known/)
+  const silent = (file, args, opts) => (args.includes('pid=,comm=') ? { status: 0, stdout: '', stderr: '' } : t.run(file, args, opts))
+  await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: silent }), /named no process \(exit 0\).*1 process\(es\).*not known/)
   const gone = darwinTools([{ pid: 501, at: new Date(), exe: '/x/codex' }, { pid: 502, at: new Date(), exe: '/x/zcode' }])
-  const onlyFirst = (file, args) => (file === 'lsof' ? { status: 0, stdout: 'p501\nftxt\nn/x/real-codex\n', stderr: '' } : gone.run(file, args))
-  assert.deepEqual((await listProcs({ uid: 501, platform: 'darwin', exec: onlyFirst })).map((f) => [f.pid, f.exe]), [[501, '/x/real-codex'], [502, '/x/zcode']], 'a process lsof does not name ended between the two questions: ps\'s word stays')
-  // a working Mac's answer (~1.6 MB: every mapped library is a txt record) is read whole, so the newest process — the highest pid, lsof's last — has its
-  // executable; an lsof cut short (more output than it may print, killed by its timeout) is not read in part: the table is not known
-  const at = new Date(), many = Array.from({ length: 500 }, (_, i) => ({ pid: 1000 + i, at, exe: `/Applications/App${i}.app/Contents/MacOS/App${i}`, cmdline: `app${i}` }))
-  const big = darwinTools([...many, { pid: 9999, at, exe: '/Users/u/.local/share/claude/versions/2.1.296', cmdline: 'claude' }], { libs: 40 })
-  assert.equal((await listProcs({ uid: 501, platform: 'darwin', exec: big.run })).find((f) => f.pid === 9999).exe, '/Users/u/.local/share/claude/versions/2.1.296', 'the last process of a table over 1 MiB has its real executable')
-  const cut = (file, args, opts) => (file === 'lsof' ? { ...big.run(file, args, { ...opts, maxBuffer: 1024 * 1024 }) } : big.run(file, args, opts)) // what an lsof that hit a 1 MiB cap answers
-  await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: cut }), /lsof did not finish \(spawnSync lsof ENOBUFS\).*not known/)
+  const onlyFirst = (file, args) => (args.includes('pid=,comm=') ? { status: 0, stdout: '   501 /x/real-codex\n', stderr: '' } : gone.run(file, args))
+  assert.deepEqual((await listProcs({ uid: 501, platform: 'darwin', exec: onlyFirst })).map((f) => [f.pid, f.exe]), [[501, '/x/real-codex'], [502, '/x/zcode']], 'a process the second ask does not name ended between the two: the command line\'s word stays')
+  // a machine's whole answer is read whole (the cap is 64 MiB, where the two asks of a working Mac print a few hundred kilobytes), so the newest
+  // process — the highest pid, ps's last — has its executable; an ask whose answer did not fit (cut short, killed by its timeout) is not read in
+  // part: the table is not known
+  const at = new Date(), many = Array.from({ length: 5000 }, (_, i) => ({ pid: 1000 + i, at, exe: `/Applications/App${i}.app/Contents/MacOS/App${i}`, cmdline: `app${i}` }))
+  const big = darwinTools([...many, { pid: 9999, at, exe: '/Users/u/.local/share/claude/versions/2.1.296', cmdline: 'claude' }])
+  assert.equal((await listProcs({ uid: 501, platform: 'darwin', exec: big.run })).find((f) => f.pid === 9999).exe, '/Users/u/.local/share/claude/versions/2.1.296', 'the last process of a table of 5001 has its executable')
+  const cut = (file, args, opts) => (args.includes('pid=,comm=') ? { ...big.run(file, args, { ...opts, maxBuffer: 64 * 1024 }) } : big.run(file, args, opts)) // what an ask whose answer outgrew its cap gives back
+  await assert.rejects(listProcs({ uid: 501, platform: 'darwin', exec: cut }), /did not finish \(spawnSync ps ENOBUFS\).*not known/)
   const none = darwinTools([{ pid: 1, uid: 0, at: new Date(), exe: '/sbin/launchd' }])
   assert.deepEqual(await listProcs({ uid: 501, platform: 'darwin', exec: none.run }), [])
-  assert.deepEqual(none.calls.map((c) => c[0]), ['ps'], 'a table with no process of this user asks lsof nothing (it would name none, which is not a failure)')
+  assert.deepEqual(none.calls.map((c) => c.join(' ')), ['ps -Axo pid=,ppid=,uid=,lstart=,command='], 'a table with no process of this user asks for no executable (the answer would name none, which is not a failure)')
 })
 
 test('listProcs on macOS without an injected runner does not run a real ps under npm test (0.1 §3)', async () => {
