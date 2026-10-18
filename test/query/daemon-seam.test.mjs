@@ -18,6 +18,8 @@ import { within } from '../helpers/bounded.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { run as runQueryCli } from '../../src/cli/query.mjs'
+import { queryDocument } from '../../src/query/client.mjs'
+import net from 'node:net'
 
 /** `asight query <argv>` as the command line runs it → { out, exit }: one document on stdout, nothing injected. */
 async function cli(argv, { home, env, platform }) {
@@ -61,7 +63,7 @@ test('darwin: a read goes through the real daemon and gives the very bytes the l
 
     // `segments` and `classes` are not here: both report the raw layer's live state (its sizes, what is sealed), and
     // this daemon seals its own copy — the two HOMEs may honestly disagree about those two documents, not about a record.
-    for (const argv of [['sessions', '--json'], ['session', '--id', id, '--json'], ['session', '--id', id, '--cursor', '1', '--limit', '1', '--json'], ['calls', '--session', id, '--json'], ['block', '--ref', ref, '--json'], ['pricing', '--json']]) {
+    for (const argv of [['sessions', '--json'], ['session', '--id', id, '--json'], ['session', '--id', id, '--after', '1', '--limit', '1', '--json'], ['calls', '--session', id, '--json'], ['block', '--ref', ref, '--json'], ['pricing', '--json']]) {
       const d = await cli(argv, { home: w.home, env: w.env, platform: 'darwin' })
       const l = await local(argv)
       assert.equal(d.exit, 0, d.out)
@@ -92,6 +94,51 @@ test('darwin: a read goes through the real daemon and gives the very bytes the l
       const again = await cli(['session', '--id', other.session_id, '--json'], { home: w.home, env: w.env, platform: 'darwin' })
       assert.equal(JSON.parse(again.out).meta.calls, other.calls, 'an untouched session keeps its own answer while another one grows')
     }
+  } finally {
+    await box.stop()
+  }
+})
+
+/** A raw request on the daemon's control socket that is DESTROYED as soon as the document starts arriving: a caller
+ *  that went away mid-document (Ctrl-C, a closed board tab). Resolves when the socket is gone. */
+function hangUp({ socketPath, token, path: p }) {
+  return new Promise((resolve, reject) => {
+    const s = net.connect(socketPath, () => s.write(`GET ${p} HTTP/1.1\r\nHost: collector\r\nx-asight-token: ${token}\r\nConnection: close\r\n\r\n`))
+    s.once('data', () => { s.destroy(); resolve() })
+    s.once('error', reject)
+    setTimeout(() => { s.destroy(); resolve() }, 5000).unref()
+  })
+}
+
+test('darwin: the cold read is local, the worker is warmed behind it, and a caller that hangs up mid-document leaves the worker usable', { timeout: 60_000 }, async () => {
+  const w = await modelWorld({ os: 'darwin' })
+  const asight = path.join(w.home, '.asight')
+  generate({ home: asight, seed: 11, bytes: 3_000_000, segmentBytes: 1 << 20 })
+  const box = await liveUnit({ w, platform: 'darwin' })
+  box.unit.start()
+  await within(box.starting, 20_000, 'the real daemon started')
+  const ctx = { home: asight, userHome: w.home, dir: w.dir, platform: 'darwin', env: w.env }
+  /** The one read client, over the real socket it resolves itself: `via` says WHO answered. */
+  const ask = (name, params = {}) => queryDocument(name, params, ctx)
+  const warm = async (name, params) => { for (let i = 0; i < 40; i++) { const r = await ask(name, params); if (r.via === 'daemon') return r; await new Promise((d) => setTimeout(d, 50)) } throw new Error('the worker never answered') }
+  try {
+    // 1. COLD (D63, the cold path): no worker runs yet, so the daemon says so at once and this process answers —
+    //    a cold read is never slower than a local one. The warm worker then answers the very same bytes.
+    const cold = await ask('sessions')
+    assert.equal(cold.via, 'local', 'with no worker running the read is answered locally, not after a fork')
+    const hot = await warm('sessions')
+    assert.equal(hot.text, cold.text, 'and the worker the cold read warmed answers the same document, byte for byte')
+
+    // 2. A CALLER THAT GOES: a big document is cut off mid-flight. The worker must stay usable — before this fix
+    //    its stdout stayed paused, the 30 s deadline then wrote a false failure and killed it with its cache, and
+    //    every read went local for 30 s.
+    const id = biggestSession((await ask('sessions')).text)
+    await warm('session', { id })
+    const control = JSON.parse(fs.readFileSync(path.join(w.dir, 'control.json'), 'utf8'))
+    await hangUp({ socketPath: control.path, token: control.token, path: `/query?name=session&id=${encodeURIComponent(id)}&indent=2` })
+    const after = await ask('session', { id })
+    assert.equal(after.via, 'daemon', 'the next query is still answered by the worker, not by the fallback')
+    assert.equal(JSON.parse(after.text).ok, true)
   } finally {
     await box.stop()
   }

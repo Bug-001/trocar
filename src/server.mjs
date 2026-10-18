@@ -9,7 +9,7 @@ import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { collectorDir } from './off/paths.mjs';
+import { collectorDir, collectorIn } from './off/paths.mjs';
 import { queryDocument } from './query/client.mjs';
 import { QUERIES } from './query/named/index.mjs';
 
@@ -60,7 +60,10 @@ async function serveStatic(res, urlPath) {
   } catch { sendJson(res, 404, { error: 'not found' }); }
 }
 
-export function createServer({ home, fs, now, dir = collectorDir(), platform, env } = {}) {
+// `dir` (where this platform's daemon says how to reach it) comes from the home this server was GIVEN: with
+// `collectorDir()` it was always the real `os.homedir()`'s, so a server created on a sandbox home asked the
+// machine's own daemon and could have answered out of its corpus (and a test could have reached the real HOME).
+export function createServer({ home, fs, now, dir = home ? collectorIn(home) : collectorDir(), platform, env } = {}) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
