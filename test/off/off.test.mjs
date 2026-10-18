@@ -123,7 +123,7 @@ test('V1: off with the daemon gone (its lock left, its helper dead): every certi
   assert.deepEqual(s.installItems(), installed, 'every phase-install item: still in the manifest, its file byte for byte')
   assert.deepEqual(receipt.routing, { confirmed: true, state: 'stale', how: 'no-daemon' })
   assert.deepEqual([receipt.daemon, receipt.relayed], [{ pid: null, state: 'none' }, { closing: 0, waiting: 0, cut: 0 }], 'no daemon: nothing is relayed, said as a fact')
-  assert.deepEqual(execFrom(s, calls), ['systemctl --user is-active asight-collector.service'], 'D61: the only OS tool run is the question whether systemd is about to restart the daemon — off never disables the login entry (it says inactive here) and the autostart disable: no start, no stop, no restart')
+  assert.deepEqual(execFrom(s, calls), ['systemctl --user is-active asight-collector.service'], 'D61: the only OS tool run is the question whether systemd is about to restart the daemon — off never disables the login entry (it says inactive here): no start, no stop, no restart')
   assert.deepEqual(s.sys.daemon.calls.slice(asked).filter((c) => c.startsWith('POST')), [], 'and no daemon was asked for anything, let alone started')
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ALL_HARNESSES.map(() => 'off'), 'every harness is off in state.json')
   assert.deepEqual(readManifest(s.dir).entries, entries, 'and the manifest keeps them for uninstall')
@@ -150,7 +150,7 @@ test('semantics 4 / 1.6 §1.4: a killed daemon that systemd is about to restart 
   const { receipt, exit } = await s.off({ deps: { alive: () => false, exec: sd.run } })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
   const cmds = execFrom(s, from)
-  assert.deepEqual(cmds.filter((c) => !/ is-active /.test(c)), ['systemctl --user stop asight-collector.service', 'systemctl --user reset-failed asight-collector.service'], 'D61: the unit is stopped and its failure reset, and NEVER disabled — the next login must bring the daemon back. The unit is stopped and its failed state cleared, then the autostart is disabled')
+  assert.deepEqual(cmds.filter((c) => !/ is-active /.test(c)), ['systemctl --user stop asight-collector.service', 'systemctl --user reset-failed asight-collector.service'], 'D61: the unit is stopped and its failure reset, and NEVER disabled — the next login must bring the daemon back. The unit is stopped and its failed state cleared; the registration is untouched')
   assert.ok(cmds.every((c) => !/ disable /.test(c)), 'D61: no off disables the autostart — on and off are the same across a reboot')
   assert.deepEqual(receipt.relayed, { closing: 0, waiting: 0, cut: 0 }, 'there was no engine: nothing was relayed')
   assert.deepEqual(receipt.daemon, { pid: null, state: 'none' })
@@ -438,9 +438,11 @@ test('V27: over on, off and a daemon that has to be stopped, nothing restarts an
   ]
   const procs = async () => agents
   const calls = s.sys.exec.calls.length
-  // the `on` leg (installedHome has run it): the only OS tool of the whole fixture is install's `enable --now` (D61: `on` runs none — the daemon already answers) — no restart, no stop, no signal — and all `on` asked of the daemon is its status and to attach the harnesses
-  assert.deepEqual(s.sys.exec.calls.slice(0, calls), ['systemctl --user enable --now asight-collector.service'], 'on starts the daemon (a start is not a restart) and touches no agent')
-  assert.deepEqual(s.sys.daemon.calls.map((c) => c.split(' {')[0]), ['GET /status', 'POST /on'], 'on asks the daemon for its status once and attaches the harnesses: nothing else (D61: no enable, and nothing to start)')
+  // the `on` leg (installedHome has run it): the OS tools of the whole fixture are install's `enable --now` and the registration READ every `on` makes
+  // first (1.6 §3.3) — no restart, no stop, no signal, nothing started again (the daemon install brought up already answers)
+  assert.deepEqual(s.sys.exec.calls.slice(0, calls), ['systemctl --user enable --now asight-collector.service', 'systemctl --user is-enabled asight-collector.service'], 'on starts nothing (a start is not a restart) and touches no agent')
+  // install probes before it enables and once after (拉起不是重启, R8), then `on` asks the status once and attaches the harnesses: nothing else
+  assert.deepEqual(s.sys.daemon.calls.map((c) => c.split(' {')[0]), ['GET /status', 'GET /status', 'GET /status', 'POST /on'], 'no daemon is started a second time and nothing else is asked of it')
   const r = await s.off({ deps: { procs, request: hangsOnStatus(s), alive: (pid) => t.alive(pid) || agents.some((a) => a.pid === pid), identity: t.identity, kill: t.kill, isHelper: t.isHelper, ...fakeClock() } })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
   assert.ok(t.sent.every(([pid]) => pid === 4242 || pid === 4243), `signals went to the daemon and its helper only: ${JSON.stringify(t.sent)}`)
@@ -490,7 +492,7 @@ test('V24: with the install manifest gone and no terminal, off takes the routing
   assert.deepEqual(first.receipt.pending.map((p) => [path.relative(s.home, p.path), p.how]).sort(), [['.claude/settings.json', 'json-value'], ['.codex/.env', 'block']])
   assert.match(first.receipt.problems.join('\n'), /record of what it wrote is missing[\s\S]*asight off --yes/)
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'desired off for every harness')
-  assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart], [true, ['POST /off {"exit":true}'], undefined], 'the routing is off, the daemon was asked to exit, the autostart is disabled — none of it needs the manifest')
+  assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart], [true, ['POST /off {"exit":true}'], undefined], 'the routing is off, the daemon was asked to exit, and the receipt carries no autostart key (D61: off touches no registration) — none of it needs the manifest')
   assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'partial'])
   const second = await s.off({ yes: true })
   assert.equal(second.exit, 0, JSON.stringify(second.receipt.problems))

@@ -28,7 +28,7 @@ export async function loadArch(platform = process.platform) {
     }
   }
   if (platform === 'darwin') {
-    // 4.9 §1 (as D47 rewrote it): no machine-wide helper either (install: null — nothing on darwin needs privilege: ps / lsof / scutil / security are plain CLIs, run on demand);
+    // 4.9 §1 (as D47 rewrote it): no machine-wide helper either (install: null — nothing on darwin needs privilege: ps / scutil / security are plain CLIs, run on demand);
     // no kernel to download or verify either — the ENGINE is the only local proxy (its per-group doors), so `on` has no prepare / ensureKernel arms at all (the win32 twin keeps
     // its own). The autostart unit is the launchd module (§4); the OS roots are read (darwinRoots through osRootsFor: the keychain-administered anchors + bundled + SystemRootCertificates, 4.9 §6.2);
     // netFacts is darwinNetFacts (1.6 §9.7's archFacts). No createRedirector: the daemon runs the collector model (runModelDaemon).

@@ -102,17 +102,20 @@ test('the /proc readers the daemon uses are the same functions the arch re-expor
 const PS_C = ['  501     1   501 Wed Oct  7 04:27:00 2026 /Applications/Claude.app/Contents/MacOS/claude --flag x', '  502   501   501 Wed Oct  7 05:00:00 2026 /usr/local/bin/codex app-server', ''].join('\n')
 const PS_ZH = ['  501     1   501 三 10月  7 04:27:00 2026 /Applications/Claude.app/Contents/MacOS/claude --flag x', '  502   501   501 三 10月  7 05:00:00 2026 /usr/local/bin/codex app-server', ''].join('\n')
 const PS_JA = PS_ZH.replace(/三 10月/g, '水 10月')
-const LSOF_C = 'p501\nftxt\nn/Applications/Claude.app/Contents/MacOS/claude\np502\nftxt\nn/usr/local/bin/codex\n'
-const tools = (psOut) => (file) => ({ status: 0, stdout: file === 'lsof' ? LSOF_C : psOut, stderr: '' }) // ps prints `psOut`, lsof names 501 and 502
+// the second ask (`ps -Axo pid=,comm=`): the executable of each pid, one line per process — `comm` is one word to the end of the line
+const COMM_C = ['  501 /Applications/Claude.app/Contents/MacOS/claude', '  502 /usr/local/bin/codex', ''].join('\n')
+const isComm = (args) => (args || []).join(' ') === '-Axo pid=,comm='
+const tools = (psOut) => (file, args) => ({ status: 0, stdout: isComm(args) ? COMM_C : psOut, stderr: '' }) // the lstart table prints `psOut`, the comm table names 501 and 502
 
 test('listProcs on macOS runs ps in the C locale: the runner is handed LC_ALL=C over whatever the user\'s own environment says, and a ps that honours the locale gives the table it would give in English', async () => {
   const seen = []
-  const exec = (file, args, opts) => { seen.push([file, opts.env.LC_ALL]); return tools(opts.env.LC_ALL === 'C' ? PS_C : PS_ZH)(file) } // a ps that localizes unless told not to
+  const exec = (file, args, opts) => { seen.push([[file, ...(args || [])].join(' '), opts.env.LC_ALL]); return tools(opts.env.LC_ALL === 'C' ? PS_C : PS_ZH)(file, args) } // a ps that localizes unless told not to
   for (const loc of ['zh_CN.UTF-8', 'ja_JP.UTF-8', 'C', undefined]) {
     const got = await listProcs({ uid: 501, platform: 'darwin', exec, env: { ...process.env, LC_ALL: loc, LANG: loc, LC_TIME: loc } })
-    assert.deepEqual(got.map((f) => [f.pid, f.startedAt]), [[501, new Date(2026, 9, 7, 4, 27, 0).getTime()], [502, new Date(2026, 9, 7, 5, 0, 0).getTime()]], `LC_ALL=${loc}`)
+    assert.deepEqual(got.map((f) => [f.pid, f.startedAt, f.exe]), [[501, new Date(2026, 9, 7, 4, 27, 0).getTime(), '/Applications/Claude.app/Contents/MacOS/claude'], [502, new Date(2026, 9, 7, 5, 0, 0).getTime(), '/usr/local/bin/codex']], `LC_ALL=${loc}`)
   }
-  assert.ok(seen.every(([f, l]) => (f === 'ps' ? l === 'C' : l === 'UTF-8')), `ps in the C locale, lsof in UTF-8 (lsofEnv: a non-ASCII path, not \\xNN): ${JSON.stringify(seen)}`)
+  assert.ok(seen.every(([, l]) => l === 'C'), `both asks run in the C locale: ${JSON.stringify(seen)}`)
+  assert.deepEqual([...new Set(seen.map(([c]) => c))], ['ps -Axo pid=,ppid=,uid=,lstart=,command=', 'ps -Axo pid=,comm='], 'the two asks, and no other tool')
 })
 
 test('listProcs on macOS: a ps whose lines cannot be read is an error that says so — never an empty table, which would read as "nobody is alive" — while a table with a few odd lines among readable ones is read as far as it goes', async () => {

@@ -526,7 +526,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
 
     // 6 / 7 · the receipt and its result line
     if (!w.fs.existsSync(w.dir)) receipt.log = null // nothing was written to flows/: there is no log to point at (R1)
-    if (!hadAnything && !receipt.changed.length && !receipt.removed.length && !receipt.left.length && !receipt.problems.length && !(receipt.pending || []).length && !((receipt.autostart && receipt.autostart.removed) || []).length) receipt.nothing_installed = true // an `off` of a machine asight is not on: it says so, instead of "asight 已关闭采集" (audit semantics 7)
+    if (!hadAnything && !receipt.changed.length && !receipt.removed.length && !receipt.left.length && !receipt.problems.length && !(receipt.pending || []).length) receipt.nothing_installed = true // an `off` of a machine asight is not on: it says so, instead of "asight 已关闭采集" (audit semantics 7)
     receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0 // an item that was not undone is a not-done off (1.6 R3, R4), whatever else went well
     if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${receipt.left.length} item(s) were left as they are (listed above, with why); put that right, then run asight off again`)
     const n = { changed: receipt.changed.length, removed: receipt.removed.length, left: receipt.left.length, still_trusting: (receipt.still_trusting || []).length }

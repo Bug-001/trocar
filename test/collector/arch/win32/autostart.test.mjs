@@ -429,7 +429,8 @@ test('W24 a /Query that did not run (timeout, blocked, no schtasks) is a failure
     ['killed without a reason', { status: null }],
   ]
   for (const [what, query] of didNot) {
-    for (const verb of ['remove']) {
+    {
+      const verb = 'remove' // D61: `remove` is the only undo verb left — `off` touches no registration
       const run = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
       const asked = (file, args) => (file === 'schtasks' && args[0] === '/Query' ? { stdout: '', stderr: '', ...query } : null)
       const calls = []

@@ -385,7 +385,7 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
     // D61: the login registration and the daemon, through the one seam every command uses — so Linux's install probes before it starts too
     // (拉起不是重启, R8: a daemon someone started by hand is never started a second time), and no `--now` is issued blind.
     if (opts.unit) {
-      const dmn = await ensureDaemonUp({ osName: opts.osName, dir, env: opts.env || process.env, fs, unit: opts.unit, register: true, reload: written.unit === 'rewrite', put, ...(opts.request ? { request: opts.request } : {}), ...(opts.sleep ? { pause: opts.sleep } : {}) })
+      const dmn = await ensureDaemonUp({ osName: opts.osName, dir, env: opts.env || process.env, fs, unit: opts.unit, register: true, reload: written.unit === 'rewrite', put, ...(opts.request ? { request: opts.request } : {}), ...(opts.socketPath ? { socketPath: opts.socketPath } : {}), ...(opts.sleep ? { pause: opts.sleep } : {}) })
       for (const n of dmn.notes) if (!final.notes.includes(n)) final.notes.push(n)
     }
     const counts = { entries: manifest.entries.length, files: manifest.files.filter((f) => f.role === 'trust-file').length, notes: final.notes.length }
