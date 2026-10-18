@@ -104,41 +104,6 @@ test('④b covers ~/.asight/backup/: a backup of a user\'s file that others can 
   assert.ok(r.out.includes(b) && r.out.includes('(mode 0644) can be read by someone else'), r.out)
 })
 
-// R11 / 0.1 §3: a directory that exists and cannot be listed is not "no files" — reading nothing and certifying is what this command once did. Real permissions: a mode-000 directory, restored afterwards
-const rootCanList = typeof process.getuid === 'function' && process.getuid() === 0 ? 'root lists a directory with no mode bits' : false
-test('④b: the export directory, a session directory in it, and the sessions directory — one that exists and cannot be listed is a read error (exit 3, the directory and the errno named), never a pass; listable again, the 0644 file in it is exit 1', { skip: rootCanList }, async () => {
-  const s = plain()
-  const src = path.join(s.home, 'src'); capture(src)
-  const ah = path.join(s.home, '.asight')
-  const leak = capture(path.join(ah, 'export', 'S1'), { mode: 0o644, name: 'leak.ndjson' }) // a capture others can read, where nobody can look
-  fs.mkdirSync(path.join(ah, 'sessions', 'S2'), { recursive: true })
-  const dirs = { 'the export directory': path.join(ah, 'export'), 'a session directory in the export directory': path.join(ah, 'export', 'S1'), 'the sessions directory': path.join(ah, 'sessions'), 'a session directory in the sessions directory': path.join(ah, 'sessions', 'S2') }
-  for (const [what, dir] of Object.entries(dirs)) {
-    fs.chmodSync(leak, dir.includes('export') ? 0o644 : 0o600) // hidden by the directory under test, or visible and clean (a problem that is found outranks not knowing: that is exit 1)
-    fs.chmodSync(dir, 0)
-    try {
-      const r = await doctor(s, [], { source: src })
-      assert.equal(r.exit, 3, `${what}: ${r.text}`)
-      assert.ok(r.out.includes(`Could not judge a captured file: ${dir}: EACCES`), `${what}: ${r.out}`)
-      if (what === 'the export directory') {
-        const j = await doctor(s, ['--json'], { source: src, io: fakeIo() })
-        assert.equal(j.exit, 3)
-        const doc = j.io.json()
-        assert.ok(doc.undetermined.some((u) => u.what === 'a captured file' && u.reason.startsWith(`${dir}: EACCES`)), JSON.stringify(doc.undetermined))
-        assert.ok(doc.errors.some((e) => e.where === 'a captured file' && e.reason.startsWith(`${dir}: EACCES`)), JSON.stringify(doc.errors))
-      }
-    } finally { fs.chmodSync(dir, 0o700) }
-  }
-  fs.chmodSync(leak, 0o644)
-  const r = await doctor(s, [], { source: src })
-  assert.equal(r.exit, 1, `listable: what was hidden is found\n${r.text}`); assert.ok(r.out.includes(leak) && r.out.includes('(mode 0644)'), r.out)
-  fs.chmodSync(leak, 0o600)
-  assert.equal((await doctor(s, [], { source: src })).exit, 0)
-  // a directory that is not there is no files, as before
-  fs.rmSync(path.join(ah, 'export'), { recursive: true }); fs.rmSync(path.join(ah, 'sessions'), { recursive: true })
-  assert.equal((await doctor(s, [], { source: src })).exit, 0)
-})
-
 // the network reads of the topology (1.6 §9.7, V50): `ss` and `ip` only read; the tests below are about what doctor starts, stops or changes, so these are set aside
 const NET_READ = /^(ss -ltnpH|ip -j (route get 1\.1\.1\.1|-d link show dev \S+))$/
 const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !NET_READ.test(c))

@@ -21,8 +21,7 @@ import { verifyUserTrustOnly } from '../capture/onboard.mjs'
 import { readRecords } from '../etl/ingest.mjs'
 import { serveSource } from '../paths.mjs'
 import { sealedReadProblem } from '../raw/journal.mjs'
-import { exportFiles } from '../raw/export.mjs'
-import { listSources, sealedUnder } from '../raw/discover.mjs'
+import { listSources } from '../raw/discover.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { formatInstallNotes } from './status-text.mjs'
 import { asightHome, backupDir, collectorDir, standaloneCommand } from '../off/paths.mjs'
@@ -64,20 +63,15 @@ function filesIn(dir, fs) {
 async function collect({ home, env, sourceFlags, deps }) {
   const fs = deps.fs || nodeFs, ah = asightHome(home)
   const flagged = sourceFlags.filter(Boolean)
-  const sources = [].concat(flagged.length ? flagged : env.ASIGHT_SOURCE || serveSource({ home: ah, legacy: path.join(home, '.atrace', 'asight'), collector: collectorDir(home) })).filter(Boolean)
-  const sessionsRoot = path.join(ah, 'sessions')
+  const sources = [].concat(flagged.length ? flagged : env.ASIGHT_SOURCE || serveSource({ home: ah, collector: collectorDir(home) })).filter(Boolean)
   const files = [], extra = [], records = [], readErrors = []
   for (const root of sources) {
     try {
-      const part = listSources([root], { sessionsRoot })
+      const part = listSources([root])
       files.push(...part.files)
       extra.push(...part.superseded.map((x) => x.sealed)) // sealed copies superseded by an original that still exists hold the same credentials (D35)
     } catch (e) { readErrors.push(`${root}: ${(e && e.message) || e}`) }
   }
-  // a directory that exists and cannot be listed is a read error (无法判定), never "no files": a mode-000 export dir holding a 0644 capture would otherwise be certified owner-only (0.1 §3, R11)
-  const unlistable = (d, e) => readErrors.push(`${d}: ${errText(e)}`)
-  extra.push(...exportFiles(path.join(ah, 'export'), { fs, onError: unlistable })) // the default export dir (D35 · 4.1 §凭据处置)
-  extra.push(...sealedUnder(sessionsRoot, { fs, onError: unlistable }).filter((f) => !files.includes(f))) // every sealed file `asight raw seal` filed by session, whichever source it continues
   const backups = filesIn(backupDir(home), fs) // what asight saved of the user's files before changing them: settings with tokens in them (R2)
   if (backups.error) readErrors.push(backups.error)
   extra.push(...backups.files)

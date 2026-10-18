@@ -16,7 +16,7 @@ import { osStubs } from '../helpers/os-stubs.mjs';
 //
 // It could not fail (confirmed by three independent verifiers). Two defects stacked:
 //
-//   1. D27 made `serveSource()` return an ARRAY of capture roots (the new home plus the legacy one).
+//   1. D27 made `serveSource()` return an ARRAY of capture roots (the home plus the collector directory).
 //      bin/asight.mjs still did `fs.statSync(source)` on it, which throws ERR_INVALID_ARG_TYPE, which
 //      the surrounding try/catch swallows into `{exists:false}` — so `records` stayed `[]` and nothing
 //      was ever examined. On a DEFAULT install, with a real capture on disk, doctor read zero records.
@@ -141,7 +141,7 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
   const home = tmpDir('asight-home-ok-');
   try {
     const newHome = path.join(home, '.asight');
-    const legacy = path.join(home, '.atrace', 'asight');
+    const legacy = path.join(home, '.asight', 'collector'); // the second default root (D60 ②: older locations are not read)
     fs.mkdirSync(newHome, { recursive: true });
     fs.mkdirSync(legacy, { recursive: true });
     const clean = {
@@ -175,7 +175,7 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
 
 test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () => {
   // THE ACTUAL REGRESSION, exercised the way it actually happened: no --source at all, so the source
-  // is whatever serveSource() returns — an ARRAY of the new home plus the legacy one. That array went
+  // is whatever serveSource() returns — an ARRAY of the home and the collector directory. That array went
   // straight into fs.statSync(), which throws ERR_INVALID_ARG_TYPE on a non-path, and the catch
   // turned it into "no source", i.e. zero records, i.e. a vacuous ✓.
   //
@@ -186,7 +186,7 @@ test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () =
   const home = tmpDir('asight-home-');
   try {
     const newHome = path.join(home, '.asight');
-    const legacy = path.join(home, '.atrace', 'asight');
+    const legacy = path.join(home, '.asight', 'collector'); // the second default root (D60 ②: older locations are not read)
     fs.mkdirSync(newHome, { recursive: true });
     fs.mkdirSync(legacy, { recursive: true });
     fs.writeFileSync(path.join(newHome, 'capture.ndjson'), '');

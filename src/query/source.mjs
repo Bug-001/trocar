@@ -313,34 +313,32 @@ function poisonSplitDuplicates(parts) {
 // What one root lists: discover's rule over this root alone, or — under several roots — this root's
 // share of ONE listing across all of them, so an original in one root supersedes its sealed copy in
 // another (4.2 「并存期」: every reader makes the same choice).
-// `sessionsRoot`: where `asight raw seal` files a shard's records by session; sealed files there that
-// continue a shard of a served root are read with that root (src/raw/discover.mjs, rule 3).
 // `exclude`: files to treat as absent — only `asight raw compare`, to resolve as it will once the
 // originals with a sealed copy are deleted (review 3 F1).
-const listRoot = (root, sessionsRoot = null, exclude = null) => {
-  const ls = listSources([root], { sessionsRoot, exclude });
-  return { ...ls.perRoot[0], superseded: ls.superseded, mismatched: ls.mismatched, unattributed: ls.unattributed };
+const listRoot = (root, exclude = null) => {
+  const ls = listSources([root], { exclude });
+  return { ...ls.perRoot[0], superseded: ls.superseded, mismatched: ls.mismatched };
 };
 
 // Build resolve(text_ref) -> the block's exact byte slice (or null if unresolvable). Lean: holds a
 // byte-offset index + ≤ BODY_LRU cached req_body strings, never the whole corpus.
-// `source` may be one path or SEVERAL roots (D27: the new home plus the legacy one that still holds
-// the user's captures). Scanning only the first would make raw-byte refs from the other root
-// unresolvable — the block viewer would report "record not found" for bytes that are on disk.
-export async function buildResolver(source, { retryMs = 30000, sessionsRoot = null, exclude = null, lister = (root) => listRoot(root, sessionsRoot, exclude), frameCache = createFrameCache(8), unreadableSealed = null, onIndexChange = null } = {}) {
+// `source` may be one path or SEVERAL roots (the home and the collector directory). Scanning only the
+// first would make raw-byte refs from the other root unresolvable — the block viewer would report
+// "record not found" for bytes that are on disk.
+export async function buildResolver(source, { retryMs = 30000, exclude = null, lister = (root) => listRoot(root, exclude), frameCache = createFrameCache(8), unreadableSealed = null, onIndexChange = null } = {}) {
   const roots = (Array.isArray(source) ? source : [source]).filter(Boolean);
-  if (roots.length > 1) return buildMultiResolver(roots, { retryMs, sessionsRoot, exclude });
+  if (roots.length > 1) return buildMultiResolver(roots, { retryMs, exclude });
   const sourcePath = roots[0];
   const files = [];
   // scan: what is not read is recorded with its reason, so the omission is
   // reportable rather than silent. Which files are read, and the reasons for the rest, come from the
   // shared rule (src/raw/discover.mjs): the flat *.ndjson, one level down `<sid>/calls.ndjson`, and
   // sealed files standing where those streams would be read.
-  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, bytesIndexed: 0, unreadableSealed: [], superseded: [], mismatched: [], unattributed: [] };
+  const scan = { files, skipped: [], corruptLines: 0, corruptByFile: {}, unidentifiedLines: 0, bytesIndexed: 0, unreadableSealed: [], superseded: [], mismatched: [] };
   const isDir = statSync(sourcePath).isDirectory();
   const listFiles = (skipped) => {
     const ls = lister(sourcePath); // throws if the root cannot be listed (broken ≠ empty)
-    scan.superseded = ls.superseded || []; scan.mismatched = ls.mismatched || []; scan.unattributed = ls.unattributed || [];
+    scan.superseded = ls.superseded || []; scan.mismatched = ls.mismatched || [];
     if (skipped) skipped.push(...ls.skipped.map(({ name, reason }) => ({ name, reason })));
     return [...ls.files];
   };
@@ -439,7 +437,7 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
 
   // Under several roots `unreadableSealed` is every root's list: a miss names all of them.
   const absentReason = (stream, recordId) => {
-    const bad = [...(unreadableSealed ? unreadableSealed() : scan.unreadableSealed), ...(scan.unattributed || [])];
+    const bad = [...(unreadableSealed ? unreadableSealed() : scan.unreadableSealed)];
     return `no record "${recordId}" in stream "${stream}" in this source` + (bad.length
       ? ` — note: ${bad.length} sealed file(s) here could not be read (${bad.map((b) => path.basename(b.file)).join(', ')}), so a record inside them cannot be found`
       : '');
@@ -623,7 +621,7 @@ export async function buildResolver(source, { retryMs = 30000, sessionsRoot = nu
 // among collisions — a ref that is ambiguous within a root still throws from that root's resolver.
 // Which files each root reads is ONE listing across all of them (src/raw/discover.mjs), so an
 // original in one root and its sealed copy in another are never both read.
-async function buildMultiResolver(roots, { sessionsRoot, exclude, ...opts }) {
+async function buildMultiResolver(roots, { exclude, ...opts }) {
   const parts = [];
   const unreadable = [];
   // the roots a listing can include: one that cannot be listed is left out of it (and fails alone)
@@ -636,10 +634,10 @@ async function buildMultiResolver(roots, { sessionsRoot, exclude, ...opts }) {
   const poison = () => poisonSplitDuplicates(parts.map((p) => p.index));
   const lister = (root) => {
     const good = listable();
-    if (!good.includes(root)) return listRoot(root, sessionsRoot, exclude); // throws this root's own error
-    const ls = listSources(good, { sessionsRoot, exclude });
+    if (!good.includes(root)) return listRoot(root, exclude); // throws this root's own error
+    const ls = listSources(good, { exclude });
     shared.ls = ls;
-    return { ...ls.perRoot.find((p) => p.root === root), superseded: ls.superseded, mismatched: ls.mismatched, unattributed: ls.unattributed };
+    return { ...ls.perRoot.find((p) => p.root === root), superseded: ls.superseded, mismatched: ls.mismatched };
   };
   for (const r of roots) {
     // FAIL SOFT PER ROOT. A root can be absent, unreadable, or deleted between the caller's existence
@@ -680,7 +678,6 @@ async function buildMultiResolver(roots, { sessionsRoot, exclude, ...opts }) {
     bytesIndexed: parts.reduce((n, p) => n + ((p.scan && p.scan.bytesIndexed) || 0), 0),
     unreadableSealed: unreadableSealed(),
     superseded: (shared.ls && shared.ls.superseded) || [], mismatched: (shared.ls && shared.ls.mismatched) || [],
-    unattributed: (shared.ls && shared.ls.unattributed) || [],
     unreadableRoots: unreadable,
   });
   // live: a refresh that changed nothing can still have noted a skip

@@ -15,13 +15,6 @@
 //    different file at the original's path is not the source: both are read; if it is the same inode
 //    changed in place, that is reported (invariant 4). A copied tree (new inode, same size and mtime)
 //    is still the source; same size with another mtime is read twice and reported (review 3 F4).
-// 3. Continuations (review 2026-10-06 F2). The marker-gated sealer files a shard's records by session
-//    under <sessionsRoot>/<key>/ (`asight raw seal`'s default --sessions, ~/.asight/sessions — 0.2
-//    状态表 「封存文件」). Those files continue a shard that lived in some directory, so a reader that
-//    serves THAT directory reads them as part of it and shows the same records after the seal as
-//    before (4.6 E8). Only sealed files whose source shard's directory is a served root are taken —
-//    never `asight shard` copies, which are a second copy of a stream read elsewhere. Callers opt in
-//    by passing `sessionsRoot` (the CLI does; a test that wants a hermetic scan does not).
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { readIndex } from './format.mjs';
@@ -30,18 +23,12 @@ import { isCaptureFile, skipReason } from '../paths.mjs';
 import { parseSegment } from '../collector/core/record/segments.mjs';
 
 export const SEALED_EXT = '.sealed';
-const SEG = /^(.+)\.(\d{4,})\.sealed$/;
-// Two sealed names: the raw layer's `<segment>.sealed` (D60: one sealed file per segment, the only shape the daemon
-// writes), and the older `<stream>.<NNNN>.sealed` of the per-shard sealer. A reader that knew only the second skipped
-// every segment the daemon sealed — its records would have been unreadable (invariant 2).
+// One sealed name: the raw layer's `<segment>.sealed` (D60 ①②, the only shape the daemon writes). The older
+// `<stream>.<NNNN>.sealed` of the per-shard sealer is an older location — neither read nor touched (D60 ②).
 const sealedSegment = (n) => { const s = parseSegment(n); return s && s.sealed ? s.segment : null; };
-export const isSealedPath = (p) => SEG.test(path.basename(p)) || !!sealedSegment(path.basename(p));
-export const streamOfSealed = (name) => {
-  const n = path.basename(name), m = SEG.exec(n);
-  if (m) return m[1];
-  const seg = sealedSegment(n);
-  return seg ? `${seg}.ndjson` : null; // the segment's plaintext name: what the sealed file's source-segment table holds
-};
+export const isSealedPath = (p) => !!sealedSegment(path.basename(p));
+// the segment's plaintext name: what the sealed file's source-segment table holds
+export const streamOfSealed = (name) => { const seg = sealedSegment(path.basename(name)); return seg ? `${seg}.ndjson` : null; };
 
 // The order a reader reads one directory's files in (4.2 「watermark」: a session's record sequence is
 // the same before and after sealing). By stream — `streams` first, in that order, then any other
@@ -51,10 +38,10 @@ export const streamOfSealed = (name) => {
 // sealed `probes`, unlike the originals (review 3 F2). Stable for files of one stream in several dirs.
 export function orderInputs(files, streams = []) {
   const rank = (f) => {
-    const n = path.basename(f), m = SEG.exec(n), stream = m ? m[1] : (streamOfSealed(n) || n), k = streams.indexOf(stream);
-    return { k: k < 0 ? streams.length : k, stream, seg: m ? Number(m[2]) : Infinity };
+    const n = path.basename(f), stream = streamOfSealed(n) || n, k = streams.indexOf(stream);
+    return { k: k < 0 ? streams.length : k, stream };
   };
-  const cmp = (a, b) => a.k - b.k || (a.stream < b.stream ? -1 : a.stream > b.stream ? 1 : 0) || (a.seg === b.seg ? 0 : a.seg < b.seg ? -1 : 1);
+  const cmp = (a, b) => a.k - b.k || (a.stream < b.stream ? -1 : a.stream > b.stream ? 1 : 0);
   return files.map((f) => [f, rank(f)]).sort((x, y) => cmp(x[1], y[1])).map(([f]) => f);
 }
 // A file that looks like captured bytes (a stream, a sealed file, a compressed capture) — what a reader
@@ -65,7 +52,7 @@ export function unreadCapture(name) {
   const n = path.basename(name);
   if (n.startsWith('.') || /\.(closed|sealing)$/.test(n)) return null;
   if (COMPRESSED.test(n) && /ndjson|capture|calls|probes|other/i.test(n)) return 'a compressed capture — not read; decompress it, or seal it, to have it shown';
-  if (n.endsWith('.sealed') && !isSealedPath(n)) return 'a sealed file without a segment number — not read; give it its <stream>.<NNNN>.sealed name';
+  if (n.endsWith('.sealed') && !isSealedPath(n)) return 'a sealed file whose name is not a segment — not read; give it its <segment>.sealed name';
   if (/\.ndjson\./.test(n) && !isSealedPath(n)) return 'a capture stream under another name — not read';
   return null;
 }
@@ -207,65 +194,17 @@ export function dirInputs(dir, { originals = [], order = originals, fs = nodeFs,
   return { ...r, files: orderInputs(r.files, order) };
 }
 
-const realCache = new Map();
-const realDir = (fs, d) => { if (!realCache.has(d)) { let r = null; try { r = fs.realpathSync(d); } catch {} realCache.set(d, r); } return realCache.get(d); };
-function addContinuations(perRoot, sessionsRoot, fs) {
-  const unattributed = [];
-  const want = new Map();
-  perRoot.forEach((r, k) => { try { if (fs.statSync(r.root).isDirectory()) want.set(fs.realpathSync(r.root), k); } catch {} });
-  if (!want.size) return unattributed;
-  let ents;
-  try { ents = fs.readdirSync(sessionsRoot, { withFileTypes: true }); }
-  catch (err) { if (err.code !== 'ENOENT') unattributed.push({ file: sessionsRoot, reason: `the sessions directory could not be read (${err.code}) — sealed continuations of this source in it are not read`, unreadableRecords: null }); return unattributed; }
-  const have = new Set(perRoot.flatMap((r) => [...r.flat, ...r.below].map((f) => path.resolve(f))));
-  for (const e of ents.sort((a, b) => (a.name < b.name ? -1 : 1))) {
-    if (!e.isDirectory()) continue;
-    const dir = path.join(sessionsRoot, e.name);
-    let names; try { names = fs.readdirSync(dir).sort(); }
-    catch (err) { unattributed.push({ file: dir, reason: `a session directory that could not be read (${err.code}) — sealed continuations in it are not read`, unreadableRecords: null }); continue; }
-    for (const n of names) {
-      const q = path.join(dir, n);
-      if (!isSealedPath(n) || have.has(path.resolve(q))) continue;
-      const src = sealedSources(q, { fs });
-      // unreadable: whose continuation it is cannot be told — say so rather than drop it silently
-      if (!src) { unattributed.push({ file: q, reason: `${sealedSourcesError(q) || 'unreadable'} — a sealed file under the sessions directory that could not be opened, so it is unknown whether its records belong to this source`, unreadableRecords: null }); continue; }
-      const k = src.length === 1 ? want.get(realDir(fs, path.dirname(src[0].abs))) : undefined;
-      if (k !== undefined) perRoot[k].cont.push(q);
-    }
-  }
-  return unattributed;
-}
-
-// Every sealed file directly in `dir` and one level down (doctor ④b: owner-only check). A directory that is
-// not there is no files; one that exists and cannot be listed is `onError(dir, err)` — without an `onError`
-// it is skipped as before.
-export function sealedUnder(dir, { fs = nodeFs, onError = null } = {}) {
-  const out = [];
-  const bad = (d, e) => { if (onError && !(e && (e.code === 'ENOENT' || e.code === 'ENOTDIR'))) onError(d, e); };
-  let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { bad(dir, e); return out; }
-  for (const e of ents) {
-    const p = path.join(dir, e.name);
-    if (!e.isDirectory()) { if (isSealedPath(e.name)) out.push(p); continue; }
-    try { for (const n of fs.readdirSync(p)) if (isSealedPath(n)) out.push(path.join(p, n)); } catch (err) { bad(p, err); }
-  }
-  return out.sort();
-}
-
-// roots → { files (to read, in a stable order), perRoot, skipped, superseded, mismatched, unattributed, sig }.
+// roots → { files (to read, in a stable order), perRoot, skipped, superseded, mismatched, sig }.
 // `exclude`: paths to treat as absent (`asight raw compare` reads the state after deletion this way).
-export function listSources(roots, { fs = nodeFs, sessionsRoot = null, exclude = null } = {}) {
-  const perRoot = roots.map((root) => ({ root, ...scanRoot(root, fs), cont: [] }));
-  const unattributed = sessionsRoot ? addContinuations(perRoot, sessionsRoot, fs) : [];
-  // A continuation continues one of the root's flat streams: they are ONE sequence per stream, by
-  // segment, the live file last (orderInputs) — appended after every flat file, a session whose older
-  // shard was sealed read its newer records first (review 3, second pass on F2).
+export function listSources(roots, { fs = nodeFs, exclude = null } = {}) {
+  const perRoot = roots.map((root) => ({ root, ...scanRoot(root, fs) }));
   for (const r of perRoot) {
-    r.files = [...orderInputs([...r.flat, ...r.cont]), ...r.below];
+    r.files = [...orderInputs(r.flat), ...r.below];
     if (exclude) r.files = r.files.filter((f) => !exclude.has(f));
   }
   const { superseded, mismatched, drop } = resolveCoexistence(perRoot.flatMap((r) => r.files), { fs });
   for (const r of perRoot) r.files = r.files.filter((f) => !drop.has(f));
   const files = perRoot.flatMap((r) => r.files);
   const sig = files.map((f) => { try { const s = fs.statSync(f); return `${f}:${s.size}.${Math.round(s.mtimeMs)}`; } catch { return ''; } }).join('|') || '∅dir';
-  return { files, perRoot, skipped: perRoot.flatMap((r) => r.skipped), superseded, mismatched, unattributed, sig };
+  return { files, perRoot, skipped: perRoot.flatMap((r) => r.skipped), superseded, mismatched, sig };
 }

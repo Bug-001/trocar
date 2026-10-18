@@ -39,7 +39,7 @@ test('serve reads the directory that the capture writers write into', () => {
     'asight mitm must write where asight serve looks — this was the actual first-run dead end');
   const home = existingHome();
   try {
-    assert.ok([].concat(serveSource({ home, legacyExists: false })).includes(home),
+    assert.ok([].concat(serveSource({ home })).includes(home),
       'a home that exists must be offered as a root — otherwise the writers write somewhere the '
       + 'reader never looks, which is the first-run dead end this file exists for');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
@@ -48,7 +48,7 @@ test('serve reads the directory that the capture writers write into', () => {
 test('the default source is a DIRECTORY, so every harness renders on one board', () => {
   const home = existingHome();
   try {
-    assert.deepEqual([].concat(serveSource({ home, legacyExists: false })), [home],
+    assert.deepEqual([].concat(serveSource({ home })), [home],
       'a directory source lists Claude Code / Codex / OpenCode sessions side by side; a single-file '
       + 'default silently hides every other harness the user captured');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
@@ -72,11 +72,9 @@ test('the collector directory is a default board root when it exists (4.6 §记�
   const home = existingHome();
   try {
     assert.equal(collectorHome(home), path.join(home, 'collector'));
-    assert.deepEqual(serveSource({ home, legacyExists: false }), [home], 'absent collector dir: unchanged');
+    assert.deepEqual(serveSource({ home }), [home], 'absent collector dir: unchanged');
     fs.mkdirSync(collectorHome(home));
-    assert.deepEqual(serveSource({ home, legacyExists: false }), [home, collectorHome(home)]);
-    const legacy = path.join(home, 'legacy-root');
-    assert.deepEqual(serveSource({ home, legacy, legacyExists: true }), [home, collectorHome(home), legacy], 'order: home, collector, legacy');
+    assert.deepEqual(serveSource({ home }), [home, collectorHome(home)]);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
