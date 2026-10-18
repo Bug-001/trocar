@@ -43,7 +43,7 @@ async function world({ proxy = 'http://alice:pw@127.0.0.1:7897' } = {}) {
 }
 // `doctor` has no --source any more (1.6 §2): it reads the default location inside the sandbox HOME.
 
-test('V50 status and doctor only read: they write netenv.json and flows/ and nothing else, run only read-only queries, open no connection of their own — and `bpftool` / `netsh` are printed for the user, never run', async () => {
+test('V50 status and doctor only read: they write nothing at all, run only read-only queries, open no connection of their own — and `bpftool` / `netsh` are printed for the user, never run', async () => {
   const w = await world()
   try {
     const before = snapshot(w.s.home)
@@ -52,15 +52,14 @@ test('V50 status and doctor only read: they write netenv.json and flows/ and not
     const runs = [['status'], ['status', 'claude-code'], ['status', '--json'], ['doctor'], ['doctor', 'claude-code', '--json']]
     try { for (const argv of runs) await w.s.run(argv, { deps: w.deps }) } finally { net.Socket.prototype.connect = realConnect }
     const changed = changedFiles(before, snapshot(w.s.home)).map((f) => f.split(path.sep).join('/'))
-    assert.deepEqual(changed.filter((f) => f !== '.asight/netenv.json' && !f.startsWith('.asight/collector/flows/')), [], `written: ${changed.join(', ')}`)
-    assert.ok(changed.includes('.asight/netenv.json'), 'the board\'s copy is the one thing it writes')
+    assert.deepEqual(changed, [], `§3.5 / §3.7: neither command writes any file; written: ${changed.join(', ')}`)
     assert.deepEqual([...new Set(w.calls)].filter((c) => !READ_ONLY.has(c)), [], 'every OS tool it ran is a reader')
     assert.ok(w.calls.length > 0 && w.calls.includes('ss'))
     assert.deepEqual(connects, [], 'zero connections of their own: no VPN controller is asked, nothing goes online')
     // printed for the user, never run
     w.deps.netFactsDeps = async () => ({ harnesses: descs, archFacts: async (ctx) => ({ ...(await linuxNetFacts(ctx)), otherRedirector: true }) })
     const out = (await w.s.run(['doctor'], { deps: w.deps })).io.stdoutText()
-    assert.match(out, /\$ sudo bpftool cgroup tree \/sys\/fs\/cgroup/, 'doctor prints it for the user')
+    assert.match(out, /Fix +sudo bpftool cgroup tree \/sys\/fs\/cgroup/, 'doctor prints it for the user')
     assert.ok(!w.calls.some((c) => /bpftool|netsh|sudo/.test(c)), 'and never runs it')
     assert.ok(!(w.s.sys.exec.calls.some((c) => /bpftool|netsh|sudo/.test(c))))
   } finally { await w.close() }

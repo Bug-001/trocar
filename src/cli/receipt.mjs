@@ -13,7 +13,7 @@ const adoptedLine = (h, x) => `接上后 ${h} 的路: ${x.chain}${x.proxy ? `(�
 
 /** D46: a chain that is the harness's own name and nothing else (the degenerate topology `buildTopology`'s catch leaves on a machine whose facts
  *  cannot be read) says nothing — a 「接上后 X 的路: X」 line is noise, and it is not printed. A chain with a hop (or a proxy setting named) is real. */
-const saysSomething = (x) => !!x && (/\s→\s/.test(String(x.chain || '')) || !!x.proxy)
+const saysSomething = (x) => !!x && (/\s->\s/.test(String(x.chain || '')) || !!x.proxy)
 
 /** One line per (harness, reason) of a plan's watch entries, the files named together — D46: the same fact in four entries (OpenCode's package.json
  *  family) is one line, not four. The caller indents it (the plan's own two spaces, the Windows §11 block's four). */

@@ -257,7 +257,7 @@ function legacyTopology(F, h, hf) {
   g.edge(a, p, 'system-proxy', { evidence: ['system-proxy'] })
   let path = off
   if (l.mitm && l.on_path !== false) {
-    const m = g.node({ kind: 'legacy-mitm', name: 'the old capture', pid: l.mitm.pid, addr: l.mitm.addr, port: l.mitm.port, asight: true })
+    const m = g.node({ kind: 'legacy-mitm', name: 'asight old MITM', pid: l.mitm.pid, addr: l.mitm.addr, port: l.mitm.port, asight: true })
     const pn = g.nodes.find((n) => n.id === p), p2 = g.node({ ...pn, id: undefined, role: 'upstream', unknown: pn.unknown })
     g.edge(p, m, 'proxy-http', { evidence: ['legacy-block'] }); g.edge(m, p2, 'proxy-http', { evidence: [] }); g.edge(p2, x, 'egress')
     path = [a, p, m, p2, x]

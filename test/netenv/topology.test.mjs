@@ -46,7 +46,7 @@ test('V42/D49: a proxy whose owner is a readable process (row 24, and a VPN clie
   const t = buildTopology(ROWS.find((r) => r.n === 24).facts)['claude-code']
   const p = t.nodes.find((n) => n.kind === 'proxy')
   assert.deepEqual(p, { id: p.id, kind: 'proxy', name: 'node', addr: '127.0.0.1', port: 38743, pid: 898 })
-  assert.deepEqual(t.nodes.find((n) => n.kind === 'egress'), { id: t.nodes.find((n) => n.kind === 'egress').id, kind: 'egress', name: '出口' }, 'no unknown, no chosen_by')
+  assert.deepEqual(t.nodes.find((n) => n.kind === 'egress'), { id: t.nodes.find((n) => n.kind === 'egress').id, kind: 'egress', name: 'internet' }, 'no unknown, no chosen_by')
   assert.deepEqual(validateTopology({ 'claude-code': t }), [])
   const nameless = buildTopology(facts('claude-code', { listeners: [{ addr: '127.0.0.1', port: 38743, pid: 898 }] }, { setting: proxyOf('http://127.0.0.1:38743') }))['claude-code'].nodes.find((n) => n.kind === 'proxy')
   assert.deepEqual([nameless.name, nameless.pid, nameless.unknown], ['127.0.0.1:38743', 898, undefined])
@@ -54,7 +54,7 @@ test('V42/D49: a proxy whose owner is a readable process (row 24, and a VPN clie
   assert.deepEqual([vpnClient.name, vpnClient.unknown, vpnClient.product, vpnClient.version, vpnClient.mode], ['mihomo', undefined, undefined, undefined, undefined])
 })
 
-test('V42: a listener list that could not be read gives the proxy its reason, and one that was read and holds nobody gives 「没人在听」, never an unknown owner', () => {
+test('V42: a listener list that could not be read gives the proxy its reason, and one that was read and holds nobody gives `nothing listening`, never an unknown owner', () => {
   const setting = proxyOf('http://127.0.0.1:7890')
   const unread = buildTopology(facts('claude-code', { unknowns: [{ fact: 'listeners', reason: 'denied', detail: 'ss: EPERM' }] }, { setting }))['claude-code']
   assert.deepEqual(unread.nodes.find((n) => n.kind === 'proxy').unknown, { reason: 'denied', detail: 'ss: EPERM' })
@@ -99,7 +99,7 @@ test('every value of the NetFacts the builder reads can be null / unknown withou
   void harness; void none
 })
 
-test('rows with a note: what the chain cannot say by itself (the agents still on the kernel after `off`, the command that re-adopts a drifted field, the filters nobody can see) is a note of the topology, rendered under 「说明」', () => {
+test('rows with a note: what the chain cannot say by itself (the agents still on the kernel after `off`, the command that re-adopts a drifted field, the filters nobody can see) is a note of the topology, rendered as `note:`', () => {
   const noted = ROWS.filter((r) => r.notes)
   assert.deepEqual(noted.map((r) => r.n), [14, 17, 23])
   for (const r of noted) assert.deepEqual(buildTopology(r.facts)[r.h].notes, r.notes, `row ${r.n}`)
@@ -138,10 +138,10 @@ test('a scheme the agent cannot speak and does not fail on (dsh, SOCKS) is a dir
   assert.ok(!t.nodes.some((n) => n.kind === 'proxy'), 'and no proxy hop is drawn for a value it ignores')
   const into = t.edges.find((e) => e.to === t.branches[0].off_path[1])
   assert.deepEqual([into.via, into.inferred, into.evidence], ['direct', true, ['unsupported-scheme:socks5']])
-  assert.match(renderCompact(t)[0], /:443\(直连 · 推断\)$/, 'and the words say it')
+  assert.match(renderCompact(t)[0], /:443 \(direct, inferred\)$/, 'and the words say it')
   const lab = buildTopology(facts('deepseek-dsh', {}, { ...socks, behaviour: { ...harness('deepseek-dsh').behaviour, measured: 'lab' } }))['deepseek-dsh']
   assert.equal(lab.edges.find((e) => e.to === lab.branches[0].off_path[1]).inferred, undefined, 'measured: not said to be inferred')
-  assert.ok(!/推断/.test(renderCompact(lab).join()))
+  assert.ok(!/inferred/.test(renderCompact(lab).join()))
   const fails = buildTopology(facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, { setting: proxyOf('socks5://127.0.0.1:7890', [{ kind: 'env', where: 'ALL_PROXY' }]) }))['claude-code']
   assert.ok(fails.nodes.some((n) => n.kind === 'proxy'), 'a scheme the agent fails on keeps the hop: it is where the agent tries to go')
   assert.deepEqual(validateTopology({ 'deepseek-dsh': t }), [])
@@ -159,7 +159,7 @@ test('proxy mode verdicts the platform\'s facts can ask for: a form it refused t
 
 test('D49: a TUN device or a VPN product in the facts changes nothing of the topology: a direct agent stops at the API host, with or without asight, whatever F.tun and F.vpn say', () => {
   const plain = renderCompact(buildTopology(facts('claude-code'))['claude-code'])[0]
-  assert.equal(plain, 'claude 4121 → [eBPF] asight 引擎 :47123 → api.anthropic.com:443(直连)')
+  assert.equal(plain, 'claude (pid 4121) -> [ebpf] asight :47123 -> api.anthropic.com:443 (direct)')
   for (const f of [facts('claude-code', { tun: true }), facts('claude-code', { tun: true, vpn: mihomoVpn({ tun: true }) }), facts('claude-code', { vpn: mihomoVpn({ tun: true }) })]) {
     const t = buildTopology(f)['claude-code']
     assert.equal(renderCompact(t)[0], plain)
@@ -177,20 +177,23 @@ test('NO_PROXY: when the environment names the API host, an agent with a proxy m
   const fromProc = noteOf(facts('claude-code', base, { ...via, procs: [proc(4121, { noProxy: ['api.anthropic.com'] })] }))
   assert.equal(fromProc.length, 1)
   assert.match(fromProc[0], /api\.anthropic\.com/)
-  assert.match(fromProc[0], /还没.*测|没测/, 'whether it honours NO_PROXY: not claimed')
+  assert.match(fromProc[0], /may reach those without a proxy/, 'whether it honours NO_PROXY: not claimed')
   assert.equal(noteOf(facts('claude-code', base, { ...via, procs: [proc(4121, { noProxy: [] })], noProxy: ['api.anthropic.com'] })).length, 0, 'the running process\'s own environment is what it does: it names nothing')
   assert.equal(noteOf(facts('claude-code', base, { ...via, procs: [], noProxy: ['api.anthropic.com'] })).length, 1, 'no process: what the shell that starts one has')
   assert.equal(noteOf(facts('claude-code', base, { procs: [proc(4121, { noProxy: ['api.anthropic.com'] })] })).length, 0, 'no proxy of its own: nothing to bypass')
   assert.equal(noteOf(facts('claude-code', base, via)).length, 0)
   const detail = renderDetail(buildTopology(facts('claude-code', base, { ...via, procs: [proc(4121, { noProxy: ['api.anthropic.com'] })] }))['claude-code']).join('\n')
-  assert.match(detail, /^说明: NO_PROXY/m)
+  assert.match(detail, /^ +note: NO_PROXY/m)
 })
 
-test('an https:// proxy is drawn as one: the engine ends the outer TLS of the agent\'s own https proxy and hands the CONNECT on, so the edge says 「https 代理」; a plain http proxy and a SOCKS one keep their words', () => {
-  const line = (value) => renderCompact(buildTopology(facts('claude-code', { listeners: [{ ...MIHOMO, port: 8443 }], vpn: mihomoVpn({ port: 8443 }) }, { setting: proxyOf(value) }))['claude-code'])[0]
-  assert.match(line('https://127.0.0.1:8443'), /→ \[CONNECT 原样转 · https 代理\] mihomo :8443/)
-  assert.match(line('http://127.0.0.1:8443'), /→ \[CONNECT 原样转\] mihomo :8443/)
-  assert.match(line('socks5://127.0.0.1:8443'), /→ \[SOCKS 前导原样转\] mihomo :8443/)
+test('an https:// proxy is drawn as one: the engine ends the outer TLS of the agent\'s own https proxy and hands the CONNECT on, so the edge into it is `proxy-https`; a plain http proxy and a SOCKS one keep their own via and words', () => {
+  const topo = (value) => buildTopology(facts('claude-code', { listeners: [{ ...MIHOMO, port: 8443 }], vpn: mihomoVpn({ port: 8443 }) }, { setting: proxyOf(value) }))['claude-code']
+  const viaOf = (value) => { const t = topo(value), p = t.nodes.find((n) => n.kind === 'proxy'); return t.edges.find((e) => e.to === p.id).via }
+  assert.deepEqual([viaOf('https://127.0.0.1:8443'), viaOf('http://127.0.0.1:8443'), viaOf('socks5://127.0.0.1:8443')], ['proxy-https', 'proxy-http', 'proxy-socks'])
+  const line = (value) => renderCompact(topo(value))[0]
+  assert.match(line('https://127.0.0.1:8443'), /-> \[CONNECT passed on as it is\] mihomo :8443/)
+  assert.match(line('http://127.0.0.1:8443'), /-> \[CONNECT passed on as it is\] mihomo :8443/)
+  assert.match(line('socks5://127.0.0.1:8443'), /-> \[SOCKS passed on as it is\] mihomo :8443/)
 })
 
 test('on_path is false — not true, not unknown — when asight cannot be on the path: wanted off with no process to read the watch table of, and wanted on with the kernel holding no link of this instance', () => {

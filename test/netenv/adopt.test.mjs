@@ -42,10 +42,10 @@ test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and
   assert.deepEqual(readJson(settingsOf(s)).env.HTTPS_PROXY, USER_PROXY, 'the user\'s setting is exactly what it was')
   assert.equal(readJson(settingsOf(s)).env.NODE_EXTRA_CA_CERTS.endsWith('extra-cc.pem'), true, 'and asight\'s own entry is the only thing it added')
   const a = doc.adopted['claude-code']
-  assert.equal(a.chain, 'claude-code → [eBPF] asight 引擎 → [CONNECT 原样转] proxy.corp:8080 → 出口')
+  assert.equal(a.chain, 'claude-code -> [ebpf] asight -> [CONNECT passed on as it is] proxy.corp:8080 -> internet')
   assert.equal(a.proxy, 'http://***@proxy.corp:8080')
   const text = (await (async () => { const t = sandbox(ENGINE); seedProxy(t); return (await t.run(['on', '--yes'], { deps: FACTS })).io.text() })())
-  assert.match(text, /^接上后 claude-code 的路: .*\[CONNECT 原样转\] proxy\.corp:8080.*http:\/\/\*\*\*@proxy\.corp:8080/m, 'the plan and the receipt print the chain')
+  assert.match(text, /^接上后 claude-code 的路: .*\[CONNECT passed on as it is\] proxy\.corp:8080.*http:\/\/\*\*\*@proxy\.corp:8080/m, 'the plan and the receipt print the chain')
   assert.equal(text.match(/^接上后 claude-code 的路:/gm).length, 2, 'once in the plan, once in the receipt')
   assert.ok(!/dave|hunter2/.test(text + JSON.stringify(doc)), 'no credential in the text or the JSON')
   const file = fs.readFileSync(netenvOf(s), 'utf8')
@@ -76,7 +76,7 @@ test('V46 (a) `on --dry-run` draws the chain and writes nothing; a platform with
   const before = snapshot(s.home)
   const r = await s.run(['on', '--dry-run', '--json'], { deps: FACTS })
   assert.equal(r.exit, 0)
-  assert.match(r.io.json().adopted['claude-code'].chain, /\[CONNECT 原样转\] proxy\.corp:8080/)
+  assert.match(r.io.json().adopted['claude-code'].chain, /\[CONNECT passed on as it is\] proxy\.corp:8080/)
   assert.deepEqual(snapshot(s.home), before)
   const plain = sandbox(ENGINE); seedProxy(plain)
   const q = await plain.run(['on', '--yes', '--json'])
@@ -84,15 +84,17 @@ test('V46 (a) `on --dry-run` draws the chain and writes nothing; a platform with
   assert.equal(fs.existsSync(netenvOf(plain)), false)
 })
 
-test('V47 (a) Linux: the setting is changed after `on` — the next connections go to the new proxy and asight is still on the path, the process that started before is listed under 「仍按启动时的设置」 with the old proxy (and asight on its way), and the drift is `proxy-changed`, captured', async () => {
+test('V47 (a) Linux: the setting is changed after `on` — the next connections go to the new proxy and asight is still on the path, the process that started before is listed on its own `pid N now` row with the old proxy (and asight on its way), and the drift is `proxy-changed`, captured', async () => {
   const s = sandbox({ status: { engine: { port: 47123 }, agents: [{ pid: 4121, agent: 'claude-code', trusted: true, decrypt: true }] } }); seedProxy(s)
   await s.run(['on', '--yes'], { deps: { ...FACTS, ...LINUX } })
   const started = Date.now() + 5000, changedAt = new Date(Date.now() + 10_000) // a process that started after `on`, and a change of the file after it
   setProxy(s, 'http://proxy.new:3128'); fs.utimesSync(settingsOf(s), changedAt, changedAt)
   const r = await s.run(['status', 'claude-code'], { deps: { ...FACTS, procs: async () => [claudeProc(4121, started)] } })
   const text = r.io.stdoutText()
-  assert.match(text, /^ {2}claude-code .*\[CONNECT 原样转\] proxy\.new:3128 → 出口\s+在路径上 · 是$/m, 'the new connections go to the new proxy, through asight')
-  assert.match(text, /^pid 4121 仍按启动时的设置:claude 4121 → \[eBPF\] asight 引擎 :47123 → \[CONNECT 原样转\] proxy\.corp:8080 → 出口;重启后按上面的路$/m)
+  assert.match(text, /^claude-code: on, captured$/m, 'the verdict: asight is still on the path')
+  assert.match(text, /^ +new processes +claude-code -> asight :47123 -> proxy\.new:3128 -> internet$/m, 'the new connections go to the new proxy, through asight')
+  assert.match(text, /^ +pid 4121 now$/m)
+  assert.match(text, /^ +claude \(pid 4121\) -> asight :47123 -> proxy\.corp:8080 -> internet$/m, 'it still goes by the setting it started with')
   assert.ok(!/dave|hunter2/.test(text))
   const adopted = readJson(netenvOf(s)).adopted
   const setting = readProxySetting(D['claude-code'], { home: s.home, env: {} })
@@ -102,17 +104,17 @@ test('V47 (a) Linux: the setting is changed after `on` — the next connections 
   assert.deepEqual(detectDrift({ adopted: {}, h: 'claude-code', setting, routing: 'driver' }), [], 'with nothing adopted there is nothing to have drifted from')
 })
 
-test('V47 (a) a process whose environment holds only a key its harness does not read (ALL_PROXY for claude-code) was started with no proxy: `status claude-code` does not list it under 「仍按启动时的设置」, and says nothing false about where it goes', async () => {
+test('V47 (a) a process whose environment holds only a key its harness does not read (ALL_PROXY for claude-code) was started with no proxy: `status claude-code` gives it no `pid N now` row, and says nothing false about where it goes', async () => {
   const s = sandbox({ status: { engine: { port: 47123 }, agents: [{ pid: 4121, agent: 'claude-code', trusted: true, decrypt: true }] } })
   await s.run(['on', '--yes'], { deps: { ...FACTS, ...LINUX } })
   const started = Date.now() + 5000
   const only = new Map([['ALL_PROXY', 'socks5://127.0.0.1:1080']])
   const r = await s.run(['status', 'claude-code', '--json'], { deps: { ...FACTS, procs: async () => [claudeProc(4121, started, only)] } })
   const text = r.io.text(), t = r.io.json().topology['claude-code']
-  assert.doesNotMatch(text, /仍按启动时的设置|1080/)
+  assert.doesNotMatch(text, /pid 4121 now|1080/)
   assert.deepEqual(t.running, [], 'no process is on another path')
   const own = await s.run(['status', 'claude-code'], { deps: { ...FACTS, procs: async () => [claudeProc(4121, started, new Map([['HTTPS_PROXY', 'http://127.0.0.1:7890']]))] } })
-  assert.match(own.io.stdoutText(), /^pid 4121 仍按启动时的设置:/m, 'a key it does read is still reported')
+  assert.match(own.io.stdoutText(), /^ +pid 4121 now/m, 'a key it does read is still reported')
 })
 
 test('V47 the daemon\'s 5 s check: a change of the file is one `netenv-change` (and no `failure`: the harness is still captured), however many checks run; a file nobody touched says nothing; it only reads', async () => {
