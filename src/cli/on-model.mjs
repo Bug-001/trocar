@@ -47,7 +47,8 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
       ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)]).join('\n'))
     return exit
   }
-  const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, ...(extra.dry_run || r.code ? {} : { undo: UNDO_LINE.on }), harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...extra })
+  // 附录 C.1: `undo` is the one line that undoes THIS run, and `null` when nothing was changed — a refusal (its code in `error`, or `r.code`) changed nothing, and neither did a dry run (tested on macOS and Windows 2026-10-19)
+  const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, ...(extra.dry_run || r.code || extra.error ? {} : { undo: UNDO_LINE.on }), harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...extra })
   const { autostartBlock, AUTOSTART_MISSING, ensureDaemonUp } = await import('../collector/install.mjs')
   const plan = await turnOnModel({ ...args, dryRun: true })
   const unit = !parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })

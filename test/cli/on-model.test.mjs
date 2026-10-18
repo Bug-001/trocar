@@ -61,6 +61,7 @@ for (const os of ['darwin', 'win32']) {
     const before = mine(w.home)
     const r = await on(w, os, ['--yes', '--json'], gone)
     assert.deepEqual([r.exit, r.io.json().error.code, r.io.json().ok], [2, 'autostart-missing', false], r.io.text())
+    assert.equal(r.io.json().undo, null, '附录 C.1: nothing was changed, so there is nothing to undo (macOS + Windows test machines 2026-10-19)')
     assert.match(r.io.json().error.message, /asight install/)
     assert.deepEqual(mine(w.home), before, 'nothing of yours and no state of asight\'s was written')
     assert.match(fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join(''), /"code":"autostart-missing"/, 'D38: the refusal is recorded')
@@ -69,7 +70,7 @@ for (const os of ['darwin', 'win32']) {
     assert.equal(dry.io.json().error, undefined, 'a dry run carries no error: nothing went wrong')
     // an answer that could not be read is not a yes either (the unit's `unknown`)
     const unreadable = await on(w, os, ['--yes', '--json'], { ...neverStarts, registered: () => ({ state: 'unknown', err: 'launchctl print did not run' }) })
-    assert.deepEqual([unreadable.exit, unreadable.io.json().error.code], [2, 'autostart-missing'], unreadable.io.text())
+    assert.deepEqual([unreadable.exit, unreadable.io.json().error.code, unreadable.io.json().undo], [2, 'autostart-missing', null], unreadable.io.text())
     assert.deepEqual(mine(w.home), before)
   })
 }
