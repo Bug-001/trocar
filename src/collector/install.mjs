@@ -422,7 +422,8 @@ export async function turnOn(opts = {}) {
   return recorded(dir, 'install', async (run) => {
     const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: unitFile, fs, now })
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
-    if (!isModelOs(osName) && !installComplete(plan._.prior)) return { receipt: unwritten({ ...fresh(), ok: false, code: CODE.certNotInstalled, notes: ['certificates are not installed. Run: asight install'] }), manifest: plan._.prior, plan, exit: 1 }
+    // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
+    if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: asight install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
     // the copy of the undo side that needs no source tree (R3) is one more file asight writes: listed in the plan and the dry run when it is missing or not what src/off generates now
     const standaloneCheck = checkStandalone({ home, version: OFF_VERSION, platform: osName, fs })
     if (!standaloneCheck.ok) { plan.created = [...plan.created, standaloneCheck.path]; plan.standalone = standaloneCheck.path }

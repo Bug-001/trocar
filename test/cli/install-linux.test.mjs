@@ -65,7 +65,7 @@ test('Linux on without an install record: cert-not-installed, exit 1, nothing wr
   assert.deepEqual(snapshot(home), before, 'not a byte: no CA, no settings key, no unit, no state.json')
   const j = fakeIo()
   assert.equal(await runOnCli(['--yes', '--json'], onCtx(home, j)), 1)
-  assert.equal(j.json().code, 'cert-not-installed')
+  assert.equal(j.json().error.code, 'cert-not-installed')
   assert.deepEqual(snapshot(home), before)
 })
 
