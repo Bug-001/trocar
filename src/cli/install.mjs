@@ -120,9 +120,8 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     else if (refusal) io.out(fit([`asight install stopped: ${refusal.message || refusal.reason}`, 'Nothing of yours was changed.']).join('\n'))
     else io.out(fit([receipt.ok ? "Installed. asight's root certificate is trusted by your user." : 'asight install did not finish. What is missing is below.',
       ...pairs([['Fingerprint (SHA-256)', r.fp256 || 'unknown (no root was made)']]), // the hex is one unbroken word under its label: one block, and in a block of its own, so it does not widen the rows below
-      ...pairs(carrierRows),
-      // the login entry install registered, confirmed like every other row (a Windows test machine 2026-10-18: the receipt said nothing about it)
-      ...(receipt.autostart ? pairs([['autostart', `${receipt.autostart.entry}: ${receipt.autostart.enabled ? 'enabled, and a collector starts at every login' : 'NOT enabled (see the problem below): no collector starts at login'}`]]) : []),
+      // the login entry install registered, confirmed like every other row (a Windows test machine 2026-10-18: the receipt said nothing about it) — in the carriers' own pairs() call, so its label column lines up with theirs (a Windows test machine 2026-10-19)
+      ...pairs([...carrierRows, ...(receipt.autostart ? [['autostart', `${receipt.autostart.entry}: ${receipt.autostart.enabled ? 'enabled, and a collector starts at every login' : 'NOT enabled (see the problem below): no collector starts at login'}`]] : [])]),
       ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: asight install`),
       ...receipt.notes.map((n) => `Note: ${n}`),
       ...r.problems.map((p) => `Problem: ${p}`),
