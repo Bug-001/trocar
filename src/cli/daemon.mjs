@@ -68,7 +68,7 @@ export async function runDaemonCli(argv, { io, env = process.env, home = os.home
     // D62 ⑥: a daemon that finds another one answering is already as asked, not a failure. It says so once (the line above goes to the daemon log, D46)
     // and exits 0, because the platform retries a non-zero exit for as long as the other daemon lives — launchd's KeepAlive {SuccessfulExit: false} every
     // ThrottleInterval, the Windows supervisor on its backoff (4.8 §7: 0 = it was asked to stop, do not re-pull) — which is a loop nobody sees.
-    return e && e.code === DAEMON_ALREADY_UP ? EXIT.ok : EXIT.incomplete
+    return e && e[DAEMON_ALREADY_UP] ? EXIT.ok : EXIT.incomplete
   }
   // the readiness line (whatever script starts the daemon waits for it): a port or an endpoint that is not known is left out, never printed as `null` (§1.1)
   io.out(`asight collector: ${[d.port ? `engine 127.0.0.1:${d.port}` : 'engine: no port of its own', d.socketPath ? `control ${d.socketPath}` : null].filter(Boolean).join(', ')}`)

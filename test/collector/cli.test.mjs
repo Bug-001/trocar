@@ -284,15 +284,15 @@ test('cli: the real bin runs `status` without a runtime dir on a HOME with nothi
 test('cli: a daemon that finds another one answering on the control channel says so once and exits 0 — the platform must not retry it; any other start failure still exits 1', async () => {
   const home = tmpDir('asight-cli-second-')
   markInstalled(home)
-  const run = (code) => {
-    const daemon = { startDaemon: async () => { throw Object.assign(new Error(code === DAEMON_ALREADY_UP ? 'another collector daemon is answering on /s' : 'the engine port is taken'), code ? { code } : {}) } }
+  const run = (already) => {
+    const daemon = { startDaemon: async () => { throw Object.assign(new Error(already ? 'another collector daemon is answering on /s' : 'the engine port is taken'), already ? { [DAEMON_ALREADY_UP]: true } : {}) } }
     const t = io()
     return runDaemonCli([], { io: t, home, env: {}, platform: 'darwin', deps: { daemon, proc: { on() {} }, getuid: () => 1000 } }).then((exit) => ({ exit, t }))
   }
-  const second = await run(DAEMON_ALREADY_UP)
+  const second = await run(true)
   assert.equal(second.exit, 0, 'already as asked: the OS mechanism is given no reason to start another one')
   assert.equal(second.t.e.filter((l) => /another collector daemon is answering/.test(l)).length, 1, `said once: ${JSON.stringify(second.t.e)}`)
-  const other = await run(null)
+  const other = await run(false)
   assert.equal(other.exit, 1, 'a start that failed for any other reason is still a failure')
   fs.rmSync(home, { recursive: true, force: true })
 })

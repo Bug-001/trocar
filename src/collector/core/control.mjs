@@ -30,8 +30,9 @@ const sameToken = (want, got) => typeof got === 'string' && timingSafeEqual(crea
 
 const send = (res, status, obj) => { const b = JSON.stringify(obj); res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(b) }); res.end(b) }
 
-/** The `code` startControlServer's error carries when another daemon already answers on the control channel: the one place that names it (src/cli/daemon.mjs reads it). */
-export const DAEMON_ALREADY_UP = 'daemon-already-up'
+/** The flag startControlServer's error carries when another daemon already answers on the control channel: the one place that names it (src/cli/daemon.mjs
+ *  reads it). Not `code`: a code of its own would enter the records as a failure code outside D38's closed sets, and this is not a failure at all. */
+export const DAEMON_ALREADY_UP = 'asightDaemonAlreadyUp'
 
 // token: the secret a request must carry (CONTROL_TOKEN_HEADER); null asks for none (the unix socket of Linux, which the file modes keep to the operator).
 // pipe: the socket path is a Windows named pipe (the default says so from the path): no directory to make, no file mode to set, no file to remove. A unix socket path may be given with `pipe: true` by a test.
@@ -48,7 +49,7 @@ export async function startControlServer({ socketPath, routes, maxBody = 64 * 10
   // D62 ⑥: the code is what tells the CLI this is not a failure but a daemon already in place. `asight daemon` then exits 0, because a non-zero exit
   // is retried by the platform for as long as the other daemon lives (launchd's KeepAlive {SuccessfulExit: false} every ThrottleInterval, the Windows
   // supervisor on its backoff): a hidden loop costing CPU with nothing to show for it.
-  if (state === 'live') throw Object.assign(new Error(`another collector daemon is answering on ${socketPath}`), { code: DAEMON_ALREADY_UP })
+  if (state === 'live') throw Object.assign(new Error(`another collector daemon is answering on ${socketPath}`), { [DAEMON_ALREADY_UP]: true })
   if (state === 'stale' && !pipe) fs.rmSync(socketPath, { force: true })
 
   const server = http.createServer((req, res) => {
