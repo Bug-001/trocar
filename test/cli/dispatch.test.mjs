@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { runCli } from '../../src/cli/main.mjs'
 import { COMMANDS, helpText, commandNamed, usageLine } from '../../src/cli/commands.mjs'
+import { WIDTH } from '../../src/cli/text.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
@@ -103,6 +104,12 @@ test('V6: an unknown command, an unknown option, an unknown harness and a flag t
   assert.equal(unknownOption.io.stderrText().trim(), `asight status: unknown option '--frob'\n${usageLine(commandNamed('status'))}`)
   const unknownCommand = await sandbox().run(['nope'])
   assert.equal(unknownCommand.io.stderrText().trim(), "asight: unknown command 'nope'. Run: asight help")
+  // §1.1⑥: a usage line longer than 80 columns folds under itself here as it does in help, it is not printed ragged
+  const long = await sandbox({ install: false }).run(['on', '--bogus'])
+  const lines = long.io.stderrText().trimEnd().split('\n')
+  assert.equal(lines[0], "asight on: unknown option '--bogus'")
+  for (const line of lines) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`)
+  assert.equal(lines.slice(1).join(' ').replace(/\s+/g, ' ').trim(), usageLine(commandNamed('on')), 'the whole usage line is there, folded')
 })
 
 test('V20: install / on / off / uninstall / daemon and the subcommands that change state (classes set, raw seal) refuse root and write nothing; what changes nothing of yours is not refused (§1.5)', async () => {

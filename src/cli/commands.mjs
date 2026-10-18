@@ -89,7 +89,7 @@ export const COMMANDS = Object.freeze([
 
   { name: 'raw',
     group: 'Maintenance', mutates: (args) => args.positionals[0] === 'seal', run: via('./raw.mjs', 'run'),
-    usage: 'asight raw seal [--json]\nasight raw verify [<segment>...] [--json]\nasight raw cat <segment>[:<from>[-<to>]]',
+    usage: 'asight raw seal [<file>...] [--json]\nasight raw verify [<segment>...] [--json]\nasight raw cat <segment>[:<from>[-<to>]]',
     summary: 'Hand maintenance of the captured records, which the collector normally seals by itself. seal seals every closed segment now, verify checks the sealed ones against their hashes, and cat prints a segment\'s records byte for byte.',
     options: [JSON_OPT],
     exits: [[0, 'done, and everything checked out'], [1, 'a segment did not seal, did not check out, or could not be found'], [2, 'nothing ran: a usage error or root'], [3, 'a sealed segment could not be read at all']] },
