@@ -45,7 +45,8 @@ export function readDaemonLock({ file, now = Date.now(), alive = pidAlive, ident
   return { state: age_ms > DAEMON_LOCK_FRESH_MS ? 'unresponsive' : 'running', lock, age_ms, ...(verified ? {} : { verified: false }) }
 }
 
-/** What there is to deal with → `{ state, lock, socket, reason?, age_ms? }` (`socket`: the one that answered, or null):
+/** What there is to deal with → `{ state, lock, socket, reply?, reason?, age_ms? }` (`socket`: the one that answered, or null; `reply`: what its
+ *  `GET /status` answered, for a caller that wants it — the probe below IS that question, so `status` does not ask it a second time, D62):
  *    none          no lock and nothing answers: no daemon
  *    stale         the lock names a process that is gone or is another one now, and nothing answers: no daemon (its helper may linger); or the lock was cut short
  *                  (empty or garbage: a crash or a power loss) and the control socket that was asked refuses: no daemon either, `lock` is null then
@@ -57,17 +58,17 @@ export function readDaemonLock({ file, now = Date.now(), alive = pidAlive, ident
 export async function daemonState({ lockFile, socketPath = null, request = controlRequest, identity = procIdentity, alive = pidAlive, now = Date.now, fs = nodeFs, timeoutMs = 5000, platform = process.platform } = {}) {
   const L = readDaemonLock({ file: lockFile, now: now(), alive, identity, fs })
   const lock = L.lock || null
-  let answered = false, hung = null, answeredOn = null
+  let answered = false, hung = null, answeredOn = null, reply
   const sockets = [...new Set([socketPath, lock && lock.socket].filter(Boolean))].filter((sock) => platform !== 'win32' || isPipePath(sock)) // on win32 only a pipe is asked: a lock naming a unix path is not connected to
   let refused = 0
   for (const sock of sockets) {
-    try { await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs }); answered = true; answeredOn = sock; break } catch (e) {
+    try { reply = await request({ socketPath: sock, method: 'GET', path: '/status', timeoutMs }); answered = true; answeredOn = sock; break } catch (e) {
       if (e && e.status) { answered = true; answeredOn = sock; break } // it answered, with an error: it is there
       if (e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED')) { refused++; continue } // nobody listens on it
       hung = String((e && e.message) || e)
     }
   }
-  const out = (state, reason) => ({ state, lock, socket: answeredOn, ...(reason ? { reason } : {}), ...(L.age_ms != null ? { age_ms: L.age_ms } : {}) })
+  const out = (state, reason) => ({ state, lock, socket: answeredOn, ...(reply !== undefined ? { reply } : {}), ...(reason ? { reason } : {}), ...(L.age_ms != null ? { age_ms: L.age_ms } : {}) })
   if (L.state === 'unresponsive') return out('unresponsive', `${lockFile} was not refreshed for ${Math.round(L.age_ms / 1000)} s`)
   if (answered) return out('running')
   if (hung) return out('unresponsive', `the control socket does not answer (${hung})`)

@@ -22,7 +22,7 @@ import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
-import { userProcessesOf } from '../off/orchestrate.mjs'
+import { userProcessesOf } from '../off/user-procs.mjs' // its own small file on purpose: through ./orchestrate.mjs this one function pulled the whole undo machinery into `status`'s module load (D62)
 
 import { judgeHarness, certOfForms } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
@@ -98,7 +98,11 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const st = await daemonState({ lockFile: path.join(dir, 'lock'), socketPath, request, identity, alive, now: ms, fs, timeoutMs: deps.timeoutMs || 5000, platform })
   f.daemon = { state: { none: 'not-running', stale: 'not-running', running: 'running', starting: 'not-responding', unresponsive: 'not-responding', unknown: 'unknown' }[st.state], pid: st.lock ? st.lock.pid : null, reason: st.reason || null, socket: st.socket || null, reply: null, lock: st.lock || null, helper_pid: st.lock ? st.lock.helper_pid ?? null : null }
   if (st.state === 'running') {
-    try { f.daemon.reply = await request({ socketPath: st.socket, method: 'GET', path: '/status', timeoutMs: deps.timeoutMs || 5000 }) } catch (e) { f.daemon.state = 'not-responding'; f.daemon.reason = `GET /status failed (${errText(e)})` }
+    // `daemonState`'s own probe IS `GET /status` (daemon-stop.mjs): when it carries the reply, that read is this one and no second round trip is
+    // made (D62: 3 round trips of ~23 ms each on a Windows test machine, where `status` has 0.5 s in all). A probe that answered with an ERROR status
+    // carries no reply, and then the question is put properly here — the same failure path as before.
+    if (st.reply !== undefined) f.daemon.reply = st.reply
+    else try { f.daemon.reply = await request({ socketPath: st.socket, method: 'GET', path: '/status', timeoutMs: deps.timeoutMs || 5000 }) } catch (e) { f.daemon.state = 'not-responding'; f.daemon.reason = `GET /status failed (${errText(e)})` }
   }
   const reply = f.daemon.reply
   // P12's holder rows (below) are the daemon's own poll, and answering them costs it a process snapshot of its own (41 ms measured on a Windows test machine).

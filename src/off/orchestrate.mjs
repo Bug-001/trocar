@@ -32,6 +32,7 @@ import { isProxyMode } from './mode.mjs'
 import { plistFilePath, AGENT_LABEL, agentState } from './darwin.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive, primeProcQuestions, procAskNotes } from './proc.mjs'
+import { userProcessesOf } from './user-procs.mjs' // its own file: `status` needs this one function and may not load this module's graph for it (D62)
 import { refuseElevatedByWhoami } from './win32.mjs'
 import { rootStore } from './root-store.mjs'
 import { runEventWriter } from './events.mjs'
@@ -164,18 +165,6 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
   return r
 }
 
-const USER_VERBS = { serve: 'a read-only dashboard, not on any agent path', capture: 'capturing in the foreground, it may be relaying agent traffic', mitm: 'capturing in the foreground, it may be relaying agent traffic' }
-/** The asight processes the user started themselves (`asight serve`, a foreground `capture` / `mitm`): listed, never killed (1.6 §1.4). */
-export function userProcessesOf(list, selfPid = process.pid) {
-  const out = []
-  for (const p of list || []) {
-    const argv = Array.isArray(p.argv) ? p.argv : []
-    const i = argv.findIndex((a) => /(^|\/)asight(\.mjs)?$/.test(String(a)))
-    const verb = i >= 0 ? argv[i + 1] : null
-    if (verb && Object.hasOwn(USER_VERBS, verb) && p.pid !== selfPid) out.push({ pid: p.pid, command: `asight ${verb}`, note: USER_VERBS[verb] })
-  }
-  return out
-}
 
 // What a row of the receipt says an entry lost (1.6 §7): the key, the block, the line.
 function offChangeText(e, result) {
