@@ -115,7 +115,7 @@ export async function doctorDoc({ names = null, home = nodeOs.homedir(), env = p
   const fs = deps.fs || nodeFs
   const c = await collect({ home, env, sourceFlags: [], deps })
   const depList = checkDeps({ platform, has: deps.has || ((bin) => onPath(bin, { env, platform, fs })) })
-  const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors })
+  const res = runSelfTest({ records: c.records, srcMeta: c.srcMeta, deps: depList, files: [...c.files, ...c.extra], readErrors: c.readErrors, platform })
   const f = await statusFacts({ names, home, env, platform, deps })
   const status = statusDocOf(f)
   let findings = null, findingsError = null

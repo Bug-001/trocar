@@ -81,11 +81,14 @@ export function qNoLeak(records) {
 //   unreadable  stat 不出来(权限、竞态删除…) → 不知道(退出 3),带文件与 errno:读不到的文件不是「被他人读取」,也不是「没问题」(R11);
 //   checked 0   一个文件也没核 → 不知道,什么都没认证。
 const shq = (f) => `'${String(f).replace(/'/g, `'\\''`)}'`;
-export function qFilePerms(files) {
+export function qFilePerms(files, { platform = process.platform } = {}) {
   if (!files || files.length === 0) {
     return { ok: false, checked: 0, bad: [], unreadable: [],
       note: '? no capture files were examined, so permissions cannot be certified (undetermined).' };
   }
+  // Mode bits are POSIX: Windows reports a synthesized 0666 / 0444 for every file, and who may read one is the ACL of the
+  // profile it lies in (a Windows test machine 2026-10-18: six backups of a healthy machine came out as "readable by others", with a chmod fix)
+  if (platform === 'win32') return { ok: true, checked: files.length, bad: [], unreadable: [], note: 'on Windows the profile folder\'s access list decides who reads these files; there are no mode bits to check' };
   const bad = [], unreadable = [];
   for (const f of files) {
     try {
@@ -112,14 +115,14 @@ export function qFilePerms(files) {
 //                 「核到零条」报「过」会让人以为权限已经核过(0.1 §3 「测试必须能变红」;这条守卫曾经缺席)。
 //   否则 ok → 0。
 // `hardFail` = failed:旧名字,只表示「必须以非 0 退出的失败」;`undetermined` 另走自己的退出码。
-export function runSelfTest({ records = [], srcMeta = null, deps = [], files = [], readErrors = [] } = {}) {
+export function runSelfTest({ records = [], srcMeta = null, deps = [], files = [], readErrors = [], platform = process.platform } = {}) {
   const q1 = qCapturing(records, srcMeta);
   const q2 = qCorrect(records);
   const q3 = qNoLeak(records);
   // The red line MOVED (2026-07-20): credentials are stored verbatim by design, so the failure is no
   // longer "a secret is present" but "the file holding it is readable by someone else". q3 still
   // refuses to certify a VACUOUS scan — reading nothing must never certify anything.
-  const q4b = qFilePerms(files);
+  const q4b = qFilePerms(files, { platform });
   const depsMissing = deps.filter((d) => !d.present);
   const failed = q4b.bad.length > 0;
   const why = [];

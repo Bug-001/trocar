@@ -128,6 +128,9 @@ test('qFilePerms: others-readable is a failure; a file whose permissions cannot 
     assert.deepEqual([c.failed, c.undetermined], [false, true]);
     assert.match(c.undeterminedWhy.join(' '), /the permissions of 1 file\(s\) could not be read/);
     assert.deepEqual([qFilePerms([tight]).ok, qFilePerms([]).ok], [true, false]);
+    // mode bits are POSIX: on win32 the same loose file is no finding, and not "cannot judge" either
+    const w = qFilePerms([loose, tight], { platform: 'win32' });
+    assert.deepEqual([w.ok, w.bad, w.unreadable, runSelfTest({ records: [{ endpoint: '/x' }], srcMeta: { exists: true }, files: [loose], platform: 'win32' }).failed], [true, [], [], false]);
     assert.match(qFilePerms([]).note, /no capture files were examined, so permissions cannot be certified \(undetermined\)/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
