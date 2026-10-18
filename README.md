@@ -410,7 +410,7 @@ asight classes reset
 asight serve [--port <port>]
 
 # maintenance
-asight raw seal [--json]
+asight raw seal [<file>...] [--json]
 asight raw verify [<segment>...] [--json]
 asight raw cat <segment>[:<from>[-<to>]]
 sudo asight setup-helper [--remove] [--binary <path>]   # Linux, once per machine
