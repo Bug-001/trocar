@@ -172,7 +172,7 @@ async function undoInto({ dir, home, manifest, ids = null, procs = async () => [
   const kernelCopies = manifest.entries.filter((e) => inScope(e.harness) && e.kind === 'forwarder-binary')
   if (!dropCa && kernelCopies.length) out.notes.push(`the kernel's copy (${kernelCopies.map((e) => e.path).join(', ')}) is kept while connections drain from it: it is not undone by \`off\`, \`asight uninstall\` removes it, \`asight off --now\` stops the drain`)
   const kept = [...manifest.entries, ...manifest.files].filter((x) => spared(x) && (x.harness == null ? ids == null : inScope(x.harness))).map(keyWhere)
-  if (kept.length) out.notes.push(`what asight install wrote stays — off never touches it; asight uninstall removes it: ${[...new Set(kept)].join(', ')}`) // one place once, however many entries it holds
+  if (kept.length) out.notes.push(`What asight install wrote stays: ${new Set(kept).size} file${new Set(kept).size === 1 ? '' : 's'} off never touches. asight uninstall removes them.`) // one place once, however many entries it holds; the files themselves are what `asight uninstall --dry-run` lists (§1.1 版式 4: the receipt gives what matters, not six paths)
 
   const entries = [...manifest.entries].reverse().filter((e) => inScope(e.harness) && !spared(e) && (FILE_ENTRY_KINDS.includes(e.kind) || e.kind === 'run-key' || e.kind === 'scheduled-task' || (e.kind === 'forwarder-binary' && dropCa)))
   const config = (e) => !((e.kind === 'text' || e.kind === 'trust-entry') && e.format !== 'dotenv-block') // step 1; the rest are step 4's (json-key and proxy-entry are config, a text/trust block is config only as dotenv)

@@ -18,7 +18,7 @@ export const OFF_NAMES = Object.freeze({
   aliases: Object.freeze({ claude: 'claude-code', dsh: 'deepseek-dsh', kimi: 'kimi-code', zcode: 'z-code' }),
 })
 
-const OFF_USAGE = 'usage: asight off [harness…] [--now] [--dry-run] [--yes] [--json]'
+const OFF_USAGE = 'usage: asight off [<harness>...] [--now] [--yes] [--dry-run] [--json]'
 const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--json'])
 
 /** `[harness…]` as typed → `{ ok: true, ids }` (null = none named = all; else code ids in table order, a repeat once) or `{ ok: false, unknown, known }`. Case is not folded.
@@ -52,15 +52,15 @@ export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdo
   const flags = new Set(), names = []
   for (const a of argv) {
     if (a.startsWith('-')) {
-      if (!OFF_FLAGS.has(a)) { io.err(`asight off: unknown option ${a}\n${OFF_USAGE}`); return EXIT.usage }
+      if (!OFF_FLAGS.has(a)) { io.err(`asight off: unknown option '${a}'\n${OFF_USAGE}`); return EXIT.usage }
       flags.add(a)
     } else names.push(a)
   }
   const named = resolveOffNames(names, names.length ? installedIds(home) : [])
-  if (!named.ok) { io.err(`asight off: unknown harness ${named.unknown.join(', ')}; the names are: ${named.known.join(', ')}`); return EXIT.usage }
+  if (!named.ok) { io.err(`asight off: unknown harness '${named.unknown[0]}'. Known: ${named.known.filter((n) => !Object.hasOwn(OFF_NAMES.aliases, n)).join(', ')}`); return EXIT.usage }
   const json = flags.has('--json')
   const say = json ? io.err : io.out // stdout holds the one JSON in --json mode (R5): the list and the question go to stderr
-  if ((deps.getuid || (typeof process.getuid === 'function' ? () => process.getuid() : () => -1))() === 0) { io.err('asight off: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
+  if ((deps.getuid || (typeof process.getuid === 'function' ? () => process.getuid() : () => -1))() === 0) { io.err('asight off: run this as your own user, not as root.'); return EXIT.usage } // §1.5: it refuses before it reads or writes anything
   try {
     const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say, deps: { platform, ...deps, ...(standalone ? { standalone: true } : {}) } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins): before the darwin flip a linux sandbox on a Mac host silently ran the darwin arms
     io.out(json ? JSON.stringify(receipt, null, 2) : formatOffReceipt(receipt, { home }))

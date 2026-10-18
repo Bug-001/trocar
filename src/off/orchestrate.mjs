@@ -75,7 +75,7 @@ export function offWorld({ home = nodeOs.homedir(), env = process.env, deps = {}
 /** What the user does when a daemon that answers cannot be made to confirm that its routing is off (1.6 §1.5 「确认不了就不撤」 leaves the entries alone, so the way out is said, audit semantics 5):
  *  stopping the daemon takes its helper and the links with it, and then the command is run again. On darwin the agent is booted out first — a daemon stopped under a loaded LaunchAgent is pulled right back by KeepAlive (4.9 §4). */
 const wayOut = (w, pid) => w.unitManaged()
-  ? (w.platform === 'darwin' ? `launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL} (摘自启,launchd 才不会把守护进程拉回来), then run the command again` : `To go on, stop the daemon (systemctl --user stop asight-collector.service), which takes its links off with it, then run the command again`)
+  ? (w.platform === 'darwin' ? `To go on, stop the autostart (launchctl bootout gui/${typeof process.getuid === 'function' ? process.getuid() : -1}/${AGENT_LABEL}), so the daemon is not started again, then run the command again` : `To go on, stop the daemon (systemctl --user stop asight-collector.service), which takes its links off with it, then run the command again`)
   : `To go on, stop the daemon (${Number.isInteger(pid) ? `kill ${pid}` : "no pid is on record: find it with pgrep -f 'asight.* (daemon|collector start)'"}), which takes its links off with it, then run the command again`
 
 /** Is the autostart going to bring the daemon back the moment it is stopped — systemd's Restart=on-failure mid-wait, or launchd's KeepAlive with the agent still loaded (4.9 §4)? A tool that cannot be asked says no: the lock decides. */
@@ -163,7 +163,7 @@ export async function switchRoutingOff(w, { ids = null, now = false, exit = fals
   return r
 }
 
-const USER_VERBS = { serve: '只读看板,不在 agent 路径上', capture: '前台采集,可能正中转 agent 的流量', mitm: '前台采集,可能正中转 agent 的流量' }
+const USER_VERBS = { serve: 'a read-only dashboard, not on any agent path', capture: 'capturing in the foreground, it may be relaying agent traffic', mitm: 'capturing in the foreground, it may be relaying agent traffic' }
 /** The asight processes the user started themselves (`asight serve`, a foreground `capture` / `mitm`): listed, never killed (1.6 §1.4). */
 export function userProcessesOf(list, selfPid = process.pid) {
   const out = []
@@ -178,10 +178,10 @@ export function userProcessesOf(list, selfPid = process.pid) {
 
 // What a row of the receipt says an entry lost (1.6 §7): the key, the block, the line.
 function offChangeText(e, result) {
-  if (!e) return '去掉 asight 加的部分'
-  if (e.kind === 'text') return e.vars ? `去掉 asight 哨兵块(${Object.keys(e.vars).join(', ')})` : e.format === 'pem-block' ? '去掉 asight 的证书段' : `去掉一行(${String(e.line).split(' # ')[0].trim()})`
+  if (!e) return "asight's lines removed"
+  if (e.kind === 'text') return e.vars ? `asight's block removed (${Object.keys(e.vars).join(', ')})` : e.format === 'pem-block' ? "asight's certificate block removed" : `one line removed (${String(e.line).split(' # ')[0].trim()})`
   const keys = (e.keys || []).join('.')
-  return e.prior_value != null && result !== 'left-user-value' ? `把 ${keys} 换回原值` : `去掉 ${keys}`
+  return e.prior_value != null && result !== 'left-user-value' ? `${keys} set back to your own value` : `${keys} removed`
 }
 const UNDO_NOTE = { // what each undo result other than a plain restore means for the user (4.6 撤销结果)
   'already-restored': 'already back as it was before install: nothing to undo',
@@ -190,8 +190,8 @@ const UNDO_NOTE = { // what each undo result other than a plain restore means fo
   'left-user-value': 'the key now holds a value the user set: left as it is',
 }
 const UNTIL_REASON = { restart: 'until it restarts', 'next-connection': 'until its next new connection (it re-reads the bundle)', 'next-handshake': 'until its next TLS handshake (it re-reads the bundle)', 'session-end': 'until its current session ends' }
-const MARKER_TEXT = { block: '去掉 asight 哨兵块', line: '去掉 asight 加的一行', 'json-value': '去掉 asight 的值(原值从改前副本取回)', 'owned-file': '删除 asight 建的文件' }
-const SKIP_REASON = { 'already-restored': '早已是安装前的样子', missing: '文件已不在,没有 asight 的东西了', 'left-user-value': '这个键现在是你自己设的值,没动', 'already-removed': 'asight 的文字已不在这个文件里' }
+const MARKER_TEXT = { block: "asight's block removed", line: 'the line asight added removed', 'json-value': "asight's value removed (the old one taken from the copy of the file as it was)", 'owned-file': 'the file asight created deleted' }
+const SKIP_REASON = { 'already-restored': 'already as it was before install', missing: 'the file is gone; nothing of asight is in it', 'left-user-value': 'this key now holds a value you set, so it was left as it is', 'already-removed': "asight's text is no longer in this file" }
 const SKIP_CODE = { 'already-restored': 'already-restored', missing: 'missing', 'left-user-value': 'left-user-value' } // the results that are in the closed set of codes (src/health/codes.mjs)
 const withHarness = (h) => (typeof h === 'string' ? { harness: h } : {})
 // The roots a gone bundle is rebuilt from (4.6 撤销顺序 第 2 步): Node's and this platform's OS roots, read by the reader the collector composes the bundles with
@@ -218,7 +218,7 @@ export async function undoSide(w, opts = {}) {
   try { return await undoBody(w, opts, u) } catch (e) { // whatever throws here (a manifest of a shape nobody foresaw, a file that vanishes) must not cost the receipt: the routing is already off and files may already be written (R1, R11)
     u.stopped = true
     if (u.raw && !u.changed.length && !u.removed.length) { // the files were written before it threw: the receipt lists them, as the plain undo would have
-      for (const r of u.raw.results) if (r.result === 'restored' || r.result === 'reverted-not-identical') u.changed.push({ path: r.path, change: '去掉 asight 加的部分', backup: r.backup_kept || null, result: r.result, ...withHarness(r.harness) })
+      for (const r of u.raw.results) if (r.result === 'restored' || r.result === 'reverted-not-identical') u.changed.push({ path: r.path, change: "asight's lines removed", backup: r.backup_kept || null, result: r.result, ...withHarness(r.harness) })
       u.removed.push(...u.raw.removed)
       if (!u.left.length) u.left = u.raw.left.map((l) => ({ path: l.path, result: l.result, reason: l.reason, ...withHarness(l.harness) }))
     }
@@ -301,8 +301,8 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       for (const e of roots) {
         let r
         try { r = await store.remove({ fp256: e.fp256, sha1: e.thumbprint }) } catch (err) { r = { ok: false, reason: String((err && err.message) || err) } }
-        if (r.ok && r.absent) u.skipped.push({ what: e.path, reason: '根证书已不在信任库里' })
-        else if (r.ok) u.changed.push({ path: e.path, change: '根证书已从信任库撤下', result: 'restored' })
+        if (r.ok && r.absent) u.skipped.push({ what: e.path, reason: "asight's root certificate is no longer in your trust store" })
+        else if (r.ok) u.changed.push({ path: e.path, change: "asight's root certificate removed from your trust store", result: 'restored' })
         else { u.left.push({ path: e.path, result: 'failed', reason: r.reason }); u.failures.push({ code: 'entry-not-undone', path: e.path, reason: r.reason }) }
       }
     }
@@ -325,9 +325,9 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
   if (!plan.length) { u.mode = manifestError ? 'marker' : 'none'; return u }
   u.mode = 'marker'
   const items = plan.map((p) => ({ path: p.path, how: p.how, ...withHarness(p.harness) }))
-  const listing = ['没有可用的安装清单:按 asight 自己的标记,下面这些要撤:', ...plan.map((p) => `  ${p.harness}: ${p.path}  ${MARKER_TEXT[p.how]}`)].join('\n')
+  const listing = ["There is no install record to go by. By asight's own marks, these would be undone:", ...plan.map((p) => `  ${p.harness}  ${p.path}`), ...[...new Set(plan.map((p) => `    ${MARKER_TEXT[p.how]}`))]].join('\n')
   let go = yes
-  if (!go && interactive && io) { (say || io.out)(listing); go = await confirm(io, '按标记撤销上面这些文件?') }
+  if (!go && interactive && io) { (say || io.out)(listing); go = await confirm(io, 'Proceed?') }
   if (!go) {
     u.pending = items
     u.problems.push(`the install manifest is ${manifestError ? 'unreadable' : 'missing'}: ${items.length} file(s) hold asight's marks and were left as they are; the routing is off, the entries are not. Run asight off --yes to undo them by their marks`)
@@ -339,7 +339,7 @@ async function undoBody(w, { ids = null, manifest, manifestError = null, yes = f
       if (r.how === 'owned-file') u.removed.push(r.path)
       else u.changed.push({ path: r.path, change: MARKER_TEXT[r.how], backup: r.restored_from || r.backup || null, result: r.result, ...(r.prior_left ? { prior_left: r.prior_left } : {}), ...withHarness(r.harness) })
       u.events.push({ kind: CODE_OFF.undoneByMarker, code: CODE_OFF.undoneByMarker, ...withHarness(r.harness), path: r.path, reason: `${r.path}: ${MARKER_TEXT[r.how]} (found by asight's mark; there is no manifest to say what it was before)` })
-    } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: 'asight 的标记已不在这个文件里' })
+    } else if (r.result === 'already-clean') u.skipped.push({ what: r.path, reason: "asight's mark is no longer in this file" })
     else { u.left.push({ path: r.path, result: r.result, reason: r.reason || `${r.path}: ${r.result}`, ...withHarness(r.harness) }); u.failures.push({ code: r.result === 'left-unparsable' ? 'left-unparsable' : 'entry-not-undone', ...withHarness(r.harness), path: r.path, reason: r.reason || `${r.path}: asight cannot read it; asight's value may still be in it` }) }
   }
   if (u.orphan_backups.length) u.notes.push(`the backups of the files above (JSON values taken back from them), and any others, are left in place: ${u.orphan_backups.join(', ')}`)
@@ -373,6 +373,21 @@ function refuseUnknownKinds(manifest, receipt, standalone) {
   return true
 }
 
+// The receipt's own shape, the one appendix C.2 of 1.6 names, written once for every way off can end: `harnesses` becomes one object per harness (what was undone
+// for it, what was left and why, the backups kept), `outcome` says `done` or `partial`, and every left item says what it is and how to undo it by hand.
+// The id list the text and the flows record go by is `receipt.harnesses` until this runs, so it is called at the return.
+function shapeReceipt(receipt) {
+  const ids = (receipt.harnesses || []).map((h) => (typeof h === 'string' ? h : h && h.harness)).filter(Boolean)
+  receipt.left = (receipt.left || []).map((l) => ({ what: l.what ?? (l.result === 'unknown-kind' ? 'an item this asight does not know' : 'something asight wrote'), ...l, undo_by_hand: l.undo_by_hand ?? l.restore ?? null }))
+  receipt.outcome = receipt.ok ? 'done' : 'partial'
+  receipt.harnesses = ids.map((id) => {
+    const left = (receipt.left || []).filter((l) => l.harness === id)
+    const undone = [...new Set([...(receipt.changed || []), ...(receipt.removed || [])].filter((x) => x && typeof x === 'object' && x.harness === id).map((x) => x.path))]
+    return { harness: id, ok: left.length === 0, reason: left.length ? left[0].reason || null : null, undone, kept_backups: (receipt.kept_backups || []).filter((k) => k.harness === id) }
+  })
+  return receipt
+}
+
 /** `asight off [harness…]` (1.6 §1.1, §1.4, §1.5): see the header. `ids`: harness code ids, or null for every one; `now`: cut the connections still relayed (`--now`);
  *  `yes` / `interactive` / `io`: the one confirmation, for undoing by marks when the manifest is lost (R6); `say`: where the list goes before the question.
  *  → `{ receipt, exit }`; the receipt is src/off/schema.mjs's plus `harnesses` · `routing` · `daemon` · `autostart` · `still_trusting` · `kept_backups` · `kept_bundles` ·
@@ -384,12 +399,12 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
   const put = flowWriter(w, run, receipt.notes)
   // 4.11 ⑰: a manifest of version 1 / 2 is refused before any write — no lock, no state, no flows record; the receipt names the tools that undo it
   const old = refuseOldManifest({ home, platform: w.platform, fs: w.fs })
-  if (old) { receipt.problems.push(old.message); receipt.ok = false; receipt.log = null; return { receipt, exit: EXIT.incomplete } }
+  if (old) { receipt.problems.push(old.message); receipt.ok = false; receipt.log = null; return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } }
   // R7 on Windows (4.8 §7): off never runs with an elevated token — asked before anything is touched, and a token that cannot be read is
   // not a refusal (an undo that stopped on a broken whoami is not an undo).
   if ((deps.platform || process.platform) === 'win32') {
     const refusal = refuseElevatedByWhoami({ run: w.exec, env })
-    if (refusal) { receipt.problems.push(refusal.reason); receipt.ok = false; put({ event: 'failure', ...refusal }); return { receipt, exit: EXIT.incomplete } }
+    if (refusal) { receipt.problems.push(refusal.reason); receipt.ok = false; put({ event: 'failure', ...refusal }); return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } }
   }
   const read = () => { try { return { manifest: readManifest(w.dir, w.fs), manifestError: null } } catch (e) { return { manifest: null, manifestError: e } } }
   let { manifest, manifestError } = read() // what the plan and the first desired-off go by; read AGAIN under the lock: an `on` that held it has written to the manifest since
@@ -406,14 +421,14 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     receipt.removed = [...gone, ...marks.filter((p) => p.how === 'owned-file').map((p) => p.path)]
     if (manifest && manifest.unsupported) receipt.notes.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read: no entry would be touched`)
     else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by asight's own marks, after a yes` : 'no file holds asight\'s marks'}`)
-    for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: `${id} 没有 asight 的入口(没装过,或早已撤掉)` })
+    for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'asight has nothing on its path (it was never set up, or it is already off)' })
     receipt.autostart = ids === null ? { planned: true } : null
     receipt.daemon = { pid: null, state: ids === null ? 'draining' : 'running' }
     if (!hadAnything && !receipt.changed.length && !receipt.removed.length) { receipt.nothing_installed = true; receipt.log = null } // said as it is (audit semantics 7); nothing would be written, so there is no log to point at
-    return { receipt, exit: EXIT.ok }
+    return { receipt: shapeReceipt(receipt), exit: EXIT.ok }
   }
 
-  if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt, exit: EXIT.incomplete } // before the lock, the desired state and the routing
+  if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } // before the lock, the desired state and the routing
   // 1 · the lock, off first: the desired state is written before the wait when the lock is held, so an `on` that is mid-way stops (R12)
   const tryOff = () => { try { return { r: desiredOff(w, ids, installed), error: null } } catch (e) { return { r: null, error: e } } }
   let early = null
@@ -424,12 +439,12 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       receipt.problems.push(`${errMessage(e)}. ${early && early.error ? `The desired state could not be written either (${errMessage(early.error)})` : `The desired state is already off for ${ids ? ids.join(', ') : 'every harness'}: the command that holds the lock stops at its next write`}; run asight off again afterwards`)
       receipt.ok = false
       put({ kind: 'result', outcome: 'failed', reason: `off could not get the op lock: ${errMessage(e)}` })
-      return { receipt, exit: EXIT.incomplete }
+      return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete }
     }
   }
   try {
     ({ manifest, manifestError } = read()); installed = harnessIdsOf(manifest)
-    if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt, exit: EXIT.incomplete } // read again under the lock: a newer asight may have written since (the lock is released by finally)
+    if (refuseUnknownKinds(manifest, receipt, w.standalone)) return { receipt: shapeReceipt(receipt), exit: EXIT.incomplete } // read again under the lock: a newer asight may have written since (the lock is released by finally)
     if (ids === null) receipt.harnesses = installed
     // 2 · the desired state
     const again = tryOff()
@@ -442,7 +457,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     // 3 · the routing
     const routing = await switchRoutingOff(w, { ids, now, exit: ids === null })
     receipt.routing = { confirmed: routing.confirmed, state: routing.state, how: routing.how }
-    receipt.daemon = routing.daemon
+    receipt.daemon = routing.daemon && routing.daemon.state === 'draining' ? { ...routing.daemon, exits_after: routing.relayed && routing.relayed !== 'unknown' ? routing.relayed.closing : null } : routing.daemon // C.2 `daemon:{state, pid, exits_after}`
     receipt.relayed = routing.relayed
     if (routing.relayed_reason) receipt.relayed_reason = routing.relayed_reason
     if (routing.stop) receipt.daemon_stop = { how: routing.stop.how, signals: routing.stop.signals, stopped: routing.stop.stopped }
@@ -457,7 +472,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
 
     // 4 · the entries — only when the routing is confirmed (or the daemon could not be stopped)
     let outcome = 'off'
-    if ((deps.platform || process.platform) === 'win32' && routing.state !== 'running') receipt.notes.push('没有守护进程在跑:门随它一起没了,没有连接要排空')
+    if ((deps.platform || process.platform) === 'win32' && routing.state !== 'running') receipt.notes.push('No asight daemon is running: the local port it listened on is gone with it, so no connection is draining.')
     if (routing.confirmed || routing.unstoppable) {
       const u = await undoSide(w, { ids, manifest, manifestError, yes, interactive, io, say })
       for (const k of ['changed', 'removed', 'skipped', 'left']) receipt[k].push(...u[k])
@@ -470,7 +485,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       if (u.mode === 'marker' && u.undone_by_marker && !u.left.length) outcome = CODE_OFF.undoneByMarker
       if (u.pending.length) outcome = 'partial'
       else if (u.left.length || u.mode === 'unsupported') outcome = 'left'
-      if (u.mode !== 'marker') for (const id of ids || []) if (!installed.includes(id)) receipt.skipped.push({ what: id, reason: `${id} 没有 asight 的入口(没装过,或早已撤掉)` })
+      if (u.mode !== 'marker') for (const id of ids || []) if (!installed.includes(id)) receipt.skipped.push({ what: id, reason: 'asight has nothing on its path (it was never set up, or it is already off)' })
       // (The Windows kernel arm that stood here — a daemon that did not answer left the kernel preferring its dead engine, so the standalone off made it
       // forward-only or stopped it through its controller — went with the kernel itself, D47's win32 twin: the engine's doors die with the daemon, nothing
       // outlives them to be steered, and uninstall's purge list still cleans kernel-era residue: kernel\, kernel-archive\, forwarder\.)
@@ -511,6 +526,6 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${receipt.left.length} item(s) were left as they are (listed above, with why); put that right, then run asight off again`)
     const n = { changed: receipt.changed.length, removed: receipt.removed.length, left: receipt.left.length, still_trusting: (receipt.still_trusting || []).length }
     put({ kind: 'result', outcome: receipt.ok ? outcome : outcome === 'off' ? 'failed' : outcome, counts: n, reason: receipt.ok ? `off: ${receipt.harnesses.join(', ') || 'nothing installed'}${outcome === CODE_OFF.undoneByMarker ? ' (undone by their marks: there was no manifest)' : ''}` : `off did not finish: ${receipt.problems[0]}` })
-    return { receipt, exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
+    return { receipt: shapeReceipt(receipt), exit: receipt.ok ? EXIT.ok : EXIT.incomplete }
   } finally { if (lock) lock.release() }
 }
