@@ -47,7 +47,8 @@ export const CHUNK_BYTES = KEEPER_CHUNK_BYTES // ~15 ms of parsing per turn of t
  *   flush(segment):  index it fully, and never touch it again — the segment is closed. → the chain's promise.
  *   pause():         the daemon is stopping: no new debounce is armed (the segment the stop closes still flushes).
  *   idle():          resolves when every queued pass is done (the stop awaits it after the store closed).
- *   stop():          nothing more is indexed, and nothing of this keeper's is written after it.
+ *   stop():          → a promise. Nothing more is queued, and when it settles the pass that was in flight is over:
+ *                    after that this keeper has written its last byte. The daemon's stop awaits it.
  * `index` / `debounceMs` / `chunkBytes` are test seams.
  */
 export function createIndexKeeper({ home, failure = () => {}, index = segmentIndex, debounceMs = DEBOUNCE_MS, chunkBytes = CHUNK_BYTES }) {
@@ -94,7 +95,13 @@ export function createIndexKeeper({ home, failure = () => {}, index = segmentInd
       return chain
     },
     pause() { paused = true; clearTimeout(timer); timer = null },
+    // Best effort, for the stop's convenience: the guarantee that nothing more is written is stop()'s, not this one's.
     async idle() { for (let i = 0; i < 100; i++) { const c = chain; await c.catch(() => {}); if (c === chain) return } },
-    stop() { stopped = true; paused = true; clearTimeout(timer); timer = null },
+    stop() {
+      stopped = true; paused = true; clearTimeout(timer); timer = null; pending.clear()
+      // `wrote` and `flush` add nothing to the chain once stopped, so this IS the last pass: when it settles (its own
+      // failure included — a failed pass has already been reported), nothing of this keeper's can still be written.
+      return chain.then(() => {}, () => {})
+    },
   }
 }

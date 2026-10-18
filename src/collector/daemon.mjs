@@ -173,7 +173,7 @@ function storeWithSealing({ P, failure }) {
     stop() { if (queue) queue.stop(); keeper.pause() },
     // after store.close(): the segment the stop just closed is indexed to its last byte, so the daemon leaves behind
     // the index of everything it wrote; only then does the keeper write nothing more (D62)
-    async settle() { try { await keeper.idle() } finally { keeper.stop() } },
+    async settle() { try { await keeper.idle() } finally { await keeper.stop() } },
   }
   return { store, seal, keeper }
 }
