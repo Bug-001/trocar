@@ -27,6 +27,16 @@ function matches(c) {
   return `${n} rules`
 }
 const keepOf = (c) => c.keep || 'not set'
+/** What a class's bytes are, and what they cost on disk (a macOS test machine 2026-10-18): the columns are the records' own bytes, the disk
+ * numbers of the document are what the file system says, and the only honest bridge between the two is the ratio over all classes
+ * — there is no per-class on-disk size, because a sealed segment is one compressed blob of every class in it. */
+function sizesLine(doc, home) {
+  const total = doc.classes.reduce((n, x) => n + x.counts.all.bytes, 0)
+  const stored = doc.disk.records_bytes + doc.disk.sealed_bytes
+  const ratio = total > 0 && stored > 0 ? ` Sealed, they take about ${pct(stored / total)} of that on disk:` : ''
+  return `Sizes are the bytes of the records themselves.${ratio} ${tilde(asightHome(home), home)} uses ${size(doc.disk.asight_bytes)} in all.`
+}
+const pct = (r) => `${r < 0.1 ? (r * 100).toFixed(1) : Math.round(r * 100)}%`
 
 /** `asight classes` (§4.2): one line per class with its level, what it matches and what it stored over the three windows. */
 export function classesTable(doc, { home = null, colors: c } = {}) {
@@ -34,7 +44,7 @@ export function classesTable(doc, { home = null, colors: c } = {}) {
   const rows = doc.classes.map((x) => [x.class, keepOf(x), matches(x), size(x.counts.h24.bytes), size(x.counts.d7.bytes), size(x.counts.all.bytes)])
   const [first, ...body] = columns([head, ...rows])
   return [c.bold(first), ...body, '',
-    c.dim(`Sizes are what is stored. ${tilde(asightHome(home), home)} uses ${size(doc.disk.asight_bytes)} in all.`),
+    ...wrap(sizesLine(doc, home)).map((l) => c.dim(l)),
     c.dim('full keeps whole requests and responses; log keeps headers and sizes only.'),
     c.dim('Change what is kept with asight classes set; the rules with add or rm.')]
 }

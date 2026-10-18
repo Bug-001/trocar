@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { runCli } from '../../src/cli/main.mjs'
+import { classesTable } from '../../src/cli/classes.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
 import { RECEIPT_KEYS } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -184,6 +185,20 @@ test('§4.1: a document with a non-fatal `errors[]` is exit 0 in both modes — 
     assert.ok(r.out.trim().length > 0, `${argv.join(' ')}: the document was given`)
   }
   assert.match((await run(['classes'], home)).err, /20261018T120000Z/, 'and the error is said on stderr, never silently (D38)')
+})
+
+test('§4.2: the table’s sizes are the records’ own bytes, and the only on-disk number is the document’s — no per-class disk size is invented', () => {
+  const c = { bold: (s) => s, dim: (s) => s }
+  const cls = (name, all) => ({ class: name, keep: 'full', rules: [], counts: { h24: { bytes: all }, d7: { bytes: all }, all: { bytes: all } } })
+  const doc = (disk) => ({ classes: [cls('llm', 900), cls('other', 100)], disk, file: null, last_change: null, errors: [], ok: true })
+  const sealed = classesTable(doc({ asight_bytes: 50, records_bytes: 0, sealed_bytes: 26 }), { home: '/h', colors: c }).join('\n')
+  assert.match(sealed, /Sizes are the bytes of the records themselves\./)
+  assert.match(sealed, /about 2\.6% of\s+that on disk/, 'the ratio is sealed+plaintext over the sum of the class bytes')
+  assert.match(sealed, /uses 50 B in all/)
+  // nothing on disk yet (a fresh home): no ratio is claimed, only what the file system says (R11)
+  const fresh = classesTable(doc({ asight_bytes: 0, records_bytes: 0, sealed_bytes: 0 }), { home: '/h', colors: c }).join('\n')
+  assert.doesNotMatch(fresh, /of\s+that on disk/)
+  assert.match(fresh, /uses 0 B in all/)
 })
 
 test('V83: a class, a regex or a rule number that is not there is exit 2, one line, and nothing is written', async () => {
