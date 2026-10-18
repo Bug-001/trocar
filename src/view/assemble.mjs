@@ -22,12 +22,38 @@ import { requestEncodingOf } from '../dissect/request-body.mjs';
 // bounded content_hash SEQUENCE (collision-prone). Product MUST use a REAL full SHA-256 over the
 // VERBATIM prefix bytes (skipping volatile) — so a 32-bit-key collision hiding a real byte difference
 // makes the prefixes hash-UNequal → no false ground-truth flag. Computed SERVER-SIDE (不变式 3).
-function prefixSha256(flat, idx) {
-  if (!flat || idx <= 0) return null; // no reusable prefix
-  const h = createHash('sha256');
-  // length-prefixed frames = unambiguous block boundaries with NO delimiter byte (ASCII-only source).
-  for (let i = 0; i < idx; i++) { const b = flat[i]; if (b.volatile) continue; const t = flatBlockText(b); h.update(String(t.length) + ':' + t); }
-  return h.digest('hex');
+//
+// KEPT AS A RESUMABLE CHAIN, not re-hashed per call. The first version hashed a call's whole prefix
+// text from scratch, twice per call (this call's prefix and the previous call's over the same range).
+// An agent context grows ~7 KB a turn to ~0.8 MB, so that is O(session bytes²): a 115-call session
+// hashed ~90 MB and spent 351 of its 669 ms inside crypto — every time the session was opened, and
+// again for every page of it.
+//
+// Two consecutive calls share their prefix VERBATIM up to the first block whose frame differs, so this
+// call resumes the running hash from that block (`Hash.copy()`) and the previous call's digest is read
+// off the snapshot the chain already holds. The frames, their order and the length-prefixed framing are
+// UNCHANGED, so every digest is byte-identical to the from-scratch one — the tests assert the hex.
+//
+// `prev` = the chain of the call that established the current cache baseline (never the immediately
+// preceding call when that one failed); passing null, or a chain that diverges at block 0, is always
+// correct, only slower.
+function prefixChain(flat, prev) {
+  // one frame per block; null = a volatile block (the billing nonce), which the digest skips
+  const texts = (flat || []).map((b) => (b && b.volatile ? null : flatBlockText(b)));
+  const n = texts.length;
+  let d = 0; // first block whose frame differs from the previous call's — everything before it is shared
+  if (prev) { const m = Math.min(n, prev.texts.length); while (d < m && prev.texts[d] === texts[d]) d++; }
+  const states = new Array(n + 1); // states[i] = the hash of frames [0,i); never updated in place
+  for (let i = 0; i <= d; i++) states[i] = prev ? prev.states[i] : createHash('sha256');
+  let h = states[d].copy();
+  for (let i = d; i < n; i++) {
+    const t = texts[i];
+    // length-prefixed frames = unambiguous block boundaries with NO delimiter byte (ASCII-only source).
+    if (t != null) h.update(String(t.length) + ':' + t);
+    states[i + 1] = h.copy();
+  }
+  // idx <= 0 → no reusable prefix, as before
+  return { texts, states, digestAt: (idx) => (idx > 0 && idx <= n ? states[idx].copy().digest('hex') : null) };
 }
 // Ground-truth from PROVEN byte-identity (not the structural proxy). Strict wording per 3.3:73 — the
 // claim is only "MY outbound prefix is byte-identical", never "the provider is wrong".
@@ -159,6 +185,7 @@ function assembleFlatLane(records, d, opts = {}) {
   const scans = new Map(); // record → field → scanned JSON root, shared by every call's locators (linear, not N²)
   const calls = [];
   const prevFlatOf = new Map(); // lane kind → the last call that established a cache prefix in that lane
+  const prevChainOf = new Map(); // and its resumable prefix-hash chain (prefixChain)
   const prevInfoOf = new Map(); // lane kind → { msgCount, marker } of the last parsed call: the compaction verdict's predecessor
   let local = 0;
   for (const r of llm) {
@@ -167,6 +194,7 @@ function assembleFlatLane(records, d, opts = {}) {
     // header) — the rule the ETL uses too (registry.flatLaneOf); labels are server-side (invariant 3)
     const laneKind = flatLaneOf(d, r);
     const prevFlat = prevFlatOf.get(laneKind) || null;
+    const prevChain = prevChainOf.get(laneKind) || null; // set together with prevFlat: both or neither
     const gi = opts.giOf ? opts.giOf(r) : local;
     local++;
     let req;
@@ -214,8 +242,9 @@ function assembleFlatLane(records, d, opts = {}) {
     // 3.2:124 on the board too: what is shown of a partial / server-edited context is not what the model saw,
     // so no byte-identity claim and no ground truth is made over it
     const blind = wire.contextState === 'partial' || wire.contextState === 'server_edited';
-    const curPfx = blind ? null : prefixSha256(flat, brk.idx);
-    const prevPfx = prefixSha256(prevFlat, brk.idx);
+    const chain = prefixChain(flat, prevChain);
+    const curPfx = blind ? null : chain.digestAt(brk.idx);
+    const prevPfx = prevChain ? prevChain.digestAt(brk.idx) : null;
     const prefixByteIdentical = brk.idx > 0 && curPfx != null && curPfx === prevPfx;
     brk.prefixSha256 = curPfx;
     brk.prefixByteIdentical = prefixByteIdentical;
@@ -241,7 +270,7 @@ function assembleFlatLane(records, d, opts = {}) {
     });
     // A call that failed never established a cache prefix, so it MUST NOT become the next baseline. A call whose request
     // was not stored does (with no blocks, as in the ETL): the next call then has no known prefix to compare with.
-    if (!(r.error || failed || (st != null && st !== 200))) prevFlatOf.set(laneKind, flat);
+    if (!(r.error || failed || (st != null && st !== 200))) { prevFlatOf.set(laneKind, flat); prevChainOf.set(laneKind, chain); }
   }
   const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));
   const lanes = kinds.map((k) => {
@@ -499,7 +528,7 @@ function assembleAnalyzed(records, opts = {}) {
   const giOfHydrated = opts.giOf ? new Map(hydrated.map((h, i) => [h, opts.giOf(records[i])])) : null;
   const A = analyze(hydrated, giOfHydrated ? { giOf: (h) => giOfHydrated.get(h) } : {});
   for (const lane of A.lanes || []) {
-    let prevFlat = null;
+    let prevFlat = null, prevChain = null;
     for (const call of lane.calls || []) {
       if (!call.rec || !call.rec.request) { call.flat = []; call.cacheBreak = null; call.gt = null; call.wire = null; continue; }
       call.wire = wireOf(call.rec, 'anthropic'); // cheap meta: rides on out-of-window calls too
@@ -534,8 +563,9 @@ function assembleAnalyzed(records, opts = {}) {
       // 3.2:124, as on the flat-lane path: what is shown of a partial / server-edited context is not what the model
       // saw, so no byte-identity claim and no ground truth is made over it (the ETL writes NULL / NULL too)
       const blind = call.wire.contextState === 'partial' || call.wire.contextState === 'server_edited';
-      const curPfx = blind ? null : prefixSha256(flat, brk.idx);
-      const prevPfx = prefixSha256(prevFlat, brk.idx);
+      const chain = prefixChain(flat, prevChain);
+      const curPfx = blind ? null : chain.digestAt(brk.idx);
+      const prevPfx = prevFlat ? prevChain.digestAt(brk.idx) : null;
       const prefixByteIdentical = brk.idx > 0 && curPfx != null && curPfx === prevPfx;
       brk.prefixSha256 = curPfx;                       // 逐字字节事实(可独立复算)
       brk.prefixByteIdentical = prefixByteIdentical;
@@ -549,7 +579,7 @@ function assembleAnalyzed(records, opts = {}) {
       // through it makes the NEXT successful call diff against context that was never cached — the
       // board then reports a cache break that did not happen, with a cause and a fix hint. analyze()
       // marks this as `chainsPrefix`; undefined (older shapes) means "assume it chained".
-      if (call.chainsPrefix !== false) prevFlat = flat;
+      if (call.chainsPrefix !== false) { prevFlat = flat; prevChain = chain; }
       // COMPOSITION IS TIER A — computed HERE, while the blocks are still in hand, because the very
       // next line throws them away for out-of-window calls. Nine integers, 125 bytes: it rides on
       // every call whether or not its body does, so the timeline draws the WHOLE session rather than
