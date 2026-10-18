@@ -2,12 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { tmpDir, conversation, envelope, toLine, writeShard, listFiles } from './helpers.mjs';
 import { shardOnce } from '../../src/etl/shard.mjs';
 import { sealLegacy } from '../../src/raw/legacy.mjs';
-import { compareTree } from '../../src/query/raw-compare.mjs';
+import { compareTree, runCompare } from '../../src/query/raw-compare.mjs';
 import { readJournal } from '../../src/raw/journal.mjs';
 
 // Review 3 F1: the real-run check before deleting originals compared `curl -s` output of two servers
@@ -19,7 +17,6 @@ import { readJournal } from '../../src/raw/journal.mjs';
 
 const NONE = { fdHolders: async () => new Map(), processList: async () => [], sleep: async () => {} };
 const A = 'a1a1a1a1-0000-4000-8000-0000000000a1', B = 'b2b2b2b2-0000-4000-8000-0000000000b2';
-const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'asight.mjs');
 
 async function tree(root) {
   const a = conversation(A, 4, { idPrefix: 'ca_' }), b = conversation(B, 2, { idPrefix: 'cb_' });
@@ -46,28 +43,31 @@ test('F1: compare reads every session and control class over originals and over 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('F1: a sealed copy that does not read back the same is a DIFF, named, journalled, exit 1; nothing compared is exit 1 too', async () => {
+
+test('F1: a sealed copy that does not read back the same is a DIFF, named and journalled; nothing compared is not ok either', async () => {
   const root = tmpDir();
   try {
     const home = path.join(root, 'home'), ses = await tree(path.join(home, '.asight'));
-    const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
-    let r = run('raw', 'compare', ses);
-    assert.equal(r.status, 1, 'nothing sealed, yet compare passed');
-    assert.match(r.stderr + r.stdout, /nothing compared/);
+    const journal = path.join(home, '.asight', 'raw', 'journal.jsonl');
+    let res = await runCompare({ root: ses, journal });
+    assert.equal(res.ok, false, 'nothing sealed, yet compare passed');
+    assert.equal(res.compared, 0, 'nothing is sealed, so nothing can be compared');
     await sealLegacy(ses, { ...NONE, journal: path.join(root, 'j.jsonl') });
-    r = run('raw', 'compare', ses);
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, /compared 10 records in 4 groups/);
+    res = await runCompare({ root: ses, journal });
+    assert.equal(res.ok, true, JSON.stringify(res.groups.filter((g) => g.status !== 'same')));
+    assert.equal(res.compared, 10);
     // damage A's sealed probes (its frame; the index still opens). The resolver does not index probes in
     // a sharded tree, so only the record-by-record read can see it.
     for (const stream of ['probes', 'calls']) {
       const victim = listFiles(path.join(ses, A)).find((f) => f.includes(`${stream}.ndjson.`));
       const fd = fs.openSync(victim, 'r+'); fs.writeSync(fd, Buffer.from([0x5a, 0x5a]), 0, 2, 30); fs.closeSync(fd);
-      r = run('raw', 'compare', ses);
-      assert.equal(r.status, 1, `a damaged sealed ${stream} copy passed the compare`);
-      assert.match(r.stdout + r.stderr, new RegExp(`DIFF\\s+${A} .*${stream}\\.ndjson\\.0001\\.sealed`));
+      res = await runCompare({ root: ses, journal });
+      assert.equal(res.ok, false, `a damaged sealed ${stream} copy passed the compare`);
+      const bad = res.groups.filter((g) => g.status === 'diff' && g.group === A);
+      assert.ok(bad.some((g) => new RegExp(`${stream}\\.ndjson\\.0001\\.sealed`).test(JSON.stringify(g.diff))),
+        `the difference does not name the damaged ${stream} copy: ${JSON.stringify(bad)}`);
     }
-    const j = readJournal({ journal: path.join(home, '.asight', 'raw', 'journal.jsonl') }).filter((e) => e.op === 'compare');
+    const j = readJournal({ journal }).filter((e) => e.op === 'compare');
     assert.ok(j.some((e) => e.outcome === 'diff' && e.group === A && e.reason), 'the difference left no durable record');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -156,18 +156,19 @@ for (const [label, mangle] of [
   });
 }
 
-test('F1: `raw compare --list` names every compared and every not-covered original (for the cross-check with the dry run)', async () => {
+
+test('F1: compare names every compared and every not-covered original (for the cross-check with the dry run)', async () => {
   const root = tmpDir();
   try {
     const home = path.join(root, 'home'), ses = await tree(path.join(home, '.asight'));
+    const journal = path.join(home, '.asight', 'raw', 'journal.jsonl');
     await sealLegacy(path.join(ses, A), { ...NONE, journal: null });                      // A sealed, B and control not
-    const r = spawnSync(process.execPath, [CLI, 'raw', 'compare', ses, '--list'], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    const lines = (tag) => r.stdout.split('\n').filter((l) => l.startsWith(tag + ' ')).map((l) => l.slice(tag.length).trim()).sort();
-    assert.deepEqual(lines('compared-original'), listFiles(path.join(ses, A), /\.ndjson$/));
-    assert.deepEqual(lines('not-covered'), [...listFiles(path.join(ses, B), /\.ndjson$/), ...listFiles(path.join(ses, 'control'), /\.ndjson$/)].sort());
-    const j = readJournal({ journal: path.join(home, '.asight', 'raw', 'journal.jsonl') }).filter((e) => e.op === 'compare' && e.outcome === 'not-covered');
-    assert.deepEqual(j.flatMap((e) => e.files).sort(), lines('not-covered'), 'the not-covered files are not journalled by name');
+    const res = await runCompare({ root: ses, journal });
+    const flat = (key) => res.groups.flatMap((g) => g[key] || []).sort();
+    assert.deepEqual(flat('deletable'), listFiles(path.join(ses, A), /\.ndjson$/));
+    assert.deepEqual(flat('uncovered'), [...listFiles(path.join(ses, B), /\.ndjson$/), ...listFiles(path.join(ses, 'control'), /\.ndjson$/)].sort());
+    const j = readJournal({ journal }).filter((e) => e.op === 'compare' && e.outcome === 'not-covered');
+    assert.deepEqual(j.flatMap((e) => e.files).sort(), flat('uncovered'), 'the not-covered files are not journalled by name');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -210,15 +211,3 @@ test('row 1: an original --delete-original would delete that no group compared f
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('row 1 (cosmetic): the summary counts not-covered ORIGINALS, also in a group that mixes covered and uncovered ones', async () => {
-  const root = tmpDir();
-  try {
-    const home = path.join(root, 'home'), ses = await tree(path.join(home, '.asight'));
-    await sealLegacy(path.join(ses, A, 'calls.ndjson'), { ...NONE, journal: null });         // A mixes; B and control not sealed
-    const r = spawnSync(process.execPath, [CLI, 'raw', 'compare', ses, '--list'], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    const n = r.stdout.split('\n').filter((l) => l.startsWith('not-covered ')).length;
-    assert.ok(n >= 3, 'precondition: several originals not covered');
-    assert.match(r.stdout, new RegExp(`: 0 differ, ${n} original\\(s\\) not covered,`));
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});

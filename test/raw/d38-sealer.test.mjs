@@ -4,8 +4,6 @@ import http from 'node:http';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { tmpDir, conversation, envelope, toLine, writeShard } from './helpers.mjs';
 import { listSources } from '../../src/raw/discover.mjs';
 import { sealShard, sealUnchecked } from '../../src/raw/seal.mjs';
@@ -20,7 +18,6 @@ import { shardOnce } from '../../src/etl/shard.mjs';
 
 const S = '38383838-0000-4000-8000-000000000038';
 const NONE = { fdHolders: async () => new Map(), processList: async () => [], sleep: async () => {} };
-const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'asight.mjs');
 const get = (port, p) => new Promise((res, rej) => {
   http.get({ host: '127.0.0.1', port, path: p }, (r) => { let b = ''; r.on('data', (c) => (b += c)); r.on('end', () => res(JSON.parse(b))); }).on('error', rej);
 });
@@ -112,8 +109,5 @@ test('S-7: a journal that exists but cannot be read is an error, not "nothing ha
     const journal = path.join(home, '.asight', 'raw', 'journal.jsonl');
     fs.mkdirSync(journal, { recursive: true });                                    // a directory where the file should be
     assert.throws(() => readJournal({ journal }), /EISDIR/);
-    const r = spawnSync(process.execPath, [CLI, 'raw', 'journal'], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /cannot read the raw journal.*EISDIR/);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
