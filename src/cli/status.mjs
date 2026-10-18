@@ -102,7 +102,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const reply = f.daemon.reply
   // P12's holder rows (below) are the daemon's own poll, and answering them costs it a process snapshot of its own (41 ms measured on a Windows test machine).
   // the request is started HERE, so it is answered while the manifest, the switch and every harness are judged (D62).
-  const holdersP = reply && 'holders' in reply ? request({ socketPath: st.socket, method: 'GET', path: '/holders', timeoutMs: deps.timeoutMs || 5000 }).then((h) => (Array.isArray(h && h.holders) ? h.holders : null), () => null) : null
+  // Asked only when the daemon's poll HAS rows (`holders` a number): with nothing watched it answers null and `GET /holders` would read the whole
+  // process table again for what the rows below are judged from anyway (41 ms measured on a Windows test machine) — D62.
+  const holdersP = reply && typeof reply.holders === 'number' ? request({ socketPath: st.socket, method: 'GET', path: '/holders', timeoutMs: deps.timeoutMs || 5000 }).then((h) => (Array.isArray(h && h.holders) ? h.holders : null), () => null) : null
   // the manifest, then the switch (the manifest names which harnesses are installed: a version 1 state.json is read for them)
   try { f.manifest = { value: readManifest(dir, fs), error: null } } catch (e) { f.manifest = { value: null, error: `${path.join(dir, 'install-manifest.json')}: ${errText(e)}` } }
   if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this asight does not read`; f.manifest.value = null }
@@ -353,8 +355,9 @@ export function statusDocOf(f) {
     ...(f.health_error ? [{ where: 'capture health', reason: f.health_error }] : []),
     ...(f.identity_error ? [{ where: 'the agent name list', reason: f.identity_error }] : []),
     ...(f.userProcs && f.userProcs.error ? [{ where: 'the process table', reason: f.userProcs.error }] : []),
-    // a read put to the OS because the daemon could not answer it: the fallback worked, and is never silent (D38; 4.8 §1)
-    ...(f.proc_asks || []).map((reason) => ({ where: 'the process facts the daemon was asked for', reason })),
+    // a read put to the OS because the daemon could not answer it: the fallback worked, and is never silent (D38; 4.8 §1). `where` is the
+    // closed-set name of the question (src/health/codes.mjs DOC_WHERE); which reader could not answer it, and why, is the reason.
+    ...(f.proc_asks || []).map((reason) => ({ where: 'the process table', reason: `the daemon was asked for the process facts and could not answer, so the OS was asked: ${reason}` })),
   ]
   const doc = {
     ...newReceipt('status'), ok: statusExit(f) === EXIT.ok,
@@ -381,7 +384,9 @@ export async function statusFacts({ names = null, home = nodeOs.homedir(), env =
     const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names })
     Object.assign(f, await gatherTopology(f, { home, env, platform, deps: { ...deps, daemonReader: reader } }))
     judgeCertificates(f)
-    f.proc_asks = procAskNotes()
+    // only a RUNNING daemon owes an answer: with none, a control.json left behind by a stopped one makes every read "fail" (ENOENT) and that is
+    // the normal no-daemon state, not a fact about the user's machine.
+    f.proc_asks = f.daemon && f.daemon.state === 'running' ? procAskNotes() : []
     return f
   } finally { close() }
 }

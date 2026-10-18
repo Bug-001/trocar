@@ -699,6 +699,7 @@ test('one `status` asks the OS each question once: on Windows the whole process 
   assert.equal(calls.filter((c) => /Win32_Process \| ForEach-Object/.test(c)).length, 1, 'the process table: one question for the whole command')
   assert.equal(calls.filter((c) => /Win32_Process -Filter/.test(c)).length, 0, 'and not one identity question of its own: the table\'s answer carries the pid\'s creation time and the machine\'s boot time')
   assert.deepEqual([doc.daemon.running, doc.daemon.responding], [null, false], 'the identity the table gave matched the lock byte for byte: a daemon that holds the lock and does not answer (a mismatch would read as a stale lock, [false, null])')
+  assert.deepEqual(doc.errors.filter((e) => /read question/.test(e.reason)), [], 'and with no daemon answering, the read it could not answer is NOT an error of the user\'s machine: a control.json left behind by a stopped daemon is the normal no-daemon state')
   assert.equal(exit, EXIT.ok, io.stdoutText())
 })
 
@@ -744,7 +745,36 @@ test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no Power
   const cold = await once(false)
   assert.equal(cold.verbs[0], 'ps', 'the daemon was asked')
   assert.deepEqual(cold.shells.map((c) => (/ForEach-Object/.test(c) ? 'table' : 'identity')), ['table'], 'and when it cannot answer that read, the one local question is asked — once, and no identity question of its own')
-  assert.deepEqual(cold.doc.errors.filter((e) => /process facts/.test(e.where)).map((e) => e.reason), ['the daemon did not answer the read question: ps: helper down: it exited with code 1'], 'the fallback is never silent (D38)')
+  const asked = cold.doc.errors.filter((e) => /did not answer the read question/.test(e.reason))
+  assert.deepEqual(asked.map((e) => e.where), ['the process table'], 'the fallback is never silent (D38), under the closed-set name of the question (src/health/codes.mjs DOC_WHERE)')
+  assert.match(asked[0].reason, /ps: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
   const sameSide = (d) => [d.daemon, d.holders, d.harnesses]
   assert.deepEqual(sameSide(cold.doc), sameSide(hot.doc), 'and what the table decides — the daemon\'s verdict, the holders, the harnesses — is the same, whichever side answered')
+})
+
+test('D62: `GET /holders` is asked only when the daemon\'s poll has rows — with nothing watched (`holders: null`) the rows are judged from the table `status` already read, and the daemon reads no second process snapshot for it', async () => {
+  const CREATED = 1_740_000_123_456, BOOTED = 1_740_000_000_000, PID = 4343
+  const PIPE = '\\\\.\\pipe\\asight-holders'
+  const paths = []
+  const once = async (holders) => {
+    const fresh = tmpDir('asight-holders-')
+    const dir = collectorDir(fresh)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'lock'), `${JSON.stringify({ pid: PID, start_time: String(CREATED), boot_id: String(BOOTED), socket: PIPE, engine_port: 47123 })}\n`)
+    const request = async ({ path: p, body }) => {
+      paths.push(p)
+      if (p === '/status') return { pid: PID, harnesses: {}, actual: 'off', holders, doors: {}, upstreams: {}, relayed: {}, engine: {} }
+      if (p === '/holders') return { count: 0, holders: [] }
+      if (p === '/helper') return { ok: true, data: body.verb === 'ps' ? { procs: [] } : { rows: [] }, self: { pid: PID, start_time: String(CREATED), boot_id: String(BOOTED) } }
+      throw Object.assign(new Error(`no route ${p}`), { status: 404 })
+    }
+    const io = fakeIo()
+    await runStatusCli(['--json'], { io, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps: { request, socketPath: PIPE, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: {} }, user: 'alice', spawn: absentSpawn, alive: () => true } })
+    return JSON.parse(io.stdoutText())
+  }
+  await once(null)
+  assert.deepEqual(paths.filter((p) => p === '/holders'), [], 'nothing is watched: the route that would read the whole process table again (41 ms on the Windows test machine) is not asked')
+  paths.length = 0
+  await once(0)
+  assert.deepEqual(paths.filter((p) => p === '/holders'), ['/holders'], 'the poll has rows (a number, even 0): its own snapshot is the answer, and it is asked')
 })
