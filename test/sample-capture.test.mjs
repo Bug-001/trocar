@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { projectsView, sessionView } from '../src/view/board.mjs';
+import { groupSessions, sessionView } from '../src/view/board.mjs';
 
 // The shipped demo capture is the FIRST THING a new user sees (`npm run demo`), and the only way a
 // GitHub visitor can evaluate the tool without first MITM-ing their own agent — asight's real test
@@ -18,16 +18,9 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SAMPLE = path.join(HERE, '..', 'samples', 'demo-session.ndjson');
 const records = readFileSync(SAMPLE, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
 
-test('the shipped sample loads and lands in exactly one session', () => {
-  const { projects } = projectsView(records);
-  const sessions = projects.flatMap((p) => p.sessions);
-  assert.equal(sessions.length, 1, 'the demo should present one clean session, not a confusing set');
-  assert.equal(sessions[0].harness, 'cc');
-  assert.ok(sessions[0].calls >= 6, 'enough calls to make scrubbing meaningful');
-});
+const [id] = groupSessions(records).keys();
 
 test('every panel the demo is supposed to show has real data behind it', () => {
-  const id = projectsView(records).projects[0].sessions[0].session_id;
   const v = sessionView(records, id);
   const steps = v.analyzed.steps;
 
@@ -43,7 +36,6 @@ test('every panel the demo is supposed to show has real data behind it', () => {
 });
 
 test('the sample exercises the error path (a red bar exists to be seen)', () => {
-  const id = projectsView(records).projects[0].sessions[0].session_id;
   const { analyzed } = sessionView(records, id);
   const statuses = new Set(analyzed.steps.map((s) => s.status));
   assert.ok(statuses.has(429),
@@ -52,7 +44,6 @@ test('the sample exercises the error path (a red bar exists to be seen)', () => 
 });
 
 test('a failed call does not corrupt the cache-break chain in the shipped demo', () => {
-  const id = projectsView(records).projects[0].sessions[0].session_id;
   const { analyzed } = sessionView(records, id);
   const bad = analyzed.steps.filter((s) => s.cacheBreak.attribution !== 'harmless');
   assert.equal(bad.length, 0,

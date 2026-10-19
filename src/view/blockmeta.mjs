@@ -29,7 +29,7 @@ const enc = (s) => (s == null ? 0 : Buffer.byteLength(String(s), 'utf8'));
  * tax and the growth Δ are all denominated in. Ported verbatim from the browser's flatBytes(); the
  * numbers must not move, or every historical reading of a session silently changes meaning.
  */
-export function blockBytes(b) {
+function blockBytes(b) {
   if (!b) return 0;
   if (b.sec === 'tools') {
     // D15: a verbatim trace carries the real description + schema bytes; a v0 trace kept only a
@@ -48,12 +48,6 @@ export function blockBytes(b) {
   if (bl.type === 'tool_result') { const c = bl.content; return enc(typeof c === 'string' ? c : JSON.stringify(c ?? '')); }
   if (bl.type === 'image') return 800;   // no bytes on the wire to count; a nominal weight, as before
   return enc(JSON.stringify(bl));
-}
-
-/** Character count of the block's rendered body — the 「字符数」 on the collapsed row. */
-export function blockChars(b) {
-  const t = bodyTextOf(b);
-  return t == null ? 0 : String(t).length;
 }
 
 // The body as the context window would render it. Used HERE only to derive chars/preview; the
@@ -115,7 +109,7 @@ function argPreview(bl) {
  * The collapsed row: { role, tag, label }. RAW strings — escaping is the renderer's job, and doing
  * it here would double-escape or, worse, ship markup. Ported from the browser's blockHead().
  */
-export function blockHead(b) {
+function blockHead(b) {
   if (!b) return { role: '', tag: '', label: '' };
   if (b.sec === 'tools') return { role: 'tool', tag: 'def' + (b.mcp ? ' · MCP' : ''), label: b.name || '' };
   if (b.sec === 'system') return { role: 'system', tag: b.label || '', label: '' };
@@ -131,7 +125,7 @@ export function blockHead(b) {
 }
 
 /** 短预览 for the row body — distinct from head.label, which previews the tool ARGUMENT. */
-export const blockPreview = (b) => shorten(bodyTextOf(b));
+const blockPreview = (b) => shorten(bodyTextOf(b));
 
 // ── composition: what this call's context is MADE OF, in nine buckets ────────────────────────────
 //
@@ -153,7 +147,7 @@ const COMP_KIND = { thinking: 'thinking', redacted_thinking: 'thinking', tool_us
 const COMP_ROLE = { assistant: 'assistant', user: 'user', system: 'system', developer: 'system', tool: 'tool_result' };
 export const COMP_KEYS = ['tools', 'system', 'user', 'assistant', 'thinking', 'tool_use', 'tool_result', 'image', 'other'];
 
-export function compBucket(b) {
+function compBucket(b) {
   if (!b) return 'other';
   if (b.sec === 'tools') return 'tools';
   if (b.sec === 'system') return 'system';
@@ -192,7 +186,7 @@ export function compBuckets(flat) {
  * presents as a research finding. It also belongs here on principle (invariant 3): `<system-reminder>`
  * is Claude-Code-shaped knowledge, and the browser must not branch on a harness's wire shape.
  */
-export function blockQuery(b) {
+function blockQuery(b) {
   return queryOf(b, bodyTextOf(b));
 }
 // …over a body text the caller already has (slimBlock builds it once for chars, preview and this).

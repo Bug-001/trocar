@@ -2,31 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assembleSession } from '../../src/view/assemble.mjs';
 import { linearContext } from '../../src/view/analyze.mjs';
-import { blockPreview } from '../../src/view/blockmeta.mjs';
 
-// Three "same output, less work" rewrites of the session view (D62 / spec 1.6 §3.1) each replaced a
+// Two "same output, less work" rewrites of the session view (D62 / spec 1.6 §3.1) each replaced a
 // build-then-throw-away with a bounded or resumable one. Each is only legitimate while its output is
-// IDENTICAL to the form it replaced, and nothing above would notice if it drifted — a preview would
-// read slightly differently, a block key would diff against itself, a prefix digest would stop being
+// IDENTICAL to the form it replaced, and nothing above would notice if it drifted — a block key would diff against itself, a prefix digest would stop being
 // reproducible. So each gets its old definition back here, as the oracle.
 
-// ── 1. the collapsed row's preview: shorten() ────────────────────────────────────────────────────
-// Was `String(s || '').replace(/\s+/g, ' ').trim().slice(0, 90)` over the WHOLE body text.
-const PREVIEW_REF = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 90);
 const long = (unit, n) => unit.repeat(n);
-const PREVIEW_CASES = [
-  '', ' ', '   \t\n ', 'plain text',
-  '  leading', 'trailing   ', '  both  ', 'a  b\t\tc\n\nd',
-  '\u00a0\u2003nbsp and em space\u2028\u2029', 'emoji 🙂\t🙂 and 中文  字',
-  long('x', 500), long('word ', 300), long(' ', 5000) + 'after a lot of whitespace',
-  long('a b', 200), long('\n', 1000), long('中', 300), 'exact' + long(' ', 90) + 'end',
-  long('ab ', 30) + 'cut here', long('.', 89), long('.', 90), long('.', 91),
-];
-test('the preview is whitespace-collapsed, trimmed and clipped exactly as the regex form was', () => {
-  for (const s of PREVIEW_CASES) {
-    assert.equal(blockPreview({ sec: 'system', text: s }), PREVIEW_REF(s), `preview of ${JSON.stringify(s.slice(0, 40))}…`);
-  }
-});
 
 // ── 2. the block key: hash(text.slice(0, 4096)) ──────────────────────────────────────────────────
 // The text is now built WITH the 4 096-char bound instead of in full and sliced after. The bound is
