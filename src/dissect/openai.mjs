@@ -411,8 +411,7 @@ export function ctxTokens(norm) {
 // branches on a wire. Registered by wire format in src/dissect/registry.mjs (`boardDissectorFor`).
 // `provider` is the pre-D37 board label (analyzed.provider), kept for readers of old payloads; `blockKeys`
 // are the request's top-level keys that become context blocks (everything else is a non-block key).
-// The ETL adapter generated from the same object (src/adapters/dissected.mjs) also reads: `consumedBody` — the
-// request keys this dissector maps to blocks / columns (the rest are unmapped, 3.1:44); `messageCount` — the
+// `consumedBody` — the request keys this dissector maps to blocks (the rest are unmapped, 3.1:44); `messageCount` — the
 // message count compaction compares (3.4); `faithfulnessOf` — a flat block's 3.2 faithfulness.
 const blockFaithfulness = (b) => faithfulness(b && b.block); // tools / system descriptors carry no .block → verbatim
 export const RESPONSES = Object.freeze({

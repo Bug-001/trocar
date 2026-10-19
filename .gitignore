@@ -17,7 +17,6 @@ node_modules
 db/*.duckdb
 db/*.duckdb.wal
 db/*.parquet
-public/
 
 # frontend build artifact
 src/web/dist/

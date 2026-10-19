@@ -83,7 +83,7 @@ export const HARNESSES = Object.freeze([
 ]);
 
 // Ordered union of every header session key the table declares, then the legacy ones. Only for raw lines that
-// do not parse (src/etl/shard.mjs), where the harness is unknown: the per-row lookup is always preferred.
+// do not parse, where the harness is unknown: the per-row lookup is always preferred.
 export const HEADER_SESSION_KEYS = Object.freeze([...new Set([
   ...HARNESSES.flatMap((h) => h.sessionKeys.filter((k) => k.from === 'header').map((k) => k.name.toLowerCase())),
   ...LEGACY_SESSION_KEYS.map((k) => k.name.toLowerCase()),
