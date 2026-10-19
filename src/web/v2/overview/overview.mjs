@@ -112,12 +112,12 @@ export function overviewItems(s, now) {
   const o3 = groups.map(({ g, part }) => {
     const a = agentKey(g.last && g.last.agent)
     const why = (g.last && (g.last.reason || g.last.code)) || g.key
-    if (part === 'raw') return { key: g.key, lastTs: g.last_ts, text: `${W.RAW_FAILURES} · ${why} · ${W.FAIL_TIMES(g.count)} · ${when(g.last_ts, now)}`, href: '#/capture/log', tip: `组 ${g.key}` }
+    if (part === 'raw') return { key: g.key, lastTs: g.last_ts, text: `${W.RAW_FAILURES} · ${why} · ${W.FAIL_TIMES(g.count)} · ${when(g.last_ts, now)}`, href: '#/capture/log', tip: `group ${g.key}` }
     return {
       key: g.key, lastTs: g.last_ts, chip: a ?? undefined,
       subject: a != null ? null : W.SVC_SUBJECT,
       text: `${W.FAILURES} · ${why} · ${W.FAIL_TIMES(g.count)} · ${when(g.last_ts, now)}`,
-      href: a != null ? `#/capture?h=${encodeURIComponent(a)}` : '#/capture/log', tip: `组 ${g.key}`,
+      href: a != null ? `#/capture?h=${encodeURIComponent(a)}` : '#/capture/log', tip: `group ${g.key}`,
     }
   }).sort((x, y) => (parseTs(y.lastTs) ?? 0) - (parseTs(x.lastTs) ?? 0)) // newest failure first
   for (const it of o3.slice(0, 5)) push('O3', it.key, it)
@@ -333,7 +333,7 @@ export function diskModel(retentionData) {
 export function headHtml(s) {
   return pageHeadHtml({
     name: SCREEN_NAME.overview,
-    scope: { label: '统计窗', options: W.WINDOWS.map((x) => ({ value: x, label: W.WINDOW_LABEL[x], href: `#/overview?window=${x}` })), value: s.w },
+    scope: { label: 'Stats window', options: W.WINDOWS.map((x) => ({ value: x, label: W.WINDOW_LABEL[x], href: `#/overview?window=${x}` })), value: s.w },
     readAt: s.readAt,
   })
 }
@@ -376,7 +376,7 @@ export function itemsCardHtml(s, now) {
       }).join('')
     : (allRead && items.partial.length === 0 ? `<p class="ovempty">${esc(W.NO_ITEMS)}</p>` : '')
   return `<section class="ovcard items" aria-label="${esc(W.CARD.items)}">` +
-    `<h2 class="ovh">${esc(W.CARD.items)}${infoButton({ label: '失败列表的时段', title: W.FAIL_LIST, body: W.FAIL_WINDOW(hrs) })}</h2>` +
+    `<h2 class="ovh">${esc(W.CARD.items)}${infoButton({ label: 'Failure list window', title: W.FAIL_LIST, body: W.FAIL_WINDOW(hrs) })}</h2>` +
     (items.partial.length ? `<p class="ovsub warn">${esc(W.PARTIAL_NOTE(items.partial))}</p>` : '') + staleLine +
     `<div class="ovlist">${body}</div></section>`
 }
@@ -384,7 +384,7 @@ export function itemsCardHtml(s, now) {
 export function statsCardHtml(s, now, titles) {
   const st = s.stats
   if (st == null) return '' // no such slot: no card
-  if (st.ok === false) return readFailHtml('统计', st.err, 'slow') // a failed read says so even before any data arrived
+  if (st.ok === false) return readFailHtml('Stats', st.err, 'slow') // a failed read says so even before any data arrived
   if (st.data == null) return '' // never read yet: nothing is drawn that has no source (the polls land one by one)
   if (st.absent) return '' // the endpoint is not there: the card does not exist (1.7 §统计)
   const D = st.data
@@ -420,7 +420,7 @@ export function statsCardHtml(s, now, titles) {
     `</section>`
 }
 
-const extraCantWhy = '多花按「断开时没读到的缓存 × 单价差」算:这一行没有 missed 数、没有单价,或它的缓存写入数有的报了有的没报,就算不出'
+const extraCantWhy = 'extra cost = cache not read at a break × the unit price difference; it cannot be computed when this row has no missed count, no unit price, or cache writes reported for only some calls'
 const extraLine = (m, priceFail) => {
   if (priceFail) return ''
   if (m.extraCant > 0 && !(m.extra > 0)) return `<p class="ovsay">${esc(W.EXTRA_LABEL)} ${esc(W.CANT)} <span class="ovmark" title="${esc(extraCantWhy)}">${esc(W.WASTED_CANT_K(m.extraCant))}</span></p>`
@@ -437,7 +437,7 @@ const coverageOf = (s) => {
     const k = agentKey(m && m.harness)
     if (k != null && !inStore.has(k)) seen.add(k)
   }
-  return seen.size ? W.COVERAGE([...seen].map(harnessName).join('、')) : null
+  return seen.size ? W.COVERAGE([...seen].map(harnessName).join(', ')) : null
 }
 
 // every session's title rule (the same fallback order as the recent list), keyed by session_id — the most-expensive
@@ -453,7 +453,7 @@ export function sessionTitleMap(projectsData) {
 
 const mostHover = (most, titles, now) => {
   const meta = (titles && titles.get(most.sessionId)) || null
-  const title = meta && meta.title ? (meta.basis === 'agent' ? meta.title : `${meta.title}(取自第一条提问)`) : W.UNNAMED(meta ? fmtWhen(parseTs(meta.last), now) : '—')
+  const title = meta && meta.title ? (meta.basis === 'agent' ? meta.title : `${meta.title} (taken from the first prompt)`) : W.UNNAMED(meta ? fmtWhen(parseTs(meta.last), now) : '—')
   return `${title} · ≈ ${usd(most.usd)} · ${W.HIT_LABEL} ${most.hit == null ? '—' : `${Math.round(most.hit * 100)}%`} · ${W.BREAKS_N(most.breaks)}`
 }
 
@@ -479,7 +479,7 @@ const agentTableHtml = (m, w, now) => {
 export function recentCardHtml(s, now) {
   const P = s.projects
   if (P == null) return ''
-  if (P.ok === false) return readFailHtml('会话列表', P.err, 'projects')
+  if (P.ok === false) return readFailHtml('Session list', P.err, 'projects')
   const rows = recentRows(P.data)
   if (rows == null) return ''
   if (!rows.length) { // empty is a capture question, not a data question: the verdict's own sentence says why
@@ -489,13 +489,13 @@ export function recentCardHtml(s, now) {
   }
   const body = rows.map((r) => {
     const title = r.title
-      ? `${esc(r.title)}${r.titleBasis === 'guess' ? ` <span class="ovmark" title="${esc(W.FROM_FIRST_PROMPT)}">(推测)</span>` : ''}`
+      ? `${esc(r.title)}${r.titleBasis === 'guess' ? ` <span class="ovmark" title="${esc(W.FROM_FIRST_PROMPT)}">(inferred)</span>` : ''}`
       : esc(W.UNNAMED(fmtWhen(parseTs(r.last), now)))
     const titleTip = r.title ? (r.titleBasis === 'agent' ? W.TITLE_FROM_AGENT : W.FROM_FIRST_PROMPT) : null
     const calls = r.calls === 0 && r.probes > 0
-      ? `<span title="${esc(W.PROBE_ONLY_TIP)}">${esc(W.PROBE_ONLY)}</span>` : `模型调用 ${r.calls}`
+      ? `<span title="${esc(W.PROBE_ONLY_TIP)}">${esc(W.PROBE_ONLY)}</span>` : W.CALLS_N(r.calls)
     return `<a class="ovitem" href="${esc(r.href)}">` +
-      `${harnessIcon(r.harness)}<span class="ovnm">${esc(harnessName(r.harness))}${r.inferred ? ` <span class="ovmark" title="按请求头推测的 agent">(推测)</span>` : ''}</span>` +
+      `${harnessIcon(r.harness)}<span class="ovnm">${esc(harnessName(r.harness))}${r.inferred ? ` <span class="ovmark" title="agent inferred from the request headers">(inferred)</span>` : ''}</span>` +
       `<span class="ovtx"${titleTip ? ` title="${esc(titleTip)}"` : ''}>${title}</span>` +
       `<span class="ovnum">${calls}</span>` +
       `<span class="ovwhen">${esc(when(r.last, now))}</span></a>`
@@ -508,7 +508,7 @@ export function recentCardHtml(s, now) {
 export function diskCardHtml(s, now) {
   const R = s.retention
   if (R == null) return ''
-  if (R.ok === false) return readFailHtml('保存设置', R.err, 'slow')
+  if (R.ok === false) return readFailHtml('Retention', R.err, 'slow')
   const m = diskModel(R.data)
   if (!m) return ''
   const total = m.total == null ? W.DISK_USE('—') : (m.atLeast ? W.DISK_AT_LEAST(bytes(m.total)) : W.DISK_USE(bytes(m.total)))
@@ -525,13 +525,13 @@ export function diskCardHtml(s, now) {
 export function firstUseHtml() {
   return `<section class="ovcard start" aria-label="${esc(W.CARD.start)}"><h2 class="ovh">${esc(W.CARD.start)}</h2>` +
     W.START_ROWS.map(([k, v]) => `<p class="ovsay"><b>${esc(k)}</b>${esc(v)}</p>`).join('') +
-    techDetailsHtml({ 安装命令: `<code>${esc(COMMANDS.install)}</code>` }, { id: 'ov-install', html: true }) +
+    techDetailsHtml({ 'install command': `<code>${esc(COMMANDS.install)}</code>` }, { id: 'ov-install', html: true }) +
     `</section>`
 }
 
 const readFailHtml = (what, why, group) =>
   `<section class="ovcard"><h2 class="ovh">${esc(what)}</h2>` +
-  `<p class="ovsay warn">${esc(W.READ_FAIL(what, why || '不知道原因'))} · ` +
+  `<p class="ovsay warn">${esc(W.READ_FAIL(what, why || 'reason unknown'))} · ` +
   `<button type="button" class="ghostbtn" data-act="retry" data-g="${esc(group)}">${esc(W.RETRY)}</button></p></section>`
 
 // the first-run page: not installed and not one session yet → the capture card and 开始使用 only (1.7 §首次使用)
@@ -591,7 +591,7 @@ export function mount(el, ctx) {
   const fold = (slot, r) => {
     const prev = s[slot]
     if (r && r.ok) { s[slot] = { data: r.data, ok: true, err: null, absent: !!r.absent }; s.readAt = Date.now() }
-    else s[slot] = { data: prev && prev.data, ok: false, err: (r && (r.error || `HTTP ${r.status}`)) || '不知道原因', absent: !!(r && r.absent) }
+    else s[slot] = { data: prev && prev.data, ok: false, err: (r && (r.error || `HTTP ${r.status}`)) || 'reason unknown', absent: !!(r && r.absent) }
   }
 
   const render = () => {
@@ -608,7 +608,7 @@ export function mount(el, ctx) {
     // a failed read keeps the last good answer and its time, so the card goes 未刷新 rather than blank)
     const p = capHealthPatch(await api.get('status'), Date.now())
     if (p.capHOkAt != null) s.caph = { data: p.capH, okAt: p.capHOkAt, err: null, ok: true, absent: false }
-    else s.caph = { data: s.caph.data, okAt: s.caph.okAt, err: p.capHErr || '不知道原因', ok: false, absent: false }
+    else s.caph = { data: s.caph.data, okAt: s.caph.okAt, err: p.capHErr || 'reason unknown', ok: false, absent: false }
     if (s.caph.ok) s.readAt = Date.now()
   }
   const readProjects = async () => { fold('projects', await api.get('sessions')) }
