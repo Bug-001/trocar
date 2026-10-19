@@ -128,11 +128,16 @@ export async function doorPartsFor({ os, env = process.env, event = () => {}, fa
 /** The proxy-mode half of status's facts on macOS / Windows (1.6 §9.7, 4.11 CM21): the model's per-form reader over this user's install manifest, the daemon's
  *  reply and `chainSp` (the arch's system proxy in the chain's shape) → { forms, forwarder } for gatherNetFacts. Read-only: the manifest is read, nothing written. */
 export async function modelNetForms({ os, home, env = process.env, status, settings = {}, harnesses, procs, systemProxy, chainSp, dirs, fs = nodeFs }) {
-  const [{ readManifest }, { modelFormFacts, netFormsOf }, { installDrift }, { collectorHome }] = await Promise.all([
-    import('../core/trust/journal.mjs'), import('../core/proxymode/status-facts.mjs'), import('../model-on.mjs'), import('../../paths.mjs')])
-  let m = null
-  try { m = readManifest(collectorHome(path.join(home, '.asight')), fs) } catch (e) { if (e && e.code === 'ESANDBOX') throw e } // unreadable: no installed harness to draw
+  const [{ readManifest }, { modelFormFacts, netFormsOf, setupOf }, { collectorHome }] = await Promise.all([
+    import('../core/trust/journal.mjs'), import('../core/proxymode/status-facts.mjs'), import('../../paths.mjs')])
+  let m = null, unread = null
+  try { m = readManifest(collectorHome(path.join(home, '.asight')), fs) } catch (e) { if (e && e.code === 'ESANDBOX') throw e; unread = { error: String((e && e.message) || e) } } // unreadable: no installed harness to draw, setup unknown
   const ctx = sourcesCtx({ os, home, env, dirs, fs })
-  const model = await modelFormFacts({ harnesses, os, manifest: m, reply: status.daemon && status.daemon.reply, root: status.cert && status.cert.root, systemProxy: chainSp, ctx, fs, drift: (h) => installDrift(m, h, fs) })
-  return netFormsOf({ model, status, procs, systemProxy, settings })
+  const root = status.cert && status.cert.root
+  // 4.11 P4b: each harness's setup, the one judgement `on`'s precondition ⑪ makes too (with status's root); the forms' certificate codes read it as before
+  const setup = Object.fromEntries(harnesses.filter((d) => d.proxyMode).map((d) => [d.name, setupOf(d, { os, manifest: unread || m, ctx, root, fs })]))
+  const DRIFT = { 'carrier-absent': 'entry-missing', 'carrier-overwritten': 'entry-changed' }
+  const drift = (h) => { const s = setup[h]; if (!s || s.state === 'ready') return null; const x = s.missing.find((y) => y.form); return s.state === 'unknown' ? { reason: null, command: 'asight install' } : x ? { reason: DRIFT[x.what], command: 'asight install' } : null }
+  const model = await modelFormFacts({ harnesses, os, manifest: m, reply: status.daemon && status.daemon.reply, root, systemProxy: chainSp, ctx, fs, drift })
+  return { ...netFormsOf({ model, status, procs, systemProxy, settings }), setup }
 }

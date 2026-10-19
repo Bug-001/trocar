@@ -7,11 +7,10 @@
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
-import { readManifest, saveManifest, judgeEntry, sha256 } from './core/trust/journal.mjs'
-import { installUsable, itemsOfPhase } from '../off/manifest.mjs'
-import { readOrNull } from '../off/fsutil.mjs'
+import { readManifest, saveManifest } from './core/trust/journal.mjs'
+import { installUsable } from '../off/manifest.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../off/state.mjs'
-import { checkWrapper } from './core/proxymode/hooks/wrapper.mjs'
+import { setupOf } from './core/proxymode/status-facts.mjs'
 import { planRoutes, writeRoutes, noProxyNames } from './core/proxymode/entries.mjs'
 import { resolveLoc } from './core/proxymode/sources.mjs'
 import { loadIngressConfig, rebindTaken, freeOnLoopback } from './core/ingress-config.mjs'
@@ -20,28 +19,10 @@ import { CODE } from './core/codes.mjs'
 import { appendEvent } from './core/events.mjs'
 
 const INSTALL_HINT = 'asight install'
+// 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON)
+const SETUP_WHY = { 'carrier-absent': 'asight has not set up its certificate for it (installed after asight, or what asight placed is gone)', 'carrier-overwritten': 'its own update overwrote what asight placed for its certificate', 'root-missing': "asight's root certificate is no longer trusted" }
 const errText = (e) => String((e && e.message) || e)
 const groupOf = (harness, routeId) => `${harness}:${routeId}`
-
-/** Precondition ⑪ for one harness: → null (its install items are there and unchanged) or { reason: 'entry-missing' | 'entry-changed', path, command }. */
-export function installDrift(m, harness, fs = nodeFs) {
-  if (!((m.install && m.install.harnesses) || []).includes(harness)) return { reason: 'entry-missing', path: null, command: INSTALL_HINT, why: `${harness} was not found when asight install last ran` }
-  const recorded = itemsOfPhase(m, 'install').filter((i) => i.harness === harness)
-  // what install placed (m.install.items) must still be on record: an item whose record is gone is as missing as its file
-  for (const p of (m.install.items && m.install.items[harness]) || []) {
-    if (!recorded.some((x) => x.kind === p.kind && x.path === p.path)) return { reason: 'entry-missing', path: p.path, command: INSTALL_HINT, why: `${p.path}, which asight install placed for ${harness}, is no longer in the install manifest` }
-  }
-  for (const x of recorded) {
-    if (x.kind === 'owned-file') {
-      const d = x.role === 'wrapper' ? checkWrapper({ fs }, x) : (() => { const b = readOrNull(fs, x.path); return b == null ? { reason: 'entry-missing', path: x.path } : sha256(b) !== x.sha256 ? { reason: 'entry-changed', path: x.path } : null })()
-      if (d) return { ...d, command: INSTALL_HINT }
-    } else {
-      const j = judgeEntry({ manifest: m, planned: x, fs })
-      if (j.action !== 'skip-intact') return { reason: fs.existsSync(x.path) ? 'entry-changed' : 'entry-missing', path: x.path, command: INSTALL_HINT, why: j.why }
-    }
-  }
-  return null
-}
 
 /** turnOnModel({ os, home, env, ids, harnesses, ctx, … }) → { on, refused, routes, notes, problems, doors, exit }. `request` / `isFree` replace the
  *  world in a test that needs to; the default asks the endpoint controlEndpointFor resolves (no socket path is ever passed in). */
@@ -52,14 +33,16 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const wanted = ids || m.install.harnesses
   const refused = [], on = []
-  for (const h of wanted) {
-    const d = installDrift(m, h, fs)
-    if (d) refused.push({ harness: h, ...d }); else on.push(h)
+  const unsure = []
+  for (const h of wanted) { // precondition ⑪ = status's `setup` (4.11 P4b, one judgement): only a harness that needs setup is refused, nothing written for it
+    const s = setupOf(byName.get(h), { os, manifest: m, ctx, fs })
+    if (s.state === 'needed') refused.push({ harness: h, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: INSTALL_HINT })
+    else { on.push(h); if (s.state === 'unknown') unsure.push({ harness: h, text: `whether ${h} is set up could not be told (${s.reason})` }) }
   }
   // what install left pending (the root store declined or not answered, the custody unreachable): on goes on — the forms the root cannot reach go through
   // their doors forwarding only (D51④) — and says each one, with the command, forward only (1.6 §1.1)
   const pending = (Array.isArray(m.install.pending) ? m.install.pending : []).map((p) => ({ harness: null, code: CODE.installPending, item: p.item, state: p.state, why: p.reason, command: INSTALL_HINT }))
-  const out = { on, refused, routes: [], notes: [...pending], problems: [], doors: {}, planned: [], exit: 1 }
+  const out = { on, refused, routes: [], notes: [...pending, ...unsure], problems: [], doors: {}, planned: [], exit: 1 }
   if (!on.length) return out
   const render = (tpl, { door, harness }) => { const d = byName.get(harness), p = (d.proxy || {}).env || []; return renderHook(tpl, { DOOR: door, PROXY_ENV: p, PROXY_NAMES: p, NO_PROXY_ENV: noProxyNames(d) }).text }
   const wctx = { ...ctx, dir, home, manifest: m, fs, now, persistentEnv, systemProxy, render, ...(newId ? { newId } : {}) }

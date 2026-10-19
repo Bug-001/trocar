@@ -66,6 +66,7 @@ export const CODE = Object.freeze({
   priorProxyUnknown: 'prior-proxy-unknown', // a door's upstream: the proxy the agent had in its process env could not be recovered (parent gone, env unreadable): the system proxy, else direct (4.11 P7)
   notUsersFile: 'not-users-file', // install skipped a P8 install-folder wrapper: the target is not one native program in a folder this user owns, outside package-manager trees, with the layout declared (4.11 P8)
   certNotInstalled: 'cert-not-installed', // on refused: no install record with a root — run asight install first (1.6 §1.1, D55⑥)
+  setupNeeded: 'setup-needed', // on refused one harness: its setup is needed (a form's certificate carrier absent or overwritten, or the root gone; 4.11 P4b, D65④); the others go on
   installPending: 'install-pending', // on went on over an install that left an item pending or declined (the root store's prompt): the forms only the root reaches forward only, said (1.6 §1.1)
   collectorsOnline: 'collectors-online', // uninstall refused: a harness is on, or a holder may still use a door; nothing changed (1.6 §1.1, 4.11 CM24)
   upstreamHeaderIgnored: 'upstream-header-ignored', // X-Asight-Upstream from a form whose hook does not send it: ignored, recorded without its value (4.11 P7 · ⑥)

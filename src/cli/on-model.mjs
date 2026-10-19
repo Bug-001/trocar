@@ -21,7 +21,11 @@ const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again w
 // §1.4「计划写全」: every planned route by the full path (and key) it will write; a route that writes no file of yours says why instead
 const planLine = (p, home) => [p.harness, `${p.paths.length ? p.paths.map((x) => tilde(x, home)).join(', ') : `no file of yours: asight hands ${p.harness} the setting as it starts`}${p.keys && p.keys.length ? `: ${p.keys.join('.')}` : ''}`]
 const noteLine = (n) => (n.code === 'install-pending' ? `Not done yet: ${n.item} is ${n.state} (${n.why}). Run again: ${n.command}` : `Note: ${n.harness ? `${n.harness}: ` : ''}${n.text || n.why || n.code}${n.paths && n.paths.length ? ` (${n.paths.join(', ')})` : ''}`)
-const refusedLine = (r) => `${r.harness} was not turned on: ${r.reason}${r.path ? ` (${r.path})` : ''}. Run: ${r.command}`
+// 1.6 §3.3: a harness that needs setup — the fix is two commands, never the code (§1.1)
+const refusedLine = (r) => `${r.harness} was not turned on: ${r.why}. Run: ${r.command}, then: asight on ${r.harness}`
+/** 1.6 §3.3 (D65④): the harnesses `on` refused because their setup is needed — `blocked` of a dry run, `error` of a real one (exit 1). */
+const setupBlocked = (r) => r.refused.filter((x) => x.reason === 'setup-needed').map((x) => ({ what: x.harness, reason: x.why }))
+const setupError = (b) => ({ code: 'setup-needed', message: `${b.map((x) => x.what).join(', ')} ${b.length === 1 ? 'is' : 'are'} not set up for capture; run asight install, then asight on again` })
 
 /** → the exit code. `parts` is loadParts' view (its arch's unit); `deps`: backends, harnesses, which, exec, now, sleep, fs (0.1 §3). */
 export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, json }) {
@@ -76,7 +80,9 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   say(fit([`asight on will change ${plan.planned.length} setting${plan.planned.length === 1 ? '' : 's'}:`,
     ...pairs(plan.planned.map((p) => planLine(p, home))),
     ...(fresh.length ? [`New since you last said yes: ${fresh.map((x) => tilde(x, home)).join(', ')}`] : [])]).join('\n'))
-  if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned }), EXIT.ok)
+  const blockedSetup = setupBlocked(plan)
+  if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
+  if (!plan.on.length && blockedSetup.length) return out(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup) }), EXIT.incomplete) // nothing to turn on: no daemon started
   if (fresh.length && !flags.has('--yes')) {
     if (json || !isInteractive(io)) { if (json) io.out(JSON.stringify({ ...receiptOf({ ...plan, exit: 2 }), ok: false, planned: plan.planned, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES); return EXIT.usage }
     if (!(await ask({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
@@ -95,7 +101,8 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     const r = up.up ? await turnOnModel(args) : { ...plan, routes: [], problems: up.problems.length ? up.problems : up.notes, exit: EXIT.incomplete }
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
     if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
-    return out(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, doors: r.doors || {} }), r.exit)
+    const b = setupBlocked(r)
+    return out(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, doors: r.doors || {}, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit)
   } finally { lock.release() }
   } finally { closeProcs() }
 }

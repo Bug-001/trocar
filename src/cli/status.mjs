@@ -401,6 +401,16 @@ function boardOf(f) {
   return say(b.state === 'port-taken' ? 'port-taken' : 'not-running', b.reason || `the daemon says the board is ${b.state}`)
 }
 
+/** C.3 `harnesses[h].setup` (4.11 P4b, D65④): the model's one judgement, read with the forms; driver mode (Linux) does not judge it, and what was not read is
+ *  `unknown` with its reason, never `ready` (D38). */
+function setupDocOf(f, id) {
+  const hf = f.facts && f.facts.harnesses && f.facts.harnesses[id]
+  if (hf && hf.setup) return hf.setup
+  const why = f.platform === 'linux' || (f.facts && f.facts.routing === 'driver') ? 'driver mode (Linux) does not judge setup per form; asight on works as before'
+    : `the setup of ${id} could not be read${f.topology_error ? ` (${f.topology_error})` : ''}`
+  return { state: 'unknown', missing: [], reason: why }
+}
+
 /** The 附录 C.3 document of a read: `status --json` and `asight query status` print exactly this. */
 export function statusDocOf(f) {
   const d = f.daemon, forms = formsOf(f) || {}
@@ -422,7 +432,7 @@ export function statusDocOf(f) {
     daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, error: d.reason || null },
     harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
       desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why,
-      forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null })),
+      setup: setupDocOf(f, h.id), forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null })),
       ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}),
     }])),
     ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),

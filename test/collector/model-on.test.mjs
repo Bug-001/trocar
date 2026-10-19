@@ -14,6 +14,7 @@ import { startControlServer } from '../../src/collector/core/control.mjs'
 import { daemonMayStart, readManifest } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
+import { isPresent } from '../../src/collector/core/proxymode/sources.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const TOKEN = 'k'.repeat(32)
@@ -67,7 +68,6 @@ test('e2e: a Kimi-only machine — install placed the wrapper; on asks the daemo
 
 const DRIFTS = {
   'the wrapper replaced by the installer': (w) => fs.writeFileSync(w.kimi, Buffer.concat([MACHO, Buffer.from('new release')])),
-  'the wrapper deleted': (w) => fs.rmSync(w.kimi),
 }
 for (const [name, drift] of Object.entries(DRIFTS)) {
   test(`CM28 · ⑪: ${name} → only kimi-code is refused, with asight install; codex and deepseek-dsh are turned on`, async () => {
@@ -76,8 +76,7 @@ for (const [name, drift] of Object.entries(DRIFTS)) {
     const d = await daemon(w)
     try {
       const r = await on(w)
-      assert.deepEqual(r.refused.map((x) => [x.harness, x.command]), [['kimi-code', 'asight install']])
-      assert.ok(['entry-changed', 'entry-missing'].includes(r.refused[0].reason))
+      assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), [['kimi-code', 'setup-needed', 'asight install']])
       assert.ok(r.on.includes('deepseek-dsh') && r.on.includes('codex') && !r.on.includes('kimi-code'))
       assert.equal(fs.existsSync(path.join(w.dir, 'switch', 'kimi-code')), false)
       assert.ok(fs.existsSync(path.join(w.dir, 'switch', 'deepseek-dsh')))
@@ -86,19 +85,20 @@ for (const [name, drift] of Object.entries(DRIFTS)) {
   })
 }
 
-test('CM28 · ⑪: a harness install never saw is refused with asight install, the others go on', async () => {
+test('CM28 · ⑪ · 4.11 P4b: a harness installed after asight (present, install never saw it) is refused with setup-needed and asight install, the others go on', async () => {
   const w = await installed()
+  fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true })
   const d = await daemon(w)
   try {
     const r = await on(w, { ids: ['codex', 'hermes'] })
-    assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), [['hermes', 'entry-missing', 'asight install']])
+    assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), [['hermes', 'setup-needed', 'asight install']])
     assert.deepEqual(r.on, ['codex'])
   } finally { await d.close() }
 })
 
 // the review of T20, item 2: precondition ⑪ is not vacuous when install's record went too — install keeps what it placed per harness (install.items), so
-// an item gone from the manifest (with its file or without it) refuses that harness, entry-missing, like one gone from disk. Generated over every item install placed.
-test('CM28 · ⑪: every item install placed, its record dropped from the manifest (file kept, or file gone too) → only its harness is refused, entry-missing, asight install', async () => {
+// an item gone from the manifest (with its file or without it) refuses that harness, setup-needed, like one gone from disk. Generated over every item install placed.
+test('CM28 · ⑪: every item install placed, its record dropped from the manifest (file kept, or file gone too) → only its harness is refused, setup-needed, asight install', async () => {
   const w0 = await installed()
   const m0 = JSON.parse(fs.readFileSync(path.join(w0.dir, 'install-manifest.json'), 'utf8'))
   const placed = Object.entries(m0.install.items).flatMap(([h, xs]) => xs.map((x, i) => ({ h, i })))
@@ -115,8 +115,10 @@ test('CM28 · ⑪: every item install placed, its record dropped from the manife
       const d = await daemon(w)
       try {
         const r = await on(w)
-        assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.path, x.command]), [[h, 'entry-missing', p.path, 'asight install']], `${h} ${p.kind} ${p.path} (file too: ${fileToo})`)
-        assert.ok(!r.on.includes(h) && r.on.length > 0)
+        // P4b: a form no longer on this machine is not counted (the file was its only `present` place): nothing to set up, so not refused
+        const present = w.harnesses.find((d) => d.name === h).proxyMode.forms.some((f) => f.os.includes('darwin') && isPresent(f, w.ctx))
+        assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), present ? [[h, 'setup-needed', 'asight install']] : [], `${h} ${p.kind} ${p.path} (file too: ${fileToo})`)
+        assert.ok(present ? !r.on.includes(h) && r.on.length > 0 : r.on.length > 0)
       } finally { await d.close() }
     }
   }
