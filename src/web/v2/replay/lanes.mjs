@@ -16,7 +16,7 @@ export function buildLanes(analyzed, probes) {
     // 'token-count' (2.1's table) never collides with the server's `probe` lane (a warm-up request) — 1.3 #16.
     const count = (probes && probes.count) || series.length // the full truth: series only holds the ones with a size
     const calls = series.map((p, i) => ({ gi: i, ts: p.ts, ctx: p.tokens || 0, probe: true, usage: null }))
-    ls.push({ id: 'token-count', kind: 'token-count', label: 'token 计数', calls, count, events: [], resources: null,
+    ls.push({ id: 'token-count', kind: 'token-count', label: 'token count', calls, count, events: [], resources: null,
       giLocal: new Map(calls.map((c, i) => [c.gi, i])), peakCtx: calls.reduce((m, c) => Math.max(m, c.ctx), 1), flagged: 0 })
   }
   return ls

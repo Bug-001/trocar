@@ -23,7 +23,7 @@ export function renderTicks(lane, s) {
   const win = lane.calls.map((c, i) => ({ c, i })).filter((o) => inWindow(s.anchorTs, s.view, o.c.ts))
   const x = (c) => (xOf(s.anchorTs, s.view, c.ts) * 100).toFixed(2)
   const w = laneWord(lane.kind)
-  const tip = (c, i) => `${w} · 第 ${i + 1} 次调用 · ${when(c.ts)} · ${failOf(c) ? '调用失败' : kf(c.ctx) + ' tok'}`
+  const tip = (c, i) => `${w} · call ${i + 1} · ${when(c.ts)} · ${failOf(c) ? 'call failed' : kf(c.ctx) + ' tok'}`
   if (lane.kind === 'token-count') {
     const MAX = 300, step = Math.max(1, Math.ceil(win.length / MAX)) // drawn bars are capped; every probe stays reachable
     const peak = Math.max(1, lane.peakCtx)
@@ -44,9 +44,9 @@ function collapsedMarks(lanes, s) {
   const x = (c) => (xOf(s.anchorTs, s.view, c.ts) * 100).toFixed(2)
   return lanes.flatMap((l) => l.calls.map((c, i) => ({ c, i, l })).filter((o) => inWindow(s.anchorTs, s.view, o.c.ts) && (failOf(o.c) || o.c.flagged === true)))
     .map(({ c, i, l }) => {
-      const head = `${laneWord(l.kind)} · 第 ${i + 1} 次调用 · ${when(c.ts)}`
+      const head = `${laneWord(l.kind)} · call ${i + 1} · ${when(c.ts)}`
       return failOf(c)
-        ? `<span class="tick errtick" data-lane="${esc(l.id)}" data-i="${i}" style="left:${x(c)}%" title="${esc(head + ' · 调用失败')}"></span>`
+        ? `<span class="tick errtick" data-lane="${esc(l.id)}" data-i="${i}" style="left:${x(c)}%" title="${esc(head + ' · call failed')}"></span>`
         : `<span class="tick flag" data-lane="${esc(l.id)}" data-i="${i}" style="left:${x(c)}%" title="${esc(head + ' · ' + FLAGGED_WORD)}"></span>`
     }).join('')
 }
@@ -67,8 +67,8 @@ function railHtml(l, s, { sub = false } = {}) {
       if (v == null) { if (u) from = true; continue }
       sum += v; if (m.exact === false) from = true
     }
-    name = `${esc(String(l.task != null && l.task !== '' ? l.task : l.label || ''))} · 调用 ${l.calls.length} 次` + (sum > 0 || from ? ` · ≈ ${usd(sum)}${from ? ' 起' : ''}` : '')
-  } else name = `${esc(laneWord(l.kind))} ${l.calls.length} 次`
+    name = `${esc(String(l.task != null && l.task !== '' ? l.task : l.label || ''))} · ${l.calls.length} calls` + (sum > 0 || from ? ` · ≈ ${from ? 'from ' : ''}${usd(sum)}` : '')
+  } else name = `${esc(laneWord(l.kind))} · ${l.calls.length} calls`
   return `<div class="rail k-${esc(l.kind)} trow">` +
     `<div class="tgut railname ${col ? 'col' : ''}" data-toggle="${esc(l.id)}" title="${esc(hint)}"><span class="tw">${col ? '▸' : '▾'}</span> <span class="tn">${name}</span></div>` +
     (col ? '<div class="tlane"></div>' : `<div class="tlane railbody" data-lane="${esc(l.id)}">${renderTicks(l, s)}</div>`) + `</div>`
@@ -86,7 +86,7 @@ function tcRailHtml(l, s) {
 // < 900 px the subagent / 后台调用 / 全程 rows fold into one 「▸」 row (1.2 §窄屏); the fold state is a viewport fact,
 // not session data, so it is never reset with a session switch
 const narrowScreen = () => typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches
-const foldRowHtml = (folded) => `<div class="railunfold trow" data-railunfold="1" role="button" tabindex="0" aria-label="叠加轨"><div class="tgut railname"><span class="tw">${folded ? '▸' : '▾'}</span> <span class="tn">叠加轨</span></div><div class="tlane"></div></div>`
+const foldRowHtml = (folded) => `<div class="railunfold trow" data-railunfold="1" role="button" tabindex="0" aria-label="Overlay rows"><div class="tgut railname"><span class="tw">${folded ? '▸' : '▾'}</span> <span class="tn">Overlay rows</span></div><div class="tlane"></div></div>`
 
 export function renderRails(el, s) {
   const narrow = narrowScreen()

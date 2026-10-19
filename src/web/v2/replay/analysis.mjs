@@ -61,14 +61,14 @@ export function messageTurns(flat) {
   flat.forEach((b, i) => {
     if (b.sec !== 'messages') return
     const human = humanOf(b)
-    if (human || !cur) { cur = { label: human ? preview(human) : '接着上一轮', query: !!human, items: [] }; turns.push(cur) }
+    if (human || !cur) { cur = { label: human ? preview(human) : 'continued from the previous prompt', query: !!human, items: [] }; turns.push(cur) }
     cur.items.push(i)
   })
   for (const t of turns) {
     const k = t.items.map((i) => flat[i].kind)
     const tools = k.filter((x) => x === 'tool_use' || x === 'server_tool_use').length
     // the board's words (2.2 §提问卡): 调用 N 次工具 · 思考 · 工具结果 — the ones this turn has, in this order
-    t.acts = [tools && `调用 ${tools} 次工具`, k.includes('thinking') && '思考', k.includes('tool_result') && '工具结果'].filter(Boolean).join(' · ')
+    t.acts = [tools && `${tools} tool calls`, k.includes('thinking') && 'thinking', k.includes('tool_result') && 'tool result'].filter(Boolean).join(' · ')
   }
   return turns
 }

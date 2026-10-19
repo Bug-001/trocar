@@ -112,10 +112,10 @@ export function inlineText(b) {
   if (b.sec === 'tools') {
     return b.verbatim
       ? `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\n\ndescription:\n${b.desc || '—'}${b.schema !== undefined ? `\n\nschema:\n${JSON.stringify(b.schema, null, 2)}` : ''}`
-      : `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\nparams (names only): ${(b.props || []).join(', ') || '—'}\ndescription: ${kf(b.descChars)} chars captured — schema text not retained (length only)\n\n只有元数据:完整的 JSON schema(参数类型 / required / 枚举 / 嵌套)和描述文本没有被采集。模型收到的是完整 schema,这是采集边界,不是显示截断。`
+      : `${b.name}${b.ttype ? ' · ' + b.ttype : ''}\nparams (names only): ${(b.props || []).join(', ') || '—'}\ndescription: ${kf(b.descChars)} chars captured — schema text not retained (length only)\n\nMetadata only: the full JSON schema (parameter types / required / enums / nesting) and the description text were not captured. The model received the full schema; this is a capture boundary, not a display clip.`
   }
   if (b.sec === 'system') return b.text
-  if (b.faithfulness === 'opaque') return String(rawContentText(b.block) || '') || '[加密 / 涂黑的推理:线上只有签名或密文,没有明文。没有可以逐字还原的内容。]'
+  if (b.faithfulness === 'opaque') return String(rawContentText(b.block) || '') || '[Encrypted / redacted reasoning: the wire carries only a signature or ciphertext, no plaintext. There is nothing to restore verbatim.]'
   return rawContentText(b.block)
 }
 
@@ -131,7 +131,7 @@ export function blockBodyHtml(got, b) {
     return note + `<pre class="cbpre">${preEsc(clipText(String(inlineText(b) ?? '')))}</pre>`
   }
   if (got.status !== 'ok') {
-    const why = got.error || got.reason || '采集读不出来'
+    const why = got.error || got.reason || 'the capture could not be read'
     return `<div class="cbsrc warn" title="locator: ${esc(b.text_ref || '—')}">${esc(W.HALF_MARK + ' ' + ffWord('notfetched') + ' — ' + why)}</div>`
   }
   return `<pre class="cbpre">${preEsc(clipText(String(got.text ?? '')))}</pre>`
@@ -201,7 +201,7 @@ export function ctxBlockHtml(b, i, { prevKeys, open, windowLine = false } = {}) 
   const f = open ? faithNow({ ...b, _open: true }) : faithOf(b)
   const tag = tagWord(h.tag)
   const isNew = prevKeys && !b.volatile && !prevKeys.has(b.key)
-  const bp = b.cc ? `<span class="bpbadge" title="${esc(W.CACHE_MARK_TIP)} · 声明的值:${esc(JSON.stringify(b.cc))}">${esc(W.CACHE_MARK)}</span>` : ''
+  const bp = b.cc ? `<span class="bpbadge" title="${esc(W.CACHE_MARK_TIP)} · declared value: ${esc(JSON.stringify(b.cc))}">${esc(W.CACHE_MARK)}</span>` : ''
   const vol = b.volatile ? `<span class="volbadge" title="${esc(W.VOLATILE_MARK_TIP)}">${esc(W.VOLATILE_MARK)}</span>` : ''
   const nw = isNew ? `<span class="newmark" title="${esc(W.NEW_MARK_TIP)}">${esc(W.NEW_MARK)}</span>` : ''
   const tech = f === 'unknown' ? String(b.faithfulness) : f === 'unaddressable' ? (b.unaddressable || '') : ''

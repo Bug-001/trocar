@@ -19,10 +19,10 @@ export function mount(el, ctx) {
   say('')
   api.get('sessions').then((r) => {
     if (dead) return
-    if (!r.ok) return say(`<p class="note bad" role="alert">没读到会话列表:${esc(r.error || '不知道原因')}</p>`)
+    if (!r.ok) return say(`<p class="note bad" role="alert">Could not read the session list: ${esc(r.error || 'cause not known')}</p>`)
     const hit = findSession(r.data, link.id)
     if (hit) return router.go({ area: 'replay', screen: 'replay', project: hit.project, id: hit.id, params: link.params || {} }, { replace: true })
     say(`<p class="note" id="notlisted">${esc(SESSION_NOT_LISTED)} · <a href="#/sessions">${esc(BACK_TO_SESSIONS)}</a></p>`)
-  }, (e) => { if (!dead) say(`<p class="note bad" role="alert">没读到会话列表:${esc(String((e && e.message) || e))}</p>`) })
+  }, (e) => { if (!dead) say(`<p class="note bad" role="alert">Could not read the session list: ${esc(String((e && e.message) || e))}</p>`) })
   return { update() {}, unmount() { dead = true; el.replaceChildren() } }
 }

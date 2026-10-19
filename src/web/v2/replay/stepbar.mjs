@@ -16,7 +16,7 @@ const errMsgOf = (c) => { const e = c && c.error; if (!e) return ''; return type
 // ── the cost cell trio (from rawpanel.mjs; D14 — a LOCAL estimate, never a wire fact) ───────────────────────────────
 // the state of the price table itself, when there is no table to look a price up in: a failed read names its reason, an
 // unanswered one says so. Empty when the table is there.
-export const priceStateNote = (table, err) => (table ? '' : err ? `价表读不出:${err}` : '价表载入中')
+export const priceStateNote = (table, err) => (table ? '' : err ? `The price table could not be read: ${err}` : 'Loading the price table')
 // the price a model's cost is read through: exact key, or the LONGEST table key occurring in the model id (then every place
 // that shows it labels it 「按 <键> 的单价」). No key at all → null: unknown, never a guess.
 export const priceMatchOf = (table, model) => priceMatch(table, model)
@@ -33,22 +33,22 @@ export function costCellHtml(model, u, table, tableErr) {
 const usageNum = (n) => (n == null ? `<span class="un-null" title="${esc(W.USAGE_NULL_TIP)}">—</span>` : esc(kf(n)))
 export function usageLineHtml(u) {
   if (!u) return ''
-  return `命中缓存 ${usageNum(u.read)} · 写入缓存 ${usageNum(u.create)} · 未缓存 ${usageNum(u.fresh)} · 输出 ${usageNum(u.out)} token`
+  return `cache read ${usageNum(u.read)} · cache write ${usageNum(u.create)} · uncached ${usageNum(u.fresh)} · output ${usageNum(u.out)} tokens`
 }
 
 // ── the 缓存 button ──────────────────────────────────────────────────────────────────────────────────────────────────
 // the button's word follows the predicate (2.2 §缓存判定): 失败 → — → N% (a vendor of uncertain cache numbers adds ?)
 export function cacheLabel(call) {
   const st = cacheState(call)
-  if (st.state === 'failed') return '缓存 失败'
-  if (st.state === 'no-usage') return '缓存 —'
+  if (st.state === 'failed') return 'cache failed'
+  if (st.state === 'no-usage') return 'cache —'
   const pct = st.hit != null ? Math.round(st.hit * 100) : null
   const q = call && call.wire && call.wire.cacheSemanticsKnown === false
-  return pct == null ? '缓存 —' : `缓存 ${pct}%${q ? '?' : ''}`
+  return pct == null ? 'cache —' : `cache ${pct}%${q ? '?' : ''}`
 }
 // the popover: the state sentence first, then only the rows that apply — a structural verdict carries its mark, the four
 // numbers are the real usage, a break says what it cost, and the jump is offered only when the window drew the 变化线.
-export function cachePopoverHtml(call, ref, { laneW = '主对话', priceRow = null, hasChange = false } = {}) {
+export function cachePopoverHtml(call, ref, { laneW = 'main thread', priceRow = null, hasChange = false } = {}) {
   const st = cacheState(call, ref)
   const u = usageOf(call)
   const b = (call && call.cacheBreak) || {}

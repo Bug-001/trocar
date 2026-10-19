@@ -22,7 +22,7 @@ const AUTO_AT = 40  // …and a call with more blocks than this opens none of th
 export function costRowHtml(c, table, tableErr) {
   const model = String((c.rec && c.rec.request && c.rec.request.model) || '')
   if (!c.usage) return `<div class="din" style="color:var(--dim)">${esc(model)} · ${esc(W.COST_WHY['no-usage'])} — ≈ —</div>`
-  return `<div class="din" style="color:var(--dim)">${esc(model)} · 输出 ${kf(c.usage.out)} token · ≈ ${costCellHtml(model, c.usage, table, tableErr)}</div>`
+  return `<div class="din" style="color:var(--dim)">${esc(model)} · output ${kf(c.usage.out)} tokens · ≈ ${costCellHtml(model, c.usage, table, tableErr)}</div>`
 }
 
 // the reply: parsed by the server, folded when long — marked by the SAME resolve rule as the raw panel (2.2/2.3/2.6 §A:
@@ -32,7 +32,7 @@ function outputHtml(c) {
   if (c.error || (c.status != null && c.status !== 200)) return `<div class="din">${esc(W.FAILED_NO_REPLY)}${c.errMsg ? ` <span class="mono">${esc(c.errMsg)}</span>` : ''}</div>`
   if (c.paged_out) return `<div class="din">${esc(W.REPLY_WORD)}:<span class="pobadge">${esc(W.PAGED_TITLE)}</span></div>`
   const out = (c.norm && c.norm.text) || ''
-  if (!out) return `<div class="din">${esc(W.REPLY_WORD)}:<b>(无)</b></div>`
+  if (!out) return `<div class="din">${esc(W.REPLY_WORD)}: <b>(none)</b></div>`
   const long = out.length > 160 || out.includes('\n')
   return `<div class="din">${esc(W.REPLY_WORD)} ${replyMarkHtml(c)}</div>` +
     (long ? `<pre class="dpre">${esc(clip(out, 4000))}</pre>${out.length > 4000 ? `<div class="cbsrc warn">${esc(W.clipShownNote(4000, out.length))}</div>` : ''}` : `<div class="din"><b>${esc(out)}</b></div>`)
@@ -40,7 +40,7 @@ function outputHtml(c) {
 
 // a block's size with its unit: chars when the server baked them, else bytes (a byte count labelled 字符 would be a wrong
 // number); neither → unknown, never a measured-looking 0. An opaque block has no plaintext to measure at all.
-const sizeOf = (b) => (b.chars != null ? { n: b.chars, unit: W.CHARS_WORD } : b.bytes != null ? { n: b.bytes, unit: '字节' } : null)
+const sizeOf = (b) => (b.chars != null ? { n: b.chars, unit: W.CHARS_WORD } : b.bytes != null ? { n: b.bytes, unit: 'bytes' } : null)
 const OPAQUE_SIZE = W.OPAQUE_ROW
 
 // the call's input: one row per block of `flat`, each opening to its verbatim bytes. The fold label states what is folded:
@@ -59,7 +59,7 @@ function inputHtml(c) {
     const foldWord = f ? f.text : faithOf(b)
     // a FOLDED row always says what is folded — its own fidelity word plus 点开 — whether it folded for length or
     // because the call has >40 blocks and none auto-opened (2.6 §B); only an auto-opened row shows the plain size
-    const size = noText ? OPAQUE_SIZE : !sz ? '大小未知' : !open ? `⟨${esc(W.foldAt(foldWord, n, sz.unit))}⟩` : `${n} ${sz.unit}`
+    const size = noText ? OPAQUE_SIZE : !sz ? 'size not known' : !open ? `⟨${esc(W.foldAt(foldWord, n, sz.unit))}⟩` : `${n} ${sz.unit}`
     return `<div class="dblk ${open ? 'open' : ''}" data-di="${i}"><div class="dbh"><span class="dbrole">${esc(h.role)}</span><span class="cbtag">${esc(tagWord(h.tag))}</span>${h.label || b.preview ? `<span class="dblab">${esc(h.label || b.preview)}</span>` : '<span class="dblab"></span>'}${ffBadgeHtml(faithOf(b), { tech: b.unaddressable || String(b.faithfulness ?? '') })}<span class="dbn">${size}</span></div><div class="dbbody"></div></div>`
   }).join('')
 }
@@ -70,9 +70,9 @@ export function detailHtml(s, lane, i) {
   const k = i + 1
   // 「约在第 N 步」: by time — where the conversation stood when this call went out (the review bracket's own number)
   const near = s.anchor && s.anchor.calls.length ? nearestByTs(s.anchor, c.ts, 0) : 0
-  const nearW = s.anchor && s.anchor.kind === 'main' ? `约在第 ${near + 1} 步` : ''
+  const nearW = s.anchor && s.anchor.kind === 'main' ? `near step ${near + 1} (inferred)` : ''
   const isTc = lane.kind === 'token-count'
-  const title = `${esc(word)} · 第 ${k} 次调用 · ${esc(when(c.ts))}${nearW ? ` · ${esc(nearW)}` : ''}`
+  const title = `${esc(word)} · call ${k} · ${esc(when(c.ts))}${nearW ? ` · ${esc(nearW)}` : ''}`
   let body
   if (isTc) {
     body = `<div class="din">${esc(W.laneKind('token-count').hint)}</div>` +

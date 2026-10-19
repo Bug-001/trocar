@@ -81,14 +81,14 @@ export function outlineEntries(s) {
 const kidHtml = {
   tools: (k) => `<div class="navsub" role="button" tabindex="0" data-jumpfi="${k.jump}"><span class="nsl">${esc(k.label)}</span>${k.mcp ? `<span class="nsx">${esc(W.MCP_WORD)}</span>` : ''}</div>`,
   sys: (k) => `<div class="navsub" role="button" tabindex="0" data-jumpfi="${k.jump}"><span class="nsl">${esc(k.label)}</span>${k.ccMark ? `<span class="bpbadge" title="${esc(W.CACHE_MARK_TIP)}">${esc(W.CACHE_MARK)}</span>` : ''}${k.volatile ? `<span class="volbadge" title="${esc(W.VOLATILE_MARK_TIP)}">${esc(W.VOLATILE_MARK)}</span>` : ''}<span class="nsx">${k.chars != null ? kf(k.chars) + ' ' + W.CHARS_WORD : ''}</span></div>`,
-  msg: (k) => `<div class="navsub" role="button" tabindex="0" data-jumpfi="${k.jump}"><span class="nsl">${esc(k.label)}</span>${k.guess ? `<span class="nsx" title="${esc(W.QUERY_GUESS_TIP)}">${esc(W.GUESS)}</span>` : ''}${k.since ? `<span class="nsx navsince" data-jumpgi="${k.since.gi}" role="button" tabindex="0" title="把播放头移到第 ${k.since.n} 步">${esc(W.askSince(k.since.n))}</span>` : ''}</div>`,
+  msg: (k) => `<div class="navsub" role="button" tabindex="0" data-jumpfi="${k.jump}"><span class="nsl">${esc(k.label)}</span>${k.guess ? `<span class="nsx" title="${esc(W.QUERY_GUESS_TIP)}">${esc(W.GUESS)}</span>` : ''}${k.since ? `<span class="nsx navsince" data-jumpgi="${k.since.gi}" role="button" tabindex="0" title="Move the playhead to step ${k.since.n}">${esc(W.askSince(k.since.n))}</span>` : ''}</div>`,
 }
 
 export function outlineHtml(s) {
   const e = outlineEntries(s)
   if (!e.head) return ''
   let h = `<div class="navz">${esc(e.head)}</div>`
-  if (e.off) h += `<div class="navwhy">${esc(e.off.why)}${e.off.meta && typeof (s.anchor.calls[s.playhead] || {}).tools === 'number' ? ` · <span class="mono">${s.anchor.calls[s.playhead].tools} 个工具定义</span>` : ''}</div>`
+  if (e.off) h += `<div class="navwhy">${esc(e.off.why)}${e.off.meta && typeof (s.anchor.calls[s.playhead] || {}).tools === 'number' ? ` · <span class="mono">${s.anchor.calls[s.playhead].tools} tool definitions</span>` : ''}</div>`
   for (const g of e.groups) {
     const kids = !g.kids ? '' : g.kids.length ? g.kids.map(kidHtml[g.key]).join('') : `<div class="navsub empty">${esc(g.key === 'tools' ? W.NO_TOOLS : g.key === 'sys' ? W.NO_SYS : W.NO_ASK)}</div>`
     h += navGroupHtml(s, g.key, g.label, g.count, kids)

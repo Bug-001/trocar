@@ -89,13 +89,13 @@ export function fidelityFacts({ truncated, analyzed, logged, source, gap, harnes
   if (unk && Number(unk.records) > 0) {
     facts.push({ html: esc(W.unknownFact(unk.records)) })
     if (unk.reason) tech.push(['reason', unk.reason])
-    if (unk.endpoints && unk.endpoints.length) tech.push(['endpoints', unk.endpoints.join('、')])
+    if (unk.endpoints && unk.endpoints.length) tech.push(['endpoints', unk.endpoints.join(', ')])
   }
   if (logged && Number(logged.count) > 0) facts.push({ html: `<a href="#/settings/storage${esc(h)}">${esc(W.loggedFact(logged.count))}</a>` })
   const errs = (source && source.errors) || []
   if (errs.length) {
     facts.push({ html: `<a href="#/settings/storage">${esc(W.filesFact(errs.length))}</a>` })
-    for (const e of errs) tech.push([e.file || '', `${e.kind || ''}${e.unreadableRecords != null ? ` · ${e.unreadableRecords} 条读不出` : ''} · ${e.reason || ''}`.trim()])
+    for (const e of errs) tech.push([e.file || '', `${e.kind || ''}${e.unreadableRecords != null ? ` · ${e.unreadableRecords} records could not be read` : ''} · ${e.reason || ''}`.trim()])
   }
   if (gap) facts.push({ html: `<a href="#/capture/log${esc(h)}">${esc(W.GAP_FACT)}</a>` })
   return { facts, tech }

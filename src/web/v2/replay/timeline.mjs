@@ -61,7 +61,7 @@ export function problemSteps(calls) {
 // on every call, only the bodies are lazy.
 export function barSegsHtml(c, h) {
   const comp = callComp(c)
-  if (!comp) return `<span class="ct-unloaded" title="组成尚未计算" style="height:${h}px"></span>`
+  if (!comp) return `<span class="ct-unloaded" title="The breakdown has not been computed yet" style="height:${h}px"></span>`
   const tot = CT_ORDER.reduce((a, k) => a + (comp[k] || 0), 0) || 1
   return CT_ORDER.map((k) => { const sh = ((comp[k] || 0) / tot) * h; return sh < 0.4 ? '' : `<span class="ct-${k}" style="height:${sh.toFixed(2)}px"></span>` }).join('')
 }
@@ -91,7 +91,7 @@ function problemRowHtml(s, { lo, hi }) {
   for (const b of breaks) if (b.usd != null && b.usd > maxUsd) maxUsd = b.usd
   for (const b of breaks) {
     const h = b.usd == null ? Math.round(FLAG_H * 0.55) : Math.max(4, Math.round(Math.sqrt(b.usd / Math.max(1e-9, maxUsd)) * FLAG_H))
-    const costW = b.usd == null ? W.BREAK_COST_NONE : `≈ 多花 ${usd(b.usd)}`
+    const costW = b.usd == null ? W.BREAK_COST_NONE : `≈ extra cost ${usd(b.usd)}`
     cells[b.i - lo] = `<span class="pflag" data-i="${b.i}" role="button" tabindex="0" style="height:${h}px" title="${esc(W.breakFlagTip(b.n, costW, b.struct))}" aria-label="${esc(W.breakFlagTip(b.n, costW, b.struct))}"></span>`
   }
   return cells.map((c) => c || '<span class="pcell"></span>').join('')
@@ -160,17 +160,17 @@ export function renderSaw(el, s) {
     peak = any ? `≈ ${usd(maxCost)}` : '≈ —'
     q(el, '#sawrow').innerHTML = '<div id="reviewbracket"><span class="rbend" aria-hidden="true">' + esc(W.GUESS) + '</span></div>' + win.map(([c, i]) => {
       const b = costBarHtml(c, i, s, maxCost)
-      return `<div class="bar cost ${isFailed(c) ? 'err' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${b.h}px" title="第 ${i + 1} 步 · ${esc(b.tip)}">${b.html}</div>`
+      return `<div class="bar cost ${isFailed(c) ? 'err' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${b.h}px" title="step ${i + 1} · ${esc(b.tip)}">${b.html}</div>`
     }).join('')
   } else {
     const pk = Math.max(1, s.anchor.peakCtx)
     peak = `${kf(pk)} tok`
-    peakTip = '主对话各步真实输入总量(input + 读缓存 + 写缓存)的最大值'
+    peakTip = 'The largest real input total of a main thread step (input + cache read + cache write)'
     q(el, '#sawrow').innerHTML = '<div id="reviewbracket"><span class="rbend" aria-hidden="true">' + esc(W.GUESS) + '</span></div>' + win.map(([c, i]) => {
       const h = isFailed(c) ? 20 : Math.max(3, Math.round(((c.ctx || 0) / pk) * 72))
       // a paged-out step still draws its bar (its cheap meta is real); whether the body is on this page is the context
       // window's own sentence (2.3 ⑤) — the 砍掉的 table keeps it out of the bar's hover
-      return `<div class="bar ${isFailed(c) ? 'err' : ''} ${c.compaction ? 'compact' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${h}px" title="第 ${i + 1} 步 · ${isFailed(c) ? '调用失败' : kf(c.ctx) + ' tok'}">${isFailed(c) ? '' : barSegsHtml(c, h)}</div>`
+      return `<div class="bar ${isFailed(c) ? 'err' : ''} ${c.compaction ? 'compact' : ''} ${i === s.playhead ? 'cur' : ''}" data-i="${i}" style="height:${h}px" title="step ${i + 1} · ${isFailed(c) ? 'call failed' : kf(c.ctx) + ' tok'}">${isFailed(c) ? '' : barSegsHtml(c, h)}</div>`
     }).join('')
   }
   // the cache band
@@ -194,15 +194,15 @@ export function renderSaw(el, s) {
     q(el, '#askscale').innerHTML = h
   }
   // the axis: step numbers (call counts when the anchor is not the main lane)
-  const unit = (v) => (isMain ? `第 ${v} 步` : `第 ${v} 次调用`)
+  const unit = (v) => (isMain ? `step ${v}` : `call ${v}`)
   q(el, '#sawstart').textContent = unit(lo + 1)
   q(el, '#sawend').textContent = `${unit(hi)} / ${N}`
   // the main track's own corner: the view word + this session's peak
-  q(el, '#sawgut').innerHTML = `${esc(costView ? W.VIEW_COST : (isMain ? '上下文' : laneWord(s.anchor.kind)))} <b title="${esc(peakTip)}">${esc(peak)}</b>`
+  q(el, '#sawgut').innerHTML = `${esc(costView ? W.VIEW_COST : (isMain ? 'Context' : laneWord(s.anchor.kind)))} <b title="${esc(peakTip)}">${esc(peak)}</b>`
   // the legend row
   q(el, '#viewswitch').innerHTML = `<button type="button" class="segbtn${costView ? '' : ' on'}" data-view="ctx" aria-pressed="${!costView}">${esc(W.VIEW_CTX)}</button><button type="button" class="segbtn${costView ? ' on' : ''}" data-view="cost" aria-pressed="${costView}">${esc(W.VIEW_COST)}</button>`
   q(el, '#complegend').innerHTML = costView ? `<span>${esc(W.COST_LEGEND)}</span>` :
-    `<span>${esc(W.COMP_LEGEND)}</span><span class="barlegend"><i class="ct-tools"></i>工具<i class="ct-system"></i>系统<i class="ct-user"></i>对话<i class="ct-assistant"></i>回复<i class="ct-thinking"></i>思考<i class="ct-tool_use"></i>调用<i class="ct-tool_result"></i>结果</span>`
+    `<span>${esc(W.COMP_LEGEND)}</span><span class="barlegend"><i class="ct-tools"></i>tools<i class="ct-system"></i>system<i class="ct-user"></i>messages<i class="ct-assistant"></i>reply<i class="ct-thinking"></i>thinking<i class="ct-tool_use"></i>tool call<i class="ct-tool_result"></i>tool result</span>`
   q(el, '#viewrange').textContent = W.showSteps(lo + 1, hi)
   q(el, '#nomain').style.display = isMain ? 'none' : ''
   if (!isMain) q(el, '#nomain').textContent = W.noMainLane(laneWord(s.anchor.kind))
@@ -215,7 +215,7 @@ export function markCurrent(el, s) {
   const N = s.anchor.calls.length
   for (const b of el.querySelectorAll('#sawrow .bar')) b.classList.toggle('cur', +b.dataset.i === s.playhead)
   for (const b of el.querySelectorAll('#cacherow .cbar')) b.classList.toggle('cur', +b.dataset.i === s.playhead)
-  q(el, '#phlabel').textContent = s.anchor.kind === 'main' ? ` 第 ${s.playhead + 1}/${N} 步 ` : ` 第 ${s.playhead + 1}/${N} 次调用 `
+  q(el, '#phlabel').textContent = s.anchor.kind === 'main' ? ` step ${s.playhead + 1}/${N} ` : ` call ${s.playhead + 1}/${N} `
   const pin = q(el, '#ovpin'); if (pin) pin.style.left = (((s.playhead + 0.5) / N) * 100).toFixed(3) + '%'
   renderProblemNav(el, s) // which problem the playhead is on — and whether ‹ › have anywhere to go
 }
@@ -233,7 +233,7 @@ export function renderOverview(el, s) {
   if (N <= OVW_BARCAP) {
     bg = '<div class="ovbars">' + s.anchor.calls.map((c, i) => {
       const h = Math.max(1, Math.round(((c.ctx || 0) / peak) * 20))
-      return `<div class="ovbar ${isFailed(c) ? 'err' : ''}" style="height:${h}px" title="第 ${i + 1} 步"></div>`
+      return `<div class="ovbar ${isFailed(c) ? 'err' : ''}" style="height:${h}px" title="step ${i + 1}"></div>`
     }).join('') + '</div>'
   } else {
     // many steps: one point per bucket on the SAME /N axis as the brush and the pin. Only labelled "sampled" when buckets
@@ -249,9 +249,9 @@ export function renderOverview(el, s) {
     bg = `<svg class="ovsvg" viewBox="0 0 100 22" preserveAspectRatio="none"><polyline points="${pts.join(' ')}"/></svg>`
   }
   strip.innerHTML = bg +
-    (sampled ? `<span class="ovsample" title="降采样:每个桶一个点,不是每步一个点(概览是地图,不是逐字数据)">${esc(L.SAMPLED)}</span>` : '') +
+    (sampled ? `<span class="ovsample" title="Sampled: one point per bucket, not one per step (the strip is a map, not verbatim data)">${esc(L.SAMPLED)}</span>` : '') +
     '<div class="ovpin" id="ovpin"></div>' +
-    '<div class="ovbrush" id="ovbrush" title="拖动 = 平移 · 拖边 = 缩放 · 双击 = 全部(长会话:上面一行画不下时,就是放得下的最大一段)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>'
+    '<div class="ovbrush" id="ovbrush" title="Drag = pan · drag an edge = zoom · double-click = all (in a long session that does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>'
   repositionBrush(el, s)
 }
 export function repositionBrush(el, s) {

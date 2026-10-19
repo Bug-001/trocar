@@ -52,24 +52,24 @@ function replyHtml(c) {
 }
 // ── the pieces the capture can still hand over verbatim: reply bytes · non-block request keys · later messages ─────
 const refRow = (x, label) => x.ref
-  ? `<code class="nbk" data-nbk="${esc(x.ref)}" style="cursor:pointer">${esc(label)}</code>${x.chars != null ? ' ' + kf(x.chars) + ' 字符' : ''}`
-  : `<code>${esc(label)}</code> <span class="metabadge" title="${esc(x.why || '')}">${esc(x.why ? '没有可回源的字节' : W.NO_RAW_REPLY)}</span>`
+  ? `<code class="nbk" data-nbk="${esc(x.ref)}" style="cursor:pointer">${esc(label)}</code>${x.chars != null ? ' ' + kf(x.chars) + ' characters' : ''}`
+  : `<code>${esc(label)}</code> <span class="metabadge" title="${esc(x.why || '')}">${esc(x.why ? 'no bytes to read back' : W.NO_RAW_REPLY)}</span>`
 function rawReplyHtml(c) {
   const rs = c.respRefs || []
   if (!rs.length) return ''
   const ws = (c.wire && c.wire.transport) === 'ws'
-  return `<div class="rpk" title="采集到的回复字节 —— 每一块都能回源到原始记录里"><b>${esc(W.RAW_REPLY)}</b> · ${rs.map((x, j) => refRow(x, ws ? W.rawReplyNth(j + 1) : `${W.RAW_REPLY} · ${x.chars != null ? kf(x.chars) + ' 字符' : '—'}`)).join(' · ')}<div class="nbkbody"></div></div>`
+  return `<div class="rpk" title="The captured reply bytes — each piece can be read back from the raw record"><b>${esc(W.RAW_REPLY)}</b> · ${rs.map((x, j) => refRow(x, ws ? W.rawReplyNth(j + 1) : `${W.RAW_REPLY} · ${x.chars != null ? kf(x.chars) + ' characters' : '—'}`)).join(' · ')}<div class="nbkbody"></div></div>`
 }
 function paramsHtml(c) {
   const ks = c.nonBlockKeys || []
   if (c.unparsed) return `<div class="rpk"><b>${esc(W.REQ_PARAMS)}</b> · ${esc(W.UNPARSED_PARAMS)}</div>`
   if (!ks.length) return `<div class="rpk"><b>${esc(W.REQ_PARAMS)}</b> · ${esc(W.NO_PARAMS)}</div>`
-  return `<div class="rpk" title="请求里不属于上下文块的键 —— 逐字留在原始记录里"><b>${esc(W.REQ_PARAMS)}</b> · ${ks.map((k) => refRow({ ref: k.ref, chars: k.chars, why: k.note }, k.key)).join(' · ')}<div class="nbkbody"></div></div>`
+  return `<div class="rpk" title="Request keys that are not context blocks — kept verbatim in the raw record"><b>${esc(W.REQ_PARAMS)}</b> · ${ks.map((k) => refRow({ ref: k.ref, chars: k.chars, why: k.note }, k.key)).join(' · ')}<div class="nbkbody"></div></div>`
 }
 function extraHtml(c) {
   const xs = c.extraMessages || []
   if (!xs.length) return ''
-  return `<div class="rpk" title="这次调用进行中客户端又发的消息 —— 属于这次调用,不属于上下文;逐字留在原始记录里"><b>${esc(W.EXTRA_MSGS(xs.length))}</b> · ${xs.map((k) => refRow({ ref: k.ref, chars: k.chars, why: k.note }, k.key)).join(' · ')}<div class="nbkbody"></div></div>`
+  return `<div class="rpk" title="Messages the client sent while this call was running — they belong to this call, not to the context; kept verbatim in the raw record"><b>${esc(W.EXTRA_MSGS(xs.length))}</b> · ${xs.map((k) => refRow({ ref: k.ref, chars: k.chars, why: k.note }, k.key)).join(' · ')}<div class="nbkbody"></div></div>`
 }
 // ── the wire: the transport in words; format / vendor are 技术细节, not a visible row (2.6 §A: the closed-set ids ride
 // there raw and monospace; an empty vendor is said, not guessed — 2026-10-08 审查) ─────────────────────────────────────
@@ -88,7 +88,7 @@ function techHtml(c) {
   const bits = []
   const w = c.wire || {}
   if (w.format) bits.push(['format', w.format])
-  bits.push(['vendor', w.vendor != null ? String(w.vendor) : `${W.VENDOR_WORD} 不知道`])
+  bits.push(['vendor', w.vendor != null ? String(w.vendor) : `${W.VENDOR_WORD} not known`])
   for (const t of (c.norm && c.norm.tools) || []) if (t && t.id) bits.push(['tool id', String(t.id)]) // 2.6 §A: the tool call's id
   if (c.unparsed && c.errMsg) bits.push(['errMsg', String(c.errMsg)]) // an unparsed step's reason is a tech detail (2.6 §A)
   for (const x of c.respRefs || []) if (x && (x.label || x.why)) bits.push([W.RAW_REPLY, `${x.label || ''}${x.why ? ' — ' + x.why : ''}`])
@@ -112,7 +112,7 @@ export function renderRawPanel(el, s) {
   if (call.paged_out) {
     // 未下发 ≠ 没有: the reply / params rows become the window's own paged-out sentence + the load button; what did not
     // ride the page (respRefs, extraMessages, wire) still renders
-    el.innerHTML = head + modelLine + `<div class="rpk"><span class="pobadge" title="这一步逐字的请求体没有随本页下发;完整地留在原始采集里(不变式 4)">${esc(W.PAGED_TITLE)}</span> <button type="button" class="pobtn" data-load-step="${s.playhead}">${esc(W.LOAD_THIS_STEP)}</button></div>` +
+    el.innerHTML = head + modelLine + `<div class="rpk"><span class="pobadge" title="The verbatim request body of this step was not sent with this page; it is kept in full in the raw capture">${esc(W.PAGED_TITLE)}</span> <button type="button" class="pobtn" data-load-step="${s.playhead}">${esc(W.LOAD_THIS_STEP)}</button></div>` +
       rawReplyHtml(call) + extraHtml(call) + wireHtml(call) + observerHtml(call) + techHtml(call)
     return
   }
@@ -137,8 +137,8 @@ export function renderResourceView(el, s) {
     // The proof rule is 2.3's own (blocks.mjs : faithOf): verbatim must be === true AND the block addressable — an
     // undefined verbatim is not evidence of the verbatim tier.
     const proven = tools.every((t) => t.verbatim === true && t.text_ref)
-    body = `<div class="rpk"><b>${esc(pin.label || pin.resKey)}</b> · ${tools.length} 个工具定义</div>` +
-      tools.map((t) => `<div class="rpk mono">${esc(t.name || '')} · ${kf(t.descChars || 0)} 字符描述 · ${(t.props || []).length} 个参数</div>`).join('') +
+    body = `<div class="rpk"><b>${esc(pin.label || pin.resKey)}</b> · ${tools.length} tool definitions</div>` +
+      tools.map((t) => `<div class="rpk mono">${esc(t.name || '')} · ${kf(t.descChars || 0)}-character description · ${(t.props || []).length} parameters</div>`).join('') +
       `<div class="rpk ${proven ? 'rpok' : 'rpwarn'}">${esc(proven ? W.CAP_VERBATIM : W.CAP_METADATA)}</div>`
   } else if (b) body = `<div class="pinbody" data-bi="${flat.indexOf(b)}"></div>`
   else if (notHere) body = `<div class="rpk">${esc(notHere)}</div>`

@@ -35,7 +35,7 @@ export function callFidelityHtml(call) {
   else if (w.contextState && w.contextState !== 'complete') { add(W.CTX_FACT.fallback); tech.push(['contextState', w.contextState]) }
   if (call.reqIncomplete) {
     const f = flagWords(call.reqIncomplete, W.REQ_FACT)
-    add(`${W.INCOMPLETE_WORD.req}:${f || W.INCOMPLETE_WORD.req + '没采全'}`)
+    add(`${W.INCOMPLETE_WORD.req}: ${f || 'incomplete'}`)
     if (call.reqIncomplete.text) tech.push(['reqIncomplete', call.reqIncomplete.text])
     if (!f) tech.push(['reqIncomplete', 'unknown flag'])
   }
@@ -43,13 +43,13 @@ export function callFidelityHtml(call) {
     const skipPartial = w.contextState === 'partial' && w.contextMissing
     const f = flagWords({ ...call.wsIncomplete, partial: skipPartial ? false : call.wsIncomplete.partial }, W.WS_FACT)
     if (f) add(`${W.INCOMPLETE_WORD.ws}:${f}`)
-    else if (!skipPartial) add(`${W.INCOMPLETE_WORD.ws}:${W.INCOMPLETE_WORD.ws + '没采全'}`)
+    else if (!skipPartial) add(`${W.INCOMPLETE_WORD.ws}: incomplete`)
     if (call.wsIncomplete.text) tech.push(['wsIncomplete', call.wsIncomplete.text])
     if (!f && !skipPartial) tech.push(['wsIncomplete', 'unknown flag'])
   }
   if (call.respIncomplete) {
     const f = flagWords(call.respIncomplete, W.RESP_FACT)
-    add(`${W.INCOMPLETE_WORD.resp}:${f || W.INCOMPLETE_WORD.resp + '没采全'}`)
+    add(`${W.INCOMPLETE_WORD.resp}: ${f || 'incomplete'}`)
     if (call.respIncomplete.text) tech.push(['respIncomplete', call.respIncomplete.text])
     if (!f) tech.push(['respIncomplete', 'unknown flag'])
   }
@@ -65,7 +65,7 @@ export function callFidelityHtml(call) {
 export function windowLineHtml(flat) {
   if (!flat || !flat.length || flat.some((b) => b.text_ref)) return ''
   const reasons = [...new Set(flat.map((b) => b.unaddressable).filter(Boolean))]
-  return `<div class="cwwin"><span class="cwhalf" aria-hidden="true">${W.HALF_MARK}</span> ${esc(W.WINDOW_LINE)}${reasons.length ? techDetailsHtml(reasons.map((r, i) => ['原因 ' + (i + 1), r]), { id: 'cwwin-tech' }) : ''}</div>`
+  return `<div class="cwwin"><span class="cwhalf" aria-hidden="true">${W.HALF_MARK}</span> ${esc(W.WINDOW_LINE)}${reasons.length ? techDetailsHtml(reasons.map((r, i) => ['reason ' + (i + 1), r]), { id: 'cwwin-tech' }) : ''}</div>`
 }
 
 // ── ③ the section header: name · block count · size · 以下逐字 (or just ◐ when the window line is up) ────────────────
@@ -76,7 +76,7 @@ export function sectionHeaderHtml(sec, blocks, { windowLine = false } = {}) {
   const est = sec === 'tools' && (blocks || []).some((b) => faithNow(b) !== 'verbatim')
   const ff = windowLine ? `<span class="cwsecff" title="${esc(W.WINDOW_LINE)}">${W.HALF_MARK}</span>`
     : (blocks || []).length && (blocks || []).every((b) => faithNow(b) === 'verbatim') ? `<span class="cwsecff v">${esc(W.SECTION_VERBATIM)}</span>` : ''
-  return `<div class="cwsec" id="sec-${esc(sec)}"><b>${esc(name)}</b><span class="cwsecn">${esc(String(n))} 块</span>` +
+  return `<div class="cwsec" id="sec-${esc(sec)}"><b>${esc(name)}</b><span class="cwsecn">${esc(String(n))} blocks</span>` +
     `<span class="cwsecsz"${est ? ` title="${esc(W.SECTION_SIZE_EST_TIP)}"` : ` title="${esc(W.SECTION_SIZE_TIP)}"`}>${est ? W.SECTION_SIZE_EST : ''} ${esc(bytes(size))}</span>${ff}</div>`
 }
 
@@ -106,7 +106,7 @@ export function removedSectionHtml(removed, refK, open) {
   const rows = removed.map((b, j) => {
     const h = b.head || { role: b.role || '', tag: b.kind || '', label: '' }
     const label = h.label || b.preview || ''
-    return `<div class="cblk removed collapsed" data-rm="${j}" data-sec="${esc(b.sec)}"><div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag">${esc(tagWord(h.tag) || h.tag)}</span>${label ? `<span class="cblabel">${esc(label)}</span>` : ''}${ffBadgeHtml(faithOf(b), { tech: b.unaddressable })}<span class="remnote" title="全文按它在第 ${esc(String(refK ?? '?'))} 步里的定位回源">removed</span></div><div class="cbc"></div></div>`
+    return `<div class="cblk removed collapsed" data-rm="${j}" data-sec="${esc(b.sec)}"><div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag">${esc(tagWord(h.tag) || h.tag)}</span>${label ? `<span class="cblabel">${esc(label)}</span>` : ''}${ffBadgeHtml(faithOf(b), { tech: b.unaddressable })}<span class="remnote" title="The full text is read back from its location in step ${esc(String(refK ?? '?'))}">removed</span></div><div class="cbc"></div></div>`
   }).join('')
   return `<div class="cwremoved ${open ? 'open' : ''}"><div class="cwremhd" data-navtoggle-rem="1" role="button" tabindex="0">${esc(W.removedList(removed.length, refK ?? '?'))} ▸</div>${open ? `<div class="cwrembody">${rows}</div>` : ''}</div>`
 }
@@ -114,7 +114,7 @@ export function removedSectionHtml(removed, refK, open) {
 // ── ⑤–⑧ the stand-in states ──────────────────────────────────────────────────────────────────────────────────────────
 export function pagedOutHtml(s, call) {
   const full = !(call && call.reqIncomplete)
-  return `<div class="pagedout"><div class="pohd">${esc(W.PAGED_TITLE)}</div><div class="pobody">${esc(full ? W.PAGED_FULL : W.PAGED_PARTIAL)}(未下发 ≠ 丢失)</div>` +
+  return `<div class="pagedout"><div class="pohd">${esc(W.PAGED_TITLE)}</div><div class="pobody">${esc(full ? W.PAGED_FULL : W.PAGED_PARTIAL)} (not sent to this page ≠ lost)</div>` +
     `<div class="poact"><button type="button" class="pobtn" id="loadpage">${esc(W.LOAD_THIS_STEP)}</button></div></div>`
 }
 const unparsedHtml = (call) => `<div class="cwunparsed"><div class="cwuhd">${esc(W.UNPARSED_TITLE)}</div><div class="cwub">${esc(W.UNPARSED_KEEP)}</div>` +
@@ -160,7 +160,7 @@ export function ctxWindowHtml(s) {
     turns.forEach((t, ti) => {
       const open = turnIsOpen(s.turnFold, flat, t, ti, lastTi, s.turnLanded)
       html += `<div class="cwturn ${open ? '' : 'collapsed'}" data-turn="${ti}" data-anchor="${esc(turnAnchorKey(flat, t))}">` +
-        `<div class="cwturnhd"><span class="cwturnq">${t.query ? '<span class="qlabel">提问</span>' : ''}${esc(t.label)}${t.acts ? `<span class="qk">${esc(t.acts)}</span>` : ''}</span><span class="cwturnn">${t.items.length} 块</span></div>` +
+        `<div class="cwturnhd"><span class="cwturnq">${t.query ? '<span class="qlabel">prompt</span>' : ''}${esc(t.label)}${t.acts ? `<span class="qk">${esc(t.acts)}</span>` : ''}</span><span class="cwturnn">${t.items.length} blocks</span></div>` +
         `<div class="cwturnbody">${t.items.map((i) => mark(i) + row(flat[i], i)).join('')}</div></div>`
     })
   }

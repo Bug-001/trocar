@@ -38,31 +38,31 @@ const DESKHEAD = `<div id="deskhead"></div>`
 export const SKELETON = `<div id="pages">
 <div id="leftpage">
 <div id="saw">
-  <div class="trow trow-problem"><div class="tgut tgut-prob" id="probnav">问题</div><div class="tlane"><div class="probrow" id="probrow"></div></div></div>
-  <div class="trow trow-bars"><div class="tgut tgut-ctx" id="sawgut">上下文</div><div class="tlane"><div class="sawrow" id="sawrow"><div id="reviewbracket"><span class="rbend" aria-hidden="true">推测</span></div></div></div></div>
-  <div class="trow"><div class="tgut">缓存</div><div class="tlane"><div class="cacherow" id="cacherow"></div></div></div>
-  <div class="trow trow-asks" id="askrow" style="display:none"><div class="tgut">提问</div><div class="tlane"><div class="askrow" id="askscale"></div></div></div>
-  <div class="trow trow-ovw"><div class="tgut" title="整个会话一览 —— 拖括号平移,拖边缘缩放上面的柱">全程</div><div class="tlane"><div class="ovstrip" id="ovstrip"></div></div></div>
+  <div class="trow trow-problem"><div class="tgut tgut-prob" id="probnav">Problems</div><div class="tlane"><div class="probrow" id="probrow"></div></div></div>
+  <div class="trow trow-bars"><div class="tgut tgut-ctx" id="sawgut">Context</div><div class="tlane"><div class="sawrow" id="sawrow"><div id="reviewbracket"><span class="rbend" aria-hidden="true">inferred</span></div></div></div></div>
+  <div class="trow"><div class="tgut">Cache</div><div class="tlane"><div class="cacherow" id="cacherow"></div></div></div>
+  <div class="trow trow-asks" id="askrow" style="display:none"><div class="tgut">Prompts</div><div class="tlane"><div class="askrow" id="askscale"></div></div></div>
+  <div class="trow trow-ovw"><div class="tgut" title="The whole session at a glance — drag the bracket to pan, drag its edges to zoom the bars above">Whole session</div><div class="tlane"><div class="ovstrip" id="ovstrip"></div></div></div>
   <div class="trow"><div class="tgut"></div><div class="tlane"><div class="sawaxis"><span id="sawstart"></span><span id="sawend"></span></div></div></div>
   <div class="sawlegend">
     <span id="viewswitch"></span>
     <span id="complegend"></span>
-    <span class="cachelegend" title="每格按缓存判定画:高 = 命中复用 ≥70%,中 = 部分 ≥30%,低 = 冷 / 断 <30%;虚线 = 没有用量;四档之外单独样式 = 这个服务商的缓存数字含义不确定;失败步不画档位">${esc(CACHE_LEGEND)} · ${esc(CACHE_LEGEND_UNK)}</span>
+    <span class="cachelegend" title="Each cell is drawn from the cache verdict: high = cache hit ≥70%, middle = partial ≥30%, low = cold or broken <30%; dashed = no usage; a separate style outside the four levels = what this provider's cache numbers mean is not certain; failed steps draw no level">${esc(CACHE_LEGEND)} · ${esc(CACHE_LEGEND_UNK)}</span>
     <span id="viewrange"></span>
     <span id="nomain" style="display:none"></span>
     <span class="spacer"></span>
-    <div class="navbtns"><kbd>←</kbd><kbd>→</kbd> 换步 <button type="button" class="pgbtn" id="prev" aria-label="上一步">‹</button><span class="mono" id="phlabel"></span><button type="button" class="pgbtn" id="next" aria-label="下一步">›</button><button type="button" class="pgbtn" id="endBtn" title="跳到最新一步">最新</button></div>
+    <div class="navbtns"><kbd>←</kbd><kbd>→</kbd> change step <button type="button" class="pgbtn" id="prev" aria-label="Previous step">‹</button><span class="mono" id="phlabel"></span><button type="button" class="pgbtn" id="next" aria-label="Next step">›</button><button type="button" class="pgbtn" id="endBtn" title="Jump to the latest step">Latest</button></div>
   </div>
 </div>
 <div id="rails"></div>
 <main>
   <div id="ctxnav"></div>
-  <div id="maindiv" title="拖动调整大纲宽度 · 双击复位"></div>
-  <div id="midcol"><div id="stepbar"></div><div id="ctxwin"><div class="cwload">载入中…</div></div></div>
+  <div id="maindiv" title="Drag to resize the outline · double-click to reset"></div>
+  <div id="midcol"><div id="stepbar"></div><div id="ctxwin"><div class="cwload">Loading…</div></div></div>
 </main>
 </div>
-<div id="divider" title="拖动调整右页宽度 · 双击复位"></div>
-<div id="rightpage"><div id="rpbar" role="button" tabindex="0" aria-expanded="false" title="展开右页"></div><div id="rpbody"><div id="resexp"></div><div id="rawpanel"></div></div></div>
+<div id="divider" title="Drag to resize the right page · double-click to reset"></div>
+<div id="rightpage"><div id="rpbar" role="button" tabindex="0" aria-expanded="false" title="Expand the right page"></div><div id="rpbody"><div id="resexp"></div><div id="rawpanel"></div></div></div>
 </div>`
 
 const storage = () => { try { return window.localStorage } catch { return null } }
@@ -129,10 +129,10 @@ export function mount(el, ctx) {
     // the desk's failure state keeps its honest error text; the window's own ⑧ (载入中) is the same quiet shape
     E.ctxwin.innerHTML = `<div class="${msg === LOADING ? 'cwload' : 'empty'}">${esc(msg)}${s.errNote && msg !== LOADING ? `<div class="emptywhy">${s.errNote}</div>` : ''}</div>`
     E.ctxnav.innerHTML = ''; E.rails.innerHTML = ''; E.resexp.innerHTML = ''; E.rawpanel.innerHTML = ''
-    $('#sawrow').innerHTML = '<div id="reviewbracket"><span class="rbend" aria-hidden="true">推测</span></div>'; $('#cacherow').innerHTML = ''; $('#ovstrip').innerHTML = ''
+    $('#sawrow').innerHTML = '<div id="reviewbracket"><span class="rbend" aria-hidden="true">inferred</span></div>'; $('#cacherow').innerHTML = ''; $('#ovstrip').innerHTML = ''
     $('#probrow').innerHTML = ''; $('#askscale').innerHTML = ''; $('#askrow').style.display = 'none'
     for (const id of ['#sawstart', '#sawend', '#phlabel', '#viewrange']) $(id).textContent = ''
-    $('#sawgut').textContent = '上下文'; $('#viewswitch').innerHTML = ''; $('#complegend').innerHTML = ''; $('#nomain').style.display = 'none'
+    $('#sawgut').textContent = 'Context'; $('#viewswitch').innerHTML = ''; $('#complegend').innerHTML = ''; $('#nomain').style.display = 'none'
     renderProblemNav(E.saw, s) // no problems: the row name stops quoting the last session's count and ‹ › disappear
     closeDetail(E.detail, s)
   }
@@ -243,7 +243,7 @@ export function mount(el, ctx) {
 
   // ── fetching ─────────────────────────────────────────────────────────────────────────────────────────────────────
   // a failed read is said IN the content area (no banner, no dot): the reason, and that the raw capture is untouched
-  const fail = (title, msg) => { s.errNote = `<b>${esc(title)}</b> · ${esc(msg)} —— 盘上的原始采集是完整的(源真相不受影响)。` }
+  const fail = (title, msg) => { s.errNote = `<b>${esc(title)}</b> · ${esc(msg)} — the raw capture on disk is complete (the source of truth is not affected).` }
 
   // the price table: a failed read keeps its reason (the header, raw panel and drawer say 价表读不出 · why) and every poll retries it
   const prices = createPricingLoader(() => api.get('pricing'), s.pricing)
@@ -269,7 +269,7 @@ export function mount(el, ctx) {
     // a failed listing is NOT an empty one: say why
     const pj = await api.get('sessions')
     if (stale()) return
-    if (!pj.ok) { fail('无法列出会话', pj.error + ' —— 修好来源或重启服务。'); renderEmpty('无法列出会话。'); s.lastCheapSig = null; s.lastRenderSig = null; return }
+    if (!pj.ok) { fail('Cannot list sessions', pj.error + ' — fix the source or restart the capture service.'); renderEmpty('Cannot list sessions.'); s.lastCheapSig = null; s.lastRenderSig = null; return }
     const projects = pj.data.projects || []
     s.projectsFlat = projects.flatMap((p) => p.sessions || [])
     const cur = s.projectsFlat.find((x) => x.project_slug === s.project && x.session_id === s.id)
@@ -290,7 +290,7 @@ export function mount(el, ctx) {
       // the hash names a session the library does not have: say so HERE (1.2 §Edge cases — 就地显示,不跳走), with a way back
       if (res.status === 404) { s.errNote = null; renderEmpty(`${SESSION_NOT_LISTED} · <a href="#/sessions">${BACK_TO_SESSIONS}</a>`); renderHeader(); return }
       // any other failure stays on this screen, says why, and the next poll retries
-      fail('加载失败', `${res.error || '不知道原因'}。服务挂了就重启;会话太大会按尾部截取提供。`); renderEmpty('这个会话加载失败。')
+      fail('Loading failed', `${res.error || 'cause not known'}. If the capture service is down, restart it; a session that is too large is served from its tail.`); renderEmpty('This session failed to load.')
       renderHeader()
       return
     }
@@ -316,7 +316,7 @@ export function mount(el, ctx) {
     // the 采集缺口 is judged against the whole session's time (the once-per-open capture-health answer, 1.2 §会话保真行)
     judgeGap()
     if (!s.anchor || !s.anchor.calls.length) {
-      renderEmpty(s.probes.count ? `这个会话只有 token 计数(${s.probes.count} 次),没有可回放的模型调用。` : '这个会话里还没有追踪到模型调用。')
+      renderEmpty(s.probes.count ? `This session has only token counts (${s.probes.count}), no model calls to replay.` : 'No model calls have been captured in this session yet.')
       renderHeader(); return
     }
     s.anchorTs = s.anchor.calls.map((c) => Date.parse(c.ts))
@@ -380,13 +380,13 @@ export function mount(el, ctx) {
   if (ro) ro.observe($('#sawrow'))
   window.addEventListener('resize', refit)
 
-  renderEmpty('载入中…')
+  renderEmpty('Loading…')
   poll()
 
   return {
     update(route) {
       if (route.project !== s.project || route.id !== s.id) { // another session
-        resetSession(); renderEmpty('载入中…')
+        resetSession(); renderEmpty('Loading…')
         s.project = route.project; s.id = route.id; s.initialStep = stepOf(route)
         poll(); return
       }

@@ -23,7 +23,7 @@ const stepWordOf = (s) => {
   const isMain = s.anchor && s.anchor.kind === 'main'
   const N = s.anchor ? s.anchor.calls.length : 1
   const L = (gi) => { const v = s.anchor.giLocal.get(gi); return v == null ? N : v }
-  return (localIdx) => (isMain ? `第 ${localIdx + 1} 步` : `第 ${localIdx + 1} 次调用`)
+  return (localIdx) => (isMain ? `step ${localIdx + 1}` : `call ${localIdx + 1}`)
 }
 
 export function resourcesHtml(s) {
