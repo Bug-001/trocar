@@ -41,7 +41,7 @@ export function mount(el, ctx) {
     const q = mainEl.querySelector ? (sel) => mainEl.querySelector(sel) : () => null
     const rowEl = q(`.crow[data-h="${h.replace(/["\\]/g, '')}"]`) // a read-side id after the router's harnessKey
     if (!rowEl) {
-      if (store.get().capH != null) { toast(`采集页上现在没有 ${harnessName(h)}`); landed = h }
+      if (store.get().capH != null) { toast(`${harnessName(h)} is not on the capture page now`); landed = h }
       return
     }
     landed = h
