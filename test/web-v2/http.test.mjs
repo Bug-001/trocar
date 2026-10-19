@@ -89,14 +89,11 @@ test('4.4 token boot: #t=<token> lands in sessionStorage and leaves the URL; any
 })
 
 // 1.2: core/api.mjs has no method for an endpoint the server does not have — every name a screen asks for is a named query
-const PENDING = ['overview', 'traffic'] // PR 2 (feat/board-read) adds them to QUERY_NAMES
-test('1.2 every api.get name is a named query (or one PR 2 is adding)', () => {
+test('1.2 every api.get name is a named query', () => {
   const asked = new Set()
   for (const f of sources(V2)) for (const m of stripComments(fs.readFileSync(f, 'utf8')).matchAll(/\bapi\.get\(\s*(['"`])([^'"`]*)\1/g)) asked.add(m[2])
   assert.ok(asked.size > 0)
-  const known = new Set([...QUERY_NAMES, ...PENDING])
-  assert.deepEqual([...asked].filter((n) => !known.has(n)), [])
-  assert.deepEqual(PENDING.filter((n) => QUERY_NAMES.includes(n)), [], 'PR 2 landed: delete PENDING')
+  assert.deepEqual([...asked].filter((n) => !QUERY_NAMES.includes(n)), [])
 })
 
 test('one fetch call site: only core/http.mjs calls fetch(', () => {
