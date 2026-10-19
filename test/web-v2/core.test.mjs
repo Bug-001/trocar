@@ -1,0 +1,180 @@
+// The small pure modules other screens import by name: chips, labels, classes, store.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { CHIP, HARNESS_ORDER, harnessKey, harnessName, harnessIcon, harnessRaw, chipFor, UNIDENTIFIED, UNKNOWN_ICON, sanitizeHarnessSvg } from '../../src/web/v2/core/chips.mjs'
+import { L } from '../../src/web/v2/core/labels.mjs'
+import * as labelsAgg from '../../src/web/v2/core/labels.mjs'
+import * as labelsCommon from '../../src/web/v2/labels/common.mjs'
+import { CLASS_IDS, CLASS_NAME } from '../../src/web/v2/core/classes.mjs'
+import { createStore, store } from '../../src/web/v2/core/store.mjs'
+import { parseHash, formatHash } from '../../src/web/v2/core/router.mjs'
+import * as domMod from '../../src/web/v2/core/dom.mjs'
+import * as safeMountMod from '../../src/web/v2/shell/safemount.mjs'
+import { setFetch } from '../../src/web/v2/core/http.mjs'
+
+test('chips: the eight read-side ids (the legacy one last), each with its icon file, aliases folded onto them', () => {
+  assert.deepEqual(HARNESS_ORDER, ['cc', 'codex', 'opencode', 'kimi', 'dsh', 'hermes', 'zcode', 'deepseek-cli'])
+  for (const id of HARNESS_ORDER) { assert.ok(CHIP[id], `CHIP.${id}`); assert.match(CHIP[id].icon, /^[\w-]+\.svg$/) }
+  assert.deepEqual(['claude-code', 'deepseek-dsh', 'kimi-code', 'z-code', 'codex', 'mystery'].map(harnessKey), ['cc', 'dsh', 'kimi', 'zcode', 'codex', 'mystery'])
+  assert.equal(harnessName('deepseek-dsh'), harnessName('dsh')); assert.equal(harnessIcon('z-code'), harnessIcon('zcode'))
+})
+test('chips: an unknown or missing harness never borrows another one\'s name or icon', () => {
+  assert.equal(harnessName(null), UNIDENTIFIED); assert.equal(harnessName('mystery'), UNIDENTIFIED)
+  assert.equal(harnessName('constructor'), UNIDENTIFIED) // not an inherited property
+  assert.equal(harnessRaw('mystery'), 'mystery'); assert.equal(harnessRaw(null), null); assert.equal(harnessRaw('cc'), null)
+  for (const id of [null, '', 'mystery']) assert.match(harnessIcon(id), /hicon-unknown/, 'the reserved dashed glyph')
+  assert.match(harnessIcon('mystery'), /stroke-dasharray/, 'dashed, like no harness\' mark')
+  assert.equal(harnessIcon('mystery'), harnessIcon(null), 'one unknown glyph, not one per stranger')
+  assert.match(chipFor({ harness: 'mystery' }), /data-hicon="\?"/); assert.ok(chipFor(null).includes(UNIDENTIFIED))
+})
+test('chips: a known harness icon is an empty 16px box until the loader fills it — never the unknown glyph', () => {
+  assert.equal(harnessIcon('cc'), '<span class="hicon" data-hicon="cc" aria-hidden="true"></span>')
+  assert.ok(!harnessIcon('cc').includes('dasharray'))
+})
+test('chips: the chip is the same DOM for every harness — icon + name; entry point and inference are quiet marks', () => {
+  const s = chipFor({ harness: 'codex', entrypoint: 'cli', harness_inferred: true, session_synthesized: true })
+  assert.ok(s.startsWith(harnessIcon('codex'))); assert.ok(s.includes('<span class="chipname">Codex</span>'))
+  for (const id of HARNESS_ORDER) { // same structure: icon span + one name span, only their content differs
+    const c = chipFor({ harness: id })
+    assert.match(c, /^<span class="hicon"/); assert.equal((c.match(/<span class="chipname">/g) || []).length, 1, id)
+  }
+})
+test('chips: the icon whitelist keeps scripts, handlers, urls and foreign content out, and lets the drawn files through', () => {
+  assert.equal(sanitizeHarnessSvg('<svg viewBox="0 0 16 16"><path d="M1 1"/></svg>'), '<path d="M1 1"/>')
+  for (const bad of [
+    '<svg onload="x()"><path/></svg>',
+    '<svg><script>alert(1)</script></svg>',
+    '<svg><foreignObject><body/></foreignObject></svg>',
+    '<svg><a href="http://x">y</a></svg>',
+    '<svg><path style="fill:url(#x)"/></svg>',
+    '<svg><image href="x.png"/></svg>',
+    '<svg><text>hi</text></svg>',
+    'not svg at all',
+  ]) assert.equal(sanitizeHarnessSvg(bad), null, bad)
+})
+test('labels and classes keep their contract', () => {
+  assert.equal('PROPOSED_ENDPOINT' in L, false, 'the mock-era proposed-endpoint label is gone')
+  for (const c of CLASS_IDS) assert.ok(CLASS_NAME[c], c)
+})
+test('core/labels.mjs is the aggregator of labels/: every export of labels/common.mjs is read through it, by identity', () => {
+  for (const [name, value] of Object.entries(labelsCommon)) assert.equal(labelsAgg[name], value, name)
+  assert.ok(Object.keys(labelsCommon).includes('L') && Object.keys(labelsCommon).includes('priceApprox'))
+})
+test('store: set shallow-merges and notifies once; unsubscribe stops it', () => {
+  const s = createStore({ a: 1, b: { x: 1 } }); const seen = []
+  const off = s.subscribe((st) => seen.push(st))
+  s.set({ a: 2, c: 3 }); assert.deepEqual(s.get(), { a: 2, b: { x: 1 }, c: 3 }); assert.equal(seen.length, 1)
+  off(); s.set({ a: 9 }); assert.equal(seen.length, 1)
+  assert.deepEqual(Object.keys(store.get()).sort(), ['capH', 'capHErr', 'capHOkAt', 'libraryHash', 'libraryNotice', 'pricing'])
+  assert.equal(store.get().libraryHash, '#/sessions'); assert.equal(store.get().libraryNotice, null)
+})
+test('attrSel escapes a value for a double-quoted attribute selector (one helper, shared by the replay desk)', () => {
+  assert.equal(domMod.attrSel('plain-id'), 'plain-id')
+  assert.equal(domMod.attrSel('a"b'), 'a\\"b'); assert.equal(domMod.attrSel('a\\b'), 'a\\\\b'); assert.equal(domMod.attrSel(12), '12')
+  assert.equal(domMod.attrSel('x"]#y'), 'x\\"]#y') // the quote is what could close the selector early
+})
+test('store: set with nothing new does not notify (so a poll that writes the same answer repaints nothing)', () => {
+  const s = createStore({ a: 1, o: { x: 1 }, n: NaN }); const seen = []
+  s.subscribe((st, prev) => seen.push([st, prev]))
+  const before = s.get()
+  s.set({}); s.set({ a: 1 }); s.set({ n: NaN }); s.set({ a: 1, n: NaN })
+  assert.equal(seen.length, 0); assert.equal(s.get(), before) // no new state object either
+  s.set({ a: 1, b: 2 }); assert.equal(seen.length, 1) // one changed key among unchanged ones is a change
+  assert.equal(seen[0][0].b, 2); assert.equal(seen[0][1].b, undefined); assert.notEqual(seen[0][0], seen[0][1])
+  s.set({ o: { x: 1 } }); assert.equal(seen.length, 2) // compared by identity (Object.is), not deeply
+  s.set({ u: undefined }); assert.equal(seen.length, 3) // a key that did not exist now exists
+  s.set({ u: undefined }); assert.equal(seen.length, 3)
+})
+
+// ── a screen whose mount() throws leaves nothing behind ──────────────────────────────────────────────────────────────
+test('safeMount: a throwing mount clears the screen, drops its keys and the screen says why (escaped, as an alert)', () => {
+  const calls = []
+  const el = { innerHTML: '', replaceChildren: () => calls.push('clear') }
+  const out = safeMountMod.safeMount({ mount() { throw new Error('boom <b>x</b>') } }, el, { c: 1 }, { clearKeys: () => calls.push('keys') })
+  assert.equal(out, null)
+  assert.deepEqual(calls, ['clear', 'keys'])
+  assert.match(el.innerHTML, /role="alert"/); assert.ok(el.innerHTML.includes('boom')); assert.ok(!el.innerHTML.includes('<b>x'), 'the reason is escaped')
+})
+test('safeMount: a mount that throws something that is not an Error, or a module with no mount, still says something', () => {
+  for (const mod of [{ mount() { throw 'plain string' } }, {}, { mount: 5 }]) {
+    const el = { innerHTML: '', replaceChildren() {} }
+    const out = safeMountMod.safeMount(mod, el, {}, { clearKeys() {} })
+    assert.equal(out, null); assert.ok(el.innerHTML.length > 0 && /role="alert"/.test(el.innerHTML))
+  }
+})
+test('safeMount: a good mount returns the instance and touches nothing', () => {
+  const calls = [], inst = { update() {}, unmount() {} }
+  const got = safeMountMod.safeMount({ mount: (el, ctx) => { calls.push(['mount', el.id, ctx.n]); return inst } }, { id: 'e', replaceChildren: () => calls.push('clear') }, { n: 1 },
+    { clearKeys: () => calls.push('keys') })
+  assert.equal(got, inst); assert.deepEqual(calls, [['mount', 'e', 1]])
+})
+
+// ── modal focus trap ─────────────────────────────────────────────────────────────────────────────────────────────────
+test('trapTab: Tab on the last control wraps to the first, Shift+Tab on the first wraps to the last', () => {
+  const [a, b, c] = ['a', 'b', 'c']
+  assert.equal(domMod.trapTab([a, b, c], c, false), a); assert.equal(domMod.trapTab([a, b, c], a, true), c)
+  assert.equal(domMod.trapTab([a, b, c], b, false), null); assert.equal(domMod.trapTab([a, b, c], b, true), null) // the browser moves it
+  assert.equal(domMod.trapTab([a], a, false), a); assert.equal(domMod.trapTab([a], a, true), a)
+})
+test('trapTab: focus that is outside the dialog is pulled back in', () => {
+  assert.equal(domMod.trapTab(['a', 'b'], 'outside', false), 'a'); assert.equal(domMod.trapTab(['a', 'b'], 'outside', true), 'b')
+  assert.equal(domMod.trapTab(['a', 'b'], null, false), 'a')
+  assert.equal(domMod.trapTab([], 'x', false), null) // nothing to trap
+})
+
+// ── api: the one data entrance is an HTTP transport to the server that served the page ───────────────────────────────
+const jsonRes = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+
+test('api answers from the real transport: each method calls its endpoint with its parameters, and reads nothing from the query string', async () => {
+  const calls = []
+  setFetch(async (url, init) => { calls.push({ url: String(url), init: init || {} }); return jsonRes({ ok: 1 }) })
+  try {
+    const { api } = await import('../../src/web/v2/core/api.mjs?fresh-1')
+    assert.deepEqual(await api.projects(), { ok: true, data: { ok: 1 } })
+    await api.session({ project: 'p', id: 's 1', cursor: 0, limit: 60, extra: undefined })
+    await api.block('abc/1#2'); await api.pricing(); await api.captureHealth(); await api.retention()
+    await api.overview({ window: '7d' }); await api.traffic({ window: '24h' })
+    await api.trafficRequests({ harness: 'cc', host: 'h.test', window: '1h', cls: 'llm', cursor: 20, limit: 50 })
+    await api.trafficRequest({ ref: 's/0#9', reveal: 'authorization' })
+    const urls = calls.map((c) => c.url)
+    assert.deepEqual(urls, [
+      '/api/projects',
+      '/api/session?project=p&id=s+1&cursor=0&limit=60',
+      '/api/block?ref=abc%2F1%232',
+      '/api/pricing', '/api/capture-health', '/api/retention',
+      '/api/overview?window=7d', '/api/traffic?window=24h',
+      '/api/traffic/requests?harness=cc&host=h.test&window=1h&class=llm&cursor=20&limit=50',
+      '/api/traffic/request?ref=s%2F0%239&reveal=authorization',
+    ])
+    // POST /control/retention carries the CSRF bootstrap from GET /control/status first
+    await api.setRetention({ harness: 'cc', cls: 'llm', level: 'full' })
+    assert.equal(calls.at(-2).url, '/control/status')
+    const post = calls.at(-1)
+    assert.equal(post.url, '/control/retention'); assert.equal(post.init.method, 'POST')
+    assert.deepEqual(JSON.parse(post.init.body), { harness: 'cc', class: 'llm', level: 'full' }) // cls ships as the server's `class`
+  } finally { setFetch(null) }
+})
+
+test('api.control: null until /control/status answers, true on 200, false on 403 / 404 / 405', async () => {
+  for (const [status, want] of [[200, true], [403, false], [404, false], [405, false]]) {
+    setFetch(async (url) => (String(url).startsWith('/control/status') ? jsonRes({ error: 'off' }, status) : jsonRes({ ok: 1 })))
+    try {
+      const { api } = await import(`../../src/web/v2/core/api.mjs?ctrl-${status}`)
+      assert.equal(api.control, null, `status ${status}: unknown before the first ask`)
+      await api.controlStatus()
+      assert.equal(api.control, want, `status ${status}`)
+      await api.projects() // an ordinary read does not move it
+      assert.equal(api.control, want, `status ${status}: unchanged by /api/projects`)
+    } finally { setFetch(null) }
+  }
+})
+
+test('an endpoint this server does not have folds into {ok:false, absent:true}, so a screen can draw its absent state', async () => {
+  setFetch(async () => jsonRes({ error: 'unknown endpoint' }, 404))
+  try {
+    const { api } = await import('../../src/web/v2/core/api.mjs?fresh-2')
+    for (const r of [await api.overview({ window: '24h' }), await api.traffic({}), await api.trafficRequests({}), await api.trafficRequest({ ref: 'x' })]) {
+      assert.equal(r.ok, false); assert.equal(r.status, 404); assert.equal(r.absent, true)
+    }
+  } finally { setFetch(null) }
+})
