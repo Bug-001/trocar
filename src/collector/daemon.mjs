@@ -22,6 +22,8 @@ import { createTracker } from './core/tracker.mjs'
 import { createSwitch, readState } from './core/switch.mjs'
 import { startControlServer, controlSocketPath } from './core/control.mjs'
 import { createQueryService } from '../query/service.mjs'
+import { createServer as createBoard } from '../server.mjs'
+import { readIngressConfig } from './core/ingress-config.mjs'
 import { readCa } from './core/tls/ca-store.mjs'
 import { tryOpLock } from '../off/lock.mjs'
 import { readAgentList, agentListPath } from '../off/identity.mjs'
@@ -196,12 +198,59 @@ export function lockKeeper({ file, fields, segmentOf = () => null }) {
  *  request to a query worker this daemon forks on demand and streams its bytes back. This event loop forwards agent traffic, so it
  *  never computes an answer; the worker exits by itself when nobody queries. `stop()` belongs in the stop, before the control server
  *  closes, so a worker a stop cuts off is not left behind. */
-function queryRouteFor({ P, failure }) {
-  const svc = createQueryService({ home: path.dirname(P.dir), failure })
-  return { routes: { 'GET /query': svc.route }, stop: svc.stop }
+function queryRouteFor({ P, failure, fork }) {
+  const svc = createQueryService({ home: path.dirname(P.dir), failure, fork })
+  return { routes: { 'GET /query': svc.route }, stop: svc.stop, svc }
 }
 
-async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {} }) {
+/** The board's token (4.4, D26③): 32 random bytes, base64url, in <collector>/board.token (0600). Kept across restarts so a bookmarked URL
+ *  still opens; a file that is missing or is not one is replaced (tmp + rename). Only the daemon writes it; uninstall removes it. */
+function boardToken(dir) {
+  const file = path.join(dir, 'board.token')
+  try { const t = fs.readFileSync(file, 'utf8').trim(); if (/^[A-Za-z0-9_-]{43}$/.test(t)) return t } catch { /* absent or unreadable: a new one */ }
+  const t = crypto.randomBytes(32).toString('base64url')
+  const tmp = `${file}.tmp-${process.pid}`
+  fs.writeFileSync(tmp, t, { mode: 0o600 }); fs.renameSync(tmp, file)
+  return t
+}
+
+/** The ONE place the board is mounted (D66, 4.4 §Plan 「端口」; the platform-seam rule: both entries call it): the face (src/server.mjs) on
+ *  127.0.0.1:<ingress.json's boardPort>, relaying to the read route's query service. The daemon only reads the port (install chose it) and
+ *  never tries another: a port it cannot listen on is `port-taken` with one failure record (D38), and capture and /query go on.
+ *  routes(r) adds the board to the control routes: `GET /status` gains `board: {port, state, reason}` (never the token), and
+ *  `GET /board` answers `{port, state, reason, token}` for `asight board`. start() once the daemon is ready; stop() before the control server closes. */
+function boardFor({ P, failure, query, log = () => {} }) {
+  let st = { port: null, state: 'no-port', reason: 'no board port recorded: run asight install' }
+  let server = null, token = null, started = Promise.resolve(), stopped = false
+  async function listen() {
+    const cfg = readIngressConfig({ dir: P.dir })
+    if (cfg.boardPort === undefined) { if (cfg.error) st = { ...st, reason: `${cfg.error}: run asight install` }; return }
+    const port = cfg.boardPort
+    try {
+      token = boardToken(P.dir)
+      const s = createBoard({ home: path.dirname(P.dir), token, query }).server
+      s.on('clientError', (e, sock) => sock.destroy())
+      await new Promise((resolve, reject) => { s.once('error', reject); s.listen(port, '127.0.0.1', resolve) })
+      s.on('error', (e) => log('board', e)) // after the listen: the board never takes the daemon down
+      if (stopped) { s.close(); return } // the daemon stopped while it was listening
+      server = s
+      st = { port, state: 'serving', reason: null }
+    } catch (e) {
+      st = { port, state: 'port-taken', reason: `the board could not listen on 127.0.0.1:${port} (${(e && e.code) || errText(e)}); capture goes on` }
+      failure('daemon', coded(e, 'start-failed'), { port })
+    }
+  }
+  const tokenAnswer = async () => { await started; return { ...st, token } }
+  return {
+    start() { started = listen(); return started },
+    state: () => ({ ...st }),
+    tokenAnswer,
+    routes: (r) => ({ ...r, 'GET /status': async (q) => { const a = await r['GET /status'](q); await started; return { ...a, board: { ...st } } }, 'GET /board': tokenAnswer }),
+    stop() { stopped = true; if (server) { server.close(); server.closeAllConnections(); server = null } },
+  }
+}
+
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {}, fork }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
@@ -219,7 +268,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
-  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, foreground, upstreamCa, model })
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, foreground, upstreamCa, model, fork })
   identity = identity || procIdentity
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
@@ -235,8 +284,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       throw e
     }
   }
-  const query = queryRouteFor({ P, failure })
-  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: { 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off'), ...query.routes } }) // throws if another daemon answers
+  const query = queryRouteFor({ P, failure, fork })
+  const board = boardFor({ P, failure, query: query.svc, log })
+  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({ 'GET /status': gate('status'), 'POST /on': gate('on'), 'POST /off': gate('off'), ...query.routes }) }) // throws if another daemon answers
 
   let redirector = null
   try {
@@ -627,6 +677,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       },
     })
     markReady()
+    board.start() // never fails the start: a board that cannot listen is a state and a record
 
     // stop({signal}) — signal: what stopped it (SIGTERM, SIGINT, SIGHUP = the terminal closed or the user logged out,
     // SIGQUIT), else `reason`. Returns {failed: [where…]}: a step that failed makes `collector start` exit non-zero. It
@@ -650,7 +701,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     }
     async function doStop({ signal = null, reason = null } = {}) {
       seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off
-      query.stop()
+      board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer); clearTimeout(bundleRetry)
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
@@ -675,7 +726,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     failure.flush()
     await control.close()
     if (redirector) await redirector.close().catch((w) => failure('helper', w)) // the start failure itself is recorded by startDaemon
-    query.stop()
+    board.stop(); query.stop()
     throw e
   }
 }
@@ -685,7 +736,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
 // engine are always the real ones.
-async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model }) {
+async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, fork }) {
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
@@ -732,8 +783,9 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   // (launchd / the task bringing the daemon back while the user runs on) never binds a group's port a second time
   const ready = new Promise((r) => { markReady = r })
   const gate = (fn) => async (q) => { await ready; return fn(q) }
-  const query = queryRouteFor({ P, failure })
-  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: {
+  const query = queryRouteFor({ P, failure, fork })
+  const board = boardFor({ P, failure, query: query.svc, log })
+  const control = await startControlServer({ socketPath: sock, ...(ep ? { token: ep.token } : {}), routes: board.routes({
     'GET /status': gate(status),
     'GET /holders': gate(() => collector.holders()),
     ...query.routes,
@@ -756,13 +808,14 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
       if (body(q).exit === true) { const mine = ++exitAsked; clearInterval(exitTimer); exitTimer = setInterval(() => { if (mine === exitAsked && collector.mayExit()) { clearInterval(exitTimer); stop({ reason: 'off' }) } }, 250) }
       return r
     }),
-  } })
+  }) })
   // only now: the control server refuses a start while another daemon answers, so a lock read before it may be a live daemon's (runDaemon's order)
   noteUncleanStop(P.lock, failure)
   seal.start() // only now (the gate claimed the collector): the lock read before this could have been a live daemon's
   try {
     await collector.start()
     markReady()
+    board.start() // never fails the start: a board that cannot listen is a state and a record
     const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
     selfId = me
     const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
@@ -776,7 +829,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     const exited = new Promise((r) => { markExited = r })
     const doStop = async ({ signal = null, reason = null } = {}) => {
       seal.stop() // as in runDaemon: the last segment is left to the next start's scan
-      query.stop()
+      board.stop(); query.stop()
       clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
       const failed = []
       const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }
@@ -794,7 +847,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     return { port: null, socketPath: sock, paths: P, stop, exited, status, engine, collector }
   } catch (e) {
     failure.flush(); await control.close(); collector.close(); if (parts.close) parts.close()
-    query.stop()
+    board.stop(); query.stop()
     throw e
   }
 }
