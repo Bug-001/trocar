@@ -111,6 +111,8 @@ function summaryPairs(doc, now) {
     rows.push(['Not captured', `${who.length ? who.join(', ') : 'a program'} refused asight's certificate${hosts.length ? ` for ${hosts.length} host${hosts.length === 1 ? '' : 's'}` : ''}; restart it. Which hosts: asight status --failures`])
   }
   rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? 'none in the last 24 hours' : `${fl.problem} in the last 24 hours, latest ${ago(fl.latest, now)}`])
+  const b = doc.board // §3.5: the address without the token; `asight board` prints the one with it
+  if (b) rows.push(['Board', b.state === 'serving' ? `${b.url}  open it with: asight board` : b.state === 'unknown' ? unknown(b.reason) : `not running: ${b.reason}`])
   // V39 (§1.1): logging out stops the daemon unless linger is on — the command is printed, never run; a state that could not be read is said with its reason, never taken for "on"
   if (doc.linger === false) rows.push(['Logging out', `capture stops when you log out; run: loginctl enable-linger ${doc.user || '<your user name>'}`])
   else if (doc.linger === 'unknown') rows.push(['Logging out', unknown(doc.linger_reason || 'the linger state could not be read')])

@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { tmpDir } from '../../helpers/tmp.mjs'
-import { loadIngressConfig, readIngressConfig, rebindTaken, removeIngressConfig, freeOnLoopback, INGRESS_FILE, ENGINE_RANGE, GROUP_RANGE } from '../../../src/collector/core/ingress-config.mjs'
+import { loadIngressConfig, readIngressConfig, rebindTaken, removeIngressConfig, freeOnLoopback, ensureBoardPort, INGRESS_FILE, ENGINE_RANGE, GROUP_RANGE, BOARD_RANGE } from '../../../src/collector/core/ingress-config.mjs'
 
 const dirOf = () => path.join(tmpDir('asight-ingress-'), 'collector')
 const zeros = (n) => Buffer.alloc(n) // the random source that always starts at the bottom of a range (and gives the same secret twice: the file still has two)
@@ -145,4 +145,41 @@ test('a real socket holding a recorded group port is found by a bind probe and r
   const r = await rebindTaken(cfg, (p) => freeOnLoopback(p), { dir, isFree: noneTaken })
   assert.deepEqual(r.rebound, ['g'])
   assert.notEqual(readIngressConfig({ dir }).groupPorts.g, port)
+})
+
+test('4.4 §Plan 「端口」 · V67: ensureBoardPort records the board\'s port once — a taken 9800 is skipped, the doors and secrets stay, a second call writes nothing, and every later writer keeps it', async () => {
+  const dir = dirOf()
+  const first = await loadIngressConfig({ dir, groups: ['codex.env'], isFree: noneTaken })
+  const r = await ensureBoardPort({ dir, isFree: async (p) => p !== BOARD_RANGE[0] })
+  assert.deepEqual(r, { port: BOARD_RANGE[0] + 1, created: true })
+  const file = path.join(dir, INGRESS_FILE)
+  const bytes = fs.readFileSync(file); const mtime = fs.statSync(file).mtimeMs
+  assert.deepEqual(read(dir), { enginePort: first.enginePort, groupPorts: first.groupPorts, ingressToken: first.ingressToken, listenerToken: first.listenerToken, boardPort: r.port })
+  await new Promise((res) => setTimeout(res, 20))
+  assert.deepEqual(await ensureBoardPort({ dir, isFree: async () => { throw new Error('a recorded port is not probed') } }), { port: r.port, created: false })
+  assert.deepEqual([fs.readFileSync(file), fs.statSync(file).mtimeMs], [bytes, mtime])
+  assert.equal((await loadIngressConfig({ dir, groups: ['codex.env', 'claude-code.settings'], isFree: noneTaken })).boardPort, r.port)
+  assert.equal(read(dir).boardPort, r.port, 'a load that adds a group keeps the board port')
+  const { config } = await rebindTaken(readIngressConfig({ dir }), async () => false, { dir, isFree: noneTaken })
+  assert.equal(read(dir).boardPort, r.port); assert.equal(config.boardPort, r.port)
+})
+
+test('4.4 §Plan 「端口」: no file yet → ensureBoardPort makes it (doors\' secrets included); a full range → { error }, nothing written', async () => {
+  const dir = dirOf()
+  assert.deepEqual(await ensureBoardPort({ dir, isFree: noneTaken }), { port: BOARD_RANGE[0], created: true })
+  assert.equal(readIngressConfig({ dir }).boardPort, BOARD_RANGE[0])
+  const dir2 = dirOf()
+  await loadIngressConfig({ dir: dir2, isFree: noneTaken })
+  const before = fs.readFileSync(path.join(dir2, INGRESS_FILE))
+  assert.ok((await ensureBoardPort({ dir: dir2, isFree: async (p) => p < BOARD_RANGE[0] || p > BOARD_RANGE[1] })).error)
+  assert.deepEqual(fs.readFileSync(path.join(dir2, INGRESS_FILE)), before)
+})
+
+test('validate: a boardPort equal to a door\'s port (or not a port) makes the file one asight did not write', async () => {
+  for (const bad of ['same', 0, 70000, '9800']) {
+    const dir = dirOf()
+    const c = await loadIngressConfig({ dir, groups: ['codex.env'], isFree: noneTaken })
+    fs.writeFileSync(path.join(dir, INGRESS_FILE), JSON.stringify({ ...read(dir), boardPort: bad === 'same' ? c.groupPorts['codex.env'] : bad }))
+    assert.ok(readIngressConfig({ dir }).error, `boardPort ${bad}`)
+  }
 })

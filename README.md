@@ -79,8 +79,10 @@ certificate and the command to remove it by hand, and the next `asight uninstall
 
 ## What you see
 
-No ETL, no database, no build step — the board reads the raw segments directly (`asight serve` →
-http://127.0.0.1:9800, read-only, the HTTP shell of `asight query` over `GET /api/<name>`, D59). It
+No ETL, no database, no build step — the board reads the raw segments directly. The collector daemon
+serves it from `install` on (D66); `asight board` prints its address with your key
+(http://127.0.0.1:9800/#t=…) and opens it in your browser. It is the HTTP shell of `asight query`
+over `GET /api/<name>` (D59), and `asight status` shows its address (never the key) on its `Board` line. It
 reads `~/.asight/raw/`, so **the sessions of every captured harness appear side by side on one
 board** (the collector's `flows/`, `audit/` and `replays/` are not envelopes and are not shown).
 
@@ -245,7 +247,7 @@ asight install                # once, per user: the certificates; lists every fi
 asight on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
 asight status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
 asight off                    # every trace of it is off your agents' path (off claude-code: only that one)
-asight serve                  # the captures appear on the board
+asight board                  # opens the board in your browser; the captures appear there
 ```
 
 #### Which processes are captured: the name list (D51)
@@ -400,7 +402,7 @@ asight classes set <class> full|log
 asight classes add <class> <host-regex> [<path-regex>] [--harness <harness>]
 asight classes rm <class> [<rule>]
 asight classes reset
-asight serve [--port <port>]
+asight board                  # prints the board's address with your key and opens it; exit 1 when the board is not there
 
 # maintenance
 asight raw <segment>[:<from>[-<to>]]

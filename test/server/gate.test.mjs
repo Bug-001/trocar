@@ -109,12 +109,3 @@ test('the shared modules are pure and import-closed: no node:*, every relative i
   }
 });
 
-test('the control plane has no endpoint yet: GET → 404, anything else → 405, after the token (4.4 门 ④)', async () => {
-  const f = await serve(counting());
-  try {
-    assert.equal((await req(f.port, '/control/status', { headers: withToken() })).status, 404);
-    for (const method of ['POST', 'PUT', 'DELETE']) {
-      assert.equal((await req(f.port, '/control/classes', { method, headers: withToken() })).status, 405, method);
-    }
-  } finally { f.close(); }
-});

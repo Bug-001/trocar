@@ -12,7 +12,8 @@ import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs' // the keys and 
 import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
-import { readManifest, itemsOfPhase } from '../off/manifest.mjs'
+import { readManifest, itemsOfPhase, daemonMayStart } from '../off/manifest.mjs'
+import { readIngressConfig } from '../collector/core/ingress-config.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
@@ -114,6 +115,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   try { f.manifest = { value: readManifest(dir, fs), error: null } } catch (e) { f.manifest = { value: null, error: `${path.join(dir, 'install-manifest.json')}: ${errText(e)}` } }
   if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this asight does not read`; f.manifest.value = null }
   const m = f.manifest.value
+  f.boardPort = readIngressConfig({ dir, fs }).boardPort ?? null // the board's url (C.3 `board`): install's record, read only
   const certP = installCertOf({ f, m, dir, fs, platform, home, env, deps }) // the certificate axis: its root-store read and its own import run while the harnesses are judged
   const installedIds = m ? [...new Set([...(m.entries || []), ...(m.files || [])].map((x) => x.harness).filter((h) => typeof h === 'string'))] : []
   let state = null
@@ -385,6 +387,30 @@ export function statusExit(f) {
   return failing ? EXIT.incomplete : EXIT.ok
 }
 
+/** C.3 `board` (1.6 §3.5): the daemon's own word on its board, from the `/status` reply this read already has (D62: no second round trip); the url from
+ *  ingress.json, never the token. What cannot be told is `unknown` with its reason, never guessed (D38). */
+function boardOf(f) {
+  const url = f.boardPort ? `http://127.0.0.1:${f.boardPort}/` : null, d = f.daemon, b = d.reply && d.reply.board
+  const say = (state, reason) => ({ state, url, reason })
+  if (f.manifest.error) return say('unknown', `the install record could not be read (${f.manifest.error})`)
+  if (!daemonMayStart(f.manifest.value)) return say('not-installed', 'asight is not installed on this machine; run: asight install')
+  if (d.state === 'not-running') return say('not-running', 'the daemon is not running; asight board starts it')
+  if (d.state !== 'running') return say('unknown', `the daemon did not answer${d.reason ? ` (${d.reason})` : ''}`)
+  if (!b || typeof b.state !== 'string') return say('unknown', 'the daemon did not say whether the board is up')
+  if (b.state === 'serving') return say('serving', null)
+  return say(b.state === 'port-taken' ? 'port-taken' : 'not-running', b.reason || `the daemon says the board is ${b.state}`)
+}
+
+/** C.3 `harnesses[h].setup` (4.11 P4b, D65④): the model's one judgement, read with the forms; driver mode (Linux) does not judge it, and what was not read is
+ *  `unknown` with its reason, never `ready` (D38). */
+function setupDocOf(f, id) {
+  const hf = f.facts && f.facts.harnesses && f.facts.harnesses[id]
+  if (hf && hf.setup) return hf.setup
+  const why = f.platform === 'linux' || (f.facts && f.facts.routing === 'driver') ? 'driver mode (Linux) does not judge setup per form; asight on works as before'
+    : `the setup of ${id} could not be read${f.topology_error ? ` (${f.topology_error})` : ''}`
+  return { state: 'unknown', missing: [], reason: why }
+}
+
 /** The 附录 C.3 document of a read: `status --json` and `asight query status` print exactly this. */
 export function statusDocOf(f) {
   const d = f.daemon, forms = formsOf(f) || {}
@@ -406,10 +432,11 @@ export function statusDocOf(f) {
     daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, error: d.reason || null },
     harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
       desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why,
-      forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null })),
+      setup: setupDocOf(f, h.id), forms: forms[h.id] || [], processes: h.judged.rows.filter((r) => r.pid != null).map((r) => ({ pid: r.pid, name: r.name ?? null, captured: r.captured, reason: r.reason ?? null })),
       ...(f.identity && f.identity[h.id] ? { identity: f.identity[h.id] } : {}),
     }])),
     ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
+    board: boardOf(f),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
     ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures, errors,
   }

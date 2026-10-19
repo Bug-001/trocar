@@ -785,3 +785,15 @@ test('D62: `GET /holders` is asked only when the daemon\'s poll has rows — wit
   await once(0)
   assert.deepEqual(paths.filter((p) => p === '/holders'), ['/holders'], 'the poll has rows (a number, even 0): its own snapshot is the answer, and it is asked')
 })
+
+test('V91 · 附录 C.3: every harness status lists carries `setup` from the closed set; codex (the root carries its forms) is ready with the root in place, needed with root-missing when it is gone', async () => {
+  const w = await modelOn()
+  for (const root of ['in', 'out']) {
+    const { j } = await modelStatus(w, { desired: 'on', daemon: 'running', door: 'up', key: 'present', st: 'ready', root })
+    for (const [h, x] of Object.entries(j.harnesses)) {
+      assert.ok(['ready', 'needed', 'unknown'].includes(x.setup.state) && Array.isArray(x.setup.missing), `${h}: ${JSON.stringify(x.setup)}`)
+      if (x.setup.state === 'unknown') assert.ok(x.setup.reason, `${h}: unknown says why`)
+    }
+    assert.deepEqual(j.harnesses.codex.setup, root === 'in' ? { state: 'ready', missing: [] } : { state: 'needed', missing: [{ form: null, what: 'root-missing' }] })
+  }
+})
