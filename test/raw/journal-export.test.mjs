@@ -2,16 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { appendJournal, readJournal } from '../../src/raw/journal.mjs';
 import { runExport } from '../../src/raw/export.mjs';
-import { sealUnchecked } from '../../src/raw/seal.mjs';
+import { sealUnchecked, sealShard } from '../../src/raw/seal.mjs';
 import { tmpDir, conversation, toLine, writeShard } from './helpers.mjs';
 
 // No silent failures (to become D38), the last two gaps the review found (F10, F15):
 // a journal that cannot be written, and export failures before the first byte.
-const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'asight.mjs');
 const SID = 'ffffffff-4444-4444-8444-44444444444f';
 
 test('a journal that cannot be written says so, with the entry, instead of returning false quietly', () => {
@@ -28,16 +25,18 @@ test('a journal that cannot be written says so, with the entry, instead of retur
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('the CLI puts a refusal that could not be journalled in front of the operator', () => {
-  const home = tmpDir();
-  try {
-    fs.mkdirSync(path.join(home, '.asight'));
-    fs.writeFileSync(path.join(home, '.asight', 'raw'), 'not a directory');
-    const shard = writeShard(path.join(home, 'capture-2026-10-06.ndjson'), conversation(SID, 1).map((r) => toLine(r)));
-    const r = spawnSync(process.execPath, [CLI, 'raw', 'seal', shard], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /could not write the raw journal[\s\S]*close marker/);
-  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+
+test('a refusal that could not be journalled is put in front of the operator, not swallowed (D38)', async () => {
+  const root = tmpDir();
+  const write = process.stderr.write.bind(process.stderr), said = [];  try {
+    fs.writeFileSync(path.join(root, 'raw'), 'a file where the journal dir should be');
+    const shard = writeShard(path.join(root, 'capture-2026-10-06.ndjson'), conversation(SID, 1).map((r) => toLine(r)));
+    process.stderr.write = (s) => { said.push(String(s)); return true };
+    await assert.rejects(sealShard(shard, { journal: path.join(root, 'raw', 'journal.jsonl') }), /refusing to seal/);
+  } finally { process.stderr.write = write; fs.rmSync(root, { recursive: true, force: true }); }
+  const text = said.join('');
+  assert.match(text, /could not write the raw journal .*raw\/journal\.jsonl/);
+  assert.match(text, /close marker/, 'the entry that could not be made durable is in the message');
 });
 
 test('export failures before the first byte are journalled too; the default export dir is made owner-only', async () => {

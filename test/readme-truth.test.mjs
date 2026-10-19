@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COMMANDS, HIDDEN_ALIASES } from '../src/cli/commands.mjs';
+import { COMMANDS } from '../src/cli/commands.mjs';
 
 // The stated bar for this README is that it must not TRAP a user: every command it tells someone to
 // run has to exist, and every file it points at has to be there. That is not a style question — the
@@ -19,7 +19,7 @@ const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
 const pkg = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 // what bin/asight.mjs dispatches: the table of commands and the first word of each hidden alias (src/cli/commands.mjs, RFC 1.6 §2)
-const implementedVerbs = new Set([...COMMANDS.map((c) => c.name), ...HIDDEN_ALIASES.map((a) => a.argv[0])]);
+const implementedVerbs = new Set(COMMANDS.map((c) => c.name));
 
 // Only text the reader would actually TYPE counts as an instruction: fenced code blocks and inline
 // `code` spans. Prose like "asight sits on the wire" is not a command, and the README's own
@@ -45,9 +45,10 @@ test('the README\'s Commands section lists every command of the table, in code t
   assert.deepEqual(COMMANDS.map((c) => c.name).filter((n) => !listed.has(n)), [], 'a command of the table the README does not list');
 });
 
-test('the README teaches no hidden alias (`install`, `collector …`, `verify`) as a command, and not `asight test`', () => {
+test('the README teaches no command that is gone (`collector …`, `etl`, `shard`, `keep`, `verify`), and not `asight test`', () => {
   const taught = [...commandText.matchAll(/\basight[ \t]+([a-z-]+)/g)].map((m) => m[1]);
-  for (const a of [...HIDDEN_ALIASES.map((x) => x.argv[0]), 'test']) assert.ok(!taught.includes(a), `the README tells the reader to run \`asight ${a}\`, which is hidden or gone (1.6 §2)`);
+  // the hidden aliases are gone with 1.6 §2 (one feature, one name): what they named is not a command any more
+  for (const a of ['collector', 'etl', 'shard', 'keep', 'verify', 'test']) assert.ok(!taught.includes(a), `the README tells the reader to run \`asight ${a}\`, which is gone (1.6 §2)`);
 });
 
 test('the README no longer says what D39 and the code made false: the steer of `asight on`, <redacted> credentials, "observe-only: never rewrite", a test count', () => {

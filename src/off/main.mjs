@@ -1,4 +1,4 @@
-// main.mjs (src/off) — `asight off [harness…] [--now] [--dry-run] [--yes] [--json] [--remove-ca]` as a command line (RFC 1.6 §2, §3, R4–R7): parses the arguments,
+// main.mjs (src/off) — `asight off [harness…] [--now] [--dry-run] [--yes] [--json]` as a command line (RFC 1.6 §2, §3, R4–R7): parses the arguments,
 // refuses root, resolves the harness names, runs runOff and prints its receipt. `asight off` and the standalone `~/.asight/bin/asight-off` run this same file
 // (R3), so it may import nothing outside src/off (0.1 §2) — which is why the §3 name table is written here too (OFF_NAMES) and test/cli/harness-names.test.mjs
 // holds it equal to src/cli/harness-names.mjs. Everything the world gives is a `deps` entry (see orchestrate.mjs), plus `getuid`. A platform without a collector
@@ -19,8 +19,7 @@ export const OFF_NAMES = Object.freeze({
 })
 
 const OFF_USAGE = 'usage: asight off [harness…] [--now] [--dry-run] [--yes] [--json]'
-const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--json', '--remove-ca'])
-const REMOVE_CA_NOTE = '--remove-ca 照收,已没有作用:off 不再动旧采集的 CA(旧采集已退役,D39⑥;它留在机器上的东西按 README 手动清理)'
+const OFF_FLAGS = new Set(['--now', '--dry-run', '--yes', '--json'])
 
 /** `[harness…]` as typed → `{ ok: true, ids }` (null = none named = all; else code ids in table order, a repeat once) or `{ ok: false, unknown, known }`. Case is not folded.
  *  `installed`: the harness ids the install manifest names; each is a name too, so a harness added as descriptor data alone can be turned off (CM27). */
@@ -64,7 +63,6 @@ export async function runOffCli(argv, { io = makeIo({ stdin: process.stdin, stdo
   if ((deps.getuid || (typeof process.getuid === 'function' ? () => process.getuid() : () => -1))() === 0) { io.err('asight off: 用你自己的账号跑,不要用 root / sudo(D36)'); return EXIT.incomplete }
   try {
     const { receipt, exit } = await runOff({ home, env, ids: named.ids, now: flags.has('--now'), yes: flags.has('--yes'), dryRun: flags.has('--dry-run'), interactive: isInteractive(io), io: { ...io, prompt: json ? io.stderr : io.stdout }, say, deps: { platform, ...deps, ...(standalone ? { standalone: true } : {}) } }) // the CLI's platform is offWorld's default (deps.platform of a test's still wins): before the darwin flip a linux sandbox on a Mac host silently ran the darwin arms
-    if (flags.has('--remove-ca')) receipt.notes.unshift(REMOVE_CA_NOTE)
     io.out(json ? JSON.stringify(receipt, null, 2) : formatOffReceipt(receipt, { home }))
     return exit
   } catch (e) {

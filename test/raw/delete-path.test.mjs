@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { sealLegacy, otherSealers, isRunning } from '../../src/raw/legacy.mjs';
+import { runVerify } from '../../src/raw/verify.mjs';
+import { runCompare } from '../../src/query/raw-compare.mjs';
 import { readJournal } from '../../src/raw/journal.mjs';
 import { tmpDir, conversation, toLine, writeShard } from './helpers.mjs';
 import { changeUntilCtimeMoves } from '../helpers/ctime.mjs';
@@ -137,30 +139,29 @@ test('row 3: each original\'s "deleting" entry is durable before its unlink; a j
 });
 
 // ── row 4: an unreadable directory or original is a journalled refusal naming it, never a stack trace ──
-const CLI = path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'bin', 'asight.mjs');
 const SID_B = 'bbbbbbbb-0000-4000-8000-00000000000b';
-function cliTree() {
-  const root = tmpDir(), home = path.join(root, 'home'), ses = path.join(home, '.asight', 'sessions');
+function pairTree() {
+  const root = tmpDir(), ses = path.join(root, 'sessions');
   for (const sid of [SID, SID_B]) writeShard(path.join(ses, sid, 'calls.ndjson'), conversation(sid, 2).map((r) => toLine(r)));
-  const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
-  return { root, home, ses, run, journal: path.join(home, '.asight', 'raw', 'journal.jsonl') };
+  return { root, ses, journal: path.join(root, 'j.jsonl') };
 }
-const noTrace = (r) => assert.doesNotMatch(r.stderr, /\n\s+at .*\(.*:\d+:\d+\)/, `a stack trace:\n${r.stderr}`);
 
 for (const what of ['a session directory', 'an original']) {
-  test(`row 4: ${what} that cannot be read — seal --legacy (dry and real), verify and compare name it, journal it, exit 1, no stack trace; nothing of it deleted`, async () => {
-    const { root, ses, run, journal } = cliTree();
+  test(`row 4: ${what} that cannot be read — the legacy seal (dry and real), verify and compare name it and journal it; nothing of it deleted`, async () => {
+    const { root, ses, journal } = pairTree();
     const bad = what === 'an original' ? path.join(ses, SID_B, 'calls.ndjson') : path.join(ses, SID_B);
     try {
-      await sealLegacy(ses, { ...NONE, journal: path.join(root, 'j.jsonl') });
+      await sealLegacy(ses, { ...NONE, journal: path.join(root, 'seed.jsonl') });
       fs.chmodSync(bad, 0);
-      for (const args of [['raw', 'seal', '--legacy', ses, '--delete-original', '--quiet', '0', '--dry-run'], ['raw', 'seal', '--legacy', ses, '--delete-original', '--quiet', '0'],
-        ['raw', 'verify', ses], ['raw', 'compare', ses]]) {
-        const r = run(...args);
-        noTrace(r);
-        assert.equal(r.status, 1, `${args.join(' ')}: exit ${r.status}\n${r.stdout}${r.stderr}`);
-        assert.ok((r.stdout + r.stderr).includes(bad), `${args.join(' ')} does not name ${bad}:\n${r.stdout}${r.stderr}`);
+      for (const dryRun of [true, false]) {
+        const res = await sealLegacy(ses, { ...NONE, journal, deleteOriginal: true, dryRun });
+        assert.ok(JSON.stringify(res.refused).includes(bad), `the legacy seal (dryRun=${dryRun}) does not name ${bad}: ${JSON.stringify(res.refused)}`);
       }
+      const v = runVerify({ target: ses, journal });
+      assert.ok(v.some((r) => !r.ok && JSON.stringify(r).includes(bad)), `verify does not name ${bad}: ${JSON.stringify(v)}`);
+      const c = await runCompare({ root: ses, journal });
+      assert.equal(c.ok, false, 'an unreadable original or directory passed the compare');
+      assert.ok(c.groups.some((g) => g.status === 'diff' && JSON.stringify(g).includes(bad)), `compare does not name ${bad}: ${JSON.stringify(c.groups)}`);
       fs.chmodSync(bad, 0o700);
       assert.ok(fs.existsSync(path.join(ses, SID_B, 'calls.ndjson')), 'the unreadable one was deleted');
       const j = readJournal({ journal });
@@ -220,6 +221,7 @@ test('row 6: an original rewritten in place between its byte-for-byte check and 
 });
 
 // ── row 7: an empty claimed segment does not block the delete-only path ─────────────────────────────
+
 test('row 7: an old empty claim beside a sealed original is removed (journalled) by the delete run, said by its dry run, set aside by compare; a young one refuses by name', async () => {
   const { compareTree } = await import('../../src/query/raw-compare.mjs');
   const { root, f, journal } = sealedTree();
@@ -231,11 +233,8 @@ test('row 7: an old empty claim beside a sealed original is removed (journalled)
     const dry = await sealLegacy(f, { ...NONE, journal: null, deleteOriginal: true, dryRun: true });
     assert.deepEqual(dry.plan.map((x) => [x.file, x.action]), [[f, 'delete']], JSON.stringify(dry.refused));
     assert.deepEqual(dry.claims.map((x) => [x.file, x.outcome]), [[claim, 'would-remove']]);
+    assert.match(dry.claims[0].reason, /an empty segment/);
     assert.ok(fs.existsSync(claim), 'the dry run removed the claim');
-    const home = path.join(root, 'home');
-    const out = spawnSync(process.execPath, [CLI, 'raw', 'seal', '--legacy', f, '--delete-original', '--quiet', '0', '--dry-run'], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
-    assert.equal(out.status, 0, out.stdout + out.stderr);
-    assert.ok(out.stdout.includes(`would remove ${claim}: an empty segment`), out.stdout);
     // compare: the claim holds no records and is removed first — not a difference
     const cmp = await compareTree(path.join(root, 'sessions'));
     assert.equal(cmp.ok, true, JSON.stringify(cmp.groups.filter((g) => g.status !== 'same')));
@@ -272,23 +271,22 @@ test('row 7 (cosmetic): a dead lock beside an original the run deletes does not 
 // empty claim, step 4 removes it — but `raw verify` in step 2 printed it FAILED, and the runbook STOPs
 // on FAILED. An empty segment holds no records and is never anyone's copy (planFile ignores or
 // refuses it): verify says `empty`, journals a note, and does not fail for it.
-test('row 7: `raw verify` reports an empty claimed segment as `empty` (a note), not FAILED — a damaged one still fails', async () => {
+test('row 7: verify reports an empty claimed segment as `empty` (a note), not FAILED — a damaged one still fails', async () => {
   const { root, f, journal } = sealedTree();
   try {
     await sealLegacy(f, { ...NONE, journal });
     const claim = f + '.0002.sealed';
     fs.writeFileSync(claim, '');
-    const home = path.join(root, 'home');
-    const run = () => spawnSync(process.execPath, [CLI, 'raw', 'verify', path.join(root, 'sessions')], { encoding: 'utf8', env: { ...process.env, HOME: home, ASIGHT_SOURCE: '' } });
-    let r = run();
-    assert.equal(r.status, 0, r.stdout + r.stderr);
-    assert.match(r.stdout, new RegExp(`^empty\\s+${claim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} — .*holds no records`, 'm'));
-    assert.doesNotMatch(r.stdout, /FAILED/);
-    const j = readJournal({ journal: path.join(home, '.asight', 'raw', 'journal.jsonl') });
-    assert.ok(j.some((e) => e.op === 'verify' && e.outcome === 'note' && e.mode === 'empty' && e.sealed.includes(claim)));
+    const ses = path.join(root, 'sessions');
+    let results = runVerify({ target: ses, journal });
+    assert.ok(results.every((r) => r.ok), JSON.stringify(results.filter((r) => !r.ok)));
+    const note = results.find((r) => r.mode === 'empty');
+    assert.ok(note, `no empty note: ${JSON.stringify(results)}`);
+    assert.deepEqual(note.sealed, [claim]);
+    assert.match(note.note, /holds no records/);
+    assert.ok(readJournal({ journal }).some((e) => e.op === 'verify' && e.outcome === 'note' && e.mode === 'empty' && e.sealed.includes(claim)));
     fs.writeFileSync(claim, 'x');                                   // not empty, not a sealed file: a failure as before
-    r = run();
-    assert.equal(r.status, 1);
-    assert.match(r.stdout, /FAILED .*0002\.sealed/);
+    results = runVerify({ target: ses, journal });
+    assert.ok(results.some((r) => !r.ok && r.sealed.some((s) => s.includes('0002.sealed'))), 'a damaged segment is not reported failed');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

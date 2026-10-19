@@ -125,12 +125,13 @@ test('V7: --json keeps stdout for the one JSON; the plan of a terminal run goes 
   assert.match(io.stderrText(), /~\/\.claude\/settings\.json/)
 })
 
-test('on: usage errors exit 2 and touch nothing — an unknown harness lists the names, the old --proxy is refused with its retirement said, --no-autostart with --no-unit, an unknown flag', async () => {
+test('on: usage errors exit 2 and touch nothing — an unknown harness lists the names, the retired --proxy is a plain unknown option, --no-autostart with --no-unit, an unknown flag', async () => {
   const home = tmpDir('asight-on-usage-'); seedClaude(home); const before = snapshot(home)
   let io = fakeIo(); assert.equal(await runOnCli(['clade'], onCtx(home, io)), 2)
   assert.match(io.text(), /clade/); assert.match(io.text(), /claude-code/); assert.match(io.text(), /dsh/)
   io = fakeIo(); assert.equal(await runOnCli(['--proxy', 'http://127.0.0.1:8899'], onCtx(home, io)), 2)
-  assert.match(io.text(), /按进程采集器不需要它/)
+  // 1.6 §2 has no `--proxy` on `on`, so it is the one usage error of §1.3: `asight on: unknown option '--proxy'`
+  assert.match(io.text(), /unknown option '--proxy'/)
   io = fakeIo(); assert.equal(await runOnCli(['--no-autostart', '--no-unit', '--yes'], onCtx(home, io)), 2)
   io = fakeIo(); assert.equal(await runOnCli(['--yess'], onCtx(home, io)), 2)
   assert.deepEqual(snapshot(home), before)

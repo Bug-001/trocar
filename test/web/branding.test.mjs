@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COMMANDS, HIDDEN_ALIASES } from '../../src/cli/commands.mjs';
+import { COMMANDS } from '../../src/cli/commands.mjs';
 
 // R14 — the product is `asight`, but the served UI still called itself `atrace`
 // (browser tab title + the empty state), and the empty state instructed the user to run a command
@@ -33,7 +33,7 @@ test('every command the empty state tells the user to run actually exists in the
   // extract `asight <verb>` mentions from the empty-state copy
   const verbs = [...emptyMsg.matchAll(/asight\s+([a-z-]+)/g)].map((m) => m[1]);
   assert.ok(verbs.length, `the empty state must tell the user a REAL next command; got: "${emptyMsg}"`);
-  const implemented = new Set([...COMMANDS.map((c) => c.name), ...HIDDEN_ALIASES.map((a) => a.argv[0])]); // what bin/asight.mjs dispatches (src/cli/commands.mjs)
+  const implemented = new Set(COMMANDS.map((c) => c.name)); // what bin/asight.mjs dispatches (src/cli/commands.mjs)
   for (const v of verbs) {
     assert.ok(implemented.has(v),
       `empty state suggests "asight ${v}" but bin/asight.mjs implements no such subcommand (has: ${[...implemented].join(', ')})`);

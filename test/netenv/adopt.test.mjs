@@ -174,7 +174,7 @@ test('driftCheck takes the semantics of the record `on` made, not a routing hand
 
 const NO_SOURCE = path.join(os.tmpdir(), 'none')
 /** The codes `doctor claude-code` finds in a shell with `env` added to the sandbox's. */
-const doctorCodes = async (s, env = {}, deps = FACTS) => (await s.run(['doctor', 'claude-code', '--json', '--source', NO_SOURCE], { env: { ...s.ctx().env, ...env }, deps })).io.json().findings.map((f) => f.code)
+const doctorCodes = async (s, env = {}, deps = FACTS) => (await s.run(['doctor', 'claude-code', '--json'], { env: { ...s.ctx().env, ...env, ASIGHT_SOURCE: NO_SOURCE }, deps })).io.json().findings.map((f) => f.code)
 
 test('V47 drift is measured on what the files hold: a proxy variable in the shell that runs `status` / `doctor` is not a change the user made — `on` found none and `doctor` runs where HTTPS_PROXY is set, or the other way round — and an edit of the file still is', async () => {
   const s = sandbox(ENGINE)
@@ -204,7 +204,7 @@ test('V47 the files are found the same way by every reader: `on` records where i
   const d = readJson(settings); d.env.HTTPS_PROXY = 'http://proxy.new:3128'; fs.writeFileSync(settings, `${JSON.stringify(d, null, 2)}\n`)
   check(); check()
   assert.deepEqual(events.map((e) => [e.event, e.code, e.from, e.to]), [['netenv-change', 'proxy-changed', 'http://proxy.old:3128', 'http://proxy.new:3128']])
-  const doctor = await s.run(['doctor', 'claude-code', '--json', '--source', NO_SOURCE], { env, deps: FACTS })
+  const doctor = await s.run(['doctor', 'claude-code', '--json'], { env: { ...env, ASIGHT_SOURCE: NO_SOURCE }, deps: FACTS })
   assert.ok(doctor.io.json().findings.some((f) => f.code === 'proxy-changed'), '`doctor` agrees with the daemon')
 })
 

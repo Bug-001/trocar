@@ -12,19 +12,18 @@ import { resolveHarnesses } from './harness-names.mjs'
 import { EXIT, newReceipt } from './schema.mjs'
 import { isInteractive, confirm as ask } from '../off/io.mjs'
 import { formatOnReceipt, formatPlan } from './receipt.mjs'
-import { colors, noColor } from './color.mjs'
+import { colors, noColor } from './text.mjs'
 import { renderCompact } from '../netenv/topology-text.mjs'
 import { appendEvent } from '../collector/core/events.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { prepareAdoption, editedFields, recordAdoption } from './on-adopt.mjs'
 import { refuseOldManifest } from '../off/manifest.mjs'
+import { commandNamed, usageLine } from './commands.mjs'
 import { isModelOs } from '../collector/model-install.mjs'
 import { runModelOn } from './on-model.mjs'
 
-const USAGE = 'usage: asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]'
+const USAGE = usageLine(commandNamed('on'))
 const FLAGS = new Set(['--dry-run', '--yes', '--no-autostart', '--no-unit', '--json'])
-const OPT_IN_HINT = 'asight on 不认 --opt-in:D57 起没有点名项(各形态的证书由 asight install 装,引流随 on / off)'
-const PROXY_HINT = 'asight on 不认 --proxy:按进程采集器不需要它(D39 之前的 --proxy 是旧 CC-CLI steer 的口子,已随旧采集退役,D39⑥)'
 const chainText = (t) => renderCompact(t).join(' ; ')
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 
@@ -32,13 +31,10 @@ const processUid = () => (typeof process.getuid === 'function' ? process.getuid(
 export async function runOnCli(argv, { io, env = process.env, home = os.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set(), names = []
   for (const a of argv) {
-    if (a === '--proxy' || a.startsWith('--proxy=')) { io.err(`asight on: ${PROXY_HINT}`); return EXIT.usage }
-    if (a === '--opt-in' || a.startsWith('--opt-in=')) { io.err(`asight on: ${OPT_IN_HINT}`); return EXIT.usage } // V72: before anything is read or written
     if (a.startsWith('-')) {
-      if (!FLAGS.has(a)) { io.err(`asight on: unknown option ${a}\n${USAGE}`); return EXIT.usage }
+      if (!FLAGS.has(a)) { io.err(`asight on: unknown option '${a.split('=')[0]}'\n${USAGE}`); return EXIT.usage }
       flags.add(a)
-    } else if (!(a.startsWith('http://') || a.startsWith('https://'))) names.push(a)
-    else { io.err(`asight on: ${PROXY_HINT}`); return EXIT.usage }
+    } else names.push(a)
   }
   if (flags.has('--no-autostart') && flags.has('--no-unit')) { io.err(`asight on: --no-autostart and --no-unit exclude each other (the first writes the unit and starts it once, the second writes none)\n${USAGE}`); return EXIT.usage }
   const named = resolveHarnesses(names)

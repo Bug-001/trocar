@@ -33,7 +33,7 @@ import { diagnose } from '../netenv/findings.mjs'
 import { captureHealth } from '../health/read.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { formatStatus, formatHealth } from '../collector/cli.mjs'
-import { colors, noColor } from './color.mjs'
+import { colors, noColor } from './text.mjs'
 import { failureBrief } from './words.mjs'
 import { tilde } from './receipt.mjs'
 
@@ -310,7 +310,7 @@ const netenvWriteText = (f) => (f.netenv_write_error ? [`本机网络环境的�
 const userProcsText = (u) => (u.error ? [`你自己起的 asight 进程: 不知道(${u.error})`] : u.list.length ? [`你自己起的 asight 进程仍在跑: ${u.list.map((p) => `${p.command}(pid ${p.pid},${p.note})`).join('、')}`] : [])
 
 /** The lines of `asight status <harness…>` — the detail view: every named harness's own row, its pid rows, its path detail. `colors` is the TTY palette
- *  (src/cli/color.mjs); the pure call keeps it off. The unnamed `asight status` prints `renderStatusDigest` instead (D46). */
+ *  (src/cli/text.mjs); the pure call keeps it off. The unnamed `asight status` prints `renderStatusDigest` instead (D46). */
 /** 1.6 §9.4: each form's `certificate` and `proxy` (proxy mode), as the facts the topology was drawn from carry them (core/proxymode/status-facts.mjs); `notes` = its
  *  harness-notes (4.11 CM31 / CM32). null where no form has them (Linux, nothing installed). */
 function formsOf(f) {
@@ -524,7 +524,7 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
     io.out(JSON.stringify(r, null, 2))
     return { exit, f }
   }
-  const c = colors(io) // zero ANSI bytes when stdout is not a TTY or NO_COLOR is set; --json never gets here (src/cli/color.mjs, D46)
+  const c = colors(io) // zero ANSI bytes when stdout is not a TTY or NO_COLOR is set; --json never gets here (src/cli/text.mjs, D46)
   const now = (deps.ms || Date.now)()
   const detail = named.ids || []
   if (detail.length) for (const l of renderStatus(f, { home, detail, now, colors: c })) io.out(l) // `now`: how long ago the paths were probed (§9.2 「N 秒前探测」)

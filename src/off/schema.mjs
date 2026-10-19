@@ -4,7 +4,7 @@
 // Imports nothing.
 
 /** Bumped when a key of the receipt changes meaning or goes; adding a key does not bump it (R5 lists the least a receipt has). */
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 /** R4. `unknown` (3) is for `status` / `doctor` only: it must never be read as `ok`. `crash` is `asight daemon`'s (src/collector/cli.mjs). */
 export const EXIT = Object.freeze({ ok: 0, incomplete: 1, usage: 2, unknown: 3, crash: 70 })

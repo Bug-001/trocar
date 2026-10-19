@@ -1,16 +1,8 @@
-// cli.mjs — `asight collector …` (the old names, hidden aliases of the commands of 1.6 §2) and `asight setup-helper` (RFC 4.6 §控制面, §安装清单与卸载, D36). `collector start` is `asight daemon`
-// (src/cli/daemon.mjs); install / on / off / status / uninstall are the old names of `asight on | off | status | uninstall` (src/cli/on.mjs, src/off/main.mjs, src/cli/status.mjs, src/cli/uninstall.mjs:
-// the per-user half, no sudo); setup-helper is the machine-wide half (sudo, once). This file keeps the text of what the daemon and the disk say (formatStatus, formatHealth, formatInstallNotes) that
-// `status` and `doctor` print, and `runCollector`, the entry the aliases had before src/cli/main.mjs resolved them (its seams — `daemon`, `install`, `onDeps`, `offDeps`, `statusDeps` — are what the tests
-// of the verbs drive). Exit codes: 0 ok · 1 the kernel did not reach the asked state, or the step failed · 2 usage · 3 `status` could not judge (1.6 R4) · 70 the daemon crashed (src/cli/daemon.mjs).
-import os from 'node:os'
+// cli.mjs — the text of what the daemon and the disk say (formatStatus, formatHealth, formatInstallNotes), which `asight status` and `asight doctor` print,
+// and `asight setup-helper`, the machine-wide half of the Linux helper (sudo, once; RFC 4.6 §控制面, §安装清单与卸载, D36). The commands themselves are
+// src/cli/commands.mjs's table (1.6 §2). Exit codes: 0 ok · 1 the step failed · 2 usage.
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { controlRequest } from './core/control.mjs'
-import { runDaemonCli } from '../cli/daemon.mjs'
-
-/** What `asight collector <verb>` says when `verb` is none of the old ones (1.6 §2: they are hidden aliases now, src/cli/commands.mjs HIDDEN_ALIASES). */
-export const collectorHint = (verb) => `asight collector: ${verb ? `没有这个子命令 '${verb}'` : '缺子命令'}。这一组命令已改名,直接用 asight on / off / status / uninstall / daemon`
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -111,25 +103,4 @@ export async function runSetupHelper(argv, { arch = null, out = (s) => console.l
     out(`installed ${r.bin} (${r.getcap})${r.swept && r.swept.length ? `\nremoved ${r.swept.length} copy(ies) an interrupted setup-helper had staged: ${r.swept.join(', ')}` : ''}`)
     return 0
   } catch (e) { err(e.message); return 1 }
-}
-
-export async function runCollector(argv, { env = process.env, home = os.homedir(), out = (s) => console.log(s), err = (s) => console.error(s), request = controlRequest, daemon = null, install = null, waitForStop = null, script = process.argv[1], proc = process, exit = (c) => process.exit(c), platform = process.platform, getuid = null, onDeps = {}, offDeps = {}, statusDeps = {} } = {}) {
-  const [verb, ...rest] = argv
-  const D = () => daemon || loadDaemon()
-  if (verb === 'start') { // the old name of `asight daemon` (§2 hidden alias): the autostart units written before the rename run it
-    return runDaemonCli(rest, { io: { out, err }, env, home, platform, deps: { daemon: daemon || undefined, proc, exit, script, ...(getuid ? { getuid } : {}), ...(waitForStop ? { waitForStop } : {}) } })
-  }
-  if (verb === 'install' || verb === 'on') { // reached by a direct call only: commands.mjs routes `asight collector install` to `asight install` and `collector on` to `on`
-    const { runOnCli } = await import('../cli/on.mjs')
-    return runOnCli(rest, { io: { out, err, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, env, home, platform, deps: { daemon: daemon || undefined, install: install || undefined, request, script, ...onDeps } })
-  }
-  if (verb === 'off' || verb === 'uninstall') { // the old names of `asight off` / `asight uninstall` (§2 hidden alias): the same code, the same output (1.6 §1.4, R3)
-    const io = { out, err, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }
-    const run = verb === 'off' ? (await import('../off/main.mjs')).runOffCli : (await import('../cli/uninstall.mjs')).runUninstallCli
-    return run(rest, { io, env, home, platform, deps: { request, ...offDeps } })
-  }
-  if (verb !== 'status') { err(collectorHint(verb)); return 2 }
-  // the old name of `asight status` (§2 hidden alias): the daemon when it answers, else the disk — one judgement per harness (src/cli/status.mjs)
-  const { runStatusCli } = await import('../cli/status.mjs')
-  return runStatusCli(rest, { io: { out, err, stdin: process.stdin, stdout: process.stdout, stderr: process.stderr }, env, home, platform, deps: { request, ...statusDeps } })
 }

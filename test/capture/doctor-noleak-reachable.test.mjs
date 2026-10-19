@@ -109,21 +109,24 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
   // would now pass for the WRONG REASON — their fixtures were 0644, so ④b would trip regardless of
   // any credential — which is exactly the kind of accidentally-green assertion this suite keeps
   // finding. Assert the real thing directly.
-  const dir = leakyRoot();
+  const dir = tmpDir('asight-leak-home-');
+  const home = path.join(dir, '.asight');
+  fs.mkdirSync(home, { recursive: true });
+  fs.copyFileSync(path.join(leakyRoot(), 'capture.ndjson'), path.join(home, 'capture.ndjson'));
   try {
-    fs.chmodSync(path.join(dir, 'capture.ndjson'), 0o644);
+    fs.chmodSync(path.join(home, 'capture.ndjson'), 0o644);
     let status = 0, out = '';
     try {
-      // a sandbox HOME: doctor also scans the default export dir (D35 · E9), never the real one
-      out = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, PATH: OS_PATH } });
+      // the default source of this sandbox HOME (D27), the way a user runs it: no option of its own
+      out = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, ASIGHT_SOURCE: '', PATH: OS_PATH } });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     assert.notEqual(status, 0,
       `doctor exited 0 on a world-readable capture holding live credentials.\n--- output ---\n${out}`);
     assert.match(out, /0644|属主|owner-only|readable/i, `doctor did not name the permission problem.\n${out}`);
 
     // …and passes once the file is owner-only, credentials and all.
-    fs.chmodSync(path.join(dir, 'capture.ndjson'), 0o600);
-    const ok = execFileSync(process.execPath, [CLI, 'doctor', '--source', dir], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, PATH: OS_PATH } });
+    fs.chmodSync(path.join(home, 'capture.ndjson'), 0o600);
+    const ok = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, ASIGHT_SOURCE: '', PATH: OS_PATH } });
     assert.match(ok, /record\(s\) captured/, 'a 0600 capture must pass and report what it read');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

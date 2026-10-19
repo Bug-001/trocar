@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { formatPlan, formatOnReceipt } from '../../src/cli/receipt.mjs'
-import { colors, useColor, noColor } from '../../src/cli/color.mjs'
+import { colors, useColor, noColor } from '../../src/cli/text.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
 import { appendEvent } from '../../src/collector/core/events.mjs'
 import { installedHome } from '../off/fixtures/off-ctx.mjs'
@@ -77,11 +77,11 @@ test('D46 (c)+(d): a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan
   const home = tmpDir('asight-color-'); seedClaude(home); await installFirst(home)
   const sys = fakeSystem(); const on = fakeIo({ tty: true })
   await runOnCli(['--yes'], onCtx(home, on, { exec: sys.exec, daemon: sys.daemon }))
-  assert.match(on.stdoutText(), /\u001b\[32m✔\u001b\[0m 入口已写/, 'the receipt verdict mark is green on a TTY')
-  const c = colors({ stdout: { isTTY: true } })
-  const codes = new Set([...r.text.matchAll(/\u001b\[(\d+)m/g)].map((m) => m[1]).filter((x) => x !== '0'))
+  assert.match(on.stdoutText(), /\u001b\[32m✔\u001b\[\d+m 入口已写/, 'the receipt verdict mark is green on a TTY')
+  const c = colors({ stdout: { isTTY: true } }, {})
+  const codes = new Set([...r.text.matchAll(/\u001b\[(\d+)m/g)].map((m) => m[1]).filter((x) => !['0', '22', '39'].includes(x)))
   assert.ok(codes.size <= 5, 'at most the five palette codes appear: ' + [...codes])
-  assert.equal(c.green('x'), '\u001b[32mx\u001b[0m'); assert.equal(noColor().green('x'), 'x')
+  assert.match(c.green('x'), /^\u001b\[32mx\u001b\[\d+m$/); assert.equal(noColor().green('x'), 'x')
   assert.equal(useColor({ stdout: { isTTY: true } }), true); assert.equal(useColor({ stdout: {} }), false)
 })
 

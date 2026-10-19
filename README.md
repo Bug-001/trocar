@@ -16,12 +16,11 @@ The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**,
 
 ```sh
 git clone <this repo> && cd Agent-Context-Sentinel && npm install
-npm run demo          # → http://127.0.0.1:9800
 ```
 
-That serves a small **synthetic** sample session (`samples/demo-session.ndjson` — fabricated, no real
-prompts or credentials) so you can see exactly what the tool does before pointing it at anything of
-your own. Everything below is about capturing your own traffic.
+A small **synthetic** sample session ships in `samples/demo-session.ndjson` (fabricated, no real
+prompts or credentials) so you can read what the tool records before pointing it at anything of your
+own. Everything below is about capturing your own traffic.
 
 ## Questions it answers that your logs cannot
 
@@ -78,12 +77,10 @@ holds a door, it changes nothing, exits 1 with `collectors-online` and names the
 ## What you see
 
 No ETL, no database, no build step — the board reads the NDJSON directly (`asight serve` →
-http://127.0.0.1:9800). With no `--source` it reads the capture directory, so **the sessions of every
-captured harness appear side by side on one board** (`asight shard` groups the older capture
-streams by session into `~/.asight/sessions/`, which the board and `asight raw seal` also read). It
-also reads the per-user process collector's `~/.asight/collector/capture-*.ndjson` when that
-directory exists (its `flows/`, `audit/` and `replays/` are not envelopes and are not shown). Pass
-`--source <file|dir>` to look somewhere else.
+http://127.0.0.1:9800, the HTTP shell of `asight query`, D59). It reads the capture directory, so
+**the sessions of every captured harness appear side by side on one board**, including the per-user
+process collector's `~/.asight/collector/capture-*.ndjson` (its `flows/`, `audit/` and `replays/` are
+not envelopes and are not shown).
 
 Per call, on one board: **context replay** (the full assembled request, block by block, plus the raw
 wire body) · **cache overlay** (real `cache_read` / `cache_write` counts, the marked break, its cause
@@ -110,14 +107,13 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   drawn as something else — also when only some records of a session are unrecognized. One session may
   mix wire formats; each call is read by its own.
 - Request keys that are not context blocks are listed one by one, each opening its verbatim bytes.
-  A token-count probe's request body is kept verbatim like any other (D40; `asight keep` can turn that into a log
+  A token-count probe's request body is kept verbatim like any other (D40; `asight classes` can turn that into a log
   line), and its detail says which: kept, log only (**只记日志**), or captured before D40 and kept as a length
   only (**本条采于 D40 之前,只存了长度**).
-- **保存什么 · what is kept** (the session picker's last group): the `asight keep` table on the board — per harness
+- **保存什么 · what is kept** (the session picker's last group): the traffic classes on the board — per harness
   and traffic class the level, the calls, the bytes on the wire and the bytes stored over 24 h / 7 d / all, so you
-  can see which class costs what before you change it. Each number says where it comes from (the analytics store as
-  of the last `asight etl`, the disk total live, once-sealed sizes as an **估计**). The switches work only under
-  `asight serve --control`; without it the page shows the `asight keep` command to run.
+  can see which class costs what before you change it. Each number says where it comes from (the records, the disk
+  total live, once-sealed sizes as an **估计**). The page shows the `asight classes` command that changes a level.
 - **The reply as captured** is listed in the raw panel with a locator per piece — the whole decoded
   stream of an HTTP call, each server message of a WebSocket call — each opening its verbatim bytes. A
   piece that cannot be opened says why (a JSON reply stored parsed only — one from before D40, or one that re-serializes to itself — a message kept as
@@ -130,12 +126,8 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   in the probe lane, not on the turn axis; messages the agent sent while a call was open (an interrupt)
   are listed on that call.
 
-Optional: `asight etl <capture.ndjson|dir> --rebuild` (a directory such as `~/.asight/collector`: its
-top-level `*.ndjson` in name order, subdirectories never read; an incremental run refuses and asks
-for `--rebuild` if an earlier file grew after a later one was loaded, or if the store was written by an
-older version of asight) loads a DuckDB projection
-(`sessions / calls / call_blocks / block_contents / usage / resource_events / cache_events`) for
-cross-session SQL. The board works fine without it.
+Reading the records across sessions is `asight query <name>` — the one core that reads data, of which
+the board is the HTTP shell (D59); there is no separate ETL step and no database to load.
 
 ## What it touches, and what lands on disk
 
@@ -212,7 +204,7 @@ agent group, loopback only, no TUN, never the system proxy, nothing written into
 
 What it keeps (D40): for a trusted agent it decrypts **every** host it talks to by default (policy `all`), not just the
 model API, and stores every call verbatim — telemetry, uploads, account calls, session sync, downloads — so you can see
-what an agent harness does besides calling the model. Where that is too much, `asight keep` sets, per harness and
+what an agent harness does besides calling the model. Where that is too much, `asight classes` sets, per harness and
 traffic class (`llm` · `token-count` · `session-sync` · `telemetry` · `files` · `account` · `other`), whether to keep
 the whole call (`full`, bodies capped at 64 MiB with a label) or only a line per call (`log`: headers and sizes, no
 body). A change reaches the calls that start after it, within a second, and never touches what is already stored.
@@ -309,33 +301,25 @@ command's output is its only report. An `off` or `uninstall` that cannot undo so
 keeps the install manifest for the next run. The Linux helper is a root-owned copy of the build, so after upgrading
 run `sudo asight setup-helper` again to replace it.
 
-## Shrinking the raw logs — sealed files (D35)
+## Shrinking the raw logs — sealed segments (D35, D60)
 
 Raw captures grow with the square of a conversation (every call re-sends the whole history), so they
-dwarf the agent's own logs. A **closed** capture file can be *sealed*: re-encoded losslessly into a
-`<stream>.<NNNN>.sealed` file (per-record byte deltas + brotli frames + an index) that is typically a
-few percent of the original. Every reader — the board, `asight etl`, the "view verbatim bytes" panel —
-reads sealed files directly and shows exactly the same records; the original is deleted only after
-every record and the whole file are proven to decode back byte for byte.
+dwarf the agent's own logs. The daemon appends records to a segment under `~/.asight/raw/` and closes
+it at 128 MB or when the daemon stops. It then seals each closed segment by itself, one at a time: a
+lossless re-encoding (per-record byte deltas + brotli frames + an index), typically a few percent of
+the original. Every reader reads sealed segments directly and shows exactly the same records; the
+plain copy is deleted only after every record decodes back byte for byte. A segment that fails to seal
+keeps its plain copy, is tried again at the next daemon start, and shows in `asight status`. There is
+no manual seal command.
 
 ```sh
-asight raw seal --legacy ~/.asight/sessions --dry-run   # every check, nothing written: what would be sealed, refused or skipped, and why
-asight raw seal --legacy ~/.asight/sessions        # pre-2026-10 files: refuses while anything writes them; keeps originals
-asight raw verify ~/.asight/sessions               # decode every sealed copy, compare byte for byte with its original
-asight raw compare ~/.asight/sessions              # per session: what the board, ETL and resolver read via the originals vs. via their sealed copies (--list: per file)
-asight raw seal --legacy ~/.asight/sessions --delete-original --dry-run   # which originals would be deleted, which refused
-asight raw seal --legacy ~/.asight/sessions --delete-original   # deletes only originals that already have a sealed copy, after a byte-for-byte check; each deletion journalled first (no journal, no deletion)
-asight raw export <session-id>                     # back to plain NDJSON: ~/.asight/export/<session>/, one file per segment (0600)
-asight raw journal                                 # every refusal, skip, failure and deletion, with its reason
+asight raw <segment>[:<from>[-<to>]]   # print records byte for byte, sealed or not
 ```
 
-`asight raw seal <closed-shard>` files a shard's records by session under `~/.asight/sessions/<session>/`;
-`asight serve --source <the shard's directory>` reads them as part of that directory (a different
-`--sessions` must then be served too). The old root `~/.atrace/asight/` is never sealed — move it into
-`~/.asight` first.
-
-A capture file that is still being written is never sealed. Sealed and exported files hold the same
-plaintext and credentials as the capture and are created owner-only (0600); `asight doctor` checks them.
+On its first start after an upgrade, the daemon renames the previous version's
+`~/.asight/collector/capture-<date>.ndjson` files into `~/.asight/raw/` (bytes untouched); from then on
+they are ordinary segments. Older roots such as `~/.atrace` are neither read nor touched. Segments hold
+the same plaintext and credentials as the traffic and are owner-only (0600).
 
 ## Claude Desktop
 
@@ -408,29 +392,27 @@ not the collector's switch; `asight off` is.
 
 ```sh
 # common
-asight install [--dry-run] [--yes] [--json]   # once: the certificates (D55); prints the plan and asks first
-asight on [harness…] [--dry-run] [--yes] [--no-autostart | --no-unit] [--json]
-asight off [harness…] [--now] [--dry-run] [--yes] [--json]
-asight status [harness…] [--json] [--failures]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
-asight uninstall [--purge-data] [--dry-run] [--yes] [--json]
-asight doctor [harness…] [--source <ndjson|dir>] [--json]
+asight install [--yes] [--dry-run] [--json]   # once: the certificates (D55); prints the plan and asks first
+asight on [<harness>...] [--no-autostart] [--no-unit] [--yes] [--dry-run] [--json]
+asight off [<harness>...] [--now] [--yes] [--dry-run] [--json]
+asight status [<harness>...] [--failures] [--json]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
+asight uninstall [--purge-data] [--yes] [--dry-run] [--json]
+asight doctor [<harness>...] [--json]
 
 # data
-asight serve [--port 9800] [--db <path>] [--source <ndjson|dir>] [--control]
-asight etl <ndjson|sealed|dir> [--db <path>] [--rebuild]
-asight shard [<ndjson>] [--out <dir>] [--watch] [--interval <s>] [--rebuild-meta | --resplit]   # group a capture stream by session into ~/.asight/sessions/
-asight keep [<harness|all> <class|all> <full|log>] [--db <store>] [--json]   # what is kept of each call: show the levels and sizes, or set one (no daemon needed)
-asight raw export <session-id|file.sealed> [--sessions <dir>] [--out <dir|file>]
-asight raw journal [--tail <n>]
+asight query <name> [--<param> <value>...]   # the one way to read the records; the board is its HTTP shell (D59)
+asight classes [<class>] [--json]
+asight classes set <class> full|log
+asight classes add <class> <host-regex> [<path-regex>] [--harness <harness>]
+asight classes rm <class> [<rule>]
+asight classes reset
+asight serve [--port <port>]
 
 # maintenance
-asight raw seal <closed-shard> [--sessions <dir>]
-asight raw seal --legacy <file|dir> [--dry-run] [--delete-original] [--quiet <s>]
-asight raw verify <sealed|dir> [--against <original>]
-asight raw compare <dir> [--list]
-sudo asight setup-helper [--binary <path>] [--remove]   # Linux, once per machine
+asight raw <segment>[:<from>[-<to>]]
+sudo asight setup-helper [--remove] [--binary <path>]   # Linux, once per machine
 asight daemon [--supervise]   # the daemon in the foreground; the autostart unit runs it (Windows's task with --supervise)
-asight help [命令] · --help · -h · --version · -v
+asight help [<command>]   # also --help · -h · --version · -v
 ```
 
 Exit codes: 0 done · 1 not done, or a problem was found · 2 a usage error (nothing was touched) · 3 `status` /

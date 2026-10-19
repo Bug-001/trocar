@@ -17,9 +17,7 @@
   ],
   "scripts": {
     "test": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs",
-    "etl": "node bin/asight.mjs etl",
-    "serve": "node bin/asight.mjs serve",
-    "demo": "node bin/asight.mjs serve --source samples/demo-session.ndjson"
+    "serve": "node bin/asight.mjs serve"
   },
   "dependencies": {
     "@duckdb/node-api": "^1.5.4-r.1"

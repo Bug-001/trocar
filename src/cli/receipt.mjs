@@ -5,7 +5,7 @@
 import path from 'node:path'
 import { formatOffReceipt } from '../off/receipt.mjs'
 import { standaloneCommand } from '../off/paths.mjs'
-import { noColor } from './color.mjs'
+import { noColor } from './text.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
 
 /** One harness's chain after `on` (§9.5): where a new connection goes, then the proxy setting it was drawn from (credentials masked: the record holds the redacted value) and the file or variable that setting is in. */

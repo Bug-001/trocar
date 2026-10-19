@@ -4,7 +4,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import net from 'node:net'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
@@ -42,7 +41,7 @@ async function world({ proxy = 'http://alice:pw@127.0.0.1:7897' } = {}) {
   const deps = { exec, netFactsDeps: async () => ({ harnesses: descs, archFacts: linuxNetFacts }), procs: async () => [claudeProc(4121, Date.now() + 5000, procEnv)] }
   return { s, calls, deps, close: async () => {} }
 }
-const SRC = path.join(path.join(os.tmpdir(), 'none'))
+// `doctor` has no --source any more (1.6 §2): it reads the default location inside the sandbox HOME.
 
 test('V50 status and doctor only read: they write netenv.json and flows/ and nothing else, run only read-only queries, open no connection of their own — and `bpftool` / `netsh` are printed for the user, never run', async () => {
   const w = await world()
@@ -50,7 +49,7 @@ test('V50 status and doctor only read: they write netenv.json and flows/ and not
     const before = snapshot(w.s.home)
     const connects = [], realConnect = net.Socket.prototype.connect
     net.Socket.prototype.connect = function (...a) { connects.push(a[0]); return realConnect.apply(this, a) }
-    const runs = [['status'], ['status', 'claude-code'], ['status', '--json'], ['doctor', '--source', SRC], ['doctor', 'claude-code', '--json', '--source', SRC]]
+    const runs = [['status'], ['status', 'claude-code'], ['status', '--json'], ['doctor'], ['doctor', 'claude-code', '--json']]
     try { for (const argv of runs) await w.s.run(argv, { deps: w.deps }) } finally { net.Socket.prototype.connect = realConnect }
     const changed = changedFiles(before, snapshot(w.s.home)).map((f) => f.split(path.sep).join('/'))
     assert.deepEqual(changed.filter((f) => f !== '.asight/netenv.json' && !f.startsWith('.asight/collector/flows/')), [], `written: ${changed.join(', ')}`)
@@ -60,7 +59,7 @@ test('V50 status and doctor only read: they write netenv.json and flows/ and not
     assert.deepEqual(connects, [], 'zero connections of their own: no VPN controller is asked, nothing goes online')
     // printed for the user, never run
     w.deps.netFactsDeps = async () => ({ harnesses: descs, archFacts: async (ctx) => ({ ...(await linuxNetFacts(ctx)), otherRedirector: true }) })
-    const out = (await w.s.run(['doctor', '--source', SRC], { deps: w.deps })).io.stdoutText()
+    const out = (await w.s.run(['doctor'], { deps: w.deps })).io.stdoutText()
     assert.match(out, /\$ sudo bpftool cgroup tree \/sys\/fs\/cgroup/, 'doctor prints it for the user')
     assert.ok(!w.calls.some((c) => /bpftool|netsh|sudo/.test(c)), 'and never runs it')
     assert.ok(!(w.s.sys.exec.calls.some((c) => /bpftool|netsh|sudo/.test(c))))
@@ -96,7 +95,7 @@ test('V50 the Windows half of the allowlist, as a static scan: the resident help
 /** Everything a run of the commands prints, and what `on` and the daemon write, for a world whose agent has `proxy` set: [texts printed, texts written]. */
 async function everything(w) {
   const printed = []
-  for (const argv of [['status'], ['status', 'claude-code'], ['status', '--json'], ['doctor', '--source', SRC], ['doctor', 'claude-code', '--json', '--source', SRC]]) {
+  for (const argv of [['status'], ['status', 'claude-code'], ['status', '--json'], ['doctor'], ['doctor', 'claude-code', '--json']]) {
     const r = await w.s.run(argv, { deps: w.deps })
     printed.push(r.io.text())
   }

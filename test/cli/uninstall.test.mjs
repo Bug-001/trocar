@@ -385,7 +385,7 @@ test('uninstall: the arguments — a harness name, an unknown option, root and a
 test('formatUninstallReceipt: not done says so and what to do; the entries left and the problems are named; a kept bundle is said', () => {
   const home = '/home/u'
   const r = {
-    schema: 1, command: 'uninstall', ok: false, all: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: { closing: 0, waiting: 0, cut: 0 }, undo: ['asight on'], log: '/home/u/.asight/collector/flows',
+    schema: 2, command: 'uninstall', ok: false, all: true, changed: [], created: [], removed: [], skipped: [], restart: [], relayed: { closing: 0, waiting: 0, cut: 0 }, undo: ['asight on'], log: '/home/u/.asight/collector/flows',
     left: [{ path: '/home/u/.codex/.env', result: 'left-unparsable', reason: 'no longer valid' }], problems: ['1 item(s) could not be undone; the install manifest is kept'], notes: [], kept_captures: true, purge_data: false,
     routing: { confirmed: true, state: 'none', how: 'no-daemon' }, daemon: { pid: null, state: 'none' }, autostart: { disabled: true }, dropped_backups: [], non_identical: [],
     kept_bundles: [{ path: '/home/u/.asight/collector/ca/combined-codex.pem', pids: [5], holds_ca: false }],
