@@ -107,5 +107,14 @@ test('a system proxy change is one netenv-change (netenv-changed, captured), nev
       hold()
       assert.deepEqual(events.map((e) => [e.from, e.to]), [['off', 'system-proxy-unreadable']], os)
     } finally { u.stop() }
+    // a stop inside the hold window (the daemon exits) says the held state instead of dropping it (D38)
+    events.length = 0
+    box.s = { on: false }
+    const v = await start()
+    box.s = null
+    await v.poll()
+    assert.deepEqual(events, [], `${os}: still held`)
+    v.stop()
+    assert.deepEqual(events.map((e) => [e.from, e.to]), [['off', 'system-proxy-unreadable']], `${os}: the hold the stop found is written, not dropped`)
   }
 })

@@ -85,7 +85,7 @@ export async function systemProxyWatch({ up, read, io = {}, failure = () => {}, 
     held = timers.setTimeout(() => { held = null; say(word(watch.last())) }, holdMs)
     if (held && typeof held.unref === 'function') held.unref()
   })
-  return { now: () => up.chainSystemProxy(watch.last()), poll: () => watch.poll(), stop: () => { drop(); watch.stop() } }
+  return { now: () => up.chainSystemProxy(watch.last()), poll: () => watch.poll(), stop: () => { const pending = !!held; drop(); if (pending) say(word(watch.last())); watch.stop() } } // a daemon that goes down inside the hold window still says the state it was holding (D38: no read that failed is left unsaid)
 }
 
 /** The door's readers of the world for the model collector (4.11 §1, createModelCollector): who owns a socket and that pid's facts, its env / cwd /
