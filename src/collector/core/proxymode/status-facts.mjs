@@ -35,7 +35,8 @@ function userFileOf(desc, { m, ctx, fs, own }) {
   return null
 }
 
-/** The setting the agent has without asight, from the prior asight recorded (null when the user had none): the topology's off path. */
+/** The setting the agent has without asight, from the prior asight recorded (null when the user had none): the topology's off path. `e` is the item the
+ *  prior was READ from — its file and key — never another key of the same route: a command that names a place must name the true one (1.6 §9.6). */
 const settingOf = (prior, e) => {
   const u = prior ? parseProxyUrl(prior) : null
   return u ? { value: red(prior), ...u, source: [{ kind: 'file', where: e.path, ...(e.keys ? { key: e.keys.join('.') } : {}) }], sha256: null } : { value: null, scheme: null, host: null, port: null, source: [], sha256: null }
@@ -71,7 +72,8 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       const g = `${h}:${f.route}`, route = pm.routes[f.route] || {}
       const es = on.filter((i) => i.harness === h && i.route === f.route)
       const main = es.find((i) => i.door) || es[0] || null
-      const priorRaw = es.map((i) => i.prior_value).find((v) => typeof v === 'string') ?? null
+      const priorItem = es.find((i) => typeof i.prior_value === 'string') ?? null
+      const priorRaw = priorItem ? priorItem.prior_value : null
       const intact = es.length > 0 && es.every((i) => intactOf(m, i, fs))
       const door_up = doors[g] != null
       const ans = (answers[g] || []).at(-1)
@@ -89,7 +91,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
         entry: main ? { where: main.keys ? `${main.path}#${main.keys.join('.')}` : main.path, kind: route.kind || main.kind, asight: true, intact } : null,
         plan: blocked ? { reason: blocked.reason, at: blocked.at ?? null, code: blocked.code } : null,
         hook: HOOKS.has(carrier) && !certificate.in_effect && ['entry-changed', 'entry-missing'].includes(certificate.code) ? certificate.code : null,
-        setting: main ? settingOf(priorRaw, main) : null,
+        setting: main ? settingOf(priorRaw, priorItem || main) : null,
         notes: plan.notes.filter((n) => !n.form || n.form === f.id).map((n) => ({ code: n.code, text: n.text, ...(n.paths ? { paths: n.paths } : {}) })),
       })
     }

@@ -286,6 +286,29 @@ test('V49 the place a command names for the setting is where the setting came fr
   assert.doesNotMatch(gui(findingsOf(codex), 'proxy-dead'), /config\.toml/)
 })
 
+// B2 (the mac machine 2026-10-19): asight's door is on the path, the user's own proxy at its upstream has quit, and BOTH spellings of their key still name it.
+// The finding is upstream-unreachable, and the places it asks the user to clear are their own keys only — the key asight wrote holds the door (removing it
+// changes nothing: `off` writes the prior value back).
+test('V49 upstream-unreachable: asight on the path with a dead upstream is not proxy-dead; its places are the user\'s own keys that hold that address, never the key asight wrote', () => {
+  const SET = '/h/.claude/settings.json'
+  const place = (key) => ({ kind: 'file', path: SET, key, format: 'json', scheme: 'http', host: '127.0.0.1', port: 7897 })
+  const fm = form('claude-code.cli', { entry: { where: `${SET}#env.HTTPS_PROXY`, asight: true, opt_in: false, intact: true },
+    setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: SET, key: 'env.HTTPS_PROXY' }]), procs: [proc(4121)] })
+  const f = pfacts('claude-code', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [], platform: 'darwin' })
+  f.harnesses['claude-code'].proxyPlaces = [place('env.HTTPS_PROXY'), place('env.HTTP_PROXY')]
+  const out = findingsOf(f)
+  const codes = out.map((x) => x.code)
+  assert.ok(codes.includes('upstream-unreachable'), codes.join(','))
+  assert.ok(!codes.includes('proxy-dead'), 'the dead hop is asight\'s upstream, not a proxy the agent points at')
+  const u = out.find((x) => x.code === 'upstream-unreachable')
+  assert.deepEqual(u.places, [place('env.HTTP_PROXY')], 'the user\'s own key alone')
+  assert.deepEqual(validateFinding(u), [])
+  const text = u.commands.map((c) => c.run).join('\n')
+  assert.match(text, /Remove env\.HTTP_PROXY from \/h\/\.claude\/settings\.json/)
+  assert.doesNotMatch(text, /HTTPS_PROXY/, 'the key asight wrote is never named as one for the user to remove')
+  assert.match(text, /asight off claude-code[\s\S]*asight on claude-code/, 'off, clear your own keys, on')
+})
+
 test('V49 proxy-unsupported names the place of the setting and the value to put there, as one sentence (no 「http://…:」 left stuck to the next phrase)', () => {
   const dsh = (source) => facts('deepseek-dsh', { listeners: [MIHOMO], vpn: mihomoVpn() }, { setting: proxyOf('socks5://127.0.0.1:7890', [source]), behaviour: behaviourOf('deepseek-dsh', [{ path: '/h/.dsh/config.json', format: 'json', key: 'proxy' }], { unsupported: { socks5: 'silent-direct' }, schemes: ['http', 'https'] }) })
   const env = gui(findingsOf(dsh(SRC_ENV)), 'proxy-unsupported')

@@ -41,3 +41,31 @@ for (const os of ['darwin', 'win32']) {
     })
   }
 }
+
+// 1.6 §9.6: the place of a prior value is the key and file it was READ from. A route with two spellings of one variable records one entry per key, and the
+// user's value may sit in the second one alone — the place then names that spelling, not the route's first key (the mac machine 2026-10-19 named the key
+// asight had written as the one for the user to remove).
+const PRIOR = 'http://proxy.corp:8080'
+for (const os of ['darwin', 'win32']) {
+  for (const desc of harnesses.filter((d) => d.proxyMode)) {
+    for (const [rid, r] of Object.entries(desc.proxyMode.routes).filter(([, x]) => x.kind === 'json-key' && !x.select && (x.proxyKeys || []).length > 1)) {
+      test(`1.6 §9.6 ${os} ${desc.name}.${rid}: the prior in the route's second key is attributed to that key, not to the first`, async () => {
+        const w = world({ os })
+        const m = w.ctx.manifest
+        m.install = { state: 'complete', at: '2026-10-16T00:00:00.000Z', pending: [], harnesses: [desc.name], items: {} }
+        const forms = desc.proxyMode.forms.filter((f) => f.os.includes(os) && f.route === rid)
+        if (!forms.length) return
+        for (const f of forms) w.present(f)
+        const file = resolveLoc(r.file, w.ctx)[0]
+        const last = r.proxyKeys[r.proxyKeys.length - 1]
+        put(file, `${JSON.stringify(last.reduceRight((inner, k) => ({ [k]: inner }), PRIOR))}\n`)
+        const res = writeRoutes(desc, w.ctx, () => 'http://127.0.0.1:18200')
+        assert.deepEqual(res.results.map((x) => [x.route, x.ok]).filter(([id]) => id === rid), [[rid, true]])
+        const out = await modelFormFacts({ harnesses, os, manifest: m, reply: { doors: { [`${desc.name}:${rid}`]: 18200 } }, root: ROOT_OK, ctx: w.ctx })
+        const fm = out[desc.name].find((x) => x.route === rid)
+        assert.deepEqual(fm.setting.source, [{ kind: 'file', where: file, key: last.join('.') }], 'the key the prior was read from')
+        assert.equal(fm.proxy.prior, PRIOR)
+      })
+    }
+  }
+}

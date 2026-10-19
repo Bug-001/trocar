@@ -57,6 +57,29 @@ export function readProxySetting(desc, { home, env = process.env, fs = nodeFs, p
   return setting
 }
 
+/** Every place this harness holds a proxy address right now — not only the one that wins — as `{ kind: 'file', path, key, format, scheme, host, port }` /
+ *  `{ kind: 'env', name, scheme, host, port }`, in the descriptor's order (files, then variables). A finding that asks the user to remove a setting by hand
+ *  needs the places, plural: the key that wins is one, and the same dead address usually sits in the other spelling beside it (1.6 §9.6 `places`). */
+export function proxyPlaces(desc, { home, env = process.env, fs = nodeFs, paths = null } = {}) {
+  const p = desc.proxy, out = []
+  const add = (place, v) => { const u = parseProxyUrl(v); if (u) out.push({ ...place, scheme: u.scheme, host: u.host, port: u.port }) }
+  for (let i = 0; i < p.files.length; i++) {
+    const f = p.files[i], file = (paths && paths[i]) || f.path({ home, env })
+    let text
+    try { text = fs.readFileSync(file, 'utf8') } catch { continue }
+    if (f.format === 'json') {
+      const { data, error } = parseJsonc(text)
+      if (error || data == null) continue
+      for (const keys of f.keys) { const v = present(dig(data, keys)); if (v) add({ kind: 'file', path: file, key: keys.join('.'), format: 'json' }, v) }
+    } else {
+      const vars = parseDotenv(text)
+      for (const k of f.keys) { const v = present(vars.get(k)); if (v) add({ kind: 'file', path: file, key: k, format: 'dotenv' }, v) }
+    }
+  }
+  for (const k of p.env) { const v = present(env[k]); if (v) add({ kind: 'env', name: k }, v) }
+  return out
+}
+
 /** The files a harness reads a proxy from, resolved for this HOME and environment (the daemon stats them in its 5 s check). */
 export const proxyFilesOf = (desc, { home, env = process.env }) => desc.proxy.files.map((f) => f.path({ home, env }))
 
