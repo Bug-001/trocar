@@ -71,10 +71,6 @@ export const BREAKS_N = (n) => `${n} cache break${n === 1 ? '' : 's'}`
 export const EXTRA_LABEL = '≈ extra cost'
 export const WASTED_CANT_K = (k) => `${k} cannot be computed`
 export const MOST_EXPENSIVE = 'Most expensive session ›'
-export const FROM_FIRST_PROMPT = 'taken from the first prompt'
-export const DISK_AT_LEAST = (b) => `at least ${b} used by asight`
-export const DISK_PER_DAY = (b) => `grows ≈ ${b} a day`
-export const DISK_STALE = 'the newest call in the library is more than 24 hours old'
 export const EST_TIP = 'local estimated cost (usage × unit price), not a bill'
 export const EMPTY_WINDOW = 'no sessions in this window'
 export const PRICE_FAIL = (why) => `the price table could not be read: ${why}`

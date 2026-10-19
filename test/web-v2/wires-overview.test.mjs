@@ -3,7 +3,7 @@
 // `traffic`, the recent list from `sessions`. The documents come from the real face (real server, real query worker).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { overviewItems } from '../../src/web/v2/overview/overview.mjs'
+import { overviewItems, recentRows, diskBytes } from '../../src/web/v2/overview/overview.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
 const docs = (async () => {
@@ -25,6 +25,13 @@ const stateOf = (D, now, over = {}) => ({
   sessions: ok(D.sessions), classes: ok(D.classes), pricing: ok(D.pricing), stats: ok(D.overview), usageAll: ok(D.overview), traffic: ok(D.traffic), ...over,
 })
 
+test('(3) the disk footer is classes.disk.asight_bytes; a failed classes read draws no footer', async () => {
+  const D = await docs
+  assert.equal(typeof D.classes.disk.asight_bytes, 'number')
+  assert.equal(diskBytes(ok(D.classes)), D.classes.disk.asight_bytes)
+  assert.equal(diskBytes({ data: D.classes, ok: false, err: 'HTTP 500' }), null)
+})
+
 test('(4) O9: one item per host first seen in the last 24 h of a harness seen before that; none when the harness itself is new', async () => {
   const D = await docs, now = Date.now(), H = 3600e3
   const iso = (ago) => new Date(now - ago).toISOString()
@@ -40,4 +47,11 @@ test('(4) O9: one item per host first seen in the last 24 h of a harness seen be
     const o9 = items.rows.filter((r) => r.cls === 'O9').length + (items.more.O9 || 0)
     assert.equal(o9, want.length, `harness_since ${sinceAgo / H} h ago`)
   }
+})
+
+test('(5) the recent sessions are the five newest of the sessions document by last_ts', async () => {
+  const D = await docs
+  assert.ok(D.sessions.sessions.length > 5)
+  const want = [...D.sessions.sessions].sort((a, b) => Date.parse(b.last_ts) - Date.parse(a.last_ts)).slice(0, 5).map((s) => s.session_id)
+  assert.deepEqual(recentRows(D.sessions).map((r) => r.id), want)
 })

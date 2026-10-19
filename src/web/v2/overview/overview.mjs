@@ -1,26 +1,27 @@
 // overview/overview.mjs — 总览 (1.7): the first screen, answering three questions at one glance — is capture healthy,
-// is there anything to handle, what did the agents cost. Five cards (采集 · 要处理的事 · 统计 · 最近的会话 · 磁盘; first
-// run swaps the last three for 开始使用). Every number names its source: stats come ONLY from S5 /api/overview (D24), the
-// recent list is live from /api/sessions, and the two are allowed to disagree by
-// a few sessions — the stats card says 截至, it never back-fills from the live list.
-// Polls (1.5 §轮询): capture-health every 1.5 s and projects every 3 s while visible; retention · pricing ·
-// overview(window) · overview(all) · traffic(24h) on open, on window change and every 30 s. Hidden stops everything;
-// coming back reads at once. All reads are GET; the page holds no button but the window links, the 技术细节 disclosures
-// and the read-failure 重试 (invariant 1).
+// is there anything to handle, what did the agents cost. Four cards (采集 · 要处理的事 · 统计 · 最近的会话; first run swaps
+// the last two for 开始使用). Every number names its source: stats come ONLY from the C.5 `overview` document (D24), the
+// recent list is live from `sessions`, and the two are allowed to disagree by a few sessions — the stats card says 截至,
+// it never back-fills from the live list. The disk footer is `classes.disk.asight_bytes`.
+// Polls (1.5 §轮询): `status` every 1.5 s and `sessions` every 3 s while visible; classes · pricing · overview(window) ·
+// overview(all) · traffic(24h) on open, on window change and every 30 s. Hidden stops everything; coming back reads at
+// once. All reads are GET; the page holds no button but the window links, the 技术细节 disclosures and 重试 (invariant 1).
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router, toast}.
 import { COMMANDS, ERR_WHERE } from '../labels/capture.mjs'
+import { TITLE_FROM_WIRE } from '../labels/replay.mjs'
 import { esc, fmtWhen, relTime, bytes, usd } from '../core/fmt.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { harnessKey, harnessName, harnessIcon, UNIDENTIFIED } from '../core/chips.mjs'
 import { captureVerdict, capHealthPatch, agentVerdicts, failureSentence, AGENT_TIER, CAPH_MS } from '../core/capture-verdict.mjs'
 import { priceMatch, costOf } from '../core/metrics.mjs'
+import { loadSessions } from '../library/logic.mjs'
 import { infoButton, techDetailsHtml } from '../core/ui.mjs'
 import { L } from '../labels/common.mjs'
 import * as W from '../labels/overview.mjs'
 
 const DAY = 24 * 3600e3
-export const POLL = Object.freeze({ health: CAPH_MS, projects: 3000, slow: 30000 })
+export const POLL = Object.freeze({ health: CAPH_MS, sessions: 3000, slow: 30000 })
 
 // the route's window param, or 24h when it is not one of the three (1.7 §页头)
 export const parseWindow = (p) => (p === '7d' || p === 'all') ? p : '24h'
@@ -227,46 +228,23 @@ export function overviewStats(rows, pricingData) {
   }
 }
 
-// ── 最近的会话 · the live list (pure; from /api/projects, never a statistic) ────────────────────────────────────────
-export function recentRows(projectsData) {
-  const P = projectsData && Array.isArray(projectsData.projects) ? projectsData : null
-  if (!P) return null
-  const flat = []
-  for (const p of P.projects) for (const m of list(p && p.sessions)) if (m) flat.push(m)
-  flat.sort((a, b) => (parseTs(b.last_ts) ?? -1) - (parseTs(a.last_ts) ?? -1))
-  return flat.slice(0, 5).map((m) => ({
-    key: `${m.project_slug}::${m.session_id}`,
-    harness: m.harness, inferred: !!m.harness_inferred,
-    title: m.title || m.first_prompt || null,
-    titleBasis: m.title ? 'agent' : (m.first_prompt ? (m.first_prompt_basis || 'prompt') : null),
-    calls: m.calls ?? 0, probes: m.probes ?? 0, last: m.last_ts || null,
+// ── 最近的会话 · the live list (pure; the `sessions` document, never a statistic) ───────────────────────────────────
+export function recentRows(sessionsData) {
+  if (!sessionsData || !Array.isArray(sessionsData.sessions)) return null
+  return [...sessionsData.sessions].filter(Boolean).sort((a, b) => (parseTs(b.last_ts) ?? -1) - (parseTs(a.last_ts) ?? -1)).slice(0, 5).map((m) => ({
+    key: `${m.project_slug}::${m.session_id}`, id: m.session_id, harness: m.harness, inferred: !!m.harness_inferred,
+    title: m.title ?? null, titleSource: m.title_source ?? null, calls: m.calls ?? 0, probes: m.probes ?? 0, last: m.last_ts || null,
     href: `#/replay/${encodeURIComponent(m.project_slug || '')}/${encodeURIComponent(m.session_id || '')}`,
   }))
 }
 
-// ── 磁盘 · the two figures (the value rules are 1.11's; this card reads the same /api/retention fields) ──────────────
-export function diskModel(retentionData) {
-  const R = retentionData
-  if (!R || typeof R !== 'object' || !R.disk) return null
-  const d = R.disk
-  const total = num(d.total_bytes)
-  const atLeast = Array.isArray(d.unreadable) && d.unreadable.length > 0
-  let daily = null, dailyFloor = false, asOf = null, stale = false, reason = null
-  if (!R.sizes) reason = R.sizes_reason || null
-  else {
-    const all = R.totals && R.totals.all && R.totals.all['24h'] ? R.totals.all['24h'] : null
-    const leg = R.totals && R.totals.legacy_meta && R.totals.legacy_meta['24h'] ? R.totals.legacy_meta['24h'] : null
-    const stored = ((all && all.stored_bytes) || 0) + ((leg && leg.stored_bytes) || 0)
-    dailyFloor = ((all && all.stored_unrecorded) || 0) + ((leg && leg.stored_unrecorded) || 0) > 0
-    const end = parseTs(R.sizes.windows_end), a = parseTs(R.sizes.as_of)
-    asOf = a
-    stale = a != null && end != null && a < end - DAY // the store's newest call predates the 24 h window
-    if (!stale) daily = stored
-  }
-  return { total, atLeast, daily, dailyFloor, asOf, stale, reason }
+// ── 盘上占用 · the stats card's footer: `classes.disk.asight_bytes`, or nothing when the classes read failed ─────────
+export function diskBytes(slot) {
+  if (!slot || slot.ok === false || !slot.data || !slot.data.disk) return null
+  return num(slot.data.disk.asight_bytes)
 }
 
-// ── renderers (string level; the tests assert on these) ─────────────────────────────────────────────────────────────
+// ── renderers (string level) ─────────────────────────────────────────────────────────────────────────────────────────
 export function headHtml(s) {
   return pageHeadHtml({
     name: SCREEN_NAME.overview,
@@ -278,16 +256,13 @@ export function headHtml(s) {
 // the capture card: the verdict's own sentence (core/capture-verdict.mjs — the 采集 page says the same thing), never empty
 export function capCardHtml(s, now) {
   const v = captureVerdict(s.caph.data, { okAt: s.caph.okAt, err: s.caph.err, now })
-  const h = s.caph.data && !s.caph.data.unreadable ? s.caph.data : null
-  const errs = v.readErrors || (h && h.summary && h.summary.read_errors) || 0
-  const sw = h && h.collector && h.collector.switch && h.collector.switch.harnesses ? h.collector.switch.harnesses : null
-  const on = sw ? Object.values(sw).filter((x) => x && x.desired === 'on').length : null
-  const tot = sw ? Object.values(sw).filter((x) => x && (x.desired === 'on' || x.desired === 'off')).length : null
+  const hs = s.caph.data && s.caph.data.harnesses && typeof s.caph.data.harnesses === 'object' ? Object.values(s.caph.data.harnesses) : null
+  const on = hs ? hs.filter((x) => x && x.desired === 'on').length : 0
   return `<section class="ovcard cap" aria-label="${esc(W.CARD.capture)}">` +
     `<h2 class="ovh"><span class="lamp ${esc(v.cls)}" aria-hidden="true"></span>${esc(W.CARD.capture)}</h2>` +
     `<p class="ovsay ${esc(v.cls)}">${esc(v.text)}</p>` +
-    (errs > 0 ? `<p class="ovsub">${esc(W.READ_FILES_FAIL(errs))}</p>` : '') +
-    (on != null && tot > 0 ? `<p class="ovsub">${esc(W.AGENTS_ON(on, tot))}</p>` : '') +
+    (v.readErrors > 0 ? `<p class="ovsub">${esc(W.READ_FILES_FAIL(v.readErrors))}</p>` : '') +
+    (hs && hs.length ? `<p class="ovsub">${esc(W.AGENTS_ON(on, hs.length))}</p>` : '') +
     `<p class="ovgo"><a href="#/capture">${esc(W.GO_CAPTURE)}</a></p>` +
     `</section>`
 }
@@ -295,7 +270,7 @@ export function capCardHtml(s, now) {
 const itemHtml = (it) =>
   `<a class="ovitem" href="${esc(it.href)}"${it.tip ? ` title="${esc(it.tip)}"` : ''}>` +
   (it.chip != null ? chipHtml(it.chip) : (it.subject ? `<span class="ovsubj">${esc(it.subject)}</span>` : '')) +
-  `<span class="ovtx">${esc(it.text)}${it.extra ? ` <span class="ovmono">${esc(it.extra.map((m) => m === '' ? W.NO_MODEL_NAME : m).join(' · '))}</span>` : ''}</span>` +
+  `<span class="ovtx">${esc(it.text || '')}${it.extra ? ` <span class="ovmono">${esc(it.extra.map((m) => m === '' ? W.NO_MODEL_NAME : m).join(' · '))}</span>` : ''}</span>` +
   `<span class="go" aria-hidden="true">›</span></a>`
 
 const MORE_HREF = { O3: '#/capture/log', O9: '#/traffic' }
@@ -410,10 +385,11 @@ const agentTableHtml = (m, w, now) => {
   return `<div class="hscroll"><div class="ovtbl" role="table">${head}${rows}</div></div>`
 }
 
+const TITLE_TIP = { 'harness-local-store': W.TITLE_FROM_AGENT, wire: TITLE_FROM_WIRE }
 export function recentCardHtml(s, now) {
-  const P = s.projects
+  const P = s.sessions
   if (P == null) return ''
-  if (P.ok === false) return readFailHtml('Session list', P.err, 'projects')
+  if (P.ok === false && P.data == null) return readFailHtml('Session list', P.err, 'sessions')
   const rows = recentRows(P.data)
   if (rows == null) return ''
   if (!rows.length) { // empty is a capture question, not a data question: the verdict's own sentence says why
@@ -422,38 +398,17 @@ export function recentCardHtml(s, now) {
       `<p class="ovempty">${esc(v.text)}</p><p class="ovgo"><a href="#/capture">${esc(W.GO_CAPTURE)}</a></p></section>`
   }
   const body = rows.map((r) => {
-    const title = r.title
-      ? `${esc(r.title)}${r.titleBasis === 'guess' ? ` <span class="ovmark" title="${esc(W.FROM_FIRST_PROMPT)}">(inferred)</span>` : ''}`
-      : esc(W.UNNAMED(fmtWhen(parseTs(r.last), now)))
-    const titleTip = r.title ? (r.titleBasis === 'agent' ? W.TITLE_FROM_AGENT : W.FROM_FIRST_PROMPT) : null
-    const calls = r.calls === 0 && r.probes > 0
-      ? `<span title="${esc(W.PROBE_ONLY_TIP)}">${esc(W.PROBE_ONLY)}</span>` : W.CALLS_N(r.calls)
+    const tip = [r.title != null ? TITLE_TIP[r.titleSource] : null, r.id].filter(Boolean).join(' · ')
+    const calls = r.calls === 0 && r.probes > 0 ? `<span title="${esc(W.PROBE_ONLY_TIP)}">${esc(W.PROBE_ONLY)}</span>` : esc(W.CALLS_N(r.calls))
     return `<a class="ovitem" href="${esc(r.href)}">` +
       `${harnessIcon(r.harness)}<span class="ovnm">${esc(harnessName(r.harness))}${r.inferred ? ` <span class="ovmark" title="agent inferred from the request headers">(inferred)</span>` : ''}</span>` +
-      `<span class="ovtx"${titleTip ? ` title="${esc(titleTip)}"` : ''}>${title}</span>` +
+      `<span class="ovtx" title="${esc(tip)}">${esc(r.title != null ? r.title : W.UNNAMED(fmtWhen(parseTs(r.last), now)))}</span>` +
       `<span class="ovnum">${calls}</span>` +
       `<span class="ovwhen">${esc(when(r.last, now))}</span></a>`
   }).join('')
   return `<section class="ovcard recent" aria-label="${esc(W.CARD.recent)}"><h2 class="ovh">${esc(W.CARD.recent)}</h2>` +
     `<div class="ovlist">${body}</div>` +
     `<p class="ovgo"><a href="#/sessions">${esc(W.ALL_SESSIONS)}</a></p></section>`
-}
-
-export function diskCardHtml(s, now) {
-  const R = s.retention
-  if (R == null) return ''
-  if (R.ok === false) return readFailHtml('Retention', R.err, 'slow')
-  const m = diskModel(R.data)
-  if (!m) return ''
-  const total = m.total == null ? W.DISK_USE('—') : (m.atLeast ? W.DISK_AT_LEAST(bytes(m.total)) : W.DISK_USE(bytes(m.total)))
-  const daily = m.daily == null
-    ? `—${m.reason ? ` <span class="ovmark" title="${esc(m.reason)}">?</span>` : ''}`
-    : `${bytes(m.daily)}${m.dailyFloor ? esc(W.FROM) : ''}`
-  return `<section class="ovcard disk" aria-label="${esc(W.CARD.disk)}"><h2 class="ovh">${esc(W.CARD.disk)}</h2>` +
-    `<p class="ovsay">${esc(total)}</p>` +
-    `<p class="ovsub">${esc(W.DISK_PER_DAY(daily))}${m.asOf != null && !m.stale ? ` · ${esc(W.AS_OF(fmtWhen(m.asOf, now)))}` : ''}</p>` +
-    (m.stale ? `<p class="ovsub">${esc(W.DISK_STALE)}</p>` : '') +
-    `<p class="ovgo"><a href="#/settings/storage">${esc(W.SEE_STORAGE)}</a></p></section>`
 }
 
 export function firstUseHtml() {
@@ -470,23 +425,16 @@ const readFailHtml = (what, why, group) =>
 
 // the first-run page: not installed and not one session yet → the capture card and 开始使用 only (1.7 §首次使用)
 export function firstUse(s) {
-  const st = s.caph && s.caph.data && s.caph.data.summary ? s.caph.data.summary.state : null
-  if (st !== 'not-installed') return false
-  const rows = recentRows(s.projects && s.projects.data)
+  const h = s.caph && s.caph.data && s.caph.data.health
+  if (!h || h.state !== 'not-installed') return false
+  const rows = recentRows(s.sessions && s.sessions.data)
   return rows != null && rows.length === 0
 }
 
 // the whole body: which cards exist and their html
 export function renderBody(s, now) {
-  if (firstUse(s)) return { first: true, cap: capCardHtml(s, now), items: '', stats: '', recent: firstUseHtml(), disk: '' }
-  return {
-    first: false,
-    cap: capCardHtml(s, now),
-    items: itemsCardHtml(s, now),
-    stats: statsCardHtml(s, now, sessionTitleMap(s.projects && s.projects.data)),
-    recent: recentCardHtml(s, now),
-    disk: diskCardHtml(s, now),
-  }
+  if (firstUse(s)) return { first: true, cap: capCardHtml(s, now), items: '', stats: '', recent: firstUseHtml() }
+  return { first: false, cap: capCardHtml(s, now), items: itemsCardHtml(s, now), stats: statsCardHtml(s, now, sessionTitleMap(s.sessions && s.sessions.data)), recent: recentCardHtml(s, now) }
 }
 
 // ── the screen ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -494,38 +442,30 @@ export const SKELETON =
   `<div class="page">` +
   `<header class="pagehead" id="ovhead"></header>` +
   `<div class="ovgrid" id="ovgrid">` +
-  `<div id="ovcap"></div><div id="ovitems"></div><div id="ovstats" class="span"></div><div id="ovrecent"></div><div id="ovdisk"></div>` +
+  `<div id="ovcap"></div><div id="ovitems"></div><div id="ovstats" class="span"></div><div id="ovrecent"></div>` +
   `</div></div>`
 
+const SLOTS = ['sessions', 'classes', 'pricing', 'stats', 'usageAll', 'traffic']
 export function mount(el, ctx) {
   const { api, router } = ctx
   let dead = false, w = parseWindow(router.current().params.window)
-  const s = {
-    w, readAt: null,
-    caph: { data: null, okAt: null, err: null, ok: null, absent: false },
-    projects: { data: null, ok: null, err: null, absent: false },
-    retention: { data: null, ok: null, err: null, absent: false },
-    pricing: { data: null, ok: null, err: null, absent: false },
-    stats: { data: null, ok: null, err: null, absent: false },
-    usageAll: { data: null, ok: null, err: null, absent: false },
-    traffic: { data: null, ok: null, err: null, absent: false },
-  }
+  const s = { w, readAt: null, caph: { data: null, okAt: null, err: null, ok: null } }
+  for (const k of SLOTS) s[k] = { data: null, ok: null, err: null }
   const polls = {
     health: { lastAt: null, inFlight: false, due: true, period: POLL.health },
-    projects: { lastAt: null, inFlight: false, due: true, period: POLL.projects },
+    sessions: { lastAt: null, inFlight: false, due: true, period: POLL.sessions },
     slow: { lastAt: null, inFlight: false, due: true, period: POLL.slow },
   }
 
   el.innerHTML = SKELETON
   const zone = (id) => el.querySelector('#' + id)
-  const zones = { head: zone('ovhead'), cap: zone('ovcap'), items: zone('ovitems'), stats: zone('ovstats'), recent: zone('ovrecent'), disk: zone('ovdisk') }
+  const zones = { head: zone('ovhead'), cap: zone('ovcap'), items: zone('ovitems'), stats: zone('ovstats'), recent: zone('ovrecent') }
   let sigs = {}
 
   // fold one read into its slot: a failure keeps the last good data and marks the source failed this round
   const fold = (slot, r) => {
-    const prev = s[slot]
-    if (r && r.ok) { s[slot] = { data: r.data, ok: true, err: null, absent: !!r.absent }; s.readAt = Date.now() }
-    else s[slot] = { data: prev && prev.data, ok: false, err: (r && (r.error || `HTTP ${r.status}`)) || 'reason unknown', absent: !!(r && r.absent) }
+    if (r && r.ok) { s[slot] = { data: r.data, ok: true, err: null }; s.readAt = Date.now() }
+    else s[slot] = { data: s[slot].data, ok: false, err: (r && (r.error || `HTTP ${r.status}`)) || 'reason unknown' }
   }
 
   const render = () => {
@@ -533,29 +473,27 @@ export function mount(el, ctx) {
     const now = api.now()
     const body = renderBody(s, now)
     const next = { head: headHtml(s), ...body }
-    for (const k of ['head', 'cap', 'items', 'stats', 'recent', 'disk']) if (sigs[k] !== next[k]) { zones[k].innerHTML = next[k]; sigs[k] = next[k] }
+    for (const k of Object.keys(zones)) if (sigs[k] !== next[k]) { zones[k].innerHTML = next[k]; sigs[k] = next[k] }
     el.querySelector('#ovgrid').classList.toggle('first', body.first)
   }
 
   const readHealth = async () => {
-    // capHealthPatch speaks {capH, capHOkAt, capHErr}; fold it into the slot (a 503 answer IS data — {unreadable};
-    // a failed read keeps the last good answer and its time, so the card goes 未刷新 rather than blank)
+    // capHealthPatch speaks {capH, capHOkAt, capHErr}; a failed read keeps the last good answer and its time (未刷新, not blank)
     const p = capHealthPatch(await api.get('status'), Date.now())
-    if (p.capHOkAt != null) s.caph = { data: p.capH, okAt: p.capHOkAt, err: null, ok: true, absent: false }
-    else s.caph = { data: s.caph.data, okAt: s.caph.okAt, err: p.capHErr || 'reason unknown', ok: false, absent: false }
-    if (s.caph.ok) s.readAt = Date.now()
+    if (p.capHOkAt != null) { s.caph = { data: p.capH, okAt: p.capHOkAt, err: null, ok: true }; s.readAt = Date.now() }
+    else s.caph = { data: s.caph.data, okAt: s.caph.okAt, err: p.capHErr || 'reason unknown', ok: false }
   }
-  const readProjects = async () => { fold('projects', await api.get('sessions')) }
+  const readSessions = async () => { fold('sessions', await loadSessions(api)) }
   const readSlow = async () => {
     await Promise.allSettled([
-      api.get('classes').then((r) => fold('retention', r)),
+      api.get('classes').then((r) => fold('classes', r)),
       api.get('pricing').then((r) => fold('pricing', r)),
       api.get('overview', { since: w === 'all' ? null : w }).then((r) => { fold('stats', r); if (w === 'all') s.usageAll = { ...s.stats } }),
       w === 'all' ? Promise.resolve() : api.get('overview').then((r) => fold('usageAll', r)),
       api.get('traffic', { since: '24h' }).then((r) => fold('traffic', r)),
     ])
   }
-  const readers = { health: readHealth, projects: readProjects, slow: readSlow }
+  const readers = { health: readHealth, sessions: readSessions, slow: readSlow }
 
   // one heartbeat: ask each poll what to do; a read that is still out never starts a second one
   const beat = () => {
