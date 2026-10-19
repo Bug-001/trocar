@@ -3,7 +3,7 @@
 // `traffic`, the recent list from `sessions`. The documents come from the real face (real server, real query worker).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { overviewItems, recentRows, diskBytes } from '../../src/web/v2/overview/overview.mjs'
+import { overviewStats, overviewItems, recentRows, renderBody, diskBytes } from '../../src/web/v2/overview/overview.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
 const docs = (async () => {
@@ -23,6 +23,41 @@ const ok = (data) => ({ data, ok: true, err: null })
 const stateOf = (D, now, over = {}) => ({
   w: 'all', readAt: now, caph: { data: D.status, okAt: now, err: null, ok: true },
   sessions: ok(D.sessions), classes: ok(D.classes), pricing: ok(D.pricing), stats: ok(D.overview), usageAll: ok(D.overview), traffic: ok(D.traffic), ...over,
+})
+
+test('(1) the stats are the overview document\'s numbers; a session the index has not caught up with changes the recent list, not the stats (D24)', async () => {
+  const D = await docs, now = Date.now()
+  const m = overviewStats(D.overview, D.pricing)
+  assert.ok(D.overview.sessions.total > 0 && D.overview.calls.llm > 0, 'the fixture has sessions and calls')
+  assert.equal(m.sessions, D.overview.sessions.total)
+  assert.equal(m.calls, D.overview.calls.llm)
+  const more = copy(D.sessions)
+  more.sessions.push({ ...more.sessions[0], session_id: 'extra-session', last_ts: new Date(now).toISOString() })
+  const a = renderBody(stateOf(D, now), now), b = renderBody(stateOf(D, now, { sessions: ok(more) }), now)
+  assert.equal(b.stats, a.stats)
+  assert.deepEqual(overviewStats(D.overview, D.pricing), m)
+  assert.equal(recentRows(more)[0].id, 'extra-session')
+})
+
+test('(2) usage that did not cover the window marks the cost partial; a main row without a cache write marks the hit uncertain; unknown is never 0', async () => {
+  const D = await docs
+  const ov = copy(D.overview)
+  const cov = ov.usage.coverage
+  assert.equal(overviewStats(ov, D.pricing).partial, cov.sessions_read < cov.sessions_in_window)
+  cov.sessions_read = cov.sessions_in_window - 1; cov.reason = 'byte-budget'
+  const p = overviewStats(ov, D.pricing)
+  assert.equal(p.partial, true)
+  assert.notEqual(p.cost, 0)
+  const main = ov.usage.rows.filter((r) => r.lane === 'main')
+  assert.ok(main.length > 1, 'the fixture has main-lane rows')
+  for (const r of main) { r.cache_write = 0; r.cache_known = true }
+  assert.equal(overviewStats(ov, D.pricing).hitUncertain, false)
+  main[0].cache_write = null
+  assert.equal(overviewStats(ov, D.pricing).hitUncertain, true)
+  const none = copy(D.overview)
+  Object.assign(none.usage, { coverage: { ...none.usage.coverage, sessions_read: 0, capped_at: 1, reason: 'byte-budget' }, rows: [] })
+  const z = overviewStats(none, D.pricing)
+  assert.equal(z.partial, true); assert.equal(z.cost, null); assert.equal(z.hit, null)
 })
 
 test('(3) the disk footer is classes.disk.asight_bytes; a failed classes read draws no footer', async () => {

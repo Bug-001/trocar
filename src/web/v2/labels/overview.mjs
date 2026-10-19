@@ -65,16 +65,10 @@ export const CALLS_N = (n) => `${n} model call${n === 1 ? '' : 's'}`
 export const FROM = 'from'
 export const HIT_LABEL = 'main thread cache hit'
 export const HIT_UNKNOWN_TIP = "this provider's cache figures have an uncertain meaning"
-export const CANT = 'cannot be computed'
-export const HIT_PCT = (p) => `main thread cache hit ${p}%`
-export const BREAKS_N = (n) => `${n} cache break${n === 1 ? '' : 's'}`
-export const EXTRA_LABEL = '≈ extra cost'
-export const WASTED_CANT_K = (k) => `${k} cannot be computed`
-export const MOST_EXPENSIVE = 'Most expensive session ›'
 export const EST_TIP = 'local estimated cost (usage × unit price), not a bill'
 export const EMPTY_WINDOW = 'no sessions in this window'
 export const PRICE_FAIL = (why) => `the price table could not be read: ${why}`
-export const TBL = Object.freeze({ agent: 'agent', sessions: 'sessions', calls: 'model calls', cost: '≈ cost', hit: 'main thread cache hit', breaks: 'cache breaks', last: 'last active' })
+export const TBL = Object.freeze({ agent: 'agent', sessions: 'sessions', calls: 'model calls', cost: '≈ cost', hit: 'main thread cache hit', last: 'last active' })
 
 // ── 最近的会话 · 盘上占用 · 开始使用 ───────────────────────────────────────────────────────────────────────────────────
 export const ALL_SESSIONS = 'All sessions ›'

@@ -14,10 +14,9 @@ import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { harnessKey, harnessName, harnessIcon, UNIDENTIFIED } from '../core/chips.mjs'
 import { captureVerdict, capHealthPatch, agentVerdicts, failureSentence, AGENT_TIER, CAPH_MS } from '../core/capture-verdict.mjs'
-import { priceMatch, costOf } from '../core/metrics.mjs'
+import { priceMatch, costOf, hitRatio } from '../core/metrics.mjs'
 import { loadSessions } from '../library/logic.mjs'
 import { infoButton, techDetailsHtml } from '../core/ui.mjs'
-import { L } from '../labels/common.mjs'
 import * as W from '../labels/overview.mjs'
 
 const DAY = 24 * 3600e3
@@ -139,92 +138,44 @@ export function unpricedModels(rows, table) {
   return { n: names.length, names: names.slice(0, 3) }
 }
 
-// ── 统计 · the stats model (pure; every number from the S5 rows alone, D24) ──────────────────────────────────────────
-// rows: S5 rows; pricingData: the /api/pricing answer ({pricing}); → the figures the card draws. Money is an estimate
-// (D14): a row that cannot be priced is excluded and marks the sum 「起」; nothing unknown is ever a 0.
-export function overviewStats(rows, pricingData) {
-  const price = pricingData && pricingData.pricing ? pricingData.pricing : null
-  const rs = list(rows)
-  const main = rs.filter((r) => r.lane === 'main')
-  const meteredOf = (r) => (r.calls || 0) - (r.failed || 0) - (r.no_usage || 0)
+// 主对话缓存命中 over some usage rows: Σread ÷ Σ(read + write + input) of the main lane; uncertain when a main row's cache figures
+// are not known or it reported no cache write (that term is then left out of the denominator) — never shown as a 0
+function mainHit(rows) {
+  const main = rows.filter((r) => r.lane === 'main')
+  const u = { read: 0, create: 0, fresh: 0 }
+  let uncertain = false
+  for (const r of main) { u.read += r.cache_read || 0; u.create += r.cache_write || 0; u.fresh += r.input || 0; if (r.cache_known === false || r.cache_write == null) uncertain = true }
+  return { hit: main.length ? hitRatio(u) : null, uncertain, main: main.length }
+}
 
-  let cost = 0, floor = false, anyPriced = false
-  const approxKeys = new Set()
-  const rowCost = new Map() // a row's priced cost (null when it cannot be priced) — reused by the per-session / per-agent sums
-  for (const r of rs) {
-    if ((r.no_usage || 0) > 0) floor = true
-    if (meteredOf(r) <= 0) { rowCost.set(r, null); continue }
-    const pm = priceMatch(price, r.model)
-    if (!pm) { floor = true; rowCost.set(r, null); continue }
-    anyPriced = true
-    if (!pm.exact) approxKeys.add(pm.key)
-    const c = costOf(pm.row, { fresh: r.fresh, out: r.out, create: r.create, read: r.read })
-    rowCost.set(r, c)
-    cost += c || 0
-  }
-
-  // 主对话缓存命中: main rows only; a provider whose cache numbers mean something else marks the figure with 「?」
-  let rd = 0, cr = 0, fr = 0, unknown = false
-  for (const r of main) { rd += r.read || 0; cr += r.create || 0; fr += r.fresh || 0; if (r.cache_known === false) unknown = true }
-  const hit = (rd + cr + fr) > 0 ? rd / (rd + cr + fr) : null
-  const breaks = main.reduce((a, r) => a + (r.breaks || 0), 0)
-
-  // ≈ 多花 (2.2 §多花怎么算, per row): every metered call reported its cache-write count → the write−read price gap;
-  // none did → the uncached-input−read gap; in between, no missed count, or no price → this row cannot be said
-  let extra = 0, cant = 0
-  for (const r of main) {
-    if (!(r.breaks > 0)) continue
-    const pm = priceMatch(price, r.model)
-    if (r.break_missed == null || !pm) { cant++; continue }
-    const metered = meteredOf(r)
-    let unit
-    if ((r.create_null || 0) === 0) unit = pm.row[2] - pm.row[3]
-    else if (metered > 0 && (r.create_null || 0) === metered) unit = pm.row[0] - pm.row[3]
-    else { cant++; continue }
-    extra += ((r.break_missed || 0) * unit) / 1e6
-  }
-
-  // the per-agent table: the same columns, grouped by the read-side harness id. Sessions are counted per group, so the
-  // groups' session sums may exceed the card's own count when one session ran several agents (1.7 §Edge cases).
-  const by = new Map()
-  for (const r of rs) {
-    const k = (r.harness == null || r.harness === '' || r.harness === 'unknown') ? null : harnessKey(r.harness)
-    if (!by.has(k)) by.set(k, { harness: k, sessions: new Set(), calls: 0, cost: 0, floor: false, rd: 0, cr: 0, fr: 0, unknown: false, breaks: 0, last: null })
-    const g = by.get(k)
-    g.sessions.add(r.session_id); g.calls += r.calls || 0
-    if (meteredOf(r) > 0 && rowCost.get(r) == null) g.floor = true
-    g.cost += rowCost.get(r) || 0
-    if (parseTs(r.last_ts) != null && (parseTs(g.last) == null || parseTs(r.last_ts) > parseTs(g.last))) g.last = r.last_ts
-    if (r.lane === 'main') { g.rd += r.read || 0; g.cr += r.create || 0; g.fr += r.fresh || 0; g.breaks += r.breaks || 0; if (r.cache_known === false) g.unknown = true }
-  }
-  const byAgent = [...by.values()].map((g) => ({
-    harness: g.harness, sessions: g.sessions.size, calls: g.calls, cost: g.cost, floor: g.floor,
-    hit: (g.rd + g.cr + g.fr) > 0 ? g.rd / (g.rd + g.cr + g.fr) : null, unknown: g.unknown, breaks: g.breaks, last: g.last,
-  })).sort((a, b) => (a.harness == null) - (b.harness == null) || (a.calls < b.calls ? 1 : a.calls > b.calls ? -1 : 0))
-
-  // the most expensive session: priced whole (every metered row of it priced), the largest such sum. The hover wants
-  // 标题 · ≈ $ · 主对话缓存命中 · 缓存断开 (1.7 §统计), so the per-session rollup keeps the main-lane hit parts too.
-  const perSess = new Map()
-  for (const r of rs) {
-    const e = perSess.get(r.session_id) || { usd: 0, all: true, last: null, rd: 0, cr: 0, fr: 0, breaks: 0 }
-    if (meteredOf(r) > 0) {
-      const c = rowCost.get(r)
-      if (c == null) e.all = false; else e.usd += c
+// ── 统计 · the stats model (pure; every number from the `overview` document alone, D24) ─────────────────────────────
+// doc = the overview document, pricingDoc = /api/pricing. Money is an estimate (D14): a row that cannot be priced is left out and
+// marks the sum 「起」, and so does a usage read that did not cover the window; nothing unknown is ever a 0.
+export function overviewStats(doc, pricingDoc) {
+  const table = priceTable(pricingDoc)
+  const usage = (doc && doc.usage) || {}
+  const rows = list(usage.rows), cov = usage.coverage || {}
+  const partial = num(cov.sessions_read) != null && num(cov.sessions_in_window) != null && cov.sessions_read < cov.sessions_in_window
+  const priced = (rs) => {
+    let cost = 0, any = false, floor = partial
+    for (const r of rs) {
+      if ((r.no_usage || 0) > 0) floor = true
+      if (metered(r) <= 0) continue
+      const pm = priceMatch(table, r.model)
+      if (!pm) { floor = true; continue }
+      any = true; cost += costOf(pm.row, usageOfRow(r)) || 0
     }
-    if (parseTs(r.last_ts) != null && (parseTs(e.last) == null || parseTs(r.last_ts) > parseTs(e.last))) e.last = r.last_ts
-    if (r.lane === 'main') { e.rd += r.read || 0; e.cr += r.create || 0; e.fr += r.fresh || 0; e.breaks += r.breaks || 0 }
-    perSess.set(r.session_id, e)
+    return { cost: any ? cost : null, floor }
   }
-  let most = null
-  for (const [sid, e] of perSess)
-    if (e.all && e.usd > 0 && (!most || e.usd > most.usd || (e.usd === most.usd && (parseTs(e.last) ?? 0) > (parseTs(most.last) ?? 0))))
-      most = { sessionId: sid, usd: e.usd, hit: (e.rd + e.cr + e.fr) > 0 ? e.rd / (e.rd + e.cr + e.fr) : null, breaks: e.breaks }
-
+  const byAgent = list(doc && doc.harnesses).map((h) => {
+    const k = agentKey(h.harness), mine = rows.filter((r) => agentKey(r.harness) === k)
+    return { harness: k, sessions: h.sessions, calls: h.calls, last: h.last_ts, ...priced(mine), ...mainHit(mine) }
+  })
+  const hit = mainHit(rows)
   return {
-    sessions: new Set(rs.map((r) => r.session_id)).size,
-    calls: rs.reduce((a, r) => a + (r.calls || 0), 0),
-    cost: anyPriced ? cost : null, floor, approxKeys: [...approxKeys], unpriced: unpricedModels(rs, price),
-    hit, hitUnknown: unknown, breaks, main: main.length, extra, extraCant: cant, byAgent, most,
+    sessions: doc && doc.sessions ? doc.sessions.total : null, calls: doc && doc.calls ? doc.calls.llm : null,
+    ...priced(rows), partial, coverage: cov, hit: hit.hit, hitUncertain: hit.uncertain, main: hit.main,
+    unpriced: unpricedModels(rows, table), byAgent,
   }
 }
 
@@ -290,94 +241,56 @@ export function itemsCardHtml(s, now) {
     `<div class="ovlist">${body}</div></section>`
 }
 
-export function statsCardHtml(s, now, titles) {
+const hitText = (h, floor) => h.main === 0 || h.hit == null ? '—' : `${Math.round(h.hit * 100)}%${h.uncertain ? '?' : ''}${floor ? ` ${W.FROM}` : ''}`
+const costText = (c, priceFail) => `≈ ${priceFail || c.cost == null ? '—' : usd(c.cost)}${!priceFail && c.cost != null && c.floor ? ` ${W.FROM}` : ''}`
+
+export function statsCardHtml(s, now) {
   const st = s.stats
-  if (st == null) return '' // no such slot: no card
-  if (st.ok === false) return readFailHtml('Stats', st.err, 'slow') // a failed read says so even before any data arrived
-  if (st.data == null) return '' // never read yet: nothing is drawn that has no source (the polls land one by one)
-  if (st.absent) return '' // the endpoint is not there: the card does not exist (1.7 §统计)
+  if (st == null) return ''
+  if (st.ok === false && st.data == null) return readFailHtml('Stats', st.err, 'slow')
+  if (st.data == null) return '' // never read yet: nothing is drawn that has no source
   const D = st.data
-  if (D.rows == null) return '' // no rows: nothing has a source to draw
   const priceFail = s.pricing && s.pricing.ok === false ? s.pricing.err : null
-  const priceData = s.pricing && s.pricing.data ? s.pricing.data : null
-  const cover = coverageOf(s)
-  if (!D.rows.length) { // the window holds not one session: that sentence, no zero figures (1.7 §统计)
-    return `<section class="ovcard stats" aria-label="${esc(W.CARD.stats)}"><h2 class="ovh">${esc(W.CARD.stats)}</h2>` +
-      `<p class="ovsub">${esc(W.AS_OF(D.as_of ? fmtWhen(parseTs(D.as_of), now) : '—'))} · ${esc(W.SCOPE_LINE)}</p>` +
-      (cover ? `<p class="ovsub warn">${esc(cover)}</p>` : '') +
-      (priceFail ? `<p class="ovsub warn">${esc(W.PRICE_FAIL(priceFail))}</p>` : '') +
-      `<p class="ovsay">${esc(W.EMPTY_WINDOW)}</p></section>`
-  }
-  const m = overviewStats(D.rows || [], priceData)
-  const hitPct = m.hit == null ? null : Math.round(m.hit * 100)
-  const hitSeg = m.main === 0 ? `${esc(W.HIT_LABEL)} —` : `<span${m.hitUnknown ? ` title="${esc(W.HIT_UNKNOWN_TIP)}"` : ''}>${esc(`${W.HIT_PCT(hitPct)}${m.hitUnknown ? '?' : ''}`)}</span>`
-  const breaksSeg = m.main === 0 ? `${esc(W.TBL.breaks)} —` : `${esc(W.BREAKS_N(m.breaks))}<span class="ovmark" title="${esc(L.STRUCT_EST)}">(${esc(L.STRUCT_EST)})</span>`
-  return `<section class="ovcard stats" aria-label="${esc(W.CARD.stats)}">` +
-    `<h2 class="ovh">${esc(W.CARD.stats)}</h2>` +
+  const m = overviewStats(D, s.pricing && s.pricing.data)
+  const cov = m.partial || (m.coverage.sessions_read === 0 && m.coverage.sessions_in_window > 0)
+    ? `<p class="ovsub warn">${esc(W.USAGE_COVERAGE(m.coverage.sessions_read, m.coverage.sessions_in_window, m.coverage.reason))}</p>` : ''
+  const missing = coverageOf(s)
+  const disk = diskBytes(s.classes)
+  const head = `<section class="ovcard stats" aria-label="${esc(W.CARD.stats)}"><h2 class="ovh">${esc(W.CARD.stats)}</h2>` +
     `<p class="ovsub">${esc(W.AS_OF(D.as_of ? fmtWhen(parseTs(D.as_of), now) : '—'))} · ${esc(W.SCOPE_LINE)}</p>` +
-    (cover ? `<p class="ovsub warn">${esc(cover)}</p>` : '') +
-    (priceFail ? `<p class="ovsub warn">${esc(W.PRICE_FAIL(priceFail))}</p>` : '') +
+    (missing ? `<p class="ovsub warn">${esc(missing)}</p>` : '') + cov +
+    (priceFail ? `<p class="ovsub warn">${esc(W.PRICE_FAIL(priceFail))}</p>` : '')
+  const foot = (disk != null ? `<p class="ovsub">${esc(W.DISK_USE(bytes(disk)))} · <a href="#/settings/storage">${esc(W.SEE_STORAGE)}</a></p>` : '') + `</section>`
+  if (!m.sessions && !list(D.usage && D.usage.rows).length) return head + `<p class="ovsay">${esc(W.EMPTY_WINDOW)}</p>` + foot
+  const hit = { hit: m.hit, uncertain: m.hitUncertain, main: m.main }
+  return head +
     `<p class="ovsay">` +
-    `<a href="#/sessions?window=${esc(s.w)}">${esc(W.SESSIONS_N(m.sessions))} ›</a> · ${esc(W.CALLS_N(m.calls))} · ` +
-    `≈ ${priceFail ? '—' : (m.cost == null ? '—' : usd(m.cost))}${!priceFail && m.floor ? esc(W.FROM) : ''}` +
+    `<a href="#/sessions?window=${esc(s.w)}">${esc(W.SESSIONS_N(m.sessions ?? 0))} ›</a> · ${esc(W.CALLS_N(m.calls ?? 0))} · ` +
+    `<span title="${esc(W.EST_TIP)}">${esc(costText(m, priceFail))}</span>` +
     (!priceFail && m.unpriced.n > 0 ? ` · <a href="#/settings/prices">${esc(W.UNPRICED(m.unpriced.n))} ›</a>` : '') +
-    ` · ${hitSeg} · ${breaksSeg}` +
-    `</p>` +
-    extraLine(m, priceFail) +
-    (m.most ? `<p class="ovsub"><a href="#/session/${encodeURIComponent(m.most.sessionId)}" title="${esc(mostHover(m.most, titles, now))}">${esc(W.MOST_EXPENSIVE)}</a></p>` : '') +
-    agentTableHtml(m, s.w, now) +
-    `</section>`
+    ` · <span${m.hitUncertain ? ` title="${esc(W.HIT_UNKNOWN_TIP)}"` : ''}>${esc(`${W.HIT_LABEL} ${hitText(hit, m.partial)}`)}</span>` +
+    `</p>` + agentTableHtml(m, s.w, now, priceFail) + foot
 }
 
-const extraCantWhy = 'extra cost = cache not read at a break × the unit price difference; it cannot be computed when this row has no missed count, no unit price, or cache writes reported for only some calls'
-const extraLine = (m, priceFail) => {
-  if (priceFail) return ''
-  if (m.extraCant > 0 && !(m.extra > 0)) return `<p class="ovsay">${esc(W.EXTRA_LABEL)} ${esc(W.CANT)} <span class="ovmark" title="${esc(extraCantWhy)}">${esc(W.WASTED_CANT_K(m.extraCant))}</span></p>`
-  return `<p class="ovsay">${esc(W.EXTRA_LABEL)} ${usd(m.extra)}${m.extraCant > 0 ? ` ${esc(W.FROM)} <span class="ovmark" title="${esc(extraCantWhy)}">${esc(W.WASTED_CANT_K(m.extraCant))}</span>` : ''}</p>`
-}
-
+// the agents in the live list that the overview document does not have yet (1.7 §统计 · 覆盖): a sentence, never a number
 const coverageOf = (s) => {
-  const D = s.stats && s.stats.data
-  const P = s.projects && s.projects.data
-  if (!D || !D.store || !Array.isArray(D.store.harnesses) || !P) return null
-  const inStore = new Set(D.store.harnesses.map(harnessKey))
+  const D = s.stats && s.stats.data, S = s.sessions && s.sessions.data
+  if (!D || !S) return null
+  const inStats = new Set(list(D.harnesses).map((h) => agentKey(h && h.harness)))
   const seen = new Set()
-  for (const p of list(P.projects)) for (const m of list(p && p.sessions)) {
-    const k = agentKey(m && m.harness)
-    if (k != null && !inStore.has(k)) seen.add(k)
-  }
+  for (const m of list(S.sessions)) { const k = agentKey(m && m.harness); if (k != null && !inStats.has(k)) seen.add(k) }
   return seen.size ? W.COVERAGE([...seen].map(harnessName).join(', ')) : null
 }
 
-// every session's title rule (the same fallback order as the recent list), keyed by session_id — the most-expensive
-// hover looks its session up here, in the whole /api/projects answer, not just the five newest (1.7 §统计)
-export function sessionTitleMap(projectsData) {
-  const map = new Map()
-  const P = projectsData && Array.isArray(projectsData.projects) ? projectsData : null
-  if (!P) return map
-  for (const p of P.projects) for (const m of list(p && p.sessions)) if (m && m.session_id != null)
-    map.set(m.session_id, { title: m.title || m.first_prompt || null, basis: m.title ? 'agent' : (m.first_prompt ? (m.first_prompt_basis || 'prompt') : null), last: m.last_ts || null })
-  return map
-}
-
-const mostHover = (most, titles, now) => {
-  const meta = (titles && titles.get(most.sessionId)) || null
-  const title = meta && meta.title ? (meta.basis === 'agent' ? meta.title : `${meta.title} (taken from the first prompt)`) : W.UNNAMED(meta ? fmtWhen(parseTs(meta.last), now) : '—')
-  return `${title} · ≈ ${usd(most.usd)} · ${W.HIT_LABEL} ${most.hit == null ? '—' : `${Math.round(most.hit * 100)}%`} · ${W.BREAKS_N(most.breaks)}`
-}
-
-// the per-agent table as a grid of link rows — the whole row is one <a> (1.7 §统计 · 行链接); the unidentified row is
-// plain text (the session library has no filter word for it yet)
-const agentTableHtml = (m, w, now) => {
+// the per-agent table as a grid of link rows — the whole row is one <a> (1.7 §统计 · 行链接); the unidentified row is plain text
+const agentTableHtml = (m, w, now, priceFail) => {
   if (!m.byAgent.length) return ''
   const t = W.TBL
-  const head = `<div class="ovtrh" role="row"><span>${esc(t.agent)}</span><span>${esc(t.sessions)}</span><span>${esc(t.calls)}</span><span>${esc(t.cost)}</span><span>${esc(t.hit)}</span><span>${esc(t.breaks)}</span><span>${esc(t.last)}</span></div>`
+  const head = `<div class="ovtrh" role="row"><span>${esc(t.agent)}</span><span>${esc(t.sessions)}</span><span>${esc(t.calls)}</span><span>${esc(t.cost)}</span><span>${esc(t.hit)}</span><span>${esc(t.last)}</span></div>`
   const rows = m.byAgent.map((g) => {
-    const hit = g.hit == null ? '—' : `<span${g.unknown ? ` title="${esc(W.HIT_UNKNOWN_TIP)}"` : ''}>${Math.round(g.hit * 100)}%${g.unknown ? '?' : ''}</span>`
     const body = `<span class="ovag">${g.harness == null ? `<span class="ovsubj">${esc(UNIDENTIFIED)}</span>` : chipHtml(g.harness)}</span>` +
-      `<span>${g.sessions}</span><span>${g.calls}</span>` +
-      `<span>≈ ${g.cost == null ? '—' : usd(g.cost)}${g.floor ? esc(W.FROM) : ''}</span>` +
-      `<span>${hit}</span><span>${g.breaks}</span><span>${esc(when(g.last, now))}</span>`
+      `<span>${g.sessions ?? '—'}</span><span>${g.calls ?? '—'}</span><span>${esc(costText(g, priceFail))}</span>` +
+      `<span${g.uncertain ? ` title="${esc(W.HIT_UNKNOWN_TIP)}"` : ''}>${esc(hitText(g, m.partial))}</span><span>${esc(when(g.last, now))}</span>`
     return g.harness == null
       ? `<div class="ovtr" role="row">${body}</div>`
       : `<a class="ovtr" role="row" href="${esc(`#/sessions?h=${encodeURIComponent(g.harness)}&window=${w}`)}">${body}</a>`
@@ -434,7 +347,7 @@ export function firstUse(s) {
 // the whole body: which cards exist and their html
 export function renderBody(s, now) {
   if (firstUse(s)) return { first: true, cap: capCardHtml(s, now), items: '', stats: '', recent: firstUseHtml() }
-  return { first: false, cap: capCardHtml(s, now), items: itemsCardHtml(s, now), stats: statsCardHtml(s, now, sessionTitleMap(s.sessions && s.sessions.data)), recent: recentCardHtml(s, now) }
+  return { first: false, cap: capCardHtml(s, now), items: itemsCardHtml(s, now), stats: statsCardHtml(s, now), recent: recentCardHtml(s, now) }
 }
 
 // ── the screen ───────────────────────────────────────────────────────────────────────────────────────────────────────
