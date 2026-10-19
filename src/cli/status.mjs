@@ -123,7 +123,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const fromReply = reply && reply.harnesses && typeof reply.harnesses === 'object' ? reply.harnesses : null
   const ids = [...new Set([...installedIds, ...Object.keys(state ? state.harnesses : {}), ...Object.keys(fromReply || {}), ...(names || [])])]
   const order = (id) => (HARNESS_IDS.includes(id) ? HARNESS_IDS.indexOf(id) : HARNESS_IDS.length)
-  const wanted = (names ? ids.filter((id) => names.includes(id)) : ids).sort((a, b) => order(a) - order(b) || a.localeCompare(b))
+  let wanted = (names ? ids.filter((id) => names.includes(id)) : ids).sort((a, b) => order(a) - order(b) || a.localeCompare(b))
   // the kernel and the helper, as the daemon reports them; a kernel state the daemon could not read keeps its error (the daemon's `actual: 'unknown'` carries `error` and `error_code`: R11 — the reason is not dropped on the way to 不知道)
   const kernelReason = (r) => (r.actual === 'unknown' ? `the daemon could not read the kernel state: ${r.error || 'it gave no reason'}${r.error_code && !String(r.error || '').includes(r.error_code) ? ` (${r.error_code})` : ''}` : `the daemon's reply does not say whether the kernel has this instance's link (actual: ${JSON.stringify(r.actual ?? null)})`)
   const attached = reply ? (reply.actual === 'on' ? true : reply.actual === 'off' ? false : null) : null
@@ -158,6 +158,14 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
+  // with no names, every harness with a form present on this machine gets a row too, besides the ones asight's records know (1.6 §3.5, D65④):
+  // the row is where Set up and the board's on / off appear for a harness installed after asight. Proxy mode only; `on` / `off` do not read this list.
+  if (!names && isProxyMode(platform) && desc.value) {
+    try {
+      const present = await (deps.presentHarnesses || (await import('../collector/net-deps.mjs')).presentHarnesses)({ os: platform, home, env, harnesses: desc.value, fs })
+      wanted = [...new Set([...wanted, ...present])].sort((a, b) => order(a) - order(b) || a.localeCompare(b))
+    } catch (e) { rethrowSandbox(e); f.identity_error = f.identity_error || `which harnesses are on this machine could not be read (${errMessage(e)})` }
+  }
   for (const id of wanted) {
     const why = []
     const desired = fromReply && fromReply[id] ? (fromReply[id].desired === 'on' ? 'on' : 'off') : state ? (state.harnesses[id] && state.harnesses[id].desired === 'on' ? 'on' : 'off') : null

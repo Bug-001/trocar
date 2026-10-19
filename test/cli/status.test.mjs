@@ -588,6 +588,14 @@ test('V32 proxy mode: desired × daemon × door × certificate state — the ver
   }
 })
 
+test('1.6 §3.5: with no names, status lists every harness with a form present on this machine, also one installed after asight — with its setup; an absent one is not listed', async () => {
+  const w = await modelOn()
+  for (const c of ['dsh', 'opencode']) fs.writeFileSync(path.join(w.home, 'bin', c), '#!/bin/sh\n', { mode: 0o755 }) // installed after `asight install`
+  const { j } = await modelStatus(w, { desired: 'on', daemon: 'running', door: 'up', key: 'present', st: 'ready', root: 'in' })
+  for (const h of ['codex', 'deepseek-dsh', 'opencode']) assert.ok(['ready', 'needed', 'unknown'].includes(j.harnesses[h] && j.harnesses[h].setup.state), `${h}: ${JSON.stringify(j.harnesses[h])}`)
+  assert.equal('hermes' in j.harnesses, false, 'no form of hermes is on this machine')
+})
+
 // one HOME with codex installed and turned on (the door half a stub), for the cases below
 async function modelOn() {
   const w = await modelWorld({ os: 'darwin', commands: ['codex'] })

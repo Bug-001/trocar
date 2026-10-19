@@ -16,3 +16,6 @@ export async function netFactsDeps({ arch = null, harnesses = null, platform = p
   if (!A) { try { A = await loadArch(platform) } catch { A = null } }
   return { harnesses: harnesses || (await loadHarnesses()), archFacts: A && A.netFacts ? A.netFacts : null }
 }
+
+/** The harnesses with a form of this OS present on this machine (proxy mode; 1.6 §3.5): the arch's reader, loaded only when asked. */
+export async function presentHarnesses(o) { return (await import('./arch/model-backends.mjs')).presentHarnesses(o) }

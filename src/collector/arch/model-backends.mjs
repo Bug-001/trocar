@@ -38,6 +38,14 @@ export function sourcesCtx({ os, home, env = process.env, cwd = process.cwd(), d
   }
 }
 
+/** The harnesses with a form of this OS present on this machine (4.11 `present`, over the sources ctx with the platform's dirs): with no names,
+ *  `status` lists them beside the ones asight's own records know (1.6 §3.5). Reads only. */
+export async function presentHarnesses({ os, home, env = process.env, harnesses, fs = nodeFs }) {
+  const [{ dirsOf }, { isPresent }] = await Promise.all([os === 'darwin' ? import('./darwin/policy.mjs') : import('./win32/policy.mjs'), import('../core/proxymode/sources.mjs')])
+  const ctx = sourcesCtx({ os, home, env, dirs: dirsOf(home, env), fs })
+  return harnesses.filter((d) => d.proxyMode && d.proxyMode.forms.some((f) => f.os.includes(os) && isPresent(f, ctx))).map((d) => d.name)
+}
+
 /** backendsFor({ os, home, run, env, fs }) → { custody, rootStore, installHelper, wrapperKit, facts, dirs, policy } for macOS / Windows. */
 export async function backendsFor({ os, home, run = null, env = process.env, fs = nodeFs }) {
   if (os === 'darwin') {
