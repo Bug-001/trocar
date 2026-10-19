@@ -2,7 +2,7 @@
 // mark on EACH side (never one sentence covering both), credential-class header values masked until「显示」reveals
 // exactly one (the server masks by default; masking is a display default, not isolation), copies that never carry a
 // still-masked value, and 技术细节 for the codes. The host page (1.10) hosts it; the model-call lead line is the host
-// page's, not this widget's. Pure: it eats S8's answer only.
+// page's, not this widget's. Pure: it eats the `calls {ref}` document only.
 import { esc, bytes } from '../core/fmt.mjs'
 import { techDetailsHtml, disclosureHtml } from '../core/ui.mjs'
 import { copyBtn } from '../core/dom.mjs'
@@ -131,10 +131,22 @@ function reqMarks(ctl, b) {
   return out
 }
 
+// the `calls {ref}` document → the detail's model: its one record, and the byte figures from the record's own
+// sent_bytes / received_bytes (null = not recorded, never 0). An unknown ref is records:[] + an errors[] entry.
+export function detailModel(doc) {
+  const rec = doc && Array.isArray(doc.records) && doc.records.length ? doc.records[0] : null
+  if (!rec) {
+    const e = doc && Array.isArray(doc.errors) && doc.errors[0]
+    return { rec: null, error: (e && e.reason) || null }
+  }
+  return { rec, ref: rec.ref ?? null, sent: rec.sent_bytes ?? null, received: rec.received_bytes ?? null }
+}
+
 // ── the widget ─────────────────────────────────────────────────────────────────────────────────────────────────────
-// rec is S8's answer; opts = { ref, revealed, foldRequest } — `foldRequest` is the host page's model-call treatment:
+// model is detailModel's; opts = { revealed, foldRequest } — `foldRequest` is the host page's model-call treatment:
 // the request side folds into a default-closed 「原始请求」 disclosure (the content is in the replay).
-export function requestDetailHtml(rec, { ref = null, revealed = null, foldRequest = false } = {}) {
+export function requestDetailHtml(model, { revealed = null, foldRequest = false } = {}) {
+  const rec = (model && model.rec) || {}, ref = (model && model.ref) || null
   const ctl = (rec && rec.ctl) || {}
   if (ctl.error) return `<p class="rqd-none">${esc(W.UNKNOWN_KIND)}</p>` // a record the server could not shape: its reason travels in the answer's error, not here
   const method = rec && rec.method ? String(rec.method) : ''
@@ -179,11 +191,11 @@ export function requestDetailHtml(rec, { ref = null, revealed = null, foldReques
     bodySec(W.RESP_BODY, 'resp', respBody, respMarks(ctl, ctl.resp))
 
   const wireLine = `<p class="rqd-wire">${esc(W.WIRE_SIZE)} · ` +
-    `${esc(W.REQ_BODY)} ${esc(ctl.wire_bytes && ctl.wire_bytes.req != null ? W.WIRE_N(ctl.wire_bytes.req) : W.UNRECORDED)} · ` +
-    `${esc(W.RESP_BODY)} ${esc(ctl.wire_bytes && ctl.wire_bytes.resp != null ? W.WIRE_N(ctl.wire_bytes.resp) : W.UNRECORDED)}</p>`
+    `${esc(W.REQ_BODY)} ${esc(model.sent != null ? W.WIRE_N(model.sent) : W.UNRECORDED)} · ` +
+    `${esc(W.RESP_BODY)} ${esc(model.received != null ? W.WIRE_N(model.received) : W.UNRECORDED)}</p>`
 
   const tech = techDetailsHtml([
-    ...(ref ? [['raw_ref', ref]] : []),
+    ...(ref ? [['ref', ref]] : []),
     ...(ctl.omitted ? [['left in the source record', ctl.omitted.join(', ')]] : []),
     ...(reqBody.decoded_from || (ctl.req && ctl.req.decoded_from) ? [['decoded_from', (ctl.req && ctl.req.decoded_from) || reqBody.decoded_from]] : []),
     ...(reqBody.unknownKind ? [['req.kind', String(reqBody.unknownKind)]] : []),
