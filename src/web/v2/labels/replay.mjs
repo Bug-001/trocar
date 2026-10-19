@@ -2,8 +2,8 @@
 // (1.2 §会话头), the step head and its 缓存 / 组成 / ≈ $ popovers and the compare menu (2.2 §步头), the lane kind table's words
 // (2.1, owned here for the whole board). Fixed text keyed by asight's own closed sets — the cache-predicate states
 // (core/metrics.mjs), the server's `cacheBreak.cause` / attribution closed sets (src/view/analyze.mjs CAUSE_META) and the lane
-// kinds — never by a harness-defined code (1.5 §数据规则): those carry their own words from the server. English causeLabel /
-// fixHint and field names stay out of the UI (raw values go to 技术细节).
+// kinds — never by a harness-defined code (1.5 §数据规则): those carry their own words from the server. The server's own
+// causeLabel / fixHint and field names stay out of the UI (raw values go to technical details).
 import { L } from '../core/labels.mjs'
 
 // ── the lane kind table (2.1 owns it; 1.3's rows, 2.2's buckets, 2.6 §B's drawer title all read it) ─────────────────
@@ -11,38 +11,38 @@ import { L } from '../core/labels.mjs'
 // kind lands on ('saw' = the main track's own axis, 'sub' = the 子 agent group, 'bg' = the 后台调用 group, 'tc' = the token
 // 计数 row built from `probes`, not a lane); `bucket` is the cost bucket (null = not billed, not in any bucket).
 export const LANE_KIND = Object.freeze({
-  main: { word: '主对话', row: 'saw', bucket: 'main', hint: 'agent 和模型的对话本身;横轴按它的步排' },
-  subagent: { word: '子 agent', row: 'sub', bucket: 'sub', hint: '主 agent 另开的独立对话,有自己的上下文' },
-  monitor: { word: '安全审查', row: 'bg', bucket: 'bg', hint: 'agent 让模型审查一步操作;它读取完整上下文。悬停看它大约审到第几步(推测)' },
-  notify: { word: '通知摘要', row: 'bg', bucket: 'bg', hint: 'agent 让模型把最近的活动写成一句通知' },
-  titlegen: { word: '生成标题', row: 'bg', bucket: 'bg', hint: 'agent 让模型给会话起标题' },
-  quota: { word: '保活检查', row: 'bg', bucket: 'bg', hint: '回复上限极小的检查调用,回复不用' },
-  aux: { word: '其他后台调用', row: 'bg', bucket: 'bg', hint: '主对话和子 agent 之外的其他辅助调用' },
-  probe: { word: '预热请求', row: 'bg', bucket: 'bg', hint: 'agent 自己标出的预热请求:先把缓存写好,不是对话的一步' },
-  'token-count': { word: 'token 计数', row: 'tc', bucket: null, hint: 'token 计数:不生成回复、不计费' },
+  main: { word: 'main thread', row: 'saw', bucket: 'main', hint: 'The exchange between the agent and the model itself; the horizontal axis follows its steps' },
+  subagent: { word: 'sub-agent', row: 'sub', bucket: 'sub', hint: 'A separate thread the main agent opened, with its own context' },
+  monitor: { word: 'safety review', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to review an action; it reads the full context. Hover to see the step it most likely reviewed (inferred)' },
+  notify: { word: 'notification summary', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to sum up recent activity in a one-line notification' },
+  titlegen: { word: 'title generation', row: 'bg', bucket: 'bg', hint: 'The agent asks the model to give the session a title' },
+  quota: { word: 'keep-alive check', row: 'bg', bucket: 'bg', hint: 'A check call with a tiny reply limit; the reply is not used' },
+  aux: { word: 'other background call', row: 'bg', bucket: 'bg', hint: 'Any other helper call outside the main thread and the sub-agents' },
+  probe: { word: 'warm-up request', row: 'bg', bucket: 'bg', hint: 'A warm-up request the agent marked itself: it writes the cache ahead of time; not a step of the main thread' },
+  'token-count': { word: 'token count', row: 'tc', bucket: null, hint: 'Token count: generates no reply and is not billed' },
 })
 // a kind the table does not know yet (the server grew one): its own words, the 后台调用 row, no guess about the bucket
-export const laneKind = (kind) => LANE_KIND[kind] || { word: '其他调用', row: 'bg', bucket: 'bg', hint: '看板还不认识这种调用' }
+export const laneKind = (kind) => LANE_KIND[kind] || { word: 'other call', row: 'bg', bucket: 'bg', hint: 'The board does not know this kind of call yet' }
 export const laneWord = (kind) => laneKind(kind).word
 
 // ── the cache predicate's own words (2.2 §缓存判定; the states are core/metrics.mjs : CACHE_STATES) ──────────────────
 // cacheSentence(state, {laneW, causeW, attrW, hitPct, warm, inferred, errMsg, zeroInput}) → the sentence the 缓存 popover opens
 // with. `laneW` is the lane word of the call the button is about (the step bar's is always 主对话).
-export const STRUCT_TIP = '按块的结构比对得出,不是服务商真实的缓存边界'
+export const STRUCT_TIP = 'From comparing the block structure, not the provider\'s real cache boundary'
 export function cacheSentence(st, o = {}) {
-  const laneW = o.laneW || '主对话'
+  const laneW = o.laneW || 'main thread'
   switch (st.state) {
-    case 'failed': return `这次调用失败${o.errMsg ? `(${o.errMsg})` : ''},没有用量,不计价`
-    case 'no-usage': return o.zeroInput ? '用量里没有输入数,算不出(不是 0%)' : '没有返回用量,算不出(不是 0%)'
-    case 'first': return `${laneW}的第一次调用,没有可对比的前一次` + (o.warm ? ' · 读到的缓存来自更早的调用留下的相同开头(比如别的会话),不是异常' : '')
-    case 'ttl-rebuild': return '缓存过期:前面没变,重新写入'
-    case 'provider-contradiction': return '前面和对比的那一步相同,却没读到缓存 —— 可能是服务商一侧'
+    case 'failed': return `This call failed${o.errMsg ? ` (${o.errMsg})` : ''}; no usage, no cost`
+    case 'no-usage': return o.zeroInput ? 'The usage has no input count, so this cannot be computed (not 0%)' : 'No usage returned, so this cannot be computed (not 0%)'
+    case 'first': return `The first ${laneW} call; there is no earlier call to compare with` + (o.warm ? ' · the cache it read came from an identical prefix left by an earlier call (for example another session); this is not a fault' : '')
+    case 'ttl-rebuild': return 'Cache expired: the prefix did not change and was written again'
+    case 'provider-contradiction': return 'The prefix matches the compared step, yet no cache was read — possibly on the provider side'
     case 'changed': return st.cause === 'compaction'
-      ? `对话被压缩${o.inferred ? '(推测)' : ''},整个上下文重新写入` + (o.attrW ? ` · ${o.attrW}` : '')
-      : `缓存在这一步断开:${o.causeW || '原因未知'}` + (o.attrW ? ` · ${o.attrW}` : '')
-    case 'low-hit': return o.hitPct != null ? `前面没变,但只命中了 ${o.hitPct}%` : '前面没变,但没有命中'
-    case 'reused': return st.quiet === 'volatile-nonce-only' ? '只有每次都变的块变了,不影响缓存' : '复用了前面的缓存'
-    default: return '这一步没有采集到请求,缓存无从对比' // unjudged: no captured request to compare a prefix from
+      ? `Compaction${o.inferred ? ' (inferred)' : ''}: the whole context was written again` + (o.attrW ? ` · ${o.attrW}` : '')
+      : `Cache break at this step: ${o.causeW || 'cause unknown'}` + (o.attrW ? ` · ${o.attrW}` : '')
+    case 'low-hit': return o.hitPct != null ? `The prefix did not change, but the cache hit only ${o.hitPct}%` : 'The prefix did not change, but there was no cache hit'
+    case 'reused': return st.quiet === 'volatile-nonce-only' ? 'Only blocks that change every call changed; the cache is not affected' : 'Reused the earlier cache'
+    default: return 'No request was captured for this step, so there is nothing to compare the cache with' // unjudged: no captured request to compare a prefix from
   }
 }
 // the states whose verdict stands on a block-structure comparison (2.2 MUST: they carry the visible 结构估计 mark)
@@ -51,170 +51,170 @@ export const isStructState = (st) => STRUCT_STATES.has(st && st.state) || (st &&
 
 // the server's cause closed set (CAUSE_META) in plain words; anything else is 原因未知 and the raw value goes to 技术细节
 export const CAUSE_WORD = Object.freeze({
-  compaction: '对话被压缩', 'tool-array-reorder': '工具列表的顺序变了', 'json-key-reorder': '请求里 JSON 键的顺序变了',
-  'content-changed': '前面某一块的内容变了',
+  compaction: 'compaction', 'tool-array-reorder': 'the order of the tool list changed', 'json-key-reorder': 'the order of JSON keys in the request changed',
+  'content-changed': 'the content of an earlier block changed',
 })
-export const causeWord = (cause) => CAUSE_WORD[cause] || '原因未知'
+export const causeWord = (cause) => CAUSE_WORD[cause] || 'cause unknown'
 // the five attribution values, five words (2.2 §缓存判定)
 export const ATTR_WORD = Object.freeze({
-  yours: '请求每次拼得不一样,可以修', harness: 'agent 的正常机制', review: '需要人看',
-  harmless: '不影响', 'provider-excluded': '服务商不计入缓存',
+  yours: 'the request is built differently each time; fixable', harness: 'the agent\'s normal behaviour', review: 'needs a person to look',
+  harmless: 'no effect', 'provider-excluded': 'the provider does not count it in the cache',
 })
 
 // ── the 缓存 popover ──────────────────────────────────────────────────────────────────────────────────────────────────
-export const USAGE_NULL_TIP = '服务商没有返回这个数'
+export const USAGE_NULL_TIP = 'The provider did not return this number'
 export const BREAK_COST_WHY = Object.freeze({
-  'no-write-counter': '多花算不出:服务商没有返回写缓存数', 'no-price': '多花算不出:没有这个模型的单价',
-  'no-usage': '多花算不出:没有返回用量', 'no-ref': '多花算不出',
+  'no-write-counter': 'Extra cost cannot be computed: the provider returned no cache write count', 'no-price': 'Extra cost cannot be computed: no unit price for this model',
+  'no-usage': 'Extra cost cannot be computed: no usage returned', 'no-ref': 'Extra cost cannot be computed',
 })
-export const CACHE_SEMANTICS_UNKNOWN = '这个服务商的缓存数字含义不确定'
-export const JUMP_TO_CHANGE = '跳到变化处 ›'
+export const CACHE_SEMANTICS_UNKNOWN = 'What this provider\'s cache numbers mean is not certain'
+export const JUMP_TO_CHANGE = 'Jump to the change ›'
 
 // ── the 组成 popover ──────────────────────────────────────────────────────────────────────────────────────────────────
-export const SEG_NAME = Object.freeze({ tools: '工具定义', system: '系统提示', history: '历史对话', task: '本轮新内容' })
-export const COMP_CALIBRE = '按内容字节,不含请求的 JSON 外壳;token 是按字符估的'
-export const compCulprit = (seg, pct) => `最大的一段:${SEG_NAME[seg] || seg}(${pct}%),每次请求都重发`
-export const TOOLS_ESTIMATED = '工具定义只存了元数据,这一段的大小是估的'
-export const DIAGNOSE_ONLY = '这里只说增量来自哪里;要不要删,由 agent 自己决定'
-export const COMPACTION_REWRITE = '对话被压缩,整个上下文重写,不是逐块追加'
-export const compOffPage = (n) => `第 ${n} 步的内容不在当前这一页,增量算不出`
-export const COMP_SELF = Object.freeze({ paged: '这一步的内容不在当前这一页,组成算不出', unparsed: '这一步的请求解析不出来', none: '这一步没有采集到请求' })
-export const compSize = (n) => `这次请求的内容 ${n}`
-export const growthLine = (delta, segW, less = false) => `比上一步${less ? '少' : '多'} ${delta}` + (segW ? `,主要在${segW}` : '')
-export const growthVs = (n, delta, segW, less = false) => `比第 ${n} 步${less ? '少' : '多'} ${delta}` + (segW ? `,主要在${segW}` : '')
-export const LOAD_STEP = (n) => `载入第 ${n} 步`
+export const SEG_NAME = Object.freeze({ tools: 'tool definitions', system: 'system prompt', history: 'earlier messages', task: 'new in this step' })
+export const COMP_CALIBRE = 'By content bytes, without the request\'s JSON wrapper; tokens are estimated from characters'
+export const compCulprit = (seg, pct) => `Largest part: ${SEG_NAME[seg] || seg} (${pct}%), resent with every request`
+export const TOOLS_ESTIMATED = 'Tool definitions were stored as metadata only; the size of this part is an estimate'
+export const DIAGNOSE_ONLY = 'This only says where the growth comes from; whether to cut anything is up to the agent'
+export const COMPACTION_REWRITE = 'Compaction: the whole context was rewritten, not appended block by block'
+export const compOffPage = (n) => `The content of step ${n} is not on the current page, so the growth cannot be computed`
+export const COMP_SELF = Object.freeze({ paged: 'This step\'s content is not on the current page, so the breakdown cannot be computed', unparsed: 'This step\'s request could not be parsed', none: 'No request was captured for this step' })
+export const compSize = (n) => `Content of this request: ${n}`
+export const growthLine = (delta, segW, less = false) => `${delta} ${less ? 'less' : 'more'} than the previous step` + (segW ? `, mostly in ${segW}` : '')
+export const growthVs = (n, delta, segW, less = false) => `${delta} ${less ? 'less' : 'more'} than step ${n}` + (segW ? `, mostly in ${segW}` : '')
+export const LOAD_STEP = (n) => `Load step ${n}`
 
 // ── the ≈ $ popover ───────────────────────────────────────────────────────────────────────────────────────────────────
-export const COST_CALIBRE = '本地估价(用量 × 单价),不是账单'
-export const PRICE_BY_KEY = (key) => `按 ${key} 的单价`
-export const SEE_PRICES = '看单价 ›'
+export const COST_CALIBRE = 'Local estimate (usage × unit price), not a bill'
+export const PRICE_BY_KEY = (key) => `At the unit price of ${key}`
+export const SEE_PRICES = 'Unit prices ›'
 export const COST_WHY = Object.freeze({
-  failed: '调用失败,不计价', 'no-usage': '没有返回用量,不计价', 'no-price': '没有这个模型的单价',
+  failed: 'The call failed; no cost', 'no-usage': 'No usage returned; no cost', 'no-price': 'No unit price for this model',
 })
-export const priceTableNote = (table, err) => (table ? '' : err ? `价表读不出:${err}` : '价表载入中')
+export const priceTableNote = (table, err) => (table ? '' : err ? `The price table could not be read: ${err}` : 'Loading the price table')
 
 // ── the compare menu (2.3 §两个对比步; the control itself is 2.2's) ────────────────────────────────────────────────────
-export const COMPARE = '对比'
-export const compareAt = (n) => `对比第 ${n} 步 ×`
-export const COMPARE_DEFAULT = '上一步(默认)'
-export const compareDefaultAt = (n) => `第 ${n} 步(默认)`
-export const COMPARE_PICK = '选一步…'
-export const COMPARE_WITH = '和第'
-export const COMPARE_WITH2 = '步对比'
-export const COMPARE_OK = '确定'
-export const COMPARE_RANGE = (m) => `1 到 ${m} 之间、不是当前这一步`
+export const COMPARE = 'Compare'
+export const compareAt = (n) => `Comparing with step ${n} ×`
+export const COMPARE_DEFAULT = 'Previous step (default)'
+export const compareDefaultAt = (n) => `Step ${n} (default)`
+export const COMPARE_PICK = 'Pick a step…'
+export const COMPARE_WITH = 'Compare with step'
+export const COMPARE_WITH2 = ''
+export const COMPARE_OK = 'OK'
+export const COMPARE_RANGE = (m) => `Between 1 and ${m}, and not the current step`
 
 // ── the three buttons and their popovers (the button word carries the short state; the rest is behind it) ────────────
-export const CACHE_TITLE = '缓存'
-export const CACHE_POPOVER_LABEL = '这一步的缓存'
-export const COMP_TITLE = '组成'
-export const COMP_POPOVER_LABEL = '这次请求的组成'
-export const COMP_BTN = '组成'
-export const COMP_BTN_NONE = '组成 —'
+export const CACHE_TITLE = 'Cache'
+export const CACHE_POPOVER_LABEL = 'Cache at this step'
+export const COMP_TITLE = 'Breakdown'
+export const COMP_POPOVER_LABEL = 'What this request is made of'
+export const COMP_BTN = 'Breakdown'
+export const COMP_BTN_NONE = 'Breakdown —'
 export const COST_TITLE = '≈ $'
-export const COST_POPOVER_LABEL = '这一步的估价'
-export const CMP_RESET = '回到上一步'
+export const COST_POPOVER_LABEL = 'Estimated cost of this step'
+export const CMP_RESET = 'Back to the previous step'
 
 // ── the step head (2.2 §步头) ─────────────────────────────────────────────────────────────────────────────────────────
-export const STEP_PREV = '上一步'
-export const STEP_NEXT = '下一步'
-export const stepNo = (n, m) => `第 ${n} / ${m} 步`
-export const callNo = (laneW, k, m) => `${laneW} · 第 ${k} / ${m} 次调用`
-export const askNo = (k) => `第 ${k} 次提问`
+export const STEP_PREV = 'Previous step'
+export const STEP_NEXT = 'Next step'
+export const stepNo = (n, m) => `Step ${n} / ${m}`
+export const callNo = (laneW, k, m) => `${laneW} · call ${k} / ${m}`
+export const askNo = (k) => `Prompt ${k}`
 
 // ── the session head (1.2 §会话头) ────────────────────────────────────────────────────────────────────────────────────
-export const BACK = '‹ 会话'
-export const UNTITLED = '未命名会话'
-export const FOLLOW = '跟随最新'
-export const SESSION_INFO_LABEL = '这次会话的概况'
-export const MULTIPLE_AGENTS = '多个 agent'
-export const TITLE_FROM_META = '标题来自 agent 自己的记录,不是采集到的内容'
-export const TITLE_FROM_PROMPT = '取自第一条提问'
-export const TITLE_UNTITLED_TIP = '没有可用的标题;开始时间来自第一步的记录'
-export const MULTIPLE_AGENTS_TIP = '同一个会话 id 下混了几种 agent 的记录'
-export const PROJECT = '项目'
-export const GUESS = '推测'
+export const BACK = '‹ Sessions'
+export const UNTITLED = 'Untitled session'
+export const FOLLOW = 'Follow latest'
+export const SESSION_INFO_LABEL = 'About this session'
+export const MULTIPLE_AGENTS = 'several agents'
+export const TITLE_FROM_META = 'The title comes from the agent\'s own records, not from captured content'
+export const TITLE_FROM_PROMPT = 'Taken from the first prompt'
+export const TITLE_UNTITLED_TIP = 'No usable title; the start time comes from the record of the first step'
+export const MULTIPLE_AGENTS_TIP = 'Records of several agents share this session id'
+export const PROJECT = 'project'
+export const GUESS = 'inferred'
 
 // ── the 会话保真行 (1.2 §会话保真行): each fact's plain words ────────────────────────────────────────────────────────
-export const truncFact = (shown, total, fileMb) => `只显示了最近 ${shown} / ${total} 次调用(文件 ${fileMb} MB)`
-export const unknownFact = (n) => `${n} 条记录没有解析器能读,没有画出来`
-export const LOGGED_FACT = '次调用只记了日志,不在回放里 ›'
+export const truncFact = (shown, total, fileMb) => `Showing only the latest ${shown} / ${total} calls (file ${fileMb} MB)`
+export const unknownFact = (n) => `${n} records no parser can read; not drawn`
+export const LOGGED_FACT = 'calls are log only and not in the replay ›'
 export const loggedFact = (n) => `${n} ${LOGGED_FACT}`
-export const FILES_FACT = '个采集文件没读全,这个会话可能缺内容 ›'
-export const filesFact = (n) => `有 ${n} ${FILES_FACT}`
-export const GAP_FACT = '这段时间采集出过错,读到的范围内可能缺调用(推测)· 采集记录 ›'
+export const FILES_FACT = 'capture files were not read in full; this session may be missing content ›'
+export const filesFact = (n) => `${n} ${FILES_FACT}`
+export const GAP_FACT = 'Capture had errors in this period; calls may be missing from the range read (inferred) · capture log ›'
 
 // ── the context window (2.3): sections, block marks, the 调用保真行, the 窗口行, the 变化线, the代替态 ────────────────
-export const SECTION_NAME = Object.freeze({ tools: '工具定义', system: '系统提示', messages: '对话' })
-export const SECTION_VERBATIM = '以下逐字'
-export const SECTION_SIZE_TIP = '这一段各块内容的字节数之和'
+export const SECTION_NAME = Object.freeze({ tools: 'Tool definitions', system: 'System prompt', messages: 'Messages' })
+export const SECTION_VERBATIM = 'verbatim below'
+export const SECTION_SIZE_TIP = 'The sum of the content bytes of the blocks in this section'
 export const SECTION_SIZE_EST = '≈'
-export const SECTION_SIZE_EST_TIP = '工具定义只存了元数据,大小是估算'
+export const SECTION_SIZE_EST_TIP = 'Tool definitions were stored as metadata only; the size is an estimate'
 export const HALF_MARK = '◐'
-export const WINDOW_LINE = '这一步的内容不能回到原始字节(经过重新解析)'
-export const FOLD_ALL_OPEN = '全部展开'
-export const FOLD_ALL_CLOSE = '全部折叠'
-export const FOLD_ALL_OPEN_TIP = '展开这一步的每一张提问卡'
-export const FOLD_ALL_CLOSE_TIP = '折叠这一步的每一张提问卡'
+export const WINDOW_LINE = 'This step\'s content cannot be traced back to the raw bytes (it was parsed again)'
+export const FOLD_ALL_OPEN = 'Expand all'
+export const FOLD_ALL_CLOSE = 'Collapse all'
+export const FOLD_ALL_OPEN_TIP = 'Expand every prompt card in this step'
+export const FOLD_ALL_CLOSE_TIP = 'Collapse every prompt card in this step'
 
 // the 调用保真行 (2.3): one fact per field, joined by 「 · 」; the closed sets of contextState and the three *Incomplete flags
 export const CTX_FACT = Object.freeze({
-  partial: '上下文不完整:缺前面的记录', partialBare: '上下文不完整', unknownWhy: '原因未知',
-  reconstructed: '由前几条记录拼出', server_edited: '服务端改过上下文,这里不是模型收到的全部',
-  fallback: '上下文没采全',
+  partial: 'Context incomplete: earlier records are missing', partialBare: 'Context incomplete', unknownWhy: 'cause unknown',
+  reconstructed: 'reconstructed from earlier records', server_edited: 'the server edited the context; this is not everything the model received',
+  fallback: 'the context was not fully captured',
 })
-export const REQ_FACT = Object.freeze({ truncated: '在采集上限处截断', partial: '没收全' })
-export const WS_FACT = Object.freeze({ partial: '这条连接前面的消息缺了', truncated: '有消息超过上限,只存了大小', undecoded: '有消息没解压出来', nonVerbatim: '有消息只存了大小' })
-export const RESP_FACT = Object.freeze({ undecoded: '没解压出来', binary: '不是文本', notJson: '不是 JSON', empty: '没有回复体', unparsed: '有事件没读出来,回复可能不全', truncated: '在采集上限处截断' })
-export const INCOMPLETE_WORD = Object.freeze({ req: '请求', ws: '消息', resp: '回复' })
-export const reqEncodingFact = (enc) => `请求体在线上压缩过(${enc}),这里是解压后的确切文字`
+export const REQ_FACT = Object.freeze({ truncated: 'truncated at the capture limit', partial: 'incomplete' })
+export const WS_FACT = Object.freeze({ partial: 'earlier messages on this connection are missing', truncated: 'some messages were over the limit; length only', undecoded: 'some messages were not decompressed', nonVerbatim: 'some messages are length only' })
+export const RESP_FACT = Object.freeze({ undecoded: 'not decompressed', binary: 'not text', notJson: 'not JSON', empty: 'no response body', unparsed: 'some events could not be parsed; the reply may be incomplete', truncated: 'truncated at the capture limit' })
+export const INCOMPLETE_WORD = Object.freeze({ req: 'request', ws: 'messages', resp: 'reply' })
+export const reqEncodingFact = (enc) => `The request body was compressed on the wire (${enc}); this is the exact decompressed text`
 
 // block-level marks (2.3 §保真标): one visible word per unproven block; the codes are the 3.2 closed set plus
 // asight's own opened-body outcomes (notfetched · reserialized · unknown)
 export const FF_WORD = Object.freeze({
-  metadata: '只有元数据', opaque: '加密,没有明文', summarized: '客户端的摘要,不是原文', omitted: '源头省略了',
-  truncated: '源头就截断了', unaddressable: '不能回源', unknown: '保真未知', notfetched: '取不到字节',
-  reserialized: '重新序列化过,不是线上字节', verbatim: '逐字',
+  metadata: 'metadata only', opaque: 'encrypted; no plaintext', summarized: 'a client summary, not the original', omitted: 'omitted by the source',
+  truncated: 'truncated at the source', unaddressable: 'not addressable', unknown: 'fidelity unknown', notfetched: 'bytes could not be fetched',
+  reserialized: 'reserialized, not the wire bytes', verbatim: 'verbatim',
 })
 export const FF_TIP = Object.freeze({
-  metadata: '只有元数据:完整的 JSON schema 没有被采集(D15 前的旧 trace),模型收到的是完整 schema',
-  opaque: '加密 / 涂黑的推理:线上只有签名或密文,没有明文可还原',
-  summarized: '客户端的摘要顶替了原文(例如压缩),不是逐字原文',
-  omitted: '源头省略了这一块的内容',
-  truncated: '源本身就没抓全(采集上限处截断);全文不在盘上',
-  unaddressable: '不能回源:这一块没有可定位的线上字节跨度,正文是块里内联带来的',
-  unknown: '保真未知:服务端给的保真值不在认识的闭集里,不当作逐字',
-  notfetched: '取不到字节:回源失败,原因见正文;再点开会重试',
-  reserialized: '这些字节在进入采集时被重新序列化过,不是线上字节的逐字记录',
-  verbatim: '逐字:这一块存下来的就是线上的字节,没有改写(AC-1)',
+  metadata: 'Metadata only: the full JSON schema was not captured (an older capture); the model received the full schema',
+  opaque: 'Encrypted / redacted reasoning: the wire carries only a signature or ciphertext; there is no plaintext to restore',
+  summarized: 'A client summary replaced the original (for example in compaction); this is not the verbatim original',
+  omitted: 'The source omitted the content of this block',
+  truncated: 'The source itself was not captured in full (truncated at the capture limit); the full text is not on disk',
+  unaddressable: 'Not addressable: this block has no locatable byte span on the wire; its text came inline with the block',
+  unknown: 'Fidelity unknown: the server gave a fidelity value outside the known set; it is not treated as verbatim',
+  notfetched: 'Bytes could not be fetched: reading the source failed, the reason is in the body; opening it again retries',
+  reserialized: 'These bytes were reserialized on their way into the capture; they are not a verbatim record of the wire bytes',
+  verbatim: 'Verbatim: what is stored for this block is the wire bytes, unchanged',
 })
-export const INLINE_NOTE = '这段文字是块里带来的,不是从原始采集里逐字切出来的'
-export const NO_BODY = '这一块没有正文,也没有回源定位'
-export const FETCHING = '回源中…'
-export const clipNote = (n) => `…(共 ${n} 字符,这里只显示前 20000)`
+export const INLINE_NOTE = 'This text came inline with the block; it is not cut verbatim from the raw capture'
+export const NO_BODY = 'This block has no body and no source location'
+export const FETCHING = 'Fetching…'
+export const clipNote = (n) => `…(${n} characters in total; only the first 20000 are shown)`
 // the raw panel's reply / the drawer's reply: the display clip said once, in 2.6 §A's own words (the context window's
 // blocks keep clipNote above — 2.3 K-07 pins that wording for them)
-export const clipShownNote = (shown, total) => `已截断显示 · 前 ${shown} / 共 ${total} 字符`
+export const clipShownNote = (shown, total) => `Display truncated · first ${shown} of ${total} characters`
 
 // block-head words (2.3 §block 卡)
-export const CACHE_MARK = '缓存标记'
-export const CACHE_MARK_TIP = '请求在这一块声明了缓存位置;缓存怎么处理这个标记,各服务商不同'
-export const VOLATILE_MARK = '每次都变 · 不影响缓存'
-export const VOLATILE_MARK_TIP = '这一块每次调用字节都会变,却被排除在缓存键之外,不影响缓存命中'
-export const NEW_MARK = '新'
-export const NEW_MARK_TIP = '这一块不在内容对比步里:本步新增到上下文的内容(属于重发的增量)'
-export const CHARS_WORD = '字符'
+export const CACHE_MARK = 'cache mark'
+export const CACHE_MARK_TIP = 'The request declares a cache position at this block; how the cache treats this mark differs by provider'
+export const VOLATILE_MARK = 'changes every call — not part of the cache key'
+export const VOLATILE_MARK_TIP = 'The bytes of this block change on every call but are left out of the cache key, so they do not affect cache hits'
+export const NEW_MARK = 'new'
+export const NEW_MARK_TIP = 'This block is not in the compared step: content new to the context at this step (part of the resent growth)'
+export const CHARS_WORD = 'characters'
 // head.tag's closed set in plain words (2.3 Edge「块头 tag 的中文」); a data suffix (a tool name, MCP) rides along
 export const TAG_WORD = Object.freeze({
-  def: '指令', user: '对话', say: '对话', text: '对话', 'system-reminder': '系统提醒', thinking: '思考',
-  observation: '工具结果', image: '图片', document: '文档',
+  def: 'instructions', user: 'message', say: 'message', text: 'message', 'system-reminder': 'system reminder', thinking: 'thinking',
+  observation: 'tool result', image: 'image', document: 'document',
 })
-export const TAG_ACTION = '工具调用'
-export const TAG_ERROR = '错误'
-export const TAG_UNKNOWN = '原因未知'
+export const TAG_ACTION = 'tool call'
+export const TAG_ERROR = 'error'
+export const TAG_UNKNOWN = 'unknown'
 
 // the 变化线 (2.3 §变化线)
-export const STRUCT_EST_WORD = '结构估计'
+export const STRUCT_EST_WORD = 'structural estimate'
 export const changeLine = (k, causeW) => (k != null ? `从这里起和第 ${k} 步不同 · ${causeW}` : `从这里起有变化 · ${causeW}`)
 export const CHANGE_COMPACT = '对话被压缩:以下整段重写'
 export const CHANGE_COMPACT_INFERRED = '推测'
