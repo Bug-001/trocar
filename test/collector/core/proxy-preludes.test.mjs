@@ -36,7 +36,7 @@ async function lab(t, proxyOpts, { proxies = () => [], trustLab = true, dst = nu
   const tlsOpts = { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }
   const mock = await startMockUpstream({ tls: tlsOpts })
   const proxy = await startMockProxy({ target: { port: mock.port }, ...proxyOpts, ...(proxyOpts.tls ? { tls: tlsOpts } : {}) })
-  const store = createRecordStore({ root: path.join(dir, 'rec') })
+  const store = createRecordStore({ root: path.join(dir, 'rec'), raw: path.join(dir, 'rec') })
   const envelopes = [], flows = [], failures = []
   const port0 = dst ? await dst(proxy.port, mock.port) : proxy.port
   const engine = createEngine({

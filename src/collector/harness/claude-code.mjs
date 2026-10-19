@@ -147,7 +147,7 @@ const proxy = {
   unsupported: { socks4: 'fails', socks5: 'fails', socks5h: 'fails' },
   branches: ['all'],
   measured: { win32: 'lab', linux: 'lab', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3). Linux: V54 ran a real `claude -p` with HTTPS_PROXY in its settings.json env through a CONNECT proxy (the setting is read, the CONNECT comes from claude's pid) — what the path depends on when it has a proxy of its own; SOCKS and the OS proxy are not measured on Linux (it reads none). macOS: inferred, until measured
-  restart: { hint: '退出这个 Claude Code,再重新启动(它只在启动时读一次代理设置)', processes: processes.names[0].name },
+  restart: { hint: 'Quit this Claude Code, then start it again (it reads the proxy setting once, at start)', processes: processes.names[0].name },
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Facts: measured, plus a census of the Desktop app.
@@ -174,8 +174,8 @@ const proxyMode = {
       verified: { darwin: true, win32: true }, forwardOnlyHosts: ['claude.ai', 'accounts.google.com', 'downloads.claude.ai'] },
   ],
   routes: {
-    settings: { kind: 'json-key', file: SETTINGS, format: 'json', proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy']], noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']], value: 'door-url', absent: 'create', takesEffect: '下次启动 claude 时生效(它只在启动时读一次代理设置)' },
-    library: { kind: 'json-key', select: { dir: perOs({ darwin: { base: 'appSupport', path: 'Claude-3p/configLibrary' }, win32: { base: 'localAppData', path: 'Claude-3p/configLibrary' } }), meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, format: 'json', proxyKeys: [['egressProxyPacUrl']], ownKeys: [['egressProxyUrl'], ['egressProxyPacUrl']], value: 'pac-url', auth: false, absent: 'create', takesEffect: '下次启动 Claude 桌面版时生效;不需要管理员' },
+    settings: { kind: 'json-key', file: SETTINGS, format: 'json', proxyKeys: [['env', 'HTTPS_PROXY'], ['env', 'https_proxy']], noProxyKeys: [['env', 'NO_PROXY'], ['env', 'no_proxy']], value: 'door-url', absent: 'create', takesEffect: 'takes effect the next time you start claude (it reads the proxy setting once, at start)' },
+    library: { kind: 'json-key', select: { dir: perOs({ darwin: { base: 'appSupport', path: 'Claude-3p/configLibrary' }, win32: { base: 'localAppData', path: 'Claude-3p/configLibrary' } }), meta: '_meta.json', idKey: 'appliedId', createIfNone: true }, format: 'json', proxyKeys: [['egressProxyPacUrl']], ownKeys: [['egressProxyUrl'], ['egressProxyPacUrl']], value: 'pac-url', auth: false, absent: 'create', takesEffect: 'takes effect the next time you start the Claude desktop app; no administrator needed' },
   },
   certs: {
     // only when CLAUDE_CODE_CERT_STORE=bundled is set (then the root is hidden): asight-ca.pem into the settings env, if neither the settings nor the install env set it

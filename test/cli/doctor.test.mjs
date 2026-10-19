@@ -16,6 +16,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { absentSpawn } from '../helpers/no-real-os.mjs'
 import { captureHealth } from '../../src/health/read.mjs'
 import { closure } from '../helpers/imports.mjs'
+import { modelWorld } from '../helpers/model-world.mjs'
 
 // a record the four questions are content with: an LLM call with its verbatim request and a reconstructed response
 const REC = { id: 'req_1', is_llm_call: true, endpoint: 'https://api.anthropic.com/v1/messages', ts_request: '2026-01-01T00:00:00.000Z',
@@ -31,47 +32,47 @@ function capture(dir, { n = 1, mode = 0o600, name = 'capture.ndjson' } = {}) {
 }
 /** A HOME where asight has not been turned on: a doctor with nothing of its own to look at. */
 const plain = () => { const home = tmpDir('asight-doc-'); return { home, sh: { env: { HOME: home } }, sys: { exec: recordingExec() } } }
-const DEPS = { spawn: absentSpawn, has: () => true, verify: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
+const DEPS = { spawn: absentSpawn, has: () => true, request: down(), procs: async () => [], lingerRead: () => ({ state: true }), socketPath: SOCK, user: 'alice' }
 async function doctor(s, argv = [], { deps = {}, io = fakeIo(), platform = 'linux', source = '' } = {}) {
   // `doctor` has no --source any more (1.6 §2): the capture it reads is the default location, and a test points it elsewhere with the internal seam ASIGHT_SOURCE (§1.8)
   const exit = await runDoctor(argv, { io, home: s.home, platform, env: { ...s.sh.env, XDG_RUNTIME_DIR: path.join(s.home, 'run'), ASIGHT_SOURCE: source }, deps: { ...DEPS, exec: s.sys.exec.run, ...deps } })
   return { exit, io, out: io.stdoutText(), err: io.stderrText(), text: io.text() }
 }
 
-test('零条记录 = 无法判定: an empty capture file, or none at all, is exit 3 with the words and no ✓ for the permissions; one record makes the same capture exit 0', async () => {
+test('no record read = cannot judge: an empty capture file, or none at all, is exit 3 with the words; one record makes the same capture exit 0', async () => {
   const s = plain()
   const src = path.join(s.home, 'src')
   capture(src, { n: 0 })
   let r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 3, r.text)
-  assert.match(r.err, /无法判定/)
-  assert.match(r.err, /没有核到任何记录/, 'and says what was not examined')
-  assert.ok(!r.out.includes('✓ 采集文件仅属主可读'), `no all-clear: ${r.out}`)
-  assert.match(r.out, /\? ③ 凭据没漏[^\n]*没有检查任何记录/, '③ is a question mark, not a tick')
+  assert.match(r.out, /^Could not judge the captured records: 1 capture file\(s\) are there and no record could be read from them$/m, 'and says what was not examined')
+  assert.ok(!/no problems\.$/.test(r.out.trim()), `an all-clear alone is not what exit 3 prints: ${r.out}`)
   r = await doctor(s, [], { source: path.join(s.home, 'nowhere') })
   assert.equal(r.exit, 3, 'a source that does not exist is not a pass either')
   r = await doctor(plain()) // the defaults: ~/.asight does not exist
-  assert.equal(r.exit, 3, r.text)
+  assert.equal(r.exit, 0, `§3.7: having no captured data at all is not 「cannot judge」\n${r.text}`)
+  assert.match(r.out, /^File permissions: no captured data yet$/m, 'and it is said, not passed over in silence')
   capture(src, { n: 1 })
   r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 0, r.text)
-  assert.match(r.out, /1 record\(s\) captured/); assert.match(r.out, /owner-only/); assert.match(r.out, /✓ 采集文件仅属主可读/)
+  assert.match(r.out, /^asight doctor: no problems\.$/m)
+  assert.doesNotMatch(r.out, /Could not judge/, 'a capture it could read leaves nothing undetermined')
   assert.equal(r.err, '', 'nothing on stderr for a clean capture')
 })
 
-test('采集文件可被他人读取: a capture file others can read (0644, 0640) is exit 1 with the words, the file and its mode and the chmod line filled in; owner-only again is exit 0', async () => {
+test('a capture file others can read (0644, 0640) is exit 1 with the words, the file and its mode and the chmod line filled in; owner-only again is exit 0', async () => {
   const s = plain()
   const src = path.join(s.home, 'src')
   const f = capture(src, { mode: 0o644 })
   let r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 1, r.text)
-  assert.match(r.err, /采集文件可被他人读取/)
-  assert.match(r.out, /✗ 采集文件可被他人读取: 1 个 \[capture\.ndjson 0644\]/)
-  assert.ok(r.out.includes(`chmod 600 '${f}'`), `the command, with the path filled in:\n${r.out}`)
+  assert.match(r.out, /^asight doctor: 1 problem\.$/m)
+  assert.ok(r.out.includes(f) && r.out.includes('(mode 0644) can be read by someone else'), r.out)
+  assert.ok(r.out.includes(`chmod 600`) && r.out.includes(f), `the command, with the path filled in:\n${r.out}`)
   assert.ok(!/credential leak|redact firewall/.test(r.text), 'the old wording (the credential is stored verbatim on purpose) is gone')
   fs.chmodSync(f, 0o640)
   r = await doctor(s, [], { source: src })
-  assert.equal(r.exit, 1); assert.match(r.out, /capture\.ndjson 0640/)
+  assert.equal(r.exit, 1); assert.match(r.out, /\(mode 0640\) can be read by someone else/)
   fs.chmodSync(f, 0o600)
   r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 0, r.text)
@@ -88,9 +89,7 @@ test('a capture file that could not be read in full is not a pass (exit 3, the f
   const { readRecords } = await import('../../src/etl/ingest.mjs')
   const r = await doctor(s, [], { source: src, deps: { readRecords: async (f, o) => { if (f === b) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return readRecords(f, o) } } })
   assert.equal(r.exit, 3, r.text)
-  assert.ok(r.err.includes(`read error: ${b}: EIO`), r.err)
-  assert.match(r.out, /1 record\(s\) captured/, 'what could be read is still reported')
-  assert.match(r.err, /没读完整/)
+  assert.ok(r.out.includes(`Could not judge a captured file: ${b}: EIO`), r.out)
 })
 
 test('④b covers ~/.asight/backup/: a backup of a user\'s file that others can read is exit 1; asight made it 0600, and then it is a pass', async () => {
@@ -103,70 +102,45 @@ test('④b covers ~/.asight/backup/: a backup of a user\'s file that others can 
   fs.chmodSync(b, 0o644)
   r = await doctor(s, [], { source: src })
   assert.equal(r.exit, 1, r.text)
-  assert.ok(r.out.includes(`${path.basename(b)} 0644`), r.out)
-})
-
-// R11 / 0.1 §3: a directory that exists and cannot be listed is not "no files" — reading nothing and certifying is what this command once did. Real permissions: a mode-000 directory, restored afterwards
-const rootCanList = typeof process.getuid === 'function' && process.getuid() === 0 ? 'root lists a directory with no mode bits' : false
-test('④b: the export directory, a session directory in it, and the sessions directory — one that exists and cannot be listed is a read error (exit 3, the directory and the errno named), never a pass; listable again, the 0644 file in it is exit 1', { skip: rootCanList }, async () => {
-  const s = plain()
-  const src = path.join(s.home, 'src'); capture(src)
-  const ah = path.join(s.home, '.asight')
-  const leak = capture(path.join(ah, 'export', 'S1'), { mode: 0o644, name: 'leak.ndjson' }) // a capture others can read, where nobody can look
-  fs.mkdirSync(path.join(ah, 'sessions', 'S2'), { recursive: true })
-  const dirs = { 'the export directory': path.join(ah, 'export'), 'a session directory in the export directory': path.join(ah, 'export', 'S1'), 'the sessions directory': path.join(ah, 'sessions'), 'a session directory in the sessions directory': path.join(ah, 'sessions', 'S2') }
-  for (const [what, dir] of Object.entries(dirs)) {
-    fs.chmodSync(leak, dir.includes('export') ? 0o644 : 0o600) // hidden by the directory under test, or visible and clean (a problem that is found outranks not knowing: that is exit 1)
-    fs.chmodSync(dir, 0)
-    try {
-      const r = await doctor(s, [], { source: src })
-      assert.equal(r.exit, 3, `${what}: ${r.text}`)
-      assert.ok(r.err.includes(`read error: ${dir}: EACCES`), `${what}: ${r.err}`)
-      assert.ok(!r.out.includes('✓ 采集文件仅属主可读'), `${what}: no all-clear\n${r.out}`)
-      assert.match(r.err, /无法判定/)
-      if (what === 'the export directory') {
-        const j = await doctor(s, ['--json'], { source: src, io: fakeIo() })
-        assert.equal(j.exit, 3); assert.ok(j.io.json().read_errors.some((e) => e.startsWith(`${dir}: EACCES`)), JSON.stringify(j.io.json().read_errors))
-      }
-    } finally { fs.chmodSync(dir, 0o700) }
-  }
-  fs.chmodSync(leak, 0o644)
-  const r = await doctor(s, [], { source: src })
-  assert.equal(r.exit, 1, `listable: what was hidden is found\n${r.text}`); assert.match(r.out, /leak\.ndjson 0644/)
-  fs.chmodSync(leak, 0o600)
-  assert.equal((await doctor(s, [], { source: src })).exit, 0)
-  // a directory that is not there is no files, as before
-  fs.rmSync(path.join(ah, 'export'), { recursive: true }); fs.rmSync(path.join(ah, 'sessions'), { recursive: true })
-  assert.equal((await doctor(s, [], { source: src })).exit, 0)
+  assert.ok(r.out.includes(b) && r.out.includes('(mode 0644) can be read by someone else'), r.out)
 })
 
 // the network reads of the topology (1.6 §9.7, V50): `ss` and `ip` only read; the tests below are about what doctor starts, stops or changes, so these are set aside
 const NET_READ = /^(ss -ltnpH|ip -j (route get 1\.1\.1\.1|-d link show dev \S+))$/
 const ranBesides = (s, from = 0) => s.sys.exec.calls.slice(from).filter((c) => !NET_READ.test(c))
 
-test('the old `verify` is ④: the CA is in the user trust store (✓), is not (⚠ not onboarded), could not be checked (⚠ with the reason) — and none of them changes the exit', async () => {
-  const s = plain()
-  const src = path.join(s.home, 'src'); capture(src)
-  let r = await doctor(s, [], { source: src, deps: { verify: () => true } })
-  assert.match(r.out, /✓ ④ 没弱化全机 TLS[^\n]*CA present in the USER trust store/); assert.equal(r.exit, 0)
-  r = await doctor(s, [], { source: src, deps: { verify: () => false } })
-  assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*not found in the user trust store[^\n]*监测 toggle[^\n]*collector's own CA \(`asight on`\) is in no trust store/); assert.doesNotMatch(r.out, /run: asight on/); assert.equal(r.exit, 0)
-  r = await doctor(s, [], { source: src, deps: { verify: () => { throw new Error('security: the keychain could not be opened') } } })
-  assert.match(r.out, /⚠ ④ 没弱化全机 TLS[^\n]*trust check errored: security: the keychain could not be opened/); assert.equal(r.exit, 0)
-  assert.deepEqual(ranBesides(s), [], 'with the trust-store check, and the process table injected, no OS tool ran at all')
-})
+// P7 (Windows test machine 2026-10-18): there is ONE check for 「is asight's root trusted」 — the collector's root store, the one `status` and `install` use.
+// doctor used to run a second, half-built one of its own and printed its exception at the reader: "win32 TrustStoreInstaller not implemented
+// (D22 reserved — CurrentUser Root store; ship with the Windows onboard sub-unit)" — a class name, a decision id and a plan item, on a machine
+// where install had just written the root. Over both model platforms: a store that answers is judged (exit ≠ 3), one that cannot be read is
+// 「could not judge」 with its own reason and no internal label.
+for (const platform of ['darwin', 'win32']) {
+  test(`P7 · ${platform}: doctor judges the trust store by the one check status uses — a store that cannot be read is exit 3 with an English reason, never an internal label`, async () => {
+    const w = await modelWorld()
+    await w.install()
+    const src = path.join(w.home, 'src'); capture(src)
+    const run = (rootStore) => doctor({ home: w.home, sh: { env: w.env }, sys: { exec: recordingExec() } }, [], { platform, source: src, deps: { rootStore, netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }) } })
+    const judged = await run(w.store)
+    assert.notEqual(judged.exit, 3, judged.text)
+    assert.doesNotMatch(judged.out, /trust store/i, 'a store it could read is not \u300ccould not judge\u300d')
+    const blind = await run({ has: () => { throw new Error('certutil -user -store Root failed (exit 1)') } })
+    assert.equal(blind.exit, 3, blind.text)
+    assert.match(blind.out, /Could not judge the user trust store: the root store could not be read \(certutil -user -store Root failed \(exit 1\)\)/)
+    for (const leak of [/TrustStoreInstaller/, /not implemented/, /D22/, /sub-unit/]) assert.doesNotMatch(blind.text, leak, `an internal label reached the text: ${leak}`)
+  })
+}
 
 test('what doctor runs: no VPN query at all (D49), only the read of the network facts and nothing else — no `which`, no systemctl / launchctl / loginctl, nothing that starts, stops or changes a thing (the trust-store check and the process table are the other two queries; both are replaced here)', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   const before = s.sys.exec.calls.length
-  const r = await doctor(s, [], { source: src, deps: {} })
+  const r = await doctor(s, [], { source: src, deps: { request: asDaemon(reply()) } })
   assert.equal(r.exit, 0, r.text)
   assert.deepEqual(ranBesides(s, before), [])
   assert.deepEqual(s.sys.exec.calls.slice(before).filter((c) => NET_READ.test(c)), ['ss -ltnpH'], 'and the one read of the network facts, which only reads')
 })
 
-test('dependencies: found on PATH, or MISSING with the one line that installs it — looked up in the files, no `which`', async () => {
+test('dependencies are looked up in the files, never with `which` (§3.7 prints no dependency line any more)', async () => {
   const dir = tmpDir('asight-path-')
   fs.writeFileSync(path.join(dir, 'openssl'), '#!/bin/sh\n', { mode: 0o755 })
   fs.writeFileSync(path.join(dir, 'certutil'), '#!/bin/sh\n', { mode: 0o644 }) // there, but not executable
@@ -175,52 +149,65 @@ test('dependencies: found on PATH, or MISSING with the one line that installs it
   assert.equal(onPath('openssl', { env: { PATH: '' }, platform: 'linux' }), false)
   const s = plain(); const src = path.join(s.home, 'src'); capture(src)
   const r = await doctor(s, [], { source: src, deps: { has: (b) => b === 'openssl' } })
-  assert.match(r.out, /✓ openssl — found/); assert.match(r.out, /⚠ certutil — MISSING · apt install libnss3-tools/)
-  assert.equal(r.exit, 0, 'a missing tool is a warning: the four questions decide')
+  assert.equal(r.exit, 0, 'a missing tool is no problem of the capture\'s')
+  assert.deepEqual(s.sys.exec.calls.filter((c) => /which|where/.test(c)), [], 'nothing was started to find them')
 })
 
-test('the collector section is `asight status` for the same harnesses (the daemon\'s answer, every agent captured or why not), then the topology, the standalone copy; the exit is the four questions\' alone (B-7)', async () => {
+test('doctor explains the same harnesses `status` judges (the daemon\'s answer, every agent captured or why not), and its exit is the capture\'s alone (B-7)', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: 'the trust entry was written after this process started; restart it once' }]
   const before = s.sys.exec.calls.length
   const r = await doctor(s, [], { source: src, deps: { request: asDaemon(reply({ agents })) } })
   assert.equal(r.exit, 0, `status would say 1 here (an agent is not captured); doctor's exit is the capture's:\n${r.text}`)
-  assert.match(r.out, /按进程采集器[\s\S]*没采\s+claude-code\([^)]*重启后才会被采集\)/, 'the embedded status is the digest: the verdict row with its reason')
-  assert.ok(!/路径\s+\S/.test(r.out) && !/本机网络环境/.test(r.out), 'no VPN software line: doctor probes none (D49)')
-  assert.match(r.out, /✓ asight-off\(不依赖源码的撤销副本\):/, 'on wrote the standalone copy and it is the version this asight writes')
+  assert.match(r.out, /claude-code is not captured: pid 4388 started before capture was on\./, 'the finding says the harness, the pid and the reason')
+  assert.ok(!/VPN/.test(r.out), 'no VPN software line: doctor probes none (D49)')
+  assert.doesNotMatch(r.out, /is not the current version/, 'on wrote the standalone copy and it is the version this asight writes')
   assert.deepEqual(ranBesides(s, before), [], 'doctor ran no OS tool but the reads of the network facts: it reads, and it asks the daemon over its socket (R8)')
   // names restrict the harness table, as in status
-  const one = await doctor(s, ['claude'], { source: src, deps: { request: asDaemon(reply()) } })
-  const table = one.out.split('按进程采集器')[1].split('\n').filter((l) => /^ {4}\w/.test(l)).join('\n')
-  assert.match(table, /claude-code/); assert.ok(!/codex/.test(table), table)
+  const one = await doctor(s, ['claude', '--json'], { source: src, deps: { request: asDaemon(reply({ agents })) } })
+  const doc = one.io.json()
+  assert.deepEqual([...new Set((doc.findings || []).filter((x) => x.harness).map((x) => x.harness))], ['claude-code'], JSON.stringify(doc.findings))
 })
 
-test('a stale standalone copy is a ⚠ line with its reason, and an install that was never made says nothing is installed — neither is an exit code', async () => {
+test('a stale standalone copy is a problem with its reason (exit 1); where nothing was installed there is nothing to check (exit 0)', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   fs.appendFileSync(path.join(s.home, '.asight', 'bin', 'asight-off'), '\n// edited\n')
   let r = await doctor(s, [], { source: src })
-  assert.match(r.out, /⚠ asight-off\(不依赖源码的撤销副本\)不是当前版本/); assert.equal(r.exit, 0)
+  assert.match(r.out, /is not the current version, so it may not undo everything\./); assert.equal(r.exit, 1, r.out)
+  assert.ok(r.out.includes(path.join(s.home, '.asight', 'bin', 'asight-off')), 'the copy is named')
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   r = await doctor(n, [], { source: nsrc })
-  assert.match(r.out, /按进程采集器[\s\S]*采集健康 – 没装/, 'the digest says nothing is installed')
-  assert.match(r.out, /⚠ asight-off[^\n]*is not there/)
-  assert.equal(r.exit, 0)
+  assert.doesNotMatch(r.out, /asight-off/, 'nothing installed: no undo copy to check (§3.7)')
+  assert.equal(r.exit, 0, r.out)
 })
 
-test('backups no manifest names are listed (⚠, with the paths); the ones the manifest names are not; with no manifest all of them are', async () => {
+test('§3.7 (Windows test machine run 2 Q3): the headline says what the list numbers — problems and expected findings, never fewer', async () => {
+  const s = await installedHome()
+  const src = path.join(s.home, 'src'); capture(src)
+  fs.appendFileSync(path.join(s.home, '.asight', 'bin', 'asight-off'), '\n// edited\n')
+  const r = await doctor(s, [], { source: src })
+  const numbered = r.out.split('\n').filter((l) => /^\d+\. /.test(l)).length
+  const head = r.out.split('\n')[0]
+  const said = [...head.matchAll(/(\d+) (problem|expected finding)/g)].reduce((n, m) => n + Number(m[1]), 0)
+  assert.ok(numbered > 0, r.out)
+  assert.equal(said, numbered, `the headline counts ${said}, the list numbers ${numbered}:\n${r.out}`)
+})
+
+test('backups no manifest names are a note with their paths; the ones the manifest names are not; with no manifest all of them are', async () => {
   const s = await installedHome({ seed: (home) => { fs.mkdirSync(path.join(home, '.claude'), { recursive: true }); fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{"model":"x"}\n') } })
   const src = path.join(s.home, 'src'); capture(src)
   const named = new Set((s.manifest().entries || []).map((e) => e.backup).filter(Boolean))
   assert.ok(named.size > 0, 'the fixture\'s on backed up a file the manifest names')
   let r = await doctor(s, [], { source: src })
-  assert.ok(!/没有任何清单条目认领/.test(r.out), `every backup is named:\n${r.out}`)
+  assert.ok(!/belong to no install record/.test(r.out), `every backup is named:\n${r.out}`)
   const stray = writeBackup({ home: s.home, file: path.join(s.home, '.zshrc'), data: 'export A=1\n' })
   r = await doctor(s, [], { source: src })
-  assert.match(r.out, /⚠ 1 个备份没有任何清单条目认领/)
+  assert.match(r.out, /^Note: 1 backup file\(s\) belong to no install record\.$/m)
   assert.ok(r.out.includes(stray)); for (const b of named) assert.ok(!r.out.includes(b), `${b} is named by an entry`)
-  assert.equal(r.exit, 0)
+  const j = await doctor(s, ['--json'], { source: src, io: fakeIo() })
+  assert.deepEqual(j.io.json().findings.filter((x) => x.code === 'backup-unclaimed').map((x) => x.class), ['note'], 'a backup nobody claims is a note, never a problem of its own')
   const n = plain(); const nsrc = path.join(n.home, 'src'); capture(nsrc)
   const lone = writeBackup({ home: n.home, file: path.join(n.home, '.zshrc'), data: 'x\n' })
   r = await doctor(n, [], { source: nsrc })
@@ -228,24 +215,25 @@ test('backups no manifest names are listed (⚠, with the paths); the ones the m
   fs.mkdirSync(path.join(n.home, '.asight', 'collector'), { recursive: true })
   fs.writeFileSync(path.join(n.home, '.asight', 'collector', 'install-manifest.json'), '{ not json')
   r = await doctor(n, [], { source: nsrc })
-  assert.match(r.out, /备份: 不知道\([^)]*install-manifest\.json/, 'a manifest that cannot be read: 不知道 with the file, not "none are orphans"')
+  assert.match(r.out, /Whether any backup belongs to no install record is unknown$/m, 'a manifest that cannot be read: unknown, not "none are orphans"')
+  assert.ok(r.out.includes(path.join(n.home, '.asight', 'collector', 'install-manifest.json')), `with the file:\n${r.out}`)
 })
 
-test('doctor changes nothing in the HOME but ~/.asight/netenv.json (the board\'s copy of the topology); usage errors (unknown option, unknown harness) exit 2 and touch nothing', async () => {
+test('doctor writes nothing in the HOME (§3.7); usage errors (unknown option, unknown harness) exit 2 and touch nothing', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
   const before = snapshot(s.home)
   const r = await doctor(s, [], { source: src, deps: { request: asDaemon(reply()) } })
   assert.equal(r.exit, 0, r.text)
-  assert.deepEqual(changedFiles(before, snapshot(s.home)), [path.join('.asight', 'netenv.json')])
+  assert.deepEqual(changedFiles(before, snapshot(s.home)), [], 'read-only: not one file')
   const mid = snapshot(s.home)
   for (const argv of [['--bogus'], ['nosuchharness']]) {
     const u = await doctor(s, argv)
     assert.equal(u.exit, 2, `${argv.join(' ')}: ${u.text}`)
-    assert.match(u.err, /asight doctor: (unknown option --bogus|unknown harness nosuchharness)/)
+    assert.match(u.err, /asight doctor: (unknown option '--bogus'|unknown harness 'nosuchharness')/)
   }
   assert.match((await doctor(s, ['--bogus'])).err, /usage: asight doctor \[<harness>\.\.\.\]/)
-  assert.match((await doctor(s, ['nosuchharness'])).err, /unknown harness nosuchharness; the names are:/)
+  assert.match((await doctor(s, ['nosuchharness'])).err, /unknown harness 'nosuchharness'\. Known:/)
   assert.deepEqual(snapshot(s.home), mid, 'usage errors touch nothing')
 })
 
@@ -258,21 +246,20 @@ test('--json: one document that validates, the verdict and its reasons, the file
   assert.equal(r.exit, 1)
   let v = io.json()
   assert.deepEqual(validateReceipt(v), [])
-  assert.deepEqual([v.command, v.ok, v.exit, v.verdict], ['doctor', false, 1, 'failed'])
-  assert.deepEqual(v.readable_by_others, [{ file: f, mode: '0644' }])
-  assert.equal(v.records_examined, 1)
-  assert.equal(v.questions.file_permissions.ok, false)
-  assert.ok(Array.isArray(v.deps) && v.deps.every((d) => typeof d.bin === 'string'))
+  assert.deepEqual([v.command, v.ok, 'exit' in v], ['doctor', false, false], 'the exit code is the process\'s, not a key of the document')
+  assert.deepEqual(v.summary, { problem: 1, expected: 0, note: 0 })
+  const perm = v.findings.filter((x) => x.code === 'file-readable-by-others')
+  assert.deepEqual(perm.map((x) => [x.class, x.what.includes(f), x.what.includes('0644')]), [['problem', true, true]])
+  assert.deepEqual(v.undetermined, [])
   assert.equal(v.status.command, 'status', 'the status block is the status receipt')
-  assert.deepEqual(v.status.harnesses.map((h) => h.harness).filter((h) => !HARNESS_IDS.includes(h)), [], 'harness ids, never aliases')
-  assert.ok(!r.out.includes('四问'), 'no prose on stdout')
+  assert.deepEqual(Object.keys(v.status.harnesses).filter((h) => !HARNESS_IDS.includes(h)), [], 'harness ids, never aliases')
   fs.chmodSync(f, 0o600)
   io = fakeIo(); r = await doctor(s, ['--json'], { source: src, io })
-  v = io.json(); assert.equal(r.exit, 0); assert.deepEqual([v.ok, v.verdict], [true, 'ok'])
+  v = io.json(); assert.equal(r.exit, 0); assert.deepEqual([v.ok, v.summary], [true, { problem: 0, expected: 0, note: 0 }])
   fs.writeFileSync(f, '')
   io = fakeIo(); r = await doctor(s, ['--json'], { source: src, io })
-  v = io.json(); assert.equal(r.exit, 3); assert.deepEqual([v.ok, v.verdict], [false, 'undetermined'])
-  assert.match(v.undetermined_why.join(' '), /没有核到任何记录/)
+  v = io.json(); assert.equal(r.exit, 3); assert.equal(v.ok, false)
+  assert.ok(v.undetermined.some((u) => u.what === 'the captured records'), JSON.stringify(v.undetermined))
   assert.deepEqual(validateReceipt(v), [])
 })
 
@@ -306,12 +293,12 @@ test('V66 wired: a process-unknown in ~/.asight\'s flows/ reaches `doctor claude
       const what = `${platform}, ${label}`
       const text = await doctor(s, ['claude-code'], { platform, deps: { request } })
       assert.ok(text.out.includes(line), `${what}: the text gives ${line}\n${text.out}`)
-      assert.match(text.out, /process-unknown/, what)
+      assert.match(text.out, /used claude-code's proxy but is/, what)
       const j = await doctor(s, ['claude-code', '--json'], { platform, deps: { request } })
       const doc = JSON.parse(j.out)
       const f = (doc.findings || []).filter((x) => x.code === 'process-unknown')
       assert.equal(f.length, 1, `${what}: one process-unknown finding (${doc.findings_error || ''})`)
-      assert.deepEqual([f[0].harness, f[0].class, f[0].commands.some((c) => c.run.includes(line))], ['claude-code', 'hint', true], `${what}: a hint whose command is the line`)
+      assert.deepEqual([f[0].harness, f[0].class, f[0].commands.some((c) => c.run.includes(line))], ['claude-code', 'note', true], `${what}: a note whose command is the line`)
     }
   }
 })

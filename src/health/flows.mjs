@@ -1,7 +1,6 @@
 // flows.mjs — read the collector's flows/ back from the newest line and fold it (D38; RFC 4.4 /api/capture-health,
 // 4.6 §记录「看得到」). Shared by the board's endpoint and `asight collector status` (src/health/read.mjs).
-//   readFlows: day files <UTC date>.ndjson newest first — sealed ones (<date>.ndjson.NNNN.sealed, D35) through
-// src/raw/, an original and its sealed copy never both (src/raw/discover.mjs resolveCoexistence) — until the lines read
+//   readFlows: day files <UTC date>.ndjson newest first — until the lines read
 // reach back past the last daemon-start AND cover the 24 h window, or until `maxBytes` (then `truncated`). A missing
 // flows/ is "nothing recorded yet"; an unreadable one throws (the endpoint answers 503, never "no failures"); one
 // unreadable file is listed in `errors` and the rest is still read.
@@ -11,29 +10,16 @@
 // bytes (ws.tail_raw, proxy preludes, bodies) ever reach the board.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { openSealed } from '../raw/reader.mjs'
-import { resolveCoexistence } from '../raw/discover.mjs'
 import { isFailure, notCapturedClass, LEVELS } from './codes.mjs'
 
 export const WINDOW_MS = 24 * 3600e3
 export const MAX_BYTES = 4 << 20
-const DAY = /^(\d{4}-\d{2}-\d{2})\.ndjson(?:\.(\d{4,})\.sealed)?$/
+const DAY = /^(\d{4}-\d{2}-\d{2})\.ndjson$/
 const errText = (e) => String((e && e.message) || e)
 export class HealthUnreadable extends Error { constructor(m) { super(m); this.name = 'HealthUnreadable' } }
 
 // One day file's complete lines; `budget` bytes at most, newest kept. → {lines: [string], bytes, cut}
 function readDayFile(file, budget, fs) {
-  if (DAY.exec(path.basename(file))[2]) { // sealed: decoded in order; only the tail that fits is kept
-    const r = openSealed(file, { fs })
-    try {
-      const all = []
-      let bytes = 0
-      for (const { line } of r.lines()) { all.push(line.toString('utf8').replace(/\n$/, '')); bytes += line.length }
-      let keep = all.length, kept = 0
-      while (keep > 0 && kept + Buffer.byteLength(all[keep - 1]) + 1 <= budget) kept += Buffer.byteLength(all[--keep]) + 1
-      return { lines: all.slice(keep), bytes: kept, cut: keep > 0 }
-    } finally { r.close() }
-  }
   const fd = fs.openSync(file, 'r')
   try {
     const size = fs.fstatSync(fd).size
@@ -58,25 +44,15 @@ export function readFlows({ dir, now = Date.now(), windowMs = WINDOW_MS, maxByte
     if (e.code === 'ENOENT') { out.missing = true; return out }
     throw new HealthUnreadable(`${d}: ${errText(e)}`)
   }
-  const days = new Map() // date → { original, sealed: [by segment] }
-  const all = []
-  for (const n of names) { const m = DAY.exec(n); if (m) all.push(path.join(d, n)) }
-  for (const f of resolveCoexistence(all, { fs }).files) {
-    const m = DAY.exec(path.basename(f))
-    const day = days.get(m[1]) || { original: null, sealed: [] }
-    if (m[2]) day.sealed.push(f); else day.original = f
-    days.set(m[1], day)
-  }
+  const days = new Map() // date → file
+  for (const n of names) { const m = DAY.exec(n); if (m) days.set(m[1], path.join(d, n)) }
   const cutoff = now - windowMs
   let budget = maxBytes
   let sawStart = false
   const perFile = [] // newest first; reversed at the end
   const order = [...days.keys()].sort().reverse()
   for (let k = 0; k < order.length; k++) {
-    const day = days.get(order[k])
-    // within a day: what was sealed was written before the original that exists now (a late append after a seal)
-    const files = [...day.sealed.sort(), ...(day.original ? [day.original] : [])].reverse()
-    for (const file of files) {
+    for (const file of [days.get(order[k])]) {
       if (budget <= 0) { out.truncated = true; break } // a file of this day left unread
       let r
       try { r = readDayFile(file, budget, fs) } catch (e) { out.errors.push({ file, error: errText(e) }); continue }
@@ -104,15 +80,13 @@ export function readFlows({ dir, now = Date.now(), windowMs = WINDOW_MS, maxByte
   return out
 }
 
-/** One UTC day's flows/ lines (original and sealed segments, oldest first), for notes older than the window. */
+/** One UTC day's flows/ lines (oldest first), for notes older than the window. */
 export function readDay({ dir, date, fs = nodeFs, maxBytes = 1 << 20 } = {}) {
   const d = path.join(dir, 'flows')
   const out = { records: [], errors: [] }
   let names
   try { names = fs.readdirSync(d) } catch (e) { if (e.code !== 'ENOENT') out.errors.push({ file: d, error: errText(e) }); return out }
-  const all = names.filter((n) => { const m = DAY.exec(n); return m && m[1] === date }).map((n) => path.join(d, n))
-  const kept = resolveCoexistence(all, { fs }).files
-  for (const f of [...kept.filter((x) => DAY.exec(path.basename(x))[2]).sort(), ...kept.filter((x) => !DAY.exec(path.basename(x))[2])]) {
+  for (const f of names.filter((n) => { const m = DAY.exec(n); return m && m[1] === date }).map((n) => path.join(d, n))) {
     try { for (const l of readDayFile(f, maxBytes, fs).lines) { try { out.records.push(JSON.parse(l)) } catch { /* counted by readFlows when in its window */ } } } catch (e) { out.errors.push({ file: f, error: errText(e) }) }
   }
   return out
@@ -204,6 +178,7 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
   // a negative-cache pair is (neg_key ?? pid, host): "<pid>", or "<route>.<group>" for a connection with no pid (4.8 §5.5, W17), so two forms with
   // no pid are listed apart, and a clearing removes only its own key
   const clearNeg = (who) => { for (const m of [neg, rejected]) for (const k of [...m.keys()]) if (k.slice(0, k.indexOf('\u0000')) === who) m.delete(k) }
+  // `retention` holds the class table's condition (D60③) and the retired retention.json's, named by its `where`
   let degraded = null, version = null, mismatch = null, ca = null, retention = null, agentList = null
   // D51⑥: a process on no name list used a door — a fact of this daemon life per (harness, name), the newest pid kept; expected, so not a condition (no ⚠)
   const unknownProcs = new Map()
@@ -222,12 +197,13 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     else if (r.event === 'failure' && r.code === 'trust-rejected') rejected.set(`${r.neg_key ?? r.pid}\u0000${r.host}`, { kind: 'trust-rejected', ...pick(r), since: r.ts })
     else if (r.event === 'failure' && r.code === 'ca-invalid') ca = { kind: 'ca-invalid', ...pick(r), since: r.ts }
     else if (r.event === 'ca-ok') ca = null // the daemon found the CA usable again and rebuilt what it signs with (D1-2)
-    // D40: ~/.asight/retention.json cannot be read or parsed (or holds a bad cell): every call is kept in full meanwhile,
-    // and that is a condition until retention-ok. A traffic pattern that does not compile, or a classifier that threw, is a
-    // failure of its own (the groups below), not this condition: retention-ok does not say they are fixed. (A change-log line that could not be
-    // written, `retention-log-failed`, is likewise its own failure: the settings file is fine.)
-    else if (r.event === 'failure' && r.where === 'retention' && r.code !== 'pattern-invalid' && r.code !== 'classify-failed' && r.code !== 'retention-log-failed') retention = { kind: 'retention', ...pick(r), since: r.ts }
-    else if (r.event === 'retention-ok') retention = null
+    // D60③: ~/.asight/classes.json cannot be read or parsed (or holds an entry that is not a class): the builtin class
+    // table applies meanwhile, and that is a condition until classes-ok. A rule that does not compile (`pattern-invalid`),
+    // or a classifier that threw, is a failure of its own (the groups below), not this condition: classes-ok does not say
+    // they are fixed. (A change-log line that could not be written, `classes-log-failed`, is likewise its own failure:
+    // the table itself is fine.) The retired retention.json's own condition read the same way: old flows/ still show it.
+    else if (r.event === 'failure' && (r.where === 'classes' || r.where === 'retention') && !['pattern-invalid', 'classify-failed', 'retention-log-failed', 'classes-log-failed'].includes(r.code)) retention = { kind: r.where, ...pick(r), since: r.ts }
+    else if (r.event === 'classes-ok' || r.event === 'retention-ok') retention = null
     // D51③: ~/.asight/agents.json cannot be read or parsed, or holds bad items (the good ones and the presets apply meanwhile): a condition until agent-list-ok
     else if (r.event === 'failure' && r.code === 'agent-list-invalid') agentList = { kind: 'agent-list', ...pick(r), since: r.ts }
     else if (r.event === 'agent-list-ok') agentList = null

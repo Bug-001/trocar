@@ -1,6 +1,6 @@
 // test/collector/daemon.test.mjs — the vertical-slice daemon over the fake helper and a synthetic /proc (no root):
 // Claude Code's real descriptor, trusted through the settings key `installCollector` wrote, has a TLS request
-// decrypted and recorded verbatim; the board server, on its default source, serves it from ~/.asight/collector;
+// decrypted and recorded verbatim into the raw layer's current segment, the one its lock names (D60);
 // off stops recording; the same program without the CA is only observed; desired state survives a restart.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -27,8 +27,6 @@ import codex from '../../src/collector/harness/codex.mjs'
 import { startMockUpstream } from '../lab/mock-upstream/server.mjs'
 import { makeLabCa } from '../lab/mock-upstream/lab-ca.mjs'
 import { wsConnect } from '../lab/ws-client.mjs'
-import { createServer } from '../../src/server.mjs'
-import { serveSource } from '../../src/paths.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { failureBrief } from '../../src/cli/words.mjs'
@@ -36,6 +34,8 @@ import { writeNetenv } from '../../src/netenv/index.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
 import { readManifest, saveManifest, PHASES } from '../../src/off/manifest.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
+import { runQuery } from '../../src/query/named/index.mjs'
+import { harnessOf } from '../../src/dissect/harnesses.mjs'
 
 const FAKE = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))
 const UID = process.getuid()
@@ -106,7 +106,7 @@ async function relay() {
   return { ca, got, port: srv.address().port, hold: () => { state.hold = true }, release: () => { state.hold = false; while (held.length) held.shift()() }, close: () => srv.close() }
 }
 
-test('daemon: CC trusted through the installed settings key is decrypted and recorded verbatim; the board serves it from its default source; off stops recording (S2/S1/T7 unit)', async () => {
+test('daemon: CC trusted through the installed settings key is decrypted and recorded verbatim into a raw segment; off stops recording (S2/S1/T7 unit)', async () => {
   const s = sandbox(); const p = fakeProc(); const up = await relay()
   const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
   // the user's own Claude Code config, as for any private-CA relay: base URL + the relay's CA
@@ -115,10 +115,9 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
   await install(s)
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
-  let server = null
   try {
     const lock = JSON.parse(fs.readFileSync(path.join(s.collector, 'lock'), 'utf8'))
-    assert.deepEqual([lock.pid, lock.engine_port, lock.helper_pid, fs.statSync(path.join(s.collector, 'lock')).mode & 0o777], [process.pid, d.port, clients[0]._child.pid, 0o600])
+    assert.deepEqual([lock.pid, lock.engine_port, lock.helper_pid, lock.segment, fs.statSync(path.join(s.collector, 'lock')).mode & 0o777], [process.pid, d.port, clients[0]._child.pid, null, 0o600], 'no record yet: no segment is open')
     assert.equal((await req(s.sock, 'GET', '/status')).desired, 'off')
     const on = await req(s.sock, 'POST', '/on', {})
     assert.deepEqual([on.desired, on.actual, on.recording], ['on', 'on', true])
@@ -144,29 +143,17 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
       c.write(post(text))
     })
     assert.match(await send('asight-e2e-1'), /^HTTP\/1\.1 200 OK/)
-    const capture = await until(() => fs.readdirSync(s.collector).find((n) => /^capture-.*\.ndjson$/.test(n)))
-    const envs = await until(() => { const t = fs.readFileSync(path.join(s.collector, capture), 'utf8'); return t.includes('asight-e2e-1') && t.trim().split('\n').map((l) => JSON.parse(l)) })
+    const rawDir = path.join(s.home, '.asight', 'raw')
+    const capture = await until(() => fs.readdirSync(rawDir)[0]) // the raw layer's current segment (D60)
+    const envs = await until(() => { const t = fs.readFileSync(path.join(rawDir, capture), 'utf8'); return t.includes('asight-e2e-1') && t.trim().split('\n').map((l) => JSON.parse(l)) })
     assert.equal(envs.length, 1)
     assert.deepEqual(Buffer.concat([Buffer.from(envs[0].req_head_raw, 'latin1'), Buffer.from(envs[0].req_body, 'utf8')]), up.got[0], 'recorded request bytes == bytes the relay received')
     assert.deepEqual([envs[0].host, envs[0].proc.pid, envs[0].proc.agent, envs[0].proc.exe, envs[0].is_llm_call], ['relay.asight.test', 4242, 'claude-code', CC_EXE, true])
 
-    // the read side through the product path: `asight serve` with no --source reads serveSource()
-    const roots = serveSource({ home: path.join(s.home, '.asight'), legacyExists: false })
-    assert.deepEqual(roots, [path.join(s.home, '.asight'), s.collector])
-    ;({ server } = await createServer({ sourcePath: roots, dbPath: path.join(s.root, 'none.duckdb') }))
-    await new Promise((r) => server.listen(0, '127.0.0.1', r))
-    const get = async (u) => (await fetch(`http://127.0.0.1:${server.address().port}${u}`)).json()
-    const projects = await get('/api/projects')
-    assert.ok(projects.projects.some((pr) => pr.sessions.some((x) => x.id === sid || x.session_id === sid)), JSON.stringify(projects))
-    const view = await get(`/api/session?id=${sid}`)
-    const steps = view.analyzed.steps
-    assert.deepEqual([steps.length, steps[0].norm.text, steps[0].flat.map((b) => b.kind)], [1, 'pong', ['system', 'text']])
-    const relayBody = up.got[0].subarray(up.got[0].indexOf('\r\n\r\n') + 4).toString('utf8')
-    for (const b of steps[0].flat) { // 看全文 = 回源 (4.2:55): each block's bytes, served by /api/block, are the bytes the relay got
-      const blk = await get(`/api/block?ref=${encodeURIComponent(b.text_ref)}`)
-      const [, from, to] = /::(\d+)-(\d+)$/.exec(b.text_ref)
-      assert.equal(blk.text, relayBody.slice(Number(from), Number(to)), `${b.key}: board bytes == relay bytes`)
-    }
+    // the live daemon names its current segment in its lock, so the sealer and `raw seal` know the one segment to leave
+    // alone (D60; the read side of these records is the query layer's, test/query/).
+    const named = await until(() => { const l = JSON.parse(fs.readFileSync(path.join(s.collector, 'lock'), 'utf8')); return l.segment === path.basename(capture, '.ndjson') && l })
+    assert.equal(named.pid, process.pid)
 
     // 4.6 §开关「已有连接」: a request that started before off is recorded, one that starts after it is not, through the daemon's own isRecording wiring
     // (sw.isRecording(meta.agent)). The connection is kept busy across off — the relay is slow — so the next request is pipelined on it after off.
@@ -181,12 +168,67 @@ test('daemon: CC trusted through the installed settings key is decrypted and rec
     up.release()
     await once(c, 'close') // the engine closes it once the responses are out
     assert.equal(seen.split(REPLY).length - 1, 2, 'both replies reached the client in full before the close')
-    await until(() => fs.readFileSync(path.join(s.collector, capture), 'utf8').includes('asight-in-flight'))
-    const after = fs.readFileSync(path.join(s.collector, capture), 'utf8')
+    await until(() => fs.readFileSync(path.join(rawDir, capture), 'utf8').includes('asight-in-flight'))
+    const after = fs.readFileSync(path.join(rawDir, capture), 'utf8')
     assert.ok(!after.includes('asight-after-off'), 'a request that starts after off is never recorded')
     assert.equal(after.trim().split('\n').length, 2, 'the first call and the one that was in flight when off came')
     await until(() => flowsOf(s).some((f) => f.decision === 'decrypt' && f.agent === 'claude-code' && f.pid === 4242))
-  } finally { if (server) server.close(); await d.stop(); up.close(); p.done(); s.done() }
+  } finally { await d.stop(); up.close(); p.done(); s.done() }
+})
+
+// The READ side of the same slice, through `asight query` on its default paths: a real daemon records one
+// real TLS call into a raw segment, and the three named queries hand those very bytes back (T7; D59 · D60).
+// This is what the board half of this test used to assert, now through the one read entry point (1.6 §4.1).
+test('query: the records a real daemon wrote are listed and handed back byte for byte (T7 unit)', async () => {
+  const s = sandbox(); const p = fakeProc(); const up = await relay()
+  const relayCa = path.join(s.home, 'relay-ca.pem'); fs.writeFileSync(relayCa, up.ca.certPem)
+  fs.mkdirSync(path.join(s.home, '.claude'))
+  fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
+  await install(s)
+  const { arch, clients } = fakeArch(p)
+  const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], env: { ...process.env, HOME: s.home }, upstreamCa: up.ca.certPem })
+  try {
+    await req(s.sock, 'POST', '/on', {})
+    p.add(4242, { uid: UID, exe: CC_EXE, argv: ['claude', '-p', 'hi'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
+    await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 4242, pid: 4242, comm: 'claude', filename: CC_EXE, ts_ns: 1 })
+    await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 4242 && a.trusted))
+    const raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
+    await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: up.port, family: 4 }, pid: 4242, decrypt: 1 })
+    const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(path.join(s.collector, 'ca', 'extra-cc.pem'), 'utf8') })
+    await once(c, 'secureConnect')
+    const sid = '6a1b7c2d-0000-4000-8000-000000000002'
+    const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, system: [{ type: 'text', text: 'You are a test.' }], messages: [{ role: 'user', content: [{ type: 'text', text: 'asight-query-e2e' }] }] })
+    c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test:${up.port}\r\nanthropic-version: 2023-06-01\r\nx-claude-code-session-id: ${sid}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
+    await new Promise((resolve) => { let reply = ''; c.on('data', (x) => { reply += x; if (reply.endsWith(REPLY)) resolve() } ) })
+    const home = path.join(s.home, '.asight')
+    const segment = await until(() => { const n = fs.readdirSync(path.join(home, 'raw'))[0]; return n && fs.readFileSync(path.join(home, 'raw', n), 'utf8').includes('asight-query-e2e') && path.basename(n, '.ndjson') })
+
+    // `sessions` lists the call's session, through the read-side grouping only (3.4)
+    const sessions = await runQuery('sessions', {}, { home })
+    assert.deepEqual([sessions.ok, sessions.errors], [true, []])
+    const meta = sessions.sessions.find((m) => m.session_id === sid)
+    // the read side names a harness by the one dissector table's id (src/dissect/harnesses.mjs: cc = claude-code)
+    assert.deepEqual([!!meta, meta && meta.harness, meta && meta.harness_inferred, meta && meta.calls], [true, harnessOf({ proc: { agent: 'claude-code' } }).id, false, 1])
+
+    // `session` replays it: one call, its record id is the segment's first line, and the request bytes
+    // the board shows for every block are the bytes the relay received (`block`, 4.2:55 看全文 = 回源).
+    const view = await runQuery('session', { id: sid }, { home })
+    assert.deepEqual([view.ok, view.records.map((r) => r.id)], [true, [`${segment}:1`]])
+    assert.deepEqual([view.analyzed.steps, view.analyzed.streams, view.logged], [undefined, undefined, null], 'C.5: steps / streams stay off the wire')
+    const calls = view.analyzed.lanes.flatMap((l) => l.calls)
+    assert.equal(calls.length, 1)
+    assert.deepEqual(calls[0].flat.map((b) => b.kind), ['system', 'text'])
+    const relayBody = up.got[0].subarray(up.got[0].indexOf('\r\n\r\n') + 4).toString('utf8')
+    for (const b of calls[0].flat) {
+      const [, from, to] = /::(\d+)-(\d+)$/.exec(b.text_ref)
+      const blk = await runQuery('block', { ref: b.text_ref }, { home })
+      assert.deepEqual([blk.ok, blk.bytes, blk.fidelity.verbatim], [true, relayBody.slice(Number(from), Number(to)), true], `${b.key}: query bytes == relay bytes`)
+    }
+    // the whole record, unspanned: the request body exactly as it went on the wire
+    const whole = await runQuery('block', { ref: `${segment}:1` }, { home })
+    assert.deepEqual([whole.bytes, whole.truncated], [relayBody, null])
+    c.destroy()
+  } finally { await d.stop(); up.close(); p.done(); s.done() }
 })
 
 test('daemon: the same program without the CA is only observed; its direct connection is metadata in flows/ (T7 unit)', async () => {
@@ -518,7 +560,7 @@ test('daemon: an envelope that cannot be written is a durable failure record, no
   fs.mkdirSync(path.join(s.home, '.claude'))
   fs.writeFileSync(path.join(s.home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: `https://relay.asight.test:${up.port}`, NODE_EXTRA_CA_CERTS: relayCa } }))
   await install(s)
-  fs.mkdirSync(path.join(s.collector, `capture-${new Date().toISOString().slice(0, 10)}.ndjson`)) // the day's capture file cannot be opened
+  fs.writeFileSync(path.join(s.home, '.asight', 'raw'), 'not a directory') // no segment can be opened under it
   const { arch, clients } = fakeArch(p)
   const d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch, harnesses: [cc], upstreamCa: up.ca.certPem })
   try {
@@ -533,7 +575,7 @@ test('daemon: an envelope that cannot be written is a durable failure record, no
     let reply = ''; c.on('data', (x) => { reply += x })
     c.write(`POST /v1/messages HTTP/1.1\r\nhost: relay.asight.test\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\n\r\n${body}`)
     await until(() => flowsOf(s).some((f) => f.event === 'failure' && f.where === 'record'))
-    assert.match(flowsOf(s).find((f) => f.where === 'record').reason, /EISDIR/)
+    assert.match(flowsOf(s).find((f) => f.where === 'record').reason, /EEXIST|ENOTDIR/)
     await until(() => reply.endsWith(REPLY))
     assert.match(reply, /^HTTP\/1\.1 200 OK/, 'fail-open (D31, F4): the agent got the reply although its envelope could not be written')
     c.destroy()
@@ -703,7 +745,7 @@ test('daemon: the Linux arch\'s OS roots — none on the machine is a bundle fai
     const st = await req(s.sock, 'GET', '/status')
     const g = st.health.collector.failures.find((x) => x.last.where === 'bundle' && x.last.code === 'system-roots-unavailable')
     assert.ok(g, 'status (the board\'s reader) shows it')
-    assert.match(failureBrief(g), /^合并包里没有系统根证书\(/, 'in the words status prints')
+    assert.match(failureBrief(g), /^the certificate bundle has no system roots \(/, 'in the words status prints')
     assert.ok(!fs.readFileSync(bundle, 'utf8').includes(fedora.certPem.trim()))
     disk.set('/etc/pki/tls/certs/ca-bundle.crt', fedora.certPem) // the machine is a Fedora one after all (or ca-certificates got installed): the next rebuild reads it
     await until(() => fs.readFileSync(bundle, 'utf8').includes(fedora.certPem.trim()))
@@ -748,8 +790,8 @@ test('daemon: OS roots the reader dropped as unparsable, or a roots source that 
     const st = await req(s.sock, 'GET', '/status')
     const g = (code) => st.health.collector.failures.find((x) => x.last.where === 'bundle' && x.last.code === code)
     assert.ok(g('system-roots-unparsable') && g('system-roots-partial'), 'status (the board\'s reader) shows both')
-    assert.match(failureBrief(g('system-roots-unparsable')), /^有系统根证书解析不了,没进合并包\(/, 'in the words status prints')
-    assert.match(failureBrief(g('system-roots-partial')), /^合并包少了一部分系统根证书\(/)
+    assert.match(failureBrief(g('system-roots-unparsable')), /^some system roots would not parse and are not in the bundle \(/, 'in the words status prints')
+    assert.match(failureBrief(g('system-roots-partial')), /^the certificate bundle is missing some system roots \(/)
   } finally { await d.stop(); p.done(); s.done() }
 })
 
@@ -850,7 +892,8 @@ test('daemon: describe hands the engine the harness WebSocket terminators and th
     await c.sendText(msg)
     const evs = await c.events()
     assert.equal(evs.at(-1).type, 'response.completed')
-    const capture = () => fs.readdirSync(s.collector).filter((n) => /^capture-.*\.ndjson$/.test(n)).flatMap((n) => fs.readFileSync(path.join(s.collector, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+    const rawDir = path.join(s.home, '.asight', 'raw')
+    const capture = () => (fs.existsSync(rawDir) ? fs.readdirSync(rawDir) : []).flatMap((n) => fs.readFileSync(path.join(rawDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
     const [e] = await until(() => { const l = capture().filter((x) => x.transport === 'ws'); return l.length && l }, 1500)
     assert.ok(!c.state.closed, 'cut at the terminal message, not at the close')
     assert.deepEqual([e.req_body, e.resp.messages.map((m) => JSON.parse(m)), e.proc.pid, e.proc.agent], [msg, evs, 5151, 'codex'])

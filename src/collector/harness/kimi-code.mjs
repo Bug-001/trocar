@@ -93,7 +93,7 @@ const proxy = {
   unsupported: {},
   branches: ['all'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '退出这个 kimi,在新开的终端里以 `kimi` 重新启动(经 asight 的启动脚本,在那里读代理环境变量)', processes: processes.names[0].name },
+  restart: { hint: 'Quit this kimi, then start it again as `kimi` from a new terminal (through the launch script asight installed, where it reads the proxy variables)', processes: processes.names[0].name },
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts — the CLI forms through the install-folder
@@ -112,8 +112,8 @@ const proxyMode = {
       present: [perOs({ darwin: { base: 'abs', path: '/Applications/Kimi Code.app' }, win32: { base: 'localAppData', path: 'Programs/Kimi' } })], verified: { darwin: { reason: 'out-of-scope' }, win32: { reason: 'out-of-scope' } } },
   ],
   routes: {
-    switch: { kind: 'switch-file', absent: 'create', takesEffect: '下次启动 kimi 时生效' },
-    vscode: { kind: 'json-key', file: { base: 'appSupport', path: 'Code/User/settings.json' }, format: 'jsonc', proxyKeys: [['http.proxy']], arrayItems: [{ keys: ['settingsSync.ignoredSettings'], value: 'http.proxy' }], value: 'door-url', absent: 'create', takesEffect: '未实测(按模型推断):重新加载 VS Code 窗口后生效' },
+    switch: { kind: 'switch-file', absent: 'create', takesEffect: 'takes effect the next time you start kimi' },
+    vscode: { kind: 'json-key', file: { base: 'appSupport', path: 'Code/User/settings.json' }, format: 'jsonc', proxyKeys: [['http.proxy']], arrayItems: [{ keys: ['settingsSync.ignoredSettings'], value: 'http.proxy' }], value: 'door-url', absent: 'create', takesEffect: 'not measured, inferred from the model: takes effect once you reload the VS Code window' },
   },
   certs: {
     wrapper: { kind: 'wrapper', command: 'kimi', binDir: { base: 'home', path: '.kimi-code/bin' }, certVar: CA_VAR, layout: 'native-binary' },
@@ -164,7 +164,7 @@ export default {
     hints: {
       'kimi-not-via-shim': "this kimi did not start through asight's shim (started before install, by its absolute path, from a shell that did not read the rc PATH line, or by an IDE); start it as `kimi` from a new shell",
       'shim-not-on-path': "asight installed no launch shim for Kimi Code (see the install note: no ~/.kimi-code/bin/kimi, or no installer PATH line in a shell rc)",
-      'kimi-npm-no-shim': 'this is the npm build of Kimi Code (node …/kimi-code/dist/main.mjs); asight has a trust entry only for the ~/.kimi-code install',
+      'kimi-npm-no-shim': 'this is the npm build of Kimi Code (node .../kimi-code/dist/main.mjs); asight has a trust entry only for the ~/.kimi-code install',
     },
   },
 }

@@ -13,15 +13,16 @@ import path from 'node:path';
 import { asightHome } from '../paths.mjs';
 import { readIndex, R } from '../raw/format.mjs';
 
-export const DISK_GROUPS = Object.freeze(['captures', 'sealed', 'sessions', 'duckdb', 'logs', 'other']);
+export const DISK_GROUPS = Object.freeze(['records', 'sealed', 'index', 'logs', 'other']);
 
-// What a file under the home is, by where it lies and what it is called (first rule that fits).
+// What a file under the home is, by where it lies and what it is called (first rule that fits) — today's layout
+// (4.2 §目录): raw/<segment>.ndjson the captured records, raw/<segment>.sealed their sealed copies, index/ the
+// rebuildable segment index, and the journals and event logs. No rule names one file of one product.
 export function groupOf(rel) {
+  if (rel.startsWith('logs/') || /(^|\/)flows\//.test(rel) || /(^|\/)journal\.jsonl$/.test(rel)) return 'logs'; // events, the raw journal, the change log
   if (/\.sealed$/.test(rel)) return 'sealed';
-  if (rel.startsWith('sessions/')) return 'sessions';                         // `asight shard` copies (and the sealed ones above)
-  if (/\.duckdb(\.wal)?$/.test(rel)) return 'duckdb';
-  if (rel.startsWith('logs/') || /(^|\/)(flows|raw)\//.test(rel)) return 'logs'; // events, the raw journal, the change log
-  if (/\.ndjson$/.test(rel)) return 'captures';                                // capture-<date>.ndjson, claude-capture.ndjson, control/, audit/ …
+  if (/\.ndjson$/.test(rel)) return 'records';
+  if (rel.startsWith('index/')) return 'index';
   return 'other';
 }
 

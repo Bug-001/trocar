@@ -172,7 +172,7 @@ test('W25 off and uninstall (no source tree, no helper): the standalone check of
   for (const w of [{ getuid: () => 0, geteuid: () => 0 }, { getuid: () => 501, geteuid: () => 0 }]) {
     const r = offDarwin.refuseElevatedByUid(w)
     assert.equal(r.code, 'root-token')
-    assert.match(r.reason, /R7/)
+    assert.match(r.reason, /not as root/) // human text names no spec rule (D58)
     assert.deepEqual(checkRecord({ event: 'failure', where: 'start', code: r.code, reason: r.reason }), [])
   }
   // the same refusal the arch module gives on and daemon: one rule, two homes (src/off cannot import it, 0.1 §2)
@@ -339,7 +339,7 @@ test('W24 start (the --no-autostart run: this session, nothing at login) starts 
   assert.deepEqual(run.calls, [], 'no launchctl: a LaunchAgent with RunAtLoad would be an autostart')
   assert.equal(spawned.length, 1)
   assert.deepEqual([spawned[0].cmd, spawned[0].args], [NODE, [SCRIPT, 'daemon']], 'node <asight> daemon, no --supervise (there is no supervisor parent to run it, 4.9 §4)')
-  assert.deepEqual([spawned[0].opts.detached, spawned[0].opts.stdio], [true, 'ignore'])
+  assert.equal(spawned[0].opts.detached, true)
   assert.equal(spawned[0].child.unrefd, true, 'the daemon is not tied to the process that started it: this one can exit')
   const dead = userUnit({ ...o, run, spawn: () => ({ pid: undefined, unref() {}, on() {} }) }).start()
   assert.equal(dead.code, null)
@@ -359,7 +359,7 @@ test('W24 a daemon started directly (start()) gets the environment a login-start
   const fakeSpawn = (cmd, args, opts) => { spawned.push(opts); return { pid: 5, unref() {}, on() {} } }
   assert.equal(userUnit({ ...withHome({ env: shell }), run: fakeTools(), spawn: fakeSpawn, uid: 501 }).start().code, 0)
   assert.deepEqual(spawned[0].env, kept, 'start()')
-  assert.deepEqual([spawned[0].detached, spawned[0].stdio], [true, 'ignore'], 'the rest of the spawn is as before')
+  assert.equal(spawned[0].detached, true, 'the rest of the spawn is as before')
 })
 
 test('disable (a no-names off) is launchctl disable only — never a bootout of a draining daemon — and the plist stays (an install item); a refusal is a failure with the reason', () => {

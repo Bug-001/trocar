@@ -112,7 +112,7 @@ test('darwinNetFacts: a harness that is off — the daemon lists its agent as `o
   assert.equal(named.name, 'claude', 'the table names it: unchanged')
   // and it is that name the topology draws for the harness that is off
   const t = buildTopology(facts('claude-code', { desired: { 'claude-code': 'off' } }, { procs: [{ ...unnamed, trusted: false }] }))['claude-code']
-  assert.match(renderCompact(t)[0], /^claude-code 4121 → /)
+  assert.match(renderCompact(t)[0], /^claude-code \(pid 4121\) -> /)
 })
 
 test('darwinNetFacts: elevation is euid/root — the process table\'s uid answers it (0 is root); a process only the daemon listed (another user\'s, the case that makes it matter) is asked of ps once; a ps that does not answer leaves it not-known', async () => {

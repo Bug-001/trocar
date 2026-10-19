@@ -13,6 +13,7 @@ export const NOT_CAPTURED_EXPECTED = Object.freeze(['policy', 'not-trust-path', 
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
 export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set',
+  'classes-ok', // ~/.asight/classes.json reads cleanly again: ends the condition its problem opened (D60③, 4.6 §记录「保存级别」)
   'agent-list-ok', // ~/.asight/agents.json reads cleanly again, or is gone: ends the agent-list-invalid condition (D51③, 4.6 R6)
   'process-unknown']) // a process no list item claims used a door (where 'engine'; harness, door, name, wide, named = listed only with args it missed, pid; never its command line): once per (door group, name) per daemon life (D51⑥)
 
@@ -31,8 +32,12 @@ export const LEVELS = Object.freeze(['critical'])
 export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
   // the old capture (RFC 4.1 过渡期, ~/.asight/logs/mitm-events.ndjson; deleted with it)
   'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard',
+  // the raw layer's sealer (D35 · D60②, RFC 4.2 §自动封存): the daemon's seal queue reports a segment it could not seal
+  'raw',
   // the retention settings (D40, RFC 4.6 §记录「保存级别」): read by the collector's engine and by the old MITM / reverse proxy
-  'retention'])
+  'retention',
+  // the traffic class table (D60③, 1.6 §4.2): ~/.asight/classes.json, read hot by the collector's engine
+  'classes'])
 
 /** The reasons a running agent is not (yet) trusted — the `code` of `agent-untrusted`, and of the `agent-exit` that ends
  *  it. Generic ones come from the resolver (core/trust/confirm.mjs, core/tracker.mjs); the rest are a harness's own
@@ -53,6 +58,7 @@ export const TRUST_REASONS = Object.freeze([
 export const CODES_BY_PART = Object.freeze({
   daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error'],
   record: ['record-error', 'file-replaced'],
+  raw: ['seal-failed'],
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
   // a harness's configuration or files, read or written (the Claude Code settings layers have their own codes, above)
   harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial',
@@ -67,13 +73,17 @@ export const CODES_BY_PART = Object.freeze({
   // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
   // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in
   // the change log could not be written is `retention-log-failed` (the edit applies; the record of it is missing)
-  retention: ['retention-unparsable', 'retention-unreadable', 'classify-failed', 'pattern-invalid', 'retention-log-failed'],
+  // ~/.asight/classes.json cannot be read / parsed, or holds an entry that is not a class or a rule that does not
+  // compile (`pattern-invalid`, above): the builtin table applies and every call is kept at ITS level, never dropped.
+  // `classes-log-failed`: the edit was made but logs/classes.ndjson could not record it (`asight classes`, 1.6 §4.2).
+  classes: ['classes-unparsable', 'classes-unreadable', 'classes-bad-entry', 'classes-write-failed', 'classes-log-failed', 'classify-failed', 'pattern-invalid'],
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
   ca: ['ca-invalid', 'cert-key-missing', 'cert-intermediate-unavailable'], // the last two: the issuer's (4.11 P2, ⑱): the root key is not in its custody; the custody did not issue an intermediate
   install: ['install-error', 'uninstall-error', 'left-unparsable', 'left-link', 'entry-not-undone', 'reverted-not-identical', 'already-restored', 'missing', 'left-user-value', 'still-trusting', 'bundle-kept', 'residue-not-removed', 'unit-not-enabled', 'unit-not-disabled', 'not-users-file', 'cert-not-installed', 'install-pending', 'collectors-online'], // not-users-file: install skipped a P8 install-folder wrapper, the program is not this user's one native file (4.11 P8) (4.8 §4.2; the kernel-not-off row retired with the kernel, D47's twin)
   // names no writer produces any more, kept so old records still read (4.8 §12 「旧 flows/ 行照读」): the old MITM's, and macOS Hermes' route-without-ca (4.11 §3 ⑱)
-  legacy: ['route-without-ca', 'tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
+  doctor: ['file-readable-by-others', 'standalone-unreadable', 'standalone-stale', 'backup-unclaimed'], // doctor's own findings (1.6 §3.7), beside the network ones of 附录 B
+  legacy: ['retention-unparsable', 'retention-unreadable', 'retention-log-failed', 'route-without-ca', 'tls-client-error', 'client-rejected-leaf', 'upstream-aborted', 'decode-failed', 'autostart-load-failed', 'steer-unreadable', 'steer-missing', 'shard-failed'],
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
 
@@ -84,7 +94,7 @@ export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat
 // src/off/names.mjs holds the same names (src/off may import nothing outside itself); test/health/codes.test.mjs holds the two equal.
 export const OFF_WHERE = Object.freeze(['off'])
 export const OFF_EVENTS = Object.freeze(['off-note']) // a state change (the last one of a run carries kind:'result'), not a failure
-export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker', 'entry-refused'])
+export const OFF_CODES = Object.freeze(['backup-failed', 'backup-kept', 'undone-by-marker', 'root-not-removed', 'entry-refused'])
 
 // What the Windows collector writes (RFC 4.8 §12; the kernel-era rows retired with the kernel — D47's darwin conversion and its win32 twin: the forwarder-* family, the download pair,
 // the probe refresh and the fallback verdict have no producer on any arch now) and the names it shares with the netenv side (4.7 §5, D41; read-only since D43) and the CLI (1.6 §9.7).
@@ -133,8 +143,13 @@ export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing',
   'cert-not-installed', 'cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file']) // the cert group's status reasons that have a producer (1.6 §9.7, 4.11 §3 ⑱)
 export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...ROUTE_STATUS_REASONS, ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 
+// What `asight status` and `asight doctor` name in their own documents (RFC 1.6 附录 C.3 / C.4 / C.5), a block of its own like the ones above: the `where` of an
+// `errors[]` entry is the part of the picture that could not be read, in the words the text prints; the codes are `doctor`'s own findings, the ones §3.7 asks it
+// to look at beside the network (附录 B owns the rest, src/netenv/findings.mjs). They are no D38 record of a collector writer, and they are closed all the same.
+const DOC_WHERE = Object.freeze(['the on/off state', 'the install record', 'capture health', 'the agent name list', 'the process table', 'a captured file'])
+
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), written as they are
-const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS, ...ROUTE_EVENTS, ...NET_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE, ...ROUTE_WHERE, ...NET_WHERE]),
+const sets = { nc: new Set([...NOT_CAPTURED_FAILURE, ...NOT_CAPTURED_EXPECTED]), ncFail: new Set(NOT_CAPTURED_FAILURE), fail: new Set(FAILURE_EVENTS), event: new Set([...FAILURE_EVENTS, ...STATE_EVENTS, ...OFF_EVENTS, ...ROUTE_EVENTS, ...NET_EVENTS]), where: new Set([...WHERE, ...OFF_WHERE, ...ROUTE_WHERE, ...NET_WHERE, ...DOC_WHERE]),
   code: new Set([...CODES, ...OFF_CODES, ...ROUTE_CODES, ...ROUTE_TRUST_REASONS, ...NET_CODES]) }
 
 export const isCode = (c) => sets.code.has(c) || ERRNO.test(String(c))

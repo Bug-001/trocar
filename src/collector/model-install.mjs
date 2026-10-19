@@ -32,6 +32,14 @@ const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentus
 export const ROOT_SUBJECT = 'asight local root' // also how the lab's reset knows asight's own certificate (spec 4.10 §7 还原)
 const NOT_USERS = CODE.notUsersFile
 const errText = (e) => String((e && e.message) || e)
+// The key custody is a native program (4.11 P1): 'unavailable' is a VALUE, but it can also FAIL outright — a HOME with no login keychain answers
+// "A default keychain could not be found" (a macOS test machine 2026-10-18, where install exited 70 with a stack at the person). A failure is a stated
+// refusal: `install` says what happened and what to do, carries `error.code` and exits 1.
+export const CUSTODY_FAILED = 'key-custody-failed'
+const CUSTODY_ADVICE = Object.freeze({
+  darwin: 'asight needs the login keychain of this user: log in to this Mac at its own desktop once (that is where the keychain is made), then run asight install again there',
+  win32: 'run asight install again from a terminal of your own desktop session',
+})
 // an OS prompt that was not answered (timeout, no GUI session) is pending; one the user answered no is declined (1.6 §1.6)
 const promptState = (r) => r.state || (/time[d ]?out|no gui|interaction|session|unavailable/i.test(String(r.reason || '')) ? 'pending' : 'declined')
 
@@ -66,7 +74,17 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   // a · the root's key (P1): created only when the custody has none; the root it returns must have the ROOT profile (T12)
   let rootDer = null
   const rec = m.entries.find((e) => e.kind === 'root-key')
-  const has = await custody.exists()
+  // one call shape for every custody verb: a program that cannot be used is a refusal with its reason, never a stack (P5)
+  let custodyWhy = null
+  const ask = async (verb, arg) => {
+    try { return await custody[verb](arg) } catch (e) {
+      custodyWhy = `the key that signs certificates could not be ${verb === 'create' ? 'made' : 'read'} (${errText(e)}). ${CUSTODY_ADVICE[os] || CUSTODY_ADVICE.win32}`
+      pending.push({ item: 'root-key', state: 'failed', code: CUSTODY_FAILED, reason: custodyWhy })
+      return null
+    }
+  }
+  const has = await ask('exists')
+  if (custodyWhy) return finish()
   if (has === 'unavailable') { pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody is not reachable (macOS: no graphical login session); run asight install again in a terminal of that session' }) }
   else if (rec && has === true && fs.existsSync(ca.pem)) { rootDer = pemToDer(fs.readFileSync(ca.pem, 'utf8')); said('root-key', 'intact', { fp256: rec.fp256 }) }
   else {
@@ -74,7 +92,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
     // asight-ca.pem gone: the custody has no verb that returns the root), is replaced — never refused. A stray key goes first (create over it is
     // the helper's 'exists'); then the old root leaves the store by its recorded fingerprint; the carriers below are rewritten for the new root.
     if (has === true) {
-      const gone = await custody.remove(rec ? rec.custody : { kind: custody.kind })
+      const gone = await ask('remove', rec ? rec.custody : { kind: custody.kind })
+      if (custodyWhy) return finish()
       if (!gone || typeof gone !== 'object' || typeof gone.removed !== 'boolean') { pending.push({ item: 'root-key', state: 'pending', reason: `the custody holds a key whose root certificate asight can no longer read back, and could not remove it now (${JSON.stringify(gone)}); run asight install again in a terminal of the graphical login session` }); return finish() }
     }
     if (rec) { m.entries.splice(m.entries.indexOf(rec), 1); save() }
@@ -89,11 +108,12 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         problems.push(`orphan: the old asight root ${old.fp256} is still in your root store (${(r && r.reason) || 'the removal was not confirmed'}); its key is gone, so it signs nothing. Remove it by hand: ${old.undo_by_hand || undoByHand(old)}`)
       }
     }
-    const made = await custody.create({ subject: ROOT_SUBJECT })
+    const made = await ask('create', { subject: ROOT_SUBJECT })
+    if (custodyWhy) return finish()
     if (made === 'unavailable') pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody could not create the key now (no graphical login session?); run asight install again there' })
     else {
       const bad = checkProfile(made.rootDer, ROOT)
-      if (bad.length) { problems.push(`the root the custody made does not have the root profile (${bad.join('; ')}); nothing uses it`); await custody.remove({ kind: custody.kind, id: made.fp256 }) }
+      if (bad.length) { problems.push(`the root the custody made does not have the root profile (${bad.join('; ')}); nothing uses it`); await ask('remove', { kind: custody.kind, id: made.fp256 }) }
       else {
         rootDer = made.rootDer
         const k = { kind: 'root-key', harness: null, phase: 'install', custody: { kind: custody.kind, id: made.id || made.fp256 }, fp256: made.fp256, ...(made.provider ? { provider: made.provider } : {}), installed_at: now().toISOString() }
@@ -252,13 +272,22 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && o[k] != null).map((k) => [k, o[k]]))
 
 /** What install would place, read only (the plan 1.6 §1.6 prints before it asks): one row per present form → { harness, form, carrier }. */
+// The certificate carrier of one form, as a path and a key: whatever shape the descriptor uses for it (a config file and its keys, a plugin's
+// directory and its loader, a wrapper's bin directory) resolved the way `on` and `install` resolve it — so the plan names the file it will change
+// (1.6 §1.4「计划写全」) instead of a kind alone. A carrier whose place cannot be resolved on this machine says so, and why.
+const carrierLoc = (c) => c.file || (c.loader && c.loader.file) || c.dir || c.binDir || null
+const carrierKeys = (c) => c.keys || (c.loader && c.loader.keys) || (c.file && c.file.keys) || null
+
 export function planInstall({ os, harnesses, ctx }) {
   const rows = []
   for (const desc of harnesses.filter((d) => d.proxyMode)) {
     for (const f of desc.proxyMode.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
       const c = f.cert === 'root' ? null : desc.proxyMode.certs[f.cert]
       const when = c && c.when ? holds(c.when, ctx) : true
-      rows.push({ harness: desc.name, form: f.id, carrier: !c || when === false ? 'root' : c.kind })
+      const carrier = !c || when === false ? 'root' : c.kind
+      const loc = carrier === 'root' ? null : carrierLoc(c)
+      const paths = loc ? resolveLoc(loc, ctx) : []
+      rows.push({ harness: desc.name, form: f.id, carrier, paths, keys: carrierKeys(c || {}) || null })
     }
   }
   return rows

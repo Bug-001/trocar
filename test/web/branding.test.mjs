@@ -58,3 +58,13 @@ test('the wordmark reads asight', () => {
   const h1 = (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1] || '';
   assert.match(h1.replace(/<[^>]+>/g, ''), /^asight$/i, `wordmark renders as "${h1.replace(/<[^>]+>/g, '')}"`);
 });
+
+// ── 2.6 · D59③: the board is READ-ONLY. Where a keep level used to be toggled it now prints the
+// command that changes it, so the one screen about settings cannot imply the board can change them.
+test('changing what is kept is shown as a command, not as a control', () => {
+  assert.match(html, /asight classes set \$\{esc\(c\.class\)\} \$\{c\.keep===/,
+    'the class table must print `asight classes set <class> full|log` per row (2.6 §D)');
+  for (const gone of [/setRetentionLevel/, /class="lvl"/, /method:\s*'POST'/, /x-asight-csrf/]) {
+    assert.doesNotMatch(html, gone, `the board still carries ${gone} — it has no write path (D26 · D59③)`);
+  }
+});

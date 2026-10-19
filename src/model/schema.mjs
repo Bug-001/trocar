@@ -1,27 +1,6 @@
-// src/model/schema.mjs — apply the 3.2 normalized-model DDL and map provider
-// usage into canonical roles. Owns nothing provider-native beyond this file.
-import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_DDL = join(HERE, 'ddl.sql');
-
-// Run every statement in the DDL file on a @duckdb/node-api connection.
-// FIX (verify blocker): strip '--' line comments BEFORE splitting on ';', so a
-// ';' inside a comment does not create a bogus split point. The DDL contains no
-// ';' inside string literals, so splitting the comment-free text on ';' is safe.
-export async function applyDDL(connection, ddlPath = DEFAULT_DDL) {
-  const sql = await readFile(ddlPath, 'utf8');
-  const statements = sql
-    .replace(/--[^\n]*/g, '') // remove -- line comments (to end of line) FIRST
-    .split(';')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-  for (const stmt of statements) await connection.run(stmt);
-  return statements.length;
-}
-
+// src/model/schema.mjs — map provider usage into the 3.2 canonical roles. Owns
+// nothing provider-native beyond this file. (The DDL and its projection are gone
+// with DuckDB: the readers read the raw files.)
 const num = (x) => (x == null ? 0 : Number(x));
 
 // Canonical usage mapping (RFC 3.2 "provider -> canonical" table), keyed by the WIRE FORMAT the usage

@@ -49,13 +49,13 @@ test('CM24 · daemon up: a holder the daemon names (GET /holders over its real e
   try {
     const before = tree(w.home)
     const { receipt, exit } = await uninstall(w)
-    assert.deepEqual([exit, receipt.code], [1, 'collectors-online'])
+    assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
     assert.ok(receipt.problems.some((p) => p.includes('asight off') && p.includes('asight uninstall')), 'the refusal gives the steps: asight off, then asight uninstall (1.6 §9.6 collectors-online)')
-    assert.match(receipt.problems.join('\n'), /pid 4242 \(codex\)/)
+    assert.match(receipt.problems.join('\n'), /codex \(pid 4242\)/)
     assert.deepEqual(tree(w.home), before, 'not one file changed')
     const purged = await uninstall(w, {}, { purgeData: true }) // the receipt of a refused --purge-data says the captures stay (it said 「采集数据已删」)
-    assert.deepEqual([purged.exit, purged.receipt.code, tree(w.home)], [1, 'collectors-online', before])
-    assert.doesNotMatch(formatUninstallReceipt(purged.receipt), /采集数据已删/)
+    assert.deepEqual([purged.exit, purged.receipt.error && purged.receipt.error.code, tree(w.home)], [1, 'collectors-online', before])
+    assert.doesNotMatch(formatUninstallReceipt(purged.receipt), /your captured records \(--purge-data\)/)
   } finally { await server.close() }
 })
 
@@ -64,8 +64,8 @@ test('CM24 · a harness still on (desired on) → refused and named, nothing cha
   fs.writeFileSync(path.join(w.dir, 'state.json'), JSON.stringify({ version: 2, updated_at: null, harnesses: { 'kimi-code': { desired: 'on', since: new Date().toISOString() } } }))
   const before = tree(w.home)
   const { receipt, exit } = await uninstall(w)
-  assert.deepEqual([exit, receipt.code], [1, 'collectors-online'])
-  assert.match(receipt.problems.join('\n'), /还开着: kimi-code/)
+  assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
+  assert.match(receipt.problems.join('\n'), /capture is still on for kimi-code/)
   assert.deepEqual(tree(w.home), before)
 })
 
@@ -78,8 +78,8 @@ test('CM24 · daemon down: the CLI judges holders from the manifest\'s liveness 
   const before = tree(w.home)
   const proc = { pid: 777, startedAt: onAt + 1000, name: 'codex', comm: 'codex', exe: '/usr/local/bin/codex', args: ['codex'], cmdline: 'codex', argv: ['codex'] }
   const { receipt, exit } = await uninstall(w, { procs: async () => [proc] })
-  assert.deepEqual([exit, receipt.code], [1, 'collectors-online'], JSON.stringify(receipt.problems))
-  assert.match(receipt.problems.join('\n'), /pid 777 \(codex\)/)
+  assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'], JSON.stringify(receipt.problems))
+  assert.match(receipt.problems.join('\n'), /codex \(pid 777\)/)
   assert.deepEqual(tree(w.home), before)
 })
 
@@ -118,7 +118,7 @@ for (const [what, make] of Object.entries(ANSWERS)) {
     assert.deepEqual([r.exit, r.pending.map((p) => p.item)], [1, ['root-store']])
     assert.deepEqual(readManifest(w.dir).entries.filter((e) => e.kind === 'system-root').map((e) => e.fp256), [r.fp256], 'one system-root record, this root')
     const removed = []
-    const { receipt } = await uninstall(w, { rootStore: { remove: (id) => { removed.push(id.fp256); return { ok: true } } } })
+    const { receipt } = await uninstall(w, { rootStore: { remove: (id) => { removed.push(id.fp256); return { ok: true } }, has: () => ({ present: false }) } })
     assert.deepEqual(removed, [r.fp256], JSON.stringify({ p: receipt.problems, l: receipt.left }))
   })
 }
@@ -186,7 +186,7 @@ test('0.2:130 · a refused uninstall (collectors-online) leaves the daemon\'s lo
   fs.writeFileSync(path.join(w.dir, 'state.json'), JSON.stringify({ version: 2, updated_at: null, harnesses: { codex: { desired: 'on', since: new Date().toISOString() } } }))
   const before = tree(w.home)
   const { receipt, exit } = await uninstall(w)
-  assert.deepEqual([exit, receipt.code], [1, 'collectors-online'])
+  assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
   assert.deepEqual(fs.readdirSync(logs).sort(), ['daemon-err.log', 'daemon-out.log'])
   assert.deepEqual(tree(w.home), before)
 })
@@ -207,8 +207,8 @@ for (const [cause, make] of Object.entries(UNFINISHED)) {
     const { receipt, exit } = await uninstall(w, {}, { purgeData: true })
     assert.equal(exit, 1, JSON.stringify({ p: receipt.problems, l: receipt.left }))
     for (const p of CAPTURES) assert.equal(fs.readFileSync(path.join(w.dir, p), 'utf8'), `${p}\n`, `${p} stays`)
-    assert.deepEqual([receipt.purge_data, receipt.kept_captures], [false, true])
-    assert.doesNotMatch(formatUninstallReceipt(receipt), /采集数据已删/)
+    assert.deepEqual(receipt.purge_data, false)
+    assert.doesNotMatch(formatUninstallReceipt(receipt), /your captured records \(--purge-data\)/)
   })
 }
 test('invariant 2 · --purge-data on a clean run deletes the captures (the negative above is not vacuous)', async () => {
@@ -217,5 +217,35 @@ test('invariant 2 · --purge-data on a clean run deletes the captures (the negat
   const { receipt, exit } = await uninstall(w, {}, { purgeData: true })
   assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
   for (const p of CAPTURES) assert.equal(fs.existsSync(path.join(w.dir, p)), false, `${p} is gone`)
-  assert.match(formatUninstallReceipt(receipt), /采集数据已删/)
+  assert.match(formatUninstallReceipt(receipt), /your captured records \(--purge-data\)/)
 })
+
+// D38 · P5 (Windows test machine 2026-10-18): removing a root asks the operator, and a question nobody answers (or a tool that exits 0 while the root stays)
+// must not read as "removed" — uninstall exited 1 with nothing naming the certificate, and the manifest went anyway, so the machine kept trusting
+// asight and the next uninstall said nothing was installed. Generated along the ways the store can keep the root.
+const KEPT_ROOT = {
+  'the removal reports success, the store still holds it': { remove: () => ({ ok: true }), has: () => ({ present: true }) },
+  'the removal fails': { remove: () => ({ ok: false, reason: 'certutil -user -delstore failed (exit none)' }), has: () => ({ present: true }) },
+  'the removal throws': { remove: () => { throw new Error('the prompt was not answered') }, has: () => ({ present: true }) },
+  'the store cannot be read back': { remove: () => ({ ok: true }), has: () => ({ error: 'certutil -user -store failed (exit 1)' }) },
+}
+for (const [what, store] of Object.entries(KEPT_ROOT)) {
+  test(`D38 · ${what}: exit 1, the receipt names the root and the command, the manifest keeps the record for the next run`, async () => {
+    const w = await installed()
+    const fp = readManifest(w.dir).entries.find((e) => e.kind === 'system-root').fp256
+    const { receipt, exit } = await uninstall(w, { rootStore: store })
+    assert.equal(exit, 1, JSON.stringify({ p: receipt.problems, l: receipt.left }))
+    assert.equal(receipt.ok, false)
+    assert.deepEqual(receipt.still_trusting.map((x) => [x.what, x.fp256]), [['root', fp]], JSON.stringify(receipt.still_trusting))
+    assert.match(receipt.still_trusting[0].command, /security remove-trusted-cert|certutil/, 'the by-hand command is there')
+    assert.equal(receipt.problems.length, 1, JSON.stringify(receipt.problems))
+    assert.match(receipt.problems[0], /root certificate was NOT taken out of your trust store/)
+    assert.ok(receipt.left.some((l) => /trust store/.test(l.reason)), JSON.stringify(receipt.left))
+    const after = readManifest(w.dir)
+    assert.deepEqual(after.entries.filter((e) => e.kind === 'system-root').map((e) => e.fp256), [fp], 'the next uninstall finds the root to remove')
+    const flows = path.join(w.dir, 'flows')
+    const lines = fs.readdirSync(flows).flatMap((n) => fs.readFileSync(path.join(flows, n), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+    assert.equal(lines.filter((l) => l.code === 'root-not-removed').length, 1, `one failure line (${lines.map((l) => l.code || l.kind).join(', ')})`)
+    assert.match(formatUninstallReceipt(receipt, { home: w.home }), /trust store/)
+  })
+}

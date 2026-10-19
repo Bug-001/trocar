@@ -305,5 +305,6 @@ test('fidelity X8 through asight uninstall: the receipt names the line left out 
   const row = off.receipt.changed.find((c) => c.path === file)
   assert.deepEqual(row.prior_left, [{ key: 'SSL_CERT_FILE', line }])
   const text = formatOffReceipt(off.receipt, { home: s.home })
-  assert.ok(text.includes(`第 ${line} 行`) && text.includes(`删掉这行开头的 \`${OFF_PREFIX}\``), text)
+  const flat = text.replace(/\s+/g, ' ') // the receipt wraps at 80 columns (§1.1 版式 6): the sentence is read without its line breaks
+  assert.ok(flat.includes(`the old line (line ${line}) is still commented out`) && flat.includes(`delete the leading ${OFF_PREFIX}`), text)
 })

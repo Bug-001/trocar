@@ -58,7 +58,7 @@ node bin/asight.mjs on          # then start capture
 
 The same five commands on every OS, in this order: `asight install` (once) → `asight on` → `asight off` →
 `asight status` (any time) → `asight uninstall`. `install` lists every file it will touch and writes them after you
-confirm; until it has run, `asight on` refuses (`cert-not-installed`). `on` starts capture, `status` shows state,
+confirm; until it has run, `asight on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
 `off` takes every trace of asight off your agents' path, and the certificates stay until `asight uninstall`.
 
 From a Release: not published yet.
@@ -67,28 +67,31 @@ From a Release: not published yet.
 
 ```sh
 asight off                     # first: uninstall refuses while capture is on
-asight uninstall               # removes all of asight's changes, keeps captures
-asight uninstall --purge-data  # also deletes capture data (asks first)
+asight uninstall               # removes all of asight's changes; keeps your records (~/.asight/raw)
+asight uninstall --purge-data  # also deletes the records and their index (asks first)
 ```
 
-`uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
-holds a door, it changes nothing, exits 1 with `collectors-online` and names the harnesses and the pids.
+`uninstall` always prints its plan and asks first; without a terminal and without `--yes` it changes
+nothing and exits 2. `uninstall` never does `off` for you. While a harness is on, or (macOS / Windows) a process started during `on` still
+holds a door, it changes nothing, exits 1 with `error.code` `collectors-online` and names the harnesses and the pids.
+If the system's prompt to remove asight's root certificate is not answered, `uninstall` exits 1, names the
+certificate and the command to remove it by hand, and the next `asight uninstall` tries again.
 
 ## What you see
 
-No ETL, no database, no build step — the board reads the NDJSON directly (`asight serve` →
-http://127.0.0.1:9800, the HTTP shell of `asight query`, D59). It reads the capture directory, so
-**the sessions of every captured harness appear side by side on one board**, including the per-user
-process collector's `~/.asight/collector/capture-*.ndjson` (its `flows/`, `audit/` and `replays/` are
-not envelopes and are not shown).
+No ETL, no database, no build step — the board reads the raw segments directly (`asight serve` →
+http://127.0.0.1:9800, read-only, the HTTP shell of `asight query` over `GET /api/<name>`, D59). It
+reads `~/.asight/raw/`, so **the sessions of every captured harness appear side by side on one
+board** (the collector's `flows/`, `audit/` and `replays/` are not envelopes and are not shown).
 
 Per call, on one board: **context replay** (the full assembled request, block by block, plus the raw
 wire body) · **cache overlay** (real `cache_read` / `cache_write` counts, the marked break, its cause
 and fix hint) · **reconstructed streamed reply** with usage and an estimated cost · **resource
 lifecycle** — which files entered context, when, via which tool *(Claude Code only — see Limits)*.
 
-Cost is a local, editable estimate in `~/.atrace/pricing.json` (or the file `ASIGHT_PRICING` names; `atrace` is this
-project's v0 name, kept for what is already on disk); providers return usage, never dollars.
+Cost is a local, editable estimate in `~/.asight/pricing.json` (or the file `ASIGHT_PRICING` names;
+`asight query pricing` prints the table in effect and says where it came from); providers return
+usage, never dollars.
 
 What the board cannot vouch for, it labels on the call (raw panel and the top of the context window):
 - **不完整 · partial context**: what is shown is not the whole context the model saw (an earlier record is
@@ -131,9 +134,10 @@ the board is the HTTP shell (D59); there is no separate ETL step and no database
 
 ## What it touches, and what lands on disk
 
-Everything asight writes lives under `~/.asight/`. Captures made before 2026-07-20 sit under
-`~/.atrace/asight/` and are **still read** — the board lists both, so upgrading never costs you a
-session (the older `atrace` name was this project's v0 prototype).
+Everything asight writes lives under `~/.asight/`, and every record under `~/.asight/raw/`. This version is
+**not** backwards compatible: records the previous version wrote to
+`~/.asight/collector/capture-<date>.ndjson`, and older roots (`~/.asight/sessions/`, the v0 `~/.atrace`),
+are neither read nor moved nor touched. If you still want what is in them, keep a copy yourself.
 
 `asight on` arranges a local, observe-only tap **on your user account only**. It never changes your
 system proxy, never adds machine-wide trust, never needs root (Linux's one-time `setup-helper` is the
@@ -218,17 +222,17 @@ The cost of `all`, honestly: a child process of an agent that does not trust the
 | root / CA (per user) | Linux: `~/.asight/collector/ca/` (key 0600), in **no** trust store · macOS: login keychain key + user trust · Windows: CNG key + `CurrentUser\Root`; `~/.asight/collector/ca/asight-ca.pem` is the public certificate | `asight uninstall` |
 | certificate carriers (`install`) | Linux: each agent's trust entry, written by `install` (Claude Code `env.NODE_EXTRA_CA_CERTS`, OpenCode / dsh plugins, Codex / Hermes `.env` blocks, Z-Code `network.caCertFile`, combined bundles `combined-<agent>.pem`) · macOS / Windows: the carriers above | `asight uninstall` |
 | proxy entries (`on`) | macOS / Windows: the proxy keys and switch files above; Linux: none (the helper steers) | `asight off` |
-| autostart unit (per user) | Linux: `~/.config/systemd/user/asight-collector.service` · macOS: `~/Library/LaunchAgents/com.asight.collector.plist` · Windows: the scheduled task `\asight\collector`; each runs `asight daemon` | `asight off` with no names disables it, `asight uninstall` removes it (`on --no-unit` skips it) |
+| autostart unit (per user) | Linux: `~/.config/systemd/user/asight-collector.service` · macOS: `~/Library/LaunchAgents/com.asight.collector.plist` · Windows: the scheduled task `\asight\collector`; each runs `asight daemon` | `asight off` with no names disables it, `asight uninstall` removes it (`on --no-autostart` writes none at all) |
 | install manifest | `~/.asight/collector/install-manifest.json` — every file and key it changed, never a copy of your file | removed last by `asight uninstall` |
 | backups of your files | `~/.asight/backup/` (0700, files 0600): the file as it was before asight changed it — API keys included | `off` leaves them; `uninstall` deletes them all |
 | the standalone undo | `~/.asight/bin/asight-off`, written by `install`; `asight doctor` checks it is current | `asight uninstall` |
-| captures | `~/.asight/collector/capture-<date>.ndjson`; `flows/` holds connection metadata and failure records | kept unless `asight uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
+| captures | `~/.asight/raw/<segment>.ndjson` and its `<segment>.sealed` (0600); `~/.asight/index/` is a deletable accelerator; `flows/` holds connection metadata and failure records | kept unless `asight uninstall --purge-data` (which deletes `flows/` too, then records there anything it could not undo) |
 
 ```sh
 sudo asight setup-helper      # Linux, once per machine
 asight install                # once, per user: the certificates; lists every file it will change and asks (not in a terminal: add --yes)
 asight on                     # refuses until install has run; starts the daemon (systemd --user · LaunchAgent · scheduled task); then restart your agents
-asight on --no-unit           # no autostart unit: start the daemon yourself, with `asight daemon` in the foreground
+asight on --no-autostart      # no autostart entry: the daemon is started this once, and by you (`asight daemon`) after that
 asight status                 # each agent and why it is (not) captured, its proxy chain, the certificates, the recent failures
 asight off                    # every trace of it is off your agents' path (off claude-code: only that one)
 asight serve                  # the captures appear on the board
@@ -276,8 +280,8 @@ and the trust entry asight believed was in effect. It goes to the daemon's log t
 
 A relay or proxy with a private CA keeps working. On Linux `install` carries the CA you already gave Claude Code into
 `extra-cc.pem` (the other agents' CAs into their bundles), and the daemon verifies upstreams with Node's store plus
-`NODE_EXTRA_CA_CERTS` (the Linux unit carries the value of the shell you install from; with `--no-unit`, start the
-daemon from a shell that has it). On macOS and Windows the door verifies an upstream with that agent's own trust set —
+`NODE_EXTRA_CA_CERTS` (the Linux unit carries the value of the shell you install from; with `--no-autostart`, the
+daemon takes it from the shell you run `on` in). On macOS and Windows the door verifies an upstream with that agent's own trust set —
 the OS roots, Node's, and the files its certificate variables name — never with the asight root (RFC 4.11 §3 ⑭).
 asight does not count on a Claude Code process that was already
 running at install picking up the new trust entry (not verified for every mode), so `status` reports it
@@ -316,9 +320,8 @@ no manual seal command.
 asight raw <segment>[:<from>[-<to>]]   # print records byte for byte, sealed or not
 ```
 
-On its first start after an upgrade, the daemon renames the previous version's
-`~/.asight/collector/capture-<date>.ndjson` files into `~/.asight/raw/` (bytes untouched); from then on
-they are ordinary segments. Older roots such as `~/.atrace` are neither read nor touched. Segments hold
+Records the previous version wrote to `~/.asight/collector/capture-<date>.ndjson`, and older roots such as
+`~/.atrace`, are neither read nor moved nor touched. Segments hold
 the same plaintext and credentials as the traffic and are owner-only (0600).
 
 ## Claude Desktop
@@ -351,8 +354,7 @@ The old CC-CLI steer (`HTTPS_PROXY` / `NO_PROXY` in `~/.claude/settings.json`) a
 Verge's `Script.js` are yours to revert the same way they were written; v0 leftovers
 (`com.atrace.serve`, `~/.local/share/atrace`, `.atrace-bak`) are only ever reported, never touched.
 
-Captures the earlier capture wrote are still read (they are the source truth; the board lists them beside the
-collector's). The board's 监测 toggle steers only the old CC-CLI steer — it is labelled 「只管旧 CC-CLI steer」 — and is
+Captures the earlier capture wrote are **not** read: only `~/.asight/raw/` is. The board's 监测 toggle steers only the old CC-CLI steer — it is labelled 「只管旧 CC-CLI steer」 — and is
 not the collector's switch; `asight off` is.
 
 ## Limits
@@ -372,10 +374,12 @@ not the collector's switch; `asight off` is.
 - **On captures without process identity the harness is a guess.** Sessions recorded by the MITM or
   reverse proxy carry no `proc.agent`, so the board names their agent from the User-Agent and its chip
   says so (「推断自 UA」). Sessions from the per-process collector are named by process, never by UA.
-- **DuckDB is a projection, not an analytics product.** Roughly a dozen canned queries, no query UI.
-  Open the `.duckdb` file with any DuckDB client and write your own SQL.
-- **Non-verbatim data is labelled in place.** Raw NDJSON is the only source of truth; DuckDB is
-  rebuildable from it. SSE replies are faithful reconstructions of the streamed frames. Data imported
+- **The read side is a fixed set of questions, not an analytics product.** `asight query <name>` has
+  the named queries the board asks (sessions, calls, blocks, classes, segments, pricing, status,
+  doctor) and no query language. For anything else, read the segments: `asight raw <segment>` prints
+  the records byte for byte.
+- **Non-verbatim data is labelled in place.** The raw segments are the only source of truth; the
+  segment index under `~/.asight/index/` is a deletable accelerator, rebuilt from them. SSE replies are faithful reconstructions of the streamed frames. Data imported
   from the v0 demo is badged `v0-converted` (re-serialized bodies, summarized tool schemas); fresh
   captures are byte-exact with full tool schemas. A request body the collector stored only in part is
   badged on its call with the exact reason: 已截断 (cut at the 64 MiB capture cap) or 不完整 (the capture
@@ -393,7 +397,7 @@ not the collector's switch; `asight off` is.
 ```sh
 # common
 asight install [--yes] [--dry-run] [--json]   # once: the certificates (D55); prints the plan and asks first
-asight on [<harness>...] [--no-autostart] [--no-unit] [--yes] [--dry-run] [--json]
+asight on [<harness>...] [--no-autostart] [--yes] [--dry-run] [--json]
 asight off [<harness>...] [--now] [--yes] [--dry-run] [--json]
 asight status [<harness>...] [--failures] [--json]   # --failures: the whole failure wall (the plain status prints a one-screen digest)
 asight uninstall [--purge-data] [--yes] [--dry-run] [--json]

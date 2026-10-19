@@ -12,8 +12,16 @@ export const sha256 = (data) => (data == null ? null : crypto.createHash('sha256
 /** The file's bytes, or null when it is not there; any other error is thrown. */
 export function readOrNull(fs, file) { try { return fs.readFileSync(file) } catch (e) { if (e.code === 'ENOENT') return null; throw e } }
 
-/** fsync a directory so a rename or a created file in it is durable; a filesystem that refuses it is not an error. */
-export function fsyncDir(fs, dir) { try { const fd = fs.openSync(dir, 'r'); try { fs.fsyncSync(fd) } finally { fs.closeSync(fd) } } catch { /* a filesystem that refuses dir fsync */ } }
+// A directory cannot be fsynced everywhere (Windows refuses the open or the fsync with EPERM / EISDIR / EBADF, some network
+// file systems with EINVAL / ENOTSUP): that is not a failed write, the rename is done. Anything ELSE is a real failure and is
+// thrown — swallowing it is what left every Windows segment with its plaintext beside the sealed file (tested 2026-10-18).
+// By errno, never by platform (X16). This is the ONE fsyncDir in the repo (the platform-seam rule: one place per platform concern).
+const NO_DIR_FSYNC = new Set(['EINVAL', 'ENOTSUP', 'EPERM', 'EISDIR', 'EBADF'])
+/** fsync a directory so a rename or a created file in it is durable; a file system that cannot do it is not an error. */
+export function fsyncDir(fs, dir) {
+  let fd
+  try { fd = fs.openSync(dir, 'r'); fs.fsyncSync(fd) } catch (e) { if (!NO_DIR_FSYNC.has(e && e.code)) throw e } finally { if (fd !== undefined) try { fs.closeSync(fd) } catch { /* the sync above is what counted */ } }
+}
 
 // Atomic and durable: temp file in the same directory, fsync, rename over, fsync the directory. A rename that fails because another
 // process holds the target open for a moment (Windows: an editor, a scanner, the agent itself, without FILE_SHARE_DELETE) is tried again

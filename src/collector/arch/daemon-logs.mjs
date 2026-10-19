@@ -8,8 +8,11 @@
 // losing a record (R11's spirit; the unit file itself is rewritten when its text changes, and gains the two keys the same way on an upgraded machine).
 import path from 'node:path'
 
+/** The daemon's log places under a collector directory (`~/.asight/collector`): `{ dir, out, err }`. Pure. The one place the two names live. */
+export const daemonLogsIn = (collectorDir) => { const dir = path.join(collectorDir, 'logs'); return { dir, out: path.join(dir, 'daemon-out.log'), err: path.join(dir, 'daemon-err.log') } }
+
 /** The daemon's log places of `home`: `{ dir, out, err }`. Pure. */
-export const daemonLogPaths = (home) => { const dir = path.join(home, '.asight', 'collector', 'logs'); return { dir, out: path.join(dir, 'daemon-out.log'), err: path.join(dir, 'daemon-err.log') } }
+export const daemonLogPaths = (home) => daemonLogsIn(path.join(home, '.asight', 'collector'))
 
 /** Makes the directory (0700) and the two files (0600, created empty when missing; a file already there keeps its bytes). Idempotent; throws what the fs threw. */
 export function ensureDaemonLogs(home, { fs }) {

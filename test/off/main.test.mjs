@@ -18,9 +18,9 @@ const changedRel = (s, r) => r.changed.map((c) => path.relative(s.home, c.path))
 
 test('V6 (off): an unknown option and an unknown harness exit 2, name what is known, and leave the sandbox HOME byte for byte; a name given twice or by alias is one harness', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'] }); const before = snapshot(s.home)
-  let io = fakeIo(); assert.equal(await runOffCli(['--nope'], ctx(s, io)), 2); assert.match(io.text(), /unknown option --nope/)
+  let io = fakeIo(); assert.equal(await runOffCli(['--nope'], ctx(s, io)), 2); assert.match(io.text(), /unknown option '--nope'/)
   io = fakeIo(); assert.equal(await runOffCli(['clade', 'codex'], ctx(s, io)), 2)
-  assert.match(io.text(), /unknown harness clade; the names are: claude-code, codex, hermes, opencode, deepseek-dsh, kimi-code, z-code, claude, dsh, kimi, zcode/)
+  assert.match(io.text(), /^asight off: unknown harness 'clade'\. Known: claude-code, codex, hermes, opencode, deepseek-dsh, kimi-code, z-code\n/, 'the §1.6 line: the name that is not one, then the names that are, with no alias among them')
   assert.deepEqual(snapshot(s.home), before, 'exit 2: not one byte moved, nothing asked of the daemon')
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), [])
   assert.deepEqual(resolveOffNames(['claude', 'claude-code', 'kimi']), { ok: true, ids: ['claude-code', 'kimi-code'] })
@@ -35,17 +35,18 @@ test('V5 (names and --json): off claude and off claude-code give the same result
   assert.equal(await runOffCli(['claude-code', '--json'], ctx(b, ioB)), 0)
   const ra = ioA.json(), rb = ioB.json() // JSON.parse of the whole of stdout: nothing else was printed there
   assert.deepEqual([validateReceipt(ra), validateReceipt(rb)], [[], []])
-  assert.deepEqual([ra.harnesses, rb.harnesses, ra.command, ra.ok], [['claude-code'], ['claude-code'], 'off', true])
+  assert.deepEqual([ra.harnesses.map((h) => h.harness), rb.harnesses.map((h) => h.harness), ra.command, ra.ok, ra.outcome], [['claude-code'], ['claude-code'], 'off', true, 'done'], 'appendix C.2: one object per harness, and the outcome')
+  assert.ok(ra.harnesses.every((h) => h.ok && h.reason === null && Array.isArray(h.undone) && Array.isArray(h.kept_backups)))
   assert.deepEqual([changedRel(a, ra), a.sys.daemon.calls.filter((c) => c.startsWith('POST /off'))], [changedRel(b, rb), b.sys.daemon.calls.filter((c) => c.startsWith('POST /off'))])
   assert.ok(!/"claude"/.test(ioA.stdoutText()), 'the alias is input only')
   assert.ok(ra.changed.every((c) => c.harness === 'claude-code'))
 })
 
-test('R7: off as root is refused, nothing is written, nothing is asked of the daemon, exit 1', async () => {
+test('§1.5: off as root is refused before anything is read or written, nothing is asked of the daemon, exit 2', async () => {
   const s = await installedHome({ names: ['claude-code'] }); const before = snapshot(s.home); const calls = s.sys.exec.calls.length
   const io = fakeIo()
-  assert.equal(await runOffCli([], ctx(s, io, { deps: { getuid: () => 0 } })), 1)
-  assert.match(io.text(), /root/)
+  assert.equal(await runOffCli([], ctx(s, io, { deps: { getuid: () => 0 } })), 2)
+  assert.equal(io.stderrText(), 'asight off: run this as your own user, not as root.\n')
   assert.deepEqual([snapshot(s.home), s.sys.exec.calls.length, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off'))], [before, calls, []])
 })
 
@@ -53,7 +54,7 @@ test('1.6 §4 (D39⑥ executed 2026-10-11: the legacy off went with the old capt
   const s = await installedHome({ names: ['claude-code'] })
   const io = fakeIo()
   assert.equal(await runOffCli([], ctx(s, io, { platform: 'darwin' })), 0, io.text())
-  assert.match(io.stdoutText(), /^asight 已关闭采集。/, 'the NEW off ran and printed its receipt')
+  assert.match(io.stdoutText(), /^Capture is off for all harnesses\. asight is no longer on their path\./, 'the NEW off ran and printed its receipt')
   assert.doesNotMatch(io.stdoutText(), /NODE_EXTRA_CA_CERTS/, 'and it took no certificate item: those are install\'s (D55①)')
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'], 'an arm only the new off has: the daemon was told to drain and exit')
 })
@@ -65,9 +66,9 @@ test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing as
   const d = dry.json()
   assert.deepEqual([snapshot(s.home), s.sys.exec.calls.length, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off'))], [before, calls, []])
   assert.deepEqual([d.dry_run, d.ok, validateReceipt(d)], [true, true, []])
-  const ca = fakeIo(); assert.equal(await runOffCli(['--remove-ca'], ctx(s, ca)), 2); assert.match(ca.stderrText(), /^asight off: unknown option --remove-ca\n/)
+  const ca = fakeIo(); assert.equal(await runOffCli(['--remove-ca'], ctx(s, ca)), 2); assert.match(ca.stderrText(), /^asight off: unknown option '--remove-ca'\n/)
   const text = fakeIo(); assert.equal(await runOffCli(['--dry-run'], ctx(s, text)), 0)
-  assert.match(text.stdoutText(), /^asight 将关闭采集。/); assert.doesNotMatch(text.stdoutText(), /settings\.json|已关闭|已回到/, 'the plan names no certificate item: off spares them (D55①)')
+  assert.match(text.stdoutText(), /^Capture will be turned off for /); assert.doesNotMatch(text.stdoutText(), /settings\.json|restored/, 'the plan names no certificate item: off spares them (D55①)')
   assert.deepEqual(snapshot(s.home), before)
   const real = fakeIo(); const t = await installedHome({ names: ['claude-code', 'codex'] })
   assert.equal(await runOffCli(['--now', '--json'], ctx(t, real)), 0)
@@ -75,7 +76,7 @@ test('R6: --dry-run writes nothing — not a byte, not a flows/ line, nothing as
   assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true,"exit":true}'])
 })
 
-test('1.6 §7: the receipt text of an off with no names — no certificate item (D55①), the autostart, the daemon draining with its connections, who still trusts the CA, the processes the user started — and a failed off says what is left', async () => {
+test('§3.4: the receipt text of an off with no names — no certificate item (D55①), the daemon draining with its connections, who still trusts the certificate, the processes the user started — and a failed off says what is left', async () => {
   const s = await installedHome({ names: ['claude-code', 'codex'], daemon: { relayed: { closing: 2, waiting: 1, cut: 0 }, exitOnOff: false } })
   fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'EXTRA=1\n')
   const procs = async () => [
@@ -85,27 +86,49 @@ test('1.6 §7: the receipt text of an off with no names — no certificate item 
   const io = fakeIo()
   assert.equal(await runOffCli([], ctx(s, io, { deps: { procs } })), 0, io.text())
   const out = io.stdoutText()
-  assert.match(out, /^asight 已关闭采集。\n/)
-  assert.match(out, /没有改任何用户文件/, 'no certificate item is touched, the edited one neither (D55①)')
-  assert.match(out, /说明: what asight install wrote stays — off never touches it; asight uninstall removes it: .*\.codex\/\.env/, 'they are named as staying, once')
-  assert.match(out, /自启已停用;守护进程仍在排空:pid 4242,还剩 1 条等它们自己关闭;asight off --now 立即切断: 2 条连接仍经 asight 中转,本次响应\(或本轮\)结束后关闭;其中 1 条是透传连接或看不到终止消息的 WebSocket/)
-  assert.doesNotMatch(out, /重启前仍信任 asight CA/, 'off took no trust away, so it names no one as still trusting it')
-  assert.match(out, /你自己起的 asight 进程仍在跑: asight serve\(pid 5310,只读看板,不在 agent 路径上\)/)
-  assert.match(out, /引流: 已摘\(守护进程回复了,已确认\)/)
-  assert.ok(out.trimEnd().endsWith('再开  asight on'), 'the last line says how to turn it back on')
+  assert.match(out, /^Capture is off for all harnesses\. asight is no longer on their path\.\n/)
+  assert.match(out, /No file of yours was changed\./, 'no certificate item is touched, the edited one neither (D55①)')
+  assert.doesNotMatch(out, /install wrote/, 'the last line already says the certificates stay and how to remove them: what install wrote is named in --json (install_items), not in a second line here')
+  assert.match(out, /The daemon \(pid 4242\) exits after 2 open responses finish\./)
+  assert.match(out, /1 connection asight cannot see the end of/)
+  assert.doesNotMatch(out, /Still trusting the asight certificate/, 'off took no trust away, so it names no one as still trusting it')
+  assert.match(out, /Still running, started by you: asight serve \(pid 5310, a read-only dashboard,\n {2}not on any agent path\)\./)
+  assert.ok(out.trimEnd().endsWith('Certificates stay installed. To remove them: asight uninstall'), 'the last line says the certificates stay, and how to remove them')
   const bad = formatOffReceipt({ ok: false, all: true, harnesses: [], routing: { confirmed: true }, daemon: { pid: 9, state: 'unresponsive' }, relayed: 'unknown', relayed_reason: 'the daemon does not answer', changed: [], removed: [], skipped: [], left: [{ path: '/h/.codex/.env', result: 'left-unparsable', reason: 'is no longer valid JSON' }], problems: ['x'], notes: [] }, { home: '/h' })
-  assert.match(bad, /^asight 没有做完\(引流已摘,其余原因在下面\)。/m)
-  assert.match(bad, /守护进程\(pid 9\)没响应,也停不掉:手动停止 kill -9 9/); assert.match(bad, /仍经 asight 的连接数: 不知道\(the daemon does not answer\)/)
-  assert.match(bad, /没撤掉: ~\/\.codex\/\.env\(is no longer valid JSON\)/)
+  assert.match(bad, /^Capture is not fully off: asight is off their path, but some items were left\./m)
+  assert.match(bad, /The daemon \(pid 9\) does not answer and could not be stopped\.\nStop it by hand: kill -9 9/)
+  assert.match(bad, /Connections still going through asight: unknown \(the daemon does not answer\)\./)
+  assert.match(bad, /Not undone: ~\/\.codex\/\.env \(is no longer valid JSON\)/)
 })
 
-test('R6 · R5: with --json a question about the marks goes to stderr and stdout stays one JSON document; with no manifest and no terminal the plan is in the receipt and the exit is 1', async () => {
-  const s = await installedHome({ names: ['codex'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json'))
-  const io = fakeIo({ tty: false })
-  assert.equal(await runOffCli(['--json'], ctx(s, io)), 1)
-  const r = io.json()
-  assert.deepEqual([r.ok, r.pending.map((p) => path.basename(p.path)), validateReceipt(r)], [false, ['.env'], []])
-  assert.equal(flowEvents(s.dir).at(-1).outcome, 'partial')
+// V82 · 1.6 §4.2「与开关无关」/ §3.6「流量类别表不删」: the class table says what to keep of FUTURE calls — it is not asight's
+// effect on an agent, so neither `off` nor `uninstall --purge-data` (test/cli/uninstall.test.mjs R6) may touch it or its change log.
+test('V82: `off` leaves ~/.asight/classes.json and logs/classes.ndjson byte for byte — the table is not part of what off undoes', async () => {
+  const s = await installedHome({ names: ['claude-code', 'codex'] })
+  const file = path.join(s.home, '.asight', 'classes.json'), log = path.join(s.home, '.asight', 'logs', 'classes.ndjson')
+  fs.mkdirSync(path.dirname(log), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({ version: 1, classes: [{ class: 'catalog', keep: 'log', rules: [{ host: 'models\\.opencode\\.ai' }] }] }, null, 2) + '\n')
+  fs.writeFileSync(log, '{"ts":"2026-10-18T00:00:00.000Z","op":"set","class":"catalog"}\n')
+  const bytes = () => [fs.readFileSync(file), fs.readFileSync(log)]
+  const before = bytes()
+  const io = fakeIo()
+  assert.equal(await runOffCli(['--json'], ctx(s, io)), 0, io.text())
+  assert.deepEqual(bytes(), before, 'both files are untouched, to the byte')
+  assert.deepEqual(io.json().changed.filter((c) => /classes/.test(c.path)), [], 'the receipt names neither of them')
+})
+
+test('§1.2 · R6: with no install manifest and --json, off asks nothing and writes no stderr at all — stdout is one document whose `planned` holds the plan, exit 1; the same on a terminal', async () => {
+  for (const tty of [false, true]) { // on a terminal the plan used to go to stderr and the run waited on stdin, with --json (review 2026-10-18)
+    const s = await installedHome({ names: ['codex'] }); fs.rmSync(path.join(s.dir, 'install-manifest.json'))
+    const io = fakeIo({ tty })
+    assert.equal(await runOffCli(['--json'], ctx(s, io)), 1, `tty ${tty}: nothing was undone`)
+    const r = io.json()
+    assert.deepEqual([r.ok, r.pending.map((p) => path.basename(p.path)), validateReceipt(r)], [false, ['.env'], []])
+    assert.deepEqual(r.planned.map((p) => [path.basename(p.path), typeof p.change]), [['.env', 'string']], '附录 C.2: the plan is in `planned`, each item {path, change}')
+    assert.equal(io.stderrText(), '', '§1.2: stderr is empty under --json')
+    assert.deepEqual(io.asked, [], 'and no question was asked')
+    assert.equal(flowEvents(s.dir).at(-1).outcome, 'partial')
+  }
 })
 
 test('the standalone asight-off passes no io: the process\'s own stdout and stderr are what it prints on', async () => {
@@ -113,7 +136,7 @@ test('the standalone asight-off passes no io: the process\'s own stdout and stde
   const real = process.stderr.write
   process.stderr.write = (chunk) => { written.push(String(chunk)); return true }
   try { assert.equal(await runOffCli(['--bogus']), 2) } finally { process.stderr.write = real }
-  assert.match(written.join(''), /asight off: unknown option --bogus/)
+  assert.match(written.join(''), /asight off: unknown option '--bogus'/)
 })
 
 // the flip's seam 2 (4.9 §4): runOffCli threads ITS platform into runOff's deps, so offWorld runs the arm the CLI was told — not the host's. Pre-flip a Linux

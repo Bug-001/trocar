@@ -18,6 +18,8 @@ import { X509Certificate } from 'node:crypto'
 import http from 'node:http'
 import { once } from 'node:events'
 import { fakeMac } from '../cli/fixtures/legacy-ctx.mjs'
+import { rawHome } from '../../src/paths.mjs'
+import { envelopesOf, asWritten } from '../helpers/record-store.mjs'
 import { fileURLToPath } from 'node:url'
 import { startDaemon } from '../../src/collector/daemon.mjs'
 import { installCollector } from '../../src/collector/install.mjs'
@@ -37,8 +39,8 @@ import { createRedirectorClient } from '../../src/collector/arch/linux/redirecto
 import { createLinuxRedirector } from '../../src/collector/arch/linux/redirector.mjs'
 import cc from '../../src/collector/harness/claude-code.mjs'
 import codex from '../../src/collector/harness/codex.mjs'
-import { createServer } from '../../src/server.mjs'
-import { sealShard, sealUnchecked } from '../../src/raw/seal.mjs'
+import { captureHealth, HealthUnreadable } from '../../src/health/read.mjs'
+import { sealSegment } from '../../src/raw/seal.mjs'
 import { fakeProc } from './arch/linux/fixtures/fake-proc.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
@@ -72,15 +74,13 @@ const flowsOf = (s) => {
   for (const l of lines) assert.deepEqual(checkRecord(l), [], `outside the closed sets: ${JSON.stringify(l)}`)
   return lines
 }
-// (ii): the endpoint, over HTTP, from a real board server reading this home
+// (ii): the reader `asight status` prints from — the board has no capture-health route of its own any
+// more (D59: it reads the named queries, and this document is the `status` command's). A home it
+// cannot read throws, which the command states; here that is reported as the same 503 shape the HTTP
+// route used to answer, so every assertion below still reads one way.
 async function endpoint(s) {
-  const { server } = await createServer({ dbPath: '/nonexistent-db', sourcePath: null, healthHome: s.asight })
-  server.listen(0, '127.0.0.1'); await once(server, 'listening')
-  try {
-    return await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port: server.address().port, path: '/api/capture-health' }, (res) => {
-      let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, ...JSON.parse(b) }))
-    }).on('error', reject))
-  } finally { server.close() }
+  try { return { status: 200, ...captureHealth({ home: s.asight }) } }
+  catch (e) { if (e instanceof HealthUnreadable) return { status: 503, error: `capture health could not be read: ${e.message}` }; throw e }
 }
 // (iii): `asight collector status` with no daemon answering — it reads the disk
 async function statusOffline(s) {
@@ -174,8 +174,8 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
   } finally { await d.stop() }
   let st = await statusOffline(s)
   assert.match(st.text, /not running/)
-  assert.match(st.text, /negative-cache/, '(iii) status lists the condition with no daemon')
-  assert.match(st.text, /client-rejected-leaf/)
+  assert.match(st.text, /pid 7171/, `(iii) status lists the condition with no daemon:\n${st.text}`)
+  assert.match(st.text, /relay\.asight\.test/)
   d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc], upstreamCa: up.ca.certPem })
   try {
     const h = await endpoint(s)
@@ -295,8 +295,9 @@ test('F3 parts: off, a helper death (degraded), a SIGHUP stop and its clean rest
   assert.deepEqual([h.collector.daemon.state, h.summary.state], ['not-running', 'not-running'])
   assert.equal(h.collector.daemon.last_stop.signal, 'SIGHUP')
   const st = await statusOffline(s)
-  assert.match(st.text, /SIGHUP/)
-  assert.match(st.text, /degraded/, '(iii) the condition as of the stop')
+  // the stop and its signal are the endpoint's facts above; the offline text says the daemon is not running and what went wrong before it stopped
+  assert.match(st.text, /Daemon not running[^\n]*; nothing is captured/)
+  assert.match(st.text, /helper-down loader killed by SIGKILL/, '(iii) the condition as of the stop')
   // (d) a helper speaking another protocol: never attaches; no "unclean stop" after a SIGHUP (h)
   d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, { ASIGHT_FAKE_PROTO: '3' }).arch, harnesses: [cc] })
   try {
@@ -362,7 +363,7 @@ test('F4 write failures: an event line that cannot be written is on stderr and i
 test('F4 the connection row of a flow whose envelope could not be written carries write_failed, and the agent still gets its reply', async () => {
   const S = await scene({ reply: 'HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok' })
   try {
-    fs.mkdirSync(path.join(S.s.collector, `capture-${new Date().toISOString().slice(0, 10)}.ndjson`)) // the day's capture file cannot be opened
+    fs.mkdirSync(path.dirname(rawOf(S.s)), { recursive: true }); fs.writeFileSync(rawOf(S.s), '') // raw/ is a file, so no segment can be opened
     const raw = await S.inject()
     const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect')
     let got = ''; c.on('data', (x) => { got += x })
@@ -390,29 +391,24 @@ test('F6 install / uninstall: an entry uninstall cannot undo → exit-worthy `le
   assert.deepEqual([h.summary.state, h.summary.n], ['residue', 1], '未安装 · 残留 1 项')
   assert.ok(keys(h).includes('uninstall/left-unparsable'))
   const st = await statusOffline(s)
-  assert.match(st.text, /not installed — an uninstall left 1 item/)
+  assert.match(st.text, /^ {2}Certificate {2}not installed; run: asight install$/m, 'not "installed"')
+  assert.match(st.text, /an uninstall left an item behind/, 'the item left behind is said, not silence (D38)')
   s.done()
 })
 
-test('F7 sealing and reading: a seal refused on an unclosed shard is a journal line the endpoint lists (⚠); an unreadable journal is said; a sealed flows/ file is still read', async () => {
+test('F7 sealing and reading: a seal refused on a file that is not a closed segment is a journal line the endpoint lists (⚠); an unreadable journal is said', async () => {
   const s = sandbox()
   const journal = path.join(s.asight, 'raw', 'journal.jsonl')
   const shard = path.join(s.asight, 'sessions', 'p', 's', 'calls.ndjson')
   fs.mkdirSync(path.dirname(shard), { recursive: true }); fs.writeFileSync(shard, '{"id":"a"}\n')
-  await assert.rejects(sealShard(shard, { journal }))
+  await assert.rejects(sealSegment(shard, { lockFile: path.join(s.collector, 'lock'), journal }))
   let h = await endpoint(s)
   assert.deepEqual(h.raw.problems.map((x) => [x.op, x.outcome]), [['seal', 'refused']])
   assert.deepEqual([h.summary.state, h.summary.part], ['failing', 'raw'], 'the top bar turns ⚠')
-  // a sealed flows/ day of an installed collector: its failure is still listed
+  // Nothing else can be sealed any more: only the daemon seals, and only a closed segment of raw/ (4.2 §自动封存), so
+  // the old "a sealed flows/ day is still read" case cannot occur. Reading a sealed SEGMENT end to end (every record
+  // by its id, byte for byte) is test/query/segment-index.test.mjs.
   await install(s)
-  const old = path.join(s.collector, 'flows', '2000-01-01.ndjson')
-  fs.mkdirSync(path.dirname(old), { recursive: true })
-  fs.writeFileSync(old, JSON.stringify({ ts: new Date(Date.now() - 3600e3).toISOString(), event: 'failure', where: 'engine', code: 'loader-down', reason: 'in a sealed file' }) + '\n')
-  await sealUnchecked(old, { split: false, deleteOriginal: true, journal })
-  assert.ok(!fs.existsSync(old))
-  h = await endpoint(s)
-  assert.ok(keys(h).includes('engine/loader-down') && h.read.files.some((f) => f.endsWith('.sealed')), `read through src/raw/: ${keys(h)}`)
-  assert.match((await statusOffline(s)).text, /loader-down/, 'and by an offline status')
   // the journal itself unreadable
   fs.chmodSync(journal, 0o000)
   try {
@@ -424,8 +420,9 @@ test('F7 sealing and reading: a seal refused on an unclosed shard is a journal l
 // What the engine's own half asserts piece by piece is test/collector/core/exchange.test.mjs (T-11 / T-12 / T-14) and
 // not-captured.test.mjs; these are the same three things through the product path: a daemon, a real TLS client and a real
 // upstream, then the row, the event, the envelope on disk and the endpoint.
-const captureOf = (s) => fs.readdirSync(s.collector).filter((n) => /^capture-.*\.ndjson$/.test(n) && fs.statSync(path.join(s.collector, n)).isFile())
-  .flatMap((n) => fs.readFileSync(path.join(s.collector, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
+// Envelopes live in the raw layer's segments now (D59/D60), not in the collector's own dated files.
+const rawOf = (s) => rawHome(path.dirname(s.collector))
+const captureOf = (s) => envelopesOf(s.collector)
 async function talk(S, bytes, { until: ok = () => true } = {}) {
   const raw = await S.inject()
   const c = tls.connect({ socket: raw, servername: 'relay.asight.test', ca: fs.readFileSync(S.extraCc) }); await once(c, 'secureConnect')
@@ -595,7 +592,7 @@ test('F5 WebSocket labels and the top bar, by D38 class: a call cut at the cap i
   try {
     const out = []; let n = 0
     const rec = (o = {}) => createWsRecorder({ flow: WS_FLOW, upgrade: wsUpgrade(o.ext), genId: () => `ws-env-${n++}`, onFailure: failures.event, terminal: [{ pathSuffix: '/responses', patterns: ['^\\{"type":"response\\.completed"'] }],
-      recordStore: { envelope: o.write || ((e) => (out.push(e), true)), lastError: null }, ...o })
+      recordStore: { envelope: (e) => asWritten(o.write ? o.write(e) : (out.push(e), true), out.length), lastError: null }, ...o })
     const ev = (type, extra = {}) => JSON.stringify({ type, ...extra })
     const cli = (op, payload, opts) => encodeFrame(op, payload, opts), srv = (op, payload, opts) => encodeFrame(op, payload, { mask: false, ...opts })
     const wsKeys = async () => keys(await endpoint(S.s)).filter((k) => k.startsWith('ws/'))

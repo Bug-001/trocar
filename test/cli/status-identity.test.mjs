@@ -23,8 +23,10 @@ async function identityOf(s, deps = {}) {
   const r = await runStatus(s, ['--json'], deps)
   const j = JSON.parse(r.text)
   assert.deepEqual(validateReceipt(j), [], r.text) // V9: validateReceipt checks every harnesses[].identity against its shape
-  assert.deepEqual(validateReceipt({ ...j, harnesses: [{ ...j.harnesses[0], identity: { ...j.harnesses[0].identity, unknown: [{ name: 'x' }] } }] }).filter((x) => /identity/.test(x)).length, 1, 'and a broken identity block is a problem')
-  return { j, by: Object.fromEntries(j.harnesses.map((h) => [h.harness, h.identity])), r }
+  const [first, x] = Object.entries(j.harnesses)[0]
+  const broken = { ...j, harnesses: { ...j.harnesses, [first]: { ...x, identity: { ...x.identity, unknown: [{ name: 'y' }] } } } }
+  assert.equal(validateReceipt(broken).filter((p) => /identity/.test(p)).length, 1, 'and a broken identity block is a problem')
+  return { j, by: Object.fromEntries(Object.entries(j.harnesses).map(([h, v]) => [h, v.identity])), r }
 }
 
 test('V65 status --json: the identity block — a good custom item (source custom), a bad one in problems, an ignored preset, the processes on no list — the same with and without a daemon', async () => {
@@ -45,14 +47,12 @@ test('V65 status --json: the identity block — a good custom item (source custo
     assert.deepEqual(cc.unknown.map((u) => [u.name, u.wide, u.pid, u.door]), [['claude-canary', false, 7002, 'claude-code.settings'], ['python', true, 7003, 'claude-code.settings']], `${label}: one row per name, the newest pid`)
     assert.deepEqual(by.codex.names, [], `${label}: the ignored preset is gone from the names`)
     assert.deepEqual(by.codex.ignored, [{ name: 'codex', source: 'preset' }], `${label}: and listed as ignored`)
-    const row = j.harnesses.find((h) => h.harness === 'claude-code').rows.find((x) => x.pid === 5000)
+    const row = j.harnesses['claude-code'].processes.find((x) => x.pid === 5000)
     assert.equal(row && row.name, 'claude', `${label}: the process row names the name it matched`)
   }
-  // the human view of the named harness: the list, the outsiders, the bad item
+  // §3.5 prints no list of its own: the file, its problems and the processes on no list are the document's (and `doctor`'s findings, 附录 B agent-list-invalid / process-unknown)
   const t = (await runStatus(s, ['claude-code'], { procs })).text
-  assert.match(t, /名单: claude\(预设\)[^\n]*claude-nightly\(自定\)/)
-  assert.match(t, /不在名单上、用了它的入口: claude-canary\(pid 7002\)、python\(pid 7003\)/)
-  assert.match(t, /agents\.json 第 2 项\(agents\[1\]\): wide-name-needs-args/)
+  assert.ok(!/agents\.json/.test(t), t)
 })
 
 test('V65 a name the user has since put on the list is no longer said to be on no list; a broken file is said with its state; no file is state absent and no problems', async () => {
@@ -73,7 +73,7 @@ test('V65 a name the user has since put on the list is no longer said to be on n
 test('R18 V65 status puts a process under a harness by the name list in effect NOW (presets + agents.json, `ignore` applied, as the daemon identifies), not by the manifest\'s ever-growing liveness snapshot — with and without a daemon', async () => {
   const s = await installedHome()
   const procs = async () => [claudeProc(5000, Date.now() + 5000)]
-  const pidsOf = (j) => j.harnesses.find((h) => h.harness === 'claude-code').rows.map((x) => x.pid)
+  const pidsOf = (j) => j.harnesses['claude-code'].processes.map((x) => x.pid)
   for (const [label, deps] of [['no daemon', { procs }], ['daemon', { procs, request: asDaemon(reply({ agents: [] })) }]]) {
     assert.ok(pidsOf((await identityOf(s, deps)).j).includes(5000), `${label}: the preset name claude is claude-code's`)
     writeList(s.home, { version: 1, agents: [{ harness: 'claude-code', name: 'claude', ignore: true }] })
@@ -94,7 +94,7 @@ test('fold: process-unknown is a per-(harness, name) fact of this daemon life �
   assert.deepEqual(g.unknown_procs, [], 'a new daemon life starts with none')
 })
 
-test('1.6 §9.7: status reads agents.json itself — with no harness installed or named, a broken file is still said (human view and --json agent_list)', async () => {
+test('1.6 §9.7: status reads agents.json itself — with no harness installed or named, a broken file is still said (--json agent_list)', async () => {
   const { tmpDir } = await import('../helpers/tmp.mjs')
   const { fakeIo } = await import('./fixtures/on-ctx.mjs')
   const { runStatusCli } = await import('../../src/cli/status.mjs')
@@ -105,8 +105,7 @@ test('1.6 §9.7: status reads agents.json itself — with no harness installed o
   const parts = { os: 'darwin', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: {} }
   const deps = { request: down(), socketPath: SOCK, procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), parts, user: 'alice' }
   const human = fakeIo()
-  await runStatusCli([], { io: human, home, platform: 'darwin', env: { HOME: home }, deps })
-  assert.match(human.stdoutText(), /名单文件 .*agents\.json: unparsable/)
+  assert.equal(await runStatusCli([], { io: human, home, platform: 'darwin', env: { HOME: home }, deps }), 0, human.stderrText())
   const io = fakeIo()
   await runStatusCli(['--json'], { io, home, platform: 'darwin', env: { HOME: home }, deps })
   const j = JSON.parse(io.stdoutText())

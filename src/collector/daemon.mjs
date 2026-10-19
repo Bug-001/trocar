@@ -8,7 +8,8 @@ import fs from 'node:fs'
 import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
-import { asightHome, collectorHome } from '../paths.mjs'
+import { asightHome, collectorHome, rawHome } from '../paths.mjs'
+import { startSealing } from './seal-queue.mjs'
 import { loadArch } from './arch/index.mjs'
 import { loadHarnesses } from './harness/index.mjs'
 import { createRegistry } from './core/registry.mjs'
@@ -33,8 +34,7 @@ import { procIdentity, captureHealth } from '../health/read.mjs'
 import { identityFor } from '../off/proc.mjs'
 import { runAsync } from '../off/exec.mjs'
 import { driftCheck, newDriftState } from '../netenv/adopt.mjs'
-import { retentionFile } from '../capture/retention.mjs'
-import { retentionHook, wsTerminalHook } from './engine-data.mjs'
+import { classesHook, wsTerminalHook } from './engine-data.mjs'
 import { isModelOs, backendsFor, doorPartsFor, sourcesCtx } from './arch/model-backends.mjs'
 import { createModelCollector } from './core/proxymode/collector.mjs'
 import { TEMPLATES } from './harness/templates/index.mjs'
@@ -149,7 +149,41 @@ function noteUncleanStop(lock, failure) {
   else if (unreadable) failure('daemon', coded(new Error('the previous daemon left an unreadable lock (crash or power loss): it ended without a clean stop, and connections then in flight through its engine were cut (how many is not known)'), 'unclean-stop'))
 }
 
-async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {} }) {
+/** The ONE place a daemon's record store and its sealer are wired (no per-platform copy), so BOTH
+ *  entries — Linux's runDaemon and the model OSes' runModelDaemon — seal: `seal.start()` does the upgrade rename and
+ *  the last run's leftovers, then every segment this run closes, one at a time in a forked child, so this event loop
+ *  never encodes or hashes (4.2 §自动封存).
+ *    `seal.start()` MUST come after the control server claimed the collector (before that the lock may be a LIVE
+ *  daemon's, and the start scan clears the lock's `segment`); `seal.stop()` belongs at the top of the stop, before
+ *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off. */
+function storeWithSealing({ P, failure }) {
+  const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
+  let queue = null
+  const seal = {
+    start() { queue = startSealing({ store, raw: rawHome(path.dirname(P.dir)), lockFile: P.lock, failure }); return queue },
+    stop() { if (queue) queue.stop() },
+  }
+  return { store, seal }
+}
+
+/** The lock a live daemon holds (4.6 §控制面, D-25): `fields` (pid, start time, boot id …) plus `segment`, the raw-layer
+ *  segment it is appending to right now (D60: readers and the sealer leave that one alone, and may take every other). The
+ *  returned refresh is called on a timer, and by the record store right before it creates a new segment file (so the lock
+ *  names the live segment no later than its first byte); the file is rewritten only when the segment changed (a rollover,
+ *  a stop) — a reader never sees a segment named here that is already closed. */
+export function lockKeeper({ file, fields, segmentOf = () => null }) {
+  let written = false, segment = null
+  return () => {
+    const seg = segmentOf()
+    if (written && seg === segment) { const t = new Date(); fs.utimesSync(file, t, t); return }
+    const tmp = `${file}.tmp-${process.pid}`
+    fs.writeFileSync(tmp, JSON.stringify({ ...fields, segment: seg }) + '\n', { mode: 0o600 })
+    fs.renameSync(tmp, file) // atomic: a reader sees the whole old lock or the whole new one
+    segment = seg; written = true // only now: a failed write must be retried, not remembered as done
+  }
+}
+
+async function runDaemon({ dir, env = process.env, arch = null, harnesses = null, socketPath = null, enginePort = null, upstreamCa = undefined, log, identity = null, lockRefreshMs = 1000, foreground = false, caCheckMs = 24 * 3600e3, bundleMs = 24 * 3600e3, checkMs = 5000, foldMs = 10_000, home = null, model = {} }) {
   const P = collectorPaths(dir)
   const netHome = home || env.HOME || os.homedir() // whose agents' settings the 5 s check looks at: the user the daemon runs as
   const failure = createFailureRecorder(P.dir, { log })
@@ -167,7 +201,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
   const ep = A0 && typeof A0.controlEndpoint === 'function' && !socketPath ? A0.controlEndpoint({ dir: P.dir }) : null
   const sock = socketPath || (ep ? ep.path : controlSocketPath({ env }))
   // macOS / Windows run the collector model (4.11 §1, §3 ①): no CA of its own to gate on, doors from POST /on, the CLI writes every file
-  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows })
+  if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, foreground, upstreamCa, model })
   identity = identity || procIdentity
   let manifest
   try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
@@ -219,8 +253,9 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       failure.write({ event: 'ca-ok', file: caState.file, reason: 'the collector CA is usable again: leaves are signed with it and agents are judged against it from now on' })
     }, caCheckMs)
     caTimer.unref()
-    const retention = retentionHook({ file: retentionPath || retentionFile(path.dirname(P.dir)), rows: trafficRows, failure }) // D40, engine-data.mjs
-    const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
+    const retention = classesHook({ home: path.dirname(P.dir), failure }) // D60③, engine-data.mjs
+    const { store, seal } = storeWithSealing({ P, failure })
+    seal.start() // after noteUncleanStop above: the gate (the control server) has claimed the collector
     // switch / helper events: their own descriptor (events.mjs, a lost line becomes a log-gap), and every failure
     // among them carries `reason`
     let engine = null // created after the tracker; the tracker's onGone reaches it at call time
@@ -438,9 +473,14 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
     // the lock (4.6 §控制面, D-25): pid + start time + boot id, so a reused pid or a reboot is never "running"; its
     // mtime is refreshed every second, so a stuck daemon shows as unresponsive within 5 s — read from disk alone
     const me = identity(process.pid)
-    fs.writeFileSync(`${P.lock}.tmp-${process.pid}`, JSON.stringify({ pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }) + '\n', { mode: 0o600 })
-    fs.renameSync(`${P.lock}.tmp-${process.pid}`, P.lock)
-    const lockTimer = setInterval(() => { try { const t = new Date(); fs.utimesSync(P.lock, t, t) } catch (e) { failure('daemon', coded(new Error(`the lock ${P.lock} could not be refreshed (${errText(e)}); readers will judge this daemon unresponsive`), e && e.code ? e.code : 'record-error')) } }, lockRefreshMs)
+    const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, helper_pid: redirector.helperInfo().pid, engine_port: port, socket: sock }, segmentOf: () => store.currentSegment })
+    refreshLock()
+    // the lock must name the live segment before that segment's first byte (D60, invariant 2): the store calls this
+    // synchronously right before it creates the file, so a sealer never takes the segment the daemon is appending to.
+    // A lock that cannot be written is said (D38) and the capture goes on.
+    const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(new Error(`the lock ${P.lock} could not be refreshed (${errText(e)}); readers will judge this daemon unresponsive`), e && e.code ? e.code : 'record-error')) } }
+    store.onSegmentOpening(bumpLock)
+    const lockTimer = setInterval(bumpLock, lockRefreshMs)
     lockTimer.unref()
     // lifecycle (D-24): readers fold conditions from the last daemon-start; upstream_ca = the daemon's own
     // NODE_EXTRA_CA_CERTS (W-4: relays with a private CA rely on it), linger = whether logout ends this daemon
@@ -590,6 +630,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
       ready.then(() => new Promise((r) => setTimeout(r, 50))).then(() => { if (mine === exitAsked && !sw.anyOn()) return stop({ reason: 'off' }) }).catch((e) => failure('daemon', coded(e, 'stop-failed')))
     }
     async function doStop({ signal = null, reason = null } = {}) {
+      seal.stop() // the segment store.close() closes below is sealed by the next start's scan, not by a worker this stop cuts off
       clearInterval(lockTimer); clearInterval(caTimer); clearInterval(checkTimer); clearTimeout(bundleRetry)
       if (!helperDown) { try { const s = await redirector.status(); if (s && s.drops) lastDrops = s.drops } catch { /* the helper is going: what was last read is written */ } }
       noteDrops({ force: true }) // drops not yet reported are written, not lost
@@ -622,7 +663,7 @@ async function runDaemon({ dir, retentionPath = null, trafficRows = undefined, e
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
 // engine are always the real ones.
-async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model, retentionPath, trafficRows }) {
+async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failure, identity, lockRefreshMs, foreground, upstreamCa, model }) {
   const list = harnesses || (await loadHarnesses())
   const nextAgentList = agentListWatch({ home, write: (rec) => failure.write(rec) })
   let agents = (nextAgentList() || { entries: [] }).entries
@@ -632,7 +673,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const parts = model.parts || (await doorPartsFor({ os: A.os, env, event, failure, io: model.io || {} }))
   let rootPem = null
   try { rootPem = fs.readFileSync(path.join(P.caDir, 'asight-ca.pem'), 'utf8') } catch { /* no root: the issuer says so, every door forwards only */ }
-  const store = createRecordStore({ root: P.dir, onError: (e) => failure('record', coded(e, 'record-error'), e && e.file ? { file: e.file } : {}) })
+  const { store, seal } = storeWithSealing({ P, failure }) // 4.2 §自动封存, the same wiring as runDaemon's
   let collector = null
   const desired = () => { try { return readStateFile(P.state).state.harnesses || {} } catch { return {} } }
   const engine = createEngine({
@@ -640,7 +681,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     issuer: { secureContextFor: (h) => collector.issuer.secureContextFor(h), issue: (h) => collector.issuer.issue(h) }, store, upstreamCa,
     ingressToken: crypto.randomBytes(24).toString('hex'), // the model listens on no shared ingress: each door carries its group's token (ingress.json's), this one guards nothing
     isRecording: (meta) => (desired()[meta && meta.agent] || {}).desired === 'on',
-    retention: retentionHook({ file: retentionPath || retentionFile(path.dirname(P.dir)), rows: trafficRows, failure }), describe: wsTerminalHook(list), // D40 and the WebSocket turn edge, as on Linux (engine-data.mjs)
+    retention: classesHook({ home: path.dirname(P.dir), failure }), describe: wsTerminalHook(list), // D60③ and the WebSocket turn edge, as on Linux (engine-data.mjs)
     onFailure: (rec) => failure.event(rec), onError: (e) => log('engine', e),
   })
   collector = createModelCollector({ harnesses: list, dir: P.dir, identify: registry.match, ownerOf: parts.ownerOf, factsOf: parts.factsOf, proc: parts.proc,
@@ -652,8 +693,13 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   let exitAsked = 0, exitTimer = null
   const status = async () => {
     const st = collector.issuer.state()
-    const hs = Object.fromEntries(Object.entries(desired()).map(([h, e]) => [h, { ...e, attached: collector.attached(h) }])) // per harness: its doors listen (status's `attached`, 1.6 V32)
-    return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
+    const d = desired()
+    const hs = Object.fromEntries(Object.entries(d).map(([h, e]) => [h, { ...e, attached: collector.attached(h) }])) // per harness: its doors listen (status's `attached`, 1.6 V32)
+    // the connections of the harnesses that are off and still relayed (1.6 §1.3), as runDaemon reports them: the engine counts
+    // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
+    // carry the connection counts)" on every model-mode machine — a reason about asight's own IPC (a macOS test machine 2026-10-18).
+    const off = new Set(Object.entries(d).filter(([, e]) => e && e.desired === 'off').map(([h]) => h))
+    return { pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }
   const body = (q) => (q && q.body && typeof q.body === 'object' ? q.body : {})
   let stop = null, markReady
@@ -673,18 +719,22 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   } })
   // only now: the control server refuses a start while another daemon answers, so a lock read before it may be a live daemon's (runDaemon's order)
   noteUncleanStop(P.lock, failure)
+  seal.start() // only now (the gate claimed the collector): the lock read before this could have been a live daemon's
   try {
     await collector.start()
     markReady()
     const me = await identity(process.pid) // an async reader here (runDaemon's model branch): the requests markReady released go on meanwhile
-    fs.writeFileSync(`${P.lock}.tmp-${process.pid}`, JSON.stringify({ pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }) + '\n', { mode: 0o600 })
-    fs.renameSync(`${P.lock}.tmp-${process.pid}`, P.lock)
-    const lockTimer = setInterval(() => { try { const t = new Date(); fs.utimesSync(P.lock, t, t) } catch (e) { failure('daemon', coded(e, 'record-error')) } }, lockRefreshMs); lockTimer.unref()
+    const refreshLock = lockKeeper({ file: P.lock, fields: { pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, engine_port: null, socket: sock }, segmentOf: () => store.currentSegment })
+    refreshLock()
+    const bumpLock = () => { try { refreshLock() } catch (e) { failure('daemon', coded(e, 'record-error')) } }
+    store.onSegmentOpening(bumpLock) // before the new segment's file exists (D60, invariant 2); see runDaemon's copy
+    const lockTimer = setInterval(bumpLock, lockRefreshMs); lockTimer.unref()
     const listTimer = setInterval(() => { const l = nextAgentList(); if (l) { agents = l.entries; registry.replaceAgentList(agents) } }, 5000); listTimer.unref()
     failure.write({ event: 'daemon-start', pid: process.pid, start_time: me.start_time, boot_id: me.boot_id, version: VERSION, foreground: !!foreground, upstream_ca: env.NODE_EXTRA_CA_CERTS || null, linger: null })
     let stopping = null, markExited
     const exited = new Promise((r) => { markExited = r })
     const doStop = async ({ signal = null, reason = null } = {}) => {
+      seal.stop() // as in runDaemon: the last segment is left to the next start's scan
       clearInterval(lockTimer); clearInterval(listTimer); clearInterval(exitTimer)
       const failed = []
       const step = async (where, fn) => { try { await fn() } catch (e) { failed.push(where); failure(where, Object.assign(new Error(`while stopping: ${errText(e)}`), { code: (e && e.code) || 'stop-failed' })) } }

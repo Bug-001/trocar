@@ -139,7 +139,7 @@ const proxy = {
   unsupported: {},
   branches: ['all'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: '退出这个 Hermes(含 gateway),再重新启动;在它 /reload 之前,.env 里改的代理它已读过的不会变', processes: 'hermes' },
+  restart: { hint: 'Quit this Hermes (the gateway too), then start it again; until it reloads, a proxy it has already read from .env does not change', processes: 'hermes' },
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts (the .env block routes every form; the root
@@ -156,7 +156,7 @@ const proxyMode = {
     form('hermes.desktop-prebuilt', [], { darwin: { reason: 'not-measured' }, win32: { reason: 'not-measured' } }),
   ],
   routes: {
-    env: { kind: 'dotenv-block', file: HOME('.env'), proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'not-routed', takesEffect: '重启 Hermes 后生效;gateway 与 dashboard 也要重启' },
+    env: { kind: 'dotenv-block', file: HOME('.env'), proxyKeys: ['HTTPS_PROXY', 'https_proxy'], noProxyKeys: ['NO_PROXY', 'no_proxy'], value: 'door-url', absent: 'not-routed', takesEffect: 'takes effect once you restart Hermes; restart its gateway and dashboard too' },
   },
   certs: {},
   trusts: {},

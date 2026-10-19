@@ -194,7 +194,7 @@ test('an unreadable manifest: unknown never hides a failure or a dead daemon, an
 // more than the bytes read; the conditions are then partial — the summary is never ✓ (nor ○), and status says so.
 test('conditions folded without the last daemon-start are partial: unknown, never ok or off; status says it', async () => {
   const b = home()
-  const { formatHealth } = await import('../../src/collector/cli.mjs')
+  const { formatHealth } = await import('../../src/cli/status-text.mjs')
   try {
     b.manifest({ version: 3, install: { state: 'complete' }, created_at: at(100 * H), entries: [], files: [] }); b.lock(); b.state('on', at(72 * H))
     b.flows([{ ts: at(72 * H), event: 'daemon-start', pid: 4242 }, { ts: at(72 * H - 1000), event: 'agent-untrusted', pid: 77, agent: 'claude-code', reason: 'var-missing' }])
@@ -204,7 +204,7 @@ test('conditions folded without the last daemon-start are partial: unknown, neve
     let r = b.health({ maxBytes: 64 << 10 })
     assert.deepEqual([r.read.truncated, r.collector.conditions_partial, r.collector.conditions.length], [true, true, 0], 'precondition: the start and the untrusted agent are outside what was read')
     assert.deepEqual([r.summary.state, r.summary.partial], ['unknown', true], 'never ✓ 采集中')
-    assert.match(formatHealth(r, { daemonLine: false }).join('\n'), /conditions are partial/)
+    assert.match(formatHealth(r, { daemonLine: false }).join('\n'), /unknown \(the current conditions could not be read whole/)
     b.state('off', at(H))
     assert.equal(b.health({ maxBytes: 64 << 10 }).summary.state, 'unknown', 'nor ○ 采集关')
     b.state('on', at(72 * H))

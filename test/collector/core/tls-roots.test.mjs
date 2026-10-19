@@ -125,7 +125,7 @@ test('engine: an upstream signed by a CA only the (injected) system store holds 
   const run = async (signer, clientCa, systemCa) => {
     const up = tls.createServer({ SNICallback: (s, cb) => cb(null, createLeafIssuer(loadCa(signer)).secureContextFor(s)) }, (s) => { s.on('error', () => {}); s.on('data', () => s.end('pong')) })
     await new Promise((r) => up.listen(0, '127.0.0.1', r))
-    const root = path.join(dir, String(++n)), store = createRecordStore({ root }), errors = []
+    const root = path.join(dir, String(++n)), store = createRecordStore({ root, raw: root }), errors = []
     const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 3, agent: 'cc', decrypt: true }),
       issuer: createLeafIssuer(loadCa(asightCa)), store, systemCa, onFailure: createFailureRecorder(root).event, onError: (e) => errors.push(e.message) })
     const { port } = await engine.listen({})

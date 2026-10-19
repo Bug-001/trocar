@@ -227,7 +227,7 @@ test('semantics 6: a path inside ~/.asight is still removed — the fence is for
   assert.equal(fs.existsSync(path.join(s.dir, 'ca')), false)
 })
 
-test('semantics 7: off on a machine asight was never installed on says so first — nothing to close, not 「asight 已关闭采集」 — touches nothing, points at no log, and names no autostart it did not disable', async () => {
+test('semantics 7: off on a machine asight was never installed on says so first — nothing to turn off, not 「Capture is off」 — touches nothing, points at no log, and names no autostart it did not disable', async () => {
   const home = tmpDir('asight-pristine-')
   const calls = []
   const run = (file, args) => { calls.push([file, ...args].join(' ')); return { status: 0, stdout: '', stderr: '' } }
@@ -237,8 +237,9 @@ test('semantics 7: off on a machine asight was never installed on says so first 
   assert.equal(receipt.log, null, 'nothing was written, so there is no log to point at (R1)')
   assert.deepEqual(validateReceipt(receipt), [])
   const text = formatOffReceipt(receipt, { home })
-  assert.match(text, /这台机器上没有 asight 的安装\(没装过,或已经 uninstall\),没有东西要关/)
-  assert.doesNotMatch(text, /已关闭|自启已停用|引流/)
+  assert.match(text, /^Nothing to turn off\. asight is not installed on this machine\.\n/)
+  assert.match(text, /^Turn capture on: asight install, then asight on$/m, 'the next step is install first: `on` with no certificates installed refuses (§3.3 前提)')
+  assert.doesNotMatch(text, /Capture is off|Autostart|daemon/)
   assert.deepEqual(fs.readdirSync(home), [], 'and nothing was made in HOME')
   assert.deepEqual(calls, [], 'no OS tool was run: there is no unit to disable')
   const dry = await runOff({ home, env: { HOME: home }, dryRun: true, deps: { exec: run, platform: 'linux' } })
@@ -247,7 +248,7 @@ test('semantics 7: off on a machine asight was never installed on says so first 
   const s = await installedHome({ names: ['claude-code'] })
   const real = await s.off()
   assert.equal(real.receipt.nothing_installed, undefined)
-  assert.match(formatOffReceipt(real.receipt, { home: s.home }), /asight 已关闭/)
+  assert.match(formatOffReceipt(real.receipt, { home: s.home }), /^Capture is off for /)
   const again = await s.off() // the collector directory is still there: asight was installed, and is off
   assert.equal(again.receipt.nothing_installed, undefined)
 })
@@ -265,7 +266,7 @@ test('V5: off claude-code takes only Claude Code\'s routing: no certificate item
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"harnesses":["claude-code"]}'], 'by name; no exit: the daemon stays for codex')
   assert.deepEqual([s.state().harnesses['claude-code'].desired, s.state().harnesses.codex.desired], ['off', 'on'])
   assert.deepEqual([s.sys.daemon.isRecording('claude-code'), s.sys.daemon.isRecording('codex')], [false, true], 'the daemon still has codex attached')
-  assert.deepEqual([receipt.harnesses, receipt.all, receipt.daemon.state], [['claude-code'], false, 'running'])
+  assert.deepEqual([receipt.harnesses, receipt.all, receipt.daemon.state], [[{ harness: 'claude-code', ok: true, reason: null, undone: [], kept_backups: [] }], false, 'running'], 'appendix C.2: one object per harness named')
   assert.deepEqual(receipt.changed, [], 'off changed no file of the user')
   assert.ok(s.sys.exec.calls.every((c) => !/disable/.test(c)), 'a named off leaves the autostart alone')
   assert.ok(['codex', 'claude-code'].every((h) => readManifest(s.dir).entries.some((e) => e.harness === h)), 'both are still installed')
@@ -316,7 +317,7 @@ test('1.6 §1.4 第 2 步: an off with no names asks the daemon to exit once dra
   const r = await s.off({ now: false })
   assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
   assert.deepEqual(s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"exit":true}'])
-  assert.deepEqual([r.receipt.relayed, r.receipt.daemon], [{ closing: 2, waiting: 1, cut: 0 }, { pid: 4242, state: 'draining' }])
+  assert.deepEqual([r.receipt.relayed, r.receipt.daemon], [{ closing: 2, waiting: 1, cut: 0 }, { pid: 4242, state: 'draining', exits_after: 2 }], 'appendix C.2: the daemon says what it exits after')
   const t = await installedHome({ names: ['claude-code'], daemon: { relayed: { closing: 0, waiting: 0, cut: 3 }, exitOnOff: false } })
   const cut = await t.off({ now: true })
   assert.deepEqual(t.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), ['POST /off {"now":true,"exit":true}'])
@@ -446,7 +447,7 @@ test('V27: over on, off and a daemon that has to be stopped, nothing restarts an
   assert.ok(execFrom(s, calls).every((c) => !/restart/.test(c)), 'no systemctl restart')
   assert.deepEqual(r.receipt.still_trusting, [], 'off took no certificate item, so it has no one to report as still trusting what it took (D55①: trust stays until uninstall)')
   assert.deepEqual(r.receipt.restart, [], 'and off never lists anything to restart as a to-do of its own')
-  assert.deepEqual(r.receipt.user_processes, [{ pid: 7001, command: 'asight serve', note: '只读看板,不在 agent 路径上' }, { pid: 7002, command: 'asight capture', note: '前台采集,可能正中转 agent 的流量' }], 'what the user started themselves is listed, never killed')
+  assert.deepEqual(r.receipt.user_processes, [{ pid: 7001, command: 'asight serve', note: 'a read-only dashboard, not on any agent path' }, { pid: 7002, command: 'asight capture', note: 'capturing in the foreground, it may be relaying agent traffic' }], 'what the user started themselves is listed, never killed')
 })
 
 test('D38: every line off writes to flows/ is in the closed sets, every run of off ends with a result line, and a clean off writes the desired state, the routing and the autostart — and no line about a certificate item, which uninstall writes', async () => {
@@ -487,7 +488,7 @@ test('V24: with the install manifest gone and no terminal, off takes the routing
   assert.deepEqual(validateReceipt(first.receipt), [])
   assert.deepEqual(s.userFiles(), installed, 'the files are byte for byte what they were: nothing is changed without a yes')
   assert.deepEqual(first.receipt.pending.map((p) => [path.relative(s.home, p.path), p.how]).sort(), [['.claude/settings.json', 'json-value'], ['.codex/.env', 'block']])
-  assert.match(first.receipt.problems.join('\n'), /manifest is missing.*asight off --yes/)
+  assert.match(first.receipt.problems.join('\n'), /record of what it wrote is missing[\s\S]*asight off --yes/)
   assert.deepEqual(Object.values(s.state().harnesses).map((h) => h.desired), ['off', 'off'], 'desired off for every harness')
   assert.deepEqual([first.receipt.routing.confirmed, s.sys.daemon.calls.filter((c) => c.startsWith('POST /off')), first.receipt.autostart.disabled], [true, ['POST /off {"exit":true}'], true], 'the routing is off, the daemon was asked to exit, the autostart is disabled — none of it needs the manifest')
   assert.deepEqual([flowEvents(s.dir).at(-1).kind, flowEvents(s.dir).at(-1).outcome], ['result', 'partial'])
@@ -662,7 +663,7 @@ for (const [what, doc] of [['{"version":3}', () => ({ version: 3 })], ['entries 
     assert.deepEqual(validateReceipt(first.receipt), [])
     assert.deepEqual(s.userFiles(), installed, 'no file is touched without a yes')
     assert.match(first.receipt.notes.join('\n'), /the install manifest cannot be read .*not an install manifest this build can use/)
-    assert.match(first.receipt.problems.join('\n'), /unreadable.*asight off --yes/)
+    assert.match(first.receipt.problems.join('\n'), /record of what it wrote cannot be read[\s\S]*asight off --yes/)
     assert.deepEqual([first.receipt.routing.confirmed, Object.values(s.state().harnesses).map((h) => h.desired)], [true, ['off', 'off']], 'the routing is off and desired is off, with no manifest to say what is installed')
     assert.deepEqual(first.receipt.pending.map((p) => path.relative(s.home, p.path)).sort(), ['.claude/settings.json', '.codex/.env'])
     assert.equal(flowEvents(s.dir).at(-1).kind, 'result')
@@ -738,7 +739,7 @@ test('uninstall on darwin: a gone bundle is rebuilt without opening a static OS 
   assert.deepEqual([opened, fps.includes(certBlocks(marker.certPem)[0].fp)], [[], false], 'no static OS bundle is opened, and cert.pem\'s roots are not in the rebuilt bundle')
   assert.deepEqual(Object.values(macRoots).map((c) => fps.includes(certBlocks(c.certPem)[0].fp)), [true, true, true], 'the three darwin sources are in it — the corporate anchor among them, so codex keeps its relay')
   assert.equal(fps.includes(asightFp), false, 'and the asight CA is not')
-  assert.match(formatOffReceipt(receipt), /重建了 \S*combined-codex\.pem(\(不含 asight CA\))/, 'the human receipt says it was rebuilt (4.6 第 2 步「回执写已重建」)')
+  assert.match(formatOffReceipt(receipt), /combined-codex\.pem\n {2}was rebuilt without the asight certificate\./, 'the human receipt says it was rebuilt (4.6 第 2 步「回执写已重建」)')
 })
 
 // D38 on a Mac: a source that could not be read is said, the rebuild still made from the rest (no bundle = no network). Node 20 has no getCACertificates —
@@ -754,7 +755,7 @@ test('uninstall on darwin: a gone bundle rebuilt while a source cannot be read s
   const said = flowEvents(s.dir).filter((e) => e.path === bundle && /rebuilt without the asight CA/.test(e.reason))
   assert.equal(said.length, 1)
   assert.match(said[0].reason, /with the OS roots short of what could not be read \(getCACertificates: not available \(Node ≥ 22\.15 has it\)\)/)
-  assert.match(formatOffReceipt(receipt), /重建了 \S*combined-codex\.pem(\(不含 asight CA;OS 根缺读不到的那部分:getCACertificates: not available)/)
+  assert.match(formatOffReceipt(receipt), /combined-codex\.pem\n {2}was rebuilt without the asight certificate \(it is short of the certificates\n {2}that could not be read: getCACertificates: not available/)
   // and with no source at all: Node's roots only, said as such
   const t = await installedHome({ names: ['codex'] })
   fs.rmSync(path.join(t.dir, 'ca', 'combined-codex.pem'))
@@ -854,7 +855,7 @@ test('P13 uninstall: the root key is removed after the trust store\'s root; off 
       { kind: 'system-root', phase: 'install', harness: null, scope: 'user', path: 'login:root', store: 'login', fp256: 'AB' }] }
     fs.mkdirSync(dir, { recursive: true }); saveManifest(dir, m)
     const w = offWorld({ home, env: { HOME: home }, deps: { platform: 'darwin', socketPath: null, procs: async () => [],
-      rootStore: { remove: async (id) => { order.push(`root ${id.fp256}`); return { ok: true } } },
+      rootStore: { remove: async (id) => { order.push(`root ${id.fp256}`); return { ok: true } }, has: () => ({ present: false }) },
       custody: { remove: async () => { order.push('key'); return { removed: true } } } } })
     const u = await undoSide(w, { manifest: readManifest(dir), dropCa, yes: true })
     assert.deepEqual([order, u.left], [dropCa ? ['root AB', 'key'] : [], []], `dropCa ${dropCa}`)

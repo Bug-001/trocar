@@ -14,36 +14,35 @@
 // what lets Claude Code / Codex / OpenCode sessions appear side by side on one board. A single-file
 // default silently hides every other harness the user captured.
 //
-// ── D27 (2026-07-20): the home is ~/.asight, and ~/.atrace stays READABLE ────────────────────────
+// ── D27 (2026-07-20): the home is ~/.asight ─────────────────────────────────────────────────────
 // The product is asight everywhere — CLI, ASIGHT_* env, com.asight.monitor, the README title — and
-// only the filesystem still carried the v0 prototype's name. Renaming the directory is trivial; the
-// hazard is entirely in the reading. The board's dir loader is non-recursive and its statSync is
-// try/caught (server.mjs:122-128), so aiming at the wrong root does not fail — it just returns FEWER
-// SESSIONS, on a board that looks perfectly healthy. A user with gigabytes of history under the old
-// root would simply watch it disappear, with no error to search for. Hence: the legacy root is a
-// first-class, permanently-supported READ source. Writers only ever write to the new one.
+// only the filesystem still carried the v0 prototype's name. D60 ② (2026-10-18) closed the reading
+// side too: older locations (`~/.atrace/asight/`, `~/.asight/sessions/`) are neither read nor touched.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 export const asightHome = () => path.join(os.homedir(), '.asight');
-// v0-era capture root. Read-only, forever: these are the user's raw bytes (invariant 2).
-export const legacyHome = () => path.join(os.homedir(), '.atrace', 'asight');
 
 // reverse-proxy / relay tee (CC-CLI, Codex, OpenCode, DeepSeek-CLI)
 export const captureOut = () => path.join(asightHome(), 'capture.ndjson');
 // MITM (Claude Desktop — the only source that must decrypt TLS)
 export const mitmOut = () => path.join(asightHome(), 'claude-capture.ndjson');
-// The per-user process collector (RFC 4.6 §记录) writes its envelopes to <here>/capture-<date>.ndjson.
-// Its subdirectories flows/ audit/ replays/ are NOT envelopes; the board never reads them because a
+// The per-user process collector's own state and logs (RFC 4.6 §记录) live here: ca/ flows/ audit/ replays/ lock
+// state.json. NO envelopes — those are segments under rawHome(). The board never reads this subtree because a
 // root's scan only descends into <sub>/calls.ndjson (server.mjs scanRoots), and `asight etl <dir>`
 // does not descend at all. It needs a root of its own: the home's one-level scan never reaches it.
 export const collectorHome = (home = asightHome()) => path.join(home, 'collector');
-// D40 (RFC 4.6 §记录「保存级别」): what to keep of each call, per harness × traffic class — one per-user file read by BOTH
-// capture paths (src/capture/retention.mjs) — and the log of every change to it. Not in the collector's state.json: the
-// old MITM reads it too, and state.json is the collector's own.
-export const retentionFile = (home = asightHome()) => path.join(home, 'retention.json');
-export const retentionLog = (home = asightHome()) => path.join(home, 'logs', 'retention.ndjson');
+// The raw layer (D60①, 1.6 §1.7): the daemon's segments `<here>/<segment>.ndjson`, their sealed form `<segment>.sealed`,
+// and the seal journal. Only envelopes live here — the collector's own logs stay under collectorHome().
+export const rawHome = (home = asightHome()) => path.join(home, 'raw');
+// D60: what `asight query` builds from the segments to answer fast. Derived, never a source of truth — deleting it costs a rebuild, nothing more
+// (src/query/index-build.mjs has the same path under its own name; uninstall reads it from here).
+export const indexHome = (home = asightHome()) => path.join(home, 'index');
+// D60③ (1.6 §4.2): the editable traffic class table — the user's copy of it (written whole on the first edit) and the
+// log of every change (old value, new value, time). Read by the collector (the level of a call) and by `asight classes`.
+export const classesFile = (home = asightHome()) => path.join(home, 'classes.json');
+export const classesLog = (home = asightHome()) => path.join(home, 'logs', 'classes.ndjson');
 
 // Capture CA. NOT symmetric with the others: for every other path "not found" means an empty board,
 // but for the CA it means the code MINTS A SECOND ROOT and asks the user to trust it — while the
@@ -59,23 +58,16 @@ export function caDir({ home = asightHome(), legacyCa = path.join(os.homedir(), 
   return fresh;
 }
 
-// what `asight serve` reads when the user gives no --source. Returns the roots that EXIST: the new
-// home plus, while it still holds anything, the legacy one — so upgrading never costs the user a
-// session. Listing an absent root would make the loader throw "capture source unreadable" on a clean
-// machine, turning "nothing captured yet" into "something is broken", so absence is filtered here.
-// 2026-07-20: the comment above was already right and the code only did half of it. `home` was pushed
-// UNCONDITIONALLY while only `legacy` was existence-checked, so on a machine holding just the legacy
-// capture — every user who upgraded past D27 and has not captured since — the list named a directory
-// that is not there, buildResolver stat()ed it, and `asight serve` died at startup instead of serving
-// the sessions plainly sitting in the other root. Filter both.
-// 2026-10-06 (4.4:129): the collector directory is the third root, between the home and the legacy
-// one, and filtered the same way — a machine that has never run the collector lists no phantom root.
-export function serveSource({ home = asightHome(), legacy = legacyHome(), legacyExists = null, collector = collectorHome(home) } = {}) {
+// what `asight serve` reads when the user gives no --source: the roots that EXIST. Listing an absent
+// root would make the loader throw "capture source unreadable" on a clean machine, turning "nothing
+// captured yet" into "something is broken", so absence is filtered here.
+// 2026-10-06 (4.4:129): the collector directory is the second root, filtered the same way — a machine
+// that has never run the collector lists no phantom root.
+// 2026-10-18 (D60 ②): older locations (`~/.atrace/asight/`) are neither read nor touched.
+export function serveSource({ home = asightHome(), collector = collectorHome(home) } = {}) {
   const roots = [];
   if (existsQuiet(home)) roots.push(home);
   if (existsQuiet(collector)) roots.push(collector);
-  const hasLegacy = legacyExists == null ? existsQuiet(legacy) : legacyExists;
-  if (hasLegacy) roots.push(legacy);
   return roots;
 }
 

@@ -2,6 +2,7 @@
 // supervised by a small parent that brings it back when it dies. Tools (`schtasks`, `reg`) run only through execTool, so a test injects the runner; the helper, the spawn and the clock are parameters too, and every piece runs on
 // any OS against a temp directory. Node built-ins, src/paths.mjs, src/off/exec.mjs and src/off/win32.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
+import { directStartEnv, startDaemonDirect } from '../direct-start.mjs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
@@ -118,18 +119,13 @@ function lastTaskResult({ run, env }) {
   return Number.isInteger(n) ? n : null
 }
 
-const TRUST_AND_PROXY = /^(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_USE_SYSTEM_CA|NODE_USE_ENV_PROXY|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_FILE|SSL_CERT_DIR|(HTTPS?|ALL|NO|FTP|WSS?)_PROXY)$/i // Windows names are not case sensitive
 /**
  * The environment of a daemon that is started directly (`start()`, the fallback with `now`): the installer shell's, without the variables that change what the daemon trusts or whom it dials (Node's CA, TLS and proxy
  * switches, OpenSSL's CA file and directory, the `*_PROXY` family, any case). A daemon the task or the Run value starts at login has none of the shell's: a task has no environment of its own (4.8 §7), so a daemon that
  * got them from `on` would trust and dial differently from the same daemon after the next login. What is not in this list stays: the user-level variables a login task carries (`CODEX_HOME`, `PATH`, `USERPROFILE`) are in
  * the shell's environment too, and the shell's own extras are harmless; the difference that remains is the user's own `NODE_OPTIONS` and `*_PROXY` at user level, which a login would carry and this does not.
  */
-export function directStartEnv(env = process.env) {
-  const out = {}
-  for (const [k, v] of Object.entries(env)) if (!TRUST_AND_PROXY.test(k)) out[k] = v
-  return out
-}
+export { directStartEnv }
 
 /** `schtasks /Create /XML <file> /TN \asight\collector /F` from the task file install wrote. schtasks reads the file as the encoding it declares, which is UTF-16, and install writes text as UTF-8: so a UTF-16LE copy with a byte
  *  order mark (the T0 form) is made beside it, handed over, and removed. → `{ code, out, err }`; a file that cannot be read is `code: null` with the reason and `precondition: true` (schtasks was not asked, so it is not a refusal to fall back from). */
@@ -248,13 +244,10 @@ const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, user = null, conhost = 'conhost.exe' } = {}) {
   const file = path.join(collectorHome(path.join(home, '.asight')), TASK_FILE)
   const tools = { run, env }
-  function startDirect() {
-    let child
-    try { child = spawn(conhost, ['--headless', node, script, 'daemon', '--supervise'], { detached: true, stdio: 'ignore', windowsHide: true, env: directStartEnv(env) }) } catch (e) { return { code: null, out: '', err: `${conhost} could not be started (${(e && e.code) || (e && e.message) || e})` } }
-    if (!child || child.pid === undefined) return { code: null, out: '', err: `${conhost} did not start the supervised daemon` }
-    if (typeof child.on === 'function') child.on('error', () => {}) // a late spawn error is not an uncaught exception; the daemon that never answers is what `on` reports
-    child.unref()
-    return { ...ok, via: 'direct', pid: child.pid }
+  // the daemon this run starts itself: the scheduled task's own environment and the task's own log files (direct-start.mjs)
+  const startDirect = (carry) => {
+    const r = startDaemonDirect({ home, env, carry, command: conhost, argv: ['--headless', node, script, 'daemon', '--supervise'], spawn, fs, spawnOpts: { windowsHide: true } })
+    return r.code === 0 ? { ...ok, ...r } : r.err === 'the daemon did not start' ? { ...r, err: `${conhost} did not start the supervised daemon` } : r
   }
   // the task is changed or deleted when it is there, and asight's Run value is taken out; each says what it did
   const undo = (args, done, prior) => {
@@ -303,7 +296,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       const base = { via: 'run-key', reason: why, ledger: f.entry, ours: f.ours, event, ...(task ? { task } : {}), ...(warn ? { warn } : {}) }
       return started && started.code !== 0 ? { code: started.code, out: '', err: started.err, ...base } : { ...ok, ...base, ...(started ? { pid: started.pid } : {}) }
     },
-    start: startDirect,
+    start: (carry = null) => startDirect(carry),
     reload: () => ({ ...ok }),
     disable: ({ prior = null } = {}) => undo(['/Change', '/TN', TASK_NAME, '/DISABLE'], 'disabled', prior),
     remove: ({ prior = null } = {}) => undo(['/Delete', '/TN', TASK_NAME, '/F'], 'removed', prior),

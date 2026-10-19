@@ -183,7 +183,7 @@ export function countCopies(ops) {
 // Where the request body starts. Every envelope line opens with `ts`, which differs on every record,
 // so a whole-line common prefix is always ~20 bytes and says nothing; the experiment measured the
 // prefix from the body, which is where the conversation grows. A byte search for the envelope key —
-// the same one `src/etl/shard.mjs` already bounds its header scan with — not a JSON parse.
+// the same one the header scan is bounded with — not a JSON parse.
 const BODY_KEY = Buffer.from('"req_body":');
 const anchorOf = (line) => { const i = line.indexOf(BODY_KEY); return i < 0 ? 0 : i + BODY_KEY.length; };
 

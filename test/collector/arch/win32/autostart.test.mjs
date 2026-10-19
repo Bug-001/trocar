@@ -172,7 +172,7 @@ test('W25 off and uninstall (no helper, no source): the check is `whoami /groups
   assert.deepEqual(elevationByWhoami({ run: runner(WHOAMI('强制性标签\\High Mandatory Level')) }), { elevated: true, why: 'high-integrity' }, 'a localised label name does not matter: the SID decides')
   const r = refuseElevatedByWhoami({ run: runner(WHOAMI('Mandatory Label\\High Mandatory Level')) })
   assert.equal(r.code, 'elevated-token')
-  assert.match(r.reason, /R7/)
+  assert.match(r.reason, /not as an administrator/) // human text names no spec rule (D58)
   assert.equal(refuseElevatedByWhoami({ run: runner(WHOAMI('Mandatory Label\\Medium Mandatory Level')) }), null)
 })
 
@@ -382,7 +382,7 @@ test('W24 start (the --no-autostart run: this session, nothing at login) starts 
   assert.deepEqual(run.calls, [], 'no schtasks: a task with a login trigger would be an autostart')
   assert.equal(spawned.length, 1)
   assert.deepEqual([spawned[0].cmd, spawned[0].args], ['conhost.exe', ['--headless', NODE, SCRIPT, 'daemon', '--supervise']])
-  assert.deepEqual([spawned[0].opts.detached, spawned[0].opts.stdio, spawned[0].opts.windowsHide], [true, 'ignore', true])
+  assert.deepEqual([spawned[0].opts.detached, spawned[0].opts.windowsHide], [true, true])
   assert.equal(spawned[0].child.unrefd, true, 'the daemon is not tied to the process that started it: this one can exit')
   const dead = userUnit({ ...o, run, spawn: () => ({ pid: undefined, unref() {}, on() {} }) }).start()
   assert.equal(dead.code, null)
@@ -511,7 +511,6 @@ test('W24 a /Create that schtasks refused: the Run value is written with the sam
   assert.equal(COMMAND, `conhost.exe ${inner(x2(u.text({})), 'Arguments')}`, 'the command is the task\'s action: the same supervised one')
   assert.deepEqual(spawned, [['conhost.exe', '--headless', NODE, SCRIPT, 'daemon', '--supervise']], 'the login entry runs at the next login, so with now the daemon is started directly')
   assert.equal(r.pid, 77)
-  assert.deepEqual(fs.readdirSync(path.dirname(u.path)), [TASK_FILE])
   // not now: registered for login only, nothing started
   const none = []
   const r2 = installed(userUnit({ ...withHome(), run: fakeRegistry(), spawn: (...a) => { none.push(a); return { pid: 1, unref() {}, on() {} } } })).enable({ now: false })

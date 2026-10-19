@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { makeClassifier, compileTraffic, harnessIdOfAgent, retentionHarnessIds, THIRD_PARTY_TELEMETRY } from '../../src/dissect/traffic.mjs'
+import { makeClassifier, compileTraffic, retentionHarnessIds, THIRD_PARTY_TELEMETRY } from '../../src/dissect/traffic.mjs'
 import { endpointClass } from '../../src/capture/envelope.mjs'
 import { HARNESSES } from '../../src/dissect/harnesses.mjs'
 
@@ -62,8 +62,6 @@ test('a pattern that does not compile, or names a class a pattern may not, is sk
 })
 
 test('proc.agent → read-side harness id: either spelling, unknown otherwise; the settings may name every row plus unknown', () => {
-  assert.deepEqual(['cc', 'claude-code', 'codex', 'z-code', 'zcode'].map(harnessIdOfAgent), ['cc', 'cc', 'codex', 'zcode', 'zcode'])
-  assert.deepEqual([harnessIdOfAgent('mystery'), harnessIdOfAgent(null), harnessIdOfAgent(undefined)], ['unknown', 'unknown', 'unknown'])
   // deepseek-cli has no table row: only an old capture's UA names it — but a call filed under it must have a setting (review 2026-10-07)
   assert.deepEqual(retentionHarnessIds(), ['cc', 'codex', 'opencode', 'kimi', 'dsh', 'hermes', 'zcode', 'deepseek-cli', 'unknown'])
   assert.ok(THIRD_PARTY_TELEMETRY.every((p) => /^(\*\.)?[a-z0-9.-]+$/.test(p)))
@@ -98,9 +96,11 @@ export function offenders(files, read = (f) => fs.readFileSync(f, 'utf8')) {
   return files.flatMap((f) => { const code = stripComments(read(f)); return [HARNESS_NAMES, CLASS_PATTERNS].flatMap((re) => (re.test(code) ? [`${path.relative(REPO, f)}: ${code.match(re)[0]}`] : [])) })
 }
 
-test('K1 guard: src/collector/core/** and the capture files that apply the retention hold no harness name and no class pattern (D20, 0.1 §5)', () => {
-  const capture = ['envelope.mjs', 'request-body.mjs', 'retention.mjs', 'keep.mjs'].map((n) => path.join(REPO, 'src', 'capture', n)) // mitm.mjs went with the old capture (D39⑥ executed 2026-10-11)
-  const files = [...walk(path.join(REPO, 'src', 'collector', 'core')), ...capture]
+test('K1 guard: src/collector/core/** and the files that apply the keep level hold no harness name and no class pattern (D20, 0.1 §5)', () => {
+  // mitm.mjs went with the old capture (D39⑥ executed 2026-10-11); retention.mjs / keep.mjs with the retention surface (T5),
+  // and src/classes/source.mjs is where the level is applied now — its table is DATA (src/dissect), never a pattern of its own
+  const capture = ['envelope.mjs', 'request-body.mjs'].map((n) => path.join(REPO, 'src', 'capture', n))
+  const files = [...walk(path.join(REPO, 'src', 'collector', 'core')), ...capture, path.join(REPO, 'src', 'classes', 'source.mjs')]
   assert.ok(files.length > 30, 'the scan sees the tree')
   assert.deepEqual(offenders(files), [])
 })

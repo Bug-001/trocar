@@ -107,8 +107,9 @@ test('V49 the proxy mode\'s own trust reasons are findings and status reasons th
   assert.deepEqual(validateTopology({ 'kimi-code': t }), [], 'and the schema knows it as a status reason')
   const found = diagnose({ facts: F, topology: { 'kimi-code': t }, harnesses: ['kimi-code'], user: 'u' }).find((f) => f.code === 'smart-app-control')
   assert.ok(found, 'the finding exists (the trust entry renders it)')
-  assert.equal(found.class, 'failure')
-  assert.match(found.what, /没被信任:smart-app-control/)
+  assert.equal(found.class, 'problem')
+  assert.match(found.what, /kimi-code is not captured/)
+  assert.match(found.why, /Smart App Control is on/, 'the reason is named: the daemon\'s own hint')
   assert.deepEqual(validateFinding(found), [], 'the schema accepts it')
 })
 
@@ -118,23 +119,23 @@ test('V49 every trust reason is a finding (the restart ones expected, the rest f
     const found = findingsOf(f).filter((x) => x.code === reason)
     assert.equal(found.length, 1, reason)
     const restart = ['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim'].includes(reason)
-    if (!FINDINGS[reason]) assert.equal(found[0].class, restart ? 'expected' : 'failure', reason)
+    if (!FINDINGS[reason]) assert.equal(found[0].class, restart ? 'expected' : 'problem', reason)
     else assert.equal(found[0].class, typeof FINDINGS[reason].cls === 'string' ? FINDINGS[reason].cls : found[0].class, `${reason}: its own catalogue entry decides the class (not-verified is expected, 1.6 §9.6)`)
     assert.deepEqual(validateFinding(found[0]), [], reason)
   }
 })
 
-test('V49 each finding: what, why and verify say something; a failure or an expected finding has a command (a hint may have none); the commands are whole lines with no <…> left; asight\'s own come first where the catalogue says so; it validates', () => {
+test('V49 each finding: what, why and verify say something; a problem or an expected finding has a command (a note may have none); the commands are whole lines with no <…> left; asight\'s own come first where the catalogue says so; it validates', () => {
   const all = [...Object.values(SETS), ...TRUST_REASONS.map((r) => ({ facts: facts('claude-code', {}, { procs: [proc(4121, { watched: 'no-decrypt', trusted: false, reason: r })] }) }))]
   const seen = new Set()
   for (const s of all) for (const f of findingsOf(s.facts, s.names || null)) {
     const at = `${f.code} (${f.class})`
     assert.deepEqual(validateFinding(f), [], at)
     assert.ok(f.what && f.why && f.verify, at)
-    if (f.class !== 'hint') assert.ok(f.commands.length >= 1, at)
+    if (f.class !== 'note') assert.ok(f.commands.length >= 1, at)
     for (const c of f.commands) assert.ok(!/<[^>]+>/.test(c.run) && ['sh', 'powershell', 'gui'].includes(c.shell), `${at}: ${c.run}`)
-    if (FINDINGS[f.code] && FINDINGS[f.code].asightFirst && f.commands.some((c) => c.shell !== 'gui')) assert.ok(f.commands[0].run.startsWith('asight '), `${at}: the first command is asight's`) // a finding that says nothing needs doing (driver-mode proxy-changed) has no command to run
-    if (FINDINGS[f.code] && f.class === 'failure' && !FINDINGS[f.code].asightFirst) assert.ok(f.commands.length >= 1)
+    if (FINDINGS[f.code] && FINDINGS[f.code].asightFirst && f.commands.some((c) => c.shell !== 'gui')) assert.ok(f.commands[0].run.startsWith('asight ') || f.commands.find((c) => c.shell !== 'gui').run.startsWith('asight '), `${at}: the first command that is not a step in an application is asight's`)
+    if (FINDINGS[f.code] && f.class === 'problem' && !FINDINGS[f.code].asightFirst) assert.ok(f.commands.length >= 1)
     seen.add(f.code)
   }
   for (const code of Object.keys(FINDINGS)) if (!REFUSAL_CODES.includes(code)) assert.ok(seen.has(code), `${code} was produced by some fact set`)
@@ -152,7 +153,7 @@ test('V49 the commands are filled with the values of the facts: the port to look
   const nameless = diagnose({ facts: SETS['linger-off'].facts, topology: buildTopology(SETS['linger-off'].facts), harnesses: null, user: null })[0]
   assert.equal(nameless.commands[0].run, 'loginctl enable-linger "$(id -un)"', 'a name that is not known is read by the shell, not left as a placeholder')
   const pac = findingsOf(SETS['not-routed'].facts).find((f) => f.code === 'not-routed')
-  assert.ok(pac.commands.some((c) => c.run.includes('不知道 · pac')), 'the PAC\'s address is not known: said, not guessed')
+  assert.ok(pac.commands.some((c) => c.run.includes('unknown proxy address (pac)')), 'the PAC\'s address is not known: said, not guessed')
   const bpf = findingsOf(SETS['other-redirector'].facts)[0]
   assert.equal(bpf.commands[0].run, 'sudo bpftool cgroup tree /sys/fs/cgroup', 'printed for the user; doctor never runs it')
 })
@@ -168,27 +169,27 @@ test('V49 `doctor <harness>` reports that harness only; with no name, all of the
   assert.ok(all.some((x) => x.code === 'linger-off' && !x.harness))
 })
 
-test('V51 a harness the user names with nothing in the facts to explain it: `cause-unknown` — a hint, worded as a condition (「如果 … 仍连不上」: asight has no fact that says it cannot connect), the first command `asight off <harness>`, the text 「仍连不上 → 与 asight 无关」; never labelled a failure on a harness that is captured', () => {
+test('V51 a harness the user names with nothing in the facts to explain it: `cause-unknown` — a note, worded as a condition (`If … still cannot connect`: asight has no fact that says it cannot connect), the first command `asight off <harness>`, the text `if it still fails, asight is not the cause`; never labelled a problem on a harness that is captured', () => {
   const f = facts('claude-code') // on, steered, trusted: captured, nothing wrong that asight can read
   const found = findingsOf(f, ['claude-code']).find((x) => x.code === 'cause-unknown')
-  assert.equal(found.class, 'hint', 'asight cannot say that it fails to connect: it is not a failure')
-  assert.match(found.what, /^如果 claude-code 仍连不上/, 'a condition, not a statement')
+  assert.equal(found.class, 'note', 'asight cannot say that it fails to connect: it is not a problem')
+  assert.match(found.what, /^If claude-code still cannot connect: /, 'a condition, not a statement')
   assert.equal(found.commands[0].run, 'asight off claude-code')
   const text = renderFindings([found]).join('\n')
-  assert.ok(text.includes('仍连不上 → 与 asight 无关'))
-  assert.doesNotMatch(text, /\[失败\]/)
-  assert.match(text, /^\[提示\] claude-code · cause-unknown — 如果 claude-code 仍连不上/)
-  assert.match(found.verify, /仍连不上 → 与 asight 无关/)
+  assert.ok(text.includes('if it still fails, asight is not the cause'))
+  assert.doesNotMatch(text, /^\d+\. /m, 'a note is not numbered among the problems')
+  assert.match(text, /^Note: If claude-code still cannot connect: /)
+  assert.match(found.verify, /Try claude-code again/)
   assert.deepEqual(validateFinding(found), [])
   // it comes after every other finding: it is what is left when nothing above explains
   const withHints = findingsOf(row(21).facts, ['hermes']).map((x) => x.code)
-  assert.deepEqual(withHints, ['inferred-behaviour', 'cause-unknown'], 'a hint about the data does not explain a failure to connect: both are said, the condition last')
+  assert.deepEqual(withHints, ['inferred-behaviour', 'cause-unknown'], 'a note about the data does not explain a failure to connect: both are said, the condition last')
   assert.deepEqual(findingsOf(row(2).facts, ['claude-code']).map((x) => x.code), ['cause-unknown'], 'claude-code behind a proxy of its own on Linux: its behaviour was measured (V54), so there is no hint about inferred data')
 })
 
-test('V51 what explains the harness is not repeated by it: a failure or an expected finding for the harness (not on the path, off, a daemon that is down, a process that started before `on`) means no cause-unknown; nor for a harness that is off, one that is not named, or one that is not installed', () => {
+test('V51 what explains the harness is not repeated by it: a problem or an expected finding for the harness (not on the path, off, a daemon that is down, a process that started before `on`) means no cause-unknown; nor for a harness that is off, one that is not named, or one that is not installed', () => {
   const explained = (f, h = 'claude-code') => findingsOf(f, [h]).some((x) => x.code === 'cause-unknown')
-  assert.equal(explained(SETS['daemon-not-running'].facts), false, 'a failure that explains it')
+  assert.equal(explained(SETS['daemon-not-running'].facts), false, 'a problem that explains it')
   assert.equal(explained(row(5).facts), false, 'an expected finding (it started before `on`: config-after-start) explains why it is not captured')
   assert.equal(explained(row(4).facts), false, 'off: the finding is that it is off')
   assert.equal(explained(row(17).facts, 'codex'), false, 'proxy mode, the proxy was changed: it explains it')
@@ -205,7 +206,7 @@ test('V49 where the harness keeps its settings in a managed process its windows 
   const steps = (f, code = 'config-after-start') => findingsOf(f, ['codex']).find((x) => x.code === code).commands
   const c = steps(cx())
   assert.deepEqual(c.map((x) => x.shell), ['gui', 'sh'])
-  assert.ok(c[0].run.startsWith('关掉所有 codex 窗口'), 'the harness\'s own step first')
+  assert.ok(c[0].run.startsWith('Quit every codex window'), 'the harness\'s own step first')
   assert.deepEqual(c[1], { run: 'kill 5530', shell: 'sh' })
   assert.deepEqual(steps({ ...cx(), platform: 'win32' })[1], { run: 'Stop-Process -Id 5530', shell: 'powershell' })
   assert.deepEqual(steps(facts('codex', {}, { procs: [proc(5521, { ...stale, name: 'codex' })] })).map((x) => x.shell), ['gui'], 'the managed process is not running: nothing to end')
@@ -215,30 +216,45 @@ test('V49 where the harness keeps its settings in a managed process its windows 
   assert.ok(neg.some((x) => x.run === 'kill 5530'), 'a negative cache lasts as long as the process: ending it is the way out')
 })
 
-test('V47 (a) / V49 proxy-changed in driver mode: the harness is still steered, so it is `expected` and nothing needs doing — no command to run (a step that says so), the way to look is `verify`; in proxy mode the same drift is a failure whose first command is `asight on <h>`', () => {
+test('V47 (a) / V49 proxy-changed in driver mode: the harness is still steered, so it is `expected` and the one command only looks (附录 B: 「重启后自己生效,不用改东西」); in proxy mode the same drift is a problem whose first command is `asight on <h>`', () => {
   const rec = { at: 'T', routing: 'driver', chain: 'c', source: [SRC_F1], sha256: 'sha-http://proxy.old:3128', file_sha256: 'sha-http://proxy.old:3128', proxy: 'http://proxy.old:3128', vpn: null }
   const changed = proxyOf('http://proxy.new:3128', [SRC_F1])
   const f = facts('claude-code', { listeners: [], vpn: null }, { setting: changed, fileSetting: changed, adopted: rec, behaviour: behaviourOf('claude-code', CC_FILES) })
   const found = findingsOf(f, ['claude-code']).find((x) => x.code === 'proxy-changed')
   assert.ok(found, 'the file now holds another proxy than `on` found: the finding is there')
   assert.equal(found.class, 'expected')
-  assert.deepEqual(found.commands.filter((c) => c.shell !== 'gui'), [], 'nothing to run')
-  assert.ok(!found.commands.some((c) => /^asight /.test(c.run)))
-  assert.match(found.commands[0].run, /无需操作/)
+  assert.deepEqual(found.commands, [{ run: 'asight status claude-code', shell: 'sh' }], '附录 B: driver mode gets `asight status <harness>` — nothing to change')
+  assert.ok(!found.commands.some((c) => /^asight (on|off) /.test(c.run)), 'nothing that changes anything')
   assert.match(found.verify, /asight status claude-code/)
   assert.deepEqual(validateFinding(found), [])
   assert.ok(!findingsOf({ ...f, harnesses: { 'claude-code': { ...f.harnesses['claude-code'], adopted: { ...rec, file_sha256: changed.sha256, sha256: changed.sha256 } } } }, ['claude-code']).some((x) => x.code === 'proxy-changed'), 'the same setting as `on` found: no finding')
   const proxyMode = findingsOf(row(17).facts, ['codex']).find((x) => x.code === 'proxy-changed')
-  assert.equal(proxyMode.class, 'failure')
+  assert.equal(proxyMode.class, 'problem')
   assert.equal(proxyMode.commands[0].run, 'asight on codex')
 })
 
-test('renderFindings: what and why, each command on a line of its own (shell named when it is not sh; a step in an application has no $), and how to check', () => {
+test('renderFindings (§3.7): a problem is numbered, a note says `Note:`, what then why, each command on a line of its own after `Fix`, then `Check`, inside 80 columns', () => {
   const lines = renderFindings(findingsOf({ ...SETS['proxy-dead'].facts, platform: 'win32' }).filter((f) => f.code === 'proxy-dead'))
-  assert.match(lines[0], /^\[失败\] claude-code · proxy-dead — /)
-  assert.ok(lines.some((l) => /\$ netstat -ano -p TCP \| findstr ":7890"  \(PowerShell\)$/.test(l)))
-  assert.ok(lines.some((l) => /^ {10}打开你的代理软件/.test(l)), 'the step in an application is a line of its own, no $')
-  assert.match(lines[lines.length - 1], /^ {2}怎么验证: /)
+  assert.match(lines[0], /^1\. Nothing is listening on 127\.0\.0\.1:7890, the proxy claude-code is set to use\.$/)
+  assert.match(lines[1], /^ {3}Your proxy is not running; asight did not write this setting\.$/)
+  assert.ok(lines.some((l) => l === '   Fix    netstat -ano -p TCP | findstr ":7890"'), lines.join('\n'))
+  assert.ok(lines.some((l) => /^ {10}Start your proxy, so that it listens on 127\.0\.0\.1:7890$/.test(l)), 'the step in an application is a line of its own')
+  assert.match(lines[lines.length - 1], /^ {3}Check {2}asight status claude-code$/)
+  assert.ok(lines.every((l) => l.length <= 80), lines.join('\n'))
+})
+
+test('§3.7: a note carries no `Fix` (it is not a problem), and one fact several harnesses share is one line that names them', () => {
+  const note = (h, code = 'inferred-behaviour') => ({ code, class: 'note', harness: h, what: `${h}'s proxy behaviour on this platform is inferred, not measured.`, why: 'It was measured on another platform.', commands: [], verify: 'asight status' })
+  const lines = renderFindings([note('claude-code'), note('codex'), note('hermes'), note('z-code')])
+  assert.equal(lines.filter((l) => l.startsWith('Note: ')).length, 1, `the same fact is one line:\n${lines.join('\n')}`)
+  assert.match(lines[0], /^Note: claude-code, codex, hermes and z-code's proxy behaviour /)
+  // a note that says what you may do about it labels it an Option, never a Fix — a Fix under "no problems" is a contradiction
+  const withCmd = renderFindings([{ ...note('codex', 'egress-differs'), what: 'Some of codex\'s connections now leave through a different hop.', commands: [{ run: 'asight off codex', shell: 'sh' }] }])
+  assert.ok(withCmd.some((l) => l === '      Option asight off codex'), withCmd.join('\n'))
+  assert.ok(!withCmd.some((l) => /\bFix\b/.test(l)), withCmd.join('\n'))
+  // and a note about one harness, with something to do about it, is not folded with another harness's
+  const two = renderFindings([{ ...note('codex', 'egress-differs'), commands: [{ run: 'asight off codex', shell: 'sh' }] }, { ...note('hermes', 'egress-differs'), commands: [{ run: 'asight off hermes', shell: 'sh' }] }])
+  assert.equal(two.filter((l) => l.startsWith('Note: ')).length, 2)
 })
 
 // ── where the line to edit is (V49): the setting's own source, not the first key of the first file ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -253,20 +269,20 @@ const deadFacts = (source) => facts('claude-code', {}, { setting: proxyOf('http:
 
 test('V49 the place a command names for the setting is where the setting came from (its `source`): the shell\'s variable is `unset` in the shell, a value from the second file names the second file and the key that held it — and a step reads as one sentence', () => {
   const at = (source) => gui(findingsOf(deadFacts(source)), 'proxy-dead')
-  assert.match(at(SRC_ENV), /unset HTTPS_PROXY/)
+  assert.match(at(SRC_ENV), /In the terminal that starts claude-code, run: unset HTTPS_PROXY/)
   assert.doesNotMatch(at(SRC_ENV), /settings\.json|\.claude\.json/, 'the setting is not in a file')
-  assert.match(at(SRC_F1), /\/h\/\.claude\/settings\.json 里的 env\.HTTPS_PROXY/)
+  assert.match(at(SRC_F1), /Remove env\.HTTPS_PROXY from \/h\/\.claude\/settings\.json/)
   assert.doesNotMatch(at(SRC_F1), /\.claude\.json/)
-  assert.match(at(SRC_F2), /\/h\/\.claude\.json 里的 env\.https_proxy/, 'the second file, and the key that really held it')
+  assert.match(at(SRC_F2), /Remove env\.https_proxy from \/h\/\.claude\.json/, 'the second file, and the key that really held it')
   assert.doesNotMatch(at(SRC_F2), /settings\.json/)
   for (const source of [SRC_ENV, SRC_F1, SRC_F2]) {
     const text = at(source)
-    assert.doesNotMatch(text, /删掉[^\n]*写成|写成[^\n]*删掉/, 'one verb for one step')
-    assert.match(text, /^或者(删掉|去掉)这个设置:/m)
+    assert.doesNotMatch(text, /Remove[^\n]*\bSet\b|Set [^\n]*\bRemove\b/, 'one verb for one step')
+    assert.match(text, /^(Remove |In the terminal that starts claude-code, run: unset )/m, 'the step that takes the setting away is there')
   }
   // a dotenv file: the line is `KEY=`
   const codex = facts('codex', { listeners: [] }, { setting: proxyOf('http://127.0.0.1:7890', [{ kind: 'file', where: '/h/.codex/.env', key: 'HTTPS_PROXY' }]), behaviour: behaviourOf('codex', CODEX_FILES) })
-  assert.match(gui(findingsOf(codex), 'proxy-dead'), /\/h\/\.codex\/\.env 里的 HTTPS_PROXY= 那一行/)
+  assert.match(gui(findingsOf(codex), 'proxy-dead'), /Remove the HTTPS_PROXY= line from \/h\/\.codex\/\.env/)
   assert.doesNotMatch(gui(findingsOf(codex), 'proxy-dead'), /config\.toml/)
 })
 
@@ -276,7 +292,7 @@ test('V49 proxy-unsupported names the place of the setting and the value to put 
   assert.match(env, /export HTTPS_PROXY=http:\/\/127\.0\.0\.1:7890/)
   assert.doesNotMatch(env, /\.dsh\/config\.json/, 'not the first file of the descriptor: the setting came from the shell')
   const file = gui(findingsOf(dsh({ kind: 'file', where: '/h/.dsh/config.json', key: 'proxy' })), 'proxy-unsupported')
-  assert.match(file, /\/h\/\.dsh\/config\.json 里的 proxy 写成 "http:\/\/127\.0\.0\.1:7890"/)
+  assert.match(file, /Set proxy in \/h\/\.dsh\/config\.json to "http:\/\/127\.0\.0\.1:7890"/)
   for (const t of [env, file]) assert.doesNotMatch(t, /…:/, 'no garble')
 })
 
@@ -284,7 +300,7 @@ test('V49 route-loop names where the setting that loops lives; a harness with no
   const loop = (setting, behaviour) => pfacts('codex', form('codex.cli', { routeLoop: true, entry: null, setting, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992), {})
   const f = loop(proxyOf('http://127.0.0.1:17992', [{ kind: 'file', where: '/h/.codex/.env', key: 'HTTPS_PROXY' }]))
   f.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
-  assert.match(gui(findingsOf(f), 'route-loop'), /\/h\/\.codex\/\.env 里写一行 HTTPS_PROXY=/)
+  assert.match(gui(findingsOf(f), 'route-loop'), /Put the line HTTPS_PROXY=.* in \/h\/\.codex\/\.env/)
   const g = loop(proxyOf('http://127.0.0.1:17992', [SRC_ENV]))
   g.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
   assert.match(gui(findingsOf(g), 'route-loop'), /export HTTPS_PROXY=/)
@@ -295,12 +311,12 @@ test('V49 route-loop names where the setting that loops lives; a harness with no
   assert.match(gui(findingsOf(nosrc), 'route-loop'), /export ZCODE_HTTP_PROXY=/)
   const nosrcFile = loop(proxyOf('http://127.0.0.1:17992', []))
   nosrcFile.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
-  assert.match(gui(findingsOf(nosrcFile), 'route-loop'), /\/h\/\.codex\/\.env 里写一行 HTTPS_PROXY=/)
+  assert.match(gui(findingsOf(nosrcFile), 'route-loop'), /Put the line HTTPS_PROXY=.* in \/h\/\.codex\/\.env/)
   // no setting: the PAC step of not-routed says where a new one goes — on Windows from the entry place the facts carry (gatherWin32Facts fills it for every form; the hand-built form models the real one)
   const pac = ROWS.find((r) => r.n === 11).facts
   pac.harnesses.codex.behaviour = behaviourOf('codex', CODEX_FILES, { measured: 'lab' })
   pac.harnesses.codex.forms[0].entryPlace = { kind: 'file', file: '/h/.codex/.env', format: 'dotenv', key: 'HTTPS_PROXY' }
-  assert.match(gui(findingsOf(pac), 'not-routed'), /\/h\/\.codex\/\.env 里写一行 HTTPS_PROXY=/)
+  assert.match(gui(findingsOf(pac), 'not-routed'), /Put the line HTTPS_PROXY=.* in \/h\/\.codex\/\.env/)
 })
 
 test('V49 end to end, with the real descriptors: a proxy that came from the invoking shell\'s HTTPS_PROXY is `unset` there and no file is named; one from ~/.claude.json names that file', async () => {
@@ -321,7 +337,7 @@ test('V49 end to end, with the real descriptors: a proxy that came from the invo
   const second = path.join(s.home, '.claude.json')
   fs.writeFileSync(second, `${JSON.stringify({ env: { HTTPS_PROXY: 'http://127.0.0.1:7890' } })}\n`)
   const fromFile = await dead({})
-  assert.ok(fromFile.text.includes(`${second} 里的 env.HTTPS_PROXY`), fromFile.text)
+  assert.ok(fromFile.text.includes(`Remove env.HTTPS_PROXY from ${second}`), fromFile.text)
   assert.ok(!fromFile.text.includes('settings.json'))
 })
 
@@ -332,12 +348,12 @@ test('V66 process-unknown: its line, written into agents.json, makes the registr
   const F = facts('claude-code', { agentList: { path: list, state: 'absent', problems: [] }, identity: { 'claude-code': { ...idOf('claude-code')['claude-code'], unknown: [{ name: 'claude-canary', wide: false, pid: 7002, door: 'claude-code.settings' }, { name: 'python', wide: true, pid: 7003, door: 'claude-code.settings' }] } } })
   const found = findingsOf(F).filter((x) => x.code === 'process-unknown')
   assert.equal(found.length, 2, 'one finding per name')
-  for (const f of found) { assert.equal(f.class, 'hint'); assert.deepEqual(validateFinding(f), [], f.what); assert.equal(f.verify, 'asight status claude-code:该 pid 带上命中的名字') }
+  for (const f of found) { assert.equal(f.class, 'note'); assert.deepEqual(validateFinding(f), [], f.what); assert.equal(f.verify, 'asight status claude-code') }
   const [named, wide] = [found.find((f) => /claude-canary/.test(f.what)), found.find((f) => /python/.test(f.what))]
-  const line = /把 (\{.*?\}) 加进 (\S+) 的 agents/.exec(named.commands[0].run)
+  const line = /Add (\{.*?\}) to the agents list in (\S+)/.exec(named.commands[0].run)
   assert.ok(line, named.commands[0].run)
   assert.equal(line[2], list, 'the path is filled in')
-  assert.ok(!/\{"harness"/.test(wide.commands[0].run) && /解释器名要带 args/.test(wide.commands[0].run), 'a WIDE name gets no line to paste')
+  assert.ok(!/\{"harness"/.test(wide.commands[0].run) && /An interpreter name needs its script name/.test(wide.commands[0].run), 'a WIDE name gets no line to paste')
   const proc = { os: 'linux', pid: 7002, exe: '/opt/canary/claude-canary', argv: ['claude-canary'], env: () => new Map() }
   const ds = await loadHarnesses()
   assert.equal(createRegistry(ds, { agentList: readAgentList({ home }).entries }).match(proc).agent, null, 'on no list before')
@@ -347,9 +363,9 @@ test('V66 process-unknown: its line, written into agents.json, makes the registr
   assert.deepEqual([read.state, read.problems], ['ok', []])
   assert.equal(createRegistry(ds, { agentList: read.entries }).match(proc).agent, 'claude-code', 'the same facts are claude-code\'s now')
   const bad = findingsOf(SETS['agent-list-invalid'].facts).find((x) => x.code === 'agent-list-invalid')
-  assert.equal(bad.class, 'failure'); assert.ok(!bad.harness, 'the file is the machine\'s, not a harness\'s')
+  assert.equal(bad.class, 'problem'); assert.ok(!bad.harness, 'the file is the machine\'s, not a harness\'s')
   assert.match(bad.what, new RegExp(LIST.replace(/[.]/g, '\\.')))
-  assert.match(bad.commands[0].run, /第 2 项\(agents\[1\]\):wide-name-needs-args/)
+  assert.match(bad.commands[0].run, /entry 2 of .*: agents\[1\]: node is an interpreter name/)
   assert.deepEqual(validateFinding(bad), [])
 })
 
@@ -360,8 +376,8 @@ test('V66 process-unknown `named` (a preset name whose args missed, e.g. the Z C
   assert.deepEqual(validateFinding(f), [], f.what)
   assert.ok(!/\{"harness"/.test(f.commands[0].run), f.commands[0].run)
   assert.match(f.commands[0].run, /"args"/)
-  assert.match(f.what, /名字在名单上、但参数没对上/)
-  assert.doesNotMatch(f.what, /不在名单上/)
+  assert.match(f.why, /only with argument patterns this process did not match/)
+  assert.doesNotMatch(f.why, /is on no list/)
 })
 
 test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the route record\'s reason and place), and uninstall\'s collectors-online gives asight off then asight uninstall', async () => {
@@ -374,6 +390,6 @@ test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the ro
   const reasons = ['system-pac', 'blocker', 'own-egress', 'blocker-unreadable', 'unreadable', 'absent', 'credentialed-own-leg', 'no-path', 'no-applied-entry']
   assert.equal(new Set(reasons.map((r) => nr(r, '/x').why)).size >= 6, true, 'the reasons are told apart')
   for (const r of reasons) assert.deepEqual(validateFinding(nr(r, '/x')), [], r)
-  const refused = findingFor('collectors-online', { platform: 'darwin', online: '还开着: codex' })
-  assert.deepEqual([refused.class, refused.commands.map((c) => c.run)], ['failure', ['asight off', 'asight uninstall']])
+  const refused = findingFor('collectors-online', { platform: 'darwin', online: 'codex' })
+  assert.deepEqual([refused.class, refused.commands.map((c) => c.run)], ['problem', ['asight off', 'asight uninstall']])
 })

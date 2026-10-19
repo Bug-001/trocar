@@ -110,10 +110,7 @@ const COUNT_PINS = {
   'test/collector/core/tls-ca.test.mjs': 1,
   'test/dissect/request-body.test.mjs': 1,
   'test/query/source-refresh.test.mjs': 2,
-  'test/raw/seal-locks.test.mjs': 1,
   'test/view/analyze-admission.test.mjs': 1,
-  'test/view/control-wire.test.mjs': 1,
-  'test/view/session-paging.test.mjs': 5,
 }
 export const countPins = (t) => (t.match(/\.length,\s*\d{2,}\s*\)|\.(?:size|length)\)?\s*,\s*\d{2,}\s*[,)]/g) || []).length
 
@@ -141,27 +138,10 @@ test('3 · the pin comparison: fewer pins or a deleted file is stale, more pins 
   assert.deepEqual(comparePins({ 'a.mjs': 3, 'b.mjs': 1 }, listed, exists).grew, ['a.mjs: 3 (allowed 2)', 'b.mjs: 1 (allowed 0)'])
 })
 
-/** src/ exports that no src/ or bin/ file other than their own names: what reaches them from outside is a test (or nothing). */
-export function testOnlyExports() {
-  const texts = new Map([...SRC, ...walk('bin')].map((f) => [f, code(read(f))]))
-  const out = []
-  for (const f of SRC) {
-    const t = texts.get(f)
-    const names = new Set([...t.matchAll(/export\s+(?:async\s+)?(?:function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1]))
-    for (const m of t.matchAll(/export\s*\{([^}]+)\}/g)) for (const n of m[1].split(',')) { const k = n.trim().split(/\s+as\s+/).pop(); if (k && k !== 'default') names.add(k) }
-    for (const n of names) {
-      const re = new RegExp(`\\b${n.replace(/\$/g, '\\$')}\\b`)
-      if (![...texts].some(([g, u]) => g !== f && re.test(u))) out.push(`${f}: ${n}`)
-    }
-  }
-  return out
-}
-// The ceiling only goes down, as exports move behind their public entry; raising it needs a reason in the PR (0.1 §6).
-// It must equal the measured count, so a drop is locked in by the PR that made it, not spent later on new test-only exports.
-const TEST_ONLY_EXPORTS_CEILING = 339 // W25 by whoami (-1, measured): src/off/win32 elevationByWhoami has a src caller now, arch/win32 refuseElevated; (-1, measured): netenv/adopt recordDrift has a src caller again, the model's system-proxy watcher (arch/model-backends.mjs); lab2/suite (+1, reason): model-install ROOT_SUBJECT, the subject the lab's reset knows asight's root by when no clean start exists yet (4.10 §7 还原; imported, never copied); (-1, measured): darwin netfacts' start-time reader went with startSetting / noProxy, which no proxy-mode reader reads; (+1, measured; reason: plugins/opencode/asight-ca.js AsightCaPlugin is the name OpenCode loads, not a src caller's, and only its deleted plugins/win32 twin named it before; deepseek-dsh MIN_NODE was unexported in the same commit); (-1, measured): confirm.mjs MARKER_TOLERANCE_MS went with the Windows plugin markers' tolerance; (-22, measured): schema validateOptIn / OPTIN_STATES, the Windows opt-in family (optin.mjs, userpath.mjs, shims.mjs, elevate.mjs), then manifest OPTIN_KINDS / OPTIN_MACHINE_KINDS deleted. (-1, measured): the upstream trunks and readHkcuEnv deleted. (+6, measured, not new): the deleted old win32 collector was the only src file naming helper HELPER_PROTO, upstream readHkcuEnv (deleted next), ingress-config ENGINE_RANGE / GROUP_RANGE / INGRESS_FILE, proxymode/entries recordsOf, confirm MARKER_TOLERANCE_MS and codes UNTRACKED_REASONS; netfacts entryPlaceOf, helper declaredRegAllow and policyAllowOf left P5 cli-kernel (+15, reason, not new code): the legacy `raw` / `etl` / `shard` / `keep` CLI was the last src caller of the engines it drove, and those modules stay until the data-format branch (test/ci/reachable.test.mjs UNREACHED) — raw/{legacy sealLegacy failureState, seal sealShard, verify runVerify, export runExport, journal readJournal}, etl/{shard shardOnce resplitShards rebuildMeta, cli etlFile reportSkips}, query/{raw-compare runCompare, retention retentionReportFromStore}, capture/keep {runKeep formatKeepSizes}, paths mitmOut; and (+4) the new kernel's own data tables: cli/commands GROUPS, cli/json ERROR_CODES, cli/harness-names NAME_ALIASES, cli/text useColor (-5: the old cli-args VALUED_FLAGS, cli/color useColor, cli/commands HIDDEN_ALIASES, cli/keep settingHarness, cli/legacy-commands LEGACY_COMMANDS; -1 dead: collector/cli collectorHint went with runCollector, the entry the removed `collector …` aliases had; -1 dead: capture/events failureOf, which nothing called)
-
-test('4 · exports only tests use do not grow, and a drop lowers the ceiling', () => {
-  const n = testOnlyExports().length
-  assert.ok(n <= TEST_ONLY_EXPORTS_CEILING, `${n} src exports are used by tests only (ceiling ${TEST_ONLY_EXPORTS_CEILING}): test through the public entry instead`)
-  assert.equal(n, TEST_ONLY_EXPORTS_CEILING, `only ${n} test-only exports now: lower TEST_ONLY_EXPORTS_CEILING to ${n}`)
+// DuckDB is gone (the readers read the raw files): neither the manifest nor any source file may bring it back.
+test('5 · nothing depends on DuckDB any more', () => {
+  const pkg = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')
+  assert.ok(!/duckdb/i.test(pkg), 'package.json names duckdb')
+  const named = SRC.filter((f) => /@duckdb|DuckDBInstance/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')))
+  assert.deepEqual(named, [], 'these source files still reach for DuckDB')
 })

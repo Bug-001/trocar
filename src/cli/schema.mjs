@@ -1,11 +1,24 @@
 // schema.mjs — what `--json` prints (RFC 1.6 R5), and the check V9 runs over every command's output. The keys and the exit codes
 // are src/off/schema.mjs (the undo side prints receipts too and may import nothing outside src/off); this adds validateReceipt.
-import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt } from '../off/schema.mjs'
+import { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt } from '../off/schema.mjs'
 import { HARNESS_IDS } from './harness-names.mjs'
 import { STATUS_REASONS, NET_CODES } from '../health/codes.mjs'
 import { FINDING_CODES } from '../netenv/findings.mjs' // the finding codes' own closed list: the cross-platform catalogue's, the Windows table's (4.8 §10.4) and the trust reasons' — one list, one place
 
-export { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, newReceipt }
+export { SCHEMA_VERSION, EXIT, RECEIPT_KEYS, UNDO_LINE, newReceipt }
+
+/** 附录 C.2: besides the common keys of C.1, the keys each state-changing command's receipt may carry — the list a reader of 附录 C writes a client against.
+ *  A receipt with a key outside its list is drift (tested 2026-10-18: thirteen keys 附录 C named nowhere), so `validateReceipt` reports it.
+ *  C.2's table and this object name the same keys (test/cli/schema.test.mjs). */
+export const COMMAND_KEYS = Object.freeze({
+  install: Object.freeze(['fp256', 'items', 'carriers', 'harnesses', 'pending', 'standalone', 'commands', 'residual_risk', 'notes']),
+  on: Object.freeze(['harnesses', 'refused', 'routes', 'user', 'standalone', 'commands', 'unit', 'unchanged', 'capture', 'daemon', 'linger', 'linger_reason', 'adopted', 'notes']),
+  off: Object.freeze(['harnesses', 'all', 'outcome', 'autostart', 'daemon', 'daemon_stop', 'holders', 'left', 'kept_backups', 'orphan_backups', 'kept_bundles', 'still_trusting', 'residue', 'undone_by_marker', 'routing', 'install_items', 'pending', 'user_processes', 'nothing_installed', 'relayed_reason', 'notes']),
+  uninstall: Object.freeze(['harnesses', 'all', 'purge_data', 'kept', 'kept_bundles', 'still_trusting', 'residue', 'dropped_backups', 'non_identical', 'entries', 'left', 'pending', 'autostart', 'daemon', 'relayed_reason', 'routing', 'user_processes', 'declined', 'notes']),
+  classes: Object.freeze(['class', 'before', 'after']),
+})
+/** C.1: the keys any receipt may carry besides `RECEIPT_KEYS` — a refusal's `error`, and what a run stopped before writing says (`planned`, `blocked`, `needs_yes`, `dry_run`). */
+const COMMON_OPTIONAL = Object.freeze(['error', 'problems', 'planned', 'blocked', 'needs_yes', 'dry_run'])
 
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 const isString = (v) => typeof v === 'string'
@@ -18,7 +31,7 @@ function listOf(r, key, bad, check) {
   list.forEach((item, i) => check(item, `${key}[${i}]`))
 }
 
-/** created / removed / undo: a path or command as a non-empty string, or an object of the command's own shape (`{path, …}`). */
+/** created / removed: a path or command as a non-empty string, or an object of the command's own shape (`{path, …}`). */
 const stringOrObject = (bad) => (item, at) => {
   if (!((isString(item) && item !== '') || isObject(item))) bad.push(`${at}: neither a non-empty string nor an object`)
 }
@@ -32,6 +45,8 @@ function checkHarnessIds(v, at, bad, seen) {
     const here = at ? `${at}.${k}` : k
     if (k === 'harness' && !HARNESS_IDS.includes(x)) bad.push(`${here}: ${JSON.stringify(x)} is not a harness id (the code id is printed, never an alias)`)
     else if (k === 'harnesses' && Array.isArray(x)) x.forEach((id, i) => { if (isString(id) && !HARNESS_IDS.includes(id)) bad.push(`${here}[${i}]: ${JSON.stringify(id)} is not a harness id`) })
+    // 附录 C.3: `status`'s own `harnesses` is an object KEYED by the harness — the keys are ids too
+    else if (k === 'harnesses' && isObject(x)) for (const id of Object.keys(x)) if (!HARNESS_IDS.includes(id)) bad.push(`${here}.${id}: ${JSON.stringify(id)} is not a harness id`)
     checkHarnessIds(x, here, bad, seen)
   }
 }
@@ -63,7 +78,15 @@ export function validateReceipt(r) {
     // the harness id is checked for every `harness` key below; here it only has to be there
     if (!('harness' in p)) bad.push(`${at}.harness: missing`)
   })
-  listOf(r, 'undo', bad, stringOrObject(bad))
+  if ('undo' in r && !(r.undo === null || (isString(r.undo) && r.undo !== ''))) bad.push('undo: neither the one command line that undoes this command nor null')
+  if (r.command in UNDO_LINE && r.undo !== null && r.undo !== UNDO_LINE[r.command]) bad.push(`undo: ${JSON.stringify(r.undo)}, expected ${JSON.stringify(UNDO_LINE[r.command])}`)
+  // C.1: a problem is an English sentence, so a reader needs no code table to print it
+  listOf(r, 'problems', bad, (p, at) => { if (!(isString(p) && p.trim() !== '')) bad.push(`${at}: not a sentence`) })
+  const named = COMMAND_KEYS[r.command]
+  if (named) {
+    const allowed = new Set([...RECEIPT_KEYS, ...COMMON_OPTIONAL, ...named])
+    for (const k of Object.keys(r)) if (!allowed.has(k)) bad.push(`${k}: not a key 附录 C names for ${r.command}`)
+  }
   if ('relayed' in r && r.relayed !== 'unknown') {
     if (!isObject(r.relayed)) bad.push('relayed: neither "unknown" nor {closing, waiting, cut}')
     else for (const k of ['closing', 'waiting', 'cut']) if (!isCount(r.relayed[k])) bad.push(`relayed.${k}: not a non-negative integer`)
@@ -72,6 +95,7 @@ export function validateReceipt(r) {
   if ('linger' in r && !(r.linger === true || r.linger === false || r.linger === 'unknown')) bad.push('linger: not true, false or "unknown"')
   if ('agent_list' in r) bad.push(...validateAgentList(r.agent_list))
   if (Array.isArray(r.harnesses)) r.harnesses.forEach((h, i) => { if (isObject(h) && h.identity !== undefined) bad.push(...validateIdentity(h.identity).map((x) => `harnesses[${i}].${x}`)) })
+  else if (isObject(r.harnesses)) for (const [h, x] of Object.entries(r.harnesses)) if (isObject(x) && x.identity !== undefined) bad.push(...validateIdentity(x.identity).map((y) => `harnesses.${h}.${y}`))
   if ('install' in r || 'cert' in r) bad.push(...validateInstallCert(r))
   if ('forms' in r) bad.push(...validateForms(r.forms))
   checkHarnessIds(r, '', bad, new WeakSet())
@@ -160,7 +184,7 @@ export const UNKNOWN_REASONS = Object.freeze(['denied', 'timeout', 'absent', 'un
 export const BRANCH_NAMES = Object.freeze(['all', 'http', 'ws'])
 /** What a running process's line says about it: it still goes by the setting it started with, or asight is not on its path. */
 export const RUNNING_NOTES = Object.freeze(['start-time-settings', 'not-steered'])
-export const FINDING_CLASSES = Object.freeze(['failure', 'expected', 'hint'])
+export const FINDING_CLASSES = Object.freeze(['problem', 'expected', 'note']) // 附录 B
 
 const TRI = [true, false, null]
 const isId = (v) => typeof v === 'string' && v !== ''
@@ -241,12 +265,39 @@ export function validateFinding(f) {
   for (const k of ['what', 'why', 'verify']) if (!isString(f[k]) || f[k].trim() === '') bad.push(`${k}: empty`)
   if (!Array.isArray(f.commands)) bad.push('commands: not a list')
   else {
-    if (f.class !== 'hint' && f.commands.length === 0) bad.push('commands: a failure or an expected finding says what to do')
+    if (f.class !== 'note' && f.commands.length === 0) bad.push('commands: a problem or an expected finding says what to do')
     f.commands.forEach((c, i) => {
       if (!isObject(c) || !isString(c.run) || c.run.trim() === '') bad.push(`commands[${i}].run: empty`)
       else if (/<[^<>\n]+>/.test(c.run)) bad.push(`commands[${i}].run: has a <…> placeholder left`)
       if (isObject(c) && !SHELLS.includes(c.shell)) bad.push(`commands[${i}].shell: not one of ${SHELLS.join(' ')}`)
     })
+  }
+  return bad
+}
+
+/** `status` and `doctor`: `ok` is the command's own verdict (1.6 §3.5, §3.7 — nothing is wrong), not 「everything was read」. For every
+ *  other name a thing it could not read is the only reason a document is not ok. */
+const VERDICT = Object.freeze(['status', 'doctor'])
+
+/** Problems with a `query` document against 附录 C.5 (`[]` = valid): every document, whatever the name, has
+ *  `schema` · `command` · `ok` · `errors:[{where, reason}]`, and a paged one has `next` and `has_more` too. */
+export function validateQueryDoc(doc, name = doc && doc.command) {
+  if (!isObject(doc)) return ['document: not an object']
+  const bad = []
+  if (doc.schema !== SCHEMA_VERSION) bad.push(`schema: ${JSON.stringify(doc.schema)}, expected the integer ${SCHEMA_VERSION}`)
+  if (doc.command !== name) bad.push(`command: ${JSON.stringify(doc.command)}, expected ${JSON.stringify(name)} (C.5: the query's own name, and no second \`query\` key)`)
+  if ('query' in doc) bad.push('query: C.5 allows no such key — the name is `command`')
+  if (typeof doc.ok !== 'boolean') bad.push('ok: not a boolean')
+  if (!Array.isArray(doc.errors)) bad.push('errors: not a list')
+  else doc.errors.forEach((e, i) => {
+    if (!isObject(e)) { bad.push(`errors[${i}]: not an object {where, reason}`); return }
+    for (const k of ['where', 'reason']) if (!isString(e[k]) || e[k].trim() === '') bad.push(`errors[${i}].${k}: empty`)
+  })
+  if (doc.ok !== (Array.isArray(doc.errors) && doc.errors.length === 0) && !VERDICT.includes(doc.command)) bad.push('ok: says something else than `errors` does')
+  if ('has_more' in doc || 'next' in doc) {
+    if (typeof doc.has_more !== 'boolean') bad.push('has_more: not a boolean')
+    if (!(doc.next === null || isString(doc.next))) bad.push('next: neither the next --cursor nor null')
+    if (doc.has_more !== (doc.next !== null)) bad.push('next: says something else than `has_more` does')
   }
   return bad
 }

@@ -10,9 +10,9 @@
 const asight = (c, run) => ({ run, shell: c.sh })
 const ps = (run) => ({ run, shell: 'powershell' })
 const gui = (run) => ({ run, shell: 'gui' })
-const unknownValue = (what, reason) => `不知道 · ${reason}(${what})`
+const unknownValue = (what, reason) => `unknown ${what} (${reason})`
 /** The port check (4.8 §10.4: the one form, `netstat -ano -p TCP | findstr ":<端口>"`). */
-const netstat = (port) => (Number.isInteger(port) ? ps(`netstat -ano -p TCP | findstr ":${port}"`) : gui(`netstat -ano -p TCP 加 findstr 加端口号(端口号读不到,asight status 里有)`))
+const netstat = (port) => (Number.isInteger(port) ? ps(`netstat -ano -p TCP | findstr ":${port}"`) : gui('Run netstat -ano -p TCP and look for the port; asight status prints it'))
 const REG_QUERY_PROXY = 'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable'
 const GET_PAC = "Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL"
 
@@ -32,86 +32,86 @@ function whyOf(c) {
  *  (`entryPlace`): a JSON file is opened in 记事本 and its key written (never a PowerShell line that would reorder the user's JSON), a dotenv file gets its line, the policy value and the app's
  *  setting name their place (the shim and launcher places went with D52 / D57: mac / win write no shim or launcher). */
 function setProxyText(h, place, value) {
-  if (!place) return `把 ${h} 的代理设成 ${value}(这个形态的入口位置读不到)`
-  if (place.kind === 'file') return place.format === 'json' ? `用记事本打开 ${place.file},把 ${place.key} 写成 "${value}"` : `${place.file} 里写一行 ${place.key}=${value}`
-  if (place.kind === 'policy') return `在注册表策略 ${place.path} 里把 ${place.name} 写成 ${value}(regedit)`
-  return `把 ${h} 的代理设成 ${value}`
+  if (!place) return `Set ${h}'s proxy to ${value}`
+  if (place.kind === 'file') return place.format === 'json' ? `Open ${place.file} in Notepad and set ${place.key} to "${value}"` : `Put the line ${place.key}=${value} in ${place.file}`
+  if (place.kind === 'policy') return `Set ${place.name} under ${place.path} to ${value} (regedit)`
+  return `Set ${h}'s proxy to ${value}`
 }
 
 /** The catalogue (4.8 §10.4, one entry per code row). Commands only, unless the Windows row says its own thing about what or why. */
 export const FINDINGS_WIN32 = {
   'not-routed': {
-    cls: 'failure', asightFirst: false,
-    what: (c) => `${c.h}${c.fm && c.fm.id ? ` 的形态 ${c.fm.id}` : ''} 的新连接不经过 asight`,
+    cls: 'problem', asightFirst: false,
+    what: (c) => `New connections from ${c.h}${c.fm && c.fm.id ? ` (${c.fm.id})` : ''} do not go through asight.`,
     why: (c) => { const w = whyOf(c)
-      if (w.why === 'system-proxy-pac') return '这个形态跟随的系统代理是 PAC,asight 不执行 PAC,所以没接这个形态'
-      if (w.why === 'system-proxy-unreadable') return `助手这一次没读到系统代理(${w.detail || '原因读不到'}),asight 不猜它是不是开着,所以没接这个形态(on 之后读不到的是提示,不是失败:留在上一次的上游)`
+      if (w.why === 'system-proxy-pac') return 'The system proxy this form follows is a PAC script, which asight does not run.'
+      if (w.why === 'system-proxy-unreadable') return `Your system proxy could not be read (${w.detail || 'no reason given'}), and asight does not guess, so it did not connect this form.`
       if (w.why === 'upstream-unparseable') return w.detail === 'credentials-in-system-proxy'
-        ? '系统代理的 ProxyServer 里带了用户名口令,WinINET 本来就不从这个值取凭据,asight 不照读,所以没接这个形态'
-        : '这个形态原来的代理值 asight 读不懂,所以没接这个形态(asight status 印出它的入口文件与那一行,值里的用户名与口令打码)'
-      return '这个形态没有 asight 能用的入口' // 1.6 §9.6's own words, for the case none of the whys above says
+        ? 'Your system proxy address carries a login, which Windows itself does not use, so asight did not connect this form.'
+        : 'asight cannot read the proxy address this form had, so it did not connect it.'
+      return 'This form has no entry asight can use.'
     },
     commands: (c) => { const w = whyOf(c)
-      if (!w.why) return [gui(`${c.h} 的这个形态没有入口:改用它的 CLI 形态`), asight(c, `asight status ${c.h}`)]
-      if (w.why === 'system-proxy-pac') return [gui(`在你的代理软件里看它的本地端口,把 ${c.h} 的代理设成它:${setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('你的代理地址', 'pac'))}`), asight(c, `asight on ${c.h}`)]
+      if (!w.why) return [gui(`Use ${c.h}'s CLI form instead`), asight(c, `asight status ${c.h}`)]
+      if (w.why === 'system-proxy-pac') return [gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'pac'))), asight(c, `asight on ${c.h}`)]
       if (w.why === 'system-proxy-unreadable') return [asight(c, `asight on ${c.h}`), asight(c, `asight doctor ${c.h}`), ps(REG_QUERY_PROXY)]
       return [
-        gui(w.detail === 'credentials-in-system-proxy' ? '在系统代理设置里把用户名口令从代理地址里去掉(WinINET 本来就不取它们);要凭据的代理写进这个 agent 自己的代理设置:' : '把它改成一个 asight 读得懂的写法(http://host:port 或 socks5://host:port):'),
-        gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('你的代理地址', 'absent'))),
-        asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`), // 不想改就 off,不采它
+        gui(w.detail === 'credentials-in-system-proxy' ? 'Take the login out of your system proxy address' : 'Write it as http://host:port or socks5://host:port'),
+        gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'absent'))),
+        asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`),
       ]
     },
-    verify: (c) => `asight status ${c.h}:那一支「在路径上 · 是」`,
+    verify: (c) => `asight status ${c.h}`,
   },
   'entry-changed': { commands: (c) => [asight(c, (c.fm && c.fm.certificate && c.fm.certificate.command) || `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` }, // a drifted install item (row 31) names its own command
-  'egress-differs': { commands: (c) => [asight(c, `asight off ${c.h}`)], verify: () => '—' },
+  'egress-differs': { commands: (c) => [asight(c, `asight off ${c.h}`)], verify: (c) => `asight status ${c.h}` },
   'elevated-agent': {
-    commands: (c) => [gui(`关掉它,不用「以管理员身份运行」重新打开 ${c.h}`), ps('whoami /groups | findstr /i "Mandatory"')],
+    commands: (c) => [gui(`Quit ${c.h} and start it again without administrator rights`), ps('whoami /groups | findstr /i "Mandatory"')],
     verify: (c) => `asight status ${c.h}`,
   },
   'proxy-dead': {
-    commands: (c) => [netstat(c.dead && c.dead.port), gui(`打开你的代理软件(它应该监听 ${c.dead ? `${c.dead.addr}:${c.dead.port}` : unknownValue('它的地址', 'absent')})`), gui('或者关掉指着它的系统代理')],
-    verify: () => '同一条命令看到 LISTENING',
+    commands: (c) => [netstat(c.dead && c.dead.port), gui(`Start your proxy, so that it listens on ${c.dead ? `${c.dead.addr}:${c.dead.port}` : unknownValue('address', 'absent')}`), gui('Or turn off the system proxy that points at it')],
+    verify: (c) => `asight status ${c.h}`,
   },
   'upstream-unreachable': {
-    commands: (c) => [netstat(c.upPort), gui('打开你的代理软件,或关掉指着它的系统代理')],
-    verify: (c) => `asight status ${c.h}:那一跳有属主`,
+    commands: (c) => [netstat(c.upPort), gui('Start your proxy, or turn off the system proxy that points at it')],
+    verify: (c) => `asight status ${c.h}`,
   },
   'engine-port-taken': {
-    cls: 'failure', asightFirst: false,
-    what: () => '引擎的入口端口被别的进程占了',
-    why: () => '这扇门因此开不了;asight off 再 asight on 会重选端口',
+    cls: 'problem', asightFirst: false,
+    what: () => 'Another program holds the port asight listens on, so nothing is captured.',
+    why: () => 'asight picks another port after a restart.',
     commands: (c) => [netstat(c.enginePort), asight(c, 'asight off'), asight(c, 'asight on')],
-    verify: () => 'asight status:引擎「在跑」',
+    verify: () => 'asight status',
   },
   'forwarder-down': {
-    commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`), gui(`马上要用:上一步之后重启 ${c.h},它就不经 asight 了`)],
-    verify: () => 'asight status:引擎「在跑」',
+    commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`), gui(`Restart ${c.h} after that, and it connects without asight`)],
+    verify: () => 'asight status',
   },
   'form-unsupported': {
-    cls: 'failure', asightFirst: false,
-    what: (c) => `${c.h}${c.fm && c.fm.id ? ` 的形态 ${c.fm.id}` : ''} 收不了带凭据的上游`,
-    why: () => '它的入口没有口令(免鉴权的端口),asight 不把带用户名口令的代理接给它',
-    commands: (c) => [gui(`改用 ${c.h} 的 CLI 或编辑器扩展形态`)],
-    verify: () => '—',
+    cls: 'problem', asightFirst: false,
+    what: (c) => `${c.h}${c.fm && c.fm.id ? ` (${c.fm.id})` : ''} cannot take an upstream proxy that needs a login.`,
+    why: () => 'Its entry takes no login, so asight does not hand it one.',
+    commands: (c) => [gui(`Use ${c.h}'s CLI form or its editor extension instead`)],
+    verify: (c) => `asight status ${c.h}`,
   },
   'proxy-unsupported': {
-    what: (c) => `${c.h} 的代理协议接不上(${c.protocol || (c.setting && c.setting.scheme) || '不知道是哪一个'})`,
-    why: (c) => (c.protocol ? `这个形态原来的代理是 ${c.protocol} 的,asight 的上游还不支持,on 因此不接这个形态` : `${c.h} 不支持 ${c.setting && c.setting.scheme}(它自己的代理设置里配的)`),
-    commands: (c) => [gui('把它改成 http://host:port 或 socks5://host:port 的写法'), gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('你的代理地址', 'absent'))), asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)],
-    verify: (c) => `asight status ${c.h}:那一支「在路径上 · 是」`,
+    what: (c) => `${c.h} does not support the proxy scheme ${c.protocol || (c.setting && c.setting.scheme) || unknownValue('scheme', 'unreadable')}.`,
+    why: (c) => (c.protocol ? `asight cannot use a ${c.protocol} proxy as its upstream, so it did not connect this form.` : `${c.h} cannot use the proxy scheme set in its own settings.`),
+    commands: (c) => [gui('Write it as http://host:port or socks5://host:port'), gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'absent'))), asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)],
+    verify: (c) => `asight status ${c.h}`,
   },
-  'system-proxy-pac': { commands: () => [ps(GET_PAC)], verify: () => '—' },
-  'other-redirector': { commands: () => [ps('netsh winsock show catalog')], verify: () => '—' },
+  'system-proxy-pac': { commands: () => [ps(GET_PAC)], verify: () => 'asight status' },
+  'other-redirector': { commands: () => [ps('netsh winsock show catalog')], verify: () => 'asight status' },
   'socktable-unavailable': {
-    cls: 'failure', asightFirst: false,
-    what: () => '连接属主的套接字表读不到,这条连接不经采集只转发',
-    why: () => 'asight 宁可不知道也不猜属主;属主读不到的连接被旁路(splice),不采也不断',
-    commands: () => [gui('无需操作:这条连接只转发不采集;新的连接会再问一次')],
-    verify: () => '—',
+    cls: 'problem', asightFirst: false,
+    what: () => 'Windows did not say which program owns a connection, so it was forwarded only.',
+    why: () => 'asight never guesses the owner of a connection; it forwards it instead of capturing it.',
+    commands: () => [gui('No action needed: that connection was forwarded, not captured; the next one is asked again')],
+    verify: () => 'asight status',
   },
   'cause-unknown': {
-    commands: (c) => [asight(c, `asight off ${c.h}`), gui(`再试 ${c.h}:仍连不上 → 与 asight 无关`)],
-    verify: (c) => `再试 ${c.h}`,
+    commands: (c) => [asight(c, `asight off ${c.h}`), gui(`Try ${c.h} again: if it still fails, asight is not the cause`)],
+    verify: (c) => `Try ${c.h} again`,
   },
 }

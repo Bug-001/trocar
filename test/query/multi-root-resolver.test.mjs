@@ -122,38 +122,12 @@ test('dispose tears down EVERY root — the teardown name must match', async () 
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test('serveSource() returns only roots that EXIST — including the new home', async () => {
-  // Its own comment says 「Returns the roots that EXIST」 and 「absence is filtered here」, but the new
-  // home was pushed unconditionally. On a machine that has only the legacy capture — every user who
-  // upgraded and has not captured since — buildResolver stat()s a directory that is not there and
-  // `asight serve` dies at startup instead of serving the sessions it can plainly see.
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-serves-'));
-  try {
-    const home = path.join(base, 'asight-home-that-does-not-exist');
-    const legacy = path.join(base, 'legacy');
-    fs.mkdirSync(legacy, { recursive: true });
-    fs.writeFileSync(path.join(legacy, 'cap.ndjson'), '');
-
-    const roots = [].concat(serveSource({ home, legacy }));
-    for (const r of roots) {
-      assert.ok(fs.existsSync(r),
-        `serveSource() returned "${r}", which does not exist. buildResolver stats every root it is `
-        + 'given, so this is a startup crash on any machine holding only a legacy capture.');
-    }
-    assert.ok(roots.includes(legacy), 'the legacy root exists and holds captures — it must be served');
-
-    // And the resolver must survive being handed that list.
-    const resolve = await buildResolver(roots.length === 1 ? roots[0] : roots);
-    resolve.dispose && resolve.dispose();
-  } finally { fs.rmSync(base, { recursive: true, force: true }); }
-});
-
 test('…and when NEITHER root exists, that is an empty board, not a crash', async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-none-'));
   try {
     const roots = [].concat(serveSource({
       home: path.join(base, 'nope-home'),
-      legacy: path.join(base, 'nope-legacy'),
+      collector: path.join(base, 'nope-collector'),
     }));
     assert.deepEqual(roots, [],
       'a clean machine with no capture at all must yield NO roots, so the board can say "nothing '

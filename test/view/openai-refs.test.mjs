@@ -67,39 +67,3 @@ test('a record the resolver cannot address keeps its blocks inline and says so',
   }
 });
 
-// Product path: a capture directory served by `asight serve` (createServer); the refs the board receives
-// over /api/session resolve over /api/block to the exact wire bytes.
-test('over HTTP: every flat-lane locator from /api/session resolves through /api/block to its bytes', async () => {
-  const fs = await import('node:fs');
-  const os = await import('node:os');
-  const path = await import('node:path');
-  const http = await import('node:http');
-  const { once } = await import('node:events');
-  const { createServer } = await import('../../src/server.mjs');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-oarefs-'));
-  const recs = [
-    { id: 'r1', ts_request: '2026-10-06T00:00:01Z', is_llm_call: true, endpoint: '/v1/responses', req_headers: { 'session-id': 'S' }, req_body: RESP_BODY, resp: { status: 200, kind: 'sse', raw_sse: [] } },
-    { id: 'c1', ts_request: '2026-10-06T00:00:02Z', is_llm_call: true, endpoint: '/v1/chat/completions', req_headers: { 'session-id': 'T' }, req_body: CHAT_BODY, resp: { status: 200, kind: 'sse', raw_sse: [] } },
-  ];
-  fs.writeFileSync(path.join(dir, 'capture-2026-10-06.ndjson'), recs.map((r) => JSON.stringify(r)).join('\n') + '\n');
-  const { server } = await createServer({ dbPath: '/nonexistent-db-xyz', sourcePath: dir });
-  server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  const { port } = server.address();
-  const get = (p) => new Promise((resolve, reject) => http.request({ host: '127.0.0.1', port, path: p }, (res) => {
-    let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve(JSON.parse(b)));
-  }).on('error', reject).end());
-  try {
-    let checked = 0;
-    for (const [sid, body] of [['S', RESP_BODY], ['T', CHAT_BODY]]) {
-      const v = await get(`/api/session?id=${sid}`);
-      for (const b of v.analyzed.steps[0].flat) {
-        const { start, end } = parseTextRef(b.text_ref);
-        const d = await get(`/api/block?ref=${encodeURIComponent(b.text_ref)}`);
-        assert.equal(d.status, 'ok', `${b.text_ref}: ${d.error}`);
-        assert.equal(d.text, body.slice(start, end), 'diff = 0 against the bytes on disk');
-        checked++;
-      }
-    }
-    assert.equal(checked, 10);
-  } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
-});

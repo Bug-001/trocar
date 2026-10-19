@@ -8,6 +8,7 @@
 // this module's verbs return before the caller stops anything). launchctl runs only through execTool, so a test injects the runner; the spawn, the uid and the fs are parameters too,
 // and every piece runs on any OS against a temp directory. Node built-ins and src/off/exec.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
+import { directStartEnv, startDaemonDirect } from '../direct-start.mjs'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
@@ -127,7 +128,6 @@ const agentState = ({ run, env, uid }) => {
   return { state: 'absent' }
 }
 
-const TRUST_AND_PROXY = /^(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_USE_SYSTEM_CA|NODE_USE_ENV_PROXY|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_FILE|SSL_CERT_DIR|(HTTPS?|ALL|NO|FTP|WSS?)_PROXY)$/i
 /**
  * The environment of a daemon that is started directly (`start()`, the `--no-autostart` run): the installer shell's, without the variables that change what the daemon trusts or whom it
  * dials (Node's CA, TLS and proxy switches, OpenSSL's CA file and directory, the `*_PROXY` family, any case — on darwin names are case sensitive and the lowercase spellings
@@ -137,11 +137,7 @@ const TRUST_AND_PROXY = /^(NODE_EXTRA_CA_CERTS|NODE_OPTIONS|NODE_USE_SYSTEM_CA|N
  * darwin the engine verifies an upstream with the merged bundle (4.9 §5), so what the daemon trusts does not turn on it. What is not in this list stays: the user-level variables a login
  * job carries (`CODEX_HOME`, `PATH`, `HOME`, `TMPDIR`) are in the shell's environment too.
  */
-export function directStartEnv(env = process.env) {
-  const out = {}
-  for (const [k, v] of Object.entries(env)) if (!TRUST_AND_PROXY.test(k)) out[k] = v
-  return out
-}
+export { directStartEnv }
 
 // the two parts of an undo as one answer; a tool that did not run (code null) is code 1, a failure that a caller's `if (r.code)` sees (the win32 settle's rule)
 const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist.code) ?? 1, out: [agent.out, plist.out].filter(Boolean).join('\n'), err: [agent.err, plist.err].filter(Boolean).join('; '), agent: agent.state, plist: plist.state })
@@ -171,14 +167,8 @@ const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, uid = null } = {}) {
   const file = plistPath(home)
   const tools = { run, env, uid: uid ?? processUid() }
-  function startDirect() {
-    let child
-    try { child = spawn(node, [script, 'daemon'], { detached: true, stdio: 'ignore', env: directStartEnv(env) }) } catch (e) { return { code: null, out: '', err: `the daemon could not be started (${(e && e.code) || (e && e.message) || e})` } }
-    if (!child || child.pid === undefined) return { code: null, out: '', err: 'the daemon did not start' }
-    if (typeof child.on === 'function') child.on('error', () => {}) // a late spawn error is not an uncaught exception; the daemon that never answers is what `on` reports
-    child.unref()
-    return { ...ok, via: 'direct', pid: child.pid }
-  }
+  // the daemon this run starts itself: the LaunchAgent's own environment and the LaunchAgent's own log files (direct-start.mjs)
+  const startDirect = (carry) => ({ ...ok, ...startDaemonDirect({ home, env, carry, command: node, argv: [script, 'daemon'], spawn, fs }) })
   // the agent is booted out of the session and the plist out of LaunchAgents, in that order (see the userUnit header); each half says what it did
   const undo = () => {
     const q = agentState(tools)
@@ -208,7 +198,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       if (r.code === 0) return r
       return { ...r, code: r.code ?? 1, event: { event: 'failure', where: 'install', code: 'launchd-register-failed', reason: `launchctl bootstrap was refused (${r.code === null ? 'it did not run' : `exit ${r.code}`}${r.err ? `: ${r.err}` : ''}); launchd is the only autostart, so asight does not start at login` } }
     },
-    start: startDirect,
+    start: (carry = null) => startDirect(carry),
     reload: () => ({ ...ok }),
     // a no-names off: launchctl disable, never a bootout of a draining daemon — the same call as src/off/darwin.mjs disableAgent; the plist stays
     disable: () => { const r = launchctl(['disable', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools); return { ...r, code: r.code ?? 1, state: r.code === 0 ? 'disabled' : 'failed' } },
