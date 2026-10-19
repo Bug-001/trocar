@@ -63,9 +63,9 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     const procs = (part.procs && part.procs[h.id]) || []
     f.harnesses[h.id] = {
       installed: h.installed, entry: { state: h.entry.state }, installedAt: iso(h.installedAt), setting, fileSetting: fileSettings[h.id],
-      // every place it holds a proxy address now (not only the one that wins): the places a finding names for the user to remove by hand (1.6 §9.6)
+      // every place it holds a proxy address now (not only the one that wins): the places a finding names for the user to remove by hand (1.6 附录 B)
       proxyPlaces: proxyPlaces(d, { home, env, fs }),
-      // the places asight itself wrote for it (its on-phase manifest items): a finding never asks the user to edit one of them (1.6 §9.6)
+      // the places asight itself wrote for it (its on-phase manifest items): a finding never asks the user to edit one of them (1.6 附录 B)
       writtenPlaces: writtenPlaces(status.manifest && status.manifest.value, h.id),
       systemProxy: part.systemProxy && (pr.systemProxy.http !== false || pr.systemProxy.ws !== false) ? part.systemProxy : null,
       behaviour: { env: [...pr.env], follows: { ...pr.systemProxy }, schemes: [...pr.schemes], unsupported: { ...pr.unsupported }, branches: [...pr.branches], measured: pr.measured[platform] || 'inferred', restart: { ...pr.restart }, files: proxyFilesOf(d, { home, env }),

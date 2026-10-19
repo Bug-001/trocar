@@ -98,7 +98,7 @@ export function isPresent(form, ctx) {
 }
 
 /** The places of a form that are there now (its `present` places, a `{ command }` as the path it resolves to): which form a running process belongs to is
- *  read from them (1.6 §9.6: the restart steps come from the form the process belongs to). */
+ *  read from them (1.6 附录 B: the restart steps come from the form the process belongs to). */
 export function presentPaths(form, ctx) {
   return (form.present || []).flatMap((p) => {
     if (p && 'command' in p) { const at = ctx.which(p.command); return at ? [at] : [] }

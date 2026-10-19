@@ -320,7 +320,7 @@ test('D49: a record `on` wrote before (holding a `vpn` key) is the same adoption
   assert.equal('vpn' in adoptedRecord({ facts, topology: null, h: 'codex', prev: null }), false, 'and a new record does not hold one')
 })
 
-// ── every place a harness holds a proxy address (1.6 §9.6 `places`): what a finding names for the user to remove by hand ───────────────────────────────────────
+// ── every place a harness holds a proxy address (1.6 附录 B `places`): what a finding names for the user to remove by hand ───────────────────────────────────────
 test('proxyPlaces: every file key and variable that holds a proxy address now, in the descriptor\'s order — not only the one that wins; a value that is not a URL is no place', () => {
   const home = tmpDir('places')
   const d = D['claude-code']

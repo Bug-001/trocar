@@ -83,7 +83,7 @@ function dotenvPlaces(text, keys) {
 }
 
 /** The places asight itself wrote for a harness (its on-phase manifest items) as `path#key` keys, plus `path#*` for a file asight created whole: a place of
- *  asight's is never one the user is asked to edit (1.6 §9.6 `places`). One reader for every item shape: a key path (json-key, json-array-item, a registry
+ *  asight's is never one the user is asked to edit (1.6 附录 B `places`). One reader for every item shape: a key path (json-key, json-array-item, a registry
  *  value's name) or the file as a whole; a dotenv block needs no key of its own, its lines are known by its markers. */
 export function writtenPlaces(manifest, harness = null) {
   const m = manifest && !manifest.unsupported ? manifest : null
@@ -104,7 +104,7 @@ export const isWrittenPlace = (written, p) => !!written && (written.includes(p.k
 
 /** Every place this harness holds a proxy address right now — not only the one that wins — as `{ kind: 'file', path, key, format, scheme, host, port }` /
  *  `{ kind: 'env', name, scheme, host, port }`, in the descriptor's order (files, then variables). A finding that asks the user to remove a setting by hand
- *  needs the places, plural: the key that wins is one, and the same dead address usually sits in the other spelling beside it (1.6 §9.6 `places`). */
+ *  needs the places, plural: the key that wins is one, and the same dead address usually sits in the other spelling beside it (1.6 附录 B `places`). */
 export function proxyPlaces(desc, { home, env = process.env, fs = nodeFs, paths = null } = {}) {
   const p = desc.proxy, out = []
   const add = (place, v) => { const u = parseProxyUrl(v); if (u) out.push({ ...place, scheme: u.scheme, host: u.host, port: u.port }) }

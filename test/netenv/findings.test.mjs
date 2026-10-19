@@ -1,4 +1,4 @@
-// test/netenv/findings.test.mjs — RFC 1.6 §9.6 `doctor`'s findings (V49 the catalogue, both directions · V51 the fallback when an agent cannot connect and nothing explains it). Table-driven: every code has the
+// test/netenv/findings.test.mjs — RFC 1.6 附录 B `doctor`'s findings (V49 the catalogue, both directions · V51 the fallback when an agent cannot connect and nothing explains it). Table-driven: every code has the
 // injected facts that call for it, and those facts call for exactly its codes; every code the catalogue defines has such a set. Facts are injected, nothing here reads the machine (0.1 §3).
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -67,7 +67,7 @@ const SETS = {
   'prior-proxy-unknown': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { source: 'unknown' })), codes: ['prior-proxy-unknown'] },
   'agent-list-invalid': { h: null, facts: facts('claude-code', { agentList: { path: LIST, state: 'ok', problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'agents[1]: node is an interpreter name; add "args"' }] } }), codes: ['agent-list-invalid'] },
 }
-// D51③⑤ (1.6 §9.6): the name list's two findings — a state event of the door and a failure code of the harness part, both in health/codes.mjs's closed sets
+// D51③⑤ (1.6 附录 B): the name list's two findings — a state event of the door and a failure code of the harness part, both in health/codes.mjs's closed sets
 const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
 const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file'] // 1.6 §9.7's cert group, as findings
 const REFUSAL_CODES = ['collectors-online'] // a command's refusal (uninstall), rendered by findingFor, not by diagnose
@@ -123,7 +123,7 @@ test('V49 every trust reason is a finding (the restart ones expected, the rest f
     assert.equal(found.length, 1, reason)
     const restart = ['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim'].includes(reason)
     if (!FINDINGS[reason]) assert.equal(found[0].class, restart ? 'expected' : 'problem', reason)
-    else assert.equal(found[0].class, typeof FINDINGS[reason].cls === 'string' ? FINDINGS[reason].cls : found[0].class, `${reason}: its own catalogue entry decides the class (not-verified is expected, 1.6 §9.6)`)
+    else assert.equal(found[0].class, typeof FINDINGS[reason].cls === 'string' ? FINDINGS[reason].cls : found[0].class, `${reason}: its own catalogue entry decides the class (not-verified is expected, 1.6 附录 B)`)
     assert.deepEqual(validateFinding(found[0]), [], reason)
   }
 })
@@ -360,6 +360,26 @@ test('V49 upstream-unreachable, codex\'s dotenv route through the REAL writers: 
   assert.deepEqual(validateFinding(u), [])
   assert.match(u.commands.map((c) => c.run).join('\n'), new RegExp(`Remove the HTTPS_PROXY= line from ${envFile.replace(/[.\\/]/g, '\\$&')}`))
   assert.equal(places.some((p) => p.port === 17991), false, 'asight\'s own block is no place of the user\'s')
+})
+
+test('V49 / 4.8 §10.4 on Windows: proxy-dead and upstream-unreachable name the user\'s own places too, one step per place', () => {
+  const SET = 'C:\\Users\\u\\.claude\\settings.json'
+  const place = (key) => ({ kind: 'file', path: SET, key, format: 'json', scheme: 'http', host: '127.0.0.1', port: 7897 })
+  const fm = form('claude-code.cli', { entry: { where: `${SET}#env.HTTPS_PROXY`, asight: true, opt_in: false, intact: true },
+    setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: SET, key: 'env.HTTPS_PROXY' }]), procs: [proc(4121)] })
+  const f = pfacts('claude-code', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [] })
+  Object.assign(f.harnesses['claude-code'], { proxyPlaces: [place('env.HTTPS_PROXY'), place('env.HTTP_PROXY')], writtenPlaces: [`${SET}#env.HTTPS_PROXY`] })
+  // asight on the path with the dead address as its upstream (upstream-unreachable), and asight nowhere near it (proxy-dead)
+  const dead = facts('claude-code', { platform: 'win32', listeners: [] }, { setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: SET, key: 'env.HTTPS_PROXY' }]) })
+  Object.assign(dead.harnesses['claude-code'], { proxyPlaces: [place('env.HTTP_PROXY')], writtenPlaces: [] })
+  for (const [code, facts_] of [['upstream-unreachable', f], ['proxy-dead', dead]]) {
+    const x = findingsOf(facts_).find((y) => y.code === code)
+    assert.ok(x, `${code}: ${findingsOf(facts_).map((y) => y.code).join(',')}`)
+    assert.deepEqual(x.places, [place('env.HTTP_PROXY')], `${code}: the user's own key alone`)
+    const text = x.commands.map((cc) => cc.run).join('\n')
+    assert.match(text, /Remove env\.HTTP_PROXY from C:\\Users\\u\\\.claude\\settings\.json/, `${code} names the place`)
+    assert.doesNotMatch(text, /HTTPS_PROXY/, `${code} never names the key asight wrote`)
+  }
 })
 
 test('V49 proxy-unsupported names the place of the setting and the value to put there, as one sentence (no 「http://…:」 left stuck to the next phrase)', () => {

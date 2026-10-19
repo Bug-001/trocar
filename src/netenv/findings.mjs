@@ -1,4 +1,4 @@
-// findings.mjs (src/netenv) — what `asight doctor` says about the network (RFC 1.6 §9.6): the catalogue of findings, one entry per code, and `diagnose`, which says which of them the facts and the topology call for.
+// findings.mjs (src/netenv) — what `asight doctor` says about the network (RFC 1.6 附录 B): the catalogue of findings, one entry per code, and `diagnose`, which says which of them the facts and the topology call for.
 // A finding is `{ code, class, harness?, what, why, commands: [{ run, shell }], verify }`. The commands are whole lines with every value filled in (pid, port, path, user): a value that could not be read is
 // written 「不知道 · <原因>」 with the command that reads it, never a `<…>` placeholder. asight's own commands come first, then the application's or the OS's. Nothing here runs anything (R8): `doctor` only
 // prints them. Pure: facts and topology in, findings out.
@@ -73,7 +73,7 @@ function formRestart(ctx) {
 }
 const settingOf = (hf) => (hf.setting && !hf.setting.unknown && hf.setting.value ? hf.setting : ((hf.forms || []).map((f) => f.setting).find((s) => s && s.value) || null))
 const deadProxy = (t) => t.nodes.find((n) => n.kind === 'proxy' && n.down === true) || null
-/** The places of the USER's own that hold the address this finding is about (`diagnose` filtered them: a key asight wrote is never among them, 1.6 §9.6 `places`). */
+/** The places of the USER's own that hold the address this finding is about (`diagnose` filtered them: a key asight wrote is never among them, 1.6 附录 B `places`). */
 const userPlaces = (c) => (Array.isArray(c.places) ? c.places : [])
 /** The steps that take that address out of the user's own settings, one named step per place; with no place known, the one the setting was read from. */
 const removeSteps = (c) => (userPlaces(c).length ? userPlaces(c).map((p) => gui(removeAt(c.h, p))) : [gui(c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('setting', 'absent'))])
@@ -167,6 +167,7 @@ function make(code, ctx) {
   const w = ctx.platform === 'win32' ? FINDINGS_WIN32[code] : null
   const def = FINDINGS[code] || TRUST
   const c = { ...ctx, code }
+  c.removeOwn = userPlaces(c).map((p) => gui(removeAt(c.h, p))) // the user's own places, as steps: both catalogues name them (1.6 附录 B)
   const clsOf = (d) => (typeof d.cls === 'function' ? d.cls(c) : d.cls)
   const at = (f) => (w && w[f] ? w[f](c) : def[f](c))
   const pl = def.places ? def.places(c) : null
@@ -212,7 +213,7 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     if (protoForm) add('proxy-unsupported', { protocol: protoForm.route.protocol, fm: protoForm })
     const dead = deadProxy(t)
     // asight's door on the path with the dead address as its upstream is `upstream-unreachable`, not `proxy-dead`: the setting the agent reads is asight's
-    // own door, which is up; what is dead is the hop after it, and without asight the agent would not connect either (1.6 §9.6)
+    // own door, which is up; what is dead is the hop after it, and without asight the agent would not connect either (1.6 附录 B)
     if (dead) {
       const viaAsight = !!(upAddr && upAddr.host === dead.addr && String(upAddr.port) === String(dead.port))
       add(viaAsight ? 'upstream-unreachable' : 'proxy-dead', { dead, places: placesAt(dead.addr, dead.port), ...(viaAsight ? { upPort: dead.port } : {}) })

@@ -161,7 +161,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       // 附录 C.1: the refusal's code lives in `error` and nowhere else; `message` is the sentence the text form prints
       receipt.ok = false; receipt.error = { code: 'collectors-online', message: why }; receipt.purge_data = false; receipt.kept = keptOf(home, fs) // nothing changed: --purge-data deleted nothing either
       receipt.problems.push(why)
-      receipt.problems.push(`Run: ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(', then: ')}`) // the doctor's own steps for the code (1.6 §9.6)
+      receipt.problems.push(`Run: ${findingFor('collectors-online', { platform: w.platform }).commands.map((c) => c.run).join(', then: ')}`) // the doctor's own steps for the code (1.6 附录 B)
       put({ event: 'failure', code: 'collectors-online', reason: receipt.problems.at(-2) })
       put({ kind: 'result', outcome: 'failed', reason: `uninstall refused: ${receipt.problems.at(-2)}` })
       return { receipt, exit: EXIT.incomplete }

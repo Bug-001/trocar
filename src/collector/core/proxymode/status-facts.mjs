@@ -36,7 +36,7 @@ function userFileOf(desc, { m, ctx, fs, own }) {
 }
 
 /** The setting the agent has without asight, from the prior asight recorded (null when the user had none): the topology's off path. `e` is the item the
- *  prior was READ from — its file and key — never another key of the same route: a command that names a place must name the true one (1.6 §9.6). */
+ *  prior was READ from — its file and key — never another key of the same route: a command that names a place must name the true one (1.6 附录 B). */
 const settingOf = (prior, e) => {
   const u = prior ? parseProxyUrl(prior) : null
   return u ? { value: red(prior), ...u, source: [{ kind: 'file', where: e.path, ...(e.keys ? { key: e.keys.join('.') } : {}) }], sha256: null } : { value: null, scheme: null, host: null, port: null, source: [], sha256: null }
@@ -91,7 +91,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
         entry: main ? { where: main.keys ? `${main.path}#${main.keys.join('.')}` : main.path, kind: route.kind || main.kind, asight: true, intact } : null,
         plan: blocked ? { reason: blocked.reason, at: blocked.at ?? null, code: blocked.code } : null,
         // the form's own way of being made to read its settings again, and the places it runs from: the doctor's restart steps come from the form the
-        // process belongs to, never one fixed sentence (1.6 §9.6). No `restart` of its own: the harness's (`proxy.restart`), through the facts' behaviour.
+        // process belongs to, never one fixed sentence (1.6 附录 B). No `restart` of its own: the harness's (`proxy.restart`), through the facts' behaviour.
         restart: f.restart || null, paths: presentPaths(f, ctx),
         hook: HOOKS.has(carrier) && !certificate.in_effect && ['entry-changed', 'entry-missing'].includes(certificate.code) ? certificate.code : null,
         setting: main ? settingOf(priorRaw, priorItem || main) : null,

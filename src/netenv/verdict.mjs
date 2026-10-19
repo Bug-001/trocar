@@ -15,7 +15,7 @@ const verdict = (captured, reason = null) => ({ captured, reason })
  *   procs        [{ pid, startedAt (ms or ISO), trusted: true | false | null, reason, negative }] — the harness's processes that send requests. `trusted` is the daemon's verdict when it answered;
  *                null = not judged: then the entry, then the certificate, then the start time against the entry's `installedAt` decides (a process older than its entry never read it: config-after-start, 4.6 §确认信任)
  *   cert         true | null | a code — the certificate the harness's agents check asight's leaves with is in effect (true; also where nothing says otherwise, Linux), not known (null), or not
- *                in effect and why (the 1.6 §9.6 `cert-*` code of the form's `certificate`, certOfForms below). Like the entry, it decides only a process the daemon has not judged, and the harness's own row
+ *                in effect and why (the 1.6 附录 B `cert-*` code of the form's `certificate`, certOfForms below). Like the entry, it decides only a process the daemon has not judged, and the harness's own row
  * → { captured: true | false | null, rows: [{ pid?, captured, reason }] }; `reason` is one of STATUS_REASONS, null when captured or not known. With no process the one row has no pid and is
  * the harness's own: 「link 已挂、入口完好且证书生效」(§1.5, V32). The order of the reasons: desired off · the daemon · the helper · the link · (a process: its own verdict, else the entry, then the certificate, then its start time).
  * The harness is captured when every row is, not captured when any row is not, else not known.
