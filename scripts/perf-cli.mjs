@@ -244,6 +244,7 @@ const du = (dir, match = () => true) => { let n = 0
 /** (b) One tiny record per keeper pass, `n` times → index bytes per record. Its own throwaway HOME. */
 async function sparseAmp(n) {
   const { segmentIndex, indexDir } = await import('../src/query/index-build.mjs')
+  const { fillUsage } = await import('../src/query/usage.mjs')
   const { envLine } = await import('../test/query/raw-home.mjs') // one record shape, one place (0.1 §2)
   const dir = fs.mkdtempSync(path.join(require_tmp(), 'perf-amp-'))
   const h = path.join(dir, '.asight'), seg = '20261020T100000Z'
@@ -252,32 +253,38 @@ async function sparseAmp(n) {
   for (let i = 0; i < n; i++) {
     fs.appendFileSync(file, envLine({ id: `req_${String(i).padStart(5, '0')}` }) + '\n')
     await segmentIndex({ home: h, segment: seg, owner: true }) // exactly what one keeper pass does
+    await fillUsage({ home: h, segments: [seg] }) // and the worker's sidecar fill after the next overview
   }
   const captured = fs.statSync(file).size
-  const index = du(indexDir(h))
+  const index = du(indexDir(h)), usage = du(indexDir(h), (f) => f.endsWith('.usage.json'))
   fs.rmSync(dir, { recursive: true, force: true })
-  return { records: n, record_bytes: Math.round(captured / n), captured_bytes: captured, index_bytes: index,
+  return { records: n, record_bytes: Math.round(captured / n), captured_bytes: captured, index_bytes: index, usage_bytes: usage,
     index_bytes_per_record: Math.round(index / n), bytes_written_per_captured_byte: +((captured + index) / captured).toFixed(2) }
 }
 
 /** (a) the reference mix already in <home>/.asight/raw, indexed the way the daemon's keeper does. */
 async function writeAmp({ home, records }) {
   const { allSegments, segmentIndex, indexDir } = await import('../src/query/index-build.mjs')
+  const { fillUsage } = await import('../src/query/usage.mjs')
   const h = path.join(home, '.asight')
   fs.rmSync(path.join(h, 'index'), { recursive: true, force: true })
   const segs = await allSegments({ home: h })
   const t0 = process.hrtime.bigint()
   for (const s of segs) await segmentIndex({ home: h, segment: s.segment, owner: true })
   const build_ms = Math.round(Number(process.hrtime.bigint() - t0) / 1e6)
+  const t1 = process.hrtime.bigint()
+  await fillUsage({ home: h, segments: segs.map((s) => s.segment) }) // the usage sidecars live in index/ too
+  const usage_fill_ms = Math.round(Number(process.hrtime.bigint() - t1) / 1e6)
   let wire = 0, stored = 0, n = 0
   for (const s of segs) {
     const r = await segmentIndex({ home: h, segment: s.segment })
-    for (const rec of r.records) { wire += rec.wire_bytes || 0; stored += rec.stored_bytes || 0; n++ }
+    for (const rec of r.records) { wire += (rec.sent_bytes || 0) + (rec.received_bytes || 0); stored += rec.stored_bytes || 0; n++ }
   }
   const plaintext = du(path.join(h, 'raw'), (f) => f.endsWith('.ndjson'))
-  const index = du(indexDir(h))
-  return { mix: { segments: segs.length, records: n, plaintext_bytes: plaintext, index_bytes: index,
-      captured_wire_bytes: wire, stored_record_bytes: stored, build_ms,
+  const index = du(indexDir(h)), usage = du(indexDir(h), (f) => f.endsWith('.usage.json'))
+  return { mix: { segments: segs.length, records: n, plaintext_bytes: plaintext, index_bytes: index, usage_bytes: usage,
+      usage_bytes_per_plaintext_byte: plaintext ? +(usage / plaintext).toFixed(5) : null,
+      captured_wire_bytes: wire, stored_record_bytes: stored, build_ms, usage_fill_ms,
       bytes_written_per_captured_byte: wire ? +((plaintext + index) / wire).toFixed(3) : null,
       index_bytes_per_captured_byte: wire ? +(index / wire).toFixed(4) : null },
     sparse: await sparseAmp(records) }
@@ -285,10 +292,10 @@ async function writeAmp({ home, records }) {
 
 function printAmp(o) {
   const m = o.mix, s = o.sparse
-  console.log(`reference mix (gen-dataset): ${m.segments} segments  ${m.records} records  plaintext ${(m.plaintext_bytes / 1e6).toFixed(1)} MB  index ${(m.index_bytes / 1e6).toFixed(2)} MB  (built in ${m.build_ms} ms)`)
-  console.log(`  captured (wire) ${(m.captured_wire_bytes / 1e6).toFixed(1)} MB → WRITTEN PER CAPTURED BYTE ${m.bytes_written_per_captured_byte}   (§3.1: ≤ 1.1; the index alone is ${m.index_bytes_per_captured_byte})`)
-  console.log(`worst arrival shape: ${s.records} × one ${s.record_bytes} B record per keeper pass  index ${(s.index_bytes / 1024).toFixed(1)} KiB`)
-  console.log(`  INDEX PER RECORD ${s.index_bytes_per_record} B   (§3.1: ≤ 1 KB; the ratio here would be ${s.bytes_written_per_captured_byte}, which is meaningless at this size)`)
+  console.log(`reference mix (gen-dataset): ${m.segments} segments  ${m.records} records  plaintext ${(m.plaintext_bytes / 1e6).toFixed(1)} MB  index + usage sidecar ${(m.index_bytes / 1e6).toFixed(2)} MB  (index built in ${m.build_ms} ms, usage filled in ${m.usage_fill_ms} ms; sidecar ${(m.usage_bytes / 1e3).toFixed(1)} kB = ${m.usage_bytes_per_plaintext_byte} B per raw byte)`)
+  console.log(`  captured (wire) ${(m.captured_wire_bytes / 1e6).toFixed(1)} MB → WRITTEN PER CAPTURED BYTE ${m.bytes_written_per_captured_byte}   (§3.1: ≤ 1.1; index + usage sidecar alone is ${m.index_bytes_per_captured_byte})`)
+  console.log(`worst arrival shape: ${s.records} × one ${s.record_bytes} B record per keeper pass  index + usage sidecar ${(s.index_bytes / 1024).toFixed(1)} KiB (sidecar ${(s.usage_bytes / 1024).toFixed(1)} KiB)`)
+  console.log(`  INDEX + USAGE SIDECAR PER RECORD ${s.index_bytes_per_record} B   (§3.1: ≤ 1 KB; the ratio here would be ${s.bytes_written_per_captured_byte}, which is meaningless at this size)`)
 }
 
 function print(out) {
