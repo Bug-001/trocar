@@ -82,6 +82,12 @@ test('glossary parses: every row has a concept and an English word', () => {
   for (const r of g) assert.ok(r.concept && r.en, `incomplete row ${JSON.stringify(r)}`)
 })
 
+test('glossary agrees with itself: no concept\'s word uses a spelling another row rejects', () => {
+  const g = glossary()
+  const clash = g.flatMap((a) => g.flatMap((b) => b.notUsed.filter((w) => wordRe(w).test(a.en)).map((w) => `${a.concept} "${a.en}" uses "${w}", rejected for ${b.concept}`)))
+  assert.deepEqual(clash, [])
+})
+
 test('one-spelling scanner: a planted "not used" spelling is caught case-insensitively, a part of a word is not', () => {
   const src = "// Dashboard in a comment\nconst a = 'Open the Dashboard'\nconst b = 'dashboards-x'\n"
   assert.deepEqual(lineHits('x', stringText(src), wordRe('dashboard')).map((h) => [h.line, h.text]), [[2, 'Dashboard']])
