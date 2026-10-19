@@ -54,7 +54,6 @@ export const FAILURES = '采集失败'
 export const RAW_FAILURES = '封存或读取出错'
 export const FAIL_TIMES = (n) => `${n} 次`
 export const SVC_SUBJECT = '采集服务'
-export const LEGACY_SUBJECT = '旧采集'
 
 // O4 / O5 — the last install's notes, what an uninstall could not undo
 export const INSTALL_NOTES = (n) => `上次安装有 ${n} 条说明要看`
@@ -65,10 +64,8 @@ export const MANIFEST_ERROR = '安装清单读不出'
 export const RESIDUE_UNFINISHED = (n) => `安装没做完,留下 ${n} 项`
 export const RESIDUE_LEFT = (n) => `卸载后还留着 ${n} 项`
 
-// O6 / O7 — files that could not be read whole; the retention settings file
+// O6 — files that could not be read whole
 export const FILES_NOT_READ = (n) => `有 ${n} 个采集文件没读全`
-export const RETENTION_UNREADABLE = '保存设置读不出:修好之前,每次调用都按「全部」保存'
-export const RETENTION_CELLS = (n) => `保存设置里有 ${n} 格写错了:这几格按「全部」保存`
 
 // O8 / O9 — models without a price; a host seen for the first time
 export const UNPRICED = (n) => `${n} 个模型没有单价`
@@ -96,8 +93,6 @@ export const WASTED_WHY = Object.freeze({
 })
 export const MOST_EXPENSIVE = '最贵的会话 ›'
 export const EST_TIP = '本地估价(用量 × 单价),不是账单'
-export const NO_STORE = '需要先运行一次 asight etl'
-export const NEED_REBUILD = '需要重建'
 export const EMPTY_WINDOW = '这段时间里没有会话'
 export const PRICE_FAIL = (why) => `价表读不出:${why}`
 export const TBL = Object.freeze({ agent: 'agent', sessions: '会话', calls: '模型调用', cost: '≈ 花费', hit: '主对话缓存命中', breaks: '缓存断开', last: '最近活动' })
@@ -121,6 +116,4 @@ export const START_ROWS = Object.freeze([
   ['存在哪', '这些记录只存在这台电脑上。'],
   ['之后会怎样', '装好以后,agent 下一次调用模型,这里会自己出现第一条记录。asight 不会替你发任何请求。'],
 ])
-// the install command of this era, one constant shared with the 采集 page's 未安装 row (1.9 owns the era rule)
-export const INSTALL_CMD = 'asight collector install'
 export { MARK_TIP }

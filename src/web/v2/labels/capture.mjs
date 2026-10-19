@@ -3,9 +3,8 @@
 // failure events, the install-manifest roles, the residue results. A harness-defined code (HARNESS_CODES) is never a
 // key here — its words arrive with the data (`text`, S15; before that the server's `reason` as-is) and the code rides
 // in 技术细节. A value a table does not know is rendered as 「原因未知」 with the raw value in 技术细节 — never dropped,
-// never guessed. The second contract era ([待 #45] fields: switch.harnesses / netenv / opt_in) has its own tables below;
-// they are only read when the answer carries the field, and the era-2 command templates carry a <id> placeholder that
-// the page fills with the spelling the answer itself used.
+// never guessed. The tables of switch.harnesses / netenv / opt_in are only read when the answer carries the field; the
+// command templates carry a <id> placeholder that the page fills with the spelling the answer itself used.
 // 一个值表里没有 → 「原因未知」,原值留在技术细节(1.5 §数据规则 / 1.9 §条件的话)
 export const UNKNOWN_REASON = '原因未知'
 
@@ -16,7 +15,6 @@ export const CONDITION_KIND = Object.freeze({
   'ca-invalid': 'asight 的证书不能用',
   degraded: '采集服务没有完整的系统权限,部分程序可能采不到',
   'helper-version': '采集服务的系统组件版本不对,部分程序可能采不到',
-  retention: '保存设置读不出,所有调用先按「全部」保存',
 })
 // 期望态 on/off 的话(state-mismatch 的两个值、开关的期望态文字共用一份)
 export const SWITCH_WORD = Object.freeze({ on: '开着', off: '关着' })
@@ -141,11 +139,7 @@ export const CODE = Object.freeze({
   broken: 'WebSocket 连接断了',
   'recorder-error': 'WebSocket 记录器出错',
   'pattern-invalid': '一个正则表达式编译不过',
-  // retention
-  'retention-unparsable': '保存设置解析不了',
-  'retention-unreadable': '保存设置读不出来',
   'classify-failed': '给调用分类时出错',
-  'retention-log-failed': '改动的记录行写不下来',
   // switch
   'state-mismatch': '期望的状态和内核里的不一致',
   'state-unparsable': '期望态文件解析不了',
@@ -167,13 +161,6 @@ export const CODE = Object.freeze({
   'residue-not-removed': 'agent 因为 asight 的插件写下的文件留着,只报告,不删',
   'unit-not-enabled': '自启服务写好了,但系统拒绝启用它',
   'unit-not-disabled': '卸载时系统拒绝停用自启服务',
-  // 旧采集(CODES_BY_PART.legacy)
-  'tls-client-error': '旧采集的 TLS 出错',
-  'upstream-aborted': '上游断开了连接',
-  'autostart-load-failed': '旧采集的开机自启加载失败',
-  'steer-unreadable': '代理规则文件读不出来',
-  'steer-missing': '代理规则文件不在了',
-  'shard-failed': '压缩保存旧采集文件时失败',
 })
 
 // ── 原始层(封存 / 校验 / 导出)的 op(raw: 组键)────────────────────────────────────────────────────────────
@@ -191,38 +178,26 @@ export const FILE_ROLE = Object.freeze({
 export const RESIDUE_LEAD = Object.freeze({ unfinished: '安装没做完,留下:', left: '卸载后还留着:' })
 export const residueLead = (result) => (result === 'install did not finish' ? RESIDUE_LEAD.unfinished : RESIDUE_LEAD.left)
 
-// ── 旧采集(legacy.sources[].source)────────────────────────────────────────────────────────────────────────
-export const LEGACY_SOURCE = Object.freeze({ mitm: '旧采集 · MITM', proxy: '旧采集 · 反代' })
-export const LEGACY_STATE = Object.freeze({ running: '在跑', gone: '没干净地停', stopped: '已停' })
-
 // ── 第二契约代([待 #45]:字段在才画;这些表只在载荷带着那些字段时被读)────────────────────────────────────────
-export const ROUTING = Object.freeze({ driver: '驱动模式', proxy: '代理模式', legacy: '旧采集', none: '全部关着', unknown: '不知道' })
+export const ROUTING = Object.freeze({ driver: '驱动模式', proxy: '代理模式', none: '全部关着', unknown: '不知道' })
 export const SCOPE = Object.freeze({ agent: '自动', user: '你点名的 · 用户级', machine: '你点名的 · 机器级' })
 export const OPT_IN_STATE = Object.freeze({
   needed: '还没点名', done: '已点名', broken: '已点名,但入口失效', 'pending-admin': '等管理员',
   'needs-admin': '关掉之后还没撤,要管理员',
 })
 export const ENTRY_STATE = Object.freeze({ intact: '完好', 'entry-missing': '不在了', 'entry-changed': '你之后改过' })
-export const CHANGE_REMOVAL = Object.freeze({ era1: '卸载 asight 时按清单逐项移除', era2: '关掉它的采集时一并移除' })
+export const CHANGE_REMOVAL = '关掉它的采集时一并移除'
 
-// ── 命令(只出现在技术细节;第一代 = src/collector/cli.mjs USAGE,第二代 = [待 #45] 1.6 的命令表)──────────────
-// 第一代 MUST NOT 出现按 harness 的命令(1.9 §命令按哪一代 MUST):本分支的裸 on/off 子命令是旧的上手命令(装
-// 证书、改 CC-CLI 的代理),给它带一个 harness 参数会做别的事——所以那张表里只有 collector 子命令。
+// ── 命令(只出现在技术细节;每条都是 1.6 命令表 src/cli/commands.mjs 里的用法,cli-commands.test.mjs 守)──────────
+// <id> 由页面按 collector.switch.harnesses 里的拼法填(前端不另存 CLI 名表);opt_in 的命令随数据原样给
 export const COMMANDS = Object.freeze({
-  era1: Object.freeze({
-    on: 'asight collector on', off: 'asight collector off', status: 'asight collector status',
-    install: 'asight collector install', helper: 'sudo asight setup-helper', linger: 'loginctl enable-linger',
-  }),
-  // 第二代:<id> 由页面按 collector.switch.harnesses 里的拼法填(前端不另存 CLI 名表);opt_in 的命令随数据原样给
-  era2: Object.freeze({
-    on: 'asight on <id>', off: 'asight off <id>', status: 'asight status <id>', doctor: 'asight doctor <id>',
-    install: 'asight on', helper: 'sudo asight setup-helper', linger: 'loginctl enable-linger',
-  }),
+  on: 'asight on <id>', off: 'asight off <id>', status: 'asight status <id>', doctor: 'asight doctor <id>',
+  install: 'asight install', helper: 'sudo asight setup-helper', linger: 'loginctl enable-linger',
 })
 
 // ── 采集记录的固定话 ─────────────────────────────────────────────────────────────────────────────────────
 export const LOG = Object.freeze({
-  who: Object.freeze({ collector: '采集服务', legacy: '旧采集', raw: '压缩保存与读取' }),
+  who: Object.freeze({ collector: '采集服务', raw: '压缩保存与读取' }),
   window: (h) => `最近 ${h} 小时`,
   filterRule: '按每组最近一次的 agent,和这个 agent 最近一次失败所在的组',
   truncated: '只读了最近的一部分记录,可能不全',

@@ -1,6 +1,6 @@
 // capture/capture.mjs — 采集 · agent (1.9): the page a person opens to learn whether every agent of theirs is being
 // recorded — and when one is not, why and what to do about it. The 采集服务 row plus one row per detected agent, the
-// 旧采集 block, the 本机网络环境 card and the 改动 block. Everything is read from /api/capture-health through the
+// 本机网络环境 card and the 改动 block. Everything is read from /api/capture-health through the
 // shared store; the page polls every 1.5 s while visible (1.5 §采集状态 轮询) and re-paints WITHOUT disturbing the
 // reader: an expanded row stays expanded, a row the reader folded stays folded, the scroll does not move.
 // Read-only by design (N-01): no switch, no restart / install / undo control anywhere — the desired state is text and

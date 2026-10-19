@@ -1,5 +1,5 @@
 // capture/capture-view.mjs — the pure renderers of the 采集 page (1.9): the 采集服务 row, one row per detected agent,
-// the expand sections, the 旧采集 block, the 本机网络环境 card, the 改动 block and the per-era commands. Everything is
+// the expand sections, the 本机网络环境 card, the 改动 block and the commands. Everything is
 // a string builder over ONE /api/capture-health answer (or the honest absent state while a field is absent — field
 // presence decides, never a version). No DOM, no timers: capture.mjs owns the mounting, the poll and the expand memory.
 //
@@ -11,14 +11,12 @@ import { harnessIcon, harnessName, harnessKey } from '../core/chips.mjs'
 import { mark, disclosureHtml } from '../core/ui.mjs'
 import { copyBtn } from '../core/dom.mjs'
 import { redactUrlCredentials } from '../core/sensitive.mjs'
-import { agentVerdicts, commandEra as eraOf, AGENT_TIER } from '../core/capture-verdict.mjs'
+import { agentVerdicts, AGENT_TIER } from '../core/capture-verdict.mjs'
 import {
   CONDITION_KIND, SWITCH_WORD, TRUST_REASON, RESTART_CODES, NOT_CAPTURED_EXPECTED, CODE, FILE_ROLE,
-  residueLead, LEGACY_SOURCE, LEGACY_STATE, ROUTING, SCOPE, OPT_IN_STATE, ENTRY_STATE, CHANGE_REMOVAL, COMMANDS,
+  residueLead, ROUTING, SCOPE, OPT_IN_STATE, ENTRY_STATE, CHANGE_REMOVAL, COMMANDS,
   UNKNOWN_REASON,
 } from '../labels/capture.mjs'
-
-export { commandEra } from '../core/capture-verdict.mjs'
 
 const mono = (s) => `<span class="mono">${esc(s)}</span>` // a machine fact: id, path, code, command
 const when = (t) => esc(fmtWhen(t))
@@ -37,18 +35,13 @@ const leadHtml = (text, cls) => {
   return `<span class="sw">${esc(head)}</span>${esc(String(text).slice(head.length))}`
 }
 
-// ── the commands of one era (1.9 §命令按哪一代) — only ever inside 技术细节 ───────────────────────────────────────
-// era 1: the whole collector's switch lives on the 采集服务 row; agent rows carry no per-harness command (the bare
-// on/off subcommands of this branch are the old onboarding commands). era 2: per harness, spelt the way the answer
-// itself spells it; a row the answer does not name in switch.harnesses gets no per-harness command.
+// ── the commands (1.6's table) — only ever inside 技术细节 ─────────────────────────────────────────────────────────
+// per harness, spelt the way the answer itself spells it; a row the answer does not name in switch.harnesses gets no
+// per-harness command.
 export function commandsFor(h, { row = null, service = false } = {}) {
-  const era = eraOf(h), c = (h && h.collector) || {}, out = []
-  const cmds = era === 2 ? COMMANDS.era2 : COMMANDS.era1
+  const c = (h && h.collector) || {}, out = [], cmds = COMMANDS
   const fill = (s) => row && row.cliId ? s.replace('<id>', row.cliId) : s
-  if (service || era === 1) {
-    out.push(['开采集', fill(cmds.on)], ['关采集', fill(cmds.off)], ['看详细状态', fill(cmds.status)])
-    if (era === 2) out.push(['诊断', fill(cmds.doctor)])
-  } else if (row && row.cliId) {
+  if (service || (row && row.cliId)) {
     out.push(['开采集', fill(cmds.on)], ['关采集', fill(cmds.off)], ['看详细状态', fill(cmds.status)], ['诊断', fill(cmds.doctor)])
   }
   if (c.installed === false) out.push(['安装', cmds.install])
@@ -86,12 +79,7 @@ export function openStates(ordered, openByReader) {
 // ── the 采集服务 row (1.9 §采集服务行) — the first row of the table, never empty (D38②) ───────────────────────────
 // `v` is captureVerdict(capH) of the same answer; the status sentence IS its text (one wording for the whole board).
 export function serviceRowHtml(h, v, { open = false } = {}) {
-  const c = (h && h.collector) || {}, era = eraOf(h), d = c.daemon || {}
-  const sw = c.switch || {}
-  // the desired state: era 1 draws it here (the whole collector's switch); era 2 leaves the cell to the per-agent rows
-  const desired = era === 1
-    ? (sw.desired === 'on' || sw.desired === 'off' ? SWITCH_WORD[sw.desired] : `不知道:${sw.error || '读不出期望态'}`)
-    : ''
+  const c = (h && h.collector) || {}, d = c.daemon || {}
   // the agent-less conditions, one sentence each with 自 T 起 (1.9 §条件的话); an untrusted / negative-cache condition
   // with no agent names a process asight cannot pin to an agent
   const condLine = (k) => {
@@ -102,39 +90,36 @@ export function serviceRowHtml(h, v, { open = false } = {}) {
       return `<p>${esc(what)} · 自 ${t} 起</p>`
     }
     if (k.kind === 'state-mismatch') return `<p>期望 ${esc(SWITCH_WORD[k.desired] || k.desired || '?')},实际 ${esc(SWITCH_WORD[k.actual] || k.actual || '?')} · 自 ${t} 起</p>`
-    if (k.kind === 'retention') return `<p>${CONDITION_KIND.retention} · <a href="#/settings/storage">去设置 ›</a> · 自 ${t} 起</p>`
     const word = has(CONDITION_KIND, k.kind) ? CONDITION_KIND[k.kind] : UNKNOWN_REASON
     return `<p>${esc(word)}${has(CONDITION_KIND, k.kind) ? '' : `(${esc(k.kind)})`} · 自 ${t} 起</p>`
   }
   const daemonDown = d.state === 'not-running' || d.state === 'not-responding'
   const conds = daemonDown ? '' : (Array.isArray(c.conditions) ? c.conditions : []).filter((k) => !k || k.agent == null).map(condLine).join('')
-  // the daemon's own state while the summary is failing: 在跑 / 状态不知道; when only the old capture or the raw layer
-  // fails and the collector is not installed, the old capture's state says it instead
+  // the daemon's own state while the summary is failing: 在跑 / 状态不知道
   let failingLine = ''
   if (v.state === 'failing') {
     if (d.state === 'running') failingLine = '<p>采集服务在跑</p>'
     else if (d.state === 'unknown') failingLine = '<p>采集服务状态不知道</p>'
-    else if (c.installed !== true && h && h.legacy && h.legacy.present) failingLine = `<p>${esc(h.legacy.summary ? h.legacy.summary.state : '')}</p>`
   }
-  // the failure groups of the last 24 h across all three parts → the log; zero groups draws nothing
+  // the failure groups of the last 24 h across both parts → the log; zero groups draws nothing
   const nGroups = (x) => (Array.isArray(x) ? x.length : 0)
-  const groups = nGroups(c.failures) + nGroups(h && h.legacy && h.legacy.failures) + nGroups(h && h.raw && h.raw.failures)
+  const groups = nGroups(c.failures) + nGroups(h && h.raw && h.raw.failures)
   const failLink = groups ? `<a href="#/capture/log">最近 24 小时 ${groups} 组失败 · 采集记录 ›</a>` : ''
   const lingerStop = d.last_start && d.last_start.linger === false ? '<p>登出后会停采</p>' : ''
   const stt = v.text
-  const tech = serviceTechHtml(h, v, era)
+  const tech = serviceTechHtml(h, v)
   return `<div class="crow" data-h="*service">` +
     `<div class="crow-t"><span class="gut">${gutOf(v.cls, v.state === 'ok')}</span>` +
     `<button type="button" class="nm cap-nm" data-caprow="cap-svc" aria-expanded="${open}" aria-controls="cap-svc-x"><span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span>采集服务</button>` +
-    `<span class="des">${esc(desired)}</span>` +
+    '<span class="des"></span>' +
     `<span class="stt stt-${esc(v.cls)}"><p class="lead">${leadHtml(stt, v.cls)}</p>${conds}${failingLine}</span>` +
     `<span class="last">${failLink}${lingerStop}</span></div>` +
     `<div class="cexp" id="cap-svc-x"${open ? '' : ' hidden'}>${tech}</div></div>`
 }
 
-// the 采集服务 row's 技术细节: pid, the lock, the starts and stops, what was read and what could not be, this era's
+// the 采集服务 row's 技术细节: pid, the lock, the starts and stops, what was read and what could not be, the
 // commands, and the copy of the fields this row used (metadata only — the endpoint never returns record bytes)
-function serviceTechHtml(h, v, era) {
+function serviceTechHtml(h, v) {
   const c = (h && h.collector) || {}, d = c.daemon || {}, r = (h && h.read) || {}
   const rows = []
   if (d.pid != null) rows.push(['pid', mono(d.pid)])
@@ -167,9 +152,8 @@ export const agentIdsOf = (h) => agentVerdicts(h).map((r) => r.harness)
 export const rowOrder = (verdicts) => [...verdicts].sort((a, b) => a.tier - b.tier)
 
 export function agentRowHtml(row, h, { open = false } = {}) {
-  const era = eraOf(h), c = (h && h.collector) || {}
   const name = harnessName(row.harness)
-  const desired = era === 2 && (row.desired === 'on' || row.desired === 'off') ? SWITCH_WORD[row.desired] : ''
+  const desired = (row.desired === 'on' || row.desired === 'off') ? SWITCH_WORD[row.desired] : ''
   const last = row.lastCaptured
     ? `<a href="#/sessions?h=${esc(row.harness)}" title="${esc(fmtStamp(row.lastCaptured))}">${esc(relCap(row.lastCaptured))} 采到 ›</a>`
     : '<span class="c3">24 小时内没采到</span>'
@@ -198,12 +182,11 @@ function relCap(ts) {
 // the expand of an agent row, at most three sections (1.9 §展开). `problem` rows get 为什么 · 怎么办; the changes section
 // only while the answer carries S9 (or a prior-value note); 技术细节 is always there.
 export function expandHtml(row, h, { problem = false } = {}) {
-  const c = (h && h.collector) || {}, era = eraOf(h)
   const out = []
   if (problem) out.push(whyHtml(row, h))
   const ch = changesFor(row, h)
   if (ch) out.push(ch)
-  out.push(agentTechHtml(row, h, era))
+  out.push(agentTechHtml(row, h))
   return `<dl class="exp">${out.join('')}</dl>`
 }
 
@@ -225,7 +208,7 @@ function whyHtml(row, h) {
     const own = lead && (lead.text || lead.reason)
     ps.push(`<p>${esc(own || (row.tier === AGENT_TIER.forwarderDown ? 'asight 的转发程序没在运行,它连不上网。' : UNKNOWN_REASON))}。</p>`)
   }
-  // a cached verdict may carry more findings, each with its own sentence (era 2)
+  // a cached verdict may carry more findings, each with its own sentence
   for (const f of row.findings || []) {
     const t = f && (f.text || (f.code != null && has(TRUST_REASON, f.code) ? TRUST_REASON[f.code].why : null))
     if (t) ps.push(`<p>${esc(t)}</p>`)
@@ -234,10 +217,10 @@ function whyHtml(row, h) {
   return `<dt>为什么,怎么办</dt><dd>${ps.join('')}</dd>`
 }
 
-// asight 为它改了 — the S9 changes of this harness plus the era's removal sentence; information only, no undo control
+// asight 为它改了 — the S9 changes of this harness plus the removal sentence; information only, no undo control
 // Missing S9 and no prior-value note → the whole section is not drawn, 「没有改动」 is never said.
 function changesFor(row, h) {
-  const c = (h && h.collector) || {}, era = eraOf(h)
+  const c = (h && h.collector) || {}
   const ch = c.changes
   const entries = ch && Array.isArray(ch.entries) ? ch.entries.filter((e) => e && harnessKey(e.harness) === row.harness) : []
   const files = ch && Array.isArray(ch.files) ? ch.files.filter((f) => f && harnessKey(f.harness) === row.harness) : []
@@ -248,20 +231,17 @@ function changesFor(row, h) {
   for (const e of entries) {
     const what = Array.isArray(e.keys) ? e.keys.join('.') : e.what
     let extra = ''
-    if (era === 2) {
-      const bits = []
-      if (e.scope && has(SCOPE, e.scope)) bits.push(SCOPE[e.scope])
-      if (e.backup) bits.push(`备份在 ${e.backup}`)
-      if (e.state && has(ENTRY_STATE, e.state)) bits.push(ENTRY_STATE[e.state])
-      if (bits.length) extra = ` <span class="fine">${esc(bits.join(' · '))}</span>`
-    }
+    const bits = []
+    if (e.scope && has(SCOPE, e.scope)) bits.push(SCOPE[e.scope])
+    if (e.backup) bits.push(`备份在 ${e.backup}`)
+    if (e.state && has(ENTRY_STATE, e.state)) bits.push(ENTRY_STATE[e.state])
+    if (bits.length) extra = ` <span class="fine">${esc(bits.join(' · '))}</span>`
     lines.push(`<p>${mono(e.path || '')} ${mono(what || '')}${extra}</p>`)
   }
   for (const f of files) lines.push(`<p>${esc(has(FILE_ROLE, f.role) ? FILE_ROLE[f.role] : String(f.role))} ${mono(f.path || '')}</p>`)
   for (const p of prior) lines.push(`<p>替换了你原来的值 ${mono(p.path || '')}${p.reason ? ` <span class="fine">${esc(p.reason)}</span>` : ''}</p>`)
-  // the era's removal sentence: era 1's collector does not undo trust entries when capture turns off (4.6 §身份与信任)
-  lines.push(`<p class="fine">${esc(era === 2 ? CHANGE_REMOVAL.era2 : CHANGE_REMOVAL.era1)}</p>`)
-  // the 点名 items (era 2, only when the answer carries the field): read-only, the commands stay in 技术细节
+  lines.push(`<p class="fine">${esc(CHANGE_REMOVAL)}</p>`)
+  // the 点名 items (only when the answer carries the field): read-only, the commands stay in 技术细节
   const opts = (h && h.opt_in && typeof h.opt_in === 'object') ? h.opt_in : null
   if (opts) {
     for (const [id, list] of Object.entries(opts)) {
@@ -275,9 +255,9 @@ function changesFor(row, h) {
   return `<dt>asight 为它改了</dt><dd>${lines.join('')}</dd>`
 }
 
-// an agent row's 技术细节: the condition codes / pids / hosts, the daemon-stopped conditions with their 截至, the era-2
-// routing and branches (redacted), this era's commands, the copy of the fields the row used
-function agentTechHtml(row, h, era) {
+// an agent row's 技术细节: the condition codes / pids / hosts, the daemon-stopped conditions with their 截至, the
+// routing and branches (redacted), the commands, the copy of the fields the row used
+function agentTechHtml(row, h) {
   const c = (h && h.collector) || {}
   const rows = []
   for (const k of row.conditions || []) {
@@ -305,33 +285,6 @@ function agentTechHtml(row, h, era) {
   rows.push(...commandsHtml(commandsFor(h, { row })))
   const used = { harness: row.harness, verdict: { text: row.text, tier: row.tier, code: row.code, at: row.at }, conditions: row.conditions, topology: row.topology, last_captured: row.lastCaptured, last_failure: row.lastFailure }
   return detailsHtml(`cap-${row.harness}-tech`, rows) + `<div class="capcopy">${diagCopy(used)}</div>`
-}
-
-// ── the 旧采集 block (1.9 §旧采集) — its records carry no harness, so it is no agent's row ───────────────────────
-export function legacyHtml(h) {
-  const l = h && h.legacy
-  if (!l || !l.present) return ''
-  const rows = []
-  for (const s of Array.isArray(l.sources) ? l.sources : []) {
-    const name = has(LEGACY_SOURCE, s.source) ? LEGACY_SOURCE[s.source] : `旧采集 · ${s.source}`
-    const st = has(LEGACY_STATE, s.state) ? LEGACY_STATE[s.state] : String(s.state)
-    const start = s.last_start && s.last_start.ts ? `最后启动 ${when(s.last_start.ts)}` : ''
-    const stop = s.last_stop && s.last_stop.ts ? ` · 最后停止 ${when(s.last_stop.ts)}${s.last_stop.signal ? `(${esc(s.last_stop.signal)})` : ''}` : ''
-    rows.push(`<p><b>${esc(name)}</b> · ${esc(st)}${start ? ` · ${start}` : ''}${stop}</p>`)
-  }
-  if (!rows.length) {
-    if (l.state === 'no-events') rows.push(`<p>旧采集 · 没有事件记录(重启后才有)${l.capture ? ` · 采集文件最后写入于 ${when(l.capture.mtime)}` : ''}</p>`)
-    else if (l.state === 'unknown') rows.push(`<p>旧采集 · 不知道:${esc(l.error || (l.summary && l.summary.reason) || '')}</p>`)
-  }
-  if (l.last_record_at) rows.push(`<p class="fine">最后记录 ${when(l.last_record_at)}</p>`)
-  const tech = []
-  for (const s of Array.isArray(l.sources) ? l.sources : []) {
-    if (s && s.last_start && s.last_start.pid != null) tech.push([`pid(${s.source || '旧采集'})`, M(s.last_start.pid)])
-    if (s && s.last_stop && s.last_stop.reason) tech.push(['停止原因', s.last_stop.reason])
-  }
-  if (l.capture && l.capture.file) tech.push(['采集文件', M(l.capture.file)])
-  return `<section class="cblock" aria-label="旧采集"><h2 class="sec-h">旧采集</h2>${rows.join('')}` +
-    (tech.length ? detailsHtml('cap-legacy-tech', tech) : '') + `</section>`
 }
 
 // ── the 本机网络环境 card (1.9 §本机网络环境) — only when the answer carries the field; asight only reads it ─────
@@ -373,9 +326,9 @@ export function netenvHtml(h) {
 }
 
 // ── asight 在这台电脑上做的改动 (1.9 §改动块) — the changes that are no harness's; information only, no undo ────
-// Auto-expands when there is residue, when the manifest cannot be read, or (era 2) when an entry is not intact.
+// Auto-expands when there is residue, when the manifest cannot be read, or when an entry is not intact.
 export function changesHtml(h) {
-  const c = (h && h.collector) || {}, era = eraOf(h)
+  const c = (h && h.collector) || {}
   const ch = c.changes
   const files = ch && Array.isArray(ch.files) ? ch.files.filter((f) => f && f.harness == null) : []
   const entries = ch && Array.isArray(ch.entries) ? ch.entries.filter((e) => e && e.harness == null) : []
@@ -383,8 +336,8 @@ export function changesHtml(h) {
   const manifestError = c.manifest_error || null
   if (!files.length && !entries.length && !residue.length && !manifestError) return ''
   const n = files.length + entries.length + residue.length
-  const intact = era === 2 && ch && [...(ch.files || []), ...(ch.entries || [])].every((x) => !x || x.state == null || x.state === 'intact')
-  const stateBit = (x) => (era === 2 && x && x.state && has(ENTRY_STATE, x.state) ? ` <span class="fine">${ENTRY_STATE[x.state]}</span>` : '')
+  const intact = !!ch && [...(ch.files || []), ...(ch.entries || [])].every((x) => !x || x.state == null || x.state === 'intact')
+  const stateBit = (x) => (x && x.state && has(ENTRY_STATE, x.state) ? ` <span class="fine">${ENTRY_STATE[x.state]}</span>` : '')
   const lines = []
   for (const f of files) lines.push(`<p>${esc(has(FILE_ROLE, f.role) ? FILE_ROLE[f.role] : String(f.role))} ${mono(f.path || '')}${stateBit(f)}</p>`)
   for (const e of entries) lines.push(`<p>${mono(e.path || '')} ${mono(Array.isArray(e.keys) ? e.keys.join('.') : e.what || '')}${stateBit(e)}</p>`)
@@ -394,8 +347,8 @@ export function changesHtml(h) {
     lines.push(`<p>${esc(lead)}</p>`, ...items)
   }
   if (manifestError) lines.push('<p>安装清单读不出</p>')
-  lines.push(`<p class="fine">${esc(era === 2 ? CHANGE_REMOVAL.era2 : CHANGE_REMOVAL.era1)}</p>`)
-  const open = residue.length > 0 || !!manifestError || (era === 2 && !intact)
+  lines.push(`<p class="fine">${esc(CHANGE_REMOVAL)}</p>`)
+  const open = residue.length > 0 || !!manifestError || !intact
   const tech = manifestError ? detailsHtml('cap-changes-tech', [['读不出', manifestError]]) : ''
   return `<section class="cblock" aria-label="asight 在这台电脑上做的改动">` +
     disclosureHtml({ id: 'cap-changes', title: `asight 在这台电脑上做的改动 · ${n} 项${intact ? ' · 都完好' : ''}`, body: lines.join('') + tech, open }) + `</section>`
@@ -411,15 +364,13 @@ export function pageHtml(h, v, { openByReader = null } = {}) {
   const rows = [serviceRowHtml(h, v, { open: open.get('*service') })]
   for (const row of ordered) rows.push(agentRowHtml(row, h, { open: open.get(row.harness) }))
   return `<section class="crows" aria-label="agent">${rows.join('')}${tableFootHtml(h, verdicts)}</section>` +
-    legacyHtml(h) + netenvHtml(h) + changesHtml(h)
+    netenvHtml(h) + changesHtml(h)
 }
 
 // ── the two table-foot lines of the honest empty cases (1.9 §Edge cases) ────────────────────────────────────────
 export function tableFootHtml(h, verdicts) {
-  const c = (h && h.collector) || {}
   if (h && h.unreadable != null) return '' // the health could not be read: whether any agent was recorded is unknown
   if (!verdicts.length) {
-    if (h && h.legacy && h.legacy.present && c.present === false) return '<p class="capfoot">这台电脑上只有旧采集,它的记录分不出是哪个 agent</p>'
     return '<p class="capfoot">最近 24 小时采集服务没有记下任何 agent</p>'
   }
   return ''

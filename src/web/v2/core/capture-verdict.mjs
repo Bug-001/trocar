@@ -3,8 +3,7 @@
 // session library's empty state read this and no other, so they cannot word the same state two ways.
 // Pure: no DOM, no timers. The state and N come from the server; this words them and says what a failed read means.
 //
-// The state is the answer's top-level `summary`: the server folds the collector and the old capture (旧采集) into it and the worse
-// part wins. SEVERITY below is the board's copy of that order (1.5), so the page can cross-check it and can judge each part alone:
+// The state is the answer's top-level `summary`: the server folds its parts into it and the worse part wins. SEVERITY below is the board's copy of that order (1.5), so the page can cross-check it and can judge each part alone:
 //   ?(unreadable) > ✗ > ! > ?(unknown) > ○ > ✓ > –
 // Nothing here is ever empty: every state, including one this board has never seen, is a labelled non-empty sentence.
 // The sentence of each state is 1.5's 关键状态矩阵 K-03 row (the words there win over any older copy, 1.9 §采集服务行); the marks
@@ -22,31 +21,29 @@ export const SEVERITY = Object.freeze({
   unreadable: { mark: '?', cls: 'warn', rank: 8 },
   'not-running': { mark: '✗', cls: 'bad', rank: 7 }, 'not-responding': { mark: '✗', cls: 'bad', rank: 7 },
   failing: { mark: '!', cls: 'bad', rank: 6 },
-  unknown: { mark: '?', cls: 'warn', rank: 5 }, 'no-events': { mark: '?', cls: 'warn', rank: 5 },
+  unknown: { mark: '?', cls: 'warn', rank: 5 },
   off: { mark: '○', cls: 'dim', rank: 4 },
   ok: { mark: '✓', cls: 'ok', rank: 3 },
-  stopped: { mark: '○', cls: 'dim', rank: 2 }, residue: { mark: '–', cls: 'warn', rank: 2 },
+  residue: { mark: '–', cls: 'warn', rank: 2 },
   'not-installed': { mark: '–', cls: 'dim', rank: 1 },
   loading: { mark: '?', cls: 'dim', rank: 0 }, stale: { mark: '?', cls: 'warn', rank: 0 }, unrecognized: { mark: '?', cls: 'warn', rank: 0 },
 })
 
 // the sentence of each state (1.5 K-03). `W` words a timestamp (time of day when today, date and time otherwise).
 const WORDS = {
-  ok: (s, W, legacy) => (legacy ? `✓ 旧采集 · 在跑 · 最后启动于 ${W(s.since)}` : `✓ 在采 · 自 ${W(s.since)} 起`),
+  ok: (s, W) => `✓ 在采 · 自 ${W(s.since)} 起`,
   failing: (s) => `! 采集有问题${s.n != null ? `:${s.n} 项` : ''}`,
   off: (s, W) => `○ 关着 · 自 ${W(s.since)} 起`,
-  'not-running': (s, W, legacy) => `✗ ${legacy ? '旧采集没在跑' : '已停止'} · 最后记录于 ${W(s.since)}${s.signal ? ` · 因 ${s.signal}` : ''}`,
-  stopped: (s, W) => `○ 旧采集已停 · 自 ${W(s.since)} 起`,
+  'not-running': (s, W) => `✗ 已停止 · 最后记录于 ${W(s.since)}${s.signal ? ` · 因 ${s.signal}` : ''}`,
   'not-responding': (s, W) => `✗ 没响应 · 最后心跳 ${W(s.since)}`,
-  unknown: (s, W, legacy) => `? ${legacy ? '旧采集 · ' : ''}不知道${s.reason ? `:${s.reason}` : ''}`,
-  'no-events': () => '? 旧采集 · 没有事件记录(重启后才有)',
+  unknown: (s) => `? 不知道${s.reason ? `:${s.reason}` : ''}`,
   residue: (s) => `– 未安装 · 留着${s.n != null ? ` ${s.n} 项` : ''}改动`,
   'not-installed': () => '– 未安装',
 }
 
 // the failing sentence with the counts 1.5 defines, off the whole answer: how many agents are not fully captured (the
 // distinct agents of the current conditions, by harnessKey), how many agent-less conditions still hold, how many failure
-// groups the last 24 h hold across all three parts. Only items above zero are said, joined by「;」. A summary-only view
+// groups the last 24 h hold across both parts. Only items above zero are said, joined by「;」. A summary-only view
 // (a part judged alone, a hand-built answer) keeps summaryVerdict's generic n.
 function failingText(h, base) {
   const c = (h && h.collector) || {}
@@ -56,7 +53,7 @@ function failingText(h, base) {
     if (k.agent != null) agents.add(harnessKey(k.agent)); else others.push(k)
   }
   const nGroups = (x) => (Array.isArray(x) ? x.length : 0)
-  const m = nGroups(c.failures) + nGroups(h && h.legacy && h.legacy.failures) + nGroups(h && h.raw && h.raw.failures)
+  const m = nGroups(c.failures) + nGroups(h && h.raw && h.raw.failures)
   const items = []
   if (agents.size) items.push(`${agents.size} 个 agent 没有完整在采`)
   if (others.length) items.push(`另有 ${others.length} 项问题还在`)
@@ -65,14 +62,14 @@ function failingText(h, base) {
 }
 
 // the verdict of one summary ({state, since, n, part, source, signal, reason, read_errors}) — the answer's top-level summary, or the
-// summary of one part (h.collector.summary, h.legacy.summary). `part` names the part when the summary does not carry it.
+// summary of one part (h.collector.summary). `part` names the part when the summary does not carry it.
 export function summaryVerdict(summary, part = null) {
   const s = summary && typeof summary === 'object' ? summary : {}
-  const p = s.part || part, legacy = p === 'legacy'
+  const p = s.part || part
   const W = (t) => fmtWhen(t)
   const known = has(WORDS, s.state)
   const state = known ? s.state : 'unrecognized'
-  const text = (known ? WORDS[s.state](s, W, legacy) : `? 不知道采集状态(${String(s.state || '状态未知')})`) + (s.read_errors ? ' · 读不全' : '')
+  const text = (known ? WORDS[s.state](s, W) : `? 不知道采集状态(${String(s.state || '状态未知')})`) + (s.read_errors ? ' · 读不全' : '')
   return { state, ...SEVERITY[state], part: p || null, n: s.n ?? null, since: s.since ?? null, reason: s.reason ?? null, readErrors: s.read_errors || 0, text }
 }
 
@@ -93,10 +90,10 @@ export function captureVerdict(h, { okAt = null, err = null, now = Date.now() } 
   return v.state === 'failing' ? { ...v, text: failingText(h, v) } : v
 }
 
-// the two parts of an answer, each judged alone: the collector, and the old capture (null when the answer has no such part).
+// the collector part of an answer, judged alone (null when the answer has no such part).
 export function partVerdicts(h) {
   const of = (x, part) => (x && x.summary ? summaryVerdict(x.summary, part) : null)
-  return { collector: of(h && h.collector, 'collector'), legacy: of(h && h.legacy, 'legacy') }
+  return { collector: of(h && h.collector, 'collector') }
 }
 
 // → the store patch ({capH, capHOkAt, capHErr}) for one api.get('status') result: a good answer; a 503 (the server could not read
@@ -136,34 +133,26 @@ export function agentFacts(h) {
 }
 
 // ── per-agent verdicts (1.9 §每个 agent 一行 — this section; the 总览 page's 「<agent>:<状态句>」 item reads the same rows) ──
-// The contract era is judged by field presence, never a version: the answer is second-era when it has a top-level `netenv`
-// key or `collector.switch.harnesses` (1.9 §前置定义 — switch alone is not enough, an absent collector has no switch).
-export function commandEra(h) {
-  const hs = h && h.collector && h.collector.switch && h.collector.switch.harnesses
-  return (hs && typeof hs === 'object') || (h && h.netenv != null) ? 2 : 1
-}
-
 // the tier of a row's verdict, worst first — rowOrder() sorts by it (1.9 §行的次序)
 export const AGENT_TIER = Object.freeze({ forwarderDown: 0, problem: 1, unknown: 2, fine: 3, off: 4 })
 
 // one agent's status sentence, by 1.9's precedence (first rule that holds wins):
 //   1 the daemon is not running / not responding → 等采集服务恢复 (the reason lives on the 采集服务 row, once)
-//   2 the desired state is off (era 2: this harness's switch; era 1: the whole collector's) → 关着
+//   2 this harness's switch says off → 关着
 //   3 a current condition names this agent: restart codes → 重启 <agent> 后生效 (no button, K-27); a generic trust code →
 //     没在采:<TRUST_REASON why>; a harness-defined / unknown code → 没在采:<its own words: `text`, else the server's `reason`>;
 //     negative-cache → 没在采:它的一个进程不认 asight 的证书; several → the first by this order, then 「· 另有 N 项」
-//   4 era 2 only, a cached verdict (netenv.topology[h]) no older than the switch's last change: captured → 在采/不知道 · 截至 T
+//   4 a cached verdict (netenv.topology[h]) no older than the switch's last change: captured → 在采/不知道 · 截至 T
 //     (在采 only while the daemon runs); forwarder-down → 可能连不上网 · 截至 T; restart reasons → 重启 <agent> 后生效 · 截至 T;
 //     else → 没在采:<原因> · 截至 T; captured unknown → 不知道 · 截至 T; stale or missing → 不知道(没有最近的状态)
-//   5 era 1: last_captured → 没有发现问题; else → 最近 24 小时没采到 (era 1 never says 在采: no per-agent evidence, D38②)
 // → [{ harness, cliId, desired, tier, text, cls, wait, restart, code, fromCache, at, conditions, topology, findings,
-//      lastCaptured, lastFailure, lastFailureKey }] in chip-table order; `cliId` is the era-2 spelling the answer itself
+//      lastCaptured, lastFailure, lastFailureKey }] in chip-table order; `cliId` is the spelling the answer itself
 // used (the per-harness command is built from it; the front end keeps no CLI name table of its own).
 export function agentVerdicts(h) {
-  const c = (h && h.collector) || {}, era = commandEra(h)
+  const c = (h && h.collector) || {}
   const daemonDown = c.daemon && (c.daemon.state === 'not-running' || c.daemon.state === 'not-responding')
-  const hs = era === 2 && c.switch && c.switch.harnesses && typeof c.switch.harnesses === 'object' ? c.switch.harnesses : null
-  const topo = era === 2 && h.netenv && h.netenv.topology && typeof h.netenv.topology === 'object' ? h.netenv.topology : null
+  const hs = c.switch && c.switch.harnesses && typeof c.switch.harnesses === 'object' ? c.switch.harnesses : null
+  const topo = h && h.netenv && h.netenv.topology && typeof h.netenv.topology === 'object' ? h.netenv.topology : null
   // every id any source names, folded by harnessKey (1.9 §行从哪来; S9 changes carry installed-but-quiet harnesses too)
   const by = new Map()
   const row = (id) => {
@@ -195,8 +184,7 @@ export function agentVerdicts(h) {
   for (const r of by.values()) {
     const name = harnessName(r.harness)
     if (daemonDown) { Object.assign(r, { tier: AGENT_TIER.unknown, text: '等采集服务恢复', cls: 'dim', wait: true }); continue }
-    const off = era === 2 ? r.desired === 'off' : c.switch && c.switch.desired === 'off'
-    if (off) { Object.assign(r, { tier: AGENT_TIER.off, text: '关着', cls: 'dim' }); continue }
+    if (r.desired === 'off') { Object.assign(r, { tier: AGENT_TIER.off, text: '关着', cls: 'dim' }); continue }
     // rule 3 — the live conditions that name this agent, worst-order first
     const rank3 = (x) => {
       if (!x || x.kind !== 'untrusted') return x && x.kind === 'negative-cache' ? 3 : 4
@@ -215,8 +203,8 @@ export function agentVerdicts(h) {
       Object.assign(r, { tier: AGENT_TIER.problem, text, cls: 'warn', code, restart })
       continue
     }
-    // rule 4 — era 2, a cached verdict no older than the switch's last change
-    if (era === 2 && topo) {
+    // rule 4 — a cached verdict no older than the switch's last change
+    if (topo) {
       const t = r.topology
       const at = t && t.at ? Date.parse(t.at) : null
       const fresh = t && at != null && !isNaN(at) && !(r.desiredAt && at < Date.parse(r.desiredAt))
@@ -231,11 +219,8 @@ export function agentVerdicts(h) {
         Object.assign(r, { tier, text, cls, restart, fromCache: true, at: t.at ?? null, code: t.reason ?? null })
         continue
       }
-      Object.assign(r, { tier: AGENT_TIER.unknown, text: '不知道(没有最近的状态)', cls: '' })
-      continue
     }
-    // rule 5 — era 1: never 在采 (no per-agent evidence; D38② / invariant 4)
-    Object.assign(r, { tier: AGENT_TIER.fine, text: r.lastCaptured ? '没有发现问题' : '最近 24 小时没采到', cls: r.lastCaptured ? 'ok' : '' })
+    Object.assign(r, { tier: AGENT_TIER.unknown, text: '不知道(没有最近的状态)', cls: '' })
   }
   const rank = (id) => { const i = HARNESS_ORDER.indexOf(id); return i < 0 ? HARNESS_ORDER.length : i }
   return [...by.values()].sort((a, b) => rank(a.harness) - rank(b.harness) || (a.harness < b.harness ? -1 : 1))

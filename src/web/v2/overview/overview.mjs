@@ -1,13 +1,14 @@
 // overview/overview.mjs — 总览 (1.7): the first screen, answering three questions at one glance — is capture healthy,
 // is there anything to handle, what did the agents cost. Five cards (采集 · 要处理的事 · 统计 · 最近的会话 · 磁盘; first
-// run swaps the last three for 开始使用). Every number names its source: stats come ONLY from S5 /api/overview (D24, as
-// far as the last `asight etl` got), the recent list is live from /api/projects, and the two are allowed to disagree by
+// run swaps the last three for 开始使用). Every number names its source: stats come ONLY from S5 /api/overview (D24), the
+// recent list is live from /api/sessions, and the two are allowed to disagree by
 // a few sessions — the stats card says 截至, it never back-fills from the live list.
 // Polls (1.5 §轮询): capture-health every 1.5 s and projects every 3 s while visible; retention · pricing ·
 // overview(window) · overview(all) · traffic(24h) on open, on window change and every 30 s. Hidden stops everything;
 // coming back reads at once. All reads are GET; the page holds no button but the window links, the 技术细节 disclosures
 // and the read-failure 重试 (invariant 1).
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router, toast}.
+import { COMMANDS } from '../labels/capture.mjs'
 import { esc, fmtWhen, relTime, bytes, usd } from '../core/fmt.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
@@ -87,11 +88,11 @@ export function overviewItems(s, now) {
   for (const it of o1.filter((x) => !x.blocked)) push('O1', it.h, { chip: it.h, text: it.text, href: it.href })
   if (o1.length > 5) more.O1 = o1.length - 5
 
-  // ── O1′ · a condition about the capture service itself (the retention kind belongs to O7, not here) ──────────────
-  for (const c of conds.filter((c) => c && c.agent == null && c.kind !== 'retention'))
+  // ── O1′ · a condition about the capture service itself ──────────────
+  for (const c of conds.filter((c) => c && c.agent == null))
     push('O1p', (c && c.kind) || 'condition', { subject: W.SVC_ITEM(condWhy(c)), href: '#/capture' })
 
-  // ── O2 · the collector / the old capture is down or unreadable (an unknown born of manifest_error is O4's alone) ──
+  // ── O2 · the collector is down or unreadable (an unknown born of manifest_error is O4's alone) ──
   if (unreadable) push('O2', 'unreadable', { text: captureVerdict(s.caph.data).text, href: '#/capture' })
   else if (H) {
     const pv = partVerdicts(H)
@@ -100,15 +101,12 @@ export function overviewItems(s, now) {
     // here: its failure groups are O3's rows, and the capture card words the summary either way
     if (pv.collector && ['not-running', 'not-responding', 'unknown', 'unrecognized'].includes(pv.collector.state) && !manifestUnknown)
       push('O2', 'collector', { text: pv.collector.text, href: '#/capture' })
-    if (pv.legacy && ['not-running', 'unknown', 'no-events', 'unrecognized'].includes(pv.legacy.state))
-      push('O2', 'legacy', { text: pv.legacy.text, href: '#/capture' })
   }
 
   // ── O3 · failure groups of the last 24 h; the sentence is the group's own reason, the key rides in the hover ─────
   const groups = []
   if (H) {
     for (const g of list(H.collector && H.collector.failures)) groups.push({ g, part: 'collector' })
-    for (const g of list(H.legacy && H.legacy.failures)) groups.push({ g, part: 'legacy' })
     for (const g of list(H.raw && H.raw.failures)) groups.push({ g, part: 'raw' })
   }
   const o3 = groups.map(({ g, part }) => {
@@ -117,7 +115,7 @@ export function overviewItems(s, now) {
     if (part === 'raw') return { key: g.key, lastTs: g.last_ts, text: `${W.RAW_FAILURES} · ${why} · ${W.FAIL_TIMES(g.count)} · ${when(g.last_ts, now)}`, href: '#/capture/log', tip: `组 ${g.key}` }
     return {
       key: g.key, lastTs: g.last_ts, chip: a ?? undefined,
-      subject: a != null ? null : (part === 'legacy' ? W.LEGACY_SUBJECT : W.SVC_SUBJECT),
+      subject: a != null ? null : W.SVC_SUBJECT,
       text: `${W.FAILURES} · ${why} · ${W.FAIL_TIMES(g.count)} · ${when(g.last_ts, now)}`,
       href: a != null ? `#/capture?h=${encodeURIComponent(a)}` : '#/capture/log', tip: `组 ${g.key}`,
     }
@@ -154,14 +152,6 @@ export function overviewItems(s, now) {
       if (!seen.has(k)) { seen.add(k); n++ }
     }
     if (n > 0) push('O6', 'files', { text: W.FILES_NOT_READ(n), href: '#/settings/storage' })
-  }
-
-  // ── O7 · the retention settings file (a whole-file problem and per-cell problems are two items) ──────────────────
-  const R = s.retention && s.retention.data
-  if (R && R.settings && Array.isArray(R.settings.problems) && R.settings.problems.length) {
-    const cells = R.settings.problems.filter((p) => p && p.cell).length
-    if (cells < R.settings.problems.length) push('O7', 'whole', { text: W.RETENTION_UNREADABLE, href: '#/settings/storage' })
-    if (cells > 0) push('O7', 'cells', { text: W.RETENTION_CELLS(cells), href: '#/settings/storage' })
   }
 
   // ── O8 · models in use that no price row matches (window=all, independent of the stats window) ──────────────────
@@ -381,7 +371,7 @@ export function itemsCardHtml(s, now) {
   const body = items.rows.length
     ? items.rows.map(itemHtml).join('') +
       Object.entries(items.more).map(([cls, n]) => {
-        const href = cls === 'O3' || cls === 'O4' ? '#/capture/log' : cls === 'O6' || cls === 'O7' ? '#/settings/storage' : cls === 'O8' ? '#/settings/prices' : cls === 'O9' ? '#/traffic' : '#/capture'
+        const href = cls === 'O3' || cls === 'O4' ? '#/capture/log' : cls === 'O6' ? '#/settings/storage' : cls === 'O8' ? '#/settings/prices' : cls === 'O9' ? '#/traffic' : '#/capture'
         return `<a class="ovitem more" href="${href}">${esc(W.MORE_OF(n))}</a>`
       }).join('')
     : (allRead && items.partial.length === 0 ? `<p class="ovempty">${esc(W.NO_ITEMS)}</p>` : '')
@@ -398,11 +388,7 @@ export function statsCardHtml(s, now, titles) {
   if (st.data == null) return '' // never read yet: nothing is drawn that has no source (the polls land one by one)
   if (st.absent) return '' // the endpoint is not there: the card does not exist (1.7 §统计)
   const D = st.data
-  if (D.rows == null) { // no store, or one from before D40 — the server's own words, the command in 技术细节
-    return `<section class="ovcard stats" aria-label="${esc(W.CARD.stats)}"><h2 class="ovh">${esc(W.CARD.stats)}</h2>` +
-      `<p class="ovsay">${esc(D.reason === 'predates-d40' ? W.NEED_REBUILD : W.NO_STORE)}</p>` +
-      (D.etl_command ? techDetailsHtml({ 命令: `<code>${esc(D.etl_command)}</code>` }, { id: 'ov-etl', html: true }) : '') + `</section>`
-  }
+  if (D.rows == null) return '' // no rows: nothing has a source to draw
   const priceFail = s.pricing && s.pricing.ok === false ? s.pricing.err : null
   const priceData = s.pricing && s.pricing.data ? s.pricing.data : null
   const cover = coverageOf(s)
@@ -539,7 +525,7 @@ export function diskCardHtml(s, now) {
 export function firstUseHtml() {
   return `<section class="ovcard start" aria-label="${esc(W.CARD.start)}"><h2 class="ovh">${esc(W.CARD.start)}</h2>` +
     W.START_ROWS.map(([k, v]) => `<p class="ovsay"><b>${esc(k)}</b>${esc(v)}</p>`).join('') +
-    techDetailsHtml({ 安装命令: `<code>${esc(W.INSTALL_CMD)}</code>` }, { id: 'ov-install', html: true }) +
+    techDetailsHtml({ 安装命令: `<code>${esc(COMMANDS.install)}</code>` }, { id: 'ov-install', html: true }) +
     `</section>`
 }
 

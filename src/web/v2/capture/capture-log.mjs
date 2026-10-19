@@ -21,11 +21,11 @@ const when = (t) => esc(fmtWhen(t))
 
 // ── the model: every failure group of the answer, tagged with the part it belongs to ───────────────────────────
 // A group is {key, count, first_ts, last_ts, last}; `part` names who a group without an agent belongs to — 采集服务 /
-// 旧采集 / 压缩保存与读取 — and comes from where the group was read, never a guess.
+// 压缩保存与读取 — and comes from where the group was read, never a guess.
 export function groupsOf(h) {
   const of = (list, part) => (Array.isArray(list) ? list.map((g) => ({ ...g, part })) : [])
   const c = (h && h.collector) || {}
-  return [...of(c.failures, 'collector'), ...of(h && h.legacy && h.legacy.failures, 'legacy'), ...of(h && h.raw && h.raw.failures, 'raw')]
+  return [...of(c.failures, 'collector'), ...of(h && h.raw && h.raw.failures, 'raw')]
 }
 
 // the agents the head's filter menu offers (1.9): every agent the failure groups' last record names, the notes', and —
