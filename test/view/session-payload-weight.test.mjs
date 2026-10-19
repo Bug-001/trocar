@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sessionView } from '../../src/view/board.mjs';

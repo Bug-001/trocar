@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { sessionView } from '../../src/view/board.mjs';
 
 // A BLOCK MUST NEVER BE BOTH BODYLESS AND UNADDRESSABLE.
@@ -15,7 +15,7 @@ import { sessionView } from '../../src/view/board.mjs';
 //
 // But the locator only exists when the block's bytes can be located, and that requires the VERBATIM
 // wire body. A D10 capture has one (`req_body`, a string). A v0/demo-converted record does not: it
-// stored parsed JSON, so the original bytes are genuinely gone (src/etl/ingest.mjs says so in as many
+// stored parsed JSON, so the original bytes are genuinely gone (src/raw/ingest.mjs says so in as many
 // words). blockSpans therefore returns nothing for them — correctly and honestly.
 //
 // The failure mode is what happens NEXT. Dropping the text AND minting no ref leaves a row that is

@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { withLocatedRefs } from '../../src/view/assemble.mjs';
-import { parseTextRef } from '../../src/etl/orchestrator.mjs';
+import { parseTextRef } from '../../src/raw/refs.mjs';
 
 const rec = { id: 'w1', _stream: 'S1.ndjson', req_headers: { 'session-id': 'S' },
   req_body: '{"type":"response.create","input":[{"role":"user","content":"hi"}]}',

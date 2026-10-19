@@ -8,7 +8,7 @@ import path from 'node:path';
 import { startMockUpstream } from '../lab/mock-upstream/server.mjs';
 import { request, waitFor } from '../lab/helpers.mjs';
 import { startTeeProxy } from '../helpers/tee-proxy.mjs';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { sessionView } from '../../src/view/board.mjs';
 import { assembleSession } from '../../src/view/assemble.mjs';
 import { buildResolver } from '../../src/query/source.mjs';

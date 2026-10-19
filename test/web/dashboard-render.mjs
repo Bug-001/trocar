@@ -28,7 +28,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { sessionView, forWire } from '../../src/view/board.mjs';
 import { buildResolver } from '../../src/query/source.mjs';
 import { fixtureGate } from '../helpers/fixture.mjs';

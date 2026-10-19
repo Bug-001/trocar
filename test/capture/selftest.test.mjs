@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { checkDeps, qCapturing, qCorrect, qNoLeak, qFilePerms, runSelfTest } from '../../src/capture/selftest.mjs';
 import { fixtureGate } from '../helpers/fixture.mjs';
 

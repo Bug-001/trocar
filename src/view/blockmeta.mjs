@@ -217,7 +217,7 @@ const HEAVY = ['text', 'block', 'desc', 'schema', 'props'];
  * WHEN THE BYTES CANNOT BE ADDRESSED, INLINE THE TEXT — never ship neither.
  * A locator only exists if the verbatim wire body does. A D10 record carries one (`req_body`, a
  * string) so every block is addressable; a v0/demo-converted record does not — it stored parsed
- * JSON, so the original bytes are genuinely gone (see src/etl/ingest.mjs) and no span can honestly
+ * JSON, so the original bytes are genuinely gone (see src/raw/ingest.mjs) and no span can honestly
  * be computed. Dropping the text as well would leave a row that can be neither read nor fetched:
  * content that is sitting in the capture file becomes invisible in the product, permanently. That is
  * not a transport bound the user can recover from by expanding a row — it is loss on the display

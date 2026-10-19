@@ -100,7 +100,7 @@ test('a record that is not an inference call is expanded up to 1 MiB only: a bom
 
 test('the same bound holds through the loader every reader uses (readRecords), for a zstd body too', async () => {
   const fs = await import('node:fs'); const path = await import('node:path'); const { tmpDir } = await import('../helpers/tmp.mjs');
-  const { readRecords } = await import('../../src/etl/ingest.mjs');
+  const { readRecords } = await import('../../src/raw/ingest.mjs');
   const has = typeof zlib.zstdCompressSync === 'function';
   const enc = has ? 'zstd' : 'gzip';
   const wire = has ? zlib.zstdCompressSync(Buffer.alloc(8 * 1024 * 1024, 0x61)) : zlib.gzipSync(Buffer.alloc(8 * 1024 * 1024, 0x61));

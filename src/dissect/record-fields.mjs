@@ -2,8 +2,8 @@
 // gate G1): which envelope fields a text_ref may name, and the verbatim text each one holds. Envelope
 // fields only (D10 resp.raw · 4.6 resp.messages / req_extra_messages), no wire knowledge. One definition for
 // every reader — the resolver (src/query/source.mjs), /api/block, the board's locators and the ETL adapters —
-// kept in this leaf so the adapters can use it without importing the ETL (0.1 §2). src/etl/orchestrator.mjs
-// re-exports it. Leaf module.
+// kept in this leaf so the adapters can use it without importing the read side's exporters (0.1 §2).
+// Leaf module.
 // req_body is the default and never written out, so every ref minted before the segment is unchanged.
 export const TEXT_REF_FIELD = /^(resp\.raw|resp\.messages\.\d+|req_extra_messages\.\d+)$/;
 // The text a field segment addresses in a record (one definition: the resolver and the board's locators

@@ -1,4 +1,4 @@
-// src/etl/ingest.mjs — read an NDJSON capture stream into D10 envelope records, tolerating
+// src/raw/ingest.mjs — read an NDJSON capture stream into D10 envelope records, tolerating
 // BOTH the product's D10 shape (req_body = verbatim STRING) and the demo v0 shape
 // (request/request_headers/response, parsed objects). The v0→D10 bridge is SHARED by the
 // ETL CLI and the server's text resolver so both derive byte-identical req_body strings
@@ -38,7 +38,7 @@ export function normalizeRecord(raw) {
 // outcome — worse than a visible failure. So corrupt lines are now COUNTED and DESCRIBED.
 //
 // The return value deliberately stays a plain Array — every caller consumes it as one
-// (bin/asight.mjs:171 `.length`, src/server.mjs:140 re-pushes into its own array, src/etl/cli.mjs:13,
+// (bin/asight.mjs:171 `.length`, src/server.mjs:140 re-pushes into its own array,
 // plus the capture/adapters/query/view suites). Changing the shape to {records, scan} would break
 // all of them, so the report rides ALONGSIDE as a NON-ENUMERABLE `.scan` property: invisible to
 // spread / JSON.stringify / for…in, readable by anyone who asks. Callers that concatenate several

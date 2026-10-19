@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { sessionView, pageView } from '../../src/view/board.mjs';
 import { compBuckets } from '../../src/view/blockmeta.mjs';
 import { fixtureGate, hasFixture } from '../helpers/fixture.mjs';

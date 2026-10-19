@@ -8,7 +8,7 @@
 import nodeFs from 'node:fs';
 import path from 'node:path';
 import { recordId } from '../collector/core/record/segments.mjs';
-import { normalizeRecord } from '../etl/ingest.mjs';
+import { normalizeRecord } from '../raw/ingest.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { R, FLAG_UNPARSEABLE } from '../raw/format.mjs';
@@ -49,7 +49,7 @@ function* lines(file, fs, { all = false } = {}) {
 function recordOf(text, segment, lineNo, stream) {
   const rec = normalizeRecord(expandRequestBody(JSON.parse(text)));
   const out = { ...rec, id: recordId(segment, lineNo) };
-  // `_stream` is non-enumerable everywhere it is stamped (src/etl/ingest.mjs): it says which file the
+  // `_stream` is non-enumerable everywhere it is stamped (src/raw/ingest.mjs): it says which file the
   // bytes are in, for a block's ref, and must never appear in a shipped document.
   Object.defineProperty(out, '_stream', { value: stream, enumerable: false, configurable: true });
   return out;

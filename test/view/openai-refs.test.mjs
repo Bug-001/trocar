@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assembleSession } from '../../src/view/assemble.mjs';
-import { parseTextRef } from '../../src/etl/orchestrator.mjs';
+import { parseTextRef } from '../../src/raw/refs.mjs';
 
 const withStream = (r, s = 'capture-2026-10-06.ndjson') => (Object.defineProperty(r, '_stream', { value: s, enumerable: false }), r);
 // Deliberately odd spacing: a re-serialization would not reproduce these bytes.

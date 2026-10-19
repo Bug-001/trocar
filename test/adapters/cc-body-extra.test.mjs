@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { parseCall } from '../../src/adapters/cc.mjs';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { fixtureGate } from '../helpers/fixture.mjs';
 
 const FIXTURE = path.resolve('test/fixtures/cc-session-real.ndjson');

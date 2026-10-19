@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildResolver } from '../../src/query/source.mjs';
-import { composeTextRef, mintRawRef } from '../../src/etl/orchestrator.mjs';
+import { composeTextRef, mintRawRef } from '../../src/raw/refs.mjs';
 
 const FILE = 'capture-2026-10-06.ndjson';
 const raw = (id) => mintRawRef('S', FILE, id);
