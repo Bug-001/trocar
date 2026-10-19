@@ -99,7 +99,7 @@ export function partVerdicts(h) {
   return { collector: of(h && h.collector, 'collector'), legacy: of(h && h.legacy, 'legacy') }
 }
 
-// → the store patch ({capH, capHOkAt, capHErr}) for one api.captureHealth() result: a good answer; a 503 (the server could not read
+// → the store patch ({capH, capHOkAt, capHErr}) for one api.get('status') result: a good answer; a 503 (the server could not read
 // the health: {unreadable}); anything else is a recorded failure, never a silent success. One place, so the polls and a screen that
 // refreshes right after a change cannot disagree about what a 503 means.
 export function capHealthPatch(r, now = Date.now()) {
@@ -291,7 +291,7 @@ export function pollCaptureHealth({ api, store, doc = typeof document === 'undef
     if (doc && doc.hidden) return schedule() // hidden: no read; visibilitychange fires the read on return
     inFlight = true
     let r
-    try { r = await api.captureHealth() } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
+    try { r = await api.get('status') } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
     inFlight = false
     if (stopped) return
     store.set(capHealthPatch(r, api.now()))

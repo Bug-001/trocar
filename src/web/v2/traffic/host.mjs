@@ -181,7 +181,7 @@ export function mount(el, ctx) {
     if (!le || fetching || !list || list.state !== 'table' || !list.next) return
     if (!wantMore({ scrollTop: le.scrollTop || 0, viewHeight: le.clientHeight || 0, count: list.rows.length })) return
     fetching = true
-    const r = await api.trafficRequests({ harness, host, window: q.window, cls: q.cls, cursor: list.next })
+    const r = await api.get('calls', { harness, host, class: q.cls, since: q.window, after: list.next })
     fetching = false
     if (dead || !r.ok) return
     list = appendPage(list, r.data)
@@ -200,14 +200,14 @@ export function mount(el, ctx) {
   async function readDetail() {
     detail = null; detailErr = null
     paint()
-    const r = await api.trafficRequest({ ref, reveal: revealed })
+    const r = await api.get('calls', { ref })
     if (dead) return
     if (r.ok) detail = r.data
     else detailErr = r.error || `HTTP ${r.status}`
     paint()
   }
   async function readList() {
-    const r = await api.trafficRequests({ harness, host, window: q.window, cls: q.cls })
+    const r = await api.get('calls', { harness, host, class: q.cls, since: q.window })
     if (dead) return
     if (r.ok) { readAt = api.now(); err = null; list = listModel(r.data) }
     else {
@@ -217,7 +217,7 @@ export function mount(el, ctx) {
     paint()
   }
 
-  api.retention().then((r) => {
+  api.get('classes').then((r) => {
     if (dead || !r.ok) return // an unreadable answer leaves 其他 as 其他
     unmatched = r.data && r.data.unmatched ? r.data.unmatched : {}
     paint()

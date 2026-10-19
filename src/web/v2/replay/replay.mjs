@@ -246,7 +246,7 @@ export function mount(el, ctx) {
   const fail = (title, msg) => { s.errNote = `<b>${esc(title)}</b> · ${esc(msg)} —— 盘上的原始采集是完整的(源真相不受影响)。` }
 
   // the price table: a failed read keeps its reason (the header, raw panel and drawer say 价表读不出 · why) and every poll retries it
-  const prices = createPricingLoader(() => api.pricing(), s.pricing)
+  const prices = createPricingLoader(() => api.get('pricing'), s.pricing)
   async function loadPricing() {
     if (!(await prices.load()) || s.dead) return
     s.pricing = prices.table(); s.pricingErr = prices.err()
@@ -267,7 +267,7 @@ export function mount(el, ctx) {
     const key = sessionKey()
     const stale = () => s.dead || key !== sessionKey() // the session was switched while a request was in flight
     // a failed listing is NOT an empty one: say why
-    const pj = await api.projects()
+    const pj = await api.get('sessions')
     if (stale()) return
     if (!pj.ok) { fail('无法列出会话', pj.error + ' —— 修好来源或重启服务。'); renderEmpty('无法列出会话。'); s.lastCheapSig = null; s.lastRenderSig = null; return }
     const projects = pj.data.projects || []
@@ -283,7 +283,7 @@ export function mount(el, ctx) {
       if (cs === s.lastCheapSig) return
       s.lastCheapSig = cs
     }
-    const res = await api.session({ project: s.project, id: s.id, cursor: s.pageCur | 0, limit: PAGE_LIMIT })
+    const res = await api.get('session', { id: s.id, after: s.pageCur || null, limit: PAGE_LIMIT })
     if (stale()) return
     if (!res.ok) {
       s.lastCheapSig = null; s.lastRenderSig = null // so the next poll retries; a stuck signature would keep the board wedged after recovery
@@ -353,7 +353,7 @@ export function mount(el, ctx) {
     const t0 = Date.parse(steps[0].ts), t1 = Date.parse(steps[steps.length - 1].ts)
     s.gap = captureGap(s.health, { start: t0, end: t1 }, s.meta.harness)
   }
-  api.captureHealth().then((r) => { if (!s.dead && r.ok) { s.health = r.data; judgeGap(); if (s.A) renderHeader() } }).catch((e) => console.error(e))
+  api.get('status').then((r) => { if (!s.dead && r.ok) { s.health = r.data; judgeGap(); if (s.A) renderHeader() } }).catch((e) => console.error(e))
 
   const onRp = () => { s.rpOpen = !s.rpOpen; const rp = el.querySelector('#rightpage'); if (rp) { rp.classList.toggle('open', s.rpOpen); const b = el.querySelector('#rpbar'); if (b) b.setAttribute('aria-expanded', String(s.rpOpen)) } }
   const rpbar = el.querySelector('#rpbar')

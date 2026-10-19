@@ -241,21 +241,21 @@ export function mount(el, ctx) {
     el.innerHTML = `<div class="page traf">${head}${body}</div>`
   }
   async function read() {
-    const s6 = await api.traffic({ window: q.window })
+    const s6 = await api.get('traffic', { since: q.window })
     if (dead) return
     if (s6.ok) { readAt = api.now(); err = null }
     else if (!model) err = s6.error || `HTTP ${s6.status}`
     const data = s6.ok ? s6.data : (s6.data && Array.isArray(s6.data.rows) ? s6.data : (model && model.state === 'table' ? model.answer : (s6.data || {})))
     model = tableModel(data, { h: q.h, cls: q.cls, now: api.now(), unmatched })
     paint()
-    if (!unmatched) api.retention().then((r) => {
+    if (!unmatched) api.get('classes').then((r) => {
       if (dead || !r.ok) return // an unreadable retention answer leaves 其他 as 其他 (1.10 §Edge cases)
       unmatched = r.data && r.data.unmatched ? r.data.unmatched : {}
       if (model && model.state === 'table') { model = tableModel(model.answer, { h: q.h, cls: q.cls, now: api.now(), unmatched }); paint() }
     }, () => {})
   }
   // the coverage note needs /api/projects; when it cannot be read the note simply does not appear
-  api.projects().then((r) => {
+  api.get('sessions').then((r) => {
     if (dead || !r.ok) return
     const storeHarnesses = new Set(((model && model.answer && model.answer.store && model.answer.store.harnesses) || []).map(harnessKey))
     const seen = new Set()

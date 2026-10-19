@@ -78,7 +78,7 @@ export const bodyCache = new Map() // text_ref -> {status, text, fidelity, error
 // fine and the next ask may work, so a failure is shown (status 'error') but never remembered.
 export async function loadBody(api, ref) {
   if (bodyCache.has(ref)) return bodyCache.get(ref)
-  const r = await api.block(ref)
+  const r = await api.get('block', { ref })
   const got = r.ok ? r.data : { status: r.status === 404 ? 'absent' : 'error', error: r.error }
   if (r.ok || r.status === 404) {
     if (bodyCache.size >= CACHE_CAP) bodyCache.delete(bodyCache.keys().next().value)

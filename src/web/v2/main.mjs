@@ -3,6 +3,7 @@
 // ctx.router.current(). update(route) is called only when the route changes WITHIN the mounted screen (new params, another session); a
 // different screen is a fresh mount. There is no site-wide banner: a screen says what is wrong with itself.
 import { api } from './core/api.mjs'
+import { configure, bootToken } from './core/http.mjs'
 import { store } from './core/store.mjs'
 import * as router from './core/router.mjs'
 import { initKeys, setScreenKeys } from './core/keys.mjs'
@@ -27,6 +28,9 @@ const SCREENS = {
   'settings-prices': () => import('./settings/prices.mjs'),
   'settings-appearance': () => import('./settings/appearance.mjs'),
 }
+
+// the token leaves the address (#t=…) before the router reads the hash (4.4 §每用户口令)
+configure({ token: bootToken() })
 
 initKeys()
 installUi(document) // the popover / disclosure contract, once for the whole board

@@ -620,19 +620,19 @@ export function mount(el, ctx) {
   const readHealth = async () => {
     // capHealthPatch speaks {capH, capHOkAt, capHErr}; fold it into the slot (a 503 answer IS data — {unreadable};
     // a failed read keeps the last good answer and its time, so the card goes 未刷新 rather than blank)
-    const p = capHealthPatch(await api.captureHealth(), Date.now())
+    const p = capHealthPatch(await api.get('status'), Date.now())
     if (p.capHOkAt != null) s.caph = { data: p.capH, okAt: p.capHOkAt, err: null, ok: true, absent: false }
     else s.caph = { data: s.caph.data, okAt: s.caph.okAt, err: p.capHErr || '不知道原因', ok: false, absent: false }
     if (s.caph.ok) s.readAt = Date.now()
   }
-  const readProjects = async () => { fold('projects', await api.projects()) }
+  const readProjects = async () => { fold('projects', await api.get('sessions')) }
   const readSlow = async () => {
     await Promise.allSettled([
-      api.retention().then((r) => fold('retention', r)),
-      api.pricing().then((r) => fold('pricing', r)),
-      api.overview({ window: w }).then((r) => { fold('stats', r); if (w === 'all') s.usageAll = { ...s.stats } }),
-      w === 'all' ? Promise.resolve() : api.overview({ window: 'all' }).then((r) => fold('usageAll', r)),
-      api.traffic({ window: '24h' }).then((r) => fold('traffic', r)),
+      api.get('classes').then((r) => fold('retention', r)),
+      api.get('pricing').then((r) => fold('pricing', r)),
+      api.get('overview', { since: w === 'all' ? null : w }).then((r) => { fold('stats', r); if (w === 'all') s.usageAll = { ...s.stats } }),
+      w === 'all' ? Promise.resolve() : api.get('overview').then((r) => fold('usageAll', r)),
+      api.get('traffic', { since: '24h' }).then((r) => fold('traffic', r)),
     ])
   }
   const readers = { health: readHealth, projects: readProjects, slow: readSlow }

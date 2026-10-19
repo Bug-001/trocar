@@ -61,7 +61,7 @@ export function mount(el, ctx) {
   }
 
   async function read() {
-    const [p, s5] = await Promise.all([api.pricing(), api.overview({ window: 'all' })])
+    const [p, s5] = await Promise.all([api.get('pricing'), api.get('overview')])
     if (dead) return
     error = null
     let data = null

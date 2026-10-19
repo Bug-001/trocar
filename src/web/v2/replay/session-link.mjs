@@ -17,7 +17,7 @@ export function mount(el, ctx) {
   let dead = false
   const say = (html) => { el.innerHTML = `<div class="page">${pageHeadHtml({ name: SCREEN_NAME['session-link'] })}${html}</div>` }
   say('')
-  api.projects().then((r) => {
+  api.get('sessions').then((r) => {
     if (dead) return
     if (!r.ok) return say(`<p class="note bad" role="alert">没读到会话列表:${esc(r.error || '不知道原因')}</p>`)
     const hit = findSession(r.data, link.id)

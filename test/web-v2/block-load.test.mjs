@@ -13,7 +13,7 @@ const FAIL = (status, error = 'boom') => ({ ok: false, status, error })
 
 // an api double that answers from a queue and counts the questions
 function fakeApi(...answers) {
-  const api = { calls: 0, block: async () => { api.calls++; return answers.length > 1 ? answers.shift() : answers[0] } }
+  const api = { calls: 0, get: async (name) => { assert.equal(name, 'block'); api.calls++; return answers.length > 1 ? answers.shift() : answers[0] } }
   return api
 }
 // the part of an element fillBody / toggleCtxBlock touch

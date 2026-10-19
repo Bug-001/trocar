@@ -120,7 +120,7 @@ export function mount(el, ctx) {
   let data = null, errR = null, sig = null, loaded = false, dead = false, vl = null, timer = 0
   let rows = [], entries = [], total = 0, lastFilterSig = null, prevSelKey = null
   let agentSig = null, projSig = null, sortSig = null, headHtml = '', readAt = null
-  const cap = capShotMaker(() => api.captureHealth(), () => api.now()) // the one-shot capture-health read (空态 · the filtered agent)
+  const cap = capShotMaker(() => api.get('status'), () => api.now()) // the one-shot capture-health read (空态 · the filtered agent)
   let f = parseFilters(router.current().params)
   // a one-time line another screen may have left (1.8: it is a toast, never a banner): take it, so it shows once
   const notice = store.get().libraryNotice || null
@@ -227,7 +227,7 @@ export function mount(el, ctx) {
   // ── data: every 3 s while the page is visible; repaint only when what the list shows changed ───────────────────────
   async function poll() {
     let r
-    try { r = await api.projects() } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
+    try { r = await api.get('sessions') } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
     if (dead) return
     const nextErr = r.ok ? null : r, next = r.ok ? r.data : data
     const s = listSignature(next, nextErr)

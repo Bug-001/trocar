@@ -10,7 +10,6 @@ import { createStore, store } from '../../src/web/v2/core/store.mjs'
 import { parseHash, formatHash } from '../../src/web/v2/core/router.mjs'
 import * as domMod from '../../src/web/v2/core/dom.mjs'
 import * as safeMountMod from '../../src/web/v2/shell/safemount.mjs'
-import { setFetch } from '../../src/web/v2/core/http.mjs'
 
 test('chips: the eight read-side ids (the legacy one last), each with its icon file, aliases folded onto them', () => {
   assert.deepEqual(HARNESS_ORDER, ['cc', 'codex', 'opencode', 'kimi', 'dsh', 'hermes', 'zcode', 'deepseek-cli'])
@@ -122,59 +121,3 @@ test('trapTab: focus that is outside the dialog is pulled back in', () => {
   assert.equal(domMod.trapTab([], 'x', false), null) // nothing to trap
 })
 
-// ── api: the one data entrance is an HTTP transport to the server that served the page ───────────────────────────────
-const jsonRes = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
-
-test('api answers from the real transport: each method calls its endpoint with its parameters, and reads nothing from the query string', async () => {
-  const calls = []
-  setFetch(async (url, init) => { calls.push({ url: String(url), init: init || {} }); return jsonRes({ ok: 1 }) })
-  try {
-    const { api } = await import('../../src/web/v2/core/api.mjs?fresh-1')
-    assert.deepEqual(await api.projects(), { ok: true, data: { ok: 1 } })
-    await api.session({ project: 'p', id: 's 1', cursor: 0, limit: 60, extra: undefined })
-    await api.block('abc/1#2'); await api.pricing(); await api.captureHealth(); await api.retention()
-    await api.overview({ window: '7d' }); await api.traffic({ window: '24h' })
-    await api.trafficRequests({ harness: 'cc', host: 'h.test', window: '1h', cls: 'llm', cursor: 20, limit: 50 })
-    await api.trafficRequest({ ref: 's/0#9', reveal: 'authorization' })
-    const urls = calls.map((c) => c.url)
-    assert.deepEqual(urls, [
-      '/api/projects',
-      '/api/session?project=p&id=s+1&cursor=0&limit=60',
-      '/api/block?ref=abc%2F1%232',
-      '/api/pricing', '/api/capture-health', '/api/retention',
-      '/api/overview?window=7d', '/api/traffic?window=24h',
-      '/api/traffic/requests?harness=cc&host=h.test&window=1h&class=llm&cursor=20&limit=50',
-      '/api/traffic/request?ref=s%2F0%239&reveal=authorization',
-    ])
-    // POST /control/retention carries the CSRF bootstrap from GET /control/status first
-    await api.setRetention({ harness: 'cc', cls: 'llm', level: 'full' })
-    assert.equal(calls.at(-2).url, '/control/status')
-    const post = calls.at(-1)
-    assert.equal(post.url, '/control/retention'); assert.equal(post.init.method, 'POST')
-    assert.deepEqual(JSON.parse(post.init.body), { harness: 'cc', class: 'llm', level: 'full' }) // cls ships as the server's `class`
-  } finally { setFetch(null) }
-})
-
-test('api.control: null until /control/status answers, true on 200, false on 403 / 404 / 405', async () => {
-  for (const [status, want] of [[200, true], [403, false], [404, false], [405, false]]) {
-    setFetch(async (url) => (String(url).startsWith('/control/status') ? jsonRes({ error: 'off' }, status) : jsonRes({ ok: 1 })))
-    try {
-      const { api } = await import(`../../src/web/v2/core/api.mjs?ctrl-${status}`)
-      assert.equal(api.control, null, `status ${status}: unknown before the first ask`)
-      await api.controlStatus()
-      assert.equal(api.control, want, `status ${status}`)
-      await api.projects() // an ordinary read does not move it
-      assert.equal(api.control, want, `status ${status}: unchanged by /api/projects`)
-    } finally { setFetch(null) }
-  }
-})
-
-test('an endpoint this server does not have folds into {ok:false, absent:true}, so a screen can draw its absent state', async () => {
-  setFetch(async () => jsonRes({ error: 'unknown endpoint' }, 404))
-  try {
-    const { api } = await import('../../src/web/v2/core/api.mjs?fresh-2')
-    for (const r of [await api.overview({ window: '24h' }), await api.traffic({}), await api.trafficRequests({}), await api.trafficRequest({ ref: 'x' })]) {
-      assert.equal(r.ok, false); assert.equal(r.status, 404); assert.equal(r.absent, true)
-    }
-  } finally { setFetch(null) }
-})

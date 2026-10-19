@@ -4,6 +4,7 @@
 // legacy DeepSeek CLI) folded onto by every alias; the icons are asight's own drawings (see assets/harness/SOURCES.md).
 import { esc } from './fmt.mjs'
 import { mark } from './ui.mjs'
+import { asset } from './http.mjs'
 
 export const CHIP = Object.freeze({
   cc: { name: 'Claude Code', icon: 'cc.svg' },
@@ -71,7 +72,7 @@ export function sanitizeHarnessSvg(text) {
 
 const ICON_CACHE = new Map() // read-side id → Promise<inner svg | null>
 function loadIcon(k) {
-  return fetch(`assets/harness/${CHIP[k].icon}`).then((r) => (r.ok ? r.text() : null)).then((t) => {
+  return asset(`assets/harness/${CHIP[k].icon}`).then((t) => {
     if (t == null) return null
     const inner = sanitizeHarnessSvg(t)
     return inner == null ? null : `<svg class="hic-svg" viewBox="0 0 16 16" aria-hidden="true">${inner}</svg>`
