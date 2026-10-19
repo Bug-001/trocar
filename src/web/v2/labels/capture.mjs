@@ -183,7 +183,6 @@ export const ROUTING = Object.freeze({ driver: '驱动模式', proxy: '代理模
 export const SCOPE = Object.freeze({ agent: '自动', user: '你点名的 · 用户级', machine: '你点名的 · 机器级' })
 export const OPT_IN_STATE = Object.freeze({
   needed: '还没点名', done: '已点名', broken: '已点名,但入口失效', 'pending-admin': '等管理员',
-  'needs-admin': '关掉之后还没撤,要管理员',
 })
 export const ENTRY_STATE = Object.freeze({ intact: '完好', 'entry-missing': '不在了', 'entry-changed': '你之后改过' })
 export const CHANGE_REMOVAL = '关掉它的采集时一并移除'
