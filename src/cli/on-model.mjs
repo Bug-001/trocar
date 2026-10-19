@@ -102,7 +102,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
     if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
     const b = setupBlocked(r)
-    return out(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, doors: r.doors || {}, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit)
+    return out(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit)
   } finally { lock.release() }
   } finally { closeProcs() }
 }
