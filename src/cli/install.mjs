@@ -85,8 +85,13 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
       if (json || !isInteractive(io)) return needsYes(io, json, planned)
       if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
     }
-    const r = await locked(() => runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
-      wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) }))
+    const r = await locked(async () => {
+      const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
+        wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) })
+      const board = await boardPortRow(home, fs) // before the daemon starts below: it reads the port, never picks one
+      if (board) { r.pending.push(board); r.exit = 1 }
+      return r
+    })
     if (!r) return EXIT.incomplete
     // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs)
     const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.asight', 'collector'), env, fs, unit, register: true, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
@@ -167,17 +172,26 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
       try { appendEvent(path.join(home, '.asight', 'collector'), { event: EVENT.failure, where: 'install', code: (e && e.code) || 'install-error', reason }) } catch {}
       return { failed: reason }
     }
-    return { stdl, r: await inst.installCollector({ ...args, onPlan: () => {} }) }
+    const board = await boardPortRow(home, fs) // before installCollector starts the daemon: it reads the port, never picks one
+    return { stdl, board, r: await inst.installCollector({ ...args, onPlan: () => {} }) }
   })
   if (!done) return EXIT.incomplete
   if (done.failed) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [done.failed] }, null, 2)); else io.err(`asight install: ${done.failed}`); return EXIT.incomplete }
-  const { stdl, r } = done
-  const receipt = { ...newReceipt('install'), ok: true, undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created)], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], notes: r.plan ? r.plan.notes : [] }
+  const { stdl, r, board } = done
+  const receipt = { ...newReceipt('install'), ok: !board, ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created)], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], notes: r.plan ? r.plan.notes : [] }
   if (json) io.out(JSON.stringify(receipt, null, 2))
   else io.out(fit([r.already ? 'Already installed. Nothing was changed.' : "Installed. asight's certificates are in place.",
     ...(r.already ? [] : changeLines(receipt, { home })),
     ...receipt.notes.map((n) => `Note: ${n}`),
+    ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: asight install`] : []),
     'Next: asight on',
     `If asight itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
-  return EXIT.ok
+  return board ? EXIT.incomplete : EXIT.ok
+}
+
+/** The board's port (4.4 §Plan 「端口」), chosen once by install: none free (or the file cannot be written) is a pending row with the reason, never a throw. */
+async function boardPortRow(home, fs) {
+  const { ensureBoardPort } = await import('../collector/core/ingress-config.mjs')
+  const b = await ensureBoardPort({ dir: path.join(home, '.asight', 'collector'), fs })
+  return b.error ? { item: 'board', state: 'pending', reason: b.error } : null
 }

@@ -94,7 +94,7 @@ function planUninstall(w, m, purgeData = false) {
   const entries = usable ? m.entries.filter((e) => e.kind === 'json-key' || e.kind === 'text') : []
   return {
     changed: entries.map((e) => ({ path: e.path, change: `${e.kind === 'text' ? "asight's own lines" : (e.keys || []).join('.')} taken out`, backup: e.backup ?? null, ...(typeof e.harness === 'string' ? { harness: e.harness } : {}) })),
-    removed: [...(usable ? m.files.map((f) => f.path) : []), path.join(w.dir, 'state.json'), path.join(w.dir, 'control.json'), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : [])],
+    removed: [...(usable ? m.files.map((f) => f.path) : []), path.join(w.dir, 'state.json'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), backupDir(w.home), standalonePath(w.home), ...(w.fs.existsSync(netenvFile(w.home)) ? [netenvFile(w.home)] : []), ...(purgeData ? keptOf(w.home, w.fs).map((k) => k.path) : []), ...(m ? [manifestPath(w.dir)] : [])],
     kept: purgeData ? [] : keptOf(w.home, w.fs),
     notes: usable || !m ? [] : [`the install manifest is version ${JSON.stringify(m.version)}, which this build does not read: no entry would be touched`],
     autostart: { planned: true },
@@ -278,7 +278,7 @@ export async function runUninstall({ home = nodeOs.homedir(), env = process.env,
       rm(daemonLogPaths(home).dir)
       // the darwin key custody's signing helper (install put it there, 4.11 P1): it goes once no root key is left for it to remove — after undoRootKeys, which needs it
       const helper = w.platform === 'darwin' && !(m && !m.unsupported && m.entries.some((e) => e.kind === 'root-key')) ? signHelperPath(home, NATIVE.signHelper) : null
-      for (const p of [path.join(w.dir, 'run'), path.join(w.dir, 'control.json'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p)
+      for (const p of [path.join(w.dir, 'run'), path.join(w.dir, 'control.json'), path.join(w.dir, 'board.token'), w.lockFile, w.stateF, runtime, standalonePath(home), netenvFile(home), helper]) if (p) rm(p)
       removeEmptyDirs([path.dirname(standalonePath(home))], fs)
       // the door ports and their tokens (decision #16): the next install and on choose them again
       const ing = removeIngressConfig({ dir: w.dir, fs })
