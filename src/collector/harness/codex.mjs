@@ -89,9 +89,13 @@ const proxyMode = {
   forms: [
     { id: 'codex.cli', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },
     { id: 'codex.cli-standalone', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'codex' }], verified: { darwin: true, win32: true } },
-    { id: 'codex.vscode', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ base: 'home', path: '.vscode/extensions', glob: 'openai.chatgpt-*' }], verified: { darwin: true, win32: true } },
+    { id: 'codex.vscode', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os', present: [{ base: 'home', path: '.vscode/extensions', glob: 'openai.chatgpt-*' }], verified: { darwin: true, win32: true },
+      // the extension starts (and ends) its own `codex … app-server`: the user cannot quit it, and killing it is the editor's business — a window reload is
+      // what makes it start one that reads .env again (mac machine 2026-10-19: the CLI's kill step was printed for these processes)
+      restart: { hint: 'In VS Code, run Developer: Reload Window (the ChatGPT extension then starts its codex again); or quit VS Code and start it again' } },
     { id: 'codex.app', os: ['darwin', 'win32'], route: 'env', cert: 'root', trust: 'os',
       present: [perOs({ darwin: { base: 'abs', path: '/Applications', glob: 'ChatGPT.app' }, win32: { base: 'localAppData', path: 'Packages', glob: 'OpenAI.Codex_*' } }), perOs({ darwin: { base: 'abs', path: '/Applications', glob: 'Codex.app' } })],
+      restart: { hint: 'Quit the app (not just its window), then start it again' },
       verified: { darwin: true, win32: true } },
     { id: 'codex.wsl', os: ['win32'], route: 'env', cert: 'root', trust: 'os', present: [{ command: 'wsl' }], verified: { win32: { reason: 'out-of-scope' } } }, // D56⑥
   ],

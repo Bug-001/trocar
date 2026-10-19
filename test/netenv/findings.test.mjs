@@ -257,6 +257,34 @@ test('§3.7: a note carries no `Fix` (it is not a problem), and one fact several
   assert.equal(two.filter((l) => l.startsWith('Note: ')).length, 2)
 })
 
+// B3 (the mac machine 2026-10-19): the live codex processes were the VS Code extension's app-servers, and the restart step printed was the CLI's
+// ("end the managed codex app-server process"). The steps come from the form the process runs from (its `paths`), as data in the descriptor.
+test('V49 the restart steps come from the form the process belongs to (the descriptor\'s per-form restart), not one fixed sentence', async () => {
+  const descs = await loadHarnesses()
+  const codex = descs.find((d) => d.name === 'codex')
+  const byForm = Object.fromEntries(codex.proxyMode.forms.map((f) => [f.id, f.restart || null]))
+  assert.ok(byForm['codex.vscode'] && byForm['codex.vscode'].hint, 'the descriptor carries the VS Code form\'s own words')
+  const EXT = '/h/.vscode/extensions/openai.chatgpt-0.5.17'
+  const at = (exe, paths, id) => {
+    const fm = form(id, { paths, procs: [proc(5530, { name: 'codex app-server', exe })] })
+    const f = pfacts('codex', fm, fwForm(17992), { platform: 'darwin' })
+    f.harnesses.codex.forms[0].restart = byForm[id]
+    f.harnesses.codex.procs[0].reason = 'config-after-start'
+    f.harnesses.codex.procs[0].trusted = false
+    f.harnesses.codex.procs[0].hint = null
+    const fd = findingsOf(f).find((x) => x.code === 'config-after-start')
+    return { fd, text: fd ? fd.commands.map((c) => c.run).join('\n') : '' }
+  }
+  const ext = at(`${EXT}/bin/macos-aarch64/codex`, [EXT], 'codex.vscode')
+  assert.ok(ext.fd, 'the process started before capture was on: config-after-start')
+  assert.match(ext.text, /Reload Window/, 'the extension\'s own step')
+  assert.doesNotMatch(ext.text, /kill |Quit every codex window/, 'not the CLI\'s step for a process the user cannot quit')
+  const cli = at('/h/.local/bin/codex', ['/h/.local/bin/codex'], 'codex.cli')
+  assert.match(cli.text, /Quit every codex window[\s\S]*kill 5530/, 'the CLI form keeps the harness\'s own step, with the managed process')
+  // the why names what was written after the process started, not only the certificate
+  assert.doesNotMatch(ext.fd.why, /trust entry/)
+})
+
 // ── where the line to edit is (V49): the setting's own source, not the first key of the first file ────────────────────────────────────────────────────────────────────────────────────────────────────
 const CC_FILES = [{ path: '/h/.claude/settings.json', format: 'json', key: 'env.HTTPS_PROXY' }, { path: '/h/.claude.json', format: 'json', key: 'env.HTTPS_PROXY' }]
 const CODEX_FILES = [{ path: '/h/.codex/.env', format: 'dotenv', key: 'HTTPS_PROXY' }, { path: '/h/.codex/config.toml', format: 'dotenv', key: 'x' }]

@@ -6,7 +6,7 @@
 import nodeFs from 'node:fs'
 import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
-import { isPresent, readSrc, holds } from './sources.mjs'
+import { isPresent, readSrc, holds, presentPaths } from './sources.mjs'
 import { planRoutes } from './entries.mjs'
 import { upstreamFor, isAsightDoorUrl } from './chain.mjs'
 import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
@@ -90,6 +90,9 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
         proxy: { connected: intact && door_up, entry_intact: intact, door_up, upstream, written: main ? red(main.door ?? (typeof main.value === 'string' ? main.value : null)) : null, prior: red(priorRaw) },
         entry: main ? { where: main.keys ? `${main.path}#${main.keys.join('.')}` : main.path, kind: route.kind || main.kind, asight: true, intact } : null,
         plan: blocked ? { reason: blocked.reason, at: blocked.at ?? null, code: blocked.code } : null,
+        // the form's own way of being made to read its settings again, and the places it runs from: the doctor's restart steps come from the form the
+        // process belongs to, never one fixed sentence (1.6 §9.6). No `restart` of its own: the harness's (`proxy.restart`), through the facts' behaviour.
+        restart: f.restart || null, paths: presentPaths(f, ctx),
         hook: HOOKS.has(carrier) && !certificate.in_effect && ['entry-changed', 'entry-missing'].includes(certificate.code) ? certificate.code : null,
         setting: main ? settingOf(priorRaw, priorItem || main) : null,
         notes: plan.notes.filter((n) => !n.form || n.form === f.id).map((n) => ({ code: n.code, text: n.text, ...(n.paths ? { paths: n.paths } : {}) })),
@@ -111,7 +114,7 @@ export function netFormsOf({ model, status, procs = {}, systemProxy = null, sett
     const row = (status.harnesses || []).find((x) => x.id === h) || {}
     const clients = (status.holders || []).filter((x) => x.harness === h).map((x) => x.pid)
     forms[h] = list.map((x) => ({ id: x.id, setting: x.setting || settings[h] || { value: null, scheme: null, host: null, port: null, source: [], sha256: null }, systemProxy, procs: procs[h] || [],
-      entry: x.entry, route: x.plan, hook: x.hook, certificate: x.certificate, proxy: x.proxy, notes: x.notes }))
+      entry: x.entry, route: x.plan, hook: x.hook, certificate: x.certificate, proxy: x.proxy, notes: x.notes, restart: x.restart, paths: x.paths }))
     for (const x of list) {
       const written = x.proxy.written ? parseProxyUrl(x.proxy.written) : null
       const port = doors[`${h}:${x.route}`] ?? (written ? written.port : null)

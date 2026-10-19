@@ -49,16 +49,27 @@ function removeAt(h, place) {
 // darwin: the kernel's own TCP table, the one `status` reads (arch/darwin/netfacts.mjs) — `lsof -nP -iTCP:<port> -sTCP:LISTEN` names only the
 // processes whose fd table this user may open, so a port held by ANOTHER user's program came back empty, which is the case this step is for.
 const portCheck = (ctx, port) => os(ctx, { linux: `ss -ltnp 'sport = :${port}'`, darwin: `netstat -anv -p tcp | grep -E '\\.${port} .*LISTEN'`, win32: `netstat -ano -p TCP | findstr ":${port}"` })
-/** The steps that make an agent read its settings again: the harness's own words (the application step), and, where the harness keeps its settings in a managed process its windows do not end (`restart.managed`),
- *  the command that ends it, with the pid the facts hold. A managed process that is not running has nothing to end. */
+/** The steps that make an agent read its settings again: the words of the form the process belongs to (`fm.restart` — its places are `fm.paths`, so an
+ *  extension's app-server gets the editor's reload, not the CLI's kill), else the harness's own (`behaviour.restart`); and, where the harness keeps its
+ *  settings in a managed process its windows do not end (`restart.managed`), the command that ends it, with the pid the facts hold. A managed process that
+ *  is not running has nothing to end. */
 function restartSteps(ctx) {
-  const r = (ctx.hf.behaviour && ctx.hf.behaviour.restart) || {}
+  const r = formRestart(ctx) || (ctx.hf.behaviour && ctx.hf.behaviour.restart) || {}
   const steps = [gui(r.hint ? r.hint : `Quit every ${ctx.h} window, then start it again`)]
   if (r.managed === true && r.processes) {
     const name = r.processes.split(/\s+/).filter((t) => !t.startsWith('-')).join(' ') // `codex app-server --managed-daemon` -> the name a process of it is listed under: `codex app-server`
     for (const p of ctx.hf.procs) if (p.name === name) steps.push(os(ctx, { linux: `kill ${p.pid}`, darwin: `kill ${p.pid}`, win32: `Stop-Process -Id ${p.pid}` }))
   }
   return steps
+}
+// which form a process runs from: the first form one of whose places (`paths`) its executable is under. One file path, compared the way both platforms
+// spell it (separators and case): no form of any harness is told apart by either.
+const norm = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+const under = (exe, at) => { const a = norm(at); const e = norm(exe); return e === a || e.startsWith(`${a}/`) }
+function formRestart(ctx) {
+  const p = (ctx.hf.procs || []).find((x) => x.pid === ctx.pid && x.exe) || null
+  const fm = p ? (ctx.hf.forms || []).find((f) => (f.paths || []).some((at) => under(p.exe, at))) : null
+  return (fm && fm.restart) || (ctx.fm && ctx.fm.restart) || null
 }
 const settingOf = (hf) => (hf.setting && !hf.setting.unknown && hf.setting.value ? hf.setting : ((hf.forms || []).map((f) => f.setting).find((s) => s && s.value) || null))
 const deadProxy = (t) => t.nodes.find((n) => n.kind === 'proxy' && n.down === true) || null

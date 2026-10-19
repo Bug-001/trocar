@@ -97,6 +97,15 @@ export function isPresent(form, ctx) {
   })
 }
 
+/** The places of a form that are there now (its `present` places, a `{ command }` as the path it resolves to): which form a running process belongs to is
+ *  read from them (1.6 §9.6: the restart steps come from the form the process belongs to). */
+export function presentPaths(form, ctx) {
+  return (form.present || []).flatMap((p) => {
+    if (p && 'command' in p) { const at = ctx.which(p.command); return at ? [at] : [] }
+    try { return resolveLoc(p, ctx).filter((f) => ctx.exists(f)) } catch { return [] }
+  })
+}
+
 // The smallest YAML reader for the key paths descriptors declare: block maps and lists (of scalars or of maps), one-line flow
 // collections, plain / single- / double-quoted scalars kept as strings, comments, one leading `---`. Anything else (multi-line flow, block scalars, anchors, tags, tabs in indentation) throws,
 // so readSrc reports { error } rather than guessing.
