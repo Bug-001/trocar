@@ -56,7 +56,7 @@ for (const os of ['darwin', 'win32']) for (const shape of SHAPES) {
       assert.equal(res.ok, true)
       assert.deepEqual(read(path.join(L.dir, 'asight-1.json')), { [L.key]: PAC })
       assert.equal(read(L.metaFile)[L.idKey], 'asight-1')
-      assert.deepEqual(res.records.map((x) => [x.kind, x.role || x.keys.join('.')]), [['json-key', L.key], ['json-key', L.idKey], ['owned-file', 'config-entry']])
+      assert.deepEqual(res.records.map((x) => [x.kind, x.role || x.keys.join('.')]), [['json-key', L.key], ['json-key', L.idKey]], 'one record per file: the created entry is its own json-key (4.11 §4), never a second owned-file')
       assert.equal(routeEntry('json-key').check(L.ctx, res.records).ok, true)
       routeEntry('json-key').undo(L.ctx, res.records)
       assert.deepEqual(L.snap(), L.before)
@@ -64,6 +64,17 @@ for (const os of ['darwin', 'win32']) for (const shape of SHAPES) {
     })
   }
 }
+
+test('CM18 — the user edited _meta.json (a file that was there before on) during on: off keeps that edit, takes asight\'s key out, and leaves every other byte as it was', () => {
+  const L = lib('darwin', { meta: { appliedId: '', entries: [{ id: 'u1', name: 'mine' }] }, entries: { u1: { inferenceProvider: 'gateway' } } })
+  const recs = routeEntry('json-key').write(L.ctx, DOOR).records
+  const created = path.join(L.dir, 'asight-1.json')
+  fs.writeFileSync(L.metaFile, JSON.stringify({ ...read(L.metaFile), windowBounds: { w: 900 } }, null, 2) + '\n')
+  assert.equal(routeEntry('json-key').undo(L.ctx, recs).ok, true)
+  assert.deepEqual(read(L.metaFile), { appliedId: '', entries: [{ id: 'u1', name: 'mine' }], windowBounds: { w: 900 } }, 'the edit stays, the applied id is back at the user\'s value, asight\'s id is gone')
+  assert.ok(!fs.existsSync(created), 'the entry file asight created is gone')
+  assert.deepEqual(read(path.join(L.dir, 'u1.json')), { inferenceProvider: 'gateway' }, 'the user\'s own entry, byte for byte')
+})
 
 test('CM18 — the user switched appliedId during on: their choice stays, the created entry (unchanged) goes', () => {
   const L = lib('darwin', { meta: { entries: [] }, entries: { u2: { inferenceProvider: 'gateway' } } })

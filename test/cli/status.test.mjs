@@ -189,7 +189,7 @@ const run = runStatus
 
 test('the daemon answers: each agent is captured or says why, and the exit code is 1 while one is not; every agent captured is exit 0', async () => {
   const s = await installedHome()
-  const agents = [{ pid: 4121, agent: 'claude-code', trusted: true }, { pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: 'the trust entry was written after this process started; restart it once' }]
+  const agents = [{ pid: 4121, agent: 'claude-code', trusted: true }, { pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: "asight's settings for this agent were written after this process started; restart it once" }]
   const docOf = async (argv, o) => (await run(s, [...argv, '--json'], o)).io.json()
   let r = await run(s, [], { request: asDaemon(reply({ agents })) })
   assert.equal(r.exit, 1, r.text)

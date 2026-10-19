@@ -75,11 +75,13 @@ function writeJson(ctx, door) {
   let file, create = null
   if (r.select) { const t = selectTarget(ctx); if (t.code) return t; file = t.file; create = t.create || null } else file = resolveLoc(r.file, ctx)[0]
   if (!file) return notRouted('no-path')
-  const text = create ? '{}\n' : readText(ctx, file)
-  if (text === null && r.absent === 'not-routed') return notRouted('absent', file)
+  // One file, one record (4.11 §4): an entry file asight creates is carried by its own json-key record — `existed_before: false` and `created_dirs` say the
+  // file and its directories are asight's, and `off` deletes both once the keys are out. A second record of the same file (an owned-file holding the hash of
+  // the empty object) disagreed with it the moment the keys went in, and status read a byte-intact entry as changed (mac 2026-10-19).
+  const text = readText(ctx, file)
+  if (!create && text === null && r.absent === 'not-routed') return notRouted('absent', file)
   const doc = parse(text)
   if (r.value === 'pac-url' && doc) { const g = pacGate(ctx, doc, file, value); if (g) return g }
-  if (create) { writeOwnedFile({ ...b, role: 'config-entry', file, data: text, exclusive: true }); out.push(ctx.manifest.files.at(-1)) }
   for (const keys of r.proxyKeys || []) out.push(applyJsonKey({ ...b, file, keys, value }))
   if (r.noProxyKeys) { const v = noProxy(ctx, r.noProxyKeys.map((k) => (doc ? getPath(doc, k) : undefined))); for (const keys of r.noProxyKeys) out.push(applyJsonKey({ ...b, file, keys, value: v })) }
   for (const a of r.arrayItems || []) out.push(applyJsonArrayItem({ ...b, file, keys: a.keys, item: a.value }))
@@ -142,7 +144,7 @@ function check(ctx, records) {
   for (const x of records) {
     const t = readText(ctx, x.real_path || x.path)
     let ok = false
-    if (x.kind === 'owned-file') { try { const b = ctx.fs.readFileSync(x.path); ok = x.role === 'config-entry' || sha256(b) === x.sha256 } catch { ok = false } } // a created entry: there; its key is its json-key's
+    if (x.kind === 'owned-file') { try { ok = sha256(ctx.fs.readFileSync(x.path)) === x.sha256 } catch { ok = false } }
     else if (x.kind === 'text') { const env = parseDotenv(t || ''); ok = t != null && Object.entries(x.vars).every(([k, v]) => env.get(k) === v) }
     else { const v = getPath(parse(t), x.keys); ok = x.kind === 'json-array-item' ? Array.isArray(v) && v.some((e) => JSON.stringify(e) === JSON.stringify(x.item)) : v === x.value }
     if (!ok) failing.push(x.path)

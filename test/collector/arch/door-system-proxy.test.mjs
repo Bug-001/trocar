@@ -72,13 +72,17 @@ test('the door hands the P7 chain the system proxy in its shape: on darwin and w
   }
 })
 
-// 1.6 §9.5 (D49 ⑤): the model daemon's producer of `netenv-changed`. A change of the system proxy (on, off, another port, PAC, unreadable) is one
-// `netenv-change` event of the closed set (captured: the doors follow it), zero `failure`; the baseline read and an unchanged read write nothing.
-test('a system proxy change is one netenv-change (netenv-changed, captured), never a failure; no change writes nothing — darwin and win32', async () => {
+// 1.6 §9.5 (D49 ⑤) · 4.7「变了 = 归一后的那一句话变了」: the model daemon's producer of `netenv-changed`. A change of the SUMMARIZED state (on, off,
+// another port, PAC, unreadable) is one `netenv-change` event of the closed set (captured: the doors follow it), zero `failure`; the baseline read, an
+// unchanged read, a raw difference the summary does not carry, and one unreadable reading between two readings that say the same, all write nothing.
+test('a system proxy change is one netenv-change (netenv-changed, captured), never a failure; no change of the summarized state writes nothing — darwin and win32', async () => {
   const steps = [{ on: true, host: '127.0.0.1', port: 7897 }, { on: true, host: '127.0.0.1', port: 7897 }, { on: true, host: '10.1.2.3', port: 3128 }, { on: false }, { on: true, pac: true }, null, { on: true, host: '127.0.0.1', port: 7897 }]
   for (const os of Object.keys(OS)) {
     const box = { s: steps[0] }, events = [], failures = []
-    const w = await systemProxyWatch({ up: OS[os](null).up, read: () => { const f = OS[os](box.s); return f.read(f.io) }, failure: (e) => failures.push(e), event: (r) => events.push(r) })
+    let hold = null // the hold a reading that could not be read sits in: the test fires it by hand, so "it is still unreadable" is a decision, not a sleep
+    const timers = { setTimeout: (fn) => { hold = fn; return 1 }, clearTimeout: () => { hold = null } }
+    const start = () => systemProxyWatch({ up: OS[os](null).up, read: () => { const f = OS[os](box.s); return f.read(f.io) }, failure: (e) => failures.push(e), event: (r) => events.push(r), timers })
+    const w = await start()
     try {
       for (const s of steps.slice(1)) { box.s = s; await w.poll() }
     } finally { w.stop() }
@@ -88,8 +92,29 @@ test('a system proxy change is one netenv-change (netenv-changed, captured), nev
       ['netenv-change', 'netenv-changed', true, 'http://127.0.0.1:7897', 'http://10.1.2.3:3128'],
       ['netenv-change', 'netenv-changed', true, 'http://10.1.2.3:3128', 'off'],
       ['netenv-change', 'netenv-changed', true, 'off', 'pac'],
-      ['netenv-change', 'netenv-changed', true, 'pac', 'system-proxy-unreadable'],
-      ['netenv-change', 'netenv-changed', true, 'system-proxy-unreadable', 'http://127.0.0.1:7897'],
+      ['netenv-change', 'netenv-changed', true, 'pac', 'http://127.0.0.1:7897'], // the unreadable reading between pac and 7897 is not a change
     ], os)
+    // the same reading on both sides of an unreadable one: not one event, however long it flaps (the mac machine's `off -> system-proxy-unreadable -> off`)
+    events.length = 0
+    box.s = { on: false }
+    const u = await start()
+    try {
+      for (const s of [null, { on: false }, null, { on: false }]) { box.s = s; await u.poll() }
+      assert.deepEqual(events, [], os)
+      box.s = null // and one that stays: said once, when the hold is over
+      await u.poll()
+      assert.deepEqual(events, [], `${os}: not said before the hold is over`)
+      hold()
+      assert.deepEqual(events.map((e) => [e.from, e.to]), [['off', 'system-proxy-unreadable']], os)
+    } finally { u.stop() }
+    // a stop inside the hold window (the daemon exits) says the held state instead of dropping it (D38)
+    events.length = 0
+    box.s = { on: false }
+    const v = await start()
+    box.s = null
+    await v.poll()
+    assert.deepEqual(events, [], `${os}: still held`)
+    v.stop()
+    assert.deepEqual(events.map((e) => [e.from, e.to]), [['off', 'system-proxy-unreadable']], `${os}: the hold the stop found is written, not dropped`)
   }
 })

@@ -9,7 +9,7 @@ import path from 'node:path'
 import { userUnit } from '../../src/collector/arch/linux/unit.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
-import { readProxySetting, adoptedRecord, detectDrift, recordDrift, driftCheck, newDriftState, sameAdoption, driftRoutingOf } from '../../src/netenv/adopt.mjs'
+import { readProxySetting, proxyPlaces, adoptedRecord, detectDrift, recordDrift, driftCheck, newDriftState, sameAdoption, driftRoutingOf } from '../../src/netenv/adopt.mjs'
 import { settingSha } from '../../src/netenv/redact.mjs'
 import { checkRecord } from '../../src/health/codes.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
@@ -318,4 +318,18 @@ test('D49: a record `on` wrote before (holding a `vpn` key) is the same adoption
   const facts = { routing: 'driver', harnesses: { codex: { setting } }, vpn: { product: 'mihomo', version: '1', port: 7890, tun: false } }
   assert.equal(adoptedRecord({ facts, topology: null, h: 'codex', prev: old, paths: null }), old, 'nothing to rewrite')
   assert.equal('vpn' in adoptedRecord({ facts, topology: null, h: 'codex', prev: null }), false, 'and a new record does not hold one')
+})
+
+// ── every place a harness holds a proxy address (1.6 附录 B `places`): what a finding names for the user to remove by hand ───────────────────────────────────────
+test('proxyPlaces: every file key and variable that holds a proxy address now, in the descriptor\'s order — not only the one that wins; a value that is not a URL is no place', () => {
+  const home = tmpDir('places')
+  const d = D['claude-code']
+  const keys = d.proxy.files[0].keys.map((k) => k.join('.'))
+  const file = d.proxy.files[0].path({ home, env: {} })
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, `${JSON.stringify({ env: Object.fromEntries(d.proxy.files[0].keys.map((k) => [k[k.length - 1], 'http://127.0.0.1:7897'])) })}\n`)
+  const places = proxyPlaces(d, { home, env: { [d.proxy.env[0]]: 'not a url' } })
+  assert.deepEqual(places.map((p) => [p.kind, p.path, p.key, p.host, p.port]), keys.map((k) => ['file', file, k, '127.0.0.1', 7897]), 'both keys of that file, in the descriptor\'s order')
+  assert.deepEqual(proxyPlaces(d, { home, env: { [d.proxy.env[0]]: 'http://10.0.0.9:3128' } }).at(-1), { kind: 'env', name: d.proxy.env[0], scheme: 'http', host: '10.0.0.9', port: 3128 })
+  assert.deepEqual(proxyPlaces(d, { home: tmpDir('places-none'), env: {} }), [], 'no file, no variable: no place')
 })

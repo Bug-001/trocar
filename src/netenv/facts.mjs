@@ -15,7 +15,7 @@
 // `archFacts(ctx)` is the platform's part, `ctx = { status, harnesses, settings, env, home, deps }` → `{ routing, listeners?, procs?: { <h>: [proc] }, forwarder?, forms?: { <h>: [form] }, systemProxy?,
 // unknowns? }`; one that throws (not the test guard's refusal) leaves the routing unknown and says why. A platform without one has routing 'unknown'. `ctx.deps` carries the platform's own readers (the Windows helper) — the CLI injects no platform reader of its own.
 import nodeFs from 'node:fs'
-import { readProxySetting, proxyFilesOf } from './adopt.mjs'
+import { readProxySetting, proxyFilesOf, proxyPlaces, writtenPlaces } from './adopt.mjs'
 import { noProxyNames } from './noproxy.mjs'
 
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the read failed" (0.1 §3)
@@ -63,6 +63,10 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
     const procs = (part.procs && part.procs[h.id]) || []
     f.harnesses[h.id] = {
       installed: h.installed, entry: { state: h.entry.state }, installedAt: iso(h.installedAt), setting, fileSetting: fileSettings[h.id],
+      // every place it holds a proxy address now (not only the one that wins): the places a finding names for the user to remove by hand (1.6 附录 B)
+      proxyPlaces: proxyPlaces(d, { home, env, fs }),
+      // the places asight itself wrote for it (its on-phase manifest items): a finding never asks the user to edit one of them (1.6 附录 B)
+      writtenPlaces: writtenPlaces(status.manifest && status.manifest.value, h.id),
       systemProxy: part.systemProxy && (pr.systemProxy.http !== false || pr.systemProxy.ws !== false) ? part.systemProxy : null,
       behaviour: { env: [...pr.env], follows: { ...pr.systemProxy }, schemes: [...pr.schemes], unsupported: { ...pr.unsupported }, branches: [...pr.branches], measured: pr.measured[platform] || 'inferred', restart: { ...pr.restart }, files: proxyFilesOf(d, { home, env }),
         fileKeys: pr.files.map((x) => ({ path: x.path({ home, env }), format: x.format, key: x.format === 'json' ? x.keys[0].join('.') : x.keys[0] })) },

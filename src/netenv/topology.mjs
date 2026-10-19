@@ -239,7 +239,7 @@ function proxyTopology(F, h, hf) {
   }
   if (!branches.length) throw new Error('the harness has no form to draw')
   // the drift of a field asight owns (4.8 §10.3): the user changed the entry's key, asight is bypassed — the line names the one command that re-adopts it. Driver mode's proxy-changed is
-  // expected (the kernel steers whatever the setting says; 1.6 §9.6 gives it no command), so the note is this drawing's, said once per harness however many forms share the group.
+  // expected (the kernel steers whatever the setting says; 1.6 附录 B gives it no command), so the note is this drawing's, said once per harness however many forms share the group.
   if (branches.some((x) => x.reason === 'proxy-changed')) notes.push(`To put asight back on its path: asight on ${h}`)
   for (const u of F.unknowns.filter((x) => x.reason === 'kernel-filter-invisible')) notes.push('A kernel filter such as WFP is not visible to your user.')
   const b = branches[0]

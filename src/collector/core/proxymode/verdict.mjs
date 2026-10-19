@@ -67,7 +67,7 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   const started = ms(facts.startedAt), installed = ms(record.carrierInstalledAt)
   if (Number.isNaN(installed)) return fwd('not-routed', `${form.id} has no carrier installed`)
   if (Number.isNaN(started)) return fwd('start-time-unknown', `the start time of pid ${facts.pid} could not be read`)
-  if (started <= installed) return fwd('config-after-start', `pid ${facts.pid} started before ${form.id}'s carrier was installed; restart it once`)
+  if (started <= installed) return fwd('config-after-start', `pid ${facts.pid} started before asight's settings for ${form.id} were in place (its proxy entry and the certificate it needs); restart it once`)
   const pctx = { ...ctx, env: facts.env || {}, cwd: facts.cwd ?? undefined } // the process's env and cwd, never the daemon's
   const t = trustVerdict(form.trust !== 'root' && pm.trusts && pm.trusts[form.trust], pctx, facts, record)
   if (t) return t

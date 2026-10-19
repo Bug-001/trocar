@@ -254,7 +254,7 @@ export function validateTopology(t) {
 }
 
 export const SHELLS = Object.freeze(['sh', 'powershell', 'gui'])
-/** Problems with one finding of `doctor --json` (1.6 §9.6, V49; `[]` = valid): a code, a class, a what and a why that say something, every command a whole line with its shell and no `<…>` left to fill in, a verify.
+/** Problems with one finding of `doctor --json` (1.6 附录 B, V49; `[]` = valid): a code, a class, a what and a why that say something, every command a whole line with its shell and no `<…>` left to fill in, a verify.
  *  A failure or an expected finding has at least one command; a hint may have none. */
 export function validateFinding(f) {
   if (!isObject(f)) return ['finding: not an object']
@@ -270,6 +270,15 @@ export function validateFinding(f) {
       if (!isObject(c) || !isString(c.run) || c.run.trim() === '') bad.push(`commands[${i}].run: empty`)
       else if (/<[^<>\n]+>/.test(c.run)) bad.push(`commands[${i}].run: has a <…> placeholder left`)
       if (isObject(c) && !SHELLS.includes(c.shell)) bad.push(`commands[${i}].shell: not one of ${SHELLS.join(' ')}`)
+    })
+  }
+  if (f.places !== undefined) { // the user's own places a finding asks them to edit by hand (1.6 附录 B): file+key, a variable, or the OS's proxy
+    if (!Array.isArray(f.places)) bad.push('places: not a list')
+    else f.places.forEach((p, i) => {
+      if (!isObject(p)) { bad.push(`places[${i}]: not an object`); return }
+      if (p.kind === 'env') { if (!isString(p.name) || !p.name.trim()) bad.push(`places[${i}].name: empty`) }
+      else if (p.kind === 'file') { if (!isString(p.path) || !p.path.trim()) bad.push(`places[${i}].path: empty`); if (!isString(p.key) || !p.key.trim()) bad.push(`places[${i}].key: empty`) }
+      else if (p.kind !== 'system') bad.push(`places[${i}].kind: ${JSON.stringify(p.kind)} is not file, env or system`)
     })
   }
   return bad

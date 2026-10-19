@@ -64,14 +64,28 @@ export async function backendsFor({ os, home, run = null, env = process.env, fs 
 
 /** The system proxy the door hands the P7 chain (4.11 P7; D49): the arch's watcher over `read`, each answer put in the chain's shape by the arch's own
  *  `chainSystemProxy` ({ url, bypass } · { pac } · { ok: false, why } · null) — the one place a raw reader answer (the scutil dictionary, the registry values)
- *  becomes what core/proxymode/chain.mjs reads; the chain never sees a raw answer. `io`: what `read` needs ({ helper } on win32); `event`: the daemon's event writer. → { now(), poll() (read now, as the timer does), stop() }. */
-export async function systemProxyWatch({ up, read, io = {}, failure = () => {}, event = () => {} }) {
-  const watch = up.watchSystemProxy({ ...io, read, initial: await read(io).catch(() => null), onError: failure })
-  // 1.6 §9.5 (D49 ⑤): a change of the system proxy is one `netenv-change` (`netenv-changed`, captured: the door follows it per connection), zero failures.
-  // from / to: the chain's answer as one word (the url without credentials, `pac`, `off`, or why it cannot be followed)
+ *  becomes what core/proxymode/chain.mjs reads; the chain never sees a raw answer. `io`: what `read` needs ({ helper } on win32); `event`: the daemon's event writer.
+ *  `holdMs`: how long a reading that could not be read is held before it is said to be the state (one watch interval and a bit; see below). → { now(), poll() (read now, as the timer does), stop() }. */
+export async function systemProxyWatch({ up, read, io = {}, failure = () => {}, event = () => {}, holdMs = 11000, timers = { setTimeout, clearTimeout } }) {
+  const initial = await read(io).catch(() => null)
+  const watch = up.watchSystemProxy({ ...io, read, initial, onError: failure })
+  // 1.6 §9.5 (D49 ⑤) · 4.7「变了 = 归一后的那一句话变了」: a change of the system proxy is one `netenv-change` (`netenv-changed`, captured: the door follows it per
+  // connection), zero failures. from / to: the chain's answer as one word (the url without credentials, `pac`, `off`, or why it cannot be followed). The raw
+  // readings move more than the word does: a difference the word does not carry is no event (`off -> off`), and one reading that could not be read, between
+  // two readings that say the same, is no event either — it is held for `holdMs` and only said if the state is still that then (the mac machine 2026-10-19
+  // wrote `off -> off` and `off -> system-proxy-unreadable -> off` several times a minute).
   const word = (raw) => { const c = up.chainSystemProxy(raw); return c == null ? 'off' : c.url ? redactProxyUrl(c.url) : c.pac ? 'pac' : (c.why || 'unreadable') }
-  watch.on('change', ({ before, after }) => recordDrift({ drift: { code: 'netenv-changed', from: word(before), to: word(after), captured: true }, h: null, desired: null, appendEvent: event }))
-  return { now: () => up.chainSystemProxy(watch.last()), poll: () => watch.poll(), stop: () => watch.stop() }
+  const readable = (raw) => { const c = up.chainSystemProxy(raw); return !(c && c.ok === false) }
+  let said = word(initial), held = null
+  const say = (to) => { if (to === said) return; const from = said; said = to; recordDrift({ drift: { code: 'netenv-changed', from, to, captured: true }, h: null, desired: null, appendEvent: event }) }
+  const drop = () => { if (held) { timers.clearTimeout(held); held = null } }
+  watch.on('change', ({ after }) => {
+    drop()
+    if (readable(after)) return say(word(after))
+    held = timers.setTimeout(() => { held = null; say(word(watch.last())) }, holdMs)
+    if (held && typeof held.unref === 'function') held.unref()
+  })
+  return { now: () => up.chainSystemProxy(watch.last()), poll: () => watch.poll(), stop: () => { const pending = !!held; drop(); if (pending) say(word(watch.last())); watch.stop() } } // a daemon that goes down inside the hold window still says the state it was holding (D38: no read that failed is left unsaid)
 }
 
 /** The door's readers of the world for the model collector (4.11 §1, createModelCollector): who owns a socket and that pid's facts, its env / cwd /

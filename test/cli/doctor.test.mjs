@@ -156,7 +156,7 @@ test('dependencies are looked up in the files, never with `which` (§3.7 prints 
 test('doctor explains the same harnesses `status` judges (the daemon\'s answer, every agent captured or why not), and its exit is the capture\'s alone (B-7)', async () => {
   const s = await installedHome()
   const src = path.join(s.home, 'src'); capture(src)
-  const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: 'the trust entry was written after this process started; restart it once' }]
+  const agents = [{ pid: 4388, agent: 'claude-code', trusted: false, reason: 'config-after-start', hint: "asight's settings for this agent were written after this process started; restart it once" }]
   const before = s.sys.exec.calls.length
   const r = await doctor(s, [], { source: src, deps: { request: asDaemon(reply({ agents })) } })
   assert.equal(r.exit, 0, `status would say 1 here (an agent is not captured); doctor's exit is the capture's:\n${r.text}`)

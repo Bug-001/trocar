@@ -1,5 +1,5 @@
 // findings-win32.mjs (src/netenv) — the Windows half of `doctor`'s catalogue (RFC 4.8 §10.4, the kernel-era rows retired with the kernel — D47's twin: the forwarder-* family and the fallback verdict
-// have no producer on any arch now, and the engine's per-group doors are the only local proxy): the commands of 1.6 §9.6's codes on Windows, one entry per code row of the §10.4 table, every value
+// have no producer on any arch now, and the engine's per-group doors are the only local proxy): the commands of 1.6 附录 B's codes on Windows, one entry per code row of the §10.4 table, every value
 // filled from the facts (a value that could not be read says 「不知道 · <原因>」, never a `<…>` placeholder). `src/netenv/findings.mjs` picks an entry from here first on win32; a field an entry leaves
 // out falls back to the cross-platform catalogue's, and an entry for a code the cross-platform catalogue does not have (`form-unsupported`, `engine-port-taken`,
 // `socktable-unavailable`) defines every field itself. `not-routed` splits by the `why` the group's plan gave (`system-proxy-pac` · `system-proxy-unreadable` · `upstream-unparseable`, whose
@@ -70,11 +70,13 @@ export const FINDINGS_WIN32 = {
     verify: (c) => `asight status ${c.h}`,
   },
   'proxy-dead': {
-    commands: (c) => [netstat(c.dead && c.dead.port), gui(`Start your proxy, so that it listens on ${c.dead ? `${c.dead.addr}:${c.dead.port}` : unknownValue('address', 'absent')}`), gui('Or turn off the system proxy that points at it')],
+    commands: (c) => [netstat(c.dead && c.dead.port), gui(`Start your proxy, so that it listens on ${c.dead ? `${c.dead.addr}:${c.dead.port}` : unknownValue('address', 'absent')}`), ...(c.removeOwn || []), gui('Or turn off the system proxy that points at it')],
     verify: (c) => `asight status ${c.h}`,
   },
   'upstream-unreachable': {
-    commands: (c) => [netstat(c.upPort), gui('Start your proxy, or turn off the system proxy that points at it')],
+    // the places are the user's OWN (the key asight wrote holds the door): `off`, clear them, `on` — the same steps as the cross-platform row (1.6 附录 B)
+    commands: (c) => [netstat(c.upPort), gui('Start your proxy, or turn off the system proxy that points at it'),
+      ...((c.removeOwn || []).length ? [asight(c, `asight off ${c.h}`), ...c.removeOwn, asight(c, `asight on ${c.h}`)] : [])],
     verify: (c) => `asight status ${c.h}`,
   },
   'engine-port-taken': {

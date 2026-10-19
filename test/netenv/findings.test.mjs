@@ -1,4 +1,4 @@
-// test/netenv/findings.test.mjs — RFC 1.6 §9.6 `doctor`'s findings (V49 the catalogue, both directions · V51 the fallback when an agent cannot connect and nothing explains it). Table-driven: every code has the
+// test/netenv/findings.test.mjs — RFC 1.6 附录 B `doctor`'s findings (V49 the catalogue, both directions · V51 the fallback when an agent cannot connect and nothing explains it). Table-driven: every code has the
 // injected facts that call for it, and those facts call for exactly its codes; every code the catalogue defines has such a set. Facts are injected, nothing here reads the machine (0.1 §3).
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -8,6 +8,9 @@ import { validateFinding, validateTopology } from '../../src/cli/schema.mjs'
 import { NET_CODES, ROUTE_CODES, ROUTE_TRUST_REASONS, STATUS_REASONS, TRUST_REASONS } from '../../src/health/codes.mjs'
 import { FINDINGS_WIN32 } from '../../src/netenv/findings-win32.mjs'
 import { ROWS, facts, proc, proxyOf, form, fwForm, pfacts, MIHOMO, mihomoVpn } from './fixtures/rows.mjs'
+import { proxyPlaces, writtenPlaces } from '../../src/netenv/adopt.mjs'
+import { writeRoutes } from '../../src/collector/core/proxymode/entries.mjs'
+import { world, put } from '../collector/core/proxymode/fixtures/entries-ctx.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
 import { installedViaCli } from '../cli/fixtures/dispatch-ctx.mjs'
@@ -64,7 +67,7 @@ const SETS = {
   'prior-proxy-unknown': { h: 'codex', facts: pfacts('codex', form('codex.cli', { procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992, { source: 'unknown' })), codes: ['prior-proxy-unknown'] },
   'agent-list-invalid': { h: null, facts: facts('claude-code', { agentList: { path: LIST, state: 'ok', problems: [{ index: 1, code: 'wide-name-needs-args', detail: 'agents[1]: node is an interpreter name; add "args"' }] } }), codes: ['agent-list-invalid'] },
 }
-// D51③⑤ (1.6 §9.6): the name list's two findings — a state event of the door and a failure code of the harness part, both in health/codes.mjs's closed sets
+// D51③⑤ (1.6 附录 B): the name list's two findings — a state event of the door and a failure code of the harness part, both in health/codes.mjs's closed sets
 const IDENTITY_CODES = ['process-unknown', 'agent-list-invalid']
 const CERT_CODES = ['cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file'] // 1.6 §9.7's cert group, as findings
 const REFUSAL_CODES = ['collectors-online'] // a command's refusal (uninstall), rendered by findingFor, not by diagnose
@@ -120,7 +123,7 @@ test('V49 every trust reason is a finding (the restart ones expected, the rest f
     assert.equal(found.length, 1, reason)
     const restart = ['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim'].includes(reason)
     if (!FINDINGS[reason]) assert.equal(found[0].class, restart ? 'expected' : 'problem', reason)
-    else assert.equal(found[0].class, typeof FINDINGS[reason].cls === 'string' ? FINDINGS[reason].cls : found[0].class, `${reason}: its own catalogue entry decides the class (not-verified is expected, 1.6 §9.6)`)
+    else assert.equal(found[0].class, typeof FINDINGS[reason].cls === 'string' ? FINDINGS[reason].cls : found[0].class, `${reason}: its own catalogue entry decides the class (not-verified is expected, 1.6 附录 B)`)
     assert.deepEqual(validateFinding(found[0]), [], reason)
   }
 })
@@ -257,6 +260,34 @@ test('§3.7: a note carries no `Fix` (it is not a problem), and one fact several
   assert.equal(two.filter((l) => l.startsWith('Note: ')).length, 2)
 })
 
+// B3 (the mac machine 2026-10-19): the live codex processes were the VS Code extension's app-servers, and the restart step printed was the CLI's
+// ("end the managed codex app-server process"). The steps come from the form the process runs from (its `paths`), as data in the descriptor.
+test('V49 the restart steps come from the form the process belongs to (the descriptor\'s per-form restart), not one fixed sentence', async () => {
+  const descs = await loadHarnesses()
+  const codex = descs.find((d) => d.name === 'codex')
+  const byForm = Object.fromEntries(codex.proxyMode.forms.map((f) => [f.id, f.restart || null]))
+  assert.ok(byForm['codex.vscode'] && byForm['codex.vscode'].hint, 'the descriptor carries the VS Code form\'s own words')
+  const EXT = '/h/.vscode/extensions/openai.chatgpt-0.5.17'
+  const at = (exe, paths, id) => {
+    const fm = form(id, { paths, procs: [proc(5530, { name: 'codex app-server', exe })] })
+    const f = pfacts('codex', fm, fwForm(17992), { platform: 'darwin' })
+    f.harnesses.codex.forms[0].restart = byForm[id]
+    f.harnesses.codex.procs[0].reason = 'config-after-start'
+    f.harnesses.codex.procs[0].trusted = false
+    f.harnesses.codex.procs[0].hint = null
+    const fd = findingsOf(f).find((x) => x.code === 'config-after-start')
+    return { fd, text: fd ? fd.commands.map((c) => c.run).join('\n') : '' }
+  }
+  const ext = at(`${EXT}/bin/macos-aarch64/codex`, [EXT], 'codex.vscode')
+  assert.ok(ext.fd, 'the process started before capture was on: config-after-start')
+  assert.match(ext.text, /Reload Window/, 'the extension\'s own step')
+  assert.doesNotMatch(ext.text, /kill |Quit every codex window/, 'not the CLI\'s step for a process the user cannot quit')
+  const cli = at('/h/.local/bin/codex', ['/h/.local/bin/codex'], 'codex.cli')
+  assert.match(cli.text, /Quit every codex window[\s\S]*kill 5530/, 'the CLI form keeps the harness\'s own step, with the managed process')
+  // the why names what was written after the process started, not only the certificate
+  assert.doesNotMatch(ext.fd.why, /trust entry/)
+})
+
 // ── where the line to edit is (V49): the setting's own source, not the first key of the first file ────────────────────────────────────────────────────────────────────────────────────────────────────
 const CC_FILES = [{ path: '/h/.claude/settings.json', format: 'json', key: 'env.HTTPS_PROXY' }, { path: '/h/.claude.json', format: 'json', key: 'env.HTTPS_PROXY' }]
 const CODEX_FILES = [{ path: '/h/.codex/.env', format: 'dotenv', key: 'HTTPS_PROXY' }, { path: '/h/.codex/config.toml', format: 'dotenv', key: 'x' }]
@@ -284,6 +315,71 @@ test('V49 the place a command names for the setting is where the setting came fr
   const codex = facts('codex', { listeners: [] }, { setting: proxyOf('http://127.0.0.1:7890', [{ kind: 'file', where: '/h/.codex/.env', key: 'HTTPS_PROXY' }]), behaviour: behaviourOf('codex', CODEX_FILES) })
   assert.match(gui(findingsOf(codex), 'proxy-dead'), /Remove the HTTPS_PROXY= line from \/h\/\.codex\/\.env/)
   assert.doesNotMatch(gui(findingsOf(codex), 'proxy-dead'), /config\.toml/)
+})
+
+// B2 (the mac machine 2026-10-19): asight's door is on the path, the user's own proxy at its upstream has quit, and BOTH spellings of their key still name it.
+// The finding is upstream-unreachable, and the places it asks the user to clear are their own keys only — the key asight wrote holds the door (removing it
+// changes nothing: `off` writes the prior value back).
+test('V49 upstream-unreachable: asight on the path with a dead upstream is not proxy-dead; its places are the user\'s own keys that hold that address, never the key asight wrote', () => {
+  const SET = '/h/.claude/settings.json'
+  const place = (key) => ({ kind: 'file', path: SET, key, format: 'json', scheme: 'http', host: '127.0.0.1', port: 7897 })
+  const fm = form('claude-code.cli', { entry: { where: `${SET}#env.HTTPS_PROXY`, asight: true, opt_in: false, intact: true },
+    setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: SET, key: 'env.HTTPS_PROXY' }]), procs: [proc(4121)] })
+  const f = pfacts('claude-code', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [], platform: 'darwin' })
+  f.harnesses['claude-code'].proxyPlaces = [place('env.HTTPS_PROXY'), place('env.HTTP_PROXY')]
+  f.harnesses['claude-code'].writtenPlaces = [`${SET}#env.HTTPS_PROXY`]
+  const out = findingsOf(f)
+  const codes = out.map((x) => x.code)
+  assert.ok(codes.includes('upstream-unreachable'), codes.join(','))
+  assert.ok(!codes.includes('proxy-dead'), 'the dead hop is asight\'s upstream, not a proxy the agent points at')
+  const u = out.find((x) => x.code === 'upstream-unreachable')
+  assert.deepEqual(u.places, [place('env.HTTP_PROXY')], 'the user\'s own key alone')
+  assert.deepEqual(validateFinding(u), [])
+  const text = u.commands.map((c) => c.run).join('\n')
+  assert.match(text, /Remove env\.HTTP_PROXY from \/h\/\.claude\/settings\.json/)
+  assert.doesNotMatch(text, /HTTPS_PROXY/, 'the key asight wrote is never named as one for the user to remove')
+  assert.match(text, /asight off claude-code[\s\S]*asight on claude-code/, 'off, clear your own keys, on')
+})
+
+test('V49 upstream-unreachable, codex\'s dotenv route through the REAL writers: the user\'s own line in $CODEX_HOME/.env is a place, the line asight\'s block wrote is not', async () => {
+  const desc = (await loadHarnesses()).find((d) => d.name === 'codex')
+  const w = world({ os: 'darwin' })
+  for (const fo of desc.proxyMode.forms.filter((x) => x.os.includes('darwin') && x.route === 'env')) w.present(fo)
+  const envFile = desc.proxy.files[0].path({ home: w.home, env: {} })
+  put(envFile, 'HTTPS_PROXY=http://127.0.0.1:7897\n')
+  const res = writeRoutes(desc, w.ctx, () => 'http://127.0.0.1:17991')
+  assert.deepEqual(res.results.map((x) => [x.route, x.ok]), [['env', true]])
+  const places = proxyPlaces(desc, { home: w.home, env: {}, fs })
+  const written = writtenPlaces(w.ctx.manifest, 'codex')
+  const fm = form('codex.cli', { entry: { where: `${envFile}#HTTPS_PROXY`, asight: true, opt_in: false, intact: true }, setting: proxyOf('http://127.0.0.1:17991', [{ kind: 'file', where: envFile, key: 'HTTPS_PROXY' }]), procs: [proc(5530, { name: 'codex app-server' })] })
+  const f = pfacts('codex', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [{ addr: '127.0.0.1', port: 17991, pid: 6120, exe: 'asight-engine' }], platform: 'darwin' })
+  Object.assign(f.harnesses.codex, { proxyPlaces: places, writtenPlaces: written })
+  const u = findingsOf(f).find((x) => x.code === 'upstream-unreachable')
+  assert.ok(u, 'the dead hop is asight\'s upstream')
+  assert.deepEqual(u.places, [{ kind: 'file', path: envFile, key: 'HTTPS_PROXY', format: 'dotenv', scheme: 'http', host: '127.0.0.1', port: 7897 }], 'the user\'s own line, which `off` puts back')
+  assert.deepEqual(validateFinding(u), [])
+  assert.match(u.commands.map((c) => c.run).join('\n'), new RegExp(`Remove the HTTPS_PROXY= line from ${envFile.replace(/[.\\/]/g, '\\$&')}`))
+  assert.equal(places.some((p) => p.port === 17991), false, 'asight\'s own block is no place of the user\'s')
+})
+
+test('V49 / 4.8 §10.4 on Windows: proxy-dead and upstream-unreachable name the user\'s own places too, one step per place', () => {
+  const SET = 'C:\\Users\\u\\.claude\\settings.json'
+  const place = (key) => ({ kind: 'file', path: SET, key, format: 'json', scheme: 'http', host: '127.0.0.1', port: 7897 })
+  const fm = form('claude-code.cli', { entry: { where: `${SET}#env.HTTPS_PROXY`, asight: true, opt_in: false, intact: true },
+    setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: SET, key: 'env.HTTPS_PROXY' }]), procs: [proc(4121)] })
+  const f = pfacts('claude-code', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [] })
+  Object.assign(f.harnesses['claude-code'], { proxyPlaces: [place('env.HTTPS_PROXY'), place('env.HTTP_PROXY')], writtenPlaces: [`${SET}#env.HTTPS_PROXY`] })
+  // asight on the path with the dead address as its upstream (upstream-unreachable), and asight nowhere near it (proxy-dead)
+  const dead = facts('claude-code', { platform: 'win32', listeners: [] }, { setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: SET, key: 'env.HTTPS_PROXY' }]) })
+  Object.assign(dead.harnesses['claude-code'], { proxyPlaces: [place('env.HTTP_PROXY')], writtenPlaces: [] })
+  for (const [code, facts_] of [['upstream-unreachable', f], ['proxy-dead', dead]]) {
+    const x = findingsOf(facts_).find((y) => y.code === code)
+    assert.ok(x, `${code}: ${findingsOf(facts_).map((y) => y.code).join(',')}`)
+    assert.deepEqual(x.places, [place('env.HTTP_PROXY')], `${code}: the user's own key alone`)
+    const text = x.commands.map((cc) => cc.run).join('\n')
+    assert.match(text, /Remove env\.HTTP_PROXY from C:\\Users\\u\\\.claude\\settings\.json/, `${code} names the place`)
+    assert.doesNotMatch(text, /HTTPS_PROXY/, `${code} never names the key asight wrote`)
+  }
 })
 
 test('V49 proxy-unsupported names the place of the setting and the value to put there, as one sentence (no 「http://…:」 left stuck to the next phrase)', () => {

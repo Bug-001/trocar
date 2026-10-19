@@ -1,8 +1,8 @@
-// findings.mjs (src/netenv) — what `asight doctor` says about the network (RFC 1.6 §9.6): the catalogue of findings, one entry per code, and `diagnose`, which says which of them the facts and the topology call for.
+// findings.mjs (src/netenv) — what `asight doctor` says about the network (RFC 1.6 附录 B): the catalogue of findings, one entry per code, and `diagnose`, which says which of them the facts and the topology call for.
 // A finding is `{ code, class, harness?, what, why, commands: [{ run, shell }], verify }`. The commands are whole lines with every value filled in (pid, port, path, user): a value that could not be read is
 // written 「不知道 · <原因>」 with the command that reads it, never a `<…>` placeholder. asight's own commands come first, then the application's or the OS's. Nothing here runs anything (R8): `doctor` only
 // prints them. Pure: facts and topology in, findings out.
-import { detectDrift } from './adopt.mjs'
+import { detectDrift, isWrittenPlace } from './adopt.mjs'
 import { hopKey, firstHopAfterAsight, firstHopOff } from './topology-text.mjs'
 import { parseProxyUrl } from './redact.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
@@ -49,10 +49,12 @@ function removeAt(h, place) {
 // darwin: the kernel's own TCP table, the one `status` reads (arch/darwin/netfacts.mjs) — `lsof -nP -iTCP:<port> -sTCP:LISTEN` names only the
 // processes whose fd table this user may open, so a port held by ANOTHER user's program came back empty, which is the case this step is for.
 const portCheck = (ctx, port) => os(ctx, { linux: `ss -ltnp 'sport = :${port}'`, darwin: `netstat -anv -p tcp | grep -E '\\.${port} .*LISTEN'`, win32: `netstat -ano -p TCP | findstr ":${port}"` })
-/** The steps that make an agent read its settings again: the harness's own words (the application step), and, where the harness keeps its settings in a managed process its windows do not end (`restart.managed`),
- *  the command that ends it, with the pid the facts hold. A managed process that is not running has nothing to end. */
+/** The steps that make an agent read its settings again: the words of the form the process belongs to (`fm.restart` — its places are `fm.paths`, so an
+ *  extension's app-server gets the editor's reload, not the CLI's kill), else the harness's own (`behaviour.restart`); and, where the harness keeps its
+ *  settings in a managed process its windows do not end (`restart.managed`), the command that ends it, with the pid the facts hold. A managed process that
+ *  is not running has nothing to end. */
 function restartSteps(ctx) {
-  const r = (ctx.hf.behaviour && ctx.hf.behaviour.restart) || {}
+  const r = formRestart(ctx) || (ctx.hf.behaviour && ctx.hf.behaviour.restart) || {}
   const steps = [gui(r.hint ? r.hint : `Quit every ${ctx.h} window, then start it again`)]
   if (r.managed === true && r.processes) {
     const name = r.processes.split(/\s+/).filter((t) => !t.startsWith('-')).join(' ') // `codex app-server --managed-daemon` -> the name a process of it is listed under: `codex app-server`
@@ -60,8 +62,21 @@ function restartSteps(ctx) {
   }
   return steps
 }
+// which form a process runs from: the first form one of whose places (`paths`) its executable is under. One file path, compared the way both platforms
+// spell it (separators and case): no form of any harness is told apart by either.
+const norm = (p) => String(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+const under = (exe, at) => { const a = norm(at); const e = norm(exe); return e === a || e.startsWith(`${a}/`) }
+function formRestart(ctx) {
+  const p = (ctx.hf.procs || []).find((x) => x.pid === ctx.pid && x.exe) || null
+  const fm = p ? (ctx.hf.forms || []).find((f) => (f.paths || []).some((at) => under(p.exe, at))) : null
+  return (fm && fm.restart) || (ctx.fm && ctx.fm.restart) || null
+}
 const settingOf = (hf) => (hf.setting && !hf.setting.unknown && hf.setting.value ? hf.setting : ((hf.forms || []).map((f) => f.setting).find((s) => s && s.value) || null))
 const deadProxy = (t) => t.nodes.find((n) => n.kind === 'proxy' && n.down === true) || null
+/** The places of the USER's own that hold the address this finding is about (`diagnose` filtered them: a key asight wrote is never among them, 1.6 附录 B `places`). */
+const userPlaces = (c) => (Array.isArray(c.places) ? c.places : [])
+/** The steps that take that address out of the user's own settings, one named step per place; with no place known, the one the setting was read from. */
+const removeSteps = (c) => (userPlaces(c).length ? userPlaces(c).map((p) => gui(removeAt(c.h, p))) : [gui(c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('setting', 'absent'))])
 
 /** not-routed, by the reason the model's route plan gave the form (`fm.route.reason`, src/collector/core/proxymode/entries.mjs; 4.11 §3, 1.6 附录 B): the why, and the steps
  *  (the place the plan named in `at`, else `unknown`). A PAC the facts see and no reason of the plan's is the PAC row; nothing known is the generic row. */
@@ -90,7 +105,7 @@ export const FINDINGS = {
   'not-routed': { cls: 'problem', asightFirst: false, what: (c) => `New connections from ${c.h} do not go through asight.`, why: (c) => notRoutedOf(c).why, commands: (c) => notRoutedOf(c).commands, verify: (c) => `asight status ${c.h}` },
   'route-loop': { cls: 'problem', asightFirst: true, what: (c) => `asight's upstream for ${c.h} would be asight itself.`, why: () => 'The proxy setting asight read already points at one of asight\'s own ports, so asight did not connect this form.', commands: (c) => [asight(c, `asight off ${c.h}`), gui(setAt(c.h, placeOf(c.hf, c.setting), c.old || unknownValue('proxy address', 'absent'))), asight(c, `asight on ${c.h}`)], verify: (c) => `asight doctor ${c.h}` },
   'proxy-dead': { cls: 'problem', asightFirst: false, what: (c) => `Nothing is listening on ${c.dead.addr}:${c.dead.port}, the proxy ${c.h} is set to use.`, why: () => 'Your proxy is not running; asight did not write this setting.',
-    commands: (c) => [gui(`Start your proxy, so that it listens on ${c.dead.addr}:${c.dead.port}`), gui(c.setting ? removeAt(c.h, placeOf(c.hf, c.setting)) : unknownValue('setting', 'absent')), portCheck(c, c.dead.port)], verify: (c) => `asight status ${c.h}` },
+    places: userPlaces, commands: (c) => [gui(`Start your proxy, so that it listens on ${c.dead.addr}:${c.dead.port}`), ...removeSteps(c), portCheck(c, c.dead.port)], verify: (c) => `asight status ${c.h}` },
   'proxy-unsupported': { cls: 'problem', asightFirst: false, what: (c) => `${c.h} does not support the proxy scheme ${c.setting.scheme}.`, why: (c) => (c.silent ? `${c.h} connects directly and says nothing, so that proxy has no effect.` : `${c.h} cannot use a ${c.setting.scheme} proxy.`),
     commands: (c) => [gui(setAt(c.h, placeOf(c.hf, c.setting), c.setting.host && c.setting.port ? `http://${c.setting.host}:${c.setting.port}` : unknownValue('proxy address', 'absent')))], verify: (c) => `asight status ${c.h}` },
   'proxy-changed': { cls: (c) => (c.F.routing === 'proxy' ? 'problem' : 'expected'), asightFirst: true, what: (c) => `${c.h}'s proxy setting is not the one asight connected to.`, why: () => 'You changed it.',
@@ -98,7 +113,11 @@ export const FINDINGS = {
   'elevated-agent': { cls: 'problem', asightFirst: false, what: (c) => `${c.h}${c.pid ? ` (pid ${c.pid})` : ''} runs elevated, so asight only forwards it.`, why: () => 'asight never decrypts an elevated process.', commands: () => [gui('Quit it and start it again without administrator rights')], verify: (c) => `asight status ${c.h}` },
   'forwarder-down': { cls: 'problem', asightFirst: true, what: (c) => `asight is not listening${c.port ? ` on :${c.port}` : ''}, so ${c.h || 'your agents'} cannot connect.`, why: () => 'The port lives with asight\'s background process, which is not there.', commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`)], verify: () => 'asight status' },
   'upstream-unreachable': { cls: 'problem', asightFirst: false, what: (c) => `asight cannot reach the proxy${c.upPort ? ` :${c.upPort}` : ''} it uses for ${c.h}.`, why: () => 'Your proxy has quit while a setting still points at it; without asight it would not connect either.',
-    commands: (c) => [gui('Start your proxy, or turn off the system proxy that points at it'), ...(c.upPort ? [portCheck(c, c.upPort)] : [])], verify: (c) => `asight status ${c.h}` },
+    places: userPlaces,
+    // asight's door is on the path, and its upstream is the address nobody answers: the key asight wrote holds the door, so removing THAT changes nothing
+    // (`off` would write the prior value back). What to take away, to get off this proxy for good, are their own keys that still name it.
+    commands: (c) => [gui('Start your proxy, or turn off the system proxy that points at it'), ...(userPlaces(c).length ? [asight(c, `asight off ${c.h}`), ...userPlaces(c).map((p) => gui(removeAt(c.h, p))), asight(c, `asight on ${c.h}`)] : []),
+      ...(c.upPort ? [portCheck(c, c.upPort)] : [])], verify: (c) => `asight status ${c.h}` },
   'shim-not-on-path': { cls: 'problem', asightFirst: true, what: (c) => `${c.h} does not start through the program asight installed.`, why: () => 'Another command of the same name comes first on PATH, or it was started another way.',
     commands: (c) => [asight(c, 'asight install'), gui(`Quit ${c.h} and start it again from a new terminal`)], verify: (c) => `asight status ${c.h}` },
   'egress-differs': { cls: 'note', asightFirst: false, what: (c) => `Some of ${c.h}'s connections now leave through a different hop.`, why: () => 'In proxy mode a form has one upstream, so traffic that used to split now takes that one.', commands: (c) => [asight(c, `asight off ${c.h}`)], verify: (c) => `asight status ${c.h}` },
@@ -148,9 +167,11 @@ function make(code, ctx) {
   const w = ctx.platform === 'win32' ? FINDINGS_WIN32[code] : null
   const def = FINDINGS[code] || TRUST
   const c = { ...ctx, code }
+  c.removeOwn = userPlaces(c).map((p) => gui(removeAt(c.h, p))) // the user's own places, as steps: both catalogues name them (1.6 附录 B)
   const clsOf = (d) => (typeof d.cls === 'function' ? d.cls(c) : d.cls)
   const at = (f) => (w && w[f] ? w[f](c) : def[f](c))
-  return { code, class: w && w.cls !== undefined ? clsOf(w) : clsOf(def), ...(ctx.h ? { harness: ctx.h } : {}), what: at('what'), why: at('why'), commands: at('commands'), verify: at('verify') }
+  const pl = def.places ? def.places(c) : null
+  return { code, class: w && w.cls !== undefined ? clsOf(w) : clsOf(def), ...(ctx.h ? { harness: ctx.h } : {}), what: at('what'), why: at('why'), commands: at('commands'), verify: at('verify'), ...(pl && pl.length ? { places: pl } : {}) }
 }
 
 /** One finding outside `diagnose`, for a command that refuses with a catalogued code (uninstall's collectors-online). */
@@ -182,12 +203,21 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     const row = hf.procs.find((p) => p.reason && reasons.includes(p.reason))
     const sysPac = !!((hf.systemProxy && hf.systemProxy.pac) || (hf.forms || []).some((f) => f.systemProxy && f.systemProxy.pac))
     const upstream = Object.values((F.forwarder && F.forwarder.forms) || {}).map((x) => x.upstream).find((u) => u && u !== 'DIRECT')
+    const upAddr = upstream ? parseProxyUrl(upstream) : null
+    // the places of the user's OWN that hold an address, for a finding that asks them to remove it by hand: a place asight wrote (its value is the door, and
+    // `off` puts the user's own back) is never one of them — known from this harness's on-phase manifest items (`writtenPlaces`), whatever the format
+    const placesAt = (host, port) => (hf.proxyPlaces || []).filter((p) => p.host === host && String(p.port) === String(port) && !isWrittenPlace(hf.writtenPlaces, p))
     // the doctor's own name for a protocol the upstream cannot take replaces the branch's not-routed (4.8 §10.4: upstream-protocol sits on the proxy-unsupported row)
     const protoForm = (hf.forms || []).find((f) => f.route && f.route.code === 'proxy-unsupported') || null
-    for (const r of reasons.filter((x) => !(protoForm && x === 'not-routed'))) add(r, { upPort: upstream ? (parseProxyUrl(upstream) || {}).port : undefined, hint: row && row.reason === r ? row.hint : undefined, pid: row && row.reason === r ? row.pid : undefined, pac: sysPac, fm: formOf(r) })
+    for (const r of reasons.filter((x) => !(protoForm && x === 'not-routed'))) add(r, { upPort: upAddr ? upAddr.port : undefined, places: upAddr ? placesAt(upAddr.host, upAddr.port) : [], hint: row && row.reason === r ? row.hint : undefined, pid: row && row.reason === r ? row.pid : undefined, pac: sysPac, fm: formOf(r) })
     if (protoForm) add('proxy-unsupported', { protocol: protoForm.route.protocol, fm: protoForm })
     const dead = deadProxy(t)
-    if (dead) add('proxy-dead', { dead })
+    // asight's door on the path with the dead address as its upstream is `upstream-unreachable`, not `proxy-dead`: the setting the agent reads is asight's
+    // own door, which is up; what is dead is the hop after it, and without asight the agent would not connect either (1.6 附录 B)
+    if (dead) {
+      const viaAsight = !!(upAddr && upAddr.host === dead.addr && String(upAddr.port) === String(dead.port))
+      add(viaAsight ? 'upstream-unreachable' : 'proxy-dead', { dead, places: placesAt(dead.addr, dead.port), ...(viaAsight ? { upPort: dead.port } : {}) })
+    }
     const s = base.setting
     if (s && s.scheme && ((hf.behaviour.unsupported || {})[s.scheme] || !(hf.behaviour.schemes || []).includes(s.scheme))) add('proxy-unsupported', { silent: (hf.behaviour.unsupported || {})[s.scheme] === 'silent-direct' })
     if (sysPac) add('system-proxy-pac')
