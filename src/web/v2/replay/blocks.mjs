@@ -76,10 +76,19 @@ export const bodyCache = new Map() // text_ref -> {status, text, fidelity, error
 // What is cached: the bytes (200), and a 404 — the server looked the locator up in every capture root (re-indexing once on a miss)
 // and found no such record, so it is kept as `absent`. What is NOT cached: a network failure, a 400 / 409 / 5xx — the capture may be
 // fine and the next ask may work, so a failure is shown (status 'error') but never remembered.
+// a C.5 `block` document ({ref, bytes, encoding, fidelity:{verbatim, note?}, truncated, errors}) as the body the row shows:
+// `bytes` is the decoded text; `fidelity.verbatim:false` is the one non-verbatim case (re-serialised). No bytes = no such
+// record, said with the document's own reason.
+export function blockGot(doc) {
+  const d = doc || {}
+  if (typeof d.bytes !== 'string') return { status: 'absent', error: ((d.errors || [])[0] || {}).reason || 'the capture has no such block' }
+  const verbatim = !!(d.fidelity && d.fidelity.verbatim)
+  return { status: 'ok', text: d.bytes, verbatim, fidelity: verbatim ? 'verbatim' : 'reserialized', note: (d.fidelity && d.fidelity.note) || null, truncated: d.truncated ?? null }
+}
 export async function loadBody(api, ref) {
   if (bodyCache.has(ref)) return bodyCache.get(ref)
   const r = await api.get('block', { ref })
-  const got = r.ok ? r.data : { status: r.status === 404 ? 'absent' : 'error', error: r.error }
+  const got = r.ok ? blockGot(r.data) : { status: r.status === 404 ? 'absent' : 'error', error: r.error }
   if (r.ok || r.status === 404) {
     if (bodyCache.size >= CACHE_CAP) bodyCache.delete(bodyCache.keys().next().value)
     bodyCache.set(ref, got)

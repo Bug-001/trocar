@@ -1,13 +1,11 @@
 // replay/lanes.mjs — lane building and the shared time axis. Pure: the anchor lane's call times (`anchorTs`, epoch ms, one per
 // anchor call) and the brush window (`view = {lo, hi}`, step indices) are arguments, never module state.
 
-// A lane names its calls by `gi`; the call objects arrive once, in `steps`. Re-hydrate by gi (a Map, so a gap in the numbering
-// cannot shift anything). `giLocal` (gi → index inside the lane) arrives as {} over JSON, so it is rebuilt here as a Map.
+// C.5 `session`: each lane carries its call objects (`analyzed.lanes[].calls`). `giLocal` (gi → index inside the lane) arrives
+// as {} over JSON, so it is rebuilt here as a Map.
 export function buildLanes(analyzed, probes) {
-  const steps = (analyzed && analyzed.steps) || []
-  const byGi = new Map(steps.map((c) => [c.gi, c]))
   const ls = ((analyzed && analyzed.lanes) || []).map((l) => {
-    const calls = (l.calls || []).map((c) => (typeof c === 'number' ? byGi.get(c) : c)).filter(Boolean)
+    const calls = (l.calls || []).filter((c) => c && typeof c === 'object')
     return { ...l, calls, giLocal: new Map(calls.map((c, i) => [c.gi, i])) }
   })
   const series = (probes && probes.series) || []
@@ -21,6 +19,10 @@ export function buildLanes(analyzed, probes) {
   }
   return ls
 }
+
+// the steps: the main lane's calls; a session without a main lane anchors on its first lane (K-04)
+export const anchorLane = (lanes) => (lanes || []).find((l) => l.kind === 'main') || (lanes || [])[0] || null
+export const stepsOf = (lanes) => { const a = anchorLane(lanes); return a ? a.calls : [] }
 
 // ── numbering (1.2 §编号): the ONE conversion from a global gi to the words the board shows ─────────────────────────
 // 「第 N 步」 names ONLY a call of the main lane (N = its index there + 1, M = the main lane's call count). Any other

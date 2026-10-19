@@ -8,17 +8,17 @@ import { copyBtn } from '../core/dom.mjs'
 import { chipFor, harnessKey } from '../core/chips.mjs'
 import { infoButton, techDetailsHtml } from '../core/ui.mjs'
 import { sessionTotals, priceMatch } from '../core/metrics.mjs'
+import { stepsOf } from './lanes.mjs'
 import * as W from '../labels/replay.mjs'
 
 // ── the title: the fallback chain and where each title came from (1.2) ───────────────────────────────────────────────
-// meta.title → [S1] meta.first_prompt → 「未命名会话」 + the first step's time. The tip names the source and carries the
-// session id; a title is never invented from the id.
-function titleHtml(meta, analyzed) {
+// meta.title (its source = meta.title_source) → 「未命名会话」 + the first step's time. The tip names the source and carries
+// the session id; a title is never invented from the id.
+const titleFrom = (meta) => (meta.title_source === 'wire' ? W.TITLE_FROM_WIRE : W.TITLE_FROM_META)
+function titleHtml(meta, lanes) {
   const id = (meta && meta.session_id) || ''
-  if (meta && meta.title) return `<span class="sh-name" title="${esc(W.TITLE_FROM_META)}\n${esc(W.SESSION_ID)} ${esc(id)}">${esc(meta.title)}</span>`
-  const first = meta && meta.first_prompt // S1: not shipped yet — the chain simply stops one link shorter
-  if (first) return `<span class="sh-name" title="${esc(W.TITLE_FROM_PROMPT)}\n${esc(W.SESSION_ID)} ${esc(id)}">${esc(first)}</span>`
-  const steps = (analyzed && analyzed.steps) || []
+  if (meta && meta.title != null) return `<span class="sh-name" title="${esc(titleFrom(meta))}\n${esc(W.SESSION_ID)} ${esc(id)}">${esc(meta.title)}</span>`
+  const steps = stepsOf(lanes)
   const t0 = steps.length ? fmtWhen(steps[0].ts) : ''
   return `<span class="sh-name" title="${esc(W.TITLE_UNTITLED_TIP)}\n${esc(W.SESSION_ID)} ${esc(id)}">${W.UNTITLED}${t0 ? ` · ${esc(t0)}` : ''}</span>`
 }
@@ -36,13 +36,12 @@ function chipHtml(meta) {
 }
 
 // ── the head: ONLY the parts of 1.2's table — nothing statistical ever lands here ────────────────────────────────────
-export function sessionHeadHtml({ meta, analyzed, follow, libraryHash }) {
+export function sessionHeadHtml({ meta, lanes, follow, libraryHash }) {
   if (!meta) return '' // nothing loaded yet: the head stays empty rather than guessing
-  void analyzed
   const slugOk = meta.project_slug && meta.project_slug !== '_unresolved'
   const projName = slugOk ? (meta.project_path ? String(meta.project_path).split('/').filter(Boolean).pop() : meta.project_slug) : ''
   return `<a class="sh-back" href="${esc(libraryHash || '#/sessions')}">${W.BACK}</a>` +
-    titleHtml(meta, analyzed) +
+    titleHtml(meta, lanes) +
     chipHtml(meta) +
     (slugOk ? `<span class="sh-proj" title="${esc(meta.project_path || '')}">${esc(W.PROJECT)} ${esc(projName)}</span>` : '') +
     `<span class="spacer"></span>` +
@@ -51,36 +50,28 @@ export function sessionHeadHtml({ meta, analyzed, follow, libraryHash }) {
 }
 
 // ── the 采集缺口 (1.2 §会话保真行): judged, never asserted away ───────────────────────────────────────────────────────
-// A failure group counts only when (a) the session's time overlaps the health read's window ([generated_at − window_hours,
-// generated_at]), (b) the group's own [first_ts, last_ts] overlaps the session's [first step, last step], and (c) the group's
-// agent (harnessKey of `last.agent`) is this session's harness or carries none. No health answer, or a session without a
-// harness, → null: no judgement — and never the words 「没有缺口」.
-export function captureGap(health, range, harness) {
-  if (!health || !range || range.start == null || range.end == null) return null
-  const winH = health.read && Number(health.read.window_hours)
-  const gen = Date.parse(health.generated_at || '')
-  if (!(winH > 0) || isNaN(gen)) return null // no window to judge inside: silence is not "no gap"
-  if (range.end < gen - winH * 3600e3 || range.start > gen) return null // the session sits outside what the answer covers
+// `doc` is the C.3 `status` document. A failure group counts only when (a) the session's time overlaps the groups' window
+// ([failures.since, now]), (b) the group's own [first_ts, last_ts] overlaps the session's [first step, last step], and (c) the
+// group's `harness` (via harnessKey) is this session's or absent. No status answer, or no readable window, → null: no
+// judgement — and never the words 「没有缺口」. → the matching groups, or null.
+export function captureGap(doc, range, harness, now = Date.now()) {
+  const f = doc && doc.failures
+  if (!f || !range || range.start == null || range.end == null) return null
+  const since = Date.parse(f.since || '')
+  if (isNaN(since) || range.end < since || range.start > now) return null // outside the window: not judged, not said
   const mine = harness != null ? harnessKey(harness) : null
-  const t = (x) => Date.parse(x)
-  const hit = []
-  for (const part of [health.collector, health.legacy]) {
-    for (const g of ((part && part.failures) || [])) {
-      const lo = t(g.first_ts), hi = t(g.last_ts)
-      if (isNaN(lo) || isNaN(hi)) continue
-      if (hi < range.start || lo > range.end) continue // the failure did not touch this session's time
-      const a = g.last && g.last.agent
-      if (mine != null && a != null && harnessKey(a) !== mine) continue // another agent's failure, not this session's
-      hit.push({ part: part === health.collector ? 'collector' : 'legacy', group: g })
-    }
-  }
+  const hit = (f.groups || []).filter((g) => {
+    const lo = Date.parse(g && g.first_ts), hi = Date.parse(g && g.last_ts)
+    if (isNaN(lo) || isNaN(hi) || hi < range.start || lo > range.end) return false // did not touch this session's time
+    return g.harness == null || mine == null || harnessKey(g.harness) === mine
+  })
   return hit.length ? hit : null
 }
 
 // ── the 会话保真行: each fact in plain words; the row exists only when at least one does (必拒隐瞒) ────────────────────
 // `d` is one /api/session answer (+ the desk's once-per-open capture-health answer pre-judged into `gap`). Raw values ride
 // along as `tech` pairs for the 技术细节 disclosure, never in the plain words.
-export function fidelityFacts({ truncated, analyzed, logged, source, gap, harness }) {
+export function fidelityFacts({ truncated, analyzed, logged, errors, gap, harness }) {
   const facts = []
   const h = harness != null ? `?h=${encodeURIComponent(harnessKey(harness))}` : ''
   const tech = []
@@ -92,10 +83,10 @@ export function fidelityFacts({ truncated, analyzed, logged, source, gap, harnes
     if (unk.endpoints && unk.endpoints.length) tech.push(['endpoints', unk.endpoints.join(', ')])
   }
   if (logged && Number(logged.count) > 0) facts.push({ html: `<a href="#/settings/storage${esc(h)}">${esc(W.loggedFact(logged.count))}</a>` })
-  const errs = (source && source.errors) || []
+  const errs = (errors || []).filter(Boolean)
   if (errs.length) {
     facts.push({ html: `<a href="#/settings/storage">${esc(W.filesFact(errs.length))}</a>` })
-    for (const e of errs) tech.push([e.file || '', `${e.kind || ''}${e.unreadableRecords != null ? ` · ${e.unreadableRecords} records could not be read` : ''} · ${e.reason || ''}`.trim()])
+    for (const e of errs) tech.push([String(e.where ?? ''), String(e.reason ?? '')])
   }
   if (gap) facts.push({ html: `<a href="#/capture/log${esc(h)}">${esc(W.GAP_FACT)}</a>` })
   return { facts, tech }
@@ -110,7 +101,7 @@ export function fidelityLineHtml(o) {
 // ── the session info popover: ONLY statistics, in 1.2's fixed order; a 0 or absent row is not drawn ──────────────────
 // `t` is sessionTotals(lanes, priceOf) — the one home of these numbers; the words are labels/replay.mjs. No field name is
 // ever shown: every number has a Chinese name and its mark (≈ / 结构估计 / ?).
-export function sessionInfoHtml({ meta, analyzed, lanes, probes, totals, truncated }) {
+export function sessionInfoHtml({ meta, lanes, probes, totals, truncated }) {
   const t = totals || {}
   const rows = []
   // 1 ≈ 花费 — three buckets covering every lane; 「起」 when some call could not be priced; never $0
@@ -142,7 +133,7 @@ export function sessionInfoHtml({ meta, analyzed, lanes, probes, totals, truncat
   // 4 调用失败 — every lane; the jump lands on the first one
   if (t.failed) rows.push(`<div class="sir"><button type="button" class="sijump" data-si="failed">${esc(W.FAILED_LINE(t.failed))}</button></div>`)
   // 5 压缩 — inferred ones carry 「推测」
-  const steps = (analyzed && analyzed.steps) || []
+  const steps = stepsOf(lanes)
   const compN = steps.filter((x) => x && x.compaction).length
   if (compN) {
     const infN = steps.filter((x) => x && x.compaction && x.compactionInferred).length
@@ -164,7 +155,7 @@ export function sessionInfoHtml({ meta, analyzed, lanes, probes, totals, truncat
   }
   // 8 会话 id (copyable) · where the title came from — only when the title is the agent's own record
   const idRow = meta && meta.session_id ? `<span class="sirmono">${esc(meta.session_id)}</span> ${copyBtn(meta.session_id, W.COPY)}` : ''
-  const fromTitle = meta && meta.title ? ` <span class="sirsub">${esc(W.TITLE_FROM_META)}</span>` : ''
+  const fromTitle = meta && meta.title != null && meta.title_source === 'harness-local-store' ? ` <span class="sirsub">${esc(W.TITLE_FROM_META)}</span>` : ''
   if (idRow || fromTitle) rows.push(`<div class="sir">${esc(W.SESSION_ID)} ${idRow}${fromTitle}</div>`)
   // < 900 px: the head's 项目 moves in as the last row (CSS shows .sir-narrow only there)
   if (meta && meta.project_slug && meta.project_slug !== '_unresolved') {
@@ -185,12 +176,12 @@ export function totalsOf(s) {
 
 export function renderSessionHead(el, s) {
   if (!el) return
-  const html = sessionHeadHtml({ meta: s.meta, analyzed: s.A, follow: s.follow, libraryHash: s.ctx && s.ctx.store ? s.ctx.store.get().libraryHash : '' })
+  const html = sessionHeadHtml({ meta: s.meta, lanes: s.lanes, follow: s.follow, libraryHash: s.ctx && s.ctx.store ? s.ctx.store.get().libraryHash : '' })
   if (!html) { el.innerHTML = ''; return }
   s.totals = s.A ? totalsOf(s) : null
   // the popover body replaces the placeholder the builder had to leave (infoButton needs its layer's html up front)
-  const head = html.replace('<div class="sipre">…</div>', `<div class="sipb">${sessionInfoHtml({ meta: s.meta, analyzed: s.A, lanes: s.lanes, probes: s.probes, totals: s.totals, truncated: s.trunc })}</div>`)
-  const d = s.A ? { truncated: s.trunc, analyzed: s.A, logged: s.logged, source: s.sourceE, gap: s.gap, harness: s.meta && s.meta.harness } : null
+  const head = html.replace('<div class="sipre">…</div>', `<div class="sipb">${sessionInfoHtml({ meta: s.meta, lanes: s.lanes, probes: s.probes, totals: s.totals, truncated: s.trunc })}</div>`)
+  const d = s.A ? { truncated: s.trunc, analyzed: s.A, logged: s.logged, errors: s.sourceE, gap: s.gap, harness: s.meta && s.meta.harness } : null
   el.innerHTML = `<div class="sesshead">${head}</div>` + (d ? fidelityLineHtml(d) : '')
 }
 
