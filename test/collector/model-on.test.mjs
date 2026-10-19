@@ -15,6 +15,7 @@ import { daemonMayStart, readManifest } from '../../src/off/manifest.mjs'
 import { undoHarnesses } from '../../src/off/undo.mjs'
 import { sha256 } from '../../src/off/fsutil.mjs'
 import { isPresent } from '../../src/collector/core/proxymode/sources.mjs'
+import { modelFormFacts } from '../../src/collector/core/proxymode/status-facts.mjs'
 
 const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0])
 const TOKEN = 'k'.repeat(32)
@@ -85,14 +86,15 @@ for (const [name, drift] of Object.entries(DRIFTS)) {
   })
 }
 
-test('CM28 · ⑪ · 4.11 P4b: a harness installed after asight (present, install never saw it) is refused with setup-needed and asight install, the others go on', async () => {
+test('CM28 · ⑪ · 4.11 P4b: a harness installed after asight whose forms the root carries (present, install never saw it) needs no setup and is turned on', async () => {
   const w = await installed()
-  fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true })
+  fs.mkdirSync(path.join(w.home, '.hermes'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.hermes', '.env'), '')
   const d = await daemon(w)
   try {
     const r = await on(w, { ids: ['codex', 'hermes'] })
-    assert.deepEqual(r.refused.map((x) => [x.harness, x.reason, x.command]), [['hermes', 'setup-needed', 'asight install']])
-    assert.deepEqual(r.on, ['codex'])
+    assert.deepEqual([r.refused, r.on], [[], ['codex', 'hermes']])
+    const facts = await modelFormFacts({ harnesses: w.harnesses, os: 'darwin', manifest: readManifest(w.dir, fs), root: { state: 'in-place' }, ctx: w.ctx, fs })
+    assert.ok((facts.hermes || []).length, 'status draws the forms on turned on for it')
   } finally { await d.close() }
 })
 

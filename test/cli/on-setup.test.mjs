@@ -44,3 +44,21 @@ test('V91 · 1.6 §3.3: on A B, A needing setup → exit 1, error.code setup-nee
     assert.match(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'), /HTTPS_PROXY=http:\/\/127\.0\.0\.1:\d+/, 'B is turned on')
   } finally { await server.close() }
 })
+
+test('V91 · 4.11 P4b: the root gone from the user\'s store → on refuses setup-needed (status\'s root-missing, the same store question); in place → on goes on', async () => {
+  for (const present of [false, true]) {
+    const w = await modelWorld({ commands: [B] })
+    assert.equal((await w.install({})).exit, 0)
+    const sock = path.join(w.home, 'c.sock'), token = 'k'.repeat(32)
+    fs.writeFileSync(path.join(w.dir, 'control.json'), JSON.stringify({ path: sock, token }))
+    const server = await startControlServer({ socketPath: sock, token, routes: {
+      'GET /status': async () => ({ doors: {} }),
+      'POST /on': async ({ body }) => ({ doors: Object.fromEntries(Object.entries(body.groups).map(([g, port]) => [g, `http://127.0.0.1:${port}`])) }),
+    } })
+    const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs, rootStore: { has: async () => ({ present }) } }, harnesses: w.harnesses, which: w.ctx.which, daemonReader: reader, parts: { os: 'darwin', harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } }
+    try {
+      const io = fakeIo(), exit = await runOnCli([B, '--yes', '--json'], { io, env: w.env, home: w.home, platform: 'darwin', deps }), j = io.json()
+      assert.deepEqual([exit, j.error ? j.error.code : null, j.refused.map((x) => x.harness)], present ? [0, null, []] : [1, 'setup-needed', [B]], io.text())
+    } finally { await server.close() }
+  }
+})

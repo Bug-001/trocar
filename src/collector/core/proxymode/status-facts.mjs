@@ -55,12 +55,12 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
   if (!desc || !desc.proxyMode) return unknown(`${desc ? desc.name : 'this harness'} has no proxy-mode description in this build`)
   const missing = []
   try {
-    const pm = desc.proxyMode, seen = ((m && m.install && m.install.harnesses) || []).includes(desc.name)
+    const pm = desc.proxyMode
     let lost
     for (const f of pm.forms.filter((x) => x.os.includes(os) && isPresent(x, ctx))) {
       const c = f.cert === 'root' ? null : (pm.certs || {})[f.cert]
-      if (!seen) { missing.push({ form: f.id, what: 'carrier-absent' }); continue } // installed after asight: install never set it up
-      if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form
+      if (!c || (c.when && holds(c.when, ctx) === false)) continue // the root carries it: nothing per form, whether install saw the harness or not
+      // a carrier of its own: install's items for it (none when install never saw the harness, unless rule U's shared block carries it)
       if (lost === undefined) lost = carrierLoss(m || {}, desc, itemsFor(desc, itemsOfPhase(m, 'install'), ctx), fs)
       if (lost) missing.push({ form: f.id, what: lost })
     }
@@ -100,7 +100,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
   const inst = itemsOfPhase(m, 'install'), on = itemsOfPhase(m, 'on')
   const doors = (reply && reply.doors) || {}, answers = (reply && reply.upstreams) || {}
   const ports = Object.values(doors)
-  for (const desc of harnesses.filter((d) => d.proxyMode && installed.includes(d.name))) {
+  for (const desc of harnesses.filter((d) => d.proxyMode && (installed.includes(d.name) || (m && m.install && on.some((i) => i.harness === d.name))))) { // one install never saw: drawn once on wrote for it (its forms ride the root)
     const pm = desc.proxyMode, h = desc.name
     const plan = planRoutes(desc, ctx), d = drift(h), own = itemsFor(desc, inst, ctx)
     const uf = userFileOf(desc, { m, ctx, fs, own })

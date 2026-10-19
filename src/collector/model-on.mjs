@@ -5,6 +5,7 @@
 // to the daemon through the ONE endpoint resolver (controlEndpointFor), and the doors it opened read back; the P5 entries of the present forms and the
 // switch files, each with its door; the harness notes (hostTree, effects). The caller holds op.lock and has refused root. The CLI calls it from `asight on`.
 import nodeFs from 'node:fs'
+import crypto from 'node:crypto'
 import path from 'node:path'
 import { collectorHome } from '../paths.mjs'
 import { readManifest, saveManifest } from './core/trust/journal.mjs'
@@ -22,20 +23,31 @@ const INSTALL_HINT = 'asight install'
 // 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON)
 const SETUP_WHY = { 'carrier-absent': 'asight has not set up its certificate for it (installed after asight, or what asight placed is gone)', 'carrier-overwritten': 'its own update overwrote what asight placed for its certificate', 'root-missing': "asight's root certificate is no longer trusted" }
 const errText = (e) => String((e && e.message) || e)
+/** The root's state the way `status` reads it (cert.root.state, 1.6 §9.4): asight-ca.pem asked of the user's store through the injected reader — the one
+ *  store question `on` asks, so ⑪'s root-missing is status's (4.11 P4b). Pending / declined / unreadable → not `missing`: not setup work, or not known. */
+async function rootOf({ dir, m, rootStore, fs }) {
+  if (!rootStore) return null
+  if ((m.install.pending || []).some((p) => p.item === 'root-store')) return { state: 'pending' }
+  let x
+  try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'))) } catch { return null }
+  let has
+  try { has = await rootStore.has({ fp256: x.fingerprint256, sha1: x.fingerprint.replace(/:/g, '') }) } catch { return null }
+  return { state: has && has.present ? 'in-place' : has && has.error ? 'unknown' : 'missing' }
+}
 const groupOf = (harness, routeId) => `${harness}:${routeId}`
 
 /** turnOnModel({ os, home, env, ids, harnesses, ctx, … }) → { on, refused, routes, notes, problems, doors, exit }. `request` / `isFree` replace the
  *  world in a test that needs to; the default asks the endpoint controlEndpointFor resolves (no socket path is ever passed in). */
-export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined, dryRun = false }) {
+export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined, dryRun = false, rootStore = null }) {
   const dir = collectorHome(path.join(home, '.asight'))
   const m = readManifest(dir, fs)
   if (!installUsable(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`asight is not installed for this user (no install record with a root): run ${INSTALL_HINT} first`], exit: 1 }
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const wanted = ids || m.install.harnesses
   const refused = [], on = []
-  const unsure = []
+  const unsure = [], root = await rootOf({ dir, m, rootStore, fs })
   for (const h of wanted) { // precondition ⑪ = status's `setup` (4.11 P4b, one judgement): only a harness that needs setup is refused, nothing written for it
-    const s = setupOf(byName.get(h), { os, manifest: m, ctx, fs })
+    const s = setupOf(byName.get(h), { os, manifest: m, ctx, root, fs })
     if (s.state === 'needed') refused.push({ harness: h, reason: CODE.setupNeeded, why: [...new Set(s.missing.map((x) => SETUP_WHY[x.what]))].join('; '), command: INSTALL_HINT })
     else { on.push(h); if (s.state === 'unknown') unsure.push({ harness: h, text: `whether ${h} is set up could not be told (${s.reason})` }) }
   }

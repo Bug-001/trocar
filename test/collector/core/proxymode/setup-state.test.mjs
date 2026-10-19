@@ -1,5 +1,6 @@
 // setup-state.test.mjs — V91 (1.6 附录 C.3 `setup`, 4.11 P4b, D65④): setupOf, the one judgement behind `status`'s `harnesses[h].setup` and `on`'s ⑪,
-// over a descriptor fixture: form present / absent × its carrier's install item none / intact / hash changed × the root in place / missing / pending.
+// over a descriptor fixture: form present / absent × its carrier's install item none / intact / hash changed × the root in place / missing / pending ×
+// install saw the harness or not (one installed after asight: its root-carried form needs nothing, a carrier of its own is absent).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -14,26 +15,27 @@ const DESC = { name: 'fx', proxyMode: {
   certs: { hook: { kind: 'plugin' } }, routes: { all: {} },
 } }
 
-function cell({ present, item, root }) {
+function cell({ present, item, root, seen }) {
   const home = tmpDir('asight-setup-')
   const file = path.join(home, 'hook.mjs')
   fs.writeFileSync(file, 'asight hook\n')
   const rec = { kind: 'owned-file', role: 'plugin', harness: 'fx', phase: 'install', path: file, sha256: sha256(fs.readFileSync(file)) }
-  const m = { version: 3, entries: [], files: item === 'none' ? [] : [rec], install: { harnesses: ['fx'], items: { fx: item === 'none' ? [] : [{ kind: rec.kind, path: file }] } } }
+  const m = { version: 3, entries: [], files: item === 'none' ? [] : [rec], install: { harnesses: seen ? ['fx'] : [], items: { fx: item === 'none' ? [] : [{ kind: rec.kind, path: file }] } } }
   if (item === 'hash-changed') fs.writeFileSync(file, 'the harness\'s own update\n')
   const ctx = { home, env: {}, which: (c) => (c === 'fx' || (present && c === 'fx-app') ? path.join(home, c) : null), exists: () => false }
   return setupOf(DESC, { os: 'darwin', manifest: m, ctx, root: { state: root }, fs })
 }
 
 test('V91 · 4.11 P4b: setup state per cell — an absent form is not counted, a root-carried form needs nothing, the carrier none → carrier-absent, changed → carrier-overwritten, the root missing → one root-missing; pending is not setup work', () => {
-  for (const present of [true, false]) for (const item of ['none', 'intact', 'hash-changed']) for (const root of ['in-place', 'missing', 'pending']) {
+  for (const present of [true, false]) for (const item of ['none', 'intact', 'hash-changed']) for (const root of ['in-place', 'missing', 'pending']) for (const seen of [true, false]) {
+    if (!seen && item !== 'none') continue // install never saw it: it placed nothing for it
     const want = [
       ...(present && item === 'none' ? [{ form: 'fx.app', what: 'carrier-absent' }] : []),
       ...(present && item === 'hash-changed' ? [{ form: 'fx.app', what: 'carrier-overwritten' }] : []),
       ...(root === 'missing' ? [{ form: null, what: 'root-missing' }] : []),
     ]
-    const s = cell({ present, item, root })
-    assert.deepEqual([s.state, s.missing], [want.length ? 'needed' : 'ready', want], JSON.stringify({ present, item, root }))
+    const s = cell({ present, item, root, seen })
+    assert.deepEqual([s.state, s.missing], [want.length ? 'needed' : 'ready', want], JSON.stringify({ present, item, root, seen }))
   }
 })
 
