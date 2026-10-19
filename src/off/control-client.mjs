@@ -3,16 +3,16 @@
 // name and secret token live in <collector>\control.json — a pipe has no file mode, so the token is what keeps it to the operator).
 // Moved here from src/collector/core/control.mjs, which re-exports both names: `asight off` and the standalone `~/.asight/bin/asight-off`
 // ask the daemon to switch off and must not need the collector code (0.1 §2: src/off imports only node:* and itself). The server side
-// stays in core/control.mjs. The facts both sides share (CONTROL_FILE, CONTROL_TOKEN_HEADER, PIPE_PREFIX, the pipe shape) live HERE once: the
+// stays in core/control.mjs. The facts both sides share (CONTROL_FILE, PIPE_PREFIX, the pipe shape) live HERE once: the
 // daemon (core/control.mjs, arch/*/control-path.mjs) imports them — core may import src/off (0.1 §2), src/off cannot import core.
 import nodeFs from 'node:fs'
 import nodeHttp from 'node:http'
 import path from 'node:path'
+// The header a token-guarded request carries lives in token-header.mjs (import-free, so the board's page can load it); imported, not
+// re-exported: standalone.mjs's bundle refuses `export { }`.
+import { CONTROL_TOKEN_HEADER } from './token-header.mjs'
 
 export const CONTROL_FILE = 'control.json'
-/** The header every request to a token-guarded endpoint carries; the daemon's server (core/control.mjs) imports this name. */
-import { CONTROL_TOKEN_HEADER } from './token-header.mjs'
-export { CONTROL_TOKEN_HEADER }
 /** What a Windows daemon's pipe name starts with (`\\.\pipe\asight-`); the writer (arch/win32/control-path.mjs) adds `<16 hex>` and holds that strictly. */
 export const PIPE_PREFIX = '\\\\.\\pipe\\asight-'
 /** Is `p` a Windows named pipe: `\\.\pipe\` or `\\?\pipe\` and any name. Deliberately loose — off must not refuse a pipe a newer daemon build named differently —
