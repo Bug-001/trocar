@@ -173,3 +173,14 @@ test('pick: metadata only — no tail_raw, prelude or body; long text clipped an
   assert.ok(p.reason.length < 1100 && p.reason.endsWith('… (5000 chars)'), 'clipped, and the full length said')
   assert.doesNotMatch(JSON.stringify(p), /AAAA|secret|Proxy-Authorization|HTTP\/1\.1|stack/)
 })
+
+test('foldFlows: expected_groups — each expected not_captured code of the window with its count and first / last ts (C.3 failures.groups, level expected)', () => {
+  const recs = [
+    { ts: at(30 * H), flow_id: 'f0', pid: 6, agent: 'codex', decision: 'splice', not_captured: 'policy' },
+    { ts: at(3 * H), flow_id: 'f1', pid: 6, agent: 'codex', decision: 'splice', not_captured: 'policy' },
+    { ts: at(1 * H), flow_id: 'f2', pid: 6, agent: 'codex', decision: 'splice', not_captured: 'policy' },
+    { ts: at(2 * H), flow_id: 'f3', pid: 6, agent: 'codex', decision: 'direct', not_captured: 'https-proxy' },
+  ]
+  const f = foldFlows(recs, { now: NOW })
+  assert.deepEqual(f.expected_groups, { policy: { count: 2, first_ts: at(3 * H), last_ts: at(H) }, 'https-proxy': { count: 1, first_ts: at(2 * H), last_ts: at(2 * H) } })
+})

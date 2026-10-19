@@ -8,11 +8,11 @@ import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { STATUS_REASONS } from '../health/codes.mjs'
-import { EXIT, newReceipt } from '../off/schema.mjs' // the keys and the exit codes themselves (D62): `status` prints a receipt, it does not VALIDATE one, so it does not pay for ./schema.mjs's checker and the closed lists under it
+import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs' // the keys and the exit codes themselves (D62): `status` prints a receipt, it does not VALIDATE one, so it does not pay for ./schema.mjs's checker and the closed lists under it
 import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
-import { readManifest } from '../off/manifest.mjs'
+import { readManifest, itemsOfPhase } from '../off/manifest.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
@@ -334,15 +334,47 @@ function formsOf(f) {
   return Object.keys(out).length ? out : null
 }
 
-/** `failures` of the document: how many problems, how many expected and note findings, since when and the newest. Counts only real problems (§3.5). */
+/** 附录 C.3 `failures`: how many problems, how many expected and note findings, since when and the newest — counts only real problems (§3.5) — and
+ *  `groups`: the groups captureHealth already folded, refolded by code, newest first, at most GROUPS_MAX (the cut is said in `errors`). */
+const GROUPS_MAX = 50
 function failuresOf(f) {
   const h = effectiveHealth(f).health
   if (!h) return null
-  const groups = [...((h.collector && h.collector.failures) || []), ...((h.legacy && h.legacy.failures) || []), ...((h.raw && h.raw.failures) || [])]
-  const expected = Object.values((h.collector && h.collector.expected) || {}).reduce((n, x) => n + (Number(x) || 0), 0)
+  const c = h.collector || {}
+  const groups = [...(c.failures || []), ...((h.legacy && h.legacy.failures) || []), ...((h.raw && h.raw.failures) || [])]
+  const expected = Object.values(c.expected || {}).reduce((n, x) => n + (Number(x) || 0), 0)
   let latest = null
   for (const g of groups) if (String(g.last_ts || '') >= String(latest || '')) latest = g.last_ts || null
-  return { problem: groups.reduce((n, g) => n + (g.count || 1), 0), expected, note: (h.collector && h.collector.conditions ? h.collector.conditions.length : 0), since: h.read && h.read.since ? h.read.since : null, latest }
+  // the code a group's record carries: a failure's code, a connection row's not_captured (or its reason), the raw journal's outcome, else the event
+  const codeOf = (l) => (l && (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason)) || null
+  const parts = [
+    ...groups.map((g) => ({ code: codeOf(g.last) || g.key, level: 'problem', count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: g.last && g.last.agent })),
+    ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ code, level: 'expected', ...g })),
+    // a condition holds since its record (`since`); one with neither a code nor a kind, or no time, is no group (no time is made up)
+    ...(c.conditions || []).filter((x) => (x.code || x.kind) && x.since).map((x) => ({ code: x.code || x.kind, level: 'note', count: 1, first_ts: x.since, last_ts: x.since, agent: x.agent })),
+  ]
+  const by = new Map()
+  for (const p of parts) {
+    const k = `${p.level}\u0000${p.code}`, g = by.get(k)
+    const harness = HARNESS_IDS.includes(p.agent) ? p.agent : null
+    if (!g) { by.set(k, { code: p.code, level: p.level, count: p.count, first_ts: p.first_ts, last_ts: p.last_ts, harness }); continue }
+    g.count += p.count
+    if (String(p.first_ts) < String(g.first_ts)) g.first_ts = p.first_ts
+    if (String(p.last_ts) > String(g.last_ts)) g.last_ts = p.last_ts
+    if (g.harness !== harness) g.harness = null // groups of one code from more than one harness: the group names none
+  }
+  const all = [...by.values()].map(({ harness, ...g }) => (harness ? { ...g, harness } : g)).sort((a, b) => (String(a.last_ts) < String(b.last_ts) ? 1 : String(a.last_ts) > String(b.last_ts) ? -1 : 0))
+  return { problem: groups.reduce((n, g) => n + (g.count || 1), 0), expected, note: c.conditions ? c.conditions.length : 0, since: h.read && h.read.since ? h.read.since : null, latest,
+    groups: all.slice(0, GROUPS_MAX), ...(all.length > GROUPS_MAX ? { groups_cut: all.length } : {}) }
+}
+
+/** 附录 C.3 `changed[]`: every place asight changed or created for a harness (the install record's items of phase install and on), with the one
+ *  command that undoes it. Machine-wide items (the root, the login entry) name no harness and are not listed. An unreadable record is null, never []. */
+function changedOf(f) {
+  if (f.manifest.error) return null
+  const m = f.manifest.value
+  const item = (x, undo) => ({ harness: x.harness, path: x.path, what: [x.kind || x.role, Array.isArray(x.keys) ? x.keys.join('.') : x.format].filter(Boolean).join(' '), undo })
+  return [...itemsOfPhase(m, 'install').filter((x) => x.harness).map((x) => item(x, UNDO_LINE.install)), ...itemsOfPhase(m, 'on').filter((x) => x.harness).map((x) => item(x, `${UNDO_LINE.on} ${x.harness}`))]
 }
 
 /** The exit code of `status` (§3.5): 0 every harness that is on is captured · 1 some are not · 3 that cannot be judged. A stale record never decides it: the daemon's own answer does. */
@@ -356,7 +388,10 @@ export function statusExit(f) {
 /** The 附录 C.3 document of a read: `status --json` and `asight query status` print exactly this. */
 export function statusDocOf(f) {
   const d = f.daemon, forms = formsOf(f) || {}
+  const failures = failuresOf(f), cut = failures && failures.groups_cut
+  if (cut) delete failures.groups_cut
   const errors = [
+    ...(cut ? [{ where: 'capture health', reason: `${cut} failure groups in the window; the newest ${GROUPS_MAX} are listed` }] : []),
     ...(f.state && f.state.error ? [{ where: 'the on/off state', reason: f.state.error }] : []),
     ...(f.manifest.error ? [{ where: 'the install record', reason: f.manifest.error }] : []),
     ...(f.health_error ? [{ where: 'capture health', reason: f.health_error }] : []),
@@ -367,7 +402,7 @@ export function statusDocOf(f) {
     ...(f.proc_asks || []).map((reason) => ({ where: 'the process table', reason: `the daemon was asked for the process facts and could not answer, so the OS was asked: ${reason}` })),
   ]
   const doc = {
-    ...newReceipt('status'), ok: statusExit(f) === EXIT.ok,
+    ...newReceipt('status'), ok: statusExit(f) === EXIT.ok, changed: changedOf(f),
     daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, error: d.reason || null },
     harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
       desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why,
@@ -376,7 +411,7 @@ export function statusDocOf(f) {
     }])),
     ...(f.topology ? { topology: f.topology } : {}), ...(f.topology_error ? { topology_error: f.topology_error } : {}),
     install: f.install, cert: f.cert, holders: f.holders, relayed: f.relayed, ...(f.relayed === 'unknown' ? { relayed_reason: f.relayed_reason } : {}),
-    ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures: failuresOf(f), errors,
+    ...(f.linger ? f.linger : {}), user: f.user, agent_list: f.agent_list, restart: restartOf(f), critical: criticalOf(f), failures, errors,
   }
   return doc
 }

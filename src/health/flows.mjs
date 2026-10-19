@@ -153,6 +153,7 @@ const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r
  *   unknown_procs            process-unknown since the last daemon-start, one per (harness, name), the newest pid: {harness, name, wide, named, pid, door, since}
  *                            — expected (the process is only forwarded), so not a condition; a daemon restart clears them (D51⑥)
  *   groups                   failures of the last 24 h by groupKey: {key, count, first_ts, last_ts, last}
+ *   expected_groups          expected not_captured codes of the last 24 h: {code: {count, first_ts, last_ts}} (`expected` is its counts)
  *   expected                 {not_captured: count} of the last 24 h
  *   agents                   [{agent, last_captured, last_failure, last_failure_key}]
  *   last_ts                  the newest line of any kind ("last record at")
@@ -161,7 +162,7 @@ const weight = (r) => (r.folded ? 0 : 1) + (typeof r.suppressed === 'number' ? r
 export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = {}) {
   let startIdx = -1
   for (let i = records.length - 1; i >= 0; i--) if (records[i].event === 'daemon-start') { startIdx = i; break }
-  const out = { last_start: startIdx >= 0 ? pick(records[startIdx]) : null, last_stop: null, conditions: [], unknown_procs: [], partial: startIdx < 0 && records.length > 0, groups: [], expected: {}, agents: [], last_ts: null, install: { install: [], uninstall: [] } }
+  const out = { last_start: startIdx >= 0 ? pick(records[startIdx]) : null, last_stop: null, conditions: [], unknown_procs: [], partial: startIdx < 0 && records.length > 0, groups: [], expected: {}, expected_groups: {}, agents: [], last_ts: null, install: { install: [], uninstall: [] } }
   // conditions: only what this run wrote — from the last daemon-start, plus the start-up lines written before it (the
   // CA check, the helper's protocol): back to the last daemon-stop, the previous daemon-start, a refused start, or this
   // start's own unclean-stop, and no further than 60 s before daemon-start (4.6 §事件与码)
@@ -232,7 +233,11 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
       groups.set(key, g)
       if (agent) { const a = agentRow(agent); a.last_failure = r.ts; a.last_failure_key = key }
     } else if (isRow(r)) {
-      if (notCapturedClass(r.not_captured) === 'expected') out.expected[r.not_captured] = (out.expected[r.not_captured] || 0) + 1
+      if (notCapturedClass(r.not_captured) === 'expected') {
+        out.expected[r.not_captured] = (out.expected[r.not_captured] || 0) + 1
+        const e = out.expected_groups[r.not_captured] || (out.expected_groups[r.not_captured] = { count: 0, first_ts: r.ts, last_ts: r.ts })
+        e.count += 1; e.last_ts = r.ts
+      }
       else if (r.decision === 'decrypt' && r.not_captured == null && agent) agentRow(agent).last_captured = r.ts
     }
   }
