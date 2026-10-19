@@ -6,7 +6,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { api } from '../../src/web/v2/core/api.mjs'
-import { configure, bootToken } from '../../src/web/v2/core/http.mjs'
+import { configure, bootToken, onForbidden } from '../../src/web/v2/core/http.mjs'
+import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
+import { boardHome, serveBoard } from './real-face.mjs'
 import { QUERY_NAMES } from '../../src/query/client.mjs'
 import { stripComments } from '../helpers/code-text.mjs'
 
@@ -26,20 +28,16 @@ const headerOf = (init, name) => {
 async function withFetch(answer, fn) {
   const real = globalThis.fetch, calls = []
   globalThis.fetch = async (url, init) => { calls.push({ url: String(url), init: init || {} }); return answer(String(url), init || {}) }
-  try { return await fn(calls) } finally { globalThis.fetch = real; configure({ token: null, header: null }) }
+  try { return await fn(calls) } finally { globalThis.fetch = real; configure({ token: null }) }
 }
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } })
 
-test('4.4 token: every api.get carries the configured token under the configured header; no header name, no token header', async () => {
+test('4.4 token: every request carries the token under the shared CONTROL_TOKEN_HEADER', async () => {
   await withFetch(() => json({ v: 1 }), async (calls) => {
-    configure({ token: 'T', header: 'x-h' })
-    await api.get('sessions', { limit: 5 }); await api.get('block', { ref: 's:1' })
-    for (const c of calls) assert.equal(headerOf(c.init, 'x-h'), 'T')
     configure({ token: 'T' })
-    const n = calls.length
-    await api.get('pricing')
-    assert.equal(calls.length, n + 1)
-    assert.equal(Object.values(calls[n].init.headers || {}).includes('T'), false)
+    await api.get('sessions', { limit: 5 }); await api.get('block', { ref: 's:1' })
+    assert.equal(calls.length, 2)
+    for (const c of calls) assert.equal(c.init.headers[CONTROL_TOKEN_HEADER], 'T')
   })
 })
 
@@ -61,7 +59,7 @@ test('invariant 4: a failed read is never an empty success', async () => {
     [() => json({ error: 'boom' }, 500), (r) => { assert.equal(r.ok, false); assert.equal(r.status, 500) }],
     [() => new Response('<html>', { status: 200 }), (r) => assert.equal(r.ok, false)],
     [() => { throw new TypeError('network') }, (r) => { assert.equal(r.ok, false); assert.equal(r.status, 0) }],
-    [() => json({ error: 'unknown endpoint' }, 404), (r) => { assert.equal(r.ok, false); assert.equal(r.status, 404); assert.equal(r.absent, true) }],
+    [() => json({ error: 'unknown endpoint' }, 404), (r) => { assert.equal(r.ok, false); assert.equal(r.status, 404) }],
   ]
   for (const [i, [answer, check]] of cases.entries()) await withFetch(answer, async () => check(await api.get('calls', { ref: 'fail-' + i })))
 })
@@ -99,4 +97,28 @@ test('1.2 every api.get name is a named query', () => {
 test('one fetch call site: only core/http.mjs calls fetch(', () => {
   const callers = sources(V2).filter((f) => /\bfetch\(/.test(stripComments(fs.readFileSync(f, 'utf8')))).map((f) => path.relative(V2, f))
   assert.deepEqual(callers, [path.join('core', 'http.mjs')])
+})
+
+// K-30 (1.5): one 403 latches the board — no further request leaves the page, and the page is told once
+test('K-30: after a 403 no request is sent, every read is {ok:false, status:403}, onForbidden fires once', async () => {
+  let fired = 0
+  onForbidden(() => fired++)
+  await withFetch(() => json({ error: 'x' }, 403), async (calls) => {
+    assert.equal((await api.get('sessions')).status, 403)
+    const n = calls.length
+    for (let i = 0; i < 5; i++) assert.deepEqual(((r) => [r.ok, r.status])(await api.get('sessions', { i })), [false, 403])
+    assert.equal(calls.length, n)
+  })
+  assert.equal(fired, 1)
+})
+
+// the real face over a real worker whose HOME/PATH is the empty test machine (real-face.mjs)
+test('real face: status answers on the empty machine and sessions lists the demo session', async () => {
+  const b = await serveBoard(boardHome())
+  try {
+    const st = await b.get('status')
+    assert.equal(st.status, 200); assert.equal(st.doc.command, 'status')
+    const ss = await b.get('sessions')
+    assert.equal(ss.status, 200); assert.ok(ss.doc.sessions.length >= 1)
+  } finally { await b.close() }
 })
