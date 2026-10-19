@@ -1,42 +1,47 @@
 // src/query/named/calls.mjs — `asight query calls` (RFC 1.6 §4.1, 附录 C.5).
 //
-// Any class of call, not only inference (D40). Without `--class` it is the class table — counted from
-// the segment index alone, no body read. With `--class` it is the calls themselves, in the detail
-// panel's shape (src/view/control-wire.mjs, the one reshaping rule), newest few with their bodies.
-import { stampSynthKeys } from '../../dissect/synth-key.mjs';
-import { sessionIdOf } from '../../view/assemble.mjs';
+// Any class of call, not only inference (D40). Without `--class` / `--host` / `--ref` it is the class table. With
+// one of them it is the calls themselves: filtered, counted and paged on the SEGMENT INDEX alone, and only the
+// page's records are read back, one seek each (3.5 §访问模式, D62②) — in the detail panel's shape
+// (src/view/control-wire.mjs, the one reshaping rule), the newest few with their bodies, under the index facts C.5 names.
+import { parseRecordId } from '../../collector/core/record/segments.mjs';
 import { controlRecordWire, CONTROL_DETAIL_RECORDS } from '../../view/control-wire.mjs';
-import { allRecords } from '../records.mjs';
-import { indexRows } from '../rows.mjs';
-import { listOf, paginate, tsFilter } from './index.mjs';
+import { recordsAt } from '../records.mjs';
+import { asOf, indexRows } from '../rows.mjs';
+import { QueryArgError, listOf, paginate, tsFilter } from './index.mjs';
 
-export const params = Object.freeze(['class', 'harness', 'session', 'since', 'until', 'limit', 'after']);
+export const params = Object.freeze(['class', 'harness', 'session', 'host', 'ref', 'since', 'until', 'limit', 'after']);
 
 export async function run({ home, fs, now, params: p, errors }) {
-  const keep = tsFilter(p, now), cls = listOf(p.class), harness = listOf(p.harness), sess = listOf(p.session);
+  if (p.ref != null && !parseRecordId(String(p.ref))) throw new QueryArgError(`asight query calls: --ref ${JSON.stringify(String(p.ref))} names no record — a record is \`<segment>:<line>\``);
+  const keep = tsFilter(p, now), cls = listOf(p.class), harness = listOf(p.harness), sess = listOf(p.session),
+    host = listOf(p.host), ref = listOf(p.ref);
+  // Through the ONE warm, stat-revalidated reading of the index (src/query/rows.mjs, which `sessions` and `session` ask too).
+  const all = await indexRows({ home, fs, errors });
+  const as_of = asOf(all);
+  // --harness is the harness `sessions` decided (proc, else the UA), and the session is the one `sessions` grouped by (C.5)
+  const rows = all.filter((r) => keep(r.ts) && (!harness || harness.has(r.harness_id)) && (!sess || sess.has(r.session_id))
+    && (!cls || cls.has(r.class)) && (!host || host.has(r.host)) && (!ref || ref.has(r.id)));
 
-  if (!cls) {
-    // Through the ONE warm, stat-revalidated reading of the index (src/query/rows.mjs, which `sessions` and
-    // `session` ask too): read straight from `segmentIndex` here, this branch re-read and re-parsed the whole index
-    // on every call — measured 409 ms on a 60 MB corpus where the warm reading is 1 ms, and the class table is a
-    // nearby query like any other (1.6 §4.1 ≤ 50 ms).
+  if (!cls && !host && !ref) {
     const counts = new Map();
-    for (const r of await indexRows({ home, fs, errors })) {
-      if (!keep(r.ts) || (harness && !harness.has(r.harness)) || (sess && !sess.has(r.session_key))) continue;
-      counts.set(r.class, (counts.get(r.class) || 0) + 1);
-    }
-    return { classes: [...counts].map(([c, count]) => ({ class: c, count })) };
+    for (const r of rows) counts.set(r.class, (counts.get(r.class) || 0) + 1);
+    return { as_of, classes: [...counts].map(([c, count]) => ({ class: c, count })) };
   }
 
-  // the session a record belongs to is read-side (3.4): a keyless inference call gets its synthesized key first
-  const recs = stampSynthKeys(await allRecords({ home, fs, errors }));
-  const list = recs.filter((r) => cls.has(r.traffic_class) && keep(r.ts_request ?? r.ts)
-    && (!harness || harness.has((r.proc || {}).agent)) && (!sess || sess.has(sessionIdOf(r))));
-  const { items, next, has_more } = paginate(list, p);
-  const slimBefore = Math.max(0, items.length - CONTROL_DETAIL_RECORDS);
+  if (ref && !rows.length) errors.push({ where: String(p.ref), reason: `no record ${p.ref} in this home's segment index` });
+  const { items, next, has_more } = paginate(rows, p);
+  const byId = new Map(items.map((r) => [r.id, r]));
+  const recs = recordsAt({ home, fs, rows: items, errors });
+  const slimBefore = Math.max(0, recs.length - CONTROL_DETAIL_RECORDS);
   return {
-    class: p.class, total: list.length, detail_limit: CONTROL_DETAIL_RECORDS,
-    records: items.map((r, i) => controlRecordWire(r, { detail: i >= slimBefore })),
+    as_of, ...(p.class != null ? { class: p.class } : {}), total: rows.length, detail_limit: CONTROL_DETAIL_RECORDS,
+    records: recs.map((rec, i) => {
+      const r = byId.get(rec.id);
+      return { ...controlRecordWire(rec, { detail: i >= slimBefore }),
+        id: r.id, ts: r.ts, harness: r.harness_id, class: r.class, host: r.host, endpoint: r.path, status: r.status,
+        sent_bytes: r.sent_bytes, received_bytes: r.received_bytes, retention: r.log_only ? 'log' : 'full', ref: r.id };
+    }),
     next, has_more,
   };
 }

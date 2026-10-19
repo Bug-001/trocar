@@ -95,6 +95,8 @@ function applyEnrich(base, enrich) {
     session_synthesized: !!base.session_synthesized,
     provider: base.provider ?? null,
     title: (info && info.title) || null,
+    // where the title came from (附录 C.5, 4.4 §人类标题的来源): the harness's own local store, never the captured wire
+    title_source: info && info.title ? 'harness-local-store' : null,
     calls: base.calls || 0,
     logged: base.logged || 0, // D40: inference calls kept as a log line only (a meta.json written before D40 has none)
     probes: base.probes || 0,

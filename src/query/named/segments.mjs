@@ -14,6 +14,8 @@ export async function run({ home, fs, now, params: p, errors }) {
   const until = p.until == null ? null : parseTime(p.until, { name: 'until', now: now() });
   const all = await allSegments({ home, fs });
   const segments = [];
+  // 附录 C.5 as_of: the newest call time over ALL segments, whatever the time filter keeps
+  const as_of = all.reduce((m, s) => (s.to && (m == null || s.to > m) ? s.to : m), null);
   for (const s of all) {
     const from = s.from ? Date.parse(s.from) : null, to = s.to ? Date.parse(s.to) : null;
     // A segment with no readable record has no time range: it is kept, so a problem is never hidden by a filter.
@@ -23,5 +25,5 @@ export async function run({ home, fs, now, params: p, errors }) {
       ratio: s.sealed_bytes != null && s.bytes > 0 ? s.sealed_bytes / s.bytes : null,
       from: s.from, to: s.to, problems: s.problems });
   }
-  return { segments };
+  return { as_of, segments };
 }

@@ -14,7 +14,7 @@ import zlib from 'node:zlib'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
-import { allRecords, recordsAt } from '../../src/query/records.mjs'
+import { recordsAt } from '../../src/query/records.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
 
 // every item of the list is the `meta` its own session document carries
@@ -43,10 +43,6 @@ test('one session is read back from its own records only — the same membership
   const recs = recordsAt({ home, rows: mine })
   assert.equal(recs.length, mine.length)
   assert.deepEqual(recs.map((r) => r.id), mine.map((r) => r.id))
-  // the same records the whole-corpus read would have put in this session, byte-identical envelopes
-  const all = await allRecords({ home })
-  const theirs = all.filter((r) => mine.some((m) => m.id === r.id))
-  assert.deepEqual(recs.map((r) => JSON.stringify(r)), theirs.map((r) => JSON.stringify(r)))
 
   const doc = await runQuery('session', { id }, { home })
   assert.equal(doc.meta.session_id, id)

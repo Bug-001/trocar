@@ -1,7 +1,7 @@
 // src/query/records.mjs — the raw records themselves, for the queries that need more than the index.
 //
-// The segment index (src/query/index-build.mjs) answers the list queries; `sessions`, `session`, `calls
-// --class` and `block` need the envelope, so they read the lines back from the segment. This is the ONE
+// The segment index (src/query/index-build.mjs) answers the list queries; `session`, `calls`
+// and `block` need the envelope, so they read the lines back from the segment. This is the ONE
 // place that does it: the records come out as the view layer's readers expect them (the same
 // normalizeRecord / expandRequestBody the ETL and the resolver use), stamped with their id
 // `<segment>:<line>` (D60) and the file they came from, and nothing else is derived here.
@@ -11,8 +11,8 @@ import { recordId } from '../collector/core/record/segments.mjs';
 import { normalizeRecord } from '../raw/ingest.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 import { openSealed } from '../raw/reader.mjs';
-import { R, FLAG_UNPARSEABLE } from '../raw/format.mjs';
-import { allSegments, segmentIndex } from './index-build.mjs';
+import { R } from '../raw/format.mjs';
+import { segmentIndex } from './index-build.mjs';
 import { asightHome } from '../paths.mjs';
 import { rowsKey, warmCache, fsTag } from './warm.mjs';
 
@@ -26,14 +26,13 @@ const listKey = (home, rows, fs) => { const k = rowsKey(rows); return { id: `${f
 const NL = 0x0a;
 
 /** Every stored line of one segment file as [lineNo, text] — sealed or plain, the line numbers it was written with.
- *  `all`: keep the lines that were not JSON when they were sealed too — `asight raw` prints bytes, it does not parse them. */
-function* lines(file, fs, { all = false } = {}) {
+ *  The lines that were not JSON when they were sealed are kept too: the index row names them, and the reader decides. */
+function* lines(file, fs) {
   if (file.endsWith('.sealed')) {
     const sf = openSealed(file, { fs });
     try {
       for (let i = 0; i < sf.count; i++) {
         const r = sf.records[i];
-        if (!all && r[R.flags] & FLAG_UNPARSEABLE) continue; // not JSON when it was sealed; the index reports it
         let b = sf.lineAt(i);
         if (b.length && b[b.length - 1] === NL) b = b.subarray(0, b.length - 1);
         if (b.length) yield [Number(r[R.lineNo]) + 1, b.toString('utf8')];
@@ -52,25 +51,6 @@ function recordOf(text, segment, lineNo, stream) {
   // `_stream` is non-enumerable everywhere it is stamped (src/raw/ingest.mjs): it says which file the
   // bytes are in, for a block's ref, and must never appear in a shipped document.
   Object.defineProperty(out, '_stream', { value: stream, enumerable: false, configurable: true });
-  return out;
-}
-
-/**
- * allRecords({home, fs, errors}) → every record of every segment, oldest segment first.
- * A segment or a line it cannot read goes into `errors` (D38), never silently missing.
- */
-export async function allRecords({ home = asightHome(), fs = nodeFs, errors = [] } = {}) {
-  const out = [];
-  for (const s of await allSegments({ home, fs })) {
-    for (const pr of s.problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
-    const stream = path.basename(s.path);
-    try {
-      for (const [no, text] of lines(s.path, fs)) {
-        try { out.push(recordOf(text, s.segment, no, stream)); }
-        catch (e) { errors.push({ where: recordId(s.segment, no), reason: `cannot be read back: ${String((e && e.message) || e)}` }); }
-      }
-    } catch (e) { errors.push({ where: `segments/${s.segment}`, reason: `cannot be read: ${String((e && e.message) || e)}` }); }
-  }
   return out;
 }
 
@@ -125,7 +105,7 @@ function plainReader(file, fs) {
   const fd = fs.openSync(file, 'r');
   let all = null;
   const scan = (r) => {
-    if (!all) all = [...lines(file, fs, { all: true })];
+    if (!all) all = [...lines(file, fs)];
     const hit = all.find(([no]) => no === r.lineNo);
     if (!hit) throw new Error(`line ${r.lineNo} is not in ${path.basename(file)}`);
     return hit[1];

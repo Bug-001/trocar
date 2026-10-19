@@ -253,7 +253,7 @@ test('封存后记录 id 与索引字段不变,封存件里每条记录按 id �
 // 不然 128 MB 明文还在盘上,状态却报 `sealed`(2026-10-18 Windows run P1)。
 test('明文与封存件并存时:状态不是 sealed,读的是明文的字节', async () => {
   const { sealSegment } = await import('../../src/raw/seal.mjs')
-  const { segmentLines, allRecords } = await import('../../src/query/records.mjs')
+  const { segmentLines } = await import('../../src/query/records.mjs')
   const home = rawHome()
   writeSegment(home, SEG, [{ id: 'a' }])
   await sealSegment(path.join(home, 'raw', `${SEG}.ndjson`), { lockFile: path.join(home, 'collector', 'lock'), journal: null })
@@ -269,7 +269,6 @@ test('明文与封存件并存时:状态不是 sealed,读的是明文的字节',
   await segmentIndex({ home, segment: SEG, owner: true })
   assert.equal((await segmentIndex({ home, segment: SEG })).bytesRead, 0)
   assert.equal([...segmentLines({ home, segment: SEG })].length, 2)
-  assert.deepEqual((await allRecords({ home })).map((r) => r.id), [`${SEG}:1`, `${SEG}:2`])
 })
 
 // A whole-document write goes through a temp next to the index and a rename. The temp name was the pid alone, so two
