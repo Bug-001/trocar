@@ -1,21 +1,17 @@
-// test/server/readonly.test.mjs — V84 (RFC 1.6 §1057, 4.4 验收 3 · 7): `asight serve` is read-only
+// test/server/readonly.test.mjs — V84 (RFC 1.6 §1057, 4.4 验收 3 · 7): the board is read-only
 // and reachable from this machine only.
 //
 // The loopback bind is checked against a real external address of this host (not a flag), the
-// read-only claim against what HOME gained after a round of requests, and the port-in-use line
-// against the CLI itself.
+// read-only claim against what HOME gained after a round of requests.
+// The port-in-use line is test/cli/board.test.mjs's.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-import { once } from 'node:events';
 import * as face from './face.mjs';
 import { withToken } from './face.mjs';
-import { run as serveRun, DEFAULT_PORT } from '../../src/cli/serve.mjs';
-import { EXIT } from '../../src/cli/schema.mjs';
 import { QUERIES } from '../../src/query/named/index.mjs';
 import { rawHome, writeSegment } from '../query/raw-home.mjs';
 
@@ -79,17 +75,4 @@ test('V84: a round of requests leaves HOME with nothing new but index/', async (
     const st = fs.statSync(path.join(home, 'raw', f));
     return [f, st.size, st.ino, st.mtimeMs];
   }), raw, 'a segment file changed — the service never writes records (invariant 2)');
-});
-
-test('V84: a port already in use prints §4.3\'s line and exits 1', async () => {
-  const taken = http.createServer(() => {});
-  taken.listen(0, '127.0.0.1'); await once(taken, 'listening');
-  const port = taken.address().port;
-  const err = [];
-  try {
-    const code = await serveRun([], { io: { out() {}, err: (s) => err.push(s) }, args: { flags: { port: String(port) } } });
-    assert.equal(code, EXIT.incomplete);
-    assert.deepEqual(err, [`asight serve: port ${port} is in use. Try: asight serve --port ${port + 1}`]);
-  } finally { taken.close(); }
-  assert.equal(DEFAULT_PORT, 9800, 'the default port is §4.3\'s');
 });

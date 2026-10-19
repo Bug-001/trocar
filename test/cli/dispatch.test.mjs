@@ -75,7 +75,7 @@ test('help through the dispatch: no arguments, `help`, `--help`, `help <command>
     const { exit, c } = await say(argv)
     assert.equal(exit, 0, argv.join(' ')); assert.equal(c.io.stdoutText().trim(), helpText()); assert.equal(c.io.stderrText(), '')
   }
-  for (const argv of [['help', 'off'], ['off', '--help'], ['off', '-h'], ['off', '--yes', '--help'], ['serve', '--help'], ['query', '--help']]) {
+  for (const argv of [['help', 'off'], ['off', '--help'], ['off', '-h'], ['off', '--yes', '--help'], ['board', '--help'], ['query', '--help']]) {
     const { exit, c } = await say(argv)
     const name = argv[0] === 'help' ? argv[1] : argv[0]
     assert.equal(exit, 0, argv.join(' ')); assert.equal(c.io.stdoutText().trim(), helpText(name)); assert.ok(!/asight uninstall/.test(c.io.stdoutText()), 'one command only')
@@ -91,7 +91,7 @@ test('help through the dispatch: no arguments, `help`, `--help`, `help <command>
 test('V6: an unknown command, an unknown option, an unknown harness and a flag that was removed are exit 2, say one line and the usage, and leave the sandbox HOME byte for byte as it was', async () => {
   for (const platform of ['linux', 'darwin']) {
     for (const argv of [['nope'], ['on', 'clade'], ['off', 'clade'], ['status', 'clade'], ['uninstall', 'claude-code'], ['on', '--proxy', 'http://127.0.0.1:8899'],
-      ['on', '--opt-in'], ['off', '--remove-ca'], ['doctor', '--source', '/x'], ['doctor', '--only', 'old-ca'], ['serve', '--db', '/x'], ['serve', '--control'], ['daemon', '--bogus'], ['status', '--frob']]) {
+      ['on', '--opt-in'], ['off', '--remove-ca'], ['doctor', '--source', '/x'], ['doctor', '--only', 'old-ca'], ['board', '--port', '9800'], ['daemon', '--bogus'], ['status', '--frob']]) {
       const s = sandbox({ platform, install: false }); const before = snapshot(s.home); const calls = s.sys.exec.calls.length
       const { exit, io } = await s.run(argv)
       assert.equal(exit, 2, `${platform}: ${argv.join(' ')}: ${io.text()}`)
