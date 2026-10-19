@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assembleSession } from '../../src/view/assemble.mjs';
 import { linearContext } from '../../src/view/analyze.mjs';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { buildResolver } from '../../src/query/source.mjs';
 import { slimBlock } from '../../src/view/blockmeta.mjs';
 

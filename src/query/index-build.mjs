@@ -43,13 +43,15 @@ import { statKey, warmCache, fsTag } from './warm.mjs';
 
 const rawDir = (home = asightHome()) => path.join(home, 'raw');
 export const indexDir = (home = asightHome()) => path.join(home, 'index');
-const INDEX_V = 4;
+const INDEX_V = 5;
 const CHUNK = 1 << 20;
 // How many appended bytes one catch-up of the daemon's keeper takes (src/collector/index-keeper.mjs imports it): the
 // unit of "a chunk of index work". A READER that had to read more than this from a segment is the honest definition of
 // a cold index (D62 · D38): the keeper never leaves that much behind, so nothing was keeping this index current.
 export const KEEPER_CHUNK_BYTES = 4 << 20;
 const NL = 0x0a;
+// One direction's wire bytes: the number when it is one, else null — not recorded is never 0 (4.2 §段索引, invariant 4).
+const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
 // What a session is made of, per record, so `sessions` never reads a record back (1.6 §4.1 速度目标 ≤ 1 s).
 // Each is a fact of THIS record; the grouping and the counting are the read side's (src/query/rows.mjs), and
 // the session key is the ONE table's answer (3.4, body keys included), not a header list of this file's own.
@@ -96,7 +98,8 @@ export function indexEntryOf(env, { segment, lineNo, storedBytes, offset = null 
     path: e.endpoint ?? null,
     status: (e.resp && e.resp.status) ?? null,
     stored_bytes: storedBytes,
-    wire_bytes: (Number(wire.req) || 0) + (Number(wire.resp) || 0),
+    sent_bytes: finite(wire.req),
+    received_bytes: finite(wire.resp),
     session_key: sessionKeyOf(e).key ?? null,
     is_llm: !!e.is_llm_call,
     // the session facts: harness_id is the harness the BOARD decides (proc, else the UA — and it says which)
@@ -181,9 +184,9 @@ function scanSealed(fs, file, segment, problems) {
   } finally { sf.close(); }
 }
 
-// ── the index document: append-only NDJSON (INDEX_V 4; 4.2 §段索引) ────────
+// ── the index document: append-only NDJSON (INDEX_V 5; 4.2 §段索引) ────────
 // One file per segment, one line per fact: an entry (a record, bare), a problem (`{"p":…}`), or a mark
-// (`{"m":…,"v":4}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
+// (`{"m":…,"v":5}` = "the index covers this segment up to m.end"). A pass APPENDS its new entries and problems and
 // then one mark; a reader takes everything up to the LAST complete mark and ignores what follows it (a torn batch).
 // That is what makes keeping the index current cost the NEW records, never the whole segment: the whole-document
 // format this replaces (v3) rewrote ≈ e·N²/2 bytes per segment, and real traffic gives nearly every record a pass of
@@ -362,7 +365,7 @@ function storeIndex(fs, file, lines, problems, at = null) {
 
 /**
  * segmentIndex({home, segment, maxBytes, owner}) → { segment, source, records, problems, bytesRead, done }
- *   records: [{ id, ts, harness, class, host, path, status, stored_bytes, wire_bytes, session_key, is_llm }]
+ *   records: [{ id, ts, harness, class, host, path, status, stored_bytes, sent_bytes, received_bytes, session_key, is_llm }]
  *     — every record of the segment for a reader; for an `owner` resuming, only the ones THIS pass indexed (it reads
  *     the stored mark alone, never the stored entries, so that its cost stays proportional to the new bytes).
  *   bytesRead: what this call read from the segment (0 = the stored index was current).
@@ -425,7 +428,7 @@ export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs, 
 // `allSegments` also called would be a cycle between the two modules.
 const segRows = warmCache({ maxBytes: 64 * 1024 * 1024, bytes: (v) => v.records.length * 320 }); // ~320 B per index row in memory (measured on the reference dataset)
 // Both files, so a plaintext that is sealed (or a sealed file rebuilt) is a new stamp: the plaintext wins while it exists (4.2:30).
-const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home), `${segment}.ndjson`), fs)}|${statKey(path.join(rawDir(home), `${segment}.sealed`), fs)}`;
+export const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home), `${segment}.ndjson`), fs)}|${statKey(path.join(rawDir(home), `${segment}.sealed`), fs)}`;
 /** warmSegmentIndex({home, segment, fs}) → the same `segmentIndex()` answer, read from disk only when that segment's
  *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory. */
 export const warmSegmentIndex = ({ home = asightHome(), segment, fs = nodeFs } = {}) =>

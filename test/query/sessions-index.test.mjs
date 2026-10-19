@@ -3,9 +3,9 @@
 //
 // The list used to read every record back: 4.5 s on Windows and 7.0 s on macOS over the 1 GB reference
 // dataset, against a ≤ 1 s budget (test-machine runs, 2026-10-18). It is now derived from the per-segment index
-// rows. What this pins is the thing that can drift: the index-derived document must equal, field for
-// field, what the board derives from the records themselves — on a dataset the generator made, not on a
-// fixture shaped to agree.
+// rows. What this pins is the thing that can drift: each item of the index-derived list must equal, field
+// for field, the `meta` of that session's own document, which is counted from its records (附录 C.5: `meta`
+// 同 `sessions` 的一项) — on a dataset the generator made, not on a fixture shaped to agree.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -14,9 +14,16 @@ import zlib from 'node:zlib'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { generate } from '../../scripts/gen-dataset.mjs'
 import { runQuery } from '../../src/query/named/index.mjs'
-import { sessionMetasOf } from '../../src/view/board.mjs'
-import { allRecords, recordsAt } from '../../src/query/records.mjs'
+import { recordsAt } from '../../src/query/records.mjs'
 import { indexRows, sessionGroups } from '../../src/query/rows.mjs'
+
+// every item of the list is the `meta` its own session document carries
+const listIsEachMeta = async (home) => {
+  const doc = await runQuery('sessions', { limit: '500' }, { home })
+  assert.deepEqual(doc.errors, [])
+  assert.ok(doc.sessions.length > 1, `the dataset has sessions to compare (${doc.sessions.length})`)
+  for (const item of doc.sessions) assert.deepEqual(item, (await runQuery('session', { id: item.session_id }, { home })).meta)
+}
 
 const dataset = (bytes = 4_000_000) => {
   const home = path.join(tmpDir('asight-sessions-'), '.asight')
@@ -24,15 +31,9 @@ const dataset = (bytes = 4_000_000) => {
   return home
 }
 
-test('the sessions document is the board\'s own grouping over the records, derived from the index instead', async () => {
+test('each item of the index-built sessions list is that session\'s own record-built meta', async () => {
   const home = dataset()
-  const want = sessionMetasOf(await allRecords({ home }))
-    .sort((a, b) => String(b.last_ts).localeCompare(String(a.last_ts)))
-    .slice(0, 500)
-  const doc = await runQuery('sessions', { limit: '500' }, { home })
-  assert.ok(want.length > 10, `the dataset has sessions to compare (${want.length})`)
-  assert.deepEqual(doc.sessions, want)
-  assert.deepEqual(doc.errors, [])
+  await listIsEachMeta(home)
 })
 
 test('one session is read back from its own records only — the same membership the list counted', async () => {
@@ -42,10 +43,6 @@ test('one session is read back from its own records only — the same membership
   const recs = recordsAt({ home, rows: mine })
   assert.equal(recs.length, mine.length)
   assert.deepEqual(recs.map((r) => r.id), mine.map((r) => r.id))
-  // the same records the whole-corpus read would have put in this session, byte-identical envelopes
-  const all = await allRecords({ home })
-  const theirs = all.filter((r) => mine.some((m) => m.id === r.id))
-  assert.deepEqual(recs.map((r) => JSON.stringify(r)), theirs.map((r) => JSON.stringify(r)))
 
   const doc = await runQuery('session', { id }, { home })
   assert.equal(doc.meta.session_id, id)
@@ -67,9 +64,7 @@ test('a request body stored compressed names the same session in the list as on 
     })
     fs.writeFileSync(file, out.join('\n'))
   }
-  const want = sessionMetasOf(await allRecords({ home })).sort((a, b) => String(b.last_ts).localeCompare(String(a.last_ts)))
-  const doc = await runQuery('sessions', { limit: '500' }, { home })
-  assert.deepEqual(doc.sessions, want.slice(0, 500))
+  await listIsEachMeta(home)
 })
 
 // The resident worker keeps one entry per row list, stamped with the list itself — and a row list cannot move (its

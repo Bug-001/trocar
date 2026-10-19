@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardFlat } from '../../src/dissect/openai.mjs';
 import { linearContext } from '../../src/view/analyze.mjs';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { sessionView, forWire } from '../../src/view/board.mjs';
 
 // BUG 2 — PROVIDER KNOWLEDGE LEAKED INTO THE BROWSER (invariant 3 / AC-3).

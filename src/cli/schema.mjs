@@ -59,9 +59,16 @@ export function validateReceipt(r) {
   if ('schema' in r && r.schema !== SCHEMA_VERSION) bad.push(`schema: ${JSON.stringify(r.schema)}, expected the integer ${SCHEMA_VERSION}`)
   if ('command' in r && !(isString(r.command) && r.command !== '')) bad.push('command: not a non-empty string')
   if ('ok' in r && typeof r.ok !== 'boolean') bad.push('ok: not a boolean')
-  listOf(r, 'changed', bad, (c, at) => {
-    if (!isObject(c)) { bad.push(`${at}: not an object {path, change, backup}`); return }
+  // C.1 `{path, change, backup}` for a command that changes state; C.3 `{harness, path, what, undo}` for status, whose list is null when the install record could not be read
+  const status = r.command === 'status'
+  if (!(status && r.changed === null)) listOf(r, 'changed', bad, (c, at) => {
+    if (!isObject(c)) { bad.push(`${at}: not an object ${status ? '{harness, path, what, undo}' : '{path, change, backup}'}`); return }
     if (!isString(c.path)) bad.push(`${at}.path: not a string`)
+    if (status) {
+      if (!('harness' in c)) bad.push(`${at}.harness: missing`) // the id itself is checked for every `harness` key below
+      for (const k of ['what', 'undo']) if (!isString(c[k])) bad.push(`${at}.${k}: not a string`)
+      return
+    }
     if (!isString(c.change)) bad.push(`${at}.change: not a string`)
     if (!(c.backup === null || isString(c.backup))) bad.push(`${at}.backup: neither a path nor null`)
   })

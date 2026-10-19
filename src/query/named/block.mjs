@@ -2,12 +2,13 @@
 //
 // One block's bytes, read back from the record they were captured in. A ref names its record as
 // `<segment>:<line>` (D60) and, optionally, a field and a byte span inside it — the same text_ref the
-// session view mints (src/etl/orchestrator.mjs). The fidelity of what comes back is NOT smoothed over
+// session view mints (src/raw/refs.mjs, mintRawRef / composeTextRef). The fidelity of what comes back is NOT smoothed over
 // (invariant 4): it is classified by the resolver's own classifier, and the capture's own
 // incompleteness labels are carried through as they are.
 import { parseRecordId } from '../../collector/core/record/segments.mjs';
-import { parseTextRef, TEXT_REF_FIELD, fieldTextOf } from '../../etl/orchestrator.mjs';
-import { normalizeRecord } from '../../etl/ingest.mjs';
+import { parseTextRef } from '../../raw/refs.mjs';
+import { TEXT_REF_FIELD, fieldTextOf } from '../../dissect/record-fields.mjs';
+import { normalizeRecord } from '../../raw/ingest.mjs';
 import { requestEncodingOf } from '../../dissect/request-body.mjs';
 import { reqIncompleteOf } from '../../dissect/capture-labels.mjs';
 import { classifyFidelity } from '../source.mjs';

@@ -19,12 +19,15 @@ export async function run({ home, fs, now, errors }) {
   const counts = new Map(table.classes.map((c) => [c.class, zero()]));
   const t = now();
   const segs = await allSegments({ home, fs });
+  let as_of = null; // 附录 C.5: the newest call time in the whole index
+
   for (const s of segs) {
     for (const pr of s.problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
     const { records } = await segmentIndex({ home, segment: s.segment, fs });
     for (const r of records) {
       // A class on disk that the table does not name (an edited table, a record from before an edit) is
       // counted under its own line rather than dropped (invariant 4), and said to be no longer in the table.
+      if (r.ts && (as_of == null || String(r.ts) > as_of)) as_of = String(r.ts);
       let c = counts.get(r.class);
       if (!c) { c = zero(); counts.set(r.class, c); }
       const at = r.ts ? Date.parse(r.ts) : null;
@@ -48,6 +51,7 @@ export async function run({ home, fs, now, errors }) {
   // records, their sealed copies, the whole home. A segment that still has its plaintext beside a sealed copy
   // counts in both — that is what it costs (tested 2026-10-18: both were 0 while 1 GB sat in raw/).
   return {
+    as_of,
     classes,
     disk: {
       asight_bytes: du.total_bytes,

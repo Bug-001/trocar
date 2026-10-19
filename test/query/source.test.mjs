@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { buildResolver } from '../../src/query/source.mjs';
-import { readRecords } from '../../src/etl/ingest.mjs';
-import { composeTextRef, mintRawRef } from '../../src/etl/orchestrator.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
+import { composeTextRef, mintRawRef } from '../../src/raw/refs.mjs';
 import { fixtureGate } from '../helpers/fixture.mjs';
 
 const refFor = (r, start, end) => composeTextRef(mintRawRef('sess', 'stream', r.id), [start, end]);

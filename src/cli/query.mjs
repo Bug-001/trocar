@@ -4,7 +4,7 @@
 // itself is always JSON (§4.1), so `--json` changes only what an error looks like: the JSON error document instead of one English line (§1.2).
 import { EXIT } from './schema.mjs'
 import { printJson, errorDoc } from './json.mjs'
-import { columns, wrap } from './text.mjs'
+import { wrap, WIDTH } from './text.mjs'
 import { asightHome, collectorDir } from '../off/paths.mjs'
 import { queryDocument } from '../query/client.mjs'
 
@@ -14,8 +14,10 @@ const errText = (e) => String((e && e.message) || e)
  *  this command's load time, and the daemon path does not need it). */
 export const queryList = async () => {
   const { QUERIES } = await import('../query/named/index.mjs')
-  return columns([['NAME', 'PARAMETERS'],
-    ...Object.entries(QUERIES).map(([name, q]) => [name, q.params.length ? q.params.map((p) => `--${p}`).join(' ') : 'none'])])
+  const rows = [['NAME', 'PARAMETERS'], ...Object.entries(QUERIES).map(([name, q]) => [name, q.params.length ? q.params.map((p) => `--${p}`).join(' ') : 'none'])]
+  // the parameters fold under their own column rather than pass 80 columns (§1.1⑥)
+  const w = Math.max(...rows.map(([n]) => n.length)), pad = ' '.repeat(w + 2)
+  return rows.flatMap(([n, p]) => wrap(p, WIDTH - pad.length).map((l, i) => (i ? pad : n.padEnd(w + 2)) + l))
 }
 
 /** → the exit code. `argv` is what follows `query`; the parsed form is `ctx.args` ({ positionals, flags }). */

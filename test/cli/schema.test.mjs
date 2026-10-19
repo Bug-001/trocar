@@ -8,7 +8,7 @@ import { COMMAND_KEYS } from '../../src/cli/schema.mjs'
 import { readFileSync } from 'node:fs'
 
 const mutate = (fn, command = 'status') => { const r = newReceipt(command); fn(r); return r } // `status` carries no C.2 key list, so a probe of a common key is not read as drift
-const problems = (fn) => validateReceipt(mutate(fn))
+const problems = (fn, command) => validateReceipt(mutate(fn, command))
 
 test('receipt schema: the keys, the exit codes and the version are the 1.6 R5 / R4 ones, and src/cli re-exports src/off', () => {
   assert.equal(SCHEMA_VERSION, 2)
@@ -61,14 +61,14 @@ test('receipt schema: schema is the current integer, command a non-empty string,
   assert.deepEqual(problems((r) => { r.ok = false }), [])
 })
 
-test('receipt schema: changed[] items are {path, change, backup: string|null}', () => {
-  assert.deepEqual(problems((r) => { r.changed.push({ path: '/h/.codex/.env', change: 'adds the asight block', backup: '/h/.asight/backup/ab-1' }, { path: '/h/.bashrc', change: 'x', backup: null }) }), [])
-  assert.ok(problems((r) => { r.changed.push({ path: '/h/a', change: 'x' }) }).some((s) => s.includes('changed[0].backup')), 'backup must be there, null when there is none')
-  assert.ok(problems((r) => { r.changed.push({ path: '/h/a', change: 'x', backup: 3 }) }).some((s) => s.includes('changed[0].backup')))
-  assert.ok(problems((r) => { r.changed.push({ change: 'x', backup: null }) }).some((s) => s.includes('changed[0].path')))
-  assert.ok(problems((r) => { r.changed.push({ path: '/h/a', change: 7, backup: null }) }).some((s) => s.includes('changed[0].change')))
-  assert.ok(problems((r) => { r.changed.push('/h/a') }).some((s) => s.includes('changed[0]')))
-  assert.ok(problems((r) => { r.changed = {} }).some((s) => s.includes('changed')))
+test('receipt schema: changed[] items of a state-changing command (on) are {path, change, backup: string|null} (C.1)', () => {
+  assert.deepEqual(problems((r) => { r.changed.push({ path: '/h/.codex/.env', change: 'adds the asight block', backup: '/h/.asight/backup/ab-1' }, { path: '/h/.bashrc', change: 'x', backup: null }) }, 'on'), [])
+  assert.ok(problems((r) => { r.changed.push({ path: '/h/a', change: 'x' }) }, 'on').some((s) => s.includes('changed[0].backup')), 'backup must be there, null when there is none')
+  assert.ok(problems((r) => { r.changed.push({ path: '/h/a', change: 'x', backup: 3 }) }, 'on').some((s) => s.includes('changed[0].backup')))
+  assert.ok(problems((r) => { r.changed.push({ change: 'x', backup: null }) }, 'on').some((s) => s.includes('changed[0].path')))
+  assert.ok(problems((r) => { r.changed.push({ path: '/h/a', change: 7, backup: null }) }, 'on').some((s) => s.includes('changed[0].change')))
+  assert.ok(problems((r) => { r.changed.push('/h/a') }, 'on').some((s) => s.includes('changed[0]')))
+  assert.ok(problems((r) => { r.changed = {} }, 'on').some((s) => s.includes('changed')))
 })
 
 test('receipt schema: skipped[] items are {what, reason} strings', () => {

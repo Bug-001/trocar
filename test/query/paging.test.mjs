@@ -51,11 +51,11 @@ test('calls 两种形状:不带 --class 给 classes:[{class,count}],带 --class 
     { ts: at(6), class: 'telemetry', is_llm: false, host: 'o11y.example' },
   ])
   const table = await runQuery('calls', {}, { home })
-  assert.deepEqual(Object.keys(table).sort(), ['classes', 'command', 'errors', 'ok', 'schema'])
+  assert.deepEqual(Object.keys(table).sort(), ['as_of', 'classes', 'command', 'errors', 'ok', 'schema'])
   assert.deepEqual(table.classes.map((c) => [c.class, c.count]).sort(), [['llm', 2], ['telemetry', 2]])
 
   const one = await runQuery('calls', { class: 'telemetry' }, { home })
-  assert.deepEqual(Object.keys(one).sort(), ['class', 'command', 'detail_limit', 'errors', 'has_more', 'next', 'ok', 'records', 'schema', 'total'])
+  assert.deepEqual(Object.keys(one).sort(), ['as_of', 'class', 'command', 'detail_limit', 'errors', 'has_more', 'next', 'ok', 'records', 'schema', 'total'])
   assert.deepEqual([one.class, one.total, one.records.length], ['telemetry', 2, 2])
   assert.deepEqual(one.records.map((r) => r.id), [`${SEG}:3`, `${SEG}:4`])
   // 分页与过滤是同一组参数

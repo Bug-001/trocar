@@ -86,7 +86,7 @@ test('a capture file that could not be read in full is not a pass (exit 3, the f
   const s = plain()
   const src = path.join(s.home, 'src')
   capture(src, { name: 'a.ndjson' }); const b = capture(src, { name: 'b.ndjson' })
-  const { readRecords } = await import('../../src/etl/ingest.mjs')
+  const { readRecords } = await import('../../src/raw/ingest.mjs')
   const r = await doctor(s, [], { source: src, deps: { readRecords: async (f, o) => { if (f === b) throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); return readRecords(f, o) } } })
   assert.equal(r.exit, 3, r.text)
   assert.ok(r.out.includes(`Could not judge a captured file: ${b}: EIO`), r.out)

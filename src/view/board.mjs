@@ -1,8 +1,6 @@
 // src/view/board.mjs — server-side board data assembly (D18a Option-2). Groups a FLAT raw
 // NDJSON (the source of truth, invariant 2) into the shapes the reused demo dashboard polls:
-//   /api/projects  → { projects:[{slug,name,path,last_ts,sessions:[meta…]}] }
-//   /api/session   → { records(slim), analyzed, probes, meta, truncated }
-//   /api/control   → { classes:[…] } | { class, records }
+//   session → { records(slim), analyzed, probes, meta, truncated }
 // All provider parsing happens in assembleSession (analyze) HERE, server-side — the browser
 // receives only canonical `analyzed` (invariant 3 / AC-3). Pure over its `records` input;
 // human-title / cwd enrichment is injected via `enrich(id)` so this module stays testable.
@@ -10,12 +8,10 @@ import { assembleSession, sessionIdOf, headersOf, respOf } from './assemble.mjs'
 import { harnessOf as harnessOfRecord, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { stampSynthKeys } from '../dissect/synth-key.mjs';
 import { isLogOnly, bodyRetentionOf, retentionLabelOf } from '../dissect/capture-labels.mjs';
-import { controlRecordWire, CONTROL_DETAIL_RECORDS } from './control-wire.mjs';
 
 // tolerate both envelope shapes: demo v0 `request_headers` + product D10 `req_headers` (Codex).
 const anyHeaders = (recs) => headersOf(recs.find((r) => r.request_headers || r.req_headers));
 
-const base = (p) => String(p).replace(/\/+$/, '').split('/').pop() || String(p);
 const isProbe = (r) => /count_tokens/.test(r.endpoint || '');
 // A session record that is neither real inference nor a count_tokens probe — the sharder's `other`
 // stream. Kept exactly complementary to is_llm_call/isProbe so calls+probes+other = the session total.
@@ -28,7 +24,7 @@ const isLogged = (r) => !!r.is_llm_call && isLogOnly(r);
 // Records carrying their harness's session key (src/dissect/harnesses.mjs, RFC 3.4) belong to a
 // session; the rest are the session-less control plane (telemetry / config / account).
 // A keyless Hermes / Kimi inference call gets a synthesized key first (3.4 合成键, gate G11), stamped over the
-// whole input in its order — the order the ETL reads the files in, so both readers name it the same.
+// whole input in its order — the order the segment index reads the files in, so both readers name it the same.
 export function groupSessions(records) {
   stampSynthKeys(records);
   const g = new Map();
@@ -40,7 +36,6 @@ export function groupSessions(records) {
   }
   return g;
 }
-export const controlRecords = (records) => stampSynthKeys(records).filter((r) => !sessionIdOf(r));
 
 // ── per-session derived meta (cheap; no analyze) ──────────────────────────────
 const llmRecs = (recs) => recs.filter((r) => r.is_llm_call && !isLogOnly(r));
@@ -58,8 +53,8 @@ function entrypointOf(recs) {
   if (app === 'cli' || /cli|sdk-cli/.test(ua)) return 'cli';
   return null;
 }
-// D37 ①: harness = proc.agent, through the ONE table (src/dissect/harnesses.mjs) the ETL and sharder
-// also read. The UA is consulted only for legacy records without proc, and that answer is flagged
+// D37 ①: harness = proc.agent, through the ONE table (src/dissect/harnesses.mjs) the segment index
+// also reads. The UA is consulted only for legacy records without proc, and that answer is flagged
 // harness_inferred so the chip can say so. The first record WITH proc decides; else the first with headers.
 // provider = the board's PRICING key (gate G10): fixed for the pre-D37 harnesses, otherwise the wire
 // dialect actually observed, or null. A harness that can be pointed at ANY backend (OpenCode) MUST NOT
@@ -81,8 +76,8 @@ function lastTs(recs) { let m = ''; for (const r of recs) { const t = String(r.t
 
 // project_slug / project_path / title are a BOARD-side lookup (enrich against ~/.claude/projects),
 // not a capture fact — so they are layered on separately from the per-session facts. This is applied
-// both to metas computed from records (sessionMetaFor) and to metas precomputed by the archive layer
-// (projectsViewFromMetas), so the two paths produce identical session objects.
+// both to metas computed from records (sessionMetaFor) and to facts counted from the segment index
+// (sessionMetaOfFacts), so the two paths produce identical session objects.
 // It is also the ONE place the session document's shape lives (附录 C.5): `asight query sessions` derives the
 // same facts from the segment index (src/query/rows.mjs sessionFactsOf) and hands them to this function, so the
 // list the board draws and the list the CLI prints are one document, however they were counted.
@@ -100,6 +95,8 @@ function applyEnrich(base, enrich) {
     session_synthesized: !!base.session_synthesized,
     provider: base.provider ?? null,
     title: (info && info.title) || null,
+    // where the title came from (附录 C.5, 4.4 §人类标题的来源): the harness's own local store, never the captured wire
+    title_source: info && info.title ? 'harness-local-store' : null,
     calls: base.calls || 0,
     logged: base.logged || 0, // D40: inference calls kept as a log line only (a meta.json written before D40 has none)
     probes: base.probes || 0,
@@ -124,41 +121,10 @@ function sessionMetaFor(id, recs, enrich) {
   }, enrich);
 }
 
-function groupIntoProjects(sessions) {
-  const byProj = new Map();
-  for (const m of sessions) {
-    if (!byProj.has(m.project_slug)) byProj.set(m.project_slug, []);
-    byProj.get(m.project_slug).push(m);
-  }
-  const projects = [...byProj.entries()].map(([slug, ss]) => {
-    ss.sort((a, b) => String(b.last_ts).localeCompare(String(a.last_ts)));
-    const anyPath = ss.find((s) => s.project_path)?.project_path;
-    const name = slug === '_unresolved' ? 'unresolved' : anyPath ? base(anyPath) : slug;
-    return { slug, path: anyPath || slug, name, last_ts: ss[0].last_ts, sessions: ss };
-  });
-  // real projects first (newest), the _unresolved bucket last
-  projects.sort((a, b) =>
-    a.slug === '_unresolved' ? 1 : b.slug === '_unresolved' ? -1 : String(b.last_ts).localeCompare(String(a.last_ts)));
-  return { projects };
-}
-
-// Session metas straight from records (the sharder's `_unkeyed/`: keys that are not headers, 3.4:21).
-export const sessionMetasOf = (records) => [...groupSessions(records)].map(([id, recs]) => sessionMetaFor(id, recs));
 /** One session meta from facts counted elsewhere (the segment index), in the one document shape. */
 export const sessionMetaOfFacts = (facts, { enrich } = {}) => applyEnrich(facts, enrich);
 
-// ── /api/projects ─────────────────────────────────────────────────────────────
-export function projectsView(records, { enrich } = {}) {
-  return groupIntoProjects([...groupSessions(records)].map(([id, recs]) => sessionMetaFor(id, recs, enrich)));
-}
-
-// Same view, but from per-session metas the archive layer precomputed (src/etl/session-meta.mjs) —
-// so the board can list every session of a multi-GB capture without loading a single record.
-export function projectsViewFromMetas(metas, { enrich } = {}) {
-  return groupIntoProjects((metas || []).map((m) => applyEnrich(m, enrich)));
-}
-
-// ── /api/session ──────────────────────────────────────────────────────────────
+// ── session ──────────────────────────────────────────────────────────────
 // analyze() sees LLM calls only (count_tokens probes are passed separately, as the demo did);
 // `records` is SLIMMED to what the browser still needs locally (errStats status + change-sig) —
 // the heavy request bodies ride inside `analyzed.…calls[].rec`, never duplicated.
@@ -177,7 +143,7 @@ export function projectsViewFromMetas(metas, { enrich } = {}) {
 // the board falls through to its empty state and LIES that there are no calls. Keep the MOST RECENT
 // calls that fit; the omitted ones stay intact in the raw NDJSON and the view is MARKED non-complete
 // (invariant 4) via `truncated`, which the board renders as the 非完整视图 banner.
-export function tailBound(recs, maxBytes) {
+function tailBound(recs, maxBytes) {
   const bytesOf = (r) => (typeof r.req_body === 'string' ? r.req_body.length
     : (r.request ? JSON.stringify(r.request).length : 0));
   const calls = (rs) => rs.reduce((n, r) => n + (r.is_llm_call && !isLogOnly(r) ? 1 : 0), 0);
@@ -349,32 +315,9 @@ export function pageView(view, spec = {}) {
 // stay under V8's max string instead of 500-ing.
 //
 // A PROJECTION, never a mutation: the same assembled view is memoized and backs later page requests,
-// and server-side callers (ETL, the test suite) legitimately read `steps`. Returns a new object.
+// and server-side callers (the test suite) legitimately read `steps`. Returns a new object.
 export function forWire(view) {
   if (!view || !view.analyzed) return view;
   const { streams, ...analyzed } = view.analyzed;
   return { ...view, analyzed: onWire(analyzed) };
-}
-
-// ── /api/control ──────────────────────────────────────────────────────────────
-function controlClass(r) {
-  const e = String(r.endpoint || '');
-  if (/count_tokens/.test(e)) return 'telemetry';
-  if (/oauth|token|account|organization|profile/.test(e)) return 'account';
-  if (/mcp|registry|marketplace|extension/.test(e)) return 'registry';
-  if (/statsig|telemetry|event|metric|flag/.test(e)) return 'telemetry';
-  return 'control';
-}
-export function controlView(records, cls, { detail = CONTROL_DETAIL_RECORDS } = {}) {
-  const ctrl = controlRecords(records);
-  // D40: the records go out reshaped for the detail panel (bodies as stored, clipped for display, labelled; the heavy fields stay in the source).
-  // Only the newest `detail` of a class carry their bodies (the page lists and opens that many); older ones go slim, so the answer is bounded.
-  if (cls) {
-    const list = ctrl.filter((r) => controlClass(r) === cls);
-    const slimBefore = Math.max(0, list.length - detail);
-    return { class: cls, total: list.length, detail_limit: detail, records: list.map((r, i) => controlRecordWire(r, { detail: i >= slimBefore })) };
-  }
-  const counts = new Map();
-  for (const r of ctrl) { const c = controlClass(r); counts.set(c, (counts.get(c) || 0) + 1); }
-  return { classes: [...counts.entries()].map(([c, n]) => ({ class: c, count: n })) };
 }

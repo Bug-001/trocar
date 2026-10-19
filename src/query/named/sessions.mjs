@@ -7,19 +7,20 @@
 // Membership is one function for this query and for `session` (src/query/rows.mjs), and the document shape
 // is the board's own (src/view/board.mjs sessionMetaOfFacts), so the list and a replay cannot disagree.
 import { sessionMetaOfFacts } from '../../view/board.mjs';
-import { indexRows, sessionGroups, sessionFactsOf } from '../rows.mjs';
+import { asOf, indexRows, sessionGroups, sessionFactsOf } from '../rows.mjs';
 import { listOf, paginate, tsFilter } from './index.mjs';
 
 export const params = Object.freeze(['harness', 'since', 'until', 'limit', 'after']);
 
 export async function run({ home, fs, now, params: p, errors }) {
   const keep = tsFilter(p, now), harness = listOf(p.harness);
-  const rows = (await indexRows({ home, fs, errors })).filter((r) => keep(r.ts));
+  const index = await indexRows({ home, fs, errors });
+  const rows = index.filter((r) => keep(r.ts));
   const all = [...sessionGroups(rows)]
     .map(([id, rs]) => sessionMetaOfFacts(sessionFactsOf(id, rs)))
     // --harness filters on the harness the board DECIDED (proc, else the UA — and it says which), not on a field of its own.
     .filter((m) => !harness || harness.has(m.harness))
     .sort((a, b) => String(b.last_ts).localeCompare(String(a.last_ts)));
   const { items, next, has_more } = paginate(all, p);
-  return { sessions: items, next, has_more };
+  return { as_of: asOf(index), sessions: items, next, has_more };
 }

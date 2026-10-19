@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { assembleSession } from '../../src/view/assemble.mjs';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { buildResolver } from '../../src/query/source.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
 

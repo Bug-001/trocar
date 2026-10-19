@@ -16,7 +16,7 @@ test('记录 id 从 1 起,读取侧不把明文段的索引落盘(那份文件�
   writeSegment(home, SEG, [{ ts: '2026-10-18T10:00:00.000Z' }, { ts: '2026-10-18T10:00:01.000Z', class: 'telemetry', is_llm: false, status: 204 }])
   const { records } = await segmentIndex({ home, segment: SEG })
   assert.deepEqual(records.map((r) => r.id), [`${SEG}:1`, `${SEG}:2`])
-  assert.deepEqual(records[1], { id: `${SEG}:2`, ts: '2026-10-18T10:00:01.000Z', harness: 'claude-code', class: 'telemetry', host: 'api.anthropic.com', path: '/v1/messages', status: 204, stored_bytes: records[1].stored_bytes, wire_bytes: 30, session_key: null, is_llm: false,
+  assert.deepEqual(records[1], { id: `${SEG}:2`, ts: '2026-10-18T10:00:01.000Z', harness: 'claude-code', class: 'telemetry', host: 'api.anthropic.com', path: '/v1/messages', status: 204, stored_bytes: records[1].stored_bytes, sent_bytes: 10, received_bytes: 20, session_key: null, is_llm: false,
     // the session facts, so `sessions` never reads a record back (1.6 §4.1 ≤ 1 s): the harness the board decides,
     // where the record's bytes are, and the kind of call it is
     harness_id: 'cc', has_proc: true, has_headers: true, harness_inferred: false, entrypoint: null, log_only: false, subagent: false, synth_hash: null, offset: records[1].offset })
@@ -123,6 +123,25 @@ test('删掉 index/ 后重建,结果逐字段相等', async () => {
   const rebuilt = await segmentIndex({ home, segment: SEG })
   assert.deepEqual(rebuilt.records, withIndex.records)
   assert.equal(withIndex.records[0].session_key, 's-1')
+})
+
+// 4.2 §段索引: each direction's wire bytes from body_wire_bytes; a value not recorded is null, never 0 (invariant 4).
+test('条目的 sent_bytes / received_bytes 取自 body_wire_bytes,没记下的是 null,不是 0', async () => {
+  const home = rawHome()
+  writeSegment(home, SEG, [{ id: 'a', wireReq: 7, wireResp: null }, { id: 'b', noWire: true }])
+  const { records } = await segmentIndex({ home, segment: SEG })
+  assert.deepEqual(records.map((r) => [r.sent_bytes, r.received_bytes]), [[7, null], [null, null]])
+})
+
+// 4.2: an index of another version (v4 and earlier) is stale — the reader rebuilds it and never answers from it.
+test('旧版本(v4)的索引文件:读者不信它,重建出的记录与新建的逐字段相等', async () => {
+  const home = rawHome()
+  writeSegment(home, SEG, [{ id: 'a' }, { id: 'b', class: 'account' }])
+  const fresh = await segmentIndex({ home, segment: SEG, owner: true })
+  const idx = path.join(indexDir(home), `${SEG}.json`)
+  const m = markOf(idx)
+  fs.writeFileSync(idx, `{"id":"ghost"}\n${JSON.stringify({ m, v: 4 })}\n`)
+  assert.deepEqual((await segmentIndex({ home, segment: SEG })).records, fresh.records)
 })
 
 // D62: `maxBytes` is what lets the daemon's keeper index a backlog in chunks without blocking its event loop. The
@@ -234,7 +253,7 @@ test('封存后记录 id 与索引字段不变,封存件里每条记录按 id �
 // 不然 128 MB 明文还在盘上,状态却报 `sealed`(2026-10-18 Windows run P1)。
 test('明文与封存件并存时:状态不是 sealed,读的是明文的字节', async () => {
   const { sealSegment } = await import('../../src/raw/seal.mjs')
-  const { segmentLines, allRecords } = await import('../../src/query/records.mjs')
+  const { segmentLines } = await import('../../src/query/records.mjs')
   const home = rawHome()
   writeSegment(home, SEG, [{ id: 'a' }])
   await sealSegment(path.join(home, 'raw', `${SEG}.ndjson`), { lockFile: path.join(home, 'collector', 'lock'), journal: null })
@@ -250,7 +269,6 @@ test('明文与封存件并存时:状态不是 sealed,读的是明文的字节',
   await segmentIndex({ home, segment: SEG, owner: true })
   assert.equal((await segmentIndex({ home, segment: SEG })).bytesRead, 0)
   assert.equal([...segmentLines({ home, segment: SEG })].length, 2)
-  assert.deepEqual((await allRecords({ home })).map((r) => r.id), [`${SEG}:1`, `${SEG}:2`])
 })
 
 // A whole-document write goes through a temp next to the index and a rename. The temp name was the pid alone, so two
@@ -286,7 +304,7 @@ test('一个写者:补索引的那一笔与封存器的 rename 相撞时,写在�
   fs.appendFileSync(idx, '{"id":"torn"')
   // the seal worker's index of the sealed copy: built in its child and renamed over this one (storeIndex `at: null`),
   // at the moment this pass cuts its own file back
-  const sealer = Buffer.from(`{"m":{"size":99,"sealed":true},"v":4}\n`)
+  const sealer = Buffer.from(`{"m":{"size":99,"sealed":true},"v":5}\n`)
   const race = () => { const tmp = `${idx}.sealer`; fs.writeFileSync(tmp, sealer); fs.renameSync(tmp, idx) }
   let raced = false
   const racing = { ...fs,

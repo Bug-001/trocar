@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { buildResolver } from '../../src/query/source.mjs';
-import { composeTextRef, mintRawRef } from '../../src/etl/orchestrator.mjs';
+import { composeTextRef, mintRawRef } from '../../src/raw/refs.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
 
 const refFor = (stream, id, start, end) => composeTextRef(mintRawRef('sess', stream, id), [start, end]);

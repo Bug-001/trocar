@@ -135,6 +135,11 @@ daemon's query worker, which stays warm and keeps the segment index current as i
 session you are looking at answers in milliseconds. It is not a prerequisite: with no daemon — or none that answers
 yet — the command reads the records itself and gives the same document, only slower. Long results page with
 `--limit` and `--after <cursor>`, where the cursor is the `page.next` of the document before it.
+`asight query traffic` is one line per agent and host, with requests and bytes sent and received (sums over
+the calls that recorded a size, so they are a floor). `asight query overview` is the board's stats card: sessions,
+calls, bytes and token usage over a `--since` / `--until` window. `asight query calls --host <host>` lists the
+calls to one host, and `--ref <segment>:<line>` opens one call. Documents read from the segment index carry
+`as_of`, the time of the newest call they were counted over.
 
 ## What it touches, and what lands on disk
 

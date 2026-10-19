@@ -19,7 +19,7 @@ import { warmCache, fsTag } from './warm.mjs';
 // is used here for the ordered segment list alone, and every row and problem below comes from the stat-revalidated
 // reading, so a line appended to the live segment is never missed.
 const segList = warmCache({ max: 4 });
-const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(home, 'raw')).sort().join('\n'); } catch { return ''; } };
+export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(home, 'raw')).sort().join('\n'); } catch { return ''; } };
 
 /**
  * indexRows({home, fs, errors}) → [{…index row, segment, lineNo, session_id}], oldest segment first,
@@ -41,6 +41,10 @@ export async function indexRows({ home = asightHome(), fs = nodeFs, errors = [] 
   }
   return out;
 }
+
+/** as_of (附录 C.5): the newest call time in the WHOLE index — what every number of an index-reading document is
+ *  counted as of (invariant 4); null when the index has no row with a time. */
+export const asOf = (rows) => rows.reduce((m, r) => (r.ts && (m == null || String(r.ts) > m) ? String(r.ts) : m), null);
 
 // The groups of one row list: `session` asks for them right after `sessions` did, over the same array (D63 ①).
 const groups = new WeakMap();

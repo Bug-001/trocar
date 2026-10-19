@@ -160,7 +160,7 @@ function collectorHealth({ dir, now, fs, alive, identity, maxBytes, read }) {
     conditions: fold.conditions, ...(fold.partial && flows.truncated ? { conditions_partial: true } : {}),
     ...(daemon.state !== 'running' && fold.conditions.length ? { conditions_as_of: fold.last_ts } : {}),
     unknown_procs: fold.unknown_procs, // process-unknown of this daemon life (D51⑥): expected, not a condition
-    failures: fold.groups, expected: fold.expected, agents: fold.agents, install: notesOf(dir, fold, m, fs, read),
+    failures: fold.groups, expected: fold.expected, expected_groups: fold.expected_groups, agents: fold.agents, install: notesOf(dir, fold, m, fs, read),
   }
   c.summary = collectorSummary(c)
   return c

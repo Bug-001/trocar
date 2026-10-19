@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { sessionView, forWire } from '../../src/view/board.mjs';
 
 // THE BROWSER MUST READ WHAT THE SERVER SENDS — NOT RE-DERIVE IT FROM A BODY THAT IS GONE.

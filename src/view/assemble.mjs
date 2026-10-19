@@ -11,7 +11,8 @@ import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } fr
 import { blockSpans } from '../adapters/cc.mjs';
 import { scanJson, spanAt } from '../adapters/content-hash.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
-import { mintRawRef, composeTextRef, fieldTextOf, TEXT_REF_FIELD } from '../etl/orchestrator.mjs';
+import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
+import { fieldTextOf, TEXT_REF_FIELD } from '../dissect/record-fields.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
 import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf } from '../dissect/registry.mjs';
 import { parsedRequestBody } from '../dissect/request-body.mjs';

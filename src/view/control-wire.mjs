@@ -25,14 +25,14 @@ import { trafficClassOf } from '../dissect/traffic.mjs';
 import { headerOf } from '../dissect/harnesses.mjs';
 
 export const BODY_SHOW_CHARS = 1 << 20; // the most of one body's text a record carries to the browser
-export const HEX_SHOW_BYTES = 4096;     // the most of a binary body shown as hex
+const HEX_SHOW_BYTES = 4096;     // the most of a binary body shown as hex
 export const CONTROL_DETAIL_RECORDS = 80; // how many of a class's newest records /api/control sends with their bodies (the page lists and opens 80)
 
 const finite = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
 const b64Bytes = (s) => { const n = s.length; return Math.max(0, Math.floor((n * 3) / 4) - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0)); };
 
 // 16 bytes a line: offset, hex, printable ASCII
-export function hexDump(buf) {
+function hexDump(buf) {
   const out = [];
   for (let i = 0; i < buf.length; i += 16) {
     const row = buf.subarray(i, i + 16);

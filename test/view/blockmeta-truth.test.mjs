@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readRecords } from '../../src/etl/ingest.mjs';
+import { readRecords } from '../../src/raw/ingest.mjs';
 import { sessionView } from '../../src/view/board.mjs';
 
 // THE NUMBERS ON THE COLLAPSED ROW MUST BE THE SOURCE'S NUMBERS.

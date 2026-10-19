@@ -9,8 +9,12 @@ import { loadPricing } from '../../view/pricing.mjs';
 export const params = Object.freeze([]);
 const UNIT = '$/Mtok';
 
-export async function run({ home }) {
-  const { pricing, source } = loadPricing(process.env.ASIGHT_PRICING || path.join(home, 'pricing.json'));
+/** The one file the prices come from: `ASIGHT_PRICING`, else ~/.asight/pricing.json (the built-in table when it is
+ *  absent). `run` and the stamp both ask this, so they cannot disagree about which file the answer depends on. */
+export const pricingFile = ({ home, env = process.env }) => env.ASIGHT_PRICING || path.join(home, 'pricing.json');
+
+export async function run({ home, env }) {
+  const { pricing, source } = loadPricing(pricingFile({ home, env: env ?? process.env }));
   return {
     models: Object.entries(pricing).map(([model, [input, output, cache_write, cache_read]]) =>
       ({ model, input, output, cache_read, cache_write, unit: UNIT })),

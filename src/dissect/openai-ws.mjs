@@ -186,7 +186,6 @@ export function normRespWs(rec) {
 // wire with a cross-record context provides.
 export const RESPONSES_WS = Object.freeze({
   id: 'openai-responses-ws', provider: 'openai', blockKeys: ['tools', 'instructions', 'input'],
-  // the ETL adapter generated from this object (src/adapters/dissected.mjs) threads one chain through a run
   createChain, stitchedRequest, locate, roleOf,
   consumedBody: ['type', 'model', 'stream', 'instructions', 'tools', 'input', 'previous_response_id', 'generate'],
   faithfulnessOf: (b) => faithfulness(b && b.block),

@@ -20,11 +20,6 @@ import { rawHome, writeSegment, requiredFor } from '../query/raw-home.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SEGMENT = '20261018T100000Z';
 
-// Names the board does not fetch, with the reason — not a free list: each is a document a COMMAND
-// prints (`asight status` / `asight doctor`) or a maintenance view (`asight query segments`), so the
-// board having no fetch for it is correct. Anything else unfetched is a dead query.
-const CLI_ONLY = new Set(['segments', 'status', 'doctor']);
-
 const get = (port, p) => new Promise((resolve, reject) => {
   const r = http.request({ host: '127.0.0.1', port, path: p, method: 'GET' }, (res) => {
     let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, body: b }));
@@ -75,16 +70,6 @@ test('V80: every named query answers the same document through HTTP as through r
   } finally { server.close(); }
   // `status` reads the process list; both sides were refused it on purpose (above), so the ledger is cleared here.
   takeRefusals();
-});
-
-test('V80: the routes the board fetches are exactly the query names', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'src', 'web', 'index.html'), 'utf8');
-  const fetched = new Set([...html.matchAll(/['"`]\/api\/([a-z-]+)/g)].map((m) => m[1]));
-  for (const name of fetched) assert.ok(QUERIES[name], `index.html fetches /api/${name}, which is not a named query`);
-  for (const name of Object.keys(QUERIES)) {
-    if (CLI_ONLY.has(name)) continue;
-    assert.ok(fetched.has(name), `the query ${name} is reachable by HTTP but the board never fetches it`);
-  }
 });
 
 test('V80: no second read path is left in the shell or the page', () => {

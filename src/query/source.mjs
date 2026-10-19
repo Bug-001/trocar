@@ -18,8 +18,9 @@
 import { open } from 'node:fs/promises';
 import { statSync, openSync, readSync, closeSync, fstatSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { parseTextRef, TEXT_REF_FIELD, fieldTextOf } from '../etl/orchestrator.mjs';
-import { normalizeRecord } from '../etl/ingest.mjs';
+import { parseTextRef } from '../raw/refs.mjs';
+import { TEXT_REF_FIELD, fieldTextOf } from '../dissect/record-fields.mjs';
+import { normalizeRecord } from '../raw/ingest.mjs';
 import { expandRequestBody, requestEncodingOf } from '../dissect/request-body.mjs';
 import { listSources, isSealedPath } from '../raw/discover.mjs';
 import { openSealed, createFrameCache } from '../raw/reader.mjs';
@@ -45,7 +46,7 @@ const AMBIGUOUS = Symbol('ambiguous-record-id');
 const streamOfRawRef = (rawRef) => rawRef.slice(rawRef.indexOf('/') + 1, rawRef.lastIndexOf('#'));
 
 // ── fidelity of the bytes we hand back (invariant 4 保真边界写明) ──────────
-// NOT every record we can resolve is byte-faithful. `normalizeRecord` (src/etl/ingest.mjs:14)
+// NOT every record we can resolve is byte-faithful. `normalizeRecord` (src/raw/ingest.mjs:14)
 // has two branches:
 //   · D10 — `req_body` is the VERBATIM captured request string → the bytes that went on the wire.
 //   · demo v0 — the capture stored the request as PARSED JSON, so the body is rebuilt with
