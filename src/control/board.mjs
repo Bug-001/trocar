@@ -22,6 +22,8 @@ export async function planThenConfirm({ dryRun, run, confirm }) {
   return { status: 200, doc: await run() }
 }
 
+// Every verb runs with the daemon's environment (deps.env || process.env): the login job's, not a shell's. A variable exported only in some shell
+// (CODEX_HOME, SSL_CERT_FILE …) reaches the CLI run from that shell and never the board; V91 is equality under one environment (4.4 §控制面).
 export const VERBS = Object.freeze({
   /** GET /control/status: per harness what `status --json` says of its switch and its setup — that very document, so the two cannot differ (V91). */
   async status(_body, { home, deps }) {
