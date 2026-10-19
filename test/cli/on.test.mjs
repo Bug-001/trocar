@@ -39,7 +39,7 @@ async function sandbox({ installed = true } = {}) {
   if (installed) await install()
   return { home, sh, dir, sys, run, unit, install }
 }
-// `unit.start()` (the `--no-autostart` run) really spawns a daemon: every test hands in its own spawn, so no test ever starts one (0.1 §3).
+// `unit.start()` (the direct start `on` falls back to when the login mechanism refuses, D61) really spawns a daemon: every test hands in its own spawn, so no test ever starts one (0.1 §3).
 // It brings the given fake daemon up, as a real start does.
 function fakeSpawn(daemon = null) {
   const spawn = (exe, args) => { spawn.calls.push([exe, ...args].join(' ')); if (daemon) daemon.state.up = true; return { pid: 4242, unref: () => {}, on: () => {} } }
@@ -127,8 +127,10 @@ test('R9: a second on on a complete install leaves installed_at, inode and mtime
   assert.deepEqual(entryStats(s), stat)
   assert.deepEqual(files.map((f) => [f, fs.statSync(f).ino, mtime(f)]), marks, 'no file of asight was written again either')
   assert.equal(s.sys.daemon.calls.filter((c) => c.startsWith('POST /on')).length, 2, 'each on still asks the daemon to attach (it is idempotent there)')
-  const enables = s.sys.exec.calls.filter((c) => /enable/.test(c))
-  assert.deepEqual(enables, ['systemctl --user enable --now asight-collector.service', 'systemctl --user enable asight-collector.service'], 'a daemon already answering is never started again, only kept enabled (拉起不是重启)')
+  // D61: `on` touches no registration, and a daemon that answers is not started again (拉起不是重启): the one start is the FIRST on's, when nothing answered
+  // every `on` READS the registration before it writes anything (1.6 §3.3: `is-enabled`); only the first STARTED the daemon
+  assert.deepEqual(s.sys.exec.calls, ['systemctl --user is-enabled asight-collector.service', 'systemctl --user start asight-collector.service', 'systemctl --user is-enabled asight-collector.service'], `only the first on started the daemon (${s.sys.exec.calls.join(' | ')})`)
+  assert.ok(!s.sys.exec.calls.some((c) => /^systemctl --user (enable|disable)/.test(c)), 'and the login entry is install\'s: on enables and disables nothing — `is-enabled` is a read (1.6 §3.3)')
 })
 
 test('R9: an entry the operator changed after asight wrote it is reported and left; on never overwrites it, and off then on writes it again', async () => {
@@ -201,17 +203,21 @@ test('R9: a manifest an older asight wrote has no liveness for some harness: on 
   assert.ok(after.codex && typeof after.codex.rereads === 'boolean', 'codex has its record again')
 })
 
-test('R9: the unit file is written again when what it would say changed (the repo moved); a daemon-reload comes first, and the unit is enabled', async () => {
+test('D61: the login entry is install\'s — install writes it, rewrites it when what it would say changed (a daemon-reload first), and a later on never writes it', async () => {
   const s = await sandbox()
-  await s.run()
   const unitFile = path.join(s.home, '.config', 'systemd', 'user', 'asight-collector.service')
-  assert.match(fs.readFileSync(unitFile, 'utf8'), /"\/repo\/bin\/asight\.mjs" daemon$/m)
+  const opts = (script) => ({ home: s.home, env: s.sh.env, osName: 'linux', harnesses: descs, freePort: async () => 47011, roots: ROOTS, confirm: async () => true, request: s.sys.daemon.request, socketPath: SOCK, sleep: async () => {}, linger: () => true, user: 'alice', unit: s.unit(script) })
+  await installCollector(opts('/repo/bin/asight.mjs'))
+  assert.match(fs.readFileSync(unitFile, 'utf8'), /"\/repo\/bin\/asight\.mjs" daemon$/m, 'install writes the entry')
   s.sys.exec.calls.length = 0
+  await installCollector(opts('/moved/bin/asight.mjs'))
+  assert.match(fs.readFileSync(unitFile, 'utf8'), /"\/moved\/bin\/asight\.mjs" daemon$/m, 'and writes it again when what it would say changed (the repo moved)')
+  assert.ok(s.sys.exec.calls.includes('systemctl --user daemon-reload'), `a rewritten unit is reloaded (${s.sys.exec.calls.join(' | ')})`)
+  const mark = [fs.statSync(unitFile).ino, fs.statSync(unitFile).mtimeMs]
+  await new Promise((r) => setTimeout(r, 25))
   const r = await s.run({ unit: s.unit('/moved/bin/asight.mjs') })
   assert.equal(r.exit, 0)
-  assert.match(fs.readFileSync(unitFile, 'utf8'), /"\/moved\/bin\/asight\.mjs" daemon$/m)
-  assert.deepEqual(s.sys.exec.calls.slice(0, 2), ['systemctl --user daemon-reload', 'systemctl --user enable asight-collector.service'])
-  assert.deepEqual(r.receipt.created.filter((p) => p === unitFile), [unitFile])
+  assert.deepEqual([fs.statSync(unitFile).ino, fs.statSync(unitFile).mtimeMs], mark, 'the on after it does not write the entry (D61)')
 })
 
 test('R12: on reads state.json before each write and stops, exit 1, when it says off for a harness it is turning on; what it wrote is a resumable install', async () => {
@@ -259,34 +265,28 @@ test('R12: a state.json a version 1 collector wrote (desired on or off) is read 
   }
 })
 
-test('on: with no daemon answering and no unit it writes everything, exits 0 and says how to start the daemon; --no-autostart writes no login entry and starts the daemon directly this once (1.6 §3.3)', async () => {
+test('on: with no daemon answering and no login entry it writes everything, exits 0 and says how to start the daemon', async () => {
   const s = await sandbox()
   const down = fakeDaemon({ up: false })
   const bare = await s.run({ unit: null, request: down.request })
-  assert.deepEqual([bare.exit, bare.receipt.daemon.state, bare.receipt.unit], [0, 'not-running', null])
+  // D61: `on` has no login entry to report — the key is gone from appendix C.2's `on` row with it
+  assert.deepEqual([bare.exit, bare.receipt.daemon.state, 'unit' in bare.receipt], [0, 'not-running', false])
   assert.match(bare.receipt.notes.join('\n'), /asight daemon/)
   assert.deepEqual(s.sys.exec.calls, [], 'no unit: no systemctl at all')
   assert.ok(!fs.existsSync(path.join(s.home, '.config', 'systemd')), 'and no unit file')
   assert.deepEqual(readManifest(s.dir).files.filter((f) => f.role === 'unit'), [])
 
-  const t = await sandbox()
-  const sys = fakeSystem()
-  const spawn = fakeSpawn(sys.daemon)
-  const r = await t.run({ unit: userUnit({ home: t.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run: sys.exec.run, spawn }), request: sys.daemon.request, autostart: false })
-  assert.equal(r.exit, 0)
-  assert.deepEqual(spawn.calls, ['/usr/bin/node /repo/bin/asight.mjs daemon'], 'the daemon is started directly, this once')
-  assert.deepEqual(sys.exec.calls, [], 'no systemctl at all: nothing is enabled and no unit is loaded')
-  assert.ok(!fs.existsSync(path.join(t.home, '.config', 'systemd')), '--no-autostart writes no login entry')
-  assert.deepEqual([r.receipt.daemon.state, r.receipt.daemon.started, r.receipt.unit], ['running', true, null])
 })
 
 test('on: a unit systemd refuses to enable, a daemon that never answers, a kernel that does not confirm — each exit 1 with the reason, recorded; the attach is not asked when the unit failed', async () => {
   const refused = await sandbox()
   const sys = fakeSystem()
-  const ex = recordingExec({ fail: (cmd) => (/enable/.test(cmd) ? { status: 1, stderr: 'Failed to connect to bus' } : null) })
+  // D61: `on` does not enable; it starts the daemon through the entry install registered, and itself when systemd refuses (the reason said, D38)
+  const ex = recordingExec({ fail: (cmd) => (/start/.test(cmd) ? { status: 1, stderr: 'Failed to connect to bus' } : null) })
   let r = await refused.run({ unit: userUnit({ home: refused.home, node: '/n', script: '/s', run: ex.run, spawn: fakeSpawn() }), request: sys.daemon.request })
-  assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /"systemctl --user enable --now" failed \(Failed to connect to bus\)/)
-  assert.equal(readManifest(refused.dir).install?.state, 'complete', 'the install itself is complete; only the autostart is not')
+  assert.equal(r.exit, 1); assert.match(r.receipt.notes.join('\n'), /Failed to connect to bus/)
+  assert.ok(!ex.calls.some((c) => /^systemctl --user enable/.test(c)), `and nothing is enabled — is-enabled is a read, not a change (${ex.calls.join(' | ')})`)
+  assert.equal(readManifest(refused.dir).install?.state, 'complete', 'the install itself is complete; only the start is not')
 
   const silent = await sandbox(); const dead = fakeDaemon({ up: false })
   r = await silent.run({ request: dead.request })
@@ -382,7 +382,8 @@ test('R6 / V7: `on --dry-run` with the helper missing still prints the plan and 
   assert.deepEqual([dry.exit, dry.receipt.ok, dry.receipt.dry_run], [0, true, true])
   assert.deepEqual([dry.receipt.changed, dry.receipt.created], [ok.receipt.changed, ok.receipt.created], 'the plan is the one a user with a helper would get')
   assert.ok(dry.receipt.created.length > 0, 'and it is a real plan (the unit; every certificate item is install\'s)')
-  assert.match(dry.receipt.blocked, /capability helper is missing.*sudo asight setup-helper/)
+  assert.deepEqual(dry.receipt.blocked.map((b) => b.what), ['asight on']) // 附录 C.1: blocked:[{what, reason}]
+  assert.match(dry.receipt.blocked[0].reason, /capability helper is missing.*sudo asight setup-helper/)
   assert.match(dry.receipt.notes.join('\n'), /sudo asight setup-helper.*a real asight on stops there/)
   assert.deepEqual(validateReceipt(dry.receipt), [])
   assert.deepEqual(snapshot(s.home), before, 'a dry run writes nothing')

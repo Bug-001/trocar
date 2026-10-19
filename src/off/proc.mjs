@@ -1,6 +1,6 @@
 // proc.mjs (src/off) — the process table `off` reads for itself, and the identity of one process (RFC 4.6 §安装清单与卸载「撤销顺序」第 2 / 5 步,
 // §控制面 `lock`, 1.6 R3). `off` has to know which agents are alive after the daemon is stopped and the entries are undone, with no daemon to ask
-// and no collector code (the standalone `asight-off` is made of src/off alone, 0.1 §2): Linux reads /proc, macOS runs `ps`, Windows asks one fixed
+// and no collector code (the standalone `asight-off` is made of src/off alone, 0.1 §2): Linux reads /proc, macOS runs two `ps` asks, Windows asks one fixed
 // powershell question (4.8 §7) — both through execTool. The /proc readers moved here from src/collector/arch/linux/procinfo.mjs, which re-exports them; procIdentity /
 // pidAlive from src/health/read.mjs, which re-exports procIdentity. A table that cannot be read throws: an empty one would read as "nobody is alive" (D38).
 // Every reader takes an injectable `root` (default '/proc'), so a test points it at a synthetic tree. Imports only node:* and src/off.
@@ -113,19 +113,14 @@ export function winIdentity(pid, { run = null, env = process.env } = {}) {
  *  runner (runAsync), which the daemon passes so a PowerShell does not stop its event loop on its way to answering `on` (a Windows test machine 2026-10-17). */
 const then = (r, f) => (r && typeof r.then === 'function' ? r.then(f) : f(r))
 
-// What one question about the whole process table may print (spawnSync's own default is 1 MiB): `lsof`'s txt records of one user's processes on a
-// working Mac are 1.6 MB (every mapped library is a txt record), and a cut answer reads as a table whose newest processes — the highest pids, the
-// ones started after `on` — have no executable. An answer longer than this is not read at all (code null), never read in part.
+// What one question about the whole process table may print (spawnSync's own default is 1 MiB): the command lines of a working Mac's ~430 processes
+// are a few hundred kilobytes, and a cut answer reads as a table whose newest processes — the highest pids, the ones started after `on` — are missing.
+// An answer longer than this is not read at all (code null), never read in part.
 const TABLE_MAX_BUFFER = 64 * 1024 * 1024
 
 // `ps` prints dates in the user's language: under LC_ALL=zh_CN.UTF-8 or ja_JP.UTF-8 the five words of `lstart` are no longer "Wed Oct  7 04:27:00 2026" and every row
 // failed to parse — no error, just an empty table, which `off` read as "nobody is alive" (audit rule-b 2). The C locale gives the same words on every machine.
 const psEnv = (env = process.env) => ({ ...env, LC_ALL: 'C' })
-/** The environment `lsof` runs in, here and in the collector's targeted ask (arch/darwin/procinfo.mjs realExeOf): under the C locale lsof prints every
- *  byte outside ASCII as `\xNN`, so a path under `测 试/` came back as `\xe6\xb5\x8b \xe8\xaf\x95/` — not the file (measured on macOS with the real
- *  lsof 4.91, 2026-10-14; guard test/collector/arch/darwin/identity-real.test.mjs). `UTF-8` is the ctype-only locale: the names print as they are, every
- *  other category stays C. */
-export const lsofEnv = (env = process.env) => ({ ...env, LC_ALL: 'UTF-8' })
 
 /** {start_time, boot_id} of a live process where there is no /proc (macOS): `ps -o lstart= -p <pid>` in the C locale, the blanks collapsed ("Wed Oct 7 04:27:00 2026"),
  *  and the seconds of `sysctl -n kern.boottime` as the boot id (lstart has a one-second grain, the boot time tells a reboot apart); both null when `ps`
@@ -173,13 +168,18 @@ function procsOfLinux({ uid, root }) {
 // the same failure as a localized `ps`, whatever else changes the format).
 const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(\S.*)$/
 // The executable of each process is not in that line: `ps` repeats the command as invoked — a bare word for an agent started through PATH, a path cut at its
-// first space under `ZCode Helper.app` — and the descriptors' process names (D51, the `processes` of src/collector/harness/<name>.mjs) are measured against the real one, the first `txt` record
-// of `lsof` (the collector's own source, arch/darwin/procinfo.mjs realExeOf). One `lsof … -d txt -Fpn` answers it for every process of the user: `p<pid>`,
-// then `f<fd>` / `n<name>` pairs; the first txt name that is a path is the executable. It runs AFTER `ps`, so a row it does not name is a process that ended
-// between the two (its `ps` word is kept). An lsof that did not finish (code null: killed by its timeout, more output than TABLE_MAX_BUFFER, or never
-// started — what it printed is cut short) or that names no process while `ps` listed some cannot be read: the table is not known (4.6 「判活快照」).
+// first space under `ZCode Helper.app` — and the descriptors' process names (D51, the `processes` of src/collector/harness/<name>.mjs) are measured against the whole
+// one, which is `comm` asked as the LAST (here: the only) column: it is then neither cut to 16 characters nor at a space (measured on a macOS machine,
+// 2026-10-18, on a VPN client's system-extension path whose vendor name is not reproduced here; `ps -Axo pid=,comm=` prints
+// `/Library/<Vendor>/<Vendor> System Extension.app/Contents/MacOS/<Vendor>Extension` whole). It is argv[0] as the
+// process was started — a bare word stays a bare word, where the `lsof -d txt` ask this replaced resolved the file — so the name list reads the same name
+// and no path is invented; the collector's targeted ask, which has one process to spend a read on, resolves it with the native helper
+// (arch/darwin/procinfo.mjs realExeOf). One `ps -Axo pid=,comm=` answers the whole machine in ~32 ms, where lsof's whole-user txt ask cost 310 ms (measured,
+// same Mac) — no lsof is run on macOS any more. It runs AFTER the first `ps`, so a pid it does not name is a process that ended between the two (its
+// command line's first word is kept). A `ps` that did not finish (code null: killed by its timeout, more output than TABLE_MAX_BUFFER, or never started —
+// what it printed is cut short) or that names no process while the first listed some cannot be read: the table is not known (4.6 「判活快照」).
 /** psArgv(cmdline, exe) — the argv of a `ps` command line (darwin): the line split on white space, the argument boundaries being lost — except argv[0],
- *  which the real executable (lsof's, `exe`) lets us keep whole: a line that begins with that path, or whose first words (as many as the exe's file name
+ *  which the executable (`comm`'s, or the collector's resolved one — `exe`) lets us keep whole: a line that begins with that path, or whose first words (as many as the exe's file name
  *  names) name the same program (src/off/identity.mjs normalizeName: a symlink of that name, the version-named file's directory). So a bundle path with spaces (`…/Claude Helper (Renderer)`) is never cut
  *  into a fragment that names another program. The facts it goes into carry `argvSplit: true` (src/off/identity.mjs entryOf reads it). */
 export function psArgv(cmdline, exe = null) {
@@ -197,17 +197,16 @@ export function psArgv(cmdline, exe = null) {
   return k > 1 && normalizeName(head) === name ? [head, ...words.slice(k)] : words
 }
 
-function exesOfLsof({ uid, exec, env, rows }) {
-  const r = execTool('lsof', [...(uid != null ? ['-a', '-u', String(uid)] : []), '-d', 'txt', '-Fpn'], { run: exec, env: lsofEnv(env), maxBuffer: TABLE_MAX_BUFFER })
-  if (r.code === null) throw new Error(`lsof did not finish (${r.err || 'no reason given'}), so the executables of the ${rows} process(es) ps listed are not known, nor which agents are alive`)
+function exesOfPs({ exec, env, rows }) {
+  const r = execTool('ps', ['-Axo', 'pid=,comm='], { run: exec, env: psEnv(env), maxBuffer: TABLE_MAX_BUFFER })
+  const how = r.code === null ? `did not finish (${r.err || 'no reason given'})` : `failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`
+  if (r.code !== 0) throw new Error(`the executables ask \`ps -Axo pid=,comm=\` ${how}, so the executables of the ${rows} process(es) the table listed are not known, nor which agents are alive`)
   const exes = new Map()
-  let pid = null, txt = false
   for (const line of String(r.out || '').split('\n')) {
-    if (line[0] === 'p') { pid = Number(line.slice(1)); txt = false; if (Number.isInteger(pid) && !exes.has(pid)) exes.set(pid, null) }
-    else if (line[0] === 'f') txt = line === 'ftxt'
-    else if (line[0] === 'n' && txt && pid != null && exes.get(pid) == null && line[1] === '/') exes.set(pid, line.slice(1))
+    const m = /^\s*(\d+)\s+(\S.*)$/.exec(line) // the pid, then `comm` to the end of the line: a path with spaces in it is one word here
+    if (m) exes.set(Number(m[1]), m[2].trimEnd())
   }
-  if (exes.size === 0 && rows > 0) throw new Error(`lsof named no process (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}), so the executables of the ${rows} process(es) ps listed are not known, nor which agents are alive`)
+  if (exes.size === 0 && rows > 0) throw new Error(`\`ps -Axo pid=,comm=\` named no process (exit ${r.code}), so the executables of the ${rows} process(es) the table listed are not known, nor which agents are alive`)
   return exes
 }
 function procsOfPs({ uid, exec, env }) {
@@ -228,15 +227,16 @@ function procsOfPs({ uid, exec, env }) {
     out.push({ pid: Number(m[1]), ppid: Number(m[2]), uid: Number(m[3]), startedAt: Number.isFinite(at) ? at : null, exe: argv[0], argv, argvSplit: true, cmdline, env: () => null, envRead: false })
   }
   if (rows > 0 && parsed === 0) throw new Error(`ps printed ${rows} line(s) and none could be read (the first: ${JSON.stringify(r.out.split('\n').find((l) => l.trim()).slice(0, 80))}), so which agents are alive is not known`)
-  if (!out.length) return out // nobody of this user: nothing for lsof to name
-  const exes = exesOfLsof({ uid, exec, env, rows: out.length })
+  if (!out.length) return out // nobody of this user: nothing to name
+  const exes = exesOfPs({ exec, env, rows: out.length })
   for (const p of out) if (exes.get(p.pid)) { p.exe = exes.get(p.pid); p.argv = psArgv(p.cmdline, p.exe) }
   return out
 }
 
 /** The live processes of one user: `[{ pid, ppid, uid, startedAt: ms | null, exe, argv, env: () => Map | null }]` — `env` is read when asked for; macOS and
  *  Windows rows add `cmdline` (the command line as it came, or null) and `envRead: false` (no other process's environment is readable there: `env` is null by the
- *  OS's rule, not because a read failed). `uid` null lists everyone's. Linux reads `root` (/proc); macOS runs `ps` then `lsof` (the executables), Windows one
+ *  OS's rule, not because a read failed). `uid` null lists everyone's. Linux reads `root` (/proc); macOS runs two `ps` asks (the table, then the executables),
+ *  Windows one
  *  fixed Get-CimInstance question, all through `exec`
  *  (a spawnSync-like runner a test injects; execTool refuses a real one under npm test). Another platform, or a table that cannot be read, rejects. */
 export async function listProcs({ uid = typeof process.getuid === 'function' ? process.getuid() : null, root = '/proc', platform = process.platform, exec = null, env = process.env } = {}) {

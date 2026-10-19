@@ -8,8 +8,8 @@
 //      that cannot be stopped: its entries are undone all the same (the new connections are direct by its stale heartbeat), exit 1, the pid is given
 //   4  the entries: by the manifest (undoHarnesses), or, with no readable manifest, by asight's own marks (planByMarker) after a yes (R3);
 //      5.1's held requests through `deps.releaseHeld` (5.1 is not built: a seam)
-//   5  with no names: the autostart is disabled and the daemon was asked to exit once drained — systemd's disable on Linux (src/off/autostart.mjs), the LaunchAgent's undo on
-//      darwin (src/off/darwin.mjs disableAgent: launchctl disable, never a bootout of a draining daemon), nothing on win32 (the task and Run value are manifest entries)
+//   5  with no names: the daemon was asked to exit once drained (step 3) and nothing else — the login registration is install's and off never touches it (D61),
+//      so `on` and `off` are the same after a reboot as before it
 //   6  the receipt (R1) and the `off-note` lines of `flows/`, the last of them `kind:'result'`; exit 0 only when the routing is confirmed off and every
 //      entry is undone (connections that are still draining do not count against it)
 // Everything the world gives is a `deps` entry a test replaces (0.1 §3): `fs` `exec` `request` `socketPath` `alive` `identity` `kill` `isHelper` `sleep` `ms`
@@ -27,11 +27,11 @@ import { undoHarnesses, undoRootKeys } from './undo.mjs'
 import { planByMarker, undoByMarker } from './marker.mjs'
 import { daemonState, stopDaemon, helperGone, isRedirectorHelper, clearStaleSupervisorLock } from './daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from './control-client.mjs'
-import { disableAutostart, unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
-import { plistFilePath, AGENT_LABEL, agentState, disableAgent } from './darwin.mjs'
+import { unitFilePath, UNIT_FILE_NAME } from './autostart.mjs'
+import { plistFilePath, AGENT_LABEL, agentState } from './darwin.mjs'
 import { execTool } from './exec.mjs'
 import { listProcs, identityFor, pidAlive } from './proc.mjs'
-import { refuseElevatedByWhoami, disableScheduledTask } from './win32.mjs'
+import { refuseElevatedByWhoami } from './win32.mjs'
 import { rootStore } from './root-store.mjs'
 import { runEventWriter } from './events.mjs'
 import { confirm } from './io.mjs'
@@ -448,7 +448,6 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
     if (manifest && manifest.unsupported) receipt.notes.push(`the install manifest is version ${JSON.stringify(manifest.version)}, which this build does not read: no entry would be touched`)
     else if (!manifest) receipt.notes.push(`there is no usable install manifest${manifestError ? ` (${errMessage(manifestError)})` : ''}: ${marks.length ? `${marks.length} file(s) would be undone by asight's own marks, after a yes` : 'no file holds asight\'s marks'}`)
     for (const id of ids || []) if (manifest && !installed.includes(id)) receipt.skipped.push({ what: id, reason: 'asight has nothing on its path (it was never set up, or it is already off)' })
-    receipt.autostart = ids === null ? { planned: true } : null
     receipt.daemon = { pid: null, state: ids === null ? 'draining' : 'running' }
     if (!hadAnything && !receipt.changed.length && !receipt.removed.length) { receipt.nothing_installed = true; receipt.log = null } // said as it is (audit semantics 7); nothing would be written, so there is no log to point at
     return { receipt: shapeReceipt(receipt), exit: EXIT.ok }
@@ -515,30 +514,10 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
       // (The Windows kernel arm that stood here — a daemon that did not answer left the kernel preferring its dead engine, so the standalone off made it
       // forward-only or stopped it through its controller — went with the kernel itself, D47's win32 twin: the engine's doors die with the daemon, nothing
       // outlives them to be steered, and uninstall's purge list still cleans kernel-era residue: kernel\, kernel-archive\, forwarder\.)
-      // 5 · no names: the autostart goes too (the daemon was asked to exit once drained in step 3). Windows' task is disabled HERE, by the off itself — the
-      // registration survives any manifest (an on whose ledger is gone, a task registered from asight's file by hand), so claiming "disabled" without asking
-      // schtasks left the task enabled at every login while the receipt said otherwise; the Run value stays a manifest entry and goes with the rest in step 4
-      // (undoRunKey). darwin's LaunchAgent is undone through the launchd arm (the flip checklist ①, 4.9 §4): the agent booted out FIRST (KeepAlive does not pull
-      // the daemon back), then the plist out of ~/Library/LaunchAgents (launchd scans it at every login: a file left there undoes the off).
-      if (ids === null) {
-        if ((deps.platform || process.platform) === 'win32') {
-          const t = disableScheduledTask({ run: w.exec, env })
-          receipt.autostart = { disabled: t.ok, removed: [], ...(t.ok ? { note: 'the task is disabled now; the Run value is a ledger entry, undone with the rest (4.8 §4.2)' } : { error: t.reason || `the task is ${t.task}` }) }
-          put({ kind: 'autostart', disabled: t.ok, reason: `autostart ${t.ok ? 'disabled' : 'NOT disabled'} (schtasks: the task is ${t.task})${t.reason ? ` (${t.reason})` : ''}` })
-          if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
-        }
-        else if ((deps.platform || process.platform) === 'darwin') {
-          const u = disableAgent({ exec: w.exec, env }) // disable, never bootout — the daemon drains and exits itself; the plist stays (an install item)
-          receipt.autostart = { disabled: u.code === 0, removed: [], ...(u.code !== 0 ? { error: u.err || 'launchctl disable was refused' } : {}) }
-          put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'} (launchctl disable${u.code === 0 ? '' : `: exit ${u.code}`})${u.err ? ` (${u.err})` : ''}` })
-          if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
-        }
-        else {
-          receipt.autostart = disableAutostart({ home, exec: w.exec, env, fs: w.fs })
-          put({ kind: 'autostart', disabled: receipt.autostart.disabled, reason: `autostart ${receipt.autostart.disabled ? 'disabled' : 'NOT disabled'}${receipt.autostart.error ? ` (${receipt.autostart.error})` : ''}` })
-          if (receipt.autostart.error) { receipt.notes.push(receipt.autostart.error); put({ event: 'failure', code: 'unit-not-disabled', reason: receipt.autostart.error }) }
-        }
-      }
+      // 5 · the login registration is NOT touched (D61): `on` rewrote the agents' config files, so a machine that came
+      // up without the daemon left every harness that was on unable to reach anything. The daemon was asked to exit once drained in step 3 and exits 0 —
+      // systemd's Restart=on-failure and launchd's KeepAlive {SuccessfulExit: false} leave a clean exit down — and at the next login it starts again and
+      // opens the doors the persisted desired state asks for (none, after this off). `install` registers it, `uninstall` takes it out.
     } else outcome = 'failed'
     let list = []
     try { list = await w.procs() } catch (e) { receipt.notes.push(`the process table could not be read (${errMessage(e)}), so the asight processes you started yourself are not listed`) }
@@ -547,7 +526,7 @@ export async function runOff({ home = nodeOs.homedir(), env = process.env, ids =
 
     // 6 / 7 · the receipt and its result line
     if (!w.fs.existsSync(w.dir)) receipt.log = null // nothing was written to flows/: there is no log to point at (R1)
-    if (!hadAnything && !receipt.changed.length && !receipt.removed.length && !receipt.left.length && !receipt.problems.length && !(receipt.pending || []).length && !((receipt.autostart && receipt.autostart.removed) || []).length) receipt.nothing_installed = true // an `off` of a machine asight is not on: it says so, instead of "asight 已关闭采集" (audit semantics 7)
+    if (!hadAnything && !receipt.changed.length && !receipt.removed.length && !receipt.left.length && !receipt.problems.length && !(receipt.pending || []).length) receipt.nothing_installed = true // an `off` of a machine asight is not on: it says so, instead of "asight 已关闭采集" (audit semantics 7)
     receipt.ok = receipt.problems.length === 0 && receipt.left.length === 0 // an item that was not undone is a not-done off (1.6 R3, R4), whatever else went well
     if (!receipt.ok && !receipt.problems.length) receipt.problems.push(`${receipt.left.length} item(s) were left as they are (listed above, with why); put that right, then run asight off again`)
     const n = { changed: receipt.changed.length, removed: receipt.removed.length, left: receipt.left.length, still_trusting: (receipt.still_trusting || []).length }

@@ -1,5 +1,5 @@
-// `asight install` on Linux (override #15; 1.6 §1.6 步骤): the CA, asight's own trust files and the (c)-level keys, all phase install, plus asight-off;
-// no unit, no state, no daemon. The `on` that follows finds every certificate item intact and touches none of their bytes (D55①).
+// `asight install` on Linux (override #15; 1.6 §1.6 步骤): the CA, asight's own trust files and the (c)-level keys, all phase install, plus asight-off,
+// and (D61) the login unit, enabled, with the daemon up; no state: that is `on`'s. The `on` that follows finds every certificate item intact and touches none of their bytes (D55①).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { assertEnglish } from '../helpers/english.mjs'
@@ -9,7 +9,8 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { runInstallCli } from '../../src/cli/install.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { readManifest } from '../../src/off/manifest.mjs'
-import { fakeIo, onCtx, seedClaude, snapshot } from './fixtures/on-ctx.mjs'
+import { fakeIo, fakeSystem, onCtx, seedClaude, snapshot } from './fixtures/on-ctx.mjs'
+import { unitPath, UNIT_NAME } from '../../src/collector/arch/linux/unit.mjs'
 
 const certBytes = (home) => Object.fromEntries(Object.entries(snapshot(home)).filter(([k]) => k.startsWith('.asight/collector/ca/') || k === '.claude/settings.json'))
 
@@ -30,7 +31,6 @@ test('Linux install: CA + trust entries (phase install) + asight-off, no unit, n
   assert.ok(m.files.some((f) => f.role === 'ca-key') && m.entries.length > 0)
   assert.deepEqual([...m.entries, ...m.files].filter((x) => x.phase !== 'install'), [], 'every item is phase install')
   assert.equal(fs.existsSync(path.join(dir, 'state.json')), false, 'no state: that is on\'s')
-  assert.equal(m.files.some((f) => f.role === 'unit'), false, 'no unit: that is on\'s')
   assert.ok(fs.existsSync(path.join(home, '.asight', 'bin', 'asight-off')), 'the standalone undo')
   const certs = certBytes(home)
   const again = fakeIo()
@@ -39,6 +39,25 @@ test('Linux install: CA + trust entries (phase install) + asight-off, no unit, n
   const onIo = fakeIo()
   assert.equal(await runOnCli(['--yes'], onCtx(home, onIo)), 0, onIo.text())
   assert.deepEqual(certBytes(home), certs, 'on wrote no certificate byte')
+})
+
+// D61 (4.6 「用户级自启单元」, 1.6 §3.2 步骤 5): registering the login entry and pulling the daemon up is install's, not on's — through the
+// one seam (ensureDaemonUp), so `--now` is only asked for when nothing answers (拉起不是重启, R8).
+test('Linux install writes the systemd user unit and enables it with --now when no daemon answers; with one up it enables without --now', async () => {
+  const home = tmpDir('asight-install-unit-')
+  seedClaude(home)
+  const down = fakeSystem({ up: false }) // nothing answers the control socket yet: the unit is enabled AND started
+  const io = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], { ...onCtx(home, io, { exec: down.exec, daemon: down.daemon }), platform: 'linux' }), 0, io.text())
+  assert.equal(fs.existsSync(unitPath(home)), true, 'the unit file install wrote')
+  assert.equal(readManifest(path.join(home, '.asight', 'collector')).files.some((f) => f.role === 'unit' && f.path === unitPath(home) && f.phase === 'install'), true, 'listed in the manifest, phase install')
+  assert.deepEqual(down.exec.calls.filter((c) => /enable/.test(c)), [`systemctl --user enable --now ${UNIT_NAME}`])
+  const other = tmpDir('asight-install-unit-up-')
+  seedClaude(other)
+  const up = fakeSystem({ up: true })
+  const again = fakeIo()
+  assert.equal(await runInstallCli(['--yes'], { ...onCtx(other, again, { exec: up.exec, daemon: up.daemon }), platform: 'linux' }), 0, again.text())
+  assert.deepEqual(up.exec.calls.filter((c) => /enable/.test(c)), [`systemctl --user enable ${UNIT_NAME}`], 'a daemon that already answers is not started a second time')
 })
 
 test('Linux install: no terminal and no --yes → the plan with D55\'s cost line, exit 2, nothing written; --dry-run → exit 0', async () => {

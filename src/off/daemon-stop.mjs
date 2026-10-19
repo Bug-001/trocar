@@ -218,8 +218,9 @@ export async function stopDaemon({ lockFile, socketPath = null, exec = null, kil
     // BEFORE any signal, so what is stopped stays stopped. The plist stays in ~/Library/LaunchAgents — the next login brings the job back, the same temporary
     // stop `systemctl --user stop` is on Linux; the full undo (bootout AND the plist) is a no-names off's step 5 (src/off/darwin.mjs undoAutostart).
     const uid = typeof process.getuid === 'function' ? process.getuid() : -1
-    // no `launchctl disable` here (1.6 §1.4): this stop path serves a named off with a stuck daemon too, which must not touch the autostart; only a
-    // no-names off disables, in its step 5 (darwin.mjs disableAgent). A draining daemon never reaches this path: it exits itself.
+    // no `launchctl disable` anywhere in an off (D61): a bootout is for THIS session only (the plist stays, the next login loads it again), while
+    // `disable` persists and would leave a rebooted machine without the daemon the agents' rewritten configs point at. A draining daemon never
+    // reaches this path: it exits itself.
     const q = agentState({ exec, env, uid })
     if (q.state === 'present') {
       // the SLASH form (`gui/<uid>/<label>`, one argument — the rule `launchctl` in darwin.mjs carries): the two-argument
@@ -229,7 +230,7 @@ export async function stopDaemon({ lockFile, socketPath = null, exec = null, kil
       if (r.code === 0) { signals.push('launchctl-bootout'); how = 'launchctl' }
       else { agentStillManaged = true; problems.push(`launchctl bootout of ${AGENT_LABEL} failed (${r.code === null ? r.err || 'it did not run' : `exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''}`}); launchd's KeepAlive may bring the daemon back`) }
     } else if (q.state === 'unknown') { agentStillManaged = true; problems.push(`whether the LaunchAgent is loaded is not known (${q.err}); nothing was booted out on a guess, and launchd's KeepAlive may bring the daemon back`) }
-    // absent: nothing to boot out — the daemon was not started by the agent (a `--no-autostart` run, or the session ended)
+    // absent: nothing to boot out — the daemon was not started by the agent (a direct start by `on`, or the session ended)
   } else if (unitManaged) { // systemd then knows it is meant to be down and does not bring it back (Restart=on-failure)
     execTool('systemctl', ['--user', 'stop', UNIT_FILE_NAME], { run: exec, env, timeoutMs: termWaitMs })
     signals.push('systemctl-stop'); how = 'systemctl'

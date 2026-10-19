@@ -462,10 +462,9 @@ test('V39 on: the same lines in the receipt (and in the plan\'s receipt when --j
     else { assert.match(flat, /Whether capture survives a logout is unknown \(\/var\/lib\/systemd\/linger\/alice: EACCES\)/); assert.ok(!/Capture stops when you log out/.test(flat), 'unreadable never claims capture is kept or lost') }
     const j = fakeIo(); const home2 = tmpDir('asight-v39-'); seedClaude(home2); await installFirst(home2); const exec2 = recordingExec()
     assert.equal(await runOnCli(['--yes', '--json'], onCtx(home2, j, { exec: exec2, deps: { lingerRead, linger: undefined } })), 0)
-    for (const e of [exec, exec2]) {
-      assert.ok(e.calls.length > 0, 'on ran its OS tools through this runner: the check below looks at something')
-      assert.ok(!e.has(/loginctl/), `loginctl is not run by on: asight says how, it does not do it (R8) — ${e.calls.join(' | ')}`)
-    }
+    // D61: with a daemon already answering `on` runs no OS tool at all (it registers nothing), so the runner may be empty —
+    // what is asserted is that loginctl is never among the calls: asight says how to enable linger, it does not do it (R8)
+    for (const e of [exec, exec2]) assert.ok(!e.has(/loginctl/), `loginctl is not run by on — ${e.calls.join(' | ')}`)
     const doc = j.json()
     assert.equal(doc.linger, want)
     if (want === 'unknown') assert.match(doc.linger_reason, /EACCES/)

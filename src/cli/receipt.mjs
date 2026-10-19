@@ -59,7 +59,7 @@ function watchLines(watch, t) {
 
 /** Every file a plan would write or change, by full path and key, one per line (§1.4「计划写全」) → [{ what, detail }] for the caller to print or
  *  to put in `--json` as `planned`. `p` = what planOn returns (its `files` / `owned` / `entries` / `unit` are only what would be written). */
-export function planItems(p, { home = null, platform = 'linux', autostart = true } = {}) {
+export function planItems(p, { home = null, platform = 'linux' } = {}) {
   const t = (x) => tilde(x, home)
   const sep = platform === 'win32' ? '\\' : '/' // one separator style per platform (§1.1): a directory shown as `~\\.asight\\collector/` mixes two
   const items = []
@@ -73,24 +73,26 @@ export function planItems(p, { home = null, platform = 'linux', autostart = true
   for (const o of p.owned || []) add(o.harness, o.path, `${t(o.path)}: asight's ${o.role}`)
   for (const e of p.entries || []) add(e.harness, e.path, `${t(e.path)}${e.real_path ? ` -> ${t(e.real_path)}` : ''}: ${e.what || e.keys.join('.')}`)
   if (p.unit) add('autostart', p.unit.path, `${t(p.unit.path)}: starts the collector at login`)
-  // §1.4「计划写全」: the symlink `enable` makes is a file of the user's too, so it is named as well (nothing is enabled with `--no-autostart`)
-  if (p.unit && autostart) for (const l of p.unit.links || []) add('autostart', l, `${t(l)}: the link that enables it`)
+  // §1.4「计划写全」: the symlink `enable` makes is a file of the user's too, so it is named as well
+  if (p.unit) for (const l of p.unit.links || []) add('autostart', l, `${t(l)}: the link that enables it`)
   for (const l of p.logs || []) add('log', l, `${t(l)}: the collector's own output`)
   if (p.records) add('record', p.records, `${t(p.records)}${sep}: what each run did`)
   else if (p.events) add('record', p.events, `${t(p.events)}: what each run did`)
+  // V85 / §1.4「计划写全」: asight's own tree is ONE line, as it is in the model install's plan — every run of asight keeps its record, its
+  // desired state and its own logs there, and `asight uninstall` takes all of it back. Every file of YOURS is its own line, above.
+  if (home) add('asight', path.join(home, '.asight'), `${t(path.join(home, '.asight'))}${sep}: asight's own files (its install record, what is turned on, its logs); asight uninstall takes all of it back`)
   return items
 }
 
 /** Every file `on` (or Linux `install`) would write or change, before it writes any (§1.4): the count first, then every file by full path and key. */
-export function formatPlan(p, { home = null, autostart = true, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
+export function formatPlan(p, { home = null, platform = 'linux', command = 'on', colors: c = noColor() } = {}) {
   const t = (x) => tilde(x, home)
-  const items = planItems(p, { home, platform, autostart })
+  const items = planItems(p, { home, platform })
   const backups = t(p.backups || path.join(home || '~', '.asight', 'backup'))
   return fit([
     c.bold(`asight ${command} will write ${items.length} file${items.length === 1 ? '' : 's'}:`),
     ...pairs(items.map((i) => [i.what, i.detail])),
     `A copy of every file of yours it changes goes to ${backups}/ first.`,
-    ...(p.unit && !autostart ? ['The collector is started this once; nothing is added to your login.'] : []),
     ...watchLines(p.watch, t).map((l) => `  ${l}`),
     ...(p.skipped && p.skipped.length ? [`Skipped: ${p.skipped.map((s) => `${t(s.what)} (${s.reason})`).join('; ')}`] : []),
     ...(p.edited || []).map((e) => `You changed the proxy setting of ${e.harness}: ${e.where || 'its proxy field'} is now ${e.now ?? 'empty'} (asight left ${e.was ?? 'empty'} there). Going on takes your value as the upstream and points the setting back at asight.`),

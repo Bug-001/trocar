@@ -632,9 +632,9 @@ test('install: a unit systemd refuses to enable is a recorded failure, the insta
 // the flip checklist ③ (4.9 §4 末): an arch whose enable() carries its own failure record — the darwin userUnit answers a refused bootstrap with the `launchd-register-failed`
 // code and launchctl wording — has that record reach flows/ VERBATIM, not the systemd-shaped unit-not-enabled + 「systemctl --user enable --now」 remediation that used to replace
 // it (launchd is the only autostart on darwin, 4.9 §11: the receipt must say so). Both halves of the install: installCollector (the harness/lab shape) and turnOn (`asight on`).
-test('install: a unit whose enable() carries its own failure event — the darwin LaunchAgent — records THAT, not unit-not-enabled and systemd words (flip ③, 4.9 §4)', async () => {
+test('install: a unit whose enable() carries its own failure event — the darwin LaunchAgent — records THAT, not unit-not-enabled and systemd words (flip ③, 4.9 §4; D61: registering is install\'s, so this is install\'s record)', async () => {
   const refused = { code: 1, err: 'Boot-on-boot failed: 5: Input/output error', event: { event: 'failure', where: 'install', code: 'launchd-register-failed', reason: 'launchctl bootstrap was refused (exit 5: Boot-on-boot failed: 5: Input/output error); launchd is the only autostart, so asight does not start at login' } }
-  const unit = (b) => ({ path: path.join(b.home, 'Library', 'LaunchAgents', 'com.asight.collector.plist'), links: [], text: (env) => JSON.stringify(env), enable: () => ({ ...refused }), disable: () => ({ code: 0 }), stop: () => {} })
+  const unit = (b) => ({ path: path.join(b.home, 'Library', 'LaunchAgents', 'com.asight.collector.plist'), links: [], text: (env) => JSON.stringify(env), enable: () => ({ ...refused }), startNow: () => ({ ...refused }), start: () => ({ ...refused }), registered: () => ({ state: 'present' }), stop: () => {} })
   const { recentFailures } = await import('../../src/collector/core/events.mjs')
   const a = box()
   try {
@@ -646,16 +646,6 @@ test('install: a unit whose enable() carries its own failure event — the darwi
     assert.ok(!/systemctl/.test(f.reason), 'no systemd remediation text in a launchd failure')
     assert.ok(!recentFailures(a.dir).some((x) => x.code === 'unit-not-enabled'), 'the generic code is not what the record carries')
   } finally { a.done() }
-  const b = box()
-  try {
-    await installCollector({ ...onBase(b), unit: null }) // D55: on writes no certificate, install comes first
-    const r = await turnOn(onBase(b, { unit: unit(b), request: fakeDaemon({ up: false }).request }))
-    assert.equal(r.exit, 1, 'a not-done on: the autostart would not register')
-    const f = recentFailures(b.dir).find((x) => x.event === 'failure')
-    assert.equal(f.code, 'launchd-register-failed', JSON.stringify(f))
-    assert.match(r.receipt.notes.join('\n'), /launchctl bootstrap was refused/, 'the receipt says it in launchctl\'s words')
-    assert.ok(!/systemctl/.test(r.receipt.notes.join('\n')), 'and never in systemd\'s')
-  } finally { b.done() }
 })
 
 test('daemonEnv: the install shell\'s NODE_EXTRA_CA_CERTS goes to the unit when it is an absolute path outside asight\'s home; otherwise it is said and recorded (review 3 #1, D38)', async () => {
@@ -961,73 +951,6 @@ test('a descriptor whose afterUninstall is a string that is no known "until" is 
 // ── asight on: the unit, and a harness turned on again (1.6 §1.6 · §1.1; V33, V16 unit half) ───────────────────────────────────────────────
 const onBase = (b, o = {}) => ({ home: b.home, env: { HOME: b.home, XDG_RUNTIME_DIR: path.join(b.home, 'run') }, osName: 'none', harnesses: [cc], freePort: async () => 47011, roots: ROOTS, confirm: async () => true, sleep: async () => {}, linger: () => true, ...o })
 const unitOf = (b, run, spawn = () => { throw new Error('no test starts a daemon: hand in a spawn') }, env = undefined) => userUnit({ home: b.home, node: '/usr/bin/node', script: '/repo/bin/asight.mjs', run, spawn, ...(env ? { env } : {}) })
-
-test('V33: on --no-autostart writes no login entry at all and starts the daemon itself through spawn, the daemon is then running and the manifest lists no unit; an arch without a unit writes none either', async () => {
-  const b = box()
-  try {
-    const sys = fakeSystem()
-    await installCollector({ ...onBase(b), unit: null }) // D55: on writes no certificate, install comes first
-    const r = await turnOn(onBase(b, { unit: unitOf(b, sys.exec.run, sys.spawn), request: sys.daemon.request, autostart: false }))
-    assert.equal(r.exit, 0)
-    const unitFile = path.join(b.home, '.config', 'systemd', 'user', 'asight-collector.service')
-    assert.equal(fs.existsSync(unitFile), false, '--no-autostart writes no unit (1.6 §3.3)')
-    assert.deepEqual(sys.exec.calls, [], 'no systemctl at all: nothing to write, enable or start through systemd')
-    assert.deepEqual(sys.spawn.calls, ['/usr/bin/node /repo/bin/asight.mjs daemon'], 'started directly, this once')
-    assert.equal(sys.daemon.state.up, true, 'the daemon is running')
-    assert.deepEqual(readManifest(b.dir).files.filter((f) => f.role === 'unit'), [], 'and nothing of an autostart is listed: there is none to remove')
-    assert.equal(r.receipt.unit, null, 'the receipt names no login entry either')
-  } finally { b.done() }
-  const c = box()
-  try {
-    const ex = recordingExec()
-    await installCollector({ ...onBase(c), unit: null })
-    const r = await turnOn(onBase(c, { unit: null, request: fakeDaemon({ up: false }).request }))
-    assert.equal(r.exit, 0)
-    assert.ok(!fs.existsSync(path.join(c.home, '.config')), 'an arch with no unit writes none')
-    assert.deepEqual(readManifest(c.dir).files.filter((f) => f.role === 'unit'), [], 'the manifest lists none')
-    assert.deepEqual(ex.calls, [])
-  } finally { c.done() }
-})
-
-test('on --no-autostart: the direct start carries the daemon environment the login entry would carry and writes to the same two log files; a value it cannot carry is said, and a login entry an earlier `on` left is reported, not removed', async () => {
-  const b = box()
-  try {
-    const sys = fakeSystem()
-    const corp = path.join(b.home, 'corp.pem'); fs.writeFileSync(corp, createCa({ commonName: 'corp relay CA' }).certPem)
-    const env = { HOME: b.home, XDG_RUNTIME_DIR: path.join(b.home, 'run'), NODE_EXTRA_CA_CERTS: corp, HTTPS_PROXY: 'http://relay:8080' }
-    await installCollector({ ...onBase(b), unit: null, env })
-    const r = await turnOn(onBase(b, { unit: unitOf(b, sys.exec.run, sys.spawn, env), request: sys.daemon.request, autostart: false, env }))
-    assert.equal(r.exit, 0, JSON.stringify(r.receipt.problems))
-    const o = sys.spawn.opts[0]
-    // item 2: without it the daemon checks a relay behind a corporate MITM with Node's roots only and capture breaks, saying nothing
-    assert.equal(o.env.NODE_EXTRA_CA_CERTS, corp, 'the direct start carries what the systemd unit carries (install.mjs daemonEnv)')
-    assert.equal(o.env.HTTPS_PROXY, undefined, 'and still drops the proxy variables a login-started daemon would not have (directStartEnv)')
-    // item 3: stdio 'ignore' left a daemon that exits at once with its reason nowhere (D46)
-    const logs = [path.join(b.home, '.asight', 'collector', 'logs', 'daemon-out.log'), path.join(b.home, '.asight', 'collector', 'logs', 'daemon-err.log')]
-    assert.deepEqual(logs.map((f) => fs.existsSync(f)), [true, true], 'the two daemon log files are there')
-    assert.equal(o.stdio[0], 'ignore')
-    assert.deepEqual(o.stdio.slice(1).map((x) => typeof x), ['number', 'number'], 'stdout and stderr are the two appended log files, not /dev/null')
-  } finally { b.done() }
-  const c = box()
-  try { // the same note the unit gets when this shell's value cannot be carried (review 3 #1, D38)
-    const sys = fakeSystem()
-    await installCollector({ ...onBase(c), unit: null })
-    const r = await turnOn(onBase(c, { unit: unitOf(c, sys.exec.run, sys.spawn, { HOME: c.home, XDG_RUNTIME_DIR: path.join(c.home, 'run'), NODE_EXTRA_CA_CERTS: 'rel/ca.pem' }), request: sys.daemon.request, autostart: false, env: { HOME: c.home, XDG_RUNTIME_DIR: path.join(c.home, 'run'), NODE_EXTRA_CA_CERTS: 'rel/ca.pem' } }))
-    assert.equal(sys.spawn.opts[0].env.NODE_EXTRA_CA_CERTS, undefined)
-    assert.ok(r.receipt.notes.some((n) => /\(rel\/ca\.pem\) is not given to the daemon asight starts \(it is a relative path\)/.test(String(n && n.text ? n.text : n))), `said, never dropped silently: ${JSON.stringify(r.receipt.notes)}`)
-  } finally { c.done() }
-  const d = box()
-  try { // item 5: an autostart entry an earlier `on` installed stays; --no-autostart must say it is there and where
-    const sys = fakeSystem()
-    await installCollector({ ...onBase(d), unit: null })
-    const left = path.join(d.home, '.config', 'systemd', 'user', 'asight-collector.service')
-    fs.mkdirSync(path.dirname(left), { recursive: true }); fs.writeFileSync(left, '[Service]\n')
-    const r = await turnOn(onBase(d, { unit: unitOf(d, sys.exec.run, sys.spawn), request: sys.daemon.request, autostart: false }))
-    assert.equal(r.exit, 0)
-    assert.ok(r.receipt.notes.some((n) => new RegExp(`an autostart entry .*is still there \\(${left.replace(/[.\\/]/g, '\\$&')}\\)`).test(String(n && n.text ? n.text : n))), `the entry is reported with its path: ${JSON.stringify(r.receipt.notes)}`)
-    assert.equal(fs.existsSync(left), true, 'and is not removed: that is `asight off`')
-  } finally { d.done() }
-})
 
 // A keep-alive TLS relay for relay.asight.test with its own private CA (the shape daemon.test.mjs uses): answers every complete request with a fixed message.
 const FAKE_LOADER = fileURLToPath(new URL('./arch/linux/fixtures/fake-loader.mjs', import.meta.url))

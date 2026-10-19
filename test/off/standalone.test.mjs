@@ -82,7 +82,7 @@ test('V2: with the repository out of reach the copy install wrote does what `asi
   assert.deepEqual(normalize(JSON.parse(r.stdout), b.home), normalize(io.json(), a.home), 'the same receipt, key for key')
   assert.deepEqual([backToBefore(preEntries(b)).length, JSON.parse(r.stdout).changed], [preEntries(b).length, []], 'every certificate entry install wrote is still in (D55①): the copy, like off, takes none')
   assert.deepEqual(readManifest(b.dir).entries.map((e) => [e.harness, e.kind, e.path]), kept, 'and its manifest keeps the same entries')
-  assert.ok(r.stubs.calls().some((c) => /^systemctl --user disable asight-collector\.service/.test(c)), `no names: the autostart was disabled, through the one runner (${r.stubs.calls()})`)
+  assert.ok(!r.stubs.calls().some((c) => /disable/.test(c)), `D61: no off disables the autostart, the copy included (${r.stubs.calls()})`)
   assert.equal(r.stderr, '')
 })
 
@@ -232,7 +232,7 @@ test('src/off carries OFF_VERSION as an integer, and the unique-name rule the ge
 
 // The kinds the copy undoes, and how (the file rule's kinds), pinned to the OFF_VERSION that ships them: a change to either list
 // without a bump (and a row here) is red, so doctor's version line tells an old copy from one that knows the new rules.
-const KINDS_AT = { 16: 'e3c392509cb0c538' }
+const KINDS_AT = { 16: 'e3c392509cb0c538', 17: 'e3c392509cb0c538' } // 17 ships the same kinds: the bump is D61 (the copy no longer disables the autostart), its reason line is in src/off/manifest.mjs
 test('OFF_VERSION moves with the undo rules: the known kinds and the file-rule kinds are the ones this version ships', () => {
   const fp = sha256(Buffer.from(JSON.stringify([KNOWN_KINDS, FILE_ENTRY_KINDS]))).slice(0, 16)
   assert.equal(KINDS_AT[OFF_VERSION], fp, `KNOWN_KINDS / FILE_ENTRY_KINDS changed: bump OFF_VERSION with its reason line (src/off/manifest.mjs) and add { ${OFF_VERSION + 1}: '${fp}' } here`)
@@ -333,7 +333,7 @@ test('V35: `asight doctor` says nothing of a copy that is current, and makes a f
   const dir = tmpDir('asight-stub-'), bin = path.join(dir, 'bin'), log = path.join(dir, 'calls.log')
   fs.mkdirSync(bin)
   for (const name of ['security', 'systemctl', 'launchctl', 'certutil', 'loginctl', 'ss', 'ip']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\nexit 1\n`, { mode: 0o755 }) // doctor's trust check finds these, and only these (`ss` and `ip` are the reads of its network facts, which only read) (its dependency probe looks at files on PATH, it starts no `which`)
-  for (const name of ['ps', 'lsof', 'route', 'ifconfig', 'scutil']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 }) // the flip (4.9 §4): the doctor's status block on a Mac is the NEW status now — it reads the process table and the darwin network facts, all read-only, all stubbed to the empty world
+  for (const name of ['ps', 'netstat', 'route', 'ifconfig', 'scutil']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 }) // the flip (4.9 §4): the doctor's status block on a Mac is the NEW status now — it reads the process table and the darwin network facts, all read-only, all stubbed to the empty world
   const doctor = () => spawnSync(process.execPath, [path.join(REPO, 'bin', 'asight.mjs'), 'doctor'], { env: { ASIGHT_SOURCE: tmpDir('asight-src-'), PATH: bin, HOME: s.home, TMPDIR: os.tmpdir(), ASIGHT_TEST_SANDBOX: '1', ASIGHT_MIHOMO_SOCK: path.join(dir, 'none.sock') }, encoding: 'utf8', timeout: 60_000 }) // the VPN probe is pinned to a socket nobody listens on, so it asks no `ps` and can never reach the developer's own core
   const flat = (r) => r.stdout.replace(/\n\s+/g, ' ') // §3.7 findings wrap at the §1.1 width; the fact is the sentence
   const file = standalonePath(s.home)

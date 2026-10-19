@@ -9,6 +9,7 @@
 // and every piece runs on any OS against a temp directory. Node built-ins and src/off/exec.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
 import { directStartEnv, startDaemonDirect } from '../direct-start.mjs'
+import { autostartNode } from '../autostart-node.mjs'
 import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
@@ -129,7 +130,7 @@ const agentState = ({ run, env, uid }) => {
 }
 
 /**
- * The environment of a daemon that is started directly (`start()`, the `--no-autostart` run): the installer shell's, without the variables that change what the daemon trusts or whom it
+ * The environment of a daemon that is started directly (`start()`, the fallback when launchd refuses to start it): the installer shell's, without the variables that change what the daemon trusts or whom it
  * dials (Node's CA, TLS and proxy switches, OpenSSL's CA file and directory, the `*_PROXY` family, any case — on darwin names are case sensitive and the lowercase spellings
  * (`https_proxy`) are as meaningful as the uppercase ones, so the case-insensitive match strips a few mixed-case names that mean nothing too, which costs nothing). A daemon the LaunchAgent
  * starts at login has none of the shell's: launchd starts it with a bare environment plus the plist's EnvironmentVariables, so a daemon that got the shell's from `on` would trust and dial
@@ -152,11 +153,10 @@ const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist
  *                    With `now: false` (a daemon already answers) launchctl is not asked at all: the plist in ~/Library/LaunchAgents is what launchd loads at the NEXT login, and a
  *                    bootstrap would start a second daemon beside the one that answers (拉起不是重启, R8). When launchctl refuses the bootstrap the answer is not 0 and carries the
  *                    `launchd-register-failed` failure record for the caller to write: launchd is the only autostart, so `on`'s receipt says it (4.9 §11) — there is no fallback.
- *   start()          the `--no-autostart` run: this session, nothing at login. A LaunchAgent with RunAtLoad would be an autostart, so none is registered: the daemon is started directly,
+ *   start()          the fallback `on` uses when `startNow()` refuses (a job that is not loaded): this session, nothing registered. A LaunchAgent with RunAtLoad would be an autostart, so none is registered: the daemon is started directly,
  *                    detached, with the environment of `directStartEnv(env)` (the shell's, without the trust and proxy variables a login-started daemon would not have) and no
- *                    supervisor flag (launchd is the restart; a `--no-autostart` daemon is not under it and dies when it dies).
+ *                    supervisor flag (launchd is the restart; a directly started daemon is not under it and dies when it dies).
  *   reload()         nothing to do: a rewritten plist is replaced by the next `enable` (bootout + bootstrap).
- *   disable()        a no-argument `off`: `launchctl disable gui/<uid>/<label>` only — the draining daemon exits itself and launchd loads the job no more until `enable`.
  *   remove()         an `uninstall`. The undo, in its order: **`launchctl bootout` FIRST** (the autostart off the hook, so KeepAlive does not pull the
  *                    daemon back — the caller stops the daemon process after this verb returns, never before, 4.9 §4), then the plist leaves ~/Library/LaunchAgents (launchd scans that
  *                    directory at every login: a file left there brings the agent back at the next one, which would undo the off, D39). → `{ code, out, err, agent: 'booted-out' |
@@ -165,6 +165,7 @@ const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist
  *                    guess — the plist is a separate part of the undo and still goes.
  */
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, uid = null } = {}) {
+  node = autostartNode({ env, execPath: node, fs }) // D61: a node the plist can still name after a node upgrade (one rule, all three OSes)
   const file = plistPath(home)
   const tools = { run, env, uid: uid ?? processUid() }
   // the daemon this run starts itself: the LaunchAgent's own environment and the LaunchAgent's own log files (direct-start.mjs)
@@ -199,9 +200,13 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       return { ...r, code: r.code ?? 1, event: { event: 'failure', where: 'install', code: 'launchd-register-failed', reason: `launchctl bootstrap was refused (${r.code === null ? 'it did not run' : `exit ${r.code}`}${r.err ? `: ${r.err}` : ''}); launchd is the only autostart, so asight does not start at login` } }
     },
     start: (carry = null) => startDirect(carry),
+    // D61: `on` asks launchd to start the daemon now (the job launchd loaded at login) and never touches the registration
+    // (`install` made it). A job that is not loaded answers non-zero, and ensureDaemonUp falls back to `start()`, reason said.
+    startNow: () => launchctl(['kickstart', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools),
+    // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything (an `on` with no
+    // entry opens doors that nobody opens after the next login) — `launchctl print`, the question this file already asks (agentState).
+    registered: () => agentState(tools),
     reload: () => ({ ...ok }),
-    // a no-names off: launchctl disable, never a bootout of a draining daemon — the same call as src/off/darwin.mjs disableAgent; the plist stays
-    disable: () => { const r = launchctl(['disable', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools); return { ...r, code: r.code ?? 1, state: r.code === 0 ? 'disabled' : 'failed' } },
     remove: undo,
   }
 }

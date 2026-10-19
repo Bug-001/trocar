@@ -77,7 +77,7 @@ export async function systemProxyWatch({ up, read, io = {}, failure = () => {}, 
 /** The door's readers of the world for the model collector (4.11 §1, createModelCollector): who owns a socket and that pid's facts, its env / cwd /
  *  parent (P7), how a proxy address is dialled, the system proxy now (a watcher's last read), the process table (P12). → { ownerOf, factsOf, proc,
  *  proxyOf, systemProxy, procTable, close }. Read-only, as the arch's own modules are. `io`: the OS readers only (a test's seam, 0.1 §3; the daemon's
- *  `model.io`) — `exec`, a spawnSync-shaped runner of lsof / ps / procenv (darwin) and of the process table (both); `helper`, startHelper's
+ *  `model.io`) — `exec`, a spawnSync-shaped runner of ps / netstat / procenv (darwin) and of the process table (both); `helper`, startHelper's
  *  { spawn, exe, args } (win32). Everything above them stays this function's own. */
 export async function doorPartsFor({ os, env = process.env, event = () => {}, failure = () => {}, io = {} }) {
   if (!isModelOs(os)) throw new Error(`the collector model runs on macOS and Windows, not ${os}`)

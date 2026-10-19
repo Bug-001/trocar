@@ -14,7 +14,7 @@ const NOBODY = { ownerOf: async () => null, factsOf: async () => null, proc: {},
 export async function liveUnit({ w, platform, io = null }) {
   const { controlEndpoint } = await import(`../../src/collector/arch/${platform}/control-path.mjs`)
   const arch = { os: platform, controlEndpoint }
-  const box = { daemon: null, starting: null, enabled: [], procs: [] } // procs: the process table the daemon's holder judge reads (empty: no holder)
+  const box = { daemon: null, starting: null, enabled: [], startedNow: [], procs: [] } // procs: the process table the daemon's holder judge reads (empty: no holder)
   const start = (custody = w.custody) => {
     box.starting = startDaemon({ dir: w.dir, env: w.env, home: w.home, arch, harnesses: w.harnesses, getuid: () => 501, identity: () => ({ start_time: '111', boot_id: 'boot-1' }),
       model: { backends: { custody, dirs: w.ctx.dirs }, ...(io ? { io } : { parts: { ...NOBODY, procTable: async () => box.procs } }) } }).then((d) => { box.daemon = d; return d })
@@ -24,6 +24,8 @@ export async function liveUnit({ w, platform, io = null }) {
     path: path.join(w.home, 'asight-unit'), text: () => '# stands for the LaunchAgent / scheduled task', links: [],
     enable: ({ now = false } = {}) => { box.enabled.push(now); if (now && !box.starting) start(); return { code: 0 } },
     start: () => { if (!box.starting) start(); return { code: 0 } },
+    startNow: () => { box.startedNow.push(true); if (!box.starting) start(); return { code: 0 } }, // D61: what `on` asks (the OS mechanism starting the daemon), the real units' verb
+    registered: () => ({ state: 'present' }), // the login entry install registered: what `on` asks before it writes (1.6 §3.3)
     reload: () => {},
   }
   box.parts = { os: platform, harnesses: w.harnesses, arch: { unit: { userUnit: () => box.unit } } }

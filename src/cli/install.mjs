@@ -59,8 +59,8 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
     const ctx = sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
     const rows = planInstall({ os: platform, harnesses, ctx })
-    // the autostart unit is install's, inert until `on` enables it (4.11 §1 install d; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
-    const unit = deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch(platform)).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env })
+    // the login entry is install's (D61: registered AND started here, 4.11 §1 install 7; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
+    const unit = deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch(platform)).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
     const carrierOf = (r) => (r.carrier === 'root'
       ? 'reads your user trust store'
       : r.paths && r.paths.length
@@ -73,6 +73,8 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
         .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, what: group[0].harness, detail: carrierOf(group[0]) })),
       // V85: asight's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
       { what: 'asight', detail: `${tilde(path.join(home, '.asight'), home)}${platform === 'win32' ? '\\' : '/'}: asight's own files (its root certificate and key, the install record, and ${tilde(standalonePath(home), home)}, the undo that works without this source tree)` },
+      // D61 (1.6 §3.2 step 5, 4.11 §1 install 7): the login entry is a file of YOURS outside asight's tree, so it is its own line (V85), and the plan says a daemon runs from now on
+      ...(unit ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\asight\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (asight uninstall takes it out again)` }] : []),
     ]
     say(fit([`asight install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
       ...pairs(planned.map((p) => [p.what, p.detail])),
@@ -86,9 +88,14 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     const r = await locked(() => runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
       wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) }))
     if (!r) return EXIT.incomplete
+    // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs)
+    const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.asight', 'collector'), env, fs, unit, register: true, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
+    r.problems.push(...dmn.problems)
+    const dmnNotes = dmn.notes.filter((n) => !r.problems.includes(n)) // 附录 C.1: `problems` is the failure channel; what asight could not do but said is `notes` (M-2)
+    if (dmn.problems.length) r.exit = 1
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: r.pending, problems: r.problems, standalone: standalonePath(home), residual_risk: RISK,
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, ...(unit ? { autostart: { entry: platform === 'win32' ? '\\asight\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       planned, commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
     const dir = path.join(home, '.asight', 'collector')
@@ -113,8 +120,10 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     else if (refusal) io.out(fit([`asight install stopped: ${refusal.message || refusal.reason}`, 'Nothing of yours was changed.']).join('\n'))
     else io.out(fit([receipt.ok ? "Installed. asight's root certificate is trusted by your user." : 'asight install did not finish. What is missing is below.',
       ...pairs([['Fingerprint (SHA-256)', r.fp256 || 'unknown (no root was made)']]), // the hex is one unbroken word under its label: one block, and in a block of its own, so it does not widen the rows below
-      ...pairs(carrierRows),
+      // the login entry install registered, confirmed like every other row (a Windows test machine 2026-10-18: the receipt said nothing about it) — in the carriers' own pairs() call, so its label column lines up with theirs (a Windows test machine 2026-10-19)
+      ...pairs([...carrierRows, ...(receipt.autostart ? [['autostart', `${receipt.autostart.entry}: ${receipt.autostart.enabled ? 'enabled, and a collector starts at every login' : 'NOT enabled (see the problem below): no collector starts at login'}`]] : [])]),
       ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: asight install`),
+      ...receipt.notes.map((n) => `Note: ${n}`),
       ...r.problems.map((p) => `Problem: ${p}`),
       // the residual risk (RISK) is the last line of the plan printed just above in this same run (§3.2 prints it there, and the
       // receipt sample does not carry it); printing it again put the paragraph on the screen twice (a macOS test machine 2026-10-18).
@@ -135,14 +144,16 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const { OFF_VERSION } = await import('../off/manifest.mjs')
   const parts = deps.parts || await (await import('../collector/daemon.mjs')).loadParts({ env, agentList: readAgentList({ home, fs }).entries })
   const inst = await import('../collector/install.mjs')
-  const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}) }
+  // D61: the login entry is install's — written here and enabled with `--now`, so the daemon is up from install until uninstall
+  const unit = deps.unit !== undefined ? deps.unit : (!parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }))
+  const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, unit, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { sleep: deps.sleep } : {}) } // request / sleep: installCollector's ensureDaemonUp seam (D61), so a test's daemon is the one asked
   let plan
   try { plan = await inst.planOn(args) } catch (e) { io.err(`asight install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
   // asight-off (R3) is install's: named in the plan and the dry run when this run would write it, i.e. when it is not already what src/off generates
   const stdPath = standalonePath(home)
   let stdNew = true
   try { stdNew = fs.readFileSync(stdPath, 'utf8') !== buildStandalone({ version: OFF_VERSION, fs }) } catch { stdNew = true }
-  say([formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, autostart: false, platform, command: 'install' }), ...wrap(COST)].join('\n'))
+  say([formatPlan({ ...plan, adopted: [], standalone: stdNew ? stdPath : null }, { home, platform, command: 'install' }), ...wrap(COST)].join('\n'))
   if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), harnesses: plan.targets, changed: plan.changed, created: [...(stdNew ? [stdPath] : []), ...plan.created] }, null, 2)); return EXIT.ok }
   if ((plan.writing || stdNew) && !flags.has('--yes')) {
     if (json || !isInteractive(io)) return needsYes(io, json, planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }))

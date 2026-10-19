@@ -13,6 +13,7 @@ import { refuseElevated, nodePreflight, NODE_MIN_MAJOR, taskXml, taskUser, userU
 import { elevationByWhoami, refuseElevatedByWhoami } from '../../../../src/off/win32.mjs'
 import { checkRecord } from '../../../../src/health/codes.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, PIPE_PREFIX } from '../../../../src/collector/arch/win32/control-path.mjs'
+import { autostartBlock } from '../../../../src/collector/install.mjs' // D61: the refusal `registered()` feeds
 import { startControlServer, CONTROL_TOKEN_HEADER } from '../../../../src/collector/core/control.mjs'
 
 
@@ -320,7 +321,7 @@ test('W24 userUnit gives the shape turnOn and install consume: a path under the 
   assert.deepEqual(u.links, [], 'a task has no wants/ link')
   assert.equal(u.name, 'asight-collector')
   assert.equal(u.text({ NODE_EXTRA_CA_CERTS: 'C:\\corp\\ca.pem' }), xml(), 'the text is the XML; a Windows task has no environment of its own, so the daemon environment install offers is not carried (4.8 §7)')
-  for (const verb of ['enable', 'start', 'reload', 'disable', 'remove']) assert.equal(typeof u[verb], 'function', verb)
+  for (const verb of ['enable', 'start', 'startNow', 'reload', 'remove']) assert.equal(typeof u[verb], 'function', verb) // D61: no `disable` verb — nothing in an off touches the registration
   assert.deepEqual(u.reload(), { code: 0, out: '', err: '' }, 'a rewritten task is registered again by the next enable (/F), so there is nothing to reload')
 })
 
@@ -372,7 +373,7 @@ test('W24 enable says why it failed: a /Run that did not start, a task file that
   assert.deepEqual(fs.readdirSync(path.join(refusedHome.home, '.asight', 'collector')), [TASK_FILE], 'the UTF-16 copy is removed on the failure path too')
 })
 
-test('W24 start (the --no-autostart run: this session, nothing at login) starts the supervised daemon itself without registering anything: conhost --headless, detached, no window, and a spawn that did not start is a failure, not a success', () => {
+test('W24 start (the direct start `on` falls back to: this session, nothing at login) starts the supervised daemon itself without registering anything: conhost --headless, detached, no window, and a spawn that did not start is a failure, not a success', () => {
   const o = withHome()
   const run = fakeTools()
   const spawned = []
@@ -408,31 +409,29 @@ test('W24 a daemon started directly (start(), the fallback with now) gets the en
   assert.deepEqual([spawned[1].detached, spawned[1].windowsHide], [true, true], 'the rest of the spawn is as before')
 })
 
-test('W24 disable (a no-argument off) switches the task off and leaves it registered; remove (uninstall) deletes it; a task that is not there is already as asked, not an error', () => {
+test('W24 remove (uninstall) deletes the task; a task that is not there is already as asked, not an error (D61: an off has no disable)', () => {
   const o = withHome()
   const noRunKey = { 'reg query': { status: 1, stderr: 'ERROR: The system was unable to find the specified registry key or value.' } }
-  const present = fakeTools({ 'schtasks /Query': { status: 0 }, ...noRunKey })
-  assert.deepEqual(userUnit({ ...o, run: present }).disable(), { code: 0, out: '', err: '', task: 'disabled', runKey: 'absent' })
-  assert.deepEqual(present.calls.filter((c) => c[0] === 'schtasks'), [['schtasks', '/Query', '/TN', TASK_NAME], ['schtasks', '/Change', '/TN', TASK_NAME, '/DISABLE']])
   const gone = fakeTools({ 'schtasks /Query': { status: 1, stderr: 'ERROR: The system cannot find the file specified.' }, ...noRunKey })
-  assert.deepEqual(userUnit({ ...o, run: gone }).disable(), { code: 0, out: '', err: '', task: 'absent', runKey: 'absent' })
+  assert.deepEqual(userUnit({ ...o, run: gone }).remove(), { code: 0, out: '', err: '', task: 'absent', runKey: 'absent' })
   assert.deepEqual(gone.calls.filter((c) => c[0] === 'schtasks').map((c) => c[1]), ['/Query'], 'nothing is changed or deleted')
   const rm = fakeTools({ 'schtasks /Query': { status: 0 }, ...noRunKey })
   assert.deepEqual(userUnit({ ...o, run: rm }).remove(), { code: 0, out: '', err: '', task: 'removed', runKey: 'absent' })
   assert.deepEqual(rm.calls.filter((c) => c[0] === 'schtasks'), [['schtasks', '/Query', '/TN', TASK_NAME], ['schtasks', '/Delete', '/TN', TASK_NAME, '/F']])
-  const stuck = fakeTools({ 'schtasks /Query': { status: 0 }, 'schtasks /Change': { status: 1, stderr: 'ERROR: Access is denied.' }, ...noRunKey })
-  const f = userUnit({ ...o, run: stuck }).disable()
-  assert.deepEqual([f.code, f.err, f.task], [1, 'ERROR: Access is denied.', 'failed'], 'a task that could not be switched off says so')
+  const stuck = fakeTools({ 'schtasks /Query': { status: 0 }, 'schtasks /Delete': { status: 1, stderr: 'ERROR: Access is denied.' }, ...noRunKey })
+  const f = userUnit({ ...o, run: stuck }).remove()
+  assert.deepEqual([f.code, f.err, f.task], [1, 'ERROR: Access is denied.', 'failed'], 'a task that could not be deleted says so')
 })
 
-test('W24 a /Query that did not run (timeout, blocked, no schtasks) is a failure for disable and remove, never "absent": nothing was asked of the task, so it is not known to be gone; the Run value is still taken out', () => {
+test('W24 a /Query that did not run (timeout, blocked, no schtasks) is a failure for remove, never "absent": nothing was asked of the task, so it is not known to be gone; the Run value is still taken out', () => {
   const didNot = [
     ['timed out', { status: null, error: Object.assign(new Error('spawnSync schtasks ETIMEDOUT'), { code: 'ETIMEDOUT' }) }],
     ['could not start', { status: null, error: Object.assign(new Error('spawn schtasks ENOENT'), { code: 'ENOENT' }) }],
     ['killed without a reason', { status: null }],
   ]
   for (const [what, query] of didNot) {
-    for (const verb of ['disable', 'remove']) {
+    {
+      const verb = 'remove' // D61: `remove` is the only undo verb left — `off` touches no registration
       const run = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
       const asked = (file, args) => (file === 'schtasks' && args[0] === '/Query' ? { stdout: '', stderr: '', ...query } : null)
       const calls = []
@@ -449,6 +448,42 @@ test('W24 a /Query that did not run (timeout, blocked, no schtasks) is a failure
   const lost = fakeTools({ 'schtasks /Query': { status: 0 }, 'schtasks /Delete': { status: null, error: new Error('spawnSync schtasks ETIMEDOUT') }, 'reg query': { status: 1 } })
   const d = userUnit({ ...withHome(), run: lost }).remove()
   assert.deepEqual([d.task, typeof d.code, d.code !== 0], ['failed', 'number', true])
+})
+
+// ---- D61 / 1.6 §3.3: `registered()` — is the login entry registered AND enabled? ------------------------------------------------------------------
+
+/** The task's XML as `schtasks /Query /TN \asight\collector /XML` prints it, shortened to the elements the answer turns on (a Windows test machine, 2026-10-19, pass C /
+ *  win-6): `<Enabled>false</Enabled>` is in `<Settings>` only when the task is switched off — an enabled task has no such element at all. */
+const TASK_XML = (enabled) => ['<?xml version="1.0" encoding="UTF-16"?>', '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">', '  <Settings>',
+  '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>', ...(enabled ? [] : ['    <Enabled>false</Enabled>']), '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>', '  </Settings>',
+  '  <Triggers>', '    <LogonTrigger>', '      <UserId>TESTMACHINE\\tester</UserId>', '    </LogonTrigger>', '  </Triggers>', '</Task>'].join('\r\n')
+/** schtasks writes that XML as UTF-16LE with a BOM on a redirected stdout, and execTool decodes UTF-8 (and trims): what the code really gets is every ASCII character followed by a NUL. */
+const asSchtasksPrintsIt = (xml) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')]).toString('utf8').trim()
+/** A `schtasks` whose task is registered and answers `xml` to `/Query /XML` (null = the query fails), with no Run value of ours. */
+const taskThatAnswers = (xml) => fakeTools({ 'schtasks /Query': (file, args) => (args.includes('/XML') ? (xml === null ? { status: 1, stderr: 'ERROR: The system cannot find the file specified.' } : { status: 0, stdout: xml }) : { status: 0 }), ...NO_RUN_VALUE })
+
+test('D61 registered() answers the one question 1.6 §3.3 asks — registered AND enabled: a DISABLED task is not "present", in either encoding schtasks may print its XML in', () => {
+  for (const [how, form] of [['UTF-16LE decoded as UTF-8, as execTool gets it', asSchtasksPrintsIt], ['plain text', (x) => x]]) {
+    const on = userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(true))) })
+    assert.equal(on.registered().state, 'present', `${how}: an enabled task is the login entry`)
+    assert.equal(autostartBlock({ unit: on, osName: 'win32' }), null, `${how}: so \`on\` goes on`)
+    const off = userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(false))) })
+    assert.equal(off.registered().state, 'disabled', `${how}: /Query /TN exits 0 for a disabled task too, so the XML is what tells`)
+    assert.match(autostartBlock({ unit: off, osName: 'win32' }), /asight install$/, `${how}: and \`on\` refuses — nothing starts at the next login`)
+  }
+  // the XML could not be read: no verdict, so the refusal stands (D61: anything but a proven enabled entry)
+  const blind = userUnit({ ...withHome(), run: taskThatAnswers(null) })
+  assert.equal(blind.registered().state, 'unknown')
+  assert.match(autostartBlock({ unit: blind, osName: 'win32' }), /asight install$/)
+})
+
+test('D61 the Run-key fallback is still the login entry when the task is gone OR switched off (that fallback disables the task itself)', () => {
+  const withValue = (xml) => { // the task answers `xml` (null: not registered) and asight's own Run value is there
+    const run = fakeTools({ 'schtasks /Query': (file, args) => (xml === null ? { status: 1 } : args.includes('/XML') ? { status: 0, stdout: xml } : { status: 0 }), 'reg query': { status: 0, stdout: REG_OUT('REG_SZ', COMMAND) } })
+    return userUnit({ ...withHome(), run }).registered()
+  }
+  assert.equal(withValue(null).state, 'present', 'no task, our Run value: the §7 fallback IS the login entry')
+  assert.equal(withValue(TASK_XML(false)).state, 'present', 'a disabled task next to our Run value is what runKeyFallback leaves behind, and it does start at login')
 })
 
 // ---- W24: the Run-key fallback -------------------------------------------------------------------------------------------------------------------
@@ -557,12 +592,12 @@ test('W24 a fallback that did not take is a failure with both reasons: reg add r
   const direct = runKeyFallback({ command: COMMAND, run: fakeRegistry(null, { storeAs: (v) => `${v} --other` }) })
   assert.deepEqual([direct.ok, typeof direct.entry, direct.reason.includes('did not take')], [false, 'object', true], 'runKeyFallback itself: not ok, entry for the ledger, the reason')
   // what is ledgered undoes, by the same rule as any undo: a value that is not asight's by its tail is left (`--other` is somebody's); one that is (here only differently spelled) is taken out
-  assert.deepEqual([userUnit({ ...withHome(), run: skewReg }).disable({ prior: skew.ledger.prior }).runKey, skewReg.reg.value.value], ['left', `${COMMAND} --other`])
+  assert.deepEqual([userUnit({ ...withHome(), run: skewReg }).remove({ prior: skew.ledger.prior }).runKey, skewReg.reg.value.value], ['left', `${COMMAND} --other`])
   const spelledReg = fakeRegistry(null, { storeAs: (v) => v.replace('conhost.exe', 'CONHOST.EXE') })
   const spelled = installed(userUnit({ ...withHome(), run: spelledReg })).enable({ now: false })
   assert.notEqual(spelled.code, 0, 'a read-back that is not byte for byte what was written is a failure')
   assert.equal(spelled.ledger.prior, null)
-  assert.deepEqual([userUnit({ ...withHome(), run: spelledReg }).disable({ prior: spelled.ledger.prior }).runKey, spelledReg.reg.value], ['removed', null], 'and the entry it handed back undoes it')
+  assert.deepEqual([userUnit({ ...withHome(), run: spelledReg }).remove({ prior: spelled.ledger.prior }).runKey, spelledReg.reg.value], ['removed', null], 'and the entry it handed back undoes it')
   const c = installed(userUnit({ ...withHome(), run: fakeRegistry(), spawn: () => ({ pid: undefined, unref() {}, on() {} }) })).enable({ now: true })
   assert.notEqual(c.code, 0, 'the entry is written but nothing runs now: that is not a success')
   assert.match(c.err, /did not start/)
@@ -616,7 +651,7 @@ test('W24 reg.exe prints in the console code page, which the runner decodes as U
 test('W24 off and uninstall remove only the Run value: ours with no prior is deleted, ours over a prior puts the prior back with its kind, one that is not ours is left, and nothing but that one value is named', () => {
   const o = withHome()
   const del = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
-  assert.deepEqual(userUnit({ ...o, run: del }).disable(), { code: 0, out: '', err: '', task: 'absent', runKey: 'removed' })
+  assert.deepEqual(userUnit({ ...o, run: del }).remove(), { code: 0, out: '', err: '', task: 'absent', runKey: 'removed' })
   assert.equal(del.reg.value, null)
   assert.deepEqual(del.calls.filter((c) => c[0] === 'reg' && c[1] === 'delete'), [['reg', 'delete', RUN_PATH, '/v', 'asight-collector', '/f']])
   const prior = { kind: 'REG_EXPAND_SZ', value: '%ProgramFiles%\\Tools\\mine.exe' }

@@ -87,8 +87,8 @@ async function recorded(dir, where, fn) {
 
 // 4.6 §引擎 5: the engine checks an upstream with Node's roots + NODE_EXTRA_CA_CERTS of the daemon's own environment. A daemon
 // nothing but a login entry starts has no login shell's exports, so the entry carries this shell's value — an absolute path
-// outside asight's home only; anything else is said, never dropped silently (review 3 #1, D38). The daemon a `--no-autostart`
-// run starts by hand is handed exactly the same (ensureDaemonUp → unit.start): without it capture breaks behind a corporate
+// outside asight's home only; anything else is said, never dropped silently (review 3 #1, D38). A daemon `on` starts directly
+// (the fallback when the OS mechanism refuses) is handed exactly the same (ensureDaemonUp → unit.start): without it capture breaks behind a corporate
 // MITM relay and nothing says so (review 2026-10-18).
 export function daemonEnv(env, dir) {
   const v = env.NODE_EXTRA_CA_CERTS
@@ -115,6 +115,22 @@ const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
 const shortLine = (l) => String(l).split(' # ')[0].trim()
 const RESTART_REASONS = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1)
 const DAEMON_CMD = 'asight daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
+/** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
+const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\asight\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.asight.collector'}` : 'the systemd user unit asight-collector.service')
+
+/** 附录 C.1: the code of the refusal below (one place, mirrored by src/cli/json.mjs's ERROR_CODES). */
+export const AUTOSTART_MISSING = 'autostart-missing'
+/** D61 / 1.6 §3.3: the login entry is `install`'s and `on` never touches it, so an `on` whose entry is not registered would leave the agents'
+ *  rewritten configs pointing at doors that nobody opens after the next login (without it nothing starts after a reboot and no agent can reach a door).
+ *  One question per OS, asked of the arch's own autostart unit (`registered()`: launchctl print · schtasks /Query · systemctl --user is-enabled),
+ *  so no call site has a platform branch. Anything but a proven `present` — not registered, registered but switched off, or an answer that could not be read — refuses.
+ *  → the reason (one English sentence ending in the fix command), or null when the entry is there (or there is no autostart on this platform). */
+export function autostartBlock({ unit, osName }) {
+  if (!unit) return null
+  const q = unit.registered()
+  if (q.state === 'present') return null
+  return `${entryWords(osName, unit)} ${q.state === 'absent' ? 'is not registered' : q.state === 'disabled' ? 'is registered but switched off' : `could not be read (${q.err || 'no reason given'})`}: the collector would not start at the next login, and the agents asight points at its doors would all fail to connect. Nothing was changed. Run: asight install`
+}
 
 /** What the receipt says an entry did, in one phrase — the same words in the dry run (from the preview) and in the real run (from the entry). */
 export function changeText(e, prior = null) {
@@ -323,12 +339,12 @@ async function writeInstallSteps({ dir, home, plan, m, osName, harnesses, freePo
   if (unit) {
     const text = unit.text(daemon.env)
     const j = judgeOwned({ manifest: m, file: unit.path, planned: sha256(Buffer.from(text)), fs })
-    if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', phase: 'on', file: unit.path, data: text, mode: 0o644, exclusive: j.action === 'write', now: now(), fs }); written.unit = j.action }
+    if (j.action !== 'skip-intact') { guard(); writeOwnedFile({ dir, manifest: m, role: 'unit', phase: 'install', file: unit.path, data: text, mode: 0o644, exclusive: j.action === 'write', now: now(), fs }); written.unit = j.action }
     // D46: the daemon's own log sinks the unit names — directory 0700, two files 0600, made here at unit-write time and listed in the manifest like
     // every file asight owns; NEVER rewritten afterwards (a later on only lists what the manifest does not know yet, so no log line is ever truncated)
     if (typeof unit.ensureLogs === 'function') { guard(); unit.ensureLogs() }
     if (typeof unit.logFiles === 'function') for (const lf of unit.logFiles()) {
-      if (!(m.files || []).some((x) => x.path === lf.path)) { writeOwnedFile({ dir, manifest: m, role: 'daemon-log', phase: 'on', file: lf.path, data: '', mode: 0o600, now: now(), fs }); written.files.push(lf.path) }
+      if (!(m.files || []).some((x) => x.path === lf.path)) { writeOwnedFile({ dir, manifest: m, role: 'daemon-log', phase: 'install', file: lf.path, data: '', mode: 0o600, now: now(), fs }); written.files.push(lf.path) }
     }
   }
   // D55: install's own record (before P10 the `on` that writes the certificates sets it): kept as it is once complete, so a second `on` saves nothing (D54)
@@ -365,19 +381,13 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
     onPlan(plan)
     const m = openManifest({ dir, plan, now, fs })
     const { manifest, final, written } = await writeInstall({ dir, home, plan, m, osName: opts.osName, harnesses: opts.harnesses, freePort: opts.freePort || freeEnginePort, now, fs })
-    let unitFailed = null, unitEvent = null
-    if (opts.unit) {
-      const r = opts.unit.enable()
-      if (r.code === 0 && r.warn) final.notes.push(r.warn) // enable's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say)
-      if (r.code !== 0) {
-        // the flip checklist ③ (4.9 §4 末): an arch whose enable() carries its own failure record (the darwin LaunchAgent: `launchd-register-failed`, launchctl wording —
-        // launchd is the only autostart there, 4.9 §11) has THAT recorded verbatim, not the systemd-shaped remediation below replacing it.
-        if (r.event) { unitEvent = r.event; unitFailed = r.event.reason }
-        else unitFailed = `${opts.unit.path} is written but "systemctl --user enable --now" failed (${r.err || `exit ${r.code}`}); start the daemon with "${DAEMON_CMD}", or enable the unit once systemd --user runs`
-      }
-    }
     const put = noteRun({ dir, run, final, written, notes: final.notes, fs })
-    if (unitFailed) { final.notes.push(unitFailed); put(unitEvent || { event: EVENT.failure, where: 'install', code: CODE.unitNotEnabled, reason: unitFailed }) }
+    // D61: the login registration and the daemon, through the one seam every command uses — so Linux's install probes before it starts too
+    // (拉起不是重启, R8: a daemon someone started by hand is never started a second time), and no `--now` is issued blind.
+    if (opts.unit) {
+      const dmn = await ensureDaemonUp({ osName: opts.osName, dir, env: opts.env || process.env, fs, unit: opts.unit, register: true, reload: written.unit === 'rewrite', put, ...(opts.request ? { request: opts.request } : {}), ...(opts.socketPath ? { socketPath: opts.socketPath } : {}), ...(opts.sleep ? { pause: opts.sleep } : {}) })
+      for (const n of dmn.notes) if (!final.notes.includes(n)) final.notes.push(n)
+    }
     const counts = { entries: manifest.entries.length, files: manifest.files.filter((f) => f.role === 'trust-file').length, notes: final.notes.length }
     put({ event: EVENT.installNote, where: 'install', kind: 'result', outcome: 'installed', counts, reason: `installed: ${counts.entries} trust entr${counts.entries === 1 ? 'y' : 'ies'} and ${counts.files} trust file(s) written, ${counts.notes} note(s)` })
     return { already: false, manifest, plan: final }
@@ -389,15 +399,13 @@ export async function installCollector({ home = os.homedir(), ...opts } = {}) {
  *  `sleep`), so a test runs it in a sandbox HOME. Refuses root by throwing (R7); everything else is a receipt: `exit` 0 done · 1 not done or a problem ·
  *  2 not in a terminal without a yes (the plan is in the receipt, nothing was written).
  *    ids        harness code ids, or null for every one found   confirm(plan) → true | false | null (null: nobody can be asked)   onPlan(plan): print it
- *    unit       the autostart unit (arch/linux/unit.mjs userUnit), or null (no autostart on this platform)   autostart  false: no entry is written at all, `start` it this once (`--no-autostart`)
+ *    unit       the autostart unit (arch/linux/unit.mjs userUnit), or null (no autostart on this platform); `on` never writes or enables it (D61: it is install's) — it is handed in only to start the daemon when none answers
  *    request    the control socket's client (default: controlRequest at $XDG_RUNTIME_DIR/asight/collector.sock, or `socketPath`)
  *    arch       the arch, asked for the combined bundles' OS roots (planOn)   roots  overrides them
  *  → { receipt, manifest, plan, exit }. */
 export async function turnOn(opts = {}) {
-  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, autostart = true, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
+  const { home = os.homedir(), env = process.env, ids = null, osName, harnesses, scan, match, arch = null, roots = null, unit = null, freePort = freeEnginePort, onPlan = () => {}, confirm = null, dryRun = false, networkEdited = null, request = null, now = () => new Date(), fs = nodeFs, getuid, helperState = null, linger = null, lingerRead = null, socketPath = null, sleep: pause = sleep, user = null, lockWaitMs = OP_LOCK_WAIT_MS } = opts
   refuseRoot('on', getuid)
-  // `--no-autostart` (1.6 §3.3): no login entry is written at all, and the daemon is started this once (`unit.start()`) — so the writing side is handed no unit
-  const unitFile = autostart ? unit : null
   const dir = collectorHome(path.join(home, '.asight'))
   const stateF = path.join(dir, 'state.json')
   const username = (() => { try { return user || os.userInfo().username } catch { return String(env.USER || '') } })()
@@ -413,6 +421,10 @@ export async function turnOn(opts = {}) {
     if (h && h.ok === false) helperBlock = `the capability helper is missing or not the right version (${h.reason || 'not usable'}); nothing was changed. Run: sudo asight setup-helper`
   }
   if (helperBlock && !dryRun) return { receipt: unwritten({ ...fresh(), ok: false, notes: [helperBlock] }), manifest: null, plan: null, exit: 1 }
+  // D61 / 1.6 §3.3: the login entry is `install`'s, so an `on` with none would open doors that nobody opens after the next login
+  // (without the login registration, a reboot after `on` leaves every agent unusable). Asked here, before the first write; a `--dry-run` goes on and carries it in `blocked`.
+  const autostartBlk = dryRun ? null : autostartBlock({ unit, osName })
+  if (autostartBlk) return { receipt: unwritten({ ...fresh(), ok: false, notes: [autostartBlk], blocked: [{ what: 'asight on', reason: autostartBlk }], error: { code: AUTOSTART_MISSING, message: autostartBlk } }), manifest: null, plan: null, exit: 2 }
   // `lingerRead()` → { state, error? } (src/collector/arch/linux/redirector.mjs) says why when it cannot be read; `linger()` → true | false | null is the older form
   const lingerNow = () => { try {
     if (lingerRead) { const r = lingerRead(); return r.state === true || r.state === false ? { linger: r.state } : { linger: 'unknown', linger_reason: r.error || 'the linger state could not be read' } }
@@ -420,7 +432,7 @@ export async function turnOn(opts = {}) {
     return v === true || v === false ? { linger: v } : { linger: 'unknown', linger_reason: linger ? 'the linger state could not be read (/var/lib/systemd/linger)' : 'nothing reads it here' }
   } catch (e) { return { linger: 'unknown', linger_reason: String((e && e.message) || e) } } }
   return recorded(dir, 'install', async (run) => {
-    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: unitFile, fs, now })
+    const plan = await planOn({ home, env, ids, osName, harnesses, scan, match, arch, roots, unit: null, fs, now }) // D61: the login entry is `install`'s and `on` never writes it, so the writing side is handed no unit at all
     // D55⑥ / override #15: `on` never writes a certificate, so it never installs silently — no install record, no on (macOS / Windows: turnOnModel)
     // 附录 C.1: the refusal's code lives in `error`, the one place a client looks (never a top-level `code`)
     if (!isModelOs(osName) && !installComplete(plan._.prior)) { const message = 'certificates are not installed. Run: asight install'; return { receipt: unwritten({ ...fresh(), ok: false, error: { code: CODE.certNotInstalled, message }, notes: [message] }), manifest: plan._.prior, plan, exit: 1 } }
@@ -442,7 +454,10 @@ export async function turnOn(opts = {}) {
     // the proxy fields the user edited since the last `on` (1.6 §9.5): asked about like an extra file (R6); a routing that owns none has none
     const edited = networkEdited && plan.targets.length ? await networkEdited(plan.targets) : []
     if (edited.length) r.notes.push(...edited.map((e) => `you changed the proxy setting of ${e.harness}: ${e.where || 'the proxy field'} is now ${e.now ?? 'empty'} (asight left ${e.was ?? 'empty'} there); on takes that as the upstream and points the setting back at asight`))
-    if (dryRun) return { receipt: { ...r, dry_run: true, ok: !named, ...(helperBlock ? { blocked: helperBlock, notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real asight on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+    if (dryRun) {
+      const blk = autostartBlock({ unit, osName })
+      return { receipt: { ...r, dry_run: true, ok: !named, ...(blk ? { blocked: [{ what: 'asight on', reason: blk }], notes: [...r.notes, `${blk} (a real asight on stops there)`] } : {}), ...(helperBlock ? { blocked: [{ what: 'asight on', reason: helperBlock }], notes: [...r.notes, `${helperBlock.replace('nothing was changed. ', '')} (a real asight on stops there)`] } : {}) }, manifest: plan._.prior, plan, exit: named ? 1 : 0 }
+    }
     if (plan.writing || stateWrite || edited.length) onPlan({ ...plan, state: stateWrite ? stateF : null, edited })
     if (plan.first || plan.newPaths.length || edited.length) {
       const verdict = confirm ? await confirm(plan) : null
@@ -489,7 +504,7 @@ export async function turnOn(opts = {}) {
     const receipt = {
       ...r,
       changed: (written ? written.entries : []).map((e) => ({ path: e.path, change: changeText(e, e.prior_value), backup: e.backup ?? null })),
-      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned, ...(written.unit && unitFile ? [unitFile.path] : [])] : [])],
+      created: [...(plan._.prior ? [] : [manifestPath(dir)]), ...(stateWrite ? [stateF] : []), ...(standalone.written ? [standalone.path] : []), ...(written && written.caCreated ? plan._.ca ? [plan._.ca.key, plan._.ca.pem] : [] : []), ...(written ? [...written.files, ...written.owned] : [])],
       unchanged: written ? written.intact : [],
     }
     const finish = (outcome, reason) => {
@@ -505,13 +520,12 @@ export async function turnOn(opts = {}) {
 
     // ── the unit and the daemon: started when nothing answers, never started a second time (拉起不是重启, R8) ──
     const checked = (fn) => { try { fn() } catch (e) { if (!e.stopsRun) throw e; problems.push(e.message); halt = true } }
-    const d = await ensureDaemonUp({ osName, dir, env, fs, unit, autostart, reload: written.unit === 'rewrite', socketPath, request, pause, put, halted: () => { checked(() => guard()); return halt } })
+    const d = await ensureDaemonUp({ osName, dir, env, fs, unit, socketPath, request, pause, put, halted: () => { checked(() => guard()); return halt } })
     const { sock, ask, started, unitFailed } = d
     const up = d.up
     notes.push(...d.notes); problems.push(...d.problems); if (d.halt) halt = true
     const pid = readLockPid(dir, fs)
     receipt.daemon = { state: up ? 'running' : 'not-running', started, ...(pid ? { pid } : {}) }
-    receipt.unit = unitFile ? { path: unitFile.path, written: written.unit || false, autostart, enabled: autostart && !unitFailed } : null
     // the links last: the daemon attaches on this request, and answers with the state it reached
     if (up && !halt) checked(() => guard())
     if (up && !halt) {
@@ -547,9 +561,11 @@ const UNIT_NAME_HINT = 'asight-collector.service'
 // Second seam of the same incident (caught on a macOS test machine, 2026-10-11): on darwin / win32 control.json is written by the daemon AT ITS
 // FIRST START, so a FIRST install has no endpoint to resolve before the unit runs — resolving once up here kept sock null through the whole
 // poll and every first `on` ended "no daemon answers on null", exit 1, while the daemon was up and healthy. The probe re-resolves while
-// → { up, started, sock, ask, unitFailed, notes, problems, halt }: `halted()` is asked before the unit is touched and after each poll (R12: an `off` that
-// lands meanwhile stops the run); `put` records each failure; `reload`: the unit file was rewritten under a loaded unit.
-export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = null, autostart = true, reload = false, socketPath = null, request = null, pause = sleep, put = () => {}, halted = () => false }) {
+// → { up, started, sock, ask, unitFailed, notes, problems, halt }: `halted()` is asked before the daemon is touched and after each poll (R12: an `off` that
+// lands meanwhile stops the run); `put` records each failure. `register` (D61) is `install`'s arm: the login registration is made and the daemon started
+// (`unit.enable`, with `--now` only when nothing answers — 拉起不是重启, R8). Without it (`on`'s arm) the registration is NEVER touched: the daemon is
+// started through the OS mechanism install registered (`unit.startNow()`), and directly when that refuses (no systemd --user bus, a job that is not loaded).
+export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = null, register = false, reload = false, socketPath = null, request = null, pause = sleep, put = () => {}, halted = () => false }) {
   const resolveEndpoint = () => controlEndpointFor({ platform: osName, dir, env, fs })
   let endpoint = resolveEndpoint()
   let sock = socketPath || endpoint.socketPath
@@ -563,9 +579,6 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
     }
   }
   const notes = [], problems = []
-  // `--no-autostart` writes no login entry, and removes none either: one an earlier `on` installed still starts the daemon at every login, so the
-  // receipt says it is there and where (review 2026-10-18: it stayed and went unsaid). Said here, so both `on` arms carry it. `asight off` takes it out.
-  if (!autostart && unit && unit.path && fs.existsSync(unit.path)) notes.push(`an autostart entry an earlier "asight on" installed is still there (${unit.path}): --no-autostart adds none and removes none; it starts the collector at every login until "asight off"`)
   const was = await probe()
   let up = was.up, started = false, unitFailed = null, halt = false
   if (was.stuck) { problems.push(`a daemon holds the control socket but does not answer (${was.stuck}); run "asight off", then "asight on" (off stops a stuck daemon, 1.6 §1.4)`); halt = true }
@@ -573,14 +586,19 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
     if (halted()) halt = true
     else {
       if (reload && typeof unit.reload === 'function') unit.reload() // a unit file rewritten under a loaded unit
-      const rr = autostart ? unit.enable({ now: !was.up }) : (was.up ? null : unit.start(daemonEnv(env, dir))) // the direct start carries what the login entry's Environment= would carry
+      // `install` registers and starts (enable); `on` only starts, through the OS mechanism, and itself when that refuses — the reason said, never dropped (D38)
+      let rr = register ? unit.enable({ now: !was.up }) : (was.up ? null : unit.startNow())
+      if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
+        const direct = unit.start(daemonEnv(env, dir)) // the direct start carries what the login entry's Environment= would carry
+        if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); asight started it directly this run — the login entry starts it at the next login`); rr = direct }
+      }
       started = !was.up
-      if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // enable's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
+      if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // the arch's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
       if (rr && rr.code !== 0) {
         // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —
-        // launchd is the only autostart there, 4.9 §11); the systemd wording below is the answer of an arch that has none.
+        // launchd is the only autostart there, 4.9 §11); the wording below is the answer of an arch that has none.
         if (rr.event) { unitFailed = rr.event.reason; put(rr.event) }
-        else if (!autostart) { unitFailed = `the collector could not be started (${rr.err || `exit ${rr.code}`}); start it yourself: ${DAEMON_CMD}`; put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: unitFailed }) } // no login entry was written: there is nothing to enable, only this one start
+        else if (!register) { unitFailed = `the collector could not be started (${rr.err || `exit ${rr.code}`}); start it yourself: ${DAEMON_CMD}`; put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: unitFailed }) } // `on` touches no registration: there is nothing to enable, only this start
         else {
           // the start question in the platform's own words: win32's unit is a scheduled task (\asight\collector, autostart.mjs), darwin's a LaunchAgent,
           // and the systemd wording is Linux's alone — a Windows user told to run `systemctl --user status` has been handed nothing (tested 2026-10-11)
@@ -595,15 +613,13 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       } else if (!was.up) {
         for (let i = 0; i < 60 && !up && !halt; i++) { up = (await probe()).up; if (!up) { await pause(250); if (halted()) halt = true } } // an off that lands while the daemon starts is seen within a poll, not after 15 s (R12)
         if (!up && !halt) {
-          const errLog = typeof unit.logFiles === 'function' ? (unit.logFiles()[1] || {}).path : null
-          const where = !autostart && errLog ? errLog // nothing was enabled: there is no unit, task or LaunchAgent to query — the daemon's own log is where its reason is (D46)
-            : osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.asight.collector' : osName === 'win32' ? 'schtasks /Query /TN \\asight\\collector (and "asight status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
+          const where = osName === 'darwin' ? 'launchctl print gui/$(id -u)/com.asight.collector' : osName === 'win32' ? 'schtasks /Query /TN \\asight\\collector (and "asight status" for the daemon)' : `systemctl --user status ${UNIT_NAME_HINT}` // the autostart's own status question, in the platform's words (4.9 §4: the LaunchAgent, not a systemd unit; 4.8 §7: the task, not a unit)
           const why = `the collector was started${sock ? ` but does not answer on ${sock}` : ', but it does not answer yet'}; look at "${where}" and the capture health on the board` // never "answers on null": an endpoint that is not known yet is not named (1.6 §1.1)
           problems.push(why); put({ event: EVENT.failure, where: 'start', code: 'start-failed', reason: why })
         }
       }
     }
-  } else if (!up) notes.push(`no autostart entry and no collector running: start it with ${DAEMON_CMD} (it follows what is turned on)${was.why ? `; ${was.why}` : ''}`)
+  } else if (!up) notes.push(`no login entry and no collector running: start it with ${DAEMON_CMD} (it follows what is turned on)${was.why ? `; ${was.why}` : ''}`)
   return { up, started: started && up, sock, ask, unitFailed, notes, problems, halt }
 }
 function readLockPid(dir, fs) { try { return JSON.parse(fs.readFileSync(path.join(dir, 'lock'), 'utf8')).pid ?? null } catch { return null } }

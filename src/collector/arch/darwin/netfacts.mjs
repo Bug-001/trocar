@@ -5,19 +5,21 @@
 //     `proxy.env`, and which of the harness's API hosts its NO_PROXY covers: nothing else of it is kept), when — and, the row 4.9 §10 names for darwin, whether it runs as root: elevation is euid/root, answered by the
 //     process table's `uid` (darwin's `ps` has no `euid` keyword; `uid` is the column the darwin line's judgment uses, 4.9 §1's procinfo, and a sudo-launched agent is uid 0 in it as surely as euid), or by one
 //     `ps -o uid=` ask for a process only the daemon listed — another user's, the one case that makes elevation matter, for the table `status` read holds this user's processes alone;
-//   · the listeners of this user (`lsof -nP -iTCP -sTCP:LISTEN`: every row lsof prints is a process's fd, so each names its owner — the exe is the process table's path, else the name lsof gave; a listener of ANOTHER
-//     user is not in the answer at all, for without privilege lsof cannot open its fd table, so a port with no row reads as nobody listening to this user — measured on the dev machine: 47 listeners machine-wide,
-//     26 in lsof's answer. linux's `owner-unreadable` row is kept for the shared listener shape the topology reads, not as a shape lsof's answer has);
+//   · the listeners of this machine (`netstat -anv -p tcp`, the kernel's own TCP table — the LISTEN rows, whose owner column is `process:pid`: the exe is the process table's path, else the 16-character name the
+//     kernel kept. It is one read of the pcblist sysctl (~10 ms), and it names EVERY listener, another user's too — where the `lsof -nP -iTCP -sTCP:LISTEN` this replaced cost 310 ms and showed only the
+//     processes whose fd table it could open (measured on the dev machine: 47 listeners machine-wide, 26 in lsof's answer). A LISTEN row whose owner column holds no pid keeps linux's `owner-unreadable` shape, the
+//     one the topology reads);
 //   · the OS proxy and PAC: `scutil --proxy` through the same reader the upstream rule uses (./upstream.mjs `readSystemProxy`, 4.9 §2.2 — one reader of one fact, so the topology cannot disagree with the kernel's
 //     dial): the `HTTPS*` keys are the hop an HTTPS request takes (the `HTTP*` ones alone send HTTPS direct, WinINET's own rule, kept apart there as here), `ProxyAutoConfigEnable` is PAC's own flag — the g row of
 //     1.6 §9.7's shape table, with none of Windows' OPEN 27 type ambiguity;
 // Routing is `proxy` (D43: macOS has proxy mode only). The per-form half — each form's certificate and proxy, the doors as `forwarder.forms` — is the collector
 // model's one OS-neutral reader (core/proxymode/status-facts.mjs, through model-backends.mjs modelNetForms); this file only supplies what darwin reads: the
-// process table, lsof's listeners and scutil's proxy. Another process's environment is never read here (4.9 §5.4): the start-time proxy of a running process is
+// process table, netstat's listeners and scutil's proxy. Another process's environment is never read here (4.9 §5.4): the start-time proxy of a running process is
 // a driver-mode fact (Linux), and the door's per-process answer is the daemon's.
 // Imports no harness: the descriptors arrive in `ctx.harnesses` (their `proxy.env` names the keys of a process's environment that count) and their data in `settings` and in `status`.
 import { execTool } from '../../../off/exec.mjs'
 import { readSystemProxy, chainSystemProxy } from './upstream.mjs'
+import { ownerColumn, ownerAt } from './socktable.mjs'
 import { dirsOf } from './policy.mjs'
 import { modelNetForms } from '../model-backends.mjs'
 
@@ -37,20 +39,31 @@ export function processName(argv, exe, harness) {
 /** The last x.y.z in the path of the program (…/claude/versions/2.1.291, …/releases/0.160.1/bin/codex), or null. */
 export const versionOf = (exe) => { const all = [...String(exe || '').matchAll(/\d+\.\d+\.\d+/g)]; return all.length ? all[all.length - 1][0] : null }
 
-/** `lsof -nP -iTCP -sTCP:LISTEN` → [{ addr, port, pid?, comm? }]. A line is `mihomo  777 user  7u  IPv4  0x…  0t0  TCP 127.0.0.1:7890 (LISTEN)`: the owner is the first two columns (COMMAND PID — lsof's row is a
- *  process's fd, so the answer always has one), `*` is the all-interfaces address and `[::1]` an IPv6 one (brackets stripped, as the linux twin strips ss's); a line it does not know is skipped. A LISTEN line that
- *  holds the socket and no owner is not a shape lsof's answer has on macOS — it is parsed all the same, for the shared listener shape the topology reads (the linux twin's `owner-unreadable` row). */
-export function parseLsof(text) {
+/** The LISTEN rows of `netstat -anv -p tcp` → [{ addr, port, pid?, comm? }], or null when the table has no owner column (it cannot be read: the caller says so, never
+ *  an empty list). A row is `tcp4 0 0 127.0.0.1.7890 *.* LISTEN … mihomo:777 …`: the local end is `<address>.<port>` (`*` the all-interfaces address, `::1` an IPv6
+ *  one — no brackets here, where lsof wrote them), and the owner is the `process:pid` column, read by the one reader of that column (./socktable.mjs ownerAt: the
+ *  name may hold spaces, so it ends at its `:<pid>`). A row whose owner column holds no pid is parsed all the same, for the shared listener shape the topology
+ *  reads (the linux twin's `owner-unreadable` row). */
+export function parseListeners(text) {
+  const lines = String(text).split('\n')
+  const header = lines.find((l) => /^Proto\s/.test(l))
+  const col = header ? ownerColumn(header) : null
+  if (!col) return null
   const out = []
-  for (const line of String(text).split('\n')) {
-    const m = /^(?:(\S+)\s+(\d+)\s+)?(\S+)\s+(\S+)\s+IPv[46]\s+(\S+)\s+(\S+)\s+TCP\s+(\S+):(\d+)\s+\(LISTEN\)$/.exec(line.trim())
-    if (m) out.push({ addr: m[7].replace(/^\[|\]$/g, ''), port: Number(m[8]), ...(m[2] ? { pid: Number(m[2]), comm: m[1] } : {}) })
+  for (const line of lines) {
+    const t = line.trim().split(/\s+/)
+    if (!/^tcp[46]$/.test(t[0] || '') || t[5] !== 'LISTEN') continue
+    const dot = String(t[3]).lastIndexOf('.')
+    const port = Number(String(t[3]).slice(dot + 1))
+    if (dot < 1 || !Number.isInteger(port)) continue
+    const { pid, name } = ownerAt(t, col)
+    out.push({ addr: String(t[3]).slice(0, dot), port, ...(pid != null && pid > 0 ? { pid, ...(name ? { comm: name } : {}) } : {}) })
   }
   return out
 }
 
 /**
- * macOS's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of `lsof`, `scutil` and the euid's `ps`:
+ * macOS's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of `netstat`, `scutil` and the euid's `ps`:
  * spawnSync-shaped; execTool refuses a real one under npm test — `procRoot` is accepted by the shared call and unused, there is no /proc to point at on darwin, the process table arrives in `status`).
  * → { routing: 'proxy', listeners, procs: { <h>: [proc] }, systemProxy, forms, forwarder, unknowns }.
  */
@@ -85,9 +98,11 @@ export async function darwinNetFacts(ctx, deps = {}) {
     })
   }
   let listeners = []
-  const lsof = run('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN'])
-  if (lsof.code === 0) listeners = parseLsof(lsof.out).map((l) => { const t = table.find((x) => x.p && x.p.pid === l.pid); return l.pid ? { addr: l.addr, port: l.port, pid: l.pid, exe: (t && t.p.exe) || l.comm } : { addr: l.addr, port: l.port, unknown: { reason: 'owner-unreadable', detail: "lsof names no process for it — not a shape its answer has on macOS; a listener of another user is not in the answer at all, for without privilege lsof cannot open its fd table" } } })
-  else unknowns.push({ fact: 'listeners', reason: REASON(lsof), detail: `lsof -nP -iTCP -sTCP:LISTEN: ${lsof.err || `exit ${lsof.code}`}` })
+  const ns = run('netstat', ['-anv', '-p', 'tcp'])
+  const rowsOf = ns.code === 0 ? parseListeners(ns.out) : null
+  if (rowsOf) listeners = rowsOf.map((l) => { const t = table.find((x) => x.p && x.p.pid === l.pid); return l.pid ? { addr: l.addr, port: l.port, pid: l.pid, exe: (t && t.p.exe) || l.comm } : { addr: l.addr, port: l.port, unknown: { reason: 'owner-unreadable', detail: "netstat's owner column holds no pid for it — the socket is held by no process the kernel names" } } })
+  else if (ns.code === 0) unknowns.push({ fact: 'listeners', reason: 'unparseable', detail: 'netstat -anv -p tcp: the table has no owner column (process:pid or pid)' })
+  else unknowns.push({ fact: 'listeners', reason: REASON(ns), detail: `netstat -anv -p tcp: ${ns.err || `exit ${ns.code}`}` })
   let systemProxy = null
   const scutil = await readSystemProxy({ exec, env })
   if (scutil.ok) {

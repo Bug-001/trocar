@@ -12,7 +12,7 @@ export function osStubs() {
   sh('launchctl', 'case "$1" in list) echo "Could not find service" >&2; exit 113;; getenv) exit 0;; *) exit 1;; esac')
   sh('security', 'echo "could not be found" >&2; exit 44')
   sh('ps', 'exit 0') // the flip (4.9 §4): the NEW status on a Mac reads the process table too — an empty one is the nothing-running world
-  sh('lsof', 'exit 0') // and the darwin network facts (4.9 §9's table): no listener, no default route's device, no utun — the plain world
+  sh('netstat', 'exit 0') // and the darwin network facts (4.9 §9's table): the kernel TCP table printing nothing is the no-listener world (no route read: D49)
   sh('route', 'exit 1')
   sh('ifconfig', 'exit 0')
   sh('scutil', 'exit 1')

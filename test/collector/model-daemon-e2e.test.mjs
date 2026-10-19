@@ -51,7 +51,7 @@ for (const platform of ['darwin', 'win32']) {
         const io = fakeIo()
         const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text() + (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : ''))
-        assert.deepEqual(box.enabled, [true], 'the unit was enabled and started once')
+        assert.deepEqual([box.enabled, box.startedNow], [[], [true]], 'D61: `on` started the daemon through the OS mechanism once (startNow) and never touched the registration (no enable)')
         const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
         const st = await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status' })
         const [g, port] = Object.entries(st.doors).find(([k]) => k.startsWith('codex:')) || []

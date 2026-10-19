@@ -1,4 +1,4 @@
-// backend.test.mjs — the macOS OS-backend readers of T13 over injected runners (no real security / lsof / ps / procenv / plutil):
+// backend.test.mjs — the macOS OS-backend readers of T13 over injected runners (no real security / ps / procenv / plutil):
 // the user root store's argv (CM7: the login keychain, no `-p`), the proc readers envOf / cwdOf / parentOf with their pid +
 // start-time cache, and the managed-preference reader with the platform facts.
 import test from 'node:test'
@@ -8,7 +8,7 @@ import path from 'node:path'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 import { custodyStub } from '../../../helpers/custody-stub.mjs'
 import { userRootStore } from '../../../../src/collector/arch/darwin/root-store.mjs'
-import { envOf, cwdOf, parentOf } from '../../../../src/collector/arch/darwin/procinfo.mjs'
+import { envOf, cwdOf, metaOf, parentOf } from '../../../../src/collector/arch/darwin/procinfo.mjs'
 import { policyReader, platformFacts, dirsOf } from '../../../../src/collector/arch/darwin/policy.mjs'
 
 /** A runner that answers by the command's basename and logs every call. */
@@ -66,15 +66,17 @@ test('proc readers: envOf asks procenv for the named variables only, keeps nothi
   assert.equal(failing.calls.length, 2, 'a failed read is not cached')
 })
 
-test('proc readers: cwdOf reads lsof -a -p <pid> -d cwd -Fn in the UTF-8 locale; cached', () => {
-  const { run, calls } = runner({ lsof: { out: 'p42\nfcwd\nn/Users/me/my project\n' } })
+test('proc readers: cwdOf and metaOf are the helper\'s `:cwd` / `:exe` — asked together, cached by pid + start, and a fact it cannot read is null', () => {
+  const { run, calls } = runner({ procenv: { out: ':exe=/Users/me/bin/claude\0:cwd=/Users/me/my project\0' } })
   const cache = new Map()
-  assert.equal(cwdOf(42, { exec: run, cache, startedAt: 5 }), '/Users/me/my project')
-  assert.equal(cwdOf(42, { exec: run, cache, startedAt: 5 }), '/Users/me/my project')
-  assert.equal(calls.length, 1)
-  assert.deepEqual(calls[0].args, ['-a', '-p', '42', '-d', 'cwd', '-Fn'])
-  assert.equal(calls[0].env.LC_ALL, 'UTF-8')
-  assert.equal(cwdOf(43, { exec: runner({ lsof: { code: 1 } }).run, cache }), null)
+  const o = { exec: run, cache, startedAt: 5, procenvPath: '/pkg/native/procenv' }
+  assert.equal(cwdOf(42, o), '/Users/me/my project')
+  assert.deepEqual(metaOf(42, o), { exe: '/Users/me/bin/claude', cwd: '/Users/me/my project' })
+  assert.equal(calls.length, 1, 'the cwd and the exe come from ONE read, kept for the life of the process')
+  assert.deepEqual(calls[0].args, ['42', ':cwd', ':exe'], 'names an environment entry cannot have, so the helper answers the two facts and no variable')
+  assert.equal(calls[0].file, '/pkg/native/procenv')
+  assert.equal(cwdOf(43, { exec: runner({}).run, cache }), null, 'the helper cannot read it (another user\'s): not known, never guessed')
+  assert.deepEqual(metaOf(44, { exec: runner({ procenv: { out: ':exe=/bin/x\0' } }).run, cache, startedAt: 5 }), { exe: '/bin/x', cwd: null }, 'a fact absent from the answer is null')
 })
 
 test('proc readers: parentOf → the parent pid and the PARENT\'s start time (the key of the next step up); cached', () => {

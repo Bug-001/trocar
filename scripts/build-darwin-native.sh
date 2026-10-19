@@ -3,19 +3,27 @@
 # Builds src/collector/arch/darwin/native/{asight-sign-helper,procenv} as universal (arm64 + x86_64, macOS 13+) binaries and
 # rewrites native/pins.json with their sha256. Commit the binaries and pins.json together: `npm pack` copies them and nothing
 # rebuilds at pack time (a rebuild changes the helper's code hash, and the login keychain then asks for the password again, R3-M2).
+# Name the pieces to build to leave the others' bytes — and their hashes — alone: `build-darwin-native.sh procenv` rebuilds procenv
+# and keeps the sign helper the keychain already trusts. No argument builds both.
 # Needs the Command Line Tools (swiftc, clang, lipo). Never runs what it builds.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 dir="$here/src/collector/arch/darwin/native"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+want=" ${*:-asight-sign-helper procenv} "
+build() { case "$want" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+if build asight-sign-helper; then
 for arch in arm64 x86_64; do
   mkdir "$tmp/$arch" # the output's name is the ad-hoc signature's identifier: keep it the installed name
   swiftc -O -target "$arch-apple-macos13" -o "$tmp/$arch/asight-sign-helper" "$dir/sign-helper.swift"
 done
 lipo -create -output "$dir/asight-sign-helper" "$tmp/arm64/asight-sign-helper" "$tmp/x86_64/asight-sign-helper"
+fi
+if build procenv; then
 clang -arch arm64 -arch x86_64 -mmacosx-version-min=13 -O2 -Wall -o "$dir/procenv" "$dir/procenv.c"
+fi
 chmod 755 "$dir/asight-sign-helper" "$dir/procenv"
 
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
