@@ -215,166 +215,166 @@ export const TAG_UNKNOWN = 'unknown'
 
 // the 变化线 (2.3 §变化线)
 export const STRUCT_EST_WORD = 'structural estimate'
-export const changeLine = (k, causeW) => (k != null ? `从这里起和第 ${k} 步不同 · ${causeW}` : `从这里起有变化 · ${causeW}`)
-export const CHANGE_COMPACT = '对话被压缩:以下整段重写'
-export const CHANGE_COMPACT_INFERRED = '推测'
-export const CHANGE_REF_HINT = '结构参考,非真实边界'
-export const changeFirstTip = (headW) => `第一个不同的块:${headW}`
-export const removedList = (n, k2) => `第 ${k2} 步里有、这一步没有的块:${n} 个`
+export const changeLine = (k, causeW) => (k != null ? `Differs from step ${k} from here · ${causeW}` : `Changes from here · ${causeW}`)
+export const CHANGE_COMPACT = 'Compaction: everything below was rewritten'
+export const CHANGE_COMPACT_INFERRED = 'inferred'
+export const CHANGE_REF_HINT = 'A structural reference, not the real boundary'
+export const changeFirstTip = (headW) => `First differing block: ${headW}`
+export const removedList = (n, k2) => `Blocks in step ${k2} that are not in this step: ${n}`
 
 // the 代替态 (1.4 ⑤–⑧, words 2.3)
-export const PAGED_TITLE = '这一步的内容不在当前这一页'
-export const PAGED_FULL = '原始记录完整在盘上'
-export const PAGED_PARTIAL = '采到的那部分在盘上'
-export const LOAD_THIS_STEP = '载入这一步'
-export const RETRY = '重试'
-export const UNPARSED_TITLE = '这一步的请求解析不出来,没有上下文可以显示'
-export const UNPARSED_KEEP = '原始记录原样在盘上'
-export const NO_REQUEST = '这一步没有采集到请求'
-export const LOADING = '载入中…'
+export const PAGED_TITLE = 'This step\'s content is not on the current page'
+export const PAGED_FULL = 'The full raw record is on disk'
+export const PAGED_PARTIAL = 'The captured part is on disk'
+export const LOAD_THIS_STEP = 'Load this step'
+export const RETRY = 'Retry'
+export const UNPARSED_TITLE = 'This step\'s request could not be parsed; there is no context to show'
+export const UNPARSED_KEEP = 'The raw record is on disk, unchanged'
+export const NO_REQUEST = 'No request was captured for this step'
+export const LOADING = 'Loading…'
 
 // ── the session info popover (1.2 §信息弹出层, the rows in order) ────────────────────────────────────────────────────
-export const COST_LINE = '≈ 花费'
-export const BUCKETS = Object.freeze({ main: '主对话', sub: '子 agent', bg: '后台调用' })
-export const COST_FROM = '起'
-export const noPriceCalls = (n) => `${n} 次模型调用没有单价`
-export const NO_ANY_PRICE = '没有这些模型的单价'
-export const HIT_LINE = '主对话缓存命中'
-export const HIT_MAIN_ONLY = '只算主对话'
-export const HIT_UNMEASURED = '算不出(没有返回用量)'
-export const BREAKS_LINE = (n) => `缓存断开 ${n} 处(${L.STRUCT_EST})`
-export const BREAK_COST_LINE = '≈ 多花'
-export const BREAK_COST_SOME = (n) => `其中 ${n} 处算不出`
-export const WORST_AT = (n) => `最贵在第 ${n} 步 ›`
-export const FAILED_LINE = (n) => `调用失败 ${n} 次 ›`
-export const COMPACTION_LINE = (n) => `压缩 ${n} 次`
-export const COUNTS_LINE = { sub: (n) => `子 agent ${n} 个`, bg: (n) => `后台调用 ${n} 次`, probe: (n) => `token 计数 ${n} 次` }
-export const START_LINE = '开始'
-export const DURATION_WORD = '时长'
-export const SESSION_ID = '会话 id'
-export const COPY = '复制'
-export const TRUNCATED_NOTE = (shown) => `只算了显示的 ${shown} 次调用`
-export const MODEL_CALLS = (n) => `模型调用 ${n} 次`
+export const COST_LINE = '≈ cost'
+export const BUCKETS = Object.freeze({ main: 'main thread', sub: 'sub-agents', bg: 'background calls' })
+export const COST_FROM = 'from'
+export const noPriceCalls = (n) => `${n} model calls have no unit price`
+export const NO_ANY_PRICE = 'No unit price for these models'
+export const HIT_LINE = 'Main thread cache hit'
+export const HIT_MAIN_ONLY = 'main thread only'
+export const HIT_UNMEASURED = 'cannot be computed (no usage returned)'
+export const BREAKS_LINE = (n) => `${n} cache breaks (${L.STRUCT_EST})`
+export const BREAK_COST_LINE = '≈ extra cost'
+export const BREAK_COST_SOME = (n) => `${n} of them cannot be computed`
+export const WORST_AT = (n) => `Most expensive at step ${n} ›`
+export const FAILED_LINE = (n) => `${n} failed calls ›`
+export const COMPACTION_LINE = (n) => `${n} compactions`
+export const COUNTS_LINE = { sub: (n) => `${n} sub-agents`, bg: (n) => `${n} background calls`, probe: (n) => `${n} token counts` }
+export const START_LINE = 'Started'
+export const DURATION_WORD = 'Duration'
+export const SESSION_ID = 'Session id'
+export const COPY = 'Copy'
+export const TRUNCATED_NOTE = (shown) => `Counts only the ${shown} calls shown`
+export const MODEL_CALLS = (n) => `${n} model calls`
 
 // ── the trace (1.3): the problem lane, the cache band's four states, the view switch, the overlay rows ───────────────
-export const PROBLEM_ROW = '问题'
-export const problemPager = (k, n) => (n ? `问题 ${k == null ? '—' : k}/${n}` : '问题')
-export const PROBLEM_PREV = '上一个问题'
-export const PROBLEM_NEXT = '下一个问题'
-export const breakFlagTip = (n, costW, struct) => `第 ${n} 步缓存断开 · ${costW}` + (struct ? ` · ${L.STRUCT_EST}` : '')
-export const BREAK_COST_NONE = '多花算不出'
-export const failTip = (n, msg) => `第 ${n} 步调用失败${msg ? `(${msg})` : ''}`
-export const COMPACT_WORD = '压缩'
-export const compactTip = (n, inferred) => `第 ${n} 步对话被压缩:历史被重写,整个上下文重新写入${inferred ? '(推测)' : ''}`
+export const PROBLEM_ROW = 'Problems'
+export const problemPager = (k, n) => (n ? `Problem ${k == null ? '—' : k}/${n}` : 'Problems')
+export const PROBLEM_PREV = 'Previous problem'
+export const PROBLEM_NEXT = 'Next problem'
+export const breakFlagTip = (n, costW, struct) => `Cache break at step ${n} · ${costW}` + (struct ? ` · ${L.STRUCT_EST}` : '')
+export const BREAK_COST_NONE = 'extra cost cannot be computed'
+export const failTip = (n, msg) => `Call failed at step ${n}${msg ? ` (${msg})` : ''}`
+export const COMPACT_WORD = 'compaction'
+export const compactTip = (n, inferred) => `Compaction at step ${n}: the history was rewritten and the whole context written again${inferred ? ' (inferred)' : ''}`
 // the cache band's four hover shapes, in the predicate's own order
-export const CACHE_CELL_FAILED = '缓存 失败'
-export const CACHE_CELL_NONE = '缓存 —'
-export const CACHE_CELL_NONE_TIP = '没有返回用量,算不出(不是 0%)'
-export const cacheCellPct = (p) => `缓存 ${p}%`
-export const cacheCellUnknown = (p) => `缓存 ${p}%?`
-export const CACHE_LEGEND = '高 = 命中,中 = 部分,低 = 没到,虚线 = 没有用量'
-export const CACHE_LEGEND_UNK = '含义不确定'
-export const VIEW_CTX = '上下文大小'
-export const VIEW_COST = '花费'
-export const COMP_LEGEND = '颜色 = 内容类型(按内容大小估算)'
-export const COST_LEGEND = '柱高 = 这一步的估价(用量 × 单价)· 斜纹 = 算不出'
-export const showSteps = (a, b) => `显示第 ${a}–${b} 步`
-export const noMainLane = (laneW) => `这个会话没有主对话,时间轴按${laneW}的调用排`
-export const ONLY_MAIN = '这个会话只有主对话'
+export const CACHE_CELL_FAILED = 'cache failed'
+export const CACHE_CELL_NONE = 'cache —'
+export const CACHE_CELL_NONE_TIP = 'No usage returned, so this cannot be computed (not 0%)'
+export const cacheCellPct = (p) => `cache ${p}%`
+export const cacheCellUnknown = (p) => `cache ${p}%?`
+export const CACHE_LEGEND = 'high = hit, middle = partial, low = none, dashed = no usage'
+export const CACHE_LEGEND_UNK = 'meaning not certain'
+export const VIEW_CTX = 'Context size'
+export const VIEW_COST = 'Cost'
+export const COMP_LEGEND = 'colour = content type (estimated from content size)'
+export const COST_LEGEND = 'bar height = estimated cost of the step (usage × unit price) · hatched = cannot be computed'
+export const showSteps = (a, b) => `Showing steps ${a}–${b}`
+export const noMainLane = (laneW) => `This session has no main thread; the timeline follows the ${laneW} calls`
+export const ONLY_MAIN = 'This session has only the main thread'
 export const peakCtx = (v) => `${v} tok` // kf() bakes the number; the peak is the main lane's real total_input
-export const askScaleTip = (k, preview) => `第 ${k} 次提问` + (preview ? ` ${preview}` : '')
+export const askScaleTip = (k, preview) => `Prompt ${k}` + (preview ? ` ${preview}` : '')
 // the overlay rows' names (2.1 / 1.3): the counts are the full truth, never the drawn ticks
-export const SUBAGENT_ROW = (n) => `子 agent ${n} 个`
-export const BG_ROW = (n) => `后台调用 ${n} 次`
-export const TC_ROW = (n) => `token 计数 ${n} 次`
-export const laneTimes = (word, n) => `${word} ${n} 次`
-export const callsWord = (n) => `调用 ${n} 次`
-export const TC_SAMPLED_TIP = (m, n) => `画了 ${m} 根,共 ${n} 次;点哪里都打开最近的一次`
-export const TC_NO_SIZE = (j) => `其中 ${j} 次没有返回大小,没有画`
-export const FLAGGED_WORD = '标记了问题' // S13 landed: flagged === true draws a mark on the collapsed 后台调用 row
-export const REVIEW_TIP = (k) => `按时间推断:这次调用发出时,主对话已到第 ${k} 步`
+export const SUBAGENT_ROW = (n) => `${n} sub-agents`
+export const BG_ROW = (n) => `${n} background calls`
+export const TC_ROW = (n) => `${n} token counts`
+export const laneTimes = (word, n) => `${word} · ${n} calls`
+export const callsWord = (n) => `${n} calls`
+export const TC_SAMPLED_TIP = (m, n) => `${m} of ${n} drawn; clicking anywhere opens the nearest one`
+export const TC_NO_SIZE = (j) => `${j} of them returned no size and are not drawn`
+export const FLAGGED_WORD = 'flagged a problem' // S13 landed: flagged === true draws a mark on the collapsed 后台调用 row
+export const REVIEW_TIP = (k) => `Inferred from timing: when this call was sent, the main thread was at step ${k}`
 
 // ── the outline (2.5) ────────────────────────────────────────────────────────────────────────────────────────────────
-export const OUTLINE_HEAD = '这一步的输入'
-export const GRP_TOOLS = '工具定义'
-export const GRP_SYS = '系统提示'
-export const GRP_ASK = '提问'
-export const NO_TOOLS = '这一步没有工具定义'
-export const NO_SYS = '这一步没有系统提示'
-export const NO_ASK = '这一步的上下文里没有认得出的提问'
+export const OUTLINE_HEAD = 'Input of this step'
+export const GRP_TOOLS = 'Tool definitions'
+export const GRP_SYS = 'System prompt'
+export const GRP_ASK = 'Prompts'
+export const NO_TOOLS = 'No tool definitions in this step'
+export const NO_SYS = 'No system prompt in this step'
+export const NO_ASK = 'No recognisable prompt in the context of this step'
 export const MCP_WORD = 'MCP'
-export const askSince = (n) => `第 ${n} 步起`
-export const QUERY_GUESS_TIP = '这条是不是人写的提问,是推测的'
-export const UNPARSED_LINE = '请求体解析不出来'
+export const askSince = (n) => `from step ${n}`
+export const QUERY_GUESS_TIP = 'Whether a person wrote this prompt is inferred'
+export const UNPARSED_LINE = 'The request body could not be parsed'
 
 // ── the resource explorer (2.4) ──────────────────────────────────────────────────────────────────────────────────────
-export const RES_SECTION = '资源 · 整个会话'
+export const RES_SECTION = 'Resources · whole session'
 export const RES_GRP = Object.freeze({
-  file: '读过的文件', seen: '只见到名字', load: '载入的说明文件', cap: '工具与能力', dl: '目录与链接', comp: '上下文压缩', other: '其他资源',
+  file: 'Files read', seen: 'Names seen only', load: 'Instruction files loaded', cap: 'Tools and capabilities', dl: 'Directories and links', comp: 'Compaction', other: 'Other resources',
 })
-export const OTHERS_ROW = (n) => `其他 ${n} 项`
-// the lifecycle words take the composed step word (「第 5 步」, or 「第 5 次调用」 when the session has no main lane)
-export const lifeIn = (at) => `${at}读入`
-export const LIFE_IN_CTX = '在上下文中'
-export const lifeEvicted = (at) => `${at}压缩时移出`
-export const lifeLoaded = (at) => `${at}载入`
-export const lifeSeen = (at) => `${at}出现`
-export const seenTip = (k, at) => `见过 ${k} 次 · 第一次在${at}`
-export const SEEN_GROUP_TIP = '从工具结果和文字里按路径的样子挑出来的名字,可能漏,也可能多;agent 没有打开过它们,这里没有内容;最多列 200 个'
-export const SHOW_ALL = (n) => `显示全部 ${n} 个`
-export const HIDE_ALL = '收起'
-export const NO_LEDGER = '这个 agent 的记录里没有资源信息'
-export const NO_RESOURCES = '没有资源记录(这个 agent 可能不提供)'
-export const DIR_WORD = '目录'
-export const LINK_WORD = '链接'
-export const compactRow = (at, from, to) => `${at} · 压缩:${from} → ${to} 条消息`
-export const summarizeRow = (at, out) => `${at} · 摘要(输出 ${out} token)`
-export const ONLY_CALLS = '只看到调用'
-export const ONLY_CALLS_TIP = '看到了这次调用,驻留的正文不在采集到的上下文里'
-export const viewNameTip = (name) => `看 ${name} 的内容`
-export const jumpStepTip = (at) => `跳到${at}`
+export const OTHERS_ROW = (n) => `${n} more`
+// the lifecycle words take the composed step word (「step 5」, or 「call 5」 when the session has no main lane)
+export const lifeIn = (at) => `read at ${at}`
+export const LIFE_IN_CTX = 'in context'
+export const lifeEvicted = (at) => `removed by compaction at ${at}`
+export const lifeLoaded = (at) => `loaded at ${at}`
+export const lifeSeen = (at) => `seen at ${at}`
+export const seenTip = (k, at) => `Seen ${k} times · first at ${at}`
+export const SEEN_GROUP_TIP = 'Names picked from tool results and text because they look like paths; some may be missed and some may be wrong. The agent never opened them, so there is no content here. At most 200 are listed'
+export const SHOW_ALL = (n) => `Show all ${n}`
+export const HIDE_ALL = 'Show fewer'
+export const NO_LEDGER = 'This agent\'s records have no resource information'
+export const NO_RESOURCES = 'No resource records (this agent may not provide them)'
+export const DIR_WORD = 'directory'
+export const LINK_WORD = 'link'
+export const compactRow = (at, from, to) => `${at} · compaction: ${from} → ${to} messages`
+export const summarizeRow = (at, out) => `${at} · summary (${out} output tokens)`
+export const ONLY_CALLS = 'call seen only'
+export const ONLY_CALLS_TIP = 'The call was seen; the resident content is not in the captured context'
+export const viewNameTip = (name) => `View the content of ${name}`
+export const jumpStepTip = (at) => `Jump to ${at}`
 // the capability's two tiers, by 2.3's proof rule
-export const CAP_VERBATIM = '工具定义逐字采集了,在上下文窗里展开工具块看完整 schema'
-export const CAP_METADATA = '只有元数据:名字、参数个数、描述长度;不是逐字的 schema'
+export const CAP_VERBATIM = 'Tool definitions were captured verbatim; expand the tool block in the context window to see the full schema'
+export const CAP_METADATA = 'Metadata only: name, parameter count, description length; not the verbatim schema'
 // the pinned panel's honest fallbacks
-export const RES_NOT_FOUND = '在这一步的上下文里找不到唯一对应的块:它可能更早读入,或已被移出。点这一行的步号,跳到它读入的那一步。'
-export const RES_NOT_LOADED = '这一步的正文还没载入,那一页到了就会显示。'
+export const RES_NOT_FOUND = 'No single matching block in the context of this step: it may have been read earlier or already removed. Click the step number on this row to jump to the step that read it.'
+export const RES_NOT_LOADED = 'The body of this step has not loaded yet; it shows once that page arrives.'
 
 // ── the raw panel (2.6 §A) ───────────────────────────────────────────────────────────────────────────────────────────
-export const RAW_WORD = '原始数据'
-export const RAW_HEAD = (n) => `原始数据 · 第 ${n} 步`
-export const REPLY_WORD = '回复'
-export const toolCallRow = (name) => `调用工具 ${name}`
-export const stopReasonRow = (v) => `停止原因 ${v}`
-export const REPLY_PARSED = '解析后的回复'
-export const REPLY_PARTIAL = '回复没采全'
-export const RAW_REPLY = '原始回复'
-export const rawReplyRow = (chars) => `原始回复 · ${chars} 字符 ›`
-export const rawReplyNth = (k) => `原始回复 第 ${k} 条`
-export const NO_RAW_REPLY = '原始回复没有可回源的字节'
-export const REQ_PARAMS = '请求参数'
-export const NO_PARAMS = '这条记录没有可回源的请求参数'
-export const UNPARSED_PARAMS = '请求体解析不出来,列不出参数'
-export const EXTRA_MSGS = (n) => `这次调用里客户端后来又发的消息 · ${n} 条 ›`
-export const TRANSPORT_HTTP = '传输 HTTP'
-export const TRANSPORT_WS = '传输 WebSocket'
-export const VENDOR_WORD = '厂商'
-export const BACK_TO_RAW = '回到原始数据'
-export const FAILED_NO_REPLY = '这次调用失败,没有回复'
-export const TECH_DETAILS = '技术细节'
+export const RAW_WORD = 'Raw'
+export const RAW_HEAD = (n) => `Raw · step ${n}`
+export const REPLY_WORD = 'Reply'
+export const toolCallRow = (name) => `Tool call ${name}`
+export const stopReasonRow = (v) => `Stop reason ${v}`
+export const REPLY_PARSED = 'parsed reply'
+export const REPLY_PARTIAL = 'reply incomplete'
+export const RAW_REPLY = 'Raw reply'
+export const rawReplyRow = (chars) => `Raw reply · ${chars} characters ›`
+export const rawReplyNth = (k) => `Raw reply ${k}`
+export const NO_RAW_REPLY = 'The raw reply has no bytes to read back'
+export const REQ_PARAMS = 'Request parameters'
+export const NO_PARAMS = 'This record has no request parameters to read back'
+export const UNPARSED_PARAMS = 'The request body could not be parsed, so no parameters can be listed'
+export const EXTRA_MSGS = (n) => `Messages the client sent later in this call · ${n} ›`
+export const TRANSPORT_HTTP = 'Transport HTTP'
+export const TRANSPORT_WS = 'Transport WebSocket'
+export const VENDOR_WORD = 'Vendor'
+export const BACK_TO_RAW = 'Back to raw'
+export const FAILED_NO_REPLY = 'This call failed; there is no reply'
+export const TECH_DETAILS = 'Technical details'
 
 // ── the call drawer (2.6 §B) ────────────────────────────────────────────────────────────────────────────────────────
-export const DRAWER_CLOSE = '关闭'
-export const backToStep = (n) => `← 回到第 ${n} 步`
-export const inputBlocks = (n) => `输入 · ${n} 个块`
-export const NO_INPUT = '这次调用没有输入块'
-export const INPUT_NOT_PAGE = '这次调用的输入不在当前这一页'
-export const VERBATIM_FOLD = (n, unit) => `逐字 · ${n} ${unit} · 点开`
-export const foldAt = (word, n, unit) => `${word} · ${n} ${unit} · 点开`
+export const DRAWER_CLOSE = 'Close'
+export const backToStep = (n) => `← Back to step ${n}`
+export const inputBlocks = (n) => `Input · ${n} blocks`
+export const NO_INPUT = 'This call has no input blocks'
+export const INPUT_NOT_PAGE = 'The input of this call is not on the current page'
+export const VERBATIM_FOLD = (n, unit) => `verbatim · ${n} ${unit} · open`
+export const foldAt = (word, n, unit) => `${word} · ${n} ${unit} · open`
 export const TC_INPUT = Object.freeze({
-  full: '请求体不在会话里,到 流量 页按「token 计数」类别逐条看(保存级别:全部)',
-  log: '请求体不在会话里,到 流量 页按「token 计数」类别逐条看(保存级别:只记日志)',
-  old: '请求体不在会话里,到 流量 页按「token 计数」类别逐条看(保存级别:较早采集的记录,只存了长度)',
+  full: 'The request body is not in the session; see each one on the traffic page under the "token-count" class (retention: full)',
+  log: 'The request body is not in the session; see each one on the traffic page under the "token-count" class (retention: log only)',
+  old: 'The request body is not in the session; see each one on the traffic page under the "token-count" class (retention: an older capture, length only)',
 })
-export const TC_MEASURED = (n) => `量出来 ${n} token`
-export const OPAQUE_ROW = '不透明 · 线上只有签名,没有明文'
+export const TC_MEASURED = (n) => `Measured ${n} tokens`
+export const OPAQUE_ROW = 'opaque — only a signature on the wire, no plaintext'
