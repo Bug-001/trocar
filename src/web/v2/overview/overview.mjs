@@ -8,12 +8,12 @@
 // coming back reads at once. All reads are GET; the page holds no button but the window links, the 技术细节 disclosures
 // and the read-failure 重试 (invariant 1).
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router, toast}.
-import { COMMANDS } from '../labels/capture.mjs'
+import { COMMANDS, ERR_WHERE } from '../labels/capture.mjs'
 import { esc, fmtWhen, relTime, bytes, usd } from '../core/fmt.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { harnessKey, harnessName, harnessIcon, UNIDENTIFIED } from '../core/chips.mjs'
-import { captureVerdict, capHealthPatch, CAPH_MS } from '../core/capture-verdict.mjs'
+import { captureVerdict, capHealthPatch, agentVerdicts, failureSentence, AGENT_TIER, CAPH_MS } from '../core/capture-verdict.mjs'
 import { priceMatch, costOf } from '../core/metrics.mjs'
 import { infoButton, techDetailsHtml } from '../core/ui.mjs'
 import { L } from '../labels/common.mjs'
@@ -40,13 +40,11 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : null
 const parseTs = (t) => { const x = t == null ? NaN : Date.parse(t); return Number.isNaN(x) ? null : x }
 const agentKey = (a) => (a == null || a === '') ? null : harnessKey(a)
 const when = (t, now) => { const x = parseTs(t); return x == null ? '—' : relTime(x, now) }
-// a condition's sentence: the daemon's own reason first (it says what to do), then the kind word, then the kind verbatim
-const condWhy = (c) => (c && (c.reason || c.text)) || W.KIND_WORD[c && c.kind] || (c && c.kind) || ''
 // one harness chip for the rows that carry one (icon + name; an unknown id keeps its dashed box and 未识别的 agent)
 const chipHtml = (id) => `${harnessIcon(id)}<span class="ovnm">${esc(harnessName(id))}</span>`
 
 // ── 要处理的事 · the items model (pure) ──────────────────────────────────────────────────────────────────────────────
-// s = the read state: {caph:{data,okAt,err,ok}, projects, retention, pricing, stats, usageAll, traffic — each {data,ok,err,absent}}.
+// s = the read state: {caph:{data,okAt,err,ok}, sessions, classes, pricing, stats, usageAll, traffic — each {data,ok,err}}.
 // → {rows:[{cls,key,chip,subject,text,extra,href,tip}], more:{cls→n}, partial:[names]}. A source that failed its last
 // read keeps its last good data (items still computed from it) and names itself in `partial`; the RENDERER draws
 // 「没有要处理的事」 only when partial is empty, every source answered and nothing triggered — never as a stand-in for
@@ -54,150 +52,89 @@ const chipHtml = (id) => `${harnessIcon(id)}<span class="ovnm">${esc(harnessName
 export function overviewItems(s, now) {
   const rows = [], more = {}
   const H = s.caph && s.caph.data && !s.caph.data.unreadable ? s.caph.data : null
-  const unreadable = s.caph && s.caph.data && s.caph.data.unreadable ? String(s.caph.data.unreadable) : null
   const push = (cls, key, o) => rows.push({ cls, key, ...o })
+  const capped = (cls, items) => { for (const it of items.slice(0, 5)) push(cls, it.key, it); if (items.length > 5) more[cls] = items.length - 5 }
 
-  // ── O1 · one agent the collector still has a condition about; the net-blocked ones go before the whole table ─────
-  const conds = H ? list(H.collector && H.collector.conditions) : []
-  const asOf = H && H.collector && H.collector.conditions_as_of ? H.collector.conditions_as_of : null
-  const byAgent = new Map() // harness → {net, why, k}: one item per agent, the first cause + 「等 k 处」
-  const note = (id, netHit, why) => {
-    const k = agentKey(id) ?? '-'
-    const row = byAgent.get(k) || { blocked: false, why: null, k: 0 }
-    row.k++
-    if (!row.why) { row.blocked = netHit; row.why = why }
-    byAgent.set(k, row)
-  }
-  for (const c of conds) {
-    if (c == null || c.agent == null) continue
-    const netHit = c.code === W.NET_BLOCKED_CODE
-    note(c.agent, netHit, netHit ? W.NET_BLOCKED(c.reason || '') : condWhy(c))
-  }
-  // [待 #45] a harness the answer says is NOT captured while the operator wants it on — field presence decides, never a version
-  const top = H && H.netenv && H.netenv.topology && typeof H.netenv.topology === 'object' ? H.netenv.topology : null
-  const want = H && H.collector && H.collector.switch && H.collector.switch.harnesses ? H.collector.switch.harnesses : null
-  if (top && want) for (const [id, v] of Object.entries(top)) {
-    if (v && v.captured === false && want[id] && want[id].desired === 'on') note(id, false, W.NOT_CAPTURED)
-  }
-  const asOfTail = asOf ? ` ${W.AS_OF_TAIL(fmtWhen(parseTs(asOf), now))}` : ''
-  const o1 = [...byAgent.entries()].map(([h, r]) => ({
-    h, blocked: r.blocked, href: `#/capture?h=${encodeURIComponent(h)}`,
-    text: W.AGENT_ITEM(harnessName(h), r.why) + (r.k > 1 ? W.ETC_K(r.k - 1) : '') + (r.blocked ? '' : asOfTail),
-  }))
-  for (const it of o1.filter((x) => x.blocked)) push('O1', `net:${it.h}`, { chip: it.h, text: it.text, href: it.href })
-  for (const it of o1.filter((x) => !x.blocked)) push('O1', it.h, { chip: it.h, text: it.text, href: it.href })
-  if (o1.length > 5) more.O1 = o1.length - 5
-
-  // ── O1′ · a condition about the capture service itself ──────────────
-  for (const c of conds.filter((c) => c && c.agent == null))
-    push('O1p', (c && c.kind) || 'condition', { subject: W.SVC_ITEM(condWhy(c)), href: '#/capture' })
-
-  // ── O2 · the collector is down or unreadable (an unknown born of manifest_error is O4's alone) ──
-  if (unreadable) push('O2', 'unreadable', { text: captureVerdict(s.caph.data).text, href: '#/capture' })
-  else if (H) {
-    const cv = captureVerdict(H)
-    const manifestUnknown = H.collector && H.collector.manifest_error && H.collector.summary && H.collector.summary.state === 'unknown'
-    // an unrecognized state is also something to look at (the verdict words it, the 采集 page explains); `failing` is not
-    // here: its failure groups are O3's rows, and the capture card words the summary either way
-    if (['not-running', 'not-responding', 'unknown', 'unrecognized'].includes(cv.state) && !manifestUnknown)
-      push('O2', 'collector', { text: cv.text, href: '#/capture' })
-  }
-
-  // ── O3 · failure groups of the last 24 h; the sentence is the group's own reason, the key rides in the hover ─────
-  const groups = []
+  // ── O1 · an agent with a problem, worded as its 采集 page row (agentVerdicts); the net-blocked ones lead the table ──
   if (H) {
-    for (const g of list(H.collector && H.collector.failures)) groups.push({ g, part: 'collector' })
-    for (const g of list(H.raw && H.raw.failures)) groups.push({ g, part: 'raw' })
+    const o1 = agentVerdicts(H).filter((r) => r.tier <= AGENT_TIER.problem).sort((a, b) => a.tier - b.tier)
+      .map((r) => ({ key: r.harness, chip: r.harness, href: `#/capture?h=${encodeURIComponent(r.harness)}`, text: W.AGENT_ITEM(harnessName(r.harness), r.text) }))
+    capped('O1', o1)
+    // ── O1′ · problems that hang on no harness: critical[] without one, the agent name list, the certificate ──────
+    for (const c of list(H.critical)) if (c && c.harness == null) push('O1p', `c:${c.kind}`, { subject: W.SVC_ITEM(c.reason || W.KIND_WORD[c.kind] || c.kind || ''), href: '#/capture' })
+    for (const p of list(H.agent_list && H.agent_list.problems)) push('O1p', 'agent-list', { subject: W.SVC_ITEM(String((p && (p.reason || p.code)) ?? p)), href: '#/capture' })
+    const ca = Object.values(H.cert || {}).find((x) => x && x.code === 'ca-invalid')
+    if (ca) push('O1p', 'cert', { subject: W.SVC_ITEM(ca.reason || W.KIND_WORD['ca-invalid']), href: '#/capture' })
   }
-  const o3 = groups.map(({ g, part }) => {
-    const a = agentKey(g.last && g.last.agent)
-    const why = (g.last && (g.last.reason || g.last.code)) || g.key
-    if (part === 'raw') return { key: g.key, lastTs: g.last_ts, text: `${W.RAW_FAILURES} · ${why} · ${W.FAIL_TIMES(g.count)} · ${when(g.last_ts, now)}`, href: '#/capture/log', tip: `group ${g.key}` }
+
+  // ── O2 · the capture service is down, not answering, not known, or `status` could not be read ──────────────────
+  const cv = captureVerdict(s.caph && s.caph.data, { now })
+  if (['unreadable', 'not-running', 'not-responding', 'unknown', 'unrecognized'].includes(cv.state)) push('O2', 'collector', { text: cv.text, href: '#/capture' })
+
+  // ── O3 · problem-level failure groups of the last 24 h, newest first; the sentence is the capture log's own ──────
+  if (H) capped('O3', list(H.failures && H.failures.groups).filter((g) => g && g.level === 'problem').map((g) => {
+    const a = agentKey(g.harness), f = failureSentence(g)
     return {
-      key: g.key, lastTs: g.last_ts, chip: a ?? undefined,
-      subject: a != null ? null : W.SVC_SUBJECT,
-      text: `${W.FAILURES} · ${why} · ${W.FAIL_TIMES(g.count)} · ${when(g.last_ts, now)}`,
-      href: a != null ? `#/capture?h=${encodeURIComponent(a)}` : '#/capture/log', tip: `group ${g.key}`,
+      key: `${g.where}/${g.code}/${g.harness ?? ''}`, chip: a ?? undefined, subject: a != null ? null : W.SVC_SUBJECT,
+      text: `${W.FAILURES} · ${f.unknown ? `${g.where ?? '—'}/${g.code ?? '—'} ${g.reason ?? ''}`.trim() : f.text} · ${W.FAIL_TIMES(g.count)} · ${when(g.last_ts, now)}`,
+      href: a != null ? `#/capture?h=${encodeURIComponent(a)}` : '#/capture/log', tip: [g.level, g.where, g.code].filter(Boolean).join(' · '),
     }
-  }).sort((x, y) => (parseTs(y.lastTs) ?? 0) - (parseTs(x.lastTs) ?? 0)) // newest failure first
-  for (const it of o3.slice(0, 5)) push('O3', it.key, it)
-  if (o3.length > 5) more.O3 = o3.length - 5
+  }))
 
-  // ── O4 · the last install / uninstall left notes, failed, or the manifest cannot be read ─────────────────────────
-  if (H && H.collector && H.collector.manifest_error) push('O4', 'manifest', { text: W.MANIFEST_ERROR, href: '#/capture/log' })
-  const inst = H && H.collector ? H.collector.install : null
-  if (inst) {
-    for (const [ls, notesW, failW, tag] of [[list(inst.install), W.INSTALL_NOTES, W.INSTALL_FAILED, 'i'], [list(inst.uninstall), W.UNINSTALL_NOTES, W.UNINSTALL_FAILED, 'u']]) {
-      const notes = ls.filter((r) => r && r.kind !== 'result' && r.kind !== 'prior-value').length
-      if (notes > 0) push('O4', `notes:${tag}`, { text: notesW(notes), href: '#/capture/log' })
-      if (ls.some((r) => r && r.kind === 'result' && r.outcome === 'failed')) push('O4', `fail:${tag}`, { text: failW, href: '#/capture/log' })
-    }
+  // ── O4 / O5 · the last install did not finish, left items, or its record cannot be read ─────────────────────────
+  if (H) {
+    if (list(H.errors).some((e) => e && e.where === ERR_WHERE.manifest)) push('O4', 'manifest', { text: W.MANIFEST_ERROR, href: '#/capture/log' })
+    const inst = H.install || {}, n = list(inst.pending).length, unfinished = inst.state != null && inst.state !== 'complete'
+    if (unfinished && n === 0) push('O4', 'unfinished', { text: W.INSTALL_UNFINISHED, href: '#/capture/log' })
+    if (n > 0) push('O5', 'pending', { text: (H.health && H.health.state === 'residue' ? W.RESIDUE_LEFT : unfinished ? W.RESIDUE_UNFINISHED : W.INSTALL_PENDING)(n), href: '#/capture' })
   }
 
-  // ── O5 · residue an uninstall could not undo, or a crashed install left ──────────────────────────────────────────
-  const res = H ? list(H.collector && H.collector.residue) : []
-  if (res.length) push('O5', 'residue', {
-    text: (res.every((r) => r && r.result === 'install did not finish') ? W.RESIDUE_UNFINISHED : W.RESIDUE_LEFT)(res.length), href: '#/capture',
-  })
-
-  // ── O6 · capture files this board could not read whole (the session library caption's own count, 1.8) ────────────
-  const P = s.projects && s.projects.data
-  if (P && P.source) {
-    const seen = new Set()
-    let n = 0
-    for (const e of list(P.source.errors)) { const k = e && e.file; if (k != null && !seen.has(k)) { seen.add(k); n++ } }
-    for (const e of list(P.source.skipped)) {
-      if (!e || e.attention !== true) continue
-      const k = `${e.root || ''}/${e.name}`
-      if (!seen.has(k)) { seen.add(k); n++ }
-    }
-    if (n > 0) push('O6', 'files', { text: W.FILES_NOT_READ(n), href: '#/settings/storage' })
-  }
+  // ── O6 · capture files the library could not read whole: the sessions document's errors[] (1.8's same count) ──────
+  const nErr = list(s.sessions && s.sessions.data && s.sessions.data.errors).length
+  if (nErr > 0) push('O6', 'files', { text: W.FILES_NOT_READ(nErr), href: '#/settings/storage' })
 
   // ── O8 · models in use that no price row matches (window=all, independent of the stats window) ──────────────────
-  const U = s.usageAll && s.usageAll.data
-  const price = s.pricing && s.pricing.data && s.pricing.data.pricing ? s.pricing.data.pricing : null
-  if (U && Array.isArray(U.rows) && price) {
+  const U = s.usageAll && s.usageAll.data && s.usageAll.data.usage
+  const price = priceTable(s.pricing && s.pricing.data)
+  if (U && price) {
     const miss = unpricedModels(U.rows, price)
     if (miss.n > 0) push('O8', 'unpriced', { text: W.UNPRICED(miss.n), extra: miss.names, href: '#/settings/prices' })
   }
 
-  // ── O9 · a host an agent connected to for the first time, by what reached the store (window=24h; a store younger
-  // than 24 h says nothing — a new install is not news) ────────────────────────────────────────────────────────────────
+  // ── O9 · a host an agent connected to for the first time (traffic ?since=24h; first_seen and harness_since are the whole
+  // index's): a harness first seen less than 24 h ago says nothing — a new install is not news ─────────────────────────
   const T = s.traffic && s.traffic.data
-  if (T && Array.isArray(T.rows)) {
+  if (T) {
     const since = T.harness_since || {}
-    const o9 = T.rows.filter((r) => {
-      if (!r || r.host == null) return false
-      const fs = parseTs(r.first_seen), hs = parseTs(since[harnessKey(r.harness)])
-      return fs != null && hs != null && now - fs < DAY && now - hs >= DAY
-    }).sort((a, b) => (parseTs(b.first_seen) ?? 0) - (parseTs(a.first_seen) ?? 0))
-    for (const r of o9.slice(0, 5)) push('O9', `${r.harness} ${r.host}`, {
-      chip: agentKey(r.harness) ?? undefined,
-      text: `${W.NEW_HOST(harnessName(r.harness), r.host)}(${W.BY_STATS})`,
+    capped('O9', list(T.hosts).filter((r) => {
+      const fs = parseTs(r && r.first_seen), hs = parseTs(since[r && r.harness])
+      return r && r.host != null && fs != null && hs != null && now - fs < DAY && now - hs >= DAY
+    }).sort((a, b) => parseTs(b.first_seen) - parseTs(a.first_seen)).map((r) => ({
+      key: `${r.harness} ${r.host}`, chip: agentKey(r.harness) ?? undefined,
+      text: `${W.NEW_HOST(harnessName(harnessKey(r.harness)), r.host)} (${W.BY_STATS})`,
       href: `#/traffic/host/${encodeURIComponent(harnessKey(r.harness))}/${encodeURIComponent(r.host)}`,
-    })
-    if (o9.length > 5) more.O9 = o9.length - 5
+    })))
   }
 
-  // the sources whose LAST read failed (an absent endpoint is not a failure — it is not there at all)
   const partial = []
-  const failed = (slot) => slot && slot.ok === false && !slot.absent
-  if (failed(s.caph)) partial.push(W.SRC_NAME.health)
-  for (const [slot, name] of [[s.projects, W.SRC_NAME.projects], [s.retention, W.SRC_NAME.retention], [s.pricing, W.SRC_NAME.pricing], [s.usageAll, W.SRC_NAME.usage], [s.traffic, W.SRC_NAME.traffic]])
-    if (failed(slot)) partial.push(name)
+  if (s.caph && s.caph.ok === false) partial.push(W.SRC_NAME.health)
+  for (const k of ['sessions', 'pricing', 'usageAll', 'traffic']) if (s[k] && s[k].ok === false) partial.push(W.SRC_NAME[k])
   return { rows, more, partial }
 }
 
-// the models whose calls had usage but whose model no price row matches — one per model name (S5 rows; '' is 没有模型名)
-export function unpricedModels(rows, priceTable) {
-  const miss = new Map()
-  for (const r of list(rows)) {
-    const metered = (r.calls || 0) - (r.failed || 0) - (r.no_usage || 0)
-    if (metered <= 0) continue
-    if (!priceMatch(priceTable, r.model)) miss.set(r.model == null || r.model === '' ? '' : String(r.model), true)
-  }
-  const names = [...miss.keys()].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a < b ? -1 : 1))
+// the /api/pricing document's models[] as the table core/metrics.mjs prices with ({model: [input, output, cache_write, cache_read]})
+export function priceTable(doc) {
+  if (!doc || !Array.isArray(doc.models)) return null
+  return Object.fromEntries(doc.models.filter((m) => m && m.model).map((m) => [m.model, [m.input, m.output, m.cache_write, m.cache_read]]))
+}
+const usageOfRow = (r) => ({ fresh: r.input, out: r.output, create: r.cache_write, read: r.cache_read })
+const metered = (r) => (r.calls || 0) - (r.failed || 0) - (r.no_usage || 0)
+
+// the models whose calls had usage but whose model no price row matches — one per model name ('' is 没有模型名)
+export function unpricedModels(rows, table) {
+  const miss = new Set()
+  for (const r of list(rows)) if (metered(r) > 0 && !priceMatch(table, r.model)) miss.add(r.model == null || r.model === '' ? '' : String(r.model))
+  const names = [...miss].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a < b ? -1 : 1))
   return { n: names.length, names: names.slice(0, 3) }
 }
 
@@ -361,22 +298,19 @@ const itemHtml = (it) =>
   `<span class="ovtx">${esc(it.text)}${it.extra ? ` <span class="ovmono">${esc(it.extra.map((m) => m === '' ? W.NO_MODEL_NAME : m).join(' · '))}</span>` : ''}</span>` +
   `<span class="go" aria-hidden="true">›</span></a>`
 
+const MORE_HREF = { O3: '#/capture/log', O9: '#/traffic' }
 export function itemsCardHtml(s, now) {
   const items = overviewItems(s, now)
   const v = captureVerdict(s.caph.data, { okAt: s.caph.okAt, err: s.caph.err, now })
-  const h = s.caph.data && !s.caph.data.unreadable ? s.caph.data : null
-  const hrs = (h && h.read && h.read.window_hours) || 24
   const staleLine = v.state === 'stale' && s.caph.okAt != null ? `<p class="ovsub">${esc(W.CAP_STALE_AS_OF(fmtWhen(s.caph.okAt, now)))}</p>` : ''
-  const allRead = s.caph.data != null && [s.projects, s.retention, s.pricing, s.usageAll, s.traffic].every((x) => x && x.data != null)
+  const allRead = s.caph.data != null && ['sessions', 'pricing', 'usageAll', 'traffic'].every((k) => s[k] && s[k].data != null)
   const body = items.rows.length
     ? items.rows.map(itemHtml).join('') +
-      Object.entries(items.more).map(([cls, n]) => {
-        const href = cls === 'O3' || cls === 'O4' ? '#/capture/log' : cls === 'O6' ? '#/settings/storage' : cls === 'O8' ? '#/settings/prices' : cls === 'O9' ? '#/traffic' : '#/capture'
-        return `<a class="ovitem more" href="${href}">${esc(W.MORE_OF(n))}</a>`
-      }).join('')
+      Object.entries(items.more).map(([cls, n]) => `<a class="ovitem more" href="${MORE_HREF[cls] || '#/capture'}">${esc(W.MORE_OF(n))}</a>`).join('')
     : (allRead && items.partial.length === 0 ? `<p class="ovempty">${esc(W.NO_ITEMS)}</p>` : '')
+  const since = s.caph.data && s.caph.data.failures ? s.caph.data.failures.since : null
   return `<section class="ovcard items" aria-label="${esc(W.CARD.items)}">` +
-    `<h2 class="ovh">${esc(W.CARD.items)}${infoButton({ label: 'Failure list window', title: W.FAIL_LIST, body: W.FAIL_WINDOW(hrs) })}</h2>` +
+    `<h2 class="ovh">${esc(W.CARD.items)}${infoButton({ label: 'Failure list window', title: W.FAIL_LIST, body: W.FAIL_WINDOW(since ? fmtWhen(parseTs(since), now) : null) })}</h2>` +
     (items.partial.length ? `<p class="ovsub warn">${esc(W.PARTIAL_NOTE(items.partial))}</p>` : '') + staleLine +
     `<div class="ovlist">${body}</div></section>`
 }
