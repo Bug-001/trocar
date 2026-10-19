@@ -25,3 +25,24 @@ test('sessionView(maxBytes) bounds the assembled view and sets truncated', () =>
   assert.equal(bounded.truncated.total, 3);
   assert.ok(bounded.truncated.shown < 3);
 });
+
+// one test per contract of the tail bound, through the product path (sessionView's records + truncated)
+const ids = (v) => v.records.map((r) => r.id);
+
+test('over budget: the newest calls are kept and the omission is disclosed', () => {
+  const v = sessionView([rec(1, 1000), rec(2, 1000), rec(3, 1000), rec(4, 1000)], 'S', { maxBytes: 2200 });
+  assert.deepEqual(ids(v), ['r3', 'r4'], 'the tail (most recent) is kept');
+  assert.deepEqual([v.truncated.shown, v.truncated.total], [2, 4]);
+  assert.ok(v.truncated.file_mb >= v.truncated.kept_mb);
+});
+
+test('a single call over budget is still shipped (never an empty view)', () => {
+  const v = sessionView([rec(1, 100), rec(2, 5_000_000)], 'S', { maxBytes: 1000 });
+  assert.deepEqual(ids(v), ['r2']);
+  assert.equal(v.truncated.shown, 1);
+});
+
+test('the bound counts LLM calls only (non-LLM records are not miscounted as calls)', () => {
+  const v = sessionView([rec(1, 10, false), rec(2, 10, false), rec(3, 1000), rec(4, 1000)], 'S', { maxBytes: 1100 });
+  assert.equal(v.truncated.total, 2);
+});
