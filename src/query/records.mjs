@@ -12,7 +12,7 @@ import { normalizeRecord } from '../raw/ingest.mjs';
 import { expandRequestBody } from '../dissect/request-body.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { R } from '../raw/format.mjs';
-import { segmentIndex } from './index-build.mjs';
+import { segmentIndex, segmentSource } from './index-build.mjs';
 import { asightHome } from '../paths.mjs';
 import { rowsKey, warmCache, fsTag } from './warm.mjs';
 
@@ -82,6 +82,11 @@ export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors 
   return [...got.out];
 }
 
+// A read that failed: `io` says the bytes could not be read (a transient EIO / EMFILE / a seal rename window),
+// as against a line whose content does not parse. It is NON-ENUMERABLE, like `_stream` above: `errors` ships as
+// [{where, reason}] (3.5:42), and only the usage fill looks at it (it never remembers a failed read).
+const failedRead = (where, reason, io) => Object.defineProperty({ where, reason }, 'io', { value: io });
+
 function readRows({ home, fs, rows }) {
   const errors = [];
   const bySegment = new Map();
@@ -92,11 +97,11 @@ function readRows({ home, fs, rows }) {
     const stream = path.basename(file);
     let read;
     try { read = file.endsWith('.sealed') ? sealedReader(file, fs) : plainReader(file, fs); }
-    catch (e) { for (const r of rs) errors.push({ where: r.id, reason: `cannot be read: ${String((e && e.message) || e)}` }); continue; }
+    catch (e) { for (const r of rs) errors.push(failedRead(r.id, `cannot be read: ${String((e && e.message) || e)}`, true)); continue; }
     try {
       for (const r of rs) {
         try { out.push(recordOf(read(r), segment, r.lineNo, stream)); }
-        catch (e) { errors.push({ where: r.id, reason: `cannot be read back: ${String((e && e.message) || e)}` }); }
+        catch (e) { errors.push(failedRead(r.id, `cannot be read back: ${String((e && e.message) || e)}`, !(e instanceof SyntaxError))); }
       }
     } finally { read.close(); }
   }
@@ -157,11 +162,10 @@ export async function readRecord({ home = asightHome(), fs = nodeFs, segment, li
   try { return expandRequestBody(JSON.parse(read({ ...row, lineNo }))); } finally { read.close(); }
 }
 
-/** The file a segment's bytes are in: the plaintext while it exists (4.2:30 明文为准), else the sealed copy. */
+/** The file a segment's bytes are in (segmentSource: the plaintext while it exists, 4.2:30 明文为准), or throws
+ *  when there is none — this path reads records back, so a missing segment is an error, not an empty index. */
 function segmentFile({ home, fs, segment }) {
-  const plain = path.join(home, 'raw', `${segment}.ndjson`);
-  const sealed = path.join(home, 'raw', `${segment}.sealed`);
-  const file = fs.existsSync(plain) ? plain : sealed;
+  const file = segmentSource(home, segment, fs);
   if (!fs.existsSync(file)) throw new Error(`there is no segment ${segment} in ${path.join(home, 'raw')}`);
   return file;
 }

@@ -14,6 +14,7 @@ import path from 'node:path';
 import { groupSessions, sessionView } from '../view/board.mjs';
 import { mapUsage } from '../model/schema.mjs';
 import { recordsAt } from './records.mjs';
+import { isModelCall } from './rows.mjs';
 import { indexDir, readIndex, tailMark, usability, storeIndex, segmentSource, plainMark, segStamp, warmSegmentIndex } from './index-build.mjs';
 import { warmCache, fsTag, statKey } from './warm.mjs';
 import { asightHome } from '../paths.mjs';
@@ -69,12 +70,14 @@ const problemLine = (p) => `${JSON.stringify({ p })}\n`;
 const markLine = (m) => `${JSON.stringify({ m, v: USAGE_V })}\n`;
 const lineOf = (id) => Number(String(id).split(':').pop());
 
-// One chunk's lines: its calls in line order, then the records it could not read (said again by every reader, D38).
+// One chunk's lines: its calls in line order, then the records whose CONTENT does not parse (said again by every
+// reader, D38). `io`: a read failed (EIO, a frame that will not decode) — such a pass stores nothing for this
+// segment, so a failed read is never remembered (3.5 §访问模式 acceptance #8, like recordsAt's warm cache).
 function chunkLines({ home, fs, rows }) {
   const errs = [];
   const facts = callFacts(recordsAt({ home, fs, rows, errors: errs, remember: false }));
   const lines = facts.map((f) => ({ ...f, line: lineOf(f.id) })).sort((a, b) => a.line - b.line).map(callLine);
-  return [...lines, ...errs.map(({ where, reason }) => problemLine({ where, reason }))];
+  return { io: errs.some((e) => e.io), lines: [...lines, ...errs.filter((e) => !e.io).map(({ where, reason }) => problemLine({ where, reason }))] };
 }
 // Rows → chunks of about USAGE_CHUNK_BYTES of model calls (at least one row each); the rows between calls ride along,
 // so the last chunk's mark covers every row given.
@@ -90,21 +93,42 @@ function chunksOf(rows, needed) {
   return out;
 }
 
+// The LAST problem a fill hit, per home: a fill runs after the answer was sent, so there is no document to put it in
+// — the next `overview` takes it and says it once (D38: a failure is never silent). Taken, it is cleared.
+const lastProblem = new Map();
+const problemKey = (home, fs) => `${fsTag(fs)}\n${home}`;
+const noteProblem = (home, fs, segment, reason) => lastProblem.set(problemKey(home, fs), { where: `usage/${segment}`, reason });
+/** takeFillProblem({home, fs}) → {where, reason} | null: what the last fill could not do, once. */
+export function takeFillProblem({ home = asightHome(), fs = nodeFs } = {}) {
+  const key = problemKey(home, fs);
+  const p = lastProblem.get(key) ?? null;
+  lastProblem.delete(key);
+  return p;
+}
+
 async function fillOne({ home, fs, segment }) {
   await tick();
   const rows = (await warmSegmentIndex({ home, segment, fs })).records.map((r) => ({ ...r, segment, lineNo: lineOf(r.id) }));
-  const needed = (r) => r.is_llm && !r.log_only;
+  const needed = isModelCall;
   const source = segmentSource(home, segment, fs);
   const file = usageFile(home, segment);
-  try { fs.mkdirSync(indexDir(home), { recursive: true, mode: 0o700 }); fs.accessSync(indexDir(home), nodeFs.constants.W_OK); } catch { return; }
+  try { fs.mkdirSync(indexDir(home), { recursive: true, mode: 0o700 }); fs.accessSync(indexDir(home), nodeFs.constants.W_OK); }
+  catch (e) { noteProblem(home, fs, segment, `index-unwritable: ${indexDir(home)}: ${String((e && e.message) || e)}`); return; }
   const problems = [];
+  const said = () => { for (const p of problems) noteProblem(home, fs, segment, `${p.code}: ${p.reason}`); };
   if (/\.sealed$/.test(source)) {
     const st = fs.statSync(source);
     if (usability(fs, source, readIndex(fs, file, USAGE_V)) === 'reuse') return;
     const lines = [];
-    for (const chunk of chunksOf(rows, needed)) { lines.push(...chunkLines({ home, fs, rows: chunk.filter(needed) })); await tick(); }
+    for (const chunk of chunksOf(rows, needed)) {
+      const got = chunkLines({ home, fs, rows: chunk.filter(needed) });
+      if (got.io) return; // a failed read is never remembered: the next warm `overview` reports it and this retries
+      lines.push(...got.lines);
+      await tick();
+    }
     lines.push(markLine({ size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, sealed: true }));
     storeIndex(fs, file, lines, problems, null);
+    said();
     return;
   }
   const t = tailMark(fs, file, USAGE_V);
@@ -116,8 +140,11 @@ async function fillOne({ home, fs, segment }) {
   if (!todo.some(needed) || todo.some((r) => r.offset == null)) return;
   for (const chunk of chunksOf(todo, needed)) {
     const last = chunk[chunk.length - 1];
-    const lines = [...chunkLines({ home, fs, rows: chunk.filter(needed) }), markLine(plainMark(fs, source, last.offset + last.stored_bytes + 1, last.lineNo))];
+    const got = chunkLines({ home, fs, rows: chunk.filter(needed) });
+    if (got.io) return; // as above: this chunk's mark is not written, so these lines stay missing and are read again
+    const lines = [...got.lines, markLine(plainMark(fs, source, last.offset + last.stored_bytes + 1, last.lineNo))];
     storeIndex(fs, file, lines, problems, at);
+    said();
     if (problems.some((p) => p.code === 'index-unwritable')) return;
     at = (at ?? 0) + Buffer.byteLength(lines.join(''));
     await tick();
@@ -134,7 +161,8 @@ export function fillUsage({ home = asightHome(), fs = nodeFs, segments = [] } = 
     const key = `${fsTag(fs)}\n${home}\n${segment}`;
     if (waiting.has(key)) continue;
     waiting.add(key);
-    chain = chain.then(() => { waiting.delete(key); return fillOne({ home, fs, segment }); }).catch(() => {});
+    chain = chain.then(() => { waiting.delete(key); return fillOne({ home, fs, segment }); })
+      .catch((e) => noteProblem(home, fs, segment, String((e && e.message) || e)));
   }
   return chain;
 }

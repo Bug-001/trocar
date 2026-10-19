@@ -37,7 +37,7 @@ const homeWith = async (lines) => {
   await segmentIndex({ home, segment: SEG, owner: true }) // the index the daemon keeps (4.2 §段索引)
   return home
 }
-const docOf = (home) => fs.readFileSync(usageFile(home, SEG), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+const docOf = (home, seg = SEG) => fs.readFileSync(usageFile(home, seg), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
 const callsOf = (home) => docOf(home).filter((o) => 'line' in o)
 const appendRaw = (home, lines) => fs.appendFileSync(path.join(home, 'raw', `${SEG}.ndjson`), lines.join('\n') + '\n')
 
@@ -192,6 +192,48 @@ test('3.5:93 deleting the sidecars only falls back to the budget; filled again, 
   assert.ok(doc2.usage.coverage.sessions_read < doc2.usage.coverage.sessions_in_window)
   const doc3 = await until(() => local(home, { warm: true }), complete)
   assert.deepEqual(doc3, doc1)
+})
+
+test('3.5:93 #8 a fill that could not READ the segment stores nothing; filled again it carries no problem line', async () => {
+  const home = await budgetWorld()
+  await segmentIndex({ home, segment: OLD }) // the index is the daemon's; only the fill's own read opens the sealed file
+  let fail = true
+  const bad = { ...fs, openSync: (p, ...a) => {
+    if (fail && /\.sealed$/.test(String(p))) throw Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' })
+    return fs.openSync(p, ...a)
+  } }
+  await fillUsage({ home, fs: bad, segments: [OLD] })
+  assert.equal(fs.existsSync(usageFile(home, OLD)), false, 'a failed read is never remembered')
+  fail = false
+  await fillUsage({ home, fs: bad, segments: [OLD] })
+  assert.ok(!docOf(home, OLD).some((o) => 'p' in o), 'the retry read the records: no problem line')
+  const doc = await until(() => local(home, { warm: true }), complete)
+  assert.equal(doc.usage.coverage.sessions_read, doc.usage.coverage.sessions_in_window)
+})
+
+test('D38 a fill that cannot write the sidecar is named in the next overview\'s errors, once', async () => {
+  const home = await budgetWorld()
+  const bad = { ...fs, writeFileSync: (p, ...a) => {
+    if (/\.usage\.json/.test(String(p))) throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' })
+    return fs.writeFileSync(p, ...a)
+  } }
+  await fillUsage({ home, fs: bad, segments: [SEG] })
+  const said = (doc) => doc.errors.filter((e) => /^usage\//.test(e.where))
+  const doc1 = await local(home, { fs: bad })
+  assert.equal(said(doc1).length, 1)
+  assert.match(said(doc1)[0].reason, /EROFS/)
+  assert.equal(doc1.ok, false)
+  assert.deepEqual(said(await local(home, { fs: bad })), [], 'said once, then cleared')
+})
+
+test('1.6:972 C.5 a session wholly in the sidecars still counts after the byte budget stopped the computing', async () => {
+  const home = await budgetWorld()
+  await until(() => local(home, { warm: true }), complete)
+  await fillUsage({ home, segments: [] })
+  fs.rmSync(usageFile(home, SEG)) // only the newest segment's: the session wholly in OLD keeps its sidecar
+  const doc = await local(home)
+  assert.equal(doc.usage.coverage.reason, 'byte-budget')
+  assert.ok(doc.usage.coverage.sessions_read >= 1, 'the session wholly in the sidecars is counted after the cap')
 })
 
 test('3.5:91 with the sidecars whole, overview opens no record body, and the fill left every segment file as it was', async () => {

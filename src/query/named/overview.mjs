@@ -8,8 +8,8 @@
 // in the sidecars still counts after that. `coverage` says how far it got and why it stopped (invariant 4). With
 // `warm` (the query worker), the missing segments are filled after the answer.
 import { recordsAt } from '../records.mjs';
-import { readUsage, fillUsage, callFacts } from '../usage.mjs';
-import { asOf, indexRows, sessionFactsOf, sessionGroups } from '../rows.mjs';
+import { readUsage, fillUsage, callFacts, takeFillProblem } from '../usage.mjs';
+import { asOf, indexRows, isModelCall, sessionFactsOf, sessionGroups } from '../rows.mjs';
 import { rowsKey } from '../warm.mjs';
 import { OVERVIEW_USAGE_BYTES, tsFilter } from './index.mjs';
 
@@ -57,7 +57,9 @@ export async function run({ home, fs, now, params: p, errors, warm = false }) {
 
 function usageOf({ home, fs, inWindow, errors, warm }) {
   const newest = [...inWindow].sort((a, b) => (a[1].last_ts < b[1].last_ts ? 1 : a[1].last_ts > b[1].last_ts ? -1 : 0));
-  const needed = (r) => r.is_llm && !r.log_only;
+  const needed = isModelCall;
+  const fill = takeFillProblem({ home, fs }); // what the fill after an earlier answer could not do, said once (D38)
+  if (fill) errors.push(fill);
   const notes = new Map(); // segment → its sidecar (or null), read once per answer; its problems said on first use (D38)
   const note = (segment) => {
     if (!notes.has(segment)) {
