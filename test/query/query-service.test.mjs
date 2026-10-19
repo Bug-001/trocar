@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { createQueryService } from '../../src/query/service.mjs'
 import { isCode, isWhere } from '../../src/health/codes.mjs'
 import { rawHome } from './raw-home.mjs'
+import { workerFork } from '../helpers/worker-fork.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 // A worker that answers one query (the warm-up's) and then dies on the next, which is how a caller WAITING for a
@@ -133,6 +134,19 @@ test('a response that is full when the document ends does not leave the worker p
     assert.equal(next.status, 200)
     assert.deepEqual(JSON.parse(next.text()).segments, [], 'the whole document, not a frame read half')
     assert.ok(Date.now() - t0 < 2000, `the next query waited ${Date.now() - t0} ms: the worker's stdout was left paused`)
+  } finally {
+    svc.stop()
+  }
+})
+
+test('relay with no worker forks one and answers the document, not the cold 503 (the board has no local path, 4.4 D66)', async () => {
+  const svc = createQueryService({ home: rawHome('asight-qsvc-'), fork: workerFork })
+  try {
+    const res = recorder()
+    await svc.relay({ name: 'segments', params: {}, res })
+    assert.equal(res.status, 200)
+    assert.ok(res.ended)
+    assert.deepEqual(JSON.parse(res.text()).segments, [])
   } finally {
     svc.stop()
   }

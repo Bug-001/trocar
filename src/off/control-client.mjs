@@ -11,7 +11,8 @@ import path from 'node:path'
 
 export const CONTROL_FILE = 'control.json'
 /** The header every request to a token-guarded endpoint carries; the daemon's server (core/control.mjs) imports this name. */
-export const CONTROL_TOKEN_HEADER = 'x-asight-token'
+import { CONTROL_TOKEN_HEADER } from './token-header.mjs'
+export { CONTROL_TOKEN_HEADER }
 /** What a Windows daemon's pipe name starts with (`\\.\pipe\asight-`); the writer (arch/win32/control-path.mjs) adds `<16 hex>` and holds that strictly. */
 export const PIPE_PREFIX = '\\\\.\\pipe\\asight-'
 /** Is `p` a Windows named pipe: `\\.\pipe\` or `\\?\pipe\` and any name. Deliberately loose — off must not refuse a pipe a newer daemon build named differently —
