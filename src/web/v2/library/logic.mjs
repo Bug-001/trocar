@@ -43,33 +43,40 @@ export const hasFilters = (f) => !!(f.q.trim() || f.h.length || f.project || f.w
 // cases: one menu item, both spellings filter to it); '-' = a session whose harness is not identified (h=- filters them alone)
 export const facetId = (s) => (s.harness == null || s.harness === '') ? '-' : harnessKey(s.harness)
 export const sessionKey = (s) => `${s.project_slug}::${s.session_id}`
-// the unresolved bucket is not a project: its rows show no project, its name is not searched, it has no menu item
+// the unresolved bucket is not a project: its rows show no project, its name is not searched, it has no menu item.
+// The project name is the last segment of project_path, else the slug (1.8 §一行): grouping is the board's, not the server's.
+const UNRESOLVED = '_unresolved'
+const projectName = (s) => (s.project_path ? String(s.project_path).split('/').filter(Boolean).pop() : '') || s.project_slug || ''
 export function flattenSessions(data) {
-  return ((data && data.projects) || []).flatMap((p) => p.sessions.map((s) => ({ ...s, project_name: p.slug === '_unresolved' ? '' : p.name, project_dir: p.slug === '_unresolved' ? '' : (p.path || '') })))
+  return ((data && data.sessions) || []).map((s) => ({ ...s, project_name: s.project_slug === UNRESOLVED ? '' : projectName(s), project_dir: s.project_slug === UNRESOLVED ? '' : (s.project_path || '') }))
+}
+// every page of `sessions` (C.5: paged, `next` → `after` until null). → {ok:true, data:{sessions, errors, as_of}} or the first
+// failed read as it came. The pages are one list, so a session is never missing because it sat past page one.
+export async function loadSessions(api, { limit = 500 } = {}) {
+  const sessions = [], errors = []
+  let after = null, as_of = null
+  for (;;) {
+    const r = await api.get('sessions', { limit, after })
+    if (!r || !r.ok) return r || { ok: false, error: 'no answer' }
+    const d = r.data || {}
+    sessions.push(...(d.sessions || [])); errors.push(...(d.errors || [])); as_of = as_of || d.as_of || null
+    if (d.next == null || d.next === after) return { ok: true, data: { sessions, errors, as_of } }
+    after = d.next
+  }
 }
 const lastMs = (s) => { const t = Date.parse(s.last_ts); return Number.isNaN(t) ? null : t }
 
-// ── the title rule (1.8 §标题规则): agent 标题 → 第一条提问(「」包住, ≤80 字) → 未命名会话 ─────────────────────────
-// Key presence decides each step: no `first_prompt` key at all is the S1-before state, a null one says "computed, none
-// found". The hover word and the 「推测」 mark follow from { from, basis, hasKey }.
-export function titleOf(s) {
-  if (s.title) return { from: 'title', text: String(s.title), basis: null, hasKey: false }
-  if (has(s, 'first_prompt')) {
-    if (s.first_prompt != null) return { from: 'prompt', text: W.promptTitle(s.first_prompt), basis: s.first_prompt_basis ?? null, hasKey: true }
-    return { from: 'none', text: W.UNTITLED, basis: null, hasKey: true }
-  }
-  return { from: 'none', text: W.UNTITLED, basis: null, hasKey: false }
-}
-export function titleTipOf(s, t) {
+// ── the title rule (1.8 §标题规则): `title` as it is, else 未命名会话; where it came from is `title_source` ─────────────
+export const titleText = (s) => (s.title != null ? String(s.title) : W.UNTITLED)
+export function titleTipOf(s) {
   const id = s.session_id
-  if (t.from === 'title') return W.titleFromAgent(id)
-  if (t.from === 'prompt') return W.titleFromPrompt(id) + (t.basis === 'guess' ? ` · ${W.TITLE_GUESS_MORE}` : '')
-  return t.hasKey ? W.titleNoPrompt(id) : W.titleNoKey(id)
+  if (s.title == null) return W.titleNoKey(id)
+  return s.title_source === 'wire' ? W.titleFromWire(id) : W.titleFromAgent(id)
 }
 
-function matches(s, f, now, titleText) {
+function matches(s, f, now, title) {
   const q = f.q.trim().toLowerCase()
-  if (q && ![titleText, s.first_prompt, s.project_name, s.session_id].some((x) => x != null && String(x).toLowerCase().includes(q))) return false
+  if (q && ![title, s.project_name, s.session_id].some((x) => x != null && String(x).toLowerCase().includes(q))) return false
   if (f.project && s.project_slug !== f.project) return false
   if (f.window !== 'all') { const t = lastMs(s); if (t == null || now - t > WINDOWS[f.window]) return false } // no time → only in 全部; boundary inclusive
   return true
@@ -80,7 +87,7 @@ export function applyFilters(list, f, now) {
   for (const s of list) {
     // the agent filter matches the session's own harness, or — S14 present — any of its harnesses
     if (f.h.length && !f.h.includes(facetId(s)) && !(Array.isArray(s.harnesses) && s.harnesses.some((x) => f.h.includes(harnessKey(x))))) continue
-    if (!matches(s, f, now, titleOf(s).text)) continue
+    if (!matches(s, f, now, s.title)) continue
     out.push(s)
   }
   return out.sort(f.sort === 'calls' ? (a, b) => (b.calls || 0) - (a.calls || 0) || byTimeDesc(a, b) : byTimeDesc)
@@ -106,8 +113,14 @@ export function agentMenuModel(list, f) {
 export const agentMenuSignature = (m) => JSON.stringify(m.map((c) => [c.id, c.on]))
 
 // ── the project menu: real projects only (the unresolved bucket is not a project); hover carries the path ────────────
-export function projectOptions(projects, selected) {
-  const ps = (projects || []).filter((p) => p.slug !== '_unresolved')
+// the projects are grouped here, from each row's project_slug / project_path (C.5 `sessions` is flat)
+function projectsOf(list) {
+  const by = new Map()
+  for (const s of list || []) if (s.project_slug && s.project_slug !== UNRESOLVED && !by.has(s.project_slug)) by.set(s.project_slug, { slug: s.project_slug, name: projectName(s), path: s.project_path || '' })
+  return [...by.values()]
+}
+export function projectOptions(list, selected) {
+  const ps = projectsOf(list)
   const item = (slug, name, title, on) => `<button type="button" role="menuitem" data-project="${esc(slug)}"${title ? ` title="${esc(title)}"` : ''}${on ? ' class="on"' : ''}>${esc(name)}</button>`
   let html = item('', W.ALL_PROJECTS, '', !selected)
   for (const p of ps) html += item(p.slug, p.name, p.path || '', selected === p.slug)
@@ -115,31 +128,10 @@ export function projectOptions(projects, selected) {
   return { html, sig: html }
 }
 
-// ── the caption row and its 技术细节: what changes trust stays visible; bookkeeping rides below ─────────────────────
-// facts: 没读全 (errors[] by file + skipped[] with attention, N = the deduped sum — the link goes to 存储) · 坏行 · 没有 id.
-// tech rows: per unreadable file its own line (basename · reason · kind · unreadableRecords), then 未计数 · 半行 · 重读 · 其余没读.
-export function captionFacts(source) {
-  const h = source || {}
-  const byFile = new Map()
-  for (const e of h.errors || []) if (e && e.file && !byFile.has(e.file)) byFile.set(e.file, e)
-  const attention = (h.skipped || []).filter((x) => x && x.attention)
-  const notAll = byFile.size + attention.length
-  const corrupt = h.corrupt_lines == null ? 0 : Object.values(h.corrupt_lines).reduce((a, c) => a + c, 0)
-  const unid = h.unidentified_lines || 0
-  const facts = []
-  if (notAll) facts.push({ kind: 'not-all', n: notAll })
-  if (corrupt) facts.push({ kind: 'corrupt', n: corrupt })
-  if (unid) facts.push({ kind: 'no-id', n: unid })
-  const tail = (f) => String(f).split('/').pop()
-  const tech = []
-  for (const e of byFile.values()) tech.push(`${tail(e.file)} · ${e.reason || ''}${e.kind ? ` · ${e.kind}` : ''}${e.unreadableRecords != null ? ` · ${e.unreadableRecords} records unreadable` : ''}`)
-  if (h.corrupt_lines == null) tech.push(W.TECH_UNCOUNTED)
-  const pending = Object.keys(h.tail_pending || {})
-  if (pending.length) tech.push(W.techTail(pending.map(tail)))
-  if (h.resets && h.resets.length) tech.push(W.techResets(h.resets.map(tail)))
-  const rest = (h.skipped || []).filter((x) => x && !x.attention)
-  if (rest.length) tech.push(W.techSkipped(rest.map((x) => tail(x.name))))
-  return { facts, tech }
+// ── the caption row and its 技术细节: the document's errors[] (1.8 §说明行: N = the number of entries; each where · reason) ──
+export function captionFacts(errors) {
+  const es = (errors || []).filter(Boolean)
+  return { facts: es.length ? [{ kind: 'not-all', n: es.length }] : [], tech: es.map((e) => `${e.where ?? ''} · ${e.reason ?? ''}`) }
 }
 
 // ── what the read failed with: a dead server is not an HTTP error ────────────────────────────────────────────────────
@@ -151,7 +143,6 @@ export function readFailWording(r) {
 
 // ── the row ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 export function rowModel(s, now) {
-  const title = titleOf(s)
   const multi = Array.isArray(s.harnesses) && s.harnesses.length > 1 // S14: field presence — before it, never drawn
   const probeOnly = !s.calls && s.probes > 0
   const entry = has(W.ENTRY, s.entrypoint) ? W.ENTRY[s.entrypoint] : (s.entrypoint ? String(s.entrypoint) : '')
@@ -160,7 +151,7 @@ export function rowModel(s, now) {
     key: sessionKey(s),
     href: formatHash({ area: 'replay', screen: 'replay', project: s.project_slug, id: s.session_id, params: {} }),
     harnessId: s.harness, harnessName: harnessName(s.harness), harnessIcon: harnessIcon(s.harness), harnessRaw: harnessRaw(s.harness),
-    title, titleTip: titleTipOf(s, title), titleGuess: title.from === 'prompt' && title.basis === 'guess',
+    title: s.title ?? null, titleSource: s.title_source ?? null, untitled: s.title == null, titleText: titleText(s), titleTip: titleTipOf(s),
     dim: probeOnly, calls: s.calls || 0, probes: s.probes || 0,
     logged: s.logged || 0, subagent: s.has_subagent === true, inferred, synthesized: !!s.session_synthesized,
     multi, multiNames: multi ? [...new Set(s.harnesses.map((x) => harnessName(harnessKey(x))))] : null,
@@ -170,14 +161,11 @@ export function rowModel(s, now) {
 }
 
 // ── repaint policy ───────────────────────────────────────────────────────────────────────────────────────────────────
-// the poll repaints only when this changes: every field a row shows — including S1 / S14's (first_prompt, basis,
-// harnesses, logged) — plus what the project menu shows. Checked against the rendered row in the tests, so a field
-// added to the row later cannot be left out here.
-const ROW_FIELDS = ['project_slug', 'session_id', 'title', 'first_prompt', 'first_prompt_basis', 'harnesses', 'logged', 'harness', 'harness_inferred', 'session_synthesized', 'entrypoint', 'project_name', 'project_dir', 'project_path', 'calls', 'probes', 'has_subagent', 'last_ts']
+// the poll repaints only when this changes: every field a row shows (the project menu is built from the same rows)
+const ROW_FIELDS = ['project_slug', 'session_id', 'title', 'title_source', 'harnesses', 'logged', 'harness', 'harness_inferred', 'session_synthesized', 'entrypoint', 'project_name', 'project_dir', 'project_path', 'calls', 'probes', 'has_subagent', 'last_ts']
 export function listSignature(data, error) {
   const ss = flattenSessions(data).map((s) => ROW_FIELDS.map((k) => s[k]).join('|')).join(';')
-  const ps = ((data && data.projects) || []).map((p) => [p.slug, p.name, p.path, p.sessions.length].join('|')).join(';')
-  return `${error || ''}#${ss}#${ps}#${JSON.stringify((data && data.source) || null)}`
+  return `${error || ''}#${ss}#${JSON.stringify((data && data.errors) || null)}`
 }
 // the list's scroll policy: what a new paint does. prevSig = the previous paint's filterSignature (null = a new list);
 // the decision follows the highlighted session's KEY, not its index — a poll that re-sorts the rows above the highlight
@@ -202,18 +190,15 @@ export const agentLabel = (id) => {
   return raw ? `${n} ${raw}` : n
 }
 
-// ── the agent-not-captured check (1.8 空态, [待 #45] fields — read by key presence, never by version) ────────────────
-// A picked agent is not being captured when the operator's switch says off for it, the cached 判词 says not captured,
-// or a live condition names it. Anything absent is unknown, not "off".
-export function agentNotCaptured(health, id) {
+// ── the agent-not-captured check (1.8 空态): the C.3 `status` document, read by key presence ─────────────────────────────
+// A picked agent is not being captured when its `harnesses` entry says desired off or captured false, its `topology`
+// entry says captured false, or a `critical[]` entry names it. Anything absent is unknown, not "off".
+export function agentNotCaptured(doc, id) {
   const k = harnessKey(id)
-  const sw = health && health.collector && health.collector.switch && health.collector.switch.harnesses
-  if (sw && sw[k] && sw[k].desired === 'off') return true
-  const topo = health && health.netenv && health.netenv.topology
-  if (topo && topo[k] && topo[k].captured === false) return true
-  const conds = health && health.collector && Array.isArray(health.collector.conditions) ? health.collector.conditions : []
-  if (conds.some((c) => c && harnessKey(c.agent) === k)) return true
-  return false
+  const mine = (o) => Object.entries((o && typeof o === 'object') ? o : {}).filter(([h]) => harnessKey(h) === k).map(([, v]) => v || {})
+  if (mine(doc && doc.harnesses).some((h) => h.desired === 'off' || h.captured === false)) return true
+  if (mine(doc && doc.topology).some((t) => t.captured === false)) return true
+  return ((doc && Array.isArray(doc.critical)) ? doc.critical : []).some((c) => c && c.harness != null && harnessKey(c.harness) === k)
 }
 
 // ── the one-shot capture-health read (1.8 数据与刷新: the 空态 and the filtered agent read it ONCE, no polling) ────────

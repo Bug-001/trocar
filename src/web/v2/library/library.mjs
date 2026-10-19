@@ -12,7 +12,7 @@ import { mark, techDetailsHtml } from '../core/ui.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { formatHash } from '../core/router.mjs'
 import * as W from '../labels/library.mjs'
-import { parseFilters, filtersToParams, hasFilters, flattenSessions, applyFilters, groupOf, selectedKey, sessionKey, rowModel, listSignature, filterSignature, scrollDecision, agentMenuModel, agentMenuSignature, projectOptions, captionFacts, readFailWording, titleOf, capShotMaker, emptyBoardState, filteredAgentLine, agentLabel, WINDOWS } from './logic.mjs'
+import { parseFilters, filtersToParams, hasFilters, flattenSessions, applyFilters, groupOf, selectedKey, sessionKey, rowModel, listSignature, filterSignature, scrollDecision, agentMenuModel, agentMenuSignature, projectOptions, captionFacts, readFailWording, loadSessions, capShotMaker, emptyBoardState, filteredAgentLine, agentLabel, WINDOWS } from './logic.mjs'
 
 const ROW_H = 50, POLL_MS = 3000
 const hidden = () => typeof document !== 'undefined' && document.hidden
@@ -66,7 +66,7 @@ export function rowHtml(s, sel, now) {
   ].filter(Boolean).join('')
   return `<a class="lrow${on ? ' sel' : ''}${m.dim ? ' dim' : ''}" href="${esc(m.href)}" data-key="${esc(m.key)}"${on ? ' aria-current="true"' : ''}>` +
     `<span class="lmain">` +
-    `<span class="lt" title="${esc(m.titleTip)}">${esc(m.title.text)}${m.titleGuess ? mark('inf', W.TITLE_GUESS_MORE) : ''}</span>` +
+    `<span class="lt" title="${esc(m.titleTip)}">${esc(m.titleText)}</span>` +
     `<span class="lsub">${m.harnessIcon}<span class="lhn" title="${esc(m.harnessRaw ? `${m.harnessName} · ${m.harnessRaw}` : m.harnessName)}">${esc(m.harnessName)}</span>${marks ? marks : ''}</span>` +
     `</span>` +
     `<span class="ln" title="${esc(m.dim ? W.PROBE_ONLY_TIP : W.COL_CALLS)}">${m.dim ? esc(W.PROBE_ONLY) : m.calls}</span>` +
@@ -77,13 +77,11 @@ export function rowHtml(s, sel, now) {
 // ── the caption row's html (pure — the wording is testable without a DOM): only what changes how far the list can
 // be trusted, joined by ·; bookkeeping rides in 技术细节. A failed read WITH an older list on screen says so here,
 // without one the failure replaces the table (readFailHtml below).
-export function captionHtml(source, errR, readAt) {
+export function captionHtml(errors, errR, readAt) {
   if (errR && readAt == null) return '' // the failure replaces the table (readFailHtml) — its details are not drawn twice
-  const cf = captionFacts(source)
+  const cf = captionFacts(errors)
   const parts = cf.facts.map((x) =>
-    x.kind === 'not-all' ? `<a href="${esc(formatHash({ area: 'settings', screen: 'settings-storage' }))}" title="${esc(W.CAP_NOT_ALL_TIP)}">${esc(W.capNotAllRead(x.n))} ›</a>`
-      : x.kind === 'corrupt' ? esc(W.capCorrupt(x.n))
-      : esc(W.capNoId(x.n)))
+    `<a href="${esc(formatHash({ area: 'settings', screen: 'settings-storage' }))}" title="${esc(W.CAP_NOT_ALL_TIP)}">${esc(W.capNotAllRead(x.n))} ›</a>`)
   if (errR && readAt != null) parts.push(`${esc(readFailWording(errR).line)} · <button type="button" class="linkbtn" data-act="retry">${esc(W.RETRY)}</button> · ${esc(W.capOldList(fmtTime(readAt)))}`)
   const tech = cf.tech.slice()
   if (errR) tech.push(String((errR.error || '') || 'HTTP ' + errR.status))
@@ -155,7 +153,7 @@ export function mount(el, ctx) {
       else { $('lib-agent').innerHTML = agentItemsHtml(am); ensureHarnessIcons($('lib-agent')) }
       agentSig = as
     }
-    const po = projectOptions(data && data.projects, f.project)
+    const po = projectOptions(all, f.project)
     if (po.sig !== projSig) {
       if (projSig == null) $('mw-project').innerHTML = popMenu('lib-project', W.PROJECT_MENU, null, po.html)
       else $('lib-project').innerHTML = po.html
@@ -166,20 +164,17 @@ export function mount(el, ctx) {
       else { $('lib-sort-label').textContent = `${W.SORT_MENU}:${W.SORTS[f.sort]}`; $('lib-sort').innerHTML = sortItemsHtml(f.sort) }
       sortSig = f.sort
     }
-    const withPrompt = all.some((s) => Object.prototype.hasOwnProperty.call(s, 'first_prompt'))
-    const want = withPrompt ? W.SEARCH_WITH_PROMPT : W.SEARCH_PLAIN
-    if (qEl.placeholder !== want) qEl.placeholder = want
     if (document.activeElement !== qEl && qEl.value !== f.q) qEl.value = f.q // never rewrite the box someone is typing in
     // the active filters, each removable on its own
     const chips = f.h.map((id) => `<button type="button" class="fchip" data-unh="${esc(id)}">${esc(W.activeAgentChip(agentLabel(id)))} ×</button>`).join('')
-      + (f.project ? `<button type="button" class="fchip" data-unproj="1">${esc(W.activeProjectChip((data && data.projects || []).find((p) => p.slug === f.project)?.name || f.project))} ×</button>` : '')
+      + (f.project ? `<button type="button" class="fchip" data-unproj="1">${esc(W.activeProjectChip((all.find((s) => s.project_slug === f.project) || {}).project_name || f.project))} ×</button>` : '')
     if (fchipsEl.innerHTML !== chips) fchipsEl.innerHTML = chips
     clearEl.disabled = !hasFilters(f)
   }
 
   // ── the caption row and the standing-in states all render through the pure builders above ──────────────────────────
   function paintCaption() {
-    const html = captionHtml(data && data.source, errR, errR ? readAt : null)
+    const html = captionHtml(data && data.errors, errR, errR ? readAt : null)
     if (capEl.innerHTML !== html) capEl.innerHTML = html
     capEl.style.display = html ? '' : 'none'
   }
@@ -227,7 +222,7 @@ export function mount(el, ctx) {
   // ── data: every 3 s while the page is visible; repaint only when what the list shows changed ───────────────────────
   async function poll() {
     let r
-    try { r = await api.get('sessions') } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
+    try { r = await loadSessions(api) } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
     if (dead) return
     const nextErr = r.ok ? null : r, next = r.ok ? r.data : data
     const s = listSignature(next, nextErr)
