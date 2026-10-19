@@ -44,9 +44,9 @@ export async function run(argv, { io, env = process.env, home, platform = proces
   const url = `http://127.0.0.1:${b.port}/#t=${b.token}`
   const [file, list] = (OPENERS[platform] || OPENERS.linux)(url)
   try { await (deps.open || openWith)(file, list) } catch (e) {
-    io.out([`asight board: ${url}`, ...wrap(`Your browser could not be opened (${errText(e)}). Open the address above yourself.`, WIDTH)].join('\n'))
+    io.out([...wrap(`asight board: your browser could not be opened (${errText(e)}). Open this address yourself:`, WIDTH), url].join('\n'))
     return EXIT.ok
   }
-  io.out(`asight board: ${url}  (opened in your browser)`)
+  io.out(['asight board: opened in your browser:', url].join('\n')) // the URL on a line of its own: with the token it is 68+ columns (D58 80)
   return EXIT.ok
 }
