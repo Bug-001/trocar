@@ -68,15 +68,6 @@ export const NOT_CAPTURED_EXPECTED = Object.freeze({
   error: 'connection error',
 })
 
-// ── the failure events that are not a (where, code) pair (FAILURE_EVENTS minus failure / agent-untrusted)──────────────────────────────────────
-export const FAILURE_EVENT = Object.freeze({
-  'helper-down': 'the capture helper is not running',
-  'helper-version-mismatch': 'the capture helper is the wrong version',
-  'attach-failed': 'a process could not be attached',
-  'detach-failed': 'a process could not be detached',
-  'log-gap': 'the event log has a gap',
-})
-
 // ── asight's own codes of the last install / uninstall notes and of the residue results (not failures: a failure's words
 // are the CLI's FAILURE_WORDS, looked up by (where, code) first). A Node errno or a harness-defined code is not here.
 export const CODE = Object.freeze({
@@ -105,11 +96,6 @@ export const CODE = Object.freeze({
 
 })
 
-// ── 原始层(封存 / 校验 / 导出)的 op(raw: 组键)────────────────────────────────────────────────────────────
-export const RAW_OP = Object.freeze({
-  seal: 'seal', 'seal-legacy': 'seal an old file', verify: 'verify', 'delete-original': 'delete the original', lock: 'lock', 'log-gap': 'log gap', export: 'export',
-})
-
 // ── 安装清单里 asight 自己的文件(roles)────────────────────────────────────────────────────────────────────
 export const FILE_ROLE = Object.freeze({
   'ca-key': "the capture certificate's private key", 'ca-cert': 'capture certificate', unit: 'login item', bundle: 'merged certificate bundle',
@@ -136,19 +122,17 @@ export const COMMANDS = Object.freeze({
   install: 'asight install', board: 'asight board', helper: 'sudo asight setup-helper', linger: 'loginctl enable-linger',
 })
 
+// ── `errors[].where` of the C.3 document this board reads (the closed set src/health/codes.mjs DOC_WHERE; not importable here) ──
+export const ERR_WHERE = Object.freeze({ health: 'capture health', manifest: 'the install record' })
+
 // ── 采集记录的固定话 ─────────────────────────────────────────────────────────────────────────────────────
 export const LOG = Object.freeze({
-  who: Object.freeze({ collector: 'capture service', raw: 'sealing and reading' }),
-  window: (h) => `last ${h} hours`,
-  filterRule: "by each group's latest agent, and the group of this agent's latest failure",
-  truncated: 'only the latest records were read; the list may be incomplete',
-  unreadable: (n) => `${n} file${n === 1 ? '' : 's'} could not be read`,
+  who: 'capture service',
+  window: (t) => `since ${t}`,
+  filterRule: "by each group's own agent; a group counts once",
+  truncated: 'only the latest part of the records was read; the list may be incomplete',
   none: 'no capture failures in the last 24 hours',
   metadataOnly: 'metadata only; no request or response bytes',
-  install: 'last install', uninstall: 'last uninstall', manifestError: 'the install manifest could not be read',
-  resultLine: (outcome) => `result: ${outcome}`,
-  priorValue: 'replaced the previous value',
-  expectedTitle: 'connections not recorded by design (last 24 hours)',
-  rawTitle: 'recent unsuccessful raw-layer results',
-  filesTitle: 'files read',
+  manifestError: 'the install manifest could not be read',
+  expectedTitle: 'not recorded by design (last 24 hours)',
 })

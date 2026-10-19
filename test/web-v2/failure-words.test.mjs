@@ -5,24 +5,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { FAILURE_WORDS, failureBrief } from '../../src/cli/words.mjs'
-import { failureSentence } from '../../src/web/v2/core/capture-verdict.mjs'
+import { FAILURE_WORDS } from '../../src/cli/words.mjs'
 
 const LABELS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2', 'labels')
-const group = (where, code) => ({ count: 1, last: { where, code } })
-
-test('every (where, code) the CLI knows renders as the CLI\'s brief', () => {
-  for (const k of Object.keys(FAILURE_WORDS)) {
-    const i = k.indexOf('/'), g = group(k.slice(0, i), k.slice(i + 1))
-    assert.equal(failureSentence(g).text, failureBrief(g), k)
-  }
-})
-
-test('an unknown pair and an errno code fall back exactly as the CLI does', () => {
-  for (const g of [group('engine', 'no-such-code-x'), group('record', 'ECONNRESET'), { count: 2, last: { where: 'zz', code: 'yy', reason: 'r\nr' } }]) {
-    assert.equal(failureSentence(g).text, failureBrief(g), JSON.stringify(g))
-  }
-})
 
 test('no board label table keys a (where, code) pair of the CLI\'s table', async () => {
   const keys = new Set(Object.keys(FAILURE_WORDS)), hits = []

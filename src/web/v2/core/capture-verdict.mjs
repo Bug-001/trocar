@@ -11,8 +11,8 @@
 // somewhere unnamed (the overview card's label, the library's empty state) prefixes it itself.
 import { fmtWhen, has } from './fmt.mjs'
 import { harnessKey, harnessName, HARNESS_ORDER } from './chips.mjs'
-import { TRUST_REASON, RESTART_CODES, NOT_CAPTURED, FAILURE_EVENT, RAW_OP, UNKNOWN_REASON } from '../labels/capture.mjs'
-import { failureBrief, failureWord } from '../../../cli/words.mjs'
+import { TRUST_REASON, RESTART_CODES, UNKNOWN_REASON } from '../labels/capture.mjs'
+import { failureBrief } from '../../../cli/words.mjs'
 
 export const CAPH_MS = 1500 // the poll period of the pages that show this card (1.5 s while visible)
 
@@ -104,33 +104,6 @@ export function capHealthPatch(r, now = Date.now()) {
   if (r && r.ok && r.data && r.data.summary) return { capH: r.data, capHOkAt: now, capHErr: null }
   if (r && !r.ok && r.status === 503 && r.error) return { capH: { unreadable: r.error }, capHOkAt: now, capHErr: null }
   return { capHErr: r && r.ok ? 'HTTP 200 · no summary' : (r && (r.error || 'HTTP ' + r.status)) || 'reason unknown' }
-}
-
-// ── per harness ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-// What the answer carries about each agent, by read-side harness id (every id passes harnessKey): when it was last captured, when it last
-// failed (and which failure group), the current conditions that name it, and — only when the answer carries them — the switch the operator
-// set. A harness appears when any of those names it. Field presence decides, never a version: `desired` is null while the answer has no
-// per-harness switch, and the page then states only what the whole collector's switch says.
-//   → [{ harness, desired, lastCaptured, lastFailure, lastFailureKey, conditions:[{kind, pid, reason, text, since}] }] in chip-table order
-export function agentFacts(h) {
-  const c = (h && h.collector) || {}, by = new Map()
-  const row = (id) => {
-    const k = harnessKey(id)
-    if (!by.has(k)) by.set(k, { harness: k, desired: null, lastCaptured: null, lastFailure: null, lastFailureKey: null, conditions: [] })
-    return by.get(k)
-  }
-  for (const a of Array.isArray(c.agents) ? c.agents : []) {
-    if (!a || a.agent == null) continue
-    Object.assign(row(a.agent), { lastCaptured: a.last_captured ?? null, lastFailure: a.last_failure ?? null, lastFailureKey: a.last_failure_key ?? null })
-  }
-  for (const k of Array.isArray(c.conditions) ? c.conditions : []) {
-    if (!k || k.agent == null) continue
-    row(k.agent).conditions.push({ kind: k.kind || null, pid: k.pid ?? null, reason: k.code || k.reason || null, text: k.text ?? null, since: k.since ?? null })
-  }
-  const hs = c.switch && c.switch.harnesses
-  if (hs && typeof hs === 'object') for (const [id, v] of Object.entries(hs)) row(id).desired = v && (v.desired === 'on' || v.desired === 'off') ? v.desired : null
-  const rank = (id) => { const i = HARNESS_ORDER.indexOf(id); return i < 0 ? HARNESS_ORDER.length : i }
-  return [...by.values()].sort((a, b) => rank(a.harness) - rank(b.harness) || (a.harness < b.harness ? -1 : 1))
 }
 
 // ── per-agent verdicts (1.9 §每个 agent 一行 — this section; the 总览 page's 「<agent>:<状态句>」 item reads the same rows) ──
@@ -227,36 +200,14 @@ export function agentVerdicts(h) {
   return [...by.values()].sort((a, b) => rank(a.harness) - rank(b.harness) || (a.harness < b.harness ? -1 : 1))
 }
 
-// the words of one failure group of the log (the overview's capture-failure item reads the same sentence).
-// `g` = {key, count, first_ts, last_ts, last}. The key is where+code for a failure event, not_captured for a connection row,
-// the event for the other failure events, agent-untrusted:<code>, or raw:<op>/<outcome>. A failure's sentence is the CLI's
-// own (failureBrief: its table's word, else the raw errno / where/code with the reason), so the two faces never word one
-// failure two ways. → { text, code, cls } — never empty, never a guess.
-const untrustedText = (code, last, name) => {
-  if (code != null && RESTART_CODES.includes(code)) return `restart ${name} to capture it`
-  if (code != null && has(TRUST_REASON, code)) return `not capturing: ${TRUST_REASON[code].why}`
-  return `not capturing: ${(last && (last.text || last.reason)) || UNKNOWN_REASON}`
-}
+// the words of one C.3 failure group ({level, where, code, count, first_ts, last_ts, harness?, reason}) — the overview's
+// capture-failure item reads the same sentence. With `where` the sentence is the CLI's own (failureBrief, passed the group as it
+// is), so the two faces never word one failure two ways; without `where` no word can be looked up → reason unknown, flagged, and
+// the caller puts level / where / code in the technical details. → { text, code, cls, unknown } — never empty, never a guess.
 export function failureSentence(g) {
-  const key = (g && g.key) || '', last = (g && g.last) || {}
-  if (key.startsWith('flow:')) {
-    const nc = key.slice(5)
-    return { text: failureWord('flow', nc) ? failureBrief(g) : `not captured: ${has(NOT_CAPTURED, nc) ? NOT_CAPTURED[nc] : UNKNOWN_REASON}`, code: nc, cls: 'warn' }
-  }
-  if (key.startsWith('agent-untrusted:')) {
-    const code = key.slice('agent-untrusted:'.length) || null
-    return { text: untrustedText(code, last, harnessName(last.agent)), code, cls: 'warn' }
-  }
-  if (key.startsWith('raw:')) {
-    const rest = key.slice(4), i = rest.lastIndexOf('/')
-    const op = i < 0 ? rest : rest.slice(0, i), outcome = i < 0 ? '' : rest.slice(i + 1)
-    return { text: `${has(RAW_OP, op) ? RAW_OP[op] : op} · ${outcome || 'outcome unknown'}`, code: key, cls: 'warn' }
-  }
-  // the other failure events key by their own event name (`helper-down`, possibly `/<where>`); WHERE and the event
-  // names share no word, so a `failure` event's `<where>/<code>` key cannot be confused with them.
-  const [ev] = key.split('/')
-  if (has(FAILURE_EVENT, ev)) return { text: FAILURE_EVENT[ev], code: ev, cls: 'warn' }
-  return { text: failureBrief(g), code: last.code ?? (key || null), cls: 'warn' }
+  const code = (g && g.code) ?? null
+  if (g && g.where != null) return { text: failureBrief(g), code, cls: 'warn', unknown: false }
+  return { text: UNKNOWN_REASON, code, cls: 'warn', unknown: true }
 }
 
 // ── the poll of /api/capture-health (1.5 §采集状态 轮询 — the one place, so the 总览 / 采集 / 采集记录 pages cannot disagree) ──
