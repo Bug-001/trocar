@@ -38,7 +38,7 @@ const groupOf = (harness, routeId) => `${harness}:${routeId}`
 
 /** turnOnModel({ os, home, env, ids, harnesses, ctx, … }) → { on, refused, routes, notes, problems, doors, exit }. `request` / `isFree` replace the
  *  world in a test that needs to; the default asks the endpoint controlEndpointFor resolves (no socket path is ever passed in). */
-export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined, dryRun = false, rootStore = null }) {
+export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined, dryRun = false, rootStore = null, source = null }) {
   const dir = collectorHome(path.join(home, '.asight'))
   const m = readManifest(dir, fs)
   if (!installUsable(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`asight is not installed for this user (no install record with a root): run ${INSTALL_HINT} first`], exit: 1 }
@@ -85,7 +85,7 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   for (const g of cfg.rebound) {
     const [from, to] = [was.groupPorts[g], cfg.config.groupPorts[g]]
     const reason = `the door of ${g} could not use its recorded port ${from}: another program holds it; asight on moved the door to ${to} and rewrites its entries`
-    try { appendEvent(dir, { event: 'failure', where: 'ingress', code: CODE.enginePortTaken, door: g, port: from, moved_to: to, reason }) } catch { /* the receipt's note carries it (R11) */ }
+    try { appendEvent(dir, { event: 'failure', where: 'ingress', code: CODE.enginePortTaken, door: g, port: from, moved_to: to, reason, ...(source ? { source } : {}) }) } catch { /* the receipt's note carries it (R11) */ }
     out.notes.push({ harness: g.slice(0, g.indexOf(':')), code: CODE.enginePortTaken, text: `${CODE.enginePortTaken}: 门 ${g} 原来的端口 ${from} 被别的程序占了,换到 ${to},入口跟着改写` })
   }
   let doors = null

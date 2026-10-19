@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import net from 'node:net'
 import { once } from 'node:events'
 import { modelWorld } from '../helpers/model-world.mjs'
 import { liveUnit, withScratchCwd } from '../helpers/model-daemon.mjs'
@@ -15,7 +16,7 @@ import { depsFile } from '../helpers/board-world.mjs'
 import { request } from './face.mjs'
 import { snapshot } from '../query/raw-home.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
-import { ensureBoardPort, freeOnLoopback, BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
+import { loadIngressConfig, ensureBoardPort, freeOnLoopback, BOARD_RANGE } from '../../src/collector/core/ingress-config.mjs'
 import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { createServer } from '../../src/server.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
@@ -47,6 +48,7 @@ for (const platform of ['darwin', 'win32']) {
       const envFile = path.join(w.home, '.codex', '.env')
       fs.mkdirSync(path.dirname(envFile), { recursive: true }); fs.writeFileSync(envFile, '# the user\'s own\nOPENAI_BASE_URL=https://relay.example\n')
       const before = fs.readFileSync(envFile)
+      const old = new Set(flows(w.dir).map((r) => JSON.stringify(r)))
       let home0 = snapshot(w.home)
       const p1 = await post({ harness: 'codex', on: true })
       assert.equal(p1.status, 409, p1.body)
@@ -61,7 +63,10 @@ for (const platform of ['darwin', 'win32']) {
       assert.equal(p2.status, 409, p2.body)
       assert.notEqual(p2.json.plan_id, p1.json.plan_id)
       assert.deepEqual(snapshot(w.home), home0, 'a stale confirm wrote nothing')
-      const on = await post({ harness: 'codex', on: true, confirm: p2.json.plan_id })
+      // the door port recorded for codex is held by another program: the on run moves it and writes its engine-port-taken record (a record of the on run)
+      const { groupPorts } = await loadIngressConfig({ dir: w.dir, groups: [...new Set(p2.json.plan.map((x) => `${x.harness}:${x.route}`))] })
+      const squatter = net.createServer().listen(Object.values(groupPorts)[0], '127.0.0.1'); await once(squatter, 'listening')
+      const on = await post({ harness: 'codex', on: true, confirm: p2.json.plan_id }).finally(() => squatter.close())
       assert.equal(on.status, 200, on.body)
       assert.deepEqual(validateReceipt(on.json), [], on.body)
       assert.deepEqual([on.json.command, on.json.ok, on.json.harnesses], ['on', true, ['codex']], on.body)
@@ -85,10 +90,10 @@ for (const platform of ['darwin', 'win32']) {
       assert.equal(st.status, 200, st.body)
       assert.equal(JSON.parse(st.body).harnesses.find((h) => h.harness === 'codex').desired, 'off')
       // every flows/ record of the two runs is marked as the board's and is in the closed sets
-      const recs = flows(w.dir)
-      const offs = recs.filter((r) => r.event === 'off-note')
-      assert.ok(offs.some((r) => r.kind === 'result'), JSON.stringify(recs))
-      for (const r of recs.filter((x) => x.event === 'off-note' || 'source' in x)) assert.equal(r.source, 'board', JSON.stringify(r))
+      const recs = flows(w.dir).filter((r) => !old.has(JSON.stringify(r)))
+      assert.ok(recs.some((r) => r.code === 'engine-port-taken'), JSON.stringify(recs))
+      assert.ok(recs.some((r) => r.event === 'off-note' && r.kind === 'result'), JSON.stringify(recs))
+      for (const r of recs) assert.equal(r.source, 'board', JSON.stringify(r))
       for (const r of recs) assert.deepEqual(checkRecord(r), [], JSON.stringify(r))
     })
   })
