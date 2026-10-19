@@ -102,21 +102,16 @@ export const FILE_ROLE = Object.freeze({
   'trust-file': 'certificate file for the agent', plugin: 'trust plugin', shim: 'launch shim',
 })
 
-// ── 残留(collector.residue[].result):两种开头 + 每个结果一句话 ─────────────────────────────────────────────
+// ── 残留(status install.pending[].result):两种开头 + 每个结果一句话 ─────────────────────────────────────────────
 export const RESIDUE_LEAD = Object.freeze({ unfinished: 'the install did not finish; left:', left: 'left behind by the uninstall:' })
 export const residueLead = (result) => (result === 'install did not finish' ? RESIDUE_LEAD.unfinished : RESIDUE_LEAD.left)
 
-// ── 第二契约代([待 #45]:字段在才画;这些表只在载荷带着那些字段时被读)────────────────────────────────────────
+// ── 引流方式(topology[].routing;字段在才画)────────────────────────────────────────
 export const ROUTING = Object.freeze({ driver: 'driver mode', proxy: 'proxy mode', none: 'all off', unknown: 'unknown' })
-export const SCOPE = Object.freeze({ agent: 'automatic', user: 'named by you · user', machine: 'named by you · machine' })
-export const OPT_IN_STATE = Object.freeze({
-  needed: 'not yet named', done: 'named', broken: 'named, entry no longer works', 'pending-admin': 'waiting for an administrator',
-})
-export const ENTRY_STATE = Object.freeze({ intact: 'intact', 'entry-missing': 'missing', 'entry-changed': 'changed by you since' })
 export const CHANGE_REMOVAL = 'removed when its capture is turned off'
 
 // ── 命令(只出现在技术细节;每条都是 1.6 命令表 src/cli/commands.mjs 里的用法,cli-commands.test.mjs 守)──────────
-// <id> 由页面按 collector.switch.harnesses 里的拼法填(前端不另存 CLI 名表);opt_in 的命令随数据原样给
+// <id> 由页面按 status 文档 harnesses 的键填(前端不另存 CLI 名表)
 export const COMMANDS = Object.freeze({
   on: 'asight on <id>', off: 'asight off <id>', status: 'asight status <id>', doctor: 'asight doctor <id>',
   install: 'asight install', board: 'asight board', helper: 'sudo asight setup-helper', linger: 'loginctl enable-linger',
