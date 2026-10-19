@@ -13,12 +13,14 @@ const errText = (e) => String((e && e.message) || e)
 // the platform's own way to hand a URL to the default browser. The URL holds `#`, so cmd gets it quoted and verbatim (`start` takes a first quoted word for a title)
 const OPENERS = { darwin: (u) => ['open', [u]], win32: (u) => ['cmd', ['/c', 'start', '""', `"${u}"`]], linux: (u) => ['xdg-open', [u]] }
 
-/** The default browser start: resolves when the opener exited 0, rejects with why otherwise (no graphical session, no opener). */
+const OPEN_WAIT_MS = 5000 // an opener with no desktop to open on never returns (win32 `cmd /c start` over ssh, lab 2026-10-20): past this it was not opened
+/** The default browser start: resolves when the opener exited 0, rejects with why otherwise (no graphical session, no opener, no answer in OPEN_WAIT_MS). */
 function openWith(file, args) {
   return new Promise((resolve, reject) => {
     const c = spawn(file, args, { stdio: 'ignore', windowsVerbatimArguments: file === 'cmd', windowsHide: true })
-    c.on('error', reject)
-    c.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`${file} exited ${code}`))))
+    const t = setTimeout(() => { try { c.kill() } catch { /* gone */ } reject(new Error(`${file} did not return within ${OPEN_WAIT_MS / 1000} s`)) }, OPEN_WAIT_MS)
+    c.on('error', (e) => { clearTimeout(t); reject(e) })
+    c.on('exit', (code) => { clearTimeout(t); if (code === 0) resolve(); else reject(new Error(`${file} exited ${code}`)) })
   })
 }
 
