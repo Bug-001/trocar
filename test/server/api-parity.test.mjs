@@ -3,7 +3,7 @@
 //
 // Three assertions, each over the TABLE rather than a list of names: every query answers identically
 // through `runQuery` and through `GET /api/<name>`; the board fetches exactly the names the table has
-// (so neither a dead route nor an unreachable query can survive); and no DuckDB / SQL / `/control/`
+// (so neither a dead route nor an unreachable query can survive); and no DuckDB / SQL
 // read path is left anywhere in the shell or the page.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -67,8 +67,8 @@ test('V80: no second read path is left in the shell or the page', () => {
     if (!fs.statSync(f).isFile()) continue;
     const txt = fs.readFileSync(f, 'utf8');
     // Not a bare /SELECT/: the page is HTML (<select>) and English prose. What a SQL read path would
-    // bring with it is DuckDB itself, the connection, or a /control/ write route.
-    for (const banned of [/duckdb/i, /openDb/, /db\.connection/, /\/control\//, /csrf/i]) {
+    // bring with it is DuckDB itself or the connection (the /control/ write endpoints are V80's three, 4.4 §控制面).
+    for (const banned of [/duckdb/i, /openDb/, /db\.connection/, /csrf/i]) {
       assert.doesNotMatch(txt, banned, `${path.relative(ROOT, f)} still carries ${banned} — the board reads through the named queries only (D59)`);
     }
   }

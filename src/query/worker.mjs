@@ -14,11 +14,15 @@
 // `warm: true` on every query it runs: a query here is never the only one, so what a query may build FOR THE NEXT
 // ONE (src/query/named/session.mjs assembles the whole session after answering a window) is built here and nowhere
 // else — a one-shot CLI would pay for it and exit.
+import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
 import { runQuery, QueryArgError } from './named/index.mjs'
 import { lowerPriority } from '../low-priority.mjs'
 
 const home = process.argv[2]
+// The board's control verbs (`{control, body}`, 4.4 §控制面) run the CLI's own functions, which take `deps` for what they ask of the machine.
+// The daemon never passes argv[3]; a test fork names an ES module whose default export is that `deps` object.
+const depsP = process.argv[3] ? import(pathToFileURL(process.argv[3]).href).then((m) => m.default) : Promise.resolve({})
 const IDLE_MS = Number(process.env.ASIGHT_QUERY_IDLE_MS || 180_000)
 // What the CLI's own environment may change about an answer goes local (client.mjs LOCAL_ENV); this worker serves
 // every caller, so it answers as a clean environment would and never as the daemon's happened to be.
@@ -36,8 +40,14 @@ async function answer(line) {
   clearTimeout(idle)
   let status = 200, text
   try {
-    const { name, params, indent } = JSON.parse(line)
-    text = JSON.stringify(await runQuery(name, params || {}, { home, warm: true }), null, Number(indent) || 0)
+    const { name, params, indent, control, body } = JSON.parse(line)
+    if (control) { // one JSON line, the bytes `asight <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
+      const { VERBS } = await import('../control/board.mjs')
+      if (!Object.hasOwn(VERBS, control)) throw new Error(`no control verb ${JSON.stringify(control)}`)
+      const r = await VERBS[control](body || {}, { home, deps: await depsP })
+      status = r.status
+      text = JSON.stringify(r.doc) + '\n'
+    } else text = JSON.stringify(await runQuery(name, params || {}, { home, warm: true }), null, Number(indent) || 0)
   } catch (e) {
     // 400 = the caller's mistake (an unknown name or parameter), 500 = this worker's. The message is the query
     // core's own, so the caller can raise the very error its local path would have raised.

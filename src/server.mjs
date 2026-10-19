@@ -8,6 +8,7 @@
 // nothing is read before the first two pass.
 import http from 'node:http';
 import nodeFs from 'node:fs';
+import nodeOs from 'node:os';
 import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -75,9 +76,11 @@ export function createServer({ home, token, query, uid = process.getuid?.(), fs,
     const b = Buffer.from(got);
     return b.length === want.length && timingSafeEqual(b, want);
   };
-  // The control endpoints, by `<METHOD> <name>` (4.4 §控制面): `{ 'GET status': …, 'POST classes': … }`. Each entry is
-  // `({ req, res, url, home, uid, query }) → Promise`. None yet.
-  const control = {};
+  // The control endpoints, by `<METHOD> <name>` (4.4 §控制面). The query worker runs each one (src/control/board.mjs); this face only relays.
+  // A daemon running as root mounts none of them (`on` / `off` refuse root, 1.6 §1.5): status says why, and every write falls to 405.
+  const control = uid === 0
+    ? { 'GET status': ({ res }) => sendJson(res, 200, { control: false, user: nodeOs.userInfo().username, root: true, harnesses: [] }) }
+    : { 'GET status': ({ res }) => query.control({ verb: 'status', res }) };
 
   async function api(req, res, url) {
     const m = /^\/api\/([^/]+)$/.exec(url.pathname);

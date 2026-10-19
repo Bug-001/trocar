@@ -173,8 +173,12 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
    *  so with no worker it forks one and waits its turn instead of the cold 503. The caller checked the name. */
   const relay = ({ name, params = {}, res }) => answer(lineOf(name, params), res)
 
+  /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, so a control verb waits its turn behind a query and the
+   *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */
+  const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res)
+
   /** Fork a worker (if there is none) and run this query with nobody waiting: the board's page load warms it (4.4). */
   const warm = ({ name, params = {} }) => warmUp(lineOf(name, params))
 
-  return { route, relay, warm, path: QUERY_PATH, stop: () => drop('the daemon is stopping') }
+  return { route, relay, control, warm, path: QUERY_PATH, stop: () => drop('the daemon is stopping') }
 }

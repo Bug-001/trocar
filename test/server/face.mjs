@@ -11,18 +11,19 @@ export const TOKEN = 'Xq3-board-token_0123456789abcdefABCDEF'
 export const withToken = (h = {}) => ({ [CONTROL_TOKEN_HEADER]: TOKEN, ...h })
 
 /** `query` overrides the real service (a counting stand-in); `relays` counts what reached the worker either way. */
-export async function serveFace({ home, query, ...opts }) {
-  const svc = query ? null : createQueryService({ home, fork: workerFork })
+/** `deps` = the path of a module whose default export is the worker's `deps` (src/query/worker.mjs argv[3]); control lines count as `control:<verb>`. */
+export async function serveFace({ home, query, deps, ...opts }) {
+  const svc = query ? null : createQueryService({ home, fork: (h) => (deps ? workerFork(h, deps) : workerFork(h)) })
   const relays = []
-  const q = query || { relay: (a) => (relays.push(a.name), svc.relay(a)), warm: (a) => svc.warm(a) }
+  const q = query || { relay: (a) => (relays.push(a.name), svc.relay(a)), control: (a) => (relays.push(`control:${a.verb}`), svc.control(a)), warm: (a) => svc.warm(a) }
   const { server } = createServer({ home, token: TOKEN, query: q, ...opts })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   return { server, port: server.address().port, relays, close: () => { server.close(); svc?.stop() } }
 }
 
-export const request = (port, p, { method = 'GET', headers = {} } = {}) => new Promise((resolve, reject) => {
+export const request = (port, p, { method = 'GET', headers = {}, body } = {}) => new Promise((resolve, reject) => {
   const r = http.request({ host: '127.0.0.1', port, method, path: p, headers, agent: false }, (res) => {
     let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: b }))
   })
-  r.on('error', reject); r.end()
+  r.on('error', reject); r.end(body)
 })
