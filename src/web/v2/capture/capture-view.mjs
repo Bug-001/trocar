@@ -271,7 +271,7 @@ export function pageHtml(h, v, { openByReader = null } = {}) {
 
 // ── the two table-foot lines of the honest empty cases (1.9 §Edge cases) ────────────────────────────────────────
 export function tableFootHtml(h, verdicts) {
-  if (h && h.unreadable != null) return '' // the health could not be read: whether any agent was recorded is unknown
+  if (h == null || h.unreadable != null) return '' // not answered yet, or could not be read: whether any agent was recorded is unknown
   if (!verdicts.length) {
     return '<p class="capfoot">The capture service recorded no agent in the last 24 hours</p>'
   }

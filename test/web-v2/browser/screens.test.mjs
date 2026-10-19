@@ -48,6 +48,11 @@ async function nav(page, href) {
   return page.locator(`#sidebar .fsub a[href="${href}"]`).click()
 }
 
+// a screen fills the window and scrolls inside (shell.css: `.page` scrolls, the replay splits); the document itself never scrolls,
+// so a page opened from a scrolled one is not half off the top, and the replay's landing scroll stays inside the desk
+const fitsWindow = async (page, name) =>
+  assert.ok(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1 && scrollY === 0), `${name}: the document scrolls`)
+
 // each screen, how it is reached, and the first element it draws from data (or its empty state)
 async function driveEveryScreen(b, { width, theme }) {
   const { page } = b
@@ -63,6 +68,7 @@ async function driveEveryScreen(b, { width, theme }) {
       return hs.flatMap(([t, r], i) => hs.slice(i + 1).filter(([, q]) => over(r, q)).map(([u]) => `${t} × ${u}`))
     })
     assert.deepEqual(clash, [], `${name}: headings overlap`)
+    await fitsWindow(page, name)
     assert.ok(await page.locator(sel).count() > 0, `${name}: ${sel} at ${await page.evaluate(() => location.hash)} after ${ms} ms`)
     await shoot(page, name, { width, theme })
   }
@@ -76,8 +82,9 @@ async function driveEveryScreen(b, { width, theme }) {
   // session open: click a row → its step head and context window drawn (D64①); five different rows
   const rows = await page.locator('.lrow').count()
   for (let i = 0; i < Math.min(5, rows); i++) {
-    const row = page.locator('.lrow').nth(i)
+    const row = page.locator('.lrow').nth(rows - 1 - i) // from the bottom: the library is scrolled when the row is clicked
     samples.sessionOpen.push(await timed(page, 'replay', null, () => row.click()))
+    await fitsWindow(page, `session ${i + 1}`)
     if (i < 4) { await page.goBack(); await page.waitForSelector('.lrow') }
   }
   await page.waitForLoadState('networkidle')
@@ -103,7 +110,7 @@ async function driveEveryScreen(b, { width, theme }) {
   console.log(`# ${width} ${theme}: requests during 40 step changes: ${during.length}${during.length ? ' · ' + [...new Set(during)].join(' ') : ''}`)
   await shoot(page, 'replay-step', { width, theme })
 
-  await first('capture', '.crows .crow', () => nav(page, '#/capture'))
+  await first('capture', '#caphead .readat', () => nav(page, '#/capture'))
   await first('capture-log', '.crows .lr, .crows .caplog-none', () => nav(page, '#/capture/log'))
   await nav(page, '#/traffic')
   await first('traffic', 'a.trow', () => page.locator('.pagehead a', { hasText: /^all$/i }).first().click())
@@ -135,6 +142,8 @@ test('K-30: with no token the page names `asight board`, draws no navigation and
     await b.page.waitForSelector('main.forbidden')
     await b.page.waitForTimeout(4000) // longer than the shortest poll (3 s): a poll that survived the 403 would show here
     assert.ok((await b.page.textContent('body')).includes(COMMANDS.board))
+    const code = b.page.locator('main.forbidden code') // the command reads as one line (a desk-only grid rule once squeezed it to 6 px)
+    assert.equal(await code.evaluate((e) => e.getClientRects().length), 1)
     assert.equal(await b.page.locator('#sidebar a, #sidebar nav').count(), 0)
     const denied = b.requests.filter((r) => r.status === 403)
     assert.ok(denied.length > 0)

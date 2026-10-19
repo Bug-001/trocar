@@ -65,7 +65,7 @@
   #app:not(.rail) #sidebar li:hover > .fly,#app:not(.rail) #sidebar li:focus-within > .fly{display:block;}
 }
 
-#content{min-width:0;display:flex;flex-direction:column;background:var(--paper);position:relative;}
+#content{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--paper);position:relative;}
 /* a screen fills #screen and scrolls (or splits) inside; a plain page scrolls as a whole */
 .page{flex:1;min-width:0;overflow:auto;padding:14px 32px 56px;}
 .pagehead{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 14px;margin:0 0 12px;min-height:30px;}

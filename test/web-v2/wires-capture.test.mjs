@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import { captureVerdict, capHealthPatch, agentVerdicts, AGENT_TIER } from '../../src/web/v2/core/capture-verdict.mjs'
 import { harnessKey } from '../../src/web/v2/core/chips.mjs'
 import { logRowsOf } from '../../src/web/v2/capture/capture-log.mjs'
+import { pageHtml } from '../../src/web/v2/capture/capture-view.mjs'
 import { failureBrief } from '../../src/cli/words.mjs'
 import { boardHome, serveBoard } from './real-face.mjs'
 
@@ -83,4 +84,11 @@ test('(5) capHealthPatch: a 200 status document without health is a good answer'
   const p = capHealthPatch({ ok: true, status: 200, data: doc }, 1)
   assert.equal(p.capHErr, null)
   assert.equal(p.capH, doc)
+})
+
+test('(6) before the status document answers, the page states no fact about agents (D38: never an invented empty)', () => {
+  const reading = pageHtml(null, captureVerdict(null, {}))
+  const answered = pageHtml({}, captureVerdict({}, {})) // a document that names no agent
+  assert.equal(/class="capfoot"/.test(reading), false)
+  assert.equal(/class="capfoot"/.test(answered), true) // the same predicate draws it once there is an empty answer
 })
