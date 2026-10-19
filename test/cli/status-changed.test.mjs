@@ -52,12 +52,13 @@ test('C.3 failures.groups: failures of one code fold into one problem group with
   assert.deepEqual(doc.failures.groups, [{ code: 'lookup-miss', level: 'problem', count: 3, first_ts: recs[0].ts, last_ts: recs[2].ts, harness: 'codex' }])
 })
 
+const GROUPS_MAX = 50 // 1.6 附录 C.3: 最多 50 组
 test('C.3 failures.groups: at most 50, the newest first, and the cut is in errors', async () => {
   const s = await installedHome()
-  const recs = Array.from({ length: 51 }, (_, i) => ({ ts: ago((51 - i) * 1000), event: 'failure', where: 'engine', code: `code-${i}` }))
+  const recs = Array.from({ length: GROUPS_MAX + 1 }, (_, i) => ({ ts: ago((GROUPS_MAX + 1 - i) * 1000), event: 'failure', where: 'engine', code: `code-${i}` }))
   const doc = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf(recs) } })
-  assert.equal(doc.failures.groups.length, 50)
-  assert.equal(doc.failures.groups[0].code, 'code-50')
+  assert.equal(doc.failures.groups.length, GROUPS_MAX)
+  assert.equal(doc.failures.groups[0].code, recs.at(-1).code)
   assert.ok(doc.failures.groups.every((g, i, a) => i === 0 || a[i - 1].last_ts >= g.last_ts))
   assert.ok(doc.errors.some((e) => e.where === 'capture health'))
 })
