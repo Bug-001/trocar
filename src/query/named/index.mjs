@@ -14,6 +14,7 @@ import * as session from './session.mjs';
 import * as calls from './calls.mjs';
 import * as block from './block.mjs';
 import * as pricing from './pricing.mjs';
+import * as traffic from './traffic.mjs';
 
 /** A name or a parameter the table does not have (1.6 §4.1 退出码 2). */
 export class QueryArgError extends Error { constructor(m) { super(m); this.name = 'QueryArgError'; } }
@@ -26,6 +27,7 @@ export const QUERIES = Object.freeze({
   sessions: { params: sessions.params, run: sessions.run },
   session: { params: session.params, run: session.run },
   calls: { params: calls.params, run: calls.run },
+  traffic: { params: traffic.params, run: traffic.run },
   block: { params: block.params, run: block.run },
   classes: { params: classes.params, run: classes.run },
   segments: { params: segments.params, run: segments.run },
