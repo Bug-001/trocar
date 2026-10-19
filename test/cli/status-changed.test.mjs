@@ -43,7 +43,7 @@ test('C.3 changed[]: an install record that cannot be read is null (unknown), ne
 
 const NOW = Date.now()
 const ago = (ms) => new Date(NOW - ms).toISOString()
-const healthOf = (records) => ({ collector: { failures: foldFlows(records, { now: NOW }).groups, expected: {}, conditions: [] }, legacy: { failures: [] }, raw: { failures: [] }, read: { since: ago(24 * 3600e3) } })
+const healthOf = (records) => ({ collector: { failures: foldFlows(records, { now: NOW }).groups, expected: {}, conditions: [] }, raw: { failures: [] }, read: { since: ago(24 * 3600e3) } })
 
 test('C.3 failures.groups: failures of one code fold into one problem group with its count and first / last ts', async () => {
   const s = await installedHome()

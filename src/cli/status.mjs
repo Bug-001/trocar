@@ -343,7 +343,7 @@ function failuresOf(f) {
   const h = effectiveHealth(f).health
   if (!h) return null
   const c = h.collector || {}
-  const groups = [...(c.failures || []), ...((h.legacy && h.legacy.failures) || []), ...((h.raw && h.raw.failures) || [])]
+  const groups = [...(c.failures || []), ...((h.raw && h.raw.failures) || [])]
   const expected = Object.values(c.expected || {}).reduce((n, x) => n + (Number(x) || 0), 0)
   let latest = null
   for (const g of groups) if (String(g.last_ts || '') >= String(latest || '')) latest = g.last_ts || null
@@ -411,6 +411,13 @@ function setupDocOf(f, id) {
   return { state: 'unknown', missing: [], reason: why }
 }
 
+/** C.3 `health`: captureHealth's verdict over the collector and the raw layer, with only the keys C.3 names that have a value; absent when the health could not be read (1.5 K-28). */
+const HEALTH_KEYS = ['state', 'since', 'reason', 'signal', 'n', 'read_errors']
+function healthDocOf(f) {
+  const s = (effectiveHealth(f).health || {}).summary
+  return s && typeof s.state === 'string' ? Object.fromEntries(HEALTH_KEYS.filter((k) => s[k] != null).map((k) => [k, s[k]])) : null
+}
+
 /** The 附录 C.3 document of a read: `status --json` and `asight query status` print exactly this. */
 export function statusDocOf(f) {
   const d = f.daemon, forms = formsOf(f) || {}
@@ -427,8 +434,9 @@ export function statusDocOf(f) {
     // closed-set name of the question (src/health/codes.mjs DOC_WHERE); which reader could not answer it, and why, is the reason.
     ...(f.proc_asks || []).map((reason) => ({ where: 'the process table', reason: `the daemon was asked for the process facts and could not answer, so the OS was asked: ${reason}` })),
   ]
+  const health = healthDocOf(f)
   const doc = {
-    ...newReceipt('status'), ok: statusExit(f) === EXIT.ok, changed: changedOf(f),
+    ...newReceipt('status'), ok: statusExit(f) === EXIT.ok, ...(health ? { health } : {}), changed: changedOf(f),
     daemon: { running: d.state === 'running' ? true : d.state === 'not-running' ? false : null, pid: d.state === 'running' ? d.pid : null, responding: d.state === 'running' ? true : d.state === 'not-responding' ? false : null, since: (d.reply && d.reply.since) || (d.lock && d.lock.started_at) || null, error: d.reason || null },
     harnesses: Object.fromEntries(f.harnesses.map((h) => [h.id, {
       desired: h.desired ?? null, captured: h.judged.captured, reason: reasonOf(h.judged), why: h.why,

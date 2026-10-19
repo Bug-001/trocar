@@ -161,7 +161,7 @@ export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:127\.0\.0\.1|\[?::1
 /** The whole wall of the last 24 hours: one line per kind of problem, then the `Expected` section (what is not a problem by design). */
 export function failuresBlock(health, { now = Date.now() } = {}) {
   if (!health) return [`Problems: ${unknown('capture health could not be read')}`]
-  const groups = [...((health.collector && health.collector.failures) || []), ...((health.legacy && health.legacy.failures) || []), ...((health.raw && health.raw.failures) || [])]
+  const groups = [...((health.collector && health.collector.failures) || []), ...((health.raw && health.raw.failures) || [])]
   const lines = [groups.length ? `Problems in the last 24 hours: ${groups.reduce((n, g) => n + (g.count || 1), 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : 'No problems in the last 24 hours.']
   if (groups.length) {
     const rows = groups.map((g) => [ago(g.last_ts, now), `x${g.count || 1}`, failureBrief(g)])
@@ -200,9 +200,7 @@ const SUMMARY = {
   ok: (x) => `capturing since ${x.since}`, off: (x) => `capture off since ${x.since}`, failing: (x) => `${x.n} problem(s) - see below`,
   'not-running': (x) => `not running - last record at ${x.since}${x.signal ? `, stopped by ${x.signal}` : ''}${x.reason ? `, ${x.reason}` : ''}`,
   'not-responding': (x) => `not responding - lock last refreshed at ${x.since}`, unknown: (x) => unknown(x.reason),
-  'no-events': (x) => `the old capture wrote at ${x.since} but has no event file`,
   residue: (x) => `not installed - ${x.n} item(s) left behind`, 'not-installed': () => 'not installed',
-  stopped: (x) => `the old capture stopped at ${x.since}${x.signal ? ` (${x.signal})` : ''}`,
 }
 const agoSec = (h, iso) => Math.round((Date.parse(h.generated_at) - Date.parse(iso)) / 1000)
 function daemonText(h) {

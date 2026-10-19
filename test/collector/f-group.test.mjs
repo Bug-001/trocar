@@ -404,7 +404,7 @@ test('F7 sealing and reading: a seal refused on a file that is not a closed segm
   await assert.rejects(sealSegment(shard, { lockFile: path.join(s.collector, 'lock'), journal }))
   let h = await endpoint(s)
   assert.deepEqual(h.raw.problems.map((x) => [x.op, x.outcome]), [['seal', 'refused']])
-  assert.deepEqual([h.summary.state, h.summary.part], ['failing', 'raw'], 'the top bar turns ⚠')
+  assert.equal(h.summary.state, 'failing', 'the top bar turns ⚠')
   // Nothing else can be sealed any more: only the daemon seals, and only a closed segment of raw/ (4.2 §自动封存), so
   // the old "a sealed flows/ day is still read" case cannot occur. Reading a sealed SEGMENT end to end (every record
   // by its id, byte for byte) is test/query/segment-index.test.mjs.

@@ -18,7 +18,7 @@ import { fakeIo, onCtx, seedClaude, fakeSystem, installFirst } from './fixtures/
 import { runStatus, reply, asDaemon } from './fixtures/status-ctx.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
-const HEALTH_OK = { summary: { state: 'ok', since: '2026-10-12T00:00:00.000Z' }, collector: { installed: true, daemon: { state: 'running' }, conditions: [], failures: [], expected: {} }, legacy: { present: false }, raw: { problems: [] }, read: { errors: [], truncated: false } }
+const HEALTH_OK = { summary: { state: 'ok', since: '2026-10-12T00:00:00.000Z' }, collector: { installed: true, daemon: { state: 'running' }, conditions: [], failures: [], expected: {} }, raw: { problems: [] }, read: { errors: [], truncated: false } }
 
 // (c)+(d) colour (D58): TTY-only, NO_COLOR honoured — and zero ANSI bytes anywhere else
 test('D58: a non-TTY or NO_COLOR run emits zero ANSI bytes (status, plan, receipt); a TTY run colours the verdict lines', async () => {
