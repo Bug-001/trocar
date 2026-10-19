@@ -24,18 +24,18 @@ export const SKELETON =
   `<header class="pagehead" id="libhead"></header>` +
   `<div class="lib">` +
   `<div class="libtools" role="search">` +
-  `<input id="libq" type="search" placeholder="${esc(W.SEARCH_PLAIN)}" aria-label="搜索会话" autocomplete="off" spellcheck="false">` +
+  `<input id="libq" type="search" placeholder="${esc(W.SEARCH_PLAIN)}" aria-label="Search sessions" autocomplete="off" spellcheck="false">` +
   `<span class="menuwrap" id="mw-agent"></span><span class="menuwrap" id="mw-project"></span><span class="menuwrap" id="mw-sort"></span>` +
   `<span class="fchips" id="libfchips"></span>` +
   `<button type="button" id="libclear" class="ghostbtn">${esc(W.CLEAR_FILTERS)}</button>` +
   `</div>` +
   `<div class="libcap" id="libcap"></div>` +
   `<div class="libhead">` +
-  `<span class="lhs">${esc(W.COL_SESSION)}<button type="button" class="popbtn" data-pop="lib-title-i" aria-label="标题的来源" aria-expanded="false" aria-controls="lib-title-i">ⓘ</button>` +
-  `<div class="pop" id="lib-title-i" role="dialog" aria-labelledby="lib-title-i-t" hidden><div class="ph" id="lib-title-i-t">标题的来源</div><div class="pb">${esc(W.COL_SESSION_TIP)}</div></div></span>` +
+  `<span class="lhs">${esc(W.COL_SESSION)}<button type="button" class="popbtn" data-pop="lib-title-i" aria-label="Where the title comes from" aria-expanded="false" aria-controls="lib-title-i">ⓘ</button>` +
+  `<div class="pop" id="lib-title-i" role="dialog" aria-labelledby="lib-title-i-t" hidden><div class="ph" id="lib-title-i-t">Where the title comes from</div><div class="pb">${esc(W.COL_SESSION_TIP)}</div></div></span>` +
   `<span class="ln">${esc(W.COL_CALLS)}</span><span class="lw">${esc(W.COL_LAST)}</span>` +
   `</div>` +
-  `<div class="liblist" id="liblist" aria-label="会话"></div>` +
+  `<div class="liblist" id="liblist" aria-label="Sessions"></div>` +
   `</div></div>`
 
 // a menu trigger + layer following core/ui.mjs's [data-menu] contract (the kit's menuButton cannot carry icons)
@@ -96,7 +96,7 @@ export function captionHtml(source, errR, readAt) {
 export function readFailHtml(errR) {
   const w = readFailWording(errR)
   return `${esc(w.line)}<br><button type="button" class="linkbtn" data-act="retry">${esc(W.RETRY)}</button>` +
-    techDetailsHtml([['错误', String((errR && errR.error) || '')]])
+    techDetailsHtml([['Error', String((errR && errR.error) || '')]])
 }
 // the empty board: 还没有会话, then the capture service's own sentence (read once) with 「截至」, then the way out
 export function emptyBoardHtml(shot, now) {
@@ -136,9 +136,9 @@ export function mount(el, ctx) {
   function paintHead() {
     const params = filtersToParams(f)
     const html = pageHeadHtml({
-      name: '会话',
+      name: 'Sessions',
       scope: {
-        label: '时间窗', value: f.window,
+        label: 'Time window', value: f.window,
         options: Object.entries(W.WINDOWS).map(([k, v]) => ({ value: k, label: v, href: formatHash({ area: 'sessions', screen: 'library', params: { ...params, ...(k === 'all' ? { window: null } : { window: k }) } }) })),
       },
       readAt,

@@ -9,7 +9,7 @@ export const screenErrorHtml = (reason) => `<div class="screenerr" role="alert">
 
 export function safeMount(mod, el, ctx, { clearKeys }) {
   try {
-    if (!mod || typeof mod.mount !== 'function') throw new Error('这个屏没有 mount()')
+    if (!mod || typeof mod.mount !== 'function') throw new Error('This screen has no mount()')
     return mod.mount(el, ctx)
   } catch (e) {
     console.error('mount failed', e)

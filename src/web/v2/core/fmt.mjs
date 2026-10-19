@@ -32,22 +32,22 @@ export const fmtWhen = (ts, now = Date.now()) => {
   return d.toDateString() === new Date(now).toDateString() ? fmtTime(d) : fmtStamp(d)
 }
 // how long a process has run, for a person; null / NaN / negative is unknown (invariant 4), never "1 分钟" or "NaN 天".
-// A process that has only just started (under a second) is 「不到 1 分钟」, not a minute it has not run. A longer run under a minute
-// still rounds up to "1 分钟" — the smallest whole unit shown (the restart confirmation's test pins that wording).
+// A process that has only just started (under a second) is 'under 1 min', not a minute it has not run. A longer run under a minute
+// still rounds up to "1 min" — the smallest whole unit shown (the restart confirmation's test pins that wording).
 export function fmtUp(ms) {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return L.NOT_KNOWN
-  if (ms < 1000) return '不到 1 分钟'
+  if (ms < 1000) return 'under 1 min'
   const m = Math.max(1, Math.round(ms / 60e3))
-  return m < 60 ? `${m} 分钟` : m < 1440 ? `${Math.floor(m / 60)} 小时 ${m % 60} 分` : `${Math.floor(m / 1440)} 天 ${Math.floor((m % 1440) / 60)} 小时`
+  return m < 60 ? `${m} min` : m < 1440 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${Math.floor(m / 1440)} d ${Math.floor((m % 1440) / 60)} h`
 }
-// a calendar day, the way the first-seen column words it: 「今天」, 「7月17日」, with the year only when it is not this year; '—' when empty
+// a calendar day, the way the first-seen column words it: 'today', '7/17', with the year only when it is not this year; '—' when empty
 export function fmtDay(ts, now = Date.now()) {
   if (ts == null || ts === '') return '—'
   const d = new Date(ts)
   if (isNaN(d)) return '—'
   const n = new Date(now)
-  if (d.toDateString() === n.toDateString()) return '今天'
-  return `${d.getFullYear() === n.getFullYear() ? '' : d.getFullYear() + '年'}${d.getMonth() + 1}月${d.getDate()}日`
+  if (d.toDateString() === n.toDateString()) return 'today'
+  return `${d.getFullYear() === n.getFullYear() ? '' : d.getFullYear() + '/'}${d.getMonth() + 1}/${d.getDate()}`
 }
 export const fmtDur = (ms) => ms == null ? '?' : ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms'
 // NULL (and anything that is not a non-negative amount) stays unknown ('?'); only a real zero is '$0'; a real cost too small
@@ -74,9 +74,9 @@ export function relTime(ts, now) {
   const t = typeof ts === 'number' ? ts : Date.parse(ts)
   if (isNaN(t)) return String(ts)
   const d = now - t
-  if (d < 60e3) return '刚刚'
-  if (d < 3600e3) return Math.floor(d / 60e3) + ' 分钟前'
-  if (d < 86400e3) return Math.floor(d / 3600e3) + ' 小时前'
-  if (d < 30 * 86400e3) return Math.floor(d / 86400e3) + ' 天前'
+  if (d < 60e3) return 'just now'
+  if (d < 3600e3) return Math.floor(d / 60e3) + ' min ago'
+  if (d < 86400e3) return Math.floor(d / 3600e3) + ' h ago'
+  if (d < 30 * 86400e3) return Math.floor(d / 86400e3) + ' d ago'
   return new Date(t).toLocaleDateString(LOCALE)
 }

@@ -19,7 +19,7 @@ export function delegate(root, type, selector, fn) {
 }
 
 // ── copy buttons ──────────────────────────────────────────────────────────────────────────────────────────────────
-export function copyBtn(text, label = '复制') {
+export function copyBtn(text, label = 'Copy') {
   return `<button class="copybtn" data-copy="${esc(text)}">${esc(label)}</button>`
 }
 
@@ -46,7 +46,7 @@ export function installCopy(root) {
     const was = el.dataset.label || el.textContent
     el.dataset.label = was
     const ok = await writeClipboard(el.dataset.copy || '')
-    el.textContent = ok ? '已复制' : '复制失败'
+    el.textContent = ok ? 'Copied' : 'Copy failed'
     clearTimeout(el._flash)
     el._flash = setTimeout(() => { el.textContent = was }, 1200)
   })
@@ -95,7 +95,7 @@ function wireKeys() {
 
 export function openModal({ title = '', bodyHtml = '', actions, osStyle } = {}) {
   wireKeys()
-  const acts = actions && actions.length ? actions : [{ label: '关闭', value: null }]
+  const acts = actions && actions.length ? actions : [{ label: 'Close', value: null }]
   const os = OS_GLYPH[osStyle] ? osStyle : null
   const back = document.createElement('div')
   back.className = 'v2-modal-back'

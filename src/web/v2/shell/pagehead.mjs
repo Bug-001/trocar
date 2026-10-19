@@ -8,7 +8,7 @@
 //   spec.readAt = Date | epoch ms                → 数据读于 HH:MM:SS (nothing drawn while the first read is out)
 import { esc, fmtTime } from '../core/fmt.mjs'
 
-export const READ_AT = '数据读于'
+export const READ_AT = 'Data read at'
 
 const scopeHtml = ({ label, options = [], value } = {}) => options.length < 2 ? '' :
   `<nav class="seg" role="group" aria-label="${esc(label)}">${options.map((o) =>
@@ -17,7 +17,7 @@ const scopeHtml = ({ label, options = [], value } = {}) => options.length < 2 ? 
 export function pageHeadHtml(spec = {}) {
   const crumbs = Array.isArray(spec.crumbs) && spec.crumbs.length ? spec.crumbs : null
   const title = crumbs
-    ? `<nav class="crumbs" aria-label="路径">${crumbs.map((c, i) => (i === crumbs.length - 1 || !c.href
+    ? `<nav class="crumbs" aria-label="Breadcrumb">${crumbs.map((c, i) => (i === crumbs.length - 1 || !c.href
       ? `<span${i === crumbs.length - 1 ? ' aria-current="page"' : ''}>${esc(c.label)}</span>`
       : `<a href="${esc(c.href)}">${esc(c.label)}</a>`)).join('<span class="sep" aria-hidden="true">›</span>')}</nav>`
     : `<h1 class="pagename">${esc(spec.name)}</h1>`

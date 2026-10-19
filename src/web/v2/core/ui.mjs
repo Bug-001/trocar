@@ -37,9 +37,9 @@ export function applyThemePref(doc = typeof document === 'undefined' ? null : do
 // verbatim carries no text at all (the proof rule and the section head own the words); a number's estimate is the ≈
 // prefix the caller writes; — and ? are never a zero. `tip` overrides the default legend.
 export const MARK_KINDS = Object.freeze(['verbatim', 'est', 'inf', 'struct', 'part', 'null-provider', 'null-price', 'null-na', 'unknown'])
-const MARK_FORM = { verbatim: '', est: '≈', inf: '推测', struct: '结构估计', part: '◐', 'null-provider': '—', 'null-price': '—', 'null-na': '—', unknown: '?' }
+const MARK_FORM = { verbatim: '', est: '≈', inf: 'inferred', struct: 'structural estimate', part: '◐', 'null-provider': '—', 'null-price': '—', 'null-na': '—', unknown: '?' }
 export function mark(kind, tip) {
-  if (kind === 'verbatim') return `<span class="mk" data-ff="verbatim" aria-label="逐字"${tip ? ` title="${esc(tip)}"` : ''}></span>`
+  if (kind === 'verbatim') return `<span class="mk" data-ff="verbatim" aria-label="verbatim"${tip ? ` title="${esc(tip)}"` : ''}></span>`
   const form = MARK_FORM[kind] != null ? MARK_FORM[kind] : String(kind)
   return `<span class="mk mk-${esc(kind)}"${tip || MARK_TIP[kind] ? ` title="${esc(tip || MARK_TIP[kind])}"` : ''}>${esc(form)}</span>`
 }
@@ -88,12 +88,12 @@ export function techDetailsHtml(rows, { id = 'tech', html = false } = {}) {
     ? pairs.map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${v}</span>`).join('')
     : pairs.map(([k, v]) => [`<span class="k">${esc(k)}</span>`, `<span class="v">${esc(v)}</span>`]).join('')
   const flat = html ? '' : pairs.map(([k, v]) => `${k}: ${v}`).join('\n')
-  return disclosureHtml({ id, title: '技术细节', body: `<div class="tech">${grid}</div><button type="button" class="copybtn" data-copy="${esc(flat)}">复制</button>`, open: false })
+  return disclosureHtml({ id, title: 'Technical details', body: `<div class="tech">${grid}</div><button type="button" class="copybtn" data-copy="${esc(flat)}">Copy</button>`, open: false })
 }
 
 // the confirm dialog (4.6 of the visual doc): a question, the impact, what asight will change; the default focus sits
 // on 取消 so Enter alone never confirms. String builder + the DOM wiring in confirmDialog().
-export function confirmDialogHtml({ q, impact = '', lines = [], confirmLabel = '确认', cancelLabel = '取消' }) {
+export function confirmDialogHtml({ q, impact = '', lines = [], confirmLabel = 'Confirm', cancelLabel = 'Cancel' }) {
   return `<div class="v2-modal-back" data-confirm-back><div class="v2-modal dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-q">` +
     `<div class="mtitle q" id="confirm-q">${esc(q)}</div>` +
     (impact ? `<div class="impact">${esc(impact)}</div>` : '') +

@@ -132,7 +132,7 @@ export function captionFacts(source) {
   if (unid) facts.push({ kind: 'no-id', n: unid })
   const tail = (f) => String(f).split('/').pop()
   const tech = []
-  for (const e of byFile.values()) tech.push(`${tail(e.file)} · ${e.reason || ''}${e.kind ? ` · ${e.kind}` : ''}${e.unreadableRecords != null ? ` · ${e.unreadableRecords} 条记录读不了` : ''}`)
+  for (const e of byFile.values()) tech.push(`${tail(e.file)} · ${e.reason || ''}${e.kind ? ` · ${e.kind}` : ''}${e.unreadableRecords != null ? ` · ${e.unreadableRecords} records unreadable` : ''}`)
   if (h.corrupt_lines == null) tech.push(W.TECH_UNCOUNTED)
   const pending = Object.keys(h.tail_pending || {})
   if (pending.length) tech.push(W.techTail(pending.map(tail)))
@@ -146,7 +146,7 @@ export function captionFacts(source) {
 export function readFailWording(r) {
   if (r && r.status === 0) return { line: W.CAP_CONN_FAIL, code: null }
   const code = r && r.status != null ? r.status : null
-  return { line: W.capReadFail(code != null ? code : '不知道原因'), code }
+  return { line: W.capReadFail(code != null ? code : 'unknown reason'), code }
 }
 
 // ── the row ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ export function capShotMaker(fetchHealth, now = Date.now) {
     if (!p) p = (async () => {
       let r
       try { r = await fetchHealth() } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
-      done = (r && r.ok && r.data) ? { h: r.data, asOf: now() } : { fail: (r && (r.error || (r.status != null ? 'HTTP ' + r.status : null))) || '不知道原因' }
+      done = (r && r.ok && r.data) ? { h: r.data, asOf: now() } : { fail: (r && (r.error || (r.status != null ? 'HTTP ' + r.status : null))) || 'unknown reason' }
       return done
     })()
     return p

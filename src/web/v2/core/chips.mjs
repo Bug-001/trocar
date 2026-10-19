@@ -28,7 +28,7 @@ export const harnessKey = (id) => has(ALIAS, id) ? ALIAS[id] : id
 export const isKnownHarness = (id) => has(CHIP, harnessKey(id))
 // the name the board shows: an unknown or missing harness is NEVER another harness's name (D25 / K-10); the raw id
 // rides along for the tooltip (harnessRaw)
-export const UNIDENTIFIED = '未识别的 agent'
+export const UNIDENTIFIED = 'unknown agent'
 export const harnessName = (id) => id == null || id === '' || id === '-' || !has(CHIP, harnessKey(id)) ? UNIDENTIFIED : CHIP[harnessKey(id)].name
 export const harnessRaw = (id) => id == null || id === '' || id === '-' || has(CHIP, harnessKey(id)) ? null : String(id)
 
@@ -49,9 +49,9 @@ export function chipFor(m) {
   const id = m && m.harness
   const k = harnessKey(id)
   const raw = harnessRaw(id)
-  const ep = m && m.entrypoint === 'desktop' ? '<span class="chipep">桌面版</span>' : m && m.entrypoint === 'cli' ? '<span class="chipep">命令行</span>' : ''
-  const inf = m && m.harness_inferred ? mark('inf', '按请求头推测的 agent,不是采集记录里认定的') : ''
-  const syn = m && m.session_synthesized ? '<span class="chipsyn" title="这个会话没有 id,按系统提示和时间归到一起">会话边界是推测的</span>' : ''
+  const ep = m && m.entrypoint === 'desktop' ? '<span class="chipep">desktop</span>' : m && m.entrypoint === 'cli' ? '<span class="chipep">CLI</span>' : ''
+  const inf = m && m.harness_inferred ? mark('inf', 'Agent inferred from the request headers, not identified by the capture') : ''
+  const syn = m && m.session_synthesized ? '<span class="chipsyn" title="This session has no id. Its calls were grouped by system prompt and time">session boundary inferred</span>' : ''
   const nameTitle = raw ? ` title="${esc(raw)}"` : ''
   return `${harnessIcon(id)}<span class="chipname"${nameTitle}>${esc(harnessName(id))}</span>${ep}${inf}${syn}`
 }
