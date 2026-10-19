@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script>/* the theme preference, before the first paint (1.5): light / dark pin it, anything else follows the system */try{var t=localStorage.getItem("asight.v2.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
+<title>asight</title>
+<link rel="stylesheet" href="./css/base.css" />
+<link rel="stylesheet" href="./css/shell.css" />
+<link rel="stylesheet" href="./css/library.css" />
+<link rel="stylesheet" href="./css/overview.css" />
+<link rel="stylesheet" href="./css/replay.css" />
+<link rel="stylesheet" href="./css/capture.css" />
+<link rel="stylesheet" href="./css/settings.css" />
+<link rel="stylesheet" href="./css/traffic.css" />
+</head>
+<body>
+<div id="app">
+<aside id="sidebar"></aside>
+<div id="content"><div id="screen"></div></div>
+</div>
+<div id="detail"></div>
+<div id="toasts" aria-live="polite"></div>
+<script type="module" src="./main.mjs"></script>
+</body>
+</html>
