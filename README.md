@@ -342,26 +342,6 @@ not decrypted.
 
 Whether Desktop's own model calls come out decrypted verbatim is not claimed here.
 
-## Leftovers of the earlier capture
-
-`asight off` and `asight uninstall` do not undo what the earlier capture — the base_url reverse proxy, the MITM, the
-Clash Verge steer and the CC-CLI steer — left on a machine. If one is still installed there, take it out by hand
-(check with `asight doctor --only old-ca` and `asight status`; `~/.asight/logs/mitm-events.ndjson` is its log):
-
-```sh
-launchctl bootout gui/$(id -u)/com.asight.mitm   # the resident MITM; likewise com.asight.monitor and com.asight.env
-security delete-certificate -c 'atrace local MITM CA' ~/Library/Keychains/login.keychain-db   # the old CA (by its legacy name)
-launchctl unsetenv NODE_EXTRA_CA_CERTS           # the login-environment CA variable the env primer set
-```
-
-On Linux the old CA sits in your NSS database: `certutil -D -d sql:$HOME/.pki/nssdb -n asight-ca`.
-The old CC-CLI steer (`HTTPS_PROXY` / `NO_PROXY` in `~/.claude/settings.json`) and the Clash block in
-Verge's `Script.js` are yours to revert the same way they were written; v0 leftovers
-(`com.atrace.serve`, `~/.local/share/atrace`, `.atrace-bak`) are only ever reported, never touched.
-
-Captures the earlier capture wrote are **not** read: only `~/.asight/raw/` is. The board's 监测 toggle steers only the old CC-CLI steer — it is labelled 「只管旧 CC-CLI steer」 — and is
-not the collector's switch; `asight off` is.
-
 ## Limits
 
 - **Long sessions are tail-bounded.** One assembled view is capped at 6 MB of source bytes, so a
