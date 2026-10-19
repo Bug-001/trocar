@@ -6,9 +6,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { fork } from 'node:child_process'
 import { rawHome, writeSegment, envLine } from './raw-home.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
 import { usageFile, readUsage, fillUsage } from '../../src/query/usage.mjs'
+import { runQuery, OVERVIEW_USAGE_BYTES } from '../../src/query/named/index.mjs'
 
 const SEG = '20261018T100000Z'
 const T0 = Date.parse('2026-10-18T10:00:00.000Z')
@@ -102,4 +104,109 @@ test('4.2:55 identity: a rewritten segment voids the sidecar; a sealed one is re
   assert.equal(doc[doc.length - 1].m.sealed, true)
   assert.deepEqual(callsOf(home), plain)
   assert.equal(readUsage({ home, segment: SEG }).lines, Infinity)
+})
+
+// ── overview.usage reads the sidecars (3.5 §访问模式, acceptance #10) ──────────────────────────────────────────
+// A sealed segment with sessions A and B, a plaintext one where A goes on and the newest session C holds one record
+// bigger than the byte budget: with no sidecar yet, C stops the computing and A / B come after it.
+const OLD = '20261018T090000Z'
+const DS = { host: 'api.deepseek.com' } // a vendor that reports no write counter: cache_write sums to null
+async function budgetWorld() {
+  const home = rawHome()
+  writeSegment(home, OLD, [seed(0, { s: 1, session: 'A', ...DS }), seed(0, { s: 2, session: 'B', ...DS }), seed(1, { s: 3, session: 'B', ...DS }), seed(2, { s: 4, session: 'B', ...DS })])
+  const { sealSegment } = await import('../../src/raw/seal.mjs')
+  await sealSegment(path.join(home, 'raw', `${OLD}.ndjson`), { lockFile: path.join(home, 'collector', 'lock'), journal: null })
+  writeSegment(home, SEG, [seed(0, { s: 11, session: 'A', ...DS }), logged({ s: 12, session: 'A' }), nonLlm(13),
+    seed(0, { s: 14, session: 'C', ...DS, req_body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'x'.repeat(OVERVIEW_USAGE_BYTES) }] }) })])
+  await segmentIndex({ home, segment: SEG, owner: true })
+  return home
+}
+const complete = (doc) => doc.usage.coverage.sessions_read === doc.usage.coverage.sessions_in_window
+async function until(get, ok, ms = 30_000) {
+  const end = Date.now() + ms
+  for (;;) {
+    const v = await get()
+    if (ok(v)) return v
+    if (Date.now() > end) throw new Error(`no complete answer within ${ms} ms: ${JSON.stringify(v.usage.coverage)}`)
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
+const local = (home, ctx = {}) => runQuery('overview', {}, { home, ...ctx })
+
+test('3.5:93 #10 through the real worker: after it fills, coverage is whole and the sums are the `session` calls\' sums', async () => {
+  const home = await budgetWorld()
+  const child = fork(fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url)), [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] })
+  try {
+    let buf = Buffer.alloc(0)
+    const waiting = []
+    child.stdout.on('data', (d) => {
+      buf = Buffer.concat([buf, d])
+      for (let nl; (nl = buf.indexOf(10)) >= 0;) {
+        const len = Number(buf.subarray(0, nl).toString().split(' ')[1])
+        if (buf.length < nl + 1 + len) return
+        const body = buf.subarray(nl + 1, nl + 1 + len).toString()
+        buf = buf.subarray(nl + 1 + len)
+        waiting.shift()(JSON.parse(body))
+      }
+    })
+    const ask = () => Promise.race([
+      new Promise((r) => { waiting.push(r); child.stdin.write('{"name":"overview","params":{}}\n') }),
+      new Promise((_, no) => setTimeout(() => no(new Error('the worker did not answer within 30 s')), 30_000).unref()),
+    ])
+    const first = await ask()
+    assert.ok(first.usage.coverage.sessions_read < first.usage.coverage.sessions_in_window)
+    assert.equal(first.usage.coverage.reason, 'byte-budget')
+    const doc = await until(ask, complete)
+    assert.equal(doc.usage.coverage.sessions_in_window, 3)
+
+    const want = { input: 0, output: 0, cache_read: 0, cache_write: null, calls: 0 }
+    for (const id of ['A', 'B', 'C']) {
+      const s = await runQuery('session', { id, limit: 500 }, { home })
+      want.calls += s.meta.calls
+      for (const lane of s.analyzed.lanes) for (const c of lane.calls) {
+        if (!(c.status < 400)) continue
+        const u = (c.norm && c.norm.usage) || {}
+        want.input += u.input_tokens ?? 0; want.output += u.output_tokens ?? 0; want.cache_read += u.cache_read_input_tokens ?? 0
+        if (u.cache_creation_input_tokens != null) want.cache_write = (want.cache_write ?? 0) + u.cache_creation_input_tokens
+      }
+    }
+    const got = { input: 0, output: 0, cache_read: 0, cache_write: null, calls: 0 }
+    for (const r of doc.usage.rows) {
+      got.input += r.input; got.output += r.output; got.cache_read += r.cache_read; got.calls += r.calls
+      if (r.cache_write != null) got.cache_write = (got.cache_write ?? 0) + r.cache_write
+    }
+    assert.deepEqual(got, want)
+    assert.ok(want.input > 0, 'the seeds carry usage')
+  } finally {
+    child.kill('SIGKILL')
+  }
+})
+
+test('3.5:93 deleting the sidecars only falls back to the budget; filled again, the document is the same field for field', async () => {
+  const home = await budgetWorld()
+  await local(home, { warm: true })
+  const doc1 = await until(() => local(home, { warm: true }), complete)
+  await fillUsage({ home, segments: [] }) // the queue has drained
+  for (const f of fs.readdirSync(path.join(home, 'index'))) if (f.endsWith('.usage.json')) fs.rmSync(path.join(home, 'index', f))
+  const doc2 = await local(home)
+  assert.ok(doc2.usage.coverage.sessions_read < doc2.usage.coverage.sessions_in_window)
+  const doc3 = await until(() => local(home, { warm: true }), complete)
+  assert.deepEqual(doc3, doc1)
+})
+
+test('3.5:91 with the sidecars whole, overview opens no record body, and the fill left every segment file as it was', async () => {
+  const home = await budgetWorld()
+  const ids = () => fs.readdirSync(path.join(home, 'raw')).sort().map((f) => { const st = fs.statSync(path.join(home, 'raw', f)); return [f, st.ino, st.size, st.mtimeMs] })
+  const before = ids()
+  await until(() => local(home, { warm: true }), complete)
+  await fillUsage({ home, segments: [] })
+  assert.deepEqual(ids(), before)
+  let opened = 0
+  const body = (p) => (typeof p === 'string' || p instanceof URL || Buffer.isBuffer(p)) && /[\\/]raw[\\/][^\\/]+\.(ndjson|sealed)$/.test(String(p))
+  const count = (fn) => function (p, ...a) { if (body(p)) opened++; return fn.call(this, p, ...a) }
+  const f = { ...fs, openSync: count(fs.openSync), readFileSync: count(fs.readFileSync), createReadStream: count(fs.createReadStream),
+    open: count(fs.open), readFile: count(fs.readFile), promises: { ...fs.promises, open: count(fs.promises.open), readFile: count(fs.promises.readFile) } }
+  const doc = await local(home, { fs: f })
+  assert.ok(complete(doc))
+  assert.equal(opened, 0)
 })

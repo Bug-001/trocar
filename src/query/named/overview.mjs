@@ -2,12 +2,13 @@
 //
 // Everything but `usage` is ONE pass over the segment index rows: no record body is opened (3.5 MUST NOT). The window is
 // C.5's: a session whose LAST call falls in [since, until] counts whole; a session-less row counts by its own ts.
-// `usage` is the one part that needs record bodies (the token counters live in the replies), so it reads the in-window
-// sessions newest first through the same assembly `session` uses, and stops before the session that would push the
-// stored bytes read past OVERVIEW_USAGE_BYTES — `coverage` says how far it got and why it stopped (invariant 4).
-import { sessionView } from '../../view/board.mjs';
-import { mapUsage } from '../../model/schema.mjs';
+// `usage` needs each call's token counters, which live in the replies: it takes them from the per-segment usage sidecars
+// (src/query/usage.mjs, 4.2 §用量旁注) and computes the calls they do not cover yet, newest session first, through the
+// same assembly, until the next session would push those computed bytes past OVERVIEW_USAGE_BYTES; a session wholly
+// in the sidecars still counts after that. `coverage` says how far it got and why it stopped (invariant 4). With
+// `warm` (the query worker), the missing segments are filled after the answer.
 import { recordsAt } from '../records.mjs';
+import { readUsage, fillUsage, callFacts } from '../usage.mjs';
 import { asOf, indexRows, sessionFactsOf, sessionGroups } from '../rows.mjs';
 import { rowsKey } from '../warm.mjs';
 import { OVERVIEW_USAGE_BYTES, tsFilter } from './index.mjs';
@@ -15,10 +16,8 @@ import { OVERVIEW_USAGE_BYTES, tsFilter } from './index.mjs';
 export const params = Object.freeze(['since', 'until']);
 
 const add = (sum, v) => (v == null ? sum : (sum ?? 0) + v);
-// No window: every call is slimmed to its cheap meta (norm.usage, wire, status, rec.request.model), no body assembled.
-const META_ONLY = Object.freeze({ cursor: 0, limit: 0 });
 
-export async function run({ home, fs, now, params: p, errors }) {
+export async function run({ home, fs, now, params: p, errors, warm = false }) {
   const keep = tsFilter(p, now);
   const all = await indexRows({ home, fs, errors });
   const counted = []; // [harness, rows] — one entry per in-window session, and one per in-window session-less row
@@ -53,46 +52,59 @@ export async function run({ home, fs, now, params: p, errors }) {
   }
   const harnesses = [...by.values()].sort((a, b) => String(a.harness ?? '\uffff').localeCompare(String(b.harness ?? '\uffff')));
 
-  return { as_of: asOf(all), calls, bytes, sessions: { total: inWindow.length }, harnesses, usage: usageOf({ home, fs, inWindow, errors }) };
+  return { as_of: asOf(all), calls, bytes, sessions: { total: inWindow.length }, harnesses, usage: usageOf({ home, fs, inWindow, errors, warm }) };
 }
 
-function usageOf({ home, fs, inWindow, errors }) {
+function usageOf({ home, fs, inWindow, errors, warm }) {
   const newest = [...inWindow].sort((a, b) => (a[1].last_ts < b[1].last_ts ? 1 : a[1].last_ts > b[1].last_ts ? -1 : 0));
-  const rows = new Map();
+  const needed = (r) => r.is_llm && !r.log_only;
+  const notes = new Map(); // segment → its sidecar (or null), read once per answer; its problems said on first use (D38)
+  const note = (segment) => {
+    if (!notes.has(segment)) {
+      const n = readUsage({ home, segment, fs });
+      notes.set(segment, n);
+      if (n) for (const { where, reason } of n.problems) errors.push({ where, reason });
+    }
+    return notes.get(segment);
+  };
+  const rows = new Map(), toFill = new Set();
   let spent = 0, read = 0, capped = false;
   for (const [id, facts, own] of newest) {
-    const cost = rowsKey(own).bytes;
-    if (spent + cost > OVERVIEW_USAGE_BYTES) { capped = true; break; }
-    spent += cost;
+    const need = own.filter(needed);
+    const missing = need.filter((r) => { const n = note(r.segment); return !(n && r.lineNo <= n.lines); });
+    for (const r of missing) toFill.add(r.segment);
+    let computed = null;
+    if (missing.length) {
+      const cost = rowsKey(missing).bytes;
+      if (capped || spent + cost > OVERVIEW_USAGE_BYTES) { capped = true; continue; }
+      spent += cost;
+      computed = new Map(callFacts(recordsAt({ home, fs, rows: missing, errors })).map((f) => [f.id, f]));
+    }
     read++;
-    const view = sessionView(recordsAt({ home, fs, rows: own, errors }), id, { page: META_ONLY });
-    if (!view) { errors.push({ where: `session/${id}`, reason: 'no record of this session could be read back' }); continue; }
-    for (const lane of view.analyzed.lanes || []) for (const c of lane.calls || []) {
-      const model = (c.rec && c.rec.request && c.rec.request.model) ?? null;
-      const key = JSON.stringify([facts.harness, model, lane.kind]);
+    for (const r of need) {
+      const n = note(r.segment);
+      const f = (n && r.lineNo <= n.lines ? n.facts.get(r.lineNo) : computed && computed.get(r.id));
+      if (!f) continue; // not a call `session` assembles (only counted in the coverage)
+      const key = JSON.stringify([facts.harness, f.model, f.lane]);
       let row = rows.get(key);
-      if (!row) rows.set(key, row = { harness: facts.harness, model, lane: lane.kind, sessions: new Set(), calls: 0, failed: 0, no_usage: 0,
+      if (!row) rows.set(key, row = { harness: facts.harness, model: f.model, lane: f.lane, sessions: new Set(), calls: 0, failed: 0, no_usage: 0,
         input: 0, output: 0, cache_read: 0, cache_write: null, cache_known: true });
       row.sessions.add(id);
       row.calls++;
-      if (!(c.wire && c.wire.cacheSemanticsKnown)) row.cache_known = false;
-      if (c.status == null || c.status >= 400) { row.failed++; continue; }
-      const u = canonical(c);
+      if (!f.cache_known) row.cache_known = false;
+      if (f.failed) { row.failed++; continue; }
+      const u = f.usage;
       if (!u) { row.no_usage++; continue; }
-      row.input += u.input_uncached; row.output += u.output; row.cache_read += u.cache_read;
-      row.cache_write = add(row.cache_write, u.cache_write);
+      row.input += u[0]; row.output += u[1]; row.cache_read += u[2];
+      row.cache_write = add(row.cache_write, u[3]);
     }
   }
+  // After the answer, and only where there is a next query (the worker's `warm`): the one-shot CLI never writes one.
+  if (warm && toFill.size) setImmediate(() => { fillUsage({ home, fs, segments: [...toFill] }).catch(() => {}); });
+  const cmp = (a, b) => (a === b ? 0 : a == null ? 1 : b == null ? -1 : String(a) < String(b) ? -1 : 1);
   return {
     coverage: { sessions_read: read, sessions_in_window: inWindow.length, capped_at: capped ? OVERVIEW_USAGE_BYTES : null, reason: capped ? 'byte-budget' : null },
-    rows: [...rows.values()].map((r) => ({ ...r, sessions: r.sessions.size })),
+    rows: [...rows.values()].map((r) => ({ ...r, sessions: r.sessions.size }))
+      .sort((a, b) => cmp(a.harness, b.harness) || cmp(a.model, b.model) || cmp(a.lane, b.lane)),
   };
-}
-
-// The 3.2 canonical usage of one call, by the wire it arrived in and the vendor that answered (the NULL-write rule is
-// schema.mjs's, per vendor); null when the reply reported none, or in a wire format no mapping exists for.
-function canonical(c) {
-  const raw = c.norm && c.norm.usage;
-  if (!raw || typeof raw !== 'object' || !Object.keys(raw).length || !c.wire) return null;
-  try { return mapUsage(c.wire.format, raw, { vendor: c.wire.vendor }); } catch { return null; }
 }
