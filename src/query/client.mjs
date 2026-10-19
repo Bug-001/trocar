@@ -16,7 +16,7 @@ export const LOCAL_ONLY = Object.freeze(['status', 'doctor'])
 /** Every query name there is (src/query/named/index.mjs QUERIES, which this list is checked against by
  *  test/query/docs.test.mjs — the query core is most of a CLI's load time, so the daemon must be able to refuse an
  *  unknown name without importing it, and before forking a worker for it). */
-export const QUERY_NAMES = Object.freeze(['status', 'doctor', 'sessions', 'session', 'calls', 'traffic', 'block', 'classes', 'segments', 'pricing'])
+export const QUERY_NAMES = Object.freeze(['status', 'doctor', 'sessions', 'session', 'calls', 'traffic', 'overview', 'block', 'classes', 'segments', 'pricing'])
 /** Environment variables that change what the query core answers. Set in the caller's environment → the caller
  *  answers locally, and the worker runs as if none were set (worker.mjs deletes them): one list, one place, so the
  *  two paths cannot disagree about a document. */

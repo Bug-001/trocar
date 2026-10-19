@@ -15,6 +15,7 @@ import * as calls from './calls.mjs';
 import * as block from './block.mjs';
 import * as pricing from './pricing.mjs';
 import * as traffic from './traffic.mjs';
+import * as overview from './overview.mjs';
 
 /** A name or a parameter the table does not have (1.6 §4.1 退出码 2). */
 export class QueryArgError extends Error { constructor(m) { super(m); this.name = 'QueryArgError'; } }
@@ -28,6 +29,7 @@ export const QUERIES = Object.freeze({
   session: { params: session.params, run: session.run },
   calls: { params: calls.params, run: calls.run },
   traffic: { params: traffic.params, run: traffic.run },
+  overview: { params: overview.params, run: overview.run },
   block: { params: block.params, run: block.run },
   classes: { params: classes.params, run: classes.run },
   segments: { params: segments.params, run: segments.run },
@@ -51,6 +53,9 @@ async function verdict(name, { params, errors, userHome, env, platform, deps }) 
 
 // ── parameters every list query shares (§4.1 参数) ────────────────────────────
 export const LIMIT_DEFAULT = 50, LIMIT_MAX = 500;
+/** What `overview` may read back for its `usage` (3.5 §访问模式: bounded by a byte budget, never O(corpus)): stored
+ *  bytes of the in-window sessions it reads, newest first. P1 measures it against the 0.5 s line. */
+export const OVERVIEW_USAGE_BYTES = 16 * 1024 * 1024;
 const whole = (v, name, dflt) => {
   if (v == null || v === '') return dflt;
   const n = Number(v);

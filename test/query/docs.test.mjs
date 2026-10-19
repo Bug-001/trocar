@@ -147,7 +147,7 @@ test('classes 的顶层键与每类的键照 C.5,条数与大小来自段索引'
 // C.5:读段索引的名字都带 as_of = 段索引里最新一条调用的时间(整个索引);索引空时为 null
 test('读段索引的名字都带 as_of', async () => {
   const home = homeWithData(), empty = rawHome()
-  for (const name of ['sessions', 'calls', 'classes', 'segments', 'traffic']) {
+  for (const name of ['sessions', 'calls', 'classes', 'segments', 'traffic', 'overview']) {
     assert.equal((await runQuery(name, {}, { home })).as_of, '2026-10-18T10:00:01.000Z', name)
     assert.equal((await runQuery(name, {}, { home: empty })).as_of, null, name)
   }
