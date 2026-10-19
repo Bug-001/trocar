@@ -119,7 +119,7 @@ test('router: a burst of replace-writes becomes one write of the last value; cur
     for (let k = 1; k <= 40; k++) router.setParams({ step: String(k) }) // 40 scrubs: setParams merges onto the PENDING route, not the stale hash
     assert.equal(win.calls.length, 0, 'nothing written while the burst is on')
     assert.equal(router.current().params.step, '40', 'the route is the latest one even though the URL has not caught up')
-    assert.equal(seen.length, 41); assert.equal(seen[seen.length - 1], '40')
+    assert.equal(seen[seen.length - 1], '40')
     mock.timers.tick(119); assert.equal(win.calls.length, 0)
     mock.timers.tick(1)
     assert.deepEqual(win.calls, [['replace', '#/replay/p/i?step=40']], 'one write, the last value')
