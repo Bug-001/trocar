@@ -13,7 +13,7 @@ import { collectorDir, collectorIn } from './off/paths.mjs';
 import { queryDocument } from './query/client.mjs';
 import { QUERIES } from './query/named/index.mjs';
 
-const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
+const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/', import.meta.url)));
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
