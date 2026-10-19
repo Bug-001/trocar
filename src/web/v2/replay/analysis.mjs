@@ -1,0 +1,136 @@
+// replay/analysis.mjs — pure helpers over the server-baked block list (`flat`) and per-call usage. No DOM, no wire names:
+// everything here reads the one cross-provider block vocabulary (sec · kind · role · bytes · query · key) and the neutral
+// usage shape {read, create, fresh, out}. `create` is null when a vendor reports no cache-write counter; `usage` itself is
+// null when no usage came back at all — neither is ever turned into a zero here.
+import { preview, fmtTime } from '../core/fmt.mjs'
+import { QUIET_CAUSES as QUIET } from '../core/metrics.mjs' // for hasChangeLine below (the export above re-exports the same set)
+// The cache and cost numbers moved to core/metrics.mjs (the one home of the cache predicate, plan P2.4–P2.5); the old names stay here
+// so the replay modules keep importing them from where they always did.
+export { hitRatio, hitPct, hitTier, QUIET_CAUSES, breakSteps, priceRow, priceMatch, costOf, sessionCost } from '../core/metrics.mjs'
+
+// ── composition buckets (the stacked bars) ───────────────────────────────────────────────────────────────────────────
+const COMP_KIND = { thinking: 'thinking', redacted_thinking: 'thinking', tool_use: 'tool_use', server_tool_use: 'tool_use', tool_result: 'tool_result', image: 'image' }
+// Roles belong to the common block vocabulary. A role not in this table lands in `other`, so an unrecognised role is
+// visible instead of being mis-coloured as something that was not observed (invariant 4).
+const COMP_ROLE = { assistant: 'assistant', user: 'user', system: 'system', developer: 'system', tool: 'tool_result' }
+export const CT_ORDER = ['tools', 'system', 'user', 'assistant', 'thinking', 'tool_use', 'tool_result', 'image', 'other']
+
+export function compBucket(b) {
+  if (b.sec === 'tools') return 'tools'
+  if (b.sec === 'system') return 'system'
+  return COMP_KIND[b.kind] || COMP_ROLE[b.role] || 'other'
+}
+// the server's answer for a call wins (it is computed while the blocks are in hand, so it also exists for a call whose body
+// is outside the page window); the local sum is for a call that carries its blocks. Null = not computable (hatched bar).
+export function callComp(s) {
+  if (s && s.comp) return s.comp
+  if (!s || !s.flat || !s.flat.length) return null
+  const c = Object.fromEntries(CT_ORDER.map((k) => [k, 0]))
+  for (const b of s.flat) c[compBucket(b)] += flatBytes(b)
+  return c
+}
+// bytes of one block: the server bakes `bytes` on every block (slim or inline); a block without it counts as unknown (0)
+export const flatBytes = (b) => (b && typeof b.bytes === 'number' ? b.bytes : 0)
+
+// a call whose body was not shipped on this page carries `flat: []` — empty, NOT an empty context. `paged_out` is what tells
+// the two apart, so a diff baseline is only ever fetched through here: null means "no comparison possible".
+export const blocksOf = (c) => (c && !c.paged_out && c.flat && c.flat.length ? c.flat : null)
+
+// ── turns ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// a human query is the server's `query` on a message block (the human text with the harness's injections removed, absent
+// when nothing human remains). Nothing is re-derived from a body here.
+const humanOf = (b) => (b.sec === 'messages' && b.query ? b.query : '')
+
+export function humanTurns(flat) {
+  const out = []
+  flat.forEach((b, i) => {
+    if (b.sec !== 'messages' || b.role !== 'user' || b.kind !== 'text') return
+    const h = humanOf(b)
+    // `text` (the folded original) and `basis` (S1's queryBasis) ride along for the outline's 「第 N 步起」 pairing and
+    // its 「推测」 mark; `label` stays the preview the rows print
+    if (h) out.push({ label: preview(h), text: foldWs(h), basis: b.queryBasis || null, fi: i })
+  })
+  return out
+}
+// whitespace folded the way the server folds its event previews, so the two texts can be compared
+export const foldWs = (t) => String(t || '').replace(/\s+/g, ' ').trim()
+// a turn opens at a human query and runs to the next one, carrying the assistant's call turn and the tool results
+export function messageTurns(flat) {
+  const turns = []
+  let cur = null
+  flat.forEach((b, i) => {
+    if (b.sec !== 'messages') return
+    const human = humanOf(b)
+    if (human || !cur) { cur = { label: human ? preview(human) : '接着上一轮', query: !!human, items: [] }; turns.push(cur) }
+    cur.items.push(i)
+  })
+  for (const t of turns) {
+    const k = t.items.map((i) => flat[i].kind)
+    const tools = k.filter((x) => x === 'tool_use' || x === 'server_tool_use').length
+    // the board's words (2.2 §提问卡): 调用 N 次工具 · 思考 · 工具结果 — the ones this turn has, in this order
+    t.acts = [tools && `调用 ${tools} 次工具`, k.includes('thinking') && '思考', k.includes('tool_result') && '工具结果'].filter(Boolean).join(' · ')
+  }
+  return turns
+}
+
+// ── composition: who eats the re-sent window (2.2 §组成:段权重, D17②) ────────────────────────────────────────────────
+// Bytes are the model-visible CONTENT bytes (Σ flat[].bytes, UTF-8, no JSON shell). The per-segment token is an ESTIMATE:
+// Σ flat[].chars ÷ 4, a block without chars falls back to its bytes — the 组成 popover's calibre sentence says 按字符估,
+// so the number behind it is exactly that. The render is a projection; nothing here enters the normalized schema (invariant 3).
+export const TAX_ORDER = ['tools', 'system', 'history', 'task']
+const charsOf = (b) => (b && typeof b.chars === 'number' ? b.chars : flatBytes(b))
+export function segTax(flat) {
+  const turns = messageTurns(flat)
+  const taskItems = turns.length ? new Set(turns[turns.length - 1].items) : new Set() // the last turn is the current task
+  const allVerbatim = flat.filter((b) => b.sec === 'tools').every((b) => b.verbatim !== false)
+  const seg = { tools: 0, system: 0, history: 0, task: 0 }
+  const chars = { tools: 0, system: 0, history: 0, task: 0 }
+  flat.forEach((b, i) => {
+    const n = flatBytes(b), c = charsOf(b)
+    if (b.sec === 'tools') { seg.tools += n; chars.tools += c }
+    else if (b.sec === 'system') { seg.system += n; chars.system += c }
+    else if (taskItems.has(i)) { seg.task += n; chars.task += c }
+    else { seg.history += n; chars.history += c }
+  })
+  const total = TAX_ORDER.reduce((a, k) => a + seg[k], 0) || 1
+  const culprit = TAX_ORDER.reduce((a, k) => (seg[k] > seg[a] ? k : a), 'tools')
+  return { seg, chars, total, culprit, allVerbatim, pct: (k) => Math.round((seg[k] / total) * 100), est: (k) => Math.round(chars[k] / 4) } // ≈tok = chars / 4
+}
+
+// ── cache reuse ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// hit ratio, the quiet-cause list and the break predicate live in core/metrics.mjs (re-exported above).
+// The 缓存对比步 rule under its 2.3 name: until the server names it (S12 cacheBreak.refGi — landed), the front end
+// applies the same walk — the nearest earlier call of the lane that did not fail.
+export { refOf as cacheRefOf } from '../core/metrics.mjs'
+// does THIS step's window draw the 变化线? ONE predicate for the step bar's 「跳到变化处」 and the window: the prefix
+// actually changed (cause outside QUIET_CAUSES) and there is a block to stand before.
+export function hasChangeLine(call) {
+  const b = call && call.cacheBreak
+  return !!(b && !b.firstCall && b.cause && !QUIET.has(b.cause) && !call.paged_out && !call.unparsed
+    && call.rec && Array.isArray(call.flat) && b.idx < call.flat.length)
+}
+
+// the break to jump to from the playhead: the next one after it (dir > 0) or the previous one before it (dir < 0); null at the ends
+export function breakTarget(breaks, playhead, dir) {
+  if (dir > 0) { const n = breaks.find((b) => b > playhead); return n === undefined ? null : n }
+  for (let i = breaks.length - 1; i >= 0; i--) if (breaks[i] < playhead) return breaks[i]
+  return null
+}
+
+// key-set diff between a reference step and this one (no byte diff): ◆ added = in this step only, removed = in the
+// reference only. Volatile blocks (per-request nonce) change every call by design and never count.
+export function keyDiff(refFlat, curFlat) {
+  const refKeys = new Set(refFlat.map((b) => b.key)), curKeys = new Set(curFlat.map((b) => b.key))
+  const added = new Set(curFlat.filter((b) => !b.volatile && !refKeys.has(b.key)).map((b) => b.key))
+  const removedBlocks = refFlat.filter((b) => !b.volatile && !curKeys.has(b.key))
+  return { added, removed: new Set(removedBlocks.map((b) => b.key)), removedBlocks, refKeys, curKeys }
+}
+
+// a path shown relative to the session's working directory when it is inside it, else as is (no symlink resolution)
+export function relPath(cwd, p) {
+  const s = String(p)
+  return cwd && s.startsWith(cwd + '/') ? s.slice(cwd.length + 1) : s
+}
+
+// a time shown inline: an unknown or invalid one is '—', never blank (no dangling " · " or " @ ")
+export const when = (ts) => fmtTime(ts) || '—'
