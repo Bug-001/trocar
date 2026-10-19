@@ -17,7 +17,10 @@
   ],
   "scripts": {
     "test": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs",
-    "serve": "node bin/asight.mjs serve"
+    "serve": "node bin/asight.mjs serve",
+    "test:browser": "ASIGHT_PLAYWRIGHT=1 node --test --test-concurrency=1 --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs 'test/web-v2/browser/*.test.mjs'"
   },
-  "dependencies": {}
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
+  }
 }
