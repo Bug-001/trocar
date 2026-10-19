@@ -13,7 +13,7 @@ import path from 'node:path';
 import * as face from './face.mjs';
 import { withToken } from './face.mjs';
 import { QUERIES } from '../../src/query/named/index.mjs';
-import { rawHome, writeSegment } from '../query/raw-home.mjs';
+import { rawHome, writeSegment, snapshot } from '../query/raw-home.mjs';
 
 const SEGMENT = '20261018T100000Z';
 
@@ -51,8 +51,12 @@ test('V84: there is no non-GET data route, and the gate holds on every surface',
         assert.equal(r.status, 405, `${method} /api/${name} → ${r.status}: the board has no write interface (D26 · D59③)`);
       }
     }
-    // The control plane's write endpoints are not mounted yet: every non-GET there is 405 too (4.4 门 ④).
-    for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) assert.equal((await request(port, '/control/classes', { method })).status, 405, method);
+    // 4.4 #7: the writes with no endpoint (install, uninstall, autostart; another method on classes) are 405, and HOME is as it was.
+    const before = snapshot(home);
+    for (const [method, p] of [['POST', '/control/install'], ['POST', '/control/uninstall'], ['POST', '/control/autostart'], ['PUT', '/control/classes'], ['DELETE', '/control/classes'], ['PATCH', '/control/classes']]) {
+      assert.equal((await request(port, p, { method })).status, 405, `${method} ${p}`);
+    }
+    assert.deepEqual(snapshot(home), before);
     assert.equal((await request(port, '/api/sessions', { host: 'localhost' })).status, 200);
   } finally { close(); }
 });

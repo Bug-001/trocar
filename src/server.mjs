@@ -66,6 +66,18 @@ function loadStatic() {
 /** `If-None-Match` names `stamp` (quoted or not, weak or strong, one of a list). */
 const matches = (header, stamp) => String(header || '').split(',').some((t) => t.trim().replace(/^W\//, '').replace(/^"|"$/g, '') === stamp);
 
+const BODY_MAX = 64 * 1024; // a control request is a few fields (4.4 §控制面); anything larger is not one
+/** The control request's body as a JSON object, or null when it is not one (too large, not JSON, not an object). The only thing this face parses. */
+const jsonBody = (req) => new Promise((resolve) => {
+  const chunks = []; let n = 0;
+  req.on('data', (c) => { n += c.length; if (n <= BODY_MAX) chunks.push(c); });
+  req.on('error', () => resolve(null));
+  req.on('end', () => {
+    if (n > BODY_MAX) return resolve(null);
+    try { const v = JSON.parse(Buffer.concat(chunks).toString('utf8')); resolve(v && typeof v === 'object' && !Array.isArray(v) ? v : null); } catch { resolve(null); }
+  });
+});
+
 let named = null; // the query core, imported on the first /api request (it is most of a cold start)
 
 export function createServer({ home, token, query, uid = process.getuid?.(), fs, now, env } = {}) {
@@ -80,7 +92,13 @@ export function createServer({ home, token, query, uid = process.getuid?.(), fs,
   // A daemon running as root mounts none of them (`on` / `off` refuse root, 1.6 §1.5): status says why, and every write falls to 405.
   const control = uid === 0
     ? { 'GET status': ({ res }) => sendJson(res, 200, { control: false, user: nodeOs.userInfo().username, root: true, harnesses: [] }) }
-    : { 'GET status': ({ res }) => query.control({ verb: 'status', res }) };
+    : {
+      'GET status': ({ res }) => query.control({ verb: 'status', res }),
+      'POST classes': async ({ req, res }) => {
+        const body = await jsonBody(req);
+        return body ? query.control({ verb: 'classes', body, res }) : sendJson(res, 400, { error: `the request body must be one JSON object of at most ${BODY_MAX} bytes` });
+      },
+    };
 
   async function api(req, res, url) {
     const m = /^\/api\/([^/]+)$/.exec(url.pathname);

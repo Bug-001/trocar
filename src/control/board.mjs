@@ -25,4 +25,14 @@ export const VERBS = Object.freeze({
     const doc = await statusDoc({ home: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps })
     return { status: 200, doc: { control: true, user: doc.user, root: false, harnesses: Object.entries(doc.harnesses).map(([harness, h]) => ({ harness, desired: h.desired, setup: h.setup })) } }
   },
+  /** POST /control/classes: `asight classes`'s own change (classesChange), planned then confirmed; `source:'board'` marks it in the change log.
+   *  A ClassArgError is the caller's mistake: 400 and nothing written. */
+  async classes({ confirm, source: _source, ...op }, { home }) {
+    const [{ classesChange }, { ClassArgError }] = await Promise.all([import('../cli/classes.mjs'), import('../classes/table.mjs')])
+    const change = (dryRun) => classesChange(op, { home, source: 'board', dryRun }).receipt
+    try { return await planThenConfirm({ dryRun: () => change(true), run: () => change(false), confirm }) } catch (e) {
+      if (e instanceof ClassArgError) return { status: 400, doc: { error: e.message } }
+      throw e
+    }
+  },
 })
