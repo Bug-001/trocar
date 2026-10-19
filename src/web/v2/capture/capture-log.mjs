@@ -15,6 +15,7 @@ import { copyBtn } from '../core/dom.mjs'
 import { redactUrlCredentials } from '../core/sensitive.mjs'
 import { failureSentence, pollCaptureHealth, agentFacts } from '../core/capture-verdict.mjs'
 import { CODE, NOT_CAPTURED_EXPECTED, LOG } from '../labels/capture.mjs'
+import { failureWord } from '../../../cli/words.mjs'
 
 const mono = (s) => `<span class="mono">${esc(s)}</span>`
 const when = (t) => esc(fmtWhen(t))
@@ -83,51 +84,52 @@ function logRowHtml(g, open) {
     ? `${last.error.type || ''} ${last.error.message || ''}${last.error.side ? ` (${last.error.side})` : ''}`.trim()
     : last.error != null ? String(last.error) : null
   const tech = [
-    ['组键', { m: String(g.key ?? '') }],
-    ...(last.code != null ? [['码', { m: String(last.code) }]] : []),
-    ...(last.event != null ? [['事件', { m: String(last.event) }]] : []),
-    ...(last.where != null ? [['位置', { m: String(last.where) }]] : []),
+    ['group key', { m: String(g.key ?? '') }],
+    ...(last.code != null ? [['code', { m: String(last.code) }]] : []),
+    ...(last.event != null ? [['event', { m: String(last.event) }]] : []),
+    ...(last.where != null ? [['where', { m: String(last.where) }]] : []),
     ...(last.pid != null ? [['pid', { m: String(last.pid) }]] : []),
     ...(last.host != null ? [['host', { m: redactUrlCredentials(String(last.host)) }]] : []),
-    ...(last.peer != null ? [['对端', { m: redactUrlCredentials(String(last.peer)) }]] : []),
+    ...(last.peer != null ? [['peer', { m: redactUrlCredentials(String(last.peer)) }]] : []),
     ...(last.flow_id != null ? [['flow', { m: String(last.flow_id) }]] : []),
-    ...(last.reason != null ? [['原因', String(last.reason)]] : []), // 原样 — the server's own words, never translated here
-    ...(err != null ? [['错误', err]] : []),
-    ['第一次', String(g.first_ts ?? '—')], ['最近一次', String(g.last_ts ?? '—')],
+    ...(last.reason != null ? [['reason', String(last.reason)]] : []), // 原样 — the server's own words, never translated here
+    ...(err != null ? [['error', err]] : []),
+    ['first', String(g.first_ts ?? '—')], ['latest', String(g.last_ts ?? '—')],
   ]
   return `<div class="lr" data-key="${esc(String(g.key ?? ''))}">` +
     `<span class="t">${t}</span>` +
     `<span class="ag">${who}</span>` +
     `<span class="say">${esc(s.text)}</span>` +
-    `<span class="cnt">${esc(String(g.count ?? '?'))} 次</span>` +
-    `<button type="button" class="lgo" data-lrow="lx-${slug}" aria-expanded="${open}" aria-controls="lx-${slug}" title="展开这一行"><span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span></button>` +
+    `<span class="cnt">×${esc(String(g.count ?? '?'))}</span>` +
+    `<button type="button" class="lgo" data-lrow="lx-${slug}" aria-expanded="${open}" aria-controls="lx-${slug}" title="Expand this row"><span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span></button>` +
     `<div class="lx" id="lx-${slug}"${open ? '' : ' hidden'}>` +
     `<p class="fine">${esc(LOG.metadataOnly)}</p>` +
-    disclosureHtml({ id: `lx-${slug}-tech`, title: '技术细节', body: techGrid(tech) + copyBtn(redactUrlCredentials(JSON.stringify({ key: g.key, count: g.count, first_ts: g.first_ts, last_ts: g.last_ts, last }, null, 2)), '复制诊断信息') }) +
+    disclosureHtml({ id: `lx-${slug}-tech`, title: 'Technical details', body: techGrid(tech) + copyBtn(redactUrlCredentials(JSON.stringify({ key: g.key, count: g.count, first_ts: g.first_ts, last_ts: g.last_ts, last }, null, 2)), 'Copy diagnostics') }) +
     `</div></div>`
 }
 
 // ── the notes of the last install / uninstall (1.9): one line per note of the newest run ────────────────────────
-// 时刻 · agent (when the note names one) · 路径 (等宽) · one sentence — by code from CODE, a result line as
-// 结果:<outcome 原样>, a prior-value line as 替换了原来的值, else the reason as it came.
+// time · agent (when the note names one) · path (monospace) · one sentence — the CLI's word for its (where, code), else
+// CODE's, a result line with the outcome as-is, a prior-value line, else the reason as it came.
 export function notesHtml(h) {
   const notes = (h && h.collector && h.collector.install) || {}
-  const line = (n) => {
+  const line = (where) => (n) => {
     if (!n) return ''
     const who = n.harness != null
       ? `${harnessIcon(n.harness)}<span class="chipname">${esc(harnessName(harnessKey(n.harness)))}</span>`
       : `<span class="c2">${esc(LOG.who.collector)}</span>`
     let what = ''
-    if (n.code != null && has(CODE, n.code)) what = CODE[n.code]
+    if (failureWord(n.where || where, n.code)) what = failureWord(n.where || where, n.code)
+    else if (n.code != null && has(CODE, n.code)) what = CODE[n.code]
     else if (n.kind === 'result' && n.outcome != null) what = LOG.resultLine(n.outcome)
     else if (n.kind === 'prior-value') what = LOG.priorValue
     else what = n.reason || ''
     return `<div class="lr-note"><span class="t">${when(n.ts)}</span><span class="ag">${who}</span>` +
       `<span class="what">${n.path != null ? mono(String(n.path)) + ' ' : ''}${esc(what)}</span></div>`
   }
-  const section = (title, list) => !Array.isArray(list) || !list.length ? '' :
-    `<section class="cblock" aria-label="${esc(title)}"><h2 class="sec-h">${esc(title)}</h2>${list.map(line).join('')}</section>`
-  return section(LOG.install, notes.install) + section(LOG.uninstall, notes.uninstall)
+  const section = (title, list, where) => !Array.isArray(list) || !list.length ? '' :
+    `<section class="cblock" aria-label="${esc(title)}"><h2 class="sec-h">${esc(title)}</h2>${list.map(line(where)).join('')}</section>`
+  return section(LOG.install, notes.install, 'install') + section(LOG.uninstall, notes.uninstall, 'uninstall')
 }
 
 // ── the page-bottom 技术细节 (1.9 last row): by-design not-captured counts, the raw layer's recent non-success
@@ -135,7 +137,7 @@ export function notesHtml(h) {
 export function footHtml(h) {
   const c = (h && h.collector) || {}, raw = (h && h.raw) || {}, read = (h && h.read) || {}
   const rows = []
-  for (const [k, n] of Object.entries(c.expected || {})) if (typeof n === 'number' && n > 0) rows.push(['按设计不记录', `${has(NOT_CAPTURED_EXPECTED, k) ? NOT_CAPTURED_EXPECTED[k] : k} ${n} 次`])
+  for (const [k, n] of Object.entries(c.expected || {})) if (typeof n === 'number' && n > 0) rows.push(['not recorded by design', `${has(NOT_CAPTURED_EXPECTED, k) ? NOT_CAPTURED_EXPECTED[k] : k} ×${n}`])
   for (const p of Array.isArray(raw.problems) ? raw.problems : []) {
     const f = p && (p.file || p.target) != null ? redactUrlCredentials(String(p.file || p.target)) : ''
     rows.push([LOG.rawTitle, `${p && p.op != null ? p.op : '?'} · ${p && p.outcome != null ? p.outcome : '?'}${f ? ` · ${f}` : ''}${p && p.reason ? ` · ${p.reason}` : ''}`])
@@ -143,7 +145,7 @@ export function footHtml(h) {
   for (const f of Array.isArray(read.files) ? read.files : []) rows.push([LOG.filesTitle, redactUrlCredentials(f)])
   if (!rows.length) return ''
   return disclosureHtml({
-    id: 'caplog-foot', title: '技术细节', open: false,
+    id: 'caplog-foot', title: 'Technical details', open: false,
     summary: Object.values(c.expected || {}).some((n) => typeof n === 'number' && n > 0) ? LOG.expectedTitle : '',
     body: techGrid(rows),
   })
@@ -152,8 +154,8 @@ export function footHtml(h) {
 // ── the whole main in one string (like the 采集 page): the explanation line, the table, the manifest error, the
 // notes, the foot. The 503 state (never a good answer) says 读不到采集状态 and draws no table — never an empty one.
 export function pageLogHtml(h, { filter = null, openByReader = null } = {}) {
-  if (h == null) return '<p class="caplog-none">读取中</p>' // no answer yet — never an invented empty table
-  if (h.unreadable != null) return `<p class="caplog-none">读不到采集状态 · ${esc(String(h.unreadable))}</p>`
+  if (h == null) return '<p class="caplog-none">Reading</p>' // no answer yet — never an invented empty table
+  if (h.unreadable != null) return `<p class="caplog-none">Capture health could not be read · ${esc(String(h.unreadable))}</p>`
   const read = h.read || {}
   const { html, groups, filtered } = logRowsOf(h, { filter, openByReader })
   const bits = [LOG.window(read.window_hours ?? 24)]
@@ -162,14 +164,14 @@ export function pageLogHtml(h, { filter = null, openByReader = null } = {}) {
   const say = `<p class="caplog-say">${bits.map(esc).join('<span aria-hidden="true"> · </span>')}</p>` +
     (Array.isArray(read.errors) && read.errors.length ? disclosureHtml({
       id: 'caplog-read-err', title: LOG.unreadable(read.errors.length), open: false,
-      body: techGrid(read.errors.map((e) => ['读不出', `${redactUrlCredentials(e.file)}: ${e.error}`])),
+      body: techGrid(read.errors.map((e) => ['could not be read', `${redactUrlCredentials(e.file)}: ${e.error}`])),
     }) : '')
   const table = groups.length
-    ? `<div class="lr h"><span>时间</span><span>agent</span><span class="say">发生了什么</span><span class="cnt">次数</span><span></span></div>${html}`
+    ? `<div class="lr h"><span>Time</span><span>Agent</span><span class="say">What happened</span><span class="cnt">Count</span><span></span></div>${html}`
     : `<p class="caplog-none">${esc(LOG.none)}</p>`
   const me = h.collector && h.collector.manifest_error
     ? `<section class="cblock" aria-label="${esc(LOG.manifestError)}"><p>${esc(LOG.manifestError)} · ${mono(String(h.collector.manifest_error))}</p></section>` : ''
-  return `<div class="caplog-bar">${say}</div><section class="crows" aria-label="采集失败">${table}</section>${me}${notesHtml(h)}${footHtml(h)}`
+  return `<div class="caplog-bar">${say}</div><section class="crows" aria-label="Capture failures">${table}</section>${me}${notesHtml(h)}${footHtml(h)}`
 }
 
 // ── the screen ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -194,8 +196,8 @@ export function mount(el, ctx) {
     if (sig !== headSig) {
       headSig = sig
       const menu = menuButton({
-        label: '按 agent 筛选', title: filter ? harnessName(filter) : '全部 agent',
-        items: [{ label: '全部 agent', href: '#/capture/log' }, ...agents.map((a) => ({ label: harnessName(a), href: `#/capture/log?h=${encodeURIComponent(a)}` }))],
+        label: 'Filter by agent', title: filter ? harnessName(filter) : 'All agents',
+        items: [{ label: 'All agents', href: '#/capture/log' }, ...agents.map((a) => ({ label: harnessName(a), href: `#/capture/log?h=${encodeURIComponent(a)}` }))],
       })
       headEl.innerHTML = `<header class="pagehead"><h1 class="pagename">${esc(SCREEN_NAME['capture-log'])}</h1>` +
         `<span class="tools">${menu}<span class="readat">${stamp}</span></span></header>`
