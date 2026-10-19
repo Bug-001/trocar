@@ -433,9 +433,23 @@ export const warmSegmentIndex = ({ home = asightHome(), segment, fs = nodeFs } =
 
 // WHICH SEGMENT IS BEING WRITTEN (main-session decision, 2026-10-18): there is no `.closed` marker.
 // The running daemon records its current segment in its lock file (~/.asight/collector/lock), and a
-// lock only counts when its pid + start time check out (src/off/daemon-stop.mjs readDaemonLock). Every
-// other plaintext segment is closed; one with a `.sealed` beside it is sealed.
-const defaultLockState = (home, fs) => readDaemonLock({ file: path.join(collectorHome(home), 'lock'), fs });
+// lock only counts when its pid is alive and the lock is fresh (src/off/daemon-stop.mjs readDaemonLock).
+//
+// A READER ASKS NO QUESTION ABOUT A PROCESS, and takes only a FRESH lock as "being written"
+// (`identity: NO_IDENTITY`, and `state === 'running'` below). The identity pair (a pid's creation time + the
+// machine's boot time) is there so that `off` cannot act on a REUSED pid; on Windows every such question costs
+// one powershell.exe start — ~450 ms on a Windows test machine (src/off/proc.mjs winIdentity) — when it is asked outside
+// the memo scope a command gives it. `allSegments` asks it once per `query segments` / `query classes`, so each
+// of those paid it: 673 / 703 ms through the daemon against 223 / 256 ms in a HOME with no lock file at all
+// (a Windows test machine, 2026-10-19), with the whole difference in that one question.
+// Without the pair `readDaemonLock` reports `verified: false` and judges the lock by its age alone, which is
+// exactly the evidence a LABEL needs and is strictly MORE faithful than the identity check was: the lock is
+// refreshed every second (daemon.mjs lockRefreshMs) and only by the daemon that holds the segment, so a lock
+// fresh within DAEMON_LOCK_FRESH_MS names the segment being written, and a lock nobody refreshes any more
+// (the daemon died, the machine rebooted) names nothing — where before, an `unresponsive` lock kept its
+// segment labelled `writing` for ever and only a pid that was gone or provably reused took the label off.
+const NO_IDENTITY = () => ({});
+const defaultLockState = (home, fs) => readDaemonLock({ file: path.join(collectorHome(home), 'lock'), fs, identity: NO_IDENTITY });
 
 // A segment that has BOTH files was interrupted after the rename and before the plaintext was deleted: the plaintext
 // wins (4.2:30), so it is the source, it gives the bytes, and the state is `closed` — not `sealed`, which would say the
@@ -453,7 +467,7 @@ export async function allSegments({ home = asightHome(), fs = nodeFs, lockState 
     seen.set(p.segment, at);
   }
   const L = lockState() || {};
-  const current = (L.state === 'running' || L.state === 'unresponsive') && L.lock ? L.lock.segment || null : null;
+  const current = L.state === 'running' && L.lock ? L.lock.segment || null : null;
   const out = [];
   for (const [segment, at] of [...seen].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     const { records, problems, source } = await warmSegmentIndex({ home, segment, fs });

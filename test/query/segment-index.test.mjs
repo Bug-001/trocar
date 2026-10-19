@@ -192,6 +192,11 @@ test('段的状态:守护进程的当前段在写,其余关闭,带 .sealed 的�
   // a daemon that is not running holds no segment: both plaintext segments are closed
   const idle = await allSegments({ home, lockState: () => ({ state: 'stale', lock: { pid: 1, segment: SEG2 } }) })
   assert.deepEqual(idle.map((s) => s.state), ['sealed', 'closed', 'closed'])
+  // nor does a lock nobody refreshes any more: only a FRESH lock names the segment being written, which is the
+  // whole evidence a reader has and the only one it needs — it asks no question about any process (the default
+  // lock reader passes no identity, because on Windows that question costs a powershell.exe start per query).
+  const wedged = await allSegments({ home, lockState: () => ({ state: 'unresponsive', lock: { pid: 1, segment: SEG2 }, age_ms: 60_000 }) })
+  assert.deepEqual(wedged.map((s) => s.state), ['sealed', 'closed', 'closed'])
 })
 
 test('封存后记录 id 与索引字段不变,封存件里每条记录按 id 回源仍是同一批字节(V88 读取侧)', async (t) => {
@@ -311,4 +316,23 @@ test('段列表走那唯一一处温读:同一个进程里第二次不再读索�
   const again = await allSegments({ home, fs: counting, lockState: () => ({ state: 'none' }) })
   assert.deepEqual(read, [], 'nothing moved, so no index file is read or parsed again')
   assert.deepEqual(again, first)
+})
+
+// The DEFAULT lock reader (no `lockState` injected), which is the one every `query segments` / `query classes`
+// uses: the evidence is the lock file alone — its pid being alive and WHEN it was last refreshed. Nothing is
+// asked of the OS about that process: on Windows the identity question (creation time + boot time, which only
+// `off` needs, so that it cannot act on a reused pid) costs one powershell.exe start, ~450 ms per query on the
+// test machine, and it was the whole of `segments`/`classes` being 673/703 ms there against 223/256 ms in a HOME with
+// no lock file at all (2026-10-19).
+test('a reader takes only a FRESH lock as "being written", and asks nothing about the process', async () => {
+  const home = rawHome()
+  writeSegment(home, SEG, [{ id: 'a' }])
+  const lock = path.join(home, 'collector', 'lock')
+  fs.mkdirSync(path.dirname(lock), { recursive: true })
+  // this very process, so the pid IS alive: what decides is the age, nothing else
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, segment: SEG }))
+  assert.deepEqual((await allSegments({ home })).map((s) => s.state), ['writing'], 'a lock refreshed just now names the segment being written')
+  const old = Date.now() / 1000 - 600
+  fs.utimesSync(lock, old, old)
+  assert.deepEqual((await allSegments({ home })).map((s) => s.state), ['closed'], 'a lock nobody has refreshed for ten minutes names nothing: the daemon that held it is gone')
 })
