@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { captureHealth } from '../../src/health/read.mjs'
+import { failureBrief } from '../../src/cli/words.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox } from './fixtures/dispatch-ctx.mjs'
 
@@ -30,4 +31,20 @@ test('C.3 `health`: status --json carries captureHealth\'s verdict, its state in
     assert.equal(doc.health.state, health.summary.state)
     for (const [k, v] of Object.entries(doc.health)) assert.ok(['state', 'since', 'reason', 'signal', 'n', 'read_errors'].includes(k) && v != null, k)
   }
+})
+
+test('V92: two failures sharing a code under two `where`s are two groups, each with its newest reason squashed; --failures prints one line per problem group', async () => {
+  const health = healthOver([
+    { ts: at(300), event: 'failure', where: 'daemon', code: 'start-failed', reason: 'first' },
+    { ts: at(200), event: 'failure', where: 'daemon', code: 'start-failed', reason: 'newest\n  of   daemon' },
+    { ts: at(100), event: 'failure', where: 'start', code: 'start-failed', reason: 'of start' },
+  ])
+  const s = sandbox(), deps = { captureHealth: () => health }
+  const doc = (await s.run(['status', '--json'], { deps })).io.json()
+  const mine = doc.failures.groups.filter((g) => g.code === 'start-failed')
+  assert.deepEqual(mine.map((g) => [g.level, g.where, g.count, g.reason]).sort(), [['problem', 'daemon', 2, 'newest of daemon'], ['problem', 'start', 1, 'of start']])
+  for (const g of doc.failures.groups) assert.deepEqual(Object.keys(g).filter((k) => !['level', 'where', 'code', 'count', 'first_ts', 'last_ts', 'harness', 'reason'].includes(k)), [])
+  const text = (await s.run(['status', '--failures'], { deps })).io.stdoutText()
+  const problems = doc.failures.groups.filter((g) => g.level === 'problem')
+  for (const g of problems) assert.equal(text.split('\n').filter((l) => l.includes(failureBrief(g))).length, 1, failureBrief(g))
 })

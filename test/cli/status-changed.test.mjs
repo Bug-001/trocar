@@ -45,13 +45,6 @@ const NOW = Date.now()
 const ago = (ms) => new Date(NOW - ms).toISOString()
 const healthOf = (records) => ({ collector: { failures: foldFlows(records, { now: NOW }).groups, expected: {}, conditions: [] }, raw: { failures: [] }, read: { since: ago(24 * 3600e3) } })
 
-test('C.3 failures.groups: failures of one code fold into one problem group with its count and first / last ts', async () => {
-  const s = await installedHome()
-  const recs = ['engine', 'start', 'route'].map((where, i) => ({ ts: ago((3 - i) * 60e3), event: 'failure', where, code: 'lookup-miss', agent: 'codex' }))
-  const doc = await docOf(s, { request: down(), deps: { captureHealth: () => healthOf(recs) } })
-  assert.deepEqual(doc.failures.groups, [{ code: 'lookup-miss', level: 'problem', count: 3, first_ts: recs[0].ts, last_ts: recs[2].ts, harness: 'codex' }])
-})
-
 const GROUPS_MAX = 50 // 1.6 附录 C.3: 最多 50 组
 test('C.3 failures.groups: at most 50, the newest first, and the cut is in errors', async () => {
   const s = await installedHome()

@@ -34,7 +34,7 @@ import { captureHealth } from '../health/read.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
 import { formatStatus, formatHealth, failuresBlock, statusSummary, statusDetail } from './status-text.mjs'
 import { colors, noColor, unknown as unknownText2 } from './text.mjs'
-import { failureBrief } from './words.mjs'
+import { squashed } from './words.mjs'
 import { tilde } from './receipt.mjs'
 import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
 
@@ -337,36 +337,42 @@ function formsOf(f) {
 }
 
 /** 附录 C.3 `failures`: how many problems, how many expected and note findings, since when and the newest — counts only real problems (§3.5) — and
- *  `groups`: the groups captureHealth already folded, refolded by code, newest first, at most GROUPS_MAX (the cut is said in `errors`). */
+ *  `groups`: what captureHealth read, folded by level + where + code (the key FAILURE_WORDS reads), each with the newest record's reason, newest first,
+ *  at most GROUPS_MAX (the cut is said in `errors`). The one fold of the document's groups: `status --failures` prints these (C.3, V92). */
 const GROUPS_MAX = 50
+const reasonText = (r) => (typeof r === 'string' && squashed(r)) || null
 function failuresOf(f) {
   const h = effectiveHealth(f).health
   if (!h) return null
   const c = h.collector || {}
-  const groups = [...(c.failures || []), ...((h.raw && h.raw.failures) || [])]
+  const problem = (where) => (g) => {
+    const l = g.last || {}
+    // a failure event's where / code; a connection row is `flow` with its not_captured; the raw journal's op / outcome; else the event
+    const w = where || l.where || (l.event == null ? 'flow' : l.event)
+    return { level: 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent, reason: reasonText(l.reason ?? (l.error && l.error.message)) }
+  }
+  const groups = [...(c.failures || []).map(problem(null)), ...((h.raw && h.raw.failures) || []).map(problem('raw'))]
   const expected = Object.values(c.expected || {}).reduce((n, x) => n + (Number(x) || 0), 0)
   let latest = null
   for (const g of groups) if (String(g.last_ts || '') >= String(latest || '')) latest = g.last_ts || null
-  // the code a group's record carries: a failure's code, a connection row's not_captured (or its reason), the raw journal's outcome, else the event
-  const codeOf = (l) => (l && (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason)) || null
   const parts = [
-    ...groups.map((g) => ({ code: codeOf(g.last) || g.key, level: 'problem', count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: g.last && g.last.agent })),
-    ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ code, level: 'expected', ...g })),
+    ...groups,
+    ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ level: 'expected', where: 'flow', code, ...g, reason: null })),
     // a condition holds since its record (`since`); one with neither a code nor a kind, or no time, is no group (no time is made up)
-    ...(c.conditions || []).filter((x) => (x.code || x.kind) && x.since).map((x) => ({ code: x.code || x.kind, level: 'note', count: 1, first_ts: x.since, last_ts: x.since, agent: x.agent })),
+    ...(c.conditions || []).filter((x) => (x.code || x.kind) && x.since).map((x) => ({ level: 'note', where: x.where || x.kind || null, code: x.code || x.kind, count: 1, first_ts: x.since, last_ts: x.since, agent: x.agent, reason: reasonText(x.reason) })),
   ]
   const by = new Map()
   for (const p of parts) {
-    const k = `${p.level}\u0000${p.code}`, g = by.get(k)
+    const k = `${p.level}\u0000${p.where}\u0000${p.code}`, g = by.get(k)
     const harness = HARNESS_IDS.includes(p.agent) ? p.agent : null
-    if (!g) { by.set(k, { code: p.code, level: p.level, count: p.count, first_ts: p.first_ts, last_ts: p.last_ts, harness }); continue }
+    if (!g) { by.set(k, { level: p.level, where: p.where, code: p.code, count: p.count, first_ts: p.first_ts, last_ts: p.last_ts, harness, reason: p.reason }); continue }
     g.count += p.count
     if (String(p.first_ts) < String(g.first_ts)) g.first_ts = p.first_ts
-    if (String(p.last_ts) > String(g.last_ts)) g.last_ts = p.last_ts
-    if (g.harness !== harness) g.harness = null // groups of one code from more than one harness: the group names none
+    if (String(p.last_ts) >= String(g.last_ts)) { g.last_ts = p.last_ts; g.reason = p.reason }
+    if (g.harness !== harness) g.harness = null // one group from more than one harness: the group names none
   }
   const all = [...by.values()].map(({ harness, ...g }) => (harness ? { ...g, harness } : g)).sort((a, b) => (String(a.last_ts) < String(b.last_ts) ? 1 : String(a.last_ts) > String(b.last_ts) ? -1 : 0))
-  return { problem: groups.reduce((n, g) => n + (g.count || 1), 0), expected, note: c.conditions ? c.conditions.length : 0, since: h.read && h.read.since ? h.read.since : null, latest,
+  return { problem: groups.reduce((n, g) => n + g.count, 0), expected, note: c.conditions ? c.conditions.length : 0, since: h.read && h.read.since ? h.read.since : null, latest,
     groups: all.slice(0, GROUPS_MAX), ...(all.length > GROUPS_MAX ? { groups_cut: all.length } : {}) }
 }
 
@@ -508,6 +514,6 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
       for (const l of statusDetail(doc, h, { finding, now, colors: c })) io.out(l)
     })
   } else for (const l of statusSummary(doc, { now, colors: c })) io.out(l)
-  if (failures) { io.out(''); for (const l of failuresBlock(effectiveHealth(f).health, { now })) io.out(l) }
+  if (failures) { io.out(''); for (const l of failuresBlock(doc.failures, effectiveHealth(f).health, { now })) io.out(l) }
   return { exit, f }
 }

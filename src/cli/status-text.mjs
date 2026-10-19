@@ -158,15 +158,13 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
 export const portOf = (url) => { const m = /^(?:\w+:\/\/)?(?:127\.0\.0\.1|\[?::1\]?|localhost):(\d+)/.exec(String(url || '')); return m ? `:${m[1]}` : String(url || unknown('no address recorded')) }
 
 // ── `--failures` (§3.5: one line per kind of problem, then Expected) ──────────────────────────────────────────────
-/** The whole wall of the last 24 hours: one line per kind of problem, then the `Expected` section (what is not a problem by design). */
-export function failuresBlock(health, { now = Date.now() } = {}) {
-  if (!health) return [`Problems: ${unknown('capture health could not be read')}`]
-  const groups = [...((health.collector && health.collector.failures) || []), ...((health.raw && health.raw.failures) || [])]
-  const lines = [groups.length ? `Problems in the last 24 hours: ${groups.reduce((n, g) => n + (g.count || 1), 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : 'No problems in the last 24 hours.']
-  if (groups.length) {
-    const rows = groups.map((g) => [ago(g.last_ts, now), `x${g.count || 1}`, failureBrief(g)])
-    lines.push(...columns(rows).map((l) => `  ${l}`))
-  }
+/** The whole wall of the last 24 hours: one line per `level:'problem'` group of the document's `failures` (C.3, the board's capture log reads the same
+ *  groups and words), then the `Expected` section (what is not a problem by design). */
+export function failuresBlock(failures, health, { now = Date.now() } = {}) {
+  if (!failures || !health) return [`Problems: ${unknown('capture health could not be read')}`]
+  const groups = failures.groups.filter((g) => g.level === 'problem')
+  const lines = [groups.length ? `Problems in the last 24 hours: ${groups.reduce((n, g) => n + g.count, 0)} in ${groups.length} kind${groups.length === 1 ? '' : 's'}` : 'No problems in the last 24 hours.']
+  if (groups.length) lines.push(...columns(groups.map((g) => [ago(g.last_ts, now), `x${g.count}`, failureBrief(g)])).map((l) => `  ${l}`))
   const exp = Object.entries((health.collector && health.collector.expected) || {})
   lines.push('', 'Expected')
   if (exp.length) lines.push(...exp.map(([k, n]) => `  ${expectedText(k)}: ${n}`))
