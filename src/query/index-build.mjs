@@ -428,7 +428,7 @@ export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs, 
 // `allSegments` also called would be a cycle between the two modules.
 const segRows = warmCache({ maxBytes: 64 * 1024 * 1024, bytes: (v) => v.records.length * 320 }); // ~320 B per index row in memory (measured on the reference dataset)
 // Both files, so a plaintext that is sealed (or a sealed file rebuilt) is a new stamp: the plaintext wins while it exists (4.2:30).
-const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home), `${segment}.ndjson`), fs)}|${statKey(path.join(rawDir(home), `${segment}.sealed`), fs)}`;
+export const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home), `${segment}.ndjson`), fs)}|${statKey(path.join(rawDir(home), `${segment}.sealed`), fs)}`;
 /** warmSegmentIndex({home, segment, fs}) → the same `segmentIndex()` answer, read from disk only when that segment's
  *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory. */
 export const warmSegmentIndex = ({ home = asightHome(), segment, fs = nodeFs } = {}) =>

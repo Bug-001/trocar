@@ -16,6 +16,8 @@ import * as block from './block.mjs';
 import * as pricing from './pricing.mjs';
 import * as traffic from './traffic.mjs';
 import * as overview from './overview.mjs';
+import { createHash } from 'node:crypto';
+import * as src from '../stamp.mjs';
 
 /** A name or a parameter the table does not have (1.6 §4.1 退出码 2). */
 export class QueryArgError extends Error { constructor(m) { super(m); this.name = 'QueryArgError'; } }
@@ -23,17 +25,17 @@ export class QueryArgError extends Error { constructor(m) { super(m); this.name 
 export const QUERIES = Object.freeze({
   // `status` and `doctor` are the same documents the two commands print: the query IS that document
   // (src/cli/status.mjs statusDoc / doctor.mjs doctorDoc), so the two can never disagree.
-  status: { params: Object.freeze(['harness']), run: (c) => verdict('status', c) },
-  doctor: { params: Object.freeze(['harness']), run: (c) => verdict('doctor', c) },
-  sessions: { params: sessions.params, run: sessions.run },
-  session: { params: session.params, run: session.run },
-  calls: { params: calls.params, run: calls.run },
-  traffic: { params: traffic.params, run: traffic.run },
-  overview: { params: overview.params, run: overview.run },
-  block: { params: block.params, run: block.run },
-  classes: { params: classes.params, run: classes.run },
-  segments: { params: segments.params, run: segments.run },
-  pricing: { params: pricing.params, run: pricing.run },
+  status: { params: Object.freeze(['harness']), run: (c) => verdict('status', c), stamp: () => null },
+  doctor: { params: Object.freeze(['harness']), run: (c) => verdict('doctor', c), stamp: () => null },
+  sessions: { params: sessions.params, run: sessions.run, stamp: src.corpus },
+  session: { params: session.params, run: session.run, stamp: src.corpus },
+  calls: { params: calls.params, run: calls.run, stamp: src.corpus },
+  traffic: { params: traffic.params, run: traffic.run, stamp: src.corpus },
+  overview: { params: overview.params, run: overview.run, stamp: src.corpus },
+  block: { params: block.params, run: block.run, stamp: src.corpus },
+  classes: { params: classes.params, run: classes.run, stamp: src.classes, clock: true },
+  segments: { params: segments.params, run: segments.run, stamp: src.corpus },
+  pricing: { params: pricing.params, run: pricing.run, stamp: src.pricing },
 });
 
 /**
@@ -107,10 +109,32 @@ export function parseTime(v, { name = 'time', now = Date.now() } = {}) {
  */
 export async function runQuery(name, params = {}, ctx = {}) {
   const { home = asightHome(), fs = nodeFs, now = Date.now } = ctx;
-  const q = QUERIES[name];
-  if (!q) throw new QueryArgError(`asight query: no query called ${JSON.stringify(name)} (names: ${Object.keys(QUERIES).join(', ')})`);
-  for (const k of Object.keys(params)) if (!q.params.includes(k)) throw new QueryArgError(`asight query ${name}: no parameter --${k} (its parameters: ${q.params.length ? q.params.map((p) => '--' + p).join(' ') : 'none'})`);
+  const q = checked(name, params);
   const errors = [];
   const body = await q.run({ ...ctx, home, fs, now, params, errors });
   return { schema: SCHEMA_VERSION, command: name, ok: errors.length === 0, ...body, errors };
+}
+
+function checked(name, params) {
+  const q = Object.hasOwn(QUERIES, name) ? QUERIES[name] : null;
+  if (!q) throw new QueryArgError(`asight query: no query called ${JSON.stringify(name)} (names: ${Object.keys(QUERIES).join(', ')})`);
+  for (const k of Object.keys(params)) if (!q.params.includes(k)) throw new QueryArgError(`asight query ${name}: no parameter --${k} (its parameters: ${q.params.length ? q.params.map((p) => '--' + p).join(' ') : 'none'})`);
+  return q;
+}
+
+/**
+ * stampOf(name, params, {home, fs, now, env}) → the ETag value (sha1 hex) of that answer, or null for a name that
+ * reads the machine rather than the disk (4.4 §条件 GET). Stat only: the files the answer depends on, plus
+ * `floor(now / 60 s)` when the answer reads the clock (`classes`, or a relative `--since` / `--until`), so an
+ * answer that is stale only because time passed is stale by at most one minute. Throws what runQuery throws.
+ */
+export function stampOf(name, params = {}, ctx = {}) {
+  const { home = asightHome(), fs = nodeFs, now = Date.now, env = process.env } = ctx;
+  const q = checked(name, params);
+  const parts = q.stamp({ home, fs, env });
+  if (parts == null) return null;
+  let clock = !!q.clock;
+  for (const k of ['since', 'until']) if (params[k] != null) { parseTime(params[k], { name: k, now: 0 }); clock ||= REL.test(String(params[k]).trim()); }
+  if (clock) parts.push(`tick:${Math.floor(now() / 60e3)}`);
+  return createHash('sha1').update(JSON.stringify([name, params, ...parts])).digest('hex');
 }
