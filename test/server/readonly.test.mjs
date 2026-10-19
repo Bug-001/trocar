@@ -12,7 +12,8 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { once } from 'node:events';
-import { createServer } from '../../src/server.mjs';
+import * as face from './face.mjs';
+import { withToken } from './face.mjs';
 import { run as serveRun, DEFAULT_PORT } from '../../src/cli/serve.mjs';
 import { EXIT } from '../../src/cli/schema.mjs';
 import { QUERIES } from '../../src/query/named/index.mjs';
@@ -20,22 +21,16 @@ import { rawHome, writeSegment } from '../query/raw-home.mjs';
 
 const SEGMENT = '20261018T100000Z';
 
-const request = (port, p, { method = 'GET', host = '127.0.0.1' } = {}) => new Promise((resolve, reject) => {
-  const r = http.request({ host, port, path: p, method }, (res) => {
-    let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, body: b }));
-  });
-  r.on('error', reject); r.end();
-});
+const request = (port, p, { method = 'GET', host } = {}) => face.request(port, p, { method, headers: withToken(host ? { host } : {}) });
 
 async function serve(home) {
-  const { server } = createServer({ home });
-  server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  return { server, port: server.address().port };
+  const f = await face.serveFace({ home });
+  return { server: f.server, port: f.port, close: f.close };
 }
 
 test('V84: the board listens on 127.0.0.1 only — an external address of this host cannot reach it', async (t) => {
   const home = rawHome('asight-ro-');
-  const { server, port } = await serve(home);
+  const { server, port, close } = await serve(home);
   const ext = Object.values(os.networkInterfaces()).flat().find((i) => i && !i.internal && i.family === 'IPv4');
   try {
     assert.equal(server.address().address, '127.0.0.1');
@@ -47,12 +42,12 @@ test('V84: the board listens on 127.0.0.1 only — an external address of this h
       s.on('error', (e) => resolve(e.code));
     });
     assert.ok(err, `the board accepted a connection on ${ext.address} — it must bind the loopback only`);
-  } finally { server.close(); }
+  } finally { close(); }
 });
 
 test('V84: there is no non-GET data route, and the gate holds on every surface', async () => {
   const home = rawHome('asight-ro-');
-  const { server, port } = await serve(home);
+  const { server, port, close } = await serve(home);
   try {
     for (const name of Object.keys(QUERIES)) {
       for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
@@ -60,8 +55,10 @@ test('V84: there is no non-GET data route, and the gate holds on every surface',
         assert.equal(r.status, 405, `${method} /api/${name} → ${r.status}: the board has no write interface (D26 · D59③)`);
       }
     }
+    // The control plane's write endpoints are not mounted yet: every non-GET there is 405 too (4.4 门 ④).
+    for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) assert.equal((await request(port, '/control/classes', { method })).status, 405, method);
     assert.equal((await request(port, '/api/sessions', { host: 'localhost' })).status, 200);
-  } finally { server.close(); }
+  } finally { close(); }
 });
 
 test('V84: a round of requests leaves HOME with nothing new but index/', async () => {
@@ -72,10 +69,10 @@ test('V84: a round of requests leaves HOME with nothing new but index/', async (
     const st = fs.statSync(path.join(home, 'raw', f));
     return [f, st.size, st.ino, st.mtimeMs];
   });
-  const { server, port } = await serve(home);
+  const { server, port, close } = await serve(home);
   try {
     for (const name of Object.keys(QUERIES)) await request(port, `/api/${name}?id=sess-1`);
-  } finally { server.close(); }
+  } finally { close(); }
   const added = fs.readdirSync(home).sort().filter((e) => !before.includes(e));
   assert.deepEqual(added.filter((e) => e !== 'index'), [], `serve wrote more than ~/.asight/index/: ${added.join(', ')}`);
   assert.deepEqual(fs.readdirSync(path.join(home, 'raw')).map((f) => {

@@ -8,30 +8,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { takeRefusals } from '../helpers/no-real-os.mjs';
-import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { createServer } from '../../src/server.mjs';
 import { QUERIES, QueryArgError, runQuery } from '../../src/query/named/index.mjs';
 import { rawHome, writeSegment, requiredFor } from '../query/raw-home.mjs';
+import { serveFace, request, withToken } from './face.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SEGMENT = '20261018T100000Z';
 
-const get = (port, p) => new Promise((resolve, reject) => {
-  const r = http.request({ host: '127.0.0.1', port, path: p, method: 'GET' }, (res) => {
-    let b = ''; res.on('data', (c) => (b += c)); res.on('end', () => resolve({ status: res.statusCode, body: b }));
-  });
-  r.on('error', reject); r.end();
-});
-
-async function serve(home) {
-  const { server } = createServer({ home });
-  server.listen(0, '127.0.0.1'); await once(server, 'listening');
-  return { server, port: server.address().port };
-}
+// The face as the daemon mounts it: the real query worker behind it, the token on every request.
+const get = (port, p) => request(port, p, { headers: withToken() });
 
 function home() {
   const h = rawHome('asight-parity-');
@@ -41,7 +29,8 @@ function home() {
 
 test('V80: every named query answers the same document through HTTP as through runQuery', async () => {
   const h = home();
-  const { server, port } = await serve(h);
+  const f = await serveFace({ home: h });
+  const { port } = f;
   try {
     for (const name of Object.keys(QUERIES)) {
       const params = requiredFor(name, { segment: SEGMENT, session: 'sess-1' });
@@ -67,7 +56,7 @@ test('V80: every named query answers the same document through HTTP as through r
       assert.deepEqual(JSON.parse(r.body), JSON.parse(JSON.stringify(doc)), `GET /api/${name} differs from asight query ${name}`);
       assert.equal(JSON.parse(r.body).command, name, `${name}: the document's command IS the name`);
     }
-  } finally { server.close(); }
+  } finally { f.close(); }
   // `status` reads the process list; both sides were refused it on purpose (above), so the ledger is cleared here.
   takeRefusals();
 });
