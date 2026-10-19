@@ -12,8 +12,10 @@ import { rootIdOf } from '../../src/off/root-store.mjs'
 
 /** The login entry install registered (1.6 §3.3), its start a no-op: the test's daemon is already up. */
 export const standInUnit = (home) => ({
-  path: path.join(home, 'asight-unit'), text: () => '# stands for the LaunchAgent / scheduled task', links: [],
-  enable: () => ({ code: 0 }), start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), reload: () => {},
+  // its text depends on the process and the env that build it (the real one names the script and carries NODE_EXTRA_CA_CERTS), and enable leaves a
+  // line in HOME: a run that rewrites or registers the login entry from another process changes bytes a snapshot of HOME sees
+  path: path.join(home, 'asight-unit'), text: (env = {}) => `# stands for the LaunchAgent / scheduled task: pid ${process.pid} ${env.NODE_EXTRA_CA_CERTS || ''}`, links: [],
+  enable: () => { fs.appendFileSync(path.join(home, 'asight-unit.enabled'), `${process.pid}\n`); return { code: 0 } }, start: () => ({ code: 0 }), startNow: () => ({ code: 0 }), reload: () => {},
   registered: () => ({ state: 'present' }),
 })
 

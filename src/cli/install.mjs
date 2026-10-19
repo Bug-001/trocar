@@ -97,20 +97,21 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     }
     const r = await locked(async () => {
       const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
-        wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit, only, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) })
+        wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit: only ? null : unit, only, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) })
       const { row } = await boardPortRow(home, fs) // before the daemon starts below: it reads the port, never picks one
       if (row) { r.pending.push(row); r.exit = 1 }
       return r
     })
     if (!r) return EXIT.incomplete
     // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs)
-    const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.asight', 'collector'), env, fs, unit, register: true, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
+    // Set up (only): the login entry is not in its plan, so it is neither rewritten above nor registered here (4.4 #13); the daemon asking is up, this only reads it
+    const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.asight', 'collector'), env, fs, unit, register: !only, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
     r.problems.push(...dmn.problems)
     const dmnNotes = dmn.notes.filter((n) => !r.problems.includes(n)) // 附录 C.1: `problems` is the failure channel; what asight could not do but said is `notes` (M-2)
     if (dmn.problems.length) r.exit = 1
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'asight install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, ...(unit ? { autostart: { entry: platform === 'win32' ? '\\asight\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'asight install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\asight\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       planned, commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
     const dir = path.join(home, '.asight', 'collector')

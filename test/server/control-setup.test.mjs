@@ -85,6 +85,8 @@ for (const platform of ['darwin', 'win32']) {
       const after = snapshot(w.home)
       for (const i of held.filter((x) => x.harness !== B && x.path && before[rel(x.path)])) assert.equal(after[rel(i.path)], before[rel(i.path)], i.path)
       for (const f of Object.keys(before).filter((k) => !k.startsWith('.asight/'))) if (!mine.some((i) => rel(i.path) === f)) assert.equal(after[f], before[f], f)
+      assert.deepEqual([after['asight-unit'], after['asight-unit.enabled']], [before['asight-unit'], before['asight-unit.enabled']], 'the login entry neither rewritten nor registered (its stand-in\'s text is per process)')
+      assert.ok(!('autostart' in ok.json), 'Set up does not report on a login entry it did not touch')
       assert.deepEqual(trust.calls().slice(calls0).filter((c) => !['exists', 'has'].includes(c)), [], 'the root was read back, nothing asked')
       // status --json's harnesses[B].setup is this judgement (4.11 P4b; the board's test world has no OS network facts to draw the rest)
       assert.equal(setupOf(w.harnesses.find((d) => d.name === B), { os: platform, manifest: readManifest(w.dir), ctx: w.ctx }).state, 'ready')
