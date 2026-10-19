@@ -21,6 +21,8 @@ import { tmpDir } from '../helpers/tmp.mjs'
 import { renderWrapper } from '../../src/collector/arch/darwin/wrapper.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { controlEndpointFor } from '../../src/off/control-client.mjs'
+import { ensureBoardPort } from '../../src/collector/core/ingress-config.mjs'
+import { workerFork } from '../helpers/worker-fork.mjs'
 
 /** The floor spec 1.6 §3.1 states for the idle path: the 1 s `lock` refresh (4.6 控制面) is the shortest periodic timer there is. */
 const IDLE_FLOOR_MS = 1000
@@ -48,20 +50,22 @@ function ioFor(platform) {
 }
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: an idle daemon (one harness on, the door listening, no traffic) arms no interval shorter than ${IDLE_FLOOR_MS} ms`, { timeout: 30_000 }, async () => {
+  test(`${platform}: an idle daemon (one harness on, the door and the board listening, no traffic) arms no interval shorter than ${IDLE_FLOOR_MS} ms`, { timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')
     fs.mkdirSync(path.dirname(envFile), { recursive: true }); fs.writeFileSync(envFile, 'OPENAI_BASE_URL=https://relay.example\n')
+    assert.ok((await ensureBoardPort({ dir: w.dir })).port, 'install records the board port, so the board listens while idle')
     let box = null
     const periods = await intervalsDuring(async () => {
-      box = await liveUnit({ w, platform, io: ioFor(platform) })
+      box = await liveUnit({ w, platform, io: ioFor(platform), daemon: { fork: workerFork } })
       await withScratchCwd(platform, async () => {
         const io = fakeIo()
         const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text())
         const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
         const st = await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status' })
+        assert.equal(st.board?.state, 'serving', `the board listens in the idle state: ${JSON.stringify(st.board)}`)
         assert.ok(Object.keys(st.doors).some((k) => k.startsWith('codex:')), `the door is open — this is the idle state: ${JSON.stringify(st.doors)}`)
       })
     })
