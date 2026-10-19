@@ -28,7 +28,7 @@ export const laneWord = (kind) => laneKind(kind).word
 // ── the cache predicate's own words (2.2 §缓存判定; the states are core/metrics.mjs : CACHE_STATES) ──────────────────
 // cacheSentence(state, {laneW, causeW, attrW, hitPct, warm, inferred, errMsg, zeroInput}) → the sentence the 缓存 popover opens
 // with. `laneW` is the lane word of the call the button is about (the step bar's is always 主对话).
-export const STRUCT_TIP = '按块的结构比对得出,不是服务商真实的缓存边界;权威值是 DuckDB 的 prefix_sha256'
+export const STRUCT_TIP = '按块的结构比对得出,不是服务商真实的缓存边界'
 export function cacheSentence(st, o = {}) {
   const laneW = o.laneW || '主对话'
   switch (st.state) {

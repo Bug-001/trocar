@@ -90,11 +90,7 @@ export function mount(el, ctx) {
       const rows = s5.rows
       const asOf = s5.as_of ? `<p class="cap">${W.UNPRICED_AS_OF} ${esc(fmtAsOf(s5.as_of))}</p>` : ''
       if (rows == null) {
-        const reason = s5.reason === 'no-store' ? W.ETL_NEED : s5.reason === 'predates-d40' ? W.ETL_REBUILD : null
-        cards.push(`<div class="scard"><h2>${W.CARD_UNPRICED}</h2>` + asOf +
-          (reason ? `<p class="cap">${reason}</p>` : '') +
-          (s5.etl_command ? techDetailsHtml([['asight etl', `${esc(s5.etl_command)} · ${W.TECH_ETL_AFTER}`]], { id: 'utech' }) : '') +
-          `</div>`)
+        cards.push(`<div class="scard"><h2>${W.CARD_UNPRICED}</h2>` + asOf + `</div>`)
       } else {
         const un = pricing && pricing.pricing ? unpricedModels(rows, pricing.pricing) : unpricedModels(rows, null)
         cards.push(`<div class="scard"><h2>${W.CARD_UNPRICED}</h2>` + asOf +

@@ -34,9 +34,6 @@ a.trow.hi{background:var(--panel);}
 .tstate{padding:36px 12px;color:var(--ink-2);text-align:center;}
 .tstate p{margin:0 0 8px;}
 .tbtn{margin:0 auto;}
-.etl-cmd{margin:10px auto 0;max-width:560px;text-align:left;}
-.etl-cmd summary{cursor:pointer;color:var(--ink-2);font-size:var(--fs-cap);}
-.etl-cmd pre{margin:6px 0 0;font:var(--fs-cap)/1.6 var(--mono);background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-2);padding:8px 10px;white-space:pre-wrap;word-break:break-all;}
 
 /* the small screens: 首次出现 and 主要类别 fold under the host; the numbers stay columns (1.10 §窄屏) */
 @media (max-width:899px){

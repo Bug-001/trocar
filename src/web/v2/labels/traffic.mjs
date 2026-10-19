@@ -1,5 +1,5 @@
 // labels/traffic.mjs — the fixed words of 流量 / the host page / the request detail (1.10, 2.6 §C). Closed sets keyed by
-// asight's own ids only (the seven traffic classes, the three retention levels, the body kinds, the two store reasons);
+// asight's own ids only (the seven traffic classes, the three retention levels, the body kinds);
 // a harness-defined code never reaches a key here — its words come from the server's answer (1.5 §数据规则).
 import { CLASS_NAME } from '../core/classes.mjs'
 
@@ -27,7 +27,6 @@ export const LOADING = '正在读取'
 export const EMPTY_WINDOW = '这段时间没有流量'
 export const EMPTY_WINDOW_CLASS = (word) => `这段时间没有${word}的流量`
 // the two store states (a closed set of the server's own reason codes); the command comes from the server's answer
-export const STORE_REASON = Object.freeze({ 'no-store': '需要先运行一次 asight etl', 'predates-d40': '需要重建' })
 export const RETRY = '重试'
 export const READ_FAILED = (why) => `没读到流量:${why}`
 

@@ -7,7 +7,7 @@ import { esc, bytes, fmtDay, fmtTime } from '../core/fmt.mjs'
 import { CLASS_IDS, UNCLASSIFIED } from '../core/classes.mjs'
 import { harnessKey, harnessName, harnessIcon, HARNESS_ORDER } from '../core/chips.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
-import { menuButton, infoButton, mark, techDetailsHtml } from '../core/ui.mjs'
+import { menuButton, infoButton, mark } from '../core/ui.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { delegate } from '../core/dom.mjs'
 import { formatHash, parseHash } from '../core/router.mjs'
@@ -206,12 +206,10 @@ export function tableHtml(model, { h = [], cls = null, cover = [] } = {}) {
   return `<div class="tcap">${captionHtml(model, { cover })}${filterBarHtml(model, { h, cls })}</div>` + head + groups + totalRowHtml(model)
 }
 
-// the states around the table: loading, no rows in the window, the store's own reasons, a failed read
+// the states around the table: loading, no rows in the window, a failed read
 export function stateHtml(kind, payload = {}) {
   if (kind === 'loading') return `<div class="tstate">${esc(W.LOADING)}</div>`
   if (kind === 'empty') return `<div class="tstate">${esc(payload.cls ? W.EMPTY_WINDOW_CLASS(W.classWord(payload.cls)) : W.EMPTY_WINDOW)}</div>`
-  if (kind === 'reason') return `<div class="tstate"><p>${esc(W.STORE_REASON[payload.reason] || payload.reason || '')}</p>` +
-    (payload.etl_command ? techDetailsHtml([['命令', payload.etl_command]]) : '') + `</div>`
   if (kind === 'error') return `<div class="tstate"><p>${esc(W.READ_FAILED(payload.error || '不知道原因'))}</p><button type="button" class="tbtn" data-act="retry">${esc(W.RETRY)}</button></div>`
   return ''
 }
@@ -235,7 +233,7 @@ export function mount(el, ctx) {
     else if (!model) body = stateHtml('loading')
     else if (model.state === 'none') {
       const a = model.answer || {}
-      body = a.reason ? stateHtml('reason', a) : stateHtml('error', { error: a.error })
+      body = stateHtml('error', { error: a.error || a.reason })
     } else if (!model.flat.length) body = stateHtml('empty', { cls: q.cls }) + `<div class="tcap">${captionHtml(model, { cover })}</div>`
     else body = tableHtml(model, { h: q.h, cls: q.cls, cover })
     el.innerHTML = `<div class="page traf">${head}${body}</div>`
