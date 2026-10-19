@@ -35,8 +35,7 @@ export const COL_AGENT = 'agent', COL_TOTAL = '合计',
   UNMATCHED = '不起作用',
   UNMATCHED_TIP = '还认不出这个 agent 的这类流量,这里的设置不起作用',
   UNMATCHED_SET = (level) => `设置里写的是 ${level}`,
-  REC_UNRECORDED = '未记录', // a pre-D40 response size was never recorded (never a 0)
-  CHANGING = '正在改…'
+  REC_UNRECORDED = '未记录' // a pre-D40 response size was never recorded (never a 0)
 
 // 表注行,按出现的条件(1.11 §表注行;都在卡里,不在页头)
 export const NOTE_ALWAYS = '改动只影响之后开始的调用;已存的数据不删',
@@ -53,17 +52,7 @@ export const NOTE_ALWAYS = '改动只影响之后开始的调用;已存的数据
   SETTINGS_MISSING_TECH = '还没有设置文件:每一格都按「全部」保存',
   SETTINGS_FIX_TECH = '修好或删掉这个文件后刷新'
 
-// 改级别(N-12:只有 llm / token-count 改成只记日志先确认;焦点在 取消)
-export const CONFIRM_Q = '改成只记日志?',
-  CONFIRM_LLM = (agent) => `之后 ${agent} 的模型调用只记日志:不存请求和回复的内容,这些调用不进回放。已经存下的不受影响。`,
-  CONFIRM_TC = (agent) => `之后 ${agent} 的 token 计数只记日志:不存请求和回复的内容,回放里只剩次数,看不到数出的 token 数。已经存下的不受影响。`,
-  CONFIRM_YES = '改成只记日志'
-
-// 回执(写在那一格里;技术细节放服务端原文)
-export const RECEIPT_OK = (from, to) => `${levelOf(from)} → ${levelOf(to)} · 之后开始的调用生效`,
-  RECEIPT_LOG_ERR = '修改记录没写成', RECEIPT_NOOP = (to) => `本来就是${levelOf(to)}`,
-  RECEIPT_403 = '改动被拒绝', RECEIPT_400 = '没改成', RECEIPT_409 = '设置文件读不出,没改',
-  RECEIPT_READONLY = '看板现在以只读方式运行,没改', RECEIPT_CONN = '连不上 asight 服务,没改', RETRY = '重试'
+export const RETRY = '重试'
 
 // 技术细节里的两条改法(控制面关着时)
 export const TECH_CONTROL_ON = '启动时带控制面', TECH_KEEP_CMD = (h) => `asight keep ${h} <类别> <full|log>`,

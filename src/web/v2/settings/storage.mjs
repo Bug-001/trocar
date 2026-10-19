@@ -1,17 +1,15 @@
 // settings/storage.mjs — 设置 · 存储 (1.11): 「asight 占了多少盘、每天长多少?每个 agent 的每一类流量存全部还是只
 // 记日志,各占多少?」 Two cards: 磁盘 (live lstat totals) and 保存什么 (the D40⑥ grid, agent × 7 classes; one number per
-// cell, the rest in the cell's popover). Levels change ONLY through the opt-in control plane (D26): a segmented control
-// exists only when report.control is true AND the settings file reads (N-02: no greyed switches — text + the exact
-// command otherwise); llm / token-count → 只记日志 asks first (N-12, focus on 取消). Everything from the report says
+// cell, the rest in the cell's popover). Levels are shown, not changed: no control plane answers yet, and a control that
+// cannot work is not drawn (1.5; the level switch comes back with the control plane). Everything from the report says
 // where it is from: 按类 numbers are as-of the store's newest call (never live, never 0 for unknown — invariant 4).
-// Reads once per entry (no polling: /api/retention lstats the whole home), re-reads after every change; the only
-// non-GET this screen can ever issue is POST /control/retention.
+// Reads once per entry (no polling: the classes answer lstats the whole home); this screen issues only GETs.
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { esc, bytes, fmtStamp, relTime } from '../core/fmt.mjs'
 import { CLASS_NAME } from '../core/classes.mjs'
 import { harnessIcon, harnessName, harnessRaw, harnessKey } from '../core/chips.mjs'
-import { infoButton, popover, techDetailsHtml, confirmDialog, disclosureHtml } from '../core/ui.mjs'
+import { infoButton, popover, techDetailsHtml, disclosureHtml } from '../core/ui.mjs'
 import { delegate } from '../core/dom.mjs'
 import * as W from '../labels/settings.mjs'
 
@@ -139,32 +137,6 @@ export function cellPopover(cell) {
   return out.join('')
 }
 
-// canEdit(report) — the control exists only when the plane is on AND the settings file reads as a whole
-export function canEdit(report) {
-  return !!(report && report.control === true && report.settings && !report.settings.problems.some((p) => !p.cell))
-}
-
-// needsConfirm(cls, to) — only keeping less of 模型调用 / token 计数 asks (N-12); back to 全部 never does
-export const needsConfirm = (cls, to) => (cls === 'llm' || cls === 'token-count') && to === 'log'
-
-// changeReceipt(answer, sent) — what the cell says after one POST; the server's own words ride in `tech`
-export function changeReceipt(answer, sent) {
-  if (answer && answer.ok) {
-    const d = answer.data || {}
-    if (Array.isArray(d.changed) && d.changed.length) {
-      const c = d.changed[0]
-      return { ok: true, text: W.RECEIPT_OK(c.from, c.to) + (d.logError ? ` · ${W.RECEIPT_LOG_ERR}` : ''), tech: d.logError || null }
-    }
-    return { ok: true, text: W.RECEIPT_NOOP(sent.level), tech: null }
-  }
-  const st = answer && answer.status
-  if (st === 403) return { ok: false, text: W.RECEIPT_403, tech: answer.error }
-  if (st === 400) return { ok: false, text: W.RECEIPT_400, tech: answer.error }
-  if (st === 409) return { ok: false, text: W.RECEIPT_409, tech: answer.error }
-  if (st === 404 || st === 405) return { ok: false, text: W.RECEIPT_READONLY, tech: answer ? answer.error : null }
-  return { ok: false, text: W.RECEIPT_CONN, tech: answer ? answer.error : null, retry: true }
-}
-
 // diskFigures(report) — the 磁盘 card's two numbers; the overview page's disk card calls the same function (1.7)
 export function diskFigures(report) {
   const disk = report.disk || {}
@@ -279,8 +251,6 @@ const fileDetailLines = (source) => {
 export function mount(el, ctx) {
   const { api, router } = ctx
   let dead = false, report = null, source = null, s5 = null, readAt = null, readFail = null
-  let receipts = new Map() // `${h}·${c}` → {ok, text, tech, retry} — survives the re-read after its own change, gone on the next
-  let busy = new Set()
   let route = router.current()
   let win = normWindow(route.params.window)
 
@@ -299,12 +269,11 @@ export function mount(el, ctx) {
   }
 
   async function read() {
-    const [r, p, o] = await Promise.all([api.retention(), api.projects(), api.overview({ window: 'all' })])
+    const [r, p, o] = await Promise.all([api.get('classes'), api.get('sessions'), api.get('overview')])
     if (dead) return
     readFail = null
     if (r.ok) {
       report = r.data
-      receipts = new Map() // a fresh read is the truth; what a change said has had its moment
     } else readFail = r
     source = p.ok ? (p.data && p.data.source) || null : null
     s5 = o.ok ? o.data : null
@@ -314,23 +283,15 @@ export function mount(el, ctx) {
   }
 
   // ── one cell ───────────────────────────────────────────────────────────────────────────────────────────────────
-  function levelHtml(cell, editable) {
+  function levelHtml(cell) {
     if (cell.unmatched) return `<span class="na">${W.UNMATCHED}${infoButton({ label: W.UNMATCHED, title: W.UNMATCHED, body: cellPopover(cell) })}</span>`
-    const lvl = levelOf(cell.level)
-    if (!editable) return `<span class="lvltxt" title="${esc(W.LEVEL_TIP[cell.level] || '')}">${esc(lvl)}</span>`
-    return `<span class="seg cellseg" role="group" aria-label="保存级别">` +
-      ['full', 'log'].map((v) => `<button type="button" data-lvl="${v}" data-h="${esc(cell.h)}" data-c="${esc(cell.c)}" aria-pressed="${cell.level === v}" class="${cell.level === v ? 'on' : ''}">${esc(levelOf(v))}</button>`).join('') +
-      `</span>`
+    return `<span class="lvltxt" title="${esc(W.LEVEL_TIP[cell.level] || '')}">${esc(levelOf(cell.level))}</span>`
   }
-  function cellHtml(cell, editable) {
-    const rcpt = receipts.get(`${cell.h}·${cell.c}`)
-    const isBusy = busy.has(`${cell.h}·${cell.c}`)
-    const size = isBusy ? `<span class="v busy">${W.CHANGING}</span>`
-      : cell.unmatched ? ''
+  function cellHtml(cell) {
+    const size = cell.unmatched ? ''
       : cell.size != null ? popover({ label: `这一格的数字`, title: `${harnessName(cell.h)} · ${className(cell.c)}`, body: cellPopover(cell), glyph: `<span class="v">${esc(cell.size)}</span>`, cls: 'sizepop' })
       : ''
-    const rc = rcpt ? `<span class="rcpt ${rcpt.ok ? 'ok' : 'err'}"${rcpt.tech ? ` title="${esc(rcpt.tech)}"` : ''}>${esc(rcpt.text)}${rcpt.retry ? ` · <button type="button" class="retry" data-retry-h="${esc(cell.h)}" data-retry-c="${esc(cell.c)}" data-retry-lvl="${esc(rcpt.sentLevel)}">${W.RETRY}</button>` : ''}</span>` : ''
-    return `${levelHtml(cell, editable)}${size}${rc}`
+    return `${levelHtml(cell)}${size}`
   }
 
   function paint() {
@@ -339,7 +300,6 @@ export function mount(el, ctx) {
       return
     }
     if (!report) return
-    const editable = canEdit(report)
     const grid = gridModel(report, win)
     const fig = diskFigures(report)
     const cap = captionFacts(report, s5, win)
@@ -361,7 +321,7 @@ export function mount(el, ctx) {
       `<tbody>` +
       grid.rows.map((row) => `<tr data-h="${esc(row.h)}">` +
         `<th class="ag" scope="row">${harnessIcon(row.h)}<span class="agname" title="${esc(harnessRaw(row.h) || harnessName(row.h))}">${esc(harnessName(row.h))}</span></th>` +
-        row.cells.map((cell) => `<td class="cell${cell.unmatched ? ' na' : ''}" data-c="${esc(cell.c)}">${cellHtml(cell, editable)}</td>`).join('') +
+        row.cells.map((cell) => `<td class="cell${cell.unmatched ? ' na' : ''}" data-c="${esc(cell.c)}">${cellHtml(cell)}</td>`).join('') +
         `<td class="num tot">${esc(row.total || '')}</td></tr>`).join('') +
       (grid.legacy ? `<tr class="legacy">` +
         `<th class="ag" scope="row"><span class="agname">${W.LEGACY_ROW}${infoButton({ label: W.LEGACY_ROW, title: W.LEGACY_ROW, body: W.LEGACY_TIP })}</span></th>` +
@@ -420,32 +380,6 @@ export function mount(el, ctx) {
     }
   }
 
-  // ── changing a level ────────────────────────────────────────────────────────────────────────────────────────────
-  async function changeLevel(h, c, to) {
-    const key = `${h}·${c}`
-    if (busy.has(key)) return
-    if (needsConfirm(c, to)) {
-      const agent = harnessName(h)
-      const ok = await confirmDialog({ q: W.CONFIRM_Q, impact: c === 'llm' ? W.CONFIRM_LLM(agent) : W.CONFIRM_TC(agent), confirmLabel: W.CONFIRM_YES })
-      if (!ok) return // 取消 / Esc: no request, the level is what the server holds
-    }
-    busy.add(key)
-    paint()
-    const answer = await api.setRetention({ harness: h, cls: c, level: to })
-    if (dead) return
-    busy.delete(key)
-    receipts.set(key, { ...changeReceipt(answer, { level: to }), sentLevel: to })
-    const r = await api.retention() // the cell shows what the server now holds, never what the click assumed
-    if (dead) return
-    if (r.ok) { report = r.data; readAt = api.now() }
-    paint()
-    paintHead()
-  }
-
-  const offClick = delegate(el, 'click', '[data-lvl], [data-retry-h]', async (e, b) => {
-    if (b.dataset.lvl) { await changeLevel(b.dataset.h, b.dataset.c, b.dataset.lvl); return }
-    await changeLevel(b.dataset.retryH, b.dataset.retryC, b.dataset.retryLvl)
-  })
   const offFiles = delegate(el, 'click', '.jumpfiles', (e, a) => {
     e.preventDefault()
     const d = el.querySelector('#diskfiles .disc-t')
@@ -463,6 +397,6 @@ export function mount(el, ctx) {
       if (w !== win) { win = w; if (report) paint(); paintHead() } // the report carries all three windows: no re-read
       else if (report) highlight()
     },
-    unmount() { dead = true; offClick(); offFiles(); el.replaceChildren() },
+    unmount() { dead = true; offFiles(); el.replaceChildren() },
   }
 }
