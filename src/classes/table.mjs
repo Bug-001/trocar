@@ -190,21 +190,31 @@ const fatalOf = (table) => {
 }
 
 /**
- * plan(op, {home, fs}) → {before, after, paths} | {error} — what edit(op) would do, and nothing written: the class's whole entry before and after
- * (null for reset), and the files edit would write. The same refusals as edit: ClassArgError, or the unreadable table's error.
+ * plan(op, {home, fs}) → {before, after, paths} | {error} — what edit(op) would do, and nothing written: the change log's own from / to (the class's
+ * whole entry, or for reset the whole table before), so a plan_id over it changes when the table does; and the files edit would write. The same refusals as edit: ClassArgError, or the unreadable table's error.
  */
 export function plan(op, { home = asightHome(), fs = nodeFs } = {}) {
   const table = readTable({ home, fs })
   const error = fatalOf(table)
   if (error) return { error }
-  const { classes } = apply(op, table.classes)
-  const find = (list) => (op.kind === 'reset' || !list ? null : list.find((c) => c.class === op.class) || null)
-  return { before: find(table.classes), after: find(classes), paths: [...(classes || table.file ? [classesFile(home)] : []), classesLog(home)] }
+  const { classes, log } = apply(op, table.classes)
+  return { before: log.from, after: log.to, paths: [...(classes || table.file ? [classesFile(home)] : []), classesLog(home)] }
+}
+
+/** Throws ClassArgError unless the op's fields are the types the CLI gives: a request body can carry any JSON (4.4 §控制面), and String()
+ *  below would turn 7 or [..] into a name or a regex. */
+export function checkOp(op) {
+  if (!op || typeof op !== 'object') throw new ClassArgError('a change is an object')
+  for (const k of ['kind', 'class', 'keep', 'host', 'path', 'harness']) {
+    if (op[k] != null && typeof op[k] !== 'string') throw new ClassArgError(`${k} must be a string, not ${JSON.stringify(op[k])}`)
+  }
+  if (op.rule != null && typeof op.rule !== 'string' && !Number.isInteger(op.rule)) throw new ClassArgError(`rule must be a number, not ${JSON.stringify(op.rule)}`)
 }
 
 /** The pure part: the new class list (null = delete the file) and the line that records the change. */
 function apply(op, current) {
-  const kind = op && op.kind
+  checkOp(op)
+  const kind = op.kind
   const classes = current.map((c) => ({ ...c, rules: (c.rules || []).map((r) => ({ ...r })) }))
   const find = (name) => classes.find((c) => c.class === name)
   if (kind === 'reset') return { classes: null, log: { op: 'reset', class: null, from: current, to: null } }

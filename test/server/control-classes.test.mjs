@@ -158,7 +158,10 @@ test('4.4 #10: a bad op or a body that is not one JSON object is 400, and classe
   try {
     const bad = [{ kind: 'set', class: 'nope', keep: 'log' }, { kind: 'set', class: 'llm', keep: 'most' }, { kind: 'add', class: 'other', host: 'x' },
       { kind: 'add', class: 'llm', host: '(' }, { kind: 'add', class: 'llm', host: 'x', harness: 'no-such-agent' }, { kind: 'rm', class: 'llm', rule: 99 },
-      { kind: 'rm', class: 'other' }, { kind: 'rename', class: 'llm' }, { kind: 'set', class: 'BAD NAME', keep: 'log' }]
+      { kind: 'rm', class: 'other' }, { kind: 'rename', class: 'llm' }, { kind: 'set', class: 'BAD NAME', keep: 'log' },
+      // a request body is any JSON: a field of another type is refused, never coerced into a name, a regex or a rule number
+      { kind: 'add', class: 7, host: 'y\\.com' }, { kind: 'add', class: ['zz'], host: 'y\\.com' }, { kind: 'add', class: 'llm', host: {} },
+      { kind: 'add', class: 'llm', host: 'x', path: ['/a', '/b'] }, { kind: 'rm', class: 'llm', rule: true }, { kind: 'rm', class: 'llm', rule: [1] }]
     for (const body of bad) {
       for (const confirm of [undefined, 'f'.repeat(64)]) {
         const r = await post(f.port, '/control/classes', { ...body, confirm })
@@ -191,12 +194,12 @@ test('4.4 #10: a classes.json that cannot be read is a receipt with ok:false and
   } finally { f.close() }
 })
 
-test('4.4 #11: a stale plan_id (the class changed between the two requests) is 409 with a new plan_id, and nothing is written', async () => {
+for (const body of [{ kind: 'set', class: 'telemetry', keep: 'log' }, { kind: 'reset' }]) test(`4.4 #11: a stale plan_id (the table changed between the two requests) is 409 with a new plan_id, and nothing is written: ${body.kind}`, async () => {
   const userHome = tmpDir('asight-ctlc-'), dir = asightOf(userHome)
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  assert.equal((await cli(['set', 'llm', 'log'], userHome)).exit, 0) // classes.json exists before and after, so only its content differs
   const f = await serveFace({ home: dir })
   try {
-    const body = { kind: 'set', class: 'telemetry', keep: 'log' }
     const first = JSON.parse((await post(f.port, '/control/classes', body)).body)
     assert.equal((await cli(['add', 'telemetry', 't\\.example'], userHome)).exit, 0)
     const between = freeze(dir)
