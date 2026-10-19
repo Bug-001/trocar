@@ -30,4 +30,6 @@ export const TITLE_SUFFIX = ' · asight'
 export const UNKNOWN_ROUTE = 'That page does not exist. Back on the overview'
 export const SESSION_NOT_LISTED = 'This session is not in the session list'
 export const BACK_TO_SESSIONS = 'Back to sessions'
+// K-30: the page has no token or a wrong one; the command that prints a link carrying the token follows it
+export const FORBIDDEN = 'This page cannot read the board without its key. Open the board with this command:'
 export const SCREEN_FAILED = 'This page hit an error'

@@ -133,7 +133,7 @@ export const CHANGE_REMOVAL = 'removed when its capture is turned off'
 // <id> 由页面按 collector.switch.harnesses 里的拼法填(前端不另存 CLI 名表);opt_in 的命令随数据原样给
 export const COMMANDS = Object.freeze({
   on: 'asight on <id>', off: 'asight off <id>', status: 'asight status <id>', doctor: 'asight doctor <id>',
-  install: 'asight install', helper: 'sudo asight setup-helper', linger: 'loginctl enable-linger',
+  install: 'asight install', board: 'asight board', helper: 'sudo asight setup-helper', linger: 'loginctl enable-linger',
 })
 
 // ── 采集记录的固定话 ─────────────────────────────────────────────────────────────────────────────────────
