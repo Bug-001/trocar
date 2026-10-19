@@ -61,14 +61,17 @@ function recordOf(text, segment, lineNo, stream) {
  * answer with, never for the segment (1.6 §4.1 速度目标: `session` ≤ 1 s, `block` ≤ 0.3 s).
  * A row whose record cannot be read goes into `errors` (D38), never silently missing.
  */
-export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors = [] } = {}) {
+// `remember: false` is a SCAN (the usage sidecar's fill, src/query/usage.mjs): it neither reads from nor stores into
+// the warm cache, so filling a segment never evicts the records of the sessions the board has open.
+export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors = [], remember = true } = {}) {
   const { id, bytes } = listKey(home, rows, fs);
   // The stamp IS the key here: a row list names the exact bytes it stands for, and those bytes never change
   // (invariant 2: a record is appended once and never rewritten). A shallow copy goes out, so a caller that
   // sorts or trims its result cannot reach into the cache.
-  let got = readBack.peek(id, id);
+  let got = remember ? readBack.peek(id, id) : undefined;
   if (!got) {
     got = { ...readRows({ home, fs, rows }), bytes };
+    if (!remember) { errors.push(...got.errors); return got.out; }
     // A FAILED read is never remembered (3.5 §访问模式 不答陈旧): a read that landed in the seal rename window or
     // hit one EIO would otherwise pin its incomplete answer — the row list's stamp cannot move, because the rows
     // did not change — for the life of a resident worker. Not caching it costs the next query one re-read, which
