@@ -3,7 +3,7 @@
 // seam `on` uses (ensureDaemonUp, with the arch's unit; the login registration is never touched); `GET /board` on the endpoint ensureDaemonUp
 // resolved through controlEndpointFor (no platform branch here). `deps.unit` replaces the arch's unit, `deps.open(file, args)` the browser start (0.1 §3).
 import nodeFs from 'node:fs'
-import { spawn } from 'node:child_process'
+import { runAsync } from '../off/exec.mjs'
 import { EXIT } from '../off/schema.mjs'
 import { collectorDir } from '../off/paths.mjs'
 import { readManifest, daemonMayStart } from '../off/manifest.mjs'
@@ -14,14 +14,10 @@ const errText = (e) => String((e && e.message) || e)
 const OPENERS = { darwin: (u) => ['open', [u]], win32: (u) => ['cmd', ['/c', 'start', '""', `"${u}"`]], linux: (u) => ['xdg-open', [u]] }
 
 const OPEN_WAIT_MS = 5000 // an opener with no desktop to open on never returns (win32 `cmd /c start` over ssh, lab 2026-10-20): past this it was not opened
-/** The default browser start: resolves when the opener exited 0, rejects with why otherwise (no graphical session, no opener, no answer in OPEN_WAIT_MS). */
-function openWith(file, args) {
-  return new Promise((resolve, reject) => {
-    const c = spawn(file, args, { stdio: 'ignore', windowsVerbatimArguments: file === 'cmd', windowsHide: true })
-    const t = setTimeout(() => { try { c.kill() } catch { /* gone */ } reject(new Error(`${file} did not return within ${OPEN_WAIT_MS / 1000} s`)) }, OPEN_WAIT_MS)
-    c.on('error', (e) => { clearTimeout(t); reject(e) })
-    c.on('exit', (code) => { clearTimeout(t); if (code === 0) resolve(); else reject(new Error(`${file} exited ${code}`)) })
-  })
+/** The default browser start, through the one exec seam: resolves when the opener exited 0, rejects with why otherwise (no graphical session, no opener, no answer in OPEN_WAIT_MS). */
+async function openWith(file, args, env) {
+  const r = await runAsync(file, args, { env, timeout: OPEN_WAIT_MS, quiet: true, windowsVerbatimArguments: file === 'cmd' })
+  if (r.status !== 0) throw r.error || new Error(`${file} exited ${r.status}`)
 }
 
 /** → the exit code: 0 the URL is printed · 1 the board is not there (not installed, the daemon did not come up, its port taken) · 2 a usage error. */
@@ -45,7 +41,7 @@ export async function run(argv, { io, env = process.env, home, platform = proces
   if (!b || b.state !== 'serving' || !b.port || !b.token) return down((b && b.reason) || `the daemon says the board is ${(b && b.state) || 'not there'}`)
   const url = `http://127.0.0.1:${b.port}/#t=${b.token}`
   const [file, list] = (OPENERS[platform] || OPENERS.linux)(url)
-  try { await (deps.open || openWith)(file, list) } catch (e) {
+  try { await (deps.open || openWith)(file, list, env) } catch (e) {
     io.out([...wrap(`asight board: your browser could not be opened (${errText(e)}). Open this address yourself:`, WIDTH), url].join('\n'))
     return EXIT.ok
   }
