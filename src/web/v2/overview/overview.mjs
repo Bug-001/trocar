@@ -13,7 +13,7 @@ import { esc, fmtWhen, relTime, bytes, usd } from '../core/fmt.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { SCREEN_NAME } from '../labels/shell.mjs'
 import { harnessKey, harnessName, harnessIcon, UNIDENTIFIED } from '../core/chips.mjs'
-import { captureVerdict, partVerdicts, capHealthPatch, CAPH_MS } from '../core/capture-verdict.mjs'
+import { captureVerdict, capHealthPatch, CAPH_MS } from '../core/capture-verdict.mjs'
 import { priceMatch, costOf } from '../core/metrics.mjs'
 import { infoButton, techDetailsHtml } from '../core/ui.mjs'
 import { L } from '../labels/common.mjs'
@@ -95,12 +95,12 @@ export function overviewItems(s, now) {
   // ── O2 · the collector is down or unreadable (an unknown born of manifest_error is O4's alone) ──
   if (unreadable) push('O2', 'unreadable', { text: captureVerdict(s.caph.data).text, href: '#/capture' })
   else if (H) {
-    const pv = partVerdicts(H)
+    const cv = captureVerdict(H)
     const manifestUnknown = H.collector && H.collector.manifest_error && H.collector.summary && H.collector.summary.state === 'unknown'
     // an unrecognized state is also something to look at (the verdict words it, the 采集 page explains); `failing` is not
     // here: its failure groups are O3's rows, and the capture card words the summary either way
-    if (pv.collector && ['not-running', 'not-responding', 'unknown', 'unrecognized'].includes(pv.collector.state) && !manifestUnknown)
-      push('O2', 'collector', { text: pv.collector.text, href: '#/capture' })
+    if (['not-running', 'not-responding', 'unknown', 'unrecognized'].includes(cv.state) && !manifestUnknown)
+      push('O2', 'collector', { text: cv.text, href: '#/capture' })
   }
 
   // ── O3 · failure groups of the last 24 h; the sentence is the group's own reason, the key rides in the hover ─────

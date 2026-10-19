@@ -24,3 +24,26 @@ export const MARK_TIP = Object.freeze({
   'null-na': 'Does not apply',
   unknown: 'unknown',
 })
+
+// the 采集状态 sentences (1.5 §采集状态 table), keyed by `health.state` of the C.3 document plus the board's own read states.
+// `s` = the health object; `W` words a timestamp. No subject: a caller that shows it somewhere unnamed prefixes it itself.
+export const HEALTH_WORDS = Object.freeze({
+  ok: (s, W) => `✓ capturing · since ${W(s.since)}`,
+  failing: (s, W, items) => `! capture has problems${items && items.length ? `: ${items.join('; ')}` : s.n != null ? `: ${s.n}` : ''}`,
+  off: (s, W) => `○ off · since ${W(s.since)}`,
+  'not-running': (s, W) => `✗ stopped · last record ${W(s.since)}${s.signal ? ` · by ${s.signal}` : ''}`,
+  'not-responding': (s, W) => `✗ not responding · last heartbeat ${W(s.since)}`,
+  unknown: (s) => `? unknown${s.reason ? `: ${s.reason}` : ''}`,
+  residue: (s) => `– not installed · ${s.n != null ? `${s.n} changes` : 'changes'} left behind`,
+  'not-installed': () => '– not installed',
+})
+export const HEALTH_READ = Object.freeze({
+  unrecognized: (state) => `? unknown capture health (${state})`,
+  unreadable: (why) => `? capture health could not be read: ${why}`,
+  stale: (at) => `? not refreshed · as of ${at}`,
+  loading: '? reading',
+  partial: ' · partly unreadable',
+  agents: (n) => `${n} agent${n === 1 ? ' is' : 's are'} not fully captured`,
+  others: (n) => `${n} other problem${n === 1 ? '' : 's'} open`,
+  groups: (n) => `${n} failure group${n === 1 ? '' : 's'} in the last 24 hours`,
+})
