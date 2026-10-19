@@ -186,7 +186,7 @@ test('stop() settles only after the pass in flight, and the index file does not 
 test('交接之后在飞的那趟不再写:封存器换掉索引文件,新文件一个字节不动', async () => {
   const h = home()
   append(h, 40, 0, 'y'.repeat(20_000)) // ~800 KB: more than one chunk of this keeper
-  const sealer = Buffer.from('{"m":{"size":99,"sealed":true},"v":4}\n')
+  const sealer = Buffer.from('{"m":{"size":99,"sealed":true},"v":5}\n')
   let raced = false
   const keeper = createIndexKeeper({ home: h, debounceMs: 1, chunkBytes: 100_000,
     index: async (a) => {

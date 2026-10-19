@@ -22,7 +22,7 @@ export const envLine = (o = {}) => JSON.stringify({
   capture: 'transparent',
   host: o.host ?? 'api.anthropic.com',
   traffic_class: o.class ?? 'llm',
-  body_wire_bytes: { req: o.wireReq ?? 10, resp: o.wireResp ?? 20 },
+  ...('noWire' in o ? {} : { body_wire_bytes: { req: 'wireReq' in o ? o.wireReq : 10, resp: 'wireResp' in o ? o.wireResp : 20 } }),
   proc: { pid: 7, exe: '/x', agent: o.harness ?? 'claude-code' },
 })
 
