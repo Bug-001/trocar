@@ -68,7 +68,7 @@ export function storageHtml({ classes, segments }, window) {
       `<td class="n">${r.calls ?? '—'}</td><td class="n">${r.bytes != null ? esc(bytes(r.bytes)) : '—'}</td>` +
       `<td class="mono v">${r.rules.map(esc).join('<br>')}</td></tr>`).join('') +
     `</tbody></table></div>` +
-    techDetailsHtml([[W.CLASSES_FILE, (classes && classes.file) || '—'], [W.CLASSES_CHANGE_CMD, W.CLASSES_CMD]], { id: 'classtech' }) + `</div>`
+    techDetailsHtml([[W.CLASSES_FILE, (classes && classes.file) || '—']], { id: 'classtech' }) + `</div>`
   return disk + table
 }
 

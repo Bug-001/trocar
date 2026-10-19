@@ -19,7 +19,7 @@ export const CARD_CLASSES = 'What is stored', CLASSES_AS_OF = 'Counts as of',
   WINDOWS = Object.freeze([{ value: '24h', label: '24 hours' }, { value: '7d', label: '7 days' }, { value: 'all', label: 'All' }]),
   COL_CLASS = 'Class', COL_KEEP = 'Level', COL_CALLS = 'Calls', COL_STORED = 'Stored', COL_RULES = 'Matches',
   KEEP_NAME = Object.freeze({ full: 'Everything', log: 'Log only' }), NO_CLASS = 'No class recorded',
-  CLASSES_FILE = 'Settings file', CLASSES_CHANGE_CMD = 'Change a level in a terminal', CLASSES_CMD = 'asight classes set <class> <full|log>'
+  CLASSES_FILE = 'Settings file'
 
 export const RETRY = 'Retry'
 
