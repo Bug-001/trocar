@@ -8,7 +8,7 @@ import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
 import { STATUS_REASONS } from '../health/codes.mjs'
-import { EXIT, newReceipt } from './schema.mjs'
+import { EXIT, newReceipt } from '../off/schema.mjs' // the keys and the exit codes themselves (D62): `status` prints a receipt, it does not VALIDATE one, so it does not pay for ./schema.mjs's checker and the closed lists under it
 import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
@@ -16,13 +16,13 @@ import { readManifest } from '../off/manifest.mjs'
 import { holdersOf } from '../off/holders.mjs'
 import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
-import { listProcs, identityFor, pidAlive } from '../off/proc.mjs'
+import { listProcs, identityFor, pidAlive, memoProcQuestions, procAskNotes, daemonProcReader } from '../off/proc.mjs'
 import { createRegistry } from '../collector/core/registry.mjs'
 import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
 import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
-import { userProcessesOf } from '../off/orchestrate.mjs'
+import { userProcessesOf } from '../off/user-procs.mjs' // its own small file on purpose: through ./orchestrate.mjs this one function pulled the whole undo machinery into `status`'s module load (D62)
 
 import { judgeHarness, certOfForms } from '../netenv/verdict.mjs'
 import { gatherNetFacts } from '../netenv/facts.mjs'
@@ -35,6 +35,7 @@ import { formatStatus, formatHealth, failuresBlock, statusSummary, statusDetail 
 import { colors, noColor, unknown as unknownText2 } from './text.mjs'
 import { failureBrief } from './words.mjs'
 import { tilde } from './receipt.mjs'
+import { isProxyMode } from '../off/mode.mjs' // proxy mode or driver mode (D47), decided in ONE place (src/cli may import src/off; the collector's copy is isModelOs)
 
 export { STATUS_REASONS, judgeHarness } // judgeHarness lives in src/netenv/verdict.mjs: the topology (1.6 §9) judges `captured` and `reason` with the same function, so the two cannot disagree
 
@@ -85,17 +86,35 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const request = deps.request || (endpoint && endpoint.request) || controlRequest
   const socketPath = deps.socketPath !== undefined ? deps.socketPath : (endpoint && endpoint.socketPath) || null
   const f = { at: new Date(ms()).toISOString(), platform, user: deps.user || (() => { try { return nodeOs.userInfo().username } catch { return String(env.USER || '') } })(), dir, daemon: { state: 'unknown', pid: null, reason: null, socket: null, reply: null }, harnesses: [] }
+  // The read-only probes that need nothing of each other are started together (D62 task E): the one process-table question, and the import of the
+  // daemon module the descriptors come from (its load is the floor's biggest part on Windows). The table is awaited BEFORE the daemon's lock is
+  // judged on purpose: on Windows the identity of the daemon's pid is answered out of that one table (src/off/proc.mjs memoProcQuestions), so
+  // `status` starts one PowerShell where it used to start three.
+  let table = null, tableError = null
+  const tableP = (deps.procs ? Promise.resolve().then(() => deps.procs()) : listProcs({ exec: deps.exec || null, platform, env })).then((v) => { table = v }, (e) => { tableError = e })
+  const descP = descriptorsOf({ platform, env, deps }).then((v) => ({ value: v }), (e) => ({ error: e }))
+  await tableP
   // the daemon: judged the way `off` judges it (its lock, then whether the control socket answers), then asked for its status
   const st = await daemonState({ lockFile: path.join(dir, 'lock'), socketPath, request, identity, alive, now: ms, fs, timeoutMs: deps.timeoutMs || 5000, platform })
   f.daemon = { state: { none: 'not-running', stale: 'not-running', running: 'running', starting: 'not-responding', unresponsive: 'not-responding', unknown: 'unknown' }[st.state], pid: st.lock ? st.lock.pid : null, reason: st.reason || null, socket: st.socket || null, reply: null, lock: st.lock || null, helper_pid: st.lock ? st.lock.helper_pid ?? null : null }
   if (st.state === 'running') {
-    try { f.daemon.reply = await request({ socketPath: st.socket, method: 'GET', path: '/status', timeoutMs: deps.timeoutMs || 5000 }) } catch (e) { f.daemon.state = 'not-responding'; f.daemon.reason = `GET /status failed (${errText(e)})` }
+    // `daemonState`'s own probe IS `GET /status` (daemon-stop.mjs): when it carries the reply, that read is this one and no second round trip is
+    // made (D62: 3 round trips of ~23 ms each on a Windows test machine, where `status` has 0.5 s in all). A probe that answered with an ERROR status
+    // carries no reply, and then the question is put properly here — the same failure path as before.
+    if (st.reply !== undefined) f.daemon.reply = st.reply
+    else try { f.daemon.reply = await request({ socketPath: st.socket, method: 'GET', path: '/status', timeoutMs: deps.timeoutMs || 5000 }) } catch (e) { f.daemon.state = 'not-responding'; f.daemon.reason = `GET /status failed (${errText(e)})` }
   }
   const reply = f.daemon.reply
+  // P12's holder rows (below) are the daemon's own poll, and answering them costs it a process snapshot of its own (41 ms measured on a Windows test machine).
+  // the request is started HERE, so it is answered while the manifest, the switch and every harness are judged (D62).
+  // Asked only when the daemon's poll HAS rows (`holders` a number): with nothing watched it answers null and `GET /holders` would read the whole
+  // process table again for what the rows below are judged from anyway (41 ms measured on a Windows test machine) — D62.
+  const holdersP = reply && typeof reply.holders === 'number' ? request({ socketPath: st.socket, method: 'GET', path: '/holders', timeoutMs: deps.timeoutMs || 5000 }).then((h) => (Array.isArray(h && h.holders) ? h.holders : null), () => null) : null
   // the manifest, then the switch (the manifest names which harnesses are installed: a version 1 state.json is read for them)
   try { f.manifest = { value: readManifest(dir, fs), error: null } } catch (e) { f.manifest = { value: null, error: `${path.join(dir, 'install-manifest.json')}: ${errText(e)}` } }
   if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this asight does not read`; f.manifest.value = null }
   const m = f.manifest.value
+  const certP = installCertOf({ f, m, dir, fs, platform, home, env, deps }) // the certificate axis: its root-store read and its own import run while the harnesses are judged
   const installedIds = m ? [...new Set([...(m.entries || []), ...(m.files || [])].map((x) => x.harness).filter((h) => typeof h === 'string'))] : []
   let state = null
   try { state = readStateFile(stateF, { fs, installed: installedIds, now: new Date(ms()) }).state } catch (e) { f.state = { error: e && e.code === 'state-unparsable' ? e.message : `${stateF}: ${errText(e)}` } }
@@ -110,23 +129,28 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   // the processes: the daemon's rows when it answered, else the process table matched with the name list in effect now (below)
   // The table is read whatever else is missing: the processes the user started themselves (`asight serve`, a foreground `capture`) are found by their command line alone. Only the
   // matching of a process to a harness needs the name list; with no daemon and no descriptors to build it from, that is what cannot be said (audit rule-b 6, R11)
-  let table = null, tableError = null
-  try { table = await (deps.procs ? deps.procs() : listProcs({ exec: deps.exec || null, platform, env })) } catch (e) { rethrowSandbox(e); tableError = errText(e) }
+  // the processes: the daemon's rows when it answered, else the process table read above, matched with the name list in effect now
+  // The table is read whatever else is missing: the processes the user started themselves (`asight serve`, a foreground `capture`) are found by their command line alone. Only the
+  // matching of a process to a harness needs the name list; with no daemon and no descriptors to build it from, that is what cannot be said (audit rule-b 6, R11)
+  if (tableError) { rethrowSandbox(tableError); tableError = errText(tableError) }
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
   const list = readAgentList({ home, fs }) // the name list (D51③⑤, 1.6 §9.7): read here, daemon or not
   f.agent_list = { path: list.path, state: list.state, problems: list.problems } // the file is one for the machine: said once, whatever harnesses there are
   // P12: who may still use a door after off (「还剩 N 个」), [{harness, pid}]: the proxy-mode daemon's own poll (GET /holders) when it answers, else the judge off and the daemon use, over the disk
-  if (reply && 'holders' in reply) { try { const h = await request({ socketPath: st.socket, method: 'GET', path: '/holders', timeoutMs: deps.timeoutMs || 5000 }); f.holders = Array.isArray(h && h.holders) ? h.holders : null } catch { f.holders = null } }
+  if (holdersP) f.holders = await holdersP
   else f.holders = m && table ? holdersOf({ manifest: m, procs: table, agentList: list }) : null
   // the name list in effect NOW — the descriptors' presets with the user's agents.json merged in, its `ignore` applied — built by the daemon's own primitive
   // (createRegistry, the registry the doors and the tracker judge by), so `status` names the same harness for a process with a daemon and without (1.6 V65).
   // Not the manifest's liveness: that is `off`'s holder snapshot, a union that never drops a name and never applies `ignore` (the safe direction for `off` only).
   let merged = null, whose = null
-  try {
-    const descriptors = await descriptorsOf({ platform, env, deps })
-    merged = mergedNames(descriptors, list)
-    whose = createRegistry(descriptors, { agentList: list.entries }).match
-  } catch (e) { rethrowSandbox(e); f.identity_error = `the harness descriptors could not be loaded (${errMessage(e)})` }
+  const desc = await descP
+  if (desc.error) { rethrowSandbox(desc.error); f.identity_error = `the harness descriptors could not be loaded (${errMessage(desc.error)})` }
+  else {
+    try {
+      merged = mergedNames(desc.value, list)
+      whose = createRegistry(desc.value, { agentList: list.entries }).match
+    } catch (e) { rethrowSandbox(e); f.identity_error = `the harness descriptors could not be loaded (${errMessage(e)})` }
+  }
   const matchError = !reply && !whose ? (f.identity_error || 'there is no name list to match the processes with') : tableError
   const matched = table && whose ? table.map((p) => ({ p, h: (whose(p) || {}).agent ?? null })) : [] // which harness each process of the table is
   f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
@@ -155,7 +179,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const att = own ? { attached: [true, false].includes(fromReply[id].attached) ? fromReply[id].attached : null, reason: `the daemon could not tell whether it is listening for ${id} (it could not read its own record of where it listens)` } : { attached: f.link.attached, reason: f.link.reason }
     // `judge(cert)`: the verdict again once the forms' certificates are read (judgeCertificates, after the topology's facts): V32 puts the certificate between the entry and the start time
     const judge = (cert = true) => {
-      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: platform === 'darwin' || platform === 'win32', cert })
+      const j = judgeHarness({ desired, entryIntact: entry.state === 'intact' ? true : entry.state === 'unknown' ? null : false, entryWhy: entry.state === 'changed' ? 'entry-changed' : 'entry-missing', attached: att.attached, helper: f.link.helper, daemon: f.daemon.state, procs, installedAt, deadDoor: isProxyMode(platform), cert })
       if (merged) j.rows = j.rows.map((r) => { const name = r.pid != null ? hitName(tableOf.get(r.pid), merged[id]) : null; return name ? { ...r, name } : r }) // the name the process matched (1.6 §9.7)
       return j
     }
@@ -178,7 +202,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   }
   try { f.health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   if (merged) f.identity = identityBlocks({ ids: f.harnesses.map((h) => h.id), merged, health: effectiveHealth(f).health })
-  Object.assign(f, await installCertOf({ f, m, dir, fs, platform, home, env, deps }))
+  Object.assign(f, await certP)
   return f
 }
 
@@ -198,7 +222,7 @@ const certNeedsUser = (f) => !!(f.install && f.install.state && f.cert && (['cer
  *  (backendsFor().rootStore: never `security` / `certutil` in a test); the key and the intermediate from the daemon's issuer (unknown, with a reason, without one). The certificate
  *  axis only: nothing here judges a harness; the forms' `certificate` built from `cert.root` is the certificate step of the verdict (judgeCertificates, V32). Linux: no user root step (`none`), the key is the file `install` made, no intermediate. */
 async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
-  const rec = m && m.install ? m.install : null, model = platform === 'darwin' || platform === 'win32', reply = f.daemon.reply
+  const rec = m && m.install ? m.install : null, model = isProxyMode(platform), reply = f.daemon.reply
   const install = { state: rec ? rec.state ?? null : null, at: rec ? rec.at ?? null : null, harnesses: rec ? rec.harnesses || [] : [], pending: rec ? (rec.pending || []).map((p) => p.item) : [] }
   let x = null, pemWhy = null // pemWhy: the certificate is there and cannot be read — not known, never "not installed"
   try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'))) } catch (e) { rethrowSandbox(e); if (!(e && e.code === 'ENOENT')) pemWhy = `asight-ca.pem cannot be read (${errText(e)})` }
@@ -234,7 +258,7 @@ async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
 async function descriptorsOf({ platform, env, deps }) {
   if (deps.harnesses) return deps.harnesses
   if (deps.netFactsDeps) return (await deps.netFactsDeps()).harnesses
-  const mod = await (deps.daemon || import('../collector/daemon.mjs'))
+  const mod = await (deps.daemon || import('../collector/net-deps.mjs'))
   if (typeof mod.netFactsDeps !== 'function') throw new Error('no reader of the harness descriptors is wired into this build')
   return (await mod.netFactsDeps({ platform, env })).harnesses
 }
@@ -262,19 +286,25 @@ function identityBlocks({ ids, merged, health }) {
 
 /**
  * The network facts and the topology of the harnesses `f` is about (1.6 §9): what `gatherStatus` read, the descriptors, and this platform's part (`netFactsDeps` of the daemon module: the CLI reaches
- * arch and harness only through it, layering rule 5). → `{ facts, topology }` (topology = { <h>: HarnessTopology }), or `{ topology_error }`: a failure of the build is said, and does not change what `status` judged.
+ * arch and harness only through it, layering rule 5). → `{ facts, topology, diagnosed }` (topology = { <h>: HarnessTopology }, `diagnosed` = the finding list the codes came from, so `doctor` does not diagnose the same
+ * facts a second time, D62), or `{ topology_error }`: a failure of the build is said, and does not change what `status` judged.
  */
 export async function gatherTopology(f, { home, env, platform, deps = {} }) {
   try {
     const fs = deps.fs || nodeFs
-    const mod = deps.netFactsDeps ? null : await (deps.daemon || import('../collector/daemon.mjs'))
+    const mod = deps.netFactsDeps ? null : await (deps.daemon || import('../collector/net-deps.mjs'))
     const nd = deps.netFactsDeps ? await deps.netFactsDeps() : mod && typeof mod.netFactsDeps === 'function' ? await mod.netFactsDeps({ platform }) : null
     if (!nd) return { topology_error: 'no reader of the network facts is wired into this build' }
-    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
+    // the platform's own reader of the network facts (the Windows helper): the DAEMON's warm one when it answers on the control channel, so this
+    // command starts no PowerShell of its own for the process snapshot, the socket table and Internet Settings (4.8 §1; D62). Without a daemon
+    // the platform's part starts and closes one itself, as it did.
+    const warm = deps.daemonReader && f.daemon && f.daemon.state === 'running' ? deps.daemonReader : null
+    const facts = await gatherNetFacts({ platform, home, env, harnesses: nd.harnesses, status: f, archFacts: nd.archFacts, adopted: readAdopted(home, { fs }), now: deps.ms || Date.now, fs, deps: { exec: deps.exec || null, ...(warm ? { helper: warm } : {}), ...(deps.procRoot ? { procRoot: deps.procRoot } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}) } })
     const topology = buildTopology(facts)
     // the codes `doctor` would give, on the topology of each harness (the board reads them there); the commands and the text are `doctor`'s
-    try { const by = diagnose({ facts, topology, harnesses: null, user: f.user }); for (const h of Object.keys(topology)) topology[h].findings = [...new Set(by.filter((x) => x.harness === h).map((x) => x.code))] } catch (e) { rethrowSandbox(e) }
-    return { facts, topology }
+    let diagnosed = null
+    try { diagnosed = diagnose({ facts, topology, harnesses: null, user: f.user }); for (const h of Object.keys(topology)) topology[h].findings = [...new Set(diagnosed.filter((x) => x.harness === h).map((x) => x.code))] } catch (e) { rethrowSandbox(e) }
+    return { facts, topology, diagnosed }
   } catch (e) { rethrowSandbox(e); return { topology_error: errMessage(e) } }
 }
 
@@ -332,6 +362,9 @@ export function statusDocOf(f) {
     ...(f.health_error ? [{ where: 'capture health', reason: f.health_error }] : []),
     ...(f.identity_error ? [{ where: 'the agent name list', reason: f.identity_error }] : []),
     ...(f.userProcs && f.userProcs.error ? [{ where: 'the process table', reason: f.userProcs.error }] : []),
+    // a read put to the OS because the daemon could not answer it: the fallback worked, and is never silent (D38; 4.8 §1). `where` is the
+    // closed-set name of the question (src/health/codes.mjs DOC_WHERE); which reader could not answer it, and why, is the reason.
+    ...(f.proc_asks || []).map((reason) => ({ where: 'the process table', reason: `the daemon was asked for the process facts and could not answer, so the OS was asked: ${reason}` })),
   ]
   const doc = {
     ...newReceipt('status'), ok: statusExit(f) === EXIT.ok,
@@ -350,10 +383,18 @@ export function statusDocOf(f) {
 
 /** What `status` read: the facts, the topology drawn on them, and the certificate axis folded into each verdict. Nothing is written. */
 export async function statusFacts({ names = null, home = nodeOs.homedir(), env = process.env, platform = process.platform, deps = {} } = {}) {
-  const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names })
-  Object.assign(f, await gatherTopology(f, { home, env, platform, deps }))
-  judgeCertificates(f)
-  return f
+  // one command, one answer per OS question (D62 task E): the table and the daemon pid's identity are asked once. On Windows they are asked of the
+  // DAEMON's warm helper when it answers (daemonProcReader; 4.8 §1 §7) — a powershell.exe start costs ~450 ms there — and of the OS when it does not.
+  const reader = deps.daemonReader !== undefined ? deps.daemonReader : daemonProcReader({ platform, dir: collectorDir(home), env, fs: deps.fs || nodeFs, ...(deps.request ? { request: deps.request } : {}), ...(deps.socketPath !== undefined ? { socketPath: deps.socketPath } : {}) })
+  return memoProcQuestions({ reader }, async () => {
+    const f = await gatherStatus({ home, env, deps: { ...deps, platform }, names })
+    Object.assign(f, await gatherTopology(f, { home, env, platform, deps: { ...deps, daemonReader: reader } }))
+    judgeCertificates(f)
+    // only a RUNNING daemon owes an answer: with none, a control.json left behind by a stopped one makes every read "fail" (ENOENT) and that is
+    // the normal no-daemon state, not a fact about the user's machine.
+    f.proc_asks = f.daemon && f.daemon.state === 'running' ? procAskNotes() : []
+    return f
+  })
 }
 
 /** `asight query status` (附录 C.3 / C.5): the document, for the data side and for `--json`. */

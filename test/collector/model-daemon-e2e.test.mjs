@@ -1,7 +1,7 @@
 // test/collector/model-daemon-e2e.test.mjs — the writer switch's real seam (the platform-seam rule, the pattern of test/off/main.test.mjs): `asight on`
 // through the CLI → the unit starts a REAL startDaemon running the model collector, found through the endpoint controlEndpointFor resolves (control.json,
 // the platform's own controlEndpoint wrote it) — no request and no socket path injected anywhere → POST /on opens the doors → the CLI writes the entry →
-// `asight off` through the CLI → the entry restored byte for byte and the daemon drains and exits. One run per platform value; the HOME is a tmp one, the
+// `asight off` through the CLI → the entry restored byte for byte, the doors closed and the daemon still running (D62 ⑥), and a following `on` reopens them with no OS spawn. One run per platform value; the HOME is a tmp one, the
 // custody a stub. 4.11 ① one writer, at the daemon's process boundary: driven alone through the real endpoint (POST /on, GET /status, a restart whose
 // restore() reopens the doors, POST /off), the daemon leaves ingress.json and the agent file byte- and mtime-identical. The restart holds restore() open
 // (the custody answers late) and an `on` arrives meanwhile: it waits for restore (the ready gate), one door, no engine-port-taken.
@@ -34,22 +34,26 @@ const STATUS_EXIT = EXIT.ok
 
 function fakeIo() {
   const out = [], err = []
-  return { out: (s) => out.push(s), err: (s) => err.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {}, text: () => [...out, ...err].join('\n') }
+  return { out: (s) => out.push(s), err: (s) => err.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {}, text: () => [...out, ...err].join('\n'), stdoutText: () => out.join('\n') }
 }
 const canConnect = (port) => new Promise((resolve) => { const s = net.connect(port, '127.0.0.1'); s.once('connect', () => { s.destroy(); resolve(true) }); s.once('error', () => resolve(false)) })
 
 for (const platform of ['darwin', 'win32']) {
-  test(`${platform}: asight on → a real daemon (model collector, real endpoint) opens the door → the CLI writes the entry → asight off restores it byte for byte`, { timeout: 30_000 }, async () => {
+  test(`${platform}: asight on → a real daemon (model collector, real endpoint) opens the door → the CLI writes the entry → asight off restores it byte for byte, closes the doors and leaves the daemon running`, { timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     const envFile = path.join(w.home, '.codex', '.env')
     fs.mkdirSync(path.dirname(envFile), { recursive: true }); fs.writeFileSync(envFile, '# the user\'s own\nOPENAI_BASE_URL=https://relay.example\n')
     const before = fs.readFileSync(envFile)
-    const box = await liveUnit({ w, platform })
+    // D62: `on` and `off` ask the daemon's resident read-only helper for the process table (4.8 §1 §7), over this real control endpoint — a
+    // stand-in here, this host not being Windows (0.1 §3). An empty table is a machine with nothing of ours on it.
+    const box = await liveUnit({ w, platform, parts: { helper: { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } } } })
     await withScratchCwd(platform, async () => {
       try {
         const io = fakeIo()
-        const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        // the FIRST `on` here runs with no daemon yet (it starts it), so there is no warm helper to ask for the process table and the OS is asked:
+        // injected, as every OS question in a test is (0.1 §3). The second `on` below, with the daemon still there, asks the daemon instead.
+        const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, exec: () => ({ status: 0, stdout: '', stderr: '' }), sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text() + (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : ''))
         assert.deepEqual([box.enabled, box.startedNow], [[], [true]], 'D61: `on` started the daemon through the OS mechanism once (startNow) and never touched the registration (no enable)')
         const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
@@ -115,12 +119,25 @@ for (const platform of ['darwin', 'win32']) {
         await ask('POST', '/on', onBody) // back to on for the CLI's off below
         assert.deepEqual(snap(), files0, '4.11 ①: the daemon half wrote no agent file and no ingress.json')
         const io2 = fakeIo()
-        const off = await runOffCli([], { io: io2, home: w.home, env: w.env, platform, deps: { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: () => ({ status: 0, stdout: '', stderr: '' }) } })
+        const off = await runOffCli(['--json'], { io: io2, home: w.home, env: w.env, platform, deps: { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: () => ({ status: 0, stdout: '', stderr: '' }) } })
         assert.equal(off, 0, io2.text())
         assert.deepEqual(fs.readFileSync(envFile), before, 'off restored the entry byte for byte')
-        const why = await Promise.race([box.daemon.exited.then((x) => ({ x })), new Promise((res) => setTimeout(() => res(null), 5000))])
-        assert.ok(why, 'the daemon drained and exited after off (mayExit: nothing on, no holder, no connection)')
-        assert.equal(await canConnect(port), false, 'the door is closed')
+        // D62 ⑥: in proxy mode an off with no names closes the doors and leaves the daemon running — the state D61's login start already leaves it in
+        const oj = JSON.parse(io2.stdoutText()) // --json: the document is stdout's alone (§1.2)
+        assert.deepEqual(validateReceipt(oj), [], 'off --json validates')
+        assert.deepEqual([oj.all, oj.daemon.state], [true, 'running'], 'the receipt says the daemon keeps running')
+        assert.equal(oj.daemon.exits_after, undefined, 'there is nothing to wait for: it was never asked to exit')
+        const exited = await Promise.race([box.daemon.exited.then(() => true), new Promise((res) => setTimeout(() => res(false), 1000))])
+        assert.equal(exited, false, 'the daemon was not asked to exit')
+        assert.deepEqual((await ask('GET', '/status')).doors, {}, 'it still answers, with no door open')
+        assert.equal(await canConnect(port), false, 'the door is closed: nothing of asight is on the agent\'s path (invariant 5)')
+        // and the next `on` opens the doors again by asking the daemon that stayed: no spawn through the OS mechanism (no kickstart, no throttle)
+        const spawns = box.startedNow.length
+        const io6 = fakeIo()
+        assert.equal(await runOnCli(['--yes'], { io: io6, env: w.env, home: w.home, platform, deps }), 0, io6.text())
+        assert.equal(box.startedNow.length, spawns, 'the OS was not asked to start a daemon: the one that stayed is the one asked')
+        assert.deepEqual(Object.keys((await ask('GET', '/status')).doors), [g], 'the doors are open again')
+        assert.equal(await canConnect(port), true, 'and the door listens again')
       } finally { await box.stop() }
     })
   })
@@ -133,7 +150,7 @@ for (const platform of ['darwin', 'win32']) {
   test(`${platform}: CM24 · a holder from the on window: uninstall refuses with the daemon up and with it down, and uninstalls once the holder exits`, { timeout: 30_000 }, async () => {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
-    const box = await liveUnit({ w, platform })
+    const box = await liveUnit({ w, platform, parts: { helper: { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } } } })
     await withScratchCwd(platform, async () => {
       try {
         const stub = () => ({ status: 0, stdout: '', stderr: '' })

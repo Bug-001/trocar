@@ -124,6 +124,10 @@ export function contextStateOfRequest(rec) {
 export function bodyUnparsedOf(rec) {
   const b = rec && rec.req_body;
   if (typeof b !== 'string') return false;
+  // The reader that already parsed this body says so (a non-enumerable stamp, like `_stream`: never
+  // stored, never shipped). Parsing a 0.8 MB request a second time only to learn that it parses cost
+  // 46 ms per open of a 115-call session — the same JSON.parse the board had just done (1.6 §3.1).
+  if (typeof rec._reqParsed === 'boolean') return !rec._reqParsed;
   try { const v = JSON.parse(b); return !(v && typeof v === 'object'); } catch { return true; }
 }
 

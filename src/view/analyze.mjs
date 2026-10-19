@@ -636,24 +636,48 @@ export function analyze(records, opts = {}) {
 // an SDK detail and is irrelevant to the model. What the model actually reads top-to-bottom — and
 // what the Anthropic prompt cache uses as its prefix — is tools, then system, then messages.
 // So THIS is "the original order of the context", not the JSON key order.
-function blkHashText(b) {
-  if (typeof b === 'string') return b
-  if (!b || typeof b !== 'object') return String(b)
-  if (b.type === 'text') return b.text || ''
-  if (b.type === 'thinking') return b.thinking || ''
+// The block's canonical text for hashing/diffing. `cap` BOUNDS IT WHILE IT IS BUILT, because the
+// block key below is hash(text.slice(0, cap)): building a 200 KB tool_result (or JSON.stringify-ing a
+// whole tool input) only to throw all but its first 4 096 chars away is the "O(1) per block" claim
+// being false. Capping produces the SAME chars — every branch below is a prefix-stable concatenation,
+// so slicing a part before joining and slicing the join after it are the same string.
+function blkHashText(b, cap = Infinity) {
+  if (typeof b === 'string') return b.slice(0, cap)
+  if (!b || typeof b !== 'object') return String(b).slice(0, cap)
+  if (b.type === 'text') return (b.text || '').slice(0, cap)
+  if (b.type === 'thinking') return (b.thinking || '').slice(0, cap)
   if (b.type === 'redacted_thinking') return 'redacted_thinking'
-  if (b.type === 'tool_use' || b.type === 'server_tool_use') return (b.name || '') + '::' + JSON.stringify(b.input || {})
+  if (b.type === 'tool_use' || b.type === 'server_tool_use') {
+    const head = (b.name || '') + '::'
+    return head.length >= cap ? head.slice(0, cap) : (head + JSON.stringify(b.input || {})).slice(0, cap)
+  }
   if (b.type === 'tool_result') {
+    const head = (b.tool_use_id || '') + '::'
+    if (head.length >= cap) return head.slice(0, cap)
     const c = b.content
-    const t = typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text || `[${x.type}]`).join('\n') : JSON.stringify(c)
-    return (b.tool_use_id || '') + '::' + t + (b.is_error ? '::ERR' : '')
+    let t
+    if (typeof c === 'string') t = c.slice(0, cap)
+    else if (Array.isArray(c)) { t = ''; for (let i = 0; i < c.length && t.length < cap; i++) t += (i ? '\n' : '') + (c[i].text || `[${c[i].type}]`) }
+    else t = JSON.stringify(c)
+    return (head + t + (b.is_error ? '::ERR' : '')).slice(0, cap)
   }
   if (b.type === 'image') return 'image:' + (b.source?.media_type || b.source?.type || '')
   if (b.type === 'document') return 'document:' + (b.source?.media_type || b.title || '')
-  return JSON.stringify(b)
+  return JSON.stringify(b).slice(0, cap)
 }
 // hash a bounded prefix — plenty to distinguish blocks, and O(1) per block regardless of size
-const blkKey = (prefix, b) => prefix + hash(blkHashText(b).slice(0, 4096))
+const BLK_KEY_CAP = 4096
+// `memo` (one Map per session assembly, from the caller) is NOT a cache of results across queries: an
+// append-only conversation re-sends its whole context every turn, so one session asks for the key of the
+// SAME block text once per call — measured 17 594 block keys over 494 distinct contents. Hashing the 17 100
+// repeats was 89 ms of a 115-call session's 305 ms. Same text in, same key out; the map dies with the call.
+const blkKey = (prefix, b, memo) => {
+  const t = blkHashText(b, BLK_KEY_CAP)
+  if (!memo) return prefix + hash(t)
+  let h = memo.get(t)
+  if (h === undefined) memo.set(t, (h = hash(t)))
+  return prefix + h
+}
 
 // Flatten a captured request into ordered block descriptors — the board's PROJECTION of the shared
 // CC dissector's canonical spine (src/dissect/cc.mjs · D25). Each descriptor carries a stable content
@@ -671,7 +695,7 @@ function truncNote(text) {
   return m ? m[m.length - 1] : null
 }
 
-export function linearContext(request) {
+export function linearContext(request, keyMemo = null) {
   const flat = []
   // ── resource ↔ RESULT linking ────────────────────────────────────────
   // The 📂 resource explorer promises "the bytes that entered the context". The dissector keys a
@@ -712,14 +736,14 @@ export function linearContext(request) {
       })
     } else if (e.section === 'system') {
       const b = e.parsed, text = b?.text || ''
-      flat.push({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }) })
+      flat.push({ sec: 'system', kind: 'system', role: 'system', si: e.path.i, label: sysLabel(text), text, chars: text.length, volatile: e.volatile, cc: b?.cache_control || null, key: blkKey('S:', { type: 'text', text }, keyMemo) })
     } else {
       const b = e.parsed, type = typeof b === 'string' ? 'text' : (b?.type || 'text')
       const d = {
         sec: 'messages', kind: type, role: e.role, mi: e.path.mi, bi: e.path.bi, block: b,
         toolName: type === 'tool_use' || type === 'server_tool_use' ? (b.name || '') : '',
         cc: (b && b.cache_control) || null,
-        resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b),
+        resKey: e.resourceRef, key: blkKey('M:' + e.role + ':' + type + ':', b, keyMemo),
       }
       // `key` above is UNCHANGED — the cache-prefix chain diffs on it, so the linking below only
       // ever ADDS descriptive fields.
@@ -839,8 +863,9 @@ export function cacheBreak(prevFlat, curFlat, opts = {}) {
       out.cause = keyReorder(prev, cur) ? 'json-key-reorder' : 'content-changed'
     }
     // byte-level localization within the first diverging block (structural estimate)
-    const off = firstDiffOffset(flatBlockText(prev), flatBlockText(cur))
-    if (off >= 0) { out.byteOffset = off; out.byteContext = flatBlockText(cur).slice(off, off + 48) }
+    const prevText = flatBlockText(prev), curText = flatBlockText(cur)
+    const off = firstDiffOffset(prevText, curText)
+    if (off >= 0) { out.byteOffset = off; out.byteContext = curText.slice(off, off + 48) }
     // analyze()'s drop-based compaction verdict is authoritative — a compaction that kept the first
     // user turn breaks mid-history; without the hint that reads as 'content-changed'.
     if (opts.compaction) out.cause = 'compaction'

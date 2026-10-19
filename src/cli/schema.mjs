@@ -296,7 +296,7 @@ export function validateQueryDoc(doc, name = doc && doc.command) {
   if (doc.ok !== (Array.isArray(doc.errors) && doc.errors.length === 0) && !VERDICT.includes(doc.command)) bad.push('ok: says something else than `errors` does')
   if ('has_more' in doc || 'next' in doc) {
     if (typeof doc.has_more !== 'boolean') bad.push('has_more: not a boolean')
-    if (!(doc.next === null || isString(doc.next))) bad.push('next: neither the next --cursor nor null')
+    if (!(doc.next === null || isString(doc.next))) bad.push('next: neither the next --after nor null')
     if (doc.has_more !== (doc.next !== null)) bad.push('next: says something else than `has_more` does')
   }
   return bad

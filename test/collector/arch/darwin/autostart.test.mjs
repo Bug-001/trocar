@@ -13,7 +13,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../../helpers/tmp.mjs'
-import { refuseElevated, nodePreflight, plistXml, plistPath, userUnit, directStartEnv, AGENT_LABEL, PLIST_FILE } from '../../../../src/collector/arch/darwin/autostart.mjs'
+import { refuseElevated, nodePreflight, plistXml, plistPath, userUnit, directStartEnv, AGENT_LABEL, PLIST_FILE, LAUNCHD_THROTTLE_SECONDS, KICKSTART_TIMEOUT_MS } from '../../../../src/collector/arch/darwin/autostart.mjs'
 import { daemonLogPaths } from '../../../../src/collector/arch/daemon-logs.mjs'
 import { controlEndpoint, readControlEndpoint, CONTROL_FILE, SOCKET_PREFIX, SOCKET_SUFFIX } from '../../../../src/collector/arch/darwin/control-path.mjs'
 import * as offDarwin from '../../../../src/off/darwin.mjs'
@@ -233,6 +233,10 @@ test('W24 the plist has the fields of 4.9 §4: Label com.asight.collector, Progr
   assert.doesNotMatch(x, /--supervise/, 'the supervisor flag went with the supervisor parent (4.9 §4)')
   assert.match(x, /<key>RunAtLoad<\/key>\s*<true\/>/, 'launchd starts the daemon at every login')
   assert.match(x, /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/, 'launchd brings a crashed daemon back (no supervisor), but not one that drained after off and exited 0')
+  // D62 ⑥: asight writes NO ThrottleInterval. Under KeepAlive {SuccessfulExit: false} a smaller throttle is the respawn interval of a daemon that
+  // crashes at start (every second = 15-25 % of a core, against about 2 % at launchd's 10 s default), and no `on` needs it any more: an `off` with no
+  // names leaves the daemon running, so `on` asks the one that is there instead of having launchd spawn one.
+  assert.doesNotMatch(x, /ThrottleInterval/, 'launchd\'s own throttle is what bounds a crash loop: asight does not shorten it (D62 ⑥)')
   assert.doesNotMatch(x, /EnvironmentVariables/, 'no environment needed: the daemon\'s env is empty unless install says otherwise')
   const withEnv = plistXml({ node: NODE, asight: SCRIPT, env: { NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' } })
   assert.ok(balanced(withEnv))
@@ -285,6 +289,20 @@ test('W24 userUnit gives the shape turnOn and install consume: the plist\'s path
   assert.notEqual(u.text({ NODE_EXTRA_CA_CERTS: '/usr/local/etc/corp-ca.pem' }), plist(), 'the daemon env install offers is carried (unlike the win32 task, 4.8 §7)')
   for (const verb of ['enable', 'start', 'startNow', 'reload', 'remove']) assert.equal(typeof u[verb], 'function', verb) // D61: no `disable` verb — nothing in an off touches the registration
   assert.deepEqual(u.reload(), { code: 0, out: '', err: '' }, 'a rewritten plist is replaced by the next enable (bootout + bootstrap), so there is nothing to reload')
+})
+
+// D62 ⑥ (a review's find): `launchctl kickstart` does not return until launchd spawned the job, and launchd spawns one at most once every
+// ThrottleInterval seconds — 10 s by default, which is exactly execTool's default deadline. A kickstart right after a respawn would then
+// time out, be reported as "the collector could not be started through the LaunchAgent" and send `on` down the direct-start path (D38:
+// never a wrong reason). The deadline must be ABOVE launchd's throttle.
+test('W24 startNow gives the kickstart a deadline above launchd\'s own respawn throttle, so a throttled wait is not misread as a refusal', () => {
+  const seen = []
+  const run = (file, args, opts) => { seen.push({ file, args, timeout: opts && opts.timeout }); return { status: 0, stdout: '', stderr: '' } }
+  const u = installed(userUnit({ ...withHome(), run, uid: 501 }))
+  assert.deepEqual(u.startNow(), { code: 0, out: '', err: '' })
+  assert.deepEqual(seen.map((c) => [c.file, ...c.args]), [['launchctl', 'kickstart', 'gui/501/com.asight.collector']])
+  assert.equal(seen[0].timeout, KICKSTART_TIMEOUT_MS, 'the kickstart carries its own deadline, not execTool\'s default')
+  assert.ok(KICKSTART_TIMEOUT_MS > LAUNCHD_THROTTLE_SECONDS * 1000, `${KICKSTART_TIMEOUT_MS} ms must exceed launchd's ${LAUNCHD_THROTTLE_SECONDS} s throttle`)
 })
 
 test('W24 enable bootstraps the job into the user\'s GUI session domain (gui/<uid>) from the plist install wrote — after a best-effort bootout of an earlier copy, the win32 /Create /F analog — and now is the default', () => {

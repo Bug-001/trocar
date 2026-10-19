@@ -14,11 +14,29 @@ import { CONTROL_TOKEN_HEADER, isPipePath } from '../../off/control-client.mjs'
 // The client side (controlSocketPath, controlRequest, controlEndpointFor) is src/off/control-client.mjs: `asight off` asks the daemon without this directory (1.6 R3).
 export { controlSocketPath, controlRequest, controlEndpointFor } from '../../off/control-client.mjs'
 
-function probe(socketPath) {
-  return new Promise((resolve) => {
+const PROBE_MS = 2000 // a daemon that serves answers /status without touching disk; more than this means it does not serve
+
+/** Who holds the control endpoint. A connect says whether anything is there at all; only a short `GET /status` says whether it SERVES.
+ *  'absent' — nothing is there (the socket / pipe does not exist).
+ *  'stale'  — the path is there but refuses a connection: a socket file a crashed daemon left (unix only; it is removed below).
+ *  'live'   — it answered, a 401 included (a daemon of this user's with another secret): another daemon serves this user's collector.
+ *  'busy'   — it accepts a connection and answers nothing: a daemon with a wedged event loop, or another program holding the pipe name.
+ *             A connect alone would have called this 'live' and made the new daemon exit 0, leaving the machine with no collector, no record and
+ *             no retry until the next login (D38). */
+async function probe(socketPath, token) {
+  const unreachable = await new Promise((resolve) => {
     const s = net.connect(socketPath)
-    s.once('connect', () => { s.destroy(); resolve('live') })
+    s.once('connect', () => { s.destroy(); resolve(null) })
     s.once('error', (e) => resolve(e.code === 'ENOENT' ? 'absent' : 'stale'))
+  })
+  if (unreachable) return unreachable
+  // its own connection (`agent: false`): a pooled one would be kept for this path and handed to a later request on it, after this endpoint is gone.
+  // Any status counts — a 401 is a daemon of this user's with another secret, a 404 one that does not know this route: both SERVE.
+  return await new Promise((resolve) => {
+    const req = http.request({ socketPath, method: 'GET', path: '/status', agent: false, headers: token == null ? {} : { [CONTROL_TOKEN_HEADER]: token } }, (res) => { res.resume(); resolve('live') })
+    req.setTimeout(PROBE_MS, () => req.destroy(new Error('the control endpoint did not answer')))
+    req.on('error', () => resolve('busy'))
+    req.end()
   })
 }
 
@@ -29,6 +47,14 @@ export { CONTROL_TOKEN_HEADER }
 const sameToken = (want, got) => typeof got === 'string' && timingSafeEqual(createHash('sha256').update(want).digest(), createHash('sha256').update(got).digest())
 
 const send = (res, status, obj) => { const b = JSON.stringify(obj); res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(b) }); res.end(b) }
+
+/** The flag startControlServer's error carries when another daemon already answers on the control channel: the one place that names it (src/cli/daemon.mjs
+ *  reads it). Not `code`: a code of its own would enter the records as a failure code outside D38's closed sets, and this is not a failure at all. */
+export const DAEMON_ALREADY_UP = 'asightDaemonAlreadyUp'
+
+/** The flag startControlServer's error carries when the control endpoint is held by something that does not answer (probe's 'busy'): this IS a failure
+ *  — src/cli/daemon.mjs records it under the code of the same name and exits non-zero, so the platform retries at its own throttle. */
+export const DAEMON_ENDPOINT_BUSY = 'asightControlEndpointHeld'
 
 // token: the secret a request must carry (CONTROL_TOKEN_HEADER); null asks for none (the unix socket of Linux, which the file modes keep to the operator).
 // pipe: the socket path is a Windows named pipe (the default says so from the path): no directory to make, no file mode to set, no file to remove. A unix socket path may be given with `pipe: true` by a test.
@@ -41,8 +67,12 @@ export async function startControlServer({ socketPath, routes, maxBody = 64 * 10
     fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 })
     fs.chmodSync(path.dirname(socketPath), 0o700)
   }
-  const state = await probe(socketPath)
-  if (state === 'live') throw new Error(`another collector daemon is answering on ${socketPath}`)
+  const state = await probe(socketPath, token)
+  // D62 ⑥: the code is what tells the CLI this is not a failure but a daemon already in place. `asight daemon` then exits 0, because a non-zero exit
+  // is retried by the platform for as long as the other daemon lives (launchd's KeepAlive {SuccessfulExit: false} every ThrottleInterval, the Windows
+  // supervisor on its backoff): a hidden loop costing CPU with nothing to show for it.
+  if (state === 'live') throw Object.assign(new Error(`another collector daemon is answering on ${socketPath}`), { [DAEMON_ALREADY_UP]: true })
+  if (state === 'busy') throw Object.assign(new Error(`the control endpoint ${socketPath} is held by something that does not answer`), { [DAEMON_ENDPOINT_BUSY]: true })
   if (state === 'stale' && !pipe) fs.rmSync(socketPath, { force: true })
 
   const server = http.createServer((req, res) => {
@@ -59,7 +89,12 @@ export async function startControlServer({ socketPath, routes, maxBody = 64 * 10
       let body = null
       if (chunks.length) { try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return send(res, 400, { error: 'body is not JSON' }) } }
       // a handler may refuse a request with `status` 4xx (a body it cannot act on); anything else it throws is a 500
-      try { send(res, 200, await handler({ query: url.searchParams, body })) } catch (e) { send(res, e && Number.isInteger(e.status) && e.status >= 400 && e.status < 500 ? e.status : 500, { error: String((e && e.message) || e) }) }
+      // A handler that took `res` and wrote the reply itself returns undefined (the query route, D63: the document's bytes
+      // stream from the worker to the socket and are never a value in this process); after that nothing more is sent.
+      try { const r = await handler({ query: url.searchParams, body, res }); if (r !== undefined) send(res, 200, r) } catch (e) {
+        if (!res.headersSent) send(res, e && Number.isInteger(e.status) && e.status >= 400 && e.status < 500 ? e.status : 500, { error: String((e && e.message) || e) })
+        else try { res.end() } catch { /* the socket went with the failure */ }
+      }
     })
   })
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve) })

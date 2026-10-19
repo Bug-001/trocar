@@ -109,7 +109,10 @@ for (const platform of ['darwin', 'win32']) {
     await withScratchCwd(platform, async () => {
       try {
         const io2 = fakeIo()
-        const exit = await runOnCli(['--yes'], { io: io2, env: w.env, home: w.home, platform, deps: { ...deps, parts: box.parts, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 25))) } })
+        // `on` asks the OS for the process table once (D62: the op lock's identity question comes out of it) — injected here, this platform being
+        // simulated: an empty table (boot time, no rows) is what a machine with nothing on it would print.
+        const exec = (file, args) => ({ status: 0, stdout: /ForEach-Object/.test([file, ...args].join(' ')) ? 'boot 1740000000000\n' : '', stderr: '' })
+        const exit = await runOnCli(['--yes'], { io: io2, env: w.env, home: w.home, platform, deps: { ...deps, parts: box.parts, exec, sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 25))) } })
         assert.equal(exit, 0, io2.text())
         assert.doesNotMatch(io2.text(), /ca\.key|CA is unusable/, 'the old on refusing the model install\'s root (the finding) is gone')
         assert.match(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'), /127\.0\.0\.1:\d+/, 'codex\'s entry holds its door')

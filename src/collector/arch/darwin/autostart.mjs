@@ -114,9 +114,16 @@ export function plistXml({ node, asight, env = {}, logs = null } = {}) {
 // The slash form for bootout's target (`gui/<uid>/<label>`, ONE argument — the rule src/off/darwin.mjs's `launchctl` carries,
 // measured on a macOS test machine, 2026-10-11): the two-argument form answers `Boot-out failed: 5: Input/output error` on every
 // job and leaves it loaded — an `on` over a loaded job and every uninstall would then report launchd failures of their own making.
-const launchctl = (args, { run, env }) => execTool('launchctl', args, { run, env })
+const launchctl = (args, { run, env }, opts = {}) => execTool('launchctl', args, { run, env, ...opts })
 /** The user's GUI session domain, launchd's per-user target (`bootstrap` / `bootout` take it): `gui/<uid>`, this process's own uid. */
 const domainOf = (uid) => `gui/${uid}`
+
+/** launchd's own respawn throttle (seconds), and the deadline a `kickstart` gets. asight does NOT write ThrottleInterval into the plist: under
+ *  `KeepAlive {SuccessfulExit: false}` a smaller throttle is what a daemon crashing at start would be respawned on (every second = 15-25 % of a
+ *  core, against about 2 % at 10 s; D62 ④). `kickstart` does not return until launchd spawned the job, so it can block for the whole throttle:
+ *  its deadline MUST be above it, or a normal throttled wait times out and is misread as "the LaunchAgent could not start it" (4.9 §4, D38). */
+export const LAUNCHD_THROTTLE_SECONDS = 10
+export const KICKSTART_TIMEOUT_MS = (LAUNCHD_THROTTLE_SECONDS + 10) * 1000
 
 const ok = { code: 0, out: '', err: '' }
 /** Is the agent loaded in this user's session? `launchctl print gui/<uid>/<label>` is the question (never a localised error text): exit 0 = there; any other exit = not there; a print
@@ -202,7 +209,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     start: (carry = null) => startDirect(carry),
     // D61: `on` asks launchd to start the daemon now (the job launchd loaded at login) and never touches the registration
     // (`install` made it). A job that is not loaded answers non-zero, and ensureDaemonUp falls back to `start()`, reason said.
-    startNow: () => launchctl(['kickstart', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools),
+    startNow: () => launchctl(['kickstart', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools, { timeoutMs: KICKSTART_TIMEOUT_MS }),
     // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything (an `on` with no
     // entry opens doors that nobody opens after the next login) — `launchctl print`, the question this file already asks (agentState).
     registered: () => agentState(tools),

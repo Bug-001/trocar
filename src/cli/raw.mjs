@@ -26,9 +26,10 @@ export async function run(argv, { io, args, home }) {
   if (to < from) return usage(`asight raw: ${target} ends before it begins.`)
   let printed = 0
   try {
-    // the stored bytes as they are: nothing added (a half line a crash left has no newline, and gets none)
-    for (const [no, bytes] of segmentLines({ home: asightHome(home), segment })) {
-      if (no >= from && no <= to) { io.stdout.write(bytes); printed++ }
+    // the stored bytes as they are: nothing added (a half line a crash left has no newline, and gets none).
+    // The range goes INTO the reader: a sealed segment then decodes only the frames these records sit in (D62 A1).
+    for (const [, bytes] of segmentLines({ home: asightHome(home), segment, from, to })) {
+      io.stdout.write(bytes); printed++
     }
   } catch (e) {
     say(`asight raw: ${String((e && e.message) || e)}`)

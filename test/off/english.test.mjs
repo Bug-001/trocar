@@ -70,3 +70,36 @@ test('D58: off on a machine asight is not on, and off with the install record lo
   assert.match(io.stdoutText(), /Found by asight's own marks and not undone yet:/)
   assert.match(io.stdoutText(), /Undo it by the marks asight left in it: asight off --yes/) // one file: the sentence counts with it
 })
+
+// D62 ⑥ (a review of D found the receipt saying two opposite things at once): in proxy mode a nameless `off` closes the doors and the daemon stays.
+// With a program still connected, ONE door stays open, passing its traffic on and recording nothing of it (P12) — so the receipt must not also say
+// "with no door open", and must not say asight exits, because in proxy mode it never does. Driver mode (the daemon IS the detach there) keeps its own
+// words. Asserted as the contract: for each state, which of the two claims the text may carry — never both.
+test('D62 ⑥: the receipt never claims both "no door open" and that asight exits — one truth per state, and a --dry-run says the daemon keeps running', () => {
+  const base = {
+    ok: true, all: true, harnesses: ['codex'], routing: { confirmed: true, how: 'daemon-reply' },
+    changed: [], removed: [], skipped: [], problems: [], notes: [], relayed: { closing: 0, waiting: 1, cut: 0 },
+  }
+  const holder = [{ harness: 'codex', pid: 5530, name: 'codex' }]
+
+  const held = formatOffReceipt({ ...base, daemon: { pid: 4012, state: 'running' }, holders: holder })
+  readable('off-proxy-holder', held)
+  assert.doesNotMatch(held, /no door open/, `a door IS open for the holder below: ${held}`)
+  assert.doesNotMatch(held, /asight exits|exits when/, `in proxy mode the daemon never exits: ${held}`)
+  assert.match(held, /The daemon \(pid 4012\) keeps running, with one door still open for the\n {2}connections below\./)
+  assert.match(held, /^That door closes when it exits; the daemon keeps running\.$/m)
+
+  const idle = formatOffReceipt({ ...base, daemon: { pid: 4012, state: 'running' }, holders: [] })
+  assert.match(idle, /The daemon \(pid 4012\) keeps running, with no door open\./)
+  assert.doesNotMatch(idle, /exits/, `nothing exits: ${idle}`)
+
+  // driver mode: the daemon drains and goes, and the holders line says so
+  const driver = formatOffReceipt({ ...base, daemon: { pid: 4012, state: 'draining' }, holders: holder })
+  assert.match(driver, /asight exits when it does\./)
+  assert.doesNotMatch(driver, /keeps running/, `a draining daemon does not keep running: ${driver}`)
+
+  // --dry-run on macOS / Windows: no daemon was asked anything, so there is no pid — the future tense still says what will happen to it
+  const dry = formatOffReceipt({ ...base, dry_run: true, daemon: { pid: null, state: 'running' }, holders: [] })
+  readable('off-proxy-dry', dry)
+  assert.match(dry, /^The daemon will keep running, with no door open\.$/m)
+})

@@ -76,7 +76,7 @@ export function pathKey(p, { platform = process.platform, realpath } = {}) {
   }
   if (platform === 'win32') key = key.replace(/\\/g, '/')
   if (platform === 'darwin') key = key.normalize('NFC')
-  if (platform === 'win32' || platform === 'darwin') key = key.toLowerCase()
+  if (platform === 'win32' || platform === 'darwin') key = key.toLowerCase() // not proxy mode: the OSes whose file names are case-insensitive
   return key
 }
 

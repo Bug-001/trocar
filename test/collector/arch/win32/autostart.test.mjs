@@ -477,6 +477,21 @@ test('D61 registered() answers the one question 1.6 §3.3 asks — registered AN
   assert.match(autostartBlock({ unit: blind, osName: 'win32' }), /asight install$/)
 })
 
+test('D62 (1.6 §3.1): a registered login entry is ONE schtasks start — `/Query /TN <task> /XML` answers both halves, and the second query is asked only when it did not', () => {
+  const asked = (xml) => {
+    const run = fakeTools({ 'schtasks /Query': (file, args) => (args.includes('/XML') ? (xml === null ? { status: 1, stderr: 'ERROR: The system cannot find the file specified.' } : { status: 0, stdout: xml }) : { status: 0 }), ...NO_RUN_VALUE })
+    const state = userUnit({ ...withHome(), run }).registered().state
+    return { state, queries: run.calls.filter((c) => c[0] === 'schtasks' && c.includes('/Query')).map((c) => c.slice(1).join(' ')) }
+  }
+  const enabled = asked(TASK_XML(true))
+  assert.equal(enabled.state, 'present')
+  assert.deepEqual(enabled.queries, [`/Query /TN ${TASK_NAME} /XML`], 'the normal path — the entry install registered, every `on` after it — asks schtasks once')
+  assert.deepEqual(asked(TASK_XML(false)).queries, [`/Query /TN ${TASK_NAME} /XML`], 'a switched-off task says so in the same XML: still one')
+  const blind = asked(null)
+  assert.equal(blind.state, 'unknown', 'a /XML that answered nothing is no verdict ...')
+  assert.deepEqual(blind.queries, [`/Query /TN ${TASK_NAME} /XML`, `/Query /TN ${TASK_NAME}`], '... and only then is the second query asked, to tell "not there" from "could not be read"')
+})
+
 test('D61 the Run-key fallback is still the login entry when the task is gone OR switched off (that fallback disables the task itself)', () => {
   const withValue = (xml) => { // the task answers `xml` (null: not registered) and asight's own Run value is there
     const run = fakeTools({ 'schtasks /Query': (file, args) => (xml === null ? { status: 1 } : args.includes('/XML') ? { status: 0, stdout: xml } : { status: 0 }), 'reg query': { status: 0, stdout: REG_OUT('REG_SZ', COMMAND) } })

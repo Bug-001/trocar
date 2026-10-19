@@ -14,6 +14,14 @@ import { openSealed } from '../raw/reader.mjs';
 import { R, FLAG_UNPARSEABLE } from '../raw/format.mjs';
 import { allSegments, segmentIndex } from './index-build.mjs';
 import { asightHome } from '../paths.mjs';
+import { rowsKey, warmCache, fsTag } from './warm.mjs';
+
+// WARM (D63 ①, 1.6 §4.1 附近的查询): one entry per row list, kept against THAT list. A session's pages, the block of
+// one of its steps and its calls ask for the same rows again, so the second query of an open session reads no record
+// file at all; a session that got a new record has a new list and is read again (never stale). The key is the list,
+// which is why the daemon appending to ANOTHER session costs this entry nothing.
+const readBack = warmCache({ maxBytes: 96 * 1024 * 1024, bytes: (v) => v.bytes });
+const listKey = (home, rows, fs) => { const k = rowsKey(rows); return { id: `${fsTag(fs)}\n${home}\n${k.id}`, bytes: k.bytes }; };
 
 const NL = 0x0a;
 
@@ -74,6 +82,25 @@ export async function allRecords({ home = asightHome(), fs = nodeFs, errors = []
  * A row whose record cannot be read goes into `errors` (D38), never silently missing.
  */
 export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors = [] } = {}) {
+  const { id, bytes } = listKey(home, rows, fs);
+  // The stamp IS the key here: a row list names the exact bytes it stands for, and those bytes never change
+  // (invariant 2: a record is appended once and never rewritten). A shallow copy goes out, so a caller that
+  // sorts or trims its result cannot reach into the cache.
+  let got = readBack.peek(id, id);
+  if (!got) {
+    got = { ...readRows({ home, fs, rows }), bytes };
+    // A FAILED read is never remembered (3.5 §访问模式 不答陈旧): a read that landed in the seal rename window or
+    // hit one EIO would otherwise pin its incomplete answer — the row list's stamp cannot move, because the rows
+    // did not change — for the life of a resident worker. Not caching it costs the next query one re-read, which
+    // is exactly the query that can succeed.
+    if (!got.errors.length) readBack.get(id, id, () => got);
+  }
+  errors.push(...got.errors);
+  return [...got.out];
+}
+
+function readRows({ home, fs, rows }) {
+  const errors = [];
   const bySegment = new Map();
   for (const r of rows) { if (!bySegment.has(r.segment)) bySegment.set(r.segment, []); bySegment.get(r.segment).push(r); }
   const out = [];
@@ -90,9 +117,8 @@ export function recordsAt({ home = asightHome(), fs = nodeFs, rows = [], errors 
       }
     } finally { read.close(); }
   }
-  return out;
+  return { out, errors };
 }
-
 // The plaintext at a row's own offset, exactly its stored bytes; a row from an index that has no offset
 // (a segment sealed when the row was written) falls back to the line scan.
 function plainReader(file, fs) {
@@ -158,21 +184,32 @@ function segmentFile({ home, fs, segment }) {
 }
 
 /**
- * segmentLines({home, segment}) → [lineNo, bytes] of one segment, the bytes exactly as they are stored (`asight raw`,
- * 1.6 §5.1): each line with its newline, a half line a crash left without one, an empty line as itself; a sealed
- * segment is decoded first, and nothing is parsed or re-encoded. Throws when there is no such segment.
+ * segmentLines({home, segment, from, to}) → [lineNo, bytes] of one segment, the bytes exactly as they are stored
+ * (`asight raw`, 1.6 §5.1): each line with its newline, a half line a crash left without one, an empty line as
+ * itself; a sealed segment is decoded first, and nothing is parsed or re-encoded. Throws when there is no such
+ * segment.
+ * `from`/`to` are the RECORD NUMBERS the caller will print (1-based, inclusive). They are not a filter over the
+ * whole file: a sealed segment decodes only the frames those records sit in (plus their delta chains, which its
+ * own index names), so printing the last record of a 128 MB segment costs one frame instead of all 32 — which is
+ * what made `asight raw <seg:N>` on a sealed segment 5× slower than on the plaintext one (D62 A1).
  */
-export function* segmentLines({ home = asightHome(), fs = nodeFs, segment } = {}) {
+export function* segmentLines({ home = asightHome(), fs = nodeFs, segment, from = 1, to = Infinity } = {}) {
   const file = segmentFile({ home, fs, segment });
   if (file.endsWith('.sealed')) {
     const sf = openSealed(file, { fs });
-    try { for (let i = 0; i < sf.count; i++) yield [Number(sf.records[i][R.lineNo]) + 1, sf.lineAt(i)]; } finally { sf.close(); }
+    try {
+      for (let i = 0; i < sf.count; i++) {
+        const no = Number(sf.records[i][R.lineNo]) + 1;
+        if (no < from || no > to) continue;   // its frame is never decoded: this record is not in the answer
+        yield [no, sf.lineAt(i)];
+      }
+    } finally { sf.close(); }
     return;
   }
   const buf = fs.readFileSync(file);
   for (let start = 0, no = 1; start < buf.length; no++) {
     const nl = buf.indexOf(NL, start), end = nl === -1 ? buf.length : nl + 1;
-    yield [no, buf.subarray(start, end)];
+    if (no >= from && no <= to) yield [no, buf.subarray(start, end)];
     start = end;
   }
 }

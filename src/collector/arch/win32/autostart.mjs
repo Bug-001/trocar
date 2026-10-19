@@ -151,16 +151,21 @@ const taskState = ({ run, env }) => {
   if (r.code === null) return { state: 'unknown', err: `schtasks /Query did not run (${r.err || 'no reason given'})` }
   return { state: 'absent' }
 }
-/** Is the registered task ENABLED? (1.6 §3.3 asks both, and `/Query /TN` exits 0 for a disabled task too — a Windows test machine 2026-10-19.) The question is the task's own XML,
+/** Is the login entry registered, and ENABLED? (1.6 §3.3 asks both, and `/Query /TN` exits 0 for a disabled task too — a Windows test machine 2026-10-19.) The question is the task's own XML,
  *  whose `<Settings><Enabled>false</Enabled>` is there only when it is switched off: no localised text and no `/V` column. schtasks writes that XML as UTF-16LE when its
  *  stdout is redirected and execTool decodes UTF-8, so every ASCII character comes back followed by a NUL (and the BOM as U+FFFD): the NULs go first, and the element
  *  matched below is pure ASCII either way. An answer that is no task XML is not a verdict: `unknown` with the reason, which `on` refuses (D61).
- *  → `{ state: 'present' }` · `{ state: 'disabled' }` · `{ state: 'unknown', err }`. */
+ *  `/XML` is asked FIRST and on the normal path (a task that is there) it is the ONLY question — one schtasks start, not two (D62: ~34 ms each on a Windows test machine, and
+ *  this is on `on`'s line, which has 0.5 s in all). Only a `/XML` that did not answer XML needs `taskState` after it, to tell a task that is not there from one that is
+ *  and whose XML could not be read: the two refuse with different words, and a guess at which would make `on` say something untrue (D38).
+ *  → `{ state: 'present' }` · `{ state: 'disabled' }` · `{ state: 'absent' }` · `{ state: 'unknown', err }`. */
 const taskEnabled = ({ run, env }) => {
   const r = schtasks(['/Query', '/TN', TASK_NAME, '/XML'], { run, env })
   const xml = r.code === 0 ? String(r.out).replace(/\u0000/g, '') : ''
-  if (!/<Task[\s>]/.test(xml)) return { state: 'unknown', err: `the task ${TASK_NAME} is registered, and whether it is enabled could not be read (schtasks /Query /XML: ${r.code === 0 ? 'it answered no task XML' : errOf(r)})` }
-  return /<Enabled>\s*false\s*<\/Enabled>/i.test(xml) ? { state: 'disabled' } : { state: 'present' }
+  if (/<Task[\s>]/.test(xml)) return /<Enabled>\s*false\s*<\/Enabled>/i.test(xml) ? { state: 'disabled' } : { state: 'present' }
+  const s = taskState({ run, env })
+  if (s.state !== 'present') return s // not there, or not known at all: taskState's own verdict and its own words
+  return { state: 'unknown', err: `the task ${TASK_NAME} is registered, and whether it is enabled could not be read (schtasks /Query /XML: ${r.code === 0 ? 'it answered no task XML' : errOf(r)})` }
 }
 const errOf = (r) => r.err || (r.code === null ? 'it did not run' : `exit ${r.code}`)
 const ours = (value) => /\bdaemon --supervise\s*$/.test(value) // what an earlier `on` of asight wrote: the supervised daemon command
@@ -313,10 +318,11 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     },
     start: (carry = null) => startDirect(carry),
     startNow: () => runNow(), // D61: `on` starts the daemon through the task, never touching the registration
-    // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything — `schtasks /Query`
-    // (taskState, the question this file already asks, plus taskEnabled: a DISABLED task is registered and starts nothing), and asight's own HKCU Run value when the
+    // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything — `schtasks /Query /TN <task> /XML`
+    // (taskEnabled: its XML says both whether the task is there and whether it is switched off, so a registered task costs ONE schtasks start, D62) —
+    // and asight's own HKCU Run value when the
     // task was refused or switched off by that very fallback (the §7 fallback IS the login entry then).
-    registered: () => { const s = taskState(tools); const q = s.state === 'present' ? taskEnabled(tools) : s; if (q.state === 'present') return q; const k = readRunValue({ run, env }); return k.present && ours(k.value) ? { state: 'present' } : q },
+    registered: () => { const q = taskEnabled(tools); if (q.state === 'present') return q; const k = readRunValue({ run, env }); return k.present && ours(k.value) ? { state: 'present' } : q },
     reload: () => ({ ...ok }),
     remove: ({ prior = null } = {}) => undo(['/Delete', '/TN', TASK_NAME, '/F'], 'removed', prior),
   }

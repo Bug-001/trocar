@@ -22,6 +22,8 @@ export const OPENAI_SECTIONS = [
   { id: 'messages', order: 3, category: 'conversation' },                // OpenAI `input[]`
 ];
 
+import { parsedRequestBody } from './request-body.mjs';
+
 // ── detection ───────────────────────────────────────────────────────────────────────────────
 // D25 · detect on WIRE SHAPE, not the User-Agent. The old UA test (/codex|openai/) was unreliable in
 // BOTH directions: OpenCode's real UA (`opencode/1.17.12 … ai-sdk/…`) contains no "openai" — only the
@@ -36,13 +38,9 @@ export const OPENAI_SECTIONS = [
 // discriminator (Anthropic has no top-level `input[]`); `instructions` is optional corroboration.
 const headersOf = (rec) => (rec && (rec.request_headers || rec.req_headers)) || {};
 const epPath = (rec) => String((rec && rec.endpoint) || '').split('?')[0];
-// the parsed request body, from either the D10 verbatim `req_body` string or a v0 `request` object.
-function bodyOf(rec) {
-  if (!rec) return null;
-  if (rec.request && typeof rec.request === 'object') return rec.request;
-  if (typeof rec.req_body !== 'string') return null;
-  try { return JSON.parse(rec.req_body); } catch { return null; }
-}
+// the parsed request body, from either the D10 verbatim `req_body` string or a v0 `request` object — parsed once
+// per record for every reader (src/dissect/request-body.mjs).
+const bodyOf = (rec) => parsedRequestBody(rec);
 // Hard guard, checked FIRST: Anthropic bodies also carry `messages[]`, so a naive "messages[] = Chat
 // Completions" rule would let this dissector claim every Claude Code record. These markers are
 // Anthropic-only and disjoint from OpenAI's chat wire.

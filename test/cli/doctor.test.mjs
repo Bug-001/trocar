@@ -307,3 +307,11 @@ test('doctor and status need no package: their import closure is node builtins a
   // 2026-10-14: doctor reached @duckdb/node-api through server.mjs just to list the capture files, and on the macOS and Windows test machines printed only ERR_MODULE_NOT_FOUND
   assert.deepEqual(closure(['src/cli/doctor.mjs', 'src/cli/status.mjs']).problems, [])
 })
+
+test('D62: one `doctor` reads the capture health once — `status` already read it, so the install notes do not fold the same flows/ a second time', async () => {
+  const s = plain()
+  let reads = 0
+  const health = { collector: { installed: true, last_install: { at: '2026-10-19T00:00:00.000Z', notes: [] }, conditions: [], unknown_procs: [] } }
+  const r = await doctor(s, [], { deps: { captureHealth: () => { reads += 1; return health } } })
+  assert.equal(reads, 1, `the capture health of the same files was read ${reads} time(s)\n${r.text}`)
+})

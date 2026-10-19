@@ -4,11 +4,13 @@
 // powershell question (4.8 §7) — both through execTool. The /proc readers moved here from src/collector/arch/linux/procinfo.mjs, which re-exports them; procIdentity /
 // pidAlive from src/health/read.mjs, which re-exports procIdentity. A table that cannot be read throws: an empty one would read as "nobody is alive" (D38).
 // Every reader takes an injectable `root` (default '/proc'), so a test points it at a synthetic tree. Imports only node:* and src/off.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
 import { normalizeName } from './identity.mjs'
 import { splitCommandLine } from './winargv.mjs'
+import { daemonReader } from './daemon-read.mjs'
 
 /** readlink /proc/<pid>/exe → absolute path, or null (onError(e) is told why). */
 export function readExe(pid, { root = '/proc', onError = () => {} } = {}) {
@@ -99,11 +101,62 @@ export function procIdentity(pid, { root = '/proc', fs = nodeFs, platform = null
 // The one fixed question of a process's identity on Windows (4.8 §7): its creation time and the machine's boot time, both as Unix
 // milliseconds — boot_id is the system start time, start_time the process's own, so a reused pid and a reboot are told apart exactly
 // as /proc's pair is. One Get-CimInstance for the pid and one for the OS per call; the calls are rare (a daemon start, an off's checks).
+/** The boot-time line off the head of a Windows table answer → `{ boot, json }`; an answer without one keeps `boot` null, and then no
+ *  identity is answered from the table. */
+function splitWinTable(out) {
+  const m = /^boot (\d+)\s*(?:\r?\n|$)/.exec(out)
+  return m ? { boot: m[1], json: out.slice(m[0].length).trim() } : { boot: null, json: out }
+}
+
 const WIN_IDENTITY_SCRIPT = (pid) => `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if (-not $p) { 'gone' } else { $o = Get-CimInstance Win32_OperatingSystem; [pscustomobject]@{ s = [DateTimeOffset]::new($p.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds(); b = [DateTimeOffset]::new($o.LastBootUpTime.ToUniversalTime()).ToUnixTimeMilliseconds() } | ConvertTo-Json -Compress }`
 /** {start_time, boot_id} of one live process on Windows (strings of Unix ms), each null when it cannot be read — the same contract as the
  *  /proc reader: never a throw, never a guess (a dead powershell, or an answer that is neither 'gone' nor the JSON object, is "not known").
- *  `run` is the injected runner (execTool's). */
+ *  `run` is the injected runner (execTool's). Inside a memo scope (memoProcQuestions) the answer comes from the process table this command
+ *  already read, when it has one: that table's one question carries the same two numbers from the same CIM expressions (D62 task E — on the
+ *  a Windows test machine each PowerShell start costs ~450 ms, and `status` asked this question twice). */
 export function winIdentity(pid, { run = null, env = process.env } = {}) {
+  const m = cur()
+  if (!m) return winIdentityAsk(pid, { run, env })
+  const key = `w:${pid}`
+  if (m.identity.has(key)) return m.identity.get(key)
+  // One rule: the process table this command already read answers it — its row carries the same creation time the identity question would print, and
+  // the boot time it came with is the machine's (procsOfWin). The table of the whole machine not listing the pid IS the answer "gone", the two nulls.
+  // Only without a table (or without its boot time) is the OS asked for this one pid.
+  let v = m.table && m.table.value && m.table.value.boot != null ? identityOfRow(m.table.value, pid) : null
+  // No table in this scope yet, and this asker cannot await one (op.lock's question about this very process, the daemon lock's about the
+  // daemon): then the ONE question put to the OS is the WHOLE table, read synchronously here. It costs the same single powershell.exe start
+  // as asking about this one pid (~450 ms on a Windows test machine) and it carries the same two numbers from the same CIM expressions — so every
+  // identity question after it, and every later reader of the table, is answered out of it (D62, 1.6 §3.1: a switch has 0.5 s in all). A
+  // table that cannot be read is not an error here: this one pid is asked about, exactly as before.
+  if (!v) {
+    try {
+      const rows = seedTable(m, procsOfWinLocal({ exec: run, env })) // sync with spawnSync; an async runner answers no rows and throws, and the pid is asked about below
+      v = identityOfRow(rows, pid)
+    } catch { /* not known from a table: the one pid is asked about, as before */ }
+  }
+  v = v || winIdentityAsk(pid, { run, env })
+  m.identity.set(key, v)
+  return v
+}
+/** The creation time of a pid out of the table THIS command already read, for a question that is not about identity (daemon-stop.mjs's
+ *  supervisor check, which asks `Get-Process -Id` for the same number): `undefined` = there is no table in this scope, so ask the OS;
+ *  `null` = the table does not list the pid, so that process is gone; else the Unix ms. A row without a creation time is `undefined` too. */
+export function winStartedAtOfTable(pid) {
+  const m = cur()
+  const t = m && m.table && m.table.value
+  if (!t || t.boot == null) return undefined
+  const row = t.rows.find((p) => p.pid === pid)
+  if (!row) return null
+  return row.startedAt == null ? undefined : row.startedAt
+}
+/** The pid's row of a table already read (`{ rows, boot }`) as the identity: a pid the table does not list is gone, which is the two nulls
+ *  `winIdentity` answers for it. A row without a creation time is not an answer — the direct question is asked for that one. */
+function identityOfRow({ rows, boot }, pid) {
+  const row = rows.find((p) => p.pid === pid)
+  if (!row) return { start_time: null, boot_id: null }
+  return row.startedAt == null ? null : { start_time: String(row.startedAt), boot_id: String(boot) }
+}
+function winIdentityAsk(pid, { run = null, env = process.env } = {}) {
   return then(execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', WIN_IDENTITY_SCRIPT(pid)], { run, env }), (r) => {
     if (r.code !== 0 || r.out === 'gone') return { start_time: null, boot_id: null }
     try { const o = JSON.parse(r.out); return { start_time: Number.isFinite(o.s) ? String(o.s) : null, boot_id: Number.isFinite(o.b) ? String(o.b) : null } } catch { return { start_time: null, boot_id: null } }
@@ -126,6 +179,13 @@ const psEnv = (env = process.env) => ({ ...env, LC_ALL: 'C' })
  *  and the seconds of `sysctl -n kern.boottime` as the boot id (lstart has a one-second grain, the boot time tells a reboot apart); both null when `ps`
  *  does not know the pid, boot_id null when sysctl does not answer. `exec` is the injected runner (execTool). */
 export function psIdentity(pid, { exec = null, env = process.env } = {}) {
+  const m = cur(), key = `p:${pid}`
+  if (m && m.identity.has(key)) return m.identity.get(key)
+  const v = psIdentityAsk(pid, { exec, env })
+  if (m) m.identity.set(key, v)
+  return v
+}
+function psIdentityAsk(pid, { exec = null, env = process.env } = {}) {
   return then(execTool('ps', ['-o', 'lstart=', '-p', String(pid)], { run: exec, env: psEnv(env) }), (r) => {
     if (!(r.code === 0 && /\S/.test(r.out))) return { start_time: null, boot_id: null }
     return then(execTool('sysctl', ['-n', 'kern.boottime'], { run: exec, env: psEnv(env) }), (b) => {
@@ -139,7 +199,7 @@ export function psIdentity(pid, { exec = null, env = process.env } = {}) {
  *  lock can only say "its pid is alive", and a pid that another process has taken since (a crash, a reboot) then reads as a command still
  *  running — which blocked `asight off`, the way out, for as long as that other process lived (audit rule-b 3). */
 export function identityFor({ platform = process.platform, exec = null, env = process.env, root = '/proc', fs = nodeFs } = {}) {
-  if (platform === 'win32') return (pid) => winIdentity(pid, { run: exec, env })
+  if (platform === 'win32') return (pid, o = {}) => winIdentity(pid, { run: exec, env, ...o })
   return platform === 'darwin' ? (pid) => psIdentity(pid, { exec, env }) : (pid) => procIdentity(pid, { root, fs, platform })
 }
 
@@ -239,11 +299,83 @@ function procsOfPs({ uid, exec, env }) {
  *  Windows one
  *  fixed Get-CimInstance question, all through `exec`
  *  (a spawnSync-like runner a test injects; execTool refuses a real one under npm test). Another platform, or a table that cannot be read, rejects. */
-export async function listProcs({ uid = typeof process.getuid === 'function' ? process.getuid() : null, root = '/proc', platform = process.platform, exec = null, env = process.env } = {}) {
+export async function listProcs(opts = {}) {
+  const m = cur(), key = tableKey(opts)
+  if (m && m.tables.has(key)) return m.tables.get(key)
+  const p = tableOf(opts)
+  if (m) {
+    m.tables.set(key, p)
+    // the boot time is this scope's own (the local table's first line): a module-global one would answer another command's question
+    if (!m.table) { const t = m.table = {}; p.then((rows) => { t.value = { rows, boot: m.winBoot } }, () => { /* a table that could not be read answers nothing */ }) }
+  }
+  return p
+}
+/** The memo key of one table read: the platform, whose processes, and where they are read from — written in ONE place, so a table seeded into a
+ *  scope (primeProcQuestions, winIdentity) is the one a later `listProcs` of the same question finds. */
+const tableKey = (opts = {}) => `${opts.platform || process.platform}|${'uid' in opts ? opts.uid : 'self'}|${opts.root || '/proc'}`
+/** Puts a Windows table THIS scope read outside `listProcs` into it — the rows under the table's own memo key, and the identity view every
+ *  synchronous question is answered from — and hands back that view (`{ rows, boot }`). The boot time is the scope's: the reader that produced
+ *  the rows set it (procsOfWinLocal, winTableViaDaemon). */
+function seedTable(m, rows) {
+  const value = { rows, boot: m.winBoot }
+  if (!m.table) m.table = { value }
+  else if (!m.table.value) m.table.value = value
+  if (!m.tables.has(tableKey({ platform: 'win32' }))) m.tables.set(tableKey({ platform: 'win32' }), Promise.resolve(rows))
+  return m.table.value
+}
+async function tableOf({ uid = typeof process.getuid === 'function' ? process.getuid() : null, root = '/proc', platform = process.platform, exec = null, env = process.env } = {}) {
   if (platform === 'linux') return procsOfLinux({ uid, root })
   if (platform === 'darwin') return procsOfPs({ uid, exec, env })
   if (platform === 'win32') return procsOfWin({ exec, env })
   throw new Error(`there is no process-table reader for ${platform}, so which agents are alive is not known`)
+}
+
+// ── one question, one answer, for the life of one read-only command (D62 task E, 1.6 §3.1) ────────────────────────────────────────────
+// `status` and `doctor` ask the same two questions of the OS more than once: the whole process table, and the identity of the daemon's pid
+// (the lock's judgement, then capture health). Each is one PowerShell start on Windows (~450 ms measured on a Windows test machine 2026-10-19), and
+// the answers are a snapshot either way: a read-only command reports one moment. Inside a scope each is asked once, and on Windows the
+// identity comes out of the table's own answer. It is OPT-IN — `off` watches processes exit while it works and MUST see every ask fresh —
+// and re-entrant (doctor's scope holds status's).
+//
+// A scope opened with `reader` (src/off/daemon-read.mjs, the CLI's question to the daemon's warm helper) asks the DAEMON for the Windows process
+// table first: the daemon keeps one resident read-only PowerShell, so that answer starts no process at all, and its envelope carries the daemon's
+// own identity — which is what `status` needed the second question for (4.8 §7). A daemon that does not answer leaves the local PowerShell
+// question, and the reason is kept in `procAskNotes()` for the caller to report (D38, never silent). `off` opens its scope with a reader too
+// (D62 ⑥: in proxy mode an `off` leaves the daemon running, so its warm helper answers the switch's identity questions as well) — and the
+// answers inside one switch are a snapshot either way: a process that exits while `off` works is judged by the table that switch read.
+// about to stop that daemon.
+let memo = null, memoDepth = 0
+const scope = new AsyncLocalStorage() // so that one command's answers cannot leak into another's if `status` ever runs in a resident process
+const newMemo = (reader) => ({ tables: new Map(), identity: new Map(), table: null, reader, notes: [], winBoot: null })
+/** Opens a memo scope; call what it returns to close it (try/finally), or pass `fn` and the scope is that call's async context alone (the form
+ *  `status` and `doctor` use). `reader`: the daemon read client, or null for the OS alone. A scope already open is reused either way (doctor's
+ *  holds status's), so one command still asks each question once. */
+export function memoProcQuestions({ reader = null } = {}, fn = null) {
+  if (fn) return cur() ? fn() : scope.run(newMemo(reader), fn)
+  if (memoDepth++ === 0 && !scope.getStore()) memo = newMemo(reader)
+  return () => { if (--memoDepth <= 0) { memoDepth = 0; memo = null } }
+}
+const cur = () => scope.getStore() || memo
+/** The read questions this scope could not put to the daemon and had to put to the OS, each with its reason (`status` reports them). */
+export const procAskNotes = () => { const m = cur(); return m ? [...m.notes] : [] }
+/** The daemon read client a read-only command's scope uses on Windows: null on another platform, or when no endpoint is known. */
+export const daemonProcReader = (o = {}) => ((o.platform || process.platform) === 'win32' ? daemonReader(o) : null)
+
+/** primeProcQuestions({ platform, dir, env, fs, reader }) → the closer (try/finally). Opens a scope for ONE command AND, on Windows, reads the
+ *  process table into it BEFORE anything else is asked — so the questions that follow are answered out of that one answer even where they are
+ *  synchronous contracts and cannot await anything: op.lock's question about this very process (./lock.mjs tryOpLock) and the daemon lock's about the
+ *  daemon (./daemon-stop.mjs readDaemonLock). Each of those was its own powershell.exe start, ~450-490 ms each on a Windows test machine (measured
+ *  2026-10-19: `off` started four, `on` one), where the whole switch is meant to take 0.5 s (D62, 1.6 §3.1).
+ *  Only the DAEMON's resident helper is asked here — it starts no process (4.8 §1) — and a daemon that does not answer starts nothing either: the
+ *  reason is kept in procAskNotes() for the caller to report (D38, never silent) and the table is left to the first question that needs it, which
+ *  reads the whole table in its own one PowerShell start and fills this same scope with it (winIdentity). So no command pays a process start up
+ *  front, and one that asks no identity question at all (an `on` with no lock to judge) pays none. Nothing is read on another platform: /proc and
+ *  `ps` cost nothing to ask again. */
+export async function primeProcQuestions({ platform = process.platform, dir, env = process.env, fs = nodeFs, reader = undefined, request, socketPath } = {}) {
+  const r = reader !== undefined ? reader : daemonProcReader({ platform, dir, env, fs, ...(request ? { request } : {}), ...(socketPath !== undefined ? { socketPath } : {}) })
+  const close = memoProcQuestions({ reader: r })
+  if (platform === 'win32' && r) { const m = cur(); const rows = await winTableViaDaemon(m); if (rows) seedTable(m, rows) }
+  return close
 }
 
 // The one fixed question of the whole process table on Windows (4.8 §7): one Get-CimInstance over Win32_Process, every field this file's
@@ -253,20 +385,74 @@ export async function listProcs({ uid = typeof process.getuid === 'function' ? p
 // line as it came), and another process's environment cannot be read at all (`env` null,
 // `envRead: false`: the OS's rule, 4.8 §10.1). A question that died, or an answer that is not JSON, is an error, never
 // an empty table: an empty one would say "nobody holds the bundle" and delete it (D38, the rule of the other two readers).
-const WIN_TABLE_SCRIPT = 'Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = $_.ProcessId; pp = $_.ParentProcessId; n = $_.Name; x = $_.ExecutablePath; s = $(try { [DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { $null }); c = $_.CommandLine } } | ConvertTo-Json -Compress'
-function procsOfWin({ exec, env }) {
+// Its first line is the machine's boot time (the identity question's own `b`, from the same expression), so one table answers `winIdentity` too.
+/** One process of a Windows answer as a row of this file's table: the helper's `ps` row (4.8 §1) and the one Get-CimInstance question below carry the
+ *  same facts under different names. `argv` is the command line split by the one CommandLineToArgvW splitter the collector uses too (./winargv.mjs),
+ *  `uid` is null (Windows has none) and another process's environment cannot be read at all (4.8 §10.1). */
+const winRow = ({ pid, ppid, name, exe, startedAt, cmdline, cmdlineState }) => ({
+  pid: Number(pid), ppid: Number.isFinite(ppid) ? Number(ppid) : null, uid: null, startedAt: Number.isFinite(startedAt) ? Number(startedAt) : null,
+  exe: typeof exe === 'string' && exe !== '' ? exe : (typeof name === 'string' && name !== '' ? name : null),
+  argv: splitCommandLine(typeof cmdline === 'string' && cmdline !== '' ? cmdline : null), cmdline: typeof cmdline === 'string' && cmdline !== '' ? cmdline : null,
+  ...(cmdlineState ? { cmdlineState } : {}), env: () => null, envRead: false,
+})
+
+/** The helper's `ps` rows (4.8 §1: `{procs:[{pid, ppid, name, exe, cmdline, startedAt, …}]}`) as this file's table, or null when that is no answer
+ *  (D38: an answer that is not a list of rows is "not known", never an empty table). One mapper for both sides of the seam — the daemon's own
+ *  holder poll reads its helper through it too (arch/model-backends.mjs `procTable`). */
+export function tableFromPsRows(procs) {
+  if (!Array.isArray(procs)) return null
+  return procs.filter((r) => r && typeof r === 'object' && Number.isFinite(r.pid)).map(winRow)
+}
+
+/** The Windows process table through ONE resident read-only helper: the daemon's own (arch/model-backends.mjs's holder poll) or the CLI's
+ *  question to it (./daemon-read.mjs) — both answer `call('ps', …)`. One place asks it, and one text says it failed: an answer that is no list
+ *  of rows throws, because an empty table would read as "nobody holds the door" and delete the bundle (D38, 4.8 §1). */
+export async function psTableVia(helper, { timeoutMs = WIN_PS_ASK_MS } = {}) {
+  const d = await helper.call('ps', { all: true }, { timeoutMs })
+  const rows = tableFromPsRows(d && d.procs)
+  if (!rows) throw new Error('the resident helper answered the process snapshot with no rows, so which agents are alive is not known')
+  return rows
+}
+
+const WIN_TABLE_SCRIPT = '$o = Get-CimInstance Win32_OperatingSystem; \'boot \' + [DateTimeOffset]::new($o.LastBootUpTime.ToUniversalTime()).ToUnixTimeMilliseconds(); Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ p = $_.ProcessId; pp = $_.ParentProcessId; n = $_.Name; x = $_.ExecutablePath; s = $(try { [DateTimeOffset]::new($_.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { $null }); c = $_.CommandLine } } | ConvertTo-Json -Compress'
+/** The Windows table from the daemon's warm helper alone: the rows, or null — with the reason kept in this scope's notes for the caller to
+ *  report (D38, never silent). No process is started either way (4.8 §1). */
+async function winTableViaDaemon(m) {
+  if (!m || !m.reader) return null
+  try {
+    const rows = await psTableVia(m.reader)
+    // the daemon's own identity, as its answer carried it: kept for `winIdentity` to use IF it is what the lock claims (4.8 §7), so no OS
+    // question is put about that pid. It is never taken as the truth of the lock on its own.
+    const s = m.reader.self()
+    // The boot id is a fact of the MACHINE, not of a process: the daemon's own `boot_id` is the same number the identity question would
+    // print for any pid on it (the same Win32_OperatingSystem.LastBootUpTime expression, 4.8 §7). So a table that came from the daemon
+    // carries the boot time too, and `identityOfRow` can answer the identity of EVERY pid it lists — which is what lets the synchronous
+    // questions of `on` and `off` (op.lock's own pid, the daemon lock's) be answered without a powershell.exe start (D62, 1.6 §3.1).
+    if (s && s.boot_id != null) m.winBoot = s.boot_id
+    return rows
+  } catch (e) { m.notes.push(String((e && e.message) || e)); return null }
+}
+/** The Windows table: the daemon's warm helper when this scope has a reader and it answers, else the one fixed PowerShell question. */
+async function procsOfWin({ exec, env }) {
+  return (await winTableViaDaemon(cur())) || procsOfWinLocal({ exec, env })
+}
+/** How long the daemon's `ps` answer is waited for: the helper may have to read command lines through CIM, but the fallback here is one
+ *  PowerShell start (~450 ms measured), so this question is given a little more than that and no more. The reader caps it too (DAEMON_READ_CAP). */
+const WIN_PS_ASK_MS = 2000
+function procsOfWinLocal({ exec, env }) {
   const r = execTool('powershell', ['-NoProfile', '-NonInteractive', '-Command', WIN_TABLE_SCRIPT], { run: exec, env, maxBuffer: TABLE_MAX_BUFFER })
   const what = `the Windows process table (one Get-CimInstance question) ${r.code === null ? `did not run (${r.err || 'no reason given'})` : `failed (exit ${r.code}${r.err ? `: ${r.err.slice(0, 200)}` : ''})`}, so which agents are alive is not known`
   if (r.code !== 0) throw new Error(what)
-  if (r.out === '') return [] // a table that printed nothing is an empty table (the same reading as `ps` printing nothing)
+  const { boot, json } = splitWinTable(r.out)
+  const m = cur()
+  if (m) m.winBoot = boot
+  if (json === '') return [] // a table that printed nothing is an empty table (the same reading as `ps` printing nothing)
   let rows
-  try { rows = JSON.parse(r.out) } catch { throw new Error(what.replace('did not run', 'answered something that is not JSON')) }
+  try { rows = JSON.parse(json) } catch { throw new Error(what.replace('did not run', 'answered something that is not JSON')) }
   const out = []
   for (const row of Array.isArray(rows) ? rows : [rows]) { // one process on the machine: PowerShell's JSON is an object, not a list
     if (row === null || typeof row !== 'object' || !Number.isFinite(row.p)) continue
-    const name = typeof row.n === 'string' && row.n !== '' ? row.n : null
-    const cmdline = typeof row.c === 'string' && row.c !== '' ? row.c : null
-    out.push({ pid: Number(row.p), ppid: Number.isFinite(row.pp) ? Number(row.pp) : null, uid: null, startedAt: Number.isFinite(row.s) ? Number(row.s) : null, exe: typeof row.x === 'string' && row.x !== '' ? row.x : name, argv: splitCommandLine(cmdline), cmdline, env: () => null, envRead: false })
+    out.push(winRow({ pid: row.p, ppid: row.pp, name: row.n, exe: row.x, startedAt: row.s, cmdline: row.c }))
   }
   return out
 }

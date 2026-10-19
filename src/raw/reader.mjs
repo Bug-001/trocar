@@ -29,18 +29,42 @@ export function createFrameCache(max = 8) {
   };
 }
 
+// Rebuilt LINES, bounded by bytes, shared the way the frame cache is. A record stored as a delta is rebuilt from its
+// predecessor, which may itself be a delta (up to CHAIN_MAX steps), so N records of one session walked their chains
+// independently: 112 records of the reference dataset cost 1 190 rebuilds — each one an applyOps plus a sha256 over a
+// ~380 KB line — and `query session` over sealed segments paid 221 ms for 42 MB of bytes (D62 A2, the sealed half).
+// Siblings of one chain now rebuild it once. Bounded in BYTES because one line can be megabytes (4.6 §日志体积预算),
+// and the buffers are handed out shared and read-only, exactly like the decoded frames.
+export function createLineCache(maxBytes = 16 << 20) {
+  const m = new Map();
+  const stats = { hits: 0, builds: 0 };
+  let held = 0;
+  return {
+    get(k) { const v = m.get(k); if (v !== undefined) { stats.hits++; m.delete(k); m.set(k, v); } return v; },
+    set(k, v) {
+      stats.builds++;
+      if (v.length > maxBytes) return;                 // one line bigger than the whole budget is never resident
+      m.set(k, v); held += v.length;
+      for (const [ek, ev] of m) { if (held <= maxBytes) break; if (ek === k) continue; m.delete(ek); held -= ev.length; }
+    },
+    clear() { m.clear(); held = 0; },
+    get bytes() { return held; },
+    stats,
+  };
+}
+
 let fileSeq = 0;
 
-export function openSealed(file, { fs = nodeFs, frameCache = createFrameCache(8) } = {}) {
+export function openSealed(file, { fs = nodeFs, frameCache = createFrameCache(8), lineCache = createLineCache() } = {}) {
   const fd = fs.openSync(file, 'r');
   try {
     const st = fs.fstatSync(fd);
     const { tables, indexOffset } = readIndex(fs, fd, st.size, path.basename(file));
-    return makeReader({ fs, fd, file, st, tables, indexOffset, frameCache });
+    return makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCache });
   } catch (e) { try { fs.closeSync(fd); } catch {} throw e; }
 }
 
-function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache }) {
+function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache, lineCache }) {
   const { frames, shards, streams, records } = tables;
   const name = path.basename(file);
   const bad = (msg) => new Error(`${name}: ${msg} — the sealed file is corrupt`);
@@ -101,8 +125,13 @@ function makeReader({ fs, fd, file, st, tables, indexOffset, frameCache }) {
 
   function lineAt(i) {
     if (!(i >= 0 && i < records.length)) throw new RangeError(`${name}: no record ${i}`);
+    const ck = key + ':' + i;
+    const was = lineCache.get(ck);
+    if (was) return was;
     const r = records[i];
-    return build(i, encOf(frameAt(r[R.frame]), r), lineAt);   // depth bounded by the open-time check
+    const line = build(i, encOf(frameAt(r[R.frame]), r), lineAt);   // depth bounded by the open-time check
+    lineCache.set(ck, line);
+    return line;
   }
 
   // Sequential iteration in file order (= source line order). Memory: one frame + ≤ CANDIDATES lines.

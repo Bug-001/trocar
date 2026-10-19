@@ -673,3 +673,115 @@ test('CM23 status half: the holders\' pids — from the daemon\'s poll (GET /hol
   assert.deepEqual(j.holders.map((x) => [x.harness, x.pid]), [['codex', 5151]])
   assert.equal(j.cert.intermediate.state, 'unknown'); assert.match(j.cert.intermediate.reason, /not-running/)
 })
+
+// ── D62 task E / 1.6 §3.1: one question, one answer ──────────────────────────────────────────────────────────────────────
+import { collectorDir } from '../../src/off/paths.mjs'
+
+test('one `status` asks the OS each question once: on Windows the whole process table is one PowerShell and the daemon pid\'s identity comes out of that same answer (it used to be three starts, ~450 ms each on the Windows test machine)', async () => {
+  const fresh = tmpDir('asight-once-')
+  const CREATED = 1_740_000_123_456, BOOTED = 1_740_000_000_000, PID = 4242
+  const dir = collectorDir(fresh)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'lock'), `${JSON.stringify({ pid: PID, start_time: String(CREATED), boot_id: String(BOOTED), socket: SOCK, engine_port: 47123 })}\n`)
+  const rows = [{ p: PID, pp: 1, n: 'node.exe', x: 'C:\\n.exe', s: CREATED, c: 'node asight.mjs daemon' }]
+  const calls = []
+  const exec = (file, args) => {
+    const cmd = [file, ...args].join(' ')
+    calls.push(cmd)
+    if (/Win32_Process \| ForEach-Object/.test(cmd)) return { status: 0, stdout: `boot ${BOOTED}\n${JSON.stringify(rows)}`, stderr: '' }
+    if (/Win32_Process -Filter/.test(cmd)) return { status: 0, stdout: JSON.stringify({ s: CREATED, b: BOOTED }), stderr: '' }
+    return { status: 0, stdout: '', stderr: '' }
+  }
+  const parts = { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: {} }
+  const io = fakeIo()
+  const exit = await runStatusCli(['--json'], { io, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps: { request: down(), socketPath: SOCK, exec, parts, user: 'alice', spawn: absentSpawn, alive: () => true } })
+  const doc = JSON.parse(io.stdoutText())
+  assert.equal(calls.filter((c) => /Win32_Process \| ForEach-Object/.test(c)).length, 1, 'the process table: one question for the whole command')
+  assert.equal(calls.filter((c) => /Win32_Process -Filter/.test(c)).length, 0, 'and not one identity question of its own: the table\'s answer carries the pid\'s creation time and the machine\'s boot time')
+  assert.deepEqual([doc.daemon.running, doc.daemon.responding], [null, false], 'the identity the table gave matched the lock byte for byte: a daemon that holds the lock and does not answer (a mismatch would read as a stale lock, [false, null])')
+  assert.deepEqual(doc.errors.filter((e) => /read question/.test(e.reason)), [], 'and with no daemon answering, the read it could not answer is NOT an error of the user\'s machine: a control.json left behind by a stopped daemon is the normal no-daemon state')
+  assert.equal(exit, EXIT.ok, io.stdoutText())
+})
+
+test('D62 (4.8 §1 §7): with the daemon answering, one `status` starts no PowerShell for the process facts or the pid\'s identity — the same daemon unable to answer that read falls back to the one local question, says so, and the document is unchanged', async () => {
+  const CREATED = 1_740_000_123_456, BOOTED = 1_740_000_000_000, PID = 4242
+  const row = { pid: PID, ppid: 1, name: 'node.exe', exe: 'C:\\n.exe', startedAt: CREATED, cmdline: 'node asight.mjs daemon', cmdlineState: 'ok' }
+  const cim = [{ p: PID, pp: 1, n: 'node.exe', x: 'C:\\n.exe', s: CREATED, c: 'node asight.mjs daemon' }]
+  const parts = { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: {} }
+  const PIPE = '\\\\.\\pipe\\asight-d62' // on win32 only a named pipe is asked (daemonState): a unix path in the lock is not connected to
+  const once = async (warm, self = { pid: PID, start_time: String(CREATED), boot_id: String(BOOTED) }) => {
+    const fresh = tmpDir('asight-warm-')
+    const dir = collectorDir(fresh)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'lock'), `${JSON.stringify({ pid: PID, start_time: String(CREATED), boot_id: String(BOOTED), socket: PIPE, engine_port: 47123 })}\n`)
+    const shells = [], verbs = []
+    const exec = (file, args) => {
+      const cmd = [file, ...args].join(' ')
+      if (/Win32_Process/.test(cmd)) shells.push(cmd)
+      if (/Win32_Process \| ForEach-Object/.test(cmd)) return { status: 0, stdout: `boot ${BOOTED}\n${JSON.stringify(cim)}`, stderr: '' }
+      if (/Win32_Process -Filter/.test(cmd)) return { status: 0, stdout: JSON.stringify({ s: CREATED, b: BOOTED }), stderr: '' }
+      return { status: 0, stdout: '', stderr: '' }
+    }
+    const request = async ({ path: p, body }) => {
+      if (p === '/status') return { pid: PID, harnesses: {}, actual: 'off', holders: 0, doors: {}, upstreams: {}, relayed: {}, engine: {} }
+      if (p === '/holders') return { count: 0, holders: [] }
+      if (p === '/helper') {
+        verbs.push(body.verb)
+        return warm ? { ok: true, data: { procs: [row] }, self }
+          : { ok: false, error: 'ps: helper down: it exited with code 1', self }
+      }
+      throw Object.assign(new Error(`no route ${p}`), { status: 404 })
+    }
+    const io = fakeIo()
+    const exit = await runStatusCli(['--json'], { io, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps: { request, socketPath: PIPE, exec, parts, user: 'alice', spawn: absentSpawn, alive: () => true } })
+    return { exit, shells, verbs, doc: JSON.parse(io.stdoutText()) }
+  }
+  const hot = await once(true)
+  assert.deepEqual([...new Set(hot.verbs)].sort(), ['ps', 'reg-read', 'tcp-table'], 'every read of the OS goes to the daemon\'s warm helper: the process snapshot, the socket table and Internet Settings (which used to start a helper of their own) — in whatever order they are asked')
+  assert.equal(hot.verbs.filter((v) => v === 'ps').length, 1, 'and the snapshot the table and the platform\'s network facts both want is asked ONCE')
+  assert.deepEqual(hot.shells, [], 'and no powershell.exe is started for the table or for the pid\'s identity (~450 ms each on the Windows test machine)')
+  assert.deepEqual([hot.doc.daemon.running, hot.doc.daemon.responding], [true, true], 'the daemon\'s own identity, as its answer carried it, matched the lock')
+  assert.equal(hot.exit, EXIT.ok, hot.io)
+
+  const cold = await once(false)
+  assert.equal(cold.verbs[0], 'ps', 'the daemon was asked')
+  assert.deepEqual(cold.shells.map((c) => (/ForEach-Object/.test(c) ? 'table' : 'identity')), ['table'], 'and when it cannot answer that read, the one local question is asked — once, and no identity question of its own')
+  const asked = cold.doc.errors.filter((e) => /did not answer the read question/.test(e.reason))
+  assert.deepEqual(asked.map((e) => e.where), ['the process table'], 'the fallback is never silent (D38), under the closed-set name of the question (src/health/codes.mjs DOC_WHERE)')
+  assert.match(asked[0].reason, /ps: helper down: it exited with code 1$/, 'and the prose — which reader could not answer, and why — is the reason')
+  const sameSide = (d) => [d.daemon, d.holders, d.harnesses]
+  assert.deepEqual(sameSide(cold.doc), sameSide(hot.doc), 'and what the table decides — the daemon\'s verdict, the holders, the harnesses — is the same, whichever side answered')
+
+  // The judgement rests on the TABLE's own row for that pid, never on the daemon's word about ITSELF: the row carries the creation time the OS
+  // would print, and the table came with the machine's boot time, so a `self` envelope that says something else changes nothing and starts nothing.
+  const lying = await once(true, { pid: PID, start_time: String(CREATED + 1), boot_id: String(BOOTED) })
+  assert.deepEqual(lying.shells, [], 'no OS question is started: the daemon\'s table answered the pid\'s identity')
+  assert.deepEqual([lying.doc.daemon.running, lying.doc.daemon.responding], [true, true], 'and the lock is judged on the table\'s row, which says what the lock says')
+})
+
+test('D62: `GET /holders` is asked only when the daemon\'s poll has rows — with nothing watched (`holders: null`) the rows are judged from the table `status` already read, and the daemon reads no second process snapshot for it', async () => {
+  const CREATED = 1_740_000_123_456, BOOTED = 1_740_000_000_000, PID = 4343
+  const PIPE = '\\\\.\\pipe\\asight-holders'
+  const paths = []
+  const once = async (holders) => {
+    const fresh = tmpDir('asight-holders-')
+    const dir = collectorDir(fresh)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'lock'), `${JSON.stringify({ pid: PID, start_time: String(CREATED), boot_id: String(BOOTED), socket: PIPE, engine_port: 47123 })}\n`)
+    const request = async ({ path: p, body }) => {
+      paths.push(p)
+      if (p === '/status') return { pid: PID, harnesses: {}, actual: 'off', holders, doors: {}, upstreams: {}, relayed: {}, engine: {} }
+      if (p === '/holders') return { count: 0, holders: [] }
+      if (p === '/helper') return { ok: true, data: body.verb === 'ps' ? { procs: [] } : { rows: [] }, self: { pid: PID, start_time: String(CREATED), boot_id: String(BOOTED) } }
+      throw Object.assign(new Error(`no route ${p}`), { status: 404 })
+    }
+    const io = fakeIo()
+    await runStatusCli(['--json'], { io, home: fresh, platform: 'win32', env: { HOME: fresh, USERPROFILE: fresh }, deps: { request, socketPath: PIPE, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: { os: 'win32', harnesses: [], scan: async () => [], match: () => ({ agent: null }), arch: {} }, user: 'alice', spawn: absentSpawn, alive: () => true } })
+    return JSON.parse(io.stdoutText())
+  }
+  await once(null)
+  assert.deepEqual(paths.filter((p) => p === '/holders'), [], 'nothing is watched: the route that would read the whole process table again (41 ms on the Windows test machine) is not asked')
+  paths.length = 0
+  await once(0)
+  assert.deepEqual(paths.filter((p) => p === '/holders'), ['/holders'], 'the poll has rows (a number, even 0): its own snapshot is the answer, and it is asked')
+})

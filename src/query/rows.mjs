@@ -6,10 +6,20 @@
 // index already stored (src/query/index-build.mjs), which is why `sessions` can meet its ≤ 1 s budget on
 // 1 GB (1.6 §4.1 速度目标) where reading every record back cost 4.5 s on Windows and 7 s on macOS.
 import nodeFs from 'node:fs';
+import path from 'node:path';
 import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
-import { allSegments, segmentIndex } from './index-build.mjs';
+import { allSegments, warmSegmentIndex } from './index-build.mjs';
 import { asightHome } from '../paths.mjs';
+import { warmCache, fsTag } from './warm.mjs';
+
+// WARM (D63 ①, 1.6 §4.1 附近的查询): the rows of one segment come from the ONE warm reading of its index
+// (src/query/index-build.mjs `warmSegmentIndex`, which `allSegments` reads through as well), kept against that
+// segment's own source file. `allSegments` is asked again only when the NAMES in raw/ change (a rollover, a seal): it
+// is used here for the ordered segment list alone, and every row and problem below comes from the stat-revalidated
+// reading, so a line appended to the live segment is never missed.
+const segList = warmCache({ max: 4 });
+const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(home, 'raw')).sort().join('\n'); } catch { return ''; } };
 
 /**
  * indexRows({home, fs, errors}) → [{…index row, segment, lineNo, session_id}], oldest segment first,
@@ -20,9 +30,10 @@ import { asightHome } from '../paths.mjs';
 export async function indexRows({ home = asightHome(), fs = nodeFs, errors = [] } = {}) {
   const assign = createSynthAssigner();
   const out = [];
-  for (const s of await allSegments({ home, fs })) {
-    for (const pr of s.problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
-    const { records } = await segmentIndex({ home, segment: s.segment, fs });
+  const segments = await segList.get(`${fsTag(fs)}\n${home}`, namesStamp(home, fs), () => allSegments({ home, fs }));
+  for (const s of await segments) {
+    const { records, problems } = await warmSegmentIndex({ home, segment: s.segment, fs });
+    for (const pr of problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
     for (const r of records) {
       const synth = r.synth_hash ? assign({ harness: r.harness_id, hash: r.synth_hash, ms: Date.parse(r.ts || '') }) : null;
       out.push({ ...r, segment: s.segment, lineNo: Number(String(r.id).split(':').pop()), session_id: r.session_key ?? synth ?? null, synthesized: !!synth });
@@ -31,15 +42,20 @@ export async function indexRows({ home = asightHome(), fs = nodeFs, errors = [] 
   return out;
 }
 
+// The groups of one row list: `session` asks for them right after `sessions` did, over the same array (D63 ①).
+const groups = new WeakMap();
 /** The rows of every session, in the order the sessions were first seen. A row with no session id is the
  *  session-less control plane (telemetry / config / account) and is in no group. */
 export function sessionGroups(rows) {
+  const was = groups.get(rows);
+  if (was) return was;
   const g = new Map();
   for (const r of rows) {
     if (!r.session_id) continue;
     if (!g.has(r.session_id)) g.set(r.session_id, []);
     g.get(r.session_id).push(r);
   }
+  groups.set(rows, g);
   return g;
 }
 

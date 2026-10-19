@@ -56,6 +56,10 @@ export async function runOnCli(argv, { io, env = process.env, home = os.homedir(
     const install = deps.install || await import('../collector/install.mjs')
     const model = isModelOs(parts.os) // macOS / Windows: the collector model's on (on-model.mjs); none of the old adoption / routing code runs there
     const fs = deps.fs || nodeFs
+    // D62 (1.6 §3.1): the modules the model `on` runs on are pure (they write nothing, print nothing and ask the OS nothing at load), so their load
+    // runs while the token question below is out — on Windows that question is a `whoami` start of its own (58 ms measured on a Windows test machine 2026-10-19).
+    // Nothing is awaited here: ESM caches a module, so runModelOn's own `import`s of these find them loaded, and a load that fails fails there as it did.
+    if (model) { const warm = Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs'), import('../collector/install.mjs')]); warm.catch(() => {}) }
     // The Node floor (4.8 §7, W24: the daemon is pulled up by THIS Node at every login, so an older one cannot run the collector): the arch's own read of
     // process.versions, asked first because it is free — ok:false refuses with the doctor line, before anything is touched. No flows record: the receipt
     // is it (nothing of asight's may exist yet, and the closed sets hold no code for this). Linux's arch has no nodePreflight and nothing here changes.

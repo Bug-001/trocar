@@ -7,6 +7,8 @@
 // Onboarding Codex/DeepSeek (Phase 4) = one more dissector module mirroring this shape — the board /
 // ETL projections stay put. "唯有 block 是统一的" — block is the only cross-provider unit (D25).
 
+import { parsedRequestBody } from './request-body.mjs';
+
 // ── declarative block categories + layout ───────────────────────────────────────────────────
 // Assembly order = what the model reads top-to-bottom = the Anthropic prompt-cache prefix order:
 // tools → system → messages. The request JSON's own key order is an SDK detail and irrelevant.
@@ -200,8 +202,8 @@ export function detect(rec) {
   if (/(^|\/)v1\/messages$/.test(ep)) return true; // incl. relay prefixes (/anthropic, /coding, /api/anthropic)
   const h = (rec.req_headers || rec.request_headers) || {};
   if (h['anthropic-version'] || h['anthropic-beta']) return true;
-  let body = rec.request && typeof rec.request === 'object' ? rec.request : null;
-  if (!body && typeof rec.req_body === 'string') { try { body = JSON.parse(rec.req_body); } catch { body = null; } }
+  let body = parsedRequestBody(rec);   // parsed once per record, for every reader (./request-body.mjs)
+  if (body && typeof body !== 'object') body = null;
   if (!body || !Array.isArray(body.messages) || Array.isArray(body.input)) return false;
   if (body.system !== undefined) return true;
   const tools = Array.isArray(body.tools) ? body.tools : [];

@@ -109,6 +109,7 @@ export function daemonEnv(env, dir) {
 //   installCollector   the install half alone, as the harness and lab tests set an agent up (no state.json, no daemon, no confirmation)
 
 const OP_LOCK_WAIT_MS = 10_000 // 1.6 R12: another state-changing command (an `off`, say) is waited for at most this long
+const SLOW_START_MS = 1000 // D62: a start call that blocks longer than this is the OS holding the job back, not asight working — said in the receipt (D38)
 const nodeFs = fs
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
@@ -565,7 +566,7 @@ const UNIT_NAME_HINT = 'asight-collector.service'
 // lands meanwhile stops the run); `put` records each failure. `register` (D61) is `install`'s arm: the login registration is made and the daemon started
 // (`unit.enable`, with `--now` only when nothing answers — 拉起不是重启, R8). Without it (`on`'s arm) the registration is NEVER touched: the daemon is
 // started through the OS mechanism install registered (`unit.startNow()`), and directly when that refuses (no systemd --user bus, a job that is not loaded).
-export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = null, register = false, reload = false, socketPath = null, request = null, pause = sleep, put = () => {}, halted = () => false }) {
+export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = null, register = false, reload = false, socketPath = null, request = null, pause = sleep, put = () => {}, halted = () => false, ms = Date.now }) {
   const resolveEndpoint = () => controlEndpointFor({ platform: osName, dir, env, fs })
   let endpoint = resolveEndpoint()
   let sock = socketPath || endpoint.socketPath
@@ -587,12 +588,21 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
     else {
       if (reload && typeof unit.reload === 'function') unit.reload() // a unit file rewritten under a loaded unit
       // `install` registers and starts (enable); `on` only starts, through the OS mechanism, and itself when that refuses — the reason said, never dropped (D38)
+      const startAt = ms()
       let rr = register ? unit.enable({ now: !was.up }) : (was.up ? null : unit.startNow())
       if (!register && rr && rr.code !== 0 && typeof unit.start === 'function') {
         const direct = unit.start(daemonEnv(env, dir)) // the direct start carries what the login entry's Environment= would carry
-        if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); asight started it directly this run — the login entry starts it at the next login`); rr = direct }
+        if (direct.code === 0) { notes.push(`the collector could not be started through ${entryWords(osName, unit)} (${rr.err || `exit ${rr.code}`}); asight started it directly this run; the login entry starts it at the next login`); rr = direct }
       }
       started = !was.up
+      // D62 / D38: the OS mechanism can hold the spawn back, and that wait is asight's to SAY, not to hide. `launchctl kickstart` does not return
+      // until launchd spawned the job, and launchd spawns one at most once every ThrottleInterval seconds (10 s, launchd's default: asight writes no
+      // ThrottleInterval, D62 ⑥ and darwin/autostart.mjs). An `off` no longer asks the daemon to exit, so `on` normally finds it already up and never
+      // gets here; this note is what says so when it does. No "run asight install" in it: on darwin `install` rewrites the plist and calls
+      // enable({now: false}), which does not reload an already loaded job, so the rewrite takes effect at the next login (D61,
+      // darwin/autostart.mjs enable) — only enable({now: true}) boots the job out and bootstraps it again.
+      const startMs = ms() - startAt
+      if (startMs >= SLOW_START_MS) notes.push(`${entryWords(osName, unit)} held the collector's start for ${startMs} ms; asight waited on the OS, not on work of its own${osName === 'darwin' ? ' (launchd spawns a job at most once every ThrottleInterval seconds, 10 s by default)' : ''}`)
       if (rr && rr.code === 0 && rr.warn) notes.push(rr.warn) // the arch's own `warn` reaches the receipt (4.8 §7: what it could not do is the caller's to say) — the Run-value it could not take out, the daemon it started directly because /Run's SUCCESS was a lie
       if (rr && rr.code !== 0) {
         // the flip checklist ③ (4.9 §4 末): the arch's own failure record, verbatim, when enable() carries one (the darwin LaunchAgent's `launchd-register-failed` —

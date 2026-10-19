@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { listProcs, procIdentity, pidAlive, psIdentity, identityFor } from '../../src/off/proc.mjs'
+import { listProcs, procIdentity, pidAlive, psIdentity, identityFor, memoProcQuestions } from '../../src/off/proc.mjs'
 import * as procinfo from '../../src/collector/arch/linux/procinfo.mjs'
 import * as health from '../../src/health/read.mjs'
 import { fakeProc } from '../collector/arch/linux/fixtures/fake-proc.mjs'
@@ -166,4 +166,77 @@ test('psIdentity: the start time of a pid from `ps -o lstart= -p` in the C local
   } finally { p.done() }
   assert.throws(() => identityFor({ platform: 'darwin' })(4242), { code: 'ESANDBOX' }, 'a real ps under npm test is refused (0.1 §3)')
   takeRefusals()
+})
+
+// ── one question, one answer (D62 task E, 1.6 §3.1): a read-only command asks the table and an identity once ─────────────────
+const CREATED_W = 1_740_000_123_456
+const BOOTED_W = 1_740_000_000_000
+/** A fake powershell answering both fixed Windows questions, counting each. */
+function winTools({ rows = [{ p: 4242, pp: 1, n: 'node.exe', x: 'C:\\n.exe', s: CREATED_W, c: 'node x' }] } = {}) {
+  const calls = []
+  const run = (file, args) => {
+    const cmd = [file, ...args].join(' ')
+    calls.push(cmd)
+    if (/Win32_Process \| ForEach-Object/.test(cmd)) return { status: 0, stdout: `boot ${BOOTED_W}\n${JSON.stringify(rows)}`, stderr: '' }
+    const m = /Win32_Process -Filter "ProcessId=(\d+)"/.exec(cmd)
+    if (m) { const r = rows.find((x) => x.p === Number(m[1])); return { status: 0, stdout: r ? JSON.stringify({ s: r.s, b: BOOTED_W }) : 'gone', stderr: '' } }
+    return { status: 1, stdout: '', stderr: `unknown question: ${cmd.slice(0, 60)}` }
+  }
+  return { run, calls, table: () => calls.filter((c) => /ForEach-Object/.test(c)).length, ident: () => calls.filter((c) => /-Filter/.test(c)).length }
+}
+
+test('memoProcQuestions: inside a scope the process table is asked once and a Windows identity comes out of that same answer (byte for byte what the identity question would have said); outside one, every ask is fresh — `off` watches processes exit', async () => {
+  const direct = winTools()
+  const want = identityFor({ platform: 'win32', exec: direct.run })(4242)
+  assert.deepEqual(want, { start_time: String(CREATED_W), boot_id: String(BOOTED_W) })
+  assert.deepEqual([direct.table(), direct.ident()], [0, 1], 'with no scope the identity is its own PowerShell question')
+
+  const ps = winTools()
+  const close = memoProcQuestions()
+  try {
+    const a = await listProcs({ platform: 'win32', exec: ps.run })
+    const b = await listProcs({ platform: 'win32', exec: ps.run })
+    assert.equal(a, b, 'the same answer, not a second question')
+    const id = identityFor({ platform: 'win32', exec: ps.run })
+    assert.deepEqual(id(4242), want, 'the identity is the table\'s own row and the boot time its question printed')
+    assert.deepEqual(id(4242), want)
+    assert.deepEqual(id(777), { start_time: null, boot_id: null }, 'a pid the table does not list is gone, as the identity question says')
+    assert.deepEqual([ps.table(), ps.ident()], [1, 0], 'one PowerShell for the whole command')
+  } finally { close() }
+
+  const after = winTools()
+  await listProcs({ platform: 'win32', exec: after.run })
+  await listProcs({ platform: 'win32', exec: after.run })
+  assert.equal(after.table(), 2, 'the scope is closed: every ask is fresh again')
+
+  const nested = winTools()
+  const outer = memoProcQuestions(), inner = memoProcQuestions()
+  try {
+    await listProcs({ platform: 'win32', exec: nested.run })
+    inner()
+    await listProcs({ platform: 'win32', exec: nested.run })
+    assert.equal(nested.table(), 1, 're-entrant: doctor\'s scope holds status\'s, and the inner close does not end it')
+  } finally { outer() }
+  await listProcs({ platform: 'win32', exec: nested.run })
+  assert.equal(nested.table(), 2)
+
+  const broken = { run: (file, args) => (/ForEach-Object/.test([file, ...args].join(' ')) ? { status: null, stdout: '', stderr: 'did not run' } : winTools().run(file, args)) }
+  const close2 = memoProcQuestions()
+  try {
+    await assert.rejects(listProcs({ platform: 'win32', exec: broken.run }), /is not known/, 'a table that could not be read is still an error (D38)')
+    assert.deepEqual(identityFor({ platform: 'win32', exec: broken.run })(4242), { start_time: String(CREATED_W), boot_id: String(BOOTED_W) }, 'and the identity falls back to its own question instead of inheriting the failure')
+  } finally { close2() }
+})
+
+test('memoProcQuestions in the callback form: the scope is that call\'s async context, so two commands running at once never take each other\'s answers (the protection if `status` ever runs in a resident process) — and the boot time one of them read is its own', async () => {
+  const a = winTools(), b = winTools()
+  const run = (tools) => memoProcQuestions({}, async () => {
+    await listProcs({ platform: 'win32', exec: tools.run })
+    await listProcs({ platform: 'win32', exec: tools.run })
+    return identityFor({ platform: 'win32', exec: tools.run })(4242, { expect: { start_time: String(CREATED_W), boot_id: String(BOOTED_W) } })
+  })
+  const [ia, ib] = await Promise.all([run(a), run(b)])
+  assert.deepEqual([a.table(), b.table()], [1, 1], 'each command asked the table once, and neither answered from the other\'s')
+  assert.deepEqual([a.ident(), b.ident()], [0, 0], 'each answered the identity out of its own table')
+  assert.deepEqual([ia, ib], [{ start_time: String(CREATED_W), boot_id: String(BOOTED_W) }, { start_time: String(CREATED_W), boot_id: String(BOOTED_W) }])
 })

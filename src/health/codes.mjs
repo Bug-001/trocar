@@ -56,9 +56,11 @@ export const TRUST_REASONS = Object.freeze([
 
 /** Codes asight names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
-  daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error'],
+  daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
+    'query-failed'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
+    // query-failed — D63 (4.6 §事件与码): the query worker crashed, exited non-zero or did not answer in time; that query is still answered (a re-fork, or the caller's local path)
   record: ['record-error', 'file-replaced'],
-  raw: ['seal-failed'],
+  raw: ['seal-failed', 'index-failed'], // index-failed: the daemon could not keep a segment's index current (D62); the records are on disk and the next query indexes them itself, and says so (`index-cold`)
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
   // a harness's configuration or files, read or written (the Claude Code settings layers have their own codes, above)
   harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial',
