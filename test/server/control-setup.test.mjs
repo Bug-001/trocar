@@ -21,6 +21,7 @@ import { CONTROL_TOKEN_HEADER } from '../../src/off/token-header.mjs'
 import { readManifest, itemsOfPhase } from '../../src/off/manifest.mjs'
 import { setupOf } from '../../src/collector/core/proxymode/status-facts.mjs'
 import { createServer } from '../../src/server.mjs'
+import { createQueryService } from '../../src/query/service.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
 
 const A = 'codex', B = 'z-code' // B: its CLI form is present when ~/.zcode is, and carries the root through a config key (a carrier of its own)
@@ -48,7 +49,7 @@ async function withBoard(platform, run) {
     const token = fs.readFileSync(path.join(w.dir, 'board.token'), 'utf8')
     const post = (body) => request(port, '/control/setup', { method: 'POST', headers: { 'content-type': 'application/json', [CONTROL_TOKEN_HEADER]: token }, body: JSON.stringify(body) })
       .then((r) => ({ ...r, json: JSON.parse(r.body) }))
-    try { await run({ w, post, trust }) } finally { await box.stop() }
+    try { await run({ w, post, trust, state, deps }) } finally { await box.stop() }
   })
 }
 
@@ -97,6 +98,30 @@ for (const platform of ['darwin', 'win32']) {
       assert.deepEqual(validateReceipt(ok2.json), [], ok2.body)
       assert.deepEqual(quiet(snapshot(w.home)), quiet(home1), 'a second Set up changed no byte')
       assert.deepEqual(trust.calls().slice(calls1).filter((c) => !['exists', 'has'].includes(c)), [], 'nothing asked of the custody or the root store')
+      // the root gone from the user's store (status: B needed, root-missing): the plan names the root, so its confirm's dialog is what it said
+      trust.setStore({ held: [], answer: 'ok' })
+      const gone = await post({ harness: B })
+      assert.deepEqual(gone.json.plan.map((r) => r.what), ['root'], gone.body)
+      assert.ok(!(gone.json.receipt.notes || []).some((n) => /nothing to set up/.test(n)), gone.body)
+      const back = await post({ harness: B, confirm: gone.json.plan_id })
+      assert.equal(back.status, 200, back.body)
+      assert.ok(back.json.items.some((i) => i.item === 'root-store' && i.state === 'added'), back.body)
+    })
+  })
+
+  test(`${platform} · 4.11 ㉒: the root key gone before a Set up — no new root for one harness; pending names asight install, no byte of A's or the store's changes`, { timeout: 60_000 }, async () => {
+    await withBoard(platform, async ({ w, post, trust, state }) => {
+      fs.rmSync(path.join(state, 'custody.json'))
+      fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
+      const p = await post({ harness: B })
+      const before = snapshot(w.home), held = items(w), calls0 = trust.calls().length
+      const r = await post({ harness: B, confirm: p.json.plan_id })
+      assert.equal(r.status, 200, r.body)
+      assert.deepEqual(validateReceipt(r.json), [], r.body)
+      assert.ok(r.json.pending.some((x) => x.item === 'root-key' && x.command === 'asight install'), r.body)
+      const rel = (f) => path.relative(w.home, f).split(path.sep).join('/'), after = snapshot(w.home)
+      for (const i of held.filter((x) => x.path && before[rel(x.path)])) assert.equal(after[rel(i.path)], before[rel(i.path)], i.path)
+      assert.deepEqual(trust.calls().slice(calls0).filter((c) => !['exists', 'has'].includes(c)), [], 'no key made, no root removed or added')
     })
   })
 
@@ -106,6 +131,7 @@ for (const platform of ['darwin', 'win32']) {
       fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
       const p = await post({ harness: B })
       assert.equal(p.status, 409, p.body)
+      assert.ok(p.json.plan.some((x) => x.what === 'root'), p.body)
       const r = await post({ harness: B, confirm: p.json.plan_id })
       assert.equal(r.status, 200, r.body)
       assert.deepEqual(validateReceipt(r.json), [], r.body)
@@ -113,6 +139,27 @@ for (const platform of ['darwin', 'win32']) {
       assert.ok(r.json.pending.some((x) => x.item === 'root-store' && x.state === 'pending' && x.command === 'asight install'), r.body)
       assert.ok(r.json.carriers.some((c) => c.harness === B && c.state === 'placed'), r.body)
       assert.ok(items(w).some((i) => i.harness === B && fs.existsSync(i.path)))
+    })
+  })
+
+  test(`${platform} · 4.4 「Set up 的三件实话」: a root prompt that outlasts the query deadline — the worker is not killed; the receipt is pending with asight install, B's carrier placed`, { timeout: 60_000 }, async () => {
+    await withBoard(platform, async ({ w, trust, deps }) => {
+      trust.setStore({ held: [], answer: 'pending', delayMs: 1500 })
+      fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
+      const failures = []
+      const svc = createQueryService({ home: path.join(w.home, '.asight'), fork: (h) => workerFork(h, deps), deadlineMs: 500, failure: (where, e) => failures.push(e.message) })
+      const ask = (body) => new Promise((resolve, reject) => {
+        const res = { chunks: [], writeHead(st) { this.status = st }, write(b) { this.chunks.push(b); return true }, end() { resolve({ status: this.status, json: JSON.parse(Buffer.concat(this.chunks)) }) }, once() {} }
+        svc.control({ verb: 'setup', body, res }).catch(reject)
+      })
+      try {
+        const p = await ask({ harness: B })
+        const r = await ask({ harness: B, confirm: p.json.plan_id })
+        assert.equal(r.status, 200, JSON.stringify(r.json))
+        assert.ok(r.json.pending.some((x) => x.item === 'root-store' && x.command === 'asight install'), JSON.stringify(r.json))
+        assert.ok(r.json.carriers.some((c) => c.harness === B && c.state === 'placed'), JSON.stringify(r.json))
+        assert.deepEqual(failures, [])
+      } finally { svc.stop() }
     })
   })
 }

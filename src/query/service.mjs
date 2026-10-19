@@ -15,12 +15,16 @@
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { QUERY_PATH, QUERY_NAMES } from './client.mjs'
+import { OS_PROMPT_MS } from '../off/root-store.mjs'
 
 const WORKER = fileURLToPath(new URL('./worker.mjs', import.meta.url))
 /** The worker's heap bound. Measured warm on the reference dataset: RSS ~180 MB with every session of a 500 MB
  *  corpus opened, so 384 MB leaves room for one large document being serialized without ever growing without end. */
 export const WORKER_MEMORY_MB = 384
 const DEADLINE_MS = 30_000 // a worker silent this long is wedged, not slow: the queue must not be held for ever
+/** A control verb may run install's root steps (the board's Set up, 4.4 §控制面): the OS's root prompt, then its read-back, each up to OS_PROMPT_MS,
+ *  and the rest of install. A worker killed while the dialog is open would leave no receipt and the carriers unplaced. */
+const CONTROL_DEADLINE_MS = 2 * OS_PROMPT_MS + DEADLINE_MS
 const NL = 0x0a
 /** Where the bytes of a document nobody waits for go: the warm-up query's answer, and the rest of a document whose
  *  caller disconnected (its frame MUST still be read to the end, or the next reply is read as part of it). */
@@ -29,7 +33,7 @@ const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon y
 
 const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: [`--max-old-space-size=${WORKER_MEMORY_MB}`] })
 
-export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker }) {
+export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker, deadlineMs = DEADLINE_MS, controlDeadlineMs = CONTROL_DEADLINE_MS }) {
   let child = null, pending = null, head = '', left = 0, stderr = '', paused = false
   let queue = Promise.resolve()
 
@@ -114,26 +118,26 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     resumeChild()
   }
 
-  const run = (line, res) => new Promise((done, fail) => {
+  const run = (line, res, ms) => new Promise((done, fail) => {
     const c = child || start()
     const p = { res, done, fail, quiet: false }
     p.timer = setTimeout(() => {
       // Still the deadline when the caller is gone (a silent worker must not hold the queue), but then it is not a
       // failure anyone asked about: no D38 record.
-      if (!p.quiet) failWorker(`the query worker did not answer within ${DEADLINE_MS} ms`)
+      if (!p.quiet) failWorker(`the query worker did not answer within ${ms} ms`)
       drop('the query worker did not answer in time')
-    }, DEADLINE_MS)
+    }, ms)
     pending = p
     c.stdin.write(line)
   })
 
   /** Fork a worker and give it this very query, with nobody waiting for the answer: the next query finds it warm. */
-  const warmUp = (line) => { const go = () => run(line, SINK); queue = queue.then(go, go).catch(() => {}) }
+  const warmUp = (line) => { const go = () => run(line, SINK, deadlineMs); queue = queue.then(go, go).catch(() => {}) }
 
   const lineOf = (name, params, indent = 0) => JSON.stringify({ name, params, indent }) + '\n'
 
   /** Hand `line` to the worker (forked if there is none: run() starts it) and let its frame flow into `res`. */
-  const answer = (line, res) => {
+  const answer = (line, res, ms = deadlineMs) => {
     // FIRST, before anything that can await: a caller may be gone at any moment, and the worker must survive it.
     let gone = false, finish, failRoute
     const answered = new Promise((resolve, reject) => { finish = resolve; failRoute = reject })
@@ -141,7 +145,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     // The handler answers `res` itself, so the server sends nothing: nothing of this document is held in this
     // process's memory as a JavaScript value. A request that failed does not hold the next one up, and its
     // rejection reaches the server, which answers 500.
-    const go = () => run(line, res)
+    const go = () => run(line, res, ms)
     const task = queue.then(go, go)
     queue = task.catch(() => {})
     // Answered as soon as EITHER the document is through or the caller is gone; a failure is raised only while there
@@ -175,7 +179,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
 
   /** The board's `/control/<verb>` (4.4 §控制面): the same queue and frame path as `relay`, so a control verb waits its turn behind a query and the
    *  worker runs the CLI's own function (src/control/board.mjs). The caller checked the verb and parsed the small request body. */
-  const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res)
+  const control = ({ verb, body = {}, res }) => answer(JSON.stringify({ control: verb, body }) + '\n', res, controlDeadlineMs)
 
   /** Fork a worker (if there is none) and run this query with nobody waiting: the board's page load warms it (4.4). */
   const warm = ({ name, params = {} }) => warmUp(lineOf(name, params))

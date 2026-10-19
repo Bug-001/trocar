@@ -25,7 +25,7 @@ const SETUP_WHY = { 'carrier-absent': 'asight has not set up its certificate for
 const errText = (e) => String((e && e.message) || e)
 /** The root's state the way `status` reads it (cert.root.state, 1.6 §9.4): asight-ca.pem asked of the user's store through the injected reader — the one
  *  store question `on` asks, so ⑪'s root-missing is status's (4.11 P4b). Pending / declined / unreadable → not `missing`: not setup work, or not known. */
-async function rootOf({ dir, m, rootStore, fs }) {
+export async function rootOf({ dir, m, rootStore, fs }) {
   if (!rootStore) return null
   if ((m.install.pending || []).some((p) => p.item === 'root-store')) return { state: 'pending' }
   let x

@@ -89,7 +89,10 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   if (custodyWhy) return finish()
   if (has === 'unavailable') { pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody is not reachable (macOS: no graphical login session); run asight install again in a terminal of that session' }) }
   else if (rec && has === true && fs.existsSync(ca.pem)) { rootDer = pemToDer(fs.readFileSync(ca.pem, 'utf8')); said('root-key', 'intact', { fp256: rec.fp256 }) }
-  else {
+  else if (only) { // a new root rewrites every harness's carriers (㉒), which one harness's Set up does not place: that is install's own run
+    pending.push({ item: 'root-key', state: 'pending', reason: "asight's root key is gone or cannot be read back, and a new one means every agent's certificate carrier is placed again: run asight install" })
+    return finish()
+  } else {
     // 4.11 §3 ㉒: a key that is gone (exists() false while the manifest records one), or one whose root asight cannot read back (no record, or
     // asight-ca.pem gone: the custody has no verb that returns the root), is replaced — never refused. A stray key goes first (create over it is
     // the helper's 'exists'); then the old root leaves the store by its recorded fingerprint; the carriers below are rewritten for the new root.

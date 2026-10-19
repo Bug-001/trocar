@@ -67,7 +67,8 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     const b = deps.backends || await backendsFor({ os: platform, home, run: deps.exec || null, env, fs })
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
     const ctx = sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
-    const rows = planInstall({ os: platform, harnesses, ctx }).filter(await missingOf(only, { platform, harnesses, ctx, home, fs }))
+    const need = await missingOf(only, { platform, harnesses, ctx, home, rootStore: b.rootStore, fs })
+    const rows = planInstall({ os: platform, harnesses, ctx }).filter(need.row)
     // the login entry is install's (D61: registered AND started here, 4.11 §1 install 7; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
     const unit = deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch(platform)).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
     const carrierOf = (r) => (r.carrier === 'root'
@@ -76,7 +77,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
         ? `${r.paths.map((p) => tilde(p, home)).join(', ')}${r.keys ? `: ${r.keys.join('.')}` : ''}`
         : `path not known yet: the place of its ${r.carrier} could not be resolved on this machine`)
     const planned = [
-      ...(only ? [] : [{ what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" }]),
+      ...(only && !need.root ? [] : [{ what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" }]),
       // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
       ...[...rows.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
         .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, what: group[0].harness, detail: carrierOf(group[0]) })),
@@ -87,7 +88,7 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     ]
     say(fit([`asight install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
       ...pairs(planned.map((p) => [p.what, p.detail])),
-      ...(rows.length ? [] : [only ? `${only} has every certificate carrier it needs: there is nothing to set up.` : 'No agent was found on this machine: only the root is installed.']),
+      ...(only ? (planned.length ? [] : [`${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
       ...wrap(COST), ...wrap(RISK)]).join('\n'))
     if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, ...(only && !planned.length ? { notes: [`${only}: nothing to set up`] } : {}) }, null, 2)); return EXIT.ok }
     if (!flags.has('--yes')) {
@@ -201,13 +202,16 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
 }
 
 // Set up (only): a row of the plan is one of that harness's forms whose own carrier install has not placed (setupOf's `missing`, the judgement
-// status and on read); without `only`, every row
-async function missingOf(only, { platform, harnesses, ctx, home, fs }) {
-  if (!only) return () => true
-  const [{ setupOf }, { readManifest }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/trust/journal.mjs')])
-  const manifest = readManifest(path.join(home, '.asight', 'collector'), fs)
-  const forms = new Set(setupOf(harnesses.find((d) => d.name === only), { os: platform, manifest, ctx, fs }).missing.map((x) => x.form))
-  return (r) => r.harness === only && forms.has(r.form)
+// status and on read, with the root read as on reads it: `root` when it is gone from the user's store, so install's run asks for it again); without
+// `only`, every row → { row, root }
+async function missingOf(only, { platform, harnesses, ctx, home, rootStore, fs }) {
+  if (!only) return { row: () => true, root: true }
+  const [{ setupOf }, { readManifest }, { rootOf }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/trust/journal.mjs'), import('../collector/model-on.mjs')])
+  const dir = path.join(home, '.asight', 'collector'), manifest = readManifest(dir, fs)
+  const root = manifest && manifest.install ? await rootOf({ dir, m: manifest, rootStore, fs }) : null
+  const missing = setupOf(harnesses.find((d) => d.name === only), { os: platform, manifest, ctx, root, fs }).missing
+  const forms = new Set(missing.map((x) => x.form))
+  return { row: (r) => r.harness === only && forms.has(r.form), root: missing.some((x) => x.what === 'root-missing') }
 }
 
 /** The board's port (4.4 §Plan 「端口」), chosen once by install: none free (or the file cannot be written) is a pending row with the reason, never a throw. */
