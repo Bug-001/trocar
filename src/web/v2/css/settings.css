@@ -1,0 +1,80 @@
+/* css/settings.css — 设置的三页 (1.11): 存储 · 价格 · 外观。Tokens and color-mix only: no bare colours.
+   The kit (base.css) already carries .seg .tech .disc .pop .copybtn .cap .num .mono — only the settings-specific
+   shapes live here: the card, the horizontal-scroll table frame with its sticky agent column, the retention grid,
+   the price table, the paste-template row, the theme card. */
+
+/* the page body: cards down the page, readable width */
+#smain,#pmain{display:flex;flex-direction:column;gap:14px;max-width:1160px;}
+
+/* a card: the settings pages' one container shape */
+.scard{background:var(--raised);border:1px solid var(--border);border-radius:var(--r-2);padding:14px 18px 16px;min-width:0;}
+.scard h2{margin:0 0 8px;font-family:var(--sans);font-size:var(--fs-h2);font-weight:600;color:var(--ink);white-space:nowrap;}
+.scard>.cap{margin:2px 0 8px;color:var(--ink-2);}
+.scard .err{margin:2px 0 6px;color:var(--bad);}
+
+/* tables sit in a frame that scrolls horizontally when narrow — the page itself never scrolls sideways (1.11 #25) */
+.hscroll{overflow-x:auto;border:1px solid var(--rule);border-radius:var(--r-1);background:var(--paper);}
+.hscroll table{border-collapse:collapse;width:100%;font-size:12px;}
+
+/* ── 存储 · the retention grid ─────────────────────────────────────────────────────────────────────────────────── */
+.rgrid th,.rgrid td{padding:5px 10px;border-bottom:1px solid color-mix(in srgb,var(--rule) 60%,transparent);white-space:nowrap;}
+.rgrid thead th{font-size:10.5px;color:var(--dimmer);font-weight:500;background:var(--panel);}
+.rgrid thead th:first-child{border-top-left-radius:var(--r-1);}
+/* the agent column stays put while the frame scrolls sideways */
+.rgrid .ag{position:sticky;left:0;z-index:1;background:var(--paper);text-align:left;font-weight:500;color:var(--ink);}
+.rgrid thead .ag{background:var(--panel);}
+.rgrid .ag .agname{display:inline-flex;align-items:center;gap:6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;}
+.rgrid td.cell{font-family:var(--mono);font-size:11px;text-align:right;min-width:72px;}
+.rgrid td.cell.na{text-align:left;}
+.rgrid .tot{font-family:var(--mono);font-size:11px;color:var(--ink-2);}
+.rgrid tfoot th,.rgrid tfoot td{border-top:1px solid var(--rule);border-bottom:0;color:var(--ink);}
+.rgrid tfoot .grand{font-weight:600;}
+/* the D40-之前的 row: summed apart, drawn apart */
+.rgrid tr.legacy td,.rgrid tr.legacy .agname{color:var(--dim);}
+/* a cell the route asked for: h= / class= ring it (1.11 #15) */
+.rgrid .hl{box-shadow:inset 0 0 0 2px var(--amber);border-radius:2px;}
+/* the level control: the kit's .seg, sized for a table cell */
+.cellseg button{padding:0 6px;font-size:10px;line-height:16px;}
+.cellseg button:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+.lvltxt{color:var(--ink-2);font-size:11px;}
+.na{color:var(--dimmer);font-style:italic;}
+.v{font-family:var(--mono);font-size:11px;}
+.v.busy{color:var(--dimmer);font-style:italic;}
+.sizepop{display:inline-flex;align-items:baseline;gap:4px;}
+/* the receipt under a change: what the server answered, until the next read */
+.rcpt{font-size:10px;white-space:nowrap;}
+.rcpt.ok{color:var(--green);}
+.rcpt.err{color:var(--bad);}
+.retry{border:0;background:none;padding:0;font:inherit;font-size:10px;color:var(--action);cursor:pointer;text-decoration:underline;text-underline-offset:2px;}
+/* the 磁盘 card's lines */
+.dline{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;font-size:12.5px;margin:3px 0;}
+.dline b{font-weight:500;color:var(--ink-2);}
+.dline .num{font-family:var(--mono);}
+.dline.bad a{color:var(--bad);}
+/* 最近的修改 */
+.chg{border-collapse:collapse;font-size:11.5px;margin:4px 0;}
+.chg td{padding:3px 12px 3px 0;border-bottom:1px solid color-mix(in srgb,var(--rule) 55%,transparent);color:var(--ink-2);}
+.chg td:first-child{color:var(--ink);}
+.chg tr:last-child td{border-bottom:0;}
+
+/* ── 价格 ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
+.ptable th{font-size:10.5px;color:var(--dimmer);font-weight:500;text-align:left;padding:6px 10px;border-bottom:1px solid var(--rule);}
+.ptable th.n,.ptable td.n{text-align:right;}
+.ptable td{padding:4px 10px;border-bottom:1px solid color-mix(in srgb,var(--rule) 55%,transparent);}
+.ptable tr:last-child td{border-bottom:0;}
+.ptable td.n{font-family:var(--mono);font-size:11.5px;}
+.ptable td.k{font-family:var(--mono);font-weight:500;}
+.ptable .bad-shape{color:var(--bad);font-family:var(--mono);font-size:11px;}
+.cap.from{font-family:var(--mono);font-size:11px;color:var(--dimmer);}
+/* 没有单价的模型: name · session count · the paste-ready row */
+.umodel{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;padding:7px 0;border-bottom:1px solid color-mix(in srgb,var(--rule) 45%,transparent);}
+.umodel:last-of-type{border-bottom:0;}
+.umodel .um{font-size:12px;}
+.cap.hint{margin-top:8px;color:var(--dimmer);}
+.trow{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;}
+.well{font-family:var(--mono);font-size:11px;background:var(--sunk);border:1px solid var(--rule);border-radius:var(--r-1);padding:2px 8px;}
+.well:focus-visible{outline:2px solid var(--accent);outline-offset:1px;}
+
+/* ── 外观 ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
+.theme-card .seg button{padding:0 14px;line-height:22px;font-size:var(--fs-body);}
+.themewarn{margin-top:10px;font-size:var(--fs-cap);color:var(--warn);}
