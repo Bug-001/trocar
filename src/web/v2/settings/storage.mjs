@@ -77,9 +77,9 @@ export function mount(el, ctx) {
   const winOf = (route) => { const w = route && route.params && route.params.window; return W.WINDOWS.some((o) => o.value === w) ? w : '24h' }
   let dead = false, docs = null, readAt = null, readFail = null, win = winOf(router.current())
 
-  el.innerHTML = `<div class="page"><header class="pagehead" id="shead"></header><div id="smain"></div></div>`
+  el.innerHTML = `<div class="page"><div id="shead"></div><div id="smain"></div></div>`
   const $ = (sel) => el.querySelector(sel)
-  const paintHead = () => { $('#shead').outerHTML = pageHeadHtml({ name: SCREEN_NAME['settings-storage'], readAt,
+  const paintHead = () => { $('#shead').innerHTML = pageHeadHtml({ name: SCREEN_NAME['settings-storage'], readAt,
     scope: { label: 'window', value: win, options: W.WINDOWS.map((o) => ({ ...o, href: `#/settings/storage?window=${o.value}` })) } }) }
 
   async function read() {

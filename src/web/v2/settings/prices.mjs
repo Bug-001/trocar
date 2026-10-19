@@ -59,7 +59,7 @@ export function mount(el, ctx) {
   let dead = false, readAt = null, error = null
 
   function paintHead() {
-    el.querySelector('#phead').outerHTML = pageHeadHtml({ name: SCREEN_NAME['settings-prices'], readAt })
+    el.querySelector('#phead').innerHTML = pageHeadHtml({ name: SCREEN_NAME['settings-prices'], readAt })
   }
 
   async function read() {
@@ -102,7 +102,7 @@ export function mount(el, ctx) {
   }
 
   el.innerHTML = `<div class="page">` +
-    `<header class="pagehead" id="phead"></header>` +
+    `<div id="phead"></div>` +
     `<div id="pmain"></div>` +
     `</div>`
   paintHead()

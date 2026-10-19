@@ -76,9 +76,9 @@
   .ovpin{position:absolute;top:0;bottom:0;width:1px;background:var(--fg);opacity:.55;pointer-events:none;}
   .ovbrush{position:absolute;top:0;bottom:0;min-width:6px;background:color-mix(in srgb,var(--accent) 22%,transparent);border:1px solid var(--accent);border-radius:2px;cursor:grab;box-sizing:border-box;}
   .ovbrush:active{cursor:grabbing;}
-  .ovh{position:absolute;top:-1px;bottom:-1px;width:7px;cursor:col-resize;background:var(--accent);opacity:.55;}
+  .ovbrush .ovh{position:absolute;top:-1px;bottom:-1px;width:7px;cursor:col-resize;background:var(--accent);opacity:.55;}
   .ovh-l{left:-1px;border-radius:2px 0 0 2px;} .ovh-r{right:-1px;border-radius:0 2px 2px 0;}
-  .ovh:hover{opacity:.9;}
+  .ovbrush .ovh:hover{opacity:.9;}
   .sawlegend{display:flex;gap:12px;font-size:10px;color:var(--dim);margin-top:3px;flex-wrap:wrap;align-items:center;}
   .navbtns{display:flex;gap:4px;align-items:center;margin-left:auto;}
   /* shared timeline grid: fixed left gutter (track titles) | aligned plotting lane (point 3) */

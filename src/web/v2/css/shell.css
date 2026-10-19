@@ -61,7 +61,8 @@
   #sidebar .hit .lbl,#sidebar ul.sub{display:none;}
   #sidebar li.open::after{content:"";position:absolute;top:0;bottom:0;right:0;width:2px;background:var(--ink);z-index:2;}
   #sidebar li:hover > .fly,#sidebar li:focus-within > .fly{display:block;}
-  #app:not(.rail) #sidebar .fly{display:block;} /* the media query is what decided the layout now */
+  /* the media query decided the rail, not #app.rail: outrank line 44's hide, but only on hover / keyboard focus — never all at once */
+  #app:not(.rail) #sidebar li:hover > .fly,#app:not(.rail) #sidebar li:focus-within > .fly{display:block;}
 }
 
 #content{min-width:0;display:flex;flex-direction:column;background:var(--paper);position:relative;}

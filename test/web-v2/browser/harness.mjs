@@ -21,7 +21,7 @@ export async function probe({ importer = () => import('playwright-core'), env = 
 }
 
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
- *  `requests` logs every /api and /control response as {url, status, t}; `errors` collects pageerrors. Always `await stop()`. */
+ *  `requests` logs every /api and /control response as {url, status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors. Always `await stop()`. */
 export async function withBoard({ bytes, token = true, width = 1280, theme = 'light', chromium } = {}) {
   chromium ||= (await import('playwright-core')).chromium
   const face = await serveBoard(boardHome({ bytes }))
@@ -42,7 +42,7 @@ export async function withBoard({ bytes, token = true, width = 1280, theme = 'li
     page.on('pageerror', (e) => errors.push(String(e)))
     page.on('response', (r) => {
       const u = new URL(r.url())
-      if (/^\/(api|control)\//.test(u.pathname)) requests.push({ url: u.pathname + u.search, status: r.status(), t: Date.now() })
+      if (/^\/(api|control)\//.test(u.pathname)) requests.push({ url: u.pathname + u.search, status: r.status(), start: r.request().timing().startTime, t: Date.now() })
     })
     const t = token === true ? face.token : token
     await page.goto(`${face.base}/v2/index.html${t ? `#t=${encodeURIComponent(t)}` : ''}`, { waitUntil: 'load' })

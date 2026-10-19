@@ -1,0 +1,156 @@
+// test/web-v2/browser/screens.test.mjs — every screen on the real face in the real Chrome (1.2 #20 · D64⑤): real clicks and keys,
+// each screen's first data element and zero page errors, K-30 with no token, and D64's lines measured and printed (never asserted
+// relaxed, D64⑥). Shots: every screen × 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { probe, withBoard, stats, shoot } from './harness.mjs'
+import { BOARD_LINES } from '../perf-lines.mjs'
+import { COMMANDS } from '../../../src/web/v2/labels/capture.mjs'
+
+const gate = await probe()
+const skip = gate.ok ? false : gate.reason
+const BYTES = 5e6
+const samples = { sessionOpen: [], stepClick: [], stepKey: [], button: [] }
+
+// One in-page wait, armed BEFORE the input: it marks the first pointerdown / keydown (the real input event Playwright sends), then
+// polls frames until the condition holds and lets that frame paint (a task after the rAF) before measuring. Returns ms, input → painted.
+// Conditions: 'replay' = the step head and the context window drawn (not its loading state); 'step' = the step head no longer reads
+// `arg` and the window is drawn; 'sel' = an element matches the selector `arg`.
+async function timed(page, cond, arg, act) {
+  await page.evaluate(() => { // armed and awaited before the input, so the input can never outrun the listener
+    performance.clearMarks('in')
+    const arm = () => { performance.mark('in'); removeEventListener('pointerdown', arm, true); removeEventListener('keydown', arm, true) }
+    addEventListener('pointerdown', arm, true); addEventListener('keydown', arm, true)
+  })
+  await act()
+  return page.evaluate(([cond, a]) => new Promise((resolve, reject) => {
+    const q = (s) => document.querySelector(s)
+    const holds = {
+      replay: () => location.hash.startsWith('#/replay/') && !!q('#stepbar .sb-no') && !!q('#ctxwin') && !q('#ctxwin .cwload'),
+      step: () => !!q('#stepbar .sb-no') && q('#stepbar .sb-no').textContent !== a && !q('#ctxwin .cwload'),
+      sel: () => !!q(a),
+    }[cond]
+    const t0 = performance.now()
+    const tick = () => {
+      if (performance.getEntriesByName('in').length && holds()) return setTimeout(() => resolve(performance.measure('m', 'in').duration), 0)
+      if (performance.now() - t0 > 10000) return reject(new Error(`not drawn in 10 s: ${cond} ${a ?? ''} (input seen: ${performance.getEntriesByName('in').length > 0})`))
+      requestAnimationFrame(tick)
+    }
+    tick()
+  }), [cond, arg])
+}
+
+// a sidebar link: a top-level item is clicked, a sub-item is reached through its flyout (hover the parent, then click)
+async function nav(page, href) {
+  const link = page.locator(`#sidebar a[href="${href}"]`)
+  for (let i = 0; i < await link.count(); i++) if (await link.nth(i).isVisible()) return link.nth(i).click()
+  await page.locator('#sidebar .item', { has: page.locator(`a[href="${href}"]`) }).first().hover()
+  return page.locator(`#sidebar .fsub a[href="${href}"]`).click()
+}
+
+// each screen, how it is reached, and the first element it draws from data (or its empty state)
+async function driveEveryScreen(b, { width, theme }) {
+  const { page } = b
+  const first = async (name, sel, act) => {
+    const ms = await timed(page, 'sel', sel, act)
+    samples.button.push(ms)
+    await page.waitForLoadState('networkidle')
+    await page.mouse.move(width - 8, 880) // off the sidebar: no fly-out stays over the content (1.2 §侧栏: shown on hover / focus only)
+    assert.equal(await page.locator('#sidebar .fly:visible').count(), 0, `${name}: a sidebar fly-out covers the content`)
+    const clash = await page.evaluate(() => { // headings never sit on one another (a class shared across screens' css once did this)
+      const hs = [...document.querySelectorAll('#content h1, #content h2, #content h3')].map((e) => [e.textContent, e.getBoundingClientRect()]).filter(([, r]) => r.width && r.height)
+      const over = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+      return hs.flatMap(([t, r], i) => hs.slice(i + 1).filter(([, q]) => over(r, q)).map(([u]) => `${t} × ${u}`))
+    })
+    assert.deepEqual(clash, [], `${name}: headings overlap`)
+    assert.ok(await page.locator(sel).count() > 0, `${name}: ${sel} at ${await page.evaluate(() => location.hash)} after ${ms} ms`)
+    await shoot(page, name, { width, theme })
+  }
+  await page.waitForSelector('#sidebar a')
+  await nav(page, '#/sessions'); await page.waitForSelector('.lrow')
+  await first('overview', '.ovcard .ovitem, .ovcard .ovempty', () => nav(page, '#/overview'))
+  await first('library', '.lrow', () => nav(page, '#/sessions'))
+  await page.locator('.pagehead a', { hasText: 'All' }).first().click()
+  await page.waitForSelector('.lrow')
+
+  // session open: click a row → its step head and context window drawn (D64①); five different rows
+  const rows = await page.locator('.lrow').count()
+  for (let i = 0; i < Math.min(5, rows); i++) {
+    const row = page.locator('.lrow').nth(i)
+    samples.sessionOpen.push(await timed(page, 'replay', null, () => row.click()))
+    if (i < 4) { await page.goBack(); await page.waitForSelector('.lrow') }
+  }
+  await page.waitForLoadState('networkidle')
+  await shoot(page, 'replay', { width, theme })
+
+  // step change ×20 by click, ×20 by arrow key (D64②); bounce between the first and the last step
+  const pos = async () => (await page.textContent('#stepbar .sb-no')).match(/(\d+)\s*\/\s*(\d+)/).slice(1).map(Number)
+  const tStep = Date.now()
+  for (const [kind, by] of [['stepClick', 'click'], ['stepKey', 'key']]) {
+    let dir = -1
+    for (let i = 0; i < 20; i++) {
+      const [n, m] = await pos()
+      if (n === 1) dir = 1
+      if (n === m) dir = -1
+      const prev = await page.textContent('#stepbar .sb-no')
+      const act = by === 'click'
+        ? () => page.click(`#stepbar .sbbtn[data-step="${dir < 0 ? 'prev' : 'next'}"]`)
+        : () => page.keyboard.press(dir < 0 ? 'ArrowLeft' : 'ArrowRight')
+      samples[kind].push(await timed(page, 'step', prev, act))
+    }
+  }
+  const during = b.requests.filter((r) => r.start >= tStep).map((r) => r.url)
+  console.log(`# ${width} ${theme}: requests during 40 step changes: ${during.length}${during.length ? ' · ' + [...new Set(during)].join(' ') : ''}`)
+  await shoot(page, 'replay-step', { width, theme })
+
+  await first('capture', '.crows .crow', () => nav(page, '#/capture'))
+  await first('capture-log', '.crows .lr, .crows .caplog-none', () => nav(page, '#/capture/log'))
+  await nav(page, '#/traffic')
+  await first('traffic', 'a.trow', () => page.locator('.pagehead a', { hasText: /^all$/i }).first().click())
+  await first('host', '.hrow', () => page.locator('a.trow').first().click())
+  await first('request', '.rqd', () => page.locator('.hrow').first().click())
+  await first('storage', '#smain .scard', () => nav(page, '#/settings/storage'))
+  await first('prices', '.ptable tbody tr', () => nav(page, '#/settings/prices'))
+  await first('appearance', '[data-theme-choice]', () => nav(page, '#/settings/appearance'))
+  const other = theme === 'dark' ? 'light' : 'dark'
+  samples.button.push(await timed(page, 'sel', `html[data-theme="${other}"]`, () => page.click(`[data-theme-choice="${other}"]`)))
+  await shoot(page, 'appearance-switched', { width, theme })
+}
+
+for (const width of [1280, 1024]) {
+  for (const theme of ['light', 'dark']) {
+    test(`every screen draws its data with no page error at ${width} in ${theme}`, { skip }, async () => {
+      const b = await withBoard({ bytes: BYTES, width, theme, chromium: gate.chromium })
+      try {
+        await driveEveryScreen(b, { width, theme })
+        assert.deepEqual(b.errors, [])
+      } finally { await b.stop() }
+    })
+  }
+}
+
+test('K-30: with no token the page names `asight board`, draws no navigation and sends nothing after the first 403', { skip }, async () => {
+  const b = await withBoard({ bytes: 0, token: false, chromium: gate.chromium })
+  try {
+    await b.page.waitForSelector('main.forbidden')
+    await b.page.waitForTimeout(4000) // longer than the shortest poll (3 s): a poll that survived the 403 would show here
+    assert.ok((await b.page.textContent('body')).includes(COMMANDS.board))
+    assert.equal(await b.page.locator('#sidebar a, #sidebar nav').count(), 0)
+    const denied = b.requests.filter((r) => r.status === 403)
+    assert.ok(denied.length > 0)
+    const first403 = Math.min(...denied.map((r) => r.t))
+    assert.deepEqual(b.requests.filter((r) => r.start > first403).map((r) => r.url), [])
+    assert.deepEqual(b.errors, [])
+    await shoot(b.page, 'forbidden', { width: 1280, theme: 'light' })
+  } finally { await b.stop() }
+})
+
+// D64④⑥: p50 and p95 next to the line, printed; this run is a baseline — acceptance numbers come from the test machines, not from it (PR 6)
+test.after(() => {
+  const line = { sessionOpen: BOARD_LINES.sessionOpen, stepClick: BOARD_LINES.stepClick, stepKey: BOARD_LINES.stepClick, button: BOARD_LINES.button }
+  for (const [k, v] of Object.entries(samples)) {
+    if (!v.length) continue
+    const { p50, p95 } = stats(v)
+    console.log(`# D64 ${k}: n=${v.length} p50=${p50.toFixed(1)} ms p95=${p95.toFixed(1)} ms line=${line[k]} ms ${p95 <= line[k] ? 'within' : 'OVER'}`)
+  }
+})
