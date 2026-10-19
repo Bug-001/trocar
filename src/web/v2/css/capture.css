@@ -1,0 +1,103 @@
+/* css/capture.css — the 采集 page + 采集记录 (1.9; visual doc §4 lamp / §6 rows). Tokens only, both themes follow. */
+
+/* the lamp: a 6×16 rounded bar, colour = severity; normal never lights (visual doc §4.3). Screen-local until another
+   screen needs it — then it moves to base.css unchanged. */
+.lamp{--c:var(--control-edge);display:inline-block;flex:none;width:6px;height:16px;border-radius:var(--r-pill);background:var(--c);vertical-align:middle;}
+.lamp.bad{--c:var(--bad-lamp);}
+.lamp.warn{--c:var(--warn-lamp);}
+.lamp.note{--c:var(--note-lamp);}
+/* the ok state's quiet dot (1.5 K-03: ok → 状态点 --ok) */
+.capdot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);vertical-align:middle;}
+
+/* the page */
+.capage{display:flex;flex-direction:column;min-height:100%;}
+.capage .pagehead{padding:0 0 10px;}
+.cap-main{flex:1;min-width:0;}
+
+/* the agent table: [gutter] [name] [期望态] [状态句] [右侧] */
+.crows{border-top:1px solid var(--rule);}
+.crow{border-bottom:1px solid var(--rule);}
+.crow-t{display:grid;grid-template-columns:22px minmax(150px,190px) 64px minmax(0,1fr) minmax(180px,230px);column-gap:12px;align-items:center;min-height:46px;padding:2px 0;}
+.crow-t:hover{background:color-mix(in srgb,var(--panel) 55%,transparent);}
+.crow .gut{display:flex;justify-content:center;}
+.crow .nm{display:flex;align-items:center;gap:8px;min-width:0;border:0;background:none;color:var(--ink);font-size:var(--fs-strong);font-weight:500;text-align:left;cursor:pointer;padding:0;border-radius:var(--r-1);}
+.crow .nm:hover .chipname{color:var(--action);}
+.crow .nm .chev{color:var(--ink-3);width:12px;flex:none;}
+.crow .nm:focus-visible .chev{color:var(--ink);}
+.crow .des{font-size:var(--fs-body);color:var(--ink-2);white-space:nowrap;}
+.crow .stt{font-size:var(--fs-strong);line-height:21px;min-width:0;color:var(--ink);text-wrap:pretty;}
+.crow .stt .lead{margin:0;}
+.crow .stt p{margin:1px 0 0;}
+.crow .stt p.fine,.crow .stt .fine{color:var(--ink-2);font-size:var(--fs-cap);}
+.crow .stt-ok{color:var(--ink-2);}
+.crow .stt-dim{color:var(--ink-3);}
+.crow .last{text-align:right;font-size:var(--fs-cap);line-height:18px;white-space:nowrap;}
+.crow .last a{color:var(--ink-2);}
+.crow .last a:hover{color:var(--action);text-decoration:none;}
+.crow .last .c3{color:var(--ink-3);}
+/* the severity colour lives on the leading state word only, never the whole sentence (visual doc) */
+.crow .stt .sw{font-weight:500;}
+.crow .stt-bad .sw{color:var(--bad);}
+.crow .stt-warn .sw{color:var(--warn);}
+/* the expansion: the same grid, a dl under the row */
+.cexp{padding:2px 0 14px;border-top:1px dashed var(--rule-2);}
+.cexp[hidden]{display:none;}
+.exp{display:grid;grid-template-columns:22px minmax(150px,190px) 64px minmax(0,1fr) minmax(180px,230px);column-gap:12px;row-gap:8px;margin:0;}
+.exp dt{grid-column:2 / 4;font-size:var(--fs-cap);color:var(--ink-3);line-height:21px;}
+.exp dd{grid-column:4 / 6;margin:0;font-size:var(--fs-body);line-height:21px;max-width:52em;text-wrap:pretty;}
+.exp dd p{margin:0 0 3px;}
+.exp dd .fine{color:var(--ink-2);font-size:var(--fs-cap);}
+.exp .mono{background:var(--sunk);border-radius:var(--r-1);padding:1px 5px;white-space:nowrap;}
+.capfoot{margin:10px 0 0;font-size:var(--fs-cap);color:var(--ink-3);}
+.capcopy{padding:2px 0 4px;}
+
+/* the blocks under the table (旧采集 / 本机网络环境 / 改动) */
+.cblock{border-top:1px solid var(--rule);padding:12px 0 6px;}
+.cblock .sec-h{font-size:var(--fs-h2);line-height:24px;font-weight:600;margin-bottom:4px;}
+.cblock p{font-size:var(--fs-body);line-height:21px;margin:0 0 3px;}
+.cblock .mono{background:var(--sunk);border-radius:var(--r-1);padding:1px 5px;}
+.cblock .fine{color:var(--ink-2);font-size:var(--fs-cap);}
+
+/* the log (采集记录): the explanation line, a table of failure groups, the install notes, the page-bottom tech details */
+.caplog-bar{padding:0 0 8px;}
+.caplog-say{font-size:var(--fs-cap);color:var(--ink-2);}
+.lr{display:grid;grid-template-columns:minmax(112px,150px) minmax(120px,150px) minmax(0,1fr) 56px 22px;column-gap:12px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--rule);}
+.lr.h{padding:5px 0;font-size:var(--fs-cap);color:var(--ink-3);border-bottom:1px solid var(--rule);}
+.lr .t{font-size:var(--fs-body);color:var(--ink);}
+.lr .ag{display:flex;align-items:center;gap:7px;font-size:var(--fs-body);font-weight:500;min-width:0;}
+.lr .say{font-size:var(--fs-strong);line-height:21px;min-width:0;text-wrap:pretty;}
+.lr .cnt{text-align:right;font-size:var(--fs-body);color:var(--ink-2);white-space:nowrap;}
+.lr .lgo{justify-self:end;border:0;background:none;color:var(--ink-3);font-size:var(--fs-body);cursor:pointer;padding:0 2px;border-radius:var(--r-1);}
+.lr .lgo:hover,.lr .lgo:focus-visible{color:var(--ink);}
+.lr .lx{grid-column:3 / 6;}
+.lr .lx p{font-size:var(--fs-body);margin:0 0 3px;}
+.lr .lx .fine{color:var(--ink-2);font-size:var(--fs-cap);}
+.lr .lx .disc{margin-top:4px;}
+.lr-note{display:grid;grid-template-columns:minmax(112px,150px) minmax(120px,150px) minmax(0,1fr);column-gap:12px;padding:8px 0;border-bottom:1px solid var(--rule);}
+.lr-note .t{font-size:var(--fs-body);color:var(--ink);}
+.lr-note .ag{display:flex;align-items:center;gap:7px;font-size:var(--fs-body);font-weight:500;}
+.lr-note .what{font-size:var(--fs-body);line-height:21px;text-wrap:pretty;}
+.lr-note .mono{background:var(--sunk);border-radius:var(--r-1);padding:1px 5px;}
+.caplog-none{padding:26px 0;font-size:var(--fs-strong);color:var(--ink-2);}
+
+/* narrow: the 期望态 column folds away, the right column drops under the sentence */
+@media (max-width: 1279px) {
+  .crow-t,.exp{grid-template-columns:22px minmax(130px,160px) minmax(0,1fr);}
+  .crow .des{display:none;}
+  .crow .last{grid-column:3;text-align:left;white-space:normal;}
+  .exp dt{grid-column:2;}
+  .exp dd{grid-column:2 / 4;}
+  .lr{grid-template-columns:minmax(96px,120px) minmax(0,1fr) 56px 22px;row-gap:2px;}
+  .lr.h span:nth-child(3){display:none;}
+  .lr .ag{grid-column:2;grid-row:1;}
+  .lr .say{grid-column:2;grid-row:2;}
+  .lr .cnt{grid-column:3;grid-row:1;}
+  .lr .lgo{grid-column:4;grid-row:1;}
+  .lr .lx{grid-column:2 / 5;}
+  .lr-note{grid-template-columns:minmax(96px,120px) minmax(0,1fr);}
+  .lr-note .ag{grid-column:2;grid-row:1;}
+  .lr-note .what{grid-column:2;}
+}
+@media (max-width: 899px) {
+  .lr .lx{grid-column:2 / 6;}
+}

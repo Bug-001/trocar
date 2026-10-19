@@ -16,7 +16,8 @@ import { CONTROL_TOKEN_HEADER } from './off/token-header.mjs';
 import { LOCAL_ENV, QUERY_NAMES } from './query/client.mjs';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
-const WEB_DIR = path.join(SRC, 'web');
+// Named as new URL('./web/', import.meta.url) so test/ci/reachable.test.mjs follows it into every board module.
+const WEB_DIR = path.resolve(fileURLToPath(new URL('./web/', import.meta.url)));
 /** The shared-module allowlist (4.4 静态面): pure, import-closed modules the page and the CLI must agree on, served at
  *  `/<entry>` from `src/<entry>`. Data, not routes: add a line here. */
 export const SHARED = Object.freeze(['cli/words.mjs', 'off/token-header.mjs']);
