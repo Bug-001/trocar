@@ -8,6 +8,9 @@ import { validateFinding, validateTopology } from '../../src/cli/schema.mjs'
 import { NET_CODES, ROUTE_CODES, ROUTE_TRUST_REASONS, STATUS_REASONS, TRUST_REASONS } from '../../src/health/codes.mjs'
 import { FINDINGS_WIN32 } from '../../src/netenv/findings-win32.mjs'
 import { ROWS, facts, proc, proxyOf, form, fwForm, pfacts, MIHOMO, mihomoVpn } from './fixtures/rows.mjs'
+import { proxyPlaces, writtenPlaces } from '../../src/netenv/adopt.mjs'
+import { writeRoutes } from '../../src/collector/core/proxymode/entries.mjs'
+import { world, put } from '../collector/core/proxymode/fixtures/entries-ctx.mjs'
 import { loadHarnesses } from '../../src/collector/harness/index.mjs'
 import { linuxNetFacts } from '../../src/collector/arch/linux/netfacts.mjs'
 import { installedViaCli } from '../cli/fixtures/dispatch-ctx.mjs'
@@ -324,6 +327,7 @@ test('V49 upstream-unreachable: asight on the path with a dead upstream is not p
     setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: SET, key: 'env.HTTPS_PROXY' }]), procs: [proc(4121)] })
   const f = pfacts('claude-code', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [], platform: 'darwin' })
   f.harnesses['claude-code'].proxyPlaces = [place('env.HTTPS_PROXY'), place('env.HTTP_PROXY')]
+  f.harnesses['claude-code'].writtenPlaces = [`${SET}#env.HTTPS_PROXY`]
   const out = findingsOf(f)
   const codes = out.map((x) => x.code)
   assert.ok(codes.includes('upstream-unreachable'), codes.join(','))
@@ -335,6 +339,27 @@ test('V49 upstream-unreachable: asight on the path with a dead upstream is not p
   assert.match(text, /Remove env\.HTTP_PROXY from \/h\/\.claude\/settings\.json/)
   assert.doesNotMatch(text, /HTTPS_PROXY/, 'the key asight wrote is never named as one for the user to remove')
   assert.match(text, /asight off claude-code[\s\S]*asight on claude-code/, 'off, clear your own keys, on')
+})
+
+test('V49 upstream-unreachable, codex\'s dotenv route through the REAL writers: the user\'s own line in $CODEX_HOME/.env is a place, the line asight\'s block wrote is not', async () => {
+  const desc = (await loadHarnesses()).find((d) => d.name === 'codex')
+  const w = world({ os: 'darwin' })
+  for (const fo of desc.proxyMode.forms.filter((x) => x.os.includes('darwin') && x.route === 'env')) w.present(fo)
+  const envFile = desc.proxy.files[0].path({ home: w.home, env: {} })
+  put(envFile, 'HTTPS_PROXY=http://127.0.0.1:7897\n')
+  const res = writeRoutes(desc, w.ctx, () => 'http://127.0.0.1:17991')
+  assert.deepEqual(res.results.map((x) => [x.route, x.ok]), [['env', true]])
+  const places = proxyPlaces(desc, { home: w.home, env: {}, fs })
+  const written = writtenPlaces(w.ctx.manifest, 'codex')
+  const fm = form('codex.cli', { entry: { where: `${envFile}#HTTPS_PROXY`, asight: true, opt_in: false, intact: true }, setting: proxyOf('http://127.0.0.1:17991', [{ kind: 'file', where: envFile, key: 'HTTPS_PROXY' }]), procs: [proc(5530, { name: 'codex app-server' })] })
+  const f = pfacts('codex', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [{ addr: '127.0.0.1', port: 17991, pid: 6120, exe: 'asight-engine' }], platform: 'darwin' })
+  Object.assign(f.harnesses.codex, { proxyPlaces: places, writtenPlaces: written })
+  const u = findingsOf(f).find((x) => x.code === 'upstream-unreachable')
+  assert.ok(u, 'the dead hop is asight\'s upstream')
+  assert.deepEqual(u.places, [{ kind: 'file', path: envFile, key: 'HTTPS_PROXY', format: 'dotenv', scheme: 'http', host: '127.0.0.1', port: 7897 }], 'the user\'s own line, which `off` puts back')
+  assert.deepEqual(validateFinding(u), [])
+  assert.match(u.commands.map((c) => c.run).join('\n'), new RegExp(`Remove the HTTPS_PROXY= line from ${envFile.replace(/[.\\/]/g, '\\$&')}`))
+  assert.equal(places.some((p) => p.port === 17991), false, 'asight\'s own block is no place of the user\'s')
 })
 
 test('V49 proxy-unsupported names the place of the setting and the value to put there, as one sentence (no 「http://…:」 left stuck to the next phrase)', () => {

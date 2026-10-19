@@ -5,6 +5,7 @@
 // stored or sent as JSON holds the redacted URL and a hash (redact.mjs).
 import nodeFs from 'node:fs'
 import { parseJsonc, parseDotenv } from '../collector/core/config-read.mjs'
+import { BLOCK_BEGIN, BLOCK_END, OFF_PREFIX } from '../off/text-edit.mjs'
 import { redactProxyUrl, settingSha, parseProxyUrl } from './redact.mjs'
 import { readNetenvFile } from './index.mjs'
 import { buildTopology } from './topology.mjs'
@@ -57,6 +58,50 @@ export function readProxySetting(desc, { home, env = process.env, fs = nodeFs, p
   return setting
 }
 
+/** The region asight's marked block occupies in a text file, or null: its lines are asight's, never a place of the user's. */
+function blockRange(text) {
+  const b = text.indexOf(BLOCK_BEGIN), e = text.indexOf(BLOCK_END, b + 1)
+  return b >= 0 && e > b ? [b, e + BLOCK_END.length] : null
+}
+
+/**
+ * Every LINE of a dotenv file that sets one of `keys`, as `[{ key, value }]` in the file's order — not the one assignment that wins. asight's block appends its
+ * own assignment after the user's last line (the last wins) and puts the user's lines of the same name out of effect with `OFF_PREFIX`, so the key the agent
+ * reads says nothing of what the user still holds there, and `off` puts their lines back. A line inside asight's block is never a place.
+ */
+function dotenvPlaces(text, keys) {
+  const range = blockRange(text), out = []
+  let at = 0
+  for (const raw of String(text).split('\n')) {
+    const start = at
+    at += raw.length + 1
+    if (range && start >= range[0] && start < range[1]) continue
+    const line = raw.replace(OFF_PREFIX, '') // a line asight commented out is still the user's: `off` brings it back
+    for (const [k, v] of parseDotenv(line)) if (keys.includes(k)) out.push({ key: k, value: v })
+  }
+  return out
+}
+
+/** The places asight itself wrote for a harness (its on-phase manifest items) as `path#key` keys, plus `path#*` for a file asight created whole: a place of
+ *  asight's is never one the user is asked to edit (1.6 §9.6 `places`). One reader for every item shape: a key path (json-key, json-array-item, a registry
+ *  value's name) or the file as a whole; a dotenv block needs no key of its own, its lines are known by its markers. */
+export function writtenPlaces(manifest, harness = null) {
+  const m = manifest && !manifest.unsupported ? manifest : null
+  const out = new Set()
+  for (const it of [...((m && m.entries) || []), ...((m && m.files) || [])]) {
+    if (!it || it.phase !== 'on' || (harness && it.harness !== harness)) continue
+    const path = it.path ?? it.real_path ?? null
+    if (path == null) continue
+    if (Array.isArray(it.keys)) out.add(`${path}#${it.keys.join('.')}`)
+    else if (it.name != null) out.add(`${path}#${it.name}`)
+    if (it.existed_before === false || it.kind === 'owned-file') out.add(`${path}#*`)
+  }
+  return [...out]
+}
+
+/** Is this place one asight wrote? `written` = `writtenPlaces`'s keys. */
+export const isWrittenPlace = (written, p) => !!written && (written.includes(p.kind === 'env' ? p.name : `${p.path}#${p.key}`) || (p.kind !== 'env' && written.includes(`${p.path}#*`)))
+
 /** Every place this harness holds a proxy address right now — not only the one that wins — as `{ kind: 'file', path, key, format, scheme, host, port }` /
  *  `{ kind: 'env', name, scheme, host, port }`, in the descriptor's order (files, then variables). A finding that asks the user to remove a setting by hand
  *  needs the places, plural: the key that wins is one, and the same dead address usually sits in the other spelling beside it (1.6 §9.6 `places`). */
@@ -72,8 +117,7 @@ export function proxyPlaces(desc, { home, env = process.env, fs = nodeFs, paths 
       if (error || data == null) continue
       for (const keys of f.keys) { const v = present(dig(data, keys)); if (v) add({ kind: 'file', path: file, key: keys.join('.'), format: 'json' }, v) }
     } else {
-      const vars = parseDotenv(text)
-      for (const k of f.keys) { const v = present(vars.get(k)); if (v) add({ kind: 'file', path: file, key: k, format: 'dotenv' }, v) }
+      for (const { key, value } of dotenvPlaces(text, f.keys)) { const v = present(value); if (v) add({ kind: 'file', path: file, key, format: 'dotenv' }, v) }
     }
   }
   for (const k of p.env) { const v = present(env[k]); if (v) add({ kind: 'env', name: k }, v) }

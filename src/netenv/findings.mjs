@@ -2,7 +2,7 @@
 // A finding is `{ code, class, harness?, what, why, commands: [{ run, shell }], verify }`. The commands are whole lines with every value filled in (pid, port, path, user): a value that could not be read is
 // written 「不知道 · <原因>」 with the command that reads it, never a `<…>` placeholder. asight's own commands come first, then the application's or the OS's. Nothing here runs anything (R8): `doctor` only
 // prints them. Pure: facts and topology in, findings out.
-import { detectDrift } from './adopt.mjs'
+import { detectDrift, isWrittenPlace } from './adopt.mjs'
 import { hopKey, firstHopAfterAsight, firstHopOff } from './topology-text.mjs'
 import { parseProxyUrl } from './redact.mjs'
 import { trustReasonText } from '../collector/core/codes.mjs'
@@ -203,9 +203,9 @@ export function diagnose({ facts: F, topology: T, harnesses = null, user = null 
     const sysPac = !!((hf.systemProxy && hf.systemProxy.pac) || (hf.forms || []).some((f) => f.systemProxy && f.systemProxy.pac))
     const upstream = Object.values((F.forwarder && F.forwarder.forms) || {}).map((x) => x.upstream).find((u) => u && u !== 'DIRECT')
     const upAddr = upstream ? parseProxyUrl(upstream) : null
-    // the places of the user's OWN that hold an address, for a finding that asks them to remove it by hand: a key asight wrote (its value is the door) is never one of them
-    const asightWheres = new Set((hf.forms || []).map((f) => f.entry && f.entry.where).filter(Boolean))
-    const placesAt = (host, port) => (hf.proxyPlaces || []).filter((p) => p.host === host && String(p.port) === String(port) && !asightWheres.has(p.kind === 'env' ? p.name : `${p.path}#${p.key}`))
+    // the places of the user's OWN that hold an address, for a finding that asks them to remove it by hand: a place asight wrote (its value is the door, and
+    // `off` puts the user's own back) is never one of them — known from this harness's on-phase manifest items (`writtenPlaces`), whatever the format
+    const placesAt = (host, port) => (hf.proxyPlaces || []).filter((p) => p.host === host && String(p.port) === String(port) && !isWrittenPlace(hf.writtenPlaces, p))
     // the doctor's own name for a protocol the upstream cannot take replaces the branch's not-routed (4.8 §10.4: upstream-protocol sits on the proxy-unsupported row)
     const protoForm = (hf.forms || []).find((f) => f.route && f.route.code === 'proxy-unsupported') || null
     for (const r of reasons.filter((x) => !(protoForm && x === 'not-routed'))) add(r, { upPort: upAddr ? upAddr.port : undefined, places: upAddr ? placesAt(upAddr.host, upAddr.port) : [], hint: row && row.reason === r ? row.hint : undefined, pid: row && row.reason === r ? row.pid : undefined, pac: sysPac, fm: formOf(r) })
