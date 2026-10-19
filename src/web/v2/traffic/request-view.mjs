@@ -32,7 +32,7 @@ const maskState = (h, open) => {
 // the old capture's '<redacted>' placeholder says so — that is capture-time masking, not display masking.
 export function headersHtml(headers, { revealed = null } = {}) {
   const list = normHeaders(headers)
-  if (!list) return `<p class="rqd-none">${esc('这条记录里没有记下头')}</p>`
+  if (!list) return `<p class="rqd-none">${esc('This record has no headers recorded')}</p>`
   const open = revealed != null ? String(revealed).toLowerCase() : null
   const rows = list.map((h) => {
     const name = h && h.name != null ? String(h.name) : ''
@@ -119,7 +119,7 @@ function respMarks(ctl, b) {
   const out = []
   if (labelBy(ctl.labels, 'resp-json-reserialized')) out.push(esc(W.RESP_RESERIALIZED))
   if (b && b.kind === 'undecoded') out.push(esc(W.RESP_UNDECODED(b.encoding || '?')))
-  if (b && b.error) out.push(esc(`响应:${b.error}`))
+  if (b && b.error) out.push(esc(`Response: ${b.error}`))
   else if (b && b.interrupted) out.push(esc(W.RESP_PARTIAL))
   // asight's own additions (the off switch's Connection: close): the server's words, on the response side (#45 lands the label)
   for (const l of ctl.labels || []) if (l && l.id && l.id.startsWith('asight')) out.push(esc(`${W.ASIGHT_ADDED} · ${l.label || l.id}`))
@@ -184,7 +184,7 @@ export function requestDetailHtml(rec, { ref = null, revealed = null, foldReques
 
   const tech = techDetailsHtml([
     ...(ref ? [['raw_ref', ref]] : []),
-    ...(ctl.omitted ? [['留在了源记录里', ctl.omitted.join(', ')]] : []),
+    ...(ctl.omitted ? [['left in the source record', ctl.omitted.join(', ')]] : []),
     ...(reqBody.decoded_from || (ctl.req && ctl.req.decoded_from) ? [['decoded_from', (ctl.req && ctl.req.decoded_from) || reqBody.decoded_from]] : []),
     ...(reqBody.unknownKind ? [['req.kind', String(reqBody.unknownKind)]] : []),
     ...(ctl.host ? [['SNI', ctl.host]] : []),

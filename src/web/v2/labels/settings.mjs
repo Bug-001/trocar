@@ -3,35 +3,35 @@
 // (invariant 3 — those arrive with the data).
 
 // 卡名 (the page head carries only the screen's name; these are the cards under it)
-export const CARD_DISK = '磁盘', CARD_PRICE = '单价', CARD_UNPRICED = '没有单价的模型', CARD_THEME = '明暗'
+export const CARD_DISK = 'Disk', CARD_PRICE = 'Unit prices', CARD_UNPRICED = 'Models without a unit price', CARD_THEME = 'Theme'
 
 // 磁盘卡
-export const DISK_TOTAL = 'asight 占用', DISK_TOTAL_FLOOR = '至少', // unreadable paths make the total a floor
-  DISK_PER_DAY = '每天约增加', DISK_PER_DAY_AS_OF = '截至', STORE_TOO_OLD = '库里最新的调用早于 24 小时前',
-  CAPTURE_PAGE_LINE = '各 agent 的开关、点名项和本机网络环境在采集页', CAPTURE_PAGE_HREF = '#/capture',
-  BAD_FILES = (n) => `有 ${n} 个采集文件读的时候出了问题`, BAD_FILES_SHOW = '看是哪些', POP_FLOOR = '起'
+export const DISK_TOTAL = 'Used by asight', DISK_TOTAL_FLOOR = 'at least', // unreadable paths make the total a floor
+  DISK_PER_DAY = 'Estimated growth per day', DISK_PER_DAY_AS_OF = 'as of', STORE_TOO_OLD = 'The newest stored call is older than 24 hours',
+  CAPTURE_PAGE_LINE = 'Each agent\'s switch, the named items and the local network environment are on the capture page', CAPTURE_PAGE_HREF = '#/capture',
+  BAD_FILES = (n) => `${n} capture files had a problem when read`, BAD_FILES_SHOW = 'Show which', POP_FLOOR = 'from'
 
 // 磁盘上的文件(技术细节的段名)与磁盘用途词(键 = src/query/disk.mjs : DISK_GROUPS,顺序同)
-export const DISK_GROUP_NAME = Object.freeze({ captures: '采集文件', sealed: '封存文件', sessions: '会话副本', logs: '日志', other: '其他' })
-export const FILES_DIR = '目录', FILES_SEAL_RATIO = '压缩保存比',
-  FILES_SEAL_NONE = '没有可读的封存文件', FILES_UNREADABLE = '读不了的', FILES_UNREADABLE_NOTE = '这些路径没算进总数,总数是下限',
-  FILES_CAPTURE_TROUBLE = '采集文件读的问题'
+export const DISK_GROUP_NAME = Object.freeze({ captures: 'capture files', sealed: 'sealed files', sessions: 'session copies', logs: 'logs', other: 'other' })
+export const FILES_DIR = 'Directory', FILES_SEAL_RATIO = 'Sealed compression ratio',
+  FILES_SEAL_NONE = 'No readable sealed files', FILES_UNREADABLE = 'Unreadable', FILES_UNREADABLE_NOTE = 'These paths are not in the total, so the total is a floor',
+  FILES_CAPTURE_TROUBLE = 'Capture file read problems'
 
-export const RETRY = '重试'
+export const RETRY = 'Retry'
 
 // 价格页
-export const PRICE_NOTE = '估价 = 用量 × 这里的单价,是本地估算,不是账单 · 美元 / 百万 token',
-  PRICE_FROM = (p) => `来自 ${p}`, PRICE_DEFAULT = '用的是 asight 自带的默认单价',
-  COL_KEY = '模型名包含', COL_IN = '输入', COL_OUT = '输出', COL_WRITE = '写缓存', COL_READ = '读缓存',
-  PRICE_READ_FAIL = '读不到单价表', PRICE_BAD_SHAPE = '单价表的格式不对',
-  UNPRICED_AS_OF = '截至', UNPRICED_SESSIONS = (n) => `用在 ${n} 个会话里`,
-  UNPRICED_NONE = '用到的模型都有单价', UNPRICED_NO_MODEL = '没有模型名',
-  COPY_TEMPLATE = '复制模板',
-  TEMPLATE_HINT = '把四个 null 换成每百万 token 的美元单价,依次是输入、输出、写缓存、读缓存;刷新页面后生效',
-  TECH_MATCH = '先找和模型名完全相同的一行;没有就取模型名里包含的最长的一个键;按模型名里的字匹配,不分服务商',
-  TECH_WRITE_ONE = '写缓存只有一个单价,服务商按缓存时长分价时,估价按这一个价算',
-  TECH_PRICING_PATH = '服务端读环境变量 ASIGHT_PRICING 指的文件,没设时读它的默认位置;改完文件,刷新页面后生效'
+export const PRICE_NOTE = 'Estimated cost = usage × the unit prices here; a local estimate, not a bill · USD per million tokens · read-only on the board; to change a price, edit the price file',
+  PRICE_FROM = (p) => `From ${p}`, PRICE_DEFAULT = 'Using asight\'s built-in default unit prices',
+  COL_KEY = 'Model name contains', COL_IN = 'input', COL_OUT = 'output', COL_WRITE = 'cache write', COL_READ = 'cache read',
+  PRICE_READ_FAIL = 'Could not read the price table', PRICE_BAD_SHAPE = 'The price table has the wrong shape',
+  UNPRICED_AS_OF = 'as of', UNPRICED_SESSIONS = (n) => `used in at least ${n} sessions`,
+  UNPRICED_NONE = 'Every model in use has a unit price', UNPRICED_NO_MODEL = 'no model name',
+  COPY_TEMPLATE = 'Copy template',
+  TEMPLATE_HINT = 'Replace the four nulls with USD per million tokens: input, output, cache write, cache read. Takes effect after a page refresh.',
+  TECH_MATCH = 'An exact model-name row wins; otherwise the longest key contained in the model name. Matching is on the model name only, not the vendor.',
+  TECH_WRITE_ONE = 'Cache write has one unit price; when a vendor prices by cache duration, the estimate still uses this one price.',
+  TECH_PRICING_PATH = 'The server reads the file named by the ASIGHT_PRICING environment variable, or its default location when unset. The board only reads it; edit the file, then refresh the page.'
 
 // 外观页
-export const THEME_SYSTEM = '跟随系统', THEME_LIGHT = '亮', THEME_DARK = '暗',
-  THEME_UNSTORABLE = '这个浏览器不让存这个选择,刷新后回到跟随系统'
+export const THEME_SYSTEM = 'System', THEME_LIGHT = 'Light', THEME_DARK = 'Dark',
+  THEME_UNSTORABLE = 'This browser does not allow saving the choice; after a refresh it returns to System'

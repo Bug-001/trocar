@@ -48,12 +48,12 @@ export function fileProblemCount(source) {
 // filesDetail(report, source) — the 磁盘上的文件 disclosure: facts only, no buttons (nothing on the board deletes)
 export function filesDetail(report, source) {
   const d = report.disk || {}, seal = report.seal || {}
-  const rows = [[W.FILES_DIR, `${d.home || '—'} · ${d.files ?? '—'} 个文件`]]
+  const rows = [[W.FILES_DIR, `${d.home || '—'} · ${d.files ?? '—'} files`]]
   for (const [g, name] of Object.entries(W.DISK_GROUP_NAME)) {
     const v = d.groups && d.groups[g]
-    if (v) rows.push([name, `${bytes(v.bytes)} · ${v.files} 个文件`])
+    if (v) rows.push([name, `${bytes(v.bytes)} · ${v.files} files`])
   }
-  rows.push([W.FILES_SEAL_RATIO, seal.ratio != null ? `${Number(seal.ratio).toFixed(3)} · 估计 · ${seal.files} 个压缩保存文件` : W.FILES_SEAL_NONE])
+  rows.push([W.FILES_SEAL_RATIO, seal.ratio != null ? `${Number(seal.ratio).toFixed(3)} · estimate · ${seal.files} sealed files` : W.FILES_SEAL_NONE])
   const unread = [...(d.unreadable || []), ...(seal.unreadable || [])]
   if (unread.length) {
     rows.push([W.FILES_UNREADABLE, W.FILES_UNREADABLE_NOTE])
@@ -97,7 +97,7 @@ export function mount(el, ctx) {
 
   function paint() {
     if (readFail) {
-      $('#smain').innerHTML = `<div class="scard"><p class="err">${esc('读不出这一页')} · ${esc(readFail.error || 'HTTP ' + readFail.status)} · <a href="#/settings/storage">${W.RETRY}</a></p></div>`
+      $('#smain').innerHTML = `<div class="scard"><p class="err">${esc('Could not read this page')} · ${esc(readFail.error || 'HTTP ' + readFail.status)} · <a href="#/settings/storage">${W.RETRY}</a></p></div>`
       return
     }
     if (!report) return

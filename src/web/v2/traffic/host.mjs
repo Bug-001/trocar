@@ -55,7 +55,7 @@ export function retentionHtml(row, harness) {
   if (!row || !row.retention) return ''
   if (row.retention === 'log') {
     const href = formatHash({ screen: 'settings-storage', params: { h: harnessKey(harness), class: row.class || '' } })
-    return `<a class="rmark" href="${esc(href)}" title="到存储设置里看这一类保存什么">${esc(W.RETENTION_MARK.log.label)} ›</a>`
+    return `<a class="rmark" href="${esc(href)}" title="See what this class keeps in the storage settings">${esc(W.RETENTION_MARK.log.label)} ›</a>`
   }
   if (row.retention === 'legacy-meta') return `<span class="rmark" title="${esc(W.RETENTION_MARK['legacy-meta'].tip)}">${esc(W.RETENTION_MARK['legacy-meta'].label)}</span>`
   return ''
@@ -83,8 +83,8 @@ export function rowHtml(r, { selected = false, unmatched = null, harness, window
     `<span class="cell class">${esc(w.word)}</span>` +
     `<span class="cell num">${r.sent_bytes != null ? esc(bytes(r.sent_bytes)) : esc(W.UNRECORDED)}</span>` +
     `<span class="cell num">${r.received_bytes != null ? esc(bytes(r.received_bytes)) : esc(W.UNRECORDED)}</span>` +
-    `<span class="cell marks">${retentionHtml(r, harness)}${r.error ? `<span class="rmark fail" title="具体状态在请求详情里">${esc(W.FAILED)}</span>` : ''}</span>` +
-    `<span class="cell go">${replay ? `<a class="replay" href="${esc(replay)}" title="落到这一步">${esc(W.OPEN_IN_REPLAY)}</a>` : ''}</span>` +
+    `<span class="cell marks">${retentionHtml(r, harness)}${r.error ? `<span class="rmark fail" title="The exact status is in the request details">${esc(W.FAILED)}</span>` : ''}</span>` +
+    `<span class="cell go">${replay ? `<a class="replay" href="${esc(replay)}" title="Go to this step">${esc(W.OPEN_IN_REPLAY)}</a>` : ''}</span>` +
     `</a>`
 }
 
@@ -111,7 +111,7 @@ export function captionHtml(list, { harness, window, cls = null } = {}) {
     items: CLASS_IDS.map((id) => ({ label: W.classWord(id), href: hrefOf({ class: id }) })),
   })
   const chips = cls
-    ? [`<a class="fchip" href="${esc(hrefOf({ class: null }))}" title="去掉这个筛选">${esc(W.FILTER_CLASS)}:${esc(W.classWord(cls))} <span class="x" aria-hidden="true">×</span></a>`,
+    ? [`<a class="fchip" href="${esc(hrefOf({ class: null }))}" title="Remove this filter">${esc(W.FILTER_CLASS)}:${esc(W.classWord(cls))} <span class="x" aria-hidden="true">×</span></a>`,
       `<span class="cap-item cap-note">${esc(W.CLASS_FILTER_NOTE(W.classWord(cls)))}</span>`]
     : []
   return `<div class="tcap">${parts.join('')}<div class="tfilters">${classMenu}${chips.join('')}</div></div>`
@@ -128,11 +128,11 @@ export function mount(el, ctx) {
   // a window change keeps class and drops ref (1.10 host-page head); the crumbs' links carry the window too
   const winHref = (w) => formatHash({ screen: 'traffic-host', harness, host, params: { window: w, ...(q.cls ? { class: q.cls } : {}) } })
   const crumbs = () => ([
-    { label: '流量', href: formatHash({ screen: 'traffic', params: { window: q.window } }) },
+    { label: 'Traffic', href: formatHash({ screen: 'traffic', params: { window: q.window } }) },
     { label: harnessName(harness), href: formatHash({ screen: 'traffic', params: { window: q.window, h: harness } }) },
     { label: host },
   ])
-  const scope = () => ({ label: '时间窗', value: q.window, options: W.WINDOW_LABEL.map((o) => ({ ...o, href: winHref(o.value) })) })
+  const scope = () => ({ label: 'window', value: q.window, options: W.WINDOW_LABEL.map((o) => ({ ...o, href: winHref(o.value) })) })
   const listEl = () => el.querySelector('#hlist')
 
   function paint() {
@@ -146,9 +146,9 @@ export function mount(el, ctx) {
       body = a.reason ? stateHtml('reason', a) : stateHtml('error', { error: a.error })
     } else if (!list.rows.length) body = `<div class="tstate">${esc(q.cls ? W.EMPTY_HOST_CLASS(W.classWord(q.cls)) : W.EMPTY_HOST)}</div>`
     else body = captionHtml({ ...list, host }, { harness, window: q.window, cls: q.cls }) +
-      `<div class="hhead" aria-hidden="true"><span class="cell">时间</span><span class="cell-endpoint">端点</span><span class="cell class">类别</span>` +
+      `<div class="hhead" aria-hidden="true"><span class="cell">time</span><span class="cell-endpoint">endpoint</span><span class="cell class">class</span>` +
       `<span class="cell num">${esc(W.COL.sent)}</span><span class="cell num">${esc(W.COL.recv)}</span><span class="cell marks"></span><span class="cell go"></span></div>` +
-      `<div class="hlist" id="hlist" role="list" aria-label="请求"></div>`
+      `<div class="hlist" id="hlist" role="list" aria-label="Requests"></div>`
     // the detail: a column beside the list at the breakpoint, a drawer over it below; without a selection the column
     // says what it waits for and the drawer stays closed
     const detailBody = !ref
@@ -156,7 +156,7 @@ export function mount(el, ctx) {
       : detailHtml()
     el.innerHTML = `<div class="thost ${mode}">${head}<div class="tbody">` +
       `<div class="tlist">${body}</div>` +
-      `<aside class="hdetail${ref ? ' open' : ''}" id="hdetail" aria-label="请求详情">${detailBody}</aside>` +
+      `<aside class="hdetail${ref ? ' open' : ''}" id="hdetail" aria-label="Request details">${detailBody}</aside>` +
       `</div></div>`
     paintRows()
     const le = listEl()

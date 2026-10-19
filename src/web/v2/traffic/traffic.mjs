@@ -73,13 +73,13 @@ export function isNewHost(row, harnessSince, now) {
   return first > now - DAY_MS && first <= now && since < now - DAY_MS
 }
 
-// 「截至 10月6日 14:02」 — the year only when it is not this one
+// 「as of 10/6 14:02」 — the year only when it is not this one (2025/10/6 14:02)
 export function asOfText(ts, now = Date.now()) {
   if (ts == null || ts === '') return ''
   const d = new Date(ts)
   if (isNaN(d)) return ''
   const n = new Date(now), p = (x) => String(x).padStart(2, '0')
-  return `${d.getFullYear() === n.getFullYear() ? '' : d.getFullYear() + '年'}${d.getMonth() + 1}月${d.getDate()}日 ${p(d.getHours())}:${p(d.getMinutes())}`
+  return `${d.getFullYear() === n.getFullYear() ? '' : d.getFullYear() + '/'}${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 export const readAtText = fmtTime
 
@@ -120,7 +120,7 @@ export function rowHtml(r, model, first) {
   const clsHtml = classes.slice(0, 3).map(([id, n]) => {
     const w = classWord(id, r.harness, model.unmatched)
     return w.unclassified
-      ? `${esc(w.word)} ${n} ${infoButton({ label: '为什么读作未分类', title: w.word, body: esc(W.UNCLASSIFIED_TIP) })}`
+      ? `${esc(w.word)} ${n} ${infoButton({ label: 'Why unclassified', title: w.word, body: esc(W.UNCLASSIFIED_TIP) })}`
       : `${esc(w.word)} ${n}`
   }).join('<span class="sep-dot" aria-hidden="true"> · </span>') + (classes.length > 3
     ? `<span class="more-classes" title="${esc(classes.slice(3).map(([id, n]) => `${classWord(id, r.harness, model.unmatched).word} ${n}`).join(' · '))}"> …</span>` : '')
@@ -185,10 +185,10 @@ export function filterBarHtml(model, { h = [], cls = null } = {}) {
     ],
   })
   const chips = [
-    ...h.map((id) => `<a class="fchip" href="${esc(hrefOf({ h: null }))}" title="去掉这个筛选">${esc(W.FILTER_AGENT)}:${esc(harnessName(id))} <span class="x" aria-hidden="true">×</span></a>`),
+    ...h.map((id) => `<a class="fchip" href="${esc(hrefOf({ h: null }))}" title="Remove this filter">${esc(W.FILTER_AGENT)}:${esc(harnessName(id))} <span class="x" aria-hidden="true">×</span></a>`),
   ]
   if (cls) {
-    chips.push(`<a class="fchip" href="${esc(hrefOf({ class: null }))}" title="去掉这个筛选">${esc(W.FILTER_CLASS)}:${esc(W.classWord(cls))} <span class="x" aria-hidden="true">×</span></a>`)
+    chips.push(`<a class="fchip" href="${esc(hrefOf({ class: null }))}" title="Remove this filter">${esc(W.FILTER_CLASS)}:${esc(W.classWord(cls))} <span class="x" aria-hidden="true">×</span></a>`)
     chips.push(`<span class="cap-item cap-note">${esc(W.CLASS_FILTER_NOTE(W.classWord(cls)))}</span>`)
   }
   return `<div class="tfilters">${agentMenu}${classMenu}${chips.join('')}</div>`
@@ -199,8 +199,8 @@ export function tableHtml(model, { h = [], cls = null, cover = [] } = {}) {
   const head = `<div class="trow thead" aria-hidden="true"><span class="gut"></span><span class="nm">${esc(W.COL.agent)}</span>` +
     `<span class="cell-host">${esc(W.COL.host)}</span><span class="cell-first">${esc(W.COL.first)}</span>` +
     `<span class="cell num">${esc(W.COL.requests)}</span>` +
-    `<span class="cell num">${esc(W.COL.sent)}${infoButton({ label: '发出的口径', title: W.COL.sent, body: esc(W.BYTES_TIP) })}</span>` +
-    `<span class="cell num">${esc(W.COL.recv)}${infoButton({ label: '收回的口径', title: W.COL.recv, body: esc(W.BYTES_TIP) })}</span>` +
+    `<span class="cell num">${esc(W.COL.sent)}${infoButton({ label: 'What sent counts', title: W.COL.sent, body: esc(W.BYTES_TIP) })}</span>` +
+    `<span class="cell num">${esc(W.COL.recv)}${infoButton({ label: 'What received counts', title: W.COL.recv, body: esc(W.BYTES_TIP) })}</span>` +
     `<span class="cell classes">${esc(W.COL.classes)}</span></div>`
   const groups = model.groups.map((g) => g.rows.map((r, i) => rowHtml(r, model, i === 0)).join('')).join('')
   return `<div class="tcap">${captionHtml(model, { cover })}${filterBarHtml(model, { h, cls })}</div>` + head + groups + totalRowHtml(model)
@@ -210,7 +210,7 @@ export function tableHtml(model, { h = [], cls = null, cover = [] } = {}) {
 export function stateHtml(kind, payload = {}) {
   if (kind === 'loading') return `<div class="tstate">${esc(W.LOADING)}</div>`
   if (kind === 'empty') return `<div class="tstate">${esc(payload.cls ? W.EMPTY_WINDOW_CLASS(W.classWord(payload.cls)) : W.EMPTY_WINDOW)}</div>`
-  if (kind === 'error') return `<div class="tstate"><p>${esc(W.READ_FAILED(payload.error || '不知道原因'))}</p><button type="button" class="tbtn" data-act="retry">${esc(W.RETRY)}</button></div>`
+  if (kind === 'error') return `<div class="tstate"><p>${esc(W.READ_FAILED(payload.error || 'reason not known'))}</p><button type="button" class="tbtn" data-act="retry">${esc(W.RETRY)}</button></div>`
   return ''
 }
 
@@ -220,14 +220,14 @@ export function mount(el, ctx) {
   let dead = false, model = null, cover = [], unmatched = null, readAt = null, err = null
   let q = queryOf(router.current().params)
   const scope = () => ({
-    label: '时间窗', value: q.window,
+    label: 'window', value: q.window,
     options: W.WINDOW_LABEL.map((o) => ({
       ...o,
       href: formatHash({ screen: 'traffic', params: { window: o.value, ...(q.h.length ? { h: q.h.join(',') } : {}), ...(q.cls ? { class: q.cls } : {}) } }),
     })),
   })
   const paint = () => {
-    const head = pageHeadHtml({ name: '流量', scope: scope(), readAt })
+    const head = pageHeadHtml({ name: 'Traffic', scope: scope(), readAt })
     let body = ''
     if (err && (!model || model.state !== 'table')) body = stateHtml('error', { error: err })
     else if (!model) body = stateHtml('loading')
