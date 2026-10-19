@@ -80,7 +80,7 @@ const jsonBody = (req) => new Promise((resolve) => {
 
 let named = null; // the query core, imported on the first /api request (it is most of a cold start)
 
-export function createServer({ home, token, query, uid = process.getuid?.(), fs, now, env } = {}) {
+export function createServer({ home, token, query, uid = process.getuid?.(), platform = process.platform, fs, now, env } = {}) {
   const files = loadStatic();
   const want = Buffer.from(String(token ?? ''));
   const tokenOk = (got) => {
@@ -100,6 +100,8 @@ export function createServer({ home, token, query, uid = process.getuid?.(), fs,
       'GET status': ({ res }) => query.control({ verb: 'status', res }),
       'POST classes': post('classes'),
       'POST harness': post('harness'),
+      // Set up is install's own carriers step (4.11 P4b), which is macOS / Windows only: on Linux the row is absent, so 405
+      ...(platform === 'darwin' || platform === 'win32' ? { 'POST setup': post('setup') } : {}),
     };
 
   async function api(req, res, url) {

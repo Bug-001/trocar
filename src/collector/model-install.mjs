@@ -59,7 +59,7 @@ function usersFileWhy(file, { fs = nodeFs, owns }) {
 }
 
 /** runInstall({ os, home, env, harnesses, custody, rootStore, ctx, owns, … }) → { manifest, fp256, items, carriers, pending, problems, exit }. See the header. */
-export async function runInstall({ os, home, env = process.env, harnesses, custody, rootStore, ctx, owns, installHelper = null, interactive = false, wrapperKit = null, renderHook = null, facts = {}, unit = null, nodeRoots = tls.rootCertificates, fs = nodeFs, now = () => new Date() }) {
+export async function runInstall({ os, home, env = process.env, harnesses, custody, rootStore, ctx, owns, installHelper = null, interactive = false, wrapperKit = null, renderHook = null, facts = {}, unit = null, only = null, nodeRoots = tls.rootCertificates, fs = nodeFs, now = () => new Date() }) {
   const dir = collectorHome(path.join(home, '.asight'))
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
@@ -158,8 +158,8 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   } else if (storeRec && asked && !rootPending) { storeRec.installed_at = now().toISOString(); save() } // trusted only now (an earlier add left it pending): the carrier time is now (P11 ③)
   said('root-store', rootPending ? rootPending.state : inStore.present ? 'intact' : 'added')
 
-  // c · the carriers of every present form (P4)
-  for (const desc of harnesses.filter((d) => d.proxyMode)) {
+  // c · the carriers of every present form (P4) — of one harness's only, for the board's Set up (4.4 §控制面); the others' stay as they are
+  for (const desc of harnesses.filter((d) => d.proxyMode && (!only || d.name === only))) {
     const pm = desc.proxyMode
     const forms = pm.forms.filter((f) => f.os.includes(os) && isPresent(f, ctx))
     if (!forms.length) continue

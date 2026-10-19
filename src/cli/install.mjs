@@ -32,6 +32,15 @@ const RISK = 'Any program running as you can ask asight to issue a trusted certi
 export async function runInstallCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set()
   for (const a of argv) { if (!FLAGS.has(a)) { io.err(`asight install: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: it installs for every agent found on this machine'}\n${USAGE}`); return EXIT.usage } flags.add(a) }
+  return install({ io, env, home, platform, deps, flags })
+}
+
+/**
+ * install({ io, env, home, platform, deps, flags, only }) → exit — the body of `asight install` after its arguments, for the CLI and the board.
+ * `only: <harness>` is the board's Set up (4.4 §控制面, D65④): the plan is that harness's missing carriers, and the run places that harness's
+ * carriers only; the root, its custody, asight-off and the login entry are install's own steps, read back when in place (V67). The CLI never passes it.
+ */
+export async function install({ io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {}, flags, only = null }) {
   const json = flags.has('--json')
   const lines = [] // §1.2: with --json stderr stays empty — the plan is a key of the one document on stdout
   const say = json ? (s) => lines.push(s) : io.out
@@ -58,7 +67,7 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     const b = deps.backends || await backendsFor({ os: platform, home, run: deps.exec || null, env, fs })
     const harnesses = deps.harnesses || await (await import('../collector/harness/index.mjs')).loadHarnesses()
     const ctx = sourcesCtx({ os: platform, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
-    const rows = planInstall({ os: platform, harnesses, ctx })
+    const rows = planInstall({ os: platform, harnesses, ctx }).filter(await missingOf(only, { platform, harnesses, ctx, home, fs }))
     // the login entry is install's (D61: registered AND started here, 4.11 §1 install 7; 4.9 §4, 4.8 §7): the arch's unit, or the test's `deps.unit`
     const unit = deps.unit !== undefined ? deps.unit : (await (await import('../collector/daemon.mjs')).loadArch(platform)).unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) })
     const carrierOf = (r) => (r.carrier === 'root'
@@ -67,27 +76,27 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
         ? `${r.paths.map((p) => tilde(p, home)).join(', ')}${r.keys ? `: ${r.keys.join('.')}` : ''}`
         : `path not known yet: the place of its ${r.carrier} could not be resolved on this machine`)
     const planned = [
-      { what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" },
+      ...(only ? [] : [{ what: 'root', detail: "this machine's own root certificate, trusted for your user (the system asks you once; the key cannot be exported)" }]),
       // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
       ...[...rows.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
         .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, what: group[0].harness, detail: carrierOf(group[0]) })),
       // V85: asight's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
-      { what: 'asight', detail: `${tilde(path.join(home, '.asight'), home)}${platform === 'win32' ? '\\' : '/'}: asight's own files (its root certificate and key, the install record, and ${tilde(standalonePath(home), home)}, the undo that works without this source tree)` },
+      ...(only ? [] : [{ what: 'asight', detail: `${tilde(path.join(home, '.asight'), home)}${platform === 'win32' ? '\\' : '/'}: asight's own files (its root certificate and key, the install record, and ${tilde(standalonePath(home), home)}, the undo that works without this source tree)` }]),
       // D61 (1.6 §3.2 step 5, 4.11 §1 install 7): the login entry is a file of YOURS outside asight's tree, so it is its own line (V85), and the plan says a daemon runs from now on
-      ...(unit ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\asight\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (asight uninstall takes it out again)` }] : []),
+      ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\asight\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (asight uninstall takes it out again)` }] : []),
     ]
     say(fit([`asight install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
       ...pairs(planned.map((p) => [p.what, p.detail])),
-      ...(rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
+      ...(rows.length ? [] : [only ? `${only} has every certificate carrier it needs: there is nothing to set up.` : 'No agent was found on this machine: only the root is installed.']),
       ...wrap(COST), ...wrap(RISK)]).join('\n'))
-    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned }, null, 2)); return EXIT.ok }
+    if (flags.has('--dry-run')) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), dry_run: true, planned, ...(only && !planned.length ? { notes: [`${only}: nothing to set up`] } : {}) }, null, 2)); return EXIT.ok }
     if (!flags.has('--yes')) {
       if (json || !isInteractive(io)) return needsYes(io, json, planned)
       if (!(await confirm({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
     }
     const r = await locked(async () => {
       const r = await runInstall({ os: platform, home, env, harnesses, custody: b.custody, rootStore: b.rootStore, installHelper: b.installHelper, interactive: isInteractive(io),
-        wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) })
+        wrapperKit: b.wrapperKit, facts: b.facts, ctx, unit, only, owns: deps.owns || ownsBy({ os: platform, home, fs }), renderHook, fs, ...(deps.now ? { now: deps.now } : {}) })
       const { row } = await boardPortRow(home, fs) // before the daemon starts below: it reads the port, never picks one
       if (row) { r.pending.push(row); r.exit = 1 }
       return r
@@ -100,7 +109,7 @@ export async function runInstallCli(argv, { io, env = process.env, home = nodeOs
     if (dmn.problems.length) r.exit = 1
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, ...(unit ? { autostart: { entry: platform === 'win32' ? '\\asight\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'asight install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, ...(unit ? { autostart: { entry: platform === 'win32' ? '\\asight\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
       planned, commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
     const dir = path.join(home, '.asight', 'collector')
@@ -189,6 +198,16 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
     'Next: asight on',
     `If asight itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
   return board ? EXIT.incomplete : EXIT.ok
+}
+
+// Set up (only): a row of the plan is one of that harness's forms whose own carrier install has not placed (setupOf's `missing`, the judgement
+// status and on read); without `only`, every row
+async function missingOf(only, { platform, harnesses, ctx, home, fs }) {
+  if (!only) return () => true
+  const [{ setupOf }, { readManifest }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/trust/journal.mjs')])
+  const manifest = readManifest(path.join(home, '.asight', 'collector'), fs)
+  const forms = new Set(setupOf(harnesses.find((d) => d.name === only), { os: platform, manifest, ctx, fs }).missing.map((x) => x.form))
+  return (r) => r.harness === only && forms.has(r.form)
 }
 
 /** The board's port (4.4 §Plan 「端口」), chosen once by install: none free (or the file cannot be written) is a pending row with the reason, never a throw. */

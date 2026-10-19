@@ -61,4 +61,22 @@ export const VERBS = Object.freeze({
     }
     return planThenConfirm({ dryRun: () => runOnce(true), run: () => runOnce(false), confirm })
   },
+  /** POST /control/setup: `asight install`'s own function for one harness (only), planned then confirmed (D65④). Its plan is that harness's missing
+   *  carriers ([] when it has them all); the root and the login entry are install's steps, read back when in place, asked as install asks when not —
+   *  a dialog nobody answered is a `pending` row carrying `asight install`, the harness's carriers placed all the same (4.4 「Set up 的三件实话」). */
+  async setup({ harness, confirm }, { home, deps }) {
+    const [{ resolveHarnesses }, { newReceipt }, { install }] = await Promise.all([import('../cli/harness-names.mjs'), import('../cli/schema.mjs'), import('../cli/install.mjs')])
+    const named = typeof harness === 'string' ? resolveHarnesses([harness]) : { ok: false }
+    if (!named.ok || named.ids.length !== 1) return { status: 400, doc: { error: `harness must be one of the harness names, not ${JSON.stringify(harness)}` } }
+    const out = [], err = []
+    const io = { out: (s) => out.push(s), err: (s) => err.push(s), stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: { isTTY: false } }
+    const runOnce = async (dryRun) => {
+      out.length = err.length = 0
+      try {
+        await install({ io, env: deps.env || process.env, home: path.dirname(home), platform: deps.platform || process.platform, deps: { script: SCRIPT, ...deps }, flags: new Set(['--json', dryRun ? '--dry-run' : '--yes']), only: named.ids[0] })
+        return out.length ? JSON.parse(out.at(-1)) : { ...newReceipt('install'), ok: false, notes: [...err] } // a refusal said on stderr only (root, op.lock)
+      } catch (e) { return { ...newReceipt('install'), ok: false, notes: [String((e && e.message) || e)] } }
+    }
+    return planThenConfirm({ dryRun: () => runOnce(true), run: () => runOnce(false), confirm })
+  },
 })
