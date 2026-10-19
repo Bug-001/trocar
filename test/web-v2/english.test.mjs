@@ -12,7 +12,6 @@ import { views } from '../netenv/fixtures/write-scan.mjs'
 const REPO = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const V2 = path.join(REPO, 'src', 'web', 'v2')
 const GLOSSARY = path.join(V2, 'labels', 'glossary.md')
-const TODO = 'the English pass'
 
 const walk = (dir, ext) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
   const p = path.join(dir, e.name)
@@ -37,7 +36,7 @@ test('CJK scanner: a planted CJK string literal is caught, a CJK comment is not'
   assert.deepEqual(hits.map((h) => [h.line, h.text]), [[2, '会话']])
 })
 
-test('no CJK in the board\'s code, html or css content (D58①)', { todo: TODO }, () => {
+test('no CJK in the board\'s code, html or css content (D58①)', () => {
   const files = [...walk(V2, '.mjs'), path.join(V2, 'index.html'), ...walk(V2, '.css')]
   const hits = files.flatMap((f) => cjkIn(f, fs.readFileSync(f, 'utf8')))
   assert.equal(hits.length, 0, `CJK in user text:\n${report(hits)}`)
@@ -52,7 +51,7 @@ const strings = (v, seen = new Set()) => {
   return Object.values(v).flatMap((x) => strings(x, seen))
 }
 
-test('label strings carry no section, decision or K number, source path or `undefined` (D58②)', { todo: TODO }, async () => {
+test('label strings carry no section, decision or K number, source path or `undefined` (D58②)', async () => {
   const hits = []
   for (const f of walk(path.join(V2, 'labels'), '.mjs')) {
     const mod = await import(pathToFileURL(f).href)

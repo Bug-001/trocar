@@ -83,7 +83,7 @@ export function mount(el, ctx) {
       (error ? `<p class="err">${esc(W.PRICE_READ_FAIL)}:${esc(error.error || ('HTTP ' + error.status))} · <a href="#/settings/prices">${W.RETRY}</a></p>`
         : pricing && pricing.pricing && typeof pricing.pricing === 'object' ? priceTable(priceRows(pricing.pricing), pricing.source)
         : pricing ? `<p class="err">${W.PRICE_BAD_SHAPE}</p>` : '') +
-      techDetailsHtml([[W.COL_KEY, W.TECH_MATCH], [W.COL_WRITE, W.TECH_WRITE_ONE], ['price file', W.TECH_PRICING_PATH]], { id: 'ptech' }) +
+      techDetailsHtml([[W.COL_KEY, W.TECH_MATCH], [W.COL_WRITE, W.TECH_WRITE_ONE], ['price table', W.TECH_PRICING_PATH]], { id: 'ptech' }) +
       `</div>`)
     // 没有单价的模型 — only while S5 is there (404 absent: the whole card is not drawn, an absent source is not "all priced")
     if (s5 && !s5.error) {

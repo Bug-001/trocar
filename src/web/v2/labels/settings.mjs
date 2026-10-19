@@ -20,7 +20,7 @@ export const FILES_DIR = 'Directory', FILES_SEAL_RATIO = 'Sealed compression rat
 export const RETRY = 'Retry'
 
 // 价格页
-export const PRICE_NOTE = 'Estimated cost = usage × the unit prices here; a local estimate, not a bill · USD per million tokens · read-only on the board; to change a price, edit the price file',
+export const PRICE_NOTE = 'Estimated cost = usage × the unit prices here; a local estimate, not a bill · USD per million tokens · read-only on the board; to change a price, edit the price table',
   PRICE_FROM = (p) => `From ${p}`, PRICE_DEFAULT = 'Using asight\'s built-in default unit prices',
   COL_KEY = 'Model name contains', COL_IN = 'input', COL_OUT = 'output', COL_WRITE = 'cache write', COL_READ = 'cache read',
   PRICE_READ_FAIL = 'Could not read the price table', PRICE_BAD_SHAPE = 'The price table has the wrong shape',
