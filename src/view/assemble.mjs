@@ -571,9 +571,10 @@ function anthropicFlat(request, keyMemo) {
 function multiLaneFold(read) {
   const an = createAnalyzer();
   const plans = MULTI_LANE_CONTEXT.prepare(read);
-  // Block keys of one session: the same context is re-sent every turn, so the per-text hash is asked for once per call. The
-  // memo is keyed by a block's first BLK_KEY_CAP chars, so it grows with the session's distinct content, not its stored bytes.
-  const keyMemo = new Map();
+  // Block keys: a lane re-sends its context every turn, so a block's per-text hash is asked once per lane call, not once per block
+  // of every call. A lane remembers the keys of its last call only (a key text is a slice that keeps its whole text alive), so the
+  // memo holds what each lane's baseline (`prev`) holds anyway, never the session's content.
+  const keysOf = new Map(); // lane (stream id) → text → key, for the blocks of its last call
   const prev = new Map(); // lane (stream id) → { flat, chain } of the call that established the lane's cache baseline
   function push(r, gi) {
     const ctx = plans.context(r);
@@ -581,7 +582,9 @@ function multiLaneFold(read) {
     if (!call) return null;
     call.wire = wireOf(call.rec, 'anthropic', ctx); // cheap meta: rides on out-of-window calls too
     call.respRefs = respRefsOf(call.rec); // locators only (a few dozen bytes each), never the reply body
-    const flat = anthropicFlat(call.rec.request, keyMemo);
+    const was = keysOf.get(call.streamId), keys = new Map();
+    const flat = anthropicFlat(call.rec.request, { get: (t) => { const k = keys.get(t) ?? (was && was.get(t)); if (k !== undefined) keys.set(t, k); return k; }, set: (t, k) => keys.set(t, k) });
+    keysOf.set(call.streamId, keys);
     const u = call.norm.usage || {};
     // Bake NEUTRAL canonical usage (D18a Q1 / D24): the board frontend reads call.usage.{read,
     // create,fresh,out} — ZERO provider-native usage field names in the browser. Provider→canonical

@@ -1,11 +1,12 @@
 // test/query/session-stream.test.mjs — `session` folds a session record by record and ships a page's bodies under a byte budget
 // (RFC 3.5 §内存有界 · §分页 正文预算 · 验收 15; 1.6 §4.1 分页).
 //
-// Generated Claude Code sessions (test/query/big-session.mjs) on two axes — how fast a context grows per turn, and how often a
-// subagent turn is interleaved — paged at windows across the session. The contract, whatever the axes: every call is counted and
-// carries its meta; the calls that carry bodies lie in the window (plus its baseline), include the window's middle, sit nearest it,
-// and sum to at most PAGE_BODY_BYTES of request body (or are exactly one); `page.returned` counts them. A session that grew is
-// answered byte for byte as a fold from scratch answers it, also when a late record sorts before ones already folded.
+// Generated sessions (test/query/big-session.mjs) on three axes — the wire (a whole context per request, Message Threads, Codex
+// over WebSocket: the last two stitched across records), how fast a context grows per turn, and how often a subagent turn is
+// interleaved — paged at windows across the session. The contract, whatever the axes: every call is counted and carries its meta;
+// the calls that carry bodies lie in the window (plus its baseline), include the window's middle, sit nearest it, and ship contexts
+// (their blocks' bytes, `comp`) that sum to at most PAGE_BODY_BYTES (or are exactly one); `page.returned` counts them. A session
+// that grew is answered byte for byte as a fold from scratch answers it, also when a late record sorts before ones already folded.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -18,7 +19,7 @@ import { bigSession } from './big-session.mjs'
 const freshFs = () => ({ ...fs })
 const session = (home, p, ctx = {}) => runQuery('session', p, { home, ...ctx })
 const callsOf = (doc) => [...new Set(doc.analyzed.lanes.flatMap((l) => l.calls))]
-const bytes = (c) => c.rec.request.context_chars || 0
+const bytes = (c) => Object.values(c.comp).reduce((n, v) => n + v, 0)
 
 function checkPage(doc, { cursor, limit }, total) {
   assert.equal(doc.truncated, null)
@@ -27,6 +28,9 @@ function checkPage(doc, { cursor, limit }, total) {
   assert.deepEqual(calls.map((c) => c.gi).sort((a, b) => a - b), [...Array(total).keys()], 'every call is there, bodies or not')
   const kept = calls.filter((c) => !c.paged_out)
   assert.equal(doc.page.returned, kept.length)
+  // every predecessor is in the capture: no context is partial, and a body put back is the context its meta was counted from
+  for (const c of calls) assert.notEqual(c.wire.contextState, 'partial', `gi ${c.gi}`)
+  for (const c of kept) assert.equal(c.flat.reduce((n, b) => n + b.bytes, 0), bytes(c), `gi ${c.gi}: its body is the context it was folded with`)
   for (const c of calls) if (c.paged_out) assert.deepEqual([c.flat, c.nonBlockKeys, Object.keys(c.norm)], [[], [], ['usage']])
   for (const c of kept) assert.ok(c.gi >= cursor - 1 && c.gi < cursor + limit, `gi ${c.gi} is in the window`)
   const sum = kept.reduce((n, c) => n + bytes(c), 0)
@@ -37,10 +41,10 @@ function checkPage(doc, { cursor, limit }, total) {
   for (const c of calls) if (c.paged_out && c.gi >= cursor - 1 && c.gi < cursor + limit) assert.ok(Math.abs(c.gi - mid) >= far, 'nearest the middle first')
 }
 
-for (const growth of [800, 12_000, 60_000]) for (const subEvery of [0, 3]) {
-  test(`a page of a session (context +${growth} B a turn, subagent every ${subEvery || 'never'}): the body budget and the meta of every call`, async () => {
+for (const wire of ['http', 'threads', 'ws']) for (const growth of [800, 12_000, 60_000]) for (const subEvery of [0, 3]) {
+  test(`a page of a ${wire} session (context +${growth} B a turn, subagent every ${subEvery || 'never'}): the body budget and the meta of every call`, async () => {
     const home = path.join(tmpDir('trocar-sstream-'), '.trocar')
-    const s = bigSession({ home, growth, subEvery, seed: growth + subEvery })
+    const s = bigSession({ home, wire, growth, subEvery, seed: growth + subEvery })
     s.append(70)
     for (const spec of [{ cursor: 0, limit: 60 }, { cursor: 25, limit: 7 }, { cursor: 69 - 30, limit: 60 }, { cursor: 69, limit: 1 }]) {
       const p = { id: s.id, after: String(spec.cursor), limit: String(spec.limit) }
@@ -49,6 +53,22 @@ for (const growth of [800, 12_000, 60_000]) for (const subEvery of [0, 3]) {
       const ctx = { fs: freshFs() }
       await session(home, p, ctx)
       assert.equal(JSON.stringify(await session(home, p, ctx)), JSON.stringify(cold), 'a warm answer is the cold one, byte for byte')
+    }
+  })
+}
+
+// More chains than the fold keeps in hand (a short-lived subagent every other subagent turn, each its own thread or connection):
+// the pages over the oldest ones are put back from records read again, and answer what the meta was counted from.
+for (const wire of ['threads', 'ws']) {
+  test(`a ${wire} session with many chains: every page, old chains included, ships the contexts its calls were folded with`, async () => {
+    const home = path.join(tmpDir('trocar-schains-'), '.trocar')
+    const s = bigSession({ home, wire, growth: 2_000, subEvery: 2, subLen: 4 })
+    s.append(60)
+    for (const spec of [{ cursor: 0, limit: 60 }, { cursor: 0, limit: 9 }, { cursor: 20, limit: 9 }, { cursor: 59, limit: 1 }]) {
+      const p = { id: s.id, after: String(spec.cursor), limit: String(spec.limit) }
+      const cold = await session(home, p, { fs: freshFs() })
+      checkPage(cold, spec, 60)
+      assert.ok(callsOf(cold).filter((c) => c.wire.contextState === 'complete').length > 8, 'more chains than are held')
     }
   })
 }

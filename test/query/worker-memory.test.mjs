@@ -3,7 +3,8 @@
 // The seam the board crosses, crossed the way it does: the real board face (src/server.mjs), the real query service,
 // a real fork of src/query/worker.mjs with a SMALL heap (the service's own `fork` seam, as WORKER_MEMORY_MB is passed in production),
 // a real loopback socket. One long agent session grows while it is polled the way the replay desk follows it (`sessions`, then
-// `session` with the followed call at the page's middle), until its stored bytes are several times the worker's heap. Every answer
+// `session` with the followed call at the page's middle), until its stored bytes are several times the worker's heap — on each wire
+// shape a session can have (test/query/big-session.mjs: a whole context per request, or one stitched across records). Every answer
 // must be a complete JSON document — 200, or a non-2xx JSON error — whole (never `truncated`), with the followed call's body on the
 // page, and the worker must never be reported dead (`query-failed`).
 import test from 'node:test'
@@ -26,10 +27,11 @@ const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.met
 const HEAP_MB = 128 // a third of the production worker's: the session below outgrows it several times over
 const MB = 1 << 20
 
-test('3.5 验收 11: a session growing past the worker heap while the board follows it gets a complete answer every time, and no worker dies', { timeout: 180_000 }, async () => {
+for (const shape of [{ wire: 'http' }, { wire: 'threads', growth: 60_000 }, { wire: 'ws', growth: 60_000 }])
+test(`3.5 验收 11: a ${shape.wire} session growing past the worker heap while the board follows it gets a complete answer every time, and no worker dies`, { timeout: 180_000 }, async () => {
   const home = path.join(tmpDir('trocar-wmem-'), '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
-  const s = bigSession({ home })
+  const s = bigSession({ home, ...shape })
   s.growTo(4 * MB)
   const failed = []
   const svc = createQueryService({ home, failure: (where, e) => failed.push(`${e.code}: ${e.message}`),
@@ -70,7 +72,7 @@ test('3.5 验收 11: a session growing past the worker heap while the board foll
     const quiet = async () => { await follow(); const q = []; for (let i = 0; i < 2; i++) q.push((await follow()).text); return q }
     const q1 = await quiet()
     assert.ok(q1[0] && q1[0] === q1[1], 'an unchanged session answers the same bytes')
-    for (let stored = 4 * MB; stored < 60 * MB; stored = s.append(12)) {
+    for (let stored = 4 * MB; stored < 60 * MB; stored = s.append(shape.growth ? 120 : 12)) {
       const a = await follow()
       if (!a.doc) continue // a non-2xx JSON error is a complete answer too
       assert.equal(a.doc.truncated, null, 'no session is cut for its size')

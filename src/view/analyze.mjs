@@ -474,7 +474,8 @@ export function createAnalyzer() {
       if (typeof e.text !== 'string') continue
       const full = e.text
       delete e.text
-      e.preview = full.replace(/\s+/g, ' ').trim().slice(0, 200)
+      // its own 200 characters: a slice would keep the whole text alive for as long as the event lives (the fold keeps events)
+      e.preview = (' ' + full.replace(/\s+/g, ' ').trim().slice(0, 200)).slice(1)
       e.chars = full.length
       e.text_omitted = 'derived event — full text is not shipped here; read it from this step\'s blocks'
     }
@@ -680,7 +681,7 @@ function blkHashText(b, cap = Infinity) {
 }
 // hash a bounded prefix — plenty to distinguish blocks, and O(1) per block regardless of size
 const BLK_KEY_CAP = 4096
-// `memo` (one Map per session assembly, from the caller) is NOT a cache of results across queries: an
+// `memo` (get / set, from the caller: one per lane of a session assembly) is NOT a cache of results across queries: an
 // append-only conversation re-sends its whole context every turn, so one session asks for the key of the
 // SAME block text once per call — measured 17 594 block keys over 494 distinct contents. Hashing the 17 100
 // repeats was 89 ms of a 115-call session's 305 ms. Same text in, same key out; the map dies with the call.

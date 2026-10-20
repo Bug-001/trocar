@@ -57,15 +57,29 @@ function named(r, id) {
   if (sessionKeyOf(r).key == null) Object.defineProperty(r, '_synthKey', { value: id, enumerable: false, configurable: true, writable: true });
   return r;
 }
-/** The spine of `sorted` (the rows in step order): `old` folded on when it is a prefix of them, else a fold from scratch. */
-function grow(old, { home, fs, id, sorted }) {
-  const prefix = old && old.ids.length <= sorted.length && old.ids.every((x, i) => sorted[i].id === x);
-  const s = prefix ? old : { fold: sessionFold(id), ids: [], errors: [], cost: 0 };
-  for (let i = s.ids.length; i < sorted.length;) {
+// `rows` in chunks of at most CHUNK_STORED stored bytes (at least one row each).
+function* chunks(rows) {
+  for (let i = 0; i < rows.length;) {
     let j = i, bytes = 0;
-    while (j < sorted.length && (j === i || bytes + (sorted[j].stored_bytes || 0) <= CHUNK_STORED)) bytes += sorted[j++].stored_bytes || 0;
-    for (const r of recordsAt({ home, fs, rows: sorted.slice(i, j), errors: s.errors, remember: false })) s.fold.push(named(r, id), r.id);
-    for (; i < j; i++) s.ids.push(sorted[i].id);
+    while (j < rows.length && (j === i || bytes + (rows[j].stored_bytes || 0) <= CHUNK_STORED)) bytes += rows[j++].stored_bytes || 0;
+    yield rows.slice(i, j);
+    i = j;
+  }
+}
+/** The spine of `sorted` (the rows in step order): `old` folded on when it is a prefix of them, else a fold from scratch. A record
+ *  the fold asks for again (a cross-record context whose items it no longer holds: src/dissect/chain.mjs) is read back by id, a
+ *  chunk at a time, through the rows of the query at hand (`s.rowOf`), its problems said in `s.sink` (D38). */
+function grow(old, { home, fs, id, sorted, rowOf }) {
+  const prefix = old && old.ids.length <= sorted.length && old.ids.every((x, i) => sorted[i].id === x);
+  const s = prefix ? old : { ids: [], errors: [], cost: 0 };
+  s.rowOf = rowOf; s.sink = s.errors;
+  const read = function* (ids) {
+    for (const part of chunks(ids.map((x) => s.rowOf.get(x)).filter(Boolean))) for (const r of recordsAt({ home, fs, rows: part, errors: s.sink, remember: false })) yield named(r, id);
+  };
+  if (!prefix) s.fold = sessionFold(id, { read });
+  for (const part of chunks(sorted.slice(s.ids.length))) {
+    for (const r of recordsAt({ home, fs, rows: part, errors: s.errors, remember: false })) s.fold.push(named(r, id), r.id);
+    for (const r of part) s.ids.push(r.id);
   }
   // a record that did not read is said on every answer (D38) and the spine is not kept: the next query reads it again
   s.cost = s.errors.length ? Infinity : s.ids.length * SPINE_PER_ROW;
@@ -89,8 +103,9 @@ export async function run({ home, fs, params: p, errors }) {
   const release = hold(working(read)); // the caches give way BEFORE anything is read
   let view;
   try {
-    const sp = spines.get(`${fsTag(fs)}\n${home}\n${id}`, rowsKey(sorted).id, (old) => grow(old, { home, fs, id, sorted }));
+    const sp = spines.get(`${fsTag(fs)}\n${home}\n${id}`, rowsKey(sorted).id, (old) => grow(old, { home, fs, id, sorted, rowOf }));
     errors.push(...sp.errors);
+    sp.rowOf = rowOf; sp.sink = errors;
     // the calls this page ships with their bodies, read back by id and given their bodies by the fold that assembled them
     const fill = (cs) => {
       const recs = recordsAt({ home, fs, rows: cs.map((c) => rowOf.get(c.id)).filter(Boolean), errors, remember: false });

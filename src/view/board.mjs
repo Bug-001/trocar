@@ -184,14 +184,15 @@ function itemOf(r) {
   };
 }
 /**
- * sessionFold(sessionId) → { push(rec, key), view(keys, {enrich, bound}), filled(call, rec) } — ONE session, folded record by record
- * (3.5 §内存有界; src/view/assemble.mjs createAssembler). push() takes the session's records in step order; `key` names the record
+ * sessionFold(sessionId, {read}) → { push(rec, key), view(keys, {enrich, bound}), filled(call, rec) } — ONE session, folded record by
+ * record (3.5 §内存有界; src/view/assemble.mjs createAssembler; `read(ids)` yields records back by id, for a cross-record context
+ * whose items the fold no longer holds — src/dissect/chain.mjs). push() takes the session's records in step order; `key` names the record
  * (its id, or the record itself when ids may repeat). view(keys) is the session document over the records `keys` names, in that
  * order, with every call in its META form; it does not change the fold, so more records can be pushed after it. filled(call, rec)
  * is that call with its body put back from its record (a new object), for the calls a page ships (pageView's `fill`).
  */
-export function sessionFold(sessionId) {
-  const asm = createAssembler();
+export function sessionFold(sessionId, { read = null } = {}) {
+  const asm = createAssembler({ read });
   const items = new Map();
   return {
     push(r, key = r) {
@@ -273,10 +274,11 @@ function windowOf({ cursor = 0, limit = Infinity } = {}) {
   const lim = limit == null ? Infinity : limit;
   return { lo, hi: lim === Infinity ? Infinity : lo + Math.max(0, lim | 0), limit: lim };
 }
-// What a call's body costs a page: its request body's bytes (`rec.request.context_chars`, the verbatim wire length).
-const bodyBytes = (c) => (c.rec && c.rec.request && c.rec.request.context_chars) || 0;
+// What a call's body costs a page: the bytes of the context it ships, block by block — its composition (`comp`, on every call), so a
+// context stitched across records (D37 ②) is charged whole, not its record's delta.
+const bodyBytes = (c) => Object.values(c.comp || {}).reduce((n, v) => n + v, 0);
 /** The in-window calls that ride WITH their bodies (3.5 §分页 正文预算): nearest the window's middle first (the board puts the step it
- *  shows there), while their request bodies sum to at most `budget` bytes — and always the nearest one. */
+ *  shows there), while their contexts sum to at most `budget` bytes — and always the nearest one. */
 function bodiesFor(calls, { lo, limit }, budget) {
   if (limit === Infinity || budget === Infinity) return new Set(calls);
   const mid = lo + Math.floor(limit / 2);

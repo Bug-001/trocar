@@ -1,10 +1,16 @@
-// test/query/big-session.mjs — one long agent session, the shape that grows a session's stored bytes quadratically (RFC 3.5 §内存有界).
-//
-// Every request re-sends the whole context, so call n stores ~n × `growth` bytes and a session of n calls stores ~growth × n² / 2.
+// test/query/big-session.mjs — one long agent session on one of the three wire shapes a session can have (RFC 3.5 §内存有界):
+//   'http'    Claude Code, every request re-sends the whole context: call n stores ~n × `growth` bytes, n calls ~growth × n² / 2
+//   'threads' Claude Code on Message Threads (3.1:35): a create, then continuations that send only their delta; the reply is a
+//             stream (the collector's own shapeResponse), so the context is stitched across records
+//   'ws'      Codex over WebSocket (3.1:37): response.create with previous_response_id and only the new input; the reply is the
+//             server's messages, streamed deltas then response.completed (the collector's own buildWsEnvelope)
 // The text of each turn is fresh (seeded words, a code block, a tool call and its result), so a parsed record costs in the heap what a
-// real one does. Every `subEvery`-th call is a subagent's (its own lane, a short context). Exports only: node --test runs every .mjs.
+// real one does. Every `subEvery`-th call is a subagent's (its own lane — a thread or a connection of its own — and a short context).
+// Exports only: node --test runs every .mjs.
 import fs from 'node:fs'
 import path from 'node:path'
+import { replyOf } from '../helpers/cc-threads.mjs'
+import { buildWsEnvelope } from '../../src/collector/core/record/envelope.mjs'
 
 const MODEL = 'claude-opus-4-8'
 function rng(seed) {
@@ -32,30 +38,65 @@ function turn(next, i, growth) {
 }
 
 /**
- * bigSession({home, id, calls, growth, seed, subEvery, segment}) → a writer of ONE session into <home>/raw/<segment>.ndjson.
+ * bigSession({home, id, wire, growth, seed, subEvery, subLen, segment}) → a writer of ONE session into <home>/raw/<segment>.ndjson.
+ * A subagent's context starts over (a new subagent) once it holds more than `subLen` messages; the main one (a compaction: a new
+ * thread or chain) once it holds more than `compactAt` characters.
  * `append(n)` appends the next n calls (as the daemon would, one line each) and returns the session's stored bytes so far.
  */
-export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', growth = 2_500, seed = 7, subEvery = 5, segment = '20261020T164737Z' } = {}) {
+export function bigSession({ home, id = 'big-0000-4a1b-9c2d-000000000001', wire = 'http', growth = 2_500, seed = 7, subEvery = 5, subLen = 30, compactAt = 1_000_000, segment = '20261020T164737Z' } = {}) {
   const next = rng(seed)
   const file = path.join(home, 'raw', `${segment}.ndjson`)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  const lanes = { main: [], sub: [] }
+  const lanes = { main: { msgs: [], sent: 0, prev: null, n: 0, chars: 0 }, sub: { msgs: [], sent: 0, prev: null, n: 0, chars: 0 } }
   let n = 0, stored = 0, ms = Date.parse('2026-10-20T16:47:37Z')
   const system = [{ type: 'text', text: 'You are a coding assistant operating in a terminal.' }]
   const line = () => {
     const sub = subEvery > 0 && n % subEvery === subEvery - 1
     const lane = sub ? lanes.sub : lanes.main
-    if (sub && lane.length > 30) lane.length = 0 // a new subagent: its own short context
-    lane.push(...turn(next, n, sub ? Math.round(growth / 4) : growth))
+    if (sub ? lane.msgs.length > subLen : lane.chars > compactAt) Object.assign(lane, { msgs: [], sent: 0, prev: null, n: lane.n + 1, chars: 0 })
+    lane.msgs.push(...turn(next, n, sub ? Math.round(growth / 4) : growth))
+    lane.chars += sub ? Math.round(growth / 4) : growth
     const ts = new Date((ms += 4_000)).toISOString()
     const text = words(next, 200)
-    const env = {
-      ts, endpoint: '/v1/messages', method: 'POST',
-      req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-app': 'cli', 'x-claude-code-session-id': id, ...(sub ? { 'x-claude-code-agent-id': `agent-${Math.floor(n / 40)}` } : {}), 'anthropic-version': '2023-06-01' },
-      req_body: JSON.stringify({ model: MODEL, max_tokens: 4096, system, messages: lane.slice(0, -2) }),
-      resp: { status: 200, kind: 'json', body: { id: `msg_${n}`, model: MODEL, stop_reason: n % 4 ? 'tool_use' : 'end_turn', content: [{ type: 'text', text }, ...(n % 4 ? [{ type: 'tool_use', id: `toolu_r${n}`, name: 'Read', input: { file_path: '/work/x.mjs' } }] : [])], usage: { input_tokens: 40, output_tokens: 120, cache_read_input_tokens: 1000 * n, cache_creation_input_tokens: 300 } } },
-      id: `req_${String(n + 1).padStart(5, '0')}`, ts_request: ts, ts_response_start: ts, ts_response_end: ts, duration_ms: 900,
-      is_llm_call: true, capture: 'transparent', host: 'api.anthropic.com', traffic_class: 'llm', proc: { pid: 4242, exe: '/x/claude', agent: 'claude-code' },
+    const agent = sub ? `agent-${lane.n}` : null
+    const reqId = `req_${String(n + 1).padStart(5, '0')}`
+    const usage = { input_tokens: 40, output_tokens: 120, cache_read_input_tokens: 1000 * n, cache_creation_input_tokens: 300 }
+    const ask = lane.msgs.slice(0, -2), delta = ask.slice(lane.sent)
+    lane.sent = ask.length
+    let env
+    if (wire === 'ws') {
+      const msgId = `resp_${n}`
+      const input = delta.map((m) => ({ type: 'message', role: m.role, content: m.content.map((c) => ({ type: m.role === 'user' ? 'input_text' : 'output_text', text: c.text ?? (typeof c.content === 'string' ? c.content : JSON.stringify(c.input ?? c)) })) }))
+      const body = { type: 'response.create', model: 'gpt-x', instructions: system[0].text, tools: [], input, ...(lane.prev ? { previous_response_id: lane.prev } : {}) }
+      const output = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
+      const server = [JSON.stringify({ type: 'response.created', response: { id: msgId } }),
+        ...text.match(/.{1,40}/gs).map((d) => JSON.stringify({ type: 'response.output_text.delta', delta: d })),
+        JSON.stringify({ type: 'response.completed', response: { id: msgId, status: 'completed', output, usage: { input_tokens: 40, input_tokens_details: { cached_tokens: 1000 * n }, output_tokens: 120 } } })]
+      const key = sub ? `key-${agent}` : 'key-main'
+      const headers = [['Host', 'api.openai.com'], ['Upgrade', 'websocket'], ['session-id', id], ['Sec-WebSocket-Key', key], ...(sub ? [['x-openai-subagent', agent]] : [])]
+      env = buildWsEnvelope({ id: reqId, seq: n, wsRaw: [],
+        flow: { id: key, host: 'api.openai.com', scheme: 'https', dst: { address: '127.0.0.1', port: 443 }, proc: { pid: 4243, exe: '/x/codex', agent: 'codex' } },
+        upgrade: { req: { head: { raw: Buffer.from('GET /v1/responses HTTP/1.1\r\n\r\n', 'latin1'), method: 'GET', target: '/v1/responses', headers } },
+          resp: { head: { raw: Buffer.from('HTTP/1.1 101 Switching Protocols\r\n\r\n', 'latin1'), headers: [['Upgrade', 'websocket']] } } },
+        call: { client: [JSON.stringify(body)], server, tsStart: ts, tsRespStart: ts, tsEnd: ts, partial: [], truncated: false } })
+      env.is_llm_call = true
+      lane.prev = msgId
+    } else {
+      const msgId = `msg_${n}`
+      const reply = [{ type: 'text', text }, ...(n % 4 ? [{ type: 'tool_use', id: `toolu_r${n}`, name: 'Read', input: { file_path: '/work/x.mjs' } }] : [])]
+      const threads = wire === 'threads'
+      const body = { model: MODEL, max_tokens: 4096, ...(threads && lane.prev ? { thread: { type: 'continue', previous_message_id: lane.prev }, messages: delta }
+        : { ...(threads ? { thread: { type: 'create' } } : {}), system, messages: ask }) }
+      env = {
+        ts, endpoint: '/v1/messages', method: 'POST',
+        req_headers: { host: 'api.anthropic.com', 'content-type': 'application/json', 'user-agent': 'claude-cli/2.0.0 (external, cli)', 'x-app': 'cli', 'x-claude-code-session-id': id, ...(agent ? { 'x-claude-code-agent-id': agent } : {}), 'anthropic-version': '2023-06-01' },
+        req_body: JSON.stringify(body),
+        resp: threads ? replyOf(msgId, reply, usage) : { status: 200, kind: 'json', body: { id: msgId, model: MODEL, stop_reason: n % 4 ? 'tool_use' : 'end_turn', content: reply, usage } },
+        id: reqId, ts_request: ts, ts_response_start: ts, ts_response_end: ts, duration_ms: 900,
+        is_llm_call: true, capture: 'transparent', host: 'api.anthropic.com', traffic_class: 'llm', proc: { pid: 4242, exe: '/x/claude', agent: 'claude-code' },
+      }
+      // a thread's context goes on with the reply as the server kept it; the plain wire re-sends what the generator wrote
+      if (threads) { lane.prev = msgId; lane.msgs.splice(lane.sent, 0, { role: 'assistant', content: reply }); lane.sent++ }
     }
     n++
     return JSON.stringify(env)
