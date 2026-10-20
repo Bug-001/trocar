@@ -43,8 +43,9 @@ test('(2) usage that did not cover the window marks the cost partial; a main row
   const D = await docs
   const ov = copy(D.overview)
   const cov = ov.usage.coverage
-  assert.equal(overviewStats(ov, D.pricing).partial, cov.sessions_read < cov.sessions_in_window)
-  cov.sessions_read = cov.sessions_in_window - 1; cov.reason = 'byte-budget'
+  assert.ok(cov.calls_in_window > 0, 'the fixture has calls in the window')
+  assert.equal(overviewStats(ov, D.pricing).partial, cov.calls_read < cov.calls_in_window)
+  cov.sessions_read = cov.sessions_in_window - 1; cov.calls_read = cov.calls_in_window - 1; cov.reason = 'byte-budget'
   const p = overviewStats(ov, D.pricing)
   assert.equal(p.partial, true)
   assert.notEqual(p.cost, 0)
@@ -55,7 +56,7 @@ test('(2) usage that did not cover the window marks the cost partial; a main row
   main[0].cache_write = null
   assert.equal(overviewStats(ov, D.pricing).hitUncertain, true)
   const none = copy(D.overview)
-  Object.assign(none.usage, { coverage: { ...none.usage.coverage, sessions_read: 0, capped_at: 1, reason: 'byte-budget' }, rows: [] })
+  Object.assign(none.usage, { coverage: { ...none.usage.coverage, sessions_read: 0, calls_read: 0, capped_at: 1, reason: 'byte-budget' }, rows: [] })
   const z = overviewStats(none, D.pricing)
   assert.equal(z.partial, true); assert.equal(z.cost, null); assert.equal(z.hit, null)
 })
