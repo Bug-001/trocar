@@ -6,8 +6,18 @@
 import { get, post } from './http.mjs'
 
 export const api = {
-  get: (name, params) => get('/api/' + name, params),
-  controlStatus: () => get('/control/status'),
+  get: (name, params, opts) => get('/api/' + name, params, opts),
+  controlStatus: (opts) => get('/control/status', null, opts),
   control: (verb, body) => post('/control/' + verb, body),
   now: () => Date.now(), // "now" for relative times; the board runs on the viewer's clock
+}
+
+// the same api with every read tied to `signal` as well as any signal the caller passes (main.mjs: one per mounted screen)
+const join = (a, b) => (a && b ? AbortSignal.any([a, b]) : a || b)
+export function scoped(base, signal) {
+  return {
+    ...base,
+    get: (n, p, o = {}) => base.get(n, p, { ...o, signal: join(o.signal, signal) }),
+    controlStatus: (o = {}) => base.controlStatus({ ...o, signal: join(o.signal, signal) }),
+  }
 }

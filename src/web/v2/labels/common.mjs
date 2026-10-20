@@ -47,3 +47,8 @@ export const HEALTH_READ = Object.freeze({
   others: (n) => `${n} other problem${n === 1 ? '' : 's'} open`,
   groups: (n) => `${n} failure group${n === 1 ? '' : 's'} in the last 24 hours`,
 })
+
+// the words more than one screen shows the same way
+export const READING = 'Reading…' // the content area while a screen module loads (1.2 main.mjs)
+export const WINDOW_LABEL = Object.freeze({ '24h': '24 hours', '7d': '7 days', all: 'All' })
+export const UNTITLED = 'Untitled session'
