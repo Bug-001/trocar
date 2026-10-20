@@ -112,6 +112,7 @@ a.rmark{color:var(--action);}
   .thost{padding:12px 14px 0;}
   .hhead,.hrow{grid-template-columns:132px minmax(120px,1fr) 64px minmax(88px,120px) minmax(80px,1fr);}
   .hhead .cell.num,.hrow .cell.num{display:none;}
-  .hrow{min-height:44px;padding:3px 0;}
-  .hrow .cell.class{grid-column:2;grid-row:2;}
+  /* the two lines fill the row's fixed-height slot (1.10 行高固定; the slot is the list's .vrow) */
+  .hrow{min-height:0;height:100%;padding:0;grid-template-rows:auto auto;align-content:center;line-height:18px;}
+  .hrow .cell.class{grid-column:2;grid-row:2;line-height:14px;}
 }
