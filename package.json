@@ -1,6 +1,6 @@
 {
   "name": "trocar",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "trocar — transparent, byte-faithful, cross-provider tracer of what an agent app really sends the LLM (product build).",

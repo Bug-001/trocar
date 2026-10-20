@@ -61,7 +61,7 @@ The same five commands on every OS, in this order: `trocar install` (once) → `
 confirm; until it has run, `trocar on` refuses (`error.code` `cert-not-installed`). `on` starts capture, `status` shows state,
 `off` takes every trace of trocar off your agents' path, and the certificates stay until `trocar uninstall`.
 
-From a Release: not published yet.
+From a Release: not supported — `trocar update` needs a git checkout.
 
 ## Staying up to date
 
@@ -69,17 +69,16 @@ From a Release: not published yet.
 trocar update            # the newest code, and the machine as it was
 ```
 
-From the first release on, one command takes this checkout to the newest code and leaves the machine the way it
-was: it refuses to touch a checkout with changes of your own, fast-forwards (never merges), runs
+One command takes this checkout to the newest code and leaves the machine the way it was: it refuses to touch a checkout with changes of your own, fast-forwards (never merges), runs
 `npm install` when what trocar needs changed, replaces the collector, runs `install`, and switches
 capture on again for the agents that had it on. It prints the plan — which commit to which commit,
 and which agents go off and on again — and asks first; `--yes` answers, `--dry-run` only prints.
-While it runs those agents are not captured (their connections still work), and connections the
-collector still holds are cut when it is replaced. An update that stops half way leaves a note
+While it runs those agents are not captured (their connections still work), and the collector is
+replaced the way `uninstall` stops it: connections it still holds get up to 30 s to finish. An update that stops half way leaves a note
 behind: run `trocar update` again and it goes on from where it stopped.
 
-Moving an install made before that release over is a one-time manual step (the old code has no `update`):
-`trocar off`, `git pull`, `npm install`, `trocar install`, `trocar on`.
+A machine that ran the build from before the rename moves over once, by hand: that build's own `uninstall`, then
+a clone of this repo and `trocar install`. Nothing the old name left is read or kept.
 
 ## Uninstall
 
@@ -173,10 +172,9 @@ calls to one host, and `--ref <segment>:<line>` opens one call. Documents read f
 
 ## What it touches, and what lands on disk
 
-Everything trocar writes lives under `~/.trocar/`, and every record under `~/.trocar/raw/`. This version is
-**not** backwards compatible: records the previous version wrote to
-`~/.trocar/collector/capture-<date>.ndjson`, and older roots (`~/.trocar/sessions/`, the v0 `~/.atrace`),
-are neither read nor moved nor touched. If you still want what is in them, keep a copy yourself.
+Everything trocar writes lives under `~/.trocar/`, and every record under `~/.trocar/raw/`. Nothing an
+earlier build left — its home under the old name, the v0 `~/.atrace` — is read, moved or touched. If you still want
+what is in them, keep a copy yourself.
 
 `trocar on` arranges a local, observe-only tap **on your user account only**. It never changes your
 system proxy, never adds machine-wide trust, never needs root (Linux's one-time `setup-helper` is the
@@ -360,8 +358,8 @@ no manual seal command.
 trocar raw <segment>[:<from>[-<to>]]   # print records byte for byte, sealed or not
 ```
 
-Records the previous version wrote to `~/.trocar/collector/capture-<date>.ndjson`, and older roots such as
-`~/.atrace`, are neither read nor moved nor touched. Segments hold
+What earlier builds left (the home under the old name, the v0 `~/.atrace`) is neither read nor moved nor
+touched. Segments hold
 the same plaintext and credentials as the traffic and are owner-only (0600).
 
 ## Claude Desktop
