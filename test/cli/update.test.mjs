@@ -89,6 +89,8 @@ test('V93: no git checkout is exit 2, and every failed check is exit 1 with HEAD
     'no upstream': (s) => { git(s.root, 'checkout', '-b', 'side') },
     'a commit the upstream does not have': (s) => { fs.writeFileSync(path.join(s.root, 'MINE.md'), 'mine\n'); git(s.root, 'add', '-A'); git(s.root, 'commit', '-m', 'mine'); s.ahead() },
     'git fetch fails': (s) => { fs.rmSync(s.up, { recursive: true, force: true }) },
+    // D38: which agents are being captured is a check too — a state.json nobody can read is never read as "none is on"
+    'state.json cannot be read': (s) => { fs.writeFileSync(path.join(s.dir, 'state.json'), '{ not json'); s.ahead('unreadable-state.md') },
   }
   for (const [why, set] of Object.entries(cases)) {
     const s = sandbox({ on: ['codex'] })

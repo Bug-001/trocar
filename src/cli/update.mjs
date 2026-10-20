@@ -125,13 +125,15 @@ async function update({ io, env, home, platform, deps, flags }) {
 
   // §1.4: the plan — from which commit to which, and which harnesses go off and on again
   const on = harnessesOn({ home, fs })
+  // D38 / §5.5 「先查,查不过什么都不改」: which agents are being captured is a check like any other. A state.json that cannot be read is
+  // never "none is on" — that would leave those harnesses switched off, with asight's entries in their files, and nothing to switch back on.
+  if (on.error) return no('state-unreadable', on.error)
   r.harnesses = on.ids
   r.to = `${versionOf(root, fs)}+${target.slice(0, 7)}`
   const planned = [
     { what: 'code', detail: `the code of this machine's asight goes from ${r.from} to ${r.to}` },
     { what: 'harnesses', detail: on.ids.length ? `${on.ids.join(', ')}: switched off before the code changes and on again after it` : 'no agent is being captured, so none is switched off', harness: null, harnesses: on.ids },
   ]
-  if (on.error) r.notes.push(on.error)
   const g = await gate([['Code', `${r.from} -> ${r.to}`], ['Off and on again', on.ids.join(', ') || 'nothing is being captured']], planned, COST)
   if (g !== null) return g
 
@@ -252,13 +254,13 @@ function writeHandover(file, { from, on }, fs) {
   fs.chmodSync(file, 0o600) // an existing file keeps its own mode through writeFileSync
 }
 
-/** The harnesses capture is on for (`state.json`), with the reason when the file could not be read (D38: never a silent "none"). */
+/** The harnesses capture is on for (`state.json`), with the reason when the file could not be read: a failed check, never a silent "none" (D38). */
 function harnessesOn({ home, fs }) {
   try {
     const { state } = readStateFile(stateFile(home), { fs })
     return { ids: Object.entries(state.harnesses).filter(([, e]) => e && e.desired === 'on').map(([id]) => id).sort(), error: null }
   } catch (e) {
-    return { ids: [], error: `which agents are being captured could not be read (${(e && e.message) || e}), so none is switched off and on again` }
+    return { ids: [], error: `which agents are being captured could not be read (${(e && e.message) || e}), so this update was not started. ${AGAIN}` }
   }
 }
 
