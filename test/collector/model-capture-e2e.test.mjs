@@ -27,6 +27,7 @@ import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
+import { statusRun } from '../../src/cli/status.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
 
 const FAKE_HELPER = fileURLToPath(new URL('./arch/win32/fixtures/fake-helper.mjs', import.meta.url))
@@ -210,6 +211,63 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(idx.mark.size, fs.statSync(path.join(rawDir, `${lock.segment}.ndjson`)).size, 'to the last byte the daemon wrote')
         const read = await segmentIndex({ home: path.dirname(w.dir), segment: lock.segment })
         assert.deepEqual([read.bytesRead, read.problems], [0, []], 'a query reads no segment bytes and reports no cold build')
+      } finally {
+        for (const s of open) s.destroy()
+        await box.stop()
+        await new Promise((r) => mock.close(r))
+      }
+    })
+  })
+}
+
+// 4.11 P11 status · P12 `windows` · V16: an off → on (what `trocar update` does, D67) keeps a decrypted process captured, and `status` says so —
+// the daemon's own verdict for the process it judged; for one it never saw, the door's rule over the on windows: started inside an earlier window
+// of the same door → routed; started while the harness was off (it read no entry, D31①) → config-after-start.
+for (const platform of ['darwin', 'win32']) {
+  test(`${platform}: after off → on, status takes the door's verdict for a decrypted process and judges the unseen ones by the on windows`, { timeout: 60_000 }, async () => {
+    const w = await modelWorld({ os: platform, commands: ['codex'] })
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '')
+    const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
+    const mockCa = createCa({ commonName: 'e2e upstream CA' }), mockIssuer = createLeafIssuer(loadCa(mockCa))
+    const mock = tls.createServer({ SNICallback: (s, cb) => cb(null, mockIssuer.secureContextFor(s)) }, (s) => { s.on('error', () => {}); let b = ''; s.on('data', (d) => { b += d; if (b.includes(BODY)) s.write(REPLY) }) })
+    await new Promise((r) => mock.listen(0, '127.0.0.1', r))
+    const target = `localhost:${mock.address().port}`
+    const bundle = path.join(w.home, 'codex-ca.pem')
+    fs.writeFileSync(bundle, rootPem + mockCa.certPem)
+    const desc = w.harnesses.find((h) => h.name === 'codex')
+    const a = agentOf({ w, name: desc.processes.names[0].name, env: { SSL_CERT_FILE: bundle } })
+    const win = platform === 'win32' ? win32Io(a) : null
+    const box = await liveUnit({ w, platform, io: win ? win.io : { exec: darwinExec(a) } })
+    const open = []
+    await withScratchCwd(platform, async () => {
+      try {
+        const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
+        const onDeps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
+        const offDeps = { getuid: () => 501, procs: async () => [], alive: () => false, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), sleep: async () => {}, exec: () => ({ status: 0, stdout: '', stderr: '' }) }
+        const pause = () => new Promise((r) => setTimeout(r, 30))
+        assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps: onDeps }), 0)
+        const u = new URL(/^HTTPS_PROXY=(\S+)$/m.exec(fs.readFileSync(path.join(w.home, '.codex', '.env'), 'utf8'))[1].replace(/^["']|["']$/g, ''))
+        const door = Number(u.port), auth = Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64')
+        a.ports.add(await freePort()); win?.write()
+        const one = await through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [rootPem], req: reqOf(target), open })
+        assert.ok(new crypto.X509Certificate(one.peer.issuerCertificate.raw).checkIssued(new crypto.X509Certificate(rootPem)), 'decrypted under the trocar root')
+        await one.end()
+        await pause()
+        assert.equal(await runOffCli([], { io, home: w.home, env: w.env, platform, deps: offDeps }), 0)
+        await pause()
+        assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps: onDeps }), 0)
+        const l = JSON.parse(fs.readFileSync(path.join(w.dir, 'install-manifest.json'), 'utf8')).liveness.codex
+        assert.equal(l.windows.length, 1, 'the closed window is kept: the door\'s port and token did not change')
+        const [earlier] = l.windows, msOf = (t) => Date.parse(t)
+        // the decrypted one, one started in the earlier window that never connected, one started while codex was off
+        const exe = a.exe, inWin = { pid: PID + 1, startedAt: msOf(earlier.on_at) + 1 }, offStart = { pid: PID + 2, startedAt: msOf(earlier.off_at) + 1 }
+        assert.ok(offStart.startedAt < msOf(l.on_at), 'the off-start process started before the second on')
+        const procs = async () => [a, inWin, offStart].map((p) => ({ pid: p.pid, ppid: 1, uid: process.getuid(), startedAt: p.startedAt ?? p.start, exe, argv: [exe], env: () => null, envRead: false }))
+        const sio = { t: '', out(s) { this.t += s }, err(s) { this.t += s }, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
+        await statusRun(['--json'], { io: sio, env: w.env, home: w.home, platform, deps: { platform, procs, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }), rootStore: w.store } })
+        const rows = Object.fromEntries(JSON.parse(sio.t.slice(sio.t.indexOf('{'))).harnesses.codex.processes.map((r) => [r.pid, [r.captured, r.reason]]))
+        assert.deepEqual(rows, { [PID]: [true, null], [inWin.pid]: [true, null], [offStart.pid]: [false, 'config-after-start'] }, sio.t)
       } finally {
         for (const s of open) s.destroy()
         await box.stop()

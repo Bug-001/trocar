@@ -13,7 +13,8 @@ const verdict = (captured, reason = null) => ({ captured, reason })
  *   daemon       'running' | 'not-running' | 'not-responding' | 'unknown'
  *   deadDoor     proxy mode (macOS, Windows): the agents' proxy entries name trocar's door, which lives in the daemon — a daemon that is not running, or a door it does not hold, is a dead door (forwarder-down)
  *   procs        [{ pid, startedAt (ms or ISO), trusted: true | false | null, reason, negative }] — the harness's processes that send requests. `trusted` is the daemon's verdict when it answered;
- *                null = not judged: then the entry, then the certificate, then the start time against the entry's `installedAt` decides (a process older than its entry never read it: config-after-start, 4.6 §确认信任)
+ *                null = not judged: then the entry, then the certificate, then the start time against the entry's `installedAt` decides (a process older than its entry never read it: config-after-start, 4.6 §确认信任);
+ *                in proxy mode the caller gives `start` instead — the door's own start-time rule over the carrier and the on windows (4.11 P11 status): null = passes, else its code
  *   cert         true | null | a code — the certificate the harness's agents check trocar's leaves with is in effect (true; also where nothing says otherwise, Linux), not known (null), or not
  *                in effect and why (the 1.6 附录 B `cert-*` code of the form's `certificate`, certOfForms below). Like the entry, it decides only a process the daemon has not judged, and the harness's own row
  * → { captured: true | false | null, rows: [{ pid?, captured, reason }] }; `reason` is one of STATUS_REASONS, null when captured or not known. With no process the one row has no pid and is
@@ -46,6 +47,7 @@ export function judgeHarness({ desired, entryIntact = null, entryWhy = 'entry-mi
     if (p.trusted === true) return row(p.negative ? verdict(false, 'negative-cache') : verdict(true))
     if (entry) return row(entry)
     if (certificate) return row(certificate)
+    if (p.start !== undefined) return row(p.start === null ? verdict(true) : verdict(false, p.start)) // proxy mode: the door's own rule, judged by the caller (4.11 P11 status)
     const started = at(p.startedAt)
     if (started == null || Number.isNaN(started)) return row(verdict(false, 'start-time-unknown'))
     if (installed == null || Number.isNaN(installed)) return row(verdict(null))

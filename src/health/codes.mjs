@@ -59,6 +59,9 @@ export const TRUST_REASONS = Object.freeze([
   'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override',
 ])
 
+/** The reasons a restart of the agent fixes (「重启后才会被采集」, 1.6 §1.1): `on`'s restart list, `status`'s, and doctor's expected class read this one list. */
+export const RESTART_REASONS = Object.freeze(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim'])
+
 /** Codes trocar names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
   daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
