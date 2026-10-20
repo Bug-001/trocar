@@ -87,10 +87,9 @@ export function disclosureHtml({ id, title, summary = '', body = '', open = fals
 // `rows` is [key, value] pairs or an object; values are already-rendered HTML when `html` is set (keys are escaped either way).
 export function techDetailsHtml(rows, { id = 'tech', html = false } = {}) {
   const pairs = Array.isArray(rows) ? rows : Object.entries(rows)
-  const grid = html
-    ? pairs.map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${v}</span>`).join('')
-    : pairs.map(([k, v]) => [`<span class="k">${esc(k)}</span>`, `<span class="v">${esc(v)}</span>`]).join('')
-  const flat = html ? '' : pairs.map(([k, v]) => `${k}: ${v}`).join('\n')
+  // one string per pair: an empty key keeps its (empty) cell, so the value is a continuation row and the columns hold
+  const grid = pairs.map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${html ? v : esc(v)}</span>`).join('')
+  const flat = html ? '' : pairs.map(([k, v]) => (k ? `${k}: ${v}` : String(v))).join('\n')
   return disclosureHtml({ id, title: 'Technical details', body: `<div class="tech">${grid}</div><button type="button" class="copybtn" data-copy="${esc(flat)}">Copy</button>`, open: false })
 }
 

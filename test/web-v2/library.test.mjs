@@ -160,3 +160,14 @@ test('(13) each row is one <a> with no nested focusable; truncated cells carry a
   for (const cls of ['lt', 'lhn']) assert.match(html, new RegExp(`class="${cls}" title="[^"]+"`))
   assert.match(html, /data-mark="project" title="[^"]+"/)
 })
+
+test('(A20) caption: a note is not counted as an unread file, yet it stays in technical details', () => {
+  const cf = captionFacts([{ where: 'a', reason: 'r', level: 'note' }, { where: 'b', reason: 'r' }, { where: 'c', reason: 'r' }])
+  assert.equal(cf.facts[0].n, 2); assert.equal(cf.tech.length, 3)
+  const only = captionFacts([{ where: 'a', reason: 'r', level: 'note' }])
+  assert.deepEqual(only.facts, []); assert.equal(only.tech.length, 1)
+})
+
+test('(A26b) the library skeleton holds no <header> landmark of its own', () => {
+  assert.ok(!SKELETON.includes('<header'))
+})

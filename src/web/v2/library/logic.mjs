@@ -138,10 +138,11 @@ export function projectOptions(list, selected) {
   return { html, sig: html }
 }
 
-// ── the caption row and its 技术细节: the document's errors[] (1.8 §说明行: N = the number of entries; each where · reason) ──
+// ── the caption row and its 技术细节: the document's errors[] (1.8 §说明行: N = the entries whose level is not note — a
+// note only says a read was slow; every entry, notes too, is listed in 技术细节 as where · reason) ──
 export function captionFacts(errors) {
-  const es = (errors || []).filter(Boolean)
-  return { facts: es.length ? [{ kind: 'not-all', n: es.length }] : [], tech: es.map((e) => `${e.where ?? ''} · ${e.reason ?? ''}`) }
+  const es = (errors || []).filter(Boolean), n = es.filter((e) => e.level !== 'note').length
+  return { facts: n ? [{ kind: 'not-all', n }] : [], tech: es.map((e) => `${e.where ?? ''} · ${e.reason ?? ''}`) }
 }
 
 // ── what the read failed with: a dead server is not an HTTP error ────────────────────────────────────────────────────
@@ -156,6 +157,7 @@ export function rowModel(s, now) {
   const multi = Array.isArray(s.harnesses) && s.harnesses.length > 1 // S14: field presence — before it, never drawn
   const probeOnly = !s.calls && s.probes > 0
   const entry = has(W.ENTRY, s.entrypoint) ? W.ENTRY[s.entrypoint] : (s.entrypoint ? String(s.entrypoint) : '')
+  const entryTip = has(W.ENTRY_TIP, s.entrypoint) ? W.ENTRY_TIP[s.entrypoint] : ''
   const inferred = !!s.harness_inferred
   return {
     key: sessionKey(s),
@@ -165,7 +167,7 @@ export function rowModel(s, now) {
     dim: probeOnly, calls: s.calls || 0, probes: s.probes || 0,
     logged: s.logged || 0, subagent: s.has_subagent === true, inferred, synthesized: !!s.session_synthesized,
     multi, multiNames: multi ? [...new Set(s.harnesses.map((x) => harnessName(harnessKey(x))))] : null,
-    entry, project: s.project_slug === '_unresolved' ? null : { name: s.project_name || s.project_dir || s.project_slug, path: s.project_path || s.project_dir || '' },
+    entry, entryTip, project: s.project_slug === '_unresolved' ? null : { name: s.project_name || s.project_dir || s.project_slug, path: s.project_path || s.project_dir || '' },
     when: relTime(s.last_ts, now), whenTip: s.last_ts ? fmtStamp(s.last_ts) : '',
   }
 }

@@ -2,7 +2,7 @@
 // exports mount(el, ctx) → {update(route), unmount()}. mount() is not handed the route: a screen reads its starting state from
 // ctx.router.current(). update(route) is called only when the route changes WITHIN the mounted screen (new params, another session); a
 // different screen is a fresh mount. There is no site-wide banner: a screen says what is wrong with itself.
-import { api } from './core/api.mjs'
+import { api, scoped } from './core/api.mjs'
 import { configure, bootToken, onForbidden } from './core/http.mjs'
 import { store } from './core/store.mjs'
 import * as router from './core/router.mjs'
@@ -15,6 +15,7 @@ import { mountSidebar } from './shell/sidebar.mjs'
 import { safeMount, screenErrorHtml } from './shell/safemount.mjs'
 import { UNKNOWN_ROUTE, FORBIDDEN } from './labels/shell.mjs'
 import { COMMANDS } from './labels/capture.mjs'
+import { READING } from './labels/common.mjs'
 import { BRAND } from './core/icons.mjs'
 
 // every screen of every route (core/router.mjs); the ones whose content belongs to a later task are their page head until then
@@ -60,13 +61,14 @@ watchHarnessIcons(document.body) // every agent icon box any screen, menu or dra
   link.href = 'data:image/svg+xml,' + encodeURIComponent(new XMLSerializer().serializeToString(svg))
 })()
 
-let cur = null // { screen, inst } — the mounted screen
+let cur = null // { screen, inst, ac } — the mounted screen; ac aborts its reads once it is gone (1.2 #22)
 let shut = false // K-30 latched: no screen mounts again
 let seq = 0 // a screen loads asynchronously; a newer route cancels an older load
 
 function unmountCurrent() {
   if (!cur) return
   try { cur.inst.unmount() } catch (e) { console.error('unmount failed', e) }
+  cur.ac.abort() // after unmount(): the screen's pollers are stopped, so an aborted answer writes nothing
   cur = null
   setScreenKeys(null)
   screenEl.replaceChildren()
@@ -87,6 +89,7 @@ async function show(route) {
     return
   }
   unmountCurrent()
+  screenEl.innerHTML = `<div class="page"><p class="screenwait">${esc(READING)}</p></div>` // never a blank area while the module loads
   let mod
   try { mod = await SCREENS[route.screen]() } catch (e) {
     if (mine !== seq) return
@@ -95,8 +98,10 @@ async function show(route) {
   }
   if (mine !== seq) return // a newer route took over while this screen was loading
   // a mount() that throws leaves no residue (no key handler, an emptied screen) and the screen says why
-  const inst = safeMount(mod, screenEl, ctx, { clearKeys: () => setScreenKeys(null) })
-  if (inst) cur = { screen: route.screen, inst }
+  const ac = new AbortController()
+  const inst = safeMount(mod, screenEl, { ...ctx, signal: ac.signal, api: scoped(api, ac.signal) }, { clearKeys: () => setScreenKeys(null) })
+  if (inst) cur = { screen: route.screen, inst, ac }
+  else ac.abort()
 }
 
 // the first route: write the canonical hash quietly (an empty hash becomes #/overview), then mount. An unknown route is handled by show().
@@ -112,4 +117,5 @@ onForbidden(() => {
   document.body.innerHTML = `<main class="forbidden"><p>${esc(FORBIDDEN)}</p><p><code>${esc(COMMANDS.board)}</code> ${copyBtn(COMMANDS.board)}</p></main>`
 })
 router.onRoute(show)
-show(first)
+// after the first screen settles, load every other screen module once, so a later screen change does not wait on the network
+show(first).finally(() => (globalThis.requestIdleCallback || ((f) => setTimeout(f, 1500)))(() => { for (const l of Object.values(SCREENS)) l().catch(() => {}) }))

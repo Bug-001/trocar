@@ -1,5 +1,6 @@
 // core/http.mjs — the board's only network code (4.4 §前置定义): GET /api/<name> with the per-user token in a header, conditional
-// GET against the server's ETag, and every failure (non-2xx, broken JSON, no network) folded into {ok:false, status, error}.
+// GET against the server's ETag, a read deadline and an optional caller signal, and every failure (non-2xx, broken JSON, no network,
+// deadline, cancelled) folded into {ok:false, status, error}.
 // A failure is never returned as an empty success (invariant 4).
 //
 // post(path, body) is the one write: a JSON body to /control/<verb> (4.4 §控制面), its parsed answer kept for every status (a 409 carries the plan).
@@ -31,6 +32,11 @@ function qs(params) {
 // | { cut:true } (the body never fully arrived: the connection broke after the head — a transient failure, 1.5 K-29)
 export const CUT_OFF = 'the answer did not arrive in full'
 const CUT = Object.freeze({ ok: false, status: 0, error: CUT_OFF })
+// K-29 (1.5): a read not fully answered (head and body) within the deadline is a failure like a cut answer; a read the caller
+// cancels (a screen change, main.mjs) ends as ABORTED, which no screen shows or retries
+export const READ_DEADLINE_MS = 60_000
+export const TIMED_OUT = `no answer within ${READ_DEADLINE_MS / 1000} s`
+export const ABORTED = 'cancelled'
 async function readBody(r) {
   let t
   try { t = await r.text() } catch { return { cut: true } }
@@ -44,18 +50,30 @@ function latch(status) {
   for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) }
 }
 
-export async function get(path, params) {
+export async function get(path, params, { signal } = {}) {
   if (forbidden) return FORBIDDEN
+  if (signal && signal.aborted) return { ok: false, status: 0, error: ABORTED }
   const url = path + qs(params)
   const headers = {}
   if (token) headers[CONTROL_TOKEN_HEADER] = token
   const was = held.get(url)
   if (was) headers['if-none-match'] = was.etag
-  let r
-  try { r = await fetch(url, { cache: 'no-store', headers }) } catch (e) { return { ok: false, status: 0, error: String((e && e.message) || e) } }
-  if (r.status === 304) return was ? { ok: true, data: was.data } : { ok: false, status: 304, error: 'HTTP 304' }
-  const b = await readBody(r)
-  if (b.cut) return CUT
+  const ac = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; ac.abort() }, READ_DEADLINE_MS)
+  const cancel = () => ac.abort()
+  if (signal) signal.addEventListener('abort', cancel, { once: true })
+  const ended = (fallback) => (timedOut ? { ok: false, status: 0, error: TIMED_OUT } : signal && signal.aborted ? { ok: false, status: 0, error: ABORTED } : fallback)
+  let r, b
+  try {
+    try { r = await fetch(url, { cache: 'no-store', headers, signal: ac.signal }) } catch (e) { return ended({ ok: false, status: 0, error: String((e && e.message) || e) }) }
+    if (r.status === 304) return was ? { ok: true, data: was.data } : { ok: false, status: 304, error: 'HTTP 304' }
+    b = await readBody(r) // inside the deadline: a body that stalls is aborted and lands in readBody's catch
+  } finally {
+    clearTimeout(timer)
+    if (signal) signal.removeEventListener('abort', cancel)
+  }
+  if (b.cut) return ended(CUT)
   const body = 'json' in b ? b.json : null
   latch(r.status)
   if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status }
