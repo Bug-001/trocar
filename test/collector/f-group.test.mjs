@@ -175,7 +175,7 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
   let st = await statusOffline(s)
   assert.match(st.text, /not running/)
   assert.match(st.text, /pid 7171/, `(iii) status lists the condition with no daemon:\n${st.text}`)
-  assert.match(st.text, /relay\.trocar\.test/)
+  assert.match(st.text, /relay\.asight\.test/)
   d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p).arch, harnesses: [cc], upstreamCa: up.ca.certPem })
   try {
     const h = await endpoint(s)
