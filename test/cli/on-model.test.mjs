@@ -96,4 +96,26 @@ for (const os of ['darwin', 'win32']) {
     assert.deepEqual([last.kind, last.outcome, last.source, last.harnesses, Array.isArray(last.refused)], ['result', 'failed', 'board', [], true], JSON.stringify(last)) // refused before any write: it turned nothing on
     assert.equal(new Set(run.map((l) => l.run)).size, 1, 'one run, one run id')
   })
+
+  // 1.6 §1 / §1.2: a run that cannot get the op lock, and one that throws under it, are failed runs: each leaves one result line naming no harness;
+  // the busy one's --json stdout is one document with nothing claimed undoable
+  test(`1.6 §1 (${os}): on with the lock held, and on whose daemon start throws, each end with a failed result line that turned nothing on`, async () => {
+    const w = await modelWorld({ os, commands: ['codex'] })
+    assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
+    const results = () => (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')) : []).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note' && l.kind === 'result')
+    const deps = (unit) => ({ getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, lockWaitMs: 30, parts: { os, harnesses: w.harnesses, arch: { unit: { userUnit: () => unit } } } })
+    fs.writeFileSync(path.join(w.dir, 'op.lock'), JSON.stringify({ pid: process.pid, start_time: null, boot_id: null }) + '\n')
+    const io = fakeIo()
+    assert.equal(await runOn({ io, env: w.env, home: w.home, platform: os, deps: deps(neverStarts), ids: null, flags: new Set(['--yes']), json: true }), 1, io.text())
+    const doc = io.json()
+    assert.deepEqual([doc.ok, doc.undo], [false, null], JSON.stringify(doc))
+    let last = results().at(-1)
+    assert.deepEqual([last.outcome, last.harnesses, last.refused], ['failed', [], []], JSON.stringify(last)); assert.deepEqual(checkRecord(last), [])
+    fs.rmSync(path.join(w.dir, 'op.lock'))
+    const n = results().length
+    assert.equal(await runOn({ io: fakeIo(), env: w.env, home: w.home, platform: os, deps: deps(neverStarts), ids: null, flags: new Set(['--yes']), json: true }), 1) // the unit's start throws
+    assert.equal(results().length, n + 1, 'the thrown run wrote its one result line')
+    last = results().at(-1)
+    assert.deepEqual([last.outcome, last.harnesses], ['failed', []], JSON.stringify(last)); assert.deepEqual(checkRecord(last), [])
+  })
 }
