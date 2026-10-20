@@ -14,6 +14,10 @@ import { socksHandshake } from './socks.mjs'
 import { createDrain } from './drain.mjs'
 
 const msgOf = (e) => String((e && e.message) || e)
+// How long after our side of the TLS handshake with the client a zero-data close still reads as a rejection of our leaf (RFC 4.6 §引擎 5):
+// rejecting clients go inside the handshake or within ms after it, an unused pooled socket lives >= 60 s (Chromium; Go, reqwest 90 s).
+// Tests shorten it through the engine's timing.rejectWindowMs.
+export const REJECT_WINDOW_MS = 10_000
 // host of a CONNECT authority or a SOCKS target: "[::1]:443" → "::1", "a.test:443" → "a.test". An IPv6 literal is
 // written compressed whatever form the client sent ("[0:0:0:0:0:0:0:1]:443" → "::1"), as SOCKS5 targets are (RFC 4.6
 // §记录 代理前导): one spelling per host on the row and in the negative-cache key.
@@ -463,22 +467,25 @@ export function handleFlow(client, meta, ctx) {
       try { leaf = ctx.issuer.secureContextFor(host) } catch (e) { return stepAside(upTls, all, cSock, host, isTunnel, key, 'leaf-error', msgOf(e)) }
       cSock.unshift(all)                                    // replay the ClientHello to our TLS server
       clientTls = new tls.TLSSocket(cSock, { isServer: true, secureContext: leaf, ALPNProtocols: ['http/1.1'] })
-      // Rejection (§引擎 5, D37): the client closes or resets without one byte of application data, alert
-      // or not, Finished or not — Node sends no alert, and under TLS 1.2 our side of the handshake
-      // completes before the client checks our leaf and hangs up. Judged on whichever of error / end /
-      // close comes first, by listeners added BEFORE relay()'s: the reason is on the record before relay's
-      // teardown writes it (the store serializes at call time). A connection that carried data resets
-      // the (pid, host) count. The rule is about the CLIENT going: an idle connection the upstream closed
-      // first (a preconnect timing out), or one the engine tore down, says nothing about our leaf.
-      let appData = false, judged = false, notClient = false
-      clientTls.once('data', () => { appData = true })
+      // Rejection (§引擎 5, D37): the client closes or resets without one byte of application data, alert or not, Finished or not,
+      // before our side of the handshake completes or within REJECT_WINDOW_MS after it — Node sends no alert, and under TLS 1.2 our
+      // side completes before the client checks our leaf and hangs up within ms. Judged on whichever of error / end / close comes
+      // first, by listeners added BEFORE relay()'s: the reason is on the record before relay's teardown writes it (the store serializes
+      // at call time). Acceptance resets the (pid, host) count the moment it is seen: the first byte of data, or the connection still
+      // open when the window elapses; a zero-data close after that is an unused pooled socket timing out, no rejection and no failure.
+      // The rule is about the CLIENT going: an idle connection the upstream closed first (a preconnect timing out), or one the engine
+      // tore down, says nothing about our leaf.
+      let accepted = false, judged = false, notClient = false, window = null
+      const accept = () => { if (accepted || judged) return; accepted = true; clearTimeout(window); ctx.negCache.observe(key, { rejected: false, meta, host }) }
+      clientTls.once('data', accept)
+      clientTls.once('secure', () => { window = setTimeout(accept, ctx.rejectWindowMs ?? REJECT_WINDOW_MS); if (window.unref) window.unref() })
       const otherSide = () => { if (!judged) notClient = true }
       upTls.on('end', otherSide); upTls.on('error', otherSide); upTls.on('close', otherSide)
       const judge = (e) => {
         if (judged) return
         judged = true
-        if (appData) return ctx.negCache.observe(key, { rejected: false, meta, host })
-        if (notClient || selfClosed) return
+        clearTimeout(window)
+        if (accepted || notClient || selfClosed) return
         notCaptured('client-rejected-leaf', 'client-rejected-leaf')
         // how the client went, as far as the engine can see (RFC 4.6 §记录): its TLS alert, a reset, or a close
         // with no error (a Node client checks our leaf after the handshake and sends no alert). Its own

@@ -163,7 +163,7 @@ for (const maxVersion of ['TLSv1.2', 'TLSv1.3']) {
     const untrusting = () => request(h.port, upCa.certPem, REQ, { maxVersion }).then(() => 'ok', () => 'rejected')
     assert.equal(await untrusting(), 'rejected'); await within(h.settled(), 'first flow finalized')
     assert.equal(h.flows[0].reason, 'client-rejected-leaf')
-    assert.equal(h.ctx.negCache.list().length, 0, 'one rejection is not enough (pooled sockets close unused too)')
+    assert.equal(h.ctx.negCache.list().length, 0, 'one rejection is not enough (an unused connection can still close inside the window)')
     assert.equal(await untrusting(), 'rejected'); await within(h.settled(), 'second flow finalized')
     assert.deepEqual(h.ctx.negCache.list().map((e) => [e.pid, e.host, e.cause, e.rejections]), [[1, 'upstream.test', 'client-rejected-leaf', 2]])
     // the negative-cache write is an event of its own, but the engine's negCache wrapper writes it (engine.test, once);
