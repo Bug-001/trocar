@@ -44,7 +44,7 @@ test('只读的 ~/.trocar 仍出文档,写不下索引不静默', async () => {
     assert.deepEqual(validateQueryDoc(doc, 'segments'), [])
     assert.equal(doc.segments[0].records, 1)        // the answer comes from the segment itself
     assert.equal(doc.ok, false)
-    assert.ok(doc.errors.some((e) => /index-unwritable/.test(e.reason)), JSON.stringify(doc.errors))
+    assert.ok(doc.errors.some((e) => e.code === 'index-unwritable'), JSON.stringify(doc.errors))
     assert.equal(fs.existsSync(indexDir(home)), false)
   } finally { fs.chmodSync(home, 0o700) }
   assert.deepEqual(snapshot(home), before)

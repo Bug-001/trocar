@@ -41,6 +41,8 @@ function checkPage(doc, { cursor, limit }, total) {
   for (const c of calls) if (c.paged_out && c.gi >= cursor - 1 && c.gi < cursor + limit) assert.ok(Math.abs(c.gi - mid) >= far, 'nearest the middle first')
 }
 
+// a note (`level`) is about the read that made it (3.5 读不全): a cold fold indexed the segment, a warm one did not
+const sansNotes = (d) => { const errors = d.errors.filter((e) => !e.level); return JSON.stringify({ ...d, ok: errors.length === 0, errors }) }
 for (const wire of ['http', 'threads', 'ws']) for (const growth of [800, 12_000, 60_000]) for (const subEvery of [0, 3]) {
   test(`a page of a ${wire} session (context +${growth} B a turn, subagent every ${subEvery || 'never'}): the body budget and the meta of every call`, async () => {
     const home = path.join(tmpDir('trocar-sstream-'), '.trocar')
@@ -52,7 +54,7 @@ for (const wire of ['http', 'threads', 'ws']) for (const growth of [800, 12_000,
       checkPage(cold, spec, 70)
       const ctx = { fs: freshFs() }
       await session(home, p, ctx)
-      assert.equal(JSON.stringify(await session(home, p, ctx)), JSON.stringify(cold), 'a warm answer is the cold one, byte for byte')
+      assert.equal(sansNotes(await session(home, p, ctx)), sansNotes(cold), 'a warm answer is the cold one, byte for byte')
     }
   })
 }

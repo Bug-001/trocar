@@ -28,6 +28,9 @@ const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.met
 const HEAP_MB = 128 // a third of the production worker's: the session below outgrows it several times over
 const MB = 1 << 20
 
+// a note (`level`) is about the read that made it (3.5 读不全): a cold fold indexed the segment, a warm one did not
+const sansNotes = (d) => { const errors = d.errors.filter((e) => !e.level); return JSON.stringify({ ...d, ok: errors.length === 0, errors }) }
+
 // subagents run side by side and their calls end late (written after calls that started after them), as on a live session
 for (const shape of [{ wire: 'http' }, { wire: 'threads', growth: 60_000 }, { wire: 'ws', growth: 60_000 }].map((x) => ({ ...x, subLanes: 4, late: 3 })))
 test(`3.5 验收 11: a ${shape.wire} session growing past the worker heap while the board follows it gets a complete answer every time, and no worker dies`, { timeout: 180_000 }, async () => {
@@ -92,7 +95,7 @@ test(`3.5 验收 11: a ${shape.wire} session growing past the worker heap while 
     const q2 = await quiet()
     assert.ok(q2[0] && q2[0] === q2[1])
     const cold = await runQuery('session', { id: s.id, after: String(centerCursor(tail.gi, 60)), limit: '60' }, { home })
-    assert.equal(JSON.stringify(cold), q2[0], 'the grown spine answers what a fold from scratch does')
+    assert.equal(sansNotes(cold), sansNotes(JSON.parse(q2[0])), 'the grown spine answers what a fold from scratch does')
     assert.deepEqual(failed, [], 'no query worker died')
   } finally {
     server.close(); svc.stop()

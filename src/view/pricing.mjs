@@ -7,10 +7,20 @@ import { readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Built-in prices: the vendor's (Anthropic) model price list as of 2026-10-06, in $/Mtok
+// [input, output, cache_write, cache_read]; cache write = 1.25x input (the 5-minute TTL), cache read =
+// 0.1x input unless the vendor lists a figure. The board picks the LONGEST key contained in the model id,
+// so each family key is that family's current price and a longer key only marks a generation that differs.
+// Haiku 5.5's row is its tier for prompts up to 100K tokens.
 export const DEFAULT_PRICING = {
-  opus: [15, 75, 18.75, 1.5],
-  sonnet: [3, 15, 3.75, 0.3],
-  haiku: [1, 5, 1.25, 0.1],
+  opus: [5, 25, 6.25, 0.5], // Opus 5 / 4.8 / 4.7 / 4.6 / 4.5
+  'opus-5-5': [4, 20, 5, 0.2],
+  'opus-4-1': [15, 75, 18.75, 1.5],
+  'opus-4-2025': [15, 75, 18.75, 1.5], // Opus 4.0 (dated id claude-opus-4-YYYYMMDD)
+  sonnet: [3, 15, 3.75, 0.3], // Sonnet 4.6 and older
+  'sonnet-5': [2, 10, 2.5, 0.2], // Sonnet 5 / 5.5
+  haiku: [1, 5, 1.25, 0.1], // Haiku 4.5
+  'haiku-5': [0.1, 0.5, 0.125, 0.01], // Haiku 5.5
 };
 
 export const DEFAULT_PRICING_PATH = process.env.TROCAR_PRICING || path.join(os.homedir(), '.atrace', 'pricing.json');

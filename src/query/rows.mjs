@@ -9,16 +9,15 @@ import nodeFs from 'node:fs';
 import path from 'node:path';
 import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
-import { allSegments, warmSegmentIndex } from './index-build.mjs';
+import { segmentFiles, warmSegmentIndex, problemEntry } from './index-build.mjs';
 import { trocarHome } from '../paths.mjs';
-import { warmCache, fsTag } from './warm.mjs';
 
 // WARM (D63 ①, 1.6 §4.1 附近的查询): the rows of one segment come from the ONE warm reading of its index
 // (src/query/index-build.mjs `warmSegmentIndex`, which `allSegments` reads through as well), kept against that
-// segment's own source file. `allSegments` is asked again only when the NAMES in raw/ change (a rollover, a seal): it
-// is used here for the ordered segment list alone, and every row and problem below comes from the stat-revalidated
-// reading, so a line appended to the live segment is never missed.
-const segList = warmCache({ max: 4 });
+// segment's own source file, so a line appended to the live segment is never missed. The segment list is the names in
+// raw/ (`segmentFiles`), read each time: nothing is kept here, so a note about the read that indexed a segment
+// (`index-cold`) reaches this read's `errors` and no later one.
+
 export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(home, 'raw')).sort().join('\n'); } catch { return ''; } };
 
 /**
@@ -30,13 +29,12 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
 export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [] } = {}) {
   const assign = createSynthAssigner();
   const out = [];
-  const segments = await segList.get(`${fsTag(fs)}\n${home}`, namesStamp(home, fs), () => allSegments({ home, fs }));
-  for (const s of await segments) {
-    const { records, problems } = await warmSegmentIndex({ home, segment: s.segment, fs });
-    for (const pr of problems) errors.push({ where: `segments/${s.segment}`, reason: `${pr.code}: ${pr.reason}` });
+  for (const [segment] of segmentFiles(home, fs)) {
+    const { records, problems } = await warmSegmentIndex({ home, segment, fs });
+    for (const pr of problems) errors.push(problemEntry(`segments/${segment}`, pr));
     for (const r of records) {
       const synth = r.synth_hash ? assign({ harness: r.harness_id, hash: r.synth_hash, ms: Date.parse(r.ts || '') }) : null;
-      out.push({ ...r, segment: s.segment, lineNo: Number(String(r.id).split(':').pop()), session_id: r.session_key ?? synth ?? null, synthesized: !!synth });
+      out.push({ ...r, segment, lineNo: Number(String(r.id).split(':').pop()), session_id: r.session_key ?? synth ?? null, synthesized: !!synth });
     }
   }
   return out;

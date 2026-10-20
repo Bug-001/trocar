@@ -1,7 +1,8 @@
 // core/sensitive.mjs — the credential-class header names, ONE list for the whole board (2.6 §C 凭据类头 / 4.1 §凭据处置).
-// The same four HTTP-generic names the capture side stores verbatim and the server masks on display
-// (src/capture/redact.mjs : SECRET_HEADERS — a test imports both and compares). No provider knowledge: these are
-// standard HTTP header names. 1.9's proxy-address redaction (redactUrlCredentials) also lives in this file.
+// The same four HTTP-generic names the capture side stores verbatim and the server blanks in every query document, naming
+// them in ctl.masked (src/capture/redact.mjs : SECRET_HEADERS — a test imports both and compares); this list stays the
+// front end's floor for an answer that carries no ctl.masked. No provider knowledge: these are standard HTTP header
+// names. 1.9's proxy-address redaction (redactUrlCredentials) also lives in this file.
 import { esc } from './fmt.mjs'
 export const CREDENTIAL_HEADERS = Object.freeze(['authorization', 'x-api-key', 'cookie', 'proxy-authorization'])
 
@@ -10,6 +11,10 @@ export const CREDENTIAL_HEADERS = Object.freeze(['authorization', 'x-api-key', '
 // this list is the front end's own floor for answers that carry no `masked` field (2.6 §C).
 export const isCredentialHeader = (name) =>
   typeof name === 'string' && CREDENTIAL_HEADERS.includes(name.trim().toLowerCase())
+
+/** One credential header's value: the server gives it only on a `calls {ref, reveal}` read (2.6 §C). Returns api.get's own
+ * {ok, status, data, error}; the record (data.records[0]) carries that one value, every other credential still blanked. */
+export const revealHeader = (api, ref, name, opts) => api.get('calls', { ref, reveal: String(name).trim().toLowerCase() }, opts)
 
 /** Any URL credentials in a text → `***@` (1.9 §保真边界: 代理地址里的用户名与密码一律显示成 `***@`)。
  * Covers scheme://user:pass@host in any position; an already-redacted `***@` passes through unchanged. Pure, no DOM. */
