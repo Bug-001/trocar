@@ -160,7 +160,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
   // with no names, every harness with a form present on this machine gets a row too, besides the ones asight's records know (1.6 §3.5, D65④):
   // the row is where Set up and the board's on / off appear for a harness installed after asight. Proxy mode only; `on` / `off` do not read this list.
-  if (!names && isProxyMode(platform) && desc.value) {
+  if (!names && isProxyMode(platform) && desc.value && daemonMayStart(m)) { // with asight not installed there is nothing to set up or turn on: the summary says so
     try {
       const present = await (deps.presentHarnesses || (await import('../collector/net-deps.mjs')).presentHarnesses)({ os: platform, home, env, harnesses: desc.value, fs })
       wanted = [...new Set([...wanted, ...present])].sort((a, b) => order(a) - order(b) || a.localeCompare(b))

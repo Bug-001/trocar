@@ -195,7 +195,7 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
   } finally { await d.stop(); up.close() }
   st = await statusOffline(s)
   assert.match(st.text, /ca-invalid/)
-  assert.doesNotMatch(st.text, /not installed/)
+  assert.doesNotMatch(st.text, /Certificate +not installed|No harness is set up/) // the harnesses of this machine install did not see are named `not installed:`
   await assert.rejects(install(s), /CA|unusable/i, '(c) install does not answer "already installed"')
   p.done(); s.done()
 })
