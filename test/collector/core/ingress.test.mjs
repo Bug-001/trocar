@@ -275,18 +275,28 @@ test('W13 an upstream that cannot be reached is a 502, never a 200 first; the ro
   assert.equal(L.engine.stats().ingress.unreachable, 1)
 })
 
-test('W73 upstream-unreachable blames the door\'s upstream only when the upstream proxy itself cannot be dialled (or its kind cannot be); a dead target host, direct or behind a proxy that took the TCP connection, stays on its row', T, async (t) => {
+test('W73 upstream-unreachable blames the door\'s upstream only when the upstream proxy itself fails before a target is named (dial, SOCKS5 method / auth stage) or its kind cannot be dialled; a dead target host, direct or after the proxy got the request naming it, stays on its row', T, async (t) => {
   const deadPort = () => new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
-  const closer = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => s.destroy()) }) // a proxy that takes the TCP connection, then drops the CONNECT for this target
-  await new Promise((r) => closer.listen(0, '127.0.0.1', r))
-  t.after(() => closer.close())
+  const listen = async (onConn) => { const s = net.createServer((c) => { c.on('error', () => {}); onConn(c) }); await new Promise((r) => s.listen(0, '127.0.0.1', r)); t.after(() => s.close()); return s.address().port }
+  // takes the TCP connection, then drops the first message: for HTTP that is the CONNECT naming the target; for SOCKS5 it is the greeting, before any target
+  const closer = await listen((c) => c.once('data', () => c.destroy()))
+  // takes the connection and answers in something that is not SOCKS5: the method reply already shows the proxy is broken
+  const garbage = await listen((c) => c.once('data', () => c.end('HTTP/1.1 400 Bad Request\r\n\r\n')))
+  // a SOCKS5 proxy that accepts no-auth, then drops the CONNECT request that names the target
+  const socksDrop = await listen((c) => { let n = 0; c.on('data', () => { if (n++ === 0) c.write(Buffer.from([5, 0])); else c.destroy() }) })
+  // a SOCKS5 proxy that asks for user/pass, then drops the authentication
+  const authDrop = await listen((c) => { let n = 0; c.on('data', () => { if (n++ === 0) c.write(Buffer.from([5, 2])); else c.destroy() }) })
+  const auth = { username: 'u', password: 'p' }
   const dead = await deadPort()
   const cases = [ // [upstream, target, does the door's upstream get the blame]
     [{ kind: 'direct' }, `127.0.0.1:${dead}`, false],
     [{ kind: 'http', host: '127.0.0.1', port: dead }, 'api.example:443', true],
     [{ kind: 'socks5', host: '127.0.0.1', port: dead }, 'api.example:443', true],
-    [{ kind: 'http', host: '127.0.0.1', port: closer.address().port }, 'api.example:443', false],
-    [{ kind: 'socks5', host: '127.0.0.1', port: closer.address().port }, 'api.example:443', false],
+    [{ kind: 'http', host: '127.0.0.1', port: closer }, 'api.example:443', false],
+    [{ kind: 'socks5', host: '127.0.0.1', port: closer }, 'api.example:443', true],
+    [{ kind: 'socks5', host: '127.0.0.1', port: garbage }, 'api.example:443', true],
+    [{ kind: 'socks5', host: '127.0.0.1', port: authDrop, auth }, 'api.example:443', true],
+    [{ kind: 'socks5', host: '127.0.0.1', port: socksDrop }, 'api.example:443', false],
     [{ kind: 'quic', host: '127.0.0.1', port: dead }, 'api.example:443', true],
   ]
   for (const [upstream, target, blamed] of cases) {

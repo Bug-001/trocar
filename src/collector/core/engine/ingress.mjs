@@ -164,13 +164,14 @@ async function viaHttp(sock, up, target, deadline) {
 }
 async function viaSocks5(sock, up, target, deadline) {
   const r = reader(sock)
-  const fail = (m, what) => ({ ok: false, kind: 'unreachable', error: { type: m.timeout ? 'proxy_timeout' : 'proxy_closed', message: `the SOCKS5 proxy ${m.timeout ? 'did not answer' : 'closed the connection'} during ${what}` } })
+  // before the CONNECT request no target has been named: a failure there is the proxy's own, for every agent of the door (4.8 W73 `proxy: true`)
+  const fail = (m, what, proxy = true) => ({ ok: false, kind: 'unreachable', proxy, error: { type: m.timeout ? 'proxy_timeout' : 'proxy_closed', message: `the SOCKS5 proxy ${m.timeout ? 'did not answer' : 'closed the connection'} during ${what}` } })
   const bad = (what, reason) => ({ ok: false, kind: 'refused', reason, reply: null, what })
   try {
     sock.write(up.auth ? Buffer.from([5, 2, 0, 2]) : Buffer.from([5, 1, 0]))
     const m = await r.take((b) => (b.length < 2 ? null : b[0] !== 5 ? { invalid: 'not a SOCKS5 method reply' } : { length: 2, method: b[1] }), deadline)
     if (m.gone || m.timeout) return fail(m, 'the method exchange')
-    if (m.invalid) return { ok: false, kind: 'unreachable', error: { type: 'bad_proxy_reply', message: m.invalid } }
+    if (m.invalid) return { ok: false, kind: 'unreachable', proxy: true, error: { type: 'bad_proxy_reply', message: m.invalid } }
     if (m.method === 0xff) return bad('method', 'socks5-no-acceptable-method')
     if (m.method === 2 && up.auth) {
       const u = Buffer.from(up.auth.username), p = Buffer.from(up.auth.password)
@@ -186,7 +187,7 @@ async function viaSocks5(sock, up, target, deadline) {
         : Buffer.concat([Buffer.from([3, host.length]), host])
     sock.write(Buffer.concat([Buffer.from([5, 1, 0]), addr, Buffer.from([target.port >> 8, target.port & 255])]))
     const q = await r.take(socks5Request, deadline)
-    if (q.gone || q.timeout) return fail(q, 'the CONNECT')
+    if (q.gone || q.timeout) return fail(q, 'the CONNECT', false)
     if (q.invalid) return { ok: false, kind: 'unreachable', error: { type: 'bad_proxy_reply', message: q.invalid } }
     const rest = r.detach()
     if (q.cmd === 0) return { ok: true, sock, reply: 0, rest }
