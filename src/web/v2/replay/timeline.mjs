@@ -251,7 +251,7 @@ export function renderOverview(el, s) {
   strip.innerHTML = bg +
     (sampled ? `<span class="ovsample" title="Sampled: one point per bucket, not one per step (the strip is a map, not verbatim data)">${esc(L.SAMPLED)}</span>` : '') +
     '<div class="ovpin" id="ovpin"></div>' +
-    '<div class="ovbrush" id="ovbrush" title="Drag = pan · drag an edge = zoom · double-click = all (in a long session that does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>'
+    `<div class="ovbrush" id="ovbrush" tabindex="0" aria-label="${esc(W.BRUSH_LABEL)}" title="Drag = pan · drag an edge = zoom · double-click = all (in a long session that does not fit the row above, the largest range that fits)"><span class="ovh ovh-l"></span><span class="ovh ovh-r"></span></div>`
   repositionBrush(el, s)
 }
 export function repositionBrush(el, s) {

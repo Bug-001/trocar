@@ -8,6 +8,8 @@ import { esc } from '../core/fmt.mjs'
 import { L } from '../core/labels.mjs' // the saw legend's estimate note (1.3) — the only L left in this file
 import { ensureHarnessIcons } from '../core/chips.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
+import { openModal } from '../core/dom.mjs'
+import { keyAction } from './keymap.mjs'
 import { buildLanes, anchorLane, stepsOf } from './lanes.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
@@ -26,7 +28,7 @@ import { initLayout } from './layout.mjs'
 import { renderSessionHead, wireSessionHead, captureGap } from './header.mjs'
 import { stepBarHtml, wireStepBar } from './stepbar.mjs'
 import { SESSION_NOT_LISTED, BACK_TO_SESSIONS } from '../labels/shell.mjs'
-import { LOADING, CACHE_LEGEND, CACHE_LEGEND_UNK } from '../labels/replay.mjs'
+import { LOADING, CACHE_LEGEND, CACHE_LEGEND_UNK, KEYS_TITLE, KEY_LIST } from '../labels/replay.mjs'
 
 const PAGE_LIMIT = 60 // calls whose verbatim body rides on one page; the timeline itself is never limited by it
 const POLL_MS = 1500
@@ -105,7 +107,8 @@ export function mount(el, ctx) {
     getPlayhead: () => s.playhead, getCall: () => s.anchor && s.anchor.calls[s.playhead],
     perform: (j) => (j.kind === 'anchor' ? jumpToAnchor(s, j.id) : jumpToResourceBlock(s, j.resKey)),
   })
-  s.jumpTo = (step, jump) => { setPlayhead(step, true); jumps.queue(s.playhead, jump) }
+  // a jump fetches the page that holds its step; a plain step change never fetches (D64②: the window shows K-18 until asked)
+  s.jumpTo = (step, jump) => { setPlayhead(step, true); ensurePage(s.anchor && s.anchor.calls[s.playhead], false, selectedCall()); jumps.queue(s.playhead, jump) }
   s.queueJump = (jump) => jumps.queue(s.playhead, jump)
   s.openDetail = (lane, i) => openDetail(E.detail, s, lane, i)
   s.setPlayhead = setPlayhead
@@ -195,7 +198,6 @@ export function mount(el, ctx) {
     repositionBrush(E.saw, s)
     renderPlayheadAreas()
     restoreSelection()
-    ensurePage(s.anchor.calls[s.playhead], false, selectedCall())
     syncUrl()
   }
   // how many bars #sawrow can draw (timeline.mjs barsThatFit). A lane that has no width yet (not laid out) cannot judge: no limit.
@@ -359,18 +361,21 @@ export function mount(el, ctx) {
   if (rpbar) { rpbar.addEventListener('click', onRp); rpbar.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRp() } }) }
   const offs = [() => { if (rpbar) { rpbar.removeEventListener('click', onRp) } }, wireTimeline(E.saw, s), wireRails(E.rails, s), wireCtxWin(E.ctxwin, s), wireOutline(E.ctxnav, s), wireResources(E.resexp, s),
     wireRawPanel(E.rawpanel, s), wireDetail(E.detail, s), wireSessionHead(E.deskhead, s), wireStepBar(E.stepbar, s), initLayout(el)]
+  // 1.2 §键盘: a held key moves the target at once and paints at most once per frame
+  let keyTarget = null
+  const paintKey = () => { const t = keyTarget; keyTarget = null; if (!s.dead && t != null) setPlayhead(t, true) }
   const onKey = (e) => {
-    if (e.key === 'Escape' || !s.anchor) return
-    const N = s.anchor.calls.length
-    if (e.key === 'ArrowLeft') setPlayhead(s.playhead - 1, true)
-    else if (e.key === 'ArrowRight') setPlayhead(s.playhead + 1, true)
-    else if (e.key === 'Home') setPlayhead(0, true)
-    else if (e.key === 'End') setPlayhead(N - 1, true)
-    else return
+    if (e.key === 'Escape' || !s.anchor || e.ctrlKey || e.metaKey || e.altKey) return
+    const a = keyAction(e, { at: keyTarget ?? s.playhead, n: s.anchor.calls.length, problems: s.problems })
+    if (!a) return
     e.preventDefault()
+    if (a.keys) openModal({ title: KEYS_TITLE, bodyHtml: `<dl class="keylist">${KEY_LIST.map(([k, w]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(w)}</dd>`).join('')}</dl>` })
+    else if (a.follow) { s.follow = !s.follow; renderHeader(); if (s.follow) poll() }
+    else { if (keyTarget == null) requestAnimationFrame(paintKey); keyTarget = a.to }
   }
   setScreenKeys(onKey)
-  const onEscape = () => closeDetail(E.detail, s)
+  // popovers and menus close themselves first and stop the key (core/keys.mjs); here: the call drawer, then the bottom row
+  const onEscape = () => { if (E.detail.classList.contains('open')) closeDetail(E.detail, s); else if (s.rpOpen) onRp() }
   document.addEventListener('v2:escape', onEscape)
   const timer = setInterval(poll, POLL_MS) // the desk keeps reading; 「跟随最新」 only decides whether the playhead follows growth
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.

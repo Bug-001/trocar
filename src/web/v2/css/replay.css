@@ -447,3 +447,8 @@
   .pop .sir-narrow{display:block;}
   #stepbar{flex-wrap:wrap;}
 }
+/* 1.2 §键盘: the step bar and the brush show where the keyboard is */
+#stepbar .sbbtn:focus-visible,.ovbrush:focus-visible{outline:2px solid var(--action);outline-offset:1px;}
+.v2-modal .keylist{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0;}
+.v2-modal .keylist dd{margin:0;}
+.v2-modal .keylist kbd{font-family:var(--mono);color:var(--ink);}
