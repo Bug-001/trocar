@@ -11,7 +11,10 @@
 // that was 842-1142 ms against 548 ms locally. It answers 503 at once, which the one read client reads as "no warm
 // worker" and answers locally, at local speed; the same query line then warms a worker in the background, so the
 // next query is the warm one. "No worker while nobody queries" (D63) is untouched: nothing is forked until a query
-// arrives. The board's `relay` (4.4, D66) has no local path, so it is the one caller that waits for a fork.
+// arrives, and a worker nobody has asked anything for QUERY_IDLE_MS leaves (3.5 谁执行它). The DAEMON keeps that clock, not
+// the worker: it alone knows whether a request is in flight or queued (a worker's own timer was off for as long as one of
+// its answers was unfinished, so a stuck answer kept it, and its warm heap, for good), and the clock starts only when
+// nothing is, so an idle exit never cuts a query and is not a failure. The board's `relay` (4.4, D66) has no local path, so it is the one caller that waits for a fork.
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { QUERY_PATH, QUERY_NAMES } from './client.mjs'
@@ -23,6 +26,9 @@ const DEADLINE_MS = 30_000 // a worker SILENT this long is wedged, not slow: the
 /** How long a request that just crashed the worker is answered 500 with that crash's reason instead of being forked into the same
  *  crash again (3.5 §读不全不静默): the board polls every 1.5 s, and each fork re-read the whole session it died on. */
 export const CRASH_COOLDOWN_MS = 60_000
+/** A worker asked nothing this long leaves and gives its memory back: the board polls every 1.5 s while it is open, so it stays
+ *  warm while anyone is looking; the next query after an idle exit forks a new one (3.5 谁执行它). */
+export const QUERY_IDLE_MS = 120_000
 const STDERR_HEAD = 4000, STDERR_TAIL = 1000 // V8 prints its FATAL ERROR line after a few GC lines, then the native stack
 /** A control verb may run install's root steps (the board's Set up, 4.4 §控制面): the OS's root prompt, then its read-back, each up to OS_PROMPT_MS,
  *  and the rest of install. A worker killed while the dialog is open would leave no receipt and the carriers unplaced. */
@@ -35,7 +41,8 @@ const NO_WORKER = JSON.stringify({ error: 'no warm query worker in this daemon y
 
 const forkWorker = (home) => fork(WORKER, [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: [`--max-old-space-size=${WORKER_MEMORY_MB}`] })
 
-export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker, deadlineMs = DEADLINE_MS, controlDeadlineMs = CONTROL_DEADLINE_MS, now = Date.now }) {
+export function createQueryService({ home, failure = () => {}, fork: spawn = forkWorker, deadlineMs = DEADLINE_MS, controlDeadlineMs = CONTROL_DEADLINE_MS, idleMs = QUERY_IDLE_MS, now = Date.now }) {
+  let asked = 0, idle = null // requests queued or in flight; the idle clock, running only while there are none
   let child = null, pending = null, head = '', left = 0, errHead = '', errTail = '', paused = false
   let queue = Promise.resolve()
   let crashed = null // {line, reason, at}: the request the last worker died on, while that streak lasts
@@ -71,6 +78,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   // (4.4 D66 ③), which the board read as "not JSON" instead of "cut off".
   function drop(why) {
     const c = child, p = pending
+    clearTimeout(idle)
     child = null; pending = null; head = ''; left = 0; errHead = ''; errTail = ''; paused = false
     if (c) { c.removeAllListeners(); try { c.kill() } catch { /* already gone */ } }
     if (p) {
@@ -172,9 +180,22 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
   })
 
   /** Fork a worker and give it this very query, with nobody waiting for the answer: the next query finds it warm. */
-  const warmUp = (line) => { const go = () => run(line, SINK, deadlineMs); queue = queue.then(go, go).catch(() => {}) }
+  const warmUp = (line) => { const go = () => run(line, SINK, deadlineMs); queue = counted(queue.then(go, go)).catch(() => {}) }
 
   const lineOf = (name, params, indent = 0) => JSON.stringify({ name, params, indent }) + '\n'
+
+  /** Every request is counted from the moment it is queued until it is answered or failed; at none, the idle clock starts. */
+  const counted = (task) => {
+    asked++
+    clearTimeout(idle)
+    const done = () => {
+      if (--asked || !child) return
+      idle = setTimeout(() => { if (!asked) drop('the query worker was idle') }, idleMs)
+      idle.unref?.()
+    }
+    task.then(done, done)
+    return task
+  }
 
   /** Hand `line` to the worker (forked if there is none: run() starts it) and let its frame flow into `res`. */
   const answer = (line, res, ms = deadlineMs) => {
@@ -186,7 +207,7 @@ export function createQueryService({ home, failure = () => {}, fork: spawn = for
     // process's memory as a JavaScript value. A request that failed does not hold the next one up, and its
     // rejection reaches the server, which answers 500.
     const go = () => run(line, res, ms)
-    const task = queue.then(go, go)
+    const task = counted(queue.then(go, go))
     queue = task.catch(() => {})
     // Answered as soon as EITHER the document is through or the caller is gone; a failure is raised only while there
     // is someone to raise it to (writing a 500 into a closed socket is nobody's answer).

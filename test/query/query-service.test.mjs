@@ -13,6 +13,7 @@ import { TOKEN, withToken } from '../server/face.mjs'
 import { isCode, isWhere } from '../../src/health/codes.mjs'
 import { rawHome } from './raw-home.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
+import { within } from '../helpers/bounded.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 // A worker that answers one query (the warm-up's) and then dies on the next, which is how a caller WAITING for a
@@ -151,6 +152,38 @@ test('relay with no worker forks one and answers the document, not the cold 503 
     assert.equal(res.status, 200)
     assert.ok(res.ended)
     assert.deepEqual(JSON.parse(res.text()).segments, [])
+  } finally {
+    svc.stop()
+  }
+})
+
+test('the worker leaves after idleMs with nothing asked, says no failure, and the next query is answered by a new one; a query in flight is never cut (3.5 谁执行它)', async () => {
+  const said = [], kids = []
+  const IDLE = 40 // far shorter than a cold fork plus its first query: an idle clock that ran during a query would cut it
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), idleMs: IDLE, failure: (w, e) => said.push(e.code), fork: (h) => { const c = workerFork(h); kids.push(c); return c } })
+  const gone = (pid) => { try { process.kill(pid, 0); return false } catch { return true } }
+  const exited = (c) => { let t; return within(new Promise((d) => { t = setInterval(() => gone(c.pid) && (clearInterval(t), d()), 10) }), 5000, 'the idle worker left', () => clearInterval(t)) }
+  try {
+    // in flight: a cold fork and its query, then a body whose reader is full well past IDLE — both answered whole by the one worker
+    const first = recorder()
+    await svc.relay({ name: 'segments', params: {}, res: first })
+    assert.equal(first.status, 200)
+    const slow = recorder()
+    let drain = null
+    Object.assign(slow, { write: (b) => { slow.chunks.push(b); setTimeout(() => drain && drain(), 4 * IDLE); return false }, once: (ev, fn) => { if (ev === 'drain') drain = fn } })
+    await Promise.all([svc.relay({ name: 'sessions', params: {}, res: slow }), svc.relay({ name: 'pricing', params: {}, res: recorder() })])
+    assert.equal(slow.status, 200)
+    assert.ok(slow.ended && JSON.parse(slow.text()).sessions, 'the slow reader got its whole document')
+    assert.equal(kids.length, 1, 'no query was cut by the idle exit')
+    // idle: the worker leaves on its own clock, and that is not a failure
+    await exited(kids[0])
+    const next = recorder()
+    await svc.relay({ name: 'segments', params: {}, res: next })
+    assert.equal(next.status, 200)
+    assert.deepEqual(JSON.parse(next.text()).segments, [])
+    assert.equal(kids.length, 2, 'the next query forked a new worker')
+    await exited(kids[1])
+    assert.deepEqual(said, [], 'an idle exit is not a query-failed')
   } finally {
     svc.stop()
   }
