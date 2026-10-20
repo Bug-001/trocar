@@ -6,7 +6,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { fork, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { createQueryService } from '../../src/query/service.mjs'
+import { once } from 'node:events'
+import { createQueryService, CRASH_COOLDOWN_MS } from '../../src/query/service.mjs'
+import { createServer } from '../../src/server.mjs'
+import { TOKEN, withToken } from '../server/face.mjs'
 import { isCode, isWhere } from '../../src/health/codes.mjs'
 import { rawHome } from './raw-home.mjs'
 import { workerFork } from '../helpers/worker-fork.mjs'
@@ -48,8 +51,8 @@ async function warmed(svc, name = 'segments') {
 test('a worker that dies is recorded with a closed-set code, the caller is told, and the next query gets a new worker', async () => {
   const home = rawHome('trocar-qsvc-')
   const said = []
-  let forks = 0
-  const svc = createQueryService({ home, failure: (where, e) => said.push({ where, code: e.code, reason: e.message }), fork: (h) => (++forks === 1 ? dead() : alive(h)) })
+  let forks = 0, clock = 0
+  const svc = createQueryService({ home, now: () => clock, failure: (where, e) => said.push({ where, code: e.code, reason: e.message }), fork: (h) => (++forks === 1 ? dead() : alive(h)) })
   try {
     // The first caller is cold (503) and the worker it warms is the one that dies, so the second caller is the one
     // waiting on a document when it goes: that is who must be told, and the record is written either way.
@@ -63,6 +66,7 @@ test('a worker that dies is recorded with a closed-set code, the caller is told,
     assert.ok(isWhere(said[0].where) && isCode(said[0].code), 'the where and the code are in the closed sets (D38)')
     assert.match(said[0].reason, /code 3/, 'the record says how the worker ended')
 
+    clock += CRASH_COOLDOWN_MS // the request it died on is forked again only after its cool-down (the next test)
     const { res } = await warmed(svc)
     assert.equal(res.status, 200, 'the handler answered the response itself')
     assert.deepEqual(JSON.parse(res.text()).segments, [], 'the next query is answered by a new worker')
@@ -147,6 +151,69 @@ test('relay with no worker forks one and answers the document, not the cold 503 
     assert.equal(res.status, 200)
     assert.ok(res.ended)
     assert.deepEqual(JSON.parse(res.text()).segments, [])
+  } finally {
+    svc.stop()
+  }
+})
+
+// A fake worker for one request line: `script` runs on it. Spawned like the real one, so the service reads its stdout and stderr.
+const fake = (script) => () => spawn(process.execPath, ['-e', `process.stdin.on('data', (d) => { if (String(d).includes('\\n')) { ${script} } })`], { stdio: ['pipe', 'pipe', 'pipe'] })
+
+test('a crash says its FATAL line; the same request within the cool-down is answered 500 with it and forks nothing; one record per streak (3.5:42)', async () => {
+  const said = []
+  let forks = 0, clock = 0
+  // V8's out-of-memory shape: the FATAL ERROR line first, then kilobytes of native stack — the tail alone is not the reason.
+  const oom = fake(`process.stderr.write('<--- Last few GCs --->\\n\\nFATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\\n' + ' 1: 0x1 node::Abort() [node]\\n'.repeat(300), () => process.exit(134))`)
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), now: () => clock, failure: (w, e) => said.push(e.message), fork: (h) => (forks++, oom(h)) })
+  const ask = (name) => svc.relay({ name, params: {}, res: recorder() })
+  try {
+    await assert.rejects(ask('segments'), /FATAL ERROR: Reached heap limit/, 'the caller is told why')
+    assert.equal(said.length, 1)
+    assert.match(said[0], /FATAL ERROR: Reached heap limit/, 'the D38 reason carries the fatal line, not only the stack tail')
+    assert.equal(forks, 1)
+    clock += CRASH_COOLDOWN_MS - 1
+    await assert.rejects(ask('segments'), /FATAL ERROR: Reached heap limit/, 'within the cool-down: the same reason')
+    assert.equal(forks, 1, 'and no fork into the same crash')
+    clock += 1
+    await assert.rejects(ask('segments'), /FATAL ERROR/)
+    assert.equal(forks, 2, 'after the cool-down the request is tried again')
+    assert.equal(said.length, 1, 'the same request crashing it again is the same streak: one record')
+    await assert.rejects(ask('classes'), /FATAL ERROR/)
+    assert.equal(said.length, 2, 'another request that crashes it is a new record')
+  } finally {
+    svc.stop()
+  }
+})
+
+test('a worker that dies after the frame head aborts the response: the reader never gets a clean short 200 (4.4 D66 ③)', async () => {
+  const home = rawHome('trocar-qsvc-')
+  const svc = createQueryService({ home, failure: () => {}, fork: fake(`process.stdout.write('200 100\\n{"partial":', () => setTimeout(() => process.exit(3), 20))`) })
+  const { server } = createServer({ home, token: TOKEN, query: svc })
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  try {
+    const r = await fetch(`http://127.0.0.1:${server.address().port}/api/segments`, { headers: withToken() })
+    assert.equal(r.status, 200, 'the head was already out')
+    await assert.rejects(r.text(), 'the body read fails: the transfer was aborted, not ended')
+  } finally {
+    server.close(); svc.stop()
+  }
+})
+
+test('the deadline measures silence: a body waiting on a slow reader is not killed', async () => {
+  const said = []
+  const WANT = JSON.stringify({ a: 'x'.repeat(1000) })
+  // the frame comes in two writes; the response is full after the first and says so with 'drain' only well past the deadline
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs: 200, failure: (w, e) => said.push(e.message),
+    fork: fake(`const b = ${JSON.stringify(WANT)}; process.stdout.write('200 ' + b.length + '\\n' + b.slice(0, 500)); setTimeout(() => process.stdout.write(b.slice(500)), 50)`) })
+  const res = recorder()
+  let drain = null
+  Object.assign(res, { write: (b) => { res.chunks.push(b); return false }, once: (ev, fn) => { if (ev === 'drain') drain = fn } })
+  setTimeout(() => drain && drain(), 700)
+  try {
+    await svc.relay({ name: 'segments', params: {}, res })
+    assert.equal(res.text(), WANT, 'the whole document arrived')
+    assert.ok(res.ended)
+    assert.deepEqual(said, [], 'no failure was recorded')
   } finally {
     svc.stop()
   }

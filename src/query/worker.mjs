@@ -11,9 +11,11 @@
 // forwards the bytes without parsing or re-encoding them, so a 30 MB document costs it a few buffer writes (1.6
 // §4.1 「守护进程的负担」).
 //
-// `warm: true` on every query it runs: a query here is never the only one, so what a query may build FOR THE NEXT
-// ONE (src/query/named/session.mjs assembles the whole session after answering a window) is built here and nowhere
-// else — a one-shot CLI would pay for it and exit.
+// `later(fn)` on every query it runs: a query here is never the only one, so what a query may build FOR THE NEXT ONE
+// (src/query/named/session.mjs assembles the whole session, overview.mjs fills the usage sidecars) is built here and nowhere else —
+// a one-shot CLI would pay for it and exit. It runs only once the answer's frame is WRITTEN (3.5 谁执行它): between a frame's head
+// and its last byte this process does nothing else, so that work can neither delay the answer nor, if it fails or runs the heap
+// out, cost the caller the answer it was already sent.
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { LOCAL_ENV } from './client.mjs'
@@ -40,6 +42,7 @@ const write = (status, body) => new Promise((done) => {
 async function answer(line) {
   clearTimeout(idle)
   let status = 200, text
+  const after = []
   try {
     const { name, params, indent, control, body } = JSON.parse(line)
     if (control) { // one JSON line, the bytes `trocar <command> --json` prints into a pipe; the verb says the status (src/control/board.mjs)
@@ -51,7 +54,7 @@ async function answer(line) {
     } else { // `status` / `doctor` read the machine the way the control verbs do — same user home, environment and deps — so /api/status and
       // GET /control/status answer from one view of the machine (V91); the daemon passes no deps, so this is the real machine
       const deps = await depsP
-      text = JSON.stringify(await runQuery(name, params || {}, { home, warm: true, userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }), null, Number(indent) || 0)
+      text = JSON.stringify(await runQuery(name, params || {}, { home, later: (fn) => after.push(fn), userHome: path.dirname(home), env: deps.env || process.env, platform: deps.platform || process.platform, deps }), null, Number(indent) || 0)
     }
   } catch (e) {
     // 400 = the caller's mistake (an unknown name or parameter), 500 = this worker's. The message is the query
@@ -60,7 +63,9 @@ async function answer(line) {
     text = JSON.stringify({ error: String((e && e.message) || e) })
   }
   await write(status, Buffer.from(text, 'utf8'))
+  text = null
   rearm()
+  if (after.length) setImmediate(async () => { for (const fn of after) { try { await fn() } catch { /* the next query does it */ } } })
 }
 
 let buf = '', chain = Promise.resolve() // one at a time: a request is answered before the next is read

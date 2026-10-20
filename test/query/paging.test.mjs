@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { rawHome, writeSegment } from './raw-home.mjs'
-import { runQuery, LIMIT_DEFAULT, LIMIT_MAX } from '../../src/query/named/index.mjs'
+import { runQuery, paginate, LIMIT_DEFAULT, LIMIT_MAX } from '../../src/query/named/index.mjs'
 
 const SEG = '20261018T100000Z'
 const at = (i) => new Date(Date.parse('2026-10-18T10:00:00.000Z') + i * 1000).toISOString()
@@ -64,4 +64,23 @@ test('calls 两种形状:不带 --class 给 classes:[{class,count}],带 --class 
   const since = await runQuery('calls', { class: 'telemetry', since: at(6) }, { home })
   assert.deepEqual([since.total, since.records[0].id], [1, `${SEG}:4`])
   assert.deepEqual((await runQuery('calls', { harness: 'codex' }, { home })).classes, [])
+})
+
+test('3.5 §分页: a page that reads its records back is cut by stored bytes as well as by count — at least one row, and next walks every row once', () => {
+  for (const cap of [1, 100, 1000]) for (const sizes of [[5], [2000, 1, 1], [40, 60, 80, 999, 3, 3, 3, 1500, 7], Array.from({ length: 120 }, (_, i) => (i * 37) % 250)]) for (const limit of [1, 2, 50]) {
+    const list = sizes.map((stored_bytes, id) => ({ id, stored_bytes }))
+    const seen = []
+    let after = '0', pages = 0
+    while (after != null) {
+      const { items, next, has_more } = paginate(list, { after, limit }, { bytes: (r) => r.stored_bytes, cap })
+      assert.ok(items.length >= 1 && items.length <= limit, 'every page moves on, and --limit still holds')
+      const sum = items.reduce((a, r) => a + r.stored_bytes, 0)
+      assert.ok(items.length === 1 || sum <= cap, `a page of ${items.length} rows holds ${sum} B past the cap ${cap}`)
+      assert.equal(has_more, next != null)
+      seen.push(...items.map((r) => r.id))
+      after = next
+      assert.ok(++pages <= list.length, 'the walk ends')
+    }
+    assert.deepEqual(seen, list.map((r) => r.id), 'each row exactly once, in order')
+  }
 })
