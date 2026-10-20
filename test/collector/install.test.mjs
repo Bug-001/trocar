@@ -679,7 +679,7 @@ test('ensureDaemonUp: on win32 an EPIPE / ECONNRESET on the FIRST probe is "not 
     const unit = { path: '\\asight\\collector', registered: () => ({ state: 'present' }), startNow: () => { started = true; return { code: 0 } } }
     const out = await ensureDaemonUp({
       osName, dir: 'C:\\nope\\collector', env: {}, unit, socketPath: '\\\\.\\pipe\\asight-test',
-      request: async () => { if (started || ++asks > upAfter) return { doors: {} }; throw Object.assign(new Error(`write ${code}`), { code }) },
+      request: async () => { if (started || ++asks > upAfter) return { doors: {} }; const c = Array.isArray(code) ? code[Math.min(asks - 1, code.length - 1)] : code; throw Object.assign(new Error(`write ${c}`), { code: c }) },
       pause: async () => {}, ms: () => 1_000_000,
     })
     return { ...out, startedUnit: started }
@@ -692,6 +692,10 @@ test('ensureDaemonUp: on win32 an EPIPE / ECONNRESET on the FIRST probe is "not 
   const second = await run({ osName: 'win32', code: 'EPIPE', upAfter: 1 })
   assert.deepEqual([second.up, second.started, second.startedUnit], [true, false, false], 'it answered on the second ask: already up')
   // any other error still halts, and the same EPIPE on a unix socket is a stuck daemon as before
+  // the two answers the Windows test machine gave in one run (2026-10-20, `update`): EPIPE while the pipe's server was still going, then
+  // `connect ENOENT` once it had gone. Both are a pipe that is not there, so the collector is started -- not called a stuck daemon.
+  const gone = await run({ osName: 'win32', code: ['EPIPE', 'ENOENT'], upAfter: 99 })
+  assert.deepEqual([gone.up, gone.halt, gone.problems, gone.startedUnit], [true, false, [], true], 'EPIPE then ENOENT is a gone pipe, so the daemon is started')
   const other = await run({ osName: 'win32', code: 'EACCES', upAfter: 99 })
   assert.deepEqual([other.up, other.halt, other.startedUnit], [false, true, false], 'an error that is not a gone pipe is still a daemon that does not answer')
   const linux = await run({ osName: 'linux', code: 'EPIPE', upAfter: 99 })
