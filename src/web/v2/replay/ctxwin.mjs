@@ -107,7 +107,7 @@ export function ctxWindowHtml(s) {
   s.curRemoved = (line && diff && diff.removedBlocks.length) ? diff.removedBlocks : []
   const removed = s.curRemoved.length ? removedSectionHtml(s.curRemoved, refK, s.navOpen.has('cwremoved')) : ''
   const mark = (i) => (line && i === brk.idx ? line + removed : '')
-  const row = (b, i) => ctxBlockHtml(b, i, { prevKeys: refKeys, open: s.openBlocks.has(i), windowLine: !!winLine })
+  const row = (b, i) => ctxBlockHtml(b, i, { prevKeys: refKeys, open: s.openBlocks.has(i), windowLine: !!winLine, decoded: !!s.decodedView })
   // ③ the sections, in assembly order; the change line stands before the first changed block, inside its turn if folded
   let html = fid + winLine
   let lastSec = null
@@ -171,7 +171,7 @@ export function renderContextWindow(el, s) {
 function hydrate(el, s) {
   for (const pre of el.querySelectorAll('.cblk:not(.collapsed) pre[data-ref]')) {
     const blk = pre.closest('.cblk'), b = s.curFlat[+blk.dataset.bi]
-    if (b) fillBody(s.ctx.api, blk.querySelector('.cbc'), b)
+    if (b) fillBody(s.ctx.api, blk.querySelector('.cbc'), b, { decoded: !!s.decodedView })
   }
 }
 // the landing runs ONCE per step — the first time its blocks are drawable (a paged-out step waits for its page); later
@@ -206,7 +206,7 @@ export function toggleCtxBlock(s, blk) {
   if (!wasShut) { s.openBlocks.delete(i); return }
   s.openBlocks.add(i)
   const bc = blk.querySelector('.cbc'), b = s.curFlat[i]
-  if (bc && b && !bc.dataset.filled) fillBody(s.ctx.api, bc, b) // fillBody owns the flag: a failed fetch leaves it clear, so a reopen asks again
+  if (bc && b && !bc.dataset.filled) fillBody(s.ctx.api, bc, b, { decoded: !!s.decodedView }) // fillBody owns the flag: a failed fetch leaves it clear, so a reopen asks again
 }
 // a removed row: same lazy read, but its block belongs to the 内容对比步 (s.curRemoved), not this step's flat
 function toggleRemovedBlock(s, blk) {
@@ -215,7 +215,7 @@ function toggleRemovedBlock(s, blk) {
   blk.classList.toggle('collapsed')
   if (!wasShut) return
   const bc = blk.querySelector('.cbc'), b = s.curRemoved && s.curRemoved[j]
-  if (bc && b && !bc.dataset.filled) fillBody(s.ctx.api, bc, b)
+  if (bc && b && !bc.dataset.filled) fillBody(s.ctx.api, bc, b, { decoded: !!s.decodedView })
 }
 // a block inside a collapsed turn: open the turn first (returns whether the window had to be repainted). A jump is the
 // reader's own click (an outline row, a resource card — 2.5 §跳转联动), so the open goes into the D12 fold memory and
@@ -249,6 +249,8 @@ export function wireCtxWin(el, s) {
     const loadpage = t.closest('#loadpage')
     if (loadpage) { s.ensurePage(s.anchor.calls[s.playhead], true); return }
     if (t.closest('[data-navtoggle-rem]')) { if (s.navOpen.has('cwremoved')) s.navOpen.delete('cwremoved'); else s.navOpen.add('cwremoved'); renderContextWindow(el, s); return }
+    // the decoded view of JSON bodies is one desk-wide choice: it holds across steps and sessions until toggled back
+    if (t.closest('[data-decode]')) { s.decodedView = !s.decodedView; renderContextWindow(el, s); return }
     const fa = t.closest('.foldallbtn')
     if (fa) { foldAll(el, s, fa.dataset.foldall === 'open'); return }
     const th = t.closest('.cwturnhd')

@@ -74,7 +74,7 @@ export function playheadSig(s) {
   const labels = ((c.wire && c.wire.labels) || []).map((l) => l && l.id)
   return JSON.stringify([s.anchor && s.anchor.kind, c.gi, c.id, !!c.paged_out, (c.flat || []).length, String(n.text || '').length, n.stop_reason ?? null,
     (n.tools || []).length, c.respIncomplete || null, labels, s.playhead, s.diffRef, [...(s.openBlocks || [])].sort(), [...(s.navOpen || [])].sort(),
-    s.viewPin ? s.viewPin.resKey : null, !!s.pricing, s.pricingErr || null, s.pageLoading ?? null, s.pageMissed ?? null])
+    s.viewPin ? s.viewPin.resKey : null, !!s.pricing, s.pricingErr || null, s.pageLoading ?? null, s.pageMissed ?? null, !!s.decodedView])
 }
 // the hash names a session the server does not know (1.2 §Edge cases — 就地显示,不跳走): said in the window, with a way back
 export const notListedHtml = () => `<div class="empty" id="notlisted">${esc(SESSION_NOT_LISTED)} · <a href="#/sessions">${esc(BACK_TO_SESSIONS)}</a></div>`
@@ -102,6 +102,7 @@ export function mount(el, ctx) {
     followLanding: false, // the playhead was last moved by 跟随最新, not by the reader: the window lands on the reply (1.4 §打开一步时落在哪)
     landedFor: -1, turnLanded: new Set(), // the window's landing ran for that step; turns opened for the AUTOMATIC landing only (a reader's own jump writes the D12 fold memory, 2.5)
     openBlocks: new Set(), navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false,
+    decodedView: false, // JSON bodies shown as their decoded text (2.3 §block 卡 体); a desk-wide choice, kept across sessions
     collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
     lastCheapSig: null, lastRenderSig: null, lastPhSig: null, headFollow: null, notListed: false,

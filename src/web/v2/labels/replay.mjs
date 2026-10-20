@@ -193,6 +193,10 @@ export const FF_TIP = Object.freeze({
 export const INLINE_NOTE = 'This text came inline with the block; it is not cut verbatim from the raw capture'
 export const NO_BODY = 'This block has no body and no source location'
 export const FETCHING = 'Fetching…'
+// a body that is one JSON value can be read as its text: a reading aid, never the wire bytes (2.3 §block 卡 体)
+export const SHOW_DECODED = 'Show as text'
+export const SHOW_WIRE_BYTES = 'Show wire bytes'
+export const DECODED_NOTE = 'Decoded from the JSON on the wire; these are not the wire bytes.'
 export const clipNote = (n) => `…(${n} characters in total; only the first 20000 are shown)`
 // the raw panel's reply / the drawer's reply: the display clip said once, in 2.6 §A's own words (the context window's
 // blocks keep clipNote above — 2.3 K-07 pins that wording for them)

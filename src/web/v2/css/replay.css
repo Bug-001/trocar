@@ -352,6 +352,8 @@
 .remnote{font-size:8.5px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;}
 .cbsrc{font-size:9.5px;color:var(--dimmer);margin:4px 0 0;font-family:var(--mono);}
 .cbsrc.warn{color:var(--ink-2);}
+.cbdec{font-size:9.5px;color:var(--ink-2);margin:4px 0 0;font-family:var(--mono);}
+.decodebtn{border:0;background:none;padding:0;color:var(--action);cursor:pointer;font:inherit;text-decoration:underline;}
 .cbpre[data-ref]{color:var(--dim);}
 .nbkbody .cbpre,.pinbody .cbpre{font-size:10px;line-height:1.45;color:var(--dim);max-height:260px;margin:5px 0 0;}
 .estnote{color:var(--dimmer);font-size:9px;font-style:italic;margin-left:6px;}

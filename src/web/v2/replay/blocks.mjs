@@ -131,7 +131,7 @@ export function inlineText(b) {
 // the body as HTML. `got` is a resolved /api/block answer ({status, text, fidelity, error}); null means "inline" (the block itself
 // carries the body). A proven body carries NO fidelity line of its own (the section header says 以下逐字 once); a body that came
 // back unproven is said here AND upgrades the row's mark (noteBodyFidelity, called by fillBody).
-export function blockBodyHtml(got, b) {
+export function blockBodyHtml(got, b, { decoded = false } = {}) {
   if (got == null) {
     // a tools block always has its metadata row (name · params · descChars) to show, HEAVY-dropped or old-trace
     const inline = hasInline(b) || (b.sec === 'tools' && (b.name != null || b.descChars != null || (b.props && b.props.length)))
@@ -143,13 +143,27 @@ export function blockBodyHtml(got, b) {
     const why = got.error || got.reason || 'the capture could not be read'
     return `<div class="cbsrc warn" title="locator: ${esc(b.text_ref || '—')}">${esc(W.HALF_MARK + ' ' + ffWord('notfetched') + ' — ' + why)}</div>`
   }
-  return `<pre class="cbpre">${preEsc(clipText(String(got.text ?? '')))}</pre>`
+  const text = String(got.text ?? ''), dec = decodedText(text)
+  if (dec == null) return `<pre class="cbpre">${preEsc(clipText(text))}</pre>`
+  const btn = (on) => `<button type="button" class="decodebtn" data-decode aria-pressed="${on}">${esc(on ? W.SHOW_WIRE_BYTES : W.SHOW_DECODED)}</button>`
+  // the decoded view is a reading aid, never the wire bytes: said on the spot, one click back to them
+  if (decoded) return `<div class="cbdec">${esc(W.DECODED_NOTE)} ${btn(true)}</div><pre class="cbpre" data-view="decoded">${preEsc(clipText(dec))}</pre>`
+  return `<div class="cbdec">${btn(false)}</div><pre class="cbpre">${preEsc(clipText(text))}</pre>`
+}
+// the readable text form of a body that is one JSON value (a tool result's wrapper, a tool call, a string literal): the parsed
+// value's text (rawContentText), or null when the body is not JSON, is not a string / object / array, or reads the same
+export function decodedText(text) {
+  let v
+  try { v = JSON.parse(text) } catch { return null }
+  if (v == null || (typeof v !== 'string' && typeof v !== 'object')) return null
+  const t = Array.isArray(v) ? v.map(rawContentText).join('\n') : rawContentText(v)
+  return t === text ? null : t
 }
 // the body of an opened row right now: inline, from the cache, or the pending state (the caller then loads it)
-export function bodyFor(b) {
+export function bodyFor(b, opt) {
   if (!isAddressed(b)) return blockBodyHtml(null, b)
   const got = bodyCache.get(b.text_ref)
-  return got ? blockBodyHtml(got, b) : pendingBodyHtml(b)
+  return got ? blockBodyHtml(got, b, opt) : pendingBodyHtml(b)
 }
 // a block's faithfulness as it stands NOW: an opened body that came back unproven beats the metadata's claim
 export function faithNow(b) {
@@ -180,13 +194,13 @@ export function noteBodyFidelity(blk, got) {
 // open": set at once (a collapse + reopen while the bytes are in flight must not start a second request) and taken back when the
 // fetch FAILED, so the next open of that row asks again. An absent record stays filled: asking again would only get the same 404.
 // Returns the promise of the swap (nothing to wait for when the body is already here).
-export function fillBody(api, bc, b) {
+export function fillBody(api, bc, b, opt) {
   bc.dataset.filled = '1'
-  bc.innerHTML = bodyFor(b)
+  bc.innerHTML = bodyFor(b, opt)
   if (!bc.querySelector('pre[data-ref]')) return Promise.resolve()
   return loadBody(api, b.text_ref).then((got) => {
     if (!bc.isConnected || !bc.querySelector('pre[data-ref]')) return
-    bc.innerHTML = blockBodyHtml(got, b)
+    bc.innerHTML = blockBodyHtml(got, b, opt)
     if (typeof bc.closest === 'function') noteBodyFidelity(bc.closest('.cblk'), got)
     if (isRetryable(got)) delete bc.dataset.filled
   })
@@ -204,7 +218,7 @@ export function tagWord(tag) {
   if (obs) return (W.TAG_WORD[obs[1]] || W.TAG_WORD.text) + (obs[2] ? ' · ' + (obs[2] === 'error' ? W.TAG_ERROR : obs[2]) : '')
   return null // not in the closed set: the visible word is 原因未知, the raw value goes to the title
 }
-export function ctxBlockHtml(b, i, { prevKeys, open, windowLine = false } = {}) {
+export function ctxBlockHtml(b, i, { prevKeys, open, windowLine = false, decoded = false } = {}) {
   const h = b.head || { role: b.role || '', tag: b.kind || '', label: '' }
   const label = h.label || b.preview || ''
   const f = open ? faithNow({ ...b, _open: true }) : faithOf(b)
@@ -221,5 +235,5 @@ export function ctxBlockHtml(b, i, { prevKeys, open, windowLine = false } = {}) 
   const rk = b.resKey ? ` data-rk="${esc(b.resKey)}"` : ''
   return `<div class="cblk ${open ? '' : 'collapsed'} ${isNew ? 'is-new' : ''} s-${esc(b.sec)} r-${esc(b.role)} k-${esc(b.kind)}" data-bi="${i}" data-sec="${esc(b.sec)}" data-ff="${esc(f)}"${rk}>` +
     `<div class="cbh"><span class="cbrole">${esc(h.role)}</span><span class="cbtag"${tag ? '' : ` title="${esc(String(h.tag || ''))}"`}>${esc(tag || W.TAG_UNKNOWN)}</span>${label ? `<span class="cblabel" title="${esc(label)}">${esc(label)}</span>` : ''}${bp}${vol}${nw}${badge}${chars}${sr}` +
-    `</div><div class="cbc"${open ? ' data-filled="1"' : ''}>${open ? bodyFor(b) : ''}</div></div>`
+    `</div><div class="cbc"${open ? ' data-filled="1"' : ''}>${open ? bodyFor(b, { decoded }) : ''}</div></div>`
 }
