@@ -5,7 +5,9 @@
 // it never back-fills from the live list. The disk footer is `classes.disk.asight_bytes`.
 // Polls (1.5 §轮询): `status` every CAPH_MS and `sessions` every 3 s while visible; classes · pricing · overview(window) ·
 // segments · traffic(24h) on open, on window change and every 30 s. Hidden stops everything; coming back reads at
-// once. All reads are GET; the page holds no button but the window links, the 技术细节 disclosures and 重试 (invariant 1).
+// once. All reads are GET; the page holds no button but the window links, the 技术细节 disclosures and 重试 (invariant 1) —
+// except on first use, where each agent row carries the capture page's one control (core/harness-switch.mjs: switch or Set up,
+// written only on a click through planConfirm); GET /control/status is read when first use is first seen and after a 405.
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router, toast}.
 import { COMMANDS, ERR_WHERE } from '../labels/capture.mjs'
 import { TITLE_FROM_WIRE } from '../labels/replay.mjs'
@@ -18,7 +20,8 @@ import { priceMatch, costOf, hitRatio } from '../core/metrics.mjs'
 import { loadSessions } from '../library/logic.mjs'
 import { unpricedModels } from '../settings/prices.mjs'
 import { failureBrief } from '../../../cli/words.mjs'
-import { infoButton, techDetailsHtml } from '../core/ui.mjs'
+import { infoButton, techDetailsHtml, confirmDialog } from '../core/ui.mjs'
+import { controlFor, controlHtml, wireHarnessControls } from '../core/harness-switch.mjs'
 import * as W from '../labels/overview.mjs'
 
 const DAY = 24 * 3600e3
@@ -361,10 +364,22 @@ export function firstUse(s) {
   return rows != null && rows.length === 0
 }
 
-// the whole body: which cards exist and their html. `agents` is the first-use zone of one row per agent (filled by the
-// capture page's rows, 1.9 §开关); it stays its own zone, apart from the start card
+// 各 agent 一行 (1.7 §首次使用 · 1.9 §开关): the capture page's rows (agentVerdicts) and, for the same documents, its one control.
+// s.control = GET /control/status's answer (null before it), s.ui = Map read-side id → {busy, receipt} (kept across repaints).
+function agentRowsHtml(s) {
+  const H = s.caph && s.caph.data && !s.caph.data.unreadable ? s.caph.data : null
+  const rows = H ? agentVerdicts(H, null) : []
+  if (!rows.length) return ''
+  const ui = s.ui || new Map()
+  return `<section class="ovcard agents" aria-label="${esc(W.CARD.agents)}"><h2 class="ovh">${esc(W.CARD.agents)}</h2>` +
+    rows.map((r) => `<div class="ovitem ovagent" data-h="${esc(r.harness)}">${chipHtml(r.harness)}<span class="ovtx"></span>` +
+      `${controlHtml(controlFor({ control: s.control, status: H }, r.harness), ui.get(r.harness))}</div>`).join('') + `</section>`
+}
+
+// the whole body: which cards exist and their html. `agents` is the first-use zone of one row per agent, its own zone apart
+// from the start card; both go when the first session arrives (1.5 empty → live)
 export function renderBody(s, now) {
-  if (firstUse(s)) return { first: true, cap: capCardHtml(s, now), items: '', agents: '', stats: '', recent: firstUseHtml(s) }
+  if (firstUse(s)) return { first: true, cap: capCardHtml(s, now), items: '', agents: agentRowsHtml(s), stats: '', recent: firstUseHtml(s) }
   return { first: false, cap: capCardHtml(s, now), items: itemsCardHtml(s, now), agents: '', stats: statsCardHtml(s, now), recent: recentCardHtml(s, now) }
 }
 
@@ -379,7 +394,8 @@ export const SKELETON =
 export function mount(el, ctx) {
   const { api, router } = ctx
   let dead = false, w = parseWindow(router.current().params.window)
-  const s = { w, readAt: null, caph: { data: null, okAt: null, err: null, ok: null } }
+  const s = { w, readAt: null, caph: { data: null, okAt: null, err: null, ok: null }, control: null, ui: new Map() }
+  let ctlAsked = false
   for (const k of SLOTS) s[k] = { data: null, ok: null, err: null }
   const polls = {
     health: { lastAt: null, inFlight: false, due: true, period: POLL.health },
@@ -403,8 +419,12 @@ export function mount(el, ctx) {
     const now = api.now()
     const body = renderBody(s, now)
     const next = { head: headHtml(s), ...body }
+    if (body.first && !ctlAsked) { ctlAsked = true; readControl() }
+    const doc = el.ownerDocument, act = doc && doc.activeElement
+    const focusH = act && act.closest && act.closest('#ovagents [data-hctl]') ? act.getAttribute('data-h') : null
     for (const k of Object.keys(zones)) if (sigs[k] !== next[k]) {
       zones[k].innerHTML = next[k]; sigs[k] = next[k]
+      if (k === 'agents' && focusH) { const b = zones[k].querySelector(`[data-hctl][data-h="${focusH}"]`); if (b) b.focus() } // 1.9: focus stays on the control
       if (zones[k].querySelectorAll) ensureHarnessIcons(zones[k]) // fill the 16px boxes this card just drew
     }
     el.querySelector('#ovgrid').classList.toggle('first', body.first)
@@ -416,6 +436,7 @@ export function mount(el, ctx) {
     if (p.capHOkAt != null) { s.caph = { data: p.capH, okAt: p.capHOkAt, err: null, ok: true }; s.readAt = Date.now() }
     else s.caph = { data: s.caph.data, okAt: s.caph.okAt, err: p.capHErr || 'reason unknown', ok: false }
   }
+  const readControl = () => api.controlStatus().then((r) => { s.control = r }, (e) => { s.control = { ok: false, error: String(e) } }).finally(render)
   const readSessions = async () => { fold('sessions', await loadSessions(api)) }
   const readSlow = async () => {
     await Promise.allSettled([
@@ -448,6 +469,10 @@ export function mount(el, ctx) {
     if (polls[g]) { polls[g].due = true; beat() }
   }
   el.addEventListener('click', onClick)
+  const offCtl = wireHarnessControls(el, {
+    api, state: s.ui, ask: (opts) => confirmDialog(opts, el.ownerDocument),
+    onDone: (out) => { if (out && out.status === 405) readControl(); polls.health.due = true; render(); beat() },
+  })
   beat()
 
   return {
@@ -461,6 +486,7 @@ export function mount(el, ctx) {
       clearInterval(timer)
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis)
       el.removeEventListener('click', onClick)
+      offCtl()
       el.replaceChildren()
     },
   }

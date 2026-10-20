@@ -148,25 +148,25 @@ test('#3 no false 「nothing to handle」: a failed source draws the partial not
 })
 
 // a mounted overview on a fake element and a fake api that logs every call
-function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h' } = {}) {
-  const log = []
+function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h', control = {}, answer = { ok: true } } = {}) {
+  const log = [], on = {}
   const docs = { status, sessions, classes: { disk: { asight_bytes: 1 } }, pricing: { models: [] }, traffic: { hosts: [], harness_since: {} }, segments: { segments: [] } }
   const api = {
     now: () => NOW,
     get: async (name, params) => { log.push({ method: 'GET', name, params: params || {} }); return name === 'overview' ? { ok: true, status: 200, data: stateOf(quiet()).stats.data } : { ok: true, status: 200, data: docs[name] } },
     post: async (p) => { log.push({ method: 'POST', name: p }); return { ok: true } },
-    control: async (v) => { log.push({ method: 'POST', name: v }); return { ok: true } },
-    controlStatus: async () => { log.push({ method: 'GET', name: 'control/status' }); return { ok: true, data: {} } },
+    control: async (v, body) => { log.push({ method: 'POST', name: v, body }); return answer },
+    controlStatus: async () => { log.push({ method: 'GET', name: 'control/status' }); return { ok: true, data: control } },
   }
   const zones = {}
   const el = {
     set innerHTML(v) { for (const id of v.match(/id="([^"]+)"/g).map((x) => x.slice(4, -1))) zones[id] = { innerHTML: '', classList: { toggle() {} } } },
     querySelector: (sel) => zones[sel.slice(1)],
-    addEventListener() {}, removeEventListener() {}, replaceChildren() {},
+    addEventListener(type, fn) { on[type] = fn }, removeEventListener() {}, replaceChildren() {},
   }
   const router = { current: () => ({ params: { window } }) }
   const inst = mount(el, { api, router, store: {}, toast: () => {} })
-  return { inst, log, zones }
+  return { inst, log, zones, on }
 }
 const settle = () => new Promise((r) => setTimeout(r, 60))
 
@@ -282,4 +282,71 @@ test('#13 a CLI harness id renders the read-side chip; an unknown id renders the
     assert.equal(table(cli), table(read), cli)
   }
   for (const html of [card('zz-agent'), table('zz-agent')]) { assert.ok(html.includes(UNIDENTIFIED)); assert.ok(html.includes(UNKNOWN_ICON) || html.includes('ovsubj')) }
+})
+
+// first use with agent rows (1.7 #10, #8 / #9 as amended; 1.9 §开关): the status document lists two harnesses (CLI ids, read through chips)
+const TWO = Object.keys(ALIASES).slice(0, 2)
+const twoAgents = (o = {}) => {
+  const d = quiet(), [h0] = Object.values(SAMPLE.harnesses)
+  d.harnesses = Object.fromEntries(TWO.map((id) => [id, { ...structuredClone(h0), forms: [], processes: [], ...(o[id] || {}) }]))
+  Object.assign(d, { install: { state: 'complete', harnesses: TWO, pending: [] }, changed: [], holders: [] })
+  return d
+}
+const CTL_ON = { ok: true, status: 200, data: { control: true } }
+const NONE = { sessions: [], errors: [], next: null }
+const firstWith = (status, control, sessions = NONE) => ({ ...stateOf(status, { sessions: ok(sessions) }), control, ui: new Map() })
+const hctls = (html) => [...html.matchAll(/<[^>]*data-hctl="([^"]*)"[^>]*>/g)].map((m) => ({ kind: m[1], h: /data-h="([^"]*)"/.exec(m[0])[1] }))
+const rowsOf = (html) => [...new Set([...html.matchAll(/data-h="([^"]*)"/g)].map((m) => m[1]))].sort()
+
+test('#10 first use: one row per listed agent with exactly one control (switch, or Set up when setup is needed); none and nothing disabled where the board cannot act', () => {
+  const keys = TWO.map(harnessKey).sort()
+  const a = renderBody(firstWith(twoAgents(), CTL_ON), NOW).agents
+  assert.deepEqual(hctls(a).map((x) => x.h).sort(), keys)
+  assert.ok(hctls(a).every((x) => x.kind === 'switch'))
+  const s = renderBody(firstWith(twoAgents({ [TWO[0]]: { setup: { state: 'needed', missing: [] } } }), CTL_ON), NOW).agents
+  assert.deepEqual(hctls(s).find((x) => x.h === harnessKey(TWO[0])).kind, 'setup')
+  const cannot = [
+    firstWith(twoAgents(), { ok: true, status: 200, data: { control: false } }),
+    firstWith(twoAgents(), { ok: true, status: 200, data: { control: false, root: true } }),
+    firstWith({ ...twoAgents(), health: { state: 'not-installed', since: iso(H) } }, CTL_ON),
+    firstWith(twoAgents(), null),
+  ]
+  for (const st of cannot) {
+    const b = renderBody(st, NOW), html = b.cap + b.agents + b.recent
+    assert.deepEqual(rowsOf(b.agents), keys)
+    assert.deepEqual(hctls(html), [])
+    assert.doesNotMatch(html, /disabled/)
+  }
+  for (const st of [firstWith(twoAgents(), CTL_ON), ...cannot]) {
+    const b = renderBody(st, NOW), html = b.cap + b.agents + b.recent
+    assert.doesNotMatch(html, /data-act="(install|uninstall)"/)
+    assert.ok(hctls(html).every((x) => x.kind === 'switch' || x.kind === 'setup'))
+  }
+})
+
+test('#9 first use: until a control is clicked only GETs go out; a click goes through planConfirm, its first control call carries no confirm', async () => {
+  const answer = { ok: false, status: 409, data: { need: 'confirm', plan: [], plan_id: 'p1' } }
+  const { inst, log, zones, on } = fakeMount({ status: twoAgents(), sessions: NONE, control: { control: true }, answer })
+  try {
+    await settle()
+    assert.deepEqual(log.filter((x) => x.method !== 'GET'), [])
+    assert.ok(log.some((x) => x.name === 'control/status'))
+    const [m] = [...zones.ovagents.innerHTML.matchAll(/<[^>]*data-hctl="[^"]*"[^>]*>/g)]
+    const attr = (n) => (new RegExp(`${n}="([^"]*)"`).exec(m[0]) || [])[1] ?? null
+    const btn = { getAttribute: attr, setAttribute() {}, removeAttribute() {}, isConnected: true }
+    await on.click({ target: { closest: (sel) => sel === '[data-hctl]' ? btn : null }, preventDefault() {} }); await settle()
+    const posts = log.filter((x) => x.method !== 'GET')
+    assert.ok(posts.length >= 1)
+    assert.equal(posts[0].name, 'harness')
+    assert.equal(posts[0].body.harness, attr('data-cli'))
+    assert.equal('confirm' in posts[0].body, false)
+  } finally { inst.unmount() }
+})
+
+test('#10 the first session arrives → no agent control and no start card are left on the overview', () => {
+  const b = renderBody(firstWith(twoAgents(), CTL_ON, { sessions: [session(1)], errors: [], next: null }), NOW)
+  const html = Object.values(b).filter((x) => typeof x === 'string').join('')
+  assert.equal(b.first, false)
+  assert.deepEqual(hctls(html), [])
+  assert.doesNotMatch(html, /class="ovcard start"/)
 })

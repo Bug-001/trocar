@@ -5,7 +5,7 @@
 // the capture card and the 采集 page cannot say two things (1.7 §采集卡).
 import { MARK_TIP } from './common.mjs'
 
-export const CARD = Object.freeze({ capture: 'Capture', items: 'Needs a look', stats: 'Stats', recent: 'Recent sessions', start: 'Get started' })
+export const CARD = Object.freeze({ capture: 'Capture', items: 'Needs a look', stats: 'Stats', recent: 'Recent sessions', start: 'Get started', agents: 'Agents' })
 
 // the stats window of the page head (1.7 §统计窗): three fixed choices, the route's `window` param
 export const WINDOWS = Object.freeze(['24h', '7d', 'all'])

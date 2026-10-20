@@ -1,13 +1,25 @@
 // test/web-v2/browser/overview-shots.test.mjs — the overview in real Chrome on the real face (1.7): the recent-sessions rows fit
 // their card at 1280 (titles whole, the date inside the card), the first-use page, and the K-30 page off the viewport's corner.
-// Shots: overview, overview-first-use and forbidden at 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
+// the first-use page with its agent rows (1.7 §首次使用: one control per row, only GETs until a click).
+// Shots: overview, overview-first-use, overview-first-use-agents and forbidden at 1280 / 1024 × light / dark. Runs only under `npm run test:browser`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import { probe, withBoard, shoot } from './harness.mjs'
+import { ALIASES } from '../../../src/web/v2/core/chips.mjs'
 
 const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const EMPTY = { sessions: [], errors: [], next: null }
+// the C.3 sample of spec 1.6 with two harnesses listed, the second still needing Set up
+const C3 = fs.readFileSync(new URL('../../../spec/01-asight-rfc/1.6-cli.md', import.meta.url), 'utf8').split('### C.3')[1]
+const SAMPLE = JSON.parse(/```json\n([\s\S]*?)```/.exec(C3)[1])
+const TWO = Object.keys(ALIASES).slice(0, 2)
+const twoAgents = () => {
+  const [h0] = Object.values(SAMPLE.harnesses)
+  const row = (i) => ({ ...structuredClone(h0), setup: { state: i ? 'needed' : 'ready', missing: [] } })
+  return { ...structuredClone(SAMPLE), health: { state: 'ok', since: new Date().toISOString() }, harnesses: Object.fromEntries(TWO.map((id, i) => [id, row(i)])), install: { state: 'complete', harnesses: TWO, pending: [] }, changed: [], holders: [], topology: {} }
+}
 
 const go = async (page, hash, sel) => {
   await page.evaluate((h) => { location.hash = h }, hash)
@@ -38,6 +50,14 @@ for (const width of [1280, 1024]) {
         assert.equal(await b.page.locator('.ovcard.items, .ovcard.stats, .ovcard.recent').count(), 0)
         assert.equal(await hscroll(b.page), false)
         await shoot(b.page, 'overview-first-use', { width, theme })
+        await b.page.route('**/api/status*', (r) => r.fulfill({ json: twoAgents() }))
+        await b.page.route('**/control/status*', (r) => r.fulfill({ json: { control: true } }))
+        await go(b.page, '#/settings/appearance', '[data-theme-choice]'); await go(b.page, '#/overview', '#ovagents [data-hctl]')
+        await b.page.waitForLoadState('networkidle')
+        assert.deepEqual((await b.page.locator('#ovagents [data-hctl]').evaluateAll((xs) => xs.map((x) => x.dataset.hctl))).sort(), ['setup', 'switch'])
+        assert.equal(await hscroll(b.page), false)
+        await shoot(b.page, 'overview-first-use-agents', { width, theme })
+        assert.deepEqual(b.requests.filter((r) => r.method !== 'GET'), [])
         assert.deepEqual(b.errors, [])
       } finally { await b.stop() }
     })
