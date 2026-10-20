@@ -15,7 +15,7 @@ The v1 harnesses (D37): **Claude Code**, **Codex**, **OpenCode**, **Kimi Code**,
 ## See it in 30 seconds, with no capture and no setup
 
 ```sh
-git clone <this repo> && cd Agent-Context-Sentinel && npm install
+git clone https://github.com/Bug-001/trocar && cd trocar && npm install
 ```
 
 A small **synthetic** sample session ships in `samples/demo-session.ndjson` (fabricated, no real
@@ -47,11 +47,11 @@ thinking / tool_use / tool_result), so you see *which* part grew and when.
 
 ## Install
 
-From source (Node ≥ 20). The package is private — there is no global `trocar` on your PATH, so run
-it through the repo (or `npx --no-install trocar …`):
+From source (Node ≥ 20). The package is not on npm, so there is no global `trocar` on your PATH: run
+it through the repo (or `npx --no-install trocar …`).
 
 ```sh
-git clone <this repo> && cd <the repo> && npm install
+git clone https://github.com/Bug-001/trocar && cd trocar && npm install
 node bin/trocar.mjs install     # once: the certificates (or: npx --no-install trocar install)
 node bin/trocar.mjs on          # then start capture
 ```

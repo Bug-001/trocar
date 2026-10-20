@@ -1,8 +1,8 @@
 # Release automation (RFC 4.5:52,54 / D23). Tag `v*` → test on both onboard OSes → GitHub Release
 # carrying the `npm pack` tarball. Publishing to the npm registry is a SEPARATE job that stays
-# switched off until the project is ready to go public.
+# switched off until the project is ready to be installed from npm.
 #
-# TODAY (private repository): tagging runs the tests on ubuntu + macOS and creates a GitHub Release
+# TODAY: tagging runs the tests on ubuntu + macOS and creates a GitHub Release
 # with the tarball attached. Nothing is published to npm.
 #
 # TO TURN NPM PUBLISHING ON LATER (deliberate gates — publishing is outward-facing and irreversible):
