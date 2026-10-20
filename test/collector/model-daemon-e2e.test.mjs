@@ -57,6 +57,9 @@ for (const platform of ['darwin', 'win32']) {
         const deps = { getuid: () => 501, backends: { dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, parts: box.parts, exec: () => ({ status: 0, stdout: '', stderr: '' }), sleep: (ms) => new Promise((res) => setTimeout(res, Math.min(ms, 25))) }
         assert.equal(await runOnCli(['--yes'], { io, env: w.env, home: w.home, platform, deps }), 0, io.text() + (fs.existsSync(path.join(w.dir, 'flows')) ? fs.readdirSync(path.join(w.dir, 'flows')).map((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8')).join('') : ''))
         assert.deepEqual([box.enabled, box.startedNow], [[], [true]], 'D61: `on` started the daemon through the OS mechanism once (startNow) and never touched the registration (no enable)')
+        // 1.6 §1 (2026-10-21): the on run's receipt is in flows/ — its last install-note is the result line naming the harness it turned on
+        const notes = fs.readdirSync(path.join(w.dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(w.dir, 'flows', n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))).filter((l) => l.event === 'install-note')
+        assert.deepEqual([notes.at(-1).kind, notes.at(-1).outcome, notes.at(-1).harnesses], ['result', 'on', ['codex']], JSON.stringify(notes.at(-1)))
         const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
         const st = await ep.request({ socketPath: ep.socketPath, method: 'GET', path: '/status' })
         const [g, port] = Object.entries(st.doors).find(([k]) => k.startsWith('codex:')) || []

@@ -32,7 +32,8 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const fs = deps.fs || nodeFs
   const say = json ? () => {} : io.out // §1.2: with --json stderr stays empty and the plan is the `planned` key of the one document on stdout (a macOS test machine 2026-10-18: it went to stderr)
   const dir = path.join(home, '.trocar', 'collector')
-  const put = (rec) => { try { if (fs.existsSync(dir)) appendEvent(dir, source ? { ...rec, source } : rec) } catch { /* the receipt carries it (R11) */ } }
+  const run = new Date().toISOString() // on every line this run writes, so the board's "last on" is this run's lines (as install's, 1.6 §1)
+  const put = (rec) => { try { if (fs.existsSync(dir)) appendEvent(dir, { ...rec, run, ...(source ? { source } : {}) }) } catch { /* the receipt carries it (R11) */ } }
   const [{ turnOnModel }, { backendsFor, sourcesCtx }, { renderHook }] = await Promise.all([import('../collector/model-on.mjs'), import('../collector/arch/model-backends.mjs'), import('../collector/harness/templates/index.mjs')])
   const b = deps.backends || (await backendsFor({ os, home, run: deps.exec || null, env, fs }))
   const ctx = sourcesCtx({ os, home, env, dirs: b.dirs, policy: b.policy, which: deps.which || null, fs })
@@ -52,6 +53,15 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
       ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)]).join('\n'))
     return exit
   }
+  /** 1.6 §1: a real run leaves its receipt in flows/ — its notes, then one `kind:'result'` line with the harnesses it turned on and the ones it refused;
+   *  a failed run too. Then the receipt goes out. (A dry run, and a run that stops for a yes, changed nothing and say so on stdout only.) */
+  const done = (receipt, exit) => {
+    for (const n of receipt.notes || []) put({ event: 'install-note', where: 'install', kind: 'note', harness: (n && n.harness) || null, reason: typeof n === 'string' ? n : noteLine(n) })
+    const why = (receipt.error && receipt.error.message) || (receipt.problems || [])[0] || null
+    put({ event: 'install-note', where: 'install', kind: 'result', outcome: exit === 0 ? 'on' : 'failed', harnesses: receipt.harnesses || [], refused: (receipt.refused || []).map((x) => x.harness),
+      reason: exit === 0 ? `on: ${(receipt.harnesses || []).join(', ') || 'no agent'}` : `on did not finish${why ? `: ${why}` : ''}` })
+    return out(receipt, exit)
+  }
   // 附录 C.1: `undo` is the one line that undoes THIS run, and `null` when nothing was changed — a refusal (its code in `error`, or `r.code`) changed nothing, and neither did a dry run (tested on macOS and Windows 2026-10-19)
   const receiptOf = (r, extra = {}) => ({ ...newReceipt('on'), ok: r.exit === 0, ...(extra.dry_run || r.code || extra.error ? {} : { undo: UNDO_LINE.on }), harnesses: r.on, refused: r.refused, routes: r.routes, notes: r.notes, problems: r.problems, ...extra })
   const { autostartBlock, AUTOSTART_MISSING, ensureDaemonUp } = await import('../collector/install.mjs')
@@ -63,7 +73,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     const blocked = (plan.problems.length ? plan.problems : [plan.code]).map((reason) => ({ what: 'trocar on', reason }))
     if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned || [], blocked }), EXIT.ok)
     // 附录 C.1: the refusal's code lives in `error` and nowhere else (a dry run carries none: nothing went wrong)
-    return out(receiptOf(plan, { blocked, error: { code: plan.code, message: plan.problems[0] || plan.code } }), EXIT.incomplete)
+    return done(receiptOf(plan, { blocked, error: { code: plan.code, message: plan.problems[0] || plan.code } }), EXIT.incomplete)
   }
   // D61 / 1.6 §3.3: the login entry is `install`'s, and an `on` with none would point the agents at doors nobody opens after the next
   // login — so it is asked here, before the first write, and refused (exit 2, nothing written). A `--dry-run` says it in `blocked` and exits 0.
@@ -72,7 +82,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     const blocked = [{ what: 'trocar on', reason: autostartBlk }]
     if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned || [], blocked }), EXIT.ok)
     put({ event: 'failure', where: 'start', code: AUTOSTART_MISSING, reason: autostartBlk })
-    return out(receiptOf({ ...plan, exit: 2, problems: [autostartBlk] }, { blocked, error: { code: AUTOSTART_MISSING, message: autostartBlk } }), EXIT.usage)
+    return done(receiptOf({ ...plan, exit: 2, problems: [autostartBlk] }, { blocked, error: { code: AUTOSTART_MISSING, message: autostartBlk } }), EXIT.usage)
   }
   const m = readManifest(dir, fs)
   const seen = new Set(m.confirmed_paths || [])
@@ -82,7 +92,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     ...(fresh.length ? [`New since you last said yes: ${fresh.map((x) => tilde(x, home)).join(', ')}`] : [])]).join('\n'))
   const blockedSetup = setupBlocked(plan)
   if (flags.has('--dry-run')) return out(receiptOf({ ...plan, exit: 0 }, { dry_run: true, planned: plan.planned, ...(blockedSetup.length ? { blocked: blockedSetup } : {}) }), EXIT.ok)
-  if (!plan.on.length && blockedSetup.length) return out(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup) }), EXIT.incomplete) // nothing to turn on: no daemon started
+  if (!plan.on.length && blockedSetup.length) return done(receiptOf(plan, { blocked: blockedSetup, error: setupError(blockedSetup) }), EXIT.incomplete) // nothing to turn on: no daemon started
   if (fresh.length && !flags.has('--yes')) {
     if (json || !isInteractive(io)) { if (json) io.out(JSON.stringify({ ...receiptOf({ ...plan, exit: 2 }), ok: false, planned: plan.planned, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES); return EXIT.usage }
     if (!(await ask({ ...io, prompt: io.stdout }, 'Proceed?'))) { io.err('You said no: nothing was changed'); return EXIT.incomplete }
@@ -102,7 +112,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
     if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
     const b = setupBlocked(r)
-    return out(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit)
+    return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit)
   } finally { lock.release() }
   } finally { closeProcs() }
 }
