@@ -13,7 +13,7 @@ const yamlOf = (v, ind = '') => Object.entries(v).map(([k, x]) => Array.isArray(
   : x && typeof x === 'object' ? `${ind}${k}:  # a comment\n${yamlOf(x, ind + '  ')}` : `${ind}${k}: '${x}'`).join('\n')
 const WRITE = {
   json: (v) => JSON.stringify(v, null, 2),
-  jsonc: (v) => `// asight test\n${JSON.stringify(v, null, 2).replace(/\n}$/, ',\n}')}`,
+  jsonc: (v) => `// trocar test\n${JSON.stringify(v, null, 2).replace(/\n}$/, ',\n}')}`,
   yaml: (v) => `---\n${yamlOf(v)}\n`,
   dotenv: (v) => Object.entries(v).map(([k, x]) => `${k}="${x}"`).join('\n'),
 }
@@ -35,7 +35,7 @@ const put = (f, text) => { fs.mkdirSync(path.dirname(f), { recursive: true }); f
 
 for (const format of Object.keys(WRITE)) for (const [shape, s] of Object.entries(SHAPES)) if (fits(format, s)) for (const base of ['home', 'cwd']) for (const os of ['darwin', 'win32']) for (const overridden of [false, true]) {
   test(`readSrc · ${format} · ${shape} · base ${base} · ${os} · env override ${overridden ? 'set' : 'unset'}`, () => {
-    const root = tmpDir('asight-src-')
+    const root = tmpDir('trocar-src-')
     const loc = { perOs: { darwin: { base, dir: '.mac-agent', path: 'conf', env: 'AGENT_HOME' }, win32: { base, dir: 'win-agent', path: 'conf', env: 'AGENT_HOME' } } }
     const env = overridden ? { AGENT_HOME: path.join(root, 'elsewhere') } : {}
     const ctx = ctxOf(root, os, env)
@@ -64,7 +64,7 @@ for (const format of Object.keys(WRITE)) for (const [shape, s] of Object.entries
 }
 
 test('readSrc · env, policy (injected OS reader) and a precedence list: the first set source answers, an error answers too', () => {
-  const root = tmpDir('asight-src-')
+  const root = tmpDir('trocar-src-')
   for (const os of ['darwin', 'win32']) {
     const seen = []
     const ctx = ctxOf(root, os, { CERT: 'bundled', EMPTY: '' }, { policy: (spec) => { seen.push(spec); return { set: true, value: 'p', where: 'policy' } } })
@@ -85,7 +85,7 @@ test('readSrc · env, policy (injected OS reader) and a precedence list: the fir
 })
 
 test('resolveLoc · glob matches one directory level, sorted; env override with ~; abs; missing base or OS names nothing', () => {
-  const root = tmpDir('asight-src-')
+  const root = tmpDir('trocar-src-')
   const ctx = ctxOf(root, 'darwin', { CFG: '~/cfg' })
   const ext = path.join(ctx.home, '.vscode', 'extensions')
   for (const n of ['moonshot-ai.kimi-code-0.9.0', 'moonshot-ai.kimi-code-0.8.1', 'other.ext-1']) fs.mkdirSync(path.join(ext, n), { recursive: true })
@@ -100,7 +100,7 @@ test('resolveLoc · glob matches one directory level, sorted; env override with 
 })
 
 test('isPresent · any loc exists (glob included) or a command resolves through the injected which', () => {
-  const root = tmpDir('asight-src-')
+  const root = tmpDir('trocar-src-')
   const ctx = ctxOf(root, 'win32', {}, { which: (c) => (c === 'kimi' ? '/x/kimi' : null), readdir: (p) => { try { return fs.readdirSync(p) } catch (e) { if (e.code === 'ENOENT') return []; throw e } } })
   const glob = { base: 'home', path: '.vscode/extensions', glob: 'openai.chatgpt-*' }
   assert.equal(isPresent({ present: [glob, { command: 'codex' }] }, ctx), false)
@@ -112,7 +112,7 @@ test('isPresent · any loc exists (glob included) or a command resolves through 
 })
 
 test('yaml · the smallest reader: comments, quotes, nested maps, lists of scalars and maps; anything else is an error', () => {
-  const root = tmpDir('asight-src-')
+  const root = tmpDir('trocar-src-')
   const ctx = ctxOf(root, 'darwin')
   const f = path.join(ctx.home, 'c.yaml')
   const read = (text, keys) => { put(f, text); return readSrc({ file: { base: 'home', path: 'c.yaml' }, format: 'yaml', keys }, ctx) }
@@ -128,9 +128,9 @@ test('yaml · the smallest reader: comments, quotes, nested maps, lists of scala
 })
 
 // flow leaves: one-line flow collections × where they sit (a top-level list item, a map value) × read through '*'; the measured seed is the row
-// asight itself writes into dsh's cordis.patch.yml (the Windows overlay's inject at 60c8d165, since deleted; the Linux descriptor's inject writes the same flow form), comment and all.
+// trocar itself writes into dsh's cordis.patch.yml (the Windows overlay's inject at 60c8d165, since deleted; the Linux descriptor's inject writes the same flow form), comment and all.
 const FLOWS = [
-  ['[{id: asight-ca, name: ./asight-ca.mjs}]', [{ id: 'asight-ca', name: './asight-ca.mjs' }]],
+  ['[{id: trocar-ca, name: ./trocar-ca.mjs}]', [{ id: 'trocar-ca', name: './trocar-ca.mjs' }]],
   ['[a, "b, c", \'d\'\'e\']', ['a', 'b, c', "d'e"]],
   ['{k: [x, {y: "}"}], z: w}', { k: ['x', { y: '}' }], z: 'w' }],
   ['[ ]', []],
@@ -138,10 +138,10 @@ const FLOWS = [
 ]
 for (const [flowText, want] of FLOWS) for (const at of ['list', 'map']) {
   test(`yaml · flow leaf ${flowText} · under a ${at} · '*' key path`, () => {
-    const root = tmpDir('asight-src-')
+    const root = tmpDir('trocar-src-')
     const ctx = ctxOf(root, 'darwin')
     const f = path.join(ctx.home, 'c.yml')
-    put(f, at === 'list' ? `- other: 1\n- insert: ${flowText} # asight: a comment\n` : `p0:\n  other: 1\np1:\n  insert: ${flowText}\n`)
+    put(f, at === 'list' ? `- other: 1\n- insert: ${flowText} # trocar: a comment\n` : `p0:\n  other: 1\np1:\n  insert: ${flowText}\n`)
     const r = readSrc({ file: { base: 'home', path: 'c.yml' }, format: 'yaml', keys: ['*', 'insert'] }, ctx)
     assert.equal(r.error, undefined)
     assert.deepEqual(r.value, want)

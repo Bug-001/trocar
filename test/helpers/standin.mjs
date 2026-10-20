@@ -15,7 +15,7 @@ export const EXIT_WITH_PARENT = fileURLToPath(new URL('./exit-with-parent.mjs', 
 export const WITH_PARENT = Object.freeze(['--import', EXIT_WITH_PARENT])
 
 /** `env` plus the pid the watch is to follow: this process. Without it the watch follows the parent it finds at start (a child that is orphaned before it got that far is not caught). */
-export const watchEnv = (env = process.env) => ({ ...env, ASIGHT_WATCH_PID: String(process.pid) })
+export const watchEnv = (env = process.env) => ({ ...env, TROCAR_WATCH_PID: String(process.pid) })
 
 /** A process that does nothing but stay alive until it is killed or this process is gone (`stdio: 'ignore'` unless the caller says otherwise). */
 export const spawnStandin = ({ env, ...opts } = {}) => spawn(process.execPath, [...WITH_PARENT, '-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', env: watchEnv(env), ...opts })

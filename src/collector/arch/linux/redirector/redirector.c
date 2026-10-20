@@ -1,13 +1,13 @@
-// asight Linux redirector — privileged userspace loader (spec 4.6 §Linux 机制, §开关语义; D36).
+// trocar Linux redirector — privileged userspace loader (spec 4.6 §Linux 机制, §开关语义; D36).
 //
-// Owns the eBPF bpf_links and maps for src/collector/arch/linux/bpf/asight.bpf.c and answers
+// Owns the eBPF bpf_links and maps for src/collector/arch/linux/bpf/trocar.bpf.c and answers
 // the Node client (src/collector/arch/linux/redirector-client.mjs) over a newline-JSON line
 // protocol on stdin/stdout. It does exactly three things — attach/detach the cgroup programs,
 // edit the maps, and answer lookups/status — and never touches a single connection byte.
 //
 // D36 privilege model: this binary carries exactly file caps `cap_bpf,cap_net_admin,cap_perfmon`
 // (installed once by the setup-helper step -- `sudo node install.mjs setup-helper`; the operator-
-// facing `asight setup-helper` CLI is not built yet). It runs as the OPERATOR (ruid=euid=suid), as a
+// facing `trocar setup-helper` CLI is not built yet). It runs as the OPERATOR (ruid=euid=suid), as a
 // child of that user's engine. At startup it loads + attaches EVERYTHING that needs those caps
 // (map/prog load, tp_btf attach) BEFORE the first stdin read, then drops to CAP_BPF only, sets
 // PR_SET_NO_NEW_PRIVS, stays non-dumpable, and clearenv()s — so from the first byte of protocol
@@ -41,8 +41,8 @@
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 
-#include "asight.h"
-#include "asight.skel.h"
+#include "trocar.h"
+#include "trocar.skel.h"
 
 #define CGROUP_ROOT "/sys/fs/cgroup"
 #define CGROUP2_SUPER_MAGIC 0x63677270
@@ -52,11 +52,11 @@
  * wire-visible change (fields, op semantics).
  * 2 (D38): status carries `drops`; config / heartbeat / watch / unwatch answer ok:false with the errno when the map
  * write fails; attach failed carries the errno. */
-#define ASIGHT_PROTO 2
+#define TROCAR_PROTO 2
 
-/* Overridden by the Makefile (-DASIGHT_BUILD_HASH=...) so `ready` can report the exact build. */
-#ifndef ASIGHT_BUILD_HASH
-#define ASIGHT_BUILD_HASH "unknown"
+/* Overridden by the Makefile (-DTROCAR_BUILD_HASH=...) so `ready` can report the exact build. */
+#ifndef TROCAR_BUILD_HASH
+#define TROCAR_BUILD_HASH "unknown"
 #endif
 
 #ifndef CAP_BPF
@@ -64,21 +64,21 @@
 #endif
 
 /* Minimum kernel the loader will run on. Compile-time (no runtime surface); the test rig overrides it
- * with -DASIGHT_MIN_KMAJOR (above the running major) to prove the floor refusal on a kernel it
+ * with -DTROCAR_MIN_KMAJOR (above the running major) to prove the floor refusal on a kernel it
  * can't downgrade. */
-#ifndef ASIGHT_MIN_KMAJOR
-#define ASIGHT_MIN_KMAJOR 5
+#ifndef TROCAR_MIN_KMAJOR
+#define TROCAR_MIN_KMAJOR 5
 #endif
-#ifndef ASIGHT_MIN_KMINOR
-#define ASIGHT_MIN_KMINOR 15
+#ifndef TROCAR_MIN_KMINOR
+#define TROCAR_MIN_KMINOR 15
 #endif
 
 static volatile sig_atomic_t stop;
-static struct asight *skel;
+static struct trocar *skel;
 static struct ring_buffer *rb;
 static struct bpf_link *cg_links[3]; /* connect4, connect6, sockops */
 static const char *cg_names[3] = { "connect4", "connect6", "sockops" };
-static struct asight_config cur_cfg; /* userspace-authoritative mirror of config_map[0] */
+static struct trocar_config cur_cfg; /* userspace-authoritative mirror of config_map[0] */
 static __u32 g_parent_pid;           /* --parent-pid value (0 in --selftest) */
 
 static void on_signal(int sig) { (void)sig; stop = 1; }
@@ -214,18 +214,18 @@ static void json_escape(const char *in, char *out, size_t n)
 static int on_event(void *ctx, void *data, size_t sz)
 {
 	(void)ctx; (void)sz;
-	struct asight_event *e = data;
-	if (e->type == ASIGHT_EV_EXEC) {
+	struct trocar_event *e = data;
+	if (e->type == TROCAR_EV_EXEC) {
 		char comm[64], fn[256], cesc[160], fesc[600];
-		snprintf(comm, sizeof(comm), "%.*s", ASIGHT_COMM_LEN, e->comm);
-		snprintf(fn, sizeof(fn), "%.*s", ASIGHT_FILE_LEN, e->filename);
+		snprintf(comm, sizeof(comm), "%.*s", TROCAR_COMM_LEN, e->comm);
+		snprintf(fn, sizeof(fn), "%.*s", TROCAR_FILE_LEN, e->filename);
 		json_escape(comm, cesc, sizeof(cesc));
 		json_escape(fn, fesc, sizeof(fesc));
 		emitf("{\"ev\":\"exec\",\"tgid\":%u,\"pid\":%u,\"comm\":\"%s\",\"filename\":\"%s\",\"ts_ns\":%llu}",
 		      e->tgid, e->pid, cesc, fesc, (unsigned long long)e->ts_ns);
-	} else if (e->type == ASIGHT_EV_EXIT) {
+	} else if (e->type == TROCAR_EV_EXIT) {
 		emitf("{\"ev\":\"exit\",\"tgid\":%u,\"ts_ns\":%llu}", e->tgid, (unsigned long long)e->ts_ns);
-	} else if (e->type == ASIGHT_EV_FLOW) {
+	} else if (e->type == TROCAR_EV_FLOW) {
 		char ip[64];
 		if (e->family == 4) fmt_ip4(e->daddr4, ip, sizeof(ip));
 		else fmt_ip6(e->daddr6, ip, sizeof(ip));
@@ -242,7 +242,7 @@ static int do_attach(void)
 	int cg = open(CGROUP_ROOT, O_RDONLY);
 	if (cg < 0) return -errno;
 	struct bpf_program *progs[3] = {
-		skel->progs.asight_connect4, skel->progs.asight_connect6, skel->progs.asight_sockops,
+		skel->progs.trocar_connect4, skel->progs.trocar_connect6, skel->progs.trocar_sockops,
 	};
 	/* sockops FIRST, then connect4 / connect6. connect4/6 steer a connection from the instant they are attached (and stash its original destination
 	 * under the socket cookie), and only sockops moves that stash to by_port at ACTIVE_ESTABLISHED. With the order the other way round, a connection
@@ -335,18 +335,18 @@ static uid_t proc_real_uid(__u32 tgid)
 	return ruid;
 }
 
-/* The `drops` counters summed over the CPUs, as a JSON object by reason (asight.h ASIGHT_DROP_*), or null when they
+/* The `drops` counters summed over the CPUs, as a JSON object by reason (trocar.h TROCAR_DROP_*), or null when they
  * cannot be read — unknown, never zero (D38 D-16). */
 static void read_drops(char *out, size_t n)
 {
-	static const char *names[ASIGHT_DROP_MAX] = { "no-config", "hb-stale", "no-listener", "orig-write", "byport-write", "ringbuf-full" };
+	static const char *names[TROCAR_DROP_MAX] = { "no-config", "hb-stale", "no-listener", "orig-write", "byport-write", "ringbuf-full" };
 	int ncpu = libbpf_num_possible_cpus();
 	snprintf(out, n, "null");
 	if (ncpu <= 0) return;
 	__u64 *vals = calloc((size_t)ncpu, sizeof(__u64));
 	if (!vals) return;
 	size_t off = (size_t)snprintf(out, n, "{");
-	for (__u32 k = 0; k < ASIGHT_DROP_MAX; k++) {
+	for (__u32 k = 0; k < TROCAR_DROP_MAX; k++) {
 		__u64 sum = 0;
 		if (bpf_map__lookup_elem(skel->maps.drops, &k, sizeof(k), vals, sizeof(__u64) * (size_t)ncpu, 0) != 0) {
 			snprintf(out, n, "null");
@@ -395,10 +395,10 @@ static void reply_status(long long id)
 
 static void reply_lookup(long long id, long long port, long long family)
 {
-	struct asight_portkey k = {};
+	struct trocar_portkey k = {};
 	k.sport = (__u16)port;
 	k.family = (__u8)(family ? family : 4);
-	struct asight_orig o;
+	struct trocar_orig o;
 	/* lookup-and-delete: a by_port row is for exactly one accepted connection, so consume it on
 	 * read — otherwise a later connection reusing the same {sport,family} sees a stale dst (D36). */
 	if (bpf_map__lookup_and_delete_elem(skel->maps.by_port, &k, sizeof(k), &o, sizeof(o), 0) != 0) {
@@ -438,7 +438,7 @@ static void dispatch(const char *line)
 		uid_t ruid = proc_real_uid(tgid);
 		if (ruid != getuid()) { emitf("{\"id\":%lld,\"ok\":false,\"error\":\"tgid not owned by this user\"}", id); return; }
 		long long d = 0; json_num(line, "decrypt", &d);
-		struct asight_verdict ver = { .decrypt = d ? 1 : 0 };
+		struct trocar_verdict ver = { .decrypt = d ? 1 : 0 };
 		reply_rc(id, bpf_map__update_elem(skel->maps.watch_map, &tgid, sizeof(tgid), &ver, sizeof(ver), BPF_ANY), "watch map update");
 		return;
 	}
@@ -465,14 +465,14 @@ static void dispatch(const char *line)
 static int load_and_prepare(void)
 {
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
-	skel = asight__open();
+	skel = trocar__open();
 	if (!skel) return -1;
 	skel->rodata->owner_uid = getuid();     /* only this uid is ever steered/reported */
 	skel->rodata->engine_tgid = g_parent_pid; /* the engine's own dials are never steered */
-	if (asight__load(skel)) { asight__destroy(skel); skel = NULL; return -1; }
+	if (trocar__load(skel)) { trocar__destroy(skel); skel = NULL; return -1; }
 	/* tracepoints stay attached across on/off (spec §开关语义: exec/exit 跟踪不摘) */
-	if (!bpf_program__attach(skel->progs.asight_exec)) return -1;
-	if (!bpf_program__attach(skel->progs.asight_exit)) return -1;
+	if (!bpf_program__attach(skel->progs.trocar_exec)) return -1;
+	if (!bpf_program__attach(skel->progs.trocar_exit)) return -1;
 	rb = ring_buffer__new(bpf_map__fd(skel->maps.events), on_event, NULL, NULL);
 	if (!rb) return -1;
 	return 0;
@@ -499,14 +499,14 @@ static int check_environment(void)
 {
 	struct statfs sf;
 	if (statfs(CGROUP_ROOT, &sf) != 0 || (unsigned long)sf.f_type != CGROUP2_SUPER_MAGIC) {
-		fprintf(stderr, "asight-redirector: %s is not a cgroup2 mount (unified hierarchy required)\n", CGROUP_ROOT);
+		fprintf(stderr, "trocar-redirector: %s is not a cgroup2 mount (unified hierarchy required)\n", CGROUP_ROOT);
 		return -1;
 	}
 	unsigned maj = 0, min = 0;
 	kernel_tier(&maj, &min);
-	if (maj < ASIGHT_MIN_KMAJOR || (maj == ASIGHT_MIN_KMAJOR && min < ASIGHT_MIN_KMINOR)) {
-		fprintf(stderr, "asight-redirector: kernel %u.%u is below the %u.%u floor\n",
-			maj, min, (unsigned)ASIGHT_MIN_KMAJOR, (unsigned)ASIGHT_MIN_KMINOR);
+	if (maj < TROCAR_MIN_KMAJOR || (maj == TROCAR_MIN_KMAJOR && min < TROCAR_MIN_KMINOR)) {
+		fprintf(stderr, "trocar-redirector: kernel %u.%u is below the %u.%u floor\n",
+			maj, min, (unsigned)TROCAR_MIN_KMAJOR, (unsigned)TROCAR_MIN_KMINOR);
 		return -1;
 	}
 	return 0;
@@ -516,7 +516,7 @@ static void cleanup(void)
 {
 	do_detach();
 	if (rb) ring_buffer__free(rb);
-	if (skel) asight__destroy(skel); /* destroys ALL links -> auto-detach, no residue */
+	if (skel) trocar__destroy(skel); /* destroys ALL links -> auto-detach, no residue */
 }
 
 /* argv: exactly `--selftest` or `--parent-pid <n>` (plus an optional `--parent-pid` alongside
@@ -546,7 +546,7 @@ int main(int argc, char **argv)
 	long parent_pid;
 
 	if (parse_argv(argc, argv, &selftest, &parent_pid) != 0) {
-		fprintf(stderr, "usage: asight-redirector --parent-pid <engine-pid> | --selftest\n");
+		fprintf(stderr, "usage: trocar-redirector --parent-pid <engine-pid> | --selftest\n");
 		return 2;
 	}
 	/* Drop the environment immediately: nothing below reads it, and a same-uid agent must not be
@@ -561,16 +561,16 @@ int main(int argc, char **argv)
 	signal(SIGPIPE, SIG_IGN);
 
 	if (!selftest) {
-		if (parent_pid < 0) { fprintf(stderr, "asight-redirector: --parent-pid is required\n"); return 2; }
-		if (getppid() != (pid_t)parent_pid) { fprintf(stderr, "asight-redirector: parent pid mismatch\n"); return 3; }
+		if (parent_pid < 0) { fprintf(stderr, "trocar-redirector: --parent-pid is required\n"); return 2; }
+		if (getppid() != (pid_t)parent_pid) { fprintf(stderr, "trocar-redirector: parent pid mismatch\n"); return 3; }
 		g_parent_pid = (__u32)parent_pid;
 	}
 
 	if (check_environment() != 0) return 4;
 
-	if (load_and_prepare()) { fprintf(stderr, "asight-redirector: load failed\n"); cleanup(); return 1; }
+	if (load_and_prepare()) { fprintf(stderr, "trocar-redirector: load failed\n"); cleanup(); return 1; }
 
-	if (lock_down() != 0) { fprintf(stderr, "asight-redirector: privilege lock-down failed\n"); cleanup(); return 5; }
+	if (lock_down() != 0) { fprintf(stderr, "trocar-redirector: privilege lock-down failed\n"); cleanup(); return 5; }
 
 	if (selftest) {
 		cur_cfg.engine_port = 18999;
@@ -584,7 +584,7 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	emitf("{\"ev\":\"ready\",\"pid\":%d,\"proto\":%d,\"build\":\"%s\"}", getpid(), ASIGHT_PROTO, ASIGHT_BUILD_HASH);
+	emitf("{\"ev\":\"ready\",\"pid\":%d,\"proto\":%d,\"build\":\"%s\"}", getpid(), TROCAR_PROTO, TROCAR_BUILD_HASH);
 
 	int rb_fd = ring_buffer__epoll_fd(rb);
 	static char buf[8192];

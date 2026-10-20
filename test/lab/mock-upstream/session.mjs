@@ -50,13 +50,13 @@ export function acts(turn, sc = {}) {
 // The subagent tool: Claude Code's Agent (Task before 2.1), OpenCode's task, else any tool whose
 // schema takes a prompt and a subagent_type. The type is the one each CLI always has.
 const SUBAGENT_TOOLS = ['Agent', 'Task', 'task']
-export const SUBAGENT_PROMPT = 'asight-mock-subagent: reply in one line'
-const filler = (p = {}) => p.enum ? p.enum[0] : ({ boolean: false, number: 0, integer: 0, array: [], object: {} })[p.type] ?? 'asight'
+export const SUBAGENT_PROMPT = 'trocar-mock-subagent: reply in one line'
+const filler = (p = {}) => p.enum ? p.enum[0] : ({ boolean: false, number: 0, integer: 0, array: [], object: {} })[p.type] ?? 'trocar'
 
 export function subagentCall(tools) {
   const t = tools.find((x) => SUBAGENT_TOOLS.includes(x.name)) || tools.find((x) => x.schema.properties?.prompt && x.schema.properties?.subagent_type)
   if (!t) return null
-  const props = t.schema.properties || {}, input = { description: 'asight mock subagent', prompt: SUBAGENT_PROMPT }
+  const props = t.schema.properties || {}, input = { description: 'trocar mock subagent', prompt: SUBAGENT_PROMPT }
   const want = t.name === 'task' ? 'general' : 'general-purpose', types = props.subagent_type?.enum
   if (props.subagent_type) input.subagent_type = !types || types.includes(want) ? want : types[0]
   for (const k of ['run_in_background', 'background']) if (props[k]) input[k] = false // wait for its answer

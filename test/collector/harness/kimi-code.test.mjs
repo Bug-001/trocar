@@ -34,7 +34,7 @@ test('kimi-code: the single-executable app matches by exe (its title is rewritte
   for (const [exe, argv, why] of [
     [SEA, [SEA, '__update_download', '2.1.2'], 'the background update download'],
     [SEA, [SEA, '__plugin_run_node', '/p/server.js'], "a plugin's MCP server"],
-    ['/usr/bin/dash', ['/bin/sh', '/home/u/.asight/collector/bin/kimi', '-p', 'hi'], "asight's shim itself"],
+    ['/usr/bin/dash', ['/bin/sh', '/home/u/.trocar/collector/bin/kimi', '-p', 'hi'], "trocar's shim itself"],
     ['/usr/bin/env', ['env', 'NODE_EXTRA_CA_CERTS=/x.pem', `${SEA}`, '-p'], 'the env exec inside the shim'],
     ['/usr/bin/python3.12', ['python3', '/home/u/.local/bin/kimi'], 'the older Python kimi-cli'],
     ['/usr/bin/node', ['node', '/srv/app/kimi.js'], 'some other node script'],
@@ -64,20 +64,20 @@ test('kimi-code: relay hosts from config.toml (providers, models, services, a pr
 test('kimi-code: the shim-set NODE_EXTRA_CA_CERTS trusts; without it the reason says why — not via the shim, no shim installed, the npm build (T12)', () => {
   const s = sandbox()
   try {
-    const dir = path.join(s.home, '.asight', 'collector')
-    const pem = s.put('.asight/collector/ca/asight-ca.pem', CA.certPem)
-    const extra = s.put('.asight/collector/ca/extra-kimi.pem', OTHER.certPem + CA.certPem)
+    const dir = path.join(s.home, '.trocar', 'collector')
+    const pem = s.put('.trocar/collector/ca/trocar-ca.pem', CA.certPem)
+    const extra = s.put('.trocar/collector/ca/extra-kimi.pem', OTHER.certPem + CA.certPem)
     const why = (env, { exe = SEA, argv = ['kimi-code'] } = {}) => judge(kimi, ctxFor({ home: s.home, env, argv }), { exe, collectorDir: dir }).trust
     assert.deepEqual([why({ NODE_EXTRA_CA_CERTS: pem }).trusted, why({ NODE_EXTRA_CA_CERTS: extra }).trusted], [true, true])
     assert.equal(why({}).reason, 'shim-not-on-path', 'no shim was installed (install said why)')
-    s.put('.asight/collector/bin/kimi', '#!/bin/sh\n')
+    s.put('.trocar/collector/bin/kimi', '#!/bin/sh\n')
     assert.equal(why({}).reason, 'kimi-not-via-shim')
     // the win twin: the shim is kimi.cmd there (arch/win32's opt-in item) — the reason must not mislabel a door
     // that is really there (measured live on a Windows test machine, 2026-10-13: flows rows said shim-not-on-path while the
     // session PATH resolved the shim first)
     fs.rmSync(path.join(dir, 'bin', 'kimi'))
     assert.equal(why({}).reason, 'shim-not-on-path', 'both shim names gone: back to no-shim-installed')
-    s.put('.asight/collector/bin/kimi.cmd', '@echo off\r\n')
+    s.put('.trocar/collector/bin/kimi.cmd', '@echo off\r\n')
     assert.equal(why({}).reason, 'kimi-not-via-shim', 'the .cmd shim alone is the door on Windows')
     assert.equal(why({ NODE_EXTRA_CA_CERTS: s.put('corp.pem', OTHER.certPem) }).reason, 'kimi-not-via-shim', "the user's own CA file: started without the shim, not 'ca-not-in-file'")
     assert.equal(why({}, { exe: '/usr/bin/node', argv: ['node', '/usr/local/bin/kimi'] }).reason, 'kimi-npm-no-shim')
@@ -87,7 +87,7 @@ test('kimi-code: the shim-set NODE_EXTRA_CA_CERTS trusts; without it the reason 
       assert.equal(why({}, { exe, argv: ['node', '/usr/local/bin/kimi'] }).reason, 'kimi-npm-no-shim', exe)
     assert.equal(why({}, { exe: null, argv: ['C:/Program Files/nodejs/node.exe', 'x'] }).reason, 'kimi-npm-no-shim', 'no exe: argv[0] names it')
     fs.rmSync(extra)
-    assert.equal(why({ NODE_EXTRA_CA_CERTS: extra }).reason, 'file-unreadable', "asight's own file gone (uninstalled): the generic reason")
+    assert.equal(why({ NODE_EXTRA_CA_CERTS: extra }).reason, 'file-unreadable', "trocar's own file gone (uninstalled): the generic reason")
     for (const k of ['shim-not-on-path', 'kimi-not-via-shim', 'kimi-npm-no-shim']) assert.ok(kimi.trust.hints[k], k)
   } finally { s.done() }
 })
@@ -97,8 +97,8 @@ test('kimi-code: the shim-set NODE_EXTRA_CA_CERTS trusts; without it the reason 
 test('kimi-code: on a proxy-model OS the reason never names a launch shim, with or without a shim file; the npm build is still told apart', () => {
   const s = sandbox()
   try {
-    const dir = path.join(s.home, '.asight', 'collector')
-    s.put('.asight/collector/ca/asight-ca.pem', CA.certPem)
+    const dir = path.join(s.home, '.trocar', 'collector')
+    s.put('.trocar/collector/ca/trocar-ca.pem', CA.certPem)
     const proxyOs = [...new Set(kimi.proxyMode.forms.flatMap((f) => f.os))]
     assert.ok(proxyOs.length > 0)
     const userCa = s.put('corp.pem', OTHER.certPem)
@@ -106,7 +106,7 @@ test('kimi-code: on a proxy-model OS the reason never names a launch shim, with 
       const why = (env, { exe = SEA, argv = ['kimi-code'] } = {}) => judge(kimi, ctxFor({ home: s.home, env, argv, os }), { exe, collectorDir: dir }).trust
       for (const shim of [null, 'kimi', 'kimi.cmd']) {
         fs.rmSync(path.join(dir, 'bin'), { recursive: true, force: true })
-        if (shim) s.put(`.asight/collector/bin/${shim}`, 'x\n')
+        if (shim) s.put(`.trocar/collector/bin/${shim}`, 'x\n')
         assert.equal(why({}).reason, 'var-missing', `${os}, shim file ${shim}`)
         assert.equal(why({ NODE_EXTRA_CA_CERTS: userCa }).reason, 'ca-not-in-file', `${os}, shim file ${shim}, the user's own CA file`)
         assert.equal(why({}, { exe: '/usr/bin/node', argv: ['node', '/usr/local/bin/kimi'] }).reason, 'kimi-npm-no-shim', `${os}: the npm build`)
@@ -118,8 +118,8 @@ test('kimi-code: on a proxy-model OS the reason never names a launch shim, with 
 test('kimi-code inject: a 0755 shim in the collector bin dir and one sentinel PATH line after the installer\'s in each rc that has it; nothing without the binary or that line (T10)', () => {
   const s = sandbox()
   try {
-    const dir = path.join(s.home, '.asight', 'collector')
-    const plan = (env = {}, running = [], at = dir) => planTrust({ descriptors: [kimi], ctxFor: () => ({ home: s.home, env: new Map(Object.entries(env)), running: running.map((e) => new Map(Object.entries(e))), collectorDir: at, caPem: path.join(at, 'ca', 'asight-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: at })
+    const dir = path.join(s.home, '.trocar', 'collector')
+    const plan = (env = {}, running = [], at = dir) => planTrust({ descriptors: [kimi], ctxFor: () => ({ home: s.home, env: new Map(Object.entries(env)), running: running.map((e) => new Map(Object.entries(e))), collectorDir: at, caPem: path.join(at, 'ca', 'trocar-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: at })
     const none = plan()
     assert.deepEqual([none.owned, none.entries, none.files, none.records.map((r) => r.code)], [[], [], [], ['shim-not-on-path']], 'no ~/.kimi-code/bin/kimi')
     s.put('.bashrc', INSTALLER)
@@ -134,14 +134,14 @@ test('kimi-code inject: a 0755 shim in the collector bin dir and one sentinel PA
     const shim = path.join(dir, 'bin', 'kimi')
     assert.deepEqual(p.paths, [shim, path.join(s.home, '.bashrc'), path.join(s.home, '.zshrc')], 'not ~/.local/bin, never ~/.kimi-code/bin/kimi, not an rc without the installer line')
     assert.deepEqual([p.owned[0].role, p.owned[0].mode], ['shim', 0o755])
-    assert.match(p.owned[0].data, /^#!\/bin\/sh\n# asight collector: /)
-    assert.ok(p.owned[0].data.includes(`exec env NODE_EXTRA_CA_CERTS='${path.join(dir, 'ca', 'asight-ca.pem')}' "$HOME/.kimi-code/bin/kimi" "$@"\n`))
+    assert.match(p.owned[0].data, /^#!\/bin\/sh\n# trocar collector: /)
+    assert.ok(p.owned[0].data.includes(`exec env NODE_EXTRA_CA_CERTS='${path.join(dir, 'ca', 'trocar-ca.pem')}' "$HOME/.kimi-code/bin/kimi" "$@"\n`))
     for (const e of p.entries) {
-      assert.match(e.line, new RegExp(`^export PATH="${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/bin:\\$PATH" # asight collector: `))
+      assert.match(e.line, new RegExp(`^export PATH="${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/bin:\\$PATH" # trocar collector: `))
       assert.ok(new RegExp(e.after, 'm').test(INSTALLER) && !new RegExp(e.after).test(e.line), 'after the installer line, never after its own')
     }
     assert.deepEqual(p.files, [])
-    const odd = plan({}, [], path.join(s.home, '$HOME', '.asight', 'collector'))
+    const odd = plan({}, [], path.join(s.home, '$HOME', '.trocar', 'collector'))
     assert.deepEqual([odd.owned.length, odd.records.map((r) => r.code)], [0, ['shim-not-on-path']], 'a collector dir the shell would expand inside "…" gets no PATH line')
     const key = '-----BEGIN PRIVATE KEY-----\nU0VDUkVULUtFWQ==\n-----END PRIVATE KEY-----\n'
     const corp = s.put('corp.pem', key + OTHER.certPem)
@@ -150,7 +150,7 @@ test('kimi-code inject: a 0755 shim in the collector bin dir and one sentinel PA
     assert.ok(withCa.owned[0].data.includes(`NODE_EXTRA_CA_CERTS='${extra}'`), 'a CA the user already gives kimi is carried over')
     assert.deepEqual([withCa.files.length, withCa.files[0].path, withCa.files[0].sources, fps(withCa.files[0].data)], [1, extra, [corp], [fp(OTHER), fp(CA)]])
     assert.ok(!withCa.files[0].data.includes('PRIVATE KEY'))
-    assert.deepEqual(withCa.records.map((r) => r.code), ['cert-not-merged', 'relative-path', 'harness-note'], "the key block is named; asight's own file in a running kimi's environ is not a source")
+    assert.deepEqual(withCa.records.map((r) => r.code), ['cert-not-merged', 'relative-path', 'harness-note'], "the key block is named; trocar's own file in a running kimi's environ is not a source")
     assert.match(withCa.records[1].reason, /rel\.pem is a relative path/)
   } finally { s.done() }
 })
@@ -163,13 +163,13 @@ test('kimi-code through install / uninstall: the shim runs kimi with the CA file
     const rc = s.put('.bashrc', `${INSTALLER}alias ll='ls -l'\n`)
     const corp = s.put('corp.pem', OTHER.certPem)
     await installCollector({ home: s.home, env: { HOME: s.home, NODE_EXTRA_CA_CERTS: corp }, osName: 'none', harnesses: [kimi], freePort: async () => 47014 })
-    const dir = path.join(s.home, '.asight', 'collector')
+    const dir = path.join(s.home, '.trocar', 'collector')
     assert.deepEqual(fs.readdirSync(path.join(dir, 'bin')), ['kimi'])
     assert.equal(fs.statSync(path.join(dir, 'bin', 'kimi')).mode & 0o777, 0o755)
-    assert.match(fs.readFileSync(rc, 'utf8'), new RegExp(`^# kimi-code\\nexport PATH="\\$HOME/\\.kimi-code/bin:\\$PATH"\\nexport PATH="${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/bin:\\$PATH" # asight collector: [^\\n]*\\nalias ll='ls -l'\\n$`))
+    assert.match(fs.readFileSync(rc, 'utf8'), new RegExp(`^# kimi-code\\nexport PATH="\\$HOME/\\.kimi-code/bin:\\$PATH"\\nexport PATH="${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/bin:\\$PATH" # trocar collector: [^\\n]*\\nalias ll='ls -l'\\n$`))
     const run = spawnSync('/bin/sh', ['-c', '. "$HOME/.bashrc"; command -v kimi; kimi -p "two words" \'$x\''], { env: { HOME: s.home, PATH: '/usr/bin:/bin' }, encoding: 'utf8' })
     assert.equal(run.stdout, `${path.join(dir, 'bin', 'kimi')}\n${path.join(dir, 'ca', 'extra-kimi.pem')}\n-p\ntwo words\n$x\n`, run.stderr)
-    assert.deepEqual(fps(fs.readFileSync(path.join(dir, 'ca', 'extra-kimi.pem'), 'utf8')), [fp(OTHER), ...fps(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8'))])
+    assert.deepEqual(fps(fs.readFileSync(path.join(dir, 'ca', 'extra-kimi.pem'), 'utf8')), [fp(OTHER), ...fps(fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'), 'utf8'))])
     const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none' })
     assert.deepEqual(r.entries.map((e) => e.result), ['restored'])
     assert.equal(fs.readFileSync(rc, 'utf8'), `${INSTALLER}alias ll='ls -l'\n`)
@@ -190,16 +190,16 @@ test('kimi-code on an OS that cannot read the environment (macOS, the 2026-10-12
   const { createTrustChecker, markerLayer, MARKER_VAR } = await import('../../../src/collector/core/trust/confirm.mjs')
   const s = sandbox()
   try {
-    const dir = path.join(s.home, '.asight', 'collector')
-    const pem = s.put('.asight/collector/ca/asight-ca.pem', CA.certPem)
-    s.put('.asight/collector/bin/kimi', '#!/bin/sh\n') // the shim is installed (the opt-in's job on darwin)
+    const dir = path.join(s.home, '.trocar', 'collector')
+    const pem = s.put('.trocar/collector/ca/trocar-ca.pem', CA.certPem)
+    s.put('.trocar/collector/bin/kimi', '#!/bin/sh\n') // the shim is installed (the opt-in's job on darwin)
     const readText = (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }
     const check = createTrustChecker({ caCertPem: CA.certPem })
     const startedAt = Date.now()
     const at = (environ, layers) => check.check(kimi.trust, { environ, layers, cwd: '/', startedAt, argv: ['kimi-code'], extra: { readText, collectorDir: dir, exe: SEA } })
     // the darwin reality: environ empty (never read), the tracker builds the marker layer from the shim's file
     assert.equal(at(new Map(), []).reason, 'kimi-not-via-shim', 'with no marker and no environment the reason is the shim\'s')
-    const markers = s.put('.asight/collector/run/trust/.keep', '')
+    const markers = s.put('.trocar/collector/run/trust/.keep', '')
     const markerDir = path.dirname(markers)
     const layerOf = () => markerLayer({ dir: markerDir, pid: 4242, startTicks: String(startedAt), caPem: pem, readText })
     assert.equal(layerOf(), null, 'no marker file, no layer (a kimi not started by the shim writes none)')

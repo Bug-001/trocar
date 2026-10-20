@@ -11,7 +11,7 @@ import { SENTINEL, OFF_PREFIX, lineComment } from '../../src/off/text-edit.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const T = new Date('2026-10-07T01:02:03.004Z')
-const dirOf = () => { const home = tmpDir('asight-man-'); return { home, dir: path.join(home, '.asight', 'collector') } }
+const dirOf = () => { const home = tmpDir('trocar-man-'); return { home, dir: path.join(home, '.trocar', 'collector') } }
 const writeRaw = (dir, obj) => { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(manifestPath(dir), JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 }) }
 
 // 4.11 ⑰: a manifest written before the collector model (version 1 had no `version`, version 2 had `complete`) is not read: it comes back as the refusal's
@@ -94,21 +94,21 @@ test('R3: undoByHand says, in one sentence, how to take each kind of item out wi
   assert.match(jsonPrior, /\/corp\.pem/); assert.match(jsonPrior, /env\.K/)
   const block = undoByHand({ kind: 'text', path: '/h/.codex/.env', format: 'dotenv-block', vars: { SSL_CERT_FILE: '/b.pem' } })
   assert.ok(block.includes(`# >>> ${SENTINEL} >>>`) && block.includes(`# <<< ${SENTINEL} <<<`), 'the sentinels the file really holds')
-  assert.ok(block.includes(OFF_PREFIX.trimEnd()), 'and the prefix of a line asight put out of effect')
+  assert.ok(block.includes(OFF_PREFIX.trimEnd()), 'and the prefix of a line trocar put out of effect')
   const line = undoByHand({ kind: 'text', path: '/h/.zshrc', format: 'line', line: 'export PATH="$HOME/shim:$PATH"' })
   assert.ok(line.includes('/h/.zshrc') && line.includes(JSON.stringify('export PATH="$HOME/shim:$PATH"')))
-  assert.equal(undoByHand({ kind: 'owned-file', path: '/h/.asight/collector/ca/x.pem' }), 'rm /h/.asight/collector/ca/x.pem')
-  assert.match(undoByHand({ kind: 'json-key', path: '/h/n.json', keys: ['k'], value: 'v', prior_value: null, existed_before: false }), /created|did not exist/, 'a file asight created: delete it if nothing else is in it')
+  assert.equal(undoByHand({ kind: 'owned-file', path: '/h/.trocar/collector/ca/x.pem' }), 'rm /h/.trocar/collector/ca/x.pem')
+  assert.match(undoByHand({ kind: 'json-key', path: '/h/n.json', keys: ['k'], value: 'v', prior_value: null, existed_before: false }), /created|did not exist/, 'a file trocar created: delete it if nothing else is in it')
   // a kind this build does not know: what its writer recorded wins; with nothing recorded, never a made-up `rm`
   assert.equal(undoByHand({ kind: 'mystery', path: '/z', undo_by_hand: 'run the mystery tool' }), 'run the mystery tool')
   assert.ok(!/^rm /.test(undoByHand({ kind: 'mystery', path: '/z' })) && undoByHand({ kind: 'mystery', path: '/z' }).length > 10)
   for (const kind of KNOWN_KINDS.filter((k) => k.startsWith('legacy-'))) assert.ok(undoByHand({ kind, path: '/p' }).includes('/p'), kind)
 })
 
-// The old capture's ledger ~/.asight/legacy-manifest.json is the same format in a file of its own (not in ~/.asight/collector/, so the board does not think the new collector is installed).
+// The old capture's ledger ~/.trocar/legacy-manifest.json is the same format in a file of its own (not in ~/.trocar/collector/, so the board does not think the new collector is installed).
 test('the ledger of the old capture is a manifest in a file of its own: written 0600, its directory made 0700, read back, with kind and undo_by_hand filled in; a version it does not know is refused, never rewritten', () => {
-  const dir = tmpDir('asight-ledger-')
-  const file = path.join(dir, '.asight', 'legacy-manifest.json')
+  const dir = tmpDir('trocar-ledger-')
+  const file = path.join(dir, '.trocar', 'legacy-manifest.json')
   assert.equal(readManifestAt(file), null, 'no ledger is null')
   const m = newManifest(new Date('2026-10-07T00:00:00Z'))
   m.entries.push({ kind: 'legacy-clash-block', harness: 'claude-code', path: '/v/Script.js', backup: '/b/1', installed_at: 'x', phase: 'on' })
@@ -116,7 +116,7 @@ test('the ledger of the old capture is a manifest in a file of its own: written 
   assert.equal(fs.statSync(file).mode & 0o777, 0o600); assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700)
   const back = readManifestAt(file)
   assert.deepEqual([back.version, back.entries.length, back.entries[0].kind], [MANIFEST_VERSION, 1, 'legacy-clash-block'])
-  assert.match(back.entries[0].undo_by_hand, /old capture|asight off/, 'a legacy kind has a sentence for a person with no node')
+  assert.match(back.entries[0].undo_by_hand, /old capture|trocar off/, 'a legacy kind has a sentence for a person with no node')
   assert.equal(fs.existsSync(manifestPath(path.dirname(file))), false, 'the install manifest is another file')
   fs.writeFileSync(file, JSON.stringify({ version: 99, entries: [] }))
   const odd = readManifestAt(file)
@@ -126,9 +126,9 @@ test('the ledger of the old capture is a manifest in a file of its own: written 
   saveManifest(dir, newManifest()); assert.equal(readManifest(dir).version, MANIFEST_VERSION, 'saveManifest / readManifest are the same code with the install manifest\'s name')
 })
 
-// The audit's MEDIUM finding (semantics 2): JSON that parses but is not the manifest asight wrote — `{"version":2}`, `entries: {…}`, `entries: [null]`, `files: null` — was accepted, and
+// The audit's MEDIUM finding (semantics 2): JSON that parses but is not the manifest trocar wrote — `{"version":2}`, `entries: {…}`, `entries: [null]`, `files: null` — was accepted, and
 // `off` then crashed before it did anything (or half-way, with the routing already off and no receipt). It is as unusable as a file that does not parse: the same error, and the
-// same way on (R3: asight's own marks).
+// same way on (R3: trocar's own marks).
 test('R3: a manifest whose lists are not the lists of a manifest is an error, like one that does not parse — never "nothing installed"', () => {
   const { dir } = dirOf()
   const bad = {
@@ -190,14 +190,14 @@ test('D55 / 4.11 P13 the new kinds: known, each with a sentence of undo by hand;
   for (const k of ['system-root', 'json-array-item', 'root-key']) assert.ok(KNOWN_KINDS.includes(k), k)
   assert.ok(!KNOWN_KINDS.includes('login-env'), 'never emitted, and no undo: not a kind (4.11 P13)')
   assert.equal(undoByHand({ kind: 'system-root', store: 'win-currentuser-root', thumbprint: 'AB12' }), 'run: certutil -user -delstore Root AB12')
-  assert.equal(undoByHand({ kind: 'system-root', store: 'darwin-user-trust', fp256: 'AA:BB', thumbprint: 'CC', cert_file: '/h/.asight/collector/ca/asight-ca.pem' }), 'run: security remove-trusted-cert /h/.asight/collector/ca/asight-ca.pem, then security delete-certificate -Z CC (the certificate with SHA-256 AA:BB)')
-  assert.equal(undoByHand({ kind: 'json-array-item', path: '/s.json', keys: ['settingsSync.ignoredSettings'], item: 'http.proxy', created_array: true }), 'edit /s.json: remove "http.proxy" from the list settingsSync.ignoredSettings, then delete the list if it is now empty (asight created it)')
+  assert.equal(undoByHand({ kind: 'system-root', store: 'darwin-user-trust', fp256: 'AA:BB', thumbprint: 'CC', cert_file: '/h/.trocar/collector/ca/trocar-ca.pem' }), 'run: security remove-trusted-cert /h/.trocar/collector/ca/trocar-ca.pem, then security delete-certificate -Z CC (the certificate with SHA-256 AA:BB)')
+  assert.equal(undoByHand({ kind: 'json-array-item', path: '/s.json', keys: ['settingsSync.ignoredSettings'], item: 'http.proxy', created_array: true }), 'edit /s.json: remove "http.proxy" from the list settingsSync.ignoredSettings, then delete the list if it is now empty (trocar created it)')
   const key = (kind, id) => undoByHand({ kind: 'root-key', custody: { kind, id }, fp256: 'AA:BB' })
-  assert.match(key('file', '/h/.asight/collector/ca/root.key'), /^rm \/h\/\.asight\/collector\/ca\/root\.key \(.*SHA-256 AA:BB/)
-  assert.match(key('cng', 'asight-root'), /certutil -user -csp "Microsoft Software Key Storage Provider" -delkey "asight-root"/)
-  assert.match(key('keychain', 'asight-root'), /login keychain/)
-  assert.match(undoByHand({ kind: 'text', format: 'pem-block', path: '/h/my.pem' }), /^edit \/h\/my\.pem: delete the lines from "# >>> asight collector >>>.*" to "# <<< asight collector <<<" at its end/)
-  assert.equal(undoByHand({ kind: 'owned-file', role: 'wrapper', path: '/h/bin/kimi', real: '/h/bin/.asight-real/kimi', sha256: 'ab' }), 'if sha256 of /h/bin/kimi is still ab: mv /h/bin/.asight-real/kimi /h/bin/kimi; otherwise: rm /h/bin/.asight-real/kimi (the program was updated over the wrapper)')
+  assert.match(key('file', '/h/.trocar/collector/ca/root.key'), /^rm \/h\/\.trocar\/collector\/ca\/root\.key \(.*SHA-256 AA:BB/)
+  assert.match(key('cng', 'trocar-root'), /certutil -user -csp "Microsoft Software Key Storage Provider" -delkey "trocar-root"/)
+  assert.match(key('keychain', 'trocar-root'), /login keychain/)
+  assert.match(undoByHand({ kind: 'text', format: 'pem-block', path: '/h/my.pem' }), /^edit \/h\/my\.pem: delete the lines from "# >>> trocar collector >>>.*" to "# <<< trocar collector <<<" at its end/)
+  assert.equal(undoByHand({ kind: 'owned-file', role: 'wrapper', path: '/h/bin/kimi', real: '/h/bin/.trocar-real/kimi', sha256: 'ab' }), 'if sha256 of /h/bin/kimi is still ab: mv /h/bin/.trocar-real/kimi /h/bin/kimi; otherwise: rm /h/bin/.trocar-real/kimi (the program was updated over the wrapper)')
   for (const role of ['switch', 'config-entry']) assert.equal(undoByHand({ kind: 'owned-file', role, path: '/h/x y' }), "rm '/h/x y'")
 })
 

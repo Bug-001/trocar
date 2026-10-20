@@ -7,7 +7,7 @@ import { pollCaptureHealth, captureVerdict, CAPH_MS } from '../../src/web/v2/cor
 
 // the period, read off 4.4's live-poll table (one fact, one place)
 const PERIOD = (() => {
-  const row = fs.readFileSync(new URL('../../spec/01-asight-rfc/4.4-server.md', import.meta.url), 'utf8').split('\n').find((l) => l.includes('| `status` |'))
+  const row = fs.readFileSync(new URL('../../spec/01-trocar-rfc/4.4-server.md', import.meta.url), 'utf8').split('\n').find((l) => l.includes('| `status` |'))
   return Number(/\*\*(\d+) s\*\*/.exec(row)[1]) * 1000
 })()
 

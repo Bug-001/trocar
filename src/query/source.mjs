@@ -314,7 +314,7 @@ function poisonSplitDuplicates(parts) {
 // What one root lists: discover's rule over this root alone, or — under several roots — this root's
 // share of ONE listing across all of them, so an original in one root supersedes its sealed copy in
 // another (4.2 「并存期」: every reader makes the same choice).
-// `exclude`: files to treat as absent — only `asight raw compare`, to resolve as it will once the
+// `exclude`: files to treat as absent — only `trocar raw compare`, to resolve as it will once the
 // originals with a sealed copy are deleted (review 3 F1).
 const listRoot = (root, exclude = null) => {
   const ls = listSources([root], { exclude });
@@ -351,7 +351,7 @@ export async function buildResolver(source, { retryMs = 30000, exclude = null, l
   const marks = new Map();     // file -> { size, ino, end, tail } as of its last indexing
 
   // A file that cannot be read is skipped, not fatal, at startup and on refresh: one unreadable
-  // capture must not take down the root's index (or `asight serve`). It is noted in scan.skipped
+  // capture must not take down the root's index (or `trocar serve`). It is noted in scan.skipped
   // (with its root, once per root + name + reason), which the board shows, and the note is dropped
   // once the file indexes or leaves the root. A read that failed after the open may have indexed
   // some lines; undoAttempt() takes them back, so a retry never indexes a line twice.
@@ -527,7 +527,7 @@ export async function buildResolver(source, { retryMs = 30000, exclude = null, l
   resolve.frameStats = frameCache.stats;   // sealed-frame LRU: decodes / hits / most frames ever resident
 
   // LIVE SOURCES (4.4 #10). The index used to be built once, at startup, so under a running
-  // collector a call captured after `asight serve` started was listed by the board but its blocks
+  // collector a call captured after `trocar serve` started was listed by the board but its blocks
   // came back `absent` — bytes on disk reported missing. refresh() brings the index up to date:
   // new files are indexed whole; a grown file is indexed from where the last complete line ended
   // (only the new tail is read, so the cost is the new bytes, not the corpus); a file that shrank
@@ -644,7 +644,7 @@ async function buildMultiResolver(roots, { exclude, ...opts }) {
     // FAIL SOFT PER ROOT. A root can be absent, unreadable, or deleted between the caller's existence
     // check and this open — the legacy home is exactly the kind of directory a user tidies away, and
     // the live one is being written to while we read it. One bad root must cost the sessions in that
-    // root, never the whole board: throwing here takes down `asight serve` at startup and the user
+    // root, never the whole board: throwing here takes down `trocar serve` at startup and the user
     // sees a crash where they should see the sessions that ARE readable (invariant 2 — a capture on
     // disk stays readable). What is dropped is recorded so `scan` can report it rather than hide it.
     try { parts.push(Object.assign(await buildResolver(r, { ...opts, lister, frameCache, unreadableSealed, onIndexChange: poison }), { rootPath: r })); }

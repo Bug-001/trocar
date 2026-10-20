@@ -1,4 +1,4 @@
-// src/query/named/calls.mjs — `asight query calls` (RFC 1.6 §4.1, 附录 C.5).
+// src/query/named/calls.mjs — `trocar query calls` (RFC 1.6 §4.1, 附录 C.5).
 //
 // Any class of call, not only inference (D40). Without `--class` / `--host` / `--ref` it is the class table. With
 // one of them it is the calls themselves: filtered, counted and paged on the SEGMENT INDEX alone, and only the
@@ -13,7 +13,7 @@ import { QueryArgError, listOf, paginate, tsFilter } from './index.mjs';
 export const params = Object.freeze(['class', 'harness', 'session', 'host', 'ref', 'since', 'until', 'limit', 'after']);
 
 export async function run({ home, fs, now, params: p, errors }) {
-  if (p.ref != null && !parseRecordId(String(p.ref))) throw new QueryArgError(`asight query calls: --ref ${JSON.stringify(String(p.ref))} names no record — a record is \`<segment>:<line>\``);
+  if (p.ref != null && !parseRecordId(String(p.ref))) throw new QueryArgError(`trocar query calls: --ref ${JSON.stringify(String(p.ref))} names no record — a record is \`<segment>:<line>\``);
   const keep = tsFilter(p, now), cls = listOf(p.class), harness = listOf(p.harness), sess = listOf(p.session),
     host = listOf(p.host), ref = listOf(p.ref);
   // Through the ONE warm, stat-revalidated reading of the index (src/query/rows.mjs, which `sessions` and `session` ask too).

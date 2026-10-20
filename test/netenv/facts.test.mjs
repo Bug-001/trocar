@@ -14,7 +14,7 @@ const D = Object.fromEntries(all.map((d) => [d.name, d]))
 const put = (file, text) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text) }
 
 test('readProxySetting: the key a harness file declares, in the file it declares, redacted, with a hash of the value, a source and when the file changed — and the value only in memory', () => {
-  const home = tmpDir('asight-set-')
+  const home = tmpDir('trocar-set-')
   put(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { HTTPS_PROXY: 'http://alice:pw@proxy.corp:8080', OTHER: 'x' } }))
   const s = readProxySetting(D['claude-code'], { home, env: {} })
   assert.equal(s.value, 'http://***@proxy.corp:8080')
@@ -29,14 +29,14 @@ test('readProxySetting: the key a harness file declares, in the file it declares
 })
 
 test('readProxySetting: a file wins over the environment (the way the agent reads its settings over its launch env), the next file after the first, then the environment; none is none, not unknown', () => {
-  const home = tmpDir('asight-set2-')
+  const home = tmpDir('trocar-set2-')
   const env = { HTTPS_PROXY: 'http://env.example:1', https_proxy: 'http://lower.example:2' }
   assert.deepEqual(readProxySetting(D['claude-code'], { home, env }).source, [{ kind: 'env', where: 'HTTPS_PROXY' }], 'no file: the environment, in the order the descriptor lists the names')
   put(path.join(home, '.claude.json'), JSON.stringify({ env: { HTTP_PROXY: 'http://global.example:3' } }))
   assert.equal(readProxySetting(D['claude-code'], { home, env }).host, 'global.example', '~/.claude.json holds one: it wins over the environment')
   put(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { HTTPS_PROXY: 'http://user.example:4' } }))
   assert.equal(readProxySetting(D['claude-code'], { home, env }).host, 'user.example', 'and the user settings win over ~/.claude.json')
-  assert.deepEqual(readProxySetting(D.opencode, { home: tmpDir('asight-none-'), env: {} }), { value: null, scheme: null, host: null, port: null, source: [], sha256: null, changedAt: null })
+  assert.deepEqual(readProxySetting(D.opencode, { home: tmpDir('trocar-none-'), env: {} }), { value: null, scheme: null, host: null, port: null, source: [], sha256: null, changedAt: null })
   put(path.join(home, '.codex', '.env'), '# a comment\nexport HTTPS_PROXY="socks5h://127.0.0.1:1080"\nOTHER=1\n')
   const c = readProxySetting(D.codex, { home, env: {} })
   assert.deepEqual([c.scheme, c.host, c.port, c.source[0].key], ['socks5h', '127.0.0.1', 1080, 'HTTPS_PROXY'])
@@ -44,7 +44,7 @@ test('readProxySetting: a file wins over the environment (the way the agent read
 })
 
 test('readProxySetting: a file that cannot be read or parsed is unknown with its reason (it may hold the very key that wins), and a value that is not a URL never appears in the reason', () => {
-  const home = tmpDir('asight-set3-')
+  const home = tmpDir('trocar-set3-')
   const file = path.join(home, '.claude', 'settings.json')
   put(file, '{ not json')
   const u = readProxySetting(D['claude-code'], { home, env: {} })
@@ -74,7 +74,7 @@ const status = (over = {}) => ({
 const base = { platform: 'linux', env: {}, harnesses: all, now: () => Date.parse('2026-10-07T10:00:00Z') }
 
 test('gatherNetFacts: the switch, the daemon, the link ids, the descriptors\' behaviour for this platform, the negative cache of the harness\'s processes and what `on` adopted', async () => {
-  const home = tmpDir('asight-gather-')
+  const home = tmpDir('trocar-gather-')
   const f = await gatherNetFacts({ ...base, home, status: status(), adopted: { 'claude-code': { at: 'T', chain: 'c', proxy: null, source: [], sha256: null } },
     archFacts: async () => ({ routing: 'driver', procs: { 'claude-code': [{ pid: 4121, name: 'claude' }] }, listeners: [{ addr: '127.0.0.1', port: 7890, pid: 777 }], unknowns: [{ fact: 'tun', reason: 'absent', detail: 'no ip' }] }) })
   assert.equal(f.at, '2026-10-07T10:00:00.000Z')
@@ -98,7 +98,7 @@ test('gatherNetFacts: the switch, the daemon, the link ids, the descriptors\' be
 })
 
 test('gatherNetFacts: no vpn / vpnKnown / tun in the facts and no product on a listener, even when a caller still passes a probe result or an arch part still returns tun / vpn (D49)', async () => {
-  const home = tmpDir('asight-gather2-')
+  const home = tmpDir('trocar-gather2-')
   const arch = async () => ({ routing: 'driver', listeners: [{ addr: '127.0.0.1', port: 7890, pid: 777, exe: '/usr/bin/mihomo' }], tun: true, vpn: { product: 'mihomo', port: 7890 } })
   const probe = { result: { products: [{ product: 'mihomo', mode: 'rule', tun: 'unknown', system_proxy: false, mixed_port: 7890, live: true, via: {} }], unknown: [] } }
   const f = await gatherNetFacts({ ...base, home, status: status(), netenv: probe, archFacts: arch })
@@ -109,7 +109,7 @@ test('gatherNetFacts: no vpn / vpnKnown / tun in the facts and no product on a l
 })
 
 test('gatherNetFacts: a platform part that throws leaves the routing unknown and says why; none at all says so; the guard\'s refusal is not "the read failed"', async () => {
-  const home = tmpDir('asight-gather3-')
+  const home = tmpDir('trocar-gather3-')
   const broke = await gatherNetFacts({ ...base, home, status: status(), archFacts: async () => { throw Object.assign(new Error('boom'), { code: 'EBOOM' }) } })
   assert.equal(broke.routing, 'unknown')
   assert.deepEqual(broke.unknowns, [{ fact: 'arch', reason: 'denied', detail: 'the platform\'s network facts could not be read (EBOOM)' }])
@@ -120,7 +120,7 @@ test('gatherNetFacts: a platform part that throws leaves the routing unknown and
 })
 
 test('gatherNetFacts: the host\'s linger state and another redirector, the files and keys a harness reads its proxy from (to name the line in a command), and a fake-ip an arch part saw', async () => {
-  const home = tmpDir('asight-gather4-')
+  const home = tmpDir('trocar-gather4-')
   const arch = async () => ({ routing: 'driver', otherRedirector: true, fakeIp: { 'claude-code': true } })
   const f = await gatherNetFacts({ ...base, home, status: { ...status(), linger: { linger: false } }, archFacts: arch })
   assert.deepEqual([f.linger, f.otherRedirector], [false, true])
@@ -131,7 +131,7 @@ test('gatherNetFacts: the host\'s linger state and another redirector, the files
 })
 
 test('gatherNetFacts: the NO_PROXY of the shell names the harness\'s API hosts it covers (a domain suffix, the host, `*`)', async () => {
-  const home = tmpDir('asight-gather5-')
+  const home = tmpDir('trocar-gather5-')
   const env = (v) => gatherNetFacts({ ...base, env: v, home, status: status(), archFacts: async () => ({ routing: 'driver' }) })
   assert.deepEqual((await env({ NO_PROXY: 'localhost,.anthropic.com' })).harnesses['claude-code'].noProxy, ['api.anthropic.com'])
   assert.deepEqual((await env({ no_proxy: '*' })).harnesses['claude-code'].noProxy, ['api.anthropic.com'])

@@ -43,7 +43,7 @@ export async function startMockProxy({ kind = 'connect', target, tls: tlsOpts = 
         entry.target = head.split(' ')[1]
         const given = /^proxy-authorization:[ \t]*basic[ \t]+(\S+)[ \t]*\r?$/im.exec(head)?.[1] // header name and scheme in any case
         if (auth && given !== Buffer.from(`${auth.username}:${auth.password}`).toString('base64')) ok = false
-        send(ok ? 'HTTP/1.1 200 Connection established\r\nProxy-Agent: asight-mock-proxy\r\n\r\n' : 'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n')
+        send(ok ? 'HTTP/1.1 200 Connection established\r\nProxy-Agent: trocar-mock-proxy\r\n\r\n' : 'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n')
       } else if (kind === 'socks4') {
         const h = await take(r.read(8)); await take(r.until('\0'))
         const v4a = h[4] === 0 && h[5] === 0 && h[6] === 0 && h[7] !== 0

@@ -1,5 +1,5 @@
 // core/api.mjs — the front end's ONE data entrance: api.get(<name>, params) reads GET /api/<name>, whose document is the one
-// `asight query <name>` prints (4.4, D59). There is no list of names here: the names live in the query layer (0.1 §2), and a
+// `trocar query <name>` prints (4.4, D59). There is no list of names here: the names live in the query layer (0.1 §2), and a
 // screen's name is held to it by test/web-v2/http.test.mjs. Every answer is {ok:true, data} | {ok:false, status, error}
 // (core/http.mjs). The writes are the control plane (4.4 §控制面): controlStatus() and control(<harness|setup|classes>, body), whose
 // plan-then-confirm round lives in core/control.mjs.

@@ -4,7 +4,7 @@
 //   facts  = { name: the harness the D51 lookup named for this process with the host-tree rule applied first (host-agent.mjs whoseWithHosts: an
 //            editor carrying the harness's extension is named as that harness; null: none), pid, startedAt (ms or ISO), env (the PROCESS's env; null =
 //            unreadable), cwd (the process's; null = unknown) } — never the daemon's own env or cwd.
-//   record = { carrierInstalledAt (ms or ISO) of the form's carrier, rootFp256 of the asight root }
+//   record = { carrierInstalledAt (ms or ISO) of the form's carrier, rootFp256 of the trocar root }
 //   hostSet = for a hostTree form, the host set the door built once at on / status (host-agent hostSetOf().hosts: the default hosts, the base-URL
 //            hosts in the extension's own settings, the operator's extra_hosts; 4.8 OPEN 22); absent → desc.hosts.
 //   issuer = makeIssuer()'s object, or null; ctx = the sources.mjs ctx (os, home, dirs, readFile, readdir, policy, join).
@@ -30,7 +30,7 @@ function read(src, ctx, facts) {
 }
 const why = (r) => `${r.where}: ${r.error}`
 
-/** The trust rule (⑧⑨): null when the process trusts the asight root through this form's trust, else the forward verdict. */
+/** The trust rule (⑧⑨): null when the process trusts the trocar root through this form's trust, else the forward verdict. */
 function trustVerdict(t, ctx, facts, record) {
   if (!t || !t.sources || !t.sources.length) return null
   if (t.when) {
@@ -41,7 +41,7 @@ function trustVerdict(t, ctx, facts, record) {
   let hit = null
   for (const s of t.sources) { const r = read(s.from, ctx, facts); if (r.error) return fwd(r.code, why(r)); if (r.set) { hit = r; break } }
   if (!hit) {
-    // Node's own roots never hold asight's root, nor does a process whose required source is unset
+    // Node's own roots never hold trocar's root, nor does a process whose required source is unset
     return t.base === 'node' || t.sources.some((s) => s.required) ? fwd('var-missing', `none of ${t.sources.length} trust source(s) is set for this process`) : null
   }
   const value = String(hit.value)
@@ -52,7 +52,7 @@ function trustVerdict(t, ctx, facts, record) {
     if (absent(e)) return fwd('ca-not-in-file', `${hit.where} names ${file}, which does not exist`)
     return fwd('file-unreadable', `${hit.where} names ${file}: ${(e && e.code) || e}`)
   }
-  return certBlocks(text).some((b) => hex(b.fp) === hex(record.rootFp256)) ? null : fwd('ca-not-in-file', `${hit.where} names ${file}, which does not hold the asight root`)
+  return certBlocks(text).some((b) => hex(b.fp) === hex(record.rootFp256)) ? null : fwd('ca-not-in-file', `${hit.where} names ${file}, which does not hold the trocar root`)
 }
 
 /** → { decrypt: true } | { decrypt: false, code, detail, at? }. */
@@ -67,7 +67,7 @@ export function verdictOf({ desc, form, facts = {}, record = {}, issuer, host, h
   const started = ms(facts.startedAt), installed = ms(record.carrierInstalledAt)
   if (Number.isNaN(installed)) return fwd('not-routed', `${form.id} has no carrier installed`)
   if (Number.isNaN(started)) return fwd('start-time-unknown', `the start time of pid ${facts.pid} could not be read`)
-  if (started <= installed) return fwd('config-after-start', `pid ${facts.pid} started before asight's settings for ${form.id} were in place (its proxy entry and the certificate it needs); restart it once`)
+  if (started <= installed) return fwd('config-after-start', `pid ${facts.pid} started before trocar's settings for ${form.id} were in place (its proxy entry and the certificate it needs); restart it once`)
   const pctx = { ...ctx, env: facts.env || {}, cwd: facts.cwd ?? undefined } // the process's env and cwd, never the daemon's
   const t = trustVerdict(form.trust !== 'root' && pm.trusts && pm.trusts[form.trust], pctx, facts, record)
   if (t) return t

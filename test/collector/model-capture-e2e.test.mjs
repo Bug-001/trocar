@@ -1,8 +1,8 @@
-// test/collector/model-capture-e2e.test.mjs — a real capture on the model's default path (the platform-seam rule, incident 2): `asight on` through the CLI →
+// test/collector/model-capture-e2e.test.mjs — a real capture on the model's default path (the platform-seam rule, incident 2): `trocar on` through the CLI →
 // a REAL daemon (startDaemon, model collector, real control endpoint) whose door parts are doorPartsFor's own — only the OS readers under them are fakes
 // (darwin: the exec that runs lsof / ps / procenv and the process table; win32: the helper child, the fake that speaks helper.ps1's protocol, and the
-// powershell table) → an agent connection through the real door: CONNECT with the door URL's credentials, TLS that trusts only the asight root, one
-// request to a mock upstream that has its own CA → the capture record holds the bytes. Then `asight off`: this process held the door (door-seen in the
+// powershell table) → an agent connection through the real door: CONNECT with the door URL's credentials, TLS that trusts only the trocar root, one
+// request to a mock upstream that has its own CA → the capture record holds the bytes. Then `trocar off`: this process held the door (door-seen in the
 // on window), so a new connection is forwarded — its TLS peer is the mock's own — and nothing is recorded; then the process leaves the table and the
 // daemon exits. No stub on the door / engine seam: no lookupIngress, engine, request or socket path is injected. One run per platform value.
 // 4.11 CM5 (leaf + intermediate end to end), CM22 (decrypt: named, verified form, started after the carrier, the agent's own trust file holds the root),
@@ -31,7 +31,7 @@ import { segmentIndex } from '../../src/query/index-build.mjs'
 
 const FAKE_HELPER = fileURLToPath(new URL('./arch/win32/fixtures/fake-helper.mjs', import.meta.url))
 const PID = 2_000_001 // the agent's pid as the fake readers answer it: never this process (the doors exclude their own pid) nor a real one
-const BODY = '{"model":"e2e","input":"asight-model-e2e"}'
+const BODY = '{"model":"e2e","input":"trocar-model-e2e"}'
 const reqOf = (host) => `POST /v1/responses HTTP/1.1\r\nHost: ${host}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(BODY)}\r\n\r\n${BODY}`
 const REPLY = 'HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 4\r\n\r\npong'
 const doorOpen = (port) => new Promise((resolve) => { const s = net.connect(port, '127.0.0.1'); s.once('connect', () => { s.destroy(); resolve(true) }); s.once('error', () => resolve(false)) })
@@ -67,7 +67,7 @@ const darwinExec = (a) => (file, args) => {
 
 /** win32: the fake helper over a fixture file it reads again per request (its `reread`), and the powershell process table. */
 function win32Io(a) {
-  const fx = path.join(tmpDir('asight-helper-'), 'fixture.json')
+  const fx = path.join(tmpDir('trocar-helper-'), 'fixture.json')
   const write = () => fs.writeFileSync(fx, JSON.stringify({ reread: true, verbs: {
     ps: { data: { sessionId: 1, procs: a.alive ? [{ pid: a.pid, ppid: 1, name: a.name, exe: a.exe, cmdline: a.exe, cmdlineState: 'ok', startedAt: a.start, sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false }] : [] } },
     'tcp-table': { data: { rows: a.alive ? [...a.ports].map((p) => ({ pid: a.pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort: p, remoteAddr: '127.0.0.1', remotePort: 1 })) : [] } },
@@ -76,7 +76,7 @@ function win32Io(a) {
   } }))
   write()
   const exec = (file) => (file === 'powershell' ? ok(a.alive ? JSON.stringify([{ p: a.pid, pp: 1, n: a.name, x: a.exe, s: a.start, c: a.exe }]) : '') : no(`not faked: ${file}`))
-  return { io: { exec, helper: { exe: process.execPath, args: [FAKE_HELPER, fx], spawn: (exe, args, o) => spawn(exe, args, { ...o, env: { ...o.env, ASIGHT_FAKE_HELPER: '1' } }) } }, write }
+  return { io: { exec, helper: { exe: process.execPath, args: [FAKE_HELPER, fx], spawn: (exe, args, o) => spawn(exe, args, { ...o, env: { ...o.env, TROCAR_FAKE_HELPER: '1' } }) } }, write }
 }
 
 const freePort = async () => { const s = net.createServer(); await new Promise((r) => s.listen(0, '127.0.0.1', r)); const p = s.address().port; await new Promise((r) => s.close(r)); return p }
@@ -103,7 +103,7 @@ for (const platform of ['darwin', 'win32']) {
     const w = await modelWorld({ os: platform, commands: ['codex'] })
     assert.equal((await w.install({ wrapperKit: { renderWrapper } })).exit, 0)
     fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(w.home, '.codex', '.env'), '# the user\'s own\n')
-    const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'asight-ca.pem'), 'utf8')
+    const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
     const root = new crypto.X509Certificate(rootPem)
     // the mock upstream, with a CA of its own that reaches the door through the agent's own trust set (⑭): SSL_CERT_FILE in its launch environment
     const upCa = createCa({ commonName: 'e2e upstream CA' }), upIssuer = createLeafIssuer(loadCa(upCa))
@@ -115,7 +115,7 @@ for (const platform of ['darwin', 'win32']) {
     await new Promise((r) => mock.listen(0, '127.0.0.1', r))
     const target = `localhost:${mock.address().port}`, REQ = reqOf(target)
     const bundle = path.join(w.home, 'codex-ca.pem')
-    fs.writeFileSync(bundle, rootPem + upCa.certPem) // what this codex trusts: the asight root (CM22) and the upstream's CA
+    fs.writeFileSync(bundle, rootPem + upCa.certPem) // what this codex trusts: the trocar root (CM22) and the upstream's CA
     const desc = w.harnesses.find((h) => h.name === 'codex')
     const a = agentOf({ w, name: desc.processes.names[0].name, env: { SSL_CERT_FILE: bundle } })
     const win = platform === 'win32' ? win32Io(a) : null
@@ -138,7 +138,7 @@ for (const platform of ['darwin', 'win32']) {
         const inter = one.peer.issuerCertificate
         assert.ok(inter && inter.raw && !inter.raw.equals(one.peer.raw), 'the door sent an intermediate above the leaf')
         const X = (c) => new crypto.X509Certificate(c.raw)
-        assert.ok(X(one.peer).checkIssued(X(inter)) && X(inter).checkIssued(root) && X(inter).fingerprint256 !== root.fingerprint256, 'CM5: leaf ← intermediate ← the asight root')
+        assert.ok(X(one.peer).checkIssued(X(inter)) && X(inter).checkIssued(root) && X(inter).fingerprint256 !== root.fingerprint256, 'CM5: leaf ← intermediate ← the trocar root')
         assert.equal(X(inter.issuerCertificate).fingerprint256, root.fingerprint256, 'the chain ends at the root the client trusts')
         assert.equal(got.length, 1); assert.equal(got[0].toString('latin1'), REQ, 'the mock received the request bytes verbatim')
         await one.end()

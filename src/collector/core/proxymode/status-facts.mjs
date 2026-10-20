@@ -8,7 +8,7 @@ import { itemsOfPhase } from '../../../off/manifest.mjs'
 import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
 import { isPresent, readSrc, holds, presentPaths } from './sources.mjs'
 import { planRoutes } from './entries.mjs'
-import { upstreamFor, isAsightDoorUrl } from './chain.mjs'
+import { upstreamFor, isTrocarDoorUrl } from './chain.mjs'
 import { pacLeg } from './pac.mjs'
 import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
 import { CODE } from '../codes.mjs'
@@ -17,7 +17,7 @@ import { sha256, readOrNull } from '../../../off/fsutil.mjs'
 
 const CARRIER = { 'config-key': 'config-key', wrapper: 'wrapper', plugin: 'plugin', 'plugin-file': 'plugin' } // 1.6 §9.4 `carrier` from the descriptor's cert kind
 const HOOKS = new Set(['wrapper', 'plugin']) // a carrier that also applies the route (the switch file is read through it): its drift takes the form off the path (1.6 §9.3 row 31)
-const INSTALL = 'asight install'
+const INSTALL = 'trocar install'
 const red = (v) => (typeof v === 'string' && v.trim() ? redactProxyUrl(v) : null)
 const latest = (items) => { const t = items.map((i) => Date.parse(i.installed_at)).filter(Number.isFinite); return t.length ? new Date(Math.max(...t)).toISOString() : null }
 const intactOf = (m, e, fs) => { try { return (e.kind === 'owned-file' ? judgeOwned({ manifest: m, file: e.path, fs }) : judgeEntry({ manifest: m, planned: e, fs })).action === 'skip-intact' } catch { return false } }
@@ -70,17 +70,17 @@ export function setupOf(desc, { os, manifest: m, ctx, root = null, fs = nodeFs }
   return missing.length ? { state: 'needed', missing } : { state: 'ready', missing: [] }
 }
 
-/** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`): asight appended to it (intact / changed), or it is not one asight could append to. */
+/** The user's own certificate file a `userCertFiles` key names (1.6 §9.4 `user_file`): trocar appended to it (intact / changed), or it is not one trocar could append to. */
 function userFileOf(desc, { m, ctx, fs, own }) {
   for (const file of userFilesOf(desc, ctx)) {
-    if (own.some((i) => i.path === file && i.kind === 'owned-file')) continue // asight's own bundle: not the user's file
+    if (own.some((i) => i.path === file && i.kind === 'owned-file')) continue // trocar's own bundle: not the user's file
     const e = own.find((i) => i.path === file && i.kind !== 'owned-file')
     return { path: file, state: !e ? CODE.notUsersFile : intactOf(m, e, fs) ? 'intact' : 'changed' }
   }
   return null
 }
 
-/** The setting the agent has without asight, from the prior asight recorded (null when the user had none): the topology's off path. `e` is the item the
+/** The setting the agent has without trocar, from the prior trocar recorded (null when the user had none): the topology's off path. `e` is the item the
  *  prior was READ from — its file and key — never another key of the same route: a command that names a place must name the true one (1.6 附录 B). */
 const settingOf = (prior, e) => {
   const u = prior ? parseProxyUrl(prior) : null
@@ -93,7 +93,7 @@ const settingOf = (prior, e) => {
  *   root         status's `cert.root` ({ state, code, command }): the carrier of a root-trust form
  *   systemProxy  chain.mjs's shape (null · { url, bypass } · { pac } · { ok: false })
  *   drift(h)     precondition ⑪ for h: null, or { reason: 'entry-missing' | 'entry-changed', path, command }
- * FormFacts = { id, route, certificate, proxy, entry: { where, kind, asight, intact } | null, plan: { reason, at, code } | null, setting, notes: [harness-note] }
+ * FormFacts = { id, route, certificate, proxy, entry: { where, kind, trocar, intact } | null, plan: { reason, at, code } | null, setting, notes: [harness-note] }
  */
 export async function modelFormFacts({ harnesses, os, manifest: m, reply = null, root = null, systemProxy = null, ctx, fs = nodeFs, drift = () => null }) {
   const out = {}
@@ -125,9 +125,9 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       let upstream
       if (ans && ans.source) upstream = { url_redacted: ans.url_redacted ?? null, source: ans.source }
       else {
-        const isAsightDoor = (v) => isAsightDoorUrl(v, { ports })
-        const u = route.auth === false ? await pacLeg({ systemProxy, isAsightDoor }) // a PAC's door dials the own leg its PAC names (P10), whatever the group's CLI form follows
-          : await upstreamFor({ desc, facts: null, recordedPrior: priorRaw, systemProxy, isAsightDoor })
+        const isTrocarDoor = (v) => isTrocarDoorUrl(v, { ports })
+        const u = route.auth === false ? await pacLeg({ systemProxy, isTrocarDoor }) // a PAC's door dials the own leg its PAC names (P10), whatever the group's CLI form follows
+          : await upstreamFor({ desc, facts: null, recordedPrior: priorRaw, systemProxy, isTrocarDoor })
         upstream = { url_redacted: red(u.url), source: u.source, ...(u.pac ? { pac: true } : {}) }
       }
       if (upstream.source === 'unknown') upstream.code = CODE.priorProxyUnknown
@@ -135,7 +135,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       forms.push({
         id: f.id, route: f.route, certificate,
         proxy: { connected: intact && door_up, entry_intact: intact, door_up, upstream, written: main ? red(main.door ?? (typeof main.value === 'string' ? main.value : null)) : null, prior: red(priorRaw) },
-        entry: main ? { where: main.keys ? `${main.path}#${main.keys.join('.')}` : main.path, kind: route.kind || main.kind, asight: true, intact } : null,
+        entry: main ? { where: main.keys ? `${main.path}#${main.keys.join('.')}` : main.path, kind: route.kind || main.kind, trocar: true, intact } : null,
         plan: blocked ? { reason: blocked.reason, at: blocked.at ?? null, code: blocked.code } : null,
         // the form's own way of being made to read its settings again, and the places it runs from: the doctor's restart steps come from the form the
         // process belongs to, never one fixed sentence (1.6 附录 B). No `restart` of its own: the harness's (`proxy.restart`), through the facts' behaviour.
@@ -153,7 +153,7 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
 /** The proxy-mode half of NetFacts (1.6 §9.7) from modelFormFacts: each harness's `forms` and the doors as `forwarder.forms` (a door is the engine's: D47).
  *  The port is the daemon's, else the one the entry holds (a door that is down is still drawn where the agent points). `status` = gatherStatus's facts
  *  (desired, holders, the daemon's reply); `procs` = the platform's processes per harness; `systemProxy` = NetFacts' OS proxy; `settings` = what a new
- *  process reads now (the off path of a form asight wrote nothing for, e.g. after `off`). */
+ *  process reads now (the off path of a form trocar wrote nothing for, e.g. after `off`). */
 export function netFormsOf({ model, status, procs = {}, systemProxy = null, settings = {} }) {
   const reply = status.daemon && status.daemon.reply, doors = (reply && reply.doors) || {}
   const forms = {}, fw = {}

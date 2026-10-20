@@ -44,9 +44,9 @@ const EXEC = async () => ({ status: 1, stdout: '', stderr: '' })
 const FAKE_HELPER = fileURLToPath(new URL('./arch/win32/fixtures/fake-helper.mjs', import.meta.url))
 function ioFor(platform) {
   if (platform === 'darwin') return { exec: EXEC }
-  const fx = path.join(tmpDir('asight-idle-helper-'), 'fixture.json')
+  const fx = path.join(tmpDir('trocar-idle-helper-'), 'fixture.json')
   fs.writeFileSync(fx, JSON.stringify({ reread: true, verbs: { ps: { data: { sessionId: 1, procs: [] } }, 'tcp-table': { data: { rows: [] } }, 'reg-read': { data: { values: {} } } } }))
-  return { exec: EXEC, helper: { exe: process.execPath, args: [FAKE_HELPER, fx], spawn: (exe, args, o) => spawn(exe, args, { ...o, env: { ...o.env, ASIGHT_FAKE_HELPER: '1' } }) } }
+  return { exec: EXEC, helper: { exe: process.execPath, args: [FAKE_HELPER, fx], spawn: (exe, args, o) => spawn(exe, args, { ...o, env: { ...o.env, TROCAR_FAKE_HELPER: '1' } }) } }
 }
 
 for (const platform of ['darwin', 'win32']) {

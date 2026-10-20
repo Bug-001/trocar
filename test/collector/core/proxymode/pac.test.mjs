@@ -53,7 +53,7 @@ test('an own leg keeps its scheme\'s default port; a scheme with no PAC word is 
   assert.throws(() => pacText({ door: null, ownLeg: 'ftp://p:21' }), /no PAC word/)
 })
 
-test('pacHandler serves GET /asight.pac from state() per request, and leaves every other request to the door', () => {
+test('pacHandler serves GET /trocar.pac from state() per request, and leaves every other request to the door', () => {
   let st = { door: '127.0.0.1:47001', ownLeg: null, bypass: [] }
   const h = pacHandler({ state: () => st })
   const res = () => { const r = { head: null, body: null, writeHead(s, hd) { r.head = [s, hd] }, end(b) { r.body = b } }; return r }

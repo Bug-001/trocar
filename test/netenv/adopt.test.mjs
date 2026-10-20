@@ -25,9 +25,9 @@ const FACTS = { netFactsDeps: async () => ({ harnesses: descs, archFacts: linuxN
 /** `on` told it runs on Linux (the dispatch fixture says `none`), so the manifest keeps each harness's process signature and `status` can tell which process is Claude's. */
 const LINUX = { parts: { os: 'linux', harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { unit: { userUnit } } } }
 const settingsOf = (s) => path.join(s.home, '.claude', 'settings.json')
-const netenvOf = (s) => path.join(s.home, '.asight', 'netenv.json')
+const netenvOf = (s) => path.join(s.home, '.trocar', 'netenv.json')
 const seedProxy = (s, value = USER_PROXY) => fs.writeFileSync(settingsOf(s), `${JSON.stringify({ model: 'x', env: { HTTPS_PROXY: value } }, null, 2)}\n`)
-/** The user changes the one value and nothing else (a file that is not what asight left would make `on` stop at an entry the user changed). */
+/** The user changes the one value and nothing else (a file that is not what trocar left would make `on` stop at an entry the user changed). */
 const setProxy = (s, value) => { const d = readJson(settingsOf(s)); d.env.HTTPS_PROXY = value; fs.writeFileSync(settingsOf(s), `${JSON.stringify(d, null, 2)}\n`) }
 const setProxyFile = (s, value) => setProxy(s, value) // (named for what it is in the test above: the file of the harness)
 const readJson = (f) => JSON.parse(fs.readFileSync(f, 'utf8'))
@@ -40,13 +40,13 @@ test('V46 (a) Linux: `on` writes no proxy key anywhere — the changed files and
   assert.deepEqual(validateReceipt(doc), [])
   assert.ok(doc.changed.every((c) => !/proxy/i.test(c.change)), `no changed key is a proxy key: ${JSON.stringify(doc.changed.map((c) => c.change))}`)
   assert.deepEqual(readJson(settingsOf(s)).env.HTTPS_PROXY, USER_PROXY, 'the user\'s setting is exactly what it was')
-  assert.equal(readJson(settingsOf(s)).env.NODE_EXTRA_CA_CERTS.endsWith('extra-cc.pem'), true, 'and asight\'s own entry is the only thing it added')
+  assert.equal(readJson(settingsOf(s)).env.NODE_EXTRA_CA_CERTS.endsWith('extra-cc.pem'), true, 'and trocar\'s own entry is the only thing it added')
   const a = doc.adopted['claude-code']
-  assert.equal(a.chain, 'claude-code -> [ebpf] asight -> [CONNECT passed on as it is] proxy.corp:8080 -> internet')
+  assert.equal(a.chain, 'claude-code -> [ebpf] trocar -> [CONNECT passed on as it is] proxy.corp:8080 -> internet')
   assert.equal(a.proxy, 'http://***@proxy.corp:8080')
   const text = (await (async () => { const t = sandbox(ENGINE); seedProxy(t); return (await t.run(['on', '--yes'], { deps: FACTS })).io.text() })())
   const unwrap = (t) => t.replace(/\n\s+/g, ' ') // a long chain wraps (§1.1 width); the fact is the chain, not where it breaks
-  const chain = /claude-code: route claude-code -> \[ebpf\] asight -> \[CONNECT passed on as it is\] proxy\.corp:8080 -> internet/g
+  const chain = /claude-code: route claude-code -> \[ebpf\] trocar -> \[CONNECT passed on as it is\] proxy\.corp:8080 -> internet/g
   assert.equal(unwrap(text).match(chain).length, 2, 'the chain is printed once in the plan, once in the receipt')
   assert.match(unwrap(text), /internet \(its proxy setting http:\/\/\*\*\*@proxy\.corp:8080, read from /, 'the receipt names the setting it adopted, masked')
   assert.ok(!/dave|hunter2/.test(text + JSON.stringify(doc)), 'no credential in the text or the JSON')
@@ -86,22 +86,22 @@ test('V46 (a) `on --dry-run` draws the chain and writes nothing; a platform with
   assert.equal(fs.existsSync(netenvOf(plain)), false)
 })
 
-test('V47 (a) Linux: the setting is changed after `on` — the next connections go to the new proxy and asight is still on the path, the process that started before is listed on its own `pid N now` row with the old proxy (and asight on its way), and the drift is `proxy-changed`, captured', async () => {
+test('V47 (a) Linux: the setting is changed after `on` — the next connections go to the new proxy and trocar is still on the path, the process that started before is listed on its own `pid N now` row with the old proxy (and trocar on its way), and the drift is `proxy-changed`, captured', async () => {
   const s = sandbox({ status: { engine: { port: 47123 }, agents: [{ pid: 4121, agent: 'claude-code', trusted: true, decrypt: true }] } }); seedProxy(s)
   await s.run(['on', '--yes'], { deps: { ...FACTS, ...LINUX } })
   const started = Date.now() + 5000, changedAt = new Date(Date.now() + 10_000) // a process that started after `on`, and a change of the file after it
   setProxy(s, 'http://proxy.new:3128'); fs.utimesSync(settingsOf(s), changedAt, changedAt)
   const r = await s.run(['status', 'claude-code'], { deps: { ...FACTS, procs: async () => [claudeProc(4121, started)] } })
   const text = r.io.stdoutText()
-  assert.match(text, /^claude-code: on, captured$/m, 'the verdict: asight is still on the path')
-  assert.match(text, /^ +new processes +claude-code -> asight :47123 -> proxy\.new:3128 -> internet$/m, 'the new connections go to the new proxy, through asight')
+  assert.match(text, /^claude-code: on, captured$/m, 'the verdict: trocar is still on the path')
+  assert.match(text, /^ +new processes +claude-code -> trocar :47123 -> proxy\.new:3128 -> internet$/m, 'the new connections go to the new proxy, through trocar')
   assert.match(text, /^ +pid 4121 now$/m)
-  assert.match(text, /^ +claude \(pid 4121\) -> asight :47123 -> proxy\.corp:8080 -> internet$/m, 'it still goes by the setting it started with')
+  assert.match(text, /^ +claude \(pid 4121\) -> trocar :47123 -> proxy\.corp:8080 -> internet$/m, 'it still goes by the setting it started with')
   assert.ok(!/dave|hunter2/.test(text))
   const adopted = readJson(netenvOf(s)).adopted
   const setting = readProxySetting(D['claude-code'], { home: s.home, env: {} })
   assert.deepEqual(detectDrift({ adopted, h: 'claude-code', setting, routing: 'driver' }), [{ code: 'proxy-changed', from: 'http://***@proxy.corp:8080', to: 'http://proxy.new:3128', captured: true }])
-  assert.deepEqual(detectDrift({ adopted, h: 'claude-code', setting: readProxySetting(D['claude-code'], { home: tmpDir('asight-x-'), env: {} }), routing: 'driver' }).map((d) => [d.code, d.to]), [['proxy-changed', null]], 'a setting taken away is a change too')
+  assert.deepEqual(detectDrift({ adopted, h: 'claude-code', setting: readProxySetting(D['claude-code'], { home: tmpDir('trocar-x-'), env: {} }), routing: 'driver' }).map((d) => [d.code, d.to]), [['proxy-changed', null]], 'a setting taken away is a change too')
   assert.deepEqual(detectDrift({ adopted, h: 'claude-code', setting: { unknown: { reason: 'denied', detail: 'x' } }, routing: 'driver' }), [], 'one that cannot be read is not a change: status says it is unknown')
   assert.deepEqual(detectDrift({ adopted: {}, h: 'claude-code', setting, routing: 'driver' }), [], 'with nothing adopted there is nothing to have drifted from')
 })
@@ -141,7 +141,7 @@ test('V47 the daemon\'s 5 s check: a change of the file is one `netenv-change` (
   assert.equal(events.length, 2, 'a further change is one more')
 })
 
-test('V47 (b) proxy mode: a field that holds anything but what asight put there bypasses asight — captured false: one `netenv-change` and one `failure` (where netenv), however many checks run, and the file is not touched', async () => {
+test('V47 (b) proxy mode: a field that holds anything but what trocar put there bypasses trocar — captured false: one `netenv-change` and one `failure` (where netenv), however many checks run, and the file is not touched', async () => {
   const s = await installedViaCli(ENGINE)
   const { routing, field } = proxyRouting(s)
   await s.run(['on', '--yes', 'codex'], { deps: { ...FACTS, routing } })
@@ -155,18 +155,18 @@ test('V47 (b) proxy mode: a field that holds anything but what asight put there 
   for (const e of events) assert.deepEqual(checkRecord(e), [], 'in the closed sets')
   assert.deepEqual(fs.readFileSync(field.path), bytes, 'status, doctor and the daemon only read: the field is the user\'s')
   const off = []; driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'off', appendEvent: (e) => off.push(e), state: newDriftState() })
-  assert.deepEqual(off, [], 'a harness that is off is not checked: asight is not on its path, whatever its setting is')
+  assert.deepEqual(off, [], 'a harness that is off is not checked: trocar is not on its path, whatever its setting is')
 })
 
-test('driftCheck takes the semantics of the record `on` made, not a routing handed in: a proxy-mode record (routing proxy, or one that holds `written_sha256`) with the field holding what asight wrote is no drift, and the first edit of it is a drift that bypasses asight; a driver-mode record is measured against what `on` found', () => {
-  const s = sandbox(ENGINE); seedProxy(s, 'http://asight.entry:17991')
+test('driftCheck takes the semantics of the record `on` made, not a routing handed in: a proxy-mode record (routing proxy, or one that holds `written_sha256`) with the field holding what trocar wrote is no drift, and the first edit of it is a drift that bypasses trocar; a driver-mode record is measured against what `on` found', () => {
+  const s = sandbox(ENGINE); seedProxy(s, 'http://trocar.entry:17991')
   const base = { at: 'T', chain: 'c', source: [], vpn: null, sha256: settingSha('http://proxy.old:3128'), file_sha256: settingSha('http://proxy.old:3128'), proxy: 'http://proxy.old:3128' }
   const write = (rec) => { fs.mkdirSync(path.dirname(netenvOf(s)), { recursive: true }); fs.writeFileSync(netenvOf(s), `${JSON.stringify({ at: 'T', adopted: { 'claude-code': rec } })}\n`) }
   const run = (state = newDriftState()) => { const ev = []; driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'on', appendEvent: (e) => ev.push(e), state }); return ev }
-  const WRITTEN = settingSha('http://asight.entry:17991')
+  const WRITTEN = settingSha('http://trocar.entry:17991')
   assert.deepEqual([driftRoutingOf({ routing: 'proxy' }), driftRoutingOf({ routing: 'driver', written_sha256: WRITTEN }), driftRoutingOf({ routing: 'driver' }), driftRoutingOf(undefined)], ['proxy', 'proxy', 'driver', 'driver'])
   write({ ...base, routing: 'proxy', written_sha256: WRITTEN })
-  assert.deepEqual(run(), [], 'the field holds what asight wrote: nothing to say, which a driver-mode reading would call a change on the first check after every `on`')
+  assert.deepEqual(run(), [], 'the field holds what trocar wrote: nothing to say, which a driver-mode reading would call a change on the first check after every `on`')
   setProxy(s, 'http://proxy.new:3128')
   assert.deepEqual(run().map((e) => [e.event, e.code, e.captured]), [['netenv-change', 'proxy-changed', false], ['failure', 'proxy-changed', undefined]], 'the user\'s edit leaves it uncaptured')
   write({ ...base, routing: 'driver' })
@@ -178,7 +178,7 @@ test('driftCheck takes the semantics of the record `on` made, not a routing hand
 
 const NO_SOURCE = path.join(os.tmpdir(), 'none')
 /** The codes `doctor claude-code` finds in a shell with `env` added to the sandbox's. */
-const doctorCodes = async (s, env = {}, deps = FACTS) => (await s.run(['doctor', 'claude-code', '--json'], { env: { ...s.ctx().env, ...env, ASIGHT_SOURCE: NO_SOURCE }, deps })).io.json().findings.map((f) => f.code)
+const doctorCodes = async (s, env = {}, deps = FACTS) => (await s.run(['doctor', 'claude-code', '--json'], { env: { ...s.ctx().env, ...env, TROCAR_SOURCE: NO_SOURCE }, deps })).io.json().findings.map((f) => f.code)
 
 test('V47 drift is measured on what the files hold: a proxy variable in the shell that runs `status` / `doctor` is not a change the user made — `on` found none and `doctor` runs where HTTPS_PROXY is set, or the other way round — and an edit of the file still is', async () => {
   const s = sandbox(ENGINE)
@@ -208,7 +208,7 @@ test('V47 the files are found the same way by every reader: `on` records where i
   const d = readJson(settings); d.env.HTTPS_PROXY = 'http://proxy.new:3128'; fs.writeFileSync(settings, `${JSON.stringify(d, null, 2)}\n`)
   check(); check()
   assert.deepEqual(events.map((e) => [e.event, e.code, e.from, e.to]), [['netenv-change', 'proxy-changed', 'http://proxy.old:3128', 'http://proxy.new:3128']])
-  const doctor = await s.run(['doctor', 'claude-code', '--json'], { env: { ...env, ASIGHT_SOURCE: NO_SOURCE }, deps: FACTS })
+  const doctor = await s.run(['doctor', 'claude-code', '--json'], { env: { ...env, TROCAR_SOURCE: NO_SOURCE }, deps: FACTS })
   assert.ok(doctor.io.json().findings.some((f) => f.code === 'proxy-changed'), '`doctor` agrees with the daemon')
 })
 
@@ -240,7 +240,7 @@ function proxyRouting(s, calls = []) {
   return { routing, field, calls }
 }
 
-test('V46 (b) proxy mode: `adopt` is handed the setting that was there (the value as written, for the platform\'s upstream; masked everywhere that is printed), a field it writes is recorded as what asight wrote, and a change of the system proxy is one `netenv-change`, no `failure`, and no file touched', async () => {
+test('V46 (b) proxy mode: `adopt` is handed the setting that was there (the value as written, for the platform\'s upstream; masked everywhere that is printed), a field it writes is recorded as what trocar wrote, and a change of the system proxy is one `netenv-change`, no `failure`, and no file touched', async () => {
   const s = await installedViaCli(ENGINE)
   fs.appendFileSync(path.join(s.home, '.codex', '.env'), 'HTTPS_PROXY=http://bob:secret@proxy.old:3128\n')
   const calls = [], { routing, field } = proxyRouting(s, calls)
@@ -249,14 +249,14 @@ test('V46 (b) proxy mode: `adopt` is handed the setting that was there (the valu
   assert.deepEqual(calls, [{ h: 'codex', raw: 'http://bob:secret@proxy.old:3128', value: 'http://***@proxy.old:3128' }])
   const a = readJson(netenvOf(s)).adopted.codex
   assert.equal(a.sha256, settingSha('http://bob:secret@proxy.old:3128'), 'what the user had')
-  assert.equal(a.written_sha256, settingSha(KERNEL), 'what asight wrote: an edit is told from it')
+  assert.equal(a.written_sha256, settingSha(KERNEL), 'what trocar wrote: an edit is told from it')
   assert.ok(!/bob|secret/.test(fs.readFileSync(netenvOf(s), 'utf8') + JSON.stringify(r.io.json())))
   const bytes = fs.readFileSync(field.path), events = []
   recordDrift({ drift: { code: 'netenv-changed', from: 'system proxy :7897', to: 'system proxy :7890', captured: true }, h: 'codex', desired: 'on', appendEvent: (e) => events.push(e) })
   assert.deepEqual(events.map((e) => [e.event, e.where, e.code, e.from, e.to]), [['netenv-change', 'netenv', 'netenv-changed', 'system proxy :7897', 'system proxy :7890']])
   for (const e of events) assert.deepEqual(checkRecord(e), [])
   assert.deepEqual(fs.readFileSync(field.path), bytes)
-  // the daemon check of the field: what asight wrote is not drift
+  // the daemon check of the field: what trocar wrote is not drift
   const quiet = []; driftCheck({ home: s.home, env: {}, harnesses: descs, desired: () => 'on', appendEvent: (e) => quiet.push(e), state: newDriftState() })
   assert.deepEqual(quiet, [])
 })
@@ -266,7 +266,7 @@ test('V47 (b) `on` over a field the user edited since the last `on`: not in a te
   const calls = [], { routing, field } = proxyRouting(s, calls)
   await s.run(['on', '--yes', 'codex'], { deps: { ...FACTS, routing } })
   const again = await s.run(['on', 'codex'], { deps: { ...FACTS, routing } })
-  assert.equal(again.exit, 0, 'asight\'s own value in the field is not an edit: nothing to ask')
+  assert.equal(again.exit, 0, 'trocar\'s own value in the field is not an edit: nothing to ask')
   fs.writeFileSync(field.path, fs.readFileSync(field.path, 'utf8').replace(KERNEL, 'http://proxy.new:3128'))
   const before = snapshot(s.home), n = calls.length
   const plan = await s.run(['on', 'codex'], { deps: { ...FACTS, routing } })

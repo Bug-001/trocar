@@ -46,9 +46,9 @@ test('an OS that refuses to lower this process says so and goes on at its parent
 // The real thing on this OS, not the seam: a child forked exactly as the daemon forks it is at the nice while it runs.
 // The query worker is the one that stays alive by itself (it waits for a request), so it is the one that can be read.
 test('a real forked child runs at the nice it asked for', async (t) => {
-  const home = path.join(tmpDir('asight-nice-'), '.asight')
+  const home = path.join(tmpDir('trocar-nice-'), '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
-  const child = fork(src('query/worker.mjs'), [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { ...process.env, ASIGHT_QUERY_IDLE_MS: '4000' } })
+  const child = fork(src('query/worker.mjs'), [home], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { ...process.env, TROCAR_QUERY_IDLE_MS: '4000' } })
   t.after(() => { try { child.kill() } catch { /* already gone */ } })
   // it is at its nice before it answers anything: the first line of the child asks, and this read waits for the
   // child to have loaded (its first reply is proof it is past that line)

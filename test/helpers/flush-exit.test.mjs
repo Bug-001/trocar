@@ -20,7 +20,7 @@ delete env.NODE_TEST_CONTEXT
 delete env.NODE_OPTIONS
 
 function fixtureDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-flush-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-flush-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   return dir
 }

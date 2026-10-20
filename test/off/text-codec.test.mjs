@@ -46,8 +46,8 @@ test('codec: `why` is the closed set of spec 4.6, every one has a phrase, and no
   }
 })
 
-test('codec: encodeText writes asight\'s non-ASCII text in each form and decodeText reads it back unchanged; an unknown charset is refused', () => {
-  const t = `﻿# ${ZH} \u{1F600}\r\nPATH=/Users/${ZH} x/.asight\n`
+test('codec: encodeText writes trocar\'s non-ASCII text in each form and decodeText reads it back unchanged; an unknown charset is refused', () => {
+  const t = `﻿# ${ZH} \u{1F600}\r\nPATH=/Users/${ZH} x/.trocar\n`
   for (const cs of CHARSETS) {
     const b = encodeText(t, cs)
     assert.deepEqual(decodeText(b), { ok: true, text: t, charset: cs }, cs)

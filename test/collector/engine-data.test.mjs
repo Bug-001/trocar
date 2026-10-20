@@ -15,7 +15,7 @@ const sink = () => { const recs = []; return { recs, failure: { event: (r) => re
 
 for (const d of list) {
   test(`${d.name}: a class whose rule names its harness gives the engine that class and its level; the same rule bound to another harness does not`, () => {
-    const home = tmpDir('asight-classes-')
+    const home = tmpDir('trocar-classes-')
     const id = d.name, other = list.map((x) => x.name).find((x) => x !== id) // a rule names its harness by the descriptor's name, as the CLI does
     const table = (h) => fs.writeFileSync(path.join(home, 'classes.json'), JSON.stringify({ version: 1, classes: [{ class: 'mine', keep: 'log', rules: [{ host: 'example\\.test', harness: h }] }, ...BUILTIN] }))
     const s = sink()

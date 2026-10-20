@@ -27,7 +27,7 @@ const HEALTH_PORT = 18000 // the re-entry point the recorded bytes are normalise
 const basic = (user, pass) => `Proxy-Authorization: Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}\r\n`
 const connectHead = (target, { user = USER, pass = TOKEN, auth = true } = {}) => `CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${auth ? basic(user, pass) : ''}\r\n`
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const asightCa = createCa()
+const trocarCa = createCa()
 
 // a client socket with the reads a handshake needs; every wait is bounded (test/helpers/bounded.mjs)
 function client(port) {
@@ -60,7 +60,7 @@ async function lab(t, { meta = {}, timing = {}, connectUpstream, redirector = cr
   const dials = [] // every upstream the engine was asked to open, whoever asked
   const connect = (d) => { dials.push({ ...d }); return connectUpstream ? connectUpstream(d) : net.connect(d.port, d.address) }
   const engine = createEngine({
-    redirector, issuer: createLeafIssuer(loadCa(asightCa)), connectUpstream: connect, timing, upstreamCa,
+    redirector, issuer: createLeafIssuer(loadCa(trocarCa)), connectUpstream: connect, timing, upstreamCa,
     store: { envelope: (e) => { envelopes.push(e); return true }, flow: (f) => { flows.push(structuredClone(f)); return true } },
     onFailure: (f) => failures.push(f), ...(noToken ? {} : { ingressToken: TOKEN }),
   })
@@ -82,8 +82,8 @@ test('W13 CONNECT with the right credentials: the upstream is dialled, then 200;
   assert.deepEqual([row.pid, row.agent, row.dst, row.decision, row.not_captured], [4242, 'claude-code', { address: '127.0.0.1', port: L.echoPort, family: 4 }, 'splice', 'unknown-protocol'])
   assert.deepEqual(row.ingress, { route: 'of', group: 'spike' })
   assert.deepEqual([row.pid_source, row.pid_ms, row.upstream], ['socket-table', 7, { kind: 'direct' }])
-  assert.equal('prelude' in row, false, 'the CONNECT is mihomo\'s, with asight\'s token: it is not recorded as the agent\'s prelude (invariant 4)')
-  assert.deepEqual([row.bytes_up, row.bytes_down], [5, 5], 'the agent\'s own bytes: the opener and asight\'s 200 are not counted')
+  assert.equal('prelude' in row, false, 'the CONNECT is mihomo\'s, with trocar\'s token: it is not recorded as the agent\'s prelude (invariant 4)')
+  assert.deepEqual([row.bytes_up, row.bytes_down], [5, 5], 'the agent\'s own bytes: the opener and trocar\'s 200 are not counted')
   assert.deepEqual(L.failures, [])
   assert.deepEqual(L.engine.stats().ingress, { connections: 1, flows: 1, health: 0, challenged: 0, authFailed: 0, unknown: 0, refused: 0, unreachable: 0 })
 })
@@ -224,19 +224,19 @@ test('W13 a request inside the health tunnel that is not the probe closes it and
   assert.deepEqual(L.failures.map((f) => [f.where, f.code]), [['ingress', 'ingress-unknown']])
   assert.match(L.failures[0].reason, /inside the health tunnel/)
   const d = L.client(); d.write(connectHead(`127.0.0.1:${HEALTH_PORT}`)); await d.head()
-  d.write('HEAD /asight-health/another-group HTTP/1.1\r\nHost: x\r\n\r\n'); await d.closed() // the probe of a group that is not this one's
+  d.write('HEAD /trocar-health/another-group HTTP/1.1\r\nHost: x\r\n\r\n'); await d.closed() // the probe of a group that is not this one's
   assert.equal(L.failures.length, 2)
 })
 
 test('W13 an absolute-URI GET, a TLS hello and other bytes that are not CONNECT or SOCKS5 are closed with ingress-unknown; no upstream is dialled', T, async (t) => {
   const L = await lab(t)
-  for (const bytes of ['GET http://asight-health.invalid/spike HTTP/1.1\r\nHost: asight-health.invalid\r\n\r\n', Buffer.from([0x16, 0x03, 0x01, 0x00, 0x05, 1, 2, 3, 4, 5]), 'hello there, this is not a proxy request\r\n\r\n', 'POST /x HTTP/1.1\r\n\r\n']) {
+  for (const bytes of ['GET http://trocar-health.invalid/spike HTTP/1.1\r\nHost: trocar-health.invalid\r\n\r\n', Buffer.from([0x16, 0x03, 0x01, 0x00, 0x05, 1, 2, 3, 4, 5]), 'hello there, this is not a proxy request\r\n\r\n', 'POST /x HTTP/1.1\r\n\r\n']) {
     const c = L.client(); c.write(bytes); await c.closed()
   }
   assert.equal(L.upConns.length, 0)
   assert.deepEqual(L.failures.map((f) => [f.where, f.code]), Array(4).fill(['ingress', 'ingress-unknown']))
   assert.match(L.failures[0].reason, /GET/); assert.match(L.failures[1].reason, /0x16/)
-  assert.equal(JSON.stringify(L.failures).includes('asight-health.invalid'), false, 'the reason names the method, not what the client put in the URL')
+  assert.equal(JSON.stringify(L.failures).includes('trocar-health.invalid'), false, 'the reason names the method, not what the client put in the URL')
   assert.equal(L.engine.stats().ingress.unknown, 4)
 })
 
@@ -416,8 +416,8 @@ test('W15 a direct upstream, decrypted: one dial for the whole flow (the wrapper
   const o = await origin(t)
   const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true } })
   const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
-  const r = await talk(sock, asightCa.certPem)
-  assert.equal(r.got, RESP); assert.match(r.issuer, /asight collector CA/)
+  const r = await talk(sock, trocarCa.certPem)
+  assert.equal(r.got, RESP); assert.match(r.issuer, /trocar collector CA/)
   await L.settled(1)
   assert.deepEqual(L.dials, [{ address: '127.0.0.1', port: o.port }], 'one upstream dial for one agent connection'); assert.equal(o.conns.length, 1)
   assert.deepEqual(L.envelopes.map((e) => [e.host, e.proc.pid, e.proc.agent, e.scheme]), [['upstream.test', 4242, 'claude-code', 'https']])
@@ -451,13 +451,13 @@ test('W15 an IP-literal target with an IP-SAN certificate is decrypted: no SNI e
   assert.deepEqual(L.failures, [])
 })
 
-test('W15 an http upstream: the user\'s credentials ride only in asight\'s prelude for the agent\'s connection; the flow is decrypted over one connection to the proxy; the row has neither credentials nor prelude', T, async (t) => {
+test('W15 an http upstream: the user\'s credentials ride only in trocar\'s prelude for the agent\'s connection; the flow is decrypted over one connection to the proxy; the row has neither credentials nor prelude', T, async (t) => {
   const o = await origin(t)
   const proxy = await startMockProxy({ kind: 'connect', target: { port: o.port }, auth: CRED }); t.after(() => proxy.close())
   const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port, auth: CRED } } })
   const { sock, head } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
   assert.match(head, /^HTTP\/1\.1 200 /)
-  const r = await talk(sock, asightCa.certPem); assert.equal(r.got, RESP); await L.settled(1)
+  const r = await talk(sock, trocarCa.certPem); assert.equal(r.got, RESP); await L.settled(1)
   assert.equal(proxy.log.length, 1, 'one connection to the proxy for one agent connection')
   assert.equal(proxy.log[0].target, `127.0.0.1:${o.port}`); assert.equal(proxy.log[0].ok, true)
   assert.ok(b64(proxy.log[0].in_b64).toString('latin1').includes(`Proxy-Authorization: Basic ${Buffer.from('u1:pw-SECRET').toString('base64')}`), 'the credentials are in the prelude to the proxy')
@@ -473,7 +473,7 @@ test('W15 a socks5 upstream: the target goes as a domain or an address, the cred
   const proxy = await startMockProxy({ kind: 'socks5', target: { port: o.port }, auth: CRED }); t.after(() => proxy.close())
   const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true, upstream: { kind: 'socks5', host: '127.0.0.1', port: proxy.port, auth: CRED } } })
   const { sock } = await tunnel(L.ingressPort, 'upstream.test:443') // a name: ATYP 3 (the mock proxy goes to its own target whatever it was asked for)
-  const r = await talk(sock, asightCa.certPem); assert.equal(r.got, RESP); await L.settled(1)
+  const r = await talk(sock, trocarCa.certPem); assert.equal(r.got, RESP); await L.settled(1)
   assert.equal(proxy.log.length, 1); assert.equal(proxy.log[0].target, 'upstream.test:443'); assert.equal(proxy.log[0].ok, true)
   assert.deepEqual(L.flows[0].upstream, { kind: 'socks5', host: '127.0.0.1', port: proxy.port, reply: 0 })
   assert.equal(JSON.stringify(L.flows).includes('pw-SECRET'), false)
@@ -575,7 +575,7 @@ test('W15 a proxy whose reply to CONNECT is not an HTTP status line is a dial th
   await listen(garbage); t.after(() => garbage.close())
   const L = await lab(t, { meta: { upstream: { kind: 'http', host: '127.0.0.1', port: garbage.address().port } } })
   const c = L.client(); c.write(connectHead('upstream.test:443'))
-  assert.equal(await c.head(), 'HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n', 'asight\'s own 502, not the proxy\'s bytes'); await c.closed(); await L.settled(1)
+  assert.equal(await c.head(), 'HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n', 'trocar\'s own 502, not the proxy\'s bytes'); await c.closed(); await L.settled(1)
   const [row] = L.flows
   assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, 'reason' in row && row.reason], ['error', 'error', 'bad_proxy_reply', 'upstream', null])
   assert.match(row.error.message, /not .*HTTP status line/); assert.equal(JSON.stringify(row).includes('NaN'), false)
@@ -588,7 +588,7 @@ test('W15 a proxy whose reply to CONNECT is not an HTTP status line is a dial th
 
 // The step-aside (4.6 让路): the engine does not trust the origin's CA, the agent does: the engine drops its own handshake and the agent meets the real
 // upstream with its own ClientHello. Through the ingress that second dial is a handshake with the proxy again — unless the proxy is the user's and
-// wants their credentials, which asight does not send twice (invariant 1).
+// wants their credentials, which trocar does not send twice (invariant 1).
 const front = async (t, port) => { // a tap in front of the ingress: the bytes the agent sent
   const conns = []; const socks = new Set()
   const srv = net.createServer((a) => { const rec = []; conns.push(rec); const b = net.connect(port, '127.0.0.1'); socks.add(a); socks.add(b)
@@ -688,7 +688,7 @@ test('W17 two forms with no pid: one that rejects the leaf does not poison the o
   L.redirector.setIngress('of.claude-code.cli', pidless('of.claude-code.cli')); L.redirector.setIngress('of.codex.app', pidless('of.codex.app'))
   const go = async (user, ca) => { const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`, connectHead(`127.0.0.1:${o.port}`, { user })); return talk(sock, ca) }
   let n = 0; const next = async () => { await L.settled(++n) }
-  // form A's client does not trust the asight CA: it rejects the leaf, twice in a row → (A, host) is negative
+  // form A's client does not trust the trocar CA: it rejects the leaf, twice in a row → (A, host) is negative
   assert.equal(await go('of.claude-code.cli', privCa.certPem), 'closed'); await next()
   assert.equal(L.engine.negatives().length, 0, 'one rejection is not enough')
   assert.equal(await go('of.claude-code.cli', privCa.certPem), 'closed'); await next()
@@ -699,15 +699,15 @@ test('W17 two forms with no pid: one that rejects the leaf does not poison the o
   // form A's next connection to that host is spliced; form B's connection to the SAME host is still decrypted
   const spliced = await go('of.claude-code.cli', privCa.certPem); await next()
   assert.deepEqual([spliced.got, spliced.issuer.includes('private origin CA')], [RESP, true]); assert.deepEqual([L.flows[2].decision, L.flows[2].not_captured], ['splice', 'negative-cache'])
-  const other = await go('of.codex.app', asightCa.certPem); await next()
-  assert.match(other.issuer, /asight collector CA/, 'the other form is untouched'); assert.deepEqual([L.flows[3].decision, L.flows[3].not_captured ?? null], ['decrypt', null])
+  const other = await go('of.codex.app', trocarCa.certPem); await next()
+  assert.match(other.issuer, /trocar collector CA/, 'the other form is untouched'); assert.deepEqual([L.flows[3].decision, L.flows[3].not_captured ?? null], ['decrypt', null])
   assert.deepEqual(L.failures.filter((f) => f.code === 'negative-cache').length, 1)
   // the last process of form A has gone: clear by form; B's entries (none here) and a pid's are not touched
   assert.equal(L.engine.forgetPid(4242), 0, 'a pid is not a form key')
   assert.equal(L.engine.forgetNegKey('of.codex.app'), 0); assert.equal(L.engine.negatives().length, 1)
   assert.equal(L.engine.forgetNegKey('of.claude-code.cli'), 1); assert.deepEqual(L.engine.negatives(), [])
-  const again = await go('of.claude-code.cli', asightCa.certPem); await next()
-  assert.match(again.issuer, /asight collector CA/, 'decrypted again after the clearing')
+  const again = await go('of.claude-code.cli', trocarCa.certPem); await next()
+  assert.match(again.issuer, /trocar collector CA/, 'decrypted again after the clearing')
 })
 
 test('W17 a connection whose pid is known keeps the (pid, host) key: neg_key is "<pid>"', T, async (t) => {
@@ -728,8 +728,8 @@ test('W17 the ingress keys a connection by its own user when the lookup gives no
   assert.equal(await go('of.claude-code.cli', privCa.certPem), 'closed'); await next()
   assert.equal(await go('of.claude-code.cli', privCa.certPem), 'closed'); await next()
   assert.deepEqual(L.engine.negatives().map((e) => [e.pid, e.negKey, e.host]), [[null, 'of.claude-code.cli', 'upstream.test']], 'the key is the connection\'s own user, not "null"')
-  const other = await go('of.codex.app', asightCa.certPem); await next()
-  assert.match(other.issuer, /asight collector CA/, 'the other form is not poisoned by the first one\'s rejections'); assert.equal(L.flows[2].decision, 'decrypt')
+  const other = await go('of.codex.app', trocarCa.certPem); await next()
+  assert.match(other.issuer, /trocar collector CA/, 'the other form is not poisoned by the first one\'s rejections'); assert.equal(L.flows[2].decision, 'decrypt')
   assert.equal(L.engine.forgetNegKey('of.claude-code.cli'), 1)
   L.redirector.setIngress('of.known', { ...bare('known'), pid: 88 }) // a pid and still no negKey: the pid
   for (let i = 0; i < 2; i++) { assert.equal(await go('of.known', privCa.certPem), 'closed'); await next() }
@@ -841,7 +841,7 @@ test('W15 drain: `off` lands after an ingress flow\'s request went out and befor
   const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
   let got = ''
   const done = new Promise((resolve) => {
-    const c = tls.connect({ socket: sock, servername: 'upstream.test', ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(REQ))
+    const c = tls.connect({ socket: sock, servername: 'upstream.test', ca: trocarCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(REQ))
     c.on('data', (d) => { got += d.toString('latin1') }); c.on('error', () => {}); c.on('close', () => resolve())
   })
   await within(requested, 4000, 'the origin to see the request')
@@ -855,7 +855,7 @@ test('W15 drain: `off` lands after an ingress flow\'s request went out and befor
   await within(done, 6000, 'the connection to end after the response')
   assert.match(got, /^HTTP\/1\.1 200 OK\r\ncontent-length: 2\r\nconnection: keep-alive\r\nConnection: close\r\n\r\nok$/, 'the origin\'s head, plus the one line before the blank line; the body whole')
   await L.settled(1)
-  assert.equal(L.envelopes[0].asight_added.join(), 'connection-close', 'recorded as asight\'s own addition, not the agent\'s or the origin\'s bytes')
+  assert.equal(L.envelopes[0].trocar_added.join(), 'connection-close', 'recorded as trocar\'s own addition, not the agent\'s or the origin\'s bytes')
   await within(L.engine.drained({ agents: null }), 4000, 'drained()')
   assert.deepEqual(L.failures, [])
 })

@@ -1,5 +1,5 @@
 // src/collector/core/record/segments.mjs — names and record ids of the raw layer's segments (D60①, RFC 4.6 §记录).
-// A segment is `~/.asight/raw/<segment>.ndjson` while it is plain text and `<segment>.sealed` once sealed; a record is
+// A segment is `~/.trocar/raw/<segment>.ndjson` while it is plain text and `<segment>.sealed` once sealed; a record is
 // named `<segment>:<line>` (line from 1), and that name does not change when the segment is sealed (V88).
 const NAME = String.raw`\d{8}T\d{6}Z(?:-\d+)?` // the opening instant in UTC, plus the suffix a collision takes
 const FILE = new RegExp(`^(${NAME})\\.(ndjson|sealed)$`)

@@ -16,7 +16,7 @@ const harnesses = await loadHarnesses()
 const withSelect = harnesses.flatMap((h) => Object.entries(h.proxyMode.routes).filter(([, r]) => r.select).map(([id, r]) => ({ h, id, r })))
 const withArray = harnesses.flatMap((h) => Object.entries(h.proxyMode.routes).filter(([, r]) => r.arrayItems).map(([id, r]) => ({ h, id, r })))
 const DOOR = 'http://127.0.0.1:18002' // a PAC door takes no credentials
-const PAC = `${DOOR}/asight.pac`
+const PAC = `${DOOR}/trocar.pac`
 const SHAPES = [['utf8', false, '\n'], ['utf8', true, '\r\n'], ['utf16le', true, '\n']]
 const json = (o, eol) => JSON.stringify(o, null, 2).replace(/\n/g, eol) + eol
 const read = (f) => JSON.parse(decodeBytes(fs.readFileSync(f)).text)
@@ -54,25 +54,25 @@ for (const os of ['darwin', 'win32']) for (const shape of SHAPES) {
       const L = lib(os, { shape, meta, entries })
       const res = routeEntry('json-key').write(L.ctx, DOOR)
       assert.equal(res.ok, true)
-      assert.deepEqual(read(path.join(L.dir, 'asight-1.json')), { [L.key]: PAC })
-      assert.equal(read(L.metaFile)[L.idKey], 'asight-1')
+      assert.deepEqual(read(path.join(L.dir, 'trocar-1.json')), { [L.key]: PAC })
+      assert.equal(read(L.metaFile)[L.idKey], 'trocar-1')
       assert.deepEqual(res.records.map((x) => [x.kind, x.role || x.keys.join('.')]), [['json-key', L.key], ['json-key', L.idKey]], 'one record per file: the created entry is its own json-key (4.11 §4), never a second owned-file')
       assert.equal(routeEntry('json-key').check(L.ctx, res.records).ok, true)
       routeEntry('json-key').undo(L.ctx, res.records)
       assert.deepEqual(L.snap(), L.before)
-      assert.equal(fs.existsSync(L.dir), L.dirExisted, 'a library directory asight made is gone')
+      assert.equal(fs.existsSync(L.dir), L.dirExisted, 'a library directory trocar made is gone')
     })
   }
 }
 
-test('CM18 — the user edited _meta.json (a file that was there before on) during on: off keeps that edit, takes asight\'s key out, and leaves every other byte as it was', () => {
+test('CM18 — the user edited _meta.json (a file that was there before on) during on: off keeps that edit, takes trocar\'s key out, and leaves every other byte as it was', () => {
   const L = lib('darwin', { meta: { appliedId: '', entries: [{ id: 'u1', name: 'mine' }] }, entries: { u1: { inferenceProvider: 'gateway' } } })
   const recs = routeEntry('json-key').write(L.ctx, DOOR).records
-  const created = path.join(L.dir, 'asight-1.json')
+  const created = path.join(L.dir, 'trocar-1.json')
   fs.writeFileSync(L.metaFile, JSON.stringify({ ...read(L.metaFile), windowBounds: { w: 900 } }, null, 2) + '\n')
   assert.equal(routeEntry('json-key').undo(L.ctx, recs).ok, true)
-  assert.deepEqual(read(L.metaFile), { appliedId: '', entries: [{ id: 'u1', name: 'mine' }], windowBounds: { w: 900 } }, 'the edit stays, the applied id is back at the user\'s value, asight\'s id is gone')
-  assert.ok(!fs.existsSync(created), 'the entry file asight created is gone')
+  assert.deepEqual(read(L.metaFile), { appliedId: '', entries: [{ id: 'u1', name: 'mine' }], windowBounds: { w: 900 } }, 'the edit stays, the applied id is back at the user\'s value, trocar\'s id is gone')
+  assert.ok(!fs.existsSync(created), 'the entry file trocar created is gone')
   assert.deepEqual(read(path.join(L.dir, 'u1.json')), { inferenceProvider: 'gateway' }, 'the user\'s own entry, byte for byte')
 })
 
@@ -82,14 +82,14 @@ test('CM18 — the user switched appliedId during on: their choice stays, the cr
   const m = read(L.metaFile); m[L.idKey] = 'u2'; fs.writeFileSync(L.metaFile, JSON.stringify(m))
   routeEntry('json-key').undo(L.ctx, recs)
   assert.equal(read(L.metaFile)[L.idKey], 'u2')
-  assert.ok(!fs.existsSync(path.join(L.dir, 'asight-1.json')))
+  assert.ok(!fs.existsSync(path.join(L.dir, 'trocar-1.json')))
   assert.deepEqual(read(path.join(L.dir, 'u2.json')), { inferenceProvider: 'gateway' })
 })
 
-test('CM18 — the user edited the created entry during on: it stays theirs, only asight\'s key leaves it; the applied id goes back', () => {
+test('CM18 — the user edited the created entry during on: it stays theirs, only trocar\'s key leaves it; the applied id goes back', () => {
   const L = lib('win32', { meta: { entries: [] } })
   const recs = routeEntry('json-key').write(L.ctx, DOOR).records
-  const f = path.join(L.dir, 'asight-1.json')
+  const f = path.join(L.dir, 'trocar-1.json')
   fs.writeFileSync(f, JSON.stringify({ ...read(f), chatTabEnabled: true }))
   routeEntry('json-key').undo(L.ctx, recs)
   assert.deepEqual(read(f), { chatTabEnabled: true })
@@ -127,7 +127,7 @@ for (const [why, start, expectRecord] of [['the array absent', { 'http.proxy': '
   })
 }
 
-test('arrayItems — the user removed asight\'s element during on: off leaves the array as the user left it and still restores the proxy key', () => {
+test('arrayItems — the user removed trocar\'s element during on: off leaves the array as the user left it and still restores the proxy key', () => {
   const w = world({ os: 'darwin' })
   const ctx = { ...w.ctx, harness: KIMI.h.name, route: KIMI.r, routeId: KIMI.id }
   const file = resolveLoc(KIMI.r.file, ctx)[0]

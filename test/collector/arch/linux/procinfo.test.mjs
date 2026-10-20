@@ -9,7 +9,7 @@ import { tmpDir } from '../../../helpers/tmp.mjs'
 
 // Build a synthetic /proc tree in a tmp dir so these run everywhere with no root.
 function makeProc() {
-  const root = tmpDir('asight-proc-')
+  const root = tmpDir('trocar-proc-')
   const mk = (pid, { exe, cmdline, environ, comm, fds = [] }) => {
     const d = path.join(root, String(pid))
     fs.mkdirSync(path.join(d, 'fd'), { recursive: true })

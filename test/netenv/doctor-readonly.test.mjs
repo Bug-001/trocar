@@ -99,7 +99,7 @@ async function everything(w) {
     printed.push(r.io.text())
   }
   const on = await w.s.run(['on', '--yes', '--json'], { deps: w.deps }); printed.push(on.io.text())
-  const dir = path.join(w.s.home, '.asight')
+  const dir = path.join(w.s.home, '.trocar')
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]))
   const written = [path.join(dir, 'netenv.json'), ...walk(path.join(dir, 'collector', 'flows'))].map((f) => fs.readFileSync(f, 'utf8'))
   return { printed, written }

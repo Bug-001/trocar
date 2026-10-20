@@ -2,26 +2,26 @@
 // the daemon, the link, the listeners on this machine, and per harness its proxy setting, its processes and its entry) into `{ <harness>: HarnessTopology }`, the object `status --json` prints
 // under `topology` and the board reads; the text (topology-text.mjs) is rendered from that object and from nothing else (V43).
 //
-// A harness has one or more branches: the path a connection of it takes, `path` with asight on it and `off_path` with asight taken out and every setting the same (the way out of asight changes nothing of the
-// agent's route: §9.5 「出口不变」). `on_path` is whether asight is on the path (true / false / null = not known), `captured` and `reason` are `status`'s verdict on the harness (verdict.mjs, the same function).
+// A harness has one or more branches: the path a connection of it takes, `path` with trocar on it and `off_path` with trocar taken out and every setting the same (the way out of trocar changes nothing of the
+// agent's route: §9.5 「出口不变」). `on_path` is whether trocar is on the path (true / false / null = not known), `captured` and `reason` are `status`'s verdict on the harness (verdict.mjs, the same function).
 // A hop that could not be read stays a node with `unknown: { reason }` (R11); it is never left out and never 「无」. The agent of a branch is the process the chain is drawn for: a steered one whose setting is
-// the current one, else a process that is not steered (the chain without asight is what it really does), else no process (a new one would take this path). Processes whose path is another one are `running`.
-// Driver mode (Linux eBPF) is `driverTopology`; proxy mode (4.8 §10: the agent's proxy entry points at asight's own kernel, one branch per form) is `proxyTopology`, from the facts the Windows branch's
+// the current one, else a process that is not steered (the chain without trocar is what it really does), else no process (a new one would take this path). Processes whose path is another one are `running`.
+// Driver mode (Linux eBPF) is `driverTopology`; proxy mode (4.8 §10: the agent's proxy entry points at trocar's own kernel, one branch per form) is `proxyTopology`, from the facts the Windows branch's
 // archFacts gives (`harnesses[h].forms`, `forwarder`); the macOS old capture (§4) is `legacyTopology`.
 //
 import { judgeHarness, certOfForms } from './verdict.mjs'
 import { parseProxyUrl } from './redact.mjs'
 
-export { renderCompact, renderDetail, renderPathBlock, verdictText, firstHopAfterAsight, firstHopOff, hopKey, ROUTING_TEXT } from './topology-text.mjs' // the words of the topology, rendered from the object below
+export { renderCompact, renderDetail, renderPathBlock, verdictText, firstHopAfterTrocar, firstHopOff, hopKey, ROUTING_TEXT } from './topology-text.mjs' // the words of the topology, rendered from the object below
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost'])
 const VIA = { http: 'proxy-http', https: 'proxy-https', socks4: 'proxy-socks', socks5: 'proxy-socks', socks5h: 'proxy-socks' }
-const ID_PREFIX = { agent: 'a', 'asight-engine': 'e', 'asight-forwarder': 'f', 'legacy-mitm': 'm', proxy: 'p', upstream: 'u', egress: 'x', unknown: 'q' }
+const ID_PREFIX = { agent: 'a', 'trocar-engine': 'e', 'trocar-forwarder': 'f', 'legacy-mitm': 'm', proxy: 'p', upstream: 'u', egress: 'x', unknown: 'q' }
 const drop = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null))
 const base = (p) => String(p).split(/[\\/]/).pop()
 const errorOf = (e) => (e && e.code) || String((e && e.message) || e)
 
-/** The nodes and edges of one harness. A node is the same node when its kind and what names it are the same (`intern`), so the path with asight and the path without share their common hops. */
+/** The nodes and edges of one harness. A node is the same node when its kind and what names it are the same (`intern`), so the path with trocar and the path without share their common hops. */
 function graph() {
   const nodes = [], edges = [], keyed = new Map(), counts = {}
   const keyOf = (n) => [n.kind, n.pid ?? '', n.name, n.addr ?? '', n.port ?? '', n.unknown ? n.unknown.reason : '', n.role ?? ''].join('|')
@@ -39,7 +39,7 @@ function graph() {
   return { nodes, edges, node, edge }
 }
 
-/** The proxy a setting names, as a node (D49: asight does not know products): who listens on that port here (named by its executable), or a proxy on another machine. */
+/** The proxy a setting names, as a node (D49: trocar does not know products): who listens on that port here (named by its executable), or a proxy on another machine. */
 function proxyNode(g, F, host, port) {
   if (!LOOPBACK.has(host)) return g.node({ kind: 'proxy', name: `${host}:${port}`, addr: host, port, remote: true })
   const l = F.listeners.find((x) => x.port === port)
@@ -59,8 +59,8 @@ function egressOf(g, p) {
 const sourceKey = (s) => (s.kind === 'env' ? `env:${s.where}` : s.kind === 'file' ? `file:${s.where}${s.key ? `#${s.key}` : ''}` : s.kind)
 
 /**
- * The hops after the agent (or after asight), from a setting: the agent's own proxy; else, when it follows the OS proxy (`follow`), the OS proxy; else the API host direct.
- * → { ids: [node ids in order], first: { via, evidence } } — the edge into `ids[0]` is the caller's, since it comes from the agent or from asight. The edges between the hops are made here.
+ * The hops after the agent (or after trocar), from a setting: the agent's own proxy; else, when it follows the OS proxy (`follow`), the OS proxy; else the API host direct.
+ * → { ids: [node ids in order], first: { via, evidence } } — the edge into `ids[0]` is the caller's, since it comes from the agent or from trocar. The edges between the hops are made here.
  */
 function tail(g, F, hf, setting, follow) {
   if (setting.unknown) return { ids: [g.node({ kind: 'unknown', name: 'proxy setting', unknown: setting.unknown, ...(setting.inferred === true ? { inferred: true } : {}) })], first: { via: 'unknown', evidence: [] } }
@@ -73,7 +73,7 @@ function tail(g, F, hf, setting, follow) {
   if (follow && sys) {
     const evidence = ['system-proxy']
     if (sys.unknown) return { ids: [g.node({ kind: 'unknown', name: 'system proxy', unknown: sys.unknown })], first: { via: 'system-proxy', evidence } }
-    if (sys.pac) return { ids: [g.node({ kind: 'unknown', name: 'PAC', unknown: { reason: 'pac', detail: 'the OS proxy is a PAC script; asight does not run it' } })], first: { via: 'system-proxy', evidence } }
+    if (sys.pac) return { ids: [g.node({ kind: 'unknown', name: 'PAC', unknown: { reason: 'pac', detail: 'the OS proxy is a PAC script; trocar does not run it' } })], first: { via: 'system-proxy', evidence } }
     if (sys.value) {
       const u = parseProxyUrl(sys.value)
       if (u) { const p = proxyNode(g, F, u.host, u.port), x = g.edge(p, egressOf(g, p), 'egress'); return { ids: [p, x], first: { via: 'system-proxy', evidence } } }
@@ -85,7 +85,7 @@ function tail(g, F, hf, setting, follow) {
   return { ids: [u], first }
 }
 
-/** Is asight's side of the platform up for this harness: wanted on, a daemon that answers, a helper, the kernel's links. true / false / null (not known). */
+/** Is trocar's side of the platform up for this harness: wanted on, a daemon that answers, a helper, the kernel's links. true / false / null (not known). */
 function platformUp(F, h) {
   if (F.desired[h] === 'off') return false
   if (F.desired[h] !== 'on') return null
@@ -120,23 +120,23 @@ function driverTopology(F, h, hf) {
   const current = (p) => p.startSetting == null
   const main = hf.procs.find((p) => current(p) && steeredOf(p) === true) || hf.procs.find((p) => current(p)) || null
   const steered = main ? steeredOf(main) : entryIntact(hf)
-  const asight = up === false || steered === false ? false : up === null || steered === null ? null : true
+  const trocar = up === false || steered === false ? false : up === null || steered === null ? null : true
   const negative = main ? hf.negatives.filter((n) => n.pid === main.pid) : []
-  const engine = () => g.node({ kind: 'asight-engine', name: 'asight', pid: F.daemon.pid, addr: '127.0.0.1', port: F.daemon.enginePort, mode: 'decrypt', asight: true, passthrough: negative.length ? { reason: 'negative-cache', hosts: negative.map((n) => n.host) } : undefined })
+  const engine = () => g.node({ kind: 'trocar-engine', name: 'trocar', pid: F.daemon.pid, addr: '127.0.0.1', port: F.daemon.enginePort, mode: 'decrypt', trocar: true, passthrough: negative.length ? { reason: 'negative-cache', hosts: negative.map((n) => n.host) } : undefined })
   const evidenceEbpf = [...(F.link.ids || []).slice(0, 1).map((id) => `link:${id}`), ...(main ? [`watch:${main.pid}`] : [])]
-  const build = (p, setting, withAsight, follow) => {
+  const build = (p, setting, withTrocar, follow) => {
     const a = agentOf(g, h, p), t = tail(g, F, hf, setting, follow)
     if (t.note) notes.add(t.note)
     const path = [a], off = [a, ...t.ids]
     let from = a
-    if (withAsight) { const e = engine(); g.edge(a, e, 'ebpf', { evidence: evidenceEbpf }); path.push(e); from = e }
+    if (withTrocar) { const e = engine(); g.edge(a, e, 'ebpf', { evidence: evidenceEbpf }); path.push(e); from = e }
     g.edge(from, t.ids[0], t.first.via, { evidence: t.first.evidence, inferred: t.first.inferred })
     if (from !== a) g.edge(a, t.ids[0], t.first.via, { evidence: t.first.evidence, inferred: t.first.inferred }) // the off path: the agent's own way to the same first hop
     return { path: [...path, ...t.ids], off_path: off }
   }
-  const branches = branchNames(hf).map((name) => ({ name, ...build(main, hf.setting, asight === true, followsOf(hf, name)), on_path: asight, captured: v.captured, reason: v.reason }))
+  const branches = branchNames(hf).map((name) => ({ name, ...build(main, hf.setting, trocar === true, followsOf(hf, name)), on_path: trocar, captured: v.captured, reason: v.reason }))
   const running = []
-  const mainSteered = main ? steeredOf(main) : asight
+  const mainSteered = main ? steeredOf(main) : trocar
   for (const p of hf.procs) {
     if (p === main) continue
     const stale = !current(p), s = steeredOf(p)
@@ -150,9 +150,9 @@ function driverTopology(F, h, hf) {
   return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: branches[0].on_path, captured: v.captured, reason: v.reason, nodes: g.nodes, edges: g.edges, branches, running, notes: [...notes], findings: [] }
 }
 
-// ── proxy mode (D43; 4.8 §10): agent → [its proxy entry, written by asight] asight's own kernel → asight's engine → the upstream the agent would have had without asight ─────────────────────────────────────────────
-// A form is one way of running a harness (codex.cli, claude-code.vscode, …). Per form the facts say: `setting` (the proxy the agent would use without asight, as of now), `systemProxy`, the `entry` it was
-// wired through ({ where, asight, intact }) or null when it is not, `procs`, `route` (the group's own plan: why it was left unwired — `form-unsupported`
+// ── proxy mode (D43; 4.8 §10): agent → [its proxy entry, written by trocar] trocar's own kernel → trocar's engine → the upstream the agent would have had without trocar ─────────────────────────────────────────────
+// A form is one way of running a harness (codex.cli, claude-code.vscode, …). Per form the facts say: `setting` (the proxy the agent would use without trocar, as of now), `systemProxy`, the `entry` it was
+// wired through ({ where, trocar, intact }) or null when it is not, `procs`, `route` (the group's own plan: why it was left unwired — `form-unsupported`
 // is a verdict of its own, 4.8 §2.2) and `entryPlace` (where the entry lives, filled in — the doctor's commands that name the place read it, 4.8 §10.4); and the kernel's own `forwarder.forms[id]` ({ port, state: 'on' | 'forward-only',
 // upstream, source, clients, upstream_error? }) and `routeLoop` on a form it refused to wire. The upstream is what the kernel and the engine dial: the agent's own proxy, else the OS proxy a form that follows it has, else the API host direct (4.8 §2.2).
 
@@ -160,7 +160,7 @@ function driverTopology(F, h, hf) {
 function formVerdict(F, h, hf, fm, fwf) {
   const none = (on, captured, reason) => ({ on, captured, reason, engine: false })
   const main = fm.procs.find((p) => p.elevated === true) || null
-  if (fm.routeLoop === true) return none(false, false, 'route-loop') // the platform refused to wire a form whose upstream would be asight itself (4.8 §2.2)
+  if (fm.routeLoop === true) return none(false, false, 'route-loop') // the platform refused to wire a form whose upstream would be trocar itself (4.8 §2.2)
   // before the entry checks, like judgeHarness's own order: after a real `off` the entry record is gone from the manifest and the file holds the user's own value again, so the entry checks would
   // answer not-routed and the drain window would never be drawn (4.8 §10.2 row k / 1.6 §9.3 row 14) — what says the agent is still on the kernel is its live connection to the group's port.
   if (F.desired[h] === 'off') return none(!!(fwf && fwf.clients && fwf.clients.length), false, 'desired-off')
@@ -168,7 +168,7 @@ function formVerdict(F, h, hf, fm, fwf) {
   // the plan gated off still has its ledger records, and the entry edge they give it (`intact` unknown until checkEntries lands, Task 14) would mask the verdict the same way the entry checks used to
   // mask the drain window — through the real facts path the form-unsupported verdict was unreachable and `doctor` could never emit its row.
   if (fm.route && fm.route.reason === 'form-unsupported') return none(false, false, 'form-unsupported')
-  if (fm.hook) return none(false, false, fm.hook) // the wrapper / plugin that applies the route was replaced or is gone: the agent runs without it (1.6 §9.3 row 31; its command is `asight install`)
+  if (fm.hook) return none(false, false, fm.hook) // the wrapper / plugin that applies the route was replaced or is gone: the agent runs without it (1.6 §9.3 row 31; its command is `trocar install`)
   if (!fm.entry) return none(false, false, 'not-routed') // anything else the plan left unwired is not-routed, the why on the form's `route`
   if (fm.entry.intact === null) return none(null, null, null)
   if (fm.entry.intact === false) return none(false, false, 'proxy-changed')
@@ -184,7 +184,7 @@ function formVerdict(F, h, hf, fm, fwf) {
 function upstreamTail(g, F, hf, fm, fwf) {
   if (fwf.upstream === 'DIRECT' || fwf.source === 'direct') return tail(g, F, hf, { value: null, source: [] }, false)
   const u = parseProxyUrl(fwf.upstream)
-  if (!u) return { ids: [g.node({ kind: 'unknown', name: 'upstream', unknown: { reason: 'unparseable', detail: 'the upstream asight dials is not a URL' } })], first: { via: 'unknown', evidence: [] } }
+  if (!u) return { ids: [g.node({ kind: 'unknown', name: 'upstream', unknown: { reason: 'unparseable', detail: 'the upstream trocar dials is not a URL' } })], first: { via: 'unknown', evidence: [] } }
   if (fwf.source === 'system-proxy') return tail(g, F, { ...hf, systemProxy: { value: fwf.upstream, pac: false } }, { value: null, source: [] }, true)
   return tail(g, F, hf, { value: fwf.upstream, ...u, source: fm.setting.source || [] }, false)
 }
@@ -202,7 +202,7 @@ function proxyTopology(F, h, hf) {
       && (F.desired[h] === 'off' ? (fwf.clients || []).length > 0 : !fm.hook && fm.entry && fm.entry.intact === true))
     const hfSys = { ...hf, systemProxy: fm.systemProxy }
     const split = (hf.behaviour.branches || []).join() === 'http,ws' && fm.systemProxy
-    if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`${fwf.clients.length} process(es) are still connected through asight, forwarded only; asight exits once they do`)
+    if (vd.reason === 'desired-off' && fwf && (fwf.clients || []).length) notes.push(`${fwf.clients.length} process(es) are still connected through trocar, forwarded only; trocar exits once they do`)
     if (fm.hosts && wired) {
       // the host-tree lines of 4.8 §3 (W69): the host program's other connections only forward, only the form's host set reaches the engine; the extension's own settings, when they
       // cannot be read, leave the set at the defaults and extra_hosts (said, never silent); and a fresh read that differs from what the daemon reports as applied means the door's
@@ -214,7 +214,7 @@ function proxyTopology(F, h, hf) {
         notes.push(`${extension}'s own settings could not be read (${u.reason}${u.detail ? `: ${u.detail}` : ''}): only its default hosts (${(fm.hosts.defaults || []).join(', ')}) are captured`)
       }
       if (Array.isArray(fm.hosts.applied) && [...fm.hosts.applied].sort().join('|') !== [...fm.hosts.hosts].sort().join('|')) {
-        notes.push(`the host set in use is older than ${extension}'s settings; to bring it up to date run: asight on ${h}`)
+        notes.push(`the host set in use is older than ${extension}'s settings; to bring it up to date run: trocar on ${h}`)
       }
     }
     for (const name of split ? ['http', 'ws'] : ['all']) {
@@ -223,13 +223,13 @@ function proxyTopology(F, h, hf) {
       g.edge(a, off.ids[0], off.first.via, { evidence: off.first.evidence, inferred: off.first.inferred })
       if (wired) {
         const forwardOnly = F.desired[h] === 'off' || vd.reason === 'elevated-agent' || !vd.engine && vd.on
-        const f = g.node({ kind: 'asight-forwarder', name: 'asight', pid: F.forwarder.pid, addr: '127.0.0.1', port: fwf.port, asight: true, mode: vd.reason === 'forwarder-down' ? 'down' : forwardOnly ? 'forward-only' : 'on' })
-        g.edge(a, f, 'proxy-http', { asight: true, ...(fm.entry ? { entry: { where: fm.entry.where, opt_in: fm.entry.opt_in === true } } : {}) })
+        const f = g.node({ kind: 'trocar-forwarder', name: 'trocar', pid: F.forwarder.pid, addr: '127.0.0.1', port: fwf.port, trocar: true, mode: vd.reason === 'forwarder-down' ? 'down' : forwardOnly ? 'forward-only' : 'on' })
+        g.edge(a, f, 'proxy-http', { trocar: true, ...(fm.entry ? { entry: { where: fm.entry.where, opt_in: fm.entry.opt_in === true } } : {}) })
         if (vd.reason === 'forwarder-down') path = [a, f]
         else {
           const up = upstreamTail(g, F, hfSys, fm, fwf)
           if (vd.engine) {
-            const e = g.node({ kind: 'asight-engine', name: 'asight', pid: F.daemon.pid, addr: '127.0.0.1', port: F.daemon.enginePort, mode: 'decrypt', asight: true })
+            const e = g.node({ kind: 'trocar-engine', name: 'trocar', pid: F.daemon.pid, addr: '127.0.0.1', port: F.daemon.enginePort, mode: 'decrypt', trocar: true })
             g.edge(f, e, 'forward'); g.edge(e, up.ids[0], up.first.via, { evidence: up.first.evidence, inferred: up.first.inferred }); path = [a, f, e, ...up.ids]
           } else { g.edge(f, up.ids[0], up.first.via, { evidence: up.first.evidence, inferred: up.first.inferred }); path = [a, f, ...up.ids] }
         }
@@ -238,15 +238,15 @@ function proxyTopology(F, h, hf) {
     }
   }
   if (!branches.length) throw new Error('the harness has no form to draw')
-  // the drift of a field asight owns (4.8 §10.3): the user changed the entry's key, asight is bypassed — the line names the one command that re-adopts it. Driver mode's proxy-changed is
+  // the drift of a field trocar owns (4.8 §10.3): the user changed the entry's key, trocar is bypassed — the line names the one command that re-adopts it. Driver mode's proxy-changed is
   // expected (the kernel steers whatever the setting says; 1.6 附录 B gives it no command), so the note is this drawing's, said once per harness however many forms share the group.
-  if (branches.some((x) => x.reason === 'proxy-changed')) notes.push(`To put asight back on its path: asight on ${h}`)
+  if (branches.some((x) => x.reason === 'proxy-changed')) notes.push(`To put trocar back on its path: trocar on ${h}`)
   for (const u of F.unknowns.filter((x) => x.reason === 'kernel-filter-invisible')) notes.push('A kernel filter such as WFP is not visible to your user.')
   const b = branches[0]
   return { harness: h, at: F.at, routing: F.routing, desired: F.desired[h] ?? null, on_path: b.on_path, captured: b.captured, reason: b.reason, nodes: g.nodes, edges: g.edges, branches, running: [], notes: [...new Set(notes)], findings: [] }
 }
 
-// ── the macOS old capture: the system proxy → the VPN's script block → asight's old MITM → the VPN again ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── the macOS old capture: the system proxy → the VPN's script block → trocar's old MITM → the VPN again ──────────────────────────────────────────────────────────────────────────────────────────────────────
 // The facts bring the old capture's verdict: `legacy: { mitm: { addr, port, pid } | null, on_path, captured, reason }`. The MITM and the VPN that routes into it and out of it
 // are two nodes of the same product (`role`), so the path is a path of distinct nodes.
 function legacyTopology(F, h, hf) {
@@ -257,7 +257,7 @@ function legacyTopology(F, h, hf) {
   g.edge(a, p, 'system-proxy', { evidence: ['system-proxy'] })
   let path = off
   if (l.mitm && l.on_path !== false) {
-    const m = g.node({ kind: 'legacy-mitm', name: 'asight old MITM', pid: l.mitm.pid, addr: l.mitm.addr, port: l.mitm.port, asight: true })
+    const m = g.node({ kind: 'legacy-mitm', name: 'trocar old MITM', pid: l.mitm.pid, addr: l.mitm.addr, port: l.mitm.port, trocar: true })
     const pn = g.nodes.find((n) => n.id === p), p2 = g.node({ ...pn, id: undefined, role: 'upstream', unknown: pn.unknown })
     g.edge(p, m, 'proxy-http', { evidence: ['legacy-block'] }); g.edge(m, p2, 'proxy-http', { evidence: [] }); g.edge(p2, x, 'egress')
     path = [a, p, m, p2, x]

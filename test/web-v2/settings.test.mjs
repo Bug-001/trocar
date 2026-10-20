@@ -77,10 +77,10 @@ const doc = async (w, name) => (await w.face.get(name)).doc
 
 // a temp home whose raw/ holds the generated traffic of the first n harnesses only
 function homeWith(n) {
-  const src = tmpDir('asight-gen-')
+  const src = tmpDir('trocar-gen-')
   generate({ home: src, bytes: 3e5 })
   const ids = new Set(HARNESSES.slice(0, n).map((h) => h.id))
-  const userHome = tmpDir('asight-board-'), home = path.join(userHome, '.asight')
+  const userHome = tmpDir('trocar-board-'), home = path.join(userHome, '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true })
   for (const f of fs.readdirSync(path.join(src, 'raw')).filter((x) => x.endsWith('.ndjson'))) {
     const lines = fs.readFileSync(path.join(src, 'raw', f), 'utf8').split('\n').filter((l) => {
@@ -401,7 +401,7 @@ test('#18 the template: a member of the file when it exists, a whole file when n
   assert.deepEqual(JSON.parse(`{${member}}`), { [model]: [null, null, null, null] })
   const whole = templateText(model, 'default')
   assert.deepEqual(JSON.parse(whole), { [model]: [null, null, null, null] })
-  const f = path.join(tmpDir('asight-price-'), 'pricing.json')
+  const f = path.join(tmpDir('trocar-price-'), 'pricing.json')
   fs.writeFileSync(f, whole)
   const t = loadPricing(f)
   assert.equal(Object.prototype.hasOwnProperty.call(t, model), false)

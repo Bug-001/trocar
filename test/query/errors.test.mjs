@@ -19,10 +19,10 @@ const everyDoc = async (home, now = Date.now) => {
   return docs
 }
 
-// `classes.disk.asight_bytes` counts the index files themselves, and the index is exactly what these two tests
+// `classes.disk.trocar_bytes` counts the index files themselves, and the index is exactly what these two tests
 // break or delete: a reader does not rewrite a plaintext segment's index (4.2 §段索引 谁写哪一笔), so the size of
 // the cache can differ while every answer about the DATA is the same.
-const answers = (docs) => ({ ...docs, classes: { ...docs.classes, disk: { ...docs.classes.disk, asight_bytes: null } } })
+const answers = (docs) => ({ ...docs, classes: { ...docs.classes, disk: { ...docs.classes.disk, trocar_bytes: null } } })
 
 test('一条记录坏了:文档照出,errors 点名那条记录,其余 id 不变', async () => {
   const home = rawHome()

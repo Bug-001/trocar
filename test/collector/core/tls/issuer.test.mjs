@@ -88,7 +88,7 @@ test('CM4 the next intermediate at 6 days; rotation empties the leaf cache; noth
 })
 
 test('CM4 no private key is written: the working dir stays empty, and issuer.mjs has no file system', async () => {
-  const dir = tmpDir('asight-issuer-')
+  const dir = tmpDir('trocar-issuer-')
   const cwd = process.cwd()
   process.chdir(dir)
   try { const { issuer } = await setup(); issuer.leafFor('a.test'); issuer.close() } finally { process.chdir(cwd) }
@@ -182,7 +182,7 @@ for (const [what, fault, value] of FAULTS) {
 }
 
 test('the file custody (Linux): leaves stay root-signed, chain = leaf + root; a missing CA is cert-key-missing', async () => {
-  const dir = path.join(tmpDir('asight-fc-'), 'collector', 'ca')
+  const dir = path.join(tmpDir('trocar-fc-'), 'collector', 'ca')
   const custody = fileCustody({ dir })
   assert.equal(custody.exists(), false)
   const records = []

@@ -14,7 +14,7 @@ import { createRecordStore } from '../../src/collector/core/record/store.mjs'
 import { createIndexKeeper } from '../../src/collector/index-keeper.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
 
-const home = () => { const h = tmpDir('asight-keeper-entries-'); fs.mkdirSync(path.join(h, 'collector'), { recursive: true }); return h }
+const home = () => { const h = tmpDir('trocar-keeper-entries-'); fs.mkdirSync(path.join(h, 'collector'), { recursive: true }); return h }
 
 /** One envelope with every field the index reads: a session key in the body, a harness, a class, wire bytes. */
 const envOf = (i, body = 'x'.repeat(64)) => ({

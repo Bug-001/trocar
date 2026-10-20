@@ -20,7 +20,7 @@ function fakeRedirector({ failAttach = false } = {}) {
     yank() { links = [] }, // the kernel lost the links behind our back
   }
 }
-const tmpState = () => path.join(tmpDir('asight-sw-'), 'collector', 'state.json')
+const tmpState = () => path.join(tmpDir('trocar-sw-'), 'collector', 'state.json')
 const IN = () => ['claude-code', 'codex'] // the installed harnesses (the daemon: the ones its install manifest names)
 const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, o[k]]))
 const mk = (redirector, stateFile, extra = {}) => createSwitch({ redirector, stateFile, installed: IN, ...extra })
@@ -138,7 +138,7 @@ test('switch: a state file that cannot be written fails the request and leaves n
 
 // ── state.json version 2 (1.6 §1.5, V28) ──────────────────────────────────────────────────────────────────────────────────────
 test('V28: version 1 reads as version 2 for every installed harness; unreadable reads all off with one failure; the file written back carries both updated_at', async () => {
-  const dir = tmpDir('asight-sw-'), file = path.join(dir, 'state.json')
+  const dir = tmpDir('trocar-sw-'), file = path.join(dir, 'state.json')
   fs.writeFileSync(file, JSON.stringify({ version: 1, desired: 'on', policy: 'all', extra_hosts: ['x'] }))
   const s = readState(file, () => {}, { installed: ['claude-code', 'codex'] })
   assert.equal(s.version, 2)

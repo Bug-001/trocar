@@ -24,7 +24,7 @@ export function toast(text, { ms = TOAST_MS, doc = typeof document === 'undefine
 // The theme preference, read once at boot (and by 设置 · 外观 later): 'light' / 'dark' set <html data-theme>;
 // anything else — no record, a stranger's value, a storage that throws — means follow the system (attribute gone).
 // Switching is a pure style change: this only ever touches the attribute, never a render function (1.5 §Edge cases).
-export const THEME_KEY = 'asight.v2.theme'
+export const THEME_KEY = 'trocar.v2.theme'
 // the store the theme key lives in: the page's window.localStorage (a document has none of its own; a stand-in may carry one). The read
 // itself can throw (blocked site data), so callers wrap it.
 export const themeStore = (doc) => doc.localStorage || (doc.defaultView && doc.defaultView.localStorage) || null
@@ -94,7 +94,7 @@ export function techDetailsHtml(rows, { id = 'tech', html = false } = {}) {
   return disclosureHtml({ id, title: 'Technical details', body: `<div class="tech">${grid}</div><button type="button" class="copybtn" data-copy="${esc(flat)}">Copy</button>`, open: false })
 }
 
-// the confirm dialog (4.6 of the visual doc): a question, the impact, what asight will change; the default focus sits
+// the confirm dialog (4.6 of the visual doc): a question, the impact, what trocar will change; the default focus sits
 // on 取消 so Enter alone never confirms. String builder + the DOM wiring in confirmDialog().
 export function confirmDialogHtml({ q, impact = '', lines = [], confirmLabel = 'Confirm', cancelLabel = 'Cancel' }) {
   return `<div class="v2-modal-back" data-confirm-back><div class="v2-modal dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-q">` +

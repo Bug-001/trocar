@@ -8,12 +8,12 @@
 //          exact (Linux, Windows); where argv is a `ps` line split on white space (darwin, facts.argvSplit) one per way the words from there up to the
 //          next flag word or new path (`/`, `~`, `C:/`) may join back into a path with spaces. A name item says `entry: '<pattern>'` (anchor with `$`:
 //          "the entry ends with …").
-// A harness's preset (`processes` in src/collector/harness/<h>.mjs) and the user's ~/.asight/agents.json (D51③; `on` / `off` never write it, D48)
+// A harness's preset (`processes` in src/collector/harness/<h>.mjs) and the user's ~/.trocar/agents.json (D51③; `on` / `off` never write it, D48)
 // are compiled here into the signature shape src/off/signature.mjs matches (`{ match, exclude, longLived }` of patterns over names / name0 / rest /
 // env), so the daemon, `status` and `off` — the standalone copy too — judge with one matcher. Imports only node:* and src/off.
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { asightHome } from './paths.mjs'
+import { trocarHome } from './paths.mjs'
 
 /** The interpreter / runtime names (a closed set, written only here): a name in it says nothing about the program, so a list item with such a
  *  name MUST carry an `args` pattern. Their version-suffixed spellings fold into these (python3.14t → python, node22 / nodejs → node). */
@@ -144,8 +144,8 @@ export function compileIdentity({ harness = '?', names = [], exclude = [], longL
   return { match, exclude: ex, longLived: ll }
 }
 
-/** ~/.asight/agents.json */
-export const agentListPath = (home) => path.join(asightHome(home), 'agents.json')
+/** ~/.trocar/agents.json */
+export const agentListPath = (home) => path.join(trocarHome(home), 'agents.json')
 
 /** The user's list (D51③) → { path, state: 'absent'|'ok'|'unreadable'|'unparsable', entries: [{ index, harness, name, args?, ignore? }],
  *  problems: [{ index, code, detail }] }. A bad item does not apply, the others do; a whole-file problem has index null. Every entry it returns compiles
@@ -161,7 +161,7 @@ export function readAgentList({ home, fs = nodeFs } = {}) {
   let doc
   try { doc = JSON.parse(text) } catch (e) { return fail('unparsable', 'unparsable', `${file} is not JSON: ${e.message}`) }
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return fail('unparsable', 'unparsable', `${file} must hold an object {"version":1,"agents":[…]}`)
-  if (doc.version !== 1) return fail('unparsable', 'bad-version', `${file} has version ${JSON.stringify(doc.version)}; this asight reads version 1 — write "version": 1`)
+  if (doc.version !== 1) return fail('unparsable', 'bad-version', `${file} has version ${JSON.stringify(doc.version)}; this trocar reads version 1 — write "version": 1`)
   if (!Array.isArray(doc.agents)) return fail('unparsable', 'unparsable', `${file}: "agents" must be an array of {"harness","name","args"?,"ignore"?}`)
   const entries = []
   const problems = []

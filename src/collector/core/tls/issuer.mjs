@@ -91,7 +91,7 @@ export async function makeIssuer({ custody, root = null, clock = () => Date.now(
         reason = `the ${custody.kind} custody issued a certificate that is not the intermediate profile: ${bad.join('; ')}`
       }
     } catch (e) {
-      if (e && e.code === NO_KEY) return failed(CODE.certKeyMissing, `the root key is not in its ${custody.kind} custody; run asight install`)
+      if (e && e.code === NO_KEY) return failed(CODE.certKeyMissing, `the root key is not in its ${custody.kind} custody; run trocar install`)
       reason = `the ${custody.kind} custody failed: ${String((e && e.message) || e)}`
     }
     if (!closed) failed(CODE.certIntermediateUnavailable, reason)

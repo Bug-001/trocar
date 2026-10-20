@@ -1,4 +1,4 @@
-// src/query/named/traffic.mjs — `asight query traffic` (RFC 1.6 §4.1, 附录 C.5 `traffic`; 1.10 流量表).
+// src/query/named/traffic.mjs — `trocar query traffic` (RFC 1.6 §4.1, 附录 C.5 `traffic`; 1.10 流量表).
 //
 // One pass over the SEGMENT INDEX rows, no record body opened (3.5 §访问模式 MUST NOT). A row is one request; it
 // falls in the window by its own ts (sessions take no part: most traffic has none). `first_seen` per (harness, host)

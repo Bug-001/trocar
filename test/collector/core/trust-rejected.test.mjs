@@ -1,4 +1,4 @@
-// test/collector/core/trust-rejected.test.mjs — RFC 4.6 R9 (D51④): a decrypted connection whose client refuses asight's leaf is a
+// test/collector/core/trust-rejected.test.mjs — RFC 4.6 R9 (D51④): a decrypted connection whose client refuses trocar's leaf is a
 // critical failure `trust-rejected` with its fields, one per (pid, host) and never folded; the daemon's failure recorder also tells
 // stderr; capture health and `status --json` put it first. A real engine and real TLS: the client trusts another CA only.
 import test from 'node:test'
@@ -17,9 +17,9 @@ import { closeWithin } from '../../helpers/bounded.mjs'
 import { sandbox } from '../../cli/fixtures/dispatch-ctx.mjs'
 
 const T = { timeout: 20_000 }
-const TRUST = { var: 'NODE_EXTRA_CA_CERTS', via: 'environ', file: '/home/u/.asight/ca/extra-dsh.pem' }
+const TRUST = { var: 'NODE_EXTRA_CA_CERTS', via: 'environ', file: '/home/u/.trocar/ca/extra-dsh.pem' }
 
-test('4.6 R9: a client that refuses asight\'s leaf → one critical trust-rejected per (pid, host), fields complete, stderr told; capture health and status --json put it first', T, async () => {
+test('4.6 R9: a client that refuses trocar\'s leaf → one critical trust-rejected per (pid, host), fields complete, stderr told; capture health and status --json put it first', T, async () => {
   assert.deepEqual(LEVELS, ['critical'])
   assert.ok(UNFOLDED_CODES.includes('trust-rejected') && CODES.includes('trust-rejected'))
   const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
@@ -27,7 +27,7 @@ test('4.6 R9: a client that refuses asight\'s leaf → one critical trust-reject
   await new Promise((r) => up.listen(0, '127.0.0.1', r))
   const meta = { dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 5, agent: 'deepseek-dsh', decrypt: true, door: 'g-dsh', negKey: '5', exe: '/usr/local/bin/dsh', argv: ['dsh', 'chat'], trust: TRUST }
   const redirector = createStaticRedirector(meta)
-  const home = tmpDir('asight-trust-rejected-'); const dir = path.join(home, 'collector')
+  const home = tmpDir('trocar-trust-rejected-'); const dir = path.join(home, 'collector')
   const logged = []
   const recorder = createFailureRecorder(dir, { log: (where, e) => logged.push(`[${where}] ${e.message}`) })
   appendEvent(dir, { event: 'daemon-start', pid: process.pid, reason: 'test' })
@@ -77,6 +77,6 @@ test('4.6 R9: a client that refuses asight\'s leaf → one critical trust-reject
   const text = (await s.run(['status', '--failures'], { deps: { captureHealth: () => health } })).io.stdoutText()
   // the critical kind first, in English (the summary's own layout is §3.5's, guarded by test/cli/status-doctor-en.test.mjs; this sandbox has nothing installed, so the summary says so)
   const rows = text.split('\n').filter((l) => /^ {2}\S/.test(l))
-  assert.match(rows[0], /refused asight's certificate under TLS, so that host is not captured/, text)
+  assert.match(rows[0], /refused trocar's certificate under TLS, so that host is not captured/, text)
   assert.ok(rows.length > 1, `the other condition is listed too:\n${text}`)
 })

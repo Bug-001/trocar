@@ -1,4 +1,4 @@
-// autostart.mjs — how the Windows collector is started and kept up, and what it refuses to start under (RFC 4.8 §7; acceptance W24 W25). The daemon is `node <asight> daemon`, started at login by one Task Scheduler task per user,
+// autostart.mjs — how the Windows collector is started and kept up, and what it refuses to start under (RFC 4.8 §7; acceptance W24 W25). The daemon is `node <trocar> daemon`, started at login by one Task Scheduler task per user,
 // supervised by a small parent that brings it back when it dies. Tools (`schtasks`, `reg`) run only through execTool, so a test injects the runner; the helper, the spawn and the clock are parameters too, and every piece runs on
 // any OS against a temp directory. Node built-ins, src/paths.mjs, src/off/exec.mjs and src/off/win32.mjs only (this file never imports a harness, 4.6 §结构).
 import nodeFs from 'node:fs'
@@ -11,10 +11,10 @@ import { execTool } from '../../../off/exec.mjs'
 import { collectorHome } from '../../../paths.mjs'
 import { elevationByWhoami, elevatedRefusal } from '../../../off/win32.mjs'
 
-export const TASK_NAME = '\\asight\\collector' // the scheduled task, in the \asight folder of the Task Scheduler
-export const TASK_FILE = 'asight-collector.task.xml' // the task's XML, an owned file of the install manifest, beside the collector's other files
+export const TASK_NAME = '\\trocar\\collector' // the scheduled task, in the \trocar folder of the Task Scheduler
+export const TASK_FILE = 'trocar-collector.task.xml' // the task's XML, an owned file of the install manifest, beside the collector's other files
 /** The login start-up entry that stands in when the Task Scheduler refuses the task (4.8 §7): one value of the user's own Run key. */
-export const RUN_KEY = Object.freeze({ hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'asight-collector' })
+export const RUN_KEY = Object.freeze({ hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'trocar-collector' })
 const RUN_PATH = `${RUN_KEY.hive}\\${RUN_KEY.key}`
 
 /** The oldest Node `on` accepts (package.json `engines`; a test holds the two equal). Older than that and the daemon would exit at every login with an error nobody sees (4.8 §7). */
@@ -27,13 +27,13 @@ export const NODE_MIN_MAJOR = 20
 export function nodePreflight({ versions = process.versions } = {}) {
   const have = versions && versions.node
   const major = typeof have === 'string' && /^\d+(\.|$)/.test(have) ? Number(have.split('.')[0]) : null
-  if (major === null) return { ok: false, have: have ?? null, min: NODE_MIN_MAJOR, doctor: `读不到 Node 的版本(${JSON.stringify(have ?? null)}):asight 在 Windows 上要 Node ≥ ${NODE_MIN_MAJOR}。确认 \`node --version\` 之后再 asight on` }
-  if (major < NODE_MIN_MAJOR) return { ok: false, have, min: NODE_MIN_MAJOR, doctor: `Node ${have} 太旧:asight 在 Windows 上要 Node ≥ ${NODE_MIN_MAJOR}(守护进程每次登录都由这个 Node 拉起,更老的版本起不来)。升级 Node 之后再 asight on` }
+  if (major === null) return { ok: false, have: have ?? null, min: NODE_MIN_MAJOR, doctor: `读不到 Node 的版本(${JSON.stringify(have ?? null)}):trocar 在 Windows 上要 Node ≥ ${NODE_MIN_MAJOR}。确认 \`node --version\` 之后再 trocar on` }
+  if (major < NODE_MIN_MAJOR) return { ok: false, have, min: NODE_MIN_MAJOR, doctor: `Node ${have} 太旧:trocar 在 Windows 上要 Node ≥ ${NODE_MIN_MAJOR}(守护进程每次登录都由这个 Node 拉起,更老的版本起不来)。升级 Node 之后再 trocar on` }
   return { ok: true, have, min: NODE_MIN_MAJOR }
 }
 
 /**
- * R7 on Windows (4.8 §7, W25): asight never runs with an elevated token or as SYSTEM. → `null` (go on) or `{ code: 'elevated-token', reason, token }`, which `on` and `daemon` turn into the refusal and the `start` failure record.
+ * R7 on Windows (4.8 §7, W25): trocar never runs with an elevated token or as SYSTEM. → `null` (go on) or `{ code: 'elevated-token', reason, token }`, which `on` and `daemon` turn into the refusal and the `start` failure record.
  * One criterion for on, daemon, off and uninstall: `whoami /groups` by SID (src/off/win32.mjs elevationByWhoami, with D53③'s unsplit-token exception). It used to be a
  * helper started for this one question, whose C# compile made it the costliest step of `on` (a Windows test machine 2026-10-17: 1.2 s of on's 5.8 s, and the daemon's own 0.6 s before it
  * answers). A token that cannot be read is not a refusal: `onUnknown(reason)` says why (R11). `run`: execTool's injected runner.
@@ -53,11 +53,11 @@ const plain = (name, v, { quoted = false } = {}) => {
 }
 const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-const daemonArgs = (node, asight) => `--headless "${plain('node', node, { quoted: true })}" "${plain('asight', asight, { quoted: true })}" daemon --supervise`
-/** The task's action as one command line, which is what the Run value holds: `conhost.exe --headless "<node>" "<asight>" daemon --supervise` (no window; the supervisor parent; 4.8 §7). */
-export function daemonCommandLine({ node, asight, conhost = 'conhost.exe' } = {}) {
+const daemonArgs = (node, trocar) => `--headless "${plain('node', node, { quoted: true })}" "${plain('trocar', trocar, { quoted: true })}" daemon --supervise`
+/** The task's action as one command line, which is what the Run value holds: `conhost.exe --headless "<node>" "<trocar>" daemon --supervise` (no window; the supervisor parent; 4.8 §7). */
+export function daemonCommandLine({ node, trocar, conhost = 'conhost.exe' } = {}) {
   const c = plain('conhost', conhost, { quoted: true })
-  return `${/\s/.test(c) ? `"${c}"` : c} ${daemonArgs(node, asight)}`
+  return `${/\s/.test(c) ? `"${c}"` : c} ${daemonArgs(node, trocar)}`
 }
 
 /** `DOMAIN\name`, the form the Task Scheduler wants for a trigger and a principal: from USERDOMAIN and USERNAME, the name alone without a domain, the OS's own answer when the environment says nothing. */
@@ -69,16 +69,16 @@ export function taskUser(env = process.env) {
 /**
  * The task XML (4.8 §7; the form that registered at Medium integrity in the T0 measurement). A login trigger of this user; this user as the principal, `InteractiveToken` at `LeastPrivilege` (S4U is not subject to UAC
  * filtering, so it would be High integrity: R7); no time limit, no stop on battery, one instance; restart on failure every minute, 999 times (the supervisor parent does the real restarting: the T0 measurement showed the task
- * does not bring back a killed daemon, §7). The action is `conhost.exe --headless "<node>" "<asight>" daemon --supervise`: no window, the supervisor parent, and no `--use-system-ca` (it needs Node 22.15, and an older Node would
+ * does not bring back a killed daemon, §7). The action is `conhost.exe --headless "<node>" "<trocar>" daemon --supervise`: no window, the supervisor parent, and no `--use-system-ca` (it needs Node 22.15, and an older Node would
  * exit at every login with "bad option"). The XML says UTF-16 because that is the form that was measured; `register` hands schtasks a UTF-16 copy, while the file install writes is this text as it stands.
  */
-export function taskXml({ user, node, asight, conhost = 'conhost.exe' } = {}) {
+export function taskXml({ user, node, trocar, conhost = 'conhost.exe' } = {}) {
   const u = xmlText(plain('user', user))
-  const args = daemonArgs(node, asight)
+  const args = daemonArgs(node, trocar)
   return [
     '<?xml version="1.0" encoding="UTF-16"?>',
     '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
-    '  <RegistrationInfo><Description>asight transparent collector (per user)</Description></RegistrationInfo>',
+    '  <RegistrationInfo><Description>trocar transparent collector (per user)</Description></RegistrationInfo>',
     `  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${u}</UserId></LogonTrigger></Triggers>`,
     `  <Principals><Principal id="Author"><UserId>${u}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>`,
     '  <Settings>',
@@ -128,7 +128,7 @@ function lastTaskResult({ run, env }) {
  */
 export { directStartEnv }
 
-/** `schtasks /Create /XML <file> /TN \asight\collector /F` from the task file install wrote. schtasks reads the file as the encoding it declares, which is UTF-16, and install writes text as UTF-8: so a UTF-16LE copy with a byte
+/** `schtasks /Create /XML <file> /TN \trocar\collector /F` from the task file install wrote. schtasks reads the file as the encoding it declares, which is UTF-16, and install writes text as UTF-8: so a UTF-16LE copy with a byte
  *  order mark (the T0 form) is made beside it, handed over, and removed. → `{ code, out, err }`; a file that cannot be read is `code: null` with the reason and `precondition: true` (schtasks was not asked, so it is not a refusal to fall back from). */
 export function register({ file, run = null, env = process.env, fs = nodeFs } = {}) {
   const copy = `${file}.utf16`
@@ -144,7 +144,7 @@ export function register({ file, run = null, env = process.env, fs = nodeFs } = 
 const ok = { code: 0, out: '', err: '' }
 /** Is the task registered? `/Query /TN` is the question (never a localised error text): exit 0 = there; any other exit = not there (the one ambiguity left, which `schtasks` itself does not break: exit 1 is "not found" and
  *  also "the service is down"); a query that did not run at all (timeout, blocked, no schtasks: code null) is NOT "not there": nothing was asked of the task, so an undo that took it for gone would report success while the
- *  task stays registered and starts asight at the next login. → `{ state: 'present' }` · `{ state: 'absent' }` · `{ state: 'unknown', err }`. */
+ *  task stays registered and starts trocar at the next login. → `{ state: 'present' }` · `{ state: 'absent' }` · `{ state: 'unknown', err }`. */
 const taskState = ({ run, env }) => {
   const r = schtasks(['/Query', '/TN', TASK_NAME], { run, env })
   if (r.code === 0) return { state: 'present' }
@@ -168,11 +168,11 @@ const taskEnabled = ({ run, env }) => {
   return { state: 'unknown', err: `the task ${TASK_NAME} is registered, and whether it is enabled could not be read (schtasks /Query /XML: ${r.code === 0 ? 'it answered no task XML' : errOf(r)})` }
 }
 const errOf = (r) => r.err || (r.code === null ? 'it did not run' : `exit ${r.code}`)
-const ours = (value) => /\bdaemon --supervise\s*$/.test(value) // what an earlier `on` of asight wrote: the supervised daemon command
+const ours = (value) => /\bdaemon --supervise\s*$/.test(value) // what an earlier `on` of trocar wrote: the supervised daemon command
 
 /**
- * The Run value, read: `reg query HKCU\...\Run /v asight-collector` → `{ present: true, kind, value }` · `{ present: false }` · `{ error }` (reg did not run, or answered with something that is no value).
- * One fixed query of one value: asight reads no other value of that key. reg.exe writes a redirected stdout in the console's code page (cp936 on a zh-CN Windows) and execTool decodes UTF-8, so a character outside ASCII
+ * The Run value, read: `reg query HKCU\...\Run /v trocar-collector` → `{ present: true, kind, value }` · `{ present: false }` · `{ error }` (reg did not run, or answered with something that is no value).
+ * One fixed query of one value: trocar reads no other value of that key. reg.exe writes a redirected stdout in the console's code page (cp936 on a zh-CN Windows) and execTool decodes UTF-8, so a character outside ASCII
  * comes back as U+FFFD: then `lossy: true` is there, and the value is not what the registry holds, byte for byte (the blanks at the start and end of a value are lost too, as execTool trims; a command line does not mind).
  */
 export function readRunValue({ run = null, env = process.env } = {}) {
@@ -203,15 +203,15 @@ function sameValue(read, wanted) {
 /**
  * The fallback of 4.8 §7: write the one Run value that starts the supervised daemon at login, with `reg add … /t REG_SZ` through execTool, and read it back (生效要复核).
  * → `{ ok: true, ours, entry }` · `{ ok: false, reason, entry? }`. `entry` is what the manifest ledgers: `{ kind: 'run-key', hive, key, name, value, prior }`, where `prior` is the user's own value that was there (`{ kind, value }`, to be put back by
- * the undo) or null. A value an earlier `on` of asight wrote is not a prior: `ours` is true and `prior` null, and the caller keeps the prior its ledger already has. A prior that is not a string (REG_SZ or REG_EXPAND_SZ) could
+ * the undo) or null. A value an earlier `on` of trocar wrote is not a prior: `ours` is true and `prior` null, and the caller keeps the prior its ledger already has. A prior that is not a string (REG_SZ or REG_EXPAND_SZ) could
  * not be put back, so it is never overwritten. `entry` comes with a failure only when the write went through and the read-back disagreed (the undo is idempotent, so it is ledgered all the same).
  */
 export function runKeyFallback({ command, run = null, env = process.env } = {}) {
   const before = readRunValue({ run, env })
   if (before.error) return { ok: false, reason: before.error }
   const mine = before.present && ours(before.value)
-  if (before.present && !mine && !['REG_SZ', 'REG_EXPAND_SZ'].includes(before.kind)) return { ok: false, reason: `${RUN_PATH}\\${RUN_KEY.name} already exists as ${before.kind}, not a string, and asight does not overwrite what it cannot put back` }
-  if (before.present && !mine && before.lossy) return { ok: false, reason: `${RUN_PATH}\\${RUN_KEY.name} already exists and has characters that reg.exe printed in a console code page, not UTF-8 (U+FFFD): asight cannot put it back byte for byte, so it does not overwrite it` }
+  if (before.present && !mine && !['REG_SZ', 'REG_EXPAND_SZ'].includes(before.kind)) return { ok: false, reason: `${RUN_PATH}\\${RUN_KEY.name} already exists as ${before.kind}, not a string, and trocar does not overwrite what it cannot put back` }
+  if (before.present && !mine && before.lossy) return { ok: false, reason: `${RUN_PATH}\\${RUN_KEY.name} already exists and has characters that reg.exe printed in a console code page, not UTF-8 (U+FFFD): trocar cannot put it back byte for byte, so it does not overwrite it` }
   const entry = { kind: 'run-key', hive: RUN_KEY.hive, key: RUN_KEY.key, name: RUN_KEY.name, value: command, prior: before.present && !mine ? { kind: before.kind, value: before.value } : null }
   const w = execTool('reg', ['add', RUN_PATH, '/v', RUN_KEY.name, '/t', 'REG_SZ', '/d', command, '/f'], { run, env })
   if (w.code !== 0) return { ok: false, reason: `reg add failed (${errOf(w)})` }
@@ -221,7 +221,7 @@ export function runKeyFallback({ command, run = null, env = process.env } = {}) 
 }
 
 /**
- * Takes asight's Run value out, and only that value: ours with no prior is deleted (`reg delete … /v asight-collector /f`), ours over a prior puts the prior back with its kind, a value that is not ours is left, an absent one is already
+ * Takes trocar's Run value out, and only that value: ours with no prior is deleted (`reg delete … /v trocar-collector /f`), ours over a prior puts the prior back with its kind, a value that is not ours is left, an absent one is already
  * as asked. → `{ code, out, err, runKey: 'removed' | 'restored' | 'left' | 'absent' | 'failed' }`. `prior` is the ledger entry's.
  */
 export function removeRunValue({ run = null, env = process.env, prior = null } = {}) {
@@ -237,7 +237,7 @@ export function removeRunValue({ run = null, env = process.env, prior = null } =
 const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1, out: [task.out, k.out].filter(Boolean).join('\n'), err: [task.err, k.err].filter(Boolean).join('; '), task: task.state, runKey: k.runKey })
 
 /**
- * The per-user autostart as `asight on` (src/cli/on.mjs) and install.mjs consume it, the same shape as arch/linux/unit.mjs `userUnit`: `{ name, path, links, text(env), enable({ now }), start(), reload(), disable(), remove() }`, each verb
+ * The per-user autostart as `trocar on` (src/cli/on.mjs) and install.mjs consume it, the same shape as arch/linux/unit.mjs `userUnit`: `{ name, path, links, text(env), enable({ now }), start(), reload(), disable(), remove() }`, each verb
  * returning `{ code, out, err }`. `path` is the task's XML, an owned file the install manifest lists; `links` is empty (a task has no wants/ link); `text(env)` is the XML (a Windows task has no environment of its own, so the
  * daemon environment install offers is not carried: a daemon the task starts trusts the system store, 4.8 §6.2). Nothing is registered until `enable`.
  *   enable({ now })  registers the task (`/Create /XML … /F`, which also switches a disabled one on) and, with `now` (the default; install passes false when a daemon already answers), runs it (`/Run`) → `via: 'task'`.
@@ -248,26 +248,26 @@ const settle = (task, k) => ({ code: (task.code !== 0 ? task.code : k.code) ?? 1
  *                    When schtasks REFUSES the registration, the Run-key fallback takes over (4.8 §7): `via: 'run-key'`, code 0 (`on` does not fail because the Task Scheduler said no), `reason` (why), `ledger` (the manifest entry,
  *                    runKeyFallback's), `ours`, `event` (the `task-register-failed` failure record for the caller to write: it carries the reason and names the entry used instead), and with `now` the supervised daemon is started
  *                    directly (the Run value only runs at the next login). When the fallback fails too, code is not 0 and `err` has both reasons.
- *                    Exactly one login mechanism is left live: by the task, asight's own Run value of an earlier fallback is taken out (`runKey: 'removed' | 'restored'` when it was there: the caller drops the `run-key`
+ *                    Exactly one login mechanism is left live: by the task, trocar's own Run value of an earlier fallback is taken out (`runKey: 'removed' | 'restored'` when it was there: the caller drops the `run-key`
  *                    ledger entry; `enable({ prior })` takes the ledger entry's prior so that the user's own value comes back); by the fallback, an earlier task is switched off (`task: 'disabled'`). Either that cannot be
  *                    done is `warn` (a line for the receipt; `on` does not fail for it, because the supervisor singleton keeps a second start from running a second daemon).
  *   start()          the fallback `on` uses when the task cannot start it: this session, nothing registered. A task with a login trigger would be an autostart, so none is registered: the supervised daemon is started directly, detached, with no window, with the
  *                    environment of `directStartEnv(env)` (the shell's, without the trust and proxy variables a login-started daemon would not have).
  *   reload()         nothing to do: a rewritten task is registered again by `enable` (`/F`).
- *   disable({ prior }) a no-argument `off`: the task is switched off (`/Change /DISABLE`; it does not end a running instance, the caller stops the supervisor parent first, 4.8 §4.2) and asight's Run value is taken out, whichever
+ *   disable({ prior }) a no-argument `off`: the task is switched off (`/Change /DISABLE`; it does not end a running instance, the caller stops the supervisor parent first, 4.8 §4.2) and trocar's Run value is taken out, whichever
  *                    of the two an earlier `on` used. → `{ code, out, err, task: 'disabled' | 'absent' | 'failed', runKey }`. `prior` is the Run entry's ledgered prior value.
  *   remove({ prior }) `uninstall`: the task is deleted (`/Delete /F`) and the Run value taken out the same way. A task that is not there is already as asked (found with `/Query`, never by parsing a localised error text); a `/Query` that did not run at all is not "not there": it is a failure (`task: 'failed'`, code 1) and nothing is changed on a guess.
  */
 export function userUnit({ home, node, script, run = null, env = process.env, fs = nodeFs, spawn = nodeSpawn, user = null, conhost = 'conhost.exe' } = {}) {
   node = autostartNode({ env, execPath: node, fs, platform: 'win32' }) // D61: a node the task can still name after a node upgrade (one rule, all three OSes)
-  const file = path.join(collectorHome(path.join(home, '.asight')), TASK_FILE)
+  const file = path.join(collectorHome(path.join(home, '.trocar')), TASK_FILE)
   const tools = { run, env }
   // the daemon this run starts itself: the scheduled task's own environment and the task's own log files (direct-start.mjs)
   const startDirect = (carry) => {
     const r = startDaemonDirect({ home, env, carry, command: conhost, argv: ['--headless', node, script, 'daemon', '--supervise'], spawn, fs, spawnOpts: { windowsHide: true } })
     return r.code === 0 ? { ...ok, ...r } : r.err === 'the daemon did not start' ? { ...r, err: `${conhost} did not start the supervised daemon` } : r
   }
-  // the task is changed or deleted when it is there, and asight's Run value is taken out; each says what it did
+  // the task is changed or deleted when it is there, and trocar's Run value is taken out; each says what it did
   // `on`'s start (D61): the task's own `/Run`, and the direct start when /Run answers SUCCESS and runs nothing (267011, no
   // interactive session for the task) — the registration is never touched here, `install` made it.
   const runNow = () => {
@@ -285,14 +285,14 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     return settle(t, removeRunValue({ run, env, prior }))
   }
   return {
-    name: 'asight-collector', path: file, links: [],
-    text: () => taskXml({ user: user || taskUser(env), node, asight: script, conhost }),
+    name: 'trocar-collector', path: file, links: [],
+    text: () => taskXml({ user: user || taskUser(env), node, trocar: script, conhost }),
     enable({ now = true, prior = null } = {}) {
       const c = register({ file, run, env, fs })
       if (c.code === 0) {
         // the task is the one start at login now: an earlier fallback's Run value would start a second supervisor at every login, so it goes (the user's own prior value, the ledger's, comes back)
         const gone = removeRunValue({ run, env, prior })
-        const note = gone.runKey === 'failed' ? { warn: `the HKCU Run entry ${RUN_KEY.name} of an earlier \`on\` could not be taken out (${gone.err || 'no reason given'}): both it and the task start asight at login (one supervisor runs, the other leaves at once); \`asight off\` removes both` } : {}
+        const note = gone.runKey === 'failed' ? { warn: `the HKCU Run entry ${RUN_KEY.name} of an earlier \`on\` could not be taken out (${gone.err || 'no reason given'}): both it and the task start trocar at login (one supervisor runs, the other leaves at once); \`trocar off\` removes both` } : {}
         const base = { via: 'task', ...(gone.runKey !== 'absent' ? { runKey: gone.runKey } : {}), ...note }
         if (!now) return { ...c, ...base }
         const r = runNow()
@@ -300,18 +300,18 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       }
       if (c.precondition) return { ...c, via: 'task' }
       const why = errOf(c)
-      const f = runKeyFallback({ command: daemonCommandLine({ node, asight: script, conhost }), run, env })
+      const f = runKeyFallback({ command: daemonCommandLine({ node, trocar: script, conhost }), run, env })
       if (!f.ok) {
-        const reason = `schtasks /Create was refused (${why}) and the HKCU Run entry ${RUN_KEY.name} could not be written either (${f.reason}): asight does not start at login`
+        const reason = `schtasks /Create was refused (${why}) and the HKCU Run entry ${RUN_KEY.name} could not be written either (${f.reason}): trocar does not start at login`
         return { code: c.code ?? 1, out: '', err: `${why}; the Run-key fallback failed too: ${f.reason}`, via: 'task', ...(f.entry ? { ledger: f.entry } : {}), event: { event: 'failure', where: 'install', code: 'task-register-failed', reason } }
       }
-      const event = { event: 'failure', where: 'install', code: 'task-register-failed', reason: `schtasks /Create was refused (${why}); asight starts at login through the HKCU Run entry ${RUN_KEY.name} instead, with the supervisor parent restarting the daemon` }
+      const event = { event: 'failure', where: 'install', code: 'task-register-failed', reason: `schtasks /Create was refused (${why}); trocar starts at login through the HKCU Run entry ${RUN_KEY.name} instead, with the supervisor parent restarting the daemon` }
       // the Run value is the one start at login now: a task an earlier `on` registered would start a second supervisor, so it is switched off (it stays registered; the undo takes it out)
       const q = taskState(tools)
       const off = q.state === 'present' ? schtasks(['/Change', '/TN', TASK_NAME, '/DISABLE'], tools) : null
       const task = off ? (off.code === 0 ? 'disabled' : 'failed') : null
-      const warn = task === 'failed' ? `the task ${TASK_NAME} of an earlier \`on\` is still registered and enabled (/Change /DISABLE: ${errOf(off)}): both it and the Run entry start asight at login (one supervisor runs, the other leaves at once); \`asight off\` disables both`
-        : q.state === 'unknown' ? `${q.err}: an earlier task ${TASK_NAME} may still be registered and enabled next to the Run entry (one supervisor runs, the other leaves at once); \`asight off\` disables both` : null
+      const warn = task === 'failed' ? `the task ${TASK_NAME} of an earlier \`on\` is still registered and enabled (/Change /DISABLE: ${errOf(off)}): both it and the Run entry start trocar at login (one supervisor runs, the other leaves at once); \`trocar off\` disables both`
+        : q.state === 'unknown' ? `${q.err}: an earlier task ${TASK_NAME} may still be registered and enabled next to the Run entry (one supervisor runs, the other leaves at once); \`trocar off\` disables both` : null
       const started = now ? startDirect() : null
       const base = { via: 'run-key', reason: why, ledger: f.entry, ours: f.ours, event, ...(task ? { task } : {}), ...(warn ? { warn } : {}) }
       return started && started.code !== 0 ? { code: started.code, out: '', err: started.err, ...base } : { ...ok, ...base, ...(started ? { pid: started.pid } : {}) }
@@ -320,7 +320,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
     startNow: () => runNow(), // D61: `on` starts the daemon through the task, never touching the registration
     // D61 / 1.6 §3.3: is the login entry registered and enabled? The question `on` asks BEFORE it writes anything — `schtasks /Query /TN <task> /XML`
     // (taskEnabled: its XML says both whether the task is there and whether it is switched off, so a registered task costs ONE schtasks start, D62) —
-    // and asight's own HKCU Run value when the
+    // and trocar's own HKCU Run value when the
     // task was refused or switched off by that very fallback (the §7 fallback IS the login entry then).
     registered: () => { const q = taskEnabled(tools); if (q.state === 'present') return q; const k = readRunValue({ run, env }); return k.present && ours(k.value) ? { state: 'present' } : q },
     reload: () => ({ ...ok }),
@@ -345,8 +345,8 @@ const realSleep = (ms, { signal } = {}) => new Promise((resolve) => {
 })
 
 /**
- * The supervisor parent (4.8 §7): `asight daemon --supervise` runs the real daemon, `node <asight> daemon`, as its child and starts it again with the backoff above ONLY when it exits with a code other than 0 or is killed.
- * A daemon that exits 0 was asked to stop (`off` once it drained, `uninstall`, `off --now`): the parent exits too, so that after `off` no asight process is left and `off` is not undone by its own parent. The task that starts this
+ * The supervisor parent (4.8 §7): `trocar daemon --supervise` runs the real daemon, `node <trocar> daemon`, as its child and starts it again with the backoff above ONLY when it exits with a code other than 0 or is killed.
+ * A daemon that exits 0 was asked to stop (`off` once it drained, `uninstall`, `off --now`): the parent exits too, so that after `off` no trocar process is left and `off` is not undone by its own parent. The task that starts this
  * parent does not restart a dead daemon (the T0 measurement), so this is where the restarting is. It writes `supervisor.lock` (`{ pid, startedAt }`: what `off` checks before it stops this process first, §4.2) and holds nothing else.
  *   command  { node, args }: the child, which MUST NOT carry `--supervise` (a child that did would be a supervisor of its own)
  *   dir      the collector directory (the lock goes there)
@@ -376,7 +376,7 @@ export function superviseChild({ spawn = nodeSpawn, command, dir, now = Date.now
       }
       if (!other) fs.writeFileSync(lockFile, body, { mode: 0o600 })
     }
-  } catch (e) { log(`${SUPERVISOR_LOCK} could not be written (${(e && e.code) || (e && e.message) || e}); the daemon is supervised all the same, but \`asight off\` cannot find this process by it`) }
+  } catch (e) { log(`${SUPERVISOR_LOCK} could not be written (${(e && e.code) || (e && e.message) || e}); the daemon is supervised all the same, but \`trocar off\` cannot find this process by it`) }
   if (other) {
     log(`another supervisor (pid ${other.pid}) holds ${SUPERVISOR_LOCK} and runs: this one starts no second daemon and leaves`)
     return { done: Promise.resolve(0), stop: async () => 0, lockFile, refused: other }
@@ -431,7 +431,7 @@ export const LOCK_START_TOLERANCE_MS = 2000 // the lock's start time is "now min
 /**
  * Does the process a supervisor.lock names still run (4.8 §7)? Windows is asked for the start time of that pid (`Get-Process`, through execTool: one fixed question about one integer) and the answer is the same process when
  * it agrees with the lock's to within 2 s; a pid that is running with another start time is a reused pid. → true · false (no such process, or another one); throws when it cannot be told (powershell did not run or answered
- * with something else), and the supervisor says so and takes the lock over: not knowing is "not running", so that asight starts instead of not starting. A pid that is not a positive integer is a TypeError: it never reaches a command.
+ * with something else), and the supervisor says so and takes the lock over: not knowing is "not running", so that trocar starts instead of not starting. A pid that is not a positive integer is a TypeError: it never reaches a command.
  */
 export function lockHolderAlive({ pid, startedAt } = {}, { run = null, env = process.env, toleranceMs = LOCK_START_TOLERANCE_MS } = {}) {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new TypeError(`lockHolderAlive needs a positive integer pid, got ${JSON.stringify(pid)}`)
@@ -444,12 +444,12 @@ export function lockHolderAlive({ pid, startedAt } = {}, { run = null, env = pro
 }
 
 /**
- * `asight daemon --supervise` (src/cli/daemon.mjs calls this): supervises `node <asight> daemon` until the daemon exits 0 or a stop signal arrives (SIGINT, SIGTERM, SIGHUP: a console closing). → the exit code.
- * `asight` is the script the daemon child runs (the CLI passes its own `process.argv[1]`); `dir` is the collector directory.
+ * `trocar daemon --supervise` (src/cli/daemon.mjs calls this): supervises `node <trocar> daemon` until the daemon exits 0 or a stop signal arrives (SIGINT, SIGTERM, SIGHUP: a console closing). → the exit code.
+ * `trocar` is the script the daemon child runs (the CLI passes its own `process.argv[1]`); `dir` is the collector directory.
  */
-export async function runSupervisor({ node = process.execPath, asight, dir, proc = process, run = null, env = process.env, log = (line) => { try { proc.stderr.write(`asight daemon --supervise: ${line}\n`) } catch { /* no console to write to */ } }, deps = {} } = {}) {
-  if (typeof asight !== 'string' || asight === '') throw new TypeError('runSupervisor needs the asight script the daemon child runs')
-  const sup = superviseChild({ command: { node, args: [asight, 'daemon'] }, dir, log, isLive: (holder) => lockHolderAlive(holder, { run, env }), ...deps })
+export async function runSupervisor({ node = process.execPath, trocar, dir, proc = process, run = null, env = process.env, log = (line) => { try { proc.stderr.write(`trocar daemon --supervise: ${line}\n`) } catch { /* no console to write to */ } }, deps = {} } = {}) {
+  if (typeof trocar !== 'string' || trocar === '') throw new TypeError('runSupervisor needs the trocar script the daemon child runs')
+  const sup = superviseChild({ command: { node, args: [trocar, 'daemon'] }, dir, log, isLive: (holder) => lockHolderAlive(holder, { run, env }), ...deps })
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP']
   const onSignal = () => { sup.stop() }
   for (const s of signals) proc.on(s, onSignal)

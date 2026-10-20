@@ -7,19 +7,19 @@ import crypto from 'node:crypto'
 import { createCa } from '../../../src/collector/core/tls/ca.mjs'
 import { isOwnPath } from '../../../src/collector/harness/_common.mjs'
 
-test('isOwnPath: on macOS a path is asight\'s when it is under the collector directory as the plain exact-case prefix, and not for a sibling directory of a longer name; on Windows the slash and the case do not matter; elsewhere it is the plain prefix', () => {
-  const mac = { os: 'darwin', collectorDir: '/Users/u/.asight/collector' }
-  assert.equal(isOwnPath(mac, '/Users/u/.asight/collector/ca/x.pem'), true)
-  for (const other of ['/Users/u/.asight/collector2/ca/x.pem', '/Users/u/.asight/collector', '/Users/u/corp/ca.pem', '/users/u/.asight/collector/ca/x.pem', '', null, undefined, 7]) assert.equal(isOwnPath(mac, other), false, `${String(other)}: the darwin compare is exact — APFS is case-insensitive by default, and whether darwin should get the win32 case-blind compare is the integrator's question`)
-  assert.equal(isOwnPath({ os: 'darwin', collectorDir: '/Users/u/.asight/collector/' }, '/Users/u/.asight/collector/ca/x.pem'), false, 'a trailing slash on the directory is not today\'s darwin shape (the win line normalises it away): flagged in the port report')
-  const win = { os: 'win32', collectorDir: 'C:\\Users\\u\\.asight\\collector' }
-  for (const own of ['C:/Users/u/.asight/collector/ca/x.pem', 'C:\\Users\\u\\.asight\\collector\\ca\\x.pem', 'c:/USERS/U/.asight/Collector/ca/x.pem']) assert.equal(isOwnPath(win, own), true, own)
-  for (const other of ['C:/Users/u/.asight/collector2/ca/x.pem', 'C:/Users/u/.asight/collector', 'C:/corp/ca.pem', '', null, undefined, 7]) assert.equal(isOwnPath(win, other), false, String(other))
-  assert.equal(isOwnPath({ os: 'win32', collectorDir: 'C:/Users/u/.asight/collector/' }, 'C:/Users/u/.asight/collector/ca/x.pem'), true, 'a trailing slash on the directory')
-  const lin = { os: 'linux', collectorDir: '/h/.asight/collector' }
-  assert.equal(isOwnPath(lin, '/h/.asight/collector/ca/x.pem'), true)
-  assert.equal(isOwnPath(lin, '/h/.asight/collector2/ca/x.pem'), false)
-  assert.equal(isOwnPath(lin, '/H/.ASIGHT/collector/ca/x.pem'), false, 'case counts outside Windows')
+test('isOwnPath: on macOS a path is trocar\'s when it is under the collector directory as the plain exact-case prefix, and not for a sibling directory of a longer name; on Windows the slash and the case do not matter; elsewhere it is the plain prefix', () => {
+  const mac = { os: 'darwin', collectorDir: '/Users/u/.trocar/collector' }
+  assert.equal(isOwnPath(mac, '/Users/u/.trocar/collector/ca/x.pem'), true)
+  for (const other of ['/Users/u/.trocar/collector2/ca/x.pem', '/Users/u/.trocar/collector', '/Users/u/corp/ca.pem', '/users/u/.trocar/collector/ca/x.pem', '', null, undefined, 7]) assert.equal(isOwnPath(mac, other), false, `${String(other)}: the darwin compare is exact — APFS is case-insensitive by default, and whether darwin should get the win32 case-blind compare is the integrator's question`)
+  assert.equal(isOwnPath({ os: 'darwin', collectorDir: '/Users/u/.trocar/collector/' }, '/Users/u/.trocar/collector/ca/x.pem'), false, 'a trailing slash on the directory is not today\'s darwin shape (the win line normalises it away): flagged in the port report')
+  const win = { os: 'win32', collectorDir: 'C:\\Users\\u\\.trocar\\collector' }
+  for (const own of ['C:/Users/u/.trocar/collector/ca/x.pem', 'C:\\Users\\u\\.trocar\\collector\\ca\\x.pem', 'c:/USERS/U/.trocar/Collector/ca/x.pem']) assert.equal(isOwnPath(win, own), true, own)
+  for (const other of ['C:/Users/u/.trocar/collector2/ca/x.pem', 'C:/Users/u/.trocar/collector', 'C:/corp/ca.pem', '', null, undefined, 7]) assert.equal(isOwnPath(win, other), false, String(other))
+  assert.equal(isOwnPath({ os: 'win32', collectorDir: 'C:/Users/u/.trocar/collector/' }, 'C:/Users/u/.trocar/collector/ca/x.pem'), true, 'a trailing slash on the directory')
+  const lin = { os: 'linux', collectorDir: '/h/.trocar/collector' }
+  assert.equal(isOwnPath(lin, '/h/.trocar/collector/ca/x.pem'), true)
+  assert.equal(isOwnPath(lin, '/h/.trocar/collector2/ca/x.pem'), false)
+  assert.equal(isOwnPath(lin, '/H/.TROCAR/collector/ca/x.pem'), false, 'case counts outside Windows')
 })
 
 

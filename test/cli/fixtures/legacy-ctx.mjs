@@ -1,5 +1,5 @@
-// test/cli/fixtures/legacy-ctx.mjs — what a test of the old capture on a platform without the new collector hands to `asight on | off | status | uninstall`: a sandbox HOME that holds
-// what the old commands (`desktop on`, `monitor on`) leave on a Mac — the Clash Verge Script.js with asight's block and the runtime config with its route, the three LaunchAgents, the CC-CLI
+// test/cli/fixtures/legacy-ctx.mjs — what a test of the old capture on a platform without the new collector hands to `trocar on | off | status | uninstall`: a sandbox HOME that holds
+// what the old commands (`desktop on`, `monitor on`) leave on a Mac — the Clash Verge Script.js with trocar's block and the runtime config with its route, the three LaunchAgents, the CC-CLI
 // steer and its stash — a launchd that remembers what is loaded, a login environment, a keychain, and a Clash core that answers on a real unix socket and says what it is asked.
 // Nothing here reaches the machine the tests run on (0.1 §3): every OS tool goes to the fake runner, HOME is a temp directory, the core is a socket in it.
 import fs from 'node:fs'
@@ -9,24 +9,24 @@ import { tmpDir } from '../../helpers/tmp.mjs'
 import { injectScript, DESKTOP_RULE, PROXY_NAME } from '../../../src/capture/desktop-steer.mjs'
 
 export const NO_OP = '// Define main function (script entry)\nfunction main(config, profileName) { return config; }\n'
-/** A custom global Script: stripping asight's block gives these bytes back exactly (1.6 R2). */
+/** A custom global Script: stripping trocar's block gives these bytes back exactly (1.6 R2). */
 export const USER_MAIN = '// my rules\nfunction main(config, profileName) {\n  config.rules = config.rules || [];\n  config.rules.push("DOMAIN,example.com,DIRECT");\n  return config;\n}\n'
 /** The runtime config after a Verge regen with the durable Script.js in place (serde_yaml block style: the route is there, unmarked). */
 export const RT_REGEN = ['mixed-port: 7897', 'proxies:', '- name: atrace-mitm', '  type: http', '  server: 127.0.0.1', '  port: 9898', '- name: VPN', '  type: ss', 'rules:', `- ${DESKTOP_RULE}`, '- MATCH,VPN', ''].join('\n')
 export const RT_CLEAN = RT_REGEN.replace('- name: atrace-mitm\n  type: http\n  server: 127.0.0.1\n  port: 9898\n', '').replace(`- ${DESKTOP_RULE}\n`, '')
 export const CA_CN = 'atrace local MITM CA'
 export const KEYCHAIN = (home) => path.join(home, 'Library', 'Keychains', 'login.keychain-db')
-const LABELS = ['com.asight.mitm', 'com.asight.monitor', 'com.asight.env']
+const LABELS = ['com.trocar.mitm', 'com.trocar.monitor', 'com.trocar.env']
 
 /** The plist text `launchctl` would be loaded from: the env primer carries the CA path it sets. */
-export const plistText = (label, caPath) => `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>\n  <key>Label</key><string>${label}</string>\n  <key>ProgramArguments</key><array>\n${label === 'com.asight.env' ? `    <string>/bin/launchctl</string>\n    <string>setenv</string>\n    <string>NODE_EXTRA_CA_CERTS</string>\n    <string>${caPath}</string>` : '    <string>/usr/local/bin/node</string>\n    <string>/x/asight.mjs</string>\n    <string>mitm</string>'}\n  </array>\n</dict></plist>\n`
+export const plistText = (label, caPath) => `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>\n  <key>Label</key><string>${label}</string>\n  <key>ProgramArguments</key><array>\n${label === 'com.trocar.env' ? `    <string>/bin/launchctl</string>\n    <string>setenv</string>\n    <string>NODE_EXTRA_CA_CERTS</string>\n    <string>${caPath}</string>` : '    <string>/usr/local/bin/node</string>\n    <string>/x/trocar.mjs</string>\n    <string>mitm</string>'}\n  </array>\n</dict></plist>\n`
 
 /**
- * A HOME the way the old commands leave a Mac. `block` / `runtime`: asight's route is in Script.js / in the runtime config; `agents`: which LaunchAgents are installed (and loaded); `steer`: the CC-CLI
+ * A HOME the way the old commands leave a Mac. `block` / `runtime`: trocar's route is in Script.js / in the runtime config; `agents`: which LaunchAgents are installed (and loaded); `steer`: the CC-CLI
  * steer with its stash (`displaced` is what it displaced); `userMain`: the user's own global Script under the block; `ca: false`: no CA yet (`on` generates it); `verge: false`: no Clash Verge at all.
  */
 export function macHome({ block = true, runtime = true, agents = LABELS, steer = true, userMain = NO_OP, displaced = {}, ca = true, verge: withVerge = true } = {}) {
-  const home = tmpDir('asight-legacy-platform-')
+  const home = tmpDir('trocar-legacy-platform-')
   const verge = path.join(home, 'Library', 'Application Support', 'io.github.clash-verge-rev.clash-verge-rev')
   const script = path.join(verge, 'profiles', 'Script.js'), runtimePath = path.join(verge, 'clash-verge.yaml')
   if (withVerge) {
@@ -34,7 +34,7 @@ export function macHome({ block = true, runtime = true, agents = LABELS, steer =
     fs.writeFileSync(script, block ? injectScript(userMain, 9898) : userMain)
     fs.writeFileSync(runtimePath, runtime ? RT_REGEN : RT_CLEAN)
   }
-  const caPath = path.join(home, '.asight', 'ca', 'atrace-ca.crt')
+  const caPath = path.join(home, '.trocar', 'ca', 'atrace-ca.crt')
   if (ca) { fs.mkdirSync(path.dirname(caPath), { recursive: true }); fs.writeFileSync(caPath, '-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n') }
   const la = path.join(home, 'Library', 'LaunchAgents'); fs.mkdirSync(la, { recursive: true })
   for (const label of agents) fs.writeFileSync(path.join(la, `${label}.plist`), plistText(label, caPath))
@@ -52,7 +52,7 @@ export function macHome({ block = true, runtime = true, agents = LABELS, steer =
  * `list <label>` is 0 for a loaded label (with a PID when it has one) and 113 otherwise; `unload <plist>` takes the label out (after `onUnload(label)`, which a test hangs the MITM's SIGTERM on); `load <plist>` of a label in `failLoad` is refused (exit 5); `getenv` answers
  * `env`; `security find-certificate` is 0 while `keychain` is true and 44 after the delete.
  */
-export function fakeMac({ loaded = LABELS, pids = { 'com.asight.mitm': 4242 }, env = {}, keychain = true, onUnload = () => {}, order = [], failUnload = [], failLoad = [] } = {}) {
+export function fakeMac({ loaded = LABELS, pids = { 'com.trocar.mitm': 4242 }, env = {}, keychain = true, onUnload = () => {}, order = [], failUnload = [], failLoad = [] } = {}) {
   const calls = []
   const state = { loaded: new Set(loaded), env: { ...env }, keychain }
   const run = (file, args) => {
@@ -89,7 +89,7 @@ export function fakeMac({ loaded = LABELS, pids = { 'com.asight.mitm': 4242 }, e
 /** The Clash core on a real unix socket in a temp dir (the way test/capture/desktop-steer.test.mjs has it): GET /version, GET /proxies, PUT /configs {payload}; `live` follows the last payload. `onRequest`
  *  is awaited before each answer (a test looks at the world at that instant); `breakProxies` makes its proxy list unreadable (the reload is accepted, the read-back is not). */
 export async function fakeCore({ live = true, onRequest = null, order = [], rejectAll = null, breakProxies = false } = {}) {
-  const dir = tmpDir('asight-core-')
+  const dir = tmpDir('trocar-core-')
   const sock = path.join(dir, 'm.sock')
   const state = { live, puts: [], gets: [] }
   const send = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(obj ? JSON.stringify(obj) : '') }
@@ -129,5 +129,5 @@ export function fakeClock(start = 1_000_000) {
 /** The runner of `openssl` that `generateCa` takes: writes a stub file where `-out` says, answers 0 (a real RSA-3072 key takes seconds, and this test is about what `on` does with the files). */
 export const fakeOpenssl = (file, args) => { const i = args.indexOf('-out'); if (i >= 0) fs.writeFileSync(args[i + 1], `stub ${file} ${args[0]}\n`); return { status: 0 } }
 
-export const readEvents = (home) => { try { return fs.readFileSync(path.join(home, '.asight', 'logs', 'mitm-events.ndjson'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) } catch { return [] } }
+export const readEvents = (home) => { try { return fs.readFileSync(path.join(home, '.trocar', 'logs', 'mitm-events.ndjson'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) } catch { return [] } }
 export { LABELS }

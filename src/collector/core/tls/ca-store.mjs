@@ -1,6 +1,6 @@
 // ca-store.mjs — the collector CA on disk (RFC 4.6 §身份与信任「CA」, D36, acceptance T9). The private
-// key lives in the operator's own ~/.asight/collector/ca/ca.key (0600, dir 0700) — never in the legacy
-// MITM CA dirs (~/.asight/ca, ~/.atrace/ca: a second CA with the same CN once broke Desktop networking), never in any trust store, never rotated (agents read
+// key lives in the operator's own ~/.trocar/collector/ca/ca.key (0600, dir 0700) — never in the legacy
+// MITM CA dirs (~/.trocar/ca, ~/.atrace/ca: a second CA with the same CN once broke Desktop networking), never in any trust store, never rotated (agents read
 // the PEM once at start). Half pairs: key without PEM means a mint crashed before the PEM was written,
 // so nothing can trust it yet → mint again; PEM without key may already be injected into agents →
 // refuse rather than silently replace it.
@@ -10,9 +10,9 @@ import { X509Certificate } from 'node:crypto'
 import { createCa } from './ca.mjs'
 import { pemToDer } from './cert.mjs'
 
-export const COLLECTOR_CA_CN = 'asight collector CA'
+export const COLLECTOR_CA_CN = 'trocar collector CA'
 
-export const caPaths = (dir) => ({ dir, key: path.join(dir, 'ca.key'), pem: path.join(dir, 'asight-ca.pem') })
+export const caPaths = (dir) => ({ dir, key: path.join(dir, 'ca.key'), pem: path.join(dir, 'trocar-ca.pem') })
 
 function writeAtomic(fs, file, text, mode) {
   const tmp = `${file}.tmp-${process.pid}`
@@ -42,7 +42,7 @@ export function loadOrCreateCa({ dir, fs = nodeFs }) {
 }
 
 // The CA as installed, or {error, code, which, file} saying which file could not be read and why — an unreadable CA is
-// "CA unusable", never "not installed" (D38 D-4). The daemon only reads it: `asight collector install` mints it,
+// "CA unusable", never "not installed" (D38 D-4). The daemon only reads it: `trocar collector install` mints it,
 // inside the install manifest, so uninstall finds and removes it (4.6 §安装清单与卸载).
 export function readCa({ dir, fs = nodeFs }) {
   const p = caPaths(dir)
@@ -54,7 +54,7 @@ export function readCa({ dir, fs = nodeFs }) {
   return { keyPem: key.text, certPem: cert.text, created: false, paths: p }
 }
 
-/** The `file` custody of 4.11 P1 (Linux): today's ca.key + asight-ca.pem under `dir`. It has no issueIntermediate, so the issuer
+/** The `file` custody of 4.11 P1 (Linux): today's ca.key + trocar-ca.pem under `dir`. It has no issueIntermediate, so the issuer
  *  signs leaves with the root as today (core/tls/issuer.mjs); `read` is readCa, for that issuer. */
 export function fileCustody({ dir, fs = nodeFs }) {
   const p = caPaths(dir)

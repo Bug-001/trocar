@@ -1,4 +1,4 @@
-// test/server/control-setup.test.mjs — 4.4 #13 (§控制面 Set up, D65④ · D26②; 1.6 §3.2 V67): POST /control/setup runs `asight install`'s own
+// test/server/control-setup.test.mjs — 4.4 #13 (§控制面 Set up, D65④ · D26②; 1.6 §3.2 V67): POST /control/setup runs `trocar install`'s own
 // function for one harness. A REAL startDaemon (test/helpers/model-daemon.mjs) mounts the board; its query worker is the real one
 // (test/helpers/worker-fork.mjs) with the deps module of test/helpers/board-world.mjs, whose key custody and user root store are files shared by
 // the test, the daemon and the worker (sharedTrust). Harness A (codex) is installed; harness B (z-code: a present form whose carrier is not the
@@ -26,14 +26,14 @@ import { validateReceipt } from '../../src/cli/schema.mjs'
 
 const A = 'codex', B = 'z-code' // B: its CLI form is present when ~/.zcode is, and carries the root through a config key (a carrier of its own)
 const HELPER = { close: async () => {}, call: async (verb) => { if (verb === 'ps') return { procs: [] }; throw Object.assign(new Error(`not in this stand-in: ${verb}`), { code: 'helper-verb-error' }) } }
-const FLOWS = '.asight/collector/flows/' // the run's records (install-note): every install run appends one
+const FLOWS = '.trocar/collector/flows/' // the run's records (install-note): every install run appends one
 const quiet = (snap) => Object.fromEntries(Object.entries(snap).filter(([k]) => !k.startsWith(FLOWS)))
 const items = (w) => itemsOfPhase(readManifest(w.dir), 'install')
 
 /** A model world with A installed through install's own function, the board's port recorded, and a daemon serving it; `run(ctx)` inside. */
 async function withBoard(platform, run) {
   const w = await modelWorld({ os: platform, commands: [A] })
-  const state = tmpDir('asight-trust-')
+  const state = tmpDir('trocar-trust-')
   const trust = sharedTrust(state)
   assert.equal((await w.install({ custody: trust.custody, rootStore: trust.rootStore, unit: standInUnit(w.home) })).exit, 0)
   // the board's port as install records it, then moved to a port the OS hands out: tests running side by side never meet on one board (a 403)
@@ -81,11 +81,11 @@ for (const platform of ['darwin', 'win32']) {
       const rel = (p) => path.relative(w.home, p).split(path.sep).join('/')
       const mine = items(w).filter((i) => i.harness === B)
       assert.ok(mine.length && mine.every((i) => fs.existsSync(i.path)), 'B\'s carrier written and recorded')
-      // A's carriers, the root's items, the login entry and asight-off: byte for byte as they were
+      // A's carriers, the root's items, the login entry and trocar-off: byte for byte as they were
       const after = snapshot(w.home)
       for (const i of held.filter((x) => x.harness !== B && x.path && before[rel(x.path)])) assert.equal(after[rel(i.path)], before[rel(i.path)], i.path)
-      for (const f of Object.keys(before).filter((k) => !k.startsWith('.asight/'))) if (!mine.some((i) => rel(i.path) === f)) assert.equal(after[f], before[f], f)
-      assert.deepEqual([after['asight-unit'], after['asight-unit.enabled']], [before['asight-unit'], before['asight-unit.enabled']], 'the login entry neither rewritten nor registered (its stand-in\'s text is per process)')
+      for (const f of Object.keys(before).filter((k) => !k.startsWith('.trocar/'))) if (!mine.some((i) => rel(i.path) === f)) assert.equal(after[f], before[f], f)
+      assert.deepEqual([after['trocar-unit'], after['trocar-unit.enabled']], [before['trocar-unit'], before['trocar-unit.enabled']], 'the login entry neither rewritten nor registered (its stand-in\'s text is per process)')
       assert.ok(!('autostart' in ok.json), 'Set up does not report on a login entry it did not touch')
       assert.deepEqual(trust.calls().slice(calls0).filter((c) => !['exists', 'has'].includes(c)), [], 'the root was read back, nothing asked')
       // status --json's harnesses[B].setup is this judgement (4.11 P4b; the board's test world has no OS network facts to draw the rest)
@@ -110,7 +110,7 @@ for (const platform of ['darwin', 'win32']) {
     })
   })
 
-  test(`${platform} · 4.11 ㉒: the root key gone before a Set up — no new root for one harness; pending names asight install, no byte of A's or the store's changes`, { timeout: 60_000 }, async () => {
+  test(`${platform} · 4.11 ㉒: the root key gone before a Set up — no new root for one harness; pending names trocar install, no byte of A's or the store's changes`, { timeout: 60_000 }, async () => {
     await withBoard(platform, async ({ w, post, trust, state }) => {
       fs.rmSync(path.join(state, 'custody.json'))
       fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
@@ -119,14 +119,14 @@ for (const platform of ['darwin', 'win32']) {
       const r = await post({ harness: B, confirm: p.json.plan_id })
       assert.equal(r.status, 200, r.body)
       assert.deepEqual(validateReceipt(r.json), [], r.body)
-      assert.ok(r.json.pending.some((x) => x.item === 'root-key' && x.command === 'asight install'), r.body)
+      assert.ok(r.json.pending.some((x) => x.item === 'root-key' && x.command === 'trocar install'), r.body)
       const rel = (f) => path.relative(w.home, f).split(path.sep).join('/'), after = snapshot(w.home)
       for (const i of held.filter((x) => x.path && before[rel(x.path)])) assert.equal(after[rel(i.path)], before[rel(i.path)], i.path)
       assert.deepEqual(trust.calls().slice(calls0).filter((c) => !['exists', 'has'].includes(c)), [], 'no key made, no root removed or added')
     })
   })
 
-  test(`${platform} · 4.4 #13 「Set up 的三件实话」: a root not in the store and a dialog nobody answers → pending with asight install; B's carrier placed all the same`, { timeout: 60_000 }, async () => {
+  test(`${platform} · 4.4 #13 「Set up 的三件实话」: a root not in the store and a dialog nobody answers → pending with trocar install; B's carrier placed all the same`, { timeout: 60_000 }, async () => {
     await withBoard(platform, async ({ w, post, trust }) => {
       trust.setStore({ held: [], answer: 'pending' })
       fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
@@ -137,18 +137,18 @@ for (const platform of ['darwin', 'win32']) {
       assert.equal(r.status, 200, r.body)
       assert.deepEqual(validateReceipt(r.json), [], r.body)
       assert.equal(r.json.ok, false)
-      assert.ok(r.json.pending.some((x) => x.item === 'root-store' && x.state === 'pending' && x.command === 'asight install'), r.body)
+      assert.ok(r.json.pending.some((x) => x.item === 'root-store' && x.state === 'pending' && x.command === 'trocar install'), r.body)
       assert.ok(r.json.carriers.some((c) => c.harness === B && c.state === 'placed'), r.body)
       assert.ok(items(w).some((i) => i.harness === B && fs.existsSync(i.path)))
     })
   })
 
-  test(`${platform} · 4.4 「Set up 的三件实话」: a root prompt that outlasts the query deadline — the worker is not killed; the receipt is pending with asight install, B's carrier placed`, { timeout: 60_000 }, async () => {
+  test(`${platform} · 4.4 「Set up 的三件实话」: a root prompt that outlasts the query deadline — the worker is not killed; the receipt is pending with trocar install, B's carrier placed`, { timeout: 60_000 }, async () => {
     await withBoard(platform, async ({ w, trust, deps }) => {
       trust.setStore({ held: [], answer: 'pending', delayMs: 1500 })
       fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true })
       const failures = []
-      const svc = createQueryService({ home: path.join(w.home, '.asight'), fork: (h) => workerFork(h, deps), deadlineMs: 500, failure: (where, e) => failures.push(e.message) })
+      const svc = createQueryService({ home: path.join(w.home, '.trocar'), fork: (h) => workerFork(h, deps), deadlineMs: 500, failure: (where, e) => failures.push(e.message) })
       const ask = (body) => new Promise((resolve, reject) => {
         const res = { chunks: [], writeHead(st) { this.status = st }, write(b) { this.chunks.push(b); return true }, end() { resolve({ status: this.status, json: JSON.parse(Buffer.concat(this.chunks)) }) }, once() {} }
         svc.control({ verb: 'setup', body, res }).catch(reject)
@@ -157,7 +157,7 @@ for (const platform of ['darwin', 'win32']) {
         const p = await ask({ harness: B })
         const r = await ask({ harness: B, confirm: p.json.plan_id })
         assert.equal(r.status, 200, JSON.stringify(r.json))
-        assert.ok(r.json.pending.some((x) => x.item === 'root-store' && x.command === 'asight install'), JSON.stringify(r.json))
+        assert.ok(r.json.pending.some((x) => x.item === 'root-store' && x.command === 'trocar install'), JSON.stringify(r.json))
         assert.ok(r.json.carriers.some((c) => c.harness === B && c.state === 'placed'), JSON.stringify(r.json))
         assert.deepEqual(failures, [])
       } finally { svc.stop() }
@@ -166,10 +166,10 @@ for (const platform of ['darwin', 'win32']) {
 }
 
 test('4.4 #13 · 4.11 P4b: on Linux the board has no Set up — POST /control/setup is 405 and nothing is written', async () => {
-  const home = tmpDir('asight-setup-linux-')
-  fs.mkdirSync(path.join(home, '.asight'))
+  const home = tmpDir('trocar-setup-linux-')
+  fs.mkdirSync(path.join(home, '.trocar'))
   const home0 = snapshot(home)
-  const { server } = createServer({ home: path.join(home, '.asight'), token: 't', uid: 501, platform: 'linux', query: { relay: () => assert.fail('relayed'), control: () => assert.fail('relayed'), warm: () => {} } })
+  const { server } = createServer({ home: path.join(home, '.trocar'), token: 't', uid: 501, platform: 'linux', query: { relay: () => assert.fail('relayed'), control: () => assert.fail('relayed'), warm: () => {} } })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   try {
     const r = await request(server.address().port, '/control/setup', { method: 'POST', headers: { 'content-type': 'application/json', [CONTROL_TOKEN_HEADER]: 't' }, body: JSON.stringify({ harness: B }) })

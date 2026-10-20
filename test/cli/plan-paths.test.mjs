@@ -19,7 +19,7 @@ function pathsIn(doc, home) {
   return out
 }
 const diff = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k] && a[k] !== 'dir' && b[k] !== 'dir').sort()
-// asight's own record and backups are not a plan item: the receipt side (V3) holds them out the same way — they are what the run writes ABOUT itself
+// trocar's own record and backups are not a plan item: the receipt side (V3) holds them out the same way — they are what the run writes ABOUT itself
 const OWN = ['backup', 'flows', 'index', 'logs']
 const own = (rel) => OWN.some((d) => rel.split(path.sep).includes(d))
 

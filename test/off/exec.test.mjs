@@ -22,9 +22,9 @@ function refused(call, tool, why) {
 }
 
 test('execTool: under npm test a real OS tool is refused, a PATH stub in the temp dir runs, an injected runner never spawns', () => {
-  assert.equal(process.env.ASIGHT_TEST_SANDBOX, '1', 'the preload is on: run with --require ./test/helpers/no-real-os.cjs (npm test does)')
+  assert.equal(process.env.TROCAR_TEST_SANDBOX, '1', 'the preload is on: run with --require ./test/helpers/no-real-os.cjs (npm test does)')
   refused(() => execTool('launchctl', ['list'], { env: { ...process.env, PATH: '/bin:/usr/bin' } }), 'launchctl')
-  const bin = tmpDir('asight-exec-'); fs.writeFileSync(path.join(bin, 'launchctl'), '#!/bin/sh\necho stub "$@"\n', { mode: 0o755 })
+  const bin = tmpDir('trocar-exec-'); fs.writeFileSync(path.join(bin, 'launchctl'), '#!/bin/sh\necho stub "$@"\n', { mode: 0o755 })
   assert.match(execTool('launchctl', ['list'], { env: { ...process.env, PATH: bin } }).out, /^stub list/)
   const seen = []
   assert.equal(execTool('systemctl', ['--user', 'stop', 'x'], { run: (f, a) => { seen.push([f, ...a]); return { status: 0, stdout: '', stderr: '' } } }).code, 0)
@@ -45,12 +45,12 @@ test('execTool: an absolute path to a real binary is refused too (not only a PAT
 })
 
 test('execTool: a stub that is a symlink to a real binary is refused (the check follows the link)', () => {
-  const bin = tmpDir('asight-exec-'); fs.symlinkSync('/bin/sh', path.join(bin, 'launchctl'))
+  const bin = tmpDir('trocar-exec-'); fs.symlinkSync('/bin/sh', path.join(bin, 'launchctl'))
   refused(() => execTool('launchctl', ['-c', 'true'], { env: { ...process.env, PATH: bin } }), 'launchctl')
 })
 
 test('execTool: a stub outside the temp dir is refused (a script in the repo or in $HOME is not a sandbox)', () => {
-  const home = fs.mkdtempSync(path.join(REPO, 'test', 'off', 'asight-notmp-')) // not under os.tmpdir()
+  const home = fs.mkdtempSync(path.join(REPO, 'test', 'off', 'trocar-notmp-')) // not under os.tmpdir()
   try {
     stub(home, 'systemctl', 'echo ran')
     refused(() => execTool('systemctl', [], { env: { ...process.env, PATH: home } }), 'systemctl')
@@ -58,14 +58,14 @@ test('execTool: a stub outside the temp dir is refused (a script in the repo or 
 })
 
 test('execTool: a stub in a sibling directory whose name merely starts with the temp dir\'s is refused (the prefix is a path, not a string)', () => {
-  const base = tmpDir('asight-exec-'), tmp = path.join(base, 'tmp'), sibling = path.join(base, 'tmp-evil')
+  const base = tmpDir('trocar-exec-'), tmp = path.join(base, 'tmp'), sibling = path.join(base, 'tmp-evil')
   for (const d of [tmp, sibling]) { fs.mkdirSync(d); stub(d, 'launchctl', 'echo ran') }
   // a child with TMPDIR = `tmp`, so os.tmpdir() there is that directory; two stubs, one inside it and one beside it
   const script = `import { execTool } from ${JSON.stringify(new URL('../../src/off/exec.mjs', import.meta.url).href)}
 const env = { ...process.env, PATH: process.argv[1] }
 const tryIt = () => { try { return execTool('launchctl', [], { env }).out } catch (e) { return e.code } }
 console.log(JSON.stringify([tryIt()]))`
-  const run = (dir) => JSON.parse(spawnSync(process.execPath, ['--input-type=module', '-e', script, dir], { env: { ...process.env, TMPDIR: tmp, ASIGHT_TEST_SANDBOX: '1', NODE_OPTIONS: '' }, encoding: 'utf8' }).stdout)
+  const run = (dir) => JSON.parse(spawnSync(process.execPath, ['--input-type=module', '-e', script, dir], { env: { ...process.env, TMPDIR: tmp, TROCAR_TEST_SANDBOX: '1', NODE_OPTIONS: '' }, encoding: 'utf8' }).stdout)
   assert.deepEqual(run(tmp), ['ran'])
   assert.deepEqual(run(sibling), ['ESANDBOX'])
 })
@@ -76,11 +76,11 @@ test('execTool: the sandbox flag of the process is honoured even when the caller
 })
 
 test('execTool: a tool that is nowhere on PATH is refused the same way (not an ENOENT that a caller might treat as "not installed")', () => {
-  refused(() => execTool('no-such-tool-xyz', [], { env: { ...process.env, PATH: tmpDir('asight-exec-') } }), 'no-such-tool-xyz')
+  refused(() => execTool('no-such-tool-xyz', [], { env: { ...process.env, PATH: tmpDir('trocar-exec-') } }), 'no-such-tool-xyz')
 })
 
 test('execTool: a stub gets the arguments, its stdin, and its exit code, stdout and stderr come back trimmed', () => {
-  const bin = tmpDir('asight-exec-')
+  const bin = tmpDir('trocar-exec-')
   stub(bin, 'security', 'read -r line; echo "$line"; echo "args:$1,$2"; echo oops >&2; exit 3') // shell built-ins only: PATH is just this dir
   const r = execTool('security', ['find-certificate', '-a'], { env: { ...process.env, PATH: bin }, input: 'in-line\n' })
   assert.deepEqual(r, { code: 3, out: 'in-line\nargs:find-certificate,-a', err: 'oops' })
@@ -101,7 +101,7 @@ test('execTool: an injected runner is called with (file, args, options) and its 
 })
 
 test('execTool: outside a test (no sandbox flag) it is a plain spawn: the code, output and a timeout come back; a missing tool is code null with the reason', () => {
-  const env = { ...process.env, PATH: '/bin:/usr/bin' }; delete env.ASIGHT_TEST_SANDBOX; delete env.NODE_OPTIONS; delete env.NODE_TEST_CONTEXT
+  const env = { ...process.env, PATH: '/bin:/usr/bin' }; delete env.TROCAR_TEST_SANDBOX; delete env.NODE_OPTIONS; delete env.NODE_TEST_CONTEXT
   const script = `import { execTool } from ${JSON.stringify(new URL('../../src/off/exec.mjs', import.meta.url).href)}
 console.log(JSON.stringify([execTool('echo', ['hi']), execTool('sh', ['-c', 'exit 4']), execTool('sleep', ['5'], { timeoutMs: 150 }), execTool('no-such-tool-xyz', [])]))`
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8', timeout: 30000 })
@@ -142,7 +142,7 @@ function childProcessUsers(root) {
 test('0.1 §3 src/off, src/cli and src/netenv reach node:child_process only through src/off/exec.mjs (the scan sees exec.mjs, and fails on a planted file)', () => {
   assert.ok(CHILD_PROCESS_IMPORT.test(fs.readFileSync(path.join(REPO, 'src/off/exec.mjs'), 'utf8')), 'the one allowed file still imports it (else the scan proves nothing)')
   assert.deepEqual(childProcessUsers(REPO), [])
-  const root = tmpDir('asight-cpscan-')
+  const root = tmpDir('trocar-cpscan-')
   for (const [rel, src] of [
     ['src/off/a.mjs', "import { spawnSync } from 'node:child_process'\n"],
     ['src/cli/b.mjs', "const cp = await import('node:child_process')\n"],
@@ -156,7 +156,7 @@ test('0.1 §3 src/off, src/cli and src/netenv reach node:child_process only thro
 
 test('runAsync quiet settles on the child\'s exit, not when something it started lets go of the pipes; past the timeout it is status null', { skip: process.platform === 'win32', timeout: 20_000 }, async () => {
   // the stubs' own `sleep` must resolve: with PATH = bin alone it is "not found" (127) at once, so the timeout case only passed when the machine was slow
-  const bin = tmpDir('asight-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
+  const bin = tmpDir('trocar-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
   stub(bin, 'opener', 'sleep 5 & exit 0'); stub(bin, 'stuck', 'exec sleep 5'); stub(bin, 'nope', 'exit 3')
   const t0 = Date.now()
   assert.equal((await runAsync('opener', [], { env, timeout: 3000, quiet: true })).status, 0)

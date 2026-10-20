@@ -7,14 +7,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const SPEC = fileURLToPath(new URL('../../spec/01-asight-rfc/', import.meta.url))
+const SPEC = fileURLToPath(new URL('../../spec/01-trocar-rfc/', import.meta.url))
 const read = (f) => fs.readFileSync(path.join(SPEC, f), 'utf8')
 // The units D59 / D60 rewrote: the capture envelope, the raw layer, the read side, the dashboard shell and the models they feed.
 const UNITS = ['0.0-overview.md', '2.6-detail-panel.md', '3.2-normalized-model.md', '3.3-cache-model.md', '3.4-session-identity.md',
   '3.5-query-layer.md', '4.1-capture-sources.md', '4.2-storage-etl.md', '4.4-server.md', '4.6-process-collector.md']
-const RETIRED = [/DuckDB/, /@duckdb/, /\bETL\b/, /src\/etl\//, /\.closed\b/, /asight etl\b/, /asight keep\b/, /retention\.json/]
+const RETIRED = [/DuckDB/, /@duckdb/, /\bETL\b/, /src\/etl\//, /\.closed\b/, /trocar etl\b/, /trocar keep\b/, /retention\.json/]
 
-test('D59 · D60: no data-format unit presents DuckDB, the ETL pipeline, `asight keep` or a `.closed` marker', () => {
+test('D59 · D60: no data-format unit presents DuckDB, the ETL pipeline, `trocar keep` or a `.closed` marker', () => {
   const hits = []
   for (const unit of UNITS) {
     read(unit).split('\n').forEach((line, i) => {
@@ -27,10 +27,10 @@ test('D59 · D60: no data-format unit presents DuckDB, the ETL pipeline, `asight
 
 test('D60①②: 4.2 and 4.6 state where envelopes land, when a segment is closed, and that the daemon publishes its current segment', () => {
   const storage = read('4.2-storage-etl.md'), collector = read('4.6-process-collector.md')
-  for (const re of [/~\/\.asight\/raw\/<段>\.ndjson/, /~\/\.asight\/index\//, /128 MB/]) assert.match(storage, re)
-  for (const re of [/~\/\.asight\/collector\/lock/, /`segment`/]) assert.match(storage + collector, re)
-  // only the daemon seals: no seal lock (one daemon, one queue) and no manual seal command (`asight raw` only prints records)
-  for (const re of [/seal\.lock/, /asight raw seal/]) assert.doesNotMatch(storage + collector, re)
+  for (const re of [/~\/\.trocar\/raw\/<段>\.ndjson/, /~\/\.trocar\/index\//, /128 MB/]) assert.match(storage, re)
+  for (const re of [/~\/\.trocar\/collector\/lock/, /`segment`/]) assert.match(storage + collector, re)
+  // only the daemon seals: no seal lock (one daemon, one queue) and no manual seal command (`trocar raw` only prints records)
+  for (const re of [/seal\.lock/, /trocar raw seal/]) assert.doesNotMatch(storage + collector, re)
 })
 
 test('D60②③: `<段>:<行号>` is the ONE ref shape, and the older capture files are not read, moved or touched', () => {
@@ -42,7 +42,7 @@ test('D60②③: `<段>:<行号>` is the ONE ref shape, and the older capture fi
     assert.match(unit, /capture-<(YYYY-MM-DD|日期)>\.ndjson/)
     assert.match(unit, /不向后兼容/)
   }
-  assert.doesNotMatch(capture + storage, /rename 进 `~\/\.asight\/raw\/`|<YYYYMMDD>T000000Z\.ndjson/)
+  assert.doesNotMatch(capture + storage, /rename 进 `~\/\.trocar\/raw\/`|<YYYYMMDD>T000000Z\.ndjson/)
 })
 
 test('附录 D: the reference dataset and measurement scripts live in scripts/', () => {

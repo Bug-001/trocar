@@ -92,10 +92,10 @@ export function buildEnvelope({
     // core
     ts: tsRequest, endpoint, method,
     // VERBATIM (2026-07-20). This used to be `safeHeaders(reqHeaders)`, which rewrote
-    // Authorization / x-api-key / Cookie / Proxy-Authorization to `<redacted>`. asight exists to show
+    // Authorization / x-api-key / Cookie / Proxy-Authorization to `<redacted>`. trocar exists to show
     // what really went over the wire, and that rewrite made the capture non-verbatim at exactly the
     // layer whose thesis is byte-fidelity. The risk did not disappear, it MOVED: the file now holds
-    // live credentials, so it is created 0600 and `asight doctor` hard-fails if it is readable by
+    // live credentials, so it is created 0600 and `trocar doctor` hard-fails if it is readable by
     // anyone else (src/capture/selftest.mjs::qFilePerms). See spec 4.1 §采集安全.
     req_headers: { ...reqHeaders },
     req_body, resp,
@@ -124,8 +124,8 @@ export function buildEnvelope({
 export function createEnvelopeWriter(filePath) {
   // 0600 — OWNER ONLY. Since 2026-07-20 the envelope stores request headers VERBATIM, so these bytes
   // contain live API credentials. The mode argument only applies when open() CREATES the file, so an
-  // existing capture is chmod'd too: the real ~/.asight files were 0644 when this landed, i.e. every
-  // account on the machine could read them. `asight doctor` ④b hard-fails on anything looser.
+  // existing capture is chmod'd too: the real ~/.trocar files were 0644 when this landed, i.e. every
+  // account on the machine could read them. `trocar doctor` ④b hard-fails on anything looser.
   const fd = fs.openSync(filePath, 'a', 0o600)
   try { fs.fchmodSync(fd, 0o600) } catch { /* best effort: some filesystems refuse chmod */ }
   let open = true

@@ -1,7 +1,7 @@
-// test/collector/proxymode/upstream-trust.test.mjs — 4.11 §3 ⑭: the door verifies an upstream with the agent's own trust set minus the asight root.
+// test/collector/proxymode/upstream-trust.test.mjs — 4.11 §3 ⑭: the door verifies an upstream with the agent's own trust set minus the trocar root.
 // Generated over the trust axes (stated base os | node, source env | dotenv file, its `when` absent | holding | failing; or no trust stated) × the process's state (a replace source set,
 // an add source set, none set), each verified for real: a TLS server per CA (a relay CA only in the agent's file, an OS-only CA, a Node-only CA, the
-// daemon's extra CA, the asight root) and a handshake through the context the door would use.
+// daemon's extra CA, the trocar root) and a handshake through the context the door would use.
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -15,7 +15,7 @@ import { agentTrustSet, createAgentTrust } from '../../../src/collector/core/pro
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 
 const HOST = 'up.test'
-const CAS = ['relay', 'os', 'node', 'extra', 'asight']
+const CAS = ['relay', 'os', 'node', 'extra', 'trocar']
 const ca = Object.fromEntries(CAS.map((n) => [n, createCa({ commonName: `${n} test CA` })]))
 const servers = {}
 const port = {}
@@ -34,13 +34,13 @@ const verifies = (n, secureContext) => new Promise((resolve) => {
   s.on('error', () => resolve(false))
 })
 
-const home = tmpDir('asight-ut-')
+const home = tmpDir('trocar-ut-')
 const agentFile = path.join(home, 'agent-ca.pem')
-fs.writeFileSync(agentFile, ca.relay.certPem + ca.asight.certPem) // the agent's own file holds the relay CA and (to reach the door) the asight root
+fs.writeFileSync(agentFile, ca.relay.certPem + ca.trocar.certPem) // the agent's own file holds the relay CA and (to reach the door) the trocar root
 fs.writeFileSync(path.join(home, '.env'), `SSL_CERT_FILE=${agentFile}\n`)
-const rootFp256 = new X509Certificate(ca.asight.certPem).fingerprint256
+const rootFp256 = new X509Certificate(ca.trocar.certPem).fingerprint256
 const ctx = { os: 'darwin', home, dirs: {}, readFile: (p) => fs.readFileSync(p, 'utf8'), readdir: (p) => fs.readdirSync(p), exists: (p) => fs.existsSync(p) }
-const roots = { os: async () => ca.os.certPem + ca.asight.certPem, node: [ca.node.certPem], extra: [ca.extra.certPem] } // even a base that holds the root (a user-level install) loses it
+const roots = { os: async () => ca.os.certPem + ca.trocar.certPem, node: [ca.node.certPem], extra: [ca.extra.certPem] } // even a base that holds the root (a user-level install) loses it
 const trust = createAgentTrust({ roots, rootFp256, readFile: ctx.readFile })
 
 const FROM = { env: (v) => ({ env: v }), file: () => ({ file: { base: 'home', path: '.env' }, format: 'dotenv', keys: ['SSL_CERT_FILE'] }) }
@@ -64,7 +64,7 @@ for (const c of cases) {
         os: union || (c.state !== 'replace' && c.base === 'os'), // only in the union / an os base, never beside a replace file
         node: union || (c.state !== 'replace' && c.base === 'node'),
         extra: union, // the daemon's own extra CA belongs to the union alone
-        asight: false, // never trusted upstream
+        trocar: false, // never trusted upstream
       }
       for (const n of CAS) assert.equal(await verifies(n, secureContext), want[n], `${n}-signed upstream`)
     } finally { if (c.via === 'file' && c.state === 'none') fs.renameSync(path.join(home, '.env.off'), path.join(home, '.env')) }
@@ -81,7 +81,7 @@ test('⑭ seed · claude-code default (no CLAUDE_CODE_CERT_STORE): a relay CA in
   assert.equal(set.base, 'union')
   const { secureContext } = await trust.contextFor(set)
   for (const n of ['relay', 'os', 'node']) assert.equal(await verifies(n, secureContext), true, `${n}-signed upstream`)
-  assert.equal(await verifies('asight', secureContext), false)
+  assert.equal(await verifies('trocar', secureContext), false)
 })
 
 // Regression seed (a macOS test machine run, deepseek-dsh: "splice(UNABLE_TO_VERIFY_LEAF_SIGNATURE)"): a Node agent whose stated trust adds files (no replace
@@ -94,6 +94,6 @@ test('⑭ seed · every node-runtime descriptor\'s additive trust holds the rela
   for (const [id, t] of stated) {
     const { secureContext } = await trust.contextFor(agentTrustSet({ trust: t, ctx, facts: { env: { NODE_EXTRA_CA_CERTS: agentFile }, cwd: home } }))
     assert.equal(await verifies('relay', secureContext), true, `${id}: relay-signed upstream`)
-    assert.equal(await verifies('asight', secureContext), false, `${id}: asight-signed upstream`)
+    assert.equal(await verifies('trocar', secureContext), false, `${id}: trocar-signed upstream`)
   }
 })

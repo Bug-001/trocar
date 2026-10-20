@@ -1,11 +1,11 @@
-// query.mjs — `asight query <name> [--<param> <value>...]` (RFC 1.6 §4.1, D59 · D63): the one way to read what was captured. This file parses,
+// query.mjs — `trocar query <name> [--<param> <value>...]` (RFC 1.6 §4.1, D59 · D63): the one way to read what was captured. This file parses,
 // asks src/query/client.mjs for the document and prints it; every answer a query gives is the query core's, whether the daemon's warm worker
 // computed it or this process did, so the CLI and the board cannot disagree. With no name it lists the names and their parameters. The document
 // itself is always JSON (§4.1), so `--json` changes only what an error looks like: the JSON error document instead of one English line (§1.2).
 import { EXIT } from './schema.mjs'
 import { printJson, errorDoc } from './json.mjs'
 import { wrap, WIDTH } from './text.mjs'
-import { asightHome, collectorDir } from '../off/paths.mjs'
+import { trocarHome, collectorDir } from '../off/paths.mjs'
 import { queryDocument } from '../query/client.mjs'
 
 const errText = (e) => String((e && e.message) || e)
@@ -32,16 +32,16 @@ export async function run(argv, { io, json, args, home, env, platform, deps }) {
     for (const line of await queryList()) io.out(line)
     return EXIT.ok
   }
-  if (extra.length) return refuse('usage', `asight query: one query at a time, and its parameters as --name value. Run: asight query`, EXIT.usage)
+  if (extra.length) return refuse('usage', `trocar query: one query at a time, and its parameters as --name value. Run: trocar query`, EXIT.usage)
   const { json: _json, ...params } = args.flags // `--json` is the CLI's, never a query's parameter
   try {
     // The same two spacings printJson gives: indented for a person at a terminal, one line into a pipe (§1.2) —
     // asked of whoever computes the document, so its bytes are written on as they came (D63②: the two paths print the same bytes).
-    const { text } = await queryDocument(name, params, { home: asightHome(home), userHome: home, dir: collectorDir(home), platform, env, deps, indent: io.stdout && io.stdout.isTTY ? 2 : 0 })
+    const { text } = await queryDocument(name, params, { home: trocarHome(home), userHome: home, dir: collectorDir(home), platform, env, deps, indent: io.stdout && io.stdout.isTTY ? 2 : 0 })
     io.out(text)
     return EXIT.ok
   } catch (e) {
     if (e && e.name === 'QueryArgError') return refuse('usage', errText(e), EXIT.usage)
-    return refuse('unreadable', `asight query ${name}: no document could be produced: ${errText(e)}`, EXIT.incomplete)
+    return refuse('unreadable', `trocar query ${name}: no document could be produced: ${errText(e)}`, EXIT.incomplete)
   }
 }

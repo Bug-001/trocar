@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { lockState, procIdentity, captureHealth, LOCK_FRESH_MS } from '../../src/health/read.mjs'
 
-function box() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-lock-')); return { dir, file: path.join(dir, 'lock'), done: () => fs.rmSync(dir, { recursive: true, force: true }) } }
+function box() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-lock-')); return { dir, file: path.join(dir, 'lock'), done: () => fs.rmSync(dir, { recursive: true, force: true }) } }
 const LOCK = { pid: 4242, start_time: '9000', boot_id: 'b-1', helper_pid: 4243, engine_port: 7000, socket: '/run/s' }
 const same = () => ({ start_time: '9000', boot_id: 'b-1' })
 
@@ -38,7 +38,7 @@ test('lockState: none / running / unresponsive / stale (pid dead, reused, reboot
 })
 
 test('procIdentity reads /proc/<pid>/stat field 22 and the boot id; nothing readable is null', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-proc-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-proc-'))
   try {
     fs.mkdirSync(path.join(root, '77')); fs.writeFileSync(path.join(root, '77', 'stat'), `77 (a b) c) S 1 ${'0 '.repeat(17)}31337 0 0\n`)
     fs.mkdirSync(path.join(root, 'sys', 'kernel', 'random'), { recursive: true }); fs.writeFileSync(path.join(root, 'sys', 'kernel', 'random', 'boot_id'), 'abc-def\n')
@@ -49,7 +49,7 @@ test('procIdentity reads /proc/<pid>/stat field 22 and the boot id; nothing read
 
 // ── the switch as state.json version 2 says it (1.6 §1.5; the board's "capture off since T") ──────────────────────────────────────
 test('captureHealth reads state.json per harness: all on → on, none → off, some → mixed, with since = the newest per-harness updated_at; version 1 still reads', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-sw-read-'))
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-sw-read-'))
   const dir = path.join(home, 'collector'); fs.mkdirSync(dir, { recursive: true })
   const put = (v) => fs.writeFileSync(path.join(dir, 'state.json'), typeof v === 'string' ? v : JSON.stringify(v))
   const sw = () => captureHealth({ home, now: Date.parse('2026-10-07T12:00:00Z'), alive: () => false }).collector.switch

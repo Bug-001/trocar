@@ -54,7 +54,7 @@ export function handshake(req) {
 
 export function accept(io, up, scenario) {
   const h = { upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-accept': acceptKey(up.key), ...(up.deflate ? { 'sec-websocket-extensions': up.deflate.response } : {}),
-    date: new Date().toUTCString(), server: 'asight-mock-upstream', 'x-request-id': `req_mock_${randomBytes(12).toString('hex')}`, 'x-mock-scenario': scenario }
+    date: new Date().toUTCString(), server: 'trocar-mock-upstream', 'x-request-id': `req_mock_${randomBytes(12).toString('hex')}`, 'x-mock-scenario': scenario }
   io.status = 101
   io.send(statusLine(101) + Object.entries(h).map(([k, v]) => `${k}: ${v}\r\n`).join('') + '\r\n')
   return true

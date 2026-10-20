@@ -1,8 +1,8 @@
 // test/collector/f-group.test.mjs — RFC 4.6 验收 F 组 (D38 「失败不静默」), one runnable check per F item. Each check
 // makes the failure happen in the real component (the daemon over the fake helper and a synthetic /proc, the engine
 // with real TLS clients, install / uninstall, the sealer), then asserts what F asks of every item: (i) a durable record
-// on disk with a closed reason code; (ii) GET /api/capture-health — over HTTP, from a real `asight serve` server —
-// shows the same reason; and for the daemon side (iii) `asight collector status` lists it with no daemon running.
+// on disk with a closed reason code; (ii) GET /api/capture-health — over HTTP, from a real `trocar serve` server —
+// shows the same reason; and for the daemon side (iii) `trocar collector status` lists it with no daemon running.
 //   Where an F item is checked elsewhere, the test that does is named in place (F5, F8, F9). No `todo` is left: the
 // engine's connection-row codes (C2 T-1 / T-2 / T-4 / T-11..T-15) and the combined-bundle check (D-21) landed with the
 // merge of the lanes, and the last one, F5's WebSocket labels vs the top bar, with the decision of
@@ -54,13 +54,13 @@ const CC_EXE = '/home/u/.local/share/claude/versions/2.1.289'
 const fileRoots = (file) => () => osBundleRoots({ files: [file] })
 function fakeArch(p, extraEnv = {}) {
   const clients = []
-  const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0 }); clients.push(c); return c }
+  const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1', ...extraEnv }, autoHeartbeatMs: 0 }); clients.push(c); return c }
   return { clients, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) } }
 }
 function sandbox() {
   const root = tmpDir('as-f-') // short: unix socket paths are length-limited
   const home = path.join(root, 'home'); fs.mkdirSync(home)
-  return { root, home, asight: path.join(home, '.asight'), collector: path.join(home, '.asight', 'collector'), sock: path.join(root, 'run', 'c.sock'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
+  return { root, home, trocar: path.join(home, '.trocar'), collector: path.join(home, '.trocar', 'collector'), sock: path.join(root, 'run', 'c.sock'), done: () => fs.rmSync(root, { recursive: true, force: true }) }
 }
 const req = (sock, method, p, body) => controlRequest({ socketPath: sock, method, path: p, body })
 async function until(fn, ms = 4000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 20)) } }
@@ -75,15 +75,15 @@ const flowsOf = (s) => {
   for (const l of lines) assert.deepEqual(checkRecord(l), [], `outside the closed sets: ${JSON.stringify(l)}`)
   return lines
 }
-// (ii): the reader `asight status` prints from — the board has no capture-health route of its own any
+// (ii): the reader `trocar status` prints from — the board has no capture-health route of its own any
 // more (D59: it reads the named queries, and this document is the `status` command's). A home it
 // cannot read throws, which the command states; here that is reported as the same 503 shape the HTTP
 // route used to answer, so every assertion below still reads one way.
 async function endpoint(s) {
-  try { return { status: 200, ...captureHealth({ home: s.asight }) } }
+  try { return { status: 200, ...captureHealth({ home: s.trocar }) } }
   catch (e) { if (e instanceof HealthUnreadable) return { status: 503, error: `capture health could not be read: ${e.message}` }; throw e }
 }
-// (iii): `asight collector status` with no daemon answering — it reads the disk
+// (iii): `trocar collector status` with no daemon answering — it reads the disk
 async function statusOffline(s) {
   const o = []
   const code = await runStatusCli(['--failures'], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home,
@@ -131,7 +131,7 @@ async function scene({ reply, got = null, daemon = {}, policy = null } = {}) { /
     return raw
   }
   const rows = () => flowsOf(s).filter((f) => f.event == null && f.flow_id) // the connection rows
-  const extraCc = path.join(s.collector, 'ca', 'extra-cc.pem') // what the agent trusts: the relay CA + asight's
+  const extraCc = path.join(s.collector, 'ca', 'extra-cc.pem') // what the agent trusts: the relay CA + trocar's
   let stopped = false
   const stop = async () => { if (!stopped) { stopped = true; await d.stop() } }
   return { s, p, up, d, inject, rows, extraCc, stop, done: async () => { await stop(); up.close(); p.done(); s.done() } }
@@ -161,7 +161,7 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
     // (e)
     const note = h.collector.install.install.find((n) => n.kind === 'skipped-block')
     assert.deepEqual([note.file, note.type], [relayCa, 'PRIVATE KEY'], '(e) the last install lists the block it did not carry over')
-    // (b) a trusted agent whose TLS client does not trust the asight CA after all
+    // (b) a trusted agent whose TLS client does not trust the trocar CA after all
     p.add(7171, { uid: UID, exe: CC_EXE, argv: ['claude'], cwd: s.home, env: { HOME: s.home }, startTicks: nowTicks(p) })
     await clients[0].raw({ op: '__emit', ev: 'exec', tgid: 7171, pid: 7171, comm: 'claude', filename: CC_EXE, ts_ns: 6 })
     await until(async () => (await req(s.sock, 'GET', '/status')).agents.find((a) => a.pid === 7171 && a.trusted))
@@ -315,7 +315,7 @@ test('F3 parts: off, a helper death (degraded), a SIGHUP stop and its clean rest
   assert.ok(stop, '(iii) the offline document lists the helper death')
   assert.equal(stop.reason, flowsOf(s).filter((r) => r.event === 'helper-down').at(-1).reason, '(iii) the condition as of the stop, verbatim (C.3)')
   // (d) a helper speaking another protocol: never attaches; no "unclean stop" after a SIGHUP (h)
-  d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, { ASIGHT_FAKE_PROTO: '3' }).arch, harnesses: [cc] })
+  d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, { TROCAR_FAKE_PROTO: '3' }).arch, harnesses: [cc] })
   try {
     await req(s.sock, 'POST', '/on', {})
     h = await endpoint(s)
@@ -407,15 +407,15 @@ test('F6 install / uninstall: an entry uninstall cannot undo → exit-worthy `le
   assert.deepEqual([h.summary.state, h.summary.n], ['residue', 1], '未安装 · 残留 1 项')
   assert.ok(keys(h).includes('uninstall/left-unparsable'))
   const st = await statusOffline(s)
-  assert.match(st.text, /^ {2}Certificate {2}not installed; run: asight install$/m, 'not "installed"')
+  assert.match(st.text, /^ {2}Certificate {2}not installed; run: trocar install$/m, 'not "installed"')
   assert.match(st.text, /an uninstall left an item behind/, 'the item left behind is said, not silence (D38)')
   s.done()
 })
 
 test('F7 sealing and reading: a seal refused on a file that is not a closed segment is a journal line the endpoint lists (⚠); an unreadable journal is said', async () => {
   const s = sandbox()
-  const journal = path.join(s.asight, 'raw', 'journal.jsonl')
-  const shard = path.join(s.asight, 'sessions', 'p', 's', 'calls.ndjson')
+  const journal = path.join(s.trocar, 'raw', 'journal.jsonl')
+  const shard = path.join(s.trocar, 'sessions', 'p', 's', 'calls.ndjson')
   fs.mkdirSync(path.dirname(shard), { recursive: true }); fs.writeFileSync(shard, '{"id":"a"}\n')
   await assert.rejects(sealSegment(shard, { lockFile: path.join(s.collector, 'lock'), journal }))
   let h = await endpoint(s)
@@ -497,7 +497,7 @@ test('F5 decoding and truncation of HTTP/1 calls: a response that cannot be fram
 // F1(d) (4.6 「合并包」, D38 D-21): the daemon checks every entry's combined bundle at start and daily. A bundle that went
 // missing is rebuilt, with one event that names the harness, the file and the errno; a rebuild that fails leaves the old
 // file, is a failure of its own that the endpoint lists with the harness and the path, and the resolver (which looks for
-// the asight CA in the file the entry names) keeps that agent untrusted meanwhile. The daily timer calls the same function
+// the trocar CA in the file the entry names) keeps that agent untrusted meanwhile. The daily timer calls the same function
 // as the start, so the start is what is driven here.
 test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and records it; a rebuild that fails (read-only dir) leaves the old file, a failure event, and the endpoint lists the harness and path', { skip: process.getuid && process.getuid() === 0 ? 'root ignores directory modes' : false }, async () => {
   const s = sandbox(); const p = fakeProc()
@@ -506,7 +506,7 @@ test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and r
   const CODEX_EXE = '/home/u/.local/bin/codex'
   await install(s, { harnesses: [codex], arch: { osRoots: fileRoots(osRoots) } }); turnedOn(s, ['codex'])
   const ca = path.join(s.collector, 'ca'); const bundle = path.join(ca, 'combined-codex.pem')
-  const caFp = new X509Certificate(fs.readFileSync(path.join(ca, 'asight-ca.pem'))).fingerprint256
+  const caFp = new X509Certificate(fs.readFileSync(path.join(ca, 'trocar-ca.pem'))).fingerprint256
   const hasCa = () => (fs.readFileSync(bundle, 'utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || []).some((c) => new X509Certificate(c).fingerprint256 === caFp)
   let FA
   const start = () => { FA = fakeArch(p); return startDaemon({ dir: s.collector, socketPath: s.sock, arch: { ...FA.arch, osRoots: fileRoots(osRoots) }, harnesses: [codex], env: { ...process.env, HOME: s.home } }) }
@@ -515,7 +515,7 @@ test('F1(d) an entry\'s combined bundle deleted → the daemon rebuilds it and r
     // (1) deleted → rebuilt, and one event says which harness, which file, why
     fs.rmSync(bundle)
     d = await start(); await d.stop()
-    assert.ok(hasCa(), 'the bundle is back, with the asight CA')
+    assert.ok(hasCa(), 'the bundle is back, with the trocar CA')
     const ev = flowsOf(s).filter((f) => f.event === 'bundles-rebuilt' && f.code === 'missing')
     assert.deepEqual(ev.map((f) => [f.harness, f.file, f.errno]), [['codex', bundle, 'ENOENT']])
     // (2) a root changed, but the directory cannot be written: the old file stays as it is, a failure names harness and path
@@ -589,7 +589,7 @@ test('F1(d) a bundle rebuilt without a user CA it held (its source file moved) i
 
 // F5 (WebSocket): the labels on a WebSocket call (不完整 / 已截断 / 未解码) say what is missing from
 // THAT call; the top bar goes ⚠ by the D38 class of what happened. A failed write, a message that cannot be decoded, and
-// data lost because a direction stopped being followed (or asight's own code threw) are failure events: ⚠. A call cut at
+// data lost because a direction stopped being followed (or trocar's own code threw) are failure events: ⚠. A call cut at
 // the 64 MiB cap is by design: a label on the call (`ws_truncated`), no event, no ⚠. The real recorder writes the real
 // flows/ through the daemon's failure recorder, the endpoint is read over HTTP; the top bar maps `summary.state` 'failing'
 // to ⚠ N and 'ok' to ✓ (test/web/cap-health.test.mjs). The cap is lowered through the recorder's own option: the engine
@@ -648,7 +648,7 @@ test('F5 WebSocket labels and the top bar, by D38 class: a call cut at the cap i
     assert.deepEqual(out.map((e) => [e.ws_truncated, e.partial_reasons]), [[true, ['decode-failed']]], 'labelled 已截断 like the cap, but a stopped direction is an error')
     assert.ok((await wsKeys()).includes('ws/broken'))
 
-    // (5) asight's own code throwing while it follows a direction loses data too: recorder-error, not "bad data"
+    // (5) trocar's own code throwing while it follows a direction loses data too: recorder-error, not "bad data"
     const x = rec({ genId: () => { throw new Error('id source gone') } })
     x.fromClient(cli(1, 'a')); x.end(null)
     assert.ok((await wsKeys()).includes('ws/recorder-error'))

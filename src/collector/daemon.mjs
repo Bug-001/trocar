@@ -2,13 +2,13 @@
 // wires core + arch + harness (layering.test.mjs names it). It runs as the operator, claims the control socket
 // before anything else (one daemon, one helper per user), spawns the capability helper through arch, serves the
 // engine on loopback, restores the desired switch state, and fails open everywhere: a dead helper means direct
-// connections, never broken ones. It never mints the CA: `asight on` does, inside the manifest.
+// connections, never broken ones. It never mints the CA: `trocar on` does, inside the manifest.
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import tls from 'node:tls'
 import os from 'node:os'
 import path from 'node:path'
-import { asightHome, collectorHome, rawHome } from '../paths.mjs'
+import { trocarHome, collectorHome, rawHome } from '../paths.mjs'
 import { codeId } from '../version.mjs'
 import { startSealing } from './seal-queue.mjs'
 import { createIndexKeeper } from './index-keeper.mjs'
@@ -55,23 +55,23 @@ export async function loadParts({ arch = null, harnesses = null, env = process.e
   const list = harnesses || (await loadHarnesses())
   // darwin / win32 run the collector model (runModelDaemon): no redirector here, and this parts view answers an empty process table
   // the registry judges by name on every OS (D51) and is built FIRST: the doors ask it (identify), the redirector does not feed it
-  const registry = createRegistry(list, { agentList }) // agentList: readAgentList's entries (the user's ~/.asight/agents.json, D51③); the daemon swaps them in place
+  const registry = createRegistry(list, { agentList }) // agentList: readAgentList's entries (the user's ~/.trocar/agents.json, D51③); the daemon swaps them in place
   const redirector = isModelOs(A.os) ? null : await A.createRedirector({ env }) // awaited: a test's arch may answer async
-  // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `asight on` says so (1.6 §1.1), it never enables it (R8)
+  // linger: whether the OS keeps this user's daemon after logout (true / false; null = not readable) — `trocar on` says so (1.6 §1.1), it never enables it (R8)
   return { arch: A, os: A.os, harnesses: list, registry, scan: () => (redirector ? redirector.scan() : []), match: (f) => registry.match(f), linger: () => (redirector && typeof redirector.linger === 'function' ? redirector.linger() : null), lingerRead: () => (redirector && typeof redirector.lingerRead === 'function' ? redirector.lingerRead() : { state: null, error: 'this platform has no reader of the linger state' }) }
 }
 
-/** What `asight status` and `doctor` need to draw the network topology (1.6 §9.7). It lives in ./net-deps.mjs — the small arch-facing entry, so a
+/** What `trocar status` and `doctor` need to draw the network topology (1.6 §9.7). It lives in ./net-deps.mjs — the small arch-facing entry, so a
  *  read-only command does not load this module's whole graph (89 ms on a Windows test machine; D62) — and is re-exported here for the callers that have it. */
 export { netFactsDeps } from './net-deps.mjs'
 
-export const collectorPaths = (dir = collectorHome(asightHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
+export const collectorPaths = (dir = collectorHome(trocarHome())) => ({ dir, caDir: path.join(dir, 'ca'), state: path.join(dir, 'state.json'), lock: path.join(dir, 'lock'), markers: path.join(dir, 'run', 'trust') })
 const errText = (e) => String((e && e.message) || e)
 const BUNDLE_BUSY_MS = 2000 // a bundle rebuild that found the op lock held (1.6 R12) is tried again after this long ...
 const BUNDLE_BUSY_RETRIES = 30 // ... at most this many times; the daily round is the next chance after that
 const OFF_HINT = 'capture is switched off for this harness (its desired state is off); it is not judged, not watched and not counted as untrusted'
 const VERSION = (() => { try { return codeId() } catch { return null } })() // which code this daemon runs (D67⑤): `code` on the control channel, and the version of its daemon-start record. null: said as unknown in daemon-start
-// Every failure record carries a code (asight's name from src/health/codes.mjs, or the errno): the fold key (D-3).
+// Every failure record carries a code (trocar's name from src/health/codes.mjs, or the errno): the fold key (D-3).
 const coded = (e, code) => Object.assign(new Error(errText(e)), { code: (e && e.code) || code })
 
 // upstreamCa: test seam only (the CLI never passes it). Upstreams are verified against Node's default store, so a
@@ -81,13 +81,13 @@ const coded = (e, code) => Object.assign(new Error(errText(e)), { code: (e && e.
 // written when the window closes or at stop).
 // getuid / chown: test seams for the root refusal (D-31).
 export async function startDaemon(opts = {}) {
-  const dir = opts.dir || collectorHome(asightHome())
+  const dir = opts.dir || collectorHome(trocarHome())
   const log = opts.log || (() => {})
   const getuid = opts.getuid || (() => (typeof process.getuid === 'function' ? process.getuid() : -1))
   try {
     // as root it would write root-owned 0600 files into the user's flows/ and captures, which the user's own daemon
     // then cannot append to (D36, D-31): refused before anything is written
-    if (getuid() === 0) throw Object.assign(new Error('asight daemon: run it as the user whose agents you capture, not as root (D36)'), { code: 'root-refused' })
+    if (getuid() === 0) throw Object.assign(new Error('trocar daemon: run it as the user whose agents you capture, not as root (D36)'), { code: 'root-refused' })
     return await runDaemon({ ...opts, dir, log })
   } catch (e) {
     // the refusal is recorded where status finds it — unless nothing is installed here (no directory to write into)
@@ -109,12 +109,12 @@ function ownedLikeDir(dir, chown) {
 
 // What status reports beside the live state: capture health read from disk by the reader the board uses
 // (src/health/read.mjs, D38) — failures by kind, current conditions, what could not be read (D-2: never "none").
-// `dir` is <asight home>/collector.
+// `dir` is <trocar home>/collector.
 export function healthOnDisk(dir) {
   try { return captureHealth({ home: path.dirname(dir) }) } catch (e) { return { error: `capture health could not be read: ${errText(e)}` } }
 }
 
-// The user's agent list ~/.asight/agents.json (D51③, 4.6 R6): read again only when its stat key moved — inode:size:mtime, plus the mode (a chmod
+// The user's agent list ~/.trocar/agents.json (D51③, 4.6 R6): read again only when its stat key moved — inode:size:mtime, plus the mode (a chmod
 // makes a readable file unreadable without touching the other three); an atomic rename is a new inode; a file that is not there is a key too.
 // A broken file (unreadable, unparsable, bad items) is one agent-list-invalid per file version (D38); one that reads cleanly again or is removed
 // ends it with agent-list-ok; a file that was never there writes nothing. The daemon never writes the file, nor do on / off (D48).
@@ -160,7 +160,7 @@ function noteUncleanStop(lock, failure) {
  *    `seal.start()` MUST come after the control server claimed the collector (before that the lock may be a LIVE
  *  daemon's, and the start scan clears the lock's `segment`); `seal.stop()` belongs at the top of the stop, before
  *  store.close(): the segment the stop closes is sealed by the next start's scan, not by a worker the stop cuts off,
- *  and nothing of asight's writes anything after the stop (the tail the stop closes is indexed by that next start's
+ *  and nothing of trocar's writes anything after the stop (the tail the stop closes is indexed by that next start's
  *  sealer, and until then a query resumes it from the last indexed byte). */
 function storeWithSealing({ P, failure }) {
   const home = path.dirname(P.dir)
@@ -220,13 +220,13 @@ function boardToken(dir) {
  *  127.0.0.1:<ingress.json's boardPort>, relaying to the read route's query service. The daemon only reads the port (install chose it) and
  *  never tries another: a port it cannot listen on is `port-taken` with one failure record (D38), and capture and /query go on.
  *  routes(r) adds the board to the control routes: `GET /status` gains `board: {port, state, reason}` (never the token), and
- *  `GET /board` answers `{port, state, reason, token}` for `asight board`. start() once the daemon is ready; stop() before the control server closes. */
+ *  `GET /board` answers `{port, state, reason, token}` for `trocar board`. start() once the daemon is ready; stop() before the control server closes. */
 function boardFor({ P, failure, query, log = () => {} }) {
-  let st = { port: null, state: 'no-port', reason: 'no board port recorded: run asight install' }
+  let st = { port: null, state: 'no-port', reason: 'no board port recorded: run trocar install' }
   let server = null, token = null, started = Promise.resolve(), stopped = false
   async function listen() {
     const cfg = readIngressConfig({ dir: P.dir })
-    if (cfg.boardPort === undefined) { if (cfg.error) st = { ...st, reason: `${cfg.error}: run asight install` }; return }
+    if (cfg.boardPort === undefined) { if (cfg.error) st = { ...st, reason: `${cfg.error}: run trocar install` }; return }
     const port = cfg.boardPort
     try {
       token = boardToken(P.dir)
@@ -260,7 +260,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   // The endpoint is any arch that has one: darwin's control.json — a random name under the user's $TMPDIR, 0600, with a token every request carries
   // (arch/darwin/control-path.mjs, 4.9 §7; the same file the CLI's `off` reads; found live by a smoke run 2026-10-09: without this arm the darwin daemon
   // died on the Linux path's XDG_RUNTIME_DIR demand before it ever listened) — and win32's named pipe with the token of <collector>\control.json (4.8 §7).
-  // The other platforms keep core/control.mjs's $XDG_RUNTIME_DIR/asight/collector.sock, whose file modes guard it (no token there).
+  // The other platforms keep core/control.mjs's $XDG_RUNTIME_DIR/trocar/collector.sock, whose file modes guard it (no token there).
   let A0 = arch
   if (!A0) { try { A0 = await loadArch() } catch { A0 = null } } // a platform with no collector has no part of its own (netFactsDeps' pattern)
   if (A0 && typeof A0.refuseElevated === 'function') { // win32 (4.8 §7, W25, R7): the daemon does not run on an elevated or SYSTEM token
@@ -273,9 +273,9 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   if (A0 && isModelOs(A0.os)) return runModelDaemon({ A: A0, P, sock, ep, env, harnesses, home: netHome, log, failure, identity: identity || identityFor({ platform: A0.os, env, exec: runAsync }) /* darwin = ps lstart + kern.boottime; async: the event loop stays free */, lockRefreshMs, foreground, upstreamCa, model, fork })
   identity = identity || procIdentity
   let manifest
-  try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "asight uninstall", then "asight on"`), { code: 'manifest-unreadable' }) }
+  try { manifest = readManifest(P.dir) } catch (e) { throw Object.assign(new Error(`the install manifest ${path.join(P.dir, 'install-manifest.json')} is unreadable (${errText(e)}); run "trocar uninstall", then "trocar on"`), { code: 'manifest-unreadable' }) }
   const ca = daemonMayStart(manifest) ? readCa({ dir: P.caDir }) : null
-  if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "asight on" first'), { code: 'not-installed' })
+  if (!ca) throw Object.assign(new Error('the collector is not installed for this user: run "trocar on" first'), { code: 'not-installed' })
   let markReady
   const ready = new Promise((r) => { markReady = r })
   const impl = {} // filled once wiring is done; requests that arrive earlier wait for it
@@ -370,12 +370,12 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // combined bundles follow the roots: rebuilt (atomically) at start and once a day when the roots changed, and a bundle that
     // went missing or unreadable is rebuilt at the same time (4.6 「合并包」, D38 F1(d)): one event per bundle that says which
     // harness, which file and why; a rebuild that fails leaves the old file, is a failure of its own (harness + file), and the
-    // resolver already judges that harness untrusted while the bundle lacks the asight CA. A bundle rebuilt without a user CA
+    // resolver already judges that harness untrusted while the bundle lacks the trocar CA. A bundle rebuilt without a user CA
     // it held at install (its source file moved or went) is a failure of its own, one line per bundle that names the harness,
     // the file, the lost fingerprints and each unreadable source with its errno: an agent that replaces its roots with the
     // bundle can no longer reach a relay signed by that CA, and nothing else would say so (D38 ②, 4.6 「合并包」)
-    // It works on the manifest as the disk has it NOW, not the one read at start: `asight off <harness>` runs while this daemon does, and a bundle it
-    // removed (or kept without the asight CA) must not come back with the CA, nor the manifest it saved be written over by this one's copy. And only for
+    // It works on the manifest as the disk has it NOW, not the one read at start: `trocar off <harness>` runs while this daemon does, and a bundle it
+    // removed (or kept without the trocar CA) must not come back with the CA, nor the manifest it saved be written over by this one's copy. And only for
     // the harnesses whose desired state is `on` (4.6 「合并包」, D39): one `off` has taken out is not this daemon's to rebuild.
     // The read-modify-write of the manifest and the bundles is done under the op lock (1.6 R12): `on`, `off` and `uninstall` change the same files. A lock another
     // command holds means this round waits for it (it ends in seconds, and the roots are read again then); a rebuild after the command is done sees what it left.
@@ -419,7 +419,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
           reason: `${l.path} (the combined bundle of ${l.harness}) was rebuilt without ${n} user CA${n === 1 ? '' : 's'} it held at install (${l.fps.join(', ')}): ${l.sources.length ? l.sources.map((s) => `${s.file} could not be read (${s.errno})`).join('; ') : 'the files it was built from no longer hold them'}; ${l.harness} may not reach a relay that signs with ${n === 1 ? 'it' : 'them'}` })
       }
       for (const r of report.failed) {
-        failure('bundle', Object.assign(new Error(`rebuilding ${r.path} (the combined bundle of ${r.harness}) failed: ${errText(r.error)}; it keeps its previous content, and ${r.harness} may not trust asight until it is rebuilt`), { code: r.error && r.error.code }), { harness: r.harness, file: r.path })
+        failure('bundle', Object.assign(new Error(`rebuilding ${r.path} (the combined bundle of ${r.harness}) failed: ${errText(r.error)}; it keeps its previous content, and ${r.harness} may not trust trocar until it is rebuilt`), { code: r.error && r.error.code }), { harness: r.harness, file: r.path })
       }
     }
     refreshBundles()
@@ -427,7 +427,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     // plugins (dsh, OpenCode) write their per-pid marker here; it exists while the daemon runs (0700, the operator's)
     fs.mkdirSync(P.markers, { recursive: true, mode: 0o700 })
     const tracker = createTracker({ redirector, registry, trust, onVerdict, markerDir: P.markers, caPem: ca.paths.pem, collectorDir: P.dir,
-      installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when asight wrote the value
+      installedAt: (l) => installedAt(manifest, l), // config-after-start is judged against when trocar wrote the value
       onGone: (row, via) => { // D-24, D-12: the agent and every condition it held are gone; so are its negative-cache entries
         const last = recordedUntrusted.get(row.pid); recordedUntrusted.delete(row.pid) // the reason it was recorded untrusted for ends here
         transportNoted.delete(row.pid)
@@ -478,7 +478,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     const first = await engine.listen({ port: want, hosts: ['127.0.0.1'] }).catch((e) => {
       // G3: the port is squatted (chosen at install). Nothing is steered
       // (the helper is not spawned yet), so the agents' connections stay direct; say so, and how to get a new port.
-      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "asight uninstall" and "asight on" to pick a new one`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
+      if (e.code === 'EADDRINUSE') throw Object.assign(new Error(`the engine port 127.0.0.1:${want} recorded at install is held by another process; nothing is steered, agent connections go direct. Free the port, or run "trocar uninstall" and "trocar on" to pick a new one`), { code: CODE.enginePortTaken, errno: 'EADDRINUSE' }) // recorded under its closed-set code; the daemon never picks another port (decision #16)
       throw e
     })
     const port = first.port
@@ -495,11 +495,11 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       if (helperDown) throw new Error(`the redirector helper is down (${helperDown}); restart the collector`)
       if (v6Held) throw new Error(`${v6Held}; refusing to attach so no IPv6 connection is steered to it (M8)`)
       const { proto } = redirector.helperInfo()
-      if (proto !== redirector.expectedProto) throw new Error(`helper speaks protocol ${proto}, this daemon expects ${redirector.expectedProto}; run "sudo asight setup-helper" (G2)`)
+      if (proto !== redirector.expectedProto) throw new Error(`helper speaks protocol ${proto}, this daemon expects ${redirector.expectedProto}; run "sudo trocar setup-helper" (G2)`)
       await tracker.rescan() // every `on` re-judges live processes (G18)
     }
     redirector.on('down', ({ reason, exit, stderr }) => { helperDown = reason; sw.markDown(reason); event({ event: 'helper-down', reason, ...(exit ? { exit } : {}), ...(stderr ? { stderr } : {}) }) }) // exit name + its last stderr lines (D-14)
-    redirector.on('version-mismatch', (m) => event({ event: 'helper-version-mismatch', ...m, reason: `the helper speaks protocol ${m.got}, this daemon expects ${m.expected}; run "sudo asight setup-helper"` }))
+    redirector.on('version-mismatch', (m) => event({ event: 'helper-version-mismatch', ...m, reason: `the helper speaks protocol ${m.got}, this daemon expects ${m.expected}; run "sudo trocar setup-helper"` }))
     redirector.on('helper-error', ({ reason, code }) => failure('helper', coded(Object.assign(new Error(reason), { code }), 'helper-error')))
     redirector.on('heartbeat-error', ({ reason, code }) => failure('heartbeat', coded(Object.assign(new Error(`${reason}; once the last beat is 2 s old the kernel stops steering (connections go direct)`), { code }), 'heartbeat-failed')))
     redirector.on('flow-meta', ({ pid, dst }) => { // a watched but untrusted agent's connection went direct (D31: metadata only)
@@ -515,7 +515,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     })
 
     // the harnesses `on` with no names means, and a version 1 state.json is carried to (1.6 §1.5, V28): the installed ones — those the install
-    // manifest names, because asight wrote an entry or a file for them. One it never installed is no capture target: not judged, no agent-untrusted
+    // manifest names, because trocar wrote an entry or a file for them. One it never installed is no capture target: not judged, no agent-untrusted
     const installed = () => [...new Set([...(manifest.entries || []), ...(manifest.files || [])].map((e) => e.harness).filter(Boolean))]
     // a manifest the CLI wrote since (and that this build reads, and that is complete) replaces the one read at start; one that cannot be read leaves the old one, and says so
     const reloadManifest = () => {
@@ -597,7 +597,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
         if (!mismatch || mismatch.desired !== r.desired || mismatch.actual !== r.actual) {
           mismatch = { desired: r.desired, actual: r.actual }
           failure.write({ event: 'failure', where: 'switch', code: 'state-mismatch', desired: r.desired, actual: r.actual, links: r.links.map((l) => l.name),
-            reason: r.desired === 'on' ? 'capture is on but the kernel has not got this instance\'s links: nothing is steered, agent connections go direct; run "asight on" again' : 'capture is off but the kernel still has this instance\'s links' })
+            reason: r.desired === 'on' ? 'capture is on but the kernel has not got this instance\'s links: nothing is steered, agent connections go direct; run "trocar on" again' : 'capture is off but the kernel still has this instance\'s links' })
         }
       } else if (!r.degraded && mismatch) {
         mismatch = null
@@ -627,7 +627,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
       // processes of this user whose exe cannot be read and whose command line fits no harness: seen, not judged (4.6 exe-unreadable)
       const unjudged = (typeof redirector.unreadable === 'function' ? redirector.unreadable() : []).filter((u) => !registry.couldMatch({ os: A.os, exe: null, env: null, argv: u.argv, comm: u.comm }).length)
       return {
-        code: VERSION, // D67⑤: which code this daemon runs, as `asight --version` says it — `asight update` compares the two
+        code: VERSION, // D67⑤: which code this daemon runs, as `trocar --version` says it — `trocar update` compares the two
         ...(await sw.report()),
         engine: { port, v6: v6Error ? null : port, v6_error: v6Error, ...engine.stats() },
         negatives: engine.negatives(), // (pid, host) pairs no longer decrypted until the process exits (D-12)
@@ -660,8 +660,8 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
     Object.assign(impl, {
       status,
       // capture on again cancels a pending `off {exit}` (exitWhenDrained): the daemon that was going away is the one now serving it
-      // The manifest is read again first (1.6 §1.1, R9): `asight on` writes the entries, and their `installed_at`, before it asks, so a harness turned on
-      // again after `off` is judged against when asight wrote the entry NOW — a process that started while it was off is config-after-start, and says so
+      // The manifest is read again first (1.6 §1.1, R9): `trocar on` writes the entries, and their `installed_at`, before it asks, so a harness turned on
+      // again after `off` is judged against when trocar wrote the entry NOW — a process that started while it was off is config-after-start, and says so
       on: async ({ body }) => { reloadManifest(); const r = await sw.on({ ...(body && typeof body === 'object' ? body : {}), harnesses: namesOf(body) }); exitAsked++; syncTracker(); return { ...(await status()), ...(r.noop ? { noop: true } : {}) } },
       // → {…status, unwatched: [pid], confirmed, relayed: {closing, waiting, cut}, pid}: the pids taken out of the kernel watch table, and whether the kernel
       // confirms the state asked for (every unwatch answered; with no harness left on, the links gone). With the helper dead its table is gone with it: every pid
@@ -735,7 +735,7 @@ async function runDaemon({ dir, env = process.env, arch = null, harnesses = null
   }
 }
 
-// The collector model's daemon (4.11 §1 on / off, §3 ① ②): macOS and Windows. It writes no agent file and no ingress.json — `asight on`
+// The collector model's daemon (4.11 §1 on / off, §3 ① ②): macOS and Windows. It writes no agent file and no ingress.json — `trocar on`
 // writes them after POST /on opened the doors and read them back; the daemon opens doors, judges at the door, signs leaves through the custody, keeps
 // a door forward-only while its holders live after off (P12), and exits after `off {exit}` only when mayExit says so. `model`: test seams only —
 // { backends: { custody, dirs, policy }, parts: doorPartsFor's shape, or io: doorPartsFor's OS readers alone } — the endpoint, the control server and the
@@ -749,7 +749,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
   const b = model.backends || (await backendsFor({ os: A.os, home, env }))
   const parts = model.parts || (await doorPartsFor({ os: A.os, env, event, failure, io: model.io || {} }))
   let rootPem = null
-  try { rootPem = fs.readFileSync(path.join(P.caDir, 'asight-ca.pem'), 'utf8') } catch { /* no root: the issuer says so, every door forwards only */ }
+  try { rootPem = fs.readFileSync(path.join(P.caDir, 'trocar-ca.pem'), 'utf8') } catch { /* no root: the issuer says so, every door forwards only */ }
   const { store, seal } = storeWithSealing({ P, failure }) // 4.2 §自动封存, the same wiring as runDaemon's
   let collector = null
   const desired = () => { try { return readStateFile(P.state).state.harnesses || {} } catch { return {} } }
@@ -774,7 +774,7 @@ async function runModelDaemon({ A, P, sock, ep, env, harnesses, home, log, failu
     const hs = Object.fromEntries(Object.entries(d).map(([h, e]) => [h, { ...e, attached: collector.attached(h) }])) // per harness: its doors listen (status's `attached`, 1.6 V32)
     // the connections of the harnesses that are off and still relayed (1.6 §1.3), as runDaemon reports them: the engine counts
     // what it holds in memory, so this costs nothing. Without it `status` said "Connections unknown (the daemon's reply does not
-    // carry the connection counts)" on every model-mode machine — a reason about asight's own IPC (a macOS test machine 2026-10-18).
+    // carry the connection counts)" on every model-mode machine — a reason about trocar's own IPC (a macOS test machine 2026-10-18).
     const off = new Set(Object.entries(d).filter(([, e]) => e && e.desired === 'off').map(([h]) => h))
     return { code: VERSION, pid: process.pid, doors: collector.doors(), upstreams: collector.upstreams(), harnesses: hs, holders: collector.polledHolders(), relayed: engine.relayed({ agents: off }), cert: { key: st === 'key-missing' ? 'missing' : st === 'unavailable' ? 'unknown' : 'present', intermediate: st, expires: collector.issuer.expires() }, engine: engine.stats() }
   }

@@ -1,4 +1,4 @@
-// test/off/darwin.test.mjs — the darwin arm of `asight off` / `asight uninstall`'s orchestration (RFC 4.9 §4; the flip checklist's item ①): the autostart
+// test/off/darwin.test.mjs — the darwin arm of `trocar off` / `trocar uninstall`'s orchestration (RFC 4.9 §4; the flip checklist's item ①): the autostart
 // is a LaunchAgent, not a systemd unit, so `off` must never reach for systemctl on darwin — the agent is booted out of the session (launchd's KeepAlive
 // really does pull a stopped daemon back, which is why the bootout comes BEFORE any signal) and the plist leaves ~/Library/LaunchAgents (launchd scans
 // that directory at every login: a file left there brings the agent back at the next one, D39). The undo itself is src/off/darwin.mjs undoAutostart
@@ -17,8 +17,8 @@ import { tmpDir } from '../helpers/tmp.mjs'
 
 const UID = process.getuid()
 const DOMAIN = `gui/${UID}`
-const LABEL = 'com.asight.collector'
-const plistOf = (home) => path.join(home, 'Library', 'LaunchAgents', 'com.asight.collector.plist')
+const LABEL = 'com.trocar.collector'
+const plistOf = (home) => path.join(home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')
 
 /** launchctl as a stateful fake: the agent is loaded until a bootout of it succeeds; every call is recorded in `calls` (and pushed to `order`, a log a
  *  test shares with its fake kill so cross-recorder order is assertable — the bootout MUST precede the first signal, 4.9 §4). */
@@ -39,13 +39,13 @@ function fakeLaunchd(order = null) {
   return { run, calls, has: (re) => calls.some((c) => re.test(c)) }
 }
 
-const writePlist = (home) => { const f = plistOf(home); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '<?xml version="1.0"?>\n<plist version="1.0"><dict><key>Label</key><string>com.asight.collector</string></dict></plist>\n'); return f }
+const writePlist = (home) => { const f = plistOf(home); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '<?xml version="1.0"?>\n<plist version="1.0"><dict><key>Label</key><string>com.trocar.collector</string></dict></plist>\n'); return f }
 
 // the flip checklist ① (4.9 §4 末) under D61 + D62 ⑥: a no-names `off` on darwin asks launchd for NOTHING. There is no daemon here (no lock), and a
 // daemon KeepAlive brings back is now the wanted end state — doors shut, nothing on any agent's path — so there is nothing to boot out, nothing to
 // disable, and systemctl is never asked for anything either.
 test('D61 + D62 ⑥: a no-names off on darwin with no daemon asks launchd for nothing and keeps the plist enabled — never a bootout, never a disable, never systemctl', async () => {
-  const home = tmpDir('asight-off-darwin-')
+  const home = tmpDir('trocar-off-darwin-')
   const plist = writePlist(home)
   const launchd = fakeLaunchd()
   const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: { platform: 'darwin', exec: launchd.run, procs: async () => [], sleep: async () => {} } })
@@ -63,13 +63,13 @@ test('D61 + D62 ⑥: a no-names off on darwin with no daemon asks launchd for no
 // clean. Under D62 ⑥ it is not even asked to exit: it closes its doors and goes on idling, so the LaunchAgent is left exactly as `install` registered
 // it (D61) and the next `on` asks the daemon that is there.
 test('with D61 + D62 ⑥: a no-names off with an answering daemon touches launchd not at all, and asks for no exit', async () => {
-  const home = tmpDir('asight-off-darwin-')
+  const home = tmpDir('trocar-off-darwin-')
   const plist = writePlist(home)
   const launchd = fakeLaunchd()
   const asked = []
   const { receipt, exit } = await runOff({ home, env: { HOME: home }, deps: {
     platform: 'darwin', exec: launchd.run, procs: async () => [], sleep: async () => {}, socketPath: '/x/collector.sock',
-    daemonState: async () => ({ state: 'running', socket: '/t/asight-0123456789abcdef.sock' }),
+    daemonState: async () => ({ state: 'running', socket: '/t/trocar-0123456789abcdef.sock' }),
     request: async (q) => { asked.push(q.body); return { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 1, waiting: 0, cut: 0 } } },
   } })
   assert.equal(exit, 0, JSON.stringify(receipt.problems))
@@ -85,8 +85,8 @@ test('with D61 + D62 ⑥: a no-names off with an answering daemon touches launch
 // loaded agent is pulled right back). A bootout launchctl refuses is said: the off is not clean (exit 1), the receipt names the way out, and the
 // failure record carries the closed set's stop-failed. There is no autostart row to put it in (D61).
 test('the flip ① (4.9 §4) with D61: stopping a daemon that does not answer, a bootout launchctl refuses is not a silent pass — exit 1, the receipt names the way out, the record says stop-failed', async () => {
-  const home = tmpDir('asight-off-darwin-')
-  const dir = path.join(home, '.asight', 'collector')
+  const home = tmpDir('trocar-off-darwin-')
+  const dir = path.join(home, '.trocar', 'collector')
   fs.mkdirSync(path.join(dir, 'flows'), { recursive: true })
   writePlist(home)
   const calls = []
@@ -104,12 +104,12 @@ test('the flip ① (4.9 §4) with D61: stopping a daemon that does not answer, a
 // would be pulled right back. A NAMED off: the plist STAYS (the same temporary stop `systemctl --user stop` is on Linux — only a no-names off undoes
 // the autostart, step 5), the next login brings the job back.
 test('the flip ① (4.9 §4): a stuck daemon on darwin is stopped launchd-first — the bootout precedes the first signal, and a named off keeps the plist', async () => {
-  const home = tmpDir('asight-off-darwin-')
-  const dir = path.join(home, '.asight', 'collector')
+  const home = tmpDir('trocar-off-darwin-')
+  const dir = path.join(home, '.trocar', 'collector')
   fs.mkdirSync(dir, { recursive: true })
   writePlist(home)
   // the lock as a darwin daemon writes it (psIdentity's lstart + kern.boottime seconds; the socket in $TMPDIR, 4.9 §7)
-  fs.writeFileSync(path.join(dir, 'lock'), `${JSON.stringify({ pid: 4242, start_time: 'Wed Oct 7 04:27:00 2026', boot_id: '1760000000', helper_pid: 4243, socket: '/t/asight-0123456789abcdef.sock', engine_port: 47011 })}\n`)
+  fs.writeFileSync(path.join(dir, 'lock'), `${JSON.stringify({ pid: 4242, start_time: 'Wed Oct 7 04:27:00 2026', boot_id: '1760000000', helper_pid: 4243, socket: '/t/trocar-0123456789abcdef.sock', engine_port: 47011 })}\n`)
   const order = []
   const launchd = fakeLaunchd(order)
   const signals = []
@@ -133,5 +133,5 @@ test('the flip ① (4.9 §4): a stuck daemon on darwin is stopped launchd-first 
   assert.equal(receipt.autostart, undefined, 'no autostart row on a named off, as on Linux (the key is absent, not null)')
 })
 
-// the leftovers arm (4.9 §4) went with the old capture (D39⑥ executed 2026-10-11): `asight off` no longer takes the old capture's
+// the leftovers arm (4.9 §4) went with the old capture (D39⑥ executed 2026-10-11): `trocar off` no longer takes the old capture's
 // remains out — what it left on a machine is cleaned by hand (README); the new off undoes the collector's own entries only.

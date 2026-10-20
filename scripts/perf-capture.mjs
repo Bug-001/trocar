@@ -1,17 +1,17 @@
 // scripts/perf-capture.mjs — the D62 line 「采集一次请求的 CPU ≤ 5 ms」, measured on a sandbox daemon in a temp HOME.
 //
 // WHY A CHILD: the only honest way to read the DAEMON's CPU is to have nothing else in its process. So this parent is
-// asight and only asight (modelWorld install → the real `asight on` → the real daemon of test/helpers/model-daemon.mjs,
+// trocar and only trocar (modelWorld install → the real `trocar on` → the real daemon of test/helpers/model-daemon.mjs,
 // whose door parts are the arch's own and whose OS readers are the e2e test's stand-ins), and the forked child holds
-// everything that is not asight: the mock upstream with a CA of its own, and the agent-side TLS client loop. The
+// everything that is not trocar: the mock upstream with a CA of its own, and the agent-side TLS client loop. The
 // parent's own work during the measured window is one IPC message, so `process.cpuUsage()` deltas around the loop are
 // the daemon's.
 //
 // WHAT IT PRINTS: per request size, the CPU the daemon spent per captured request (user + system), split by phase —
-// the index keeper's share is measured by its own cpuUsage deltas (`ASIGHT_PERF_HOOK`), the rest is the engine's.
+// the index keeper's share is measured by its own cpuUsage deltas (`TROCAR_PERF_HOOK`), the rest is the engine's.
 // `--prof` adds a V8 CPU profile of the parent (`--cpu-prof` style, written next to the results) for attribution.
 //
-// NEVER THE REAL HOME: the HOME is a tmpDir and the process table is a fake; nothing here reads or writes ~/.asight.
+// NEVER THE REAL HOME: the HOME is a tmpDir and the process table is a fake; nothing here reads or writes ~/.trocar.
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
@@ -69,7 +69,7 @@ const w = await modelWorld({ os: 'darwin', commands: ['codex'] })
 if ((await w.install({ wrapperKit: { renderWrapper } })).exit !== 0) throw new Error('install failed')
 fs.mkdirSync(path.join(w.home, '.codex'), { recursive: true })
 fs.writeFileSync(path.join(w.home, '.codex', '.env'), '# own\n')
-const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'asight-ca.pem'), 'utf8')
+const rootPem = fs.readFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), 'utf8')
 
 const child = fork(HERE, ['--peer'], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })
 // Every wait has a deadline and every peer failure lands here: a rejected request in the peer used to leave the
@@ -89,10 +89,10 @@ const desc = w.harnesses.find((h) => h.name === 'codex')
 const agent = { pid: PID, name: desc.processes.names[0].name, exe: path.join(w.home, 'bin', desc.processes.names[0].name), start: Math.ceil(Date.now() / 1000) * 1000 + 1000, uid: process.getuid(), env: { SSL_CERT_FILE: bundle }, cwd: w.home }
 agent.ports = new Set(Array.from({ length: (N + 8) * SIZES.length + 16 }, (_, i) => PORT_BASE + i))
 
-// the keeper's own CPU, measured where it runs (see ASIGHT_PERF_HOOK in src/collector/index-keeper.mjs)
+// the keeper's own CPU, measured where it runs (see TROCAR_PERF_HOOK in src/collector/index-keeper.mjs)
 const keeper = { ms: 0, passes: 0 }
-globalThis.__asightPerfHook = (ms) => { keeper.ms += ms; keeper.passes++ }
-process.env.ASIGHT_PERF_HOOK = '1'
+globalThis.__trocarPerfHook = (ms) => { keeper.ms += ms; keeper.passes++ }
+process.env.TROCAR_PERF_HOOK = '1'
 
 const box = await liveUnit({ w, platform: 'darwin', io: { exec: darwinExec(agent) } })
 const io = { out: () => {}, err: () => {}, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
@@ -111,7 +111,7 @@ if (process.argv.includes('--prof')) {
 }
 
 const results = []
-const rawDir = path.join(w.home, '.asight', 'raw')
+const rawDir = path.join(w.home, '.trocar', 'raw')
 const lines = () => fs.readdirSync(rawDir).reduce((n, f) => n + (f.endsWith('.ndjson') ? fs.readFileSync(path.join(rawDir, f), 'utf8').split('\n').filter(Boolean).length : 0), 0)
 
 for (const [i, size] of SIZES.entries()) {
@@ -135,7 +135,7 @@ for (const [i, size] of SIZES.entries()) {
   say(results.at(-1))
 }
 
-if (prof) await prof.stopAndWrite(arg('prof-out', '/tmp/asight-perf-capture.cpuprofile'))
+if (prof) await prof.stopAndWrite(arg('prof-out', '/tmp/trocar-perf-capture.cpuprofile'))
 child.send({ kind: 'bye' }); child.kill()
 await box.stop()
 say({ summary: results })

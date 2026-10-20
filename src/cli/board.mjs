@@ -1,4 +1,4 @@
-// board.mjs — `asight board` (RFC 1.6 §4.3, D66): the board is the daemon's, so this only prints its address with the token and opens it in the
+// board.mjs — `trocar board` (RFC 1.6 §4.3, D66): the board is the daemon's, so this only prints its address with the token and opens it in the
 // browser. In order: the install record (the daemon's own gate, daemonMayStart: none → exit 1, nothing written); the daemon up through the one
 // seam `on` uses (ensureDaemonUp, with the arch's unit; the login registration is never touched); `GET /board` on the endpoint ensureDaemonUp
 // resolved through controlEndpointFor (no platform branch here). `deps.unit` replaces the arch's unit, `deps.open(file, args)` the browser start (0.1 §3).
@@ -22,12 +22,12 @@ async function openWith(file, args, env) {
 
 /** → the exit code: 0 the URL is printed · 1 the board is not there (not installed, the daemon did not come up, its port taken) · 2 a usage error. */
 export async function run(argv, { io, env = process.env, home, platform = process.platform, args = { positionals: [] }, deps = {} }) {
-  if (args.positionals.length) { io.err('asight board: it takes no arguments. Run: asight board'); return EXIT.usage }
+  if (args.positionals.length) { io.err('trocar board: it takes no arguments. Run: trocar board'); return EXIT.usage }
   const fs = deps.fs || nodeFs, dir = collectorDir(home)
   let m = null
   try { m = readManifest(dir, fs) } catch { /* unreadable is not installed for this question; status and doctor say why */ }
-  if (!daemonMayStart(m)) { io.err('asight board: asight is not installed on this machine. Run: asight install'); return EXIT.incomplete }
-  const down = (why) => { io.err([...wrap(`asight board: the board is not running: ${why}`, WIDTH), 'Run: asight doctor'].join('\n')); return EXIT.incomplete }
+  if (!daemonMayStart(m)) { io.err('trocar board: trocar is not installed on this machine. Run: trocar install'); return EXIT.incomplete }
+  const down = (why) => { io.err([...wrap(`trocar board: the board is not running: ${why}`, WIDTH), 'Run: trocar doctor'].join('\n')); return EXIT.incomplete }
   let unit = deps.unit
   if (unit === undefined) {
     const A = await (await import('../collector/arch/index.mjs')).loadArch(platform)
@@ -42,9 +42,9 @@ export async function run(argv, { io, env = process.env, home, platform = proces
   const url = `http://127.0.0.1:${b.port}/#t=${b.token}`
   const [file, list] = (OPENERS[platform] || OPENERS.linux)(url)
   try { await (deps.open || openWith)(file, list, env) } catch (e) {
-    io.out([...wrap(`asight board: your browser could not be opened (${errText(e)}). Open this address yourself:`, WIDTH), url].join('\n'))
+    io.out([...wrap(`trocar board: your browser could not be opened (${errText(e)}). Open this address yourself:`, WIDTH), url].join('\n'))
     return EXIT.ok
   }
-  io.out(['asight board: opened in your browser:', url].join('\n')) // the URL on a line of its own: with the token it is 68+ columns (D58 80)
+  io.out(['trocar board: opened in your browser:', url].join('\n')) // the URL on a line of its own: with the token it is 68+ columns (D58 80)
   return EXIT.ok
 }

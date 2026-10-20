@@ -1,6 +1,6 @@
 // test/collector/model-unclean-stop.test.mjs — the model daemon (macOS / Windows) says an unclean stop of the previous run the way the Linux daemon
 // does (D38, 4.6 §事件与码): a lock left behind is read before the new one is written, and flows/ gets `failure {where:'daemon', code:'unclean-stop'}`
-// before this start's daemon-start. Axes: a lock naming a pid · an unreadable lock · no lock (a clean stop: no record). The world outside asight is
+// before this start's daemon-start. Axes: a lock naming a pid · an unreadable lock · no lock (a clean stop: no record). The world outside trocar is
 // stubbed as in test/helpers/model-daemon.mjs (custody, door parts NOBODY, identity).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

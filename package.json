@@ -1,14 +1,14 @@
 {
-  "name": "asight",
-  "version": "0.0.0",
+  "name": "trocar",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "asight — transparent, byte-faithful, cross-provider tracer of what an agent app really sends the LLM (product build).",
+  "description": "trocar — transparent, byte-faithful, cross-provider tracer of what an agent app really sends the LLM (product build).",
   "engines": {
     "node": ">=20"
   },
   "bin": {
-    "asight": "bin/asight.mjs"
+    "trocar": "bin/trocar.mjs"
   },
   "files": [
     "src/",
@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "test": "node --test --test-force-exit --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs",
-    "test:browser": "ASIGHT_PLAYWRIGHT=1 node --test --test-concurrency=1 --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs 'test/web-v2/browser/*.test.mjs'"
+    "test:browser": "TROCAR_PLAYWRIGHT=1 node --test --test-concurrency=1 --require ./test/helpers/flush-exit.cjs --require ./test/helpers/leak-guard.cjs --require ./test/helpers/no-real-os.cjs 'test/web-v2/browser/*.test.mjs'"
   },
   "devDependencies": {
     "playwright-core": "^1.64.1"

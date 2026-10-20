@@ -18,10 +18,10 @@ import { sharedTrust, standInUnit } from '../helpers/board-world.mjs'
 const post = (port, p, body, headers = withToken()) => request(port, p, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) })
 
 test('V91: on a darwin model world, GET /control/status gives per harness the desired and the setup `status --json` gives — one ready, one needed', async () => {
-  const w = await modelWorld({ os: 'darwin', commands: ['codex'] }), state = tmpDir('asight-trust-'), trust = sharedTrust(state)
+  const w = await modelWorld({ os: 'darwin', commands: ['codex'] }), state = tmpDir('trocar-trust-'), trust = sharedTrust(state)
   assert.equal((await w.install({ custody: trust.custody, rootStore: trust.rootStore, unit: standInUnit(w.home) })).exit, 0)
   fs.mkdirSync(path.join(w.home, '.zcode'), { recursive: true }) // z-code appears after install: its carrier is not placed
-  const file = path.join(tmpDir('asight-deps-'), 'deps.mjs')
+  const file = path.join(tmpDir('trocar-deps-'), 'deps.mjs')
   fs.writeFileSync(file, `import { boardDeps } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../helpers/board-world.mjs', import.meta.url))).href)}
 import { darwinNetFacts } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL('../../src/collector/arch/darwin/netfacts.mjs', import.meta.url))).href)}
 const d = await boardDeps(${JSON.stringify({ platform: 'darwin', home: w.home, env: w.env, dirs: w.ctx.dirs, trust: state })})
@@ -32,7 +32,7 @@ export default { ...d, netFactsDeps: async () => ({ harnesses: d.harnesses, arch
   await runStatusCli(['--json'], { io, home: w.home, platform: 'darwin', env: w.env, deps })
   const doc = io.json()
   assert.deepEqual([doc.harnesses.codex.setup.state, doc.harnesses['z-code'].setup.state], ['ready', 'needed'], JSON.stringify(doc.harnesses))
-  const f = await serveFace({ home: path.join(w.home, '.asight'), deps: file })
+  const f = await serveFace({ home: path.join(w.home, '.trocar'), deps: file })
   try {
     const r = await request(f.port, '/control/status', { headers: withToken() })
     assert.equal(r.status, 200, r.body)
@@ -41,7 +41,7 @@ export default { ...d, netFactsDeps: async () => ({ harnesses: d.harnesses, arch
 })
 
 test('4.4 #8: no token or a wrong one on /control/status and /control/classes is 403 and the worker gets no line', async () => {
-  const home = tmpDir('asight-ctl-')
+  const home = tmpDir('trocar-ctl-')
   const f = await serveFace({ home })
   try {
     for (const headers of [{}, { [CONTROL_TOKEN_HEADER]: `${TOKEN}x` }, { [CONTROL_TOKEN_HEADER]: '' }]) {
@@ -54,7 +54,7 @@ test('4.4 #8: no token or a wrong one on /control/status and /control/classes is
 })
 
 test('4.4 root: a daemon running as root mounts no control endpoint — status says root, POST /control/classes is 405, HOME unchanged', async () => {
-  const home = tmpDir('asight-ctl-')
+  const home = tmpDir('trocar-ctl-')
   const f = await serveFace({ home, uid: 0 })
   try {
     const r = await request(f.port, '/control/status', { headers: withToken() })
@@ -68,7 +68,7 @@ test('4.4 root: a daemon running as root mounts no control endpoint — status s
 })
 
 // ── POST /control/classes (4.4 #10 · #11) ─────────────────────────────────────────────────────────
-const asightOf = (userHome) => path.join(userHome, '.asight')
+const trocarOf = (userHome) => path.join(userHome, '.trocar')
 /** Every file under `dir`, as bytes; `restore` puts exactly these back (the receipt names absolute paths, so the CLI's twin run is on the same HOME). */
 function freeze(dir) {
   const out = new Map()
@@ -83,7 +83,7 @@ function restore(dir, files) {
 }
 const lastLog = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'logs', 'classes.ndjson'), 'utf8').trim().split('\n').pop())
 
-/** `asight classes <argv> --json` on `userHome` → its stdout bytes (what it prints into a pipe). */
+/** `trocar classes <argv> --json` on `userHome` → its stdout bytes (what it prints into a pipe). */
 async function cli(argv, userHome) {
   const { runCli } = await import('../../src/cli/main.mjs')
   const io = fakeIo()
@@ -110,8 +110,8 @@ async function ops() {
   return out
 }
 
-test('4.4 #10 #11: per op, no confirm is 409 with the plan and HOME untouched; the confirmed receipt is the bytes `asight classes … --json` prints', async () => {
-  const userHome = tmpDir('asight-ctlc-'), dir = asightOf(userHome)
+test('4.4 #10 #11: per op, no confirm is 409 with the plan and HOME untouched; the confirmed receipt is the bytes `trocar classes … --json` prints', async () => {
+  const userHome = tmpDir('trocar-ctlc-'), dir = trocarOf(userHome)
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   const f = await serveFace({ home: dir })
   try {
@@ -144,7 +144,7 @@ test('4.4 #10 #11: per op, no confirm is 409 with the plan and HOME untouched; t
 })
 
 test('4.4 #10: a bad op or a body that is not one JSON object is 400, and classes.json and the change log are byte-identical', async () => {
-  const userHome = tmpDir('asight-ctlc-'), dir = asightOf(userHome)
+  const userHome = tmpDir('trocar-ctlc-'), dir = trocarOf(userHome)
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   assert.equal((await cli(['set', 'telemetry', 'log'], userHome)).exit, 0)
   const start = freeze(dir)
@@ -171,7 +171,7 @@ test('4.4 #10: a bad op or a body that is not one JSON object is 400, and classe
 })
 
 test('4.4 #10: a classes.json that cannot be read is a receipt with ok:false and its error — the CLI\'s bytes — and nothing is written', async () => {
-  const userHome = tmpDir('asight-ctlc-'), dir = asightOf(userHome)
+  const userHome = tmpDir('trocar-ctlc-'), dir = trocarOf(userHome)
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   fs.writeFileSync(path.join(dir, 'classes.json'), '{"version":1,"classes":[', { mode: 0o600 })
   const start = freeze(dir)
@@ -189,7 +189,7 @@ test('4.4 #10: a classes.json that cannot be read is a receipt with ok:false and
 })
 
 for (const body of [{ kind: 'set', class: 'telemetry', keep: 'log' }, { kind: 'reset' }]) test(`4.4 #11: a stale plan_id (the table changed between the two requests) is 409 with a new plan_id, and nothing is written: ${body.kind}`, async () => {
-  const userHome = tmpDir('asight-ctlc-'), dir = asightOf(userHome)
+  const userHome = tmpDir('trocar-ctlc-'), dir = trocarOf(userHome)
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   assert.equal((await cli(['set', 'llm', 'log'], userHome)).exit, 0) // classes.json exists before and after, so only its content differs
   const f = await serveFace({ home: dir })

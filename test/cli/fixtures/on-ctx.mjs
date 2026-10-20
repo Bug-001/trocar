@@ -1,4 +1,4 @@
-// test/cli/fixtures/on-ctx.mjs — what a test of `asight on` hands to runOnCli / turnOn: a terminal that is or is not one, a sandbox HOME with
+// test/cli/fixtures/on-ctx.mjs — what a test of `trocar on` hands to runOnCli / turnOn: a terminal that is or is not one, a sandbox HOME with
 // Claude Code's settings, a recorded runner for the OS tools, and a control socket that answers like a running daemon. Exports only.
 // Nothing here reaches the machine the tests run on: every OS tool goes to the recording runner (0.1 §3), HOME is a temp directory.
 import fs from 'node:fs'
@@ -36,7 +36,7 @@ export function fakeIo({ tty = false, answers = [] } = {}) {
 }
 
 const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((x) => { const p = path.join(d, x.name); return x.isDirectory() ? [`${p}/`, ...walk(p)] : [p] })
-/** Every file (by content hash) and directory under `home`: a difference is a file asight wrote, changed or a directory it made. */
+/** Every file (by content hash) and directory under `home`: a difference is a file trocar wrote, changed or a directory it made. */
 export function snapshot(home) {
   return Object.fromEntries(walk(home).map((p) => [path.relative(home, p), p.endsWith('/') ? 'dir' : crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')]))
 }
@@ -103,18 +103,18 @@ export function onCtx(home, io, { exec = recordingExec(), daemon = fakeDaemon(),
   return {
     io, home, platform: 'linux',
     env: { HOME: home, XDG_RUNTIME_DIR: path.join(home, 'run'), ...env },
-    deps: { parts, exec: exec.run, request: daemon.request, spawn, helperState: () => ({ ok: true }), linger: () => true, roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, ...deps },
+    deps: { parts, exec: exec.run, request: daemon.request, spawn, helperState: () => ({ ok: true }), linger: () => true, roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/trocar.mjs', sleep: async () => {}, user: 'alice', getuid: () => 1000, ...deps },
   }
 }
 
 /** A runner and a control socket wired the way systemd and the daemon are: starting the unit brings the daemon up. */
 export function fakeSystem({ agents = [], actual = 'on', up = false, ...daemonOpts } = {}) {
   const daemon = fakeDaemon({ up, agents, actual, ...daemonOpts })
-  const exec = recordingExec({ onRun: (cmd) => { if (/ (start|enable --now) asight-collector\.service$/.test(cmd)) daemon.state.up = true } })
+  const exec = recordingExec({ onRun: (cmd) => { if (/ (start|enable --now) trocar-collector\.service$/.test(cmd)) daemon.state.up = true } })
   return { exec, daemon, spawn: fakeSpawn(daemon) }
 }
 
-/** `asight install --yes` in `home` with the same world as `onCtx(home, io, opts)` (D55, override #15: on never writes a certificate, so an `on` test installs first). */
+/** `trocar install --yes` in `home` with the same world as `onCtx(home, io, opts)` (D55, override #15: on never writes a certificate, so an `on` test installs first). */
 export async function installFirst(home, opts = {}) {
   const { runInstallCli } = await import('../../../src/cli/install.mjs')
   const io = fakeIo()

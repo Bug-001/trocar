@@ -11,7 +11,7 @@ import { changeUntilCtimeMoves } from '../helpers/ctime.mjs';
 
 const rec = (id, text) => JSON.stringify({ id, req_body: JSON.stringify({ messages: [{ role: 'user', content: text }] }) }) + '\n';
 const bodyOf = (line) => JSON.parse(line).req_body;
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'asight-refresh-'));
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-refresh-'));
 
 test('refresh reads only the bytes appended since the last index, and picks up a new file', async () => {
   const dir = tmp();

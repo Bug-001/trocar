@@ -14,7 +14,7 @@ const V2 = path.join(REPO, 'src', 'web', 'v2')
 const DEAD = [
   /\betl\b/gi, // D59③
   /duckdb/gi, // D59③
-  /asight (?:etl|keep|shard)\b/g, // D59③
+  /trocar (?:etl|keep|shard)\b/g, // D59③
   /--db\b/g, // D59③
   /\/api\/(?:projects|retention|capture-health|traffic\/)/g, // P7
   /\/control\/retention/g, // D60
@@ -32,7 +32,7 @@ const scan = (file, src) => DEAD.flatMap((re) => (file.endsWith('.html')
 
 test('the scanner is not vacuous: a dead name in code is reported, the same name in a comment is not', () => {
   const f = path.join(V2, 'x.mjs')
-  assert.equal(scan(f, "const u = '/api/projects'\nconst k = 'asight keep'\n").length, 2)
+  assert.equal(scan(f, "const u = '/api/projects'\nconst k = 'trocar keep'\n").length, 2)
   assert.deepEqual(scan(f, "// the ETL and /api/retention are gone (D59③)\nconst keep = 'full'\n"), [])
   assert.equal(scan(path.join(V2, 'x.html'), '<!-- DuckDB --><button data-act="uninstall">').length, 1)
 })

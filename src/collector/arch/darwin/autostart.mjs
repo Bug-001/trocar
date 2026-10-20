@@ -1,5 +1,5 @@
 // autostart.mjs — how the darwin collector is started and kept up, and what it refuses to start under (RFC 4.9 §4 · §7; the mechanisms it inherits are 4.8 §7, acceptance W24 W25; the
-// userUnit interface is arch/linux/unit.mjs's). The daemon is `node <asight> daemon`, started at login by a LaunchAgent — a plist in ~/Library/LaunchAgents, `RunAtLoad` + `KeepAlive` —
+// userUnit interface is arch/linux/unit.mjs's). The daemon is `node <trocar> daemon`, started at login by a LaunchAgent — a plist in ~/Library/LaunchAgents, `RunAtLoad` + `KeepAlive` —
 // and that is the whole of it: NO supervisor parent (4.9 §4). launchd's KeepAlive really does bring a killed process back (the Windows scheduled task does not, which is why the win32
 // side built one), so the win32 supervisor machinery — superviseChild, runSupervisor, supervisor.lock, the backoff — is dropped, and with it the task / Run-key double mechanism:
 // launchd is the one autostart, and when launchctl refuses it there is no fallback to succeed through (the `launchd-register-failed` record, 4.9 §11). The launchctl verbs are the modern
@@ -15,9 +15,9 @@ import { spawn as nodeSpawn } from 'node:child_process'
 import { execTool } from '../../../off/exec.mjs'
 import { daemonLogPaths, ensureDaemonLogs } from '../daemon-logs.mjs'
 
-export const AGENT_LABEL = 'com.asight.collector' // the launchd job's label
-export const PLIST_FILE = 'com.asight.collector.plist' // the plist's name in the user's LaunchAgents directory
-/** ~/Library/LaunchAgents/com.asight.collector.plist — launchd scans this directory at every login, so the file IS the registration: `enable`'s bootstrap starts the job now, and the undo takes the file out again or the next login brings the agent back. */
+export const AGENT_LABEL = 'com.trocar.collector' // the launchd job's label
+export const PLIST_FILE = 'com.trocar.collector.plist' // the plist's name in the user's LaunchAgents directory
+/** ~/Library/LaunchAgents/com.trocar.collector.plist — launchd scans this directory at every login, so the file IS the registration: `enable`'s bootstrap starts the job now, and the undo takes the file out again or the next login brings the agent back. */
 export const plistPath = (home) => path.join(home, 'Library', 'LaunchAgents', PLIST_FILE)
 
 /** The oldest Node `on` accepts on macOS (4.9 §7, MA5): 22.15 — below it a root the user added in the keychain is not in
@@ -32,16 +32,16 @@ const NODE_MIN = '22.15'
 export function nodePreflight({ versions = process.versions } = {}) {
   const have = versions && versions.node
   const m = typeof have === 'string' && /^(\d+)\.(\d+)(\.|$)/.exec(have)
-  if (!m) return { ok: false, have: have ?? null, min: NODE_MIN, doctor: `读不到 Node 的版本(${JSON.stringify(have ?? null)}):asight 在 macOS 上要 Node ≥ ${NODE_MIN}。确认 \`node --version\` 之后再 asight on` }
+  if (!m) return { ok: false, have: have ?? null, min: NODE_MIN, doctor: `读不到 Node 的版本(${JSON.stringify(have ?? null)}):trocar 在 macOS 上要 Node ≥ ${NODE_MIN}。确认 \`node --version\` 之后再 trocar on` }
   const [maj, min] = NODE_MIN.split('.').map(Number)
-  if (Number(m[1]) < maj || (Number(m[1]) === maj && Number(m[2]) < min)) return { ok: false, have, min: NODE_MIN, doctor: `Node ${have} 太旧:asight 在 macOS 上要 Node ≥ ${NODE_MIN}(守护进程每次登录都由 launchd 用这个 Node 拉起;更老的 Node 读不到钥匙串里另加的根)。升级 Node 之后再 asight on` }
+  if (Number(m[1]) < maj || (Number(m[1]) === maj && Number(m[2]) < min)) return { ok: false, have, min: NODE_MIN, doctor: `Node ${have} 太旧:trocar 在 macOS 上要 Node ≥ ${NODE_MIN}(守护进程每次登录都由 launchd 用这个 Node 拉起;更老的 Node 读不到钥匙串里另加的根)。升级 Node 之后再 trocar on` }
   return { ok: true, have, min: NODE_MIN }
 }
 
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1) // -1: a platform without getuid (a test on Windows) — never 0, so never a refusal; that platform's own check is the win32 helper's
 
 /**
- * R7 on darwin (4.9 §7): asight never runs as root. → `null` (go on) or `{ code: 'root-token', reason, token }`, which `on` and `daemon` turn into the refusal and the `start` failure
+ * R7 on darwin (4.9 §7): trocar never runs as root. → `null` (go on) or `{ code: 'root-token', reason, token }`, which `on` and `daemon` turn into the refusal and the `start` failure
  * record — `root-token` is the darwin name of win32's `elevated-token` (4.9 §11; the closed set takes it). The check is this process's own uid and euid: darwin has no resident helper
  * (4.9 §1) and a uid needs none, so there is no unreadable case (the win32 helper's R11 unknown has no darwin counterpart) and `getuid` / `geteuid` are parameters only so a test can say
  * which world it is in.
@@ -52,7 +52,7 @@ export async function refuseElevated({ getuid = processUid, geteuid = processUid
   if (uid !== 0 && euid !== 0) return null
   return {
     code: 'root-token',
-    reason: `用你自己的账号跑,不要用 sudo(R7:asight 不以 root 运行;${euid === 0 && uid !== 0 ? 'euid 是 0' : 'uid 是 0'})`,
+    reason: `用你自己的账号跑,不要用 sudo(R7:trocar 不以 root 运行;${euid === 0 && uid !== 0 ? 'euid 是 0' : 'uid 是 0'})`,
     token: { uid, euid },
   }
 }
@@ -65,17 +65,17 @@ const plain = (name, v) => {
 const xmlText = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 /**
- * The LaunchAgent plist (4.9 §4). Label com.asight.collector; ProgramArguments = `node <asight> daemon` and nothing more — no `--supervise`, that flag went with the supervisor parent;
+ * The LaunchAgent plist (4.9 §4). Label com.trocar.collector; ProgramArguments = `node <trocar> daemon` and nothing more — no `--supervise`, that flag went with the supervisor parent;
  * RunAtLoad true and KeepAlive {SuccessfulExit: false} (a crash is relaunched, a drained daemon's exit 0 is not), and KeepAlive is the reason there is no supervisor (launchd brings a killed daemon back) and the reason `off` boots the agent out BEFORE it stops the
  * daemon. `env` is the daemon's own environment (install's daemonEnv: NODE_EXTRA_CA_CERTS of the install shell, an absolute path), written as EnvironmentVariables — a launchd job starts
  * with none of the shell's exports, so what install wants the daemon to have must be in the plist (the linux unit's `Environment=`, 4.6 §引擎 5; a Windows task cannot carry any, 4.8 §7).
- * `logs` (D46, given by userUnit) adds StandardOutPath / StandardErrorPath under ~/.asight/collector/logs/ — the daemon's own stdout / stderr, a launchd-started daemon's only console:
+ * `logs` (D46, given by userUnit) adds StandardOutPath / StandardErrorPath under ~/.trocar/collector/logs/ — the daemon's own stdout / stderr, a launchd-started daemon's only console:
  * without them a daemon that dies at every login does so with an error nobody sees. A quote in a path is harmless here (plist element content, not a command line): only & < > are escaped,
  * and a control character or a non-string is a bug of the caller.
  */
-export function plistXml({ node, asight, env = {}, logs = null } = {}) {
+export function plistXml({ node, trocar, env = {}, logs = null } = {}) {
   const n = plain('node', node)
-  const a = plain('asight', asight)
+  const a = plain('trocar', trocar)
   if (!env || typeof env !== 'object' || Array.isArray(env)) throw new TypeError(`plist: env is an object of variable names to strings, got ${JSON.stringify(env)}`)
   const vars = Object.entries(env)
   for (const [k, v] of vars) {
@@ -118,7 +118,7 @@ const launchctl = (args, { run, env }, opts = {}) => execTool('launchctl', args,
 /** The user's GUI session domain, launchd's per-user target (`bootstrap` / `bootout` take it): `gui/<uid>`, this process's own uid. */
 const domainOf = (uid) => `gui/${uid}`
 
-/** launchd's own respawn throttle (seconds), and the deadline a `kickstart` gets. asight does NOT write ThrottleInterval into the plist: under
+/** launchd's own respawn throttle (seconds), and the deadline a `kickstart` gets. trocar does NOT write ThrottleInterval into the plist: under
  *  `KeepAlive {SuccessfulExit: false}` a smaller throttle is what a daemon crashing at start would be respawned on (every second = 15-25 % of a
  *  core, against about 2 % at 10 s; D62 ④). `kickstart` does not return until launchd spawned the job, so it can block for the whole throttle:
  *  its deadline MUST be above it, or a normal throttled wait times out and is misread as "the LaunchAgent could not start it" (4.9 §4, D38). */
@@ -151,7 +151,7 @@ export { directStartEnv }
 const settle = (agent, plist) => ({ code: (agent.code !== 0 ? agent.code : plist.code) ?? 1, out: [agent.out, plist.out].filter(Boolean).join('\n'), err: [agent.err, plist.err].filter(Boolean).join('; '), agent: agent.state, plist: plist.state })
 
 /**
- * The per-user autostart as `asight on` (src/cli/on.mjs) and install.mjs consume it, the same shape as arch/linux/unit.mjs `userUnit` (and win32's): `{ name, path, links, text(env),
+ * The per-user autostart as `trocar on` (src/cli/on.mjs) and install.mjs consume it, the same shape as arch/linux/unit.mjs `userUnit` (and win32's): `{ name, path, links, text(env),
  * enable({ now }), start(), reload(), disable(), remove() }`, each verb returning `{ code, out, err }`. `path` is the plist, an owned file the install manifest lists (written by install,
  * atomic and durable like every owned file); `links` is empty (a LaunchAgent has no wants/ link — the file in LaunchAgents is the whole registration, which is why the undo removes it).
  * `text(env)` is the plist; the daemon environment install offers is carried (see plistXml). Nothing is registered until install writes the file.
@@ -192,7 +192,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
   }
   return {
     name: AGENT_LABEL, path: file, links: [],
-    text: (e = {}) => plistXml({ node, asight: script, env: e, logs: daemonLogPaths(home) }),
+    text: (e = {}) => plistXml({ node, trocar: script, env: e, logs: daemonLogPaths(home) }),
     // D46: the daemon's log files, made at unit-write time and listed in the manifest (install calls these); never rewritten by a later on
     logFiles: () => { const { out, err } = daemonLogPaths(home); return [{ path: out }, { path: err }] },
     ensureLogs: () => ensureDaemonLogs(home, { fs }),
@@ -204,7 +204,7 @@ export function userUnit({ home, node, script, run = null, env = process.env, fs
       launchctl(['bootout', `${domainOf(tools.uid)}/${AGENT_LABEL}`], tools) // an earlier copy of the job goes out first (the /F analog); a job that is not loaded answers with an error that is not ours to fail on — the bootstrap below is the answer
       const r = launchctl(['bootstrap', domainOf(tools.uid), file], tools)
       if (r.code === 0) return r
-      return { ...r, code: r.code ?? 1, event: { event: 'failure', where: 'install', code: 'launchd-register-failed', reason: `launchctl bootstrap was refused (${r.code === null ? 'it did not run' : `exit ${r.code}`}${r.err ? `: ${r.err}` : ''}); launchd is the only autostart, so asight does not start at login` } }
+      return { ...r, code: r.code ?? 1, event: { event: 'failure', where: 'install', code: 'launchd-register-failed', reason: `launchctl bootstrap was refused (${r.code === null ? 'it did not run' : `exit ${r.code}`}${r.err ? `: ${r.err}` : ''}); launchd is the only autostart, so trocar does not start at login` } }
     },
     start: (carry = null) => startDirect(carry),
     // D61: `on` asks launchd to start the daemon now (the job launchd loaded at login) and never touches the registration

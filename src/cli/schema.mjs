@@ -183,16 +183,16 @@ function validateForms(forms) {
 }
 
 // ── the network topology (RFC 1.6 §9.4: `status --json` key `topology`, the board's `/api/capture-health` `netenv.topology`) ──────────────────────────────────────────────────────────────────────────
-// The closed sets are written here once, so the Windows branch (4.8 §10) adds none: its proxy-mode values (`routing: 'proxy'`, `asight-forwarder`, `forward`, `branches[].form`, the edge's `asight` /
+// The closed sets are written here once, so the Windows branch (4.8 §10) adds none: its proxy-mode values (`routing: 'proxy'`, `trocar-forwarder`, `forward`, `branches[].form`, the edge's `trocar` /
 // `entry`, `env-unreadable`) are already members.
-/** How the platform steers an agent's connections to asight (D43: one mode per platform; there is no `mixed`). */
+/** How the platform steers an agent's connections to trocar (D43: one mode per platform; there is no `mixed`). */
 export const ROUTING = Object.freeze(['driver', 'proxy', 'legacy', 'none', 'unknown'])
-export const TOPOLOGY_KINDS = Object.freeze(['agent', 'proxy', 'asight-engine', 'asight-forwarder', 'legacy-mitm', 'upstream', 'egress', 'unknown'])
+export const TOPOLOGY_KINDS = Object.freeze(['agent', 'proxy', 'trocar-engine', 'trocar-forwarder', 'legacy-mitm', 'upstream', 'egress', 'unknown'])
 export const TOPOLOGY_VIA = Object.freeze(['direct', 'proxy-http', 'proxy-socks', 'proxy-https', 'system-proxy', 'ebpf', 'forward', 'egress', 'unknown'])
 /** Why a hop is 「不知道」 (R11: a hop that could not be read is said, with its reason, never left out and never 「无」). */
 export const UNKNOWN_REASONS = Object.freeze(['denied', 'timeout', 'absent', 'unparseable', 'owner-unreadable', 'pac', 'kernel-filter-invisible', 'env-unreadable'])
 export const BRANCH_NAMES = Object.freeze(['all', 'http', 'ws'])
-/** What a running process's line says about it: it still goes by the setting it started with, or asight is not on its path. */
+/** What a running process's line says about it: it still goes by the setting it started with, or trocar is not on its path. */
 export const RUNNING_NOTES = Object.freeze(['start-time-settings', 'not-steered'])
 export const FINDING_CLASSES = Object.freeze(['problem', 'expected', 'note']) // 附录 B
 
@@ -231,7 +231,7 @@ export function validateTopology(t) {
       else {
         if (!TOPOLOGY_VIA.includes(e.via)) bad.push(`${w}.via: ${JSON.stringify(e.via)} is not in the closed set`)
         unknownOf(e, w)
-        if (e.entry !== undefined && !(isObject(e.entry) && isId(e.entry.where) && typeof e.entry.opt_in === 'boolean' && e.asight === true)) bad.push(`${w}.entry: needs { where, opt_in } and asight: true`)
+        if (e.entry !== undefined && !(isObject(e.entry) && isId(e.entry.where) && typeof e.entry.opt_in === 'boolean' && e.trocar === true)) bad.push(`${w}.entry: needs { where, opt_in } and trocar: true`)
       }
     })
     if (!Array.isArray(x.branches) || !x.branches.length) bad.push(`${at}.branches: not a list with a branch in it`)

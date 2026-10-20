@@ -5,7 +5,7 @@
 // QueryArgError instead of computing it again. EVERY other answer from the control plane (a wrong token = 401 from
 // src/collector/core/control.mjs, an older daemon with no such route = 404, no warm worker = 503) is a fact about
 // the CHANNEL, so the document is computed here and is the document the caller asked for. A 401 taken as a verdict
-// made `asight query` exit 2 with a usage message that named a parameter the user had typed correctly.
+// made `trocar query` exit 2 with a usage message that named a parameter the user had typed correctly.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -19,7 +19,7 @@ import { rawHome } from './raw-home.mjs'
 /** A control plane on a real socket, reached the way the CLI reaches it: `dir`'s control.json, the one resolver.
  *  `token` is what the server demands; `write` is what control.json says — a different one is how a wrong token happens. */
 async function plane({ routes = {}, token = 'a'.repeat(32), write = token }) {
-  const dir = tmpDir('asight-fb-')
+  const dir = tmpDir('trocar-fb-')
   const sock = path.join(path.join(dir, 's.sock'))
   const server = await startControlServer({ socketPath: sock, token, routes, pipe: true })
   fs.writeFileSync(path.join(dir, 'control.json'), JSON.stringify({ path: sock, token: write }))
@@ -29,7 +29,7 @@ async function plane({ routes = {}, token = 'a'.repeat(32), write = token }) {
 const refuse = (status, error) => async () => { throw Object.assign(new Error(error), { status }) }
 
 test('only 400 is the query core\'s verdict: a wrong token (401) and a missing route (404) are answered locally, with the document', async () => {
-  const home = rawHome('asight-fb-')
+  const home = rawHome('trocar-fb-')
   const want = JSON.stringify(await runQuery('segments', {}, { home }))
   for (const p of [
     await plane({ write: 'b'.repeat(32) }), //                     401: the token of control.json is not the server's
@@ -46,8 +46,8 @@ test('only 400 is the query core\'s verdict: a wrong token (401) and a missing r
 })
 
 test('400 IS the verdict: the core\'s own usage error is raised here, not computed again', async () => {
-  const home = rawHome('asight-fb-')
-  const p = await plane({ routes: { 'GET /query': refuse(400, 'asight query sessions: no parameter --nope (its parameters: --harness)') } })
+  const home = rawHome('trocar-fb-')
+  const p = await plane({ routes: { 'GET /query': refuse(400, 'trocar query sessions: no parameter --nope (its parameters: --harness)') } })
   try {
     await assert.rejects(() => queryDocument('sessions', { nope: '1' }, { home, dir: p.dir, platform: 'darwin' }), (e) => {
       assert.equal(e.name, 'QueryArgError')

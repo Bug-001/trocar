@@ -14,9 +14,9 @@ const env = { ...process.env }
 delete env.NODE_TEST_CONTEXT
 
 test('tmpDir: a fresh directory under os.tmpdir() with the prefix; removeTmp takes it away now, and twice is fine', () => {
-  const dir = tmpDir('asight-tmptest-')
+  const dir = tmpDir('trocar-tmptest-')
   assert.equal(path.dirname(dir), os.tmpdir())
-  assert.match(path.basename(dir), /^asight-tmptest-[A-Za-z0-9]{6}$/)
+  assert.match(path.basename(dir), /^trocar-tmptest-[A-Za-z0-9]{6}$/)
   assert.ok(fs.statSync(dir).isDirectory())
   removeTmp(dir)
   assert.equal(fs.existsSync(dir), false)
@@ -24,7 +24,7 @@ test('tmpDir: a fresh directory under os.tmpdir() with the prefix; removeTmp tak
 })
 
 test('removeTmp: only a directory tmpDir made — a path it did not make is left alone, whatever the caller passed', () => {
-  const mine = tmpDir('asight-tmptest-')
+  const mine = tmpDir('trocar-tmptest-')
   const notMine = path.join(mine, 'not-made-by-tmpDir')
   fs.mkdirSync(notMine)
   fs.writeFileSync(path.join(notMine, 'f'), 'x')
@@ -45,11 +45,11 @@ const ENDINGS = {
 
 for (const [name, [ending, status]] of Object.entries(ENDINGS)) {
   test(`tmpDir: the directory is removed when the process ${name}`, () => {
-    const scratch = tmpDir('asight-tmpchild-') // the children's dirs are made in here; this one goes at exit, mode-000 leftovers of a broken helper included
+    const scratch = tmpDir('trocar-tmpchild-') // the children's dirs are made in here; this one goes at exit, mode-000 leftovers of a broken helper included
     const body = `
       import { tmpDir } from ${JSON.stringify(HELPER)}
       import fs from 'node:fs'
-      const dir = tmpDir('asight-kid-')
+      const dir = tmpDir('trocar-kid-')
       fs.writeFileSync(dir + '/f', 'x')
       fs.writeFileSync(process.env.REPORT, dir)
       ${ending === '__TEST__' ? "const { default: test } = await import('node:test'); test('fails', () => { throw new Error('on purpose') })" : ending}
@@ -68,13 +68,13 @@ for (const [name, [ending, status]] of Object.entries(ENDINGS)) {
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   test(`tmpDir: the directory is removed when the process is sent ${sig} (a hung npm test that is interrupted), and it still dies of the signal`, () => {
-    const scratch = tmpDir('asight-tmpchild-') // the children's dirs are made in here; this one goes at exit, mode-000 leftovers of a broken helper included
+    const scratch = tmpDir('trocar-tmpchild-') // the children's dirs are made in here; this one goes at exit, mode-000 leftovers of a broken helper included
     const script = path.join(scratch, 'kid.mjs')
     fs.writeFileSync(script, `
       import ${JSON.stringify(EXIT_WITH_PARENT)} // …and, if the test that started this one is killed, its parent being gone (a kill -9 leaves no cleanup to run)
       import { tmpDir } from ${JSON.stringify(HELPER)}
       import fs from 'node:fs'
-      const dir = tmpDir('asight-kid-')
+      const dir = tmpDir('trocar-kid-')
       fs.writeFileSync(dir + '/f', 'x')
       fs.writeFileSync(process.env.REPORT, dir)
       process.kill(process.pid, ${JSON.stringify(sig)})
@@ -88,19 +88,19 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
 }
 
 test('tmpDir: the hung child of the signal tests (nothing but a signal ends it) is bounded by its parent — SIGKILL the process that started it and it goes, taking its directory with it', async () => {
-  const scratch = tmpDir('asight-tmpchild-')
+  const scratch = tmpDir('trocar-tmpchild-')
   const kid = path.join(scratch, 'hung.mjs'), parent = path.join(scratch, 'parent.mjs'), report = path.join(scratch, 'dir.txt')
   fs.writeFileSync(kid, `
     import ${JSON.stringify(EXIT_WITH_PARENT)}
     import { tmpDir } from ${JSON.stringify(HELPER)}
     import fs from 'node:fs'
-    const dir = tmpDir('asight-kid-')
+    const dir = tmpDir('trocar-kid-')
     fs.writeFileSync(process.env.REPORT, dir)
     setInterval(() => {}, 1000) // a hung test: only a signal ends this process, and the death of its parent
   `)
   fs.writeFileSync(parent, `
     import { spawn } from 'node:child_process'
-    const c = spawn(process.execPath, [${JSON.stringify(kid)}], { stdio: 'ignore', env: { ...process.env, ASIGHT_WATCH_PID: String(process.pid) } })
+    const c = spawn(process.execPath, [${JSON.stringify(kid)}], { stdio: 'ignore', env: { ...process.env, TROCAR_WATCH_PID: String(process.pid) } })
     console.log(c.pid)
     setInterval(() => {}, 1000)
   `)
@@ -120,12 +120,12 @@ test('tmpDir: the hung child of the signal tests (nothing but a signal ends it) 
 })
 
 test('tmpDir: a directory holding a mode-000 file and a mode-000 subdirectory is removed too', () => {
-  const scratch = tmpDir('asight-tmpchild-')
+  const scratch = tmpDir('trocar-tmpchild-')
   const script = path.join(scratch, 'kid.mjs')
   fs.writeFileSync(script, `
     import { tmpDir } from ${JSON.stringify(HELPER)}
     import fs from 'node:fs'
-    const dir = tmpDir('asight-kid-')
+    const dir = tmpDir('trocar-kid-')
     fs.mkdirSync(dir + '/sub'); fs.writeFileSync(dir + '/sub/f', 'x'); fs.writeFileSync(dir + '/g', 'y')
     fs.chmodSync(dir + '/g', 0); fs.chmodSync(dir + '/sub', 0)
     fs.writeFileSync(process.env.REPORT, dir)

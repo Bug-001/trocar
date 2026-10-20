@@ -78,7 +78,7 @@ function lastTs(recs) { let m = ''; for (const r of recs) { const t = String(r.t
 // not a capture fact — so they are layered on separately from the per-session facts. This is applied
 // both to metas computed from records (sessionMetaFor) and to facts counted from the segment index
 // (sessionMetaOfFacts), so the two paths produce identical session objects.
-// It is also the ONE place the session document's shape lives (附录 C.5): `asight query sessions` derives the
+// It is also the ONE place the session document's shape lives (附录 C.5): `trocar query sessions` derives the
 // same facts from the segment index (src/query/rows.mjs sessionFactsOf) and hands them to this function, so the
 // list the board draws and the list the CLI prints are one document, however they were counted.
 function applyEnrich(base, enrich) {

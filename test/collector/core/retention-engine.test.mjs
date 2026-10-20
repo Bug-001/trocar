@@ -13,7 +13,7 @@ import { handleFlow } from '../../../src/collector/core/engine/flow.mjs'
 import { createNegativeCache } from '../../../src/collector/core/engine/negcache.mjs'
 
 const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
-const asightCa = createCa(); const issuer = createLeafIssuer(loadCa(asightCa))
+const trocarCa = createCa(); const issuer = createLeafIssuer(loadCa(trocarCa))
 const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)))
 const within = (p, what, ms = 8000) => { let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what}: not within ${ms}ms`)), ms) })]).finally(() => clearTimeout(t)) }
 
@@ -35,7 +35,7 @@ async function rig({ retention, respond }) {
   const engine = net.createServer((c) => { done.push(handleFlow(c, { dst: { address: '127.0.0.1', port: upPort, family: 4 }, pid: 7, agent: 'claude-code', decrypt: true }, ctx)) })
   const port = await listen(engine)
   const call = (raw) => new Promise((resolve, reject) => {
-    const c = tls.connect({ port, host: '127.0.0.1', servername: 'telemetry.example.test', ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(raw))
+    const c = tls.connect({ port, host: '127.0.0.1', servername: 'telemetry.example.test', ca: trocarCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(raw))
     let got = Buffer.alloc(0); c.on('data', (d) => (got = Buffer.concat([got, d]))); c.on('end', () => resolve(got)); c.on('error', reject)
   })
   return { call, sent, envelopes, failures, close: async () => { await within(Promise.all(done), 'every flow finalized'); engine.close(); upstream.close() } }

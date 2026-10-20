@@ -1,4 +1,4 @@
-// status-text.mjs — the words of `asight status` (RFC 1.6 §3.5) and the two formatters `--failures` prints (formatStatus, formatHealth) plus the
+// status-text.mjs — the words of `trocar status` (RFC 1.6 §3.5) and the two formatters `--failures` prints (formatStatus, formatHealth) plus the
 // install notes `doctor` prints (formatInstallNotes), which used to live in src/collector/cli.mjs. English, ASCII, 80 columns, conclusion first (D58).
 // Everything here renders from the status document (附录 C.3) and the facts it was built from; nothing is computed twice and nothing is written.
 import { columns, pairs, wrap, unknown, ago, noColor, WIDTH } from './text.mjs'
@@ -14,21 +14,21 @@ const upFor = (since, now) => { const t = Date.parse(since); if (!Number.isFinit
 /** The daemon in one clause, from the daemon's own answer — never a stale pid as the present state (§1.1). */
 function daemonClause(d, now) {
   if (d.running === true) { const up = d.since ? upFor(d.since, now) : null; return `Daemon running (pid ${d.pid ?? unknown('no pid recorded')}${up ? `, up ${up}` : ''}).` }
-  if (d.running === false) return `Daemon not running${d.error ? ` (${d.error})` : ''}; nothing is captured. Start it: asight on`
+  if (d.running === false) return `Daemon not running${d.error ? ` (${d.error})` : ''}; nothing is captured. Start it: trocar on`
   if (d.responding === false) return `Daemon does not answer${d.error ? ` (${d.error})` : ''}; new connections are not captured.`
   return `Daemon: ${unknown(d.error || 'its state could not be read')}.`
 }
 
 const CAPTURED = (h) => (h.captured === true ? 'yes' : h.desired === 'off' ? 'off' : h.captured === false ? 'no' : 'unknown')
 
-/** The one-screen summary of `asight status` (§3.5). `doc` is the 附录 C.3 document. */
+/** The one-screen summary of `trocar status` (§3.5). `doc` is the 附录 C.3 document. */
 export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } = {}) {
   const names = Object.keys(doc.harnesses || {})
   const installed = (doc.install && doc.install.harnesses) || []
   const shown = names.filter((h) => installed.length === 0 || installed.includes(h))
   const on = shown.filter((h) => doc.harnesses[h].desired === 'on')
   const captured = shown.filter((h) => doc.harnesses[h].captured === true)
-  if (!shown.length) return [c.bold('No harness is set up for capture yet.'), '', ...readErrorLines(doc), 'Next: asight install']
+  if (!shown.length) return [c.bold('No harness is set up for capture yet.'), '', ...readErrorLines(doc), 'Next: trocar install']
   const head = `Capturing ${captured.length} of ${shown.length} installed harness${shown.length === 1 ? '' : 'es'}.`
   const daemon = daemonClause(doc.daemon, now)
   const lines = head.length + 1 + daemon.length <= WIDTH ? [c.bold(`${head} ${daemon}`), ''] : [c.bold(head), ...wrap(daemon, WIDTH), '']
@@ -45,7 +45,7 @@ export function statusSummary(doc, { now = Date.now(), colors: c = noColor() } =
   if (missing.length) lines.push(`  not installed: ${missing.sort().join(', ')}`)
   lines.push('', ...pairs(summaryPairs(doc, now)))
   const first = on.find((h) => doc.harnesses[h].captured !== true) || shown[0]
-  lines.push('', `More: ${[first ? `asight status ${first}` : null, 'asight status --failures', 'asight doctor'].filter(Boolean).join('   ')}`)
+  lines.push('', `More: ${[first ? `trocar status ${first}` : null, 'trocar status --failures', 'trocar doctor'].filter(Boolean).join('   ')}`)
   return lines
 }
 
@@ -57,26 +57,26 @@ const readErrorLines = (doc) => ((doc.errors || []).length ? [...(doc.errors || 
 function summaryPairs(doc, now) {
   const rows = []
   const cert = doc.cert || null
-  if (cert && !cert.fp256 && !(doc.install && doc.install.state)) rows.push(['Certificate', 'not installed; run: asight install'])
+  if (cert && !cert.fp256 && !(doc.install && doc.install.state)) rows.push(['Certificate', 'not installed; run: trocar install'])
   else if (cert) {
     const root = (cert.root && cert.root.state) || 'unknown'
-    const words = { 'in-place': 'installed, trusted by your user', pending: 'installed, but not trusted yet: the dialog was not answered', declined: 'installed, but you declined the trust dialog', missing: 'no longer in your trust store; run: asight install', orphan: 'left over from an uninstall; run: asight install', none: 'installed', unknown: null }[root]
+    const words = { 'in-place': 'installed, trusted by your user', pending: 'installed, but not trusted yet: the dialog was not answered', declined: 'installed, but you declined the trust dialog', missing: 'no longer in your trust store; run: trocar install', orphan: 'left over from an uninstall; run: trocar install', none: 'installed', unknown: null }[root]
     rows.push(['Certificate', `${words || unknown((cert.root && cert.root.reason) || 'your trust store could not be read')}${cert.expires ? `, expires ${cert.expires}` : ''}`])
   }
   const r = doc.relayed
-  rows.push(['Connections', r === 'unknown' || !r ? unknown(doc.relayed_reason || 'the daemon did not say') : `${r.closing + r.waiting} open through asight`])
+  rows.push(['Connections', r === 'unknown' || !r ? unknown(doc.relayed_reason || 'the daemon did not say') : `${r.closing + r.waiting} open through trocar`])
   const fl = doc.failures
-  // D51④: a program that refuses asight's certificate is not captured for that host at all. A count of problems does not say that,
-  // so the summary names it on its own row; which hosts is in `asight status --failures` and in `critical` of the document (C.3).
+  // D51④: a program that refuses trocar's certificate is not captured for that host at all. A count of problems does not say that,
+  // so the summary names it on its own row; which hosts is in `trocar status --failures` and in `critical` of the document (C.3).
   const crit = doc.critical || []
   if (crit.length) {
     const who = [...new Set(crit.map((x) => x.agent || x.harness).filter(Boolean))]
     const hosts = [...new Set(crit.map((x) => x.host).filter(Boolean))]
-    rows.push(['Not captured', `${who.length ? who.join(', ') : 'a program'} refused asight's certificate${hosts.length ? ` for ${hosts.length} host${hosts.length === 1 ? '' : 's'}` : ''}; restart it. Which hosts: asight status --failures`])
+    rows.push(['Not captured', `${who.length ? who.join(', ') : 'a program'} refused trocar's certificate${hosts.length ? ` for ${hosts.length} host${hosts.length === 1 ? '' : 's'}` : ''}; restart it. Which hosts: trocar status --failures`])
   }
   rows.push(['Problems', !fl ? unknown(errorReason(doc, 'capture health') || 'capture health could not be read') : fl.problem === 0 ? 'none in the last 24 hours' : `${fl.problem} in the last 24 hours, latest ${ago(fl.latest, now)}`])
-  const b = doc.board // §3.5: the address without the token; `asight board` prints the one with it
-  if (b) rows.push(['Board', b.state === 'serving' ? `${b.url}  open it with: asight board` : b.state === 'unknown' ? unknown(b.reason) : `not running: ${b.reason}`])
+  const b = doc.board // §3.5: the address without the token; `trocar board` prints the one with it
+  if (b) rows.push(['Board', b.state === 'serving' ? `${b.url}  open it with: trocar board` : b.state === 'unknown' ? unknown(b.reason) : `not running: ${b.reason}`])
   // V39 (§1.1): logging out stops the daemon unless linger is on — the command is printed, never run; a state that could not be read is said with its reason, never taken for "on"
   if (doc.linger === false) rows.push(['Logging out', `capture stops when you log out; run: loginctl enable-linger ${doc.user || '<your user name>'}`])
   else if (doc.linger === 'unknown') rows.push(['Logging out', unknown(doc.linger_reason || 'the linger state could not be read')])
@@ -107,7 +107,7 @@ export function statusDetail(doc, h, { finding = null, now = Date.now(), colors:
     for (const f of forms) {
       const k = f.certificate || {}, p = f.proxy || {}
       lines.push(`  ${String(f.form).padEnd(w)}  certificate  ${k.in_effect ? `in effect (${k.carrier || 'unknown carrier'})` : noteText(k.code, { harness: h }) || unknown('your trust store could not be read')}`)
-      lines.push(`  ${' '.repeat(w)}  proxy        ${p.written ? `points at asight ${portOf(p.written)}` : p.connected ? 'connected' : 'not connected'}`)
+      lines.push(`  ${' '.repeat(w)}  proxy        ${p.written ? `points at trocar ${portOf(p.written)}` : p.connected ? 'connected' : 'not connected'}`)
       if (p.prior !== undefined) lines.push(`  ${' '.repeat(w)}               (was: ${p.prior || 'none'})`)
     }
     lines.push('')
@@ -139,19 +139,19 @@ export function failuresBlock(failures, health, { now = Date.now() } = {}) {
   return lines
 }
 
-const expectedText = (k) => ({ 'not-an-agent': 'connections of programs that are not agents, passed on unread', passthrough: 'connections asight does not decrypt by design', 'client-rejected-leaf': "connections whose program refused asight's certificate" }[k] || k)
+const expectedText = (k) => ({ 'not-an-agent': 'connections of programs that are not agents, passed on unread', passthrough: 'connections trocar does not decrypt by design', 'client-rejected-leaf': "connections whose program refused trocar's certificate" }[k] || k)
 
 // ── what the daemon and the disk say, verbatim (printed by `--failures` and by `doctor`) ──────────────────────────
 export function formatStatus(s) {
   const lines = [`collector: desired ${s.desired}, kernel ${s.actual}${s.recording ? ', recording' : ''}${s.degraded ? ` - degraded: ${s.degraded.reason}` : ''}`]
   if (s.engine) lines.push(`engine: ${s.engine.port ? `:${s.engine.port}` : unknown('it did not say its port')}${s.engine.v6 ? ` and :${s.engine.v6} on IPv6` : s.engine.v6_error ? ` (IPv6: ${s.engine.v6_error})` : ''} - ${s.engine.decrypted ?? 0} decrypted, ${s.engine.spliced ?? 0} passed through`)
-  if (s.helper) lines.push(`helper: ${s.helper.down ? `down (${s.helper.down})` : `pid ${s.helper.pid}`} - protocol ${s.helper.proto}${s.helper.ok === false ? ` (this asight expects ${s.helper.expected_proto})` : ''}`)
+  if (s.helper) lines.push(`helper: ${s.helper.down ? `down (${s.helper.down})` : `pid ${s.helper.pid}`} - protocol ${s.helper.proto}${s.helper.ok === false ? ` (this trocar expects ${s.helper.expected_proto})` : ''}`)
   const agents = s.agents || []
   lines.push(agents.length ? `agents (${agents.length}, ${s.running_untrusted} running but not captured):` : 'agents: none running')
   for (const a of agents) {
     lines.push(`  ${a.pid} ${a.agent}${a.parent_agent ? ` (started by ${a.parent_agent})` : ''} ${a.trusted ? 'captured' : `not captured: ${a.reason}${a.hint && a.hint !== a.reason ? ` - ${a.hint}` : ''}`}`)
-    if (a.unreachable && a.unreachable.length) lines.push(`    not captured (a transport asight cannot reach): ${a.unreachable.map((u) => u.transport).join(', ')}`)
-    if (a.trusted && a.not_via_trust_path && a.not_via_trust_path.length) lines.push(`    not captured (it did not read asight's certificate): ${a.not_via_trust_path.map((b) => `${b.host} (${b.reason})`).join(', ')}`)
+    if (a.unreachable && a.unreachable.length) lines.push(`    not captured (a transport trocar cannot reach): ${a.unreachable.map((u) => u.transport).join(', ')}`)
+    if (a.trusted && a.not_via_trust_path && a.not_via_trust_path.length) lines.push(`    not captured (it did not read trocar's certificate): ${a.not_via_trust_path.map((b) => `${b.host} (${b.reason})`).join(', ')}`)
   }
   for (const n of s.negatives || []) lines.push(`  not captured: pid ${n.pid} ${n.host} - ${n.cause}`)
   for (const u of s.unmatched || []) lines.push(`  pid ${u.pid} ${u.exe} fits more than one harness (${u.candidates.join(' and ')}), so it was not watched`)
@@ -170,8 +170,8 @@ const SUMMARY = {
 const agoSec = (h, iso) => Math.round((Date.parse(h.generated_at) - Date.parse(iso)) / 1000)
 function daemonText(h) {
   const c = h.collector, d = c.daemon
-  if (c.installed === null) return `whether asight is installed is ${unknown(c.manifest_error)}; the background process is ${d.state}`
-  if (!c.installed) return c.residue && c.residue.length ? `asight is not installed - an uninstall left ${c.residue.length} item(s): ${c.residue.map((r) => `${r.path} (${r.result})`).join(', ')}` : 'asight is not installed'
+  if (c.installed === null) return `whether trocar is installed is ${unknown(c.manifest_error)}; the background process is ${d.state}`
+  if (!c.installed) return c.residue && c.residue.length ? `trocar is not installed - an uninstall left ${c.residue.length} item(s): ${c.residue.map((r) => `${r.path} (${r.result})`).join(', ')}` : 'trocar is not installed'
   const at = d.last_record_at ? ` - last record at ${d.last_record_at}` : ''
   if (d.state === 'running') return `the background process (pid ${d.pid}) holds a fresh lock but did not answer${at}`
   if (d.state === 'not-responding') return `the background process does not answer - pid ${d.pid} has not refreshed its lock for ${agoSec(h, d.lock_refreshed_at)} s${at}`
@@ -196,7 +196,7 @@ export function formatHealth(h, { daemonLine = true } = {}) {
   return lines
 }
 
-/** What the last install noted (its install-note events), for `asight doctor`. */
+/** What the last install noted (its install-note events), for `trocar doctor`. */
 export function formatInstallNotes(h) {
   const c = h && h.collector
   const all = (c && c.install && c.install.install) || []

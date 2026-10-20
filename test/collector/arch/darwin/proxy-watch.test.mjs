@@ -39,7 +39,7 @@ test('without a notice the watch keeps its everyMs poll (an injected OS: the tes
 })
 
 test('scutilChanges: tells scutil to watch the proxy key on stdin, any output is a notice, its end is onExit, and stop() ends it without one', async () => {
-  const dir = tmpDir('asight-scutil-watch-'), got = path.join(dir, 'stdin.txt')
+  const dir = tmpDir('trocar-scutil-watch-'), got = path.join(dir, 'stdin.txt')
   const stub = (body) => fs.writeFileSync(path.join(dir, 'scutil'), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
   const env = { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}` }
   stub(`read a; read b; printf '%s\\n%s\\n' "$a" "$b" > '${got}'; echo 'notification callback'; exec sleep 30`)

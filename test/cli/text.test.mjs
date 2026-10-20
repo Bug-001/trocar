@@ -40,11 +40,11 @@ test('pairs: a label/value block aligned on the label, indented; a value longer 
 })
 
 test('tilde: the home directory becomes ~, and only at the start of a path', () => {
-  assert.equal(tilde('/home/u/.asight/raw', '/home/u'), '~/.asight/raw')
+  assert.equal(tilde('/home/u/.trocar/raw', '/home/u'), '~/.trocar/raw')
   assert.equal(tilde('/home/u', '/home/u'), '~')
   assert.equal(tilde('/home/user2/x', '/home/u'), '/home/user2/x', 'not a prefix of the path\'s own segments')
   assert.equal(tilde('/var/log/home/u', '/home/u'), '/var/log/home/u')
-  assert.equal(tilde('C:\\Users\\u\\.asight', 'C:\\Users\\u'), '~\\.asight')
+  assert.equal(tilde('C:\\Users\\u\\.trocar', 'C:\\Users\\u'), '~\\.trocar')
   assert.equal(tilde(undefined, '/home/u'), undefined)
   assert.equal(tilde('/home/u/x', ''), '/home/u/x', 'no home, no shortening')
 })

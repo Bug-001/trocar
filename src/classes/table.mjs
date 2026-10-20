@@ -7,14 +7,14 @@
 //   • the table is ORDERED and the FIRST matching rule wins; `other` is last, has no rules, and catches the rest;
 //   • a rule = a host regex (matched against the WHOLE host, any case) + an optional path regex (matched from the
 //     start of the path) + an optional harness. No per-harness, per-product or per-version branch lives here (过拟合必拒).
-//   • copy-on-write: the first edit writes the whole table to ~/.asight/classes.json (0600); `reset` deletes it and the
-//     builtin table is back. Every edit appends one line (old value, new value, time) to ~/.asight/logs/classes.ndjson.
+//   • copy-on-write: the first edit writes the whole table to ~/.trocar/classes.json (0600); `reset` deletes it and the
+//     builtin table is back. Every edit appends one line (old value, new value, time) to ~/.trocar/logs/classes.ndjson.
 // A bad argument (class name, regex, rule number, level) throws ClassArgError and writes NOTHING (exit 2); a file that
 // cannot be written comes back as { ok: false, error } (exit 1). A user table that cannot be read is never overwritten
 // and never silently ignored: the builtin table applies and `problems` says so (D38).
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { asightHome, classesFile, classesLog } from '../paths.mjs'
+import { trocarHome, classesFile, classesLog } from '../paths.mjs'
 import { LLM_ENDPOINT_PATHS, TOKEN_COUNT_ENDPOINT_PATHS, RETENTION_LEVELS } from '../capture/envelope.mjs'
 import { HARNESSES } from '../dissect/harnesses.mjs'
 import { HARNESS_IDS } from '../cli/harness-names.mjs'
@@ -56,7 +56,7 @@ function builtinTable() {
   return Object.freeze(out)
 }
 
-/** The table asight ships. Ordered; `token-count` before `llm`; `other` last with no rules. */
+/** The table trocar ships. Ordered; `token-count` before `llm`; `other` last with no rules. */
 export const BUILTIN = builtinTable()
 
 const errText = (e) => String((e && e.message) || e)
@@ -70,7 +70,7 @@ const compile = (source, anchorEnd, flags = '') => new RegExp(`^(?:${source})${a
  *   problems    [{code, reason, fatal?}] — a file or an entry that cannot be honoured; fatal = the whole file is
  *               unusable, the builtin table applies and no edit may overwrite it
  */
-export function readTable({ home = asightHome(), fs = nodeFs } = {}) {
+export function readTable({ home = trocarHome(), fs = nodeFs } = {}) {
   const file = classesFile(home)
   const lastChange = readLastChange(classesLog(home), fs)
   let text
@@ -153,7 +153,7 @@ export function keepOf(table, className) {
  * Throws ClassArgError (exit 2) before touching anything when the op does not make sense; comes back ok:false when the
  * file or the log cannot be written (exit 1).
  */
-export function edit(op, { home = asightHome(), fs = nodeFs, now = () => new Date() } = {}) {
+export function edit(op, { home = trocarHome(), fs = nodeFs, now = () => new Date() } = {}) {
   const file = classesFile(home)
   const table = readTable({ home, fs })
   const error = fatalOf(table)
@@ -193,7 +193,7 @@ const fatalOf = (table) => {
  * plan(op, {home, fs}) → {before, after, paths} | {error} — what edit(op) would do, and nothing written: the change log's own from / to (the class's
  * whole entry, or for reset the whole table before), so a plan_id over it changes when the table does; and the files edit would write. The same refusals as edit: ClassArgError, or the unreadable table's error.
  */
-export function plan(op, { home = asightHome(), fs = nodeFs } = {}) {
+export function plan(op, { home = trocarHome(), fs = nodeFs } = {}) {
   const table = readTable({ home, fs })
   const error = fatalOf(table)
   if (error) return { error }
@@ -223,7 +223,7 @@ function apply(op, current) {
   const before = find(name)
   const snapshot = before ? JSON.parse(JSON.stringify(before)) : null
   if (kind === 'set') {
-    if (!before) throw new ClassArgError(`no class ${JSON.stringify(name)}; see asight classes`)
+    if (!before) throw new ClassArgError(`no class ${JSON.stringify(name)}; see trocar classes`)
     if (!KEEP_LEVELS.includes(op.keep)) throw new ClassArgError(`unknown level ${JSON.stringify(op.keep)}; use ${KEEP_LEVELS.join(' or ')}`)
     before.keep = op.keep
     return { classes, log: { op: 'set', class: name, from: snapshot, to: JSON.parse(JSON.stringify(before)) } }
@@ -241,13 +241,13 @@ function apply(op, current) {
     return { classes, log: { op: 'add', class: name, from: snapshot, to: JSON.parse(JSON.stringify(target)) } }
   }
   if (kind === 'rm') {
-    if (!before) throw new ClassArgError(`no class ${JSON.stringify(name)}; see asight classes`)
+    if (!before) throw new ClassArgError(`no class ${JSON.stringify(name)}; see trocar classes`)
     if (op.rule == null) {
       if (name === 'other') throw new ClassArgError('other cannot be removed: it is what nothing else matched')
       return { classes: classes.filter((c) => c.class !== name), log: { op: 'rm', class: name, from: snapshot, to: null } }
     }
     const i = Number(op.rule)
-    if (!Number.isInteger(i) || i < 1 || i > before.rules.length) throw new ClassArgError(`${name} has no rule ${JSON.stringify(op.rule)}; it has ${before.rules.length} (see asight classes ${name})`)
+    if (!Number.isInteger(i) || i < 1 || i > before.rules.length) throw new ClassArgError(`${name} has no rule ${JSON.stringify(op.rule)}; it has ${before.rules.length} (see trocar classes ${name})`)
     before.rules.splice(i - 1, 1)
     return { classes, log: { op: 'rm', class: name, rule: i, from: snapshot, to: JSON.parse(JSON.stringify(before)) } }
   }

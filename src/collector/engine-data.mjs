@@ -3,10 +3,10 @@
 import { createClassSource } from '../classes/source.mjs'
 
 /**
- * The engine's `retention(meta, host, method, path)` → {class, level}. The class table (~/.asight/classes.json, else the builtin one) is read at the start of
+ * The engine's `retention(meta, host, method, path)` → {class, level}. The class table (~/.trocar/classes.json, else the builtin one) is read at the start of
  * every call (re-checked at most once a second, no restart) and a problem with it is a failure event (flows/, folded) — the builtin table applies meanwhile.
  * The class and its level are sampled together, so an in-flight call keeps what it started with. The core names no harness (D20, 0.1 §5): the harness of a
- * call is the agent's descriptor name, the same name the class table and `asight classes --harness` use. `failure`: the daemon's recorder (event / write).
+ * call is the agent's descriptor name, the same name the class table and `trocar classes --harness` use. `failure`: the daemon's recorder (event / write).
  */
 export function classesHook({ home, failure }) {
   const src = createClassSource({ home, onFailure: (rec) => failure.event(rec), onOk: (rec) => failure.write(rec) })

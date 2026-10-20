@@ -1,4 +1,4 @@
-// test/off/daemon-stop.test.mjs — telling a stuck daemon from an absent one and stopping it safely (RFC 1.6 §1.4 第 2 / 5 步, 「asight 自己坏了时」).
+// test/off/daemon-stop.test.mjs — telling a stuck daemon from an absent one and stopping it safely (RFC 1.6 §1.4 第 2 / 5 步, 「trocar 自己坏了时」).
 // Every process is a row of a fake table, every signal goes to a recorder, the OS tool is a recording runner, time is a fake clock: nothing signals a
 // real process (stopDaemon refuses a default `kill` under npm test).
 import test from 'node:test'
@@ -13,12 +13,12 @@ import { psIdentity, identityFor } from '../../src/off/proc.mjs'
 const BOOT = 'boot-1'
 const clock = () => { let t = 10_000_000; return { now: () => t, sleep: async (ms) => { t += ms }, advance: (ms) => { t += ms } } }
 function lockAt(body, { ageMs = 0, now = 10_000_000 } = {}) {
-  const file = path.join(tmpDir('asight-dstop-'), 'lock')
+  const file = path.join(tmpDir('trocar-dstop-'), 'lock')
   fs.writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body))
   const when = new Date(now - ageMs); fs.utimesSync(file, when, when)
   return file
 }
-const DAEMON = { pid: 4242, start_time: '111', boot_id: BOOT, helper_pid: 4243, socket: '/run/user/1000/asight/collector.sock', engine_port: 47123 }
+const DAEMON = { pid: 4242, start_time: '111', boot_id: BOOT, helper_pid: 4243, socket: '/run/user/1000/trocar/collector.sock', engine_port: 47123 }
 // the fake process table: pid → identity; `ignoreTerm`: pids that survive SIGTERM (a stopped or wedged process)
 function table(rows, { ignoreTerm = [], dieOn = {} } = {}) {
   const live = new Map(Object.entries(rows).map(([pid, id]) => [Number(pid), id]))
@@ -45,7 +45,7 @@ test('the lock is read the way src/health lockState reads it: the same answer fo
   const t = table(UP)
   const shapes = [['none', null], ['cut short', '{"pid":'], ['no pid', '{}'], ['fresh', DAEMON], ['old', DAEMON, 30_000], ['dead pid', { ...DAEMON, pid: 9 }], ['reused', { ...DAEMON, start_time: '999' }], ['rebooted', { ...DAEMON, boot_id: 'other' }], ['older lock without identity', { pid: 4242, helper_pid: 4243 }]]
   for (const [name, body, ageMs] of shapes) {
-    const file = body === null ? path.join(tmpDir('asight-dstop-'), 'lock') : lockAt(body, { ageMs })
+    const file = body === null ? path.join(tmpDir('trocar-dstop-'), 'lock') : lockAt(body, { ageMs })
     const mine = readDaemonLock({ file, now: 10_000_000, alive: t.alive, identity: t.identity })
     assert.deepEqual(mine, lockState({ file, now: 10_000_000, alive: t.alive, identity: t.identity }), name)
   }
@@ -53,7 +53,7 @@ test('the lock is read the way src/health lockState reads it: the same answer fo
 
 test('daemonState: none, stale, running, starting, unresponsive and unknown — each from the lock and the socket, and never "none" for a lock that cannot be read', async () => {
   const t = table(UP)
-  const ask = (body, request, { ageMs = 0, socketPath = '/run/user/1000/asight/collector.sock' } = {}) => daemonState({ lockFile: body === null ? path.join(tmpDir('asight-dstop-'), 'lock') : lockAt(body, { ageMs }), socketPath, request, alive: t.alive, identity: t.identity, now: () => 10_000_000 })
+  const ask = (body, request, { ageMs = 0, socketPath = '/run/user/1000/trocar/collector.sock' } = {}) => daemonState({ lockFile: body === null ? path.join(tmpDir('trocar-dstop-'), 'lock') : lockAt(body, { ageMs }), socketPath, request, alive: t.alive, identity: t.identity, now: () => 10_000_000 })
   assert.equal((await ask(null, absent)).state, 'none', 'no lock, nothing listens')
   assert.equal((await ask({ ...DAEMON, pid: 9 }, refused)).state, 'stale', 'the lock names a dead pid')
   assert.equal((await ask({ ...DAEMON, start_time: '999' }, refused)).state, 'stale', 'or a reused one: never judged running by the pid alone (D-25)')
@@ -72,18 +72,18 @@ test('daemonState: none, stale, running, starting, unresponsive and unknown — 
 })
 
 test('a lock cut short (empty, garbage, no pid) while the control socket refuses is the lock of a daemon that is gone — stale, lock null, the reason says why; every other doubt stays unknown or unresponsive', async () => {
-  const t = table(UP); const sock = '/run/user/1000/asight/collector.sock'
+  const t = table(UP); const sock = '/run/user/1000/trocar/collector.sock'
   const ask = (file, request, o = {}) => daemonState({ lockFile: file, socketPath: sock, request, alive: t.alive, identity: t.identity, now: () => 10_000_000, ...o })
   for (const [name, body] of [['empty (a power loss keeps the rename and loses the data)', ''], ['cut short', '{"pid":'], ['garbage', 'x\u0000\u0000\u0000'], ['no pid', '{}']]) {
     for (const refusal of [refused, absent]) {
       const s = await ask(lockAt(body), refusal)
       assert.deepEqual([s.state, s.lock, s.socket], ['stale', null, null], name)
-      assert.match(s.reason, /nothing listens on \/run\/user\/1000\/asight\/collector\.sock either.*ended without a clean stop/, name)
+      assert.match(s.reason, /nothing listens on \/run\/user\/1000\/trocar\/collector\.sock either.*ended without a clean stop/, name)
     }
   }
   assert.equal((await ask(lockAt(''), hangs)).state, 'unresponsive', 'a socket that is there and does not answer is a stuck daemon, whatever the lock holds')
   assert.equal((await ask(lockAt(''), answers)).state, 'running', 'and one that answers is running')
-  const dir = path.join(tmpDir('asight-dstop-'), 'lock'); fs.mkdirSync(dir) // a lock that cannot be READ (EISDIR here; EACCES, EIO in life) is no cut-short lock: nobody knows what it held
+  const dir = path.join(tmpDir('trocar-dstop-'), 'lock'); fs.mkdirSync(dir) // a lock that cannot be READ (EISDIR here; EACCES, EIO in life) is no cut-short lock: nobody knows what it held
   const io = await ask(dir, refused)
   assert.equal(io.state, 'unknown'); assert.match(io.reason, /EISDIR.*whether a daemon runs is not known/)
   const asked = []
@@ -101,7 +101,7 @@ test('stopDaemon with a unit: systemctl stop first, which stops it; then reset-f
   const t = table(UP); const c = clock()
   const sd = systemd({ onStop: () => { t.live.delete(4242); t.live.delete(4243) } })
   const r = await stopDaemon({ lockFile: lockAt(DAEMON), exec: sd.run, kill: t.kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, unitManaged: true, platform: 'linux', now: c.now, sleep: c.sleep }) // platform said out loud: the default is the machine's own, and on a Mac that is darwin — a platform with its own arm since the flip checklist ① (4.9 §4)
-  assert.deepEqual(sd.calls, ['systemctl --user stop asight-collector.service', 'systemctl --user reset-failed asight-collector.service', 'systemctl --user is-active asight-collector.service'])
+  assert.deepEqual(sd.calls, ['systemctl --user stop trocar-collector.service', 'systemctl --user reset-failed trocar-collector.service', 'systemctl --user is-active trocar-collector.service'])
   assert.deepEqual([r.stopped, r.how, r.pid, r.signals, t.sent], [true, 'systemctl', 4242, ['systemctl-stop'], []])
 })
 
@@ -122,7 +122,7 @@ test('a unit that cannot stop a stuck daemon (systemctl stop times out): the sig
   const r = await stopDaemon({ lockFile: lockAt(DAEMON), exec: sd.run, kill: t.kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, unitManaged: true, platform: 'linux', now: c.now, sleep: c.sleep })
   assert.deepEqual(r.signals, ['systemctl-stop', 'SIGTERM', 'SIGKILL', 'SIGTERM'])
   assert.deepEqual([r.stopped, r.how], [true, 'signal'])
-  assert.equal(sd.calls.at(-1), 'systemctl --user is-active asight-collector.service')
+  assert.equal(sd.calls.at(-1), 'systemctl --user is-active trocar-collector.service')
 })
 
 test('a lock that names a reused pid kills nothing; the identity is checked again between SIGTERM and SIGKILL; a helper pid that is some other process is not signalled (D-25)', async () => {
@@ -152,7 +152,7 @@ test('a unit systemd still reports active or activating is not "stopped", and a 
   const t = table(UP); const c = clock()
   const sd = systemd({ active: 'activating', onStop: () => { t.live.delete(4242); t.live.delete(4243) } })
   const r = await stopDaemon({ lockFile: lockAt(DAEMON), exec: sd.run, kill: t.kill, alive: t.alive, identity: t.identity, isHelper: t.isHelper, unitManaged: true, platform: 'linux', now: c.now, sleep: c.sleep })
-  assert.equal(r.stopped, false); assert.match(r.error, /is-active asight-collector\.service says activating/)
+  assert.equal(r.stopped, false); assert.match(r.error, /is-active trocar-collector\.service says activating/)
   const wedged = { ...table(UP), kill: (pid, sig) => wedged.sent.push([pid, sig]) } // survives everything (D state)
   wedged.sent = []; const c2 = clock()
   const r2 = await stopDaemon({ lockFile: lockAt(DAEMON), kill: wedged.kill, alive: wedged.alive, identity: wedged.identity, isHelper: wedged.isHelper, now: c2.now, sleep: c2.sleep })
@@ -185,10 +185,10 @@ test('② the cannot-tell reason is the platform\'s own: /proc only on Linux (da
 // the lock a darwin daemon writes carries {start_time, boot_id} from ps lstart and kern.boottime (psIdentity); off's identity check reads the
 // same shapes: the same process is running, a pid another process took since is stale, and so is the lock from before a reboot.
 test('on darwin shapes the daemon lock is verified — same process running, a reused pid or a reboot is stale', () => {
-  const home = tmpDir('asight-p260-'), file = path.join(home, 'lock')
+  const home = tmpDir('trocar-p260-'), file = path.join(home, 'lock')
   const ps = (lstart, sec) => (f, args) => (f === 'sysctl' ? { status: 0, stdout: `{ sec = ${sec}, usec = 0 } Thu Oct  9 08:53:20 2025\n`, stderr: '' } : { status: 0, stdout: `${lstart}\n`, stderr: '' })
   const mine = psIdentity(4242, { exec: ps('Wed Oct  7 04:27:00 2026', 1760000000) })
-  fs.writeFileSync(file, JSON.stringify({ pid: 4242, ...mine, socket: '/t/asight-0.sock' }))
+  fs.writeFileSync(file, JSON.stringify({ pid: 4242, ...mine, socket: '/t/trocar-0.sock' }))
   const read = (exec) => readDaemonLock({ file, alive: () => true, identity: identityFor({ platform: 'darwin', exec }) })
   const same = read(ps('Wed Oct  7 04:27:00 2026', 1760000000))
   assert.equal(same.state, 'running'); assert.equal(same.verified, undefined, 'verified, not the unverified fallback')

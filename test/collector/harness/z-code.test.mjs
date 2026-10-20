@@ -59,7 +59,7 @@ test('z-code: user caCertFile trusts; env and project scopes (from the git root 
     assert.deepEqual([proj.trust.trusted, proj.trust.reason, proj.trust.var], [false, 'shadowed', 'zcode:project:caCertFile'], 'a zcode.json at the git root, two levels up')
     assert.equal(judge(zcode, ctxFor({ home: s.home, cwd: `${s.home}/repo`, env: { ZCODE_AGENT_CA_CERT: merged } })).trust.trusted, true, 'the env wins over the project')
     // with an explicit CA file in force, NODE_EXTRA_CA_CERTS no longer counts (Node `ca` option)
-    const only = s.put('ca/asight.pem', CA.certPem)
+    const only = s.put('ca/trocar.pem', CA.certPem)
     assert.equal(judge(zcode, ctxFor({ home: s.home, cwd: `${s.home}/repo`, env: { NODE_EXTRA_CA_CERTS: only } })).trust.trusted, false)
     assert.equal(judge(zcode, ctxFor({ home: s.home, env: { ZCODE_AGENT_CA_CERT: '', NODE_EXTRA_CA_CERTS: only } })).trust.trusted, true, 'no CA file: the default store, which Electron-as-Node extends (acceptance ②)')
   } finally { s.done() }
@@ -100,8 +100,8 @@ test('z-code: a user config written after start is not believed; relay hosts fro
 })
 
 const planFor = (s, env = {}, running = []) => {
-  const dir = path.join(s.home, '.asight', 'collector')
-  return planTrust({ descriptors: [zcode], ctxFor: () => ({ os: 'none', home: s.home, env: new Map(Object.entries(env)), running: running.map((e) => new Map(Object.entries(e))), collectorDir: dir, caPem: path.join(dir, 'ca', 'asight-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: dir, roots: { node: [], osText: '' } })
+  const dir = path.join(s.home, '.trocar', 'collector')
+  return planTrust({ descriptors: [zcode], ctxFor: () => ({ os: 'none', home: s.home, env: new Map(Object.entries(env)), running: running.map((e) => new Map(Object.entries(e))), collectorDir: dir, caPem: path.join(dir, 'ca', 'trocar-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: dir, roots: { node: [], osText: '' } })
 }
 
 test('z-code inject: network.caCertFile in ~/.zcode/cli/config.json = combined-z-code.pem, which carries the CAs it covers or makes ineffective; the desktop setting and a set ZCODE_AGENT_CA_CERT are named (T10, T14)', () => {
@@ -113,14 +113,14 @@ test('z-code inject: network.caCertFile in ~/.zcode/cli/config.json = combined-z
     const corp = s.put('corp.pem', OTHER.certPem); const shell = s.put('shell.pem', SHELL.certPem); const desk = s.put('desk.pem', DESK.certPem)
     s.put('.zcode/cli/config.json', JSON.stringify({ model: 'lab/m', network: { caCertFile: corp } }, null, 2))
     s.put('.zcode/v2/setting.json', JSON.stringify({ httpProxyCaCertPath: desk }))
-    const dir = path.join(s.home, '.asight', 'collector')
+    const dir = path.join(s.home, '.trocar', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-z-code.pem')
     const p = planFor(s, { NODE_EXTRA_CA_CERTS: shell, ZCODE_AGENT_CA_CERT: corp }, [{ NODE_EXTRA_CA_CERTS: bundle }, { NODE_EXTRA_CA_CERTS: 'rel.pem' }])
     assert.deepEqual(p.entries.map((e) => [e.kind, e.path, e.keys, e.value]), [['json-key', path.join(s.home, '.zcode/cli/config.json'), ['network', 'caCertFile'], bundle]])
-    assert.deepEqual([p.files[0].path, p.files[0].role, p.files[0].sources], [bundle, 'bundle', [corp, desk, shell]], 'the caCertFile it replaces, the desktop setting, the install shell; never asight\'s own')
+    assert.deepEqual([p.files[0].path, p.files[0].role, p.files[0].sources], [bundle, 'bundle', [corp, desk, shell]], 'the caCertFile it replaces, the desktop setting, the install shell; never trocar\'s own')
     assert.deepEqual(fps(p.files[0].data), [fp(OTHER), fp(DESK), fp(SHELL), fp(CA)])
     const codes = p.records.map((r) => r.code)
-    assert.deepEqual(codes.filter((c) => c !== 'harness-note'), ['relative-path'], 'nothing unreadable: asight\'s own bundle is not a source')
+    assert.deepEqual(codes.filter((c) => c !== 'harness-note'), ['relative-path'], 'nothing unreadable: trocar\'s own bundle is not a source')
     assert.ok(p.records.some((r) => r.code === 'harness-note' && r.reason.includes('httpProxyCaCertPath') && r.reason.includes(desk)), 'the desktop setting that wins is named')
     assert.ok(p.records.some((r) => r.code === 'harness-note' && /^(?:z-code: )?ZCODE_AGENT_CA_CERT is set in this shell/.test(r.reason)), 'a ZCODE_AGENT_CA_CERT in the install shell is named')
     fs.rmSync(path.join(s.home, '.zcode', 'cli'), { recursive: true })
@@ -135,10 +135,10 @@ test('z-code through install / uninstall: the user\'s caCertFile is replaced and
     const before = JSON.stringify({ model: 'lab/m', network: { caCertFile: corp, timeout: 30 } }, null, 2) + '\n'
     const cfg = s.put('.zcode/cli/config.json', before)
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [zcode], freePort: async () => 47016, roots: { node: [], osText: '' } })
-    const dir = path.join(s.home, '.asight', 'collector')
+    const dir = path.join(s.home, '.trocar', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-z-code.pem')
     assert.deepEqual(JSON.parse(fs.readFileSync(cfg, 'utf8')), { model: 'lab/m', network: { caCertFile: bundle, timeout: 30 } })
-    assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER), ...fps(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8'))])
+    assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER), ...fps(fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'), 'utf8'))])
     const live = { os: 'linux', pid: 88, exe: EXE, argv: [EXE, CJS, 'app-server', '--stdio'], env: AS_NODE, startedAt: 0 }
     const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' }, scan: async () => [live] })
     assert.deepEqual([r.entries.map((e) => e.result), r.kept_bundles.map((k) => k.pids), r.still_trusting.map((x) => x.until)], [['restored'], [[88]], ['session-end']])

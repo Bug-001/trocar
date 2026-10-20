@@ -2,8 +2,8 @@
 // Each drives a root CSS custom property (never an inline width: that would beat the narrow-screen @media rule), is clamped, is
 // remembered per boundary in localStorage, and resets on a double click. Storage may be missing or throw: it is a convenience.
 const SPLITS = [
-  { div: '#divider', host: '#pages', prop: '--rightpage-w', key: 'asight.v2.split.rightpage', def: 320, min: 220, max: 720, margin: 380, width: (host, e) => host.getBoundingClientRect().right - e.clientX },
-  { div: '#maindiv', host: 'main', prop: '--outline-w', key: 'asight.v2.split.outline', def: 270, min: 160, max: 560, margin: 360, width: (host, e) => e.clientX - host.getBoundingClientRect().left },
+  { div: '#divider', host: '#pages', prop: '--rightpage-w', key: 'trocar.v2.split.rightpage', def: 320, min: 220, max: 720, margin: 380, width: (host, e) => host.getBoundingClientRect().right - e.clientX },
+  { div: '#maindiv', host: 'main', prop: '--outline-w', key: 'trocar.v2.split.outline', def: 270, min: 160, max: 560, margin: 360, width: (host, e) => e.clientX - host.getBoundingClientRect().left },
 ]
 const ls = {
   get: (k) => { try { return localStorage.getItem(k) } catch { return null } },

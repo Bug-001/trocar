@@ -13,7 +13,7 @@ const NOW = Date.parse('2026-10-06T12:00:00Z')
 const H = 3600e3
 const at = (msAgo) => new Date(NOW - msAgo).toISOString()
 function box() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-flows-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-flows-'))
   fs.mkdirSync(path.join(dir, 'flows'))
   const put = (day, recs, { tail = '' } = {}) => fs.writeFileSync(path.join(dir, 'flows', `${day}.ndjson`), recs.map((r) => JSON.stringify(r) + '\n').join('') + tail)
   return { dir, put, done: () => fs.rmSync(dir, { recursive: true, force: true }) }
@@ -21,7 +21,7 @@ function box() {
 const ids = (r) => r.records.map((x) => x.id)
 
 test('readFlows: no flows/ is "nothing yet"; an unreadable flows/ throws (503), never "no failures"', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-flows-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-flows-'))
   try {
     assert.deepEqual([readFlows({ dir, now: NOW }).missing, readFlows({ dir, now: NOW }).records.length], [true, 0])
     fs.writeFileSync(path.join(dir, 'flows'), 'not a directory')

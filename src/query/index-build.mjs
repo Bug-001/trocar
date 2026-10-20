@@ -1,7 +1,7 @@
 // src/query/index-build.mjs — the SEGMENT INDEX (RFC 1.6 §4.1, 4.2 §段索引; D59).
 //
-// `asight query` reads the raw records themselves; the only thing it keeps beside them is one small
-// index file per segment under ~/.asight/index/. It is a CACHE, nothing else: delete the directory and
+// `trocar query` reads the raw records themselves; the only thing it keeps beside them is one small
+// index file per segment under ~/.trocar/index/. It is a CACHE, nothing else: delete the directory and
 // the next read rebuilds it, byte for byte the same (test/query/segment-index.test.mjs). Nothing else
 // in the home is ever written by a query (V79).
 //
@@ -37,12 +37,12 @@ import { createHash, randomBytes } from 'node:crypto';
 import { fpRanges, readRangeSync } from './source.mjs';
 import { openSealed } from '../raw/reader.mjs';
 import { R, FLAG_NL, FLAG_UNPARSEABLE } from '../raw/format.mjs';
-import { asightHome, collectorHome } from '../paths.mjs';
+import { trocarHome, collectorHome } from '../paths.mjs';
 import { readDaemonLock } from '../off/daemon-stop.mjs';
 import { statKey, warmCache, fsTag } from './warm.mjs';
 
-const rawDir = (home = asightHome()) => path.join(home, 'raw');
-export const indexDir = (home = asightHome()) => path.join(home, 'index');
+const rawDir = (home = trocarHome()) => path.join(home, 'raw');
+export const indexDir = (home = trocarHome()) => path.join(home, 'index');
 const INDEX_V = 5;
 const CHUNK = 1 << 20;
 // How many appended bytes one catch-up of the daemon's keeper takes (src/collector/index-keeper.mjs imports it): the
@@ -398,7 +398,7 @@ export function storeIndex(fs, file, lines, problems, at = null) {
  *     mark to its current size, so the answer is the scan's answer; anything else falls back to the scan.
  * Never throws for a segment it cannot read: the reason is in `problems` and the caller lists it in `errors`.
  */
-export async function segmentIndex({ home = asightHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null } = {}) {
+export async function segmentIndex({ home = trocarHome(), segment, fs = nodeFs, maxBytes = Infinity, owner = false, entries = null } = {}) {
   const problems = [];
   const source = segmentSource(home, segment, fs);
   const sealed = /\.sealed$/.test(source);
@@ -445,11 +445,11 @@ const segRows = warmCache({ maxBytes: 64 * 1024 * 1024, bytes: (v) => v.records.
 export const segStamp = (home, segment, fs) => `${statKey(path.join(rawDir(home), `${segment}.ndjson`), fs)}|${statKey(path.join(rawDir(home), `${segment}.sealed`), fs)}`;
 /** warmSegmentIndex({home, segment, fs}) → the same `segmentIndex()` answer, read from disk only when that segment's
  *  file moved. For READERS only: a pass of the daemon's keeper (`owner`) writes, so it is never served from memory. */
-export const warmSegmentIndex = ({ home = asightHome(), segment, fs = nodeFs } = {}) =>
+export const warmSegmentIndex = ({ home = trocarHome(), segment, fs = nodeFs } = {}) =>
   segRows.get(`${fsTag(fs)}\n${home}\n${segment}`, segStamp(home, segment, fs), () => segmentIndex({ home, segment, fs }));
 
 // WHICH SEGMENT IS BEING WRITTEN (main-session decision, 2026-10-18): there is no `.closed` marker.
-// The running daemon records its current segment in its lock file (~/.asight/collector/lock), and a
+// The running daemon records its current segment in its lock file (~/.trocar/collector/lock), and a
 // lock only counts when its pid is alive and the lock is fresh (src/off/daemon-stop.mjs readDaemonLock).
 //
 // A READER ASKS NO QUESTION ABOUT A PROCESS, and takes only a FRESH lock as "being written"
@@ -472,7 +472,7 @@ const defaultLockState = (home, fs) => readDaemonLock({ file: path.join(collecto
 // wins (4.2:30), so it is the source, it gives the bytes, and the state is `closed` — not `sealed`, which would say the
 // long-term copy is the sealed one while 128 MB of plaintext is still on disk (tested 2026-10-18).
 /** allSegments({home}) → [{ segment, state, path, records, bytes, sealed_bytes, from, to, problems }], oldest first. */
-export async function allSegments({ home = asightHome(), fs = nodeFs, lockState = () => defaultLockState(home, fs) } = {}) {
+export async function allSegments({ home = trocarHome(), fs = nodeFs, lockState = () => defaultLockState(home, fs) } = {}) {
   let names;
   try { names = fs.readdirSync(rawDir(home)); } catch { return []; }
   const seen = new Map();

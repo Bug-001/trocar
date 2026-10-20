@@ -1,6 +1,6 @@
 // fsutil.mjs — the file primitives both halves of the install journal stand on: the hash, the durable atomic write, the
 // directories a write creates, the temp files a crash leaves, and the file a symlinked path really edits (RFC 4.6 §安装清单与卸载,
-// 1.6 R2). They live in src/off/ because `asight off` and the standalone `~/.asight/bin/asight-off` need them without the repo
+// 1.6 R2). They live in src/off/ because `trocar off` and the standalone `~/.trocar/bin/trocar-off` need them without the repo
 // (0.1 §2: this directory imports only node:* and itself); the install side (src/collector/core/trust/journal.mjs) imports them.
 // Every function that touches the disk takes `fs` last, default node:fs, so a test can inject a spy or a failing one.
 import nodeFs from 'node:fs'
@@ -27,7 +27,7 @@ export function fsyncDir(fs, dir) {
 // process holds the target open for a moment (Windows: an editor, a scanner, the agent itself, without FILE_SHARE_DELETE) is tried again
 // with a bounded backoff, about a second in all; which errors are retried is by errno, never by platform (X16). Whatever fails, the temp
 // file is removed before the error is thrown: a write that did not land leaves nothing next to the user's file.
-export const TMP_MARK = '.asight-tmp-'
+export const TMP_MARK = '.trocar-tmp-'
 const RENAME_BUSY = new Set(['EBUSY', 'EPERM', 'EACCES'])
 const RENAME_WAITS = [10, 20, 40, 60, 80, 100, 120, 150, 200, 220] // ms between tries; 1 s in all
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) // a synchronous wait: every writer here is synchronous
@@ -97,7 +97,7 @@ export function missingDirs(dir, fs = nodeFs) {
 export function removeEmptyDirs(dirs, fs = nodeFs) {
   for (const d of [...(dirs || [])].reverse()) { try { fs.rmdirSync(d) } catch { /* not empty, or gone */ } }
 }
-// Temp files a crashed write left next to `file` (4.6「不留残余」): <file>.asight-tmp-<pid>, and the CA store's <file>.tmp-<pid>.
+// Temp files a crashed write left next to `file` (4.6「不留残余」): <file>.trocar-tmp-<pid>, and the CA store's <file>.tmp-<pid>.
 export function sweepTemps(file, fs = nodeFs) {
   const base = path.basename(file)
   let names = []
@@ -107,14 +107,14 @@ export function sweepTemps(file, fs = nodeFs) {
   return gone
 }
 
-// The file asight edits for `file`: itself, or the regular file a symlink resolves to (a dotfiles setup). The link
+// The file trocar edits for `file`: itself, or the regular file a symlink resolves to (a dotfiles setup). The link
 // is never replaced by a regular file; a link to nothing, or to something that is not a regular file, is refused.
 export function editTarget(file, fs = nodeFs) {
   let st = null
   try { st = fs.lstatSync(file) } catch (e) { if (e.code !== 'ENOENT') throw e }
   if (!st || !st.isSymbolicLink()) return file
   let real
-  try { real = fs.realpathSync(file) } catch { throw new Error(`${file} is a symbolic link to a file that does not exist; asight will not create a file through it or replace the link. Fix or remove the link, then install again`) }
-  if (!fs.statSync(real).isFile()) throw new Error(`${file} links to ${real}, which is not a regular file; asight will not change it`)
+  try { real = fs.realpathSync(file) } catch { throw new Error(`${file} is a symbolic link to a file that does not exist; trocar will not create a file through it or replace the link. Fix or remove the link, then install again`) }
+  if (!fs.statSync(real).isFile()) throw new Error(`${file} links to ${real}, which is not a regular file; trocar will not change it`)
   return real
 }

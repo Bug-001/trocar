@@ -140,7 +140,7 @@ for (const width of [1280, 1024]) {
   }
 }
 
-test('K-30: with no token the page names `asight board`, draws no navigation and sends nothing after the first 403', { skip }, async () => {
+test('K-30: with no token the page names `trocar board`, draws no navigation and sends nothing after the first 403', { skip }, async () => {
   const b = await withBoard({ bytes: 0, token: false, chromium: gate.chromium })
   try {
     await b.page.waitForSelector('main.forbidden')

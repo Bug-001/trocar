@@ -1,5 +1,5 @@
 // test/query/readonly.test.mjs — V79 的 `query` 一半(RFC 1.6 §4.1): a query writes nothing in
-// ~/.asight but index/, and a home it cannot write at all still yields a document.
+// ~/.trocar but index/, and a home it cannot write at all still yields a document.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -31,7 +31,7 @@ test('跑前跑后 HOME 快照只差 index/', async () => {
   for (const k of added) assert.equal(after[k].split(':')[1], '600') // the index holds derived facts of 0600 files
 })
 
-test('只读的 ~/.asight 仍出文档,写不下索引不静默', async () => {
+test('只读的 ~/.trocar 仍出文档,写不下索引不静默', async () => {
   const home = rawHome()
   // a sealed segment: the one index a reader writes, so "cannot write it" is a thing that can happen to a query
   const { sealSegment } = await import('../../src/raw/seal.mjs')

@@ -2,9 +2,9 @@
 //
 // Why this module exists (first-run dead end): the capture writers and the board
 // reader each computed their own default, inline, and they disagreed —
-//   asight capture → ~/.atrace/capture.ndjson
-//   asight mitm    → ~/.atrace/asight/claude-capture.ndjson
-//   asight serve   → ~/.atrace/capture.ndjson
+//   trocar capture → ~/.atrace/capture.ndjson
+//   trocar mitm    → ~/.atrace/trocar/claude-capture.ndjson
+//   trocar serve   → ~/.atrace/capture.ndjson
 // So the documented happy path (arrange capture, then serve) showed "No sessions captured yet" while
 // the user's capture sat on disk one directory away, with nothing in the UI to explain why. Every new
 // user hit it. Inline defaults cannot be checked against each other; centralised ones can, and
@@ -14,35 +14,35 @@
 // what lets Claude Code / Codex / OpenCode sessions appear side by side on one board. A single-file
 // default silently hides every other harness the user captured.
 //
-// ── D27 (2026-07-20): the home is ~/.asight ─────────────────────────────────────────────────────
-// The product is asight everywhere — CLI, ASIGHT_* env, com.asight.monitor, the README title — and
+// ── D27 (2026-07-20): the home is ~/.trocar ─────────────────────────────────────────────────────
+// The product is trocar everywhere — CLI, TROCAR_* env, com.trocar.monitor, the README title — and
 // only the filesystem still carried the v0 prototype's name. D60 ② (2026-10-18) closed the reading
-// side too: older locations (`~/.atrace/asight/`, `~/.asight/sessions/`) are neither read nor touched.
+// side too: older locations (`~/.atrace/trocar/`, `~/.trocar/sessions/`) are neither read nor touched.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const asightHome = () => path.join(os.homedir(), '.asight');
+export const trocarHome = () => path.join(os.homedir(), '.trocar');
 
 // reverse-proxy / relay tee (CC-CLI, Codex, OpenCode, DeepSeek-CLI)
-export const captureOut = () => path.join(asightHome(), 'capture.ndjson');
+export const captureOut = () => path.join(trocarHome(), 'capture.ndjson');
 // MITM (Claude Desktop — the only source that must decrypt TLS)
-export const mitmOut = () => path.join(asightHome(), 'claude-capture.ndjson');
+export const mitmOut = () => path.join(trocarHome(), 'claude-capture.ndjson');
 // The per-user process collector's own state and logs (RFC 4.6 §记录) live here: ca/ flows/ audit/ replays/ lock
 // state.json. NO envelopes — those are segments under rawHome(). The board never reads this subtree because a
-// root's scan only descends into <sub>/calls.ndjson (server.mjs scanRoots), and `asight etl <dir>`
+// root's scan only descends into <sub>/calls.ndjson (server.mjs scanRoots), and `trocar etl <dir>`
 // does not descend at all. It needs a root of its own: the home's one-level scan never reaches it.
-export const collectorHome = (home = asightHome()) => path.join(home, 'collector');
+export const collectorHome = (home = trocarHome()) => path.join(home, 'collector');
 // The raw layer (D60①, 1.6 §1.7): the daemon's segments `<here>/<segment>.ndjson`, their sealed form `<segment>.sealed`,
 // and the seal journal. Only envelopes live here — the collector's own logs stay under collectorHome().
-export const rawHome = (home = asightHome()) => path.join(home, 'raw');
-// D60: what `asight query` builds from the segments to answer fast. Derived, never a source of truth — deleting it costs a rebuild, nothing more
+export const rawHome = (home = trocarHome()) => path.join(home, 'raw');
+// D60: what `trocar query` builds from the segments to answer fast. Derived, never a source of truth — deleting it costs a rebuild, nothing more
 // (src/query/index-build.mjs has the same path under its own name; uninstall reads it from here).
-export const indexHome = (home = asightHome()) => path.join(home, 'index');
+export const indexHome = (home = trocarHome()) => path.join(home, 'index');
 // D60③ (1.6 §4.2): the editable traffic class table — the user's copy of it (written whole on the first edit) and the
-// log of every change (old value, new value, time). Read by the collector (the level of a call) and by `asight classes`.
-export const classesFile = (home = asightHome()) => path.join(home, 'classes.json');
-export const classesLog = (home = asightHome()) => path.join(home, 'logs', 'classes.ndjson');
+// log of every change (old value, new value, time). Read by the collector (the level of a call) and by `trocar classes`.
+export const classesFile = (home = trocarHome()) => path.join(home, 'classes.json');
+export const classesLog = (home = trocarHome()) => path.join(home, 'logs', 'classes.ndjson');
 
 // Capture CA. NOT symmetric with the others: for every other path "not found" means an empty board,
 // but for the CA it means the code MINTS A SECOND ROOT and asks the user to trust it — while the
@@ -51,20 +51,20 @@ export const classesLog = (home = asightHome()) => path.join(home, 'logs', 'clas
 // so an existing CA keeps working wherever it sits: if the legacy directory holds one, that IS the
 // CA, and we use it in place. Only a machine with no CA at all gets one in the new home.
 // (The subject name `CA_CN` is frozen for exactly this reason — see D27's explicit non-scope.)
-export function caDir({ home = asightHome(), legacyCa = path.join(os.homedir(), '.atrace', 'ca') } = {}) {
+export function caDir({ home = trocarHome(), legacyCa = path.join(os.homedir(), '.atrace', 'ca') } = {}) {
   const fresh = path.join(home, 'ca');
   if (existsQuiet(fresh)) return fresh;
   if (existsQuiet(legacyCa)) return legacyCa;
   return fresh;
 }
 
-// what `asight serve` reads when the user gives no --source: the roots that EXIST. Listing an absent
+// what `trocar serve` reads when the user gives no --source: the roots that EXIST. Listing an absent
 // root would make the loader throw "capture source unreadable" on a clean machine, turning "nothing
 // captured yet" into "something is broken", so absence is filtered here.
 // 2026-10-06 (4.4:129): the collector directory is the second root, filtered the same way — a machine
 // that has never run the collector lists no phantom root.
-// 2026-10-18 (D60 ②): older locations (`~/.atrace/asight/`) are neither read nor touched.
-export function serveSource({ home = asightHome(), collector = collectorHome(home) } = {}) {
+// 2026-10-18 (D60 ②): older locations (`~/.atrace/trocar/`) are neither read nor touched.
+export function serveSource({ home = trocarHome(), collector = collectorHome(home) } = {}) {
   const roots = [];
   if (existsQuiet(home)) roots.push(home);
   if (existsQuiet(collector)) roots.push(collector);
@@ -72,8 +72,8 @@ export function serveSource({ home = asightHome(), collector = collectorHome(hom
 }
 
 // What counts as a capture file at the top of a source directory: a `*.ndjson` that is a regular
-// file or a symlink to one (e.g. ~/.asight/codex-capture.ndjson -> ~/.atrace/codex-capture.ndjson). ONE rule
-// for the board loader, the block resolver and `asight etl <dir>`: they used to disagree (isFile()
+// file or a symlink to one (e.g. ~/.trocar/codex-capture.ndjson -> ~/.atrace/codex-capture.ndjson). ONE rule
+// for the board loader, the block resolver and `trocar etl <dir>`: they used to disagree (isFile()
 // in two of them dropped links silently), so the board listed what the resolver could not open.
 // A link that points nowhere, or at a directory, is not a capture file.
 export function isCaptureFile(dir, ent) {

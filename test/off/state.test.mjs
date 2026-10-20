@@ -1,4 +1,4 @@
-// test/off/state.test.mjs — src/off/state.mjs: ~/.asight/collector/state.json version 2 (1.6 §1.5, V28's file half). The daemon's switch
+// test/off/state.test.mjs — src/off/state.mjs: ~/.trocar/collector/state.json version 2 (1.6 §1.5, V28's file half). The daemon's switch
 // (test/collector/core/switch.test.mjs) and the undo side both read and write it through here: version 1 reads as version 2 for the
 // installed harnesses, a file that cannot be read is thrown (never read as "everything off" by this module), and a write is all or nothing.
 import test from 'node:test'
@@ -10,7 +10,7 @@ import { HARNESS_IDS } from '../../src/cli/harness-names.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
 const NOW = new Date('2026-10-07T10:00:00.000Z')
-const file = () => path.join(tmpDir('asight-state-'), 'collector', 'state.json')
+const file = () => path.join(tmpDir('trocar-state-'), 'collector', 'state.json')
 const put = (f, v) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, typeof v === 'string' ? v : JSON.stringify(v)) }
 const [A, B] = HARNESS_IDS
 

@@ -1,4 +1,4 @@
-// src/query/named/block.mjs — `asight query block --ref <ref>` (RFC 1.6 §4.1, 附录 C.5).
+// src/query/named/block.mjs — `trocar query block --ref <ref>` (RFC 1.6 §4.1, 附录 C.5).
 //
 // One block's bytes, read back from the record they were captured in. A ref names its record as
 // `<segment>:<line>` (D60) and, optionally, a field and a byte span inside it — the same text_ref the
@@ -24,12 +24,12 @@ const NOTE = {
 };
 
 export async function run({ home, fs, params: p, errors }) {
-  if (p.ref == null || p.ref === '') throw new QueryArgError('asight query block: --ref is required (a block\'s ref, as `asight query session` gives it)');
+  if (p.ref == null || p.ref === '') throw new QueryArgError('trocar query block: --ref is required (a block\'s ref, as `trocar query session` gives it)');
   const ref = String(p.ref);
   const { recordId, field, start, end } = parseTextRef(ref);
   const at = parseRecordId(recordId);
-  if (!at) throw new QueryArgError(`asight query block: --ref ${JSON.stringify(ref)} names no record — a record is \`<segment>:<line>\``);
-  if (field != null && !TEXT_REF_FIELD.test(field)) throw new QueryArgError(`asight query block: "${field}" is not a ref field (RFC 4.2:40: resp.raw | resp.messages.<j> | req_extra_messages.<k>)`);
+  if (!at) throw new QueryArgError(`trocar query block: --ref ${JSON.stringify(ref)} names no record — a record is \`<segment>:<line>\``);
+  if (field != null && !TEXT_REF_FIELD.test(field)) throw new QueryArgError(`trocar query block: "${field}" is not a ref field (RFC 4.2:40: resp.raw | resp.messages.<j> | req_extra_messages.<k>)`);
 
   const miss = (reason) => { errors.push({ where: ref, reason }); return { ref, bytes: null, encoding: null, fidelity: null, truncated: null }; };
   let raw;

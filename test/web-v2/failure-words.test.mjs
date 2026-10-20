@@ -1,4 +1,4 @@
-// test/web-v2/failure-words.test.mjs — every failure code asight's writers can put into a log has a sentence in the one catalog (src/cli/words.mjs
+// test/web-v2/failure-words.test.mjs — every failure code trocar's writers can put into a log has a sentence in the one catalog (src/cli/words.mjs
 // FAILURE_WORDS + statusReason, via failureBrief), so no face shows a raw code (D58②); and the board keeps no twin of that catalog (0.1 §2).
 import test from 'node:test'
 import assert from 'node:assert/strict'

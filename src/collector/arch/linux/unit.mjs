@@ -1,5 +1,5 @@
 // unit.mjs — the per-user systemd unit that keeps the collector daemon running (RFC 4.6 §安装清单与卸载「用户级自启
-// 单元」, D36). Listed in the install manifest like every other file asight writes; enabled with --now so the
+// 单元」, D36). Listed in the install manifest like every other file trocar writes; enabled with --now so the
 // daemon starts at once and at every login. MUST NOT set NoNewPrivileges or CapabilityBoundingSet: the helper is a
 // file-capability exec and either would strip its capabilities.
 import nodeFs from 'node:fs'
@@ -11,7 +11,7 @@ import { execTool } from '../../../off/exec.mjs'
 import { removeWantsLinks } from '../../../off/autostart.mjs'
 import { daemonLogPaths, ensureDaemonLogs } from '../daemon-logs.mjs'
 
-export const UNIT_NAME = 'asight-collector.service'
+export const UNIT_NAME = 'trocar-collector.service'
 export const unitPath = (home) => path.join(home, '.config', 'systemd', 'user', UNIT_NAME)
 // systemd: C-style escapes inside quotes; `%` starts a specifier in Environment= and ExecStart=, `$` a variable in ExecStart=
 const esc = (s) => String(s).replace(/(["\\])/g, '\\$1').replace(/%/g, '%%')
@@ -21,13 +21,13 @@ export const wantsLink = (home) => path.join(path.dirname(unitPath(home)), 'defa
 
 // env: what the daemon's own environment needs that systemd --user does not give it (install decides: the install
 // shell's NODE_EXTRA_CA_CERTS, 4.6 §引擎 5) — the daemon's only, never the login environment.
-// logs (D46, given by userUnit): StandardOutput / StandardError = append: the two files under ~/.asight/collector/logs/
+// logs (D46, given by userUnit): StandardOutput / StandardError = append: the two files under ~/.trocar/collector/logs/
 // — the daemon's own console, a journald-free face an `ssh` in can read (systemd creates the file on first write; the
 // directory and the two empty 0600 files are made at unit-write time by ensureDaemonLogs). `%` in a path is a specifier
 // there too, so it is doubled.
 export function unitText({ node, script, env = {}, logs = null }) {
   return [
-    '[Unit]', 'Description=asight transparent collector (per user)', '',
+    '[Unit]', 'Description=trocar transparent collector (per user)', '',
     '[Service]', 'Type=simple', ...Object.entries(env).map(([k, v]) => `Environment="${esc(`${k}=${v}`)}"`),
     `ExecStart=${quoteExec(node)} ${quoteExec(script)} daemon`,
     ...(logs ? [`StandardOutput=append:${logs.out.replace(/%/g, '%%')}`, `StandardError=append:${logs.err.replace(/%/g, '%%')}`] : []),
@@ -42,7 +42,7 @@ export function systemctl(args, { run = null, env = process.env } = {}) {
   return execTool('systemctl', ['--user', ...args], { run, env })
 }
 
-// The wants/ symlinks `enable` created are src/off/autostart.mjs (`asight off` removes them without this directory, 1.6 R3).
+// The wants/ symlinks `enable` created are src/off/autostart.mjs (`trocar off` removes them without this directory, 1.6 R3).
 export { removeWantsLinks } from '../../../off/autostart.mjs'
 
 // `install` enables AND starts it (`enable --now`) when no daemon answers, only enables when one does (拉起不是重启: a daemon someone

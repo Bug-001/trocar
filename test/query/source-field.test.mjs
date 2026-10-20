@@ -25,7 +25,7 @@ const RECORDS = [
 ];
 
 async function resolver(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-field-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-field-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, FILE), RECORDS.map((r) => JSON.stringify(r)).join('\n') + '\n');
   const resolve = await buildResolver([dir]);

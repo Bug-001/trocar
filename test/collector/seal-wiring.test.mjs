@@ -58,10 +58,10 @@ async function sealedLeftover({ raw, capture }) {
 test('linux: runDaemon seals the last run\'s closed segment and leaves the older version\'s capture alone', { timeout: 30_000 }, async () => {
   const root = tmpDir('as-sw-') // short: unix socket paths are length-limited
   const home = path.join(root, 'home')
-  const dir = path.join(home, '.asight', 'collector')
+  const dir = path.join(home, '.trocar', 'collector')
   const left = leftovers(dir)
   const p = fakeProc()
-  const makeClient = () => createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
+  const makeClient = () => createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 })
   await installCollector({ home, env: { HOME: home }, osName: 'none', harnesses: [cc], freePort: async () => 0 })
   const arch = { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: process.getuid() }) }
   const d = await startDaemon({ dir, socketPath: path.join(root, 'c.sock'), arch, harnesses: [cc] })

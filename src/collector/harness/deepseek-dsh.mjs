@@ -8,8 +8,8 @@
 // environment lacks, and dsh refuses to start when either file sets a bootstrap name (every CA / TLS variable,
 // NODE_OPTIONS, DEEPSEEK_BASE_URL, …; the home file alone may set the proxy names). Base URLs: DEEPSEEK_BASE_URL /
 // DEEPSEEK_SEARCH_BASE_URL from the launch env, `baseURL:` in the home and profile cordis.patch.yml.
-// Trust entry (D37④): one sentinel row in $DSH_HOME/cordis.patch.yml (it applies to every profile) loads asight's
-// plugin <collector>/plugins/dsh/index.js, which appends the asight CA to Node's default roots and writes the per-pid
+// Trust entry (D37④): one sentinel row in $DSH_HOME/cordis.patch.yml (it applies to every profile) loads trocar's
+// plugin <collector>/plugins/dsh/index.js, which appends the trocar CA to Node's default roots and writes the per-pid
 // marker. It adds nothing on Node < 22.19 (no tls.setDefaultCACertificates) or under --use-openssl-ca; the reason is
 // derived here from the exe's Node release and the process's flags (4.6: the plugin itself stays silent).
 import path from 'node:path'
@@ -59,8 +59,8 @@ function inject(ctx) {
       { path: entry, role: 'plugin', data: renderPlugin('dsh/index.js', { caFile: ctx.caPem, markerDir: path.join(ctx.collectorDir, 'run', 'trust') }) },
       { path: path.join(dir, 'package.json'), role: 'plugin', data: ANONYMOUS_MODULE_MANIFEST },
     ],
-    entries: [{ kind: 'text', format: 'yaml-list', path: path.join(dshHome(ctx.env, ctx.home), 'cordis.patch.yml'), line: `- insert: [{ name: ${JSON.stringify(entry)} }] ${lineComment("loads asight's CA trust plugin")}`, semantic: 'append' }],
-    notes: [{ code: 'harness-note', text: `a dsh on Node older than ${MIN_NODE}, or started with --use-openssl-ca, does not add the asight CA and is not captured` }],
+    entries: [{ kind: 'text', format: 'yaml-list', path: path.join(dshHome(ctx.env, ctx.home), 'cordis.patch.yml'), line: `- insert: [{ name: ${JSON.stringify(entry)} }] ${lineComment("loads trocar's CA trust plugin")}`, semantic: 'append' }],
+    notes: [{ code: 'harness-note', text: `a dsh on Node older than ${MIN_NODE}, or started with --use-openssl-ca, does not add the trocar CA and is not captured` }],
   }
 }
 
@@ -98,7 +98,7 @@ const proxyMode = {
     plugin: { kind: 'plugin', template: 'cordis-plugin', dir: DSH(), loader: { file: DSH('cordis.patch.yml'), format: 'yaml', keys: ['*', 'insert'] } },
   },
   trusts: {
-    // the plugin carries the asight root in process (carrier time = the plugin's installed_at); dsh is Node, so the files its own
+    // the plugin carries the trocar root in process (carrier time = the plugin's installed_at); dsh is Node, so the files its own
     // NODE_EXTRA_CA_CERTS names are in its set too (a relay's private CA: the door verifies that upstream with it, 4.11 §3 ⑭)
     node: { base: 'node', sources: [{ from: { env: 'NODE_EXTRA_CA_CERTS' }, semantics: 'add' }] },
   },
@@ -133,9 +133,9 @@ export default {
       return v && !versionAtLeast(v, MIN_NODE) ? 'dsh-node-too-old' : 'no-marker'
     },
     hints: {
-      'dsh-use-openssl-ca': 'under --use-openssl-ca the asight plugin adds nothing (the call would replace the default roots); start dsh without it to be captured',
+      'dsh-use-openssl-ca': 'under --use-openssl-ca the trocar plugin adds nothing (the call would replace the default roots); start dsh without it to be captured',
       'dsh-node-too-old': `this dsh runs on a Node older than ${MIN_NODE}, which cannot add a CA at run time; run dsh on a newer Node to be captured`,
-      'no-marker': "the asight plugin did not report trust for this dsh (its patch row or plugin file is gone, or the process started before install); restart it once",
+      'no-marker': "the trocar plugin did not report trust for this dsh (its patch row or plugin file is gone, or the process started before install); restart it once",
     },
   },
 }

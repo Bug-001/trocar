@@ -1,12 +1,12 @@
-// sign-helper.swift — asight's macOS key custody (RFC 4.11 P1 `keychain`, plan decision #10), ported from the lab's
+// sign-helper.swift — trocar's macOS key custody (RFC 4.11 P1 `keychain`, plan decision #10)
 // The root's P-256 private key lives in the user's login keychain, not extractable
 // and sensitive (the flags at the top level as well, R3-M1); its ACL names this binary, so only this binary signs with it.
 // It signs nothing a caller hands it: it BUILDS both certificates itself (CM3) — the root (CA pathLen 1, KU keyCertSign|cRLSign,
 // EKU serverAuth, SKI) and the 7-day intermediate (CA pathLen 0, same KU/EKU, SKI, AKI = the root's key, issuer = the root).
-//   asight-sign-helper create --subject <cn>        → {"rootDer":b64}        (exit 5 + {"error":"exists"} when a key is there)
-//   asight-sign-helper exists                       → {"exists":true|false}
-//   asight-sign-helper issue --spki <b64 P-256 SPKI> --serial <hex> --not-before <iso>  → {"certDer":b64}
-//   asight-sign-helper remove                       → {"removed":true|false}
+//   trocar-sign-helper create --subject <cn>        → {"rootDer":b64}        (exit 5 + {"error":"exists"} when a key is there)
+//   trocar-sign-helper exists                       → {"exists":true|false}
+//   trocar-sign-helper issue --spki <b64 P-256 SPKI> --serial <hex> --not-before <iso>  → {"certDer":b64}
+//   trocar-sign-helper remove                       → {"removed":true|false}
 // No GUI session (CSSMERR_CSP_NO_USER_INTERACTION over ssh, R3-M3), interaction not allowed, a locked keychain:
 // {"error":"unavailable"}, exit 3. No key: {"error":"no-key"}, exit 4. Bad argv: exit 2. Anything else: exit 1.
 // Build: scripts/build-darwin-native.sh (universal, pinned in native/pins.json). Never run it in a test: it writes the keychain.
@@ -14,7 +14,7 @@ import CryptoKit
 import Foundation
 import Security
 
-let LABEL = "asight root key"
+let LABEL = "trocar root key"
 func emit(_ o: [String: Any], _ code: Int32 = 0) -> Never {
   FileHandle.standardOutput.write(try! JSONSerialization.data(withJSONObject: o, options: [.sortedKeys]) + Data([0x0a]))
   exit(code)
@@ -130,7 +130,7 @@ case "issue":
   let (k, cn) = found
   let point = spki.suffix(65), rootPoint = pointOf(k)
   let aki = seq(hx("0603551d23"), octet(seq(tlv(0x80, [keyId(rootPoint)]))))
-  let subject = name("asight intermediate \(ISO8601DateFormatter().string(from: nb))")
+  let subject = name("trocar intermediate \(ISO8601DateFormatter().string(from: nb))")
   let cert = certificate(key: k, serial: hx(serialHex), issuer: name(cn), subject: subject, notBefore: nb, notAfter: nb + 7 * DAY,
                          point: Data(point), exts: caExtensions(pathLen: 0, point: Data(point)) + [aki])
   emit(["certDer": cert.base64EncodedString()])
@@ -139,5 +139,5 @@ case "remove":
   if st != errSecSuccess && st != errSecItemNotFound { fail(Int(st), "remove") }
   emit(["removed": st == errSecSuccess])
 default:
-  usage("asight-sign-helper create --subject <cn> | exists | issue --spki <b64> --serial <hex> --not-before <iso> | remove")
+  usage("trocar-sign-helper create --subject <cn> | exists | issue --spki <b64> --serial <hex> --not-before <iso> | remove")
 }

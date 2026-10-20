@@ -1,14 +1,14 @@
-// autostart.mjs (src/off) — taking the per-user autostart out of the way (RFC 1.6 §1.4 第 4 步: `asight off` with no names, and `uninstall`):
-// `systemctl --user disable asight-collector.service`, and the `*.wants/` links `enable` made, which are removed by hand too when systemd --user
-// was down. The unit FILE is asight's own and stays until `uninstall` removes it (4.6 §安装清单与卸载). removeWantsLinks moved here from
+// autostart.mjs (src/off) — taking the per-user autostart out of the way (RFC 1.6 §1.4 第 4 步: `trocar off` with no names, and `uninstall`):
+// `systemctl --user disable trocar-collector.service`, and the `*.wants/` links `enable` made, which are removed by hand too when systemd --user
+// was down. The unit FILE is trocar's own and stays until `uninstall` removes it (4.6 §安装清单与卸载). removeWantsLinks moved here from
 // src/collector/arch/linux/unit.mjs, which re-exports it; the unit's name and path are written here too (src/off imports nothing outside
 // itself, 0.1 §2) and test/off/autostart.test.mjs holds them equal to unit.mjs's. systemctl runs through execTool, so a test injects the runner.
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { execTool } from './exec.mjs'
 
-export const UNIT_FILE_NAME = 'asight-collector.service'
-/** ~/.config/systemd/user/asight-collector.service */
+export const UNIT_FILE_NAME = 'trocar-collector.service'
+/** ~/.config/systemd/user/trocar-collector.service */
 export const unitFilePath = (home) => path.join(home, '.config', 'systemd', 'user', UNIT_FILE_NAME)
 
 /** The wants/ symlinks `enable` created, removed; `disable` does the same, this catches the ones left when systemd --user was down. `onError(path, err)`:

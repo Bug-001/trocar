@@ -1,9 +1,9 @@
-// state.mjs — ~/.asight/collector/state.json: what the operator asked for, per harness (RFC 1.6 §1.5, 4.6 §开关语义, D39②).
+// state.mjs — ~/.trocar/collector/state.json: what the operator asked for, per harness (RFC 1.6 §1.5, 4.6 §开关语义, D39②).
 //   version 2: { version: 2, updated_at, harnesses: { <id>: { desired: 'on'|'off', policy?: 'auto'|'all', extra_hosts?: [..], updated_at } } }
 //   version 1 (before D39): { version: 1, desired, policy, extra_hosts, updated_at } — one switch for everything; read as version 2 by
 //   giving each installed harness the same three values (migrateV1).
 // This module reads, migrates and writes the file and knows nothing else: the daemon's switch (src/collector/core/switch.mjs) and the
-// undo side (`asight off`, the standalone `asight-off`) both come through here, so a file written by one is read by the other. It
+// undo side (`trocar off`, the standalone `trocar-off`) both come through here, so a file written by one is read by the other. It
 // imports only node:* (0.1 §2: src/off/ is what the single-file copy is generated from). An entry may omit `policy` / `extra_hosts`:
 // the reader that needs them fills the default (the daemon's DEFAULT_POLICY, `[]`); this module never invents either.
 // A file that is there and cannot be read is thrown, never read as "everything off" here: what to do about it (all off, say so) is

@@ -1,14 +1,14 @@
 // Invariant 4 producer test: the CC compaction-summary block MUST NOT pass as verbatim context.
 //
 // After a compaction, Claude Code replaces the entire earlier conversation with a CLIENT-GENERATED
-// summary and sends it as an ordinary user text block. On the wire it is byte-faithful (asight
+// summary and sends it as an ordinary user text block. On the wire it is byte-faithful (trocar
 // captured every byte), but as CONTEXT it is a summary standing in for the original turns — spec
 // 2.3:45 "源侧被客户端摘要 / 省略 / 截断的块 → 就地标其性质", enum in 3.2:63.
 // Rendering it unbadged makes ~10KB of client summary indistinguishable from the real earlier
 // conversation, which is exactly what invariant 4 forbids.
 //
 // Both preamble variants below are REAL — taken verbatim from test/fixtures/cc-session-real.ndjson
-// and from the live capture (~/.atrace/asight), not invented for this test.
+// and from the live capture (~/.atrace/trocar), not invented for this test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { faithfulness, dissectBlocks } from '../../src/dissect/cc.mjs';

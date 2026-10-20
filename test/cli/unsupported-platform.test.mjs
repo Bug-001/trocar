@@ -14,7 +14,7 @@ const tree = (d) => fs.readdirSync(d, { recursive: true }).sort()
 
 for (const platform of ['freebsd', 'sunos', 'aix']) {
   test(`V14: on ${platform}, on and daemon say not supported yet and exit 1, writing nothing; off says nothing is installed and exits 0`, async () => {
-    const home = tmpDir('asight-v14-'), env = { HOME: home }
+    const home = tmpDir('trocar-v14-'), env = { HOME: home }
     // a daemon must never really start here (the host may be capturing): an injected start that fails the test if it is reached
     const deps = { getuid: () => 501, startDaemon: async () => { throw new Error('the daemon was started on a platform with no collector') }, proc: { on() {}, stdin: null } }
     for (const [name, run] of [['on', () => runOnCli([], { io: o.io, env, home, platform, deps })], ['daemon', () => runDaemonCli([], { io: o.io, env, home, platform, deps })]]) {

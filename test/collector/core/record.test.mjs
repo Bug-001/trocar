@@ -55,7 +55,7 @@ test('envelope: a request body that never finished carries req_partial:<reason> 
 })
 
 test('store: 0600 files, 0700 dirs, streams split by kind, write errors never throw', () => {
-  const root = tmpDir('asight-store-')
+  const root = tmpDir('trocar-store-')
   const s = createRecordStore({ root: path.join(root, 'collector'), now: () => new Date('2026-10-05T01:00:00.000Z') })
   s.envelope({ ts: '2026-10-05T01:00:00.000Z', id: 'a' }); s.flow({ ts: '2026-10-05T01:00:00.000Z', flow_id: 'f' })
   s.audit({ ts: '2026-10-05T01:00:00.000Z' }); s.replay({ ts: '2026-10-05T01:00:00.000Z', id: 'b' })
@@ -117,7 +117,7 @@ test('ws envelope: no opener → req_body null; a binary opener → req_body nul
 // current segment, test/collector/record/segments.test.mjs.) On a day change the previous day's fds are fsync'd and
 // closed (4.6 §事件与码 「audit/、replays/ 换日时先 fsync 再关掉前一天的 fd」); there are no closing markers anywhere.
 test('store: crossing midnight fsyncs and closes the previous day\'s files, so a long-running daemon does not leak one fd set per day', () => {
-  const root = tmpDir('asight-store-')
+  const root = tmpDir('trocar-store-')
   let clock = '2026-10-05T23:59:01.000Z'
   const s = createRecordStore({ root, now: () => new Date(clock), onError: (e) => { throw e } })
   s.flow({ flow_id: 'f1' }); s.audit({ event: 'on' }); s.replay({ id: 'r1' })
@@ -137,7 +137,7 @@ test('store: crossing midnight fsyncs and closes the previous day\'s files, so a
 })
 
 test('store: a clock set back keeps writing the latest day\'s file, never appends to an earlier (maybe sealed) one (F3(i))', () => {
-  const root = tmpDir('asight-store-')
+  const root = tmpDir('trocar-store-')
   try {
     let clock = '2026-10-06T00:00:30.000Z'
     const s = createRecordStore({ root, now: () => new Date(clock), onError: (e) => { throw e } })
@@ -153,7 +153,7 @@ test('store: a clock set back keeps writing the latest day\'s file, never append
 // D38 a file renamed or deleted while open is reopened before the next write and reported (file-replaced) — no
 // line goes into an orphan inode.
 test('store: a flows file renamed or deleted while open is reopened, and that is a file-replaced failure', () => {
-  const root = tmpDir('asight-store-')
+  const root = tmpDir('trocar-store-')
   try {
     const errs = []
     const s = createRecordStore({ root, now: () => new Date('2026-10-06T01:00:00.000Z'), onError: (e) => errs.push(e) })

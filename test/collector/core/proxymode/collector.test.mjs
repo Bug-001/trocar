@@ -1,6 +1,6 @@
 // test/collector/core/proxymode/collector.test.mjs — the collector model's daemon half (spec 4.11 §3 ① ② ③ ⑥, P2, P7, P10, P11, P12; plan §E.6 ruling 1).
 // CM22 at the door: over every descriptor form and the verdict generator's axes (verdict-world.mjs), meta.decrypt equals verdictOf. CM20 / ⑥: meta.upstream
-// equals upstreamFor over env × system proxy × prior × identified, and the X-Asight-Upstream gate. CM19 / CM33: the PAC door. CM23: an idle holder keeps
+// equals upstreamFor over env × system proxy × prior × identified, and the X-Trocar-Upstream gate. CM19 / CM33: the PAC door. CM23: an idle holder keeps
 // its door forward-only. CM6: no custody / no key. ① / G4: no writes; restore reuses the recorded ports; a taken port is engine-port-taken and no door.
 // The world is injected (no real OS, no socket): the door half, the owner / facts readers, the process table, the timers.
 import test from 'node:test'
@@ -188,7 +188,7 @@ test('CM20 · meta.upstream equals upstreamFor over env × system proxy × prior
   }
 })
 
-test('CM20 · X-Asight-Upstream counts only from a form whose hook sends it; from anyone else it is ignored and recorded without its value', async () => {
+test('CM20 · X-Trocar-Upstream counts only from a form whose hook sends it; from anyone else it is ignored and recorded without its value', async () => {
   const hooked = descs.find((d) => d.proxyMode.forms.every((f) => TEMPLATES[(d.proxyMode.certs[f.cert] || {}).template]?.sendsUpstreamHeader))
   const plain = descs.find((d) => d !== hooked && d.proxyMode.forms.some((f) => f.os.includes('darwin')))
   for (const [d, counts] of [[hooked, true], [plain, false]]) {
@@ -215,22 +215,22 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   assert.equal(doors[pacG], 'http://127.0.0.1:18103', 'an auth:false door takes no credentials')
   assert.equal(opened[0].auth, false); assert.equal('token' in opened[0], false)
   for (const address of ['127.0.0.1', 'LocalHost', 'door.localhost', '127.0.0.2', '::1']) assert.equal(await c.lookupIngress({ peer: PEER, user: pacG, target: { address, port: 18103 } }), null, `${address}: a loop through the door (chain.mjs isLoopbackHost), not a flow`)
-  const on = await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' })
+  const on = await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
   assert.equal(on.status, 200); assert.match(on.body, /PROXY 127\.0\.0\.1:18103; PROXY sys\.corp:8080/)
   w.facts = { uid: 502, startedAt: INSTALLED + 1 }
-  assert.equal(await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' }), null, 'another user, for certain: refused')
+  assert.equal(await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' }), null, 'another user, for certain: refused')
   assert.equal(await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } }), null, 'a CONNECT from another user is refused too')
   w.pid = null // the owner could not be read
-  const unread = await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' })
+  const unread = await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
   assert.equal(unread.status, 200); assert.doesNotMatch(unread.body, /18103/, 'no door'); assert.match(unread.body, /return "PROXY sys\.corp:8080"/, 'the app keeps the user\'s system proxy')
   assert.deepEqual(records.filter((r) => r.code === 'pac-peer-refused').length, 3)
   w.pid = 77
   w.facts = { uid: 501, agent: pacDesc.name, startedAt: INSTALLED + 1 }
   w.manifest = manifestOf(pacDesc.name, { liveness: { [pacDesc.name]: { on_at: iso(INSTALLED), off_at: iso(INSTALLED + 10) } } })
   w.procs = [{ pid: 77, startedAt: INSTALLED + 1 }]
-  await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' }) // the app took the PAC: it read the entry, a holder after off (P12)
+  await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' }) // the app took the PAC: it read the entry, a holder after off (P12)
   await c.off({ harnesses: [pacDesc.name] })
-  const after = await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' })
+  const after = await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
   assert.match(after.body, /return "PROXY sys\.corp:8080"/, 'after off only the app\'s own way')
   assert.equal((await c.servePac({ peer: PEER, user: pacG, path: '/other' })).status, 404)
   c.close()
@@ -248,7 +248,7 @@ test('CM19 / P10 · the PAC door dials the own leg its PAC names: a bypass-list 
     assert.deepEqual(await dial('gw.corp.example'), { kind: 'direct' }, `${agent}: a bypass-list host is dialled direct, never through the env's proxy`)
     assert.deepEqual(await dial('api.example'), proxyOf(sp.url), `${agent}: any other host through the user's fixed system proxy, the PAC's own leg`)
     if (agent) assert.equal(c.upstreams()[pacG][0].source, 'system-proxy', 'status reads the same answer')
-    const pac = (await c.servePac({ peer: PEER, user: pacG, path: '/asight.pac' })).body
+    const pac = (await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })).body
     assert.match(pac, /corp\.example/); assert.match(pac, /"PROXY 127\.0\.0\.1:18104; PROXY sys\.corp:8080"/)
     w.sp = null
     assert.deepEqual(await dial('api.example'), { kind: 'direct' }, 'no system proxy: direct, as the PAC then says')

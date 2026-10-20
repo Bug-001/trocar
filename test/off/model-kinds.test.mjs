@@ -1,5 +1,5 @@
 // test/off/model-kinds.test.mjs — the manifest kinds the collector model adds (4.11 P13): `text` / `pem-block` (rule U: a marked PEM block at the end
-// of a user's certificate file) and `json-array-item` (one element asight added to a JSON array) are undone byte for byte while the file is untouched,
+// of a user's certificate file) and `json-array-item` (one element trocar added to a JSON array) are undone byte for byte while the file is untouched,
 // and by their own marks / element when the user edited it — the user's bytes before and after stay. Cases are generated over the file's form
 // (LF / CRLF, a byte-order mark, a last line without a line ending) × what the user did during on.
 import test from 'node:test'
@@ -13,7 +13,7 @@ import { createCa } from '../../src/collector/core/tls/ca.mjs'
 
 const CA = createCa({ commonName: 'model kinds root' }).certPem
 const USER = createCa({ commonName: 'model kinds user ca' }).certPem
-const box = () => { const root = tmpDir('asight-kinds-'); return { root, dir: path.join(root, '.asight', 'collector') } }
+const box = () => { const root = tmpDir('trocar-kinds-'); return { root, dir: path.join(root, '.trocar', 'collector') } }
 
 // ── pem-block ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const FORMS = [
@@ -34,7 +34,7 @@ const EDITS = {
 
 for (const f of FORMS) {
   for (const [edit, apply] of Object.entries(EDITS)) {
-    test(`pem-block: ${f.name} × ${edit} — only asight's marked block goes, the user's bytes stay`, () => {
+    test(`pem-block: ${f.name} × ${edit} — only trocar's marked block goes, the user's bytes stay`, () => {
       const b = box(), file = path.join(b.root, 'my-ca.pem'), before = userFile(f)
       fs.writeFileSync(file, before)
       const e = applyTextEntry({ phase: 'install', home: b.root, dir: b.dir, manifest: newManifest(), harness: 'kimi-code', file, edit: { format: 'pem-block', pem: CA } })
@@ -58,7 +58,7 @@ test('pem-block: a block the user already removed is "already-removed" and the f
   fs.writeFileSync(file, USER + '# edited\n')
   assert.equal(undoEntry(e).result, 'already-removed')
   assert.equal(fs.readFileSync(file, 'utf8'), USER + '# edited\n')
-  // another asight block (another root) in the same file, before ours: it is not ours to take
+  // another trocar block (another root) in the same file, before ours: it is not ours to take
   fs.writeFileSync(file, USER)
   const e2 = applyTextEntry({ phase: 'install', home: b.root, dir: b.dir, manifest: newManifest(), harness: 'h', file, edit: { format: 'pem-block', pem: CA } })
   const other = fs.readFileSync(file, 'utf8').slice(USER.length).replace(CA.trim(), USER.trim())
@@ -82,11 +82,11 @@ const ARRAYS = {
 const USER_EDITS = {
   untouched: (t) => t,
   'user added a key': (t) => t.replace('"x": 1', '"x": 1,\n  "y": 2'),
-  'user added an element after asight\'s': (t) => t.replace('"http.proxy"', '"http.proxy", "mine"'),
+  'user added an element after trocar\'s': (t) => t.replace('"http.proxy"', '"http.proxy", "mine"'),
 }
 for (const [shape, a] of Object.entries(ARRAYS)) {
   for (const [edit, user] of Object.entries(USER_EDITS)) {
-    test(`json-array-item: ${shape} array × ${edit} — asight's element goes; the list goes only when asight made it and it is empty`, () => {
+    test(`json-array-item: ${shape} array × ${edit} — trocar's element goes; the list goes only when trocar made it and it is empty`, () => {
       const b = box(), e = arrayEntry(b, a.before, a.after, a)
       fs.writeFileSync(e.path, user(a.after))
       const r = undoEntry(e)
@@ -100,7 +100,7 @@ for (const [shape, a] of Object.entries(ARRAYS)) {
       assert.ok(got.includes('// mine'), 'the user\'s comment stays')
     })
   }
-  test(`json-array-item: ${shape} array — the user removed asight's element during on: nothing is written (D48②)`, () => {
+  test(`json-array-item: ${shape} array — the user removed trocar's element during on: nothing is written (D48②)`, () => {
     const b = box(), e = arrayEntry(b, a.before, a.after, a)
     const theirs = a.after.replace(/,\n    "http.proxy"|"http.proxy"/, '').replace('"x": 1', '"x": 2')
     fs.writeFileSync(e.path, theirs)

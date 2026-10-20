@@ -8,15 +8,15 @@ import { isOwnPath } from '../../../src/collector/harness/_common.mjs'
 
 const raw = String.raw
 
-test('isOwnPath: on Windows a path is asight\'s when it is under the collector directory whatever the slash and the case, and not for a sibling directory of a longer name; elsewhere it is the plain prefix', () => {
-  const win = { os: 'win32', collectorDir: raw`C:\Users\u\.asight\collector` }
-  for (const own of ['C:/Users/u/.asight/collector/ca/x.pem', raw`C:\Users\u\.asight\collector\ca\x.pem`, 'c:/USERS/U/.asight/Collector/ca/x.pem']) assert.equal(isOwnPath(win, own), true, own)
-  for (const other of ['C:/Users/u/.asight/collector2/ca/x.pem', 'C:/Users/u/.asight/collector', 'C:/corp/ca.pem', '', null, undefined, 7]) assert.equal(isOwnPath(win, other), false, String(other))
-  assert.equal(isOwnPath({ os: 'win32', collectorDir: 'C:/Users/u/.asight/collector/' }, 'C:/Users/u/.asight/collector/ca/x.pem'), true, 'a trailing slash on the directory')
-  const lin = { os: 'linux', collectorDir: '/h/.asight/collector' }
-  assert.equal(isOwnPath(lin, '/h/.asight/collector/ca/x.pem'), true)
-  assert.equal(isOwnPath(lin, '/h/.asight/collector2/ca/x.pem'), false)
-  assert.equal(isOwnPath(lin, '/H/.ASIGHT/collector/ca/x.pem'), false, 'case counts outside Windows')
+test('isOwnPath: on Windows a path is trocar\'s when it is under the collector directory whatever the slash and the case, and not for a sibling directory of a longer name; elsewhere it is the plain prefix', () => {
+  const win = { os: 'win32', collectorDir: raw`C:\Users\u\.trocar\collector` }
+  for (const own of ['C:/Users/u/.trocar/collector/ca/x.pem', raw`C:\Users\u\.trocar\collector\ca\x.pem`, 'c:/USERS/U/.trocar/Collector/ca/x.pem']) assert.equal(isOwnPath(win, own), true, own)
+  for (const other of ['C:/Users/u/.trocar/collector2/ca/x.pem', 'C:/Users/u/.trocar/collector', 'C:/corp/ca.pem', '', null, undefined, 7]) assert.equal(isOwnPath(win, other), false, String(other))
+  assert.equal(isOwnPath({ os: 'win32', collectorDir: 'C:/Users/u/.trocar/collector/' }, 'C:/Users/u/.trocar/collector/ca/x.pem'), true, 'a trailing slash on the directory')
+  const lin = { os: 'linux', collectorDir: '/h/.trocar/collector' }
+  assert.equal(isOwnPath(lin, '/h/.trocar/collector/ca/x.pem'), true)
+  assert.equal(isOwnPath(lin, '/h/.trocar/collector2/ca/x.pem'), false)
+  assert.equal(isOwnPath(lin, '/H/.TROCAR/collector/ca/x.pem'), false, 'case counts outside Windows')
 })
 
 // ── W20: the combined bundle's Windows roots (4.8 §6.2) ──

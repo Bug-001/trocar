@@ -104,7 +104,7 @@ test('the same bound holds through the loader every reader uses (readRecords), f
   const has = typeof zlib.zstdCompressSync === 'function';
   const enc = has ? 'zstd' : 'gzip';
   const wire = has ? zlib.zstdCompressSync(Buffer.alloc(8 * 1024 * 1024, 0x61)) : zlib.gzipSync(Buffer.alloc(8 * 1024 * 1024, 0x61));
-  const dir = tmpDir('asight-bomb-'); const file = path.join(dir, 'capture.ndjson');
+  const dir = tmpDir('trocar-bomb-'); const file = path.join(dir, 'capture.ndjson');
   fs.writeFileSync(file, Array.from({ length: 12 }, (_, i) => JSON.stringify({ id: `n${i}`, is_llm_call: false, method: 'POST', endpoint: '/api/x', req_headers: {}, req_body: null, req_content_encoding: enc, req_body_b64: wire.toString('base64'), req_encoding_error: 'collector did not decode', resp: { status: 200, kind: 'empty' } }) + '\n').join(''));
   const before = process.memoryUsage().heapUsed;
   const recs = await readRecords(file);

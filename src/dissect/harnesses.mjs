@@ -1,6 +1,6 @@
 // src/dissect/harnesses.mjs — the read-side harness table (D37 ①⑤, RFC 3.4 table, 3.1): per v1 harness,
 // how a record names it, which key groups its calls into a session, which headers / body fields hint at
-// lanes, parents and compaction, and what asight's trust injection changes (observer effects). Board,
+// lanes, parents and compaction, and what trocar's trust injection changes (observer effects). Board,
 // ETL and sharder all read THIS table: adding a harness = one row here + one chip row in src/web/v2/core/chips.mjs.
 //   • harness = proc.agent (D31). A record WITH proc is never re-identified from its UA, even when the
 //     agent is unknown (id null). Only legacy records without proc use the UA, flagged inferred:true.
@@ -23,7 +23,7 @@ export const LEGACY_SESSION_KEYS = [H('x-claude-code-session-id'), H('x-session-
 const ROW = { ua: null, parentKeys: [], lane: [], compaction: [], requestKind: null, observerEffects: [], traffic: [] };
 const T = (host, cls, pathSource) => ({ host, class: cls, ...(pathSource ? { path: pathSource } : {}) });
 // 4.8 §5.6: injected trust changes the agent the same way in both modes; a legacy MITM / reverse-proxy capture still never carries one. `captures` scopes an
-// effect to the mode whose entry causes it: 'transparent' is Linux's driver mode, 'proxy' the door of macOS / Windows (D47) — what asight writes differs (4.11)
+// effect to the mode whose entry causes it: 'transparent' is Linux's driver mode, 'proxy' the door of macOS / Windows (D47) — what trocar writes differs (4.11)
 const BOTH = ['transparent', 'proxy'], LINUX = ['transparent'], DOOR = ['proxy']
 const effect = (id, cause, what, captures = BOTH) => ({ id, captures, cause, what });
 
@@ -58,10 +58,10 @@ export const HARNESSES = Object.freeze([
     sessionKeys: [H('x-opencode-session-id'), H('session-id'), H('x-session-affinity'), H('x-session-id')],
     parentKeys: [H('x-opencode-parent-session-id')],
     observerEffects: [
-      effect('opencode-plugin', 'asight trust plugin',
-        'asight code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin', LINUX),
-      effect('opencode-route-plugin', 'asight route plugin',
-        'asight code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds one npm registry fetch of @opencode-ai/plugin', DOOR)] },
+      effect('opencode-plugin', 'trocar trust plugin',
+        'trocar code runs inside the agent process; the first run adds one npm registry fetch of @opencode-ai/plugin', LINUX),
+      effect('opencode-route-plugin', 'trocar route plugin',
+        'trocar code runs inside the agent process; OpenCode 1.x\'s first run with a plugin adds one npm registry fetch of @opencode-ai/plugin', DOOR)] },
   { ...ROW, id: 'kimi', agents: ['kimi', 'kimi-code'],
     sessionKeys: [B(['prompt_cache_key']), B(['metadata', 'user_id'])],
     synth: true }, // without a body key → a synthesized key (src/dissect/synth-key.mjs, gate G11)
@@ -70,7 +70,7 @@ export const HARNESSES = Object.freeze([
     parentKeys: [B(['dsh_session_log', 'session', 'parentSession'], 'high')],
     lane: [{ body: ['dsh_session_log', 'session', 'origin'], equals: 'subagent', lane: 'subagent' }],
     compaction: [{ header: 'x-deepseek-harness-compact', equals: '1' }],
-    observerEffects: [effect('dsh-plugin', 'asight trust plugin', 'asight code runs inside the agent process')] },
+    observerEffects: [effect('dsh-plugin', 'trocar trust plugin', 'trocar code runs inside the agent process')] },
   { ...ROW, id: 'hermes', agents: ['hermes'],
     sessionKeys: [B(['session_id']), B(['prompt_cache_key'])], // custom endpoints carry neither → synthesized
     synth: true, // (src/dissect/synth-key.mjs, gate G11)

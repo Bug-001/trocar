@@ -10,16 +10,16 @@ import { qNoLeak } from '../../src/capture/selftest.mjs';
 //
 // Until 2026-07-20 the capture ran a redaction firewall: Authorization / x-api-key / Cookie /
 // Proxy-Authorization were rewritten to `<redacted>` before the envelope was written, and
-// `asight doctor`'s one hard failure was "a secret header is not redacted".
+// `trocar doctor`'s one hard failure was "a secret header is not redacted".
 //
-// It was removed, and the reasoning holds up on this product's own terms: asight exists to show
+// It was removed, and the reasoning holds up on this product's own terms: trocar exists to show
 // what REALLY went over the wire, and `<redacted>` is a mutation of exactly those bytes. Redaction
 // made the capture non-verbatim at precisely the layer whose thesis is byte-fidelity, and it bought
 // little for a single-user, loopback-only, local instrument.
 //
 // BUT THE RISK DID NOT VANISH, IT MOVED. The bytes on disk now contain live credentials, so the
 // property that matters is no longer "the secret isn't there" — it is "nobody but the owner can read
-// the file that holds it". At the time of the change the capture files were 0644 and ~/.asight was
+// the file that holds it". At the time of the change the capture files were 0644 and ~/.trocar was
 // 0755, i.e. world-readable, which was harmless under redaction and is not harmless now.
 //
 // So doctor's red line moved rather than being deleted: ③ used to assert credentials are ABSENT; it
@@ -91,7 +91,7 @@ test('doctor STILL refuses to certify a scan that examined nothing', () => {
 import { qFilePerms } from '../../src/capture/selftest.mjs';
 
 test('a capture file readable by others is a HARD failure', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-perm-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-perm-'));
   try {
     const f = path.join(dir, 'capture.ndjson');
     fs.writeFileSync(f, '{}\n');

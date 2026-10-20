@@ -1,6 +1,6 @@
 // test/cli/old-manifest.test.mjs — V69 (1.6 §V69, 4.11 ⑰) through the command line itself: with an install record of an earlier version
-// (version 1 / 2, written before the collector model) in ~/.asight/collector, each of `install`, `on`, `off` and `uninstall` exits 1 before writing
-// anything — the HOME stays identical in bytes AND in modes, the standalone copy ~/.asight/bin/asight-off is not overwritten — and the document names
+// (version 1 / 2, written before the collector model) in ~/.trocar/collector, each of `install`, `on`, `off` and `uninstall` exits 1 before writing
+// anything — the HOME stays identical in bytes AND in modes, the standalone copy ~/.trocar/bin/trocar-off is not overwritten — and the document names
 // the program that undoes it first. The command half of on / off / uninstall is covered per platform in test/off/v2-refusal.test.mjs; what is here is
 // the whole dispatch (runCli), `install` included, and the `--json` document. Nothing reaches the machine: injected fs, no OS tool, no socket.
 import test from 'node:test'
@@ -13,14 +13,14 @@ import { standalonePath } from '../../src/off/paths.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 
-const OLD_COPY = '#!/usr/bin/env node\n// the copy the asight that wrote this manifest left\n'
+const OLD_COPY = '#!/usr/bin/env node\n// the copy the trocar that wrote this manifest left\n'
 const noOs = () => { throw Object.assign(new Error('no OS tool may run on a refusal that happens before any write'), { code: 'ESANDBOX' }) }
 const noSock = () => { throw Object.assign(new Error('no control socket on a refusal'), { code: 'ESANDBOX' }) }
 
 /** A HOME holding an install record of `version` (before the collector model), the state file beside it and the standalone copy the old build left. */
 function oldHome(version) {
-  const home = tmpDir('asight-old-manifest-')
-  const dir = path.join(home, '.asight', 'collector')
+  const home = tmpDir('trocar-old-manifest-')
+  const dir = path.join(home, '.trocar', 'collector')
   fs.mkdirSync(dir, { recursive: true })
   const settings = path.join(home, '.claude', 'settings.json')
   fs.mkdirSync(path.dirname(settings), { recursive: true })

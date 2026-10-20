@@ -35,12 +35,12 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 
-public class AsightProc {
+public class TrocarProc {
   public int Pid; public int Ppid; public int Session; public int Rid; public long StartedMs;
   public string Name; public string Exe; public bool TokenDenied; public bool SameUser;
 }
 
-public static class AsightWin {
+public static class TrocarWin {
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
   struct PE32 { public uint dwSize; public uint cntUsage; public uint th32ProcessID; public IntPtr th32DefaultHeapID; public uint th32ModuleID; public uint cntThreads; public uint th32ParentProcessID; public int pcPriClassBase; public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile; }
   [DllImport("iphlpapi.dll", SetLastError = true)] static extern uint GetExtendedTcpTable(IntPtr t, ref int size, bool sort, int af, int cls, uint reserved);
@@ -134,8 +134,8 @@ public static class AsightWin {
 
   // the processes of this session and the user's own in every other session (an agent in another ssh / RDP session of the same user is
   // still the user's agent); all = every process of every session. Without command lines: those come from CIM and are merged in ProcsJson
-  public static List<AsightProc> Snapshot(bool all) {
-    List<AsightProc> res = new List<AsightProc>();
+  public static List<TrocarProc> Snapshot(bool all) {
+    List<TrocarProc> res = new List<TrocarProc>();
     int own = OwnSession();
     IntPtr snap = CreateToolhelp32Snapshot(2, 0);
     if (snap == IntPtr.Zero || snap == new IntPtr(-1)) throw new InvalidOperationException("CreateToolhelp32Snapshot failed: " + Marshal.GetLastWin32Error());
@@ -146,7 +146,7 @@ public static class AsightWin {
         int pid = (int)pe.th32ProcessID;
         if (pid == 0) continue;
         uint sess; int sid = ProcessIdToSessionId((uint)pid, out sess) ? (int)sess : -1;
-        AsightProc p = new AsightProc(); p.Pid = pid; p.Ppid = (int)pe.th32ParentProcessID; p.Name = pe.szExeFile; p.Session = sid; p.StartedMs = -1; p.Rid = -1;
+        TrocarProc p = new TrocarProc(); p.Pid = pid; p.Ppid = (int)pe.th32ParentProcessID; p.Name = pe.szExeFile; p.Session = sid; p.StartedMs = -1; p.Rid = -1;
         IntPtr h = OpenProcess(0x1000, false, pid);
         if (h != IntPtr.Zero) {
           try { p.Exe = ImagePath(h); p.StartedMs = StartedOf(h); bool denied; p.Rid = RidOfProcess(h, out denied); p.TokenDenied = denied; p.SameUser = UserOf(h) == OwnUser(); } finally { CloseHandle(h); }
@@ -159,9 +159,9 @@ public static class AsightWin {
   }
 
   // cmd = the command line of each pid (CIM), state = what is known about it: ok | pending | cim-backoff | empty | not-asked (Verb-Ps decides)
-  public static string ProcsJson(List<AsightProc> list, Dictionary<int, string> cmd, Dictionary<int, string> state) {
+  public static string ProcsJson(List<TrocarProc> list, Dictionary<int, string> cmd, Dictionary<int, string> state) {
     StringBuilder b = new StringBuilder("{\"sessionId\":" + N(OwnSession()) + ",\"procs\":[");
-    foreach (AsightProc p in list) {
+    foreach (TrocarProc p in list) {
       string c = null;
       if (cmd != null) cmd.TryGetValue(p.Pid, out c);
       string cstate = null;
@@ -310,7 +310,7 @@ $script:cimRetryAt = [DateTime]::MinValue
 function Verb-Version($a) {
   $o = [ordered]@{ proto = $script:Proto; pid = $PID; ps = $PSVersionTable.PSVersion.ToString(); os = [Environment]::OSVersion.Version.ToString(); native = $script:native }
   if ($script:nativeError) { $o.nativeError = $script:nativeError }
-  if ($script:native) { $o.sessionId = [AsightWin]::OwnSession() }
+  if ($script:native) { $o.sessionId = [TrocarWin]::OwnSession() }
   return $o
 }
 
@@ -318,7 +318,7 @@ function Verb-Ps($a) {
   Need-Native
   $all = ($null -ne $a.all) -and [bool]$a.all
   $want = -not (($null -ne $a.cmdline) -and (-not [bool]$a.cmdline))
-  $list = [AsightWin]::Snapshot($all)
+  $list = [TrocarWin]::Snapshot($all)
   $dict = New-Object 'System.Collections.Generic.Dictionary[int,string]'
   $live = @{}
   $need = New-Object 'System.Collections.Generic.List[int]'
@@ -360,7 +360,7 @@ function Verb-Ps($a) {
   }
   foreach ($k in @($script:cmdCache.Keys)) { if (-not $live.ContainsKey($k)) { $script:cmdCache.Remove($k) } }
   foreach ($k in @($script:cmdTries.Keys)) { if (-not $live.ContainsKey($k)) { $script:cmdTries.Remove($k) } }
-  return @{ __raw = [AsightWin]::ProcsJson($list, $dict, $state) }
+  return @{ __raw = [TrocarWin]::ProcsJson($list, $dict, $state) }
 }
 
 function Verb-TcpTable($a) {
@@ -369,7 +369,7 @@ function Verb-TcpTable($a) {
   if ($null -ne $a.pids) { $pids = @($a.pids | ForEach-Object { [int]$_ }) }
   $states = @()
   if ($null -ne $a.states) { $states = @($a.states | ForEach-Object { [string]$_ }) }
-  return @{ __raw = [AsightWin]::TcpJson([int[]]$pids, [int]$a.remotePort, [int]$a.localPort, [string[]]$states) }
+  return @{ __raw = [TrocarWin]::TcpJson([int[]]$pids, [int]$a.remotePort, [int]$a.localPort, [string[]]$states) }
 }
 
 function Verb-RegRead($a) {
@@ -430,7 +430,7 @@ function Verb-Route($a) {
   $dest = '1.1.1.1'
   if ($null -ne $a.dest) { $dest = [string]$a.dest }
   if ($dest -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw 'bad-dest' }
-  $idx = [AsightWin]::BestInterface($dest)
+  $idx = [TrocarWin]::BestInterface($dest)
   $hit = $null
   foreach ($i in @(Get-IfList)) { if ($null -ne $i.index -and $i.index -eq $idx) { $hit = $i } }
   $ifIndex = $null
@@ -442,11 +442,11 @@ function Verb-Route($a) {
 
 function Verb-Token($a) {
   Need-Native
-  $t = [AsightWin]::TokenInfo()
+  $t = [TrocarWin]::TokenInfo()
   $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
   $type = $null
   if ($t[1] -eq 1) { $type = 'default' } elseif ($t[1] -eq 2) { $type = 'full' } elseif ($t[1] -eq 3) { $type = 'limited' }
-  return [ordered]@{ pid = $PID; elevated = (($t[0] -eq 1) -or ($t[2] -ge 12288)); elevationType = $type; integrity = [AsightWin]::IntegrityNameOf($t[2]); system = [bool]$id.IsSystem; sessionId = [AsightWin]::OwnSession() }
+  return [ordered]@{ pid = $PID; elevated = (($t[0] -eq 1) -or ($t[2] -ge 12288)); elevationType = $type; integrity = [TrocarWin]::IntegrityNameOf($t[2]); system = [bool]$id.IsSystem; sessionId = [TrocarWin]::OwnSession() }
 }
 
 # The roots the user's and the machine's Root stores hold, read-only, de-duplicated by the SHA-256 of the DER. PEM, 64 columns, LF.
@@ -482,7 +482,7 @@ function Verb-PipeServer($a) {
   Need-Native
   $name = [string]$a.name
   if ($name -notmatch '^[A-Za-z0-9._-]{1,128}$') { throw 'bad-pipe-name' }
-  return @{ __raw = [AsightWin]::PipeJson($name) }
+  return @{ __raw = [TrocarWin]::PipeJson($name) }
 }
 
 # proc-env: one PEB read of a process of this user (the environment entries asked for, the current directory, the parent that created it)
@@ -492,7 +492,7 @@ function Verb-ProcEnv($a) {
   if ($p -le 0) { throw 'bad-pid' }
   $names = @()
   if ($null -ne $a.names) { $names = @($a.names | ForEach-Object { [string]$_ }) }
-  return @{ __raw = [AsightWin]::ProcEnvJson($p, [string[]]$names) }
+  return @{ __raw = [TrocarWin]::ProcEnvJson($p, [string[]]$names) }
 }
 
 function Dispatch([string]$verb, $a) {

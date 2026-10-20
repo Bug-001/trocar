@@ -238,7 +238,7 @@ function corrupt(R, why, text) {
   throw new Error(`no construction for ${why}`)
 }
 
-const budgetOf = (b) => b ?? (Number(process.env.ASIGHT_SHAPES_BUDGET) || 200)
+const budgetOf = (b) => b ?? (Number(process.env.TROCAR_SHAPES_BUDGET) || 200)
 /** Seeded shape cases for one format. Each case's bytes depend only on (format, seed, index), not on the budget. */
 export function shapeCases({ format, seed = 0x5eed, budget } = {}) {
   if (!axes.content[format]) throw new Error(`unknown format ${format}`)
@@ -298,7 +298,7 @@ export const seeds = [
     bytes: Buffer.concat([Buffer.from('# '), Buffer.from([0xd6, 0xd0, 0xce, 0xc4]), Buffer.from(CRLF('', 'HTTPS_PROXY=http://corp.example:8080'))]) },
 ]
 
-// ---- user edits: what a user does to the file while asight is on (I5) ----------------------------------------------------
+// ---- user edits: what a user does to the file while trocar is on (I5) ----------------------------------------------------
 // Each operator: { id, plan(bytes, { before }) → { text, charset, bom, keys, anchor, removed } | null, apply(bytes, { before })
 // → Buffer | null }. `before` is S0 (the file before `on`), `bytes` is S1 (now); an operator that locates by text uses a line
 // or key literal found exactly once in both. `keys` are the reader keys it may change (dotenv/rc: names; json: top-level
@@ -322,7 +322,7 @@ function lineOps(format, families) {
   const unrelated = (l) => yaml ? /^\s*-/.test(l.body) : !!ASSIGN.exec(l.body) && !inFamily(ASSIGN.exec(l.body)[2])
   const listOk = (t) => !yaml || !linesOf(t).some((l) => l.body.trim().startsWith('[]'))
   const ops = [
-    ['add-unrelated', (t, b) => { if (!listOk(t)) return null; const a = uniqueLine(t, b); return { splice: insertAfter(t, a, yaml ? '- added-by-user' : kv('ASIGHT_SHAPES_ADDED', 'added')), keys: [yaml ? 'rows' : 'ASIGHT_SHAPES_ADDED'], anchor: a?.body ?? null } }],
+    ['add-unrelated', (t, b) => { if (!listOk(t)) return null; const a = uniqueLine(t, b); return { splice: insertAfter(t, a, yaml ? '- added-by-user' : kv('TROCAR_SHAPES_ADDED', 'added')), keys: [yaml ? 'rows' : 'TROCAR_SHAPES_ADDED'], anchor: a?.body ?? null } }],
     ['modify-unrelated', (t, b) => {
       const l = uniqueLine(t, b, unrelated)
       if (!l) return null
@@ -332,7 +332,7 @@ function lineOps(format, families) {
     ['delete-unrelated', (t, b) => { const l = uniqueLine(t, b, unrelated); return l && { splice: { at: l.start, del: l.end - l.start, ins: '' }, keys: [yaml ? 'rows' : ASSIGN.exec(l.body)[2]], anchor: null } }],
   ]
   if (!yaml) for (const [fam, name, v] of families) ops.push(
-    // In place: the last assignment of the name (in S1 that is asight's line, inside its block).
+    // In place: the last assignment of the name (in S1 that is trocar's line, inside its block).
     [`set-${fam}-in-place`, (t) => {
       const l = linesOf(t).filter((x) => ASSIGN.exec(x.body)?.[2] === name).pop()
       if (!l) return null
@@ -365,7 +365,7 @@ function jsonOps(families) {
   const envOf = (r) => { const v = r && r.members.filter((m) => m.key === 'env').pop()?.value; return v && v.type === 'object' ? v : null }
   const unrelated = (r, t, b) => r?.members.find((m) => m.key !== 'env' && occurrences(t, JSON.stringify(m.key)) === 1 && occurrences(b, JSON.stringify(m.key)) === 1) || null
   const ops = [
-    ['add-unrelated', (t) => { const r = rootOf(t); return r && { splice: insertMember(t, r, 'asightShapesAdded', 'added'), keys: ['asightShapesAdded'], anchor: null } }],
+    ['add-unrelated', (t) => { const r = rootOf(t); return r && { splice: insertMember(t, r, 'trocarShapesAdded', 'added'), keys: ['trocarShapesAdded'], anchor: null } }],
     ['modify-unrelated', (t, b) => { const m = unrelated(rootOf(t), t, b); return m && { splice: { at: m.value.start, del: m.value.end - m.value.start, ins: JSON.stringify('changed-by-user') }, keys: [m.key], anchor: JSON.stringify(m.key) } }],
     ['delete-unrelated', (t, b) => { const r = rootOf(t), m = unrelated(r, t, b); return m && { splice: deleteMember(t, r, m), keys: [m.key], anchor: null } }],
   ]

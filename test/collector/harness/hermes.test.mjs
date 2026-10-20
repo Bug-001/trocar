@@ -120,8 +120,8 @@ test('hermes: sticky active_profile picks the home; the checkout .env only fills
 })
 
 const planFor = (s, env = {}, running = []) => {
-  const dir = path.join(s.home, '.asight', 'collector')
-  return planTrust({ descriptors: [hermes], ctxFor: () => ({ os: 'none', home: s.home, env: new Map(Object.entries(env)), running: running.map((e) => new Map(Object.entries(e))), collectorDir: dir, caPem: path.join(dir, 'ca', 'asight-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: dir, roots: { node: [], osText: '' } })
+  const dir = path.join(s.home, '.trocar', 'collector')
+  return planTrust({ descriptors: [hermes], ctxFor: () => ({ os: 'none', home: s.home, env: new Map(Object.entries(env)), running: running.map((e) => new Map(Object.entries(e))), collectorDir: dir, caPem: path.join(dir, 'ca', 'trocar-ca.pem'), readText: (f) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }, readBytes: (f) => { try { return fs.readFileSync(f) } catch { return null } }, listDir: (d) => { try { return fs.readdirSync(d) } catch { return [] } } }), caCertPem: CA.certPem, collectorDir: dir, roots: { node: [], osText: '' } })
 }
 
 test('hermes inject: a sentinel block with SSL_CERT_FILE=combined-hermes.pem atop the home .env and every profile .env; HERMES_CA_BUNDLE only for a release ≤ v2026.9.24; the bundle carries the CAs the block covers (T10, T14)', () => {
@@ -135,13 +135,13 @@ test('hermes inject: a sentinel block with SSL_CERT_FILE=combined-hermes.pem ato
     s.put('.hermes/.env', `OPENAI_API_KEY=sk-secret\nSSL_CERT_FILE="${corp}"\n`)
     s.put('.hermes/profiles/work/.env', 'X=1\n'); fs.mkdirSync(path.join(s.home, '.hermes/profiles/empty'), { recursive: true })
     s.put('.hermes/hermes-agent/install-stamp.json', MAIN_STAMP)
-    const dir = path.join(s.home, '.asight', 'collector')
+    const dir = path.join(s.home, '.trocar', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-hermes.pem')
     const p = planFor(s, { SSL_CERT_FILE: shellCa }, [{ SSL_CERT_FILE: bundle }, { HERMES_CA_BUNDLE: 'rel.pem' }])
     assert.deepEqual(p.entries.map((e) => [e.path, e.format, e.vars]), [[path.join(s.home, '.hermes/.env'), 'dotenv-block', { SSL_CERT_FILE: bundle }], [path.join(s.home, '.hermes/profiles/work/.env'), 'dotenv-block', { SSL_CERT_FILE: bundle }]])
-    assert.deepEqual([p.files.length, p.files[0].path, p.files[0].role, p.files[0].sources], [1, bundle, 'bundle', [corp, shellCa]], 'the .env value and the install shell value it covers; never asight\'s own bundle')
+    assert.deepEqual([p.files.length, p.files[0].path, p.files[0].role, p.files[0].sources], [1, bundle, 'bundle', [corp, shellCa]], 'the .env value and the install shell value it covers; never trocar\'s own bundle')
     assert.deepEqual(fps(p.files[0].data), [fp(OTHER), fp(SHELL), fp(CA)])
-    assert.deepEqual(p.records.map((r) => r.code), ['relative-path'], "asight's own bundle in a running hermes's environ is not a source (nothing unreadable)")
+    assert.deepEqual(p.records.map((r) => r.code), ['relative-path'], "trocar's own bundle in a running hermes's environ is not a source (nothing unreadable)")
     assert.match(p.records[0].reason, /rel\.pem/)
     const managed = s.put('etc-hermes/.env', `SSL_CERT_FILE=${corp}\n`)
     assert.ok(planFor(s, { HERMES_MANAGED_DIR: path.dirname(managed) }).records.some((r) => r.code === 'harness-note' && r.reason.includes(`${managed} sets SSL_CERT_FILE`)), 'the managed .env that wins over the block is named')
@@ -153,7 +153,7 @@ test('hermes inject: a sentinel block with SSL_CERT_FILE=combined-hermes.pem ato
   } finally { s.done() }
 })
 
-test('hermes inject: the CA settings of .op.env and of the checkout .env, which the block puts out of effect, are merged too; a home .env asight creates is said to turn the checkout .env into a fill (review 3 #2)', () => {
+test('hermes inject: the CA settings of .op.env and of the checkout .env, which the block puts out of effect, are merged too; a home .env trocar creates is said to turn the checkout .env into a fill (review 3 #2)', () => {
   const s = sandbox()
   try {
     const A = createCa({ commonName: 'in .op.env' }); const B = createCa({ commonName: 'in the checkout .env' }); const C = createCa({ commonName: 'in a TUI child\'s checkout' })
@@ -168,7 +168,7 @@ test('hermes inject: the CA settings of .op.env and of the checkout .env, which 
     assert.deepEqual(fps(p.files[0].data), [fp(A), fp(B), fp(C), fp(CA)])
     const flip = p.records.filter((r) => /as a fill instead of an override/.test(r.reason))
     assert.equal(flip.length, 1)
-    assert.ok(flip[0].reason.replace(/^hermes: /, '').startsWith(`${path.join(s.home, '.hermes/.env')} does not exist`) && flip[0].reason.includes(path.join(s.home, '.hermes/hermes-agent/.env')), 'only the home .env asight creates; the profile .env exists')
+    assert.ok(flip[0].reason.replace(/^hermes: /, '').startsWith(`${path.join(s.home, '.hermes/.env')} does not exist`) && flip[0].reason.includes(path.join(s.home, '.hermes/hermes-agent/.env')), 'only the home .env trocar creates; the profile .env exists')
     s.put('.hermes/.env', 'Y=1\n')
     assert.ok(!planFor(s).records.some((r) => /as a fill instead of an override/.test(r.reason)), 'nothing flips when the home .env is there')
     fs.rmSync(path.join(s.home, '.hermes/.env')); fs.rmSync(path.join(s.home, '.hermes/hermes-agent/.env'))
@@ -184,18 +184,18 @@ test('hermes through install / uninstall: the user\'s SSL_CERT_FILE line is put 
     const env = s.put('.hermes/.env', before)
     s.put('.hermes/hermes-agent/install-stamp.json', MAIN_STAMP)
     await installCollector({ home: s.home, env: { HOME: s.home }, osName: 'none', harnesses: [hermes], freePort: async () => 47015, roots: { node: [], osText: '' } })
-    const dir = path.join(s.home, '.asight', 'collector')
+    const dir = path.join(s.home, '.trocar', 'collector')
     const bundle = path.join(dir, 'ca', 'combined-hermes.pem')
     const now = fs.readFileSync(env, 'utf8')
-    assert.match(now, new RegExp(`^# >>> asight collector >>>[^\\n]*\\nSSL_CERT_FILE=${bundle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n# <<< asight collector <<<\\nOPENAI_API_KEY=sk-secret\\n#asight-collector-off# SSL_CERT_FILE=`))
-    const asightCa = fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'), 'utf8')
-    assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER), ...fps(asightCa)])
+    assert.match(now, new RegExp(`^# >>> trocar collector >>>[^\\n]*\\nSSL_CERT_FILE=${bundle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n# <<< trocar collector <<<\\nOPENAI_API_KEY=sk-secret\\n#trocar-collector-off# SSL_CERT_FILE=`))
+    const trocarCa = fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'), 'utf8')
+    assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER), ...fps(trocarCa)])
     assert.ok(!fs.readFileSync(path.join(dir, 'install-manifest.json'), 'utf8').includes('sk-secret'))
     const root = path.join(s.home, '.hermes', 'hermes-agent')
-    const installed = { caCertPem: asightCa }
+    const installed = { caCertPem: trocarCa }
     assert.equal(judge(hermes, ctxFor({ home: s.home, argv: cli(root, '-z', 'hi') }), installed).trust.trusted, true, 'a hermes started after install trusts the block')
     assert.equal(judge(hermes, ctxFor({ home: s.home, argv: cli(root, 'gateway', 'run'), startedAt: Date.now() - 60000 }), installed).trust.reason, 'config-after-start', 'a gateway from before install is not trusted on the block (it may multiplex; review 3 #3)')
-    // the user adds the same key below asight's block (lab ③: the later line wins): that hermes is untrusted, said why
+    // the user adds the same key below trocar's block (acceptance ③: the later line wins): that hermes is untrusted, said why
     fs.appendFileSync(env, `SSL_CERT_FILE=${corp}\n`)
     const below = judge(hermes, ctxFor({ home: s.home, argv: cli(root, '-z', 'hi') }), installed)
     assert.deepEqual([below.trust.trusted, below.trust.reason, below.trust.var], [false, 'ca-not-in-file', 'SSL_CERT_FILE'], 'T12: a same-name line below the block hides it')
@@ -206,7 +206,7 @@ test('hermes through install / uninstall: the user\'s SSL_CERT_FILE line is put 
     // 1.6 R3: `off` has no descriptor); the descriptor's own afterUninstall below still tells main from release
     const r = await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' }, scan: async () => [early] })
     assert.deepEqual([r.kept_bundles.map((k) => k.pids), r.still_trusting.map((x) => x.until)], [[[77]], ['restart']])
-    assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER)], 'kept without the asight CA')
+    assert.deepEqual(fps(fs.readFileSync(bundle, 'utf8')), [fp(OTHER)], 'kept without the trocar CA')
     assert.deepEqual((await uninstallCollector({ home: s.home, env: {}, stop: async () => 'none', roots: { node: [], osText: '' } })).kept_bundles, [])
     assert.deepEqual(r.entries.map((e) => e.result), ['restored'])
     assert.equal(fs.readFileSync(env, 'utf8'), before)

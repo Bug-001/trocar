@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { groupSessions, sessionView } from '../src/view/board.mjs';
 
 // The shipped demo capture is the FIRST THING a new user sees (`npm run demo`), and the only way a
-// GitHub visitor can evaluate the tool without first MITM-ing their own agent — asight's real test
+// GitHub visitor can evaluate the tool without first MITM-ing their own agent — trocar's real test
 // fixture is a personal session and is gitignored, so before this sample existed `git clone` rendered
 // an empty board. That makes the sample load-bearing: if it stops rendering, the project's shop
 // window goes dark and nothing else in the suite would notice.

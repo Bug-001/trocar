@@ -6,7 +6,7 @@
 export const CARD_DISK = 'Disk', CARD_PRICE = 'Unit prices', CARD_UNPRICED = 'Models without a unit price', CARD_THEME = 'Theme'
 
 // 磁盘卡
-export const DISK_TOTAL = 'Used by asight', DISK_PER_DAY = 'Estimated growth per day', AS_OF = 'as of',
+export const DISK_TOTAL = 'Used by trocar', DISK_PER_DAY = 'Estimated growth per day', AS_OF = 'as of',
   CAPTURE_PAGE_LINE = 'Each agent\'s switch and the local network environment are on the capture page', CAPTURE_PAGE_HREF = '#/capture',
   BAD_FILES = (n) => `${n} capture file problem${n === 1 ? '' : 's'} when read`, BAD_FILES_SHOW = 'Show which', READ_FAIL = 'Could not read this page'
 
@@ -44,14 +44,14 @@ export const ASK_LOG_TITLE = 'Change to log only?', ASK_LOG_OK = 'Change to log 
   RCPT_CHANGED = (a, b) => `${a} → ${b} · applies to calls that start from now`, RCPT_ALREADY = (k) => `Already ${k}`,
   RCPT_STALE = 'The setting on this machine changed; this is the new plan', RCPT_NOT_CHANGED = 'Not changed',
   RCPT_READ_ONLY = 'The board is running read-only right now; nothing was changed',
-  RCPT_OFFLINE = 'Cannot reach the asight service; nothing was changed'
+  RCPT_OFFLINE = 'Cannot reach the trocar service; nothing was changed'
 
 export const RETRY = 'Retry'
 
 // 价格页
 export const PRICE_NOTE = 'Estimated cost = usage × the unit prices here; a local estimate, not a bill · USD per million tokens',
   PRICE_READ_ONLY = 'Read-only on the board; to change a price, edit the price table',
-  PRICE_FROM = (p) => `From ${p}`, PRICE_DEFAULT = 'Using asight\'s built-in default unit prices',
+  PRICE_FROM = (p) => `From ${p}`, PRICE_DEFAULT = 'Using trocar\'s built-in default unit prices',
   COL_KEY = 'Model name contains', COL_IN = 'input', COL_OUT = 'output', COL_WRITE = 'cache write', COL_READ = 'cache read',
   PRICE_READ_FAIL = 'Could not read the price table', PRICE_BAD_SHAPE = 'The price table has the wrong shape',
   UNPRICED_AS_OF = 'as of', UNPRICED_SESSIONS = (n) => `used in at least ${n} sessions`,
@@ -60,7 +60,7 @@ export const PRICE_NOTE = 'Estimated cost = usage × the unit prices here; a loc
   TEMPLATE_HINT = 'Replace the four nulls with USD per million tokens: input, output, cache write, cache read. Takes effect after a page refresh.',
   TECH_MATCH = 'An exact model-name row wins; otherwise the longest key contained in the model name. Matching is on the model name only, not the vendor.',
   TECH_WRITE_ONE = 'Cache write has one unit price; when a vendor prices by cache duration, the estimate still uses this one price.',
-  TECH_PRICING_PATH = 'The server reads the file named by the ASIGHT_PRICING environment variable, or its default location when unset. The board only reads it; edit the file, then refresh the page.'
+  TECH_PRICING_PATH = 'The server reads the file named by the TROCAR_PRICING environment variable, or its default location when unset. The board only reads it; edit the file, then refresh the page.'
 
 // 外观页
 export const THEME_SYSTEM = 'System', THEME_LIGHT = 'Light', THEME_DARK = 'Dark',

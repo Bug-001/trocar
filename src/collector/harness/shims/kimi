@@ -1,5 +1,5 @@
 #!/bin/sh
-# asight collector: launch shim for Kimi Code, written by `asight collector install`; `asight collector uninstall`
-# removes it. It sets the one CA file Kimi Code reads at start (the asight CA, plus any CA the user already gave
+# trocar collector: launch shim for Kimi Code, written by `trocar collector install`; `trocar collector uninstall`
+# removes it. It sets the one CA file Kimi Code reads at start (the trocar CA, plus any CA the user already gave
 # Kimi Code) and runs Kimi Code in its place: exec keeps the pid. It does nothing else.
-exec env NODE_EXTRA_CA_CERTS='__ASIGHT_CA_FILE__' "$HOME/.kimi-code/bin/kimi" "$@"
+exec env NODE_EXTRA_CA_CERTS='__TROCAR_CA_FILE__' "$HOME/.kimi-code/bin/kimi" "$@"

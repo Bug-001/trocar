@@ -1,6 +1,6 @@
 // codes.mjs — the D38 closed sets (RFC 4.6 §记录「失败不静默」): every name a collector record may carry in
 // `event`, `where`, `code` and `not_captured`, and which of them are failures. Writers (src/collector/**) and
-// readers (`asight collector status`; later GET /api/capture-health) take the names from here and nowhere else.
+// readers (`trocar collector status`; later GET /api/capture-health) take the names from here and nowhere else.
 // Leaf module (0.1 §2): it imports nothing.
 //   A failure turns the board's indicator ⚠; an expected `not_captured` (not captured by design) is counted and
 // listed, never ⚠. A Node errno (ENOSPC, EACCES, ERR_SSL_…) goes into `code` unchanged; free text only in `reason`.
@@ -18,8 +18,8 @@ export const SEGMENT_PROBLEMS = Object.freeze(['record-unparseable', 'record-unr
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
 export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set',
-  'classes-ok', // ~/.asight/classes.json reads cleanly again: ends the condition its problem opened (D60③, 4.6 §记录「保存级别」)
-  'agent-list-ok', // ~/.asight/agents.json reads cleanly again, or is gone: ends the agent-list-invalid condition (D51③, 4.6 R6)
+  'classes-ok', // ~/.trocar/classes.json reads cleanly again: ends the condition its problem opened (D60③, 4.6 §记录「保存级别」)
+  'agent-list-ok', // ~/.trocar/agents.json reads cleanly again, or is gone: ends the agent-list-invalid condition (D51③, 4.6 R6)
   'process-unknown']) // a process no list item claims used a door (where 'engine'; harness, door, name, wide, named = listed only with args it missed, pid; never its command line): once per (door group, name) per daemon life (D51⑥)
 
 /** The `reason` of a door's `untracked` row (4.8 §5.2 · §5.3, 4.6 §连接行怎么落码): why the door could not vouch for the connection's process. */
@@ -33,15 +33,15 @@ export const UNFOLDED_CODES = Object.freeze(['negative-cache', 'trust-rejected']
 /** The `level` a failure may carry (D51④, 4.6 §事件与码): `critical` — the reader puts it first, the daemon also tells stderr. No level = an ordinary failure. */
 export const LEVELS = Object.freeze(['critical'])
 
-/** The part of asight a record comes from. */
+/** The part of trocar a record comes from. */
 export const WHERE = Object.freeze(['start', 'daemon', 'control', 'record', 'events', 'watch', 'harness', 'tracker', 'engine', 'ws', 'helper', 'heartbeat', 'state', 'switch', 'kernel', 'ca', 'bundle', 'install', 'uninstall',
-  // the old capture (RFC 4.1 过渡期, ~/.asight/logs/mitm-events.ndjson; deleted with it)
+  // the old capture (RFC 4.1 过渡期, ~/.trocar/logs/mitm-events.ndjson; deleted with it)
   'mitm', 'proxy', 'sink', 'autostart', 'steer', 'shard',
   // the raw layer's sealer (D35 · D60②, RFC 4.2 §自动封存): the daemon's seal queue reports a segment it could not seal
   'raw',
   // the retention settings (D40, RFC 4.6 §记录「保存级别」): read by the collector's engine and by the old MITM / reverse proxy
   'retention',
-  // the traffic class table (D60③, 1.6 §4.2): ~/.asight/classes.json, read hot by the collector's engine
+  // the traffic class table (D60③, 1.6 §4.2): ~/.trocar/classes.json, read hot by the collector's engine
   'classes'])
 
 /** The reasons a running agent is not (yet) trusted — the `code` of `agent-untrusted`, and of the `agent-exit` that ends
@@ -59,7 +59,7 @@ export const TRUST_REASONS = Object.freeze([
   'kimi-not-via-shim', 'kimi-npm-no-shim', 'shim-not-on-path', 'desktop-ca-override',
 ])
 
-/** Codes asight names itself, by part (the grouping is documentation; the set is flat). */
+/** Codes trocar names itself, by part (the grouping is documentation; the set is flat). */
 export const CODES_BY_PART = Object.freeze({
   daemon: ['not-installed', 'manifest-unreadable', 'root-refused', 'start-failed', 'control-endpoint-held', 'unclean-stop', 'crash', 'stop-failed', 'control-error', 'check-error',
     'query-failed'], // control-endpoint-held: the control socket / pipe accepts a connection but answers nothing, so this daemon cannot serve and did not start (D62 ⑥, D38)
@@ -69,20 +69,20 @@ export const CODES_BY_PART = Object.freeze({
   tracker: ['judge-error', 'unwatch-error', 'ambiguous', 'exe-unreadable', 'watch-failed', 'config-error', 'settings-unparsable', 'settings-unreadable', 'environ-unreadable'],
   // a harness's configuration or files, read or written (the Claude Code settings layers have their own codes, above)
   harness: ['config-unreadable', 'config-unparsable', 'harness-note', 'shim-not-on-path', 'cert-not-merged', 'source-unreadable', 'relative-path', 'unit-env-not-carried', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial',
-    'agent-list-invalid'], // ~/.asight/agents.json cannot be read / parsed, or holds bad items (with `path` and `problems`; one per file version, D51③)
+    'agent-list-invalid'], // ~/.trocar/agents.json cannot be read / parsed, or holds bad items (with `path` and `problems`; one per file version, D51③)
   trust: [...TRUST_REASONS],
   bundle: ['roots-changed', 'missing', 'system-roots-unavailable', 'system-roots-unparsable', 'system-roots-partial'], // the last three: the bundles of the harnesses that are on were (re)built with no OS root, without OS roots that did not parse, without a roots source whose read failed (4.6 「合并包」)
   note: ['ok'], // the code of an agent-trusted line
   helper: ['helper-error', 'heartbeat-failed', 'heartbeat-gap', 'loader-down', 'loader-timeout'],
   engine: ['lookup-miss', 'describe-error', 'engine-error', 'leaf-error', 'flow-write-failed', 'system-roots-unavailable', 'trust-store-error', 'framer-error', 'negative-cache', 'upstream-slow', 'unpaired-response', 'prior-proxy-unknown',
-    'trust-rejected', 'pac-peer-refused', 'upstream-header-ignored', 'holders-unreadable'], // the last two (4.11 P7 · P12): X-Asight-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused asight's leaf: level 'critical', one per (pid, host) (D51④)
+    'trust-rejected', 'pac-peer-refused', 'upstream-header-ignored', 'holders-unreadable'], // the last two (4.11 P7 · P12): X-Trocar-Upstream from a form whose hook does not send it (ignored, its value never recorded); the holder poll could not read the process table (the kept doors stay) // pac-peer-refused: the PAC door (no credentials) refused a peer not of this user (4.11 P10) // a decrypted connection whose client refused trocar's leaf: level 'critical', one per (pid, host) (D51④)
   ws: ['write-failed', 'decode-failed', 'broken', 'recorder-error', 'pattern-invalid'],
   // retention.json cannot be read / parsed / holds a cell that is neither full nor log (the call is kept in full), or the
   // classifier threw; a traffic pattern that does not compile is `pattern-invalid` (above), also under where 'retention'; a hand edit whose line in
   // the change log could not be written is `retention-log-failed` (the edit applies; the record of it is missing)
-  // ~/.asight/classes.json cannot be read / parsed, or holds an entry that is not a class or a rule that does not
+  // ~/.trocar/classes.json cannot be read / parsed, or holds an entry that is not a class or a rule that does not
   // compile (`pattern-invalid`, above): the builtin table applies and every call is kept at ITS level, never dropped.
-  // `classes-log-failed`: the edit was made but logs/classes.ndjson could not record it (`asight classes`, 1.6 §4.2).
+  // `classes-log-failed`: the edit was made but logs/classes.ndjson could not record it (`trocar classes`, 1.6 §4.2).
   classes: ['classes-unparsable', 'classes-unreadable', 'classes-bad-entry', 'classes-write-failed', 'classes-log-failed', 'classify-failed', 'pattern-invalid'],
   switch: ['state-mismatch', 'state-unparsable'],
   kernel: ['kernel-drops'],
@@ -94,7 +94,7 @@ export const CODES_BY_PART = Object.freeze({
 })
 export const CODES = Object.freeze([...new Set(Object.values(CODES_BY_PART).flat())])
 
-// What `asight off` writes (RFC 1.6 R1 / R2 / R3, D39⑦). A block of its own, below CODES and apart from the lists above (which carry D40's
+// What `trocar off` writes (RFC 1.6 R1 / R2 / R3, D39⑦). A block of its own, below CODES and apart from the lists above (which carry D40's
 // `retention` names): the branch that owned the blocks below is merged into this tree now, and they stay blocks all the same — each is held
 // against its own RFC table by its own test (W38 below, V53 for the NET_* names), and folding them into WHERE / STATE_EVENTS / CODES_BY_PART
 // is a closed-set restructuring that goes with the unit that owns those tables (1.6 §9.7), not a drive-by here; `sets` below adds them.
@@ -131,9 +131,9 @@ export const ROUTE_STATUS_REASONS = Object.freeze(['form-unsupported'])
 /** The envelope's `capture`: how the call reached the engine (4.1 信封表, 4.8 §5.6): `transparent` (Linux, and the other per-process captures) or `proxy` (macOS / Windows: the call came through the engine's own door, D47). */
 export const CAPTURE_KINDS = Object.freeze(['transparent', 'proxy'])
 
-// What the network topology and `asight doctor` write and say (RFC 1.6 §9.7, D39⑩, D43). A block of its own, like the ones above (they stay apart from WHERE / STATE_EVENTS / CODES_BY_PART for the same reason); `sets` below adds it.
+// What the network topology and `trocar doctor` write and say (RFC 1.6 §9.7, D39⑩, D43). A block of its own, like the ones above (they stay apart from WHERE / STATE_EVENTS / CODES_BY_PART for the same reason); `sets` below adds it.
 // `netenv-change` is a state change (the topology moved: a proxy setting, the machine's network environment); `failure` with `where: 'netenv'` is written for the codes in NET_FAILURE_CODES, and for
-// `proxy-changed` only when it leaves a harness that is on uncaptured (proxy mode, where the changed entry bypasses asight). D43 withdrew the VPN-block codes: the new collector writes nothing into a VPN.
+// `proxy-changed` only when it leaves a harness that is on uncaptured (proxy mode, where the changed entry bypasses trocar). D43 withdrew the VPN-block codes: the new collector writes nothing into a VPN.
 // `route-loop`, `forwarder-down` and `egress-differs` are shared with 4.7 / 4.8 (D41, D43): each is defined here, once (test/health/codes.test.mjs W38 counts the literals).
 export const NET_WHERE = Object.freeze(['netenv'])
 export const NET_EVENTS = Object.freeze(['netenv-change'])
@@ -144,13 +144,13 @@ export const NET_FAILURE_CODES = Object.freeze([...NET_FAILURE_OWN, ROUTE_LOOP, 
 // the net names `status` gives as the reason an agent is not captured (1.6 §9.7); the proxy-mode reasons of 4.8 §12 (`form-unsupported`) is ROUTE_STATUS_REASONS above; a process on no name list is `process-unknown` (a state event, D51⑥), not a status reason
 const NET_STATUS_REASONS = Object.freeze(['not-routed', 'proxy-changed', 'elevated-agent', 'upstream-unreachable', 'shim-not-on-path', ROUTE_LOOP, FORWARDER_DOWN])
 
-// What `asight status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. asight's own, then every trust
+// What `trocar status` says of an agent that is not captured (RFC 1.6 §2 / V32, 4.6 §记录「事件与码的名字」): one name from this closed set, whatever the reason. trocar's own, then every trust
 // reason above (the resolver's and the harnesses' own). A block of its own, as the ones above are. The Windows collector's reasons (ROUTE_STATUS_REASONS: what a form that is not captured says; ROUTE_TRUST_REASONS: why a running agent is not trusted) are part of it. `negative-cache` is also a code of the engine.
 export const STATUS_OWN_REASONS = Object.freeze(['desired-off', 'entry-missing', 'entry-changed', 'link-missing', 'daemon-not-running', 'daemon-not-responding', 'helper-missing', 'negative-cache',
   'cert-not-installed', 'cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-key-missing', 'cert-intermediate-unavailable', 'not-users-file']) // the cert group's status reasons that have a producer (1.6 §9.7, 4.11 §3 ⑱)
 export const STATUS_REASONS = Object.freeze([...new Set([...STATUS_OWN_REASONS, ...NET_STATUS_REASONS, ...ROUTE_STATUS_REASONS, ...TRUST_REASONS, ...ROUTE_TRUST_REASONS])])
 
-// What `asight status` and `asight doctor` name in their own documents (RFC 1.6 附录 C.3 / C.4 / C.5), a block of its own like the ones above: the `where` of an
+// What `trocar status` and `trocar doctor` name in their own documents (RFC 1.6 附录 C.3 / C.4 / C.5), a block of its own like the ones above: the `where` of an
 // `errors[]` entry is the part of the picture that could not be read, in the words the text prints; the codes are `doctor`'s own findings, the ones §3.7 asks it
 // to look at beside the network (附录 B owns the rest, src/netenv/findings.mjs). They are no D38 record of a collector writer, and they are closed all the same.
 const DOC_WHERE = Object.freeze(['the on/off state', 'the install record', 'capture health', 'the agent name list', 'the process table', 'a captured file'])

@@ -22,7 +22,7 @@ import { PassThrough } from 'node:stream'
 // the resident helper a command starts for itself: the Node stand-in of test/collector/arch/win32/fixtures/fake-helper.mjs, speaking the same
 // line protocol (nothing here runs Windows), and the child `spawn` hands back when the program is not there
 const FAKE_HELPER = fileURLToPath(new URL('../collector/arch/win32/fixtures/fake-helper.mjs', import.meta.url))
-const fakeSpawn = (fixture) => (exe, args, opts) => nodeSpawn(process.execPath, [FAKE_HELPER, JSON.stringify(fixture)], { ...opts, env: { ...process.env, ASIGHT_FAKE_HELPER: '1' } })
+const fakeSpawn = (fixture) => (exe, args, opts) => nodeSpawn(process.execPath, [FAKE_HELPER, JSON.stringify(fixture)], { ...opts, env: { ...process.env, TROCAR_FAKE_HELPER: '1' } })
 const ghostChild = (emit) => { const c = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), pid: undefined, kill: () => true }); process.nextTick(() => emit(c)); return c }
 
 const all = await loadHarnesses()
@@ -44,8 +44,8 @@ for (const row of ROWS) {
   })
 }
 
-test('W29/D49 the one line about per-process rules of a VPN / proxy: in `status <h>` for every row where asight is on the path, whatever the machine has (a–f, h, i, k, m, q, r), absent where it is not — and it is a line of the detail view, not a note of the topology, so `on`\'s plan (which renders the notes) never prints it', () => {
-  const LINE = (h) => `If your VPN or proxy routes by process, it sees asight, not ${h}.`
+test('W29/D49 the one line about per-process rules of a VPN / proxy: in `status <h>` for every row where trocar is on the path, whatever the machine has (a–f, h, i, k, m, q, r), absent where it is not — and it is a line of the detail view, not a note of the topology, so `on`\'s plan (which renders the notes) never prints it', () => {
+  const LINE = (h) => `If your VPN or proxy routes by process, it sees trocar, not ${h}.`
   for (const row of ROWS) {
     const t = buildTopology(row.facts)[row.h]
     const detail = renderDetail(t, { now: NOW }).join('\n')
@@ -74,7 +74,7 @@ const gather = (home, { helper, ids = ['claude-code'], env = {}, agents = [], de
 const KERNEL_URL = 'http://claude-code.settings:s3-listener-token@127.0.0.1:17991'
 /** The collector dir of an installed proxy mode: the kernel's lock, the ports of ingress.json, and the manifest's record of the entry that was written over the user's own proxy. */
 function collectorOf(home, { url = KERNEL_URL, prior = 'http://proxy.corp:8080', groupPorts = { 'claude-code.settings': 17991 } } = {}) {
-  const dir = path.join(home, '.asight', 'collector')
+  const dir = path.join(home, '.trocar', 'collector')
   put(path.join(dir, 'ingress.json'), `${JSON.stringify({ enginePort: 17990, groupPorts, ingressToken: 'a'.repeat(32), listenerToken: 's3-listener-token' })}\n`)
   const settings = path.join(home, '.claude', 'settings.json')
   if (prior != null) put(settings, `${JSON.stringify({ env: { HTTPS_PROXY: prior } }, null, 2)}\n`)
@@ -84,7 +84,7 @@ function collectorOf(home, { url = KERNEL_URL, prior = 'http://proxy.corp:8080',
 }
 
 test('W69 the host-set lines of `status` (4.8 §3): the host program\'s other connections only forward and only the form\'s host set reaches the engine; settings that cannot be read leave the set at the defaults and extra_hosts, said with the reason and the hosts that are still captured; a fresh read that differs from the applied set says the kernel\'s is old and names the command — three notes of the detail view, none when the set is current and reads', () => {
-  const hostForm = (hosts) => form('kimi-code.vscode', { entry: { where: 'settings.json http.proxy', asight: true, opt_in: true, intact: true }, optIn: { state: 'done' }, procs: [proc(8100, { name: 'Code', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', version: null })], hosts })
+  const hostForm = (hosts) => form('kimi-code.vscode', { entry: { where: 'settings.json http.proxy', trocar: true, opt_in: true, intact: true }, optIn: { state: 'done' }, procs: [proc(8100, { name: 'Code', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', version: null })], hosts })
   const DEFAULTS = ['api.kimi.com', 'api.kimi.ai', 'api.moonshot.ai', 'api.moonshot.cn']
   const tree = "VS Code's other connections are forwarded only; only the hosts of Kimi are captured"
   // a read that agrees with the applied set: only the host-tree line
@@ -92,9 +92,9 @@ test('W69 the host-set lines of `status` (4.8 §3): the host program\'s other co
   assert.deepEqual(current.notes, [tree], 'the set is current: no line about an older set')
   // the settings changed after `on`: the kernel's set is old, the command that recomputes it is named — `status` itself changes nothing
   const stale = buildTopology(pfacts('kimi-code', hostForm({ program: 'VS Code', extension: 'Kimi', defaults: [...DEFAULTS], hosts: [...DEFAULTS, 'relay.corp.example'], settings: 'read', dropped: [], applied: [...DEFAULTS] }), fwForm(17995)))['kimi-code']
-  assert.deepEqual(stale.notes, [tree, "the host set in use is older than Kimi's settings; to bring it up to date run: asight on kimi-code"])
+  assert.deepEqual(stale.notes, [tree, "the host set in use is older than Kimi's settings; to bring it up to date run: trocar on kimi-code"])
   const staleDetail = renderDetail(stale, { now: NOW }).join('\n')
-  assert.ok(staleDetail.includes('the host set in use is older') && staleDetail.includes('asight on kimi-code'), 'the detail view prints it, with the command')
+  assert.ok(staleDetail.includes('the host set in use is older') && staleDetail.includes('trocar on kimi-code'), 'the detail view prints it, with the command')
   // the settings cannot be read: only the defaults and extra_hosts are captured — said with the reason and the hosts that are, never silent
   const unreadable = buildTopology(pfacts('kimi-code', hostForm({ program: 'VS Code', extension: 'Kimi', defaults: [...DEFAULTS], hosts: [...DEFAULTS, 'relay.extra.example'], settings: { unreadable: { reason: 'denied', detail: 'EACCES' } }, dropped: [] }), fwForm(17995)))['kimi-code']
   assert.deepEqual(unreadable.notes, [tree, `Kimi's own settings could not be read (denied: EACCES): only its default hosts (${DEFAULTS.join(', ')}) are captured`])
@@ -106,7 +106,7 @@ test('W69 the host-set lines of `status` (4.8 §3): the host program\'s other co
 })
 
 test('a helper that cannot be started, and one that answers nothing: every read it owned is an unknown with its reason, the routing stays proxy and nothing is invented (R11)', async () => {
-  const home = tmpDir('asight-wf-dead-')
+  const home = tmpDir('trocar-wf-dead-')
   collectorOf(home)
   const broken = { call: async () => { throw Object.assign(new Error('helper-down'), { code: 'helper-down' }) }, close: async () => {} }
   // the injected helper fails AND one of this command's own cannot be started (the program is not there): both halves are said, nothing is invented
@@ -118,7 +118,7 @@ test('a helper that cannot be started, and one that answers nothing: every read 
 })
 
 test('an INJECTED helper (the daemon\'s warm one) that fails does not end the diagnosis — this command starts its own helper, says it did (D38), and every axis is read', async () => {
-  const home = tmpDir('asight-wf-fallback-')
+  const home = tmpDir('trocar-wf-fallback-')
   collectorOf(home)
   const asked = []
   const broken = { call: async (verb) => { asked.push(verb); throw Object.assign(new Error('helper-down'), { code: 'helper-down' }) }, close: async () => {} }
@@ -139,7 +139,7 @@ test('an INJECTED helper (the daemon\'s warm one) that fails does not end the di
 
 
 test('plan §E.7 ruling 2: the win32 facts are darwin\'s shape (routing proxy, the processes by the name list, the listeners, the OS proxy); the per-form half is the model\'s, so with nothing installed there is no form to draw and the topology says so', async () => {
-  const home = tmpDir('asight-wf-shape-')
+  const home = tmpDir('trocar-wf-shape-')
   const helper = { close: async () => {}, call: async (verb) => {
     if (verb === 'ps') return { procs: [{ pid: 4242, name: 'claude.exe', exe: 'C:\\Users\\u\\.local\\bin\\claude.exe', cmdline: 'claude', cmdlineState: 'ok' },
       { pid: 5151, name: 'Code.exe', exe: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', cmdline: '"C:\\Program Files\\Microsoft VS Code\\Code.exe"', cmdlineState: 'ok' }] }
@@ -169,7 +169,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 /** A finding's context, filled the way `diagnose` fills it (`fm` = the form facts of the branch that carries the reason, the extras what the daemon's records will hand over). */
 const CTX = (over = {}) => ({ F: {}, h: 'codex', hf: null, t: null, user: 'u', sh: 'powershell', platform: 'win32', setting: null, ...over })
 const cmd = (run, shell = 'powershell') => ({ run, shell })
-const A = (run) => cmd(run) // asight's own, in the platform's shell
+const A = (run) => cmd(run) // trocar's own, in the platform's shell
 
 test('W36 one entry per code row of §10.4 — no more, no less — and each entry\'s own output is a finding the schema accepts (a win-only code defines every field; no run holds a placeholder)', () => {
   assert.deepEqual(Object.keys(FINDINGS_WIN32), [
@@ -190,7 +190,7 @@ test('W36 one entry per code row of §10.4 — no more, no less — and each ent
       commands: entry.commands(c), verify: entry.verify ? entry.verify(c) : '(the cross-platform catalogue\'s own words)' }
     assert.deepEqual(validateFinding(finding), [], `${code}: the schema accepts the entry's own output`)
     for (const x of finding.commands) assert.ok(!/<[^>\n]+>/.test(x.run), `${code}: ${x.run} holds a placeholder`)
-    if (entry.asightFirst && finding.commands.some((x) => x.shell !== 'gui')) assert.ok(finding.commands[0].run.startsWith('asight '), `${code}: the first command is asight's`)
+    if (entry.trocarFirst && finding.commands.some((x) => x.shell !== 'gui')) assert.ok(finding.commands[0].run.startsWith('trocar '), `${code}: the first command is trocar's`)
     assert.ok(FINDING_CODES.includes(code), `${code}: is in the finding codes' own list`)
   }
 })
@@ -200,47 +200,47 @@ test('W36 one entry per code row of §10.4 — no more, no less — and each ent
 const LITERALS = {
   'not-routed': {
     pac: { ctx: CTX({ h: 'codex', pac: true, fm: { id: 'codex.app', route: { reason: 'not-routed', why: 'system-proxy-pac' }, entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.codex\\.env', format: 'dotenv', key: 'HTTPS_PROXY' } } }),
-      what: 'New connections from codex (codex.app) do not go through asight.', why: 'The system proxy this form follows is a PAC script, which asight does not run.',
-      commands: [cmd('Put the line HTTPS_PROXY=unknown proxy address (pac) in C:\\Users\\u\\.codex\\.env', 'gui'), A('asight on codex')], verify: 'asight status codex' },
+      what: 'New connections from codex (codex.app) do not go through trocar.', why: 'The system proxy this form follows is a PAC script, which trocar does not run.',
+      commands: [cmd('Put the line HTTPS_PROXY=unknown proxy address (pac) in C:\\Users\\u\\.codex\\.env', 'gui'), A('trocar on codex')], verify: 'trocar status codex' },
     'system-proxy-unreadable': { ctx: CTX({ h: 'codex', fm: { id: 'codex.app', route: { reason: 'not-routed', why: 'system-proxy-unreadable', detail: 'denied' } } }),
-      why: 'Your system proxy could not be read (denied), and asight does not guess, so it did not connect this form.',
-      commands: [A('asight on codex'), A('asight doctor codex'), cmd('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable')] },
+      why: 'Your system proxy could not be read (denied), and trocar does not guess, so it did not connect this form.',
+      commands: [A('trocar on codex'), A('trocar doctor codex'), cmd('reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable')] },
     'upstream-unparseable': { ctx: CTX({ h: 'claude-code', fm: { id: 'claude-code.cli', route: { reason: 'not-routed', why: 'upstream-unparseable' }, entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.claude\\settings.json', format: 'json', key: 'env.HTTPS_PROXY' } } }),
-      why: 'asight cannot read the proxy address this form had, so it did not connect it.',
-      commands: [cmd('Write it as http://host:port or socks5://host:port', 'gui'), cmd('Open C:\\Users\\u\\.claude\\settings.json in Notepad and set env.HTTPS_PROXY to "unknown proxy address (absent)"', 'gui'), A('asight on claude-code'), A('asight off claude-code')] },
+      why: 'trocar cannot read the proxy address this form had, so it did not connect it.',
+      commands: [cmd('Write it as http://host:port or socks5://host:port', 'gui'), cmd('Open C:\\Users\\u\\.claude\\settings.json in Notepad and set env.HTTPS_PROXY to "unknown proxy address (absent)"', 'gui'), A('trocar on claude-code'), A('trocar off claude-code')] },
     'credentials-in-system-proxy': { ctx: CTX({ h: 'codex', fm: { id: 'codex.app', route: { reason: 'not-routed', why: 'upstream-unparseable', detail: 'credentials-in-system-proxy' }, entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.codex\\.env', format: 'dotenv', key: 'HTTPS_PROXY' } } }),
-      why: 'Your system proxy address carries a login, which Windows itself does not use, so asight did not connect this form.',
-      commands: [cmd('Take the login out of your system proxy address', 'gui'), cmd('Put the line HTTPS_PROXY=unknown proxy address (absent) in C:\\Users\\u\\.codex\\.env', 'gui'), A('asight on codex'), A('asight off codex')] },
+      why: 'Your system proxy address carries a login, which Windows itself does not use, so trocar did not connect this form.',
+      commands: [cmd('Take the login out of your system proxy address', 'gui'), cmd('Put the line HTTPS_PROXY=unknown proxy address (absent) in C:\\Users\\u\\.codex\\.env', 'gui'), A('trocar on codex'), A('trocar off codex')] },
     'no-why': { ctx: CTX({ h: 'kimi-code', fm: null }),
-      why: 'This form has no entry asight can use.',
-      commands: [cmd("Use kimi-code's CLI form instead", 'gui'), A('asight status kimi-code')] },
+      why: 'This form has no entry trocar can use.',
+      commands: [cmd("Use kimi-code's CLI form instead", 'gui'), A('trocar status kimi-code')] },
   },
-  'entry-changed': { ctx: CTX({ h: 'z-code' }), commands: [A('asight on z-code')], verify: 'asight status z-code' },
-  'egress-differs': { ctx: CTX({ h: 'codex' }), commands: [A('asight off codex')], verify: 'asight status codex' },
+  'entry-changed': { ctx: CTX({ h: 'z-code' }), commands: [A('trocar on z-code')], verify: 'trocar status z-code' },
+  'egress-differs': { ctx: CTX({ h: 'codex' }), commands: [A('trocar off codex')], verify: 'trocar status codex' },
   'elevated-agent': { ctx: CTX({ h: 'claude-code' }),
-    commands: [cmd('Quit claude-code and start it again without administrator rights', 'gui'), cmd('whoami /groups | findstr /i "Mandatory"')], verify: 'asight status claude-code' },
+    commands: [cmd('Quit claude-code and start it again without administrator rights', 'gui'), cmd('whoami /groups | findstr /i "Mandatory"')], verify: 'trocar status claude-code' },
   'proxy-dead': { ctx: CTX({ h: 'claude-code', dead: { addr: '127.0.0.1', port: 7890 } }),
-    commands: [cmd('netstat -ano -p TCP | findstr ":7890"'), cmd('Start your proxy, so that it listens on 127.0.0.1:7890', 'gui'), cmd('Or turn off the system proxy that points at it', 'gui')], verify: 'asight status claude-code' },
+    commands: [cmd('netstat -ano -p TCP | findstr ":7890"'), cmd('Start your proxy, so that it listens on 127.0.0.1:7890', 'gui'), cmd('Or turn off the system proxy that points at it', 'gui')], verify: 'trocar status claude-code' },
   'upstream-unreachable': { ctx: CTX({ h: 'codex', upPort: 7897 }),
-    commands: [cmd('netstat -ano -p TCP | findstr ":7897"'), cmd('Start your proxy, or turn off the system proxy that points at it', 'gui')], verify: 'asight status codex' },
+    commands: [cmd('netstat -ano -p TCP | findstr ":7897"'), cmd('Start your proxy, or turn off the system proxy that points at it', 'gui')], verify: 'trocar status codex' },
   'engine-port-taken': { ctx: CTX({ h: 'codex', enginePort: 17990 }),
-    what: 'Another program holds the port asight listens on, so nothing is captured.', why: 'asight picks another port after a restart.',
-    commands: [cmd('netstat -ano -p TCP | findstr ":17990"'), A('asight off'), A('asight on')], verify: 'asight status' },
+    what: 'Another program holds the port trocar listens on, so nothing is captured.', why: 'trocar picks another port after a restart.',
+    commands: [cmd('netstat -ano -p TCP | findstr ":17990"'), A('trocar off'), A('trocar on')], verify: 'trocar status' },
   'forwarder-down': { ctx: CTX({ h: 'codex' }),
-    commands: [A('asight on'), A('asight off codex'), cmd('Restart codex after that, and it connects without asight', 'gui')], verify: 'asight status' },
+    commands: [A('trocar on'), A('trocar off codex'), cmd('Restart codex after that, and it connects without trocar', 'gui')], verify: 'trocar status' },
   'form-unsupported': { ctx: CTX({ h: 'claude-code', fm: { id: 'claude-code.desktop' } }),
-    what: 'claude-code (claude-code.desktop) cannot take an upstream proxy that needs a login.', why: 'Its entry takes no login, so asight does not hand it one.',
-    commands: [cmd("Use claude-code's CLI form or its editor extension instead", 'gui')], verify: 'asight status claude-code' },
+    what: 'claude-code (claude-code.desktop) cannot take an upstream proxy that needs a login.', why: 'Its entry takes no login, so trocar does not hand it one.',
+    commands: [cmd("Use claude-code's CLI form or its editor extension instead", 'gui')], verify: 'trocar status claude-code' },
   'proxy-unsupported': { ctx: CTX({ h: 'deepseek-dsh', protocol: 'socks4', fm: { entryPlace: { kind: 'file', file: 'C:\\Users\\u\\.dsh\\.env', format: 'dotenv', key: 'HTTPS_PROXY' } } }),
-    what: 'deepseek-dsh does not support the proxy scheme socks4.', why: 'asight cannot use a socks4 proxy as its upstream, so it did not connect this form.',
-    commands: [cmd('Write it as http://host:port or socks5://host:port', 'gui'), cmd('Put the line HTTPS_PROXY=unknown proxy address (absent) in C:\\Users\\u\\.dsh\\.env', 'gui'), A('asight on deepseek-dsh'), A('asight off deepseek-dsh')], verify: 'asight status deepseek-dsh' },
+    what: 'deepseek-dsh does not support the proxy scheme socks4.', why: 'trocar cannot use a socks4 proxy as its upstream, so it did not connect this form.',
+    commands: [cmd('Write it as http://host:port or socks5://host:port', 'gui'), cmd('Put the line HTTPS_PROXY=unknown proxy address (absent) in C:\\Users\\u\\.dsh\\.env', 'gui'), A('trocar on deepseek-dsh'), A('trocar off deepseek-dsh')], verify: 'trocar status deepseek-dsh' },
   'system-proxy-pac': { ctx: CTX({}),
-    commands: [cmd("Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL")], verify: 'asight status' },
-  'other-redirector': { ctx: CTX({}), commands: [cmd('netsh winsock show catalog')], verify: 'asight status' },
+    commands: [cmd("Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL")], verify: 'trocar status' },
+  'other-redirector': { ctx: CTX({}), commands: [cmd('netsh winsock show catalog')], verify: 'trocar status' },
   'socktable-unavailable': { ctx: CTX({}),
-    what: 'Windows did not say which program owns a connection, so it was forwarded only.', why: 'asight never guesses the owner of a connection; it forwards it instead of capturing it.',
-    commands: [cmd('No action needed: that connection was forwarded, not captured; the next one is asked again', 'gui')], verify: 'asight status' },
-  'cause-unknown': { ctx: CTX({ h: 'codex' }), commands: [A('asight off codex'), cmd('Try codex again: if it still fails, asight is not the cause', 'gui')], verify: 'Try codex again' },
+    what: 'Windows did not say which program owns a connection, so it was forwarded only.', why: 'trocar never guesses the owner of a connection; it forwards it instead of capturing it.',
+    commands: [cmd('No action needed: that connection was forwarded, not captured; the next one is asked again', 'gui')], verify: 'trocar status' },
+  'cause-unknown': { ctx: CTX({ h: 'codex' }), commands: [A('trocar off codex'), cmd('Try codex again: if it still fails, trocar is not the cause', 'gui')], verify: 'Try codex again' },
 }
 
 test('W36 each §10.4 command equals its literal (the values filled: the entry file and its key, the ports of the facts — no placeholder, no download address)', () => {

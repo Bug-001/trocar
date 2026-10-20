@@ -7,12 +7,12 @@
 // and nothing here changes a system setting. `Get-NetTCPConnection` never appears — a restricted token is refused it (4.8 E6) — the port check is always `netstat -ano -p TCP | findstr
 // ":<port>"`. A JSON edit is a `gui` step worded as 记事本 (a PowerShell one-liner would reorder the user's JSON).
 
-const asight = (c, run) => ({ run, shell: c.sh })
+const trocar = (c, run) => ({ run, shell: c.sh })
 const ps = (run) => ({ run, shell: 'powershell' })
 const gui = (run) => ({ run, shell: 'gui' })
 const unknownValue = (what, reason) => `unknown ${what} (${reason})`
 /** The port check (4.8 §10.4: the one form, `netstat -ano -p TCP | findstr ":<端口>"`). */
-const netstat = (port) => (Number.isInteger(port) ? ps(`netstat -ano -p TCP | findstr ":${port}"`) : gui('Run netstat -ano -p TCP and look for the port; asight status prints it'))
+const netstat = (port) => (Number.isInteger(port) ? ps(`netstat -ano -p TCP | findstr ":${port}"`) : gui('Run netstat -ano -p TCP and look for the port; trocar status prints it'))
 const REG_QUERY_PROXY = 'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable'
 const GET_PAC = "Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -Name AutoConfigURL"
 
@@ -41,79 +41,79 @@ function setProxyText(h, place, value) {
 /** The catalogue (4.8 §10.4, one entry per code row). Commands only, unless the Windows row says its own thing about what or why. */
 export const FINDINGS_WIN32 = {
   'not-routed': {
-    cls: 'problem', asightFirst: false,
-    what: (c) => `New connections from ${c.h}${c.fm && c.fm.id ? ` (${c.fm.id})` : ''} do not go through asight.`,
+    cls: 'problem', trocarFirst: false,
+    what: (c) => `New connections from ${c.h}${c.fm && c.fm.id ? ` (${c.fm.id})` : ''} do not go through trocar.`,
     why: (c) => { const w = whyOf(c)
-      if (w.why === 'system-proxy-pac') return 'The system proxy this form follows is a PAC script, which asight does not run.'
-      if (w.why === 'system-proxy-unreadable') return `Your system proxy could not be read (${w.detail || 'no reason given'}), and asight does not guess, so it did not connect this form.`
+      if (w.why === 'system-proxy-pac') return 'The system proxy this form follows is a PAC script, which trocar does not run.'
+      if (w.why === 'system-proxy-unreadable') return `Your system proxy could not be read (${w.detail || 'no reason given'}), and trocar does not guess, so it did not connect this form.`
       if (w.why === 'upstream-unparseable') return w.detail === 'credentials-in-system-proxy'
-        ? 'Your system proxy address carries a login, which Windows itself does not use, so asight did not connect this form.'
-        : 'asight cannot read the proxy address this form had, so it did not connect it.'
-      return 'This form has no entry asight can use.'
+        ? 'Your system proxy address carries a login, which Windows itself does not use, so trocar did not connect this form.'
+        : 'trocar cannot read the proxy address this form had, so it did not connect it.'
+      return 'This form has no entry trocar can use.'
     },
     commands: (c) => { const w = whyOf(c)
-      if (!w.why) return [gui(`Use ${c.h}'s CLI form instead`), asight(c, `asight status ${c.h}`)]
-      if (w.why === 'system-proxy-pac') return [gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'pac'))), asight(c, `asight on ${c.h}`)]
-      if (w.why === 'system-proxy-unreadable') return [asight(c, `asight on ${c.h}`), asight(c, `asight doctor ${c.h}`), ps(REG_QUERY_PROXY)]
+      if (!w.why) return [gui(`Use ${c.h}'s CLI form instead`), trocar(c, `trocar status ${c.h}`)]
+      if (w.why === 'system-proxy-pac') return [gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'pac'))), trocar(c, `trocar on ${c.h}`)]
+      if (w.why === 'system-proxy-unreadable') return [trocar(c, `trocar on ${c.h}`), trocar(c, `trocar doctor ${c.h}`), ps(REG_QUERY_PROXY)]
       return [
         gui(w.detail === 'credentials-in-system-proxy' ? 'Take the login out of your system proxy address' : 'Write it as http://host:port or socks5://host:port'),
         gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'absent'))),
-        asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`),
+        trocar(c, `trocar on ${c.h}`), trocar(c, `trocar off ${c.h}`),
       ]
     },
-    verify: (c) => `asight status ${c.h}`,
+    verify: (c) => `trocar status ${c.h}`,
   },
-  'entry-changed': { commands: (c) => [asight(c, (c.fm && c.fm.certificate && c.fm.certificate.command) || `asight on ${c.h}`)], verify: (c) => `asight status ${c.h}` }, // a drifted install item (row 31) names its own command
-  'egress-differs': { commands: (c) => [asight(c, `asight off ${c.h}`)], verify: (c) => `asight status ${c.h}` },
+  'entry-changed': { commands: (c) => [trocar(c, (c.fm && c.fm.certificate && c.fm.certificate.command) || `trocar on ${c.h}`)], verify: (c) => `trocar status ${c.h}` }, // a drifted install item (row 31) names its own command
+  'egress-differs': { commands: (c) => [trocar(c, `trocar off ${c.h}`)], verify: (c) => `trocar status ${c.h}` },
   'elevated-agent': {
     commands: (c) => [gui(`Quit ${c.h} and start it again without administrator rights`), ps('whoami /groups | findstr /i "Mandatory"')],
-    verify: (c) => `asight status ${c.h}`,
+    verify: (c) => `trocar status ${c.h}`,
   },
   'proxy-dead': {
     commands: (c) => [netstat(c.dead && c.dead.port), gui(`Start your proxy, so that it listens on ${c.dead ? `${c.dead.addr}:${c.dead.port}` : unknownValue('address', 'absent')}`), ...(c.removeOwn || []), gui('Or turn off the system proxy that points at it')],
-    verify: (c) => `asight status ${c.h}`,
+    verify: (c) => `trocar status ${c.h}`,
   },
   'upstream-unreachable': {
-    // the places are the user's OWN (the key asight wrote holds the door): `off`, clear them, `on` — the same steps as the cross-platform row (1.6 附录 B)
+    // the places are the user's OWN (the key trocar wrote holds the door): `off`, clear them, `on` — the same steps as the cross-platform row (1.6 附录 B)
     commands: (c) => [netstat(c.upPort), gui('Start your proxy, or turn off the system proxy that points at it'),
-      ...((c.removeOwn || []).length ? [asight(c, `asight off ${c.h}`), ...c.removeOwn, asight(c, `asight on ${c.h}`)] : [])],
-    verify: (c) => `asight status ${c.h}`,
+      ...((c.removeOwn || []).length ? [trocar(c, `trocar off ${c.h}`), ...c.removeOwn, trocar(c, `trocar on ${c.h}`)] : [])],
+    verify: (c) => `trocar status ${c.h}`,
   },
   'engine-port-taken': {
-    cls: 'problem', asightFirst: false,
-    what: () => 'Another program holds the port asight listens on, so nothing is captured.',
-    why: () => 'asight picks another port after a restart.',
-    commands: (c) => [netstat(c.enginePort), asight(c, 'asight off'), asight(c, 'asight on')],
-    verify: () => 'asight status',
+    cls: 'problem', trocarFirst: false,
+    what: () => 'Another program holds the port trocar listens on, so nothing is captured.',
+    why: () => 'trocar picks another port after a restart.',
+    commands: (c) => [netstat(c.enginePort), trocar(c, 'trocar off'), trocar(c, 'trocar on')],
+    verify: () => 'trocar status',
   },
   'forwarder-down': {
-    commands: (c) => [asight(c, 'asight on'), asight(c, `asight off ${c.h}`), gui(`Restart ${c.h} after that, and it connects without asight`)],
-    verify: () => 'asight status',
+    commands: (c) => [trocar(c, 'trocar on'), trocar(c, `trocar off ${c.h}`), gui(`Restart ${c.h} after that, and it connects without trocar`)],
+    verify: () => 'trocar status',
   },
   'form-unsupported': {
-    cls: 'problem', asightFirst: false,
+    cls: 'problem', trocarFirst: false,
     what: (c) => `${c.h}${c.fm && c.fm.id ? ` (${c.fm.id})` : ''} cannot take an upstream proxy that needs a login.`,
-    why: () => 'Its entry takes no login, so asight does not hand it one.',
+    why: () => 'Its entry takes no login, so trocar does not hand it one.',
     commands: (c) => [gui(`Use ${c.h}'s CLI form or its editor extension instead`)],
-    verify: (c) => `asight status ${c.h}`,
+    verify: (c) => `trocar status ${c.h}`,
   },
   'proxy-unsupported': {
     what: (c) => `${c.h} does not support the proxy scheme ${c.protocol || (c.setting && c.setting.scheme) || unknownValue('scheme', 'unreadable')}.`,
-    why: (c) => (c.protocol ? `asight cannot use a ${c.protocol} proxy as its upstream, so it did not connect this form.` : `${c.h} cannot use the proxy scheme set in its own settings.`),
-    commands: (c) => [gui('Write it as http://host:port or socks5://host:port'), gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'absent'))), asight(c, `asight on ${c.h}`), asight(c, `asight off ${c.h}`)],
-    verify: (c) => `asight status ${c.h}`,
+    why: (c) => (c.protocol ? `trocar cannot use a ${c.protocol} proxy as its upstream, so it did not connect this form.` : `${c.h} cannot use the proxy scheme set in its own settings.`),
+    commands: (c) => [gui('Write it as http://host:port or socks5://host:port'), gui(setProxyText(c.h, c.fm && c.fm.entryPlace, unknownValue('proxy address', 'absent'))), trocar(c, `trocar on ${c.h}`), trocar(c, `trocar off ${c.h}`)],
+    verify: (c) => `trocar status ${c.h}`,
   },
-  'system-proxy-pac': { commands: () => [ps(GET_PAC)], verify: () => 'asight status' },
-  'other-redirector': { commands: () => [ps('netsh winsock show catalog')], verify: () => 'asight status' },
+  'system-proxy-pac': { commands: () => [ps(GET_PAC)], verify: () => 'trocar status' },
+  'other-redirector': { commands: () => [ps('netsh winsock show catalog')], verify: () => 'trocar status' },
   'socktable-unavailable': {
-    cls: 'problem', asightFirst: false,
+    cls: 'problem', trocarFirst: false,
     what: () => 'Windows did not say which program owns a connection, so it was forwarded only.',
-    why: () => 'asight never guesses the owner of a connection; it forwards it instead of capturing it.',
+    why: () => 'trocar never guesses the owner of a connection; it forwards it instead of capturing it.',
     commands: () => [gui('No action needed: that connection was forwarded, not captured; the next one is asked again')],
-    verify: () => 'asight status',
+    verify: () => 'trocar status',
   },
   'cause-unknown': {
-    commands: (c) => [asight(c, `asight off ${c.h}`), gui(`Try ${c.h} again: if it still fails, asight is not the cause`)],
+    commands: (c) => [trocar(c, `trocar off ${c.h}`), gui(`Try ${c.h} again: if it still fails, trocar is not the cause`)],
     verify: (c) => `Try ${c.h} again`,
   },
 }

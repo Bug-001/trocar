@@ -8,7 +8,7 @@ import { serveSource } from '../../src/paths.mjs';
 
 // TWO CAPTURE ROOTS, ONE RESOLVER — AND THE SECOND ROOT MUST ACTUALLY BE SEARCHED.
 //
-// D27 moved the product home to ~/.asight and kept the legacy ~/.atrace readable, because invariant 2
+// D27 moved the product home to ~/.trocar and kept the legacy ~/.atrace readable, because invariant 2
 // says a capture that exists on disk stays readable. `serveSource()` therefore returns BOTH roots and
 // the board builds one resolver over the pair. That is the configuration every upgrading user is in,
 // and three separate wiring holes made it the broken one (2026-07-20 audit, all three verified):
@@ -31,7 +31,7 @@ const ROOT = path.resolve(HERE, '..', '..');
 
 // One record per root, each addressable, so a ref can only resolve if ITS root was searched.
 function twoRoots() {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-multiroot-'));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-multiroot-'));
   const mk = (dir, sid, id, marker) => {
     fs.mkdirSync(dir, { recursive: true });
     const req = { model: 'm', system: [{ type: 'text', text: marker }], tools: [], messages: [] };
@@ -123,7 +123,7 @@ test('dispose tears down EVERY root — the teardown name must match', async () 
 });
 
 test('…and when NEITHER root exists, that is an empty board, not a crash', async () => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-none-'));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-none-'));
   try {
     const roots = [].concat(serveSource({
       home: path.join(base, 'nope-home'),

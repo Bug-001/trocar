@@ -1,11 +1,11 @@
-// words.mjs — the English wording table of the human-facing text the CLI and the board share (D46, D58): one sentence per failure code asight can
+// words.mjs — the English wording table of the human-facing text the CLI and the board share (D46, D58): one sentence per failure code trocar can
 // write (FAILURE_WORDS, via failureBrief) and per reason an agent is not captured (statusReason). The raw errno (EPERM, ENOSPC, ERR_*) is not
 // translated; a code the table does not know falls back to `where/code` + reason, so nothing is hidden. The FULL reason is never changed or dropped
 // by this module: `--json` and the flows/ records keep it verbatim (R5, R11) — this is the display layer only, and the code and reason a sentence
-// stands for stay in the technical details (the board) and after the sentence (`asight status --failures`).
+// stands for stay in the technical details (the board) and after the sentence (`trocar status --failures`).
 const ERRNO = /^(E[A-Z0-9_]+|Z_[A-Z_]+|ERR_[A-Z0-9_]+)$/ // Node's own error codes (errno, ERR_*, zlib's Z_*), as src/health/codes.mjs spells them
 
-/** One short English sentence per failure code asight's writers can put into a log (src/health/codes.mjs's closed sets, the raw layer's journal
+/** One short English sentence per failure code trocar's writers can put into a log (src/health/codes.mjs's closed sets, the raw layer's journal
  *  outcomes and segment problems): the one catalog the CLI and the board word a failure group from (0.1 §2, D58②: no code on screen). A key is
  *  a bare `code`, or `where/code` where one code means two things under two `where`s (that key wins). A code that is also a status reason and
  *  has no key here reads statusReason's clause (below), so the two catalogs never word one code twice. */
@@ -18,9 +18,9 @@ export const FAILURE_WORDS = Object.freeze({
   'stop-failed': 'it could not be stopped',
   'control-error': 'its control channel failed',
   'check-error': 'its self-check failed',
-  'not-installed': 'asight is not installed',
+  'not-installed': 'trocar is not installed',
   'manifest-unreadable': 'the install record could not be read',
-  'control-endpoint-held': "another process holds asight's control channel, so the background process did not start",
+  'control-endpoint-held': "another process holds trocar's control channel, so the background process did not start",
   'query-failed': 'a query worker failed; the query was answered another way',
   'root-refused': 'refused: it was run as root',
   'root-token': 'refused: it was run as root',
@@ -38,7 +38,7 @@ export const FAILURE_WORDS = Object.freeze({
   'segment-unreadable': 'a capture file could not be read',
   'index-unwritable': 'the index of a capture file could not be saved; answers are read from the file itself',
   // certificates and bundles
-  'ca-invalid': "asight's certificate cannot be used",
+  'ca-invalid': "trocar's certificate cannot be used",
   'system-roots-unavailable': 'the certificate bundle has no system roots',
   'system-roots-unparsable': 'some system roots would not parse and are not in the bundle',
   'system-roots-partial': 'the certificate bundle is missing some system roots',
@@ -48,7 +48,7 @@ export const FAILURE_WORDS = Object.freeze({
   'cert-not-merged': 'a block in your certificate file is not a certificate; it was not merged into the bundle',
   'source-unreadable': 'a certificate file named in the agent config could not be read',
   'relative-path': 'a certificate given by a relative path was not carried over',
-  // processes asight follows
+  // processes trocar follows
   'watch-failed': 'a process could not be watched',
   'unwatch-error': 'a process could not stop being watched',
   'judge-error': 'a process could not be judged',
@@ -57,7 +57,7 @@ export const FAILURE_WORDS = Object.freeze({
   'config-error': "an agent's settings could not be read",
   'config-unreadable': 'a config file could not be read',
   'config-unparsable': 'a config file could not be parsed',
-  'agent-list-invalid': 'the list of agent names could not be read, or holds items asight cannot use',
+  'agent-list-invalid': 'the list of agent names could not be read, or holds items trocar cannot use',
   'harness-note': 'a note from the install',
   'unit-env-not-carried': "the login item's environment cannot carry the install's certificate variable",
   'holders-unreadable': 'the list of running processes could not be read',
@@ -67,25 +67,25 @@ export const FAILURE_WORDS = Object.freeze({
   'engine-error': 'the engine failed',
   'flow-write-failed': 'a connection log line could not be written',
   'trust-store-error': "the engine's certificate store failed",
-  'negative-cache': "a program refused asight's certificate, so its traffic to that host is passed on unread",
-  'trust-rejected': "a program refused asight's certificate under TLS, so that host is not captured",
-  'client-rejected-leaf': "a connection whose program refused asight's certificate",
+  'negative-cache': "a program refused trocar's certificate, so its traffic to that host is passed on unread",
+  'trust-rejected': "a program refused trocar's certificate under TLS, so that host is not captured",
+  'client-rejected-leaf': "a connection whose program refused trocar's certificate",
   'upstream-slow': 'the upstream was slow',
   'leaf-error': 'a certificate could not be issued',
   'framer-error': 'a request could not be parsed',
   'unpaired-response': 'a response arrived with no request to pair it with',
-  'prior-proxy-unknown': 'the proxy in use before asight could not be told',
-  'pac-peer-refused': "asight's proxy auto-config refused a program of another user",
+  'prior-proxy-unknown': 'the proxy in use before trocar could not be told',
+  'pac-peer-refused': "trocar's proxy auto-config refused a program of another user",
   'upstream-header-ignored': 'a routing header from a program that should not send one was ignored',
-  untrusted: 'a connection from a program that does not trust asight yet; passed on unread',
-  untracked: 'a connection from a program asight does not follow; passed on unread',
+  untrusted: 'a connection from a program that does not trust trocar yet; passed on unread',
+  untracked: 'a connection from a program trocar does not follow; passed on unread',
   'upstream-cert': "the upstream's certificate could not be read",
   'upstream-handshake': 'the handshake with the upstream did not finish',
   h2: 'an HTTP/2 connection could not be decrypted',
   'malformed-hello': "a program's handshake message could not be read",
   'ingress-auth-failed': 'a program did not answer the proxy challenge',
-  'ingress-unknown': 'a program spoke something other than a proxy request to asight',
-  'engine-port-taken': "asight's port is taken",
+  'ingress-unknown': 'a program spoke something other than a proxy request to trocar',
+  'engine-port-taken': "trocar's port is taken",
   'upstream-unavailable': 'the upstream could not be dialled',
   // WebSocket recording
   'write-failed': 'a WebSocket message could not be written',
@@ -96,7 +96,7 @@ export const FAILURE_WORDS = Object.freeze({
   'pattern-invalid': 'a traffic pattern does not compile',
   'classes-unparsable': 'the traffic class table could not be parsed; the built-in one applies',
   'classes-unreadable': 'the traffic class table could not be read; the built-in one applies',
-  'classes-bad-entry': 'the traffic class table holds an entry asight cannot use',
+  'classes-bad-entry': 'the traffic class table holds an entry trocar cannot use',
   'classes-write-failed': 'the traffic class table could not be saved',
   'classes-log-failed': 'a change to the traffic class table was made but not logged',
   'classify-failed': 'a call could not be classified, so it is kept in full',
@@ -123,16 +123,16 @@ export const FAILURE_WORDS = Object.freeze({
   'left-unparsable': 'an uninstall left an item behind',
   'left-link': 'a change is a link and was not undone automatically',
   'entry-not-undone': 'a change written into a user file could not be undone',
-  'reverted-not-identical': "asight's text was removed, but the file was changed again since",
+  'reverted-not-identical': "trocar's text was removed, but the file was changed again since",
   'already-restored': 'that file was already restored',
   'left-user-value': 'a value of your own is still in the file',
-  'still-trusting': "a running process still trusts asight's certificate",
+  'still-trusting': "a running process still trusts trocar's certificate",
   'bundle-kept': 'a certificate bundle still in use is kept for now',
-  'residue-not-removed': "files the agent wrote because of asight's plugin are kept; reported, not deleted",
-  'collectors-online': 'uninstall was refused: capture is still on for an agent, or a program may still be using asight',
+  'residue-not-removed': "files the agent wrote because of trocar's plugin are kept; reported, not deleted",
+  'collectors-online': 'uninstall was refused: capture is still on for an agent, or a program may still be using trocar',
   // failure events that carry no code of their own (the group's code is the event)
   failure: 'a problem was recorded',
-  'agent-untrusted': "a running agent does not trust asight's certificate yet",
+  'agent-untrusted': "a running agent does not trust trocar's certificate yet",
   'helper-down': 'the capture helper stopped',
   'helper-version-mismatch': 'the capture helper is the wrong version',
   'attach-failed': 'capture could not be attached',
@@ -173,8 +173,8 @@ const HARNESS_OWN = new Set(['settings-ignored-managed-by-host', 'settings-ignor
 
 /** The reason an agent is not captured (RFC 1.6 §3.5 NOTE column, D38): the one catalog, a clause for every code of
  *  src/health/codes.mjs STATUS_REASONS. → { text, fix, command } — `text` what is wrong ('' for `desired-off`), `fix` what to do in
- *  words or null, `command` the asight command that fixes it or null — or null for a code with no clause (the caller says the reason
- *  is unknown). `harness` and `pid` are filled in where the clause names them. `asight status` prints statusNote (the three on one
+ *  words or null, `command` the trocar command that fixes it or null — or null for a code with no clause (the caller says the reason
+ *  is unknown). `harness` and `pid` are filled in where the clause names them. `trocar status` prints statusNote (the three on one
  *  line); the board says the text and the fix and puts the command in its technical details (1.9), so the two faces word one reason
  *  one way. */
 export function statusReason(code, { harness = '', pid = null } = {}) {
@@ -185,46 +185,46 @@ export function statusReason(code, { harness = '', pid = null } = {}) {
     'env-frozen': [`${who} started before capture was on`, `restart ${h}`],
     'start-time-unknown': [`when ${pid != null ? `pid ${pid}` : 'it'} started could not be read`, `restart ${h}`],
     'no-marker': [`${who} started before capture was on`, `restart ${h}`],
-    'kimi-not-via-shim': [`${h} did not start through the program asight installed`],
-    'negative-cache': [`${h}${pid != null ? ` (pid ${pid})` : ''} refused asight's certificate`, 'restart it'],
-    'daemon-not-running': ['asight is not running in the background'],
-    'daemon-not-responding': ['asight runs in the background but does not answer'],
-    'helper-missing': ["asight's capture helper is missing or is the wrong version"],
-    'link-missing': ['asight is not attached'],
-    'entry-missing': ['the setting that points at asight is gone', null, `asight on ${h}`],
-    'entry-changed': ['the setting that points at asight holds something else'],
-    'forwarder-down': [`asight is not listening, so ${h} cannot connect`],
-    'not-routed': [`new connections from ${h} do not go through asight`],
-    'route-loop': [`asight's upstream for ${h} would be asight itself`],
-    'proxy-changed': [`${h}'s proxy setting is not the one asight connected to`],
+    'kimi-not-via-shim': [`${h} did not start through the program trocar installed`],
+    'negative-cache': [`${h}${pid != null ? ` (pid ${pid})` : ''} refused trocar's certificate`, 'restart it'],
+    'daemon-not-running': ['trocar is not running in the background'],
+    'daemon-not-responding': ['trocar runs in the background but does not answer'],
+    'helper-missing': ["trocar's capture helper is missing or is the wrong version"],
+    'link-missing': ['trocar is not attached'],
+    'entry-missing': ['the setting that points at trocar is gone', null, `trocar on ${h}`],
+    'entry-changed': ['the setting that points at trocar holds something else'],
+    'forwarder-down': [`trocar is not listening, so ${h} cannot connect`],
+    'not-routed': [`new connections from ${h} do not go through trocar`],
+    'route-loop': [`trocar's upstream for ${h} would be trocar itself`],
+    'proxy-changed': [`${h}'s proxy setting is not the one trocar connected to`],
     'proxy-dead': [`the proxy ${h} is set to use is not running`],
     'proxy-unsupported': [`${h} does not support the proxy scheme it is set to use`],
-    'elevated-agent': [`${h}${pid != null ? ` (pid ${pid})` : ''} runs elevated, so asight only forwards it`],
-    'upstream-unreachable': [`asight cannot reach the proxy it uses for ${h}`],
-    'cert-not-installed': ['certificates are not installed', null, 'asight install'],
-    'cert-root-missing': ["asight's root certificate is no longer trusted", null, 'asight install'],
-    'cert-root-pending': ["asight's root certificate is not trusted yet", null, 'asight install'],
-    'cert-root-declined': ["you declined asight's root certificate"],
-    'cert-key-missing': ["the key for asight's root is gone"],
-    'cert-intermediate-unavailable': ['asight cannot sign certificates right now, so it only forwards'],
-    'cert-bundle-missing': [`${h}'s certificate file no longer holds asight's root`],
+    'elevated-agent': [`${h}${pid != null ? ` (pid ${pid})` : ''} runs elevated, so trocar only forwards it`],
+    'upstream-unreachable': [`trocar cannot reach the proxy it uses for ${h}`],
+    'cert-not-installed': ['certificates are not installed', null, 'trocar install'],
+    'cert-root-missing': ["trocar's root certificate is no longer trusted", null, 'trocar install'],
+    'cert-root-pending': ["trocar's root certificate is not trusted yet", null, 'trocar install'],
+    'cert-root-declined': ["you declined trocar's root certificate"],
+    'cert-key-missing': ["the key for trocar's root is gone"],
+    'cert-intermediate-unavailable': ['trocar cannot sign certificates right now, so it only forwards'],
+    'cert-bundle-missing': [`${h}'s certificate file no longer holds trocar's root`],
     'cert-tier-unreachable': [`this form of ${h} has no way to reach a certificate`],
-    'not-verified': [`this form of ${h} is not verified yet, so asight passes its traffic on without reading it`],
+    'not-verified': [`this form of ${h} is not verified yet, so trocar passes its traffic on without reading it`],
     'not-users-file': [`${h} points at a certificate file that is not yours`],
-    'shim-not-on-path': [`${h} did not start through the program asight installed`],
+    'shim-not-on-path': [`${h} did not start through the program trocar installed`],
     'form-unsupported': [`this form of ${h} cannot be captured with the proxy it is set to use`],
-    'outside-host-set': [`${h} talked to a host outside the ones asight reads for it, so that traffic is only forwarded`],
+    'outside-host-set': [`${h} talked to a host outside the ones trocar reads for it, so that traffic is only forwarded`],
     'chromium-child': [`a helper process of ${h} that makes no model calls; it is never decrypted`],
     // the trust resolver's generic reasons (src/collector/core/trust)
-    'var-missing': ["this process's environment has no asight trust entry in effect", null, 'asight install'],
+    'var-missing': ["this process's environment has no trocar trust entry in effect", null, 'trocar install'],
     'file-unreadable': ['the certificate file the trust entry points to could not be read', `fix the read permission of that file, then restart ${h}`],
-    'ca-not-in-file': ["the certificate file in effect does not hold asight's certificate", null, 'asight install'],
-    'replace-without-ca': ["a setting that replaces the root certificates points to a bundle without asight's certificate", null, 'asight install'],
-    shadowed: ["a higher-priority setting without asight's certificate overrides asight's entry", 'change that setting', 'asight install'],
-    'verify-disabled': [`${h} turned off certificate checks on a connection itself, so asight does not decrypt it`, 'turn the checks back on to have that connection recorded'],
+    'ca-not-in-file': ["the certificate file in effect does not hold trocar's certificate", null, 'trocar install'],
+    'replace-without-ca': ["a setting that replaces the root certificates points to a bundle without trocar's certificate", null, 'trocar install'],
+    shadowed: ["a higher-priority setting without trocar's certificate overrides trocar's entry", 'change that setting', 'trocar install'],
+    'verify-disabled': [`${h} turned off certificate checks on a connection itself, so trocar does not decrypt it`, 'turn the checks back on to have that connection recorded'],
     'marker-stale': ["the trust plugin's marker belongs to an earlier process with the same pid", `restart ${h} once`],
     'marker-pending': ["waiting for this process's trust plugin to report (up to tens of seconds after start)", 'this updates itself'],
-    'ca-unusable': ["asight's capture certificate cannot be used", null, 'asight install'],
+    'ca-unusable': ["trocar's capture certificate cannot be used", null, 'trocar install'],
     'environ-unreadable': ["this process's environment could not be read, so its trust entry cannot be judged", `restart ${h} once`],
     'config-unreadable': ['one of its config files could not be read, so the trust entry in it does not count', `fix the read permission of that file, then restart ${h}`],
     'settings-unparsable': ['one of its settings files could not be parsed, so the trust entry in it does not count', `fix that file, then restart ${h}`],
@@ -232,12 +232,12 @@ export function statusReason(code, { harness = '', pid = null } = {}) {
     // a harness's own reasons (HARNESS_OWN): the words the data carries for them come first on the board
     'settings-ignored-managed-by-host': [`${h} is told by its host app to ignore the certificate setting in its settings files`],
     'settings-ignored-restricted': [`${h} runs in restricted mode, which ignores the certificate setting in its settings`],
-    'settings-ignored-setting-sources': [`${h} was started with settings sources that leave out asight's certificate setting`],
-    'dsh-use-openssl-ca': [`${h} runs with --use-openssl-ca, under which asight cannot add its certificate`, 'start it without that flag'],
+    'settings-ignored-setting-sources': [`${h} was started with settings sources that leave out trocar's certificate setting`],
+    'dsh-use-openssl-ca': [`${h} runs with --use-openssl-ca, under which trocar cannot add its certificate`, 'start it without that flag'],
     'dsh-node-too-old': [`${h} runs on a Node too old to add a certificate while running`, 'run it on a newer Node'],
-    'kimi-npm-no-shim': [`this is the npm build of ${h}; asight sets up only the installed one`],
-    'desktop-ca-override': [`the desktop certificate setting of ${h} overrides the one asight wrote`],
-    'smart-app-control': [`Smart App Control is on, so asight could not set up the install folder of ${h}`],
+    'kimi-npm-no-shim': [`this is the npm build of ${h}; trocar sets up only the installed one`],
+    'desktop-ca-override': [`the desktop certificate setting of ${h} overrides the one trocar wrote`],
+    'smart-app-control': [`Smart App Control is on, so trocar could not set up the install folder of ${h}`],
   }
   if (!Object.hasOwn(M, code)) return null
   const [text, fix = null, command = null] = M[code]

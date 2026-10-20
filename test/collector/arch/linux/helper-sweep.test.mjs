@@ -9,12 +9,12 @@ import path from 'node:path'
 import { sweepStaged } from '../../../../src/collector/arch/linux/install.mjs'
 
 test('sweepStaged removes only staged helper copies, keeps the current one, and reports what it removed', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-hs-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-hs-'))
   try {
-    for (const n of ['.asight-redirector.new.67915', '.asight-redirector.new.12', 'asight-redirector', '.asight-redirector.new.x', 'notes']) fs.writeFileSync(path.join(dir, n), 'x')
-    assert.deepEqual(sweepStaged(dir, '.asight-redirector.new.12').sort(), ['.asight-redirector.new.67915'])
-    assert.deepEqual(fs.readdirSync(dir).sort(), ['.asight-redirector.new.12', '.asight-redirector.new.x', 'asight-redirector', 'notes'], 'the helper itself and anything not ours stay')
-    assert.deepEqual(sweepStaged(dir), ['.asight-redirector.new.12'])
+    for (const n of ['.trocar-redirector.new.67915', '.trocar-redirector.new.12', 'trocar-redirector', '.trocar-redirector.new.x', 'notes']) fs.writeFileSync(path.join(dir, n), 'x')
+    assert.deepEqual(sweepStaged(dir, '.trocar-redirector.new.12').sort(), ['.trocar-redirector.new.67915'])
+    assert.deepEqual(fs.readdirSync(dir).sort(), ['.trocar-redirector.new.12', '.trocar-redirector.new.x', 'notes', 'trocar-redirector'], 'the helper itself and anything not ours stay')
+    assert.deepEqual(sweepStaged(dir), ['.trocar-redirector.new.12'])
     assert.deepEqual(sweepStaged(path.join(dir, 'gone')), [], 'no helper dir: nothing to do')
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })

@@ -15,7 +15,7 @@ const flaky = (failing) => new Proxy(fs, { get: (o, k) => (k === 'appendFileSync
 const lines = (dir) => (fs.existsSync(path.join(dir, 'flows')) ? fs.readdirSync(path.join(dir, 'flows')).flatMap((n) => fs.readFileSync(path.join(dir, 'flows', n), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [])
 
 test('R11: a line that cannot be written goes to stderr and to the notes, the writer does not throw, and the first line that can be written afterwards is preceded by one log-gap with the count, the window and the error', () => {
-  const dir = path.join(tmpDir('asight-evw-'), 'collector'); fs.mkdirSync(dir, { recursive: true })
+  const dir = path.join(tmpDir('trocar-evw-'), 'collector'); fs.mkdirSync(dir, { recursive: true })
   let down = true, t = 1_000
   const err = [], notes = []
   const put = runEventWriter({ dir, base: { event: 'off-note', where: 'off', run: 'r1' }, notes, now: () => new Date(Date.UTC(2026, 9, 7, 0, 0, t++)), fs: flaky(() => down), log: (m) => err.push(m) })
@@ -39,20 +39,20 @@ test('R11: a line that cannot be written goes to stderr and to the notes, the wr
 })
 
 test('R11: when the log-gap line cannot be written either, the gap stays and grows — nothing is dropped from the count; a writer that never fails writes exactly its lines', () => {
-  const dir = path.join(tmpDir('asight-evw-'), 'collector'); fs.mkdirSync(dir, { recursive: true })
+  const dir = path.join(tmpDir('trocar-evw-'), 'collector'); fs.mkdirSync(dir, { recursive: true })
   let down = true
   const put = runEventWriter({ dir, base: { event: 'off-note', where: 'off', run: 'r' }, fs: flaky(() => down), log: () => {} })
   put({ reason: 'a' }); put({ reason: 'b' }); put({ reason: 'c' })
   down = false
   put({ reason: 'd' })
   assert.equal(lines(dir)[0].lost, 3)
-  const ok = path.join(tmpDir('asight-evw-'), 'collector'); fs.mkdirSync(ok, { recursive: true })
+  const ok = path.join(tmpDir('trocar-evw-'), 'collector'); fs.mkdirSync(ok, { recursive: true })
   const fine = runEventWriter({ dir: ok, base: { event: 'off-note', where: 'off', run: 'r' }, log: () => assert.fail('nothing to say') })
   fine({ kind: 'result', reason: 'x' })
   assert.deepEqual(lines(ok).map((l) => l.reason), ['x'])
 })
 
-test('R11 through `asight off`: with flows/ unwritable the off still finishes (exit 0), stderr and the receipt say each line that was lost, and once the disk takes lines again the run\'s next line is preceded by a log-gap', async () => {
+test('R11 through `trocar off`: with flows/ unwritable the off still finishes (exit 0), stderr and the receipt say each line that was lost, and once the disk takes lines again the run\'s next line is preceded by a log-gap', async () => {
   const s = await installedHome({ names: ['claude-code'] })
   s.sys.daemon.state.up = false
   let calls = 0

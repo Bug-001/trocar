@@ -1,9 +1,9 @@
 // chain.mjs — P7, the upstream chain (spec 4.11 §1 「门只在代理链里插一环」 and P7; plan decision #12): the proxy a door dials for one connection is
-// the one its agent would have used without asight. One function for every harness; it names no OS and no harness (the descriptor's `proxy` says
+// the one its agent would have used without trocar. One function for every harness; it names no OS and no harness (the descriptor's `proxy` says
 // which variables the agent reads, in its order, and whether it follows the system proxy). Readers are injected: the process facts and the parent walk
 // come from the OS backend (cached there by pid + start), the system proxy from the OS reader, already in the shape below. Nothing here does I/O.
 //
-// upstreamFor({ desc, form, facts, recordedPrior, systemProxy, header, headerAllowed, isAsightDoor, transport }) →
+// upstreamFor({ desc, form, facts, recordedPrior, systemProxy, header, headerAllowed, isTrocarDoor, transport }) →
 //   { url: string | null, source, bypass: [row], code?, pac?, wpad?, unreadable?, notes? }
 //   source ∈ 'hook' | 'config-prior' | 'process-env' | 'system-proxy' | 'direct' | 'unknown'
 //
@@ -13,18 +13,18 @@
 //   recordedPrior the `prior_value` recorded by `on` for this form's entry (null: the user had none)
 //   systemProxy   null (none, or off) · { url, bypass, wpad? } · { pac: true, wpad? } (a PAC, or WPAD alone: reported, never executed) · { ok: false }
 //                 (unreadable). `wpad: true` (WPAD is on) is a hint carried onto the result; it never changes the URL.
-//   header        the CONNECT's `X-Asight-Upstream` value, if any; it counts only when `headerAllowed` (the form uses a hook that sends it), else it is
+//   header        the CONNECT's `X-Trocar-Upstream` value, if any; it counts only when `headerAllowed` (the form uses a hook that sends it), else it is
 //                 ignored and `notes` says so (`{ note: 'header-ignored' }`; a skipped door is `{ note: 'door-skipped', source }`; never a value: the caller records them)
-//   isAsightDoor  (text) → bool; default `isAsightDoorUrl`. Applied at EVERY source: a door is never an upstream.
+//   isTrocarDoor  (text) → bool; default `isTrocarDoorUrl`. Applied at EVERY source: a door is never an upstream.
 //   transport     'http' | 'ws': which half of `proxy.systemProxy` says whether the agent follows the system proxy
 //
-// Steps: 1 hook (the header when allowed, then ASIGHT_PRIOR_PROXY; 'none' = no proxy) · 2 config-prior · 3 process-env (the agent's order; a door
+// Steps: 1 hook (the header when allowed, then TROCAR_PRIOR_PROXY; 'none' = no proxy) · 2 config-prior · 3 process-env (the agent's order; a door
 // value walks parentOf upward) · 4 system-proxy (followers only; with its bypass) · 5 direct. Step 3 that cannot be recovered (the env unreadable,
 // the parent gone after a door) is `unknown`: the system proxy if there is one (follower or not), else direct, with code `prior-proxy-unknown`.
 import { CODE } from '../codes.mjs'
 
-export const HOOK_ENV = 'ASIGHT_PRIOR_PROXY'
-export const HOOK_HEADER = 'x-asight-upstream'
+export const HOOK_ENV = 'TROCAR_PRIOR_PROXY'
+export const HOOK_HEADER = 'x-trocar-upstream'
 export const SOURCES = Object.freeze(['hook', 'config-prior', 'process-env', 'system-proxy', 'direct', 'unknown'])
 const NONE = 'none'
 const MAX_DEPTH = 64 // a parent chain longer than this is a loop in the reader, not a process tree
@@ -38,9 +38,9 @@ export const isLoopbackHost = (host) => {
   return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)
 }
 
-/** Is a proxy text one of asight's doors? A loopback address with asight's credentials (a user and a hex token: the door URL `on` writes, and the
- *  steer value of an older asight), or a loopback address on one of `ports` (an open door, e.g. a PAC-served one, carries no credentials). */
-export function isAsightDoorUrl(text, { ports = [] } = {}) {
+/** Is a proxy text one of trocar's doors? A loopback address with trocar's credentials (a user and a hex token: the door URL `on` writes, and the
+ *  steer value of an older trocar), or a loopback address on one of `ports` (an open door, e.g. a PAC-served one, carries no credentials). */
+export function isTrocarDoorUrl(text, { ports = [] } = {}) {
   const t = textOf(text)
   if (t === null) return false
   let u
@@ -62,11 +62,11 @@ function systemOf(sp) {
   return url === null ? null : { url, bypass: Array.isArray(sp.bypass) ? sp.bypass : [], ...wpad }
 }
 
-export async function upstreamFor({ desc, form = null, facts = null, recordedPrior = null, systemProxy = null, header = null, headerAllowed = false, isAsightDoor = isAsightDoorUrl, transport = 'http' } = {}) {
+export async function upstreamFor({ desc, form = null, facts = null, recordedPrior = null, systemProxy = null, header = null, headerAllowed = false, isTrocarDoor = isTrocarDoorUrl, transport = 'http' } = {}) {
   if (!desc || !desc.proxy || !Array.isArray(desc.proxy.env)) throw new TypeError('upstreamFor needs the harness descriptor (its proxy.env)')
   void form // the caller judges headerAllowed by the form; the chain itself treats every form alike
   const notes = []
-  const door = (v) => { try { return !!isAsightDoor(v) } catch { return true } } // a judge that throws is no proof it is not a door: never dial it
+  const door = (v) => { try { return !!isTrocarDoor(v) } catch { return true } } // a judge that throws is no proof it is not a door: never dial it
   const out = (source, url, extra = {}) => ({ url, source, bypass: [], ...extra, ...(notes.length ? { notes } : {}) })
   /** A proxy text from `source`: 'none' is no proxy; a door is skipped (null: look further), noted with its source and never its value. */
   const take = (source, v) => {

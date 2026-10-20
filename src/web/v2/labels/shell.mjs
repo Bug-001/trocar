@@ -1,7 +1,7 @@
 // labels/shell.mjs — the words of the shell: the sidebar, the page names, the document titles, and the two route-level messages. Fixed
-// text, keyed by asight's own screen ids (closed set): nothing here is data, so the sidebar's text is the same in every capture state
+// text, keyed by trocar's own screen ids (closed set): nothing here is data, so the sidebar's text is the same in every capture state
 // (1.2 §侧栏: no status, no counts, no lamps). Harness names are never here (core/chips.mjs).
-export const BRAND = 'asight'
+export const BRAND = 'trocar'
 export const NAV_LABEL = 'Areas'
 // the collapse / expand button of the sidebar (its visible face is an icon; these are its aria-labels, 1.2 §侧栏)
 export const RAIL_LABELS = Object.freeze({ in: 'Collapse sidebar', out: 'Expand sidebar' })
@@ -25,7 +25,7 @@ export const SCREEN_NAME = Object.freeze({
   capture: 'Capture', 'capture-log': 'Capture log', traffic: 'Traffic', 'traffic-host': 'Traffic',
   'settings-storage': 'Storage', 'settings-prices': 'Prices', 'settings-appearance': 'Appearance',
 })
-export const TITLE_SUFFIX = ' · asight'
+export const TITLE_SUFFIX = ' · trocar'
 
 export const UNKNOWN_ROUTE = 'That page does not exist. Back on the overview'
 export const SESSION_NOT_LISTED = 'This session is not in the session list'

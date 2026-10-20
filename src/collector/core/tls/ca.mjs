@@ -1,7 +1,7 @@
 // ca.mjs — the collector's in-process root CA (RFC 4.6 §身份与信任): v3, ECDSA P-256,
 // BasicConstraints CA:TRUE critical, KeyUsage keyCertSign|cRLSign critical, Subject Key Identifier.
 // Minted with node:crypto, zero dependencies. Persistence is core/tls/ca-store.mjs: the operator's
-// ~/.asight/collector/ca/ca.key, 0600 (D36 — the root-only /etc/asight location of D31⑦ is withdrawn).
+// ~/.trocar/collector/ca/ca.key, 0600 (D36 — the root-only /etc/trocar location of D31⑦ is withdrawn).
 import crypto from 'node:crypto'
 import { name, ext, buildCertificate, certSubjectAndSki } from './cert.mjs'
 import { createLeafIssuer } from './leaf.mjs'
@@ -9,7 +9,7 @@ import { createLeafIssuer } from './leaf.mjs'
 const DAY = 86400e3
 
 /** Create a fresh CA keypair + self-signed v3 certificate. Returns PEM strings. */
-export function createCa({ commonName = 'asight collector CA', now = new Date(), years = 10 } = {}) {
+export function createCa({ commonName = 'trocar collector CA', now = new Date(), years = 10 } = {}) {
   const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
   const serial = crypto.randomBytes(16); serial[0] &= 0x7f          // positive
   const subject = name(commonName)
@@ -46,7 +46,7 @@ export function checkCa({ keyPem, certPem, now = new Date() } = {}) {
   if (now < new Date(cert.validFrom)) return { ok: false, which: 'not-yet-valid', reason: `the certificate is valid from ${cert.validFrom} only (is the clock right?)` }
   if (now > new Date(cert.validTo)) return { ok: false, which: 'expired', reason: `the certificate expired ${cert.validTo}` }
   try {
-    const probe = new crypto.X509Certificate(createLeafIssuer(loadCa({ keyPem, certPem }), { now: () => now }).issue('asight-ca-probe.invalid').certPem)
+    const probe = new crypto.X509Certificate(createLeafIssuer(loadCa({ keyPem, certPem }), { now: () => now }).issue('trocar-ca-probe.invalid').certPem)
     if (!probe.verify(cert.publicKey)) return { ok: false, which: 'pair', reason: 'a leaf signed with the private key does not verify under the certificate: they are not one pair' }
   } catch (e) { return { ok: false, which: 'pair', reason: `a probe leaf could not be signed (${msg(e)})` } }
   return { ok: true, not_after: new Date(cert.validTo).toISOString() }

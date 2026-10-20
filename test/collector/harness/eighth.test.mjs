@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpDir } from '../../helpers/tmp.mjs'
-import { OSES, ASIGHT, invariants, casesFor, run, editKept, diff, label } from '../../helpers/switch-kit.mjs'
+import { OSES, TROCAR, invariants, casesFor, run, editKept, diff, label } from '../../helpers/switch-kit.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
 import { TEMPLATES } from '../../../src/collector/harness/templates/index.mjs'
 import { findIn } from '../../helpers/code-text.mjs'
@@ -66,7 +66,7 @@ it('CM27: every template a descriptor names is a file in src/collector/harness/t
   for (const id of named) assert.ok(Object.hasOwn(TEMPLATES, id) && fs.existsSync(path.join(ROOT, 'src/collector/harness/templates', TEMPLATES[id].file)), `template ${id}`)
 })
 
-process.chdir(tmpDir('asight-pipes-')) // a win32 control endpoint is a pipe name, served as a socket path relative to the cwd (switch-contract.test.mjs)
+process.chdir(tmpDir('trocar-pipes-')) // a win32 control endpoint is a pipe name, served as a socket path relative to the cwd (switch-contract.test.mjs)
 describe('CM27: the eighth harness through the switch, from data alone', { concurrency: 1 }, () => {
   // a harness is its own neighbour here (there is one): the D54 neighbour axis is the seven's, so it is off
   for (const spec of OSES.flatMap((os) => casesFor(os, harnesses)).map((s) => ({ ...s, neighbour: null }))) {
@@ -76,8 +76,8 @@ describe('CM27: the eighth harness through the switch, from data alone', { concu
       assert.equal(r.ins.exit ?? 0, 0, 'install')
       if (spec.form) {
         assert.ok(r.on.routes.some((x) => x.ok), `on routed none of ${spec.forms.join(', ')}: ${JSON.stringify(r.on.routes)}`)
-        assert.ok(diff(r.s1, r.s2).some(({ p }) => !ASIGHT.test(p) || /switch/.test(p)), 'on wrote no entry')
-      } else assert.deepEqual(diff(r.s1, r.s2).filter(({ p }) => !ASIGHT.test(p)), [], 'CM31: no form present → no entry')
+        assert.ok(diff(r.s1, r.s2).some(({ p }) => !TROCAR.test(p) || /switch/.test(p)), 'on wrote no entry')
+      } else assert.deepEqual(diff(r.s1, r.s2).filter(({ p }) => !TROCAR.test(p)), [], 'CM31: no form present → no entry')
       assert.deepEqual(invariants.cm15({ c: r.c, s1: r.s1, s2: r.s2, s4: r.s4, edited: r.edited }), [], 'CM15')
       assert.deepEqual(invariants.cm25({ snaps }), [], 'CM25')
       assert.deepEqual(invariants.cm26({ snaps }), [], 'CM26')

@@ -27,7 +27,7 @@ const rec = (id, model) => JSON.stringify({
 }) + '\n';
 
 function fixture() {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'asight-symlink-'));
+  const root = mkdtempSync(path.join(os.tmpdir(), 'trocar-symlink-'));
   const outside = path.join(root, 'outside');
   const dir = path.join(root, 'src');
   mkdirSync(outside, { recursive: true });

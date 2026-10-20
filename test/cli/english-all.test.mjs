@@ -17,21 +17,21 @@ const SCREENS = [
 ]
 
 for (const argv of SCREENS) {
-  test(`V73 · asight ${argv.join(' ')}: the text a person reads is English, inside 80 columns, with nothing unreadable in it`, async () => {
+  test(`V73 · trocar ${argv.join(' ')}: the text a person reads is English, inside 80 columns, with nothing unreadable in it`, async () => {
     const s = await sandbox()
     const { io } = await s.run(argv)
     const text = io.text()
-    assert.ok(text.trim() !== '', `asight ${argv.join(' ')} printed nothing`)
-    assertEnglish(text, `asight ${argv.join(' ')}`, { placeholders: argv[0] === 'help' }) // help's `<name>` is what the reader types
+    assert.ok(text.trim() !== '', `trocar ${argv.join(' ')} printed nothing`)
+    assertEnglish(text, `trocar ${argv.join(' ')}`, { placeholders: argv[0] === 'help' }) // help's `<name>` is what the reader types
   })
-  test(`§1.2 · asight ${argv.join(' ')} --json: the document goes to stdout, stderr stays empty`, async () => {
+  test(`§1.2 · trocar ${argv.join(' ')} --json: the document goes to stdout, stderr stays empty`, async () => {
     const s = await sandbox()
     const { io } = await s.run([...argv, '--json'])
-    assert.equal(io.stderrText(), '', `asight ${argv.join(' ')} --json wrote to stderr: ${JSON.stringify(io.stderrText())}`)
+    assert.equal(io.stderrText(), '', `trocar ${argv.join(' ')} --json wrote to stderr: ${JSON.stringify(io.stderrText())}`)
     // `raw` has no --json (it prints captured bytes, 1.6 §4.3) and a bare `query` prints the table of query names (§4.1): neither is a document
     if (argv[0] === 'raw' || argv[0] === 'query') return
     const out = io.stdoutText().trim()
-    assert.doesNotThrow(() => JSON.parse(out), `asight ${argv.join(' ')} --json: stdout is not one document:\n${out}`)
+    assert.doesNotThrow(() => JSON.parse(out), `trocar ${argv.join(' ')} --json: stdout is not one document:\n${out}`)
   })
 }
 

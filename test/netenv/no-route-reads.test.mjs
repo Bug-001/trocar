@@ -1,4 +1,4 @@
-// test/netenv/no-route-reads.test.mjs — the backlog (D49, 4.7): asight reads no routing table and no interface list — the readings that would let it
+// test/netenv/no-route-reads.test.mjs — the backlog (D49, 4.7): trocar reads no routing table and no interface list — the readings that would let it
 // recognise a TUN-mode VPN. The exec lists of the code status and doctor run (src/cli/{doctor,status}.mjs, src/netenv/**, and the per-OS fact sources
 // status hands them, src/collector/arch/*/netfacts.mjs) contain no route / ifconfig / ip route / Get-NetRoute. A command shown to the user is not an exec.
 import test from 'node:test'
@@ -25,7 +25,7 @@ export const routeReads = (files, read) => files.flatMap((f) => findIn(read(f), 
 
 test('status and doctor run no route / interface reader (D49)', () => {
   assert.ok(FILES.length > 5)
-  assert.deepEqual(routeReads(FILES, (f) => fs.readFileSync(path.join(ROOT, f), 'utf8')), [], 'a TUN reading lets asight recognise a VPN; D49 reads only the agent\'s and the system\'s proxy')
+  assert.deepEqual(routeReads(FILES, (f) => fs.readFileSync(path.join(ROOT, f), 'utf8')), [], 'a TUN reading lets trocar recognise a VPN; D49 reads only the agent\'s and the system\'s proxy')
 })
 
 test('the scan goes red on a seeded route read, and not on a comment, a user-facing command or another tool', () => {

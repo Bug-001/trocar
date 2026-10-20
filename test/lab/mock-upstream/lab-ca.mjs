@@ -19,7 +19,7 @@ const CA_CNF = `[req]
 distinguished_name = dn
 prompt = no
 [dn]
-CN = asight lab CA - TEST ONLY
+CN = trocar lab CA - TEST ONLY
 [v3_ca]
 basicConstraints = critical, CA:TRUE
 keyUsage = critical, keyCertSign, cRLSign

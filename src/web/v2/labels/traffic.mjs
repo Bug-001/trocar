@@ -1,5 +1,5 @@
 // labels/traffic.mjs — the fixed words of 流量 / the host page / the request detail (1.10, 2.6 §C). Closed sets keyed by
-// asight's own ids only (the seven traffic classes, the three retention levels, the body kinds);
+// trocar's own ids only (the seven traffic classes, the three retention levels, the body kinds);
 // a harness-defined code never reaches a key here — its words come from the server's answer (1.5 §数据规则).
 import { CLASS_NAME } from '../core/classes.mjs'
 
@@ -87,7 +87,7 @@ export const REQ_PARTIAL = 'Request: incomplete, not fully transferred'
 export const RESP_PARTIAL = 'Response: incomplete, not fully transferred'
 export const RESP_RESERIALIZED = 'The response is reserialized JSON, not the wire bytes'
 export const RESP_UNDECODED = (enc) => `Response: not decompressed (${enc}); the bytes are still in the source record`
-export const ASIGHT_ADDED = 'added by asight'
+export const TROCAR_ADDED = 'added by trocar'
 export const DETAIL_READ_FAILED = (why) => `Could not read this request: ${why}`
 // a record that carries no class (written before D40 classified traffic): the class was never recorded (不变式 4) — not 「other」, not "null"
 export const CLASS_UNRECORDED = 'class not recorded'

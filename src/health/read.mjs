@@ -1,16 +1,16 @@
 // read.mjs — capture health read from disk (D38; RFC 4.6 §控制面 `lock`, §记录「看得到」). Whether the collector daemon
-// runs is judged from ~/.asight/collector/lock alone — `asight collector status`, uninstall and (stage D2) the board
+// runs is judged from ~/.trocar/collector/lock alone — `trocar collector status`, uninstall and (stage D2) the board
 // never ask the daemon's socket for it, so a dead or stuck daemon is still reported.
 //   lock = {pid, start_time, boot_id, helper_pid, engine_port, socket}: start_time is /proc/<pid>/stat field 22
 // (clock ticks since boot), boot_id /proc/sys/kernel/random/boot_id; the daemon refreshes the file's mtime every
 // 1 s. A pid is reused and a lock survives a reboot, so "running" needs all three to match and a fresh mtime.
-//   captureHealth() is what GET /api/capture-health answers and `asight collector status` prints when no daemon
+//   captureHealth() is what GET /api/capture-health answers and `trocar collector status` prints when no daemon
 // answers (RFC 4.4, 4.6 §记录「看得到」): from disk only — flows/ (src/health/flows.mjs), the lock, the install manifest,
 // state.json and the raw journal — never through the daemon's socket.
 // Node built-ins, src/paths.mjs, src/raw/ and src/off/proc.mjs (a process's identity and liveness: the one reader `off` uses too) only (0.1 §2).
 import nodeFs from 'node:fs'
 import path from 'node:path'
-import { asightHome } from '../paths.mjs'
+import { trocarHome } from '../paths.mjs'
 import { procIdentity, pidAlive } from '../off/proc.mjs'
 import { readFlows, readDay, foldFlows, pick, groupKey, lastRun, WINDOW_MS, HealthUnreadable } from './flows.mjs'
 
@@ -194,13 +194,13 @@ function rawHealth({ home, now, fs, read }) {
   return { problems: bad.slice(-20).map(pick), ...(bad.length > 20 || t.truncated ? { truncated: true } : {}), failures: groupsOf(bad, now, (r) => `raw:${r.op}/${r.outcome}`) }
 }
 
-// asight's own netenv.json: the adopted records and the topology `on` and `status` last wrote (RFC 1.6 §6, D49 「看板」): ~/.asight/netenv.json, written by src/netenv/index.mjs (not imported here: 0.1 §2).
+// trocar's own netenv.json: the adopted records and the topology `on` and `status` last wrote (RFC 1.6 §6, D49 「看板」): ~/.trocar/netenv.json, written by src/netenv/index.mjs (not imported here: 0.1 §2).
 // A missing file is "not written yet" with the reason; one that cannot be read or parsed carries the file and the error. Neither is an absent key or an empty list, and neither goes into
-// `read.errors`: the file is a cache the next `asight status` writes again, and a broken one must not turn the bar to 读不全 (it is not capture health).
+// `read.errors`: the file is a cache the next `trocar status` writes again, and a broken one must not turn the bar to 读不全 (it is not capture health).
 function netenvOf({ home, fs }) {
   const file = path.join(home, 'netenv.json')
   const r = readJson(file, fs)
-  if (r.missing) return { present: false, reason: `${file} is not there yet: asight status, doctor and on write it` }
+  if (r.missing) return { present: false, reason: `${file} is not there yet: trocar status, doctor and on write it` }
   if (r.error) return { present: true, error: r.error }
   if (!r.value || typeof r.value !== 'object' || Array.isArray(r.value)) return { present: true, error: `${file} is not a JSON object` }
   return { present: true, ...r.value }
@@ -209,10 +209,10 @@ function netenvOf({ home, fs }) {
 /**
  * captureHealth({home}) → the /api/capture-health payload (RFC 4.4): `installed`,
  * `summary` (the verdict over the collector and the raw layer: C.3's `health`), `collector`, `raw`,
- * `netenv` (asight's own netenv.json: the adopted records and the topology, 1.6 §6), `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
+ * `netenv` (trocar's own netenv.json: the adopted records and the topology, 1.6 §6), `read` (files read, files that could not be, truncated). Throws HealthUnreadable when flows/ (or the collector
  * directory) cannot be read at all — never an empty answer.
  */
-export function captureHealth({ home = asightHome(), now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {
+export function captureHealth({ home = trocarHome(), now = Date.now(), fs = nodeFs, alive = pidAlive, identity = procIdentity, maxBytes } = {}) {
   const read = { files: [], errors: [], truncated: false, unparsable: 0, window_hours: WINDOW_MS / 3600e3 }
   const collector = collectorHealth({ dir: path.join(home, 'collector'), now, fs, alive, identity, maxBytes, read })
   const raw = rawHealth({ home, now, fs, read })

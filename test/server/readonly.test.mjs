@@ -25,7 +25,7 @@ async function serve(home) {
 }
 
 test('V84: the board listens on 127.0.0.1 only — an external address of this host cannot reach it', async (t) => {
-  const home = rawHome('asight-ro-');
+  const home = rawHome('trocar-ro-');
   const { server, port, close } = await serve(home);
   const ext = Object.values(os.networkInterfaces()).flat().find((i) => i && !i.internal && i.family === 'IPv4');
   try {
@@ -42,7 +42,7 @@ test('V84: the board listens on 127.0.0.1 only — an external address of this h
 });
 
 test('V84: there is no non-GET data route, and the gate holds on every surface', async () => {
-  const home = rawHome('asight-ro-');
+  const home = rawHome('trocar-ro-');
   const { server, port, close } = await serve(home);
   try {
     for (const name of Object.keys(QUERIES)) {
@@ -62,7 +62,7 @@ test('V84: there is no non-GET data route, and the gate holds on every surface',
 });
 
 test('V84: a round of requests leaves HOME with nothing new but index/', async () => {
-  const home = rawHome('asight-ro-');
+  const home = rawHome('trocar-ro-');
   writeSegment(home, SEGMENT, [{ sessionKey: 'sess-1' }]);
   const before = fs.readdirSync(home).sort();
   const raw = fs.readdirSync(path.join(home, 'raw')).map((f) => {
@@ -74,7 +74,7 @@ test('V84: a round of requests leaves HOME with nothing new but index/', async (
     for (const name of Object.keys(QUERIES)) await request(port, `/api/${name}?id=sess-1`);
   } finally { close(); }
   const added = fs.readdirSync(home).sort().filter((e) => !before.includes(e));
-  assert.deepEqual(added.filter((e) => e !== 'index'), [], `serve wrote more than ~/.asight/index/: ${added.join(', ')}`);
+  assert.deepEqual(added.filter((e) => e !== 'index'), [], `serve wrote more than ~/.trocar/index/: ${added.join(', ')}`);
   assert.deepEqual(fs.readdirSync(path.join(home, 'raw')).map((f) => {
     const st = fs.statSync(path.join(home, 'raw', f));
     return [f, st.size, st.ino, st.mtimeMs];

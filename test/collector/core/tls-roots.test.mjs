@@ -118,8 +118,8 @@ test('createUpstreamTrust: one context over the union; no OS roots at all is fla
 // The cross-OS review's case: a corporate / TLS-inspection CA that only the OS store trusts. The engine
 // must accept an upstream it signed; an upstream signed by a CA nobody trusts steps aside, durably recorded.
 test('engine: an upstream signed by a CA only the (injected) system store holds is decrypted; an unknown CA steps aside with flows/ on disk; no system roots at all is a failure record', { timeout: 60_000 }, async (t) => {
-  const corp = createCa({ commonName: 'corporate inspection CA' }), stranger = createCa({ commonName: 'unknown CA' }), asightCa = createCa()
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-roots-'))
+  const corp = createCa({ commonName: 'corporate inspection CA' }), stranger = createCa({ commonName: 'unknown CA' }), trocarCa = createCa()
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-roots-'))
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
   let n = 0
   const run = async (signer, clientCa, systemCa) => {
@@ -127,7 +127,7 @@ test('engine: an upstream signed by a CA only the (injected) system store holds 
     await new Promise((r) => up.listen(0, '127.0.0.1', r))
     const root = path.join(dir, String(++n)), store = createRecordStore({ root, raw: root }), errors = []
     const engine = createEngine({ redirector: createStaticRedirector({ dst: { address: '127.0.0.1', port: up.address().port, family: 4 }, pid: 3, agent: 'cc', decrypt: true }),
-      issuer: createLeafIssuer(loadCa(asightCa)), store, systemCa, onFailure: createFailureRecorder(root).event, onError: (e) => errors.push(e.message) })
+      issuer: createLeafIssuer(loadCa(trocarCa)), store, systemCa, onFailure: createFailureRecorder(root).event, onError: (e) => errors.push(e.message) })
     const { port } = await engine.listen({})
     let c
     const issuer = await within(new Promise((resolve) => {
@@ -138,8 +138,8 @@ test('engine: an upstream signed by a CA only the (injected) system store holds 
     const read = (sub) => { const d = path.join(root, sub); return fs.existsSync(d) ? fs.readdirSync(d).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').trim().split('\n').map((l) => JSON.parse(l))) : [] }
     return { issuer, flows: read('flows').filter((r) => r.event == null), failures: read('flows').filter((r) => r.event === 'failure'), errors, stats: engine.stats() }
   }
-  const ok = await run(corp, asightCa.certPem, corp.certPem)
-  assert.match(ok.issuer, /asight collector CA/, 'decrypted: the engine trusted the corporate CA from the system store')
+  const ok = await run(corp, trocarCa.certPem, corp.certPem)
+  assert.match(ok.issuer, /trocar collector CA/, 'decrypted: the engine trusted the corporate CA from the system store')
   assert.deepEqual(ok.flows.map((f) => [f.decision, f.not_captured ?? null]), [['decrypt', null]]); assert.deepEqual(ok.failures, [])
   const bad = await run(stranger, stranger.certPem, corp.certPem)
   assert.match(bad.issuer, /unknown CA/, 'stepped aside: the client did its own handshake with the real upstream')
@@ -150,7 +150,7 @@ test('engine: an upstream signed by a CA only the (injected) system store holds 
   assert.match(none.issuer, /corporate inspection CA/, 'no system roots: the corporate upstream is not trusted either, so it steps aside')
   assert.deepEqual(none.failures.map((f) => [f.where, f.code]), [['engine', 'system-roots-unavailable'], ['engine', 'negative-cache']], 'and that is not silent; the (pid, host) it stepped aside for is negative from now on, and that is said too (D-12)')
   assert.equal(none.errors.length, 1)
-  const partial = await run(corp, asightCa.certPem, { certs: [corp.certPem], errors: ['/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied'] })
-  assert.match(partial.issuer, /asight collector CA/, 'what was read is still used')
+  const partial = await run(corp, trocarCa.certPem, { certs: [corp.certPem], errors: ['/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied'] })
+  assert.match(partial.issuer, /trocar collector CA/, 'what was read is still used')
   assert.deepEqual(partial.failures.map((f) => [f.code, f.reason]), [['trust-store-error', '/etc/ssl/certs/ca-certificates.crt: EACCES: permission denied']], 'an unreadable source is not silent')
 })

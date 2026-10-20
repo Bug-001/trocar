@@ -15,7 +15,7 @@ const SEG = '20261019T100000Z'
 const line = (i, body = 'x'.repeat(40)) => JSON.stringify({ id: `req_${i}`, ts_request: `2026-10-19T10:00:0${i % 10}.000Z`, endpoint: '/v1/messages', host: 'api.anthropic.com', traffic_class: 'llm', is_llm_call: true, req_body: body, resp: { status: 200 }, proc: { pid: 7, exe: '/x', agent: 'claude-code' }, body_wire_bytes: { req: 1, resp: 2 } }) + '\n'
 
 function home() {
-  const h = path.join(tmpDir('asight-keeper-'), '.asight')
+  const h = path.join(tmpDir('trocar-keeper-'), '.trocar')
   fs.mkdirSync(path.join(h, 'raw'), { recursive: true })
   return h
 }

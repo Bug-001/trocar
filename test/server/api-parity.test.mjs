@@ -22,7 +22,7 @@ const SEGMENT = '20261018T100000Z';
 const get = (port, p) => request(port, p, { headers: withToken() });
 
 function home() {
-  const h = rawHome('asight-parity-');
+  const h = rawHome('trocar-parity-');
   writeSegment(h, SEGMENT, [{ sessionKey: 'sess-1' }, { sessionKey: 'sess-1', id: 'req_00002' }]);
   return h;
 }
@@ -53,7 +53,7 @@ test('V80: every named query answers the same document through HTTP as through r
         continue;
       }
       assert.equal(r.status, 200, `GET /api/${name} → ${r.status}: ${r.body.slice(0, 200)}`);
-      assert.deepEqual(JSON.parse(r.body), JSON.parse(JSON.stringify(doc)), `GET /api/${name} differs from asight query ${name}`);
+      assert.deepEqual(JSON.parse(r.body), JSON.parse(JSON.stringify(doc)), `GET /api/${name} differs from trocar query ${name}`);
       assert.equal(JSON.parse(r.body).command, name, `${name}: the document's command IS the name`);
     }
   } finally { f.close(); }

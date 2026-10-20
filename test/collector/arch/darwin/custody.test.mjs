@@ -1,5 +1,5 @@
 // custody.test.mjs — the macOS keychain custody over a STUB signing helper (CM3, stub side; the real helper is L1's, plan §E.3):
-// the stub is a node script named asight-sign-helper in a temp dir that speaks the helper's verbs, exit codes and JSON, keeps its
+// the stub is a node script named trocar-sign-helper in a temp dir that speaks the helper's verbs, exit codes and JSON, keeps its
 // key in a file there and logs every argv. The real helper is never run (it would write the login keychain).
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,14 +35,14 @@ import(${JSON.stringify(CERT)}).then(({ rootCertDer, intermediateCertDer }) => {
   if (a[0] === 'issue') {
     if (!fs.existsSync(keyFile)) out({ error: 'no-key' }, 4)
     const nb = new Date(arg('--not-before'))
-    const der = intermediateCertDer({ root: fs.readFileSync(rootFile), subject: 'asight intermediate ' + nb.toISOString(), spkiDer: Buffer.from(arg('--spki'), 'base64'), serial: Buffer.from(arg('--serial'), 'hex'), notBefore: nb, sign: sign(crypto.createPrivateKey(fs.readFileSync(keyFile))) })
+    const der = intermediateCertDer({ root: fs.readFileSync(rootFile), subject: 'trocar intermediate ' + nb.toISOString(), spkiDer: Buffer.from(arg('--spki'), 'base64'), serial: Buffer.from(arg('--serial'), 'hex'), notBefore: nb, sign: sign(crypto.createPrivateKey(fs.readFileSync(keyFile))) })
     out({ certDer: der.toString('base64') })
   }
   out({ error: 'usage' }, 2)
 })
 `
 function stubHelper() {
-  const dir = tmpDir('asight-custody-')
+  const dir = tmpDir('trocar-custody-')
   const helperPath = path.join(dir, NATIVE.signHelper)
   fs.writeFileSync(helperPath, STUB, { mode: 0o755 })
   return { dir, helperPath, argv: () => fs.readFileSync(path.join(dir, 'argv.log'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)), mode: (m) => fs.writeFileSync(path.join(dir, 'mode'), m) }
@@ -53,7 +53,7 @@ test('CM3: create → a root of the ROOT profile; issue carries only spki / seri
   const h = stubHelper(), c = keychainCustody({ helperPath: h.helperPath })
   assert.equal(c.kind, 'keychain')
   assert.equal(c.exists(), false)
-  const { rootDer, fp256 } = c.create({ subject: 'asight root (test)' })
+  const { rootDer, fp256 } = c.create({ subject: 'trocar root (test)' })
   assert.deepEqual(checkProfile(rootDer, ROOT), [])
   assert.equal(fp256, new crypto.X509Certificate(rootDer).fingerprint256)
   assert.equal(c.exists(), true)
@@ -84,12 +84,12 @@ test('CM3: the helper\'s unavailable exit is the value \'unavailable\' on every 
 test('CM3: an injected runner sees the same argv (the runner seam the daemon uses)', () => {
   const seen = []
   const run = (file, args) => { seen.push([file, ...args]); return { status: 0, stdout: JSON.stringify({ exists: true }), stderr: '' } }
-  assert.equal(keychainCustody({ helperPath: '/x/asight-sign-helper', run }).exists(), true)
-  assert.deepEqual(seen, [['/x/asight-sign-helper', 'exists']])
+  assert.equal(keychainCustody({ helperPath: '/x/trocar-sign-helper', run }).exists(), true)
+  assert.deepEqual(seen, [['/x/trocar-sign-helper', 'exists']])
 })
 
 test('installHelper: fresh → written via <dest>.new-* and renamed; same hash → no-op; differing + non-interactive → kept; differing + interactive → replaced, then one foreground issue', () => {
-  const dest = path.join(tmpDir('asight-bin-'), 'bin', NATIVE.signHelper)
+  const dest = path.join(tmpDir('trocar-bin-'), 'bin', NATIVE.signHelper)
   const renames = []
   const fsSpy = { ...fs, renameSync: (a, b) => { renames.push([path.basename(a), path.basename(b)]); return fs.renameSync(a, b) } }
   const packaged = fs.readFileSync(nativePath(NATIVE.signHelper))
@@ -102,7 +102,7 @@ test('installHelper: fresh → written via <dest>.new-* and renamed; same hash �
   assert.equal(renames.length, 1, 'same hash: nothing written')
 
   fs.writeFileSync(dest, STUB, { mode: 0o755 }) // an older helper is installed (its key exists: create through it)
-  keychainCustody({ helperPath: dest }).create({ subject: 'asight root (test)' })
+  keychainCustody({ helperPath: dest }).create({ subject: 'trocar root (test)' })
   const r = installHelper({ dest, interactive: false, fs: fsSpy })
   assert.equal(r.replaced, false)
   assert.match(r.why, /differs/)
@@ -118,8 +118,8 @@ test('installHelper: fresh → written via <dest>.new-* and renamed; same hash �
 })
 
 test('installHelper: a packaged binary that is not the pinned one is refused before any write', () => {
-  const dir = tmpDir('asight-bin-'), src = path.join(dir, 'fake'), dest = path.join(dir, 'bin', NATIVE.signHelper)
+  const dir = tmpDir('trocar-bin-'), src = path.join(dir, 'fake'), dest = path.join(dir, 'bin', NATIVE.signHelper)
   fs.writeFileSync(src, 'not the helper')
-  assert.throws(() => installHelper({ dest, interactive: true, src }), /is not the pinned asight-sign-helper/)
+  assert.throws(() => installHelper({ dest, interactive: true, src }), /is not the pinned trocar-sign-helper/)
   assert.equal(fs.existsSync(dest), false)
 })

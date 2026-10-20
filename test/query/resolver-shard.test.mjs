@@ -1,7 +1,7 @@
 // test/query/resolver-shard.test.mjs — D38 (RFC 4.4 源装载 · 4.2 「读」; draft M-B10): the block resolver reads the same
-// files the board lists, so a session that exists ONLY in a shard folder (<root>/<sid>/calls.ndjson, `asight shard`'s
+// files the board lists, so a session that exists ONLY in a shard folder (<root>/<sid>/calls.ndjson, `trocar shard`'s
 // layout) resolves — "see full text" never says `absent` (a wrong reason) for bytes that are on disk. The rule lives in
-// src/raw/discover.mjs (listSources, one level down), shared with the board and `asight etl`.
+// src/raw/discover.mjs (listSources, one level down), shared with the board and `trocar etl`.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,7 +11,7 @@ import { buildResolver } from '../../src/query/source.mjs';
 import { listSources } from '../../src/raw/discover.mjs';
 
 test('a session only in a shard folder resolves, and the board lists the same file', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-shard-res-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-shard-res-'));
   try {
     fs.mkdirSync(path.join(root, 'sess-1'));
     const body = JSON.stringify({ messages: [{ role: 'user', content: 'only in the shard' }] });

@@ -140,7 +140,7 @@ export function agentVerdicts(doc, ov = null) {
       const mine = [...r.conditions].sort((a, b) => rank(a) - rank(b))
       const lead = mine[0], code = codeOf(lead)
       let text, restart = false, reason = null
-      if (lead.kind === 'negative-cache') text = `not capturing: one of its processes refused asight's certificate`
+      if (lead.kind === 'negative-cache') text = `not capturing: one of its processes refused trocar's certificate`
       else if (RESTART_CODES.includes(code)) { text = `restart ${name} to capture it`; restart = true }
       if (lead.kind !== 'negative-cache') reason = reasonOf(code, { harness: r.harness, own: lead.text || lead.reason })
       if (!text) text = `not capturing: ${reason.why}`

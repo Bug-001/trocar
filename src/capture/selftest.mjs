@@ -1,6 +1,6 @@
 // src/capture/selftest.mjs — onboard 自检:依赖探测 + 「测试」四问(RFC 4.1:61 / 4.1:4 / 4.5:41,77;
 // 1.1 六要素#5「把委派代价压到最小」)。这是 demo `run-selftest.sh` + `verify.mjs` 的 §验收 check 的
-// CLI 化(`asight doctor`)——受众是人,核对四问:**是否真在抓 · 抓得对 · 凭据没漏 · 没弱化全机 TLS**。
+// CLI 化(`trocar doctor`)——受众是人,核对四问:**是否真在抓 · 抓得对 · 凭据没漏 · 没弱化全机 TLS**。
 // 全为纯函数(probe / records / trust 皆注入)→ 离线可单测,不碰真实信任库/网络。
 import fsMod from 'node:fs';
 import { SECRET_HEADERS } from './redact.mjs';
@@ -19,13 +19,13 @@ export function qCapturing(records, srcMeta) {
   const n = records.length;
   const ok = !!(srcMeta && srcMeta.exists && n > 0);
   return { ok, n, bytes: (srcMeta && srcMeta.bytes) || 0, mtimeMs: (srcMeta && srcMeta.mtimeMs) || null,
-    note: !srcMeta || !srcMeta.exists ? 'no capture source found — run `asight on`, then an agent session'
+    note: !srcMeta || !srcMeta.exists ? 'no capture source found — run `trocar on`, then an agent session'
       : n === 0 ? 'source exists but holds 0 records (nothing captured yet)'
       : `${n} record(s) captured` };
 }
 
 // ② 抓得对:LLM call 有 verbatim req_body(string,非空)+ 一个重建出的 resp(usage/text/tool_calls 或标 error)。
-// D40: a call the operator set to 「只记日志」 (body_retention:'log', `asight keep`) has no body BY CHOICE: it is counted apart (`logged`), never
+// D40: a call the operator set to 「只记日志」 (body_retention:'log', `trocar keep`) has no body BY CHOICE: it is counted apart (`logged`), never
 // as a missing verbatim req_body (it reported ✗ for a setting that was working). src/capture may not import src/dissect, so the field is read here.
 export function qCorrect(records) {
   let llm = 0, good = 0, badReq = 0, badResp = 0, logged = 0;
@@ -41,7 +41,7 @@ export function qCorrect(records) {
     if (hasReq && hasResp) good++;
   }
   // ok = 有 LLM call 且没有一条丢了 verbatim 请求体(缺响应体可能是 interrupted,归 warn 不判死)。
-  const keptNote = logged ? ` · ${logged} LLM call(s) kept as a log line only (log line only, set with \`asight keep\`): no body by choice, not a capture failure` : '';
+  const keptNote = logged ? ` · ${logged} LLM call(s) kept as a log line only (log line only, set with \`trocar keep\`): no body by choice, not a capture failure` : '';
   return { ok: llm > 0 && badReq === 0, llm, good, badReq, badResp, logged,
     note: (llm === 0 ? (logged ? 'no LLM call kept a body to validate' : 'no LLM calls to validate (capture a /v1/messages turn)')
       : `${good}/${llm} LLM call(s) carry verbatim req_body + a reconstructed response`
@@ -71,7 +71,7 @@ export function qNoLeak(records) {
   }
   return { ok: true, examined: records.length, withCreds, tokens: tokens.slice(0, 10), tokenCount: tokens.length,
     note: `${withCreds}/${records.length} record(s) carry credential headers - stored verbatim, by design `
-      + '(asight records what really went over the wire; the protection is file permissions, see ④b)'
+      + '(trocar records what really went over the wire; the protection is file permissions, see ④b)'
       + (tokens.length ? ` · ${tokens.length} sk-ant token-shaped string(s) inside request bodies` : '') };
 }
 

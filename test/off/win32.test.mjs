@@ -35,7 +35,7 @@ function powershell({ table = {}, fail = [] } = {}) {
 
 // ── the process table and the identity: one fixed powershell question each ────────────────────────────────────────────────────
 const TABLE_JSON = JSON.stringify([
-  { p: 100, pp: 1, n: 'node.exe', x: 'C:\\Program Files\\nodejs\\node.exe', s: CREATED, c: '"C:\\Program Files\\nodejs\\node.exe" C:\\x\\asight.mjs daemon' },
+  { p: 100, pp: 1, n: 'node.exe', x: 'C:\\Program Files\\nodejs\\node.exe', s: CREATED, c: '"C:\\Program Files\\nodejs\\node.exe" C:\\x\\trocar.mjs daemon' },
   { p: 101, pp: 100, n: 'claude.exe', x: null, s: CREATED + 5000, c: null },
 ])
 test('listProcs on win32: one fixed Get-CimInstance question through the injected runner, the whole table as JSON — pid, parent, start, exe, argv; uid unknown, environment unreadable', async () => {
@@ -44,11 +44,11 @@ test('listProcs on win32: one fixed Get-CimInstance question through the injecte
   const got = await listProcs({ platform: 'win32', exec: ps.run })
   assert.deepEqual(got.map((r) => [r.pid, r.ppid, r.uid, r.startedAt]), [[100, 1, null, CREATED], [101, 100, null, CREATED + 5000]])
   assert.equal(got[0].exe, 'C:\\Program Files\\nodejs\\node.exe')
-  assert.deepEqual(got[0].argv, ['C:\\Program Files\\nodejs\\node.exe', 'C:\\x\\asight.mjs', 'daemon'], 'the command line split like CommandLineToArgvW (src/off/winargv.mjs, the collector\'s one splitter): the quoted exe path stays one word')
+  assert.deepEqual(got[0].argv, ['C:\\Program Files\\nodejs\\node.exe', 'C:\\x\\trocar.mjs', 'daemon'], 'the command line split like CommandLineToArgvW (src/off/winargv.mjs, the collector\'s one splitter): the quoted exe path stays one word')
   assert.equal(got[0].argvSplit, undefined, 'Windows argv is exact: entryOf takes one candidate, as on Linux (argvSplit is darwin\'s ps only)')
   assert.deepEqual(got[1].argv, [], 'no command line is no argv, as in the collector\'s factsOfRow')
   assert.equal(got[1].exe, 'claude.exe', 'a process without a path is named by its name')
-  assert.deepEqual(got.map((r) => r.cmdline), ['"C:\\Program Files\\nodejs\\node.exe" C:\\x\\asight.mjs daemon', null], 'the command line as it came, for the form tables\' command-line patterns; none is null')
+  assert.deepEqual(got.map((r) => r.cmdline), ['"C:\\Program Files\\nodejs\\node.exe" C:\\x\\trocar.mjs daemon', null], 'the command line as it came, for the form tables\' command-line patterns; none is null')
   assert.deepEqual([got[1].env(), got[1].envRead], [null, false], 'another process\'s environment cannot be read on Windows: the OS\'s rule, not a failed read')
   assert.equal(ps.calls.length, 1, 'one question for the whole table, not one per process')
   ps.answer(JSON.stringify({ p: 100, pp: 1, n: 'node.exe', x: 'C:\\n.exe', s: CREATED, c: 'node x' }))
@@ -73,7 +73,7 @@ test('the win32 identity: the pid\'s creation time and the machine\'s boot time 
 })
 
 test('a lock written with the win32 identity is verified: a reused pid and a reboot read stale — the cases that read "running" (and then "starting") when the identity was /proc-shaped', () => {
-  const dir = tmpDir('asight-w32-lock-')
+  const dir = tmpDir('trocar-w32-lock-')
   const lockFile = path.join(dir, 'lock')
   const write = (over = {}) => {
     nodeFs.writeFileSync(lockFile, JSON.stringify({ pid: 4242, start_time: String(CREATED), boot_id: String(BOOTED), socket: path.join(dir, 's'), engine_port: 47123, ...over }) + '\n')
@@ -95,7 +95,7 @@ const SUPER_AT = CREATED - 90_000 // the supervisor started before the daemon it
 /** The world of a stop: a daemon lock and a supervisor.lock beside it, and a fake machine whose pids die on taskkill. `at` names
  *  what each pid's creation time IS now (the fake machine's answer); the locks always say what it was when they were written. */
 function winWorld({ superAt = SUPER_AT, daemonAt = CREATED, superNowAt = superAt, daemonNowAt = daemonAt, fail = [] } = {}) {
-  const dir = tmpDir('asight-w32-stop-')
+  const dir = tmpDir('trocar-w32-stop-')
   const lockFile = path.join(dir, 'lock')
   nodeFs.writeFileSync(lockFile, JSON.stringify({ pid: 4242, start_time: String(daemonAt), boot_id: String(BOOTED), engine_port: 47123 }) + '\n')
   nodeFs.writeFileSync(path.join(dir, SUPERVISOR_LOCK), JSON.stringify({ pid: 5000, startedAt: superAt }) + '\n')

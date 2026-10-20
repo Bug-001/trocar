@@ -11,7 +11,7 @@ import { controlHtml, controlFor, wireHarnessControls } from '../../src/web/v2/c
 import { ALIASES, harnessKey } from '../../src/web/v2/core/chips.mjs'
 import { COMMANDS, CHANGE_REMOVAL, RESTART_CODES } from '../../src/web/v2/labels/capture.mjs'
 
-const SPEC = fs.readFileSync(new URL('../../spec/01-asight-rfc/1.6-cli.md', import.meta.url), 'utf8')
+const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
 const sample = () => JSON.parse(/```json\n([\s\S]*?)```/.exec(C3)[1])
 const T = '2026-10-20T09:00:00Z'
@@ -50,7 +50,7 @@ test('#5 / K-26: setup × desired × control plane × health — at most one con
   }
 })
 
-test('M9 / K-25: not installed → asight install in the details and no control; root → no control and `asight on <the harnesses key>`', () => {
+test('M9 / K-25: not installed → trocar install in the details and no control; root → no control and `trocar on <the harnesses key>`', () => {
   const ni = page(doc({ state: 'not-installed' }), CONTROL)
   assert.equal(count(ni, /data-hctl=/g), 0)
   assert.ok(ni.includes(COMMANDS.install))
@@ -135,16 +135,16 @@ test('#8 / D49: proxy credentials are ***@ in the page and its copied diagnostic
 test('#9 / R14: the removal sentence is said once in an agent row\'s expansion and never in the machine-wide changes block', () => {
   const d = doc({ hs: { codex: {}, opencode: {} } })
   d.changed = [
-    { harness: 'codex', path: '/h/.codex/.env', what: 'OPENAI_BASE_URL', undo: 'asight off codex' },
-    { harness: 'codex', path: '/h/.codex/config.toml', what: 'proxy', undo: 'asight off codex' },
-    { path: '/h/.asight/ca.pem', what: 'created' },
+    { harness: 'codex', path: '/h/.codex/.env', what: 'OPENAI_BASE_URL', undo: 'trocar off codex' },
+    { harness: 'codex', path: '/h/.codex/config.toml', what: 'proxy', undo: 'trocar off codex' },
+    { path: '/h/.trocar/ca.pem', what: 'created' },
   ]
   const html = page(d, CONTROL)
   const rows = rowsOf(html)
   assert.equal(count(rows.get('codex'), new RegExp(CHANGE_REMOVAL, 'g')), 1)
   assert.ok(count(rows.get('opencode'), new RegExp(CHANGE_REMOVAL, 'g')) <= 1)
   const block = html.slice(html.indexOf('<section class="cblock"'))
-  assert.ok(block.length > 0 && block.includes('/h/.asight/ca.pem'))
+  assert.ok(block.length > 0 && block.includes('/h/.trocar/ca.pem'))
   assert.equal(block.includes(CHANGE_REMOVAL), false)
 })
 

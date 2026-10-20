@@ -1,4 +1,4 @@
-// src/cache/cache-events.mjs — RFC 3.3 cache-events derivation (D17 forensics · asight's
+// src/cache/cache-events.mjs — RFC 3.3 cache-events derivation (D17 forensics · trocar's
 // differentiating moat, D17 · spec 3.3). Pure, offline functions: given a class='llm' call's
 // ordered BlockRow[] + its same-lane predecessor's BlockRow[] + canonical usage, derive ONE
 // cache_events row (3.2 columns).

@@ -1,7 +1,7 @@
-// clash.mjs (src/off) — taking asight's route out of Clash Verge / mihomo, and asking the core whether it is gone (only the sentinel block goes; the runtime is reloaded by payload and the live proxy list is read back). `asight desktop off` (src/capture/
+// clash.mjs (src/off) — taking trocar's route out of Clash Verge / mihomo, and asking the core whether it is gone (only the sentinel block goes; the runtime is reloaded by payload and the live proxy list is read back). `trocar desktop off` (src/capture/
 // desktop-steer.mjs) runs THIS code. Moved here from src/capture/desktop-steer.mjs without a change of behaviour — the steer's `on` side (scriptBlock, injectScript,
-// spliceRuntime) stays there, and the old names are re-exported from it. Imports only node:* and src/off (0.1 §2: the standalone ~/.asight/bin/asight-off is made of this directory).
-//   pure          stripBlock · stripRuntime · stripMergeLegacy — the text of a file with asight's route taken out, every other byte as it was
+// spliceRuntime) stays there, and the old names are re-exported from it. Imports only node:* and src/off (0.1 §2: the standalone ~/.trocar/bin/trocar-off is made of this directory).
+//   pure          stripBlock · stripRuntime · stripMergeLegacy — the text of a file with trocar's route taken out, every other byte as it was
 //   the core      knownMihomoSocks · mihomoSockCandidates · discoverMihomoSock · probeVersion · mihomoPayloadReload · probeProxy — the control socket is discovered, never hard-coded
 //   makeClash     the files of one Verge install and the core behind them: read, status, off (strip → reload → verify), with the reload and the probe replaceable by a test
 import nodeFs from 'node:fs'
@@ -11,7 +11,7 @@ import { execTool } from './exec.mjs'
 export const PROXY_NAME = 'atrace-mitm'
 export const DESKTOP_RULE = `AND,((PROCESS-PATH-REGEX,(?i)Application Support/Claude/claude-code),(DOMAIN,api.anthropic.com)),${PROXY_NAME}`
 // the sentinel INNER text is comment-syntax-agnostic; Script.js (JavaScript) writes it after `//`, a runtime YAML after `#` (a `//` line is NOT a YAML comment, it would break the parse)
-export const MARK_BEGIN = '>>> atrace desktop capture (managed by asight desktop) >>>'
+export const MARK_BEGIN = '>>> atrace desktop capture (managed by trocar desktop) >>>'
 export const MARK_END = '<<< atrace desktop capture <<<'
 /** The line in Script.js that says the block is there. */
 export const SCRIPT_BEGIN = `// ${MARK_BEGIN}`
@@ -52,7 +52,7 @@ export function stripRuntime(yaml) {
   return out.join('\n')
 }
 
-// A proxy list item (its lines) that is asight's: its OWN `name` is exactly atrace-mitm (the dash line, or a key at the item's key column) — never a nested `name:` deeper inside some other proxy (e.g. plugin-opts),
+// A proxy list item (its lines) that is trocar's: its OWN `name` is exactly atrace-mitm (the dash line, or a key at the item's key column) — never a nested `name:` deeper inside some other proxy (e.g. plugin-opts),
 // which would delete the user's proxy.
 function isOurProxyItem([head, ...rest]) {
   const nameIs = `name:\\s*(['"]?)${clashEscape(PROXY_NAME)}\\1\\s*(?:[,}]|$)`
@@ -62,15 +62,15 @@ function isOurProxyItem([head, ...rest]) {
   return rest.some((l) => l.length - l.trimStart().length === keyCol && new RegExp(`^\\s*${nameIs}`).test(l))
 }
 
-// A rule list item (its first line) that is asight's: the rule's target is the proxy atrace-mitm (nobody else's rule sends traffic to a proxy of that name).
+// A rule list item (its first line) that is trocar's: the rule's target is the proxy atrace-mitm (nobody else's rule sends traffic to a proxy of that name).
 function isOurRuleItem(line) {
   const text = line.replace(/^\s*-\s+/, '').trim().replace(/^(['"])(.*)\1$/, '$2')
   return new RegExp(`,\\s*${clashEscape(PROXY_NAME)}\\s*(?:,\\s*no-resolve\\s*)?$`).test(text)
 }
 
-/** The demo's atrace-desktop wrote `prepend-proxies:` / `prepend-rules:` blocks into Merge.yaml (inert on Verge 2.5.1). Takes out ASIGHT'S items of those two lists and nothing else (every other
+/** The demo's atrace-desktop wrote `prepend-proxies:` / `prepend-rules:` blocks into Merge.yaml (inert on Verge 2.5.1). Takes out TROCAR'S items of those two lists and nothing else (every other
  *  byte stays): a proxy named exactly atrace-mitm, a rule whose target is atrace-mitm. A list's header goes with its last item; a list that holds anything else — the user's own `prepend-rules`
- *  — keeps its header and its items, and a Merge.yaml with none of asight's items comes back byte for byte. (The old version took both lists whole, whatever they held.) */
+ *  — keeps its header and its items, and a Merge.yaml with none of trocar's items comes back byte for byte. (The old version took both lists whole, whatever they held.) */
 export function stripMergeLegacy(yaml) {
   const lines = stripBlock(yaml).split('\n') // the demo's sentinel-wrapped form goes whole, as in stripRuntime
   const tail = lines.at(-1) === '' ? lines.pop() : null
@@ -199,12 +199,12 @@ export const REACTIVATE_HINT = 'open Clash Verge → Profiles and click the flam
 /**
  * The files of one Clash Verge install and the core that runs them. Everything that touches the world is a parameter a test replaces: `fs`, `psText` (the process listing the socket is looked for in),
  * `knownSocks`, `mihomoReload(yaml)`, `probeLive()`, `exec` (the runner of `ps`), `env`. The live control socket: `sock` pins it; otherwise it is discovered lazily — only by the DEFAULT reload /
- * probe, so a caller that injects both never has the real machine probed. A found socket is remembered; a miss is retried next call (Verge may just be starting). ASIGHT_MIHOMO_SOCK in `env` pins it
+ * probe, so a caller that injects both never has the real machine probed. A found socket is remembered; a miss is retried next call (Verge may just be starting). TROCAR_MIHOMO_SOCK in `env` pins it
  * too (unusual installs; and CLI tests, so a sandboxed run can never reach the developer's own core). No Verge runtime config for this HOME → there is no Verge to look for.
  * → { platform, scriptPath, runtimePath, mergePath, read, mihomoReload, probeLive, located, status, off }
  */
 export function makeClash({ fs = nodeFs, scriptPath, runtimePath, mergePath, sock = null, psText = null, knownSocks = null, mihomoReload = null, probeLive = null, exec = null, env = process.env, uid = (typeof process.getuid === 'function' ? process.getuid() : null), platform = 'darwin' }) {
-  const pinned = sock || env.ASIGHT_MIHOMO_SOCK
+  const pinned = sock || env.TROCAR_MIHOMO_SOCK
   let located = pinned ? { sock: pinned, tried: [pinned] } : null
   const locate = async () => {
     if (located?.sock) return located
@@ -230,7 +230,7 @@ export function makeClash({ fs = nodeFs, scriptPath, runtimePath, mergePath, soc
     try { return fs.readFileSync(p, 'utf8') } catch (e) {
       if (e && e.code === 'ENOENT') return dflt
       // carry the cause forward: callers that already wrote something MUST render their own, accurate "what state is the machine in now" message rather than this pre-write one.
-      const err = new Error(`asight refused to touch ${p}: cannot read it (${e.code || e.message}). Nothing was written — fix or move the file, then retry.`)
+      const err = new Error(`trocar refused to touch ${p}: cannot read it (${e.code || e.message}). Nothing was written — fix or move the file, then retry.`)
       err.code = e && e.code; err.path = p
       throw err
     }
@@ -290,7 +290,7 @@ export function makeClash({ fs = nodeFs, scriptPath, runtimePath, mergePath, soc
         // Once the block is really gone from Script.js, a Verge regen drops the live route too — so that is the by-hand fix. While the block is still there, reactivating would RE-APPLY it.
         reason: `desktop steer NOT fully removed: ${why.join('; ')}. CC-Desktop traffic may STILL be routed into the MITM; ${st.scriptInstalled === false
           ? `the atrace block IS gone from Script.js — to drop the live route now, ${REACTIVATE_HINT}`
-          : 're-run `asight desktop off` and check `asight desktop status`'}.`,
+          : 're-run `trocar desktop off` and check `trocar desktop status`'}.`,
         reload: reloaded, status: st, ...(mergeCleanup ? { mergeCleanup } : {}),
       }
     }

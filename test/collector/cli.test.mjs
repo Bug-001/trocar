@@ -17,11 +17,11 @@ import { DAEMON_ALREADY_UP, DAEMON_ENDPOINT_BUSY } from '../../src/collector/cor
 import { tmpDir } from '../helpers/tmp.mjs'
 import { osStubs } from '../helpers/os-stubs.mjs' // on a Mac the real bin's status asks launchd and the keychain (read-only): stubs answer, 0.1 §3
 
-const BIN = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
+const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 const NO_EXEC = () => ({ status: 0, stdout: '', stderr: '' }) // and `ss` / `ip`, which it reads for the topology, find nothing (0.1 §3)
-// `asight daemon` refuses before install and writes nothing (1.6 §5.2), so a test that drives the daemon records an install
+// `trocar daemon` refuses before install and writes nothing (1.6 §5.2), so a test that drives the daemon records an install
 // the daemon may start on first (manifest.mjs daemonMayStart: an install record and a root in custody).
-const markInstalled = (home) => { const dir = path.join(home, '.asight', 'collector'); fs.mkdirSync(dir, { recursive: true })
+const markInstalled = (home) => { const dir = path.join(home, '.trocar', 'collector'); fs.mkdirSync(dir, { recursive: true })
   saveManifest(dir, { ...newManifest(), install: { state: 'complete' }, entries: [{ phase: 'install', kind: 'root-key', what: 'the root in the login keychain' }] }); return dir }
 const io = () => { const o = []; const e = []; return { o, e, out: (s) => o.push(s), err: (s) => e.push(s) } }
 // The capture commands through the one dispatch (src/cli/main.mjs, 1.6 §2): this test's flat options are its io / uid / deps.
@@ -33,22 +33,22 @@ const runCli = (argv, { env = {}, home, platform = 'linux', request, statusDeps 
       ...(exit ? { exit } : {}), ...(script ? { script } : {}), ...(waitForStop ? { waitForStop } : {}), ...statusDeps, ...onDeps, ...offDeps } })
 const STATUS = { desired: 'on', actual: 'on', recording: true, degraded: null, engine: { port: 4711, v6: 4711, decrypted: 2, spliced: 1 }, helper: { pid: 9, proto: 1, ok: true }, running_untrusted: 1,
   agents: [{ pid: 10, agent: 'claude-code', trusted: true, trust_var: 'NODE_EXTRA_CA_CERTS', trust_via: 'user settings env', direct: 0 }, { pid: 11, agent: 'claude-code', trusted: false, reason: 'var-missing', direct: 2 },
-    { pid: 12, agent: 'opencode', parent_agent: 'claude-code', trusted: true, trust_var: 'asight:marker', trust_via: 'plugin marker', not_via_trust_path: [{ host: 'models.dev', reason: 'before-plugin' }], direct: 0 },
+    { pid: 12, agent: 'opencode', parent_agent: 'claude-code', trusted: true, trust_var: 'trocar:marker', trust_via: 'plugin marker', not_via_trust_path: [{ host: 'models.dev', reason: 'before-plugin' }], direct: 0 },
     { pid: 14, agent: 'claude-code', trusted: true, trust_var: 'NODE_EXTRA_CA_CERTS', trust_via: 'user settings env', direct: 0, unreachable: [{ transport: 'af-unix', var: 'ANTHROPIC_UNIX_SOCKET' }, { transport: 'quic', var: 'BUN_OPTIONS' }] },
     { pid: 13, agent: 'deepseek-dsh', trusted: false, reason: 'dsh-node-too-old', hint: 'this dsh runs on a Node older than 22.19.0', direct: 1 }],
   unjudged: { count: 3, sample: [{ pid: 20, comm: 'sshd', errno: 'EACCES' }, { pid: 21, comm: '(sd-pam)', errno: 'EACCES' }] } }
 
-test('cli: `collector status` is the one `asight status` (src/cli/status.mjs: it only ever GETs the control socket; exit 0 / 1 / 3 are R4\'s); `collector off` is the one `asight off` (src/off/main.mjs): same arguments, same exit code, nothing posted by this file', async () => {
+test('cli: `collector status` is the one `trocar status` (src/cli/status.mjs: it only ever GETs the control socket; exit 0 / 1 / 3 are R4\'s); `collector off` is the one `trocar off` (src/off/main.mjs): same arguments, same exit code, nothing posted by this file', async () => {
   const calls = []
   const request = async (q) => { calls.push([q.method, q.path, q.socketPath]); return STATUS }
   const env = { XDG_RUNTIME_DIR: '/run/user/1000' }
-  const home = tmpDir('asight-cli-') // never the operator's own ~/.asight: status reads the disk too
+  const home = tmpDir('trocar-cli-') // never the operator's own ~/.trocar: status reads the disk too
   const status = { platform: 'linux', statusDeps: { procs: async () => [], exec: NO_EXEC } }
   let t = io(); assert.equal(await runCli(['status'], { env, home, request, ...status, ...t }), 0)
-  assert.ok(calls.length >= 1 && calls.every((c) => c[0] === 'GET' && c[1] === '/status' && c[2] === '/run/user/1000/asight/collector.sock'), '`on` and `off` are not here: they run src/cli/on.mjs and src/off/main.mjs, which plan, confirm and write before they ask the daemon anything; status only reads')
+  assert.ok(calls.length >= 1 && calls.every((c) => c[0] === 'GET' && c[1] === '/status' && c[2] === '/run/user/1000/trocar/collector.sock'), '`on` and `off` are not here: they run src/cli/on.mjs and src/off/main.mjs, which plan, confirm and write before they ask the daemon anything; status only reads')
   const named = []
-  const t2 = io(); assert.equal(await runCli(['off', '--bogus'], { env, request, platform: 'linux', ...t2 }), 2, 'and its usage errors are `asight off`\'s: exit 2')
-  assert.match(t2.e.join('\n'), /asight off: unknown option '--bogus'\nasight off \[<harness>/)
+  const t2 = io(); assert.equal(await runCli(['off', '--bogus'], { env, request, platform: 'linux', ...t2 }), 2, 'and its usage errors are `trocar off`\'s: exit 2')
+  assert.match(t2.e.join('\n'), /trocar off: unknown option '--bogus'\ntrocar off \[<harness>/)
   assert.match(t.o.join('\n'), /^No harness is set up for capture yet\./, 'nothing installed: the summary says so (§3.5); the engine summary the daemon reports is behind --failures, below')
   const tf = io(); await runCli(['status', '--failures'], { env, home, request, ...status, ...tf })
   assert.match(tf.o.join('\n'), /No problems in the last 24 hours\.\n\nExpected\n/, '\u00a73.5: `--failures` prints the problems of the last 24 hours, folded, then Expected')
@@ -56,8 +56,8 @@ test('cli: `collector status` is the one `asight status` (src/cli/status.mjs: it
   const all = formatStatus(STATUS)
   assert.match(all, /2 decrypted/)
   assert.match(all, /  11 claude-code not captured: var-missing/)
-  assert.match(all, /  12 opencode \(started by claude-code\) captured\n    not captured \(it did not read asight's certificate\): models\.dev \(before-plugin\)/)
-  assert.match(all, /  14 claude-code captured\n    not captured \(a transport asight cannot reach\): af-unix, quic/, 'the agent line lists them (B-4b)')
+  assert.match(all, /  12 opencode \(started by claude-code\) captured\n    not captured \(it did not read trocar's certificate\): models\.dev \(before-plugin\)/)
+  assert.match(all, /  14 claude-code captured\n    not captured \(a transport trocar cannot reach\): af-unix, quic/, 'the agent line lists them (B-4b)')
   assert.match(all, /not judged: 3 process\(es\) of yours whose program could not be read: 20 sshd, 21 \(sd-pam\), \.\.\./, 'said, not silent (B-1)')
   assert.match(all, /  13 deepseek-dsh not captured: dsh-node-too-old - this dsh runs on a Node older than 22\.19\.0/)
   // R4: 3 is for "could not judge", not for "no daemon": with nothing installed and no daemon there is nothing wrong (0); no runtime dir is no usage error either (the lock names the socket when there is one)
@@ -70,8 +70,8 @@ test('cli: `collector status` is the one `asight status` (src/cli/status.mjs: it
 // D-2: whenever no daemon answers — none running, no runtime dir, or one that does not reply — status still reads
 // flows/ from disk, and an unreadable flows/ is said instead of looking like "no failures".
 test('cli: with no daemon answering (not running, no runtime dir, stuck) status reads the failure records from disk (exit 1: a failure in 24 h); an unreadable flows/ is said, exit 3 (D-2, R4)', async () => {
-  const home = tmpDir('asight-cli-')
-  const dir = path.join(home, '.asight', 'collector')
+  const home = tmpDir('trocar-cli-')
+  const dir = path.join(home, '.trocar', 'collector')
   try {
     appendEvent(dir, { event: 'failure', where: 'start', code: 'EADDRINUSE', reason: 'the engine port is held by another process' })
     markInstalled(home) // installed
@@ -103,7 +103,7 @@ test('cli: with no daemon answering (not running, no runtime dir, stuck) status 
 // with a failed step exits 1; an uncaught exception is one `crash` record, then exit 70.
 test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 1 when a stop step failed, and records a crash (D-5, D-27)', async () => {
   const { EventEmitter } = await import('node:events')
-  const home = tmpDir('asight-cli-start-')
+  const home = tmpDir('trocar-cli-start-')
   try {
     const stops = []
     let failed = []
@@ -111,16 +111,16 @@ test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 
     const proc = new EventEmitter()
     // 1.6 §5.2: before install the daemon refuses and writes nothing — not even the collector directory it would log into
     let t = io(); assert.equal(await runCli(['daemon'], { home, env: {}, daemon, proc, exit: () => {}, platform: 'linux', getuid: () => 1000, ...t }), 1, 'no install, no daemon')
-    assert.match(t.e.join('\n'), /^asight daemon: certificates are not installed\. Run: asight install$/)
+    assert.match(t.e.join('\n'), /^trocar daemon: certificates are not installed\. Run: trocar install$/)
     assertEnglish(t.e.join('\n'))
-    assert.deepEqual([t.o, stops, fs.existsSync(path.join(home, '.asight'))], [[], [], false], 'nothing started, nothing written')
+    assert.deepEqual([t.o, stops, fs.existsSync(path.join(home, '.trocar'))], [[], [], false], 'nothing started, nothing written')
     markInstalled(home)
     t = io()
     const running = runCli(['daemon'], { home, env: {}, daemon, proc, exit: () => {}, platform: 'linux', getuid: () => 1000, ...t }) // the real signal wait
     await new Promise((r) => setImmediate(r))
     process.emit('SIGHUP')
     assert.equal(await running, 0)
-    assert.deepEqual(t.o, ['asight collector: engine 127.0.0.1:1, control /s'], 'the readiness line names the endpoints it has, never a null port (§1.1)')
+    assert.deepEqual(t.o, ['trocar collector: engine 127.0.0.1:1, control /s'], 'the readiness line names the endpoints it has, never a null port (§1.1)')
     assertEnglish(t.o.join('\n'))
     assert.deepEqual(stops, [{ signal: 'SIGHUP' }])
     markInstalled(home) // the signal above also ran tmpDir's own SIGHUP cleanup (test/helpers/tmp.mjs), which took this home's tree with it
@@ -131,15 +131,15 @@ test('cli: start stops on SIGHUP like SIGTERM, passes the signal to stop, exits 
     t = io(); await runCli(['daemon'], { home, env: {}, daemon, proc: (proc.removeAllListeners(), proc), exit: (c) => exits.push(c), platform: 'linux', getuid: () => 1000, waitForStop: async () => 'SIGTERM', ...t })
     proc.emit('uncaughtException', new TypeError('boom in a timer'))
     assert.deepEqual(exits, [70])
-    const f = JSON.parse(fs.readFileSync(path.join(home, '.asight', 'collector', 'flows', fs.readdirSync(path.join(home, '.asight', 'collector', 'flows'))[0]), 'utf8').trim())
+    const f = JSON.parse(fs.readFileSync(path.join(home, '.trocar', 'collector', 'flows', fs.readdirSync(path.join(home, '.trocar', 'collector', 'flows'))[0]), 'utf8').trim())
     assert.deepEqual([f.where, f.code, /TypeError: boom in a timer/.test(f.reason)], ['daemon', 'crash', true])
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
-// `collector start` is `asight daemon` (1.6 §2 hidden alias; the autostart units written before the rename run it): refused as root and on any argument before the daemon is asked for anything;
+// `collector start` is `trocar daemon` (1.6 §2 hidden alias; the autostart units written before the rename run it): refused as root and on any argument before the daemon is asked for anything;
 // every platform reaches startDaemon the same way now (D39⑥ executed 2026-10-11: the platform gate went with the old capture — a platform without a collector is refused by loadArch itself)
-test('cli: `collector start` is `asight daemon` (src/cli/daemon.mjs): it refuses root and any argument, starts nothing then, and win32 / darwin / freebsd alike reach startDaemon (R4, R7)', async () => {
-  const home = tmpDir('asight-cli-daemon-')
+test('cli: `collector start` is `trocar daemon` (src/cli/daemon.mjs): it refuses root and any argument, starts nothing then, and win32 / darwin / freebsd alike reach startDaemon (R4, R7)', async () => {
+  const home = tmpDir('trocar-cli-daemon-')
   markInstalled(home) // every run below is meant to get past the install gate (§5.2); that gate is the test above
   const started = []
   const daemon = { startDaemon: async () => { started.push(1); return { port: 1, socketPath: '/s', stop: async () => ({ failed: [] }) } } }
@@ -147,7 +147,7 @@ test('cli: `collector start` is `asight daemon` (src/cli/daemon.mjs): it refuses
   let r = await run(['daemon'], { getuid: () => 0 })
   assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /run this as your own user, not as root/) // §1.5: every mutating command, one refusal
   r = await run(['daemon', '--now'])
-  assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /asight daemon: unknown option '--now'\nasight daemon \[--supervise\]/)
+  assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /trocar daemon: unknown option '--now'\ntrocar daemon \[--supervise\]/)
   assert.deepEqual(started, [], 'none of those got as far as the daemon')
   for (const platform of ['win32', 'darwin', 'freebsd']) {
     r = await run(['daemon'], { platform })
@@ -155,16 +155,16 @@ test('cli: `collector start` is `asight daemon` (src/cli/daemon.mjs): it refuses
   }
   assert.deepEqual(started, [1, 1, 1])
   r = await run(['daemon'])
-  assert.equal(r.exit, 0); assert.match(r.t.o.join('\n'), /^asight collector: engine 127\.0\.0\.1:1, control \/s$/, 'the readiness line the lab rig waits for')
+  assert.equal(r.exit, 0); assert.match(r.t.o.join('\n'), /^trocar collector: engine 127\.0\.0\.1:1, control \/s$/, 'the readiness line the test rig waits for')
   const t = io(); const direct = await runDaemonCli([], { io: t, home, env: {}, platform: 'linux', deps: { daemon, proc: { on() {} }, getuid: () => 1000, waitForStop: async () => 'SIGTERM' } })
-  assert.equal(direct, 0, '`asight daemon` itself is the same run')
+  assert.equal(direct, 0, '`trocar daemon` itself is the same run')
   fs.rmSync(home, { recursive: true, force: true })
 })
 
 // 1.6 §1.4 5: after `off` with no names the daemon stops itself once nothing is relayed; `start` then returns 0 without any signal, so the unit exits
 // cleanly and systemd does not restart it (Restart=on-failure)
 test('cli: start returns when the daemon has stopped itself (off), exit 0, without waiting for a signal; a signal arriving later gets the first stop\'s result', async () => {
-  const home = tmpDir('asight-cli-start-')
+  const home = tmpDir('trocar-cli-start-')
   markInstalled(home)
   try {
     let result = { failed: [] }
@@ -178,25 +178,25 @@ test('cli: start returns when the daemon has stopped itself (off), exit 0, witho
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
-// `--supervise` (4.8 §7): the scheduled task runs this supervisor parent, which pulls the real `node <asight> daemon` and re-pulls it on a non-zero
+// `--supervise` (4.8 §7): the scheduled task runs this supervisor parent, which pulls the real `node <trocar> daemon` and re-pulls it on a non-zero
 // exit. The CLI hands it to arch.runSupervisor through daemon.mjs's loadArch (layering rule 5: it never imports arch/ itself) with its own entry
 // script and the collector dir — and holds no platform list: a platform whose arch has no runSupervisor refuses, so "Linux has no --supervise" is
 // the linux arch's shape, not an if in the CLI. The supervisor itself (the backoff, the lock, the signals) is autostart.test.mjs's, W24 there.
 test('cli: `daemon --supervise` (4.8 §7, W24): the lone flag goes to arch.runSupervisor through daemon.mjs\'s loadArch with its own script and the collector dir; other arguments stay exit 2, root and a platform without the new collector are refused first, and an arch with no runSupervisor is a usage error', async () => {
-  const home = tmpDir('asight-cli-supervise-')
+  const home = tmpDir('trocar-cli-supervise-')
   try {
     const ran = []
-    const supervisor = async (o) => { ran.push([o.asight, o.dir, typeof o.proc.on === 'function']); try { o.log('up') } catch { /* a log sink that is not one */ } return 7 }
+    const supervisor = async (o) => { ran.push([o.trocar, o.dir, typeof o.proc.on === 'function']); try { o.log('up') } catch { /* a log sink that is not one */ } return 7 }
     const daemon = { loadArch: async (p) => (p === 'win32' ? { runSupervisor: supervisor } : {}) } // linux's arch carries none — the CLI must ask, not assume
-    const run = (argv, o = {}) => { const t = io(); return runDaemonCli(argv, { io: t, home, env: {}, platform: o.platform || 'win32', deps: { daemon, getuid: () => 1000, proc: { on() {} }, script: '/repo/bin/asight.mjs', ...o.deps } }).then((exit) => ({ exit, t })) }
+    const run = (argv, o = {}) => { const t = io(); return runDaemonCli(argv, { io: t, home, env: {}, platform: o.platform || 'win32', deps: { daemon, getuid: () => 1000, proc: { on() {} }, script: '/repo/bin/trocar.mjs', ...o.deps } }).then((exit) => ({ exit, t })) }
     let r = await run(['--supervise'])
     assert.equal(r.exit, 7, 'the supervisor\'s exit code is the command\'s')
-    assert.deepEqual(ran, [['/repo/bin/asight.mjs', path.join(home, '.asight', 'collector'), true]], 'its own script, the collector dir, the proc to take signals on')
+    assert.deepEqual(ran, [['/repo/bin/trocar.mjs', path.join(home, '.trocar', 'collector'), true]], 'its own script, the collector dir, the proc to take signals on')
     assert.match(r.t.e.join('\n'), /^\[supervise\] up$/, 'the supervisor\'s log lines reach the terminal with their prefix')
     ran.length = 0
     for (const argv of [['--supervise', '--now'], ['--supervize']]) {
       r = await run(argv)
-      assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /takes no arguments \(/); assert.match(r.t.e.join('\n'), /usage: asight daemon \[--supervise\]/)
+      assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /takes no arguments \(/); assert.match(r.t.e.join('\n'), /usage: trocar daemon \[--supervise\]/)
     }
     r = await run(['--supervise'], { deps: { getuid: () => 0 } })
     assert.equal(r.exit, 2); assert.match(r.t.e.join('\n'), /run this as your own user, not as root/); assert.deepEqual(ran, [], 'root is refused before the supervisor is asked for') // V76: 2, not 1
@@ -207,33 +207,33 @@ test('cli: `daemon --supervise` (4.8 §7, W24): the lone flag goes to arch.runSu
     ran.length = 0
     const daemonWithSupervisor = { loadArch: async () => ({ runSupervisor: supervisor }) }
     let t = io()
-    assert.equal(await runCli(['daemon', '--supervise'], { home, env: {}, daemon: daemonWithSupervisor, proc: { on() {} }, platform: 'linux', getuid: () => 1000, script: '/repo/bin/asight.mjs', ...t }), 7)
-    assert.deepEqual(ran, [['/repo/bin/asight.mjs', path.join(home, '.asight', 'collector'), true]], 'the wrapper passes the script the supervisor child runs')
+    assert.equal(await runCli(['daemon', '--supervise'], { home, env: {}, daemon: daemonWithSupervisor, proc: { on() {} }, platform: 'linux', getuid: () => 1000, script: '/repo/bin/trocar.mjs', ...t }), 7)
+    assert.deepEqual(ran, [['/repo/bin/trocar.mjs', path.join(home, '.trocar', 'collector'), true]], 'the wrapper passes the script the supervisor child runs')
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })
 
-test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the descriptors, OS, process table and arch (its OS roots) from daemon.loadParts; uninstall is the one `asight uninstall` (src/cli/uninstall.mjs)', async () => {
+test('cli: install / on go to the one `trocar on` (src/cli/on.mjs) with the descriptors, OS, process table and arch (its OS roots) from daemon.loadParts; uninstall is the one `trocar uninstall` (src/cli/uninstall.mjs)', async () => {
   const seen = []
-  const mkU = () => ({ UNIT_NAME: 'asight-collector.service', userUnit: ({ home, node, script, run }) => ({ path: `${home}/.config/systemd/user/asight-collector.service`, links: [`${home}/.config/systemd/user/default.target.wants/asight-collector.service`], text: (env) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" daemon`, ran: run }), unitPath: (h) => `${h}/.config/systemd/user/asight-collector.service`, wantsLink: (h) => `${h}/.config/systemd/user/default.target.wants/asight-collector.service`, unitText: ({ node, script, env }) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" daemon`, systemctl: () => ({ code: 0 }), removeWantsLinks: () => [] })
+  const mkU = () => ({ UNIT_NAME: 'trocar-collector.service', userUnit: ({ home, node, script, run }) => ({ path: `${home}/.config/systemd/user/trocar-collector.service`, links: [`${home}/.config/systemd/user/default.target.wants/trocar-collector.service`], text: (env) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" daemon`, ran: run }), unitPath: (h) => `${h}/.config/systemd/user/trocar-collector.service`, wantsLink: (h) => `${h}/.config/systemd/user/default.target.wants/trocar-collector.service`, unitText: ({ node, script, env }) => `${JSON.stringify(env)} ExecStart="${node}" "${script}" daemon`, systemctl: () => ({ code: 0 }), removeWantsLinks: () => [] })
   const parts = { os: 'linux', arch: { unit: mkU() }, harnesses: [{ name: 'h' }], scan: async () => [], match: () => ({ agent: null }) }
   const daemon = { loadParts: async () => parts }
   const { newReceipt } = await import('../../src/cli/schema.mjs')
   const install = {
     turnOn: async (o) => {
       seen.push(['on', o.osName, o.harnesses, o.scan === parts.scan, o.home, o.arch === parts.arch, o.unit ? [o.unit.path, o.unit.links, o.unit.text({ NODE_EXTRA_CA_CERTS: '/corp/ca.pem' })] : null, o.dryRun])
-      o.onPlan({ manifest: '/h/.asight/collector/install-manifest.json', ca: [], files: [], entries: [] })
-      return { receipt: { ...newReceipt('on'), user: 'u', relayed: { closing: 0, waiting: 0, cut: 0 }, linger: true, changed: [{ path: '/h/s.json', change: 'adds env.K', backup: null }], undo: ['asight off'], log: '/h/.asight/collector/flows' }, exit: 0 }
+      o.onPlan({ manifest: '/h/.trocar/collector/install-manifest.json', ca: [], files: [], entries: [] })
+      return { receipt: { ...newReceipt('on'), user: 'u', relayed: { closing: 0, waiting: 0, cut: 0 }, linger: true, changed: [{ path: '/h/s.json', change: 'adds env.K', backup: null }], undo: ['trocar off'], log: '/h/.trocar/collector/flows' }, exit: 0 }
     },
   }
-  const base = { home: '/h', daemon, install, script: '/repo/bin/asight.mjs', platform: 'linux' }
+  const base = { home: '/h', daemon, install, script: '/repo/bin/trocar.mjs', platform: 'linux' }
   let t = io(); assert.equal(await runCli(['on', '--yes'], { ...base, ...t }), 0)
   assert.equal(t.o.length, 2, 'the plan, then the receipt (src/cli/receipt.mjs)')
-  assert.match(t.o[0], /^asight on will write \d+ file/); assert.match(t.o[1], /^Capturing /)
+  assert.match(t.o[0], /^trocar on will write \d+ file/); assert.match(t.o[1], /^Capturing /)
   assertEnglish(t.o.join('\n'))
   t = io(); assert.equal(await runCli(['on', '--dry-run'], { ...base, ...t }), 0)
   assert.deepEqual(seen, [
-    ['on', 'linux', parts.harnesses, true, '/h', true, ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" daemon`], false],
-    ['on', 'linux', parts.harnesses, true, '/h', true, ['/h/.config/systemd/user/asight-collector.service', ['/h/.config/systemd/user/default.target.wants/asight-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/asight.mjs" daemon`], true],
+    ['on', 'linux', parts.harnesses, true, '/h', true, ['/h/.config/systemd/user/trocar-collector.service', ['/h/.config/systemd/user/default.target.wants/trocar-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/trocar.mjs" daemon`], false],
+    ['on', 'linux', parts.harnesses, true, '/h', true, ['/h/.config/systemd/user/trocar-collector.service', ['/h/.config/systemd/user/default.target.wants/trocar-collector.service'], `{"NODE_EXTRA_CA_CERTS":"/corp/ca.pem"} ExecStart="${process.execPath}" "/repo/bin/trocar.mjs" daemon`], true],
   ])
   seen.length = 0
   t = io(); assert.equal(await runCli(['on', '--yes'], { ...base, install: { turnOn: async () => { throw new Error('boom') } }, ...t }), 1, 'a throw is exit 1, said once')
@@ -242,30 +242,30 @@ test('cli: install / on go to the one `asight on` (src/cli/on.mjs) with the desc
   // without an arch is refused by loadArch (covered by test/collector/arch/linux/redirector-adapter.test.mjs's freebsd cell);
   // here, a platform the stub answers for runs the same new code as linux.
   t = io(); assert.equal(await runCli(['on', '--yes'], { ...base, platform: 'freebsd', ...t }), 0, 'the CLI holds no platform gate: freebsd is loadArch\'s question, and the stub answered for it')
-  t = io(); assert.equal(await runCli(['uninstall', '--purge-data', '--yes'], { home: '/h', platform: 'freebsd', ...t }), 0, '`collector uninstall` is `asight uninstall`: the same entry point — nothing installed, nothing to undo, still done')
-  t = io(); assert.equal(await runCli(['uninstall', 'claude-code'], { home: '/h', platform: 'linux', ...t }), 2, 'a harness name is a usage error: uninstall removes asight for every harness')
-  assert.match(t.e.join('\n'), /asight uninstall: takes no harness name \(claude-code\)/)
+  t = io(); assert.equal(await runCli(['uninstall', '--purge-data', '--yes'], { home: '/h', platform: 'freebsd', ...t }), 0, '`collector uninstall` is `trocar uninstall`: the same entry point — nothing installed, nothing to undo, still done')
+  t = io(); assert.equal(await runCli(['uninstall', 'claude-code'], { home: '/h', platform: 'linux', ...t }), 2, 'a harness name is a usage error: uninstall removes trocar for every harness')
+  assert.match(t.e.join('\n'), /trocar uninstall: takes no harness name \(claude-code\)/)
 })
 
 test('cli: setup-helper installs or removes through arch; a failure is exit 1', async () => {
   const done = []
-  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/asight/asight-redirector' }, setupHelper: (o) => { done.push(o.binarySrc); return { bin: '/b', getcap: 'caps' } }, uninstallHelper: () => ({ warnings: [] }) } }
+  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { done.push(o.binarySrc); return { bin: '/b', getcap: 'caps' } }, uninstallHelper: () => ({ warnings: [] }) } }
   let t = io(); assert.equal(await runSetupHelper(['--binary', '/tmp/h'], { arch, ...t }), 0)
   t = io(); assert.equal(await runSetupHelper(['--remove'], { arch, ...t }), 0)
   assert.deepEqual(done, ['/tmp/h'])
   t = io(); assert.equal(await runSetupHelper([], { arch: { install: { setupHelper: () => { throw new Error('must run as root') } } }, ...t }), 1)
-  assert.deepEqual(t.e, ['asight setup-helper: must run as root'], 'the failure is said once, named by the command')
+  assert.deepEqual(t.e, ['trocar setup-helper: must run as root'], 'the failure is said once, named by the command')
   // a staged copy an interrupted setup-helper left is removed and said, by both directions (D38)
-  const swept = { install: { DEFAULTS: arch.install.DEFAULTS, setupHelper: () => ({ bin: '/b', getcap: 'caps', swept: ['.asight-redirector.new.67915'] }), uninstallHelper: () => ({ warnings: ['removed 1 copy(ies) an interrupted setup-helper had staged: .asight-redirector.new.67915'] }) } }
+  const swept = { install: { DEFAULTS: arch.install.DEFAULTS, setupHelper: () => ({ bin: '/b', getcap: 'caps', swept: ['.trocar-redirector.new.67915'] }), uninstallHelper: () => ({ warnings: ['removed 1 copy(ies) an interrupted setup-helper had staged: .trocar-redirector.new.67915'] }) } }
   t = io(); await runSetupHelper([], { arch: swept, ...t })
-  assert.match(t.o.join('\n'), /removed 1 copy\(ies\) an interrupted setup-helper had staged: \.asight-redirector\.new\.67915/)
+  assert.match(t.o.join('\n'), /removed 1 copy\(ies\) an interrupted setup-helper had staged: \.trocar-redirector\.new\.67915/)
   t = io(); await runSetupHelper(['--remove'], { arch: swept, ...t })
   assert.match(t.o.join('\n'), /Warning: removed 1 copy\(ies\)/)
 })
 
 test('cli: the real bin runs `status` without a runtime dir on a HOME with nothing installed (→ 0: nothing is wrong, and nothing was written)', () => {
-  const home = tmpDir('asight-cli-bin-')
-  const env = { ...process.env, HOME: home, ...osStubs().env, ASIGHT_MIHOMO_SOCK: path.join(home, 'none.sock') }; delete env.XDG_RUNTIME_DIR // status reads the disk: never the operator's own; the VPN probe is pinned to a socket nobody listens on, so it can never reach the operator's core
+  const home = tmpDir('trocar-cli-bin-')
+  const env = { ...process.env, HOME: home, ...osStubs().env, TROCAR_MIHOMO_SOCK: path.join(home, 'none.sock') }; delete env.XDG_RUNTIME_DIR // status reads the disk: never the operator's own; the VPN probe is pinned to a socket nobody listens on, so it can never reach the operator's core
   const r = spawnSync(process.execPath, [BIN, 'status'], { env, encoding: 'utf8' })
   assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /^No harness is set up for capture yet\./); assert.equal(r.stderr, '')
   assert.deepEqual(fs.readdirSync(home), [], 'read-only')
@@ -283,7 +283,7 @@ test('cli: the real bin runs `status` without a runtime dir on a HOME with nothi
 // as long as the other one lives — launchd's KeepAlive {SuccessfulExit: false} every ThrottleInterval, the Windows supervisor on its backoff (4.8 §7: 0 =
 // it was asked to stop, do not re-pull) — so the loop would burn CPU every 10 s with nothing to show. The reason is said once, into the daemon log (D38).
 test('cli: a daemon that finds another one answering on the control channel says so once and exits 0 — the platform must not retry it; any other start failure still exits 1', async () => {
-  const home = tmpDir('asight-cli-second-')
+  const home = tmpDir('trocar-cli-second-')
   markInstalled(home)
   const run = (already) => {
     const daemon = { startDaemon: async () => { throw Object.assign(new Error(already ? 'another collector daemon is answering on /s' : 'the engine port is taken'), already ? { [DAEMON_ALREADY_UP]: true } : {}) } }
@@ -302,7 +302,7 @@ test('cli: a daemon that finds another one answering on the control channel says
 // program holding the pipe name. Exiting 0 here would leave the machine with no working collector and no record until the next login, so this one is a
 // failure: one persistent record naming the pid the lock claims holds it, and a non-zero exit, which the platform retries at its own throttle.
 test('cli: a control endpoint held by something that does not answer is a failure record naming the pid that holds it, and a non-zero exit (not exit 0)', async () => {
-  const home = tmpDir('asight-cli-held-')
+  const home = tmpDir('trocar-cli-held-')
   const dir = markInstalled(home)
   fs.writeFileSync(path.join(dir, 'lock'), JSON.stringify({ pid: 7371 }))
   const daemon = {

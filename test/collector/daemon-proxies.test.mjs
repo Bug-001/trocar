@@ -33,7 +33,7 @@ const API = 'api.anthropic.com'
 const PROXY_HOST = 'proxy.asight.test' // the mock CA's leaf covers *.asight.test
 function fakeArch(p) {
   const clients = []
-  const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c }
+  const makeClient = () => { const c = createRedirectorClient({ binary: process.execPath, args: [FAKE], env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, autoHeartbeatMs: 0 }); clients.push(c); return c }
   return { clients, arch: { os: 'linux', createRedirector: () => createLinuxRedirector({ makeClient, procRoot: p.root, uid: UID }) } }
 }
 const req = (sock, method, p, body) => controlRequest({ socketPath: sock, method, path: p, body })
@@ -58,7 +58,7 @@ test('toProxyEntry: scheme-less is http, credentials are never kept, unknown sch
 test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine through describe — outer TLS terminated, CONNECT recorded, the tunnelled call decrypted and recorded (W8 through the daemon)', { timeout: 20000 }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'as-dp-')) // short: unix socket paths are length-limited
   const home = path.join(root, 'home'); fs.mkdirSync(home)
-  const dir = path.join(home, '.asight', 'collector'), sock = path.join(root, 'run', 'c.sock')
+  const dir = path.join(home, '.trocar', 'collector'), sock = path.join(root, 'run', 'c.sock')
   const p = fakeProc()
   const labCa = makeLabCa(path.join(root, 'lab-ca'))
   const tlsOpts = { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }
@@ -83,7 +83,7 @@ test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine th
     raw = net.connect(d.port, '127.0.0.1'); await once(raw, 'connect')
     await clients[0].raw({ op: '__inject_port', port: raw.localPort, family: 4, dst: { address: '127.0.0.1', port: proxy.port, family: 4 }, pid: 4343, decrypt: 1 })
     const trusted = fs.readFileSync(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env.NODE_EXTRA_CA_CERTS, 'utf8') // what this CC trusts: the CA install put in its settings
-    const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, messages: [{ role: 'user', content: 'asight-via-own-https-proxy' }] })
+    const body = JSON.stringify({ model: 'claude-x', max_tokens: 16, messages: [{ role: 'user', content: 'trocar-via-own-https-proxy' }] })
     const REQ = `POST /v1/messages HTTP/1.1\r\nHost: ${API}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
     const r = await new Promise((resolve, reject) => {
       const outer = tls.connect({ socket: raw, servername: PROXY_HOST, ca: trusted }, () => outer.write(`CONNECT ${API}:443 HTTP/1.1\r\nHost: ${API}:443\r\n\r\n`))
@@ -94,7 +94,7 @@ test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine th
         inner.on('end', () => resolve({ reply: reply.toString('latin1'), resp: b, issuer: outer.getPeerX509Certificate().issuer }))
       })
     })
-    assert.match(r.issuer, /asight collector CA/, 'the outer TLS to the proxy was terminated by the engine')
+    assert.match(r.issuer, /trocar collector CA/, 'the outer TLS to the proxy was terminated by the engine')
     assert.match(r.reply, /^HTTP\/1\.1 200 /)
     const entry = mock.state.log.find((e) => e.type === 'request')
     assert.equal(Buffer.from(entry.req_raw_b64, 'base64').toString('latin1'), REQ, 'the API host got the request verbatim')
@@ -111,7 +111,7 @@ test('daemon: an agent\'s own https:// proxy (HTTPS_PROXY) reaches the engine th
 test('daemon: describe that throws costs the connection nothing — it goes on without the proxy table (spliced, policy) and the failure is recorded under describe-error', { timeout: 20000 }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'as-dp-'))
   const home = path.join(root, 'home'); fs.mkdirSync(home)
-  const dir = path.join(home, '.asight', 'collector'), sock = path.join(root, 'run', 'c.sock')
+  const dir = path.join(home, '.trocar', 'collector'), sock = path.join(root, 'run', 'c.sock')
   const p = fakeProc()
   const labCa = makeLabCa(path.join(root, 'lab-ca'))
   const tlsOpts = { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }
@@ -133,7 +133,7 @@ test('daemon: describe that throws costs the connection nothing — it goes on w
       const outer = tls.connect({ socket: raw, servername: PROXY_HOST, ca: fs.readFileSync(labCa.caCert) }, () => { resolve(outer.getPeerX509Certificate().issuer); outer.end() })
       outer.on('error', reject)
     })
-    assert.doesNotMatch(issuer, /asight collector CA/, 'no table: the proxy is an ordinary TLS host outside the policy, spliced')
+    assert.doesNotMatch(issuer, /trocar collector CA/, 'no table: the proxy is an ordinary TLS host outside the policy, spliced')
     const f = await until(() => flowsOf(dir).find((x) => x.event === 'failure' && x.where === 'engine' && x.code === 'describe-error'))
     assert.match(f.reason, new RegExp(`describing pid 4444 \\(claude-code\\) for 127\\.0\\.0\\.1:${proxy.port} failed: extras exploded`))
     const row = await until(() => flowsOf(dir).find((x) => x.flow_id && x.pid === 4444))

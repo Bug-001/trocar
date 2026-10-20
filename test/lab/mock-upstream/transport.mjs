@@ -41,7 +41,7 @@ export async function writeResponse(io, res, { head = false, close = false, sc =
   let pieces = res.pieces.map((p) => Buffer.from(p)), first = res.firstDelta ?? 0
   if (sc.fault && res.firstDelta == null) pieces = halves(pieces)
   if (sc.fault === 'error-event' && res.failEvent) pieces = [...pieces.slice(0, first + 2), Buffer.from(res.failEvent(first + 2))]
-  const h = { date: new Date().toUTCString(), server: 'asight-mock-upstream', ...res.headers }
+  const h = { date: new Date().toUTCString(), server: 'trocar-mock-upstream', ...res.headers }
   if (sc.encoding && !head) { pieces = await compress(pieces, sc.encoding); h['content-encoding'] = sc.encoding }
   // chunked (default) | length: one content-length | close: no length at all, the FIN ends the body
   const framing = sc.framing || 'chunked'

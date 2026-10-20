@@ -1,16 +1,16 @@
-// asight Linux capability-helper install / removal (spec 4.6 §身份与信任 §权限划分, D36 per-user model).
+// trocar Linux capability-helper install / removal (spec 4.6 §身份与信任 §权限划分, D36 per-user model).
 //
 // D36 removes the dedicated engine account entirely. There are now exactly two halves:
 //
 //   setupHelper / uninstallHelper (ROOT, once per machine) — the ONLY privileged step. It installs
-//     the capability helper `asight-redirector` to /usr/local/libexec/asight/ as root:root 0755
+//     the capability helper `trocar-redirector` to /usr/local/libexec/trocar/ as root:root 0755
 //     with file caps `cap_bpf,cap_net_admin,cap_perfmon+ep` (no setuid, no group, no inheritable),
 //     verifies the caps and the checksum, and refuses a nosuid/noexec mount. Nothing else on the
-//     machine is touched: no account, group, ACL, system unit, or /etc|/var|/run|/var/log/asight.
+//     machine is touched: no account, group, ACL, system unit, or /etc|/var|/run|/var/log/trocar.
 //
 //   The per-user half (operator, no sudo: the collector CA, the agents' trust entries, the install manifest) is
-//     `asight collector install|uninstall` in src/collector/install.mjs (RFC 4.6 §安装清单与卸载). It records
-//     every change in ~/.asight/collector/install-manifest.json and undoes key by key; it never copies a user
+//     `trocar collector install|uninstall` in src/collector/install.mjs (RFC 4.6 §安装清单与卸载). It records
+//     every change in ~/.trocar/collector/install-manifest.json and undoes key by key; it never copies a user
 //     file or rewrites whole JSON (1.6 R2). The earlier installUser / uninstallUser here did both and are gone
 //     (Plan 3a).
 //
@@ -37,8 +37,8 @@ function exists(p) { try { fs.statSync(p); return true } catch { return false } 
 function sha(p) { try { return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex') } catch { return null } }
 function uid() { return typeof process.getuid === 'function' ? process.getuid() : -1 }
 function requireRoot() {
-  if (process.platform !== 'linux') throw new Error('asight setup-helper: Linux only')
-  if (uid() !== 0) throw new Error('asight setup-helper: must run as root (sudo)')
+  if (process.platform !== 'linux') throw new Error('trocar setup-helper: Linux only')
+  if (uid() !== 0) throw new Error('trocar setup-helper: must run as root (sudo)')
 }
 
 // Mount options for the filesystem that contains `p`, from /proc/self/mountinfo (longest match).
@@ -57,11 +57,11 @@ function mountOptions(p) {
   return best
 }
 
-// Is the capability helper there for `asight on` to attach with? (1.6 §5「助手缺失或版本不对」: on attaches nothing and says `sudo asight setup-helper`.)
+// Is the capability helper there for `trocar on` to attach with? (1.6 §5「助手缺失或版本不对」: on attaches nothing and says `sudo trocar setup-helper`.)
 // → { ok: true } | { ok: false, reason }: the file is at its fixed path, a regular executable, and carries the file capabilities (`getcap`, through
 // src/off/exec.mjs: a test injects `run`; a machine without getcap is not a refusal — the capabilities are then unchecked, not missing). What this does
 // NOT ask is the protocol version: that needs the loader to run, which only the daemon does; a helper of another protocol is refused by the daemon at start
-// (`helper-version-mismatch`) and `asight on` reports it from the daemon's answer.
+// (`helper-version-mismatch`) and `trocar on` reports it from the daemon's answer.
 export function helperState({ cfg = DEFAULTS, run = null, fsys = fs } = {}) {
   let st
   try { st = fsys.statSync(cfg.helperBin) } catch (e) { return { ok: false, reason: `${cfg.helperBin} is not there (${e.code || e.message})` } }
@@ -76,7 +76,7 @@ export function helperState({ cfg = DEFAULTS, run = null, fsys = fs } = {}) {
 
 // A setup-helper killed between its copy and its rename leaves the staged copy behind — possibly already capped.
 // Only setup-helper ever writes these names, so the next setup-helper and setup-helper --remove delete them and say so.
-const STAGED = /^\.asight-redirector\.new\.\d+$/
+const STAGED = /^\.trocar-redirector\.new\.\d+$/
 export function sweepStaged(dir, keep = null) {
   let names
   try { names = fs.readdirSync(dir) } catch (e) { if (e.code === 'ENOENT') return []; throw e }
@@ -88,12 +88,12 @@ export function setupHelper(opts = {}) {
   requireRoot()
   const cfg = { ...DEFAULTS, ...opts }
   const src = opts.binarySrc
-  if (!src || !exists(src)) throw new Error('asight setup-helper: built binarySrc not found: ' + src)
+  if (!src || !exists(src)) throw new Error('trocar setup-helper: built binarySrc not found: ' + src)
 
   // Refuse a nosuid/noexec mount: file caps are ineffective there (and exec may be blocked).
   const mopts = mountOptions(cfg.helperDir) || mountOptions(path.dirname(cfg.helperDir))
   if (mopts && /(^|,)(nosuid|noexec)(,|$)/.test(mopts)) {
-    throw new Error(`asight setup-helper: ${cfg.helperDir} is on a ${mopts.includes('noexec') ? 'noexec' : 'nosuid'} mount`)
+    throw new Error(`trocar setup-helper: ${cfg.helperDir} is on a ${mopts.includes('noexec') ? 'noexec' : 'nosuid'} mount`)
   }
 
   fs.mkdirSync(cfg.helperDir, { recursive: true, mode: 0o755 })
@@ -103,7 +103,7 @@ export function setupHelper(opts = {}) {
   // Install atomically: stage into a temp file in the SAME dir, cap it, verify, then rename over
   // the live path. rename(2) swaps the inode, so a loader currently executing the old helper keeps
   // running (no ETXTBSY) and the path is never visible without its caps (D36 review #6).
-  const tmp = path.join(cfg.helperDir, `.asight-redirector.new.${process.pid}`)
+  const tmp = path.join(cfg.helperDir, `.trocar-redirector.new.${process.pid}`)
   const swept = sweepStaged(cfg.helperDir, path.basename(tmp))
   const srcSha = sha(src)
   try {
@@ -111,9 +111,9 @@ export function setupHelper(opts = {}) {
     fs.chmodSync(tmp, 0o755)
     try { fs.chownSync(tmp, 0, 0) } catch {}
     // Copy-integrity check: the installed bytes equal the source bytes (NOT a build-provenance check).
-    if (sha(tmp) !== srcSha) throw new Error('asight setup-helper: copy integrity check failed (installed bytes != source)')
+    if (sha(tmp) !== srcSha) throw new Error('trocar setup-helper: copy integrity check failed (installed bytes != source)')
     const setcap = run('setcap', [cfg.caps, tmp])
-    if (setcap.code !== 0) throw new Error('asight setup-helper: setcap failed: ' + (setcap.err || setcap.out))
+    if (setcap.code !== 0) throw new Error('trocar setup-helper: setcap failed: ' + (setcap.err || setcap.out))
     // getcap prints the path then the caps in capability-NUMBER order (cap_net_admin=12,
     // cap_perfmon=38, cap_bpf=39) at a flag suffix. Require EXACTLY these three caps at =ep
     // (effective+permitted) and nothing else — no extra cap, and no inheritable ('i') bit.
@@ -123,7 +123,7 @@ export function setupHelper(opts = {}) {
     const gotFlags = m ? m[2].split('').sort().join('') : ''
     const wantCaps = ['cap_bpf', 'cap_net_admin', 'cap_perfmon'].sort()
     if (JSON.stringify(gotCaps) !== JSON.stringify(wantCaps) || gotFlags !== 'ep') {
-      throw new Error(`asight setup-helper: unexpected caps ${JSON.stringify(capPart)} (want exactly cap_bpf,cap_net_admin,cap_perfmon=ep)`)
+      throw new Error(`trocar setup-helper: unexpected caps ${JSON.stringify(capPart)} (want exactly cap_bpf,cap_net_admin,cap_perfmon=ep)`)
     }
     fs.renameSync(tmp, cfg.helperBin) // atomic swap over any running loader
   } catch (e) {
@@ -150,12 +150,12 @@ export function uninstallHelper(opts = {}) {
   return { ok: true, removed: true, warnings, swept }
 }
 
-// Minimal CLI for the lab driver (the product command is `asight setup-helper`).
+// Minimal CLI for the test rig (the product command is `trocar setup-helper`).
 if (import.meta.url === `file://${process.argv[1]}`) {
   const cmd = process.argv[2]
   const j = (x) => console.log(JSON.stringify(x))
   try {
-    if (cmd === 'setup-helper') j(setupHelper({ binarySrc: process.env.ASIGHT_HELPER_SRC }))
+    if (cmd === 'setup-helper') j(setupHelper({ binarySrc: process.env.TROCAR_HELPER_SRC }))
     else if (cmd === 'uninstall-helper') j(uninstallHelper())
     else { console.error('usage: install.mjs setup-helper|uninstall-helper'); process.exit(2) }
   } catch (e) { console.error(String(e.message || e)); process.exit(1) }

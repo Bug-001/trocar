@@ -95,7 +95,7 @@ export function serviceRowHtml(h, v, { open = false } = {}) {
   const condLine = (k) => {
     const t = when(k.since)
     if (k.kind === 'untrusted' || k.kind === 'negative-cache') {
-      const what = k.kind === 'negative-cache' ? kindWord(k) || UNKNOWN_REASON : `a process of no known agent does not trust asight (${k.code || k.reason || UNKNOWN_REASON})`
+      const what = k.kind === 'negative-cache' ? kindWord(k) || UNKNOWN_REASON : `a process of no known agent does not trust trocar (${k.code || k.reason || UNKNOWN_REASON})`
       return `<p>${esc(what)} · since ${t}</p>`
     }
     if (k.kind === 'state-mismatch') return `<p>wanted ${esc(SWITCH_WORD[k.desired] || k.desired || '?')}, actually ${esc(SWITCH_WORD[k.actual] || k.actual || '?')} · since ${t}</p>`
@@ -123,7 +123,7 @@ export function serviceRowHtml(h, v, { open = false } = {}) {
     `<div class="cexp" id="cap-svc-x"${open ? '' : ' hidden'}>${serviceTechHtml(h, v)}</div></div>`
 }
 
-// the 采集服务 row's 技术细节: the daemon's pid / since / error, the processes holding asight, the relayed streams, an unseen
+// the 采集服务 row's 技术细节: the daemon's pid / since / error, the processes holding trocar, the relayed streams, an unseen
 // state as it came, the read problems, the commands, and the copy of the fields this row used (metadata only)
 function serviceTechHtml(h, v) {
   const d = (h && h.daemon) || {}
@@ -209,14 +209,14 @@ function whyHtml(row) {
   return `<dt>Why, and what to do</dt><dd>${ps.join('')}</dd>`
 }
 
-// asight 为它改了 — the `changed[]` items of this harness (path · what) plus the removal sentence; information only, no undo
+// trocar 为它改了 — the `changed[]` items of this harness (path · what) plus the removal sentence; information only, no undo
 // control (`undo` sits in 技术细节). No item → the whole section is not drawn, 「没有改动」 is never said.
 function changesFor(row, h) {
   const items = list(h && h.changed).filter((e) => e && e.harness != null && harnessKey(e.harness) === row.harness)
   if (!items.length) return null
   const lines = items.map((e) => `<p>${mono(e.path || '')} ${mono(e.what || '')}</p>`)
   lines.push(`<p class="fine">${esc(CHANGE_REMOVAL)}</p>`)
-  return `<dt>Changed for it by asight</dt><dd>${lines.join('')}</dd>`
+  return `<dt>Changed for it by trocar</dt><dd>${lines.join('')}</dd>`
 }
 
 // an agent row's 技术细节: the condition codes / pids / hosts, the routing and branches (redacted), the running processes, the
@@ -243,7 +243,7 @@ function agentTechHtml(row, h) {
     for (const p of list(t.running)) if (p && p.pid != null) rows.push(['process', M(`${p.pid}${p.note ? ` · ${p.note}` : ''}`)])
     for (const n of list(t.notes)) if (n != null) rows.push(['note', String(n)])
     for (const f of list(t.findings)) if (f != null) rows.push(['finding code', M(String(f))])
-    if (t.routing === 'proxy') rows.push(['VPN', `if your VPN routes by process, it sees asight as the source, not ${harnessName(row.harness)}`])
+    if (t.routing === 'proxy') rows.push(['VPN', `if your VPN routes by process, it sees trocar as the source, not ${harnessName(row.harness)}`])
   }
   for (const e of list(h && h.changed)) if (e && e.harness != null && harnessKey(e.harness) === row.harness && e.undo) rows.push([`undo ${e.path || ''}`, M(e.undo)])
   rows.push(...commandsHtml(commandsFor(h, { row })))
@@ -251,7 +251,7 @@ function agentTechHtml(row, h) {
   return detailsHtml(`cap-${row.harness}-tech`, rows) + `<div class="capcopy">${diagCopy(used)}</div>`
 }
 
-// ── asight 在这台电脑上做的改动 (1.9 §改动块) — the changes that are no harness's; information only, no undo ────
+// ── trocar 在这台电脑上做的改动 (1.9 §改动块) — the changes that are no harness's; information only, no undo ────
 // Auto-expands when the install left something pending or the install record cannot be read.
 export function changesHtml(h) {
   const items = list(h && h.changed).filter((e) => e && e.harness == null)
@@ -265,8 +265,8 @@ export function changesHtml(h) {
   }
   if (manifest.length) lines.push('<p>The install manifest could not be read</p>')
   const tech = manifest.length ? detailsHtml('cap-changes-tech', manifest.map((e) => ['could not be read', String(e.reason ?? '')])) : ''
-  return `<section class="cblock" aria-label="Changes asight made on this computer">` +
-    disclosureHtml({ id: 'cap-changes', title: `Changes asight made on this computer · ${items.length + pending.length}`, body: lines.join('') + tech, open: pending.length > 0 || manifest.length > 0 }) + `</section>`
+  return `<section class="cblock" aria-label="Changes trocar made on this computer">` +
+    disclosureHtml({ id: 'cap-changes', title: `Changes trocar made on this computer · ${items.length + pending.length}`, body: lines.join('') + tech, open: pending.length > 0 || manifest.length > 0 }) + `</section>`
 }
 
 // the whole page in one string: the table (采集服务 row + one row per agent, in row order) and the blocks under it.

@@ -1,4 +1,4 @@
-// labels/capture.mjs — the words of the capture page and the capture log. Every table keys ONLY asight's own closed sets for
+// labels/capture.mjs — the words of the capture page and the capture log. Every table keys ONLY trocar's own closed sets for
 // states that are not failures (the not_captured classes, the failure events that are not (where, code) pairs, the
 // install-manifest roles). A failure's sentence — and an install / uninstall note's or residue result's — is never here:
 // it is the CLI's one table (src/cli/words.mjs FAILURE_WORDS, via failureBrief). A harness-defined code is never a key
@@ -38,7 +38,7 @@ export const NOT_CAPTURED_EXPECTED = Object.freeze({
 // ── a residue result that is not a failure (every other result code is worded by the CLI's FAILURE_WORDS, failureWord) ──
 export const CODE = Object.freeze({ ok: 'trusted' })
 
-// ── 安装清单里 asight 自己的文件(roles)────────────────────────────────────────────────────────────────────
+// ── 安装清单里 trocar 自己的文件(roles)────────────────────────────────────────────────────────────────────
 export const FILE_ROLE = Object.freeze({
   'ca-key': "the capture certificate's private key", 'ca-cert': 'capture certificate', unit: 'login item', bundle: 'merged certificate bundle',
   'trust-file': 'certificate file for the agent', plugin: 'trust plugin', shim: 'launch shim',
@@ -55,8 +55,8 @@ export const CHANGE_REMOVAL = 'removed when its capture is turned off'
 // ── 命令(只出现在技术细节;每条都是 1.6 命令表 src/cli/commands.mjs 里的用法,cli-commands.test.mjs 守)──────────
 // <id> 由页面按 status 文档 harnesses 的键填(前端不另存 CLI 名表)
 export const COMMANDS = Object.freeze({
-  on: 'asight on <id>', off: 'asight off <id>', status: 'asight status <id>', doctor: 'asight doctor <id>',
-  install: 'asight install', board: 'asight board', setFull: 'asight classes set <class> full', setLog: 'asight classes set <class> log', helper: 'sudo asight setup-helper', linger: 'loginctl enable-linger',
+  on: 'trocar on <id>', off: 'trocar off <id>', status: 'trocar status <id>', doctor: 'trocar doctor <id>',
+  install: 'trocar install', board: 'trocar board', setFull: 'trocar classes set <class> full', setLog: 'trocar classes set <class> log', helper: 'sudo trocar setup-helper', linger: 'loginctl enable-linger',
 })
 
 // ── `errors[].where` of the C.3 document this board reads (the closed set src/health/codes.mjs DOC_WHERE; not importable here) ──
@@ -66,9 +66,9 @@ export const ERR_WHERE = Object.freeze({ health: 'capture health', manifest: 'th
 export const CTL = Object.freeze({
   setup: 'Set up', turnOn: 'Start capturing', turnOff: 'Stop capturing',
   switchLabel: (name) => `Capture ${name}`,
-  askOn: (name) => `Start capturing ${name}? Its new connections are recorded; asight writes these files:`,
-  askOff: (name) => `Stop capturing ${name}? Its new connections are no longer recorded; asight undoes these changes:`,
-  askSetup: (name) => `Set up ${name}? asight adds what ${name} still needs to be captured:`,
+  askOn: (name) => `Start capturing ${name}? Its new connections are recorded; trocar writes these files:`,
+  askOff: (name) => `Stop capturing ${name}? Its new connections are no longer recorded; trocar undoes these changes:`,
+  askSetup: (name) => `Set up ${name}? trocar adds what ${name} still needs to be captured:`,
   stale: 'The computer changed since the last plan; this is the new plan.',
   noFiles: 'No file changes.',
   doneOn: 'On; new connections are captured', doneOff: 'Off; new connections are not captured', doneSetup: 'Set up done',

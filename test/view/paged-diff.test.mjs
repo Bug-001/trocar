@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 //     ◆new       1/376   →  375/376
 //     ⊖ removed  present →  silently gone
 // i.e. "this step re-sent 42 bytes, 1 block is new" inverted into "689 KB, everything is new", in
-// the exact view asight exists to provide, with nothing marking it unreliable.
+// the exact view trocar exists to provide, with nothing marking it unreliable.
 //
 // The guards were correct; they had simply never been exercised, because the board never sent
 // cursor/limit, so no call was ever slimmed. Paging is what made a dormant bug reachable.

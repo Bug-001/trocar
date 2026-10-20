@@ -50,7 +50,7 @@ test('CM24 · daemon up: a holder the daemon names (GET /holders over its real e
     const before = tree(w.home)
     const { receipt, exit } = await uninstall(w)
     assert.deepEqual([exit, receipt.error && receipt.error.code], [1, 'collectors-online'])
-    assert.ok(receipt.problems.some((p) => p.includes('asight off') && p.includes('asight uninstall')), 'the refusal gives the steps: asight off, then asight uninstall (1.6 §9.6 collectors-online)')
+    assert.ok(receipt.problems.some((p) => p.includes('trocar off') && p.includes('trocar uninstall')), 'the refusal gives the steps: trocar off, then trocar uninstall (1.6 §9.6 collectors-online)')
     assert.match(receipt.problems.join('\n'), /codex \(pid 4242\)/)
     assert.deepEqual(tree(w.home), before, 'not one file changed')
     const purged = await uninstall(w, {}, { purgeData: true }) // the receipt of a refused --purge-data says the captures stay (it said 「采集数据已删」)
@@ -89,10 +89,10 @@ test('CM24 · offline: LIFO — the wrapper back, the plugin and its loader line
   const { receipt, exit } = await uninstall(w)
   assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
   assert.deepEqual(fs.readFileSync(w.kimi), MACHO, 'the real kimi is back in place')
-  assert.equal(fs.existsSync(path.join(w.home, '.kimi-code', 'bin', '.asight-real')), false)
+  assert.equal(fs.existsSync(path.join(w.home, '.kimi-code', 'bin', '.trocar-real')), false)
   assert.equal(fs.readFileSync(w.env.SSL_CERT_FILE, 'utf8'), USER_PEM, 'the pem-block is gone, the user\'s file byte for byte')
-  assert.deepEqual(fs.readdirSync(path.join(w.home, '.dsh')).filter((n) => n.startsWith('asight-')), [], 'the plugin is gone')
-  assert.ok(!fs.existsSync(path.join(w.home, '.dsh', 'cordis.patch.yml')) || !/asight/.test(fs.readFileSync(path.join(w.home, '.dsh', 'cordis.patch.yml'), 'utf8')), 'and its loader line')
+  assert.deepEqual(fs.readdirSync(path.join(w.home, '.dsh')).filter((n) => n.startsWith('trocar-')), [], 'the plugin is gone')
+  assert.ok(!fs.existsSync(path.join(w.home, '.dsh', 'cordis.patch.yml')) || !/trocar/.test(fs.readFileSync(path.join(w.home, '.dsh', 'cordis.patch.yml'), 'utf8')), 'and its loader line')
   const zc = path.join(w.home, '.zcode', 'cli', 'config.json')
   assert.ok(!fs.existsSync(zc) || !/caCertFile/.test(fs.readFileSync(zc, 'utf8')), 'Z-Code\'s key is gone')
   assert.ok(seq.some((s) => s.startsWith('exec:security')), `the root store was asked (${seq.join(', ')})`)
@@ -135,24 +135,24 @@ test('rule U · the block Claude Code and Kimi Code share comes out once: the us
   assert.deepEqual([at('changed').length, at('skipped'), at('left')], [1, [], []], JSON.stringify(receipt.changed))
 })
 
-// invariant 5: uninstall leaves nothing of asight's but the captures — the darwin signing helper install put in ~/.asight/bin goes too, after the key;
+// invariant 5: uninstall leaves nothing of trocar's but the captures — the darwin signing helper install put in ~/.trocar/bin goes too, after the key;
 // while the key could not be removed (the custody unreachable), the helper stays with its record: the next uninstall needs it
-const leftUnder = (home) => { const out = []; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); if (p.includes(`${path.sep}flows`)) continue; if (fs.lstatSync(p).isDirectory()) walk(p); else out.push(path.relative(home, p)) } }; if (fs.existsSync(path.join(home, '.asight'))) walk(path.join(home, '.asight')); return out }
-test('invariant 5 · offline uninstall: ~/.asight keeps only the captures — the signing helper and ~/.asight/bin go after the key', async () => {
+const leftUnder = (home) => { const out = []; const walk = (d) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); if (p.includes(`${path.sep}flows`)) continue; if (fs.lstatSync(p).isDirectory()) walk(p); else out.push(path.relative(home, p)) } }; if (fs.existsSync(path.join(home, '.trocar'))) walk(path.join(home, '.trocar')); return out }
+test('invariant 5 · offline uninstall: ~/.trocar keeps only the captures — the signing helper and ~/.trocar/bin go after the key', async () => {
   const w = await installed()
-  const helper = path.join(w.home, '.asight', 'bin', 'asight-sign-helper')
+  const helper = path.join(w.home, '.trocar', 'bin', 'trocar-sign-helper')
   fs.writeFileSync(helper, MACHO, { mode: 0o755 })
   fs.writeFileSync(path.join(w.dir, 'board.token'), 'A'.repeat(43), { mode: 0o600 }) // the daemon's board token (4.4: it goes with uninstall)
   const { receipt, exit } = await uninstall(w)
   assert.equal(exit, 0, JSON.stringify({ p: receipt.problems, l: receipt.left }))
-  assert.deepEqual(leftUnder(w.home), [], 'nothing of asight\'s but the captures')
+  assert.deepEqual(leftUnder(w.home), [], 'nothing of trocar\'s but the captures')
   assert.equal(fs.existsSync(path.join(w.dir, 'board.token')), false)
-  assert.equal(fs.existsSync(path.join(w.home, '.asight', 'bin')), false)
+  assert.equal(fs.existsSync(path.join(w.home, '.trocar', 'bin')), false)
   assert.ok(receipt.removed.includes(helper))
 })
 test('invariant 5 · D38: a key the custody cannot reach now stays recorded, listed as left, and its signing helper stays for the next uninstall', async () => {
   const w = await installed()
-  const helper = path.join(w.home, '.asight', 'bin', 'asight-sign-helper')
+  const helper = path.join(w.home, '.trocar', 'bin', 'trocar-sign-helper')
   fs.writeFileSync(helper, MACHO, { mode: 0o755 })
   w.custody.switches.unavailable = true
   const { receipt, exit } = await uninstall(w)
@@ -164,14 +164,14 @@ test('invariant 5 · D38: a key the custody cannot reach now stays recorded, lis
 
 // 0.2:130 (D46): the daemon's console logs, which launchd writes (the LaunchAgent's StandardOutPath / StandardErrorPath, 4.9) and which no manifest
 // entry names on the model path, go with uninstall once the daemon has stopped; the user's files stay byte for byte; a refused uninstall leaves them
-const userTree = (home) => Object.fromEntries(Object.entries(tree(home)).filter(([p]) => !p.startsWith(path.join(home, '.asight'))).map(([p, b]) => [path.relative(home, p), b]))
+const userTree = (home) => Object.fromEntries(Object.entries(tree(home)).filter(([p]) => !p.startsWith(path.join(home, '.trocar'))).map(([p, b]) => [path.relative(home, p), b]))
 const withLogs = (w) => {
   const logs = path.join(w.dir, 'logs')
   fs.mkdirSync(logs, { recursive: true })
   for (const n of ['daemon-out.log', 'daemon-err.log']) fs.writeFileSync(path.join(logs, n), `${n}: what launchd caught\n`)
   return logs
 }
-test('0.2:130 · offline uninstall removes ~/.asight/collector/logs (daemon-out / daemon-err) — the user\'s files byte for byte', async () => {
+test('0.2:130 · offline uninstall removes ~/.trocar/collector/logs (daemon-out / daemon-err) — the user\'s files byte for byte', async () => {
   const w = await installed()
   const twin = await installed() // the same uninstall with no logs: what it leaves of the user's is the yardstick
   const logs = withLogs(w)
@@ -180,7 +180,7 @@ test('0.2:130 · offline uninstall removes ~/.asight/collector/logs (daemon-out 
   assert.equal(fs.existsSync(logs), false, `the daemon's logs are gone: ${leftUnder(w.home).join(', ')}`)
   assert.ok(receipt.removed.includes(logs), 'the receipt names them')
   assert.equal((await uninstall(twin)).exit, 0)
-  assert.deepEqual(userTree(w.home), userTree(twin.home), 'outside ~/.asight the user\'s files are byte for byte what the same uninstall leaves without logs')
+  assert.deepEqual(userTree(w.home), userTree(twin.home), 'outside ~/.trocar the user\'s files are byte for byte what the same uninstall leaves without logs')
 })
 test('0.2:130 · a refused uninstall (collectors-online) leaves the daemon\'s logs', async () => {
   const w = await installed()
@@ -224,7 +224,7 @@ test('invariant 2 · --purge-data on a clean run deletes the captures (the negat
 
 // D38 · P5 (Windows test machine 2026-10-18): removing a root asks the operator, and a question nobody answers (or a tool that exits 0 while the root stays)
 // must not read as "removed" — uninstall exited 1 with nothing naming the certificate, and the manifest went anyway, so the machine kept trusting
-// asight and the next uninstall said nothing was installed. Generated along the ways the store can keep the root.
+// trocar and the next uninstall said nothing was installed. Generated along the ways the store can keep the root.
 const KEPT_ROOT = {
   'the removal reports success, the store still holds it': { remove: () => ({ ok: true }), has: () => ({ present: true }) },
   'the removal fails': { remove: () => ({ ok: false, reason: 'certutil -user -delstore failed (exit none)' }), has: () => ({ present: true }) },

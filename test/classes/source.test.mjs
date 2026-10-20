@@ -15,7 +15,7 @@ const write = (home, keep) => fs.writeFileSync(path.join(home, 'classes.json'), 
 const sample = (src) => { const cls = src.classOf(CALL); return { class: cls, level: src.keepOf(cls) } }
 
 test('an edit applies within 1 s and only to calls that start after it; a call already in flight keeps its level', () => {
-  const home = tmpDir('asight-cs-')
+  const home = tmpDir('trocar-cs-')
   let t = 1_000_000
   const src = createClassSource({ home, now: () => t })
   assert.deepEqual(sample(src), { class: 'llm', level: 'full' }, 'no file: the builtin table, every class full')
@@ -29,7 +29,7 @@ test('an edit applies within 1 s and only to calls that start after it; a call a
 })
 
 test('an unparsable classes.json falls back to the builtin table with ONE failure event per state change, and classifying goes on', () => {
-  const home = tmpDir('asight-cs-')
+  const home = tmpDir('trocar-cs-')
   write(home, 'log')
   let t = 1_000_000
   const recs = []
@@ -47,7 +47,7 @@ test('an unparsable classes.json falls back to the builtin table with ONE failur
 })
 
 test('a rule that does not compile is `pattern-invalid` (4.6 §记录), the rest of the table still classifies', () => {
-  const home = tmpDir('asight-cs-')
+  const home = tmpDir('trocar-cs-')
   fs.writeFileSync(path.join(home, 'classes.json'), JSON.stringify({ version: 1, classes: [{ class: 'mine', keep: 'log', rules: [{ host: '(' }, { host: 'api\\.example\\.test' }] }] }))
   const recs = []
   const src = createClassSource({ home, onFailure: (r) => recs.push(r) })

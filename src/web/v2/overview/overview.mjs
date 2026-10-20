@@ -2,7 +2,7 @@
 // is there anything to handle, what did the agents cost. Four cards (采集 · 要处理的事 · 统计 · 最近的会话; first run swaps
 // the last two for 开始使用). Every number names its source: stats come ONLY from the C.5 `overview` document (D24), the
 // recent list is live from `sessions`, and the two are allowed to disagree by a few sessions — the stats card says 截至,
-// it never back-fills from the live list. The disk footer is `classes.disk.asight_bytes`.
+// it never back-fills from the live list. The disk footer is `classes.disk.trocar_bytes`.
 // Polls (1.5 §轮询): `status` every CAPH_MS and `sessions` every 3 s while visible; classes · pricing · overview(window) ·
 // segments · traffic(24h) on open, on window change and every 30 s. Hidden stops everything; coming back reads at
 // once. All reads are GET; the page holds no button but the window links, the 技术细节 disclosures and 重试 (invariant 1) —
@@ -211,10 +211,10 @@ export function recentRows(sessionsData) {
   }))
 }
 
-// ── 盘上占用 · the stats card's footer: `classes.disk.asight_bytes`, or nothing when the classes read failed ─────────
+// ── 盘上占用 · the stats card's footer: `classes.disk.trocar_bytes`, or nothing when the classes read failed ─────────
 export function diskBytes(slot) {
   if (!slot || slot.ok === false || !slot.data || !slot.data.disk) return null
-  return num(slot.data.disk.asight_bytes)
+  return num(slot.data.disk.trocar_bytes)
 }
 
 // ── renderers (string level) ─────────────────────────────────────────────────────────────────────────────────────────
@@ -343,8 +343,8 @@ export function recentCardHtml(s, now) {
     `<p class="ovgo"><a href="#/sessions">${esc(W.ALL_SESSIONS)}</a></p></section>`
 }
 
-// 开始使用: what asight records, where, what it never does, what happens next; the install command (technical details) only
-// while asight is not installed — the board installs nothing (D55① · D61①)
+// 开始使用: what trocar records, where, what it never does, what happens next; the install command (technical details) only
+// while trocar is not installed — the board installs nothing (D55① · D61①)
 export function firstUseHtml(s) {
   const h = s && s.caph && s.caph.data && s.caph.data.health
   return `<section class="ovcard start" aria-label="${esc(W.CARD.start)}"><h2 class="ovh">${esc(W.CARD.start)}</h2>` +
@@ -379,7 +379,7 @@ function agentRowsHtml(s) {
     }).join('') + `</section>`
 }
 
-// a row the board cannot act on: the command that does it, under technical details (1.9 §开关) — install while asight is
+// a row the board cannot act on: the command that does it, under technical details (1.9 §开关) — install while trocar is
 // not installed or left residue, else on / off spelt the way the status document keys this harness (none when it is unkeyed)
 function rowCommandsHtml(m, r) {
   const cmd = (c) => `<code>${esc(c.replace('<id>', r.cliId))}</code>`

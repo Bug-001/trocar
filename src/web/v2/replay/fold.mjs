@@ -3,7 +3,7 @@
 // compaction the anchor content changes, so the turn falls back to its default (the right behaviour).
 // Persisted as an array of [key, bool] pairs (an object would reorder integer-like keys, and order is what "oldest" means).
 // `storage` is anything with getItem/setItem (localStorage, or a fake in a test); null / a throwing one is tolerated.
-export const FOLD_KEY = 'asight.v2.turnfold'
+export const FOLD_KEY = 'trocar.v2.turnfold'
 export const FOLD_CAP = 2000
 
 export function loadFold(storage) {

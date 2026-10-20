@@ -1,4 +1,4 @@
-// src/query/disk.mjs — what ~/.asight takes on disk, and how well the sealed files compress (RFC 3.5 「保存什么」行, 4.4
+// src/query/disk.mjs — what ~/.trocar takes on disk, and how well the sealed files compress (RFC 3.5 「保存什么」行, 4.4
 // /api/retention, 2.6 §D 页脚). Both are about FILES, so they come from the file system and nothing else:
 //   diskUsage()  walks the home with lstat — only sizes, never a file's content, never through a symbolic link (a link counts as
 //                the link) — and adds them up by what the file is. Live: no cache, whatever is on the disk now.
@@ -10,7 +10,7 @@
 import fsp from 'node:fs/promises';
 import nodeFs from 'node:fs';
 import path from 'node:path';
-import { asightHome } from '../paths.mjs';
+import { trocarHome } from '../paths.mjs';
 import { readIndex, R } from '../raw/format.mjs';
 
 export const DISK_GROUPS = Object.freeze(['records', 'sealed', 'index', 'logs', 'other']);
@@ -30,7 +30,7 @@ export function groupOf(rel) {
  * diskUsage({home, fs}) → {home, source:'lstat', generated_at, files, total_bytes, groups:{<group>:{files, bytes}}, unreadable:[{path, error}], sealed_paths:[…]}
  * total_bytes = the sum of the file sizes found; when `unreadable` is not empty it is a floor, and the caller says so.
  */
-export async function diskUsage({ home = asightHome(), fs = fsp, now = Date.now } = {}) {
+export async function diskUsage({ home = trocarHome(), fs = fsp, now = Date.now } = {}) {
   const groups = Object.fromEntries(DISK_GROUPS.map((g) => [g, { files: 0, bytes: 0 }]));
   const unreadable = [], sealedPaths = [];
   let files = 0, total = 0;

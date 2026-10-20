@@ -1,7 +1,7 @@
 // test/off/v2-refusal.test.mjs — CM29 (4.11 ruling ⑰, plan decision #11): a manifest of version 1 or 2 (written before the collector model) is never
-// migrated in-tree. Every command that can write — on, off, uninstall, the standalone asight-off — refuses it BEFORE ANY write (the standalone copy
-// ~/.asight/bin/asight-off is not overwritten either), exits 1, and names the tools that undo it in order: the asight from main before the collector
-// model (`asight off`, then `asight uninstall`), then the standalone copy, printed on Windows as `node "<path>"`. Cases are generated over
+// migrated in-tree. Every command that can write — on, off, uninstall, the standalone trocar-off — refuses it BEFORE ANY write (the standalone copy
+// ~/.trocar/bin/trocar-off is not overwritten either), exits 1, and names the tools that undo it in order: the trocar from main before the collector
+// model (`trocar off`, then `trocar uninstall`), then the standalone copy, printed on Windows as `node "<path>"`. Cases are generated over
 // command × platform × manifest version; every write call of the injected fs is recorded and the sandbox HOME is compared byte for byte.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -33,15 +33,15 @@ function snapshot(root) {
 }
 const fakeIo = () => { const lines = []; return { out: (s) => lines.push(String(s)), err: (s) => lines.push(String(s)), stdin: { isTTY: false }, stdout: { isTTY: false, write: () => true }, stderr: { isTTY: false, write: () => true }, text: () => lines.join('\n') } }
 
-const OLD_COPY = '#!/usr/bin/env node\n// asight-off version 10 (the copy the asight that wrote this manifest made)\n'
+const OLD_COPY = '#!/usr/bin/env node\n// trocar-off version 10 (the copy the trocar that wrote this manifest made)\n'
 function v2Home(version) {
-  const home = tmpDir('asight-v2-')
-  const dir = path.join(home, '.asight', 'collector')
+  const home = tmpDir('trocar-v2-')
+  const dir = path.join(home, '.trocar', 'collector')
   fs.mkdirSync(dir, { recursive: true })
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
   const settings = path.join(home, '.claude', 'settings.json')
-  fs.writeFileSync(settings, '{"env":{"NODE_EXTRA_CA_CERTS":"/h/.asight/collector/ca/asight-ca.pem"}}\n')
-  const doc = { ...(version === 1 ? {} : { version }), complete: true, entries: [{ kind: 'json-key', harness: 'claude-code', path: settings, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: '/h/.asight/collector/ca/asight-ca.pem', backup: null }], files: [] }
+  fs.writeFileSync(settings, '{"env":{"NODE_EXTRA_CA_CERTS":"/h/.trocar/collector/ca/trocar-ca.pem"}}\n')
+  const doc = { ...(version === 1 ? {} : { version }), complete: true, entries: [{ kind: 'json-key', harness: 'claude-code', path: settings, keys: ['env', 'NODE_EXTRA_CA_CERTS'], value: '/h/.trocar/collector/ca/trocar-ca.pem', backup: null }], files: [] }
   fs.writeFileSync(path.join(dir, 'install-manifest.json'), JSON.stringify(doc))
   fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ version: 2, updated_at: 'T0', harnesses: { 'claude-code': { desired: 'on', updated_at: 'T0' } } }))
   fs.mkdirSync(path.dirname(standalonePath(home)), { recursive: true })
@@ -72,7 +72,7 @@ for (const [cmd, run] of Object.entries(COMMANDS)) {
         assert.equal(exit, 1, io.text())
         const copy = standalonePath(home)
         const text = io.text().slice(io.text().indexOf('Undo it first')) // the guidance, not the heading a failed uninstall prints above it
-        const main = text.indexOf('asight off'), un = text.indexOf('asight uninstall'), named = text.indexOf(copy) // the path keeps a line of its own, however the line is wrapped (§1.1 版式 6)
+        const main = text.indexOf('trocar off'), un = text.indexOf('trocar uninstall'), named = text.indexOf(copy) // the path keeps a line of its own, however the line is wrapped (§1.1 版式 6)
         assert.ok(main >= 0 && un > main && named > un, `the old build's off, then its uninstall, then the copy — in that order:\n${text}`)
         assert.match(io.text(), new RegExp(`version ${version}`))
       })
@@ -89,5 +89,5 @@ test('CM29 parseManifest of a version below 3 is { unsupported: "v2", version, t
   const home = v2Home(2)
   const r = refuseOldManifest({ home, platform: 'win32' })
   assert.equal(r.version, 2)
-  assert.equal(refuseOldManifest({ home: tmpDir('asight-v2-none-'), platform: 'linux' }), null, 'no manifest: nothing to refuse')
+  assert.equal(refuseOldManifest({ home: tmpDir('trocar-v2-none-'), platform: 'linux' }), null, 'no manifest: nothing to refuse')
 })

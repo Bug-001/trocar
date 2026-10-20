@@ -52,7 +52,7 @@ function replayRunner(file, args) {
 
 async function setUp() {
   if (process.platform !== 'darwin') return { skip: `darwin only (this is ${process.platform}): the real ps / lsof contract; linux runs test/collector/arch/linux/identity-real.test.mjs` }
-  const dir = tmpDir('asight-idreal-')
+  const dir = tmpDir('trocar-idreal-')
   const signed = path.join(dir, 'sleep-signed')
   fs.copyFileSync(SLEEP, signed)
   const sign = spawnSync('codesign', ['-s', '-', '-f', signed], { encoding: 'utf8' })
@@ -72,7 +72,7 @@ const skip = ctx.skip || false
 
 // A shape whose copy is no longer running is no process to ask the OS about: this machine SIGKILLs an ad-hoc-signed copy named `claude` under a
 // temp directory about a second after it starts (measured 2026-10-18: the `claude*` shapes die, the `Code Helper` ones live), which is a security
-// agent on the machine and no fact about asight. Such a shape is left out with a word about it, and a run where nothing survived is skipped, never
+// agent on the machine and no fact about trocar. Such a shape is left out with a word about it, and a run where nothing survived is skipped, never
 // a green that asserted nothing.
 const living = () => procs.filter(({ child }) => child.exitCode === null && child.signalCode === null) // call it after a turn of the loop (see `alive` below)
 const killed = () => procs.filter(({ child }) => !(child.exitCode === null && child.signalCode === null)).map(({ shape, child }) => `${shape.label} (${child.signalCode || `exit ${child.exitCode}`})`)
@@ -105,7 +105,7 @@ async function contract(runner, agentList, expectOf) {
       const off = matchHarness(liveness, row)
       if (off !== want) bad.push(`${shape.label}: matchHarness → ${off}, want ${want}`)
     }
-    if (await alive()) wrong.push(...bad) // it died while being asked: what the OS said of it is a zombie's, and no fact about asight
+    if (await alive()) wrong.push(...bad) // it died while being asked: what the OS said of it is a zombie's, and no fact about trocar
   }
   return wrong
 }

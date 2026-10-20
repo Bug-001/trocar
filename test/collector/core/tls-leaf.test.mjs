@@ -12,7 +12,7 @@ const issuer = createLeafIssuer(loadCa(raw))
 
 test('leaf: strict openssl verify against the CA, 199-day validity, SAN matches', () => {
   const { certPem } = issuer.issue('relay.example.test')
-  const dir = tmpDir('asight-leaf-')
+  const dir = tmpDir('trocar-leaf-')
   fs.writeFileSync(path.join(dir, 'ca.pem'), raw.certPem); fs.writeFileSync(path.join(dir, 'leaf.pem'), certPem)
   const out = execFileSync('openssl', ['verify', '-x509_strict', '-CAfile', path.join(dir, 'ca.pem'), path.join(dir, 'leaf.pem')]).toString()
   assert.match(out, /OK/)
@@ -40,7 +40,7 @@ test('leaf: a TLS client that trusts ONLY the CA completes a handshake for any S
 })
 
 // RFC 4.6 §身份与信任 (D38 T-7): a daemon that runs past a cached leaf's notAfter must not hand it out (the
-// client would reject it and be recorded as "does not trust asight"). Re-signed within 7 days of notAfter.
+// client would reject it and be recorded as "does not trust trocar"). Re-signed within 7 days of notAfter.
 test('leaf: a cached leaf is re-signed before it expires; the context follows it', () => {
   let t = Date.parse('2026-01-01T00:00:00Z')
   const iss = createLeafIssuer(loadCa(raw), { now: () => new Date(t) })

@@ -1,5 +1,5 @@
 // flows.mjs — read the collector's flows/ back from the newest line and fold it (D38; RFC 4.4 /api/capture-health,
-// 4.6 §记录「看得到」). Shared by the board's endpoint and `asight collector status` (src/health/read.mjs).
+// 4.6 §记录「看得到」). Shared by the board's endpoint and `trocar collector status` (src/health/read.mjs).
 //   readFlows: day files <UTC date>.ndjson newest first — until the lines read
 // reach back past the last daemon-start AND cover the 24 h window, or until `maxBytes` (then `truncated`). A missing
 // flows/ is "nothing recorded yet"; an unreadable one throws (the endpoint answers 503, never "no failures"); one
@@ -198,14 +198,14 @@ export function foldFlows(records, { now = Date.now(), windowMs = WINDOW_MS } = 
     else if (r.event === 'failure' && r.code === 'trust-rejected') rejected.set(`${r.neg_key ?? r.pid}\u0000${r.host}`, { kind: 'trust-rejected', ...pick(r), since: r.ts })
     else if (r.event === 'failure' && r.code === 'ca-invalid') ca = { kind: 'ca-invalid', ...pick(r), since: r.ts }
     else if (r.event === 'ca-ok') ca = null // the daemon found the CA usable again and rebuilt what it signs with (D1-2)
-    // D60③: ~/.asight/classes.json cannot be read or parsed (or holds an entry that is not a class): the builtin class
+    // D60③: ~/.trocar/classes.json cannot be read or parsed (or holds an entry that is not a class): the builtin class
     // table applies meanwhile, and that is a condition until classes-ok. A rule that does not compile (`pattern-invalid`),
     // or a classifier that threw, is a failure of its own (the groups below), not this condition: classes-ok does not say
     // they are fixed. (A change-log line that could not be written, `classes-log-failed`, is likewise its own failure:
     // the table itself is fine.) The retired retention.json's own condition read the same way: old flows/ still show it.
     else if (r.event === 'failure' && (r.where === 'classes' || r.where === 'retention') && !['pattern-invalid', 'classify-failed', 'retention-log-failed', 'classes-log-failed'].includes(r.code)) retention = { kind: r.where, ...pick(r), since: r.ts }
     else if (r.event === 'classes-ok' || r.event === 'retention-ok') retention = null
-    // D51③: ~/.asight/agents.json cannot be read or parsed, or holds bad items (the good ones and the presets apply meanwhile): a condition until agent-list-ok
+    // D51③: ~/.trocar/agents.json cannot be read or parsed, or holds bad items (the good ones and the presets apply meanwhile): a condition until agent-list-ok
     else if (r.event === 'failure' && r.code === 'agent-list-invalid') agentList = { kind: 'agent-list', ...pick(r), since: r.ts }
     else if (r.event === 'agent-list-ok') agentList = null
     else if (r.event === 'process-unknown' && typeof r.harness === 'string' && (typeof r.name === 'string' || r.name === null)) unknownProcs.set(`${r.harness}\u0000${r.name}`, { harness: r.harness, name: r.name, wide: r.wide === true, named: r.named === true, pid: Number.isInteger(r.pid) ? r.pid : null, door: typeof r.door === 'string' ? r.door : null, since: r.ts })

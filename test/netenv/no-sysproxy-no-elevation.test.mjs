@@ -3,7 +3,7 @@
 //   (b) no code puts a PROXY variable into the LOGIN environment or a system-wide one (login profiles, HKCU\Environment, setx, launchctl setenv), on or off: the agent's own entry (a shim that sets
 //       HTTPS_PROXY for the process tree it launches, a block in the agent's own .env) is not this scan's business — it never reaches past the launched tree;
 //   (c) no code elevates ITSELF or feeds a password to an elevator: no exec call runs sudo / runas / pkexec / gksudo — no exception (CM25: no admin step on
-//       macOS / Windows; Linux's setup-helper is run BY the user under sudo, asight never calls it).
+//       macOS / Windows; Linux's setup-helper is run BY the user under sudo, trocar never calls it).
 // The old capture is exempt by the shared pinned list (fixtures/old-capture.mjs). The reading side needs no allowlist for the exec scan — reads go
 // through the helper's read verbs (`reg-read`) and doctor's TEXT (findings.mjs), neither of which is an exec call; upstream.mjs's mentions of the registry names are data it hands the helper, not
 // args of a tool. Planted counter-examples turn each half red.
@@ -57,7 +57,7 @@ test('D43 the scan sees the whole of src/ (source and the helper\'s PowerShell),
   assert.ok(SOURCES.length > 50, 'the walk is not an empty directory')
   assert.ok(SOURCES.some((f) => rel(f) === 'src/collector/arch/win32/autostart.mjs'), 'the exec-tool user is in the walk')
   assert.ok(SOURCES.some((f) => rel(f).endsWith('.ps1')), 'the PowerShell of the helper and the opt-in scripts is in the walk')
-  assert.ok(callArgs("import { spawnSync } from 'node:child_process'\nexport const x = () => spawnSync('reg', ['add'])", RUN_CALLS).length === 1, 'and it sees a bare spawnSync call (asight imports its tools bare; a receiver is not a call this repo makes)')
+  assert.ok(callArgs("import { spawnSync } from 'node:child_process'\nexport const x = () => spawnSync('reg', ['add'])", RUN_CALLS).length === 1, 'and it sees a bare spawnSync call (trocar imports its tools bare; a receiver is not a call this repo makes)')
   assert.ok(callArgs("const v = views(x)\nconst y = overview(x)", RUN_CALLS).length === 0, 'a name that only ends in one of the call names is not a call')
 })
 
@@ -75,7 +75,7 @@ test('D43 planted counter-example: each half is red where it belongs, and the ex
   assert.match(violations('src/off/win32.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function l() { execTool('reg', ['add', 'HKCU\\\\Environment', '/v', 'HTTPS_PROXY', '/d', 'x']) }\n").join(), /proxy variable into an environment store/)
   assert.match(violations('src/collector/arch/win32/x.mjs', "import { spawnSync, execTool } from 'node:child_process'\nexport function p() { execTool('reg', ['add', 'HKCU\\\\Environment', '/v', 'Path', '/d', 'x']) }\n").join(), /^$/, 'a PATH write to HKCU\\Environment with no proxy variable: not this scan\'s')
   for (const [why, call, word] of [
-    ['sudo', "execTool('sudo', ['asight', 'setup-helper'])"],
+    ['sudo', "execTool('sudo', ['trocar', 'setup-helper'])"],
     ['RunAs', "spawnSync('powershell', ['-Command', 'Start-Process -Verb RunAs -FilePath x'])"],
     ['a login profile', "execTool('sh', ['-c', 'echo \\'export HTTPS_PROXY=…\\' >> ~/.zprofile'])"],
     ['launchctl setenv', "execTool('launchctl', ['setenv', 'HTTPS_PROXY', 'x'])", 'proxy variable into an environment store'],

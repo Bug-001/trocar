@@ -1,4 +1,4 @@
-// model-liveness.test.mjs — the liveness record `asight install` writes on macOS / Windows (4.11 P12, CM23 wiring): `rereads` and `per_request`
+// model-liveness.test.mjs — the liveness record `trocar install` writes on macOS / Windows (4.11 P12, CM23 wiring): `rereads` and `per_request`
 // come from the descriptor's proxyMode routes of the forms on that OS, so off's holder judge (holders.mjs) sees what the routes say. Generated over
 // every real descriptor × model OS; DeepSeek dsh (a per-request switch) and OpenCode (a re-read plugin route) are the regression seeds.
 import test from 'node:test'

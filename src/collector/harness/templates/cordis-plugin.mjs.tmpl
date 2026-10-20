@@ -1,11 +1,11 @@
-// asight plugin for DeepSeek dsh (spec 4.11 P9 `cordis-plugin`; lab W8 dsh-switch, R3-M6 / R3-W3). Written once by `asight install` and
+// trocar plugin for DeepSeek dsh (spec 4.11 P9 `cordis-plugin`; lab W8 dsh-switch, R3-M6 / R3-W3). Written once by `trocar install` and
 // loaded by one line of cordis.patch.yml; inert while the switch file is absent. What it does, and nothing else:
-//   trust — adds the asight root to Node's default roots in this process (appended; nothing taken away). Not under --use-openssl-ca, not
+//   trust — adds the trocar root to Node's default roots in this process (appended; nothing taken away). Not under --use-openssl-ca, not
 //           when tls.setDefaultCACertificates is missing, not when the root file is unreadable — and then it never routes either (§3 ⑦):
 //           a connection through the door with no root in the process would fail its handshake.
 //   route — wraps the undici dispatcher dsh's own proxy policy installed before plugins load. On every request it reads the switch file at
 //           the absolute path baked at install: present (it holds the door URL) and the origin is not loopback → a ProxyAgent to the door
-//           whose CONNECT carries X-Asight-Upstream = the proxy dsh itself would use for this origin (its environment, after dsh read its
+//           whose CONNECT carries X-Trocar-Upstream = the proxy dsh itself would use for this origin (its environment, after dsh read its
 //           .env), or `none` when dsh would go direct (no proxy set, its bypass list matches, or a scheme dsh does not take); absent → the
 //           prior dispatcher, exactly what dsh would have done. A changed door closes the old agent, so a switch takes effect on the next request.
 // It reads and changes no request or response bytes, connects nowhere but the door, writes no file and no agent config, never throws.
@@ -14,10 +14,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 
-const CA_FILE = __ASIGHT_CA_FILE__
-const SWITCH = __ASIGHT_SWITCH__
-const PROXY_ENV = __ASIGHT_PROXY_ENV__
-const NO_PROXY_ENV = __ASIGHT_NO_PROXY_ENV__
+const CA_FILE = __TROCAR_CA_FILE__
+const SWITCH = __TROCAR_SWITCH__
+const PROXY_ENV = __TROCAR_PROXY_ENV__
+const NO_PROXY_ENV = __TROCAR_NO_PROXY_ENV__
 const LOOPBACK = /^(localhost|127(\.\d+){3}|\[::1\]|::1|0\.0\.0\.0)$/i
 const SCHEMES = new Set(['http:', 'https:'])
 
@@ -74,10 +74,10 @@ if (rooted) try {
   }
   const agentFor = (d, up) => {
     const key = `${d}\n${up}`
-    if (!agents.has(key)) agents.set(key, new u.ProxyAgent({ uri: d, headers: { 'X-Asight-Upstream': up } }))
+    if (!agents.has(key)) agents.set(key, new u.ProxyAgent({ uri: d, headers: { 'X-Trocar-Upstream': up } }))
     return agents.get(key)
   }
-  class AsightSwitch extends u.Dispatcher {
+  class TrocarSwitch extends u.Dispatcher {
     dispatch(opts, handler) {
       let origin = null
       try { origin = new URL(String(opts.origin)) } catch { origin = null }
@@ -87,9 +87,9 @@ if (rooted) try {
     close() { return Promise.all([prior.close(), ...[...agents.values()].map((a) => a.close())]) }
     destroy(e) { return Promise.all([prior.destroy(e), ...[...agents.values()].map((a) => a.destroy(e))]) }
   }
-  u.setGlobalDispatcher(new AsightSwitch())
+  u.setGlobalDispatcher(new TrocarSwitch())
 } catch { /* a plugin never stops its host: dsh keeps its own dispatcher */ }
 
 // a cordis plugin must export apply (lab round 1, mac finding 4)
-export const name = 'asight'
+export const name = 'trocar'
 export function apply() {}

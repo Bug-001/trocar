@@ -61,7 +61,7 @@ test('helper.ps1 proc-env: same user only, QUERY_LIMITED | VM_READ, the asked na
   assert.match(body, /if \(UserOf\(h\) != OwnUser\(\)\) return .*other-user/)
   assert.match(body, /want\.Contains\(e\.Substring\(0, eq\)\)/, 'only the asked entries leave the helper')
   assert.match(body, /pStarted <= started/, 'the parent counts only when it is older than the child')
-  const snap = ps.slice(ps.indexOf('public static List<AsightProc> Snapshot'), ps.indexOf('public static string ProcsJson'))
+  const snap = ps.slice(ps.indexOf('public static List<TrocarProc> Snapshot'), ps.indexOf('public static string ProcsJson'))
   const keep = snap.indexOf('if (!all && sid != own && !p.SameUser) continue;')
   assert.ok(keep > 0, 'the session filter keeps a process of the same user in another session')
   assert.ok(snap.indexOf('p.SameUser = UserOf(h) == OwnUser()') < keep, 'the user is known before the filter asks')

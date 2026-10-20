@@ -15,7 +15,7 @@ const at = (secAgo) => new Date(NOW - secAgo * 1000).toISOString()
 const start = { ts: at(600), event: 'daemon-start', pid: 1 }
 
 test('fold: a retention failure is a condition until retention-ok; pattern-invalid and classify-failed are failures but not that condition', () => {
-  const bad = { ts: at(300), event: 'failure', where: 'retention', code: 'retention-unparsable', reason: '/h/.asight/retention.json cannot be parsed (x); every call is kept in full until it can' }
+  const bad = { ts: at(300), event: 'failure', where: 'retention', code: 'retention-unparsable', reason: '/h/.trocar/retention.json cannot be parsed (x); every call is kept in full until it can' }
   const f1 = foldFlows([start, bad], { now: NOW })
   assert.deepEqual(f1.conditions.map((c) => [c.kind, c.code, c.failure]), [['retention', 'retention-unparsable', true]])
   assert.deepEqual(f1.groups.map((g) => g.key), ['retention/retention-unparsable'])
@@ -43,7 +43,7 @@ test('every line the retention writes is in the closed sets (src/health/codes.mj
 })
 
 test('captureHealth over a real collector dir: the condition shows, the state is failing, and retention-ok takes the condition away', () => {
-  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-rh-'))
+  const h = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-rh-'))
   try {
     const c = path.join(h, 'collector'); fs.mkdirSync(path.join(c, 'flows'), { recursive: true })
     fs.writeFileSync(path.join(c, 'install-manifest.json'), JSON.stringify({ version: 3, install: { state: 'complete' }, created_at: at(9999), entries: [], files: [] }))

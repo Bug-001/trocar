@@ -1,4 +1,4 @@
-// upstream-trust.mjs — the door verifies an upstream with THIS agent's own trust set, minus the asight root (spec 4.11 §3 ⑭; 4.9 §5.4, 4.8 §6.4).
+// upstream-trust.mjs — the door verifies an upstream with THIS agent's own trust set, minus the trocar root (spec 4.11 §3 ⑭; 4.9 §5.4, 4.8 §6.4).
 // One rule for every OS and harness; the descriptor gives only data (its `trusts` entry: `base` and the sources in the agent's own precedence, each
 // `replace` or `add`). The base roots come in as `roots` (the daemon's arch reader: os = osRootsFor(<os>), node = Node's bundled roots), so no OS
 // literal lives here.
@@ -6,7 +6,7 @@
 //   trust stated otherwise                                               → the stated base + the files of the set `add` sources
 //   no trust stated, or its `when` does not hold                        → the union: OS roots ∪ Node's ∪ the daemon's extra ∪ the files the
 //                                                                          process's certificate variables name
-// The asight root is dropped from every set: an upstream never verifies through it (an agent that trusts it does so only to talk to the door).
+// The trocar root is dropped from every set: an upstream never verifies through it (an agent that trusts it does so only to talk to the door).
 import path from 'node:path'
 import crypto from 'node:crypto'
 import tls from 'node:tls'
@@ -35,7 +35,7 @@ export function agentTrustSet({ trust, ctx, facts = {} }) {
   return { base: trust.base, files: set.filter((x) => x.s.semantics === 'add').map((x) => x.file) }
 }
 
-/** A cache of verifying contexts: `contextFor(set)` → { secureContext, count } built from the base roots and the set's files, the asight root
+/** A cache of verifying contexts: `contextFor(set)` → { secureContext, count } built from the base roots and the set's files, the trocar root
  *  removed. roots = { os: async () => PEM text | PEM[], node: PEM[], extra: PEM[] }; readFile reads a file (an unreadable one adds nothing). */
 export function createAgentTrust({ roots, rootFp256, readFile }) {
   let osPems = null

@@ -372,7 +372,7 @@ export function canonUsage(usage = {}) {
 
 // ── normalize the SSE response → { model, usage, text, tool_calls, stop_reason } from resp.raw_sse.
 // The reverse-proxy's reconstruction is Anthropic-shaped (empty for OpenAI), so we read raw_sse (kept
-// via `asight capture --raw-sse`). This is the OpenAI dissector rebuilding blocks from raw events.
+// via `trocar capture --raw-sse`). This is the OpenAI dissector rebuilding blocks from raw events.
 // normEvents is the event-list half, shared with the WebSocket dissector (openai-ws.mjs), whose events
 // arrive as one server message each. A terminal response.completed / .incomplete / .failed carries the
 // output and usage; an `error` event with no terminal response is stop_reason 'error'. (Before the split an HTTP

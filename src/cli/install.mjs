@@ -1,4 +1,4 @@
-// install.mjs — `asight install [--dry-run] [--yes] [--json]` (RFC 1.6 §1.1, §1.6; 4.11 §1 install; D55). The order is the spec's: refuse root
+// install.mjs — `trocar install [--dry-run] [--yes] [--json]` (RFC 1.6 §1.1, §1.6; 4.11 §1 install; D55). The order is the spec's: refuse root
 // before anything is read; refuse a version 1 / 2 manifest before any write (4.11 ⑰); hold op.lock; print the plan and wait for a yes (not a terminal
 // and no --yes: the plan only, exit 2); run the install; print the receipt and record it as an `install-note` (R1, D38). Exit 0 all placed · 1 part of
 // it, or a refusal · 2 usage, or no terminal without --yes. macOS / Windows run the collector model (src/collector/model-install.mjs); Linux keeps
@@ -22,39 +22,39 @@ function needsYes(io, json, planned = []) {
   if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, planned, needs_yes: true, notes: [NEEDS_YES] }, null, 2)); else io.err(NEEDS_YES)
   return EXIT.usage
 }
-const USAGE = 'usage: asight install [--dry-run] [--yes] [--json]'
+const USAGE = 'usage: trocar install [--dry-run] [--yes] [--json]'
 const FLAGS = new Set(['--dry-run', '--yes', '--json'])
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 // 1.6 §3.2: the two lines every plan prints — what being installed costs, and on macOS / Windows the same-user residual risk
-const COST = "While installed, programs you run trust certificates issued by this machine's asight root. Remove it: asight uninstall"
-const RISK = 'Any program running as you can ask asight to issue a trusted certificate, but cannot copy the key. If you suspect misuse: asight uninstall, then asight install.'
+const COST = "While installed, programs you run trust certificates issued by this machine's trocar root. Remove it: trocar uninstall"
+const RISK = 'Any program running as you can ask trocar to issue a trusted certificate, but cannot copy the key. If you suspect misuse: trocar uninstall, then trocar install.'
 
 export async function runInstallCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
   const flags = new Set()
-  for (const a of argv) { if (!FLAGS.has(a)) { io.err(`asight install: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: it installs for every agent found on this machine'}\n${USAGE}`); return EXIT.usage } flags.add(a) }
+  for (const a of argv) { if (!FLAGS.has(a)) { io.err(`trocar install: ${a.startsWith('-') ? `unknown option '${a.split('=')[0]}'` : 'takes no agent name: it installs for every agent found on this machine'}\n${USAGE}`); return EXIT.usage } flags.add(a) }
   return install({ io, env, home, platform, deps, flags })
 }
 
 /**
- * install({ io, env, home, platform, deps, flags, only }) → exit — the body of `asight install` after its arguments, for the CLI and the board.
+ * install({ io, env, home, platform, deps, flags, only }) → exit — the body of `trocar install` after its arguments, for the CLI and the board.
  * `only: <harness>` is the board's Set up (4.4 §控制面, D65④): the plan is that harness's missing carriers, and the run places that harness's
- * carriers only; the root, its custody, asight-off and the login entry are install's own steps, read back when in place (V67). The CLI never passes it.
+ * carriers only; the root, its custody, trocar-off and the login entry are install's own steps, read back when in place (V67). The CLI never passes it.
  */
 export async function install({ io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {}, flags, only = null }) {
   const json = flags.has('--json')
   const lines = [] // §1.2: with --json stderr stays empty — the plan is a key of the one document on stdout
   const say = json ? (s) => lines.push(s) : io.out
-  if ((deps.getuid || processUid)() === 0) { io.err('asight install: run this as your own user, not as root.'); return EXIT.usage }
+  if ((deps.getuid || processUid)() === 0) { io.err('trocar install: run this as your own user, not as root.'); return EXIT.usage }
   const fs = deps.fs || nodeFs
   const old = refuseOldManifest({ home, platform, fs })
-  if (old) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }, null, 2)); else io.err(`asight install: ${old.message}`); return EXIT.incomplete }
+  if (old) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, error: { code: 'older-install', message: old.message }, notes: [old.message] }, null, 2)); else io.err(`trocar install: ${old.message}`); return EXIT.incomplete }
   const { isModelOs } = await import('../collector/model-install.mjs')
   const model = isModelOs(platform)
   // R12: the writes run under op.lock, taken after the yes (a plan that is only printed takes nothing and writes nothing)
   const locked = async (fn) => {
     let lock
     try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) {
-      if (e && e.code === LOCK_BUSY) { io.err(`asight install: ${e.message}`); return null }
+      if (e && e.code === LOCK_BUSY) { io.err(`trocar install: ${e.message}`); return null }
       throw e
     }
     try { return await fn() } finally { lock.release() }
@@ -81,12 +81,12 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
       // one line per (agent, place): the same file reached by three forms of one agent is one line, with the forms named (D46)
       ...[...rows.reduce((by, r) => by.set(`${r.harness}|${carrierOf(r)}`, [...(by.get(`${r.harness}|${carrierOf(r)}`) || []), r]), new Map()).values()]
         .map((group) => ({ harness: group[0].harness, forms: group.map((r) => r.form), carrier: group[0].carrier, paths: group[0].paths, keys: group[0].keys, what: group[0].harness, detail: carrierOf(group[0]) })),
-      // V85: asight's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
-      ...(only ? [] : [{ what: 'asight', detail: `${tilde(path.join(home, '.asight'), home)}${platform === 'win32' ? '\\' : '/'}: asight's own files (its root certificate and key, the install record, and ${tilde(standalonePath(home), home)}, the undo that works without this source tree)` }]),
-      // D61 (1.6 §3.2 step 5, 4.11 §1 install 7): the login entry is a file of YOURS outside asight's tree, so it is its own line (V85), and the plan says a daemon runs from now on
-      ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\asight\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (asight uninstall takes it out again)` }] : []),
+      // V85: trocar's own tree is ONE line (uninstall takes all of it back); every file of yours outside it is its own line, above
+      ...(only ? [] : [{ what: 'trocar', detail: `${tilde(path.join(home, '.trocar'), home)}${platform === 'win32' ? '\\' : '/'}: trocar's own files (its root certificate and key, the install record, and ${tilde(standalonePath(home), home)}, the undo that works without this source tree)` }]),
+      // D61 (1.6 §3.2 step 5, 4.11 §1 install 7): the login entry is a file of YOURS outside trocar's tree, so it is its own line (V85), and the plan says a daemon runs from now on
+      ...(unit && !only ? [{ what: 'autostart', detail: `${platform === 'win32' ? 'the scheduled task \\trocar\\collector' : tilde(unit.path, home)}: a collector daemon starts at every login from now on, and is started now (trocar uninstall takes it out again)` }] : []),
     ]
-    say(fit([`asight install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
+    say(fit([`trocar install will change ${planned.length} thing${planned.length === 1 ? '' : 's'}:`,
       ...pairs(planned.map((p) => [p.what, p.detail])),
       ...(only ? (planned.length ? [] : [`${only} has every certificate carrier it needs: there is nothing to set up.`]) : rows.length ? [] : ['No agent was found on this machine: only the root is installed.']),
       ...wrap(COST), ...wrap(RISK)]).join('\n'))
@@ -105,16 +105,16 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     if (!r) return EXIT.incomplete
     // D61: the login registration and the daemon, through the one seam every command uses (ensureDaemonUp, src/collector/install.mjs)
     // Set up (only): the login entry is not in its plan, so it is neither rewritten above nor registered here (4.4 #13); the daemon asking is up, this only reads it
-    const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.asight', 'collector'), env, fs, unit, register: !only, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
+    const dmn = unit ? await (await import('../collector/install.mjs')).ensureDaemonUp({ osName: platform, dir: path.join(home, '.trocar', 'collector'), env, fs, unit, register: !only, ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { pause: deps.sleep } : {}) }) : { up: false, started: false, notes: [], problems: [] }
     r.problems.push(...dmn.problems)
-    const dmnNotes = dmn.notes.filter((n) => !r.problems.includes(n)) // 附录 C.1: `problems` is the failure channel; what asight could not do but said is `notes` (M-2)
+    const dmnNotes = dmn.notes.filter((n) => !r.problems.includes(n)) // 附录 C.1: `problems` is the failure channel; what trocar could not do but said is `notes` (M-2)
     if (dmn.problems.length) r.exit = 1
     // a refusal carries `error: {code, message}` (附录 C.1): the first pending item that named a code is why install could not go on
     const refusal = r.pending.find((p) => p.code)
-    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'asight install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\asight\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
+    const receipt = { ...newReceipt('install'), ok: r.exit === 0, undo: UNDO_LINE.install, fp256: r.fp256, items: r.items, carriers: r.carriers, pending: only ? r.pending.map((p) => ({ ...p, command: 'trocar install' })) : r.pending, problems: r.problems, notes: [...r.notes, ...dmnNotes], standalone: standalonePath(home), residual_risk: RISK, daemon: { state: dmn.up ? 'running' : 'not-running', started: dmn.started }, ...(unit && !only ? { autostart: { entry: platform === 'win32' ? '\\trocar\\collector' : unit.path, enabled: !dmn.unitFailed } } : {}),
       ...(refusal ? { error: { code: refusal.code, message: refusal.reason } } : {}),
-      planned, commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'] }
-    const dir = path.join(home, '.asight', 'collector')
+      planned, commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'] }
+    const dir = path.join(home, '.trocar', 'collector')
     try { appendEvent(dir, { event: EVENT.installNote, where: 'install', kind: 'result', outcome: receipt.ok ? 'installed' : 'partial', reason: `install: root ${r.fp256 || 'not made'}; ${r.carriers.length} carrier row(s); ${r.pending.length} pending` }) } catch (e) { r.problems.push(`the install-note could not be written (${e.message})`) }
     // §1.1: no two rows of a receipt are the same line. One carrier reached through five forms of one agent was five identical rows (a Windows test machine
     // 2026-10-18: `codex root` five times): the rows are the DISTINCT (agent, carrier, state, file) facts, and when the forms of an
@@ -133,25 +133,25 @@ export async function install({ io, env = process.env, home = nodeOs.homedir(), 
     })
     if (json) io.out(JSON.stringify(receipt, null, 2))
     // a refusal installed nothing: the fingerprint, the risk of an installed root and "Next" would all be untrue, so the stop and its reason are the whole receipt
-    else if (refusal) io.out(fit([`asight install stopped: ${refusal.message || refusal.reason}`, 'Nothing of yours was changed.']).join('\n'))
-    else io.out(fit([receipt.ok ? "Installed. asight's root certificate is trusted by your user." : 'asight install did not finish. What is missing is below.',
+    else if (refusal) io.out(fit([`trocar install stopped: ${refusal.message || refusal.reason}`, 'Nothing of yours was changed.']).join('\n'))
+    else io.out(fit([receipt.ok ? "Installed. trocar's root certificate is trusted by your user." : 'trocar install did not finish. What is missing is below.',
       ...pairs([['Fingerprint (SHA-256)', r.fp256 || 'unknown (no root was made)']]), // the hex is one unbroken word under its label: one block, and in a block of its own, so it does not widen the rows below
       // the login entry install registered, confirmed like every other row (a Windows test machine 2026-10-18: the receipt said nothing about it) — in the carriers' own pairs() call, so its label column lines up with theirs (a Windows test machine 2026-10-19)
       ...pairs([...carrierRows, ...(receipt.autostart ? [['autostart', `${receipt.autostart.entry}: ${receipt.autostart.enabled ? 'enabled, and a collector starts at every login' : 'NOT enabled (see the problem below): no collector starts at login'}`]] : [])]),
-      ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: asight install`),
+      ...r.pending.map((p) => `Not done yet: ${p.item} is ${p.state} (${p.reason}). Run again: trocar install`),
       ...receipt.notes.map((n) => `Note: ${n}`),
       ...r.problems.map((p) => `Problem: ${p}`),
       // the residual risk (RISK) is the last line of the plan printed just above in this same run (§3.2 prints it there, and the
       // receipt sample does not carry it); printing it again put the paragraph on the screen twice (a macOS test machine 2026-10-18).
       // `--json` keeps it as `residual_risk`, because a document has no plan above it.
-      'Next: asight on',
-      `If asight itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
+      'Next: trocar on',
+      `If trocar itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
     return r.exit
   }
 }
 
-// Linux (override #15; 1.6 §3.2 steps): the CA (ca/ca.key, 0600, made here and nowhere else), asight's own files (asight-ca.pem, the combined bundles, the
-// (d)-level plugins) and the (c)-level config keys — every item phase 'install', as `on` wrote them before — plus asight-off and the liveness record.
+// Linux (override #15; 1.6 §3.2 steps): the CA (ca/ca.key, 0600, made here and nowhere else), trocar's own files (trocar-ca.pem, the combined bundles, the
+// (d)-level plugins) and the (c)-level config keys — every item phase 'install', as `on` wrote them before — plus trocar-off and the liveness record.
 // No unit, no state, no daemon: those are `on`'s. The plan printed is the one `on` used to print (formatPlan) with D55's cost line.
 async function linuxInstall({ io, env, home, platform, deps, flags, json, say, fs, locked }) {
   const { readAgentList } = await import('../off/identity.mjs')
@@ -164,10 +164,10 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const unit = deps.unit !== undefined ? deps.unit : (!parts.arch || !parts.arch.unit || !parts.arch.unit.userUnit ? null : parts.arch.unit.userUnit({ home, node: process.execPath, script: deps.script || process.argv[1], run: deps.exec || null, env, ...(deps.spawn ? { spawn: deps.spawn } : {}) }))
   const args = { home, env, osName: parts.os, harnesses: parts.harnesses, scan: parts.scan, match: parts.match, arch: parts.arch || null, roots: deps.roots || null, unit, fs, ...(deps.freePort ? { freePort: deps.freePort } : {}), ...(deps.now ? { now: deps.now } : {}), ...(deps.request ? { request: deps.request } : {}), ...(deps.sleep ? { sleep: deps.sleep } : {}) } // request / sleep: installCollector's ensureDaemonUp seam (D61), so a test's daemon is the one asked
   let plan
-  const ingressPath = path.join(home, '.asight', 'collector', 'ingress.json')
-  try { plan = await inst.planOn(args) } catch (e) { io.err(`asight install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
+  const ingressPath = path.join(home, '.trocar', 'collector', 'ingress.json')
+  try { plan = await inst.planOn(args) } catch (e) { io.err(`trocar install: the plan could not be made (${String((e && e.message) || e)}). Nothing was changed`); return EXIT.incomplete } // a plan that cannot be made (an OS bundle that cannot be read, D38) is said, never a stack
   if (plan.created && (await import('../collector/core/ingress-config.mjs')).readIngressConfig({ dir: path.dirname(ingressPath), fs }).boardPort === undefined) plan.created.push(ingressPath) // the board's port, recorded below (V85: the plan names what the run writes)
-  // asight-off (R3) is install's: named in the plan and the dry run when this run would write it, i.e. when it is not already what src/off generates
+  // trocar-off (R3) is install's: named in the plan and the dry run when this run would write it, i.e. when it is not already what src/off generates
   const stdPath = standalonePath(home)
   let stdNew = true
   try { stdNew = fs.readFileSync(stdPath, 'utf8') !== buildStandalone({ version: OFF_VERSION, fs }) } catch { stdNew = true }
@@ -181,24 +181,24 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
   const done = await locked(async () => {
     let stdl
     try { stdl = writeStandalone({ home, version: OFF_VERSION, fs }) } catch (e) {
-      const reason = `${stdPath}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed. Put that right, then run asight install again`
-      try { appendEvent(path.join(home, '.asight', 'collector'), { event: EVENT.failure, where: 'install', code: (e && e.code) || 'install-error', reason }) } catch {}
+      const reason = `${stdPath}, the undo that works without the source tree, could not be written (${String((e && e.message) || e)}); no file of the agents' was changed. Put that right, then run trocar install again`
+      try { appendEvent(path.join(home, '.trocar', 'collector'), { event: EVENT.failure, where: 'install', code: (e && e.code) || 'install-error', reason }) } catch {}
       return { failed: reason }
     }
     const { row: board, written } = await boardPortRow(home, fs) // before installCollector starts the daemon: it reads the port, never picks one
     return { stdl, board, written, r: await inst.installCollector({ ...args, onPlan: () => {} }) }
   })
   if (!done) return EXIT.incomplete
-  if (done.failed) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [done.failed] }, null, 2)); else io.err(`asight install: ${done.failed}`); return EXIT.incomplete }
+  if (done.failed) { if (json) io.out(JSON.stringify({ ...newReceipt('install'), ok: false, notes: [done.failed] }, null, 2)); else io.err(`trocar install: ${done.failed}`); return EXIT.incomplete }
   const { stdl, r, board, written } = done
-  const receipt = { ...newReceipt('install'), ok: !board, ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['asight on', 'asight off', 'asight status', 'asight uninstall'], notes: r.plan ? r.plan.notes : [] }
+  const receipt = { ...newReceipt('install'), ok: !board, ...(board ? { pending: [board] } : {}), undo: UNDO_LINE.install, harnesses: r.manifest.install ? r.manifest.install.harnesses : [], changed: r.already ? [] : plan.changed.map((c) => ({ ...c, backup: (r.manifest.entries.find((e) => e.path === c.path) || {}).backup ?? null })), created: [...new Set([...(stdl.written ? [stdl.path] : []), ...(r.already ? [] : plan.created), ...(written ? [ingressPath] : [])])], standalone: standalonePath(home), planned: planItems({ ...plan, standalone: stdNew ? stdPath : null }, { home, platform }), commands: ['trocar on', 'trocar off', 'trocar status', 'trocar uninstall'], notes: r.plan ? r.plan.notes : [] }
   if (json) io.out(JSON.stringify(receipt, null, 2))
-  else io.out(fit([r.already ? 'Already installed. Nothing was changed.' : "Installed. asight's certificates are in place.",
+  else io.out(fit([r.already ? 'Already installed. Nothing was changed.' : "Installed. trocar's certificates are in place.",
     ...(r.already ? [] : changeLines(receipt, { home })),
     ...receipt.notes.map((n) => `Note: ${n}`),
-    ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: asight install`] : []),
-    'Next: asight on',
-    `If asight itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
+    ...(board ? [`Not done yet: the board's port is pending (${board.reason}). Run again: trocar install`] : []),
+    'Next: trocar on',
+    `If trocar itself breaks: ${tilde(standalonePath(home), home)}`]).join('\n'))
   return board ? EXIT.incomplete : EXIT.ok
 }
 
@@ -208,7 +208,7 @@ async function linuxInstall({ io, env, home, platform, deps, flags, json, say, f
 async function missingOf(only, { platform, harnesses, ctx, home, rootStore, fs }) {
   if (!only) return { row: () => true, root: true }
   const [{ setupOf }, { readManifest }, { rootOf }] = await Promise.all([import('../collector/core/proxymode/status-facts.mjs'), import('../collector/core/trust/journal.mjs'), import('../collector/model-on.mjs')])
-  const dir = path.join(home, '.asight', 'collector'), manifest = readManifest(dir, fs)
+  const dir = path.join(home, '.trocar', 'collector'), manifest = readManifest(dir, fs)
   const root = manifest && manifest.install ? await rootOf({ dir, m: manifest, rootStore, fs }) : null
   const missing = setupOf(harnesses.find((d) => d.name === only), { os: platform, manifest, ctx, root, fs }).missing
   const forms = new Set(missing.map((x) => x.form))
@@ -218,6 +218,6 @@ async function missingOf(only, { platform, harnesses, ctx, home, rootStore, fs }
 /** The board's port (4.4 §Plan 「端口」), chosen once by install: none free (or the file cannot be written) is a pending row with the reason, never a throw. */
 async function boardPortRow(home, fs) {
   const { ensureBoardPort } = await import('../collector/core/ingress-config.mjs')
-  const b = await ensureBoardPort({ dir: path.join(home, '.asight', 'collector'), fs })
+  const b = await ensureBoardPort({ dir: path.join(home, '.trocar', 'collector'), fs })
   return b.error ? { row: { item: 'board', state: 'pending', reason: b.error }, written: false } : { row: null, written: b.created }
 }

@@ -20,7 +20,7 @@ export const QUERY_NAMES = Object.freeze(['status', 'doctor', 'sessions', 'sessi
 /** Environment variables that change what the query core answers. Set in the caller's environment → the caller
  *  answers locally, and the worker runs as if none were set (worker.mjs deletes them): one list, one place, so the
  *  two paths cannot disagree about a document. */
-export const LOCAL_ENV = Object.freeze(['ASIGHT_PRICING'])
+export const LOCAL_ENV = Object.freeze(['TROCAR_PRICING'])
 /** How long a daemon has to say something. Inactivity, not a total: the worker streams, so this bites a wedged
  *  daemon, never a big document. */
 export const DEADLINE_MS = 5000
@@ -33,7 +33,7 @@ export const localOnly = (name, env = {}) => LOCAL_ONLY.includes(name) || LOCAL_
 /**
  * queryDocument(name, params, ctx) → { text, via }: `text` is the whole document, serialized with `indent` and
  * ready to be written as it stands; `via` is 'daemon' or 'local'. `ctx` is the query core's context plus `dir`
- * (the collector directory, where this platform's daemon says how to reach it) — `home` = ~/.asight, `userHome` =
+ * (the collector directory, where this platform's daemon says how to reach it) — `home` = ~/.trocar, `userHome` =
  * the user's home. Throws what the query core throws (QueryArgError for an unknown name or parameter) on either path.
  */
 export async function queryDocument(name, params = {}, { home, userHome, dir, platform, env, deps, fs, now, indent = 0, deadlineMs = DEADLINE_MS } = {}) {

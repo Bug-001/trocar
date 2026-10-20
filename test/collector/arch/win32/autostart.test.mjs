@@ -19,10 +19,10 @@ import { startControlServer, CONTROL_TOKEN_HEADER } from '../../../../src/collec
 
 // ---- W26: the control plane ----------------------------------------------------------------------------------------------------------------------
 
-test('W26 the pipe name is asight- and 16 random hex digits, the token is 64; two installs get different ones; control.json is made once and read back', () => {
-  const a = tmpDir('asight-ctl-'); const b = tmpDir('asight-ctl-')
+test('W26 the pipe name is trocar- and 16 random hex digits, the token is 64; two installs get different ones; control.json is made once and read back', () => {
+  const a = tmpDir('trocar-ctl-'); const b = tmpDir('trocar-ctl-')
   const ea = controlEndpoint({ dir: a }); const eb = controlEndpoint({ dir: b })
-  assert.match(ea.path, /^\\\\\.\\pipe\\asight-[0-9a-f]{16}$/)
+  assert.match(ea.path, /^\\\\\.\\pipe\\trocar-[0-9a-f]{16}$/)
   assert.ok(ea.path.startsWith(PIPE_PREFIX))
   assert.match(ea.token, /^[0-9a-f]{64}$/)
   assert.notEqual(ea.path, eb.path, 'two installs, two names')
@@ -34,7 +34,7 @@ test('W26 the pipe name is asight- and 16 random hex digits, the token is 64; tw
 })
 
 test('W26 a reader that finds no control.json says so and writes nothing; a control.json that is not an endpoint is replaced by the writer and is an error to the reader', () => {
-  const d = tmpDir('asight-ctl-')
+  const d = tmpDir('trocar-ctl-')
   assert.equal(readControlEndpoint({ dir: d }), null, 'absent is null, not an error')
   assert.deepEqual(fs.readdirSync(d), [], 'a reader never creates it')
   for (const bad of ['', '{', '[]', JSON.stringify({ path: '\\\\.\\pipe\\other', token: 'x'.repeat(64) }), JSON.stringify({ path: `${PIPE_PREFIX}0123456789abcdef`, token: 'short' })]) {
@@ -42,13 +42,13 @@ test('W26 a reader that finds no control.json says so and writes nothing; a cont
     const r = readControlEndpoint({ dir: d })
     assert.ok(r && typeof r.error === 'string' && r.error.length > 0, `the reader names the problem for ${JSON.stringify(bad)}`)
     const e = controlEndpoint({ dir: d })
-    assert.match(e.path, /^\\\\\.\\pipe\\asight-[0-9a-f]{16}$/, 'the writer makes a good one')
+    assert.match(e.path, /^\\\\\.\\pipe\\trocar-[0-9a-f]{16}$/, 'the writer makes a good one')
     assert.deepEqual(readControlEndpoint({ dir: d }), e)
   }
 })
 
 test('W26 a control.json that is not JSON is reported without any of its text: the parser\'s message quotes the characters around the error, and a damaged file may have the token in them', () => {
-  const d = tmpDir('asight-ctl-')
+  const d = tmpDir('trocar-ctl-')
   const secret = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
   for (const damaged of [`{"path":"${PIPE_PREFIX}0123456789abcdef","token":${secret}}`, `{"token":"${secret}" "x"}`, `${secret}`, `{"token":"${secret.slice(0, 30)}`]) {
     fs.writeFileSync(path.join(d, CONTROL_FILE), damaged)
@@ -59,13 +59,13 @@ test('W26 a control.json that is not JSON is reported without any of its text: t
 })
 
 test('W26 two starts at the same moment end up with one endpoint: the one that linked first wins and the other reads it; a file system that cannot link still gets its file', () => {
-  const d = tmpDir('asight-ctl-')
+  const d = tmpDir('trocar-ctl-')
   const winner = { path: `${PIPE_PREFIX}aaaaaaaaaaaaaaaa`, token: 'b'.repeat(64) }
   const racing = { ...fs, linkSync: (from, to) => { fs.writeFileSync(to, `${JSON.stringify(winner)}\n`); throw Object.assign(new Error('EEXIST: file already exists'), { code: 'EEXIST' }) } }
   assert.deepEqual(controlEndpoint({ dir: d, fs: racing }), winner, 'the loser returns what the winner wrote')
   assert.deepEqual(readControlEndpoint({ dir: d }), winner)
   assert.deepEqual(fs.readdirSync(d), [CONTROL_FILE], 'and leaves no temp file')
-  const e = tmpDir('asight-ctl-')
+  const e = tmpDir('trocar-ctl-')
   const noLinks = { ...fs, linkSync: () => { throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }) } }
   const made = controlEndpoint({ dir: e, fs: noLinks })
   assert.deepEqual(readControlEndpoint({ dir: e }), made)
@@ -74,13 +74,13 @@ test('W26 two starts at the same moment end up with one endpoint: the one that l
 
 test('W26 the names come from the injected random source, 8 bytes for the pipe and 32 for the token', () => {
   const asked = []
-  const e = controlEndpoint({ dir: tmpDir('asight-ctl-'), randomBytes: (n) => { asked.push(n); return Buffer.alloc(n, asked.length) } })
+  const e = controlEndpoint({ dir: tmpDir('trocar-ctl-'), randomBytes: (n) => { asked.push(n); return Buffer.alloc(n, asked.length) } })
   assert.deepEqual(asked, [8, 32])
   assert.equal(e.path, `${PIPE_PREFIX}0101010101010101`)
   assert.equal(e.token, '02'.repeat(32))
 })
 
-/** One request to a control server on a unix socket, with the headers given; → { status, body }. (The client of `asight off` is the CLI's; this is the least a test needs.) */
+/** One request to a control server on a unix socket, with the headers given; → { status, body }. (The client of `trocar off` is the CLI's; this is the least a test needs.) */
 const call = (socketPath, headers = {}, p = '/status') => new Promise((resolve, reject) => {
   const req = http.request({ socketPath, method: 'GET', path: p, headers }, (res) => {
     const chunks = []
@@ -107,7 +107,7 @@ test('W26 a request without the token is refused and never reaches a route; a wr
     assert.deepEqual(reached, [], 'no route ran for any of them')
     assert.deepEqual(await call(socketPath, { [CONTROL_TOKEN_HEADER]: token }), { status: 200, body: { ok: 1 } })
     assert.deepEqual(reached, ['status'])
-    assert.equal(CONTROL_TOKEN_HEADER, 'x-asight-token')
+    assert.equal(CONTROL_TOKEN_HEADER, 'x-trocar-token')
   } finally { await srv.close() }
 })
 
@@ -177,7 +177,7 @@ test('W25 off and uninstall (no helper, no source): the check is `whoami /groups
   assert.equal(refuseElevatedByWhoami({ run: runner(WHOAMI('Mandatory Label\\Medium Mandatory Level')) }), null)
 })
 
-test('W25 off and uninstall never block on a token they cannot read: whoami failing, silent or odd is `unknown` with the reason, and the undo goes on (it must work when asight is broken)', () => {
+test('W25 off and uninstall never block on a token they cannot read: whoami failing, silent or odd is `unknown` with the reason, and the undo goes on (it must work when trocar is broken)', () => {
   for (const [what, run, why] of [
     ['whoami could not start', () => ({ status: null, stdout: '', stderr: '', error: new Error('spawn whoami ENOENT') }), /ENOENT/],
     ['whoami failed', runner('', 1), /exit 1/],
@@ -240,8 +240,8 @@ test('W24 `on` refuses a Node below the minimum with a doctor line that says wha
 
 const ME = 'DESKTOP-7Q\\ada'
 const NODE = 'C:\\Program Files\\nodejs\\node.exe'
-const SCRIPT = 'C:\\Users\\ada\\AppData\\Roaming\\npm\\node_modules\\asight\\bin\\asight.mjs'
-const xml = () => taskXml({ user: ME, node: NODE, asight: SCRIPT, conhost: 'conhost.exe' })
+const SCRIPT = 'C:\\Users\\ada\\AppData\\Roaming\\npm\\node_modules\\trocar\\bin\\trocar.mjs'
+const xml = () => taskXml({ user: ME, node: NODE, trocar: SCRIPT, conhost: 'conhost.exe' })
 const inner = (x, tag) => { const m = new RegExp(`<${tag}(?: [^>]*)?>([\\s\\S]*?)</${tag}>`).exec(x); return m ? m[1] : null }
 /** Is it well formed in the one sense that matters here: every element opened is closed, in order? (There is no XML parser in Node; a typo in a tag name is what this catches.) */
 function balanced(x) {
@@ -272,19 +272,19 @@ test('W24 the task XML has the fields of 4.8 §7: a login trigger of this user, 
   assert.equal(inner(x, 'MultipleInstancesPolicy'), 'IgnoreNew')
   assert.equal((x.match(/<Exec>/g) || []).length, 1, 'one action')
   assert.equal(inner(x, 'Command'), 'conhost.exe')
-  assert.equal(inner(x, 'Arguments'), `--headless "${NODE}" "${SCRIPT}" daemon --supervise`, 'conhost --headless (no window) runs node on asight with the supervisor flag')
+  assert.equal(inner(x, 'Arguments'), `--headless "${NODE}" "${SCRIPT}" daemon --supervise`, 'conhost --headless (no window) runs node on trocar with the supervisor flag')
   assert.doesNotMatch(x, /--use-system-ca/, 'that option needs Node 22.15 and would make an older daemon exit at every login')
-  assert.equal(taskXml({ user: ME, node: NODE, asight: SCRIPT }), x, 'conhost.exe is the default command')
+  assert.equal(taskXml({ user: ME, node: NODE, trocar: SCRIPT }), x, 'conhost.exe is the default command')
 })
 
 test('W24 what goes into the XML is escaped or refused: & < > are escaped, a quote or a control character in a path is a bug of the caller (it would end the quoted argument, or the element)', () => {
-  const x = taskXml({ user: 'A&B\\ada<x>', node: 'C:\\R&D\\node.exe', asight: 'C:\\a>b\\asight.mjs' })
+  const x = taskXml({ user: 'A&B\\ada<x>', node: 'C:\\R&D\\node.exe', trocar: 'C:\\a>b\\trocar.mjs' })
   assert.ok(balanced(x))
   assert.equal(inner(inner(x, 'LogonTrigger'), 'UserId'), 'A&amp;B\\ada&lt;x&gt;')
-  assert.equal(inner(x, 'Arguments'), '--headless "C:\\R&amp;D\\node.exe" "C:\\a&gt;b\\asight.mjs" daemon --supervise')
-  assert.match(taskXml({ user: '张三\\ada', node: NODE, asight: 'C:\\用户\\asight.mjs' }), /用户/, 'a profile path in Chinese is carried as it is: UTF-16 holds it')
-  for (const bad of [{ node: 'C:\\no"de.exe' }, { asight: 'C:\\a"b.mjs' }, { node: 'C:\\node\u0007.exe' }, { user: 'ada\u0000' }, { asight: '' }, { node: undefined }, { conhost: 'con"host.exe' }]) {
-    assert.throws(() => taskXml({ user: ME, node: NODE, asight: SCRIPT, ...bad }), TypeError, JSON.stringify(bad))
+  assert.equal(inner(x, 'Arguments'), '--headless "C:\\R&amp;D\\node.exe" "C:\\a&gt;b\\trocar.mjs" daemon --supervise')
+  assert.match(taskXml({ user: '张三\\ada', node: NODE, trocar: 'C:\\用户\\trocar.mjs' }), /用户/, 'a profile path in Chinese is carried as it is: UTF-16 holds it')
+  for (const bad of [{ node: 'C:\\no"de.exe' }, { trocar: 'C:\\a"b.mjs' }, { node: 'C:\\node\u0007.exe' }, { user: 'ada\u0000' }, { trocar: '' }, { node: undefined }, { conhost: 'con"host.exe' }]) {
+    assert.throws(() => taskXml({ user: ME, node: NODE, trocar: SCRIPT, ...bad }), TypeError, JSON.stringify(bad))
   }
 })
 
@@ -309,23 +309,23 @@ function fakeTools(answers = {}, hook = () => {}) {
 }
 /** What a real `reg query` says when the Run value is not there: exit 1. (A fake that answers exit 0 with nothing would be a `reg` that says something no `reg` says.) */
 const NO_RUN_VALUE = { 'reg query': { status: 1, stderr: 'ERROR: The system was unable to find the specified registry key or value.' } }
-const withHome = (over = {}) => { const home = tmpDir('asight-unit-'); return { home, node: NODE, script: SCRIPT, env: { USERDOMAIN: 'DESKTOP-7Q', USERNAME: 'ada' }, ...over } }
-/** What `asight on` does before it enables: writes the unit's text where the unit says it lives. */
+const withHome = (over = {}) => { const home = tmpDir('trocar-unit-'); return { home, node: NODE, script: SCRIPT, env: { USERDOMAIN: 'DESKTOP-7Q', USERNAME: 'ada' }, ...over } }
+/** What `trocar on` does before it enables: writes the unit's text where the unit says it lives. */
 const installed = (u) => { fs.mkdirSync(path.dirname(u.path), { recursive: true }); fs.writeFileSync(u.path, u.text({})); return u }
 
 test('W24 userUnit gives the shape turnOn and install consume: a path under the collector directory, no links, the text, and the verbs enable / start / reload / disable / remove', () => {
   const o = withHome()
   const u = userUnit({ ...o, run: fakeTools() })
-  assert.equal(u.path, path.join(o.home, '.asight', 'collector', TASK_FILE))
-  assert.equal(TASK_FILE, 'asight-collector.task.xml')
+  assert.equal(u.path, path.join(o.home, '.trocar', 'collector', TASK_FILE))
+  assert.equal(TASK_FILE, 'trocar-collector.task.xml')
   assert.deepEqual(u.links, [], 'a task has no wants/ link')
-  assert.equal(u.name, 'asight-collector')
+  assert.equal(u.name, 'trocar-collector')
   assert.equal(u.text({ NODE_EXTRA_CA_CERTS: 'C:\\corp\\ca.pem' }), xml(), 'the text is the XML; a Windows task has no environment of its own, so the daemon environment install offers is not carried (4.8 §7)')
   for (const verb of ['enable', 'start', 'startNow', 'reload', 'remove']) assert.equal(typeof u[verb], 'function', verb) // D61: no `disable` verb — nothing in an off touches the registration
   assert.deepEqual(u.reload(), { code: 0, out: '', err: '' }, 'a rewritten task is registered again by the next enable (/F), so there is nothing to reload')
 })
 
-test('W24 enable registers the task from the file install wrote and runs it: /Create /XML <a UTF-16 copy> /TN \\asight\\collector /F, then /Run; the copy is gone afterwards; enable({ now: false }) does not run it', () => {
+test('W24 enable registers the task from the file install wrote and runs it: /Create /XML <a UTF-16 copy> /TN \\trocar\\collector /F, then /Run; the copy is gone afterwards; enable({ now: false }) does not run it', () => {
   const o = withHome()
   const seen = {}
   const run = fakeTools(NO_RUN_VALUE, (file, args) => {
@@ -342,7 +342,7 @@ test('W24 enable registers the task from the file install wrote and runs it: /Cr
   assert.deepEqual(run.calls[0].slice(4), ['/TN', TASK_NAME, '/F'])
   assert.deepEqual(run.calls[2], ['schtasks', '/Run', '/TN', TASK_NAME])
   assert.deepEqual(run.calls[3], ['schtasks', '/Query', '/TN', TASK_NAME, '/V', '/FO', 'CSV'], 'the one question whose answer says whether the /Run started anything')
-  assert.equal(TASK_NAME, '\\asight\\collector')
+  assert.equal(TASK_NAME, '\\trocar\\collector')
   assert.deepEqual([...seen.bytes.subarray(0, 2)], [0xff, 0xfe], 'the file schtasks reads is UTF-16LE with a byte order mark, which is the form that registered in the T0 measurement')
   assert.equal(seen.bytes.subarray(2).toString('utf16le'), u.text({}), 'and it holds the text install wrote')
   assert.deepEqual(fs.readdirSync(path.dirname(u.path)), [TASK_FILE], 'the UTF-16 copy is removed once schtasks has read it')
@@ -370,7 +370,7 @@ test('W24 enable says why it failed: a /Run that did not start, a task file that
   const refused = fakeTools({ 'schtasks /Create': { status: 1, stderr: 'ERROR: Access is denied.' }, 'reg add': { status: 1, stderr: 'ERROR: Access is denied.' }, 'reg query': { status: 1 } })
   const a = installed(userUnit({ ...refusedHome, run: refused })).enable()
   assert.equal(a.code, 1)
-  assert.deepEqual(fs.readdirSync(path.join(refusedHome.home, '.asight', 'collector')), [TASK_FILE], 'the UTF-16 copy is removed on the failure path too')
+  assert.deepEqual(fs.readdirSync(path.join(refusedHome.home, '.trocar', 'collector')), [TASK_FILE], 'the UTF-16 copy is removed on the failure path too')
 })
 
 test('W24 start (the direct start `on` falls back to: this session, nothing at login) starts the supervised daemon itself without registering anything: conhost --headless, detached, no window, and a spawn that did not start is a failure, not a success', () => {
@@ -452,7 +452,7 @@ test('W24 a /Query that did not run (timeout, blocked, no schtasks) is a failure
 
 // ---- D61 / 1.6 §3.3: `registered()` — is the login entry registered AND enabled? ------------------------------------------------------------------
 
-/** The task's XML as `schtasks /Query /TN \asight\collector /XML` prints it, shortened to the elements the answer turns on (a Windows test machine, 2026-10-19, pass C /
+/** The task's XML as `schtasks /Query /TN \trocar\collector /XML` prints it, shortened to the elements the answer turns on (a Windows test machine, 2026-10-19, pass C /
  *  win-6): `<Enabled>false</Enabled>` is in `<Settings>` only when the task is switched off — an enabled task has no such element at all. */
 const TASK_XML = (enabled) => ['<?xml version="1.0" encoding="UTF-16"?>', '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">', '  <Settings>',
   '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>', ...(enabled ? [] : ['    <Enabled>false</Enabled>']), '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>', '  </Settings>',
@@ -469,12 +469,12 @@ test('D61 registered() answers the one question 1.6 §3.3 asks — registered AN
     assert.equal(autostartBlock({ unit: on, osName: 'win32' }), null, `${how}: so \`on\` goes on`)
     const off = userUnit({ ...withHome(), run: taskThatAnswers(form(TASK_XML(false))) })
     assert.equal(off.registered().state, 'disabled', `${how}: /Query /TN exits 0 for a disabled task too, so the XML is what tells`)
-    assert.match(autostartBlock({ unit: off, osName: 'win32' }), /asight install$/, `${how}: and \`on\` refuses — nothing starts at the next login`)
+    assert.match(autostartBlock({ unit: off, osName: 'win32' }), /trocar install$/, `${how}: and \`on\` refuses — nothing starts at the next login`)
   }
   // the XML could not be read: no verdict, so the refusal stands (D61: anything but a proven enabled entry)
   const blind = userUnit({ ...withHome(), run: taskThatAnswers(null) })
   assert.equal(blind.registered().state, 'unknown')
-  assert.match(autostartBlock({ unit: blind, osName: 'win32' }), /asight install$/)
+  assert.match(autostartBlock({ unit: blind, osName: 'win32' }), /trocar install$/)
 })
 
 test('D62 (1.6 §3.1): a registered login entry is ONE schtasks start — `/Query /TN <task> /XML` answers both halves, and the second query is asked only when it did not', () => {
@@ -493,7 +493,7 @@ test('D62 (1.6 §3.1): a registered login entry is ONE schtasks start — `/Quer
 })
 
 test('D61 the Run-key fallback is still the login entry when the task is gone OR switched off (that fallback disables the task itself)', () => {
-  const withValue = (xml) => { // the task answers `xml` (null: not registered) and asight's own Run value is there
+  const withValue = (xml) => { // the task answers `xml` (null: not registered) and trocar's own Run value is there
     const run = fakeTools({ 'schtasks /Query': (file, args) => (xml === null ? { status: 1 } : args.includes('/XML') ? { status: 0, stdout: xml } : { status: 0 }), 'reg query': { status: 0, stdout: REG_OUT('REG_SZ', COMMAND) } })
     return userUnit({ ...withHome(), run }).registered()
   }
@@ -504,8 +504,8 @@ test('D61 the Run-key fallback is still the login entry when the task is gone OR
 // ---- W24: the Run-key fallback -------------------------------------------------------------------------------------------------------------------
 
 const RUN_PATH = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
-/** What `reg query HKCU\…\Run /v asight-collector` prints when the value is there: CRLF line ends, as reg.exe writes them (the fixture once used \n; the parse is pinned to the real shape). */
-const REG_OUT = (kind, data) => `\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\r\n    asight-collector    ${kind}    ${data}\r\n`
+/** What `reg query HKCU\…\Run /v trocar-collector` prints when the value is there: CRLF line ends, as reg.exe writes them (the fixture once used \n; the parse is pinned to the real shape). */
+const REG_OUT = (kind, data) => `\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\r\n    trocar-collector    ${kind}    ${data}\r\n`
 const COMMAND = `conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`
 /** What `reg query` text looks like to code that decodes it as UTF-8 when reg.exe wrote it in the console's code page (cp936 on a zh-CN Windows): a character outside ASCII is two bytes that are no UTF-8, each one a U+FFFD. */
 const asDecodedByUtf8 = (v) => v.replace(/[^\x00-\x7f]/gu, '\uFFFD\uFFFD')
@@ -526,17 +526,17 @@ function fakeRegistry(initial = null, { addFails = false, deleteFails = false, d
 }
 
 test('W24 the Run value is read from `reg query` as the registry prints it: the kind and the data, absent as absent, and a failure that is not "absent" as an error', () => {
-  assert.deepEqual(RUN_KEY, { hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'asight-collector' })
+  assert.deepEqual(RUN_KEY, { hive: 'HKCU', key: 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', name: 'trocar-collector' })
   assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: REG_OUT('REG_SZ', COMMAND) } }) }), { present: true, kind: 'REG_SZ', value: COMMAND })
   assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: REG_OUT('REG_EXPAND_SZ', '%ProgramFiles%\\x.exe') } }) }), { present: true, kind: 'REG_EXPAND_SZ', value: '%ProgramFiles%\\x.exe' })
   assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: REG_OUT('REG_SZ', '') } }) }), { present: true, kind: 'REG_SZ', value: '' }, 'an empty string is a value')
-  assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: REG_OUT('REG_SZ', COMMAND).replace('asight-collector', 'ASIGHT-Collector') } }) }), { present: true, kind: 'REG_SZ', value: COMMAND }, 'a value name does not care about case')
+  assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: REG_OUT('REG_SZ', COMMAND).replace('trocar-collector', 'TROCAR-Collector') } }) }), { present: true, kind: 'REG_SZ', value: COMMAND }, 'a value name does not care about case')
   assert.deepEqual(readRunValue({ run: fakeTools({ reg: { status: 1, stderr: 'ERROR: not found' } }) }), { present: false })
   assert.match(readRunValue({ run: fakeTools({ reg: { status: 0, stdout: 'something else entirely' } }) }).error, /not .*value/i, 'an answer that is no value is an error, not "absent"')
   assert.match(readRunValue({ run: () => ({ status: null, stdout: '', stderr: '', error: new Error('spawn reg ENOENT') }) }).error, /ENOENT/)
   assert.deepEqual(fakeTools({}).calls, [])
   const q = fakeTools({ reg: { status: 1 } }); readRunValue({ run: q })
-  assert.deepEqual(q.calls, [['reg', 'query', RUN_PATH, '/v', 'asight-collector']], 'one fixed query of one value')
+  assert.deepEqual(q.calls, [['reg', 'query', RUN_PATH, '/v', 'trocar-collector']], 'one fixed query of one value')
 })
 
 test('W24 a /Create that schtasks refused: the Run value is written with the same supervised command, ledgered, read back, task-register-failed is the event, the daemon is started, and on still succeeds (code 0)', () => {
@@ -549,14 +549,14 @@ test('W24 a /Create that schtasks refused: the Run value is written with the sam
   assert.equal(r.code, 0, 'on does not fail because the Task Scheduler refused')
   assert.equal(r.via, 'run-key', 'the receipt says which path was used')
   assert.match(r.reason, /Access is denied/, '... and why the task was not registered')
-  assert.deepEqual(r.ledger, { kind: 'run-key', hive: 'HKCU', key: RUN_KEY.key, name: 'asight-collector', value: COMMAND, prior: null })
+  assert.deepEqual(r.ledger, { kind: 'run-key', hive: 'HKCU', key: RUN_KEY.key, name: 'trocar-collector', value: COMMAND, prior: null })
   assert.equal(r.ours, false)
   assert.deepEqual(r.event, { event: 'failure', where: 'install', code: 'task-register-failed', reason: r.event.reason })
   assert.match(r.event.reason, /Access is denied/)
   assert.match(r.event.reason, /Run/, 'the event names the entry that is used instead')
   assert.deepEqual(checkRecord(r.event), [], 'a record of the closed set')
   assert.deepEqual(run.calls.map((c) => c.slice(0, 2).join(' ')), ['schtasks /Create', 'reg query', 'reg add', 'reg query', 'schtasks /Query'], 'create, look at the old value, write, read it back, look whether an earlier task is there to switch off; no /Run (there is no task)')
-  assert.deepEqual(run.calls[2], ['reg', 'add', RUN_PATH, '/v', 'asight-collector', '/t', 'REG_SZ', '/d', COMMAND, '/f'])
+  assert.deepEqual(run.calls[2], ['reg', 'add', RUN_PATH, '/v', 'trocar-collector', '/t', 'REG_SZ', '/d', COMMAND, '/f'])
   assert.equal(run.reg.value.value, COMMAND)
   assert.equal(COMMAND, `conhost.exe ${inner(x2(u.text({})), 'Arguments')}`, 'the command is the task\'s action: the same supervised one')
   assert.deepEqual(spawned, [['conhost.exe', '--headless', NODE, SCRIPT, 'daemon', '--supervise']], 'the login entry runs at the next login, so with now the daemon is started directly')
@@ -602,11 +602,11 @@ test('W24 a fallback that did not take is a failure with both reasons: reg add r
   assert.notEqual(skew.code, 0)
   assert.match(skew.err, /did not take/)
   assert.match(skew.err, /--other/, 'it says what the registry holds instead')
-  assert.deepEqual(skew.ledger, { kind: 'run-key', hive: 'HKCU', key: RUN_KEY.key, name: 'asight-collector', value: COMMAND, prior: null }, 'ledgered all the same')
+  assert.deepEqual(skew.ledger, { kind: 'run-key', hive: 'HKCU', key: RUN_KEY.key, name: 'trocar-collector', value: COMMAND, prior: null }, 'ledgered all the same')
   assert.equal(skew.event.code, 'task-register-failed')
   const direct = runKeyFallback({ command: COMMAND, run: fakeRegistry(null, { storeAs: (v) => `${v} --other` }) })
   assert.deepEqual([direct.ok, typeof direct.entry, direct.reason.includes('did not take')], [false, 'object', true], 'runKeyFallback itself: not ok, entry for the ledger, the reason')
-  // what is ledgered undoes, by the same rule as any undo: a value that is not asight's by its tail is left (`--other` is somebody's); one that is (here only differently spelled) is taken out
+  // what is ledgered undoes, by the same rule as any undo: a value that is not trocar's by its tail is left (`--other` is somebody's); one that is (here only differently spelled) is taken out
   assert.deepEqual([userUnit({ ...withHome(), run: skewReg }).remove({ prior: skew.ledger.prior }).runKey, skewReg.reg.value.value], ['left', `${COMMAND} --other`])
   const spelledReg = fakeRegistry(null, { storeAs: (v) => v.replace('conhost.exe', 'CONHOST.EXE') })
   const spelled = installed(userUnit({ ...withHome(), run: spelledReg })).enable({ now: false })
@@ -625,7 +625,7 @@ test('W24 a fallback that did not take is a failure with both reasons: reg add r
 })
 
 test('W24 reg.exe prints in the console code page, which the runner decodes as UTF-8: a value with characters outside ASCII is read back through that and is not "did not take" (the ASCII of it must match), and a prior that cannot be read faithfully is never overwritten', () => {
-  const zh = `conhost.exe --headless "C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\张三\\AppData\\Roaming\\npm\\node_modules\\asight\\bin\\asight.mjs" daemon --supervise`
+  const zh = `conhost.exe --headless "C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\张三\\AppData\\Roaming\\npm\\node_modules\\trocar\\bin\\trocar.mjs" daemon --supervise`
   // 1. a correct write of a command with a Chinese profile path, read through a console code page: the fallback took
   const reg = fakeRegistry(null, { codePage: true })
   const r = runKeyFallback({ command: zh, run: reg })
@@ -658,7 +658,7 @@ test('W24 reg.exe prints in the console code page, which the runner decodes as U
   assert.match(u.err, /code page|UTF-8|U\+FFFD/i)
   assert.equal(u.event.code, 'task-register-failed')
   assert.equal(theirs.reg.value.value, '"C:\\用户\\mine.exe" --quiet', 'the user\'s value is as it was')
-  // one of asight's own, read through the code page, is still asight's (the tail is ASCII) and is taken out
+  // one of trocar's own, read through the code page, is still trocar's (the tail is ASCII) and is taken out
   const mine = fakeRegistry({ kind: 'REG_SZ', value: zh }, { codePage: true })
   assert.equal(removeRunValue({ run: mine }).runKey, 'removed')
 })
@@ -668,7 +668,7 @@ test('W24 off and uninstall remove only the Run value: ours with no prior is del
   const del = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
   assert.deepEqual(userUnit({ ...o, run: del }).remove(), { code: 0, out: '', err: '', task: 'absent', runKey: 'removed' })
   assert.equal(del.reg.value, null)
-  assert.deepEqual(del.calls.filter((c) => c[0] === 'reg' && c[1] === 'delete'), [['reg', 'delete', RUN_PATH, '/v', 'asight-collector', '/f']])
+  assert.deepEqual(del.calls.filter((c) => c[0] === 'reg' && c[1] === 'delete'), [['reg', 'delete', RUN_PATH, '/v', 'trocar-collector', '/f']])
   const prior = { kind: 'REG_EXPAND_SZ', value: '%ProgramFiles%\\Tools\\mine.exe' }
   const put = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
   assert.deepEqual(userUnit({ ...o, run: put }).remove({ prior }), { code: 0, out: '', err: '', task: 'absent', runKey: 'restored' })
@@ -682,7 +682,7 @@ test('W24 off and uninstall remove only the Run value: ours with no prior is del
   const f = userUnit({ ...o, run: stuck }).remove()
   assert.deepEqual([f.code, f.runKey], [1, 'failed'])
   assert.match(f.err, /Access is denied/)
-  for (const c of [...del.calls, ...put.calls, ...stuck.calls].filter((c) => c[0] === 'reg' && c[1] !== 'query')) assert.ok(c.includes('/v') && c.includes('asight-collector') && c[2] === RUN_PATH, `only the one value is named: ${c.join(' ')}`)
+  for (const c of [...del.calls, ...put.calls, ...stuck.calls].filter((c) => c[0] === 'reg' && c[1] !== 'query')) assert.ok(c.includes('/v') && c.includes('trocar-collector') && c[2] === RUN_PATH, `only the one value is named: ${c.join(' ')}`)
   // a task and a Run value together (an earlier on used the task, a later one the fallback): both go
   const both = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
   const bothRun = (file, args) => (file === 'schtasks' && args[0] === '/Query' ? { status: 0, stdout: '', stderr: '' } : null)
@@ -690,7 +690,7 @@ test('W24 off and uninstall remove only the Run value: ours with no prior is del
   assert.deepEqual([r.code, r.task, r.runKey], [0, 'removed', 'removed'])
 })
 
-test('W24 exactly one login mechanism is live: enable by the task takes asight\'s earlier Run value out (the user\'s own prior goes back), and enable by the Run value switches an earlier task off', () => {
+test('W24 exactly one login mechanism is live: enable by the task takes trocar\'s earlier Run value out (the user\'s own prior goes back), and enable by the Run value switches an earlier task off', () => {
   // the task registers, an earlier fallback left its Run value: that value goes, and the ledger's prior is what comes back
   const taskOk = (reg) => (file, args, opts) => (file === 'schtasks' && args[0] === '/Create' ? { status: 0, stdout: '', stderr: '' } : file === 'schtasks' && args[0] === '/Run' ? { status: 0, stdout: '', stderr: '' } : reg(file, args, opts))
   const gone = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
@@ -733,7 +733,7 @@ test('W24 exactly one login mechanism is live: enable by the task takes asight\'
   const e2 = earlier({ change: { status: 1, stderr: 'ERROR: Access is denied.' } })
   const g = installed(userUnit({ ...withHome(), run: e2.run })).enable({ now: false })
   assert.deepEqual([g.code, g.via, g.task], [0, 'run-key', 'failed'])
-  assert.match(g.warn, /\\asight\\collector/)
+  assert.match(g.warn, /\\trocar\\collector/)
   assert.match(g.warn, /Access is denied/)
   const none = fakeRegistry() // schtasks /Query answers 1: no task, nothing to switch off
   const h = installed(userUnit({ ...withHome(), run: none })).enable({ now: false })
@@ -750,9 +750,9 @@ test('W24 exactly one login mechanism is live: enable by the task takes asight\'
 test('W24 a /Run that answered success but started nothing (LastTaskResult 267011, no interactive session for the task — probe-verified on a Windows test machine, 2026-10-12): the daemon is started DIRECTLY, the receipt says exactly that, and the task keeps the login; a task that did run is left alone', () => {
   // the verbose CSV schtasks answers for the task: the Last Result column is found by its header (en), and the value may be decimal or 0x-prefixed
   const head = '"HostName","TaskName","Next Run Time","Status","Last Run Time","Last Result","Creation Date","Task To Run"'
-  const csv = (last) => ({ status: 0, stdout: `\r\n${head}\r\n"HOST","\\asight\\collector","2026/10/12 10:00:00","Ready","2026/10/12 10:00:00","${last}","2026/10/11 09:00:00","conhost.exe"\r\n`, stderr: '' })
+  const csv = (last) => ({ status: 0, stdout: `\r\n${head}\r\n"HOST","\\trocar\\collector","2026/10/12 10:00:00","Ready","2026/10/12 10:00:00","${last}","2026/10/11 09:00:00","conhost.exe"\r\n`, stderr: '' })
   const zhHead = '"\u4e3b\u673a\u540d","\u4efb\u52a1\u540d","\u4e0b\u6b21\u8fd0\u884c\u65f6\u95f4","\u6a21\u5f0f","\u4e0a\u6b21\u8fd0\u884c\u65f6\u95f4","\u4e0a\u6b21\u8fd0\u884c\u7ed3\u679c","\u521b\u5efa\u65f6\u95f4","\u8981\u8fd0\u884c\u7684\u4efb\u52a1"'
-  const zhCsv = (last) => ({ status: 0, stdout: `\r\n${zhHead}\r\n"HOST","\\asight\\collector","2026/10/12 10:00:00","\u5c31\u7eea","2026/10/12 10:00:00","${last}","2026/10/11 09:00:00","conhost.exe"\r\n`, stderr: '' })
+  const zhCsv = (last) => ({ status: 0, stdout: `\r\n${zhHead}\r\n"HOST","\\trocar\\collector","2026/10/12 10:00:00","\u5c31\u7eea","2026/10/12 10:00:00","${last}","2026/10/11 09:00:00","conhost.exe"\r\n`, stderr: '' })
   const none = fakeRegistry()
   // 267011 decimal, 0x41303, and the zh-CN header all read as "has not run": the daemon is started directly, honestly said
   for (const [name, result] of [['decimal 267011', csv('267011')], ['hex 0x41303', csv('0x41303')], ['the zh-CN header, decimal', zhCsv('267011')]]) {
@@ -780,8 +780,8 @@ test('W24 a /Run that answered success but started nothing (LastTaskResult 26701
   }
 })
 
-test('W24 which Run value is asight\'s is decided by its tail: the supervised daemon command at the end of the value (blanks after it do not matter); the same words with something after them, or glued to another word, are somebody else\'s and are left', () => {
-  for (const [value, runKey] of [[COMMAND, 'removed'], [`${COMMAND}   `, 'removed'], [`"C:\\Other\\launcher.exe" node asight daemon --supervise`, 'removed'], [`${COMMAND} --extra`, 'left'], [`${COMMAND} && del x`, 'left'], ['mydaemon --supervise', 'left'], ['"C:\\Tools\\mine.exe" --daemon --supervise-all', 'left'], ['daemon', 'left']]) {
+test('W24 which Run value is trocar\'s is decided by its tail: the supervised daemon command at the end of the value (blanks after it do not matter); the same words with something after them, or glued to another word, are somebody else\'s and are left', () => {
+  for (const [value, runKey] of [[COMMAND, 'removed'], [`${COMMAND}   `, 'removed'], [`"C:\\Other\\launcher.exe" node trocar daemon --supervise`, 'removed'], [`${COMMAND} --extra`, 'left'], [`${COMMAND} && del x`, 'left'], ['mydaemon --supervise', 'left'], ['"C:\\Tools\\mine.exe" --daemon --supervise-all', 'left'], ['daemon', 'left']]) {
     const r = fakeRegistry({ kind: 'REG_SZ', value })
     assert.equal(removeRunValue({ run: r }).runKey, runKey, JSON.stringify(value))
     assert.equal(r.reg.value === null, runKey === 'removed', `${JSON.stringify(value)}: ${runKey === 'removed' ? 'deleted' : 'still there'}`)
@@ -789,9 +789,9 @@ test('W24 which Run value is asight\'s is decided by its tail: the supervised da
 })
 
 test('W24 daemonCommandLine is the task\'s action as one line, and removeRunValue is the same undo the unit uses', () => {
-  assert.equal(daemonCommandLine({ node: NODE, asight: SCRIPT }), COMMAND)
-  assert.equal(daemonCommandLine({ node: NODE, asight: SCRIPT, conhost: 'C:\\Windows\\System32\\conhost.exe' }), `C:\\Windows\\System32\\conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`)
-  assert.throws(() => daemonCommandLine({ node: 'C:\\no"de.exe', asight: SCRIPT }), TypeError)
+  assert.equal(daemonCommandLine({ node: NODE, trocar: SCRIPT }), COMMAND)
+  assert.equal(daemonCommandLine({ node: NODE, trocar: SCRIPT, conhost: 'C:\\Windows\\System32\\conhost.exe' }), `C:\\Windows\\System32\\conhost.exe --headless "${NODE}" "${SCRIPT}" daemon --supervise`)
+  assert.throws(() => daemonCommandLine({ node: 'C:\\no"de.exe', trocar: SCRIPT }), TypeError)
   const r = fakeRegistry({ kind: 'REG_SZ', value: COMMAND })
   assert.equal(removeRunValue({ run: r }).runKey, 'removed')
   assert.equal(runKeyFallback({ command: COMMAND, run: fakeRegistry() }).ok, true, 'and the fallback writes it through the same reader')
@@ -831,7 +831,7 @@ const supervise = (over = {}) => {
   const clk = over.clk || clock()
   const spawn = over.spawn || fakeSpawner(over.script || [], clk)
   const sleep = over.sleep || sleeper(clk)
-  const dir = over.dir || tmpDir('asight-sup-')
+  const dir = over.dir || tmpDir('trocar-sup-')
   const logs = []
   const sup = superviseChild({ spawn, command: COMMAND_OF_DAEMON, dir, now: clk.now, sleep, pid: 4321, startedAt: 1234567890123, log: (l) => logs.push(l), ...over.opts })
   return { sup, spawn, sleep, dir, logs, clk }
@@ -843,7 +843,7 @@ test('W24 the supervisor brings the daemon back after a non-zero exit or a kill,
   assert.deepEqual(w.sleep.delays, [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000])
   assert.equal(w.spawn.spawns.length, 9)
   for (const { cmd, args, opts } of w.spawn.spawns) {
-    assert.deepEqual([cmd, args], [NODE, [SCRIPT, 'daemon']], 'node asight daemon: a child that carried --supervise would start a supervisor of its own, for ever')
+    assert.deepEqual([cmd, args], [NODE, [SCRIPT, 'daemon']], 'node trocar daemon: a child that carried --supervise would start a supervisor of its own, for ever')
     assert.equal(opts.windowsHide, true)
   }
   assert.deepEqual([0, 1, 2, 6, 7, 20].map(supervisorBackoff), [1000, 2000, 4000, 60000, 60000, 60000])
@@ -861,7 +861,7 @@ test('W24 a daemon that exits 0 was asked to stop (off drained, uninstall, off -
 })
 
 test('W24 the supervisor writes supervisor.lock with its pid and start time before it starts anything, holds nothing else, and removes only its own lock when it ends', async () => {
-  const dir = tmpDir('asight-sup-')
+  const dir = tmpDir('trocar-sup-')
   let seen = null
   const clk = clock()
   const spawn = fakeSpawner([{ code: 1 }, { code: 0 }], clk)
@@ -873,7 +873,7 @@ test('W24 the supervisor writes supervisor.lock with its pid and start time befo
   assert.deepEqual(seen.files, [SUPERVISOR_LOCK], 'the lock is the only thing it keeps: no capture state')
   assert.deepEqual(fs.readdirSync(dir), [], 'the lock goes with the supervisor')
   // another supervisor's lock (a newer one) is not ours to delete
-  const other = tmpDir('asight-sup-')
+  const other = tmpDir('trocar-sup-')
   const spawn2 = fakeSpawner([{ code: 0 }], clock())
   const hijack = (...a) => { fs.writeFileSync(path.join(other, SUPERVISOR_LOCK), JSON.stringify({ pid: 9, startedAt: 1 })); return spawn2(...a) }
   await within(supervise({ dir: other, spawn: Object.assign(hijack, { spawns: spawn2.spawns }) }).sup.done, 'the supervisor')
@@ -881,7 +881,7 @@ test('W24 the supervisor writes supervisor.lock with its pid and start time befo
 })
 
 test('W24 the default start time of the lock is when this process started (now minus its uptime), the form the process list gives for the identity check', async () => {
-  const dir = tmpDir('asight-sup-')
+  const dir = tmpDir('trocar-sup-')
   const spawn = fakeSpawner([{ code: 0 }], clock())
   const seen = []
   const sup = superviseChild({ spawn: (...a) => { seen.push(JSON.parse(fs.readFileSync(path.join(dir, SUPERVISOR_LOCK), 'utf8'))); return spawn(...a) }, command: COMMAND_OF_DAEMON, dir, sleep: async () => {} })
@@ -942,7 +942,7 @@ test('W24 an error of a child that is running (it has a pid: a kill that failed,
 })
 
 test('W24 a lock that cannot be written does not stop the supervision: it is said in the log, and the daemon is still brought back', async () => {
-  const dir = path.join(tmpDir('asight-sup-'), 'file-not-dir')
+  const dir = path.join(tmpDir('trocar-sup-'), 'file-not-dir')
   fs.writeFileSync(dir, 'x')
   const w = supervise({ dir, script: [{ code: 1 }, { code: 0 }] })
   assert.equal(await within(w.sup.done, 'the supervisor'), 0)
@@ -954,7 +954,7 @@ test('W24 a lock that cannot be written does not stop the supervision: it is sai
 const world = (...live) => { const asked = []; const isLive = ({ pid, startedAt }) => { asked.push({ pid, startedAt }); return live.includes(`${pid}:${startedAt}`) }; return Object.assign(isLive, { asked }) }
 
 test('W24 the supervisor is a singleton: with a live holder of supervisor.lock the second one says so, starts no daemon, exits 0 and leaves the holder\'s lock alone', async () => {
-  const dir = tmpDir('asight-sup-')
+  const dir = tmpDir('trocar-sup-')
   const a = supervise({ dir, script: [{ hang: true }], opts: { pid: 4321, startedAt: 1111 } })
   await new Promise((r) => setImmediate(r))
   assert.equal(a.spawn.spawns.length, 1)
@@ -978,7 +978,7 @@ test('W24 the supervisor is a singleton: with a live holder of supervisor.lock t
 test('W24 a lock whose holder is not running (a hard stop leaves one; a pid is reused; the start time differs) is taken over; a lock of this very pid is ours; an identity check that cannot tell is said and treated as not running', async () => {
   /** Starts a supervisor over a lock that is already there, lets it run its daemon, and says whose lock it is while it runs. */
   const takes = async (held, opts, what) => {
-    const dir = tmpDir('asight-sup-')
+    const dir = tmpDir('trocar-sup-')
     fs.writeFileSync(path.join(dir, SUPERVISOR_LOCK), typeof held === 'string' ? held : `${JSON.stringify(held)}\n`)
     const w = supervise({ dir, script: [{ hang: true }], opts: { pid: 4321, startedAt: 5555, ...opts } })
     await new Promise((r) => setImmediate(r))
@@ -991,7 +991,7 @@ test('W24 a lock whose holder is not running (a hard stop leaves one; a pid is r
   await takes({ pid: 777, startedAt: 1 }, { isLive: world() }, 'a dead holder')
   await takes({ pid: 777, startedAt: 1 }, { isLive: world('777:2') }, 'a reused pid (running, with another start time)')
   await takes({ pid: 4321, startedAt: 1 }, { isLive: world('4321:1') }, 'a lock that names this very process')
-  const broken = await takes({ pid: 777, startedAt: 1 }, { isLive: () => { throw new Error('powershell did not answer') } }, 'an identity check that fails: not known to be running is not running, asight starts rather than not starting')
+  const broken = await takes({ pid: 777, startedAt: 1 }, { isLive: () => { throw new Error('powershell did not answer') } }, 'an identity check that fails: not known to be running is not running, trocar starts rather than not starting')
   assert.ok(broken.logs.some((l) => /powershell did not answer/.test(l)), 'and the failure is said')
   for (const junk of ['', '{', '[]', '{"pid":"x"}', '{"pid":0,"startedAt":1}', '{"pid":1.5,"startedAt":1}', '{"pid":5}']) { // a lock that names nobody is nobody's
     const isLive = world('0:1', '1:1', '5:undefined')
@@ -1001,7 +1001,7 @@ test('W24 a lock whose holder is not running (a hard stop leaves one; a pid is r
 })
 
 test('W24 two supervisors that start in the same moment end up as one: the lock is made exclusively, so the one that lost reads the winner\'s lock', async () => {
-  const dir = tmpDir('asight-sup-')
+  const dir = tmpDir('trocar-sup-')
   const winner = JSON.stringify({ pid: 4000, startedAt: 7 })
   const racing = { ...fs, writeFileSync: (file, data, opts) => { if (opts && opts.flag === 'wx') { fs.writeFileSync(file, winner); throw Object.assign(new Error('EEXIST: file already exists'), { code: 'EEXIST' }) } return fs.writeFileSync(file, data, opts) } }
   const w = supervise({ dir, script: [{ code: 0 }], opts: { fs: racing, isLive: world('4000:7') } })
@@ -1011,7 +1011,7 @@ test('W24 two supervisors that start in the same moment end up as one: the lock 
 })
 
 test('W24 without an identity check (a caller that passes none) the lock is written as before; runSupervisor passes the real one, which asks Windows for the holder\'s start time and accepts the lock\'s own to within 2 s', async () => {
-  const dir = tmpDir('asight-sup-')
+  const dir = tmpDir('trocar-sup-')
   fs.writeFileSync(path.join(dir, SUPERVISOR_LOCK), JSON.stringify({ pid: 777, startedAt: 1_700_000_000_000 }))
   const w = supervise({ dir, script: [{ code: 0 }] })
   assert.equal(await within(w.sup.done, 'no check'), 0)
@@ -1034,18 +1034,18 @@ test('W24 without an identity check (a caller that passes none) the lock is writ
   const run = answers('1700000000400')
   const clk = clock()
   const spawn = fakeSpawner([{ code: 0 }], clk)
-  const r = await runSupervisor({ node: NODE, asight: SCRIPT, dir, run, proc: new EventEmitter(), deps: { spawn, now: clk.now, sleep: sleeper(clk), pid: 4321 } })
+  const r = await runSupervisor({ node: NODE, trocar: SCRIPT, dir, run, proc: new EventEmitter(), deps: { spawn, now: clk.now, sleep: sleeper(clk), pid: 4321 } })
   assert.equal(r, 0)
   assert.equal(spawn.spawns.length, 0, 'the holder answered with its own start time: this one does not start a daemon')
   assert.equal(run.calls.length, 1)
 })
 
-test('W24 runSupervisor is what `asight daemon --supervise` calls: it supervises node <asight> daemon, stops its child on SIGINT, SIGTERM or SIGHUP, and leaves no handler behind', async () => {
+test('W24 runSupervisor is what `trocar daemon --supervise` calls: it supervises node <trocar> daemon, stops its child on SIGINT, SIGTERM or SIGHUP, and leaves no handler behind', async () => {
   const clk = clock()
   const spawn = fakeSpawner([{ hang: true }], clk)
   const proc = new EventEmitter()
-  const dir = tmpDir('asight-sup-')
-  const p = runSupervisor({ node: NODE, asight: SCRIPT, dir, proc, deps: { spawn, now: clk.now, sleep: sleeper(clk) } })
+  const dir = tmpDir('trocar-sup-')
+  const p = runSupervisor({ node: NODE, trocar: SCRIPT, dir, proc, deps: { spawn, now: clk.now, sleep: sleeper(clk) } })
   await until(() => spawn.spawns.length === 1)
   assert.deepEqual([spawn.spawns[0].cmd, spawn.spawns[0].args], [NODE, [SCRIPT, 'daemon']])
   assert.deepEqual(['SIGHUP', 'SIGINT', 'SIGTERM'].map((s) => proc.listenerCount(s)), [1, 1, 1])

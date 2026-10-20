@@ -40,7 +40,7 @@ test('CM3 (stub): create → a ROOT-profile root; issue carries only spki / seri
   const ps = stubPowershell(), c = cngCustody({ run: ps.run })
   assert.equal(c.kind, 'cng')
   assert.equal(c.exists(), false)
-  const { rootDer, fp256, provider } = c.create({ subject: 'asight root (test)' })
+  const { rootDer, fp256, provider } = c.create({ subject: 'trocar root (test)' })
   assert.deepEqual(checkProfile(rootDer, ROOT), [])
   assert.equal(provider, 'Microsoft Software Key Storage Provider', 'the provider the key went to is passed on (D38: a software fallback is never silent)')
   assert.equal(fp256, new crypto.X509Certificate(rootDer).fingerprint256)
@@ -81,7 +81,7 @@ test('custody.ps1 builds and signs itself: no caller TBS, X509SignatureGenerator
   assert.match(ps1, /ExportPolicy = \[System\.Security\.Cryptography\.CngExportPolicies\]::None/)
   assert.ok(ps1.indexOf('Microsoft Platform Crypto Provider') < ps1.indexOf('Microsoft Software Key Storage Provider'), 'the TPM is tried first (R3-W1)')
   assert.doesNotMatch(ps1, /--tbs|Export\(\s*\[System\.Security\.Cryptography\.CngKeyBlobFormat\]::(EccPrivate|Pkcs8Private|GenericPrivate)/i, 'nothing signs a caller\'s bytes; the private key is never exported')
-  assert.doesNotMatch(ps1, /SetProperty|GetProperty|CngProperty/, 'the key holds no state of asight\'s: the TPM provider keeps only its own property set, so a property would push a TPM machine onto the software KSP')
+  assert.doesNotMatch(ps1, /SetProperty|GetProperty|CngProperty/, 'the key holds no state of trocar\'s: the TPM provider keeps only its own property set, so a property would push a TPM machine onto the software KSP')
   assert.match(ps1, /Get-ChildItem Cert:\\CurrentUser\\Root/, 'issue takes the issuer name from the root certificate in the user\'s Root store')
   for (const verb of ['create', 'exists', 'issue', 'remove']) assert.match(ps1, new RegExp(`^  '${verb}' \\{`, 'm'), verb)
   assert.ok(ps1.split('\n').length <= 120, 'one-shot and short')
@@ -89,7 +89,7 @@ test('custody.ps1 builds and signs itself: no caller TBS, X509SignatureGenerator
 })
 
 test('CM7 (argv): the Windows root store is always certutil -user on the Root store', () => {
-  const home = tmpDir('asight-rs-win-')
+  const home = tmpDir('trocar-rs-win-')
   const der = custodyStub().create({ subject: 'r' }).rootDer
   const { run, calls } = certutilModel()
   const rs = userRootStore({ home, run })

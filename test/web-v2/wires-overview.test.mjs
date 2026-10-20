@@ -1,5 +1,5 @@
 // wires-overview.test.mjs — the overview (1.7) reads the C.5 documents as they are: every stats number from `overview` alone
-// (D24), the cost and hit marks from `usage` (D14 · invariant 4), the disk footer from `classes.disk.asight_bytes`, O9 from
+// (D24), the cost and hit marks from `usage` (D14 · invariant 4), the disk footer from `classes.disk.trocar_bytes`, O9 from
 // `traffic`, the recent list from `sessions`. The documents come from the real face (real server, real query worker).
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -60,10 +60,10 @@ test('(2) usage that did not cover the window marks the cost partial; a main row
   assert.equal(z.partial, true); assert.equal(z.cost, null); assert.equal(z.hit, null)
 })
 
-test('(3) the disk footer is classes.disk.asight_bytes; a failed classes read draws no footer', async () => {
+test('(3) the disk footer is classes.disk.trocar_bytes; a failed classes read draws no footer', async () => {
   const D = await docs
-  assert.equal(typeof D.classes.disk.asight_bytes, 'number')
-  assert.equal(diskBytes(ok(D.classes)), D.classes.disk.asight_bytes)
+  assert.equal(typeof D.classes.disk.trocar_bytes, 'number')
+  assert.equal(diskBytes(ok(D.classes)), D.classes.disk.trocar_bytes)
   assert.equal(diskBytes({ data: D.classes, ok: false, err: 'HTTP 500' }), null)
 })
 

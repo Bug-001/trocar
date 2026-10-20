@@ -15,7 +15,7 @@ import { TITLE_FROM_AGENT, UNNAMED } from '../../src/web/v2/labels/overview.mjs'
 import { ERR_WHERE, SWITCH_WORD } from '../../src/web/v2/labels/capture.mjs'
 import { esc, fmtWhen } from '../../src/web/v2/core/fmt.mjs'
 
-const SPEC = fs.readFileSync(new URL('../../spec/01-asight-rfc/1.6-cli.md', import.meta.url), 'utf8')
+const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
 const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
 const SAMPLE = JSON.parse(/```json\n([\s\S]*?)```/.exec(C3)[1])
 const HEALTH_STATES = (() => {
@@ -47,7 +47,7 @@ const ok = (data) => ({ data, ok: true, err: null })
 const failed = (data = null) => ({ data, ok: false, err: 'HTTP 500' })
 const stateOf = (status, over = {}) => ({
   w: '24h', readAt: NOW, caph: { data: status, okAt: NOW, err: null, ok: true },
-  sessions: ok({ sessions: [session(1)], errors: [] }), classes: ok({ disk: { asight_bytes: 1e6 } }), pricing: ok({ models: [] }),
+  sessions: ok({ sessions: [session(1)], errors: [] }), classes: ok({ disk: { trocar_bytes: 1e6 } }), pricing: ok({ models: [] }),
   stats: ok({ as_of: iso(H), sessions: { total: 1 }, calls: { llm: 2 }, harnesses: [], usage: { rows: [], coverage: {} } }),
   traffic: ok({ hosts: [], harness_since: {} }), segments: ok({ segments: [] }), ...over,
 })
@@ -170,7 +170,7 @@ test('#3 no false 「nothing to handle」: a failed source draws the partial not
 // a mounted overview on a fake element and a fake api that logs every call
 function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h', control = {}, answer = { ok: true } } = {}) {
   const log = [], on = {}
-  const docs = { status, sessions, classes: { disk: { asight_bytes: 1 } }, pricing: { models: [] }, traffic: { hosts: [], harness_since: {} }, segments: { segments: [] } }
+  const docs = { status, sessions, classes: { disk: { trocar_bytes: 1 } }, pricing: { models: [] }, traffic: { hosts: [], harness_since: {} }, segments: { segments: [] } }
   const api = {
     now: () => NOW,
     get: async (name, params) => { log.push({ method: 'GET', name, params: params || {} }); return name === 'overview' ? { ok: true, status: 200, data: stateOf(quiet()).stats.data } : { ok: true, status: 200, data: docs[name] } },
@@ -341,7 +341,7 @@ test('#10 first use: one row per listed agent with exactly one control (switch, 
     const installed = !(st.caph.data.health && st.caph.data.health.state === 'not-installed')
     for (const id of TWO) {
       const row = rowHtml(b.agents, harnessKey(id))
-      assert.ok(row.includes(installed ? `asight on ${id}` : 'asight install'), row)
+      assert.ok(row.includes(installed ? `trocar on ${id}` : 'trocar install'), row)
     }
   }
   for (const st of [firstWith(twoAgents(), CTL_ON), ...cannot]) {

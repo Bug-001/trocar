@@ -35,10 +35,10 @@ test('每个文档过 schema', async () => {
 })
 
 // §4.1 的名字表是 spec 的事实,只写在 spec 里:从那张表读出名字,再与 QUERIES 比。
-const SPEC = fileURLToPath(new URL('../../spec/01-asight-rfc/1.6-cli.md', import.meta.url))
+const SPEC = fileURLToPath(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url))
 const specNames = () => {
   const md = fs.readFileSync(SPEC, 'utf8')
-  const at = md.indexOf('### 4.1 `asight query`')
+  const at = md.indexOf('### 4.1 `trocar query`')
   const table = md.slice(at, md.indexOf('\n- **参数**', at))
   return table.split('\n').map((l) => /^\| `([a-z]+)` \|/.exec(l)).filter(Boolean).map((m) => m[1])
 }
@@ -75,15 +75,15 @@ test('sessions / session / block / pricing 的顶层键照 C.5', async () => {
   assert.deepEqual(Object.keys(pricing).sort(), ['command', 'errors', 'models', 'ok', 'schema', 'source'])
   assert.deepEqual(Object.keys(pricing.models[0]).sort(), ['cache_read', 'cache_write', 'input', 'model', 'output', 'unit'])
   assert.equal(pricing.source, 'default')
-  // ASIGHT_PRICING 指的文件顶替内置表,文档说出它是来源
+  // TROCAR_PRICING 指的文件顶替内置表,文档说出它是来源
   const file = path.join(home, 'p.json')
   fs.writeFileSync(file, JSON.stringify({ opus: [1, 2, 3, 4] }))
-  process.env.ASIGHT_PRICING = file
+  process.env.TROCAR_PRICING = file
   try {
     const mine = await runQuery('pricing', {}, { home })
     assert.deepEqual([mine.source, mine.models.find((m) => m.model === 'opus')],
       [file, { model: 'opus', input: 1, output: 2, cache_read: 4, cache_write: 3, unit: '$/Mtok' }])
-  } finally { delete process.env.ASIGHT_PRICING }
+  } finally { delete process.env.TROCAR_PRICING }
 })
 
 test('block 只认 `<段>:<行>` 的记录 id;读不到的记录进 errors,文档照出', async () => {
@@ -129,13 +129,13 @@ test('classes 的顶层键与每类的键照 C.5,条数与大小来自段索引'
   assert.equal(llm.counts.h24.calls, 1)
   assert.equal(doc.classes.find((c) => c.class === 'telemetry').counts.all.calls, 1)
   assert.ok(llm.counts.all.bytes > 0)
-  assert.deepEqual(Object.keys(doc.disk).sort(), ['asight_bytes', 'records_bytes', 'sealed_bytes'])
+  assert.deepEqual(Object.keys(doc.disk).sort(), ['records_bytes', 'sealed_bytes', 'trocar_bytes'])
   // every disk number IS a size on disk (P4): the plaintext segments, their sealed copies, the whole home
   const sizes = (re) => fs.readdirSync(path.join(home, 'raw')).filter((n) => re.test(n)).reduce((n, f) => n + fs.statSync(path.join(home, 'raw', f)).size, 0)
   assert.equal(doc.disk.records_bytes, sizes(/\.ndjson$/))
   assert.ok(doc.disk.records_bytes > 0)
   assert.equal(doc.disk.sealed_bytes, sizes(/\.sealed$/))
-  assert.ok(doc.disk.asight_bytes >= doc.disk.records_bytes)
+  assert.ok(doc.disk.trocar_bytes >= doc.disk.records_bytes)
   assert.equal(doc.file, null)
 
   // 24 h / 7 d are windows on the record's own time, not on everything on disk

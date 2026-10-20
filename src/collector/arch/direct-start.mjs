@@ -16,7 +16,7 @@ export function directStartEnv(env = process.env) {
 }
 
 /** The `stdio` of a daemon this run starts itself: its stdout / stderr appended to the two files the login entry appends to (D46), so a daemon that
- *  exits at once leaves its reason where the operator and `asight status` look — `stdio: 'ignore'` left none anywhere (review 2026-10-18).
+ *  exits at once leaves its reason where the operator and `trocar status` look — `stdio: 'ignore'` left none anywhere (review 2026-10-18).
  *  → `{ stdio, logs, note }`; a logs directory that cannot be made falls back to 'ignore' and says so — it never stops the start. */
 export function directStartStdio(home, { fs = nodeFs } = {}) {
   const logs = daemonLogPaths(home)

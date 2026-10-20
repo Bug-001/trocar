@@ -1,7 +1,7 @@
 // core/chips.mjs — the ONE place harness ids appear in the front end (invariant 3 / AC-3, 1.2 §agent chip 与图标).
 // The agent chip is table-driven off the server's `harness` field: a new harness is a new row here plus one icon file in
 // assets/harness/; no screen changes. Keys are the eight read-side ids (src/dissect/harnesses.mjs's rows, plus the
-// legacy DeepSeek CLI) folded onto by every alias; the icons are asight's own drawings (see assets/harness/SOURCES.md).
+// legacy DeepSeek CLI) folded onto by every alias; the icons are trocar's own drawings (see assets/harness/SOURCES.md).
 import { esc } from './fmt.mjs'
 import { mark } from './ui.mjs'
 import { asset } from './http.mjs'

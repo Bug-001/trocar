@@ -1,4 +1,4 @@
-// labels/library.mjs — the session library's fixed words (1.8). Closed sets keyed by asight's own ids only
+// labels/library.mjs — the session library's fixed words (1.8). Closed sets keyed by trocar's own ids only
 // (entrypoint cli/desktop, window 24h/7d/all, sort calls): a harness-defined code never keys a word here — agent
 // names and icons come from core/chips.mjs (invariant 3). Nothing in this file is data.
 
@@ -24,7 +24,7 @@ export const activeProjectChip = (name) => `project: ${name}`
 export const capNotAllRead = (n) => `◐ ${n} capture ${n === 1 ? 'file was' : 'files were'} not read in full; the list may be incomplete`
 export const CAP_NOT_ALL_TIP = 'See Storage for each file'
 export const capReadFail = (code) => `Could not read the session list: the capture service returned ${code}`
-export const CAP_CONN_FAIL = 'Cannot reach the asight capture service'
+export const CAP_CONN_FAIL = 'Cannot reach the trocar capture service'
 export const RETRY = 'Retry'
 export const capOldList = (t) => `Below is the list as read at ${t}`
 

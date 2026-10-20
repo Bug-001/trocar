@@ -83,7 +83,7 @@ test('layering: the real tree has no violations, and the walk sees src/netenv (W
 })
 
 test('collector layering: a planted tree trips every rule and ignores comments and "handshake"', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-layering-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-layering-'))
   const put = (rel, text) => { const f = path.join(root, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text) }
   try {
     put('src/collector/core/p.mjs', "export const linux = process.platform === 'linux'\n")

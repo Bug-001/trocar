@@ -1,9 +1,9 @@
-// model-on.mjs — `asight on` on macOS and Windows in the collector model (RFC 4.11 §1「on / off」, §3 ① ⑪ ⑫, P5; 1.6 §1.1; plan T20). `on` only
+// model-on.mjs — `trocar on` on macOS and Windows in the collector model (RFC 4.11 §1「on / off」, §3 ① ⑪ ⑫, P5; 1.6 §1.1; plan T20). `on` only
 // routes: it never writes a certificate (D55①). In order: the install record must be there (else `cert-not-installed`); per harness, precondition ⑪
-// — its install items are there and unchanged, the wrapper's hash included — or only that harness is refused with the hint `asight install`
+// — its install items are there and unchanged, the wrapper's hash included — or only that harness is refused with the hint `trocar install`
 // (CM28); desired on and the liveness record's `on_at`; the ports (core/ingress-config, rebinding a group port another socket took); POST /on
 // to the daemon through the ONE endpoint resolver (controlEndpointFor), and the doors it opened read back; the P5 entries of the present forms and the
-// switch files, each with its door; the harness notes (hostTree, effects). The caller holds op.lock and has refused root. The CLI calls it from `asight on`.
+// switch files, each with its door; the harness notes (hostTree, effects). The caller holds op.lock and has refused root. The CLI calls it from `trocar on`.
 import nodeFs from 'node:fs'
 import crypto from 'node:crypto'
 import path from 'node:path'
@@ -19,17 +19,17 @@ import { controlEndpointFor } from './core/control.mjs'
 import { CODE } from './core/codes.mjs'
 import { appendEvent } from './core/events.mjs'
 
-const INSTALL_HINT = 'asight install'
+const INSTALL_HINT = 'trocar install'
 // 1.6 §1.1: what a `setup.missing[].what` means, in words (the code stays in the JSON)
-const SETUP_WHY = { 'carrier-absent': 'asight has not set up its certificate for it (installed after asight, or what asight placed is gone)', 'carrier-overwritten': 'its own update overwrote what asight placed for its certificate', 'root-missing': "asight's root certificate is no longer trusted" }
+const SETUP_WHY = { 'carrier-absent': 'trocar has not set up its certificate for it (installed after trocar, or what trocar placed is gone)', 'carrier-overwritten': 'its own update overwrote what trocar placed for its certificate', 'root-missing': "trocar's root certificate is no longer trusted" }
 const errText = (e) => String((e && e.message) || e)
-/** The root's state the way `status` reads it (cert.root.state, 1.6 §9.4): asight-ca.pem asked of the user's store through the injected reader — the one
+/** The root's state the way `status` reads it (cert.root.state, 1.6 §9.4): trocar-ca.pem asked of the user's store through the injected reader — the one
  *  store question `on` asks, so ⑪'s root-missing is status's (4.11 P4b). Pending / declined / unreadable → not `missing`: not setup work, or not known. */
 export async function rootOf({ dir, m, rootStore, fs }) {
   if (!rootStore) return null
   if ((m.install.pending || []).some((p) => p.item === 'root-store')) return { state: 'pending' }
   let x
-  try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'))) } catch { return null }
+  try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'))) } catch { return null }
   let has
   try { has = await rootStore.has({ fp256: x.fingerprint256, sha1: x.fingerprint.replace(/:/g, '') }) } catch { return null }
   return { state: has && has.present ? 'in-place' : has && has.error ? 'unknown' : 'missing' }
@@ -39,9 +39,9 @@ const groupOf = (harness, routeId) => `${harness}:${routeId}`
 /** turnOnModel({ os, home, env, ids, harnesses, ctx, … }) → { on, refused, routes, notes, problems, doors, exit }. `request` / `isFree` replace the
  *  world in a test that needs to; the default asks the endpoint controlEndpointFor resolves (no socket path is ever passed in). */
 export async function turnOnModel({ os, home, env = process.env, ids = null, harnesses, ctx, fs = nodeFs, now = () => new Date(), request = null, isFree = freeOnLoopback, persistentEnv = null, systemProxy = null, renderHook = null, newId = undefined, dryRun = false, rootStore = null, source = null }) {
-  const dir = collectorHome(path.join(home, '.asight'))
+  const dir = collectorHome(path.join(home, '.trocar'))
   const m = readManifest(dir, fs)
-  if (!installUsable(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`asight is not installed for this user (no install record with a root): run ${INSTALL_HINT} first`], exit: 1 }
+  if (!installUsable(m)) return { code: CODE.certNotInstalled, on: [], refused: [], routes: [], notes: [], problems: [`trocar is not installed for this user (no install record with a root): run ${INSTALL_HINT} first`], exit: 1 }
   const byName = new Map(harnesses.map((d) => [d.name, d]))
   const wanted = ids || m.install.harnesses
   const refused = [], on = []
@@ -84,12 +84,12 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   // §3 ①: a group port another socket holds is engine-port-taken — said in the receipt and recorded (D38), then the group's entries follow the new door
   for (const g of cfg.rebound) {
     const [from, to] = [was.groupPorts[g], cfg.config.groupPorts[g]]
-    const reason = `the door of ${g} could not use its recorded port ${from}: another program holds it; asight on moved the door to ${to} and rewrites its entries`
+    const reason = `the door of ${g} could not use its recorded port ${from}: another program holds it; trocar on moved the door to ${to} and rewrites its entries`
     try { appendEvent(dir, { event: 'failure', where: 'ingress', code: CODE.enginePortTaken, door: g, port: from, moved_to: to, reason, ...(source ? { source } : {}) }) } catch { /* the receipt's note carries it (R11) */ }
     out.notes.push({ harness: g.slice(0, g.indexOf(':')), code: CODE.enginePortTaken, text: `${CODE.enginePortTaken}: 门 ${g} 原来的端口 ${from} 被别的程序占了,换到 ${to},入口跟着改写` })
   }
   let doors = null
-  if (!ep.socketPath) out.problems.push(`no daemon to ask: ${ep.why || 'no control endpoint'}; start it (asight daemon), then run asight on again`)
+  if (!ep.socketPath) out.problems.push(`no daemon to ask: ${ep.why || 'no control endpoint'}; start it (trocar daemon), then run trocar on again`)
   else {
     try {
       const r = await ask({ socketPath: ep.socketPath, method: 'POST', path: '/on', body: { harnesses: on, groups: Object.fromEntries(groups.map((g) => [g, cfg.config.groupPorts[g]])) } })

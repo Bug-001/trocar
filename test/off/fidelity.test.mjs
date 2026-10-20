@@ -16,26 +16,26 @@ import { formatOffReceipt } from '../../src/off/receipt.mjs'
 import { installedHome } from './fixtures/off-ctx.mjs'
 
 const FORMATS = { dotenv: '.codex/.env', 'yaml-list': '.dsh/cordis.patch.yml', rc: '.zshrc' }
-const editFor = (format, home) => format === 'dotenv' ? { format: 'dotenv-block', vars: { SSL_CERT_FILE: `${home}/.asight/collector/ca/combined-codex.pem` }, quote: true }
-  : format === 'yaml-list' ? { format: 'yaml-list', line: `- insert: [{ name: "${home}/.asight/collector/plugins/dsh/index.js" }] ${lineComment('dsh plugin')}` }
-    : { format: 'line', line: `export PATH="${home}/.asight/collector/bin:$PATH" ${lineComment('kimi shim')}` }
+const editFor = (format, home) => format === 'dotenv' ? { format: 'dotenv-block', vars: { SSL_CERT_FILE: `${home}/.trocar/collector/ca/combined-codex.pem` }, quote: true }
+  : format === 'yaml-list' ? { format: 'yaml-list', line: `- insert: [{ name: "${home}/.trocar/collector/plugins/dsh/index.js" }] ${lineComment('dsh plugin')}` }
+    : { format: 'line', line: `export PATH="${home}/.trocar/collector/bin:$PATH" ${lineComment('kimi shim')}` }
 const BUDGET = 60
 const cases = (format, keep = () => true) => shapeCases({ format, budget: BUDGET }).filter((c) => c.determinable && keep(c))
 const tag = (c) => `${c.id} seed=${c.seed} ${c.describe}`
 
 function sandbox(c) {
-  const root = tmpDir('asight-fid-')
+  const root = tmpDir('trocar-fid-')
   const file = path.join(root, FORMATS[c.format])
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, c.bytes, { mode: 0o600 })
-  return { root, dir: path.join(root, '.asight', 'collector'), file }
+  return { root, dir: path.join(root, '.trocar', 'collector'), file }
 }
 function on(c, b, manifest = newManifest()) {
   const e = applyTextEntry({ phase: 'on', home: b.root, dir: b.dir, manifest, harness: 'h', file: b.file, edit: editFor(c.format, c.home) })
   return { e, manifest }
 }
 
-// The file the user saved again after `on`, in a form that proves no encoding: one per `why` of the closed set, built from the text asight left.
+// The file the user saved again after `on`, in a form that proves no encoding: one per `why` of the closed set, built from the text trocar left.
 const MARKS = { utf8: [0xef, 0xbb, 0xbf], utf16le: [0xff, 0xfe], utf16be: [0xfe, 0xff] }
 const utf32le = (t) => { const cps = [...t].map((x) => x.codePointAt(0)); const b = Buffer.alloc(4 * cps.length); cps.forEach((x, i) => b.writeUInt32LE(x, 4 * i)); return b }
 const RESAVED = {
@@ -46,7 +46,7 @@ const RESAVED = {
   'odd-length': (t) => Buffer.concat([shapeEncode(t, 'utf16le', true), Buffer.from([0x41])]),
   'invalid-utf16': (t) => Buffer.concat([shapeEncode(t, 'utf16be', true), Buffer.from([0xdc, 0x00])]),
 }
-const textOf = (bytes) => { const d = decodeBytes(bytes); assert.ok(!d.why, `asight left bytes the generator cannot read: ${d.why}`); return d.text }
+const textOf = (bytes) => { const d = decodeBytes(bytes); assert.ok(!d.why, `trocar left bytes the generator cannot read: ${d.why}`); return d.text }
 
 for (const format of Object.keys(FORMATS)) {
   test(`fidelity ${format}: I3 on keeps the file's form (charset, mark) and writes its line ending; I7 on twice is on once; I1 off of an untouched file is byte for byte`, () => {
@@ -55,11 +55,11 @@ for (const format of Object.keys(FORMATS)) {
       const { e, manifest } = on(c, b)
       const after = fs.readFileSync(b.file)
       const d = decodeBytes(after)
-      assert.ok(!d.why, `${tag(c)}: asight left bytes that prove no form (${d.why})`)
+      assert.ok(!d.why, `${tag(c)}: trocar left bytes that prove no form (${d.why})`)
       assert.deepEqual([d.charset, d.bom], [c.charset, c.bom], `I3 the form stays: ${tag(c)}`)
       assert.equal(e.charset, c.charset === 'utf8' ? undefined : c.charset, `the entry records a charset only when it is not utf8: ${tag(c)}`)
       const eol = shapeEol(c.text)
-      for (const op of e.ops) for (const m of op.inserted.matchAll(/\r?\n/g)) assert.equal(m[0], eol, `I3 asight's lines end as the file's do (${JSON.stringify(eol)}): ${tag(c)}`)
+      for (const op of e.ops) for (const m of op.inserted.matchAll(/\r?\n/g)) assert.equal(m[0], eol, `I3 trocar's lines end as the file's do (${JSON.stringify(eol)}): ${tag(c)}`)
       assert.equal(on(c, b, manifest).e, null, `I7 a second on writes nothing: ${tag(c)}`)
       assert.ok(fs.readFileSync(b.file).equals(after), `I7 on; on is on: ${tag(c)}`)
       assert.equal(undoEntry(e).result, 'restored', `I1: ${tag(c)}`)
@@ -73,7 +73,7 @@ for (const format of Object.keys(FORMATS)) {
       assert.throws(() => on(c, b), (err) => err.code === 'entry-refused' && err.why === decodeBytes(c.bytes).why && err.path === b.file && err.message.includes(err.why), tag(c))
       assert.ok(fs.readFileSync(b.file).equals(c.bytes), `not a byte written: ${tag(c)}`)
       assert.equal(readManifest(b.dir), null, `nothing recorded: ${tag(c)}`)
-      assert.equal(fs.existsSync(path.join(b.root, '.asight', 'backup')), false, tag(c))
+      assert.equal(fs.existsSync(path.join(b.root, '.trocar', 'backup')), false, tag(c))
     }
   })
 
@@ -120,7 +120,7 @@ test('fidelity marker: with no manifest, a marked file whose bytes prove no enco
   const resaved = RESAVED['nul-in-text'](textOf(fs.readFileSync(b.file)))
   fs.writeFileSync(b.file, resaved)
   const plan = planByMarker({ home: b.root, ids: ['codex'] })
-  assert.equal(plan.length, 1, 'the mark is found in the bytes even though they are not text asight may write')
+  assert.equal(plan.length, 1, 'the mark is found in the bytes even though they are not text trocar may write')
   const [r] = undoByMarker(plan, { home: b.root })
   assert.equal(r.result, 'left-unreadable')
   assert.ok(fs.readFileSync(b.file).equals(resaved))
@@ -137,14 +137,14 @@ const commentsOf = (t) => {
   }
   return out
 }
-const jsonSandbox = (bytes) => { const root = tmpDir('asight-fid-'), file = path.join(root, '.claude', 'settings.json'); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes, { mode: 0o600 }); return { root, dir: path.join(root, '.asight', 'collector'), file } }
-const JSON_KEYS = (b) => [[['env', 'HTTPS_PROXY'], GATE], [['env', 'NODE_EXTRA_CA_CERTS'], path.join(b.root, '.asight', 'collector', 'ca', 'asight-ca.pem')]]
+const jsonSandbox = (bytes) => { const root = tmpDir('trocar-fid-'), file = path.join(root, '.claude', 'settings.json'); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, bytes, { mode: 0o600 }); return { root, dir: path.join(root, '.trocar', 'collector'), file } }
+const JSON_KEYS = (b) => [[['env', 'HTTPS_PROXY'], GATE], [['env', 'NODE_EXTRA_CA_CERTS'], path.join(b.root, '.trocar', 'collector', 'ca', 'trocar-ca.pem')]]
 const onJson = (b, manifest = newManifest()) => JSON_KEYS(b).map(([keys, value]) => applyJsonKey({ phase: 'on', home: b.root, dir: b.dir, manifest, harness: 'claude-code', file: b.file, keys, value }))
 const offJson = (es) => [...es].reverse().map((e) => (e ? undoEntry(e).result : null))
 const jsonCases = () => shapeCases({ format: 'json', budget: BUDGET }).filter((c) => c.determinable)
 const refusedShape = (c) => c.content === 'env-null' || c.content === 'env-string'
-// what off leaves of a document: asight's keys that still hold asight's value go back to what the file had at `on` (or away), and an env that only
-// asight's keys made goes when it is empty; everything the user did stays
+// what off leaves of a document: trocar's keys that still hold trocar's value go back to what the file had at `on` (or away), and an env that only
+// trocar's keys made goes when it is empty; everything the user did stays
 function afterOff(edited, original, b) {
   const v = structuredClone(readJsonc(edited) ?? {}), o = readJsonc(original) ?? {}
   for (const [[, name], ours] of JSON_KEYS(b)) {
@@ -169,7 +169,7 @@ test('fidelity json: on keeps the file\'s form and every comment; on twice is on
     const after = fs.readFileSync(b.file), d = decodeBytes(after)
     assert.deepEqual([d.why, d.charset, d.bom], [undefined, c.charset, c.bom], `the form stays: ${tag(c)}`)
     const was = readJsonc(c.text) ?? {}
-    assert.deepEqual(readJsonc(after), { ...was, env: { ...was.env, ...Object.fromEntries(JSON_KEYS(b).map(([k, v]) => [k[1], v])) } }, `only asight's two keys changed: ${tag(c)}`)
+    assert.deepEqual(readJsonc(after), { ...was, env: { ...was.env, ...Object.fromEntries(JSON_KEYS(b).map(([k, v]) => [k[1], v])) } }, `only trocar's two keys changed: ${tag(c)}`)
     assert.deepEqual(commentsOf(d.text), commentsOf(c.text), `every comment kept, none written: ${tag(c)}`)
     assert.deepEqual(onJson(b, manifest), [null, null], `on; on is on: ${tag(c)}`)
     assert.ok(fs.readFileSync(b.file).equals(after), tag(c))
@@ -178,7 +178,7 @@ test('fidelity json: on keeps the file\'s form and every comment; on twice is on
   }
 })
 
-test('fidelity json: the user edits the file after on (a key, asight\'s own keys, a mark, line endings) → off takes back only what is still asight\'s; the user\'s values, comments and form stay', () => {
+test('fidelity json: the user edits the file after on (a key, trocar\'s own keys, a mark, line endings) → off takes back only what is still trocar\'s; the user\'s values, comments and form stay', () => {
   let n = 0
   for (const c of jsonCases().filter((x) => !refusedShape(x))) {
     for (const edit of userEdits('json', { home: c.home })) {
@@ -192,7 +192,7 @@ test('fidelity json: the user edits the file after on (a key, asight\'s own keys
       for (const r of results) assert.ok(['restored', 'reverted-not-identical', 'left-user-value', 'already-restored'].includes(r), `${edit.id} → ${r}: ${tag(c)}`)
       const out = fs.readFileSync(b.file), d = decodeBytes(out), e = decodeBytes(edited)
       assert.deepEqual([d.why, d.charset, d.bom], [undefined, e.charset, e.bom], `${edit.id}: the form the user left stays: ${tag(c)}`)
-      assert.deepEqual(readJsonc(out) ?? {}, afterOff(edited, c.bytes, b), `${edit.id}: only asight's part goes: ${tag(c)}`)
+      assert.deepEqual(readJsonc(out) ?? {}, afterOff(edited, c.bytes, b), `${edit.id}: only trocar's part goes: ${tag(c)}`)
       assert.deepEqual(commentsOf(d.text), commentsOf(e.text), `${edit.id}: every comment stays: ${tag(c)}`)
     }
   }
@@ -208,15 +208,15 @@ test('fidelity json X4 (seed): on, then the file gains a UTF-8 mark → off take
   assert.deepEqual(offJson(es), ['reverted-not-identical', 'reverted-not-identical'])
   const out = fs.readFileSync(b.file)
   assert.ok(out.subarray(0, 3).equals(MARK), 'the mark stays first')
-  assert.deepEqual(readJsonc(out).env, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', HTTPS_PROXY: s.userValues.HTTPS_PROXY }, 'the user\'s proxy is back, asight\'s CA is gone')
+  assert.deepEqual(readJsonc(out).env, { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9', HTTPS_PROXY: s.userValues.HTTPS_PROXY }, 'the user\'s proxy is back, trocar\'s CA is gone')
   assert.ok(out.equals(Buffer.concat([MARK, plain])), 'every other byte is the user\'s')
 })
 
-// ---- D48② (X8, I5): the user changes a key asight set while it is on → after off the user's new value is the one in effect ------------------------------------------
+// ---- D48② (X8, I5): the user changes a key trocar set while it is on → after off the user's new value is the one in effect ------------------------------------------
 // Codex's .env as `on` leaves it: the trust block (SSL_CERT_FILE) and the gate address joined into it (HTTPS_PROXY, 4.8 §2.3). Expectations come from the generator's
 // own reader (readDotenv), never from src/.
 const PROXY_GATE = 'http://127.0.0.1:47011'
-const caFor = (home) => `${home}/.asight/collector/ca/combined-codex.pem`
+const caFor = (home) => `${home}/.trocar/collector/ca/combined-codex.pem`
 function onDotenv(bytes, { home } = {}) {
   const b = sandbox({ format: 'dotenv', bytes })
   const manifest = newManifest()
@@ -227,7 +227,7 @@ function onDotenv(bytes, { home } = {}) {
   return { b, es, ours: { SSL_CERT_FILE: caFor(home ?? b.root), HTTPS_PROXY: PROXY_GATE } }
 }
 
-test('fidelity X8 (seed): CRLF and LF Codex .env, the user sets HTTPS_PROXY to their own value inside asight\'s block while on → off: the new value is in effect, the old line stays out of effect and is reported by line, reverted-not-identical', async () => {
+test('fidelity X8 (seed): CRLF and LF Codex .env, the user sets HTTPS_PROXY to their own value inside trocar\'s block while on → off: the new value is in effect, the old line stays out of effect and is reported by line, reverted-not-identical', async () => {
   const s = seeds.find((x) => x.id === 'seed-X8')
   for (const eol of ['\r\n', '\n']) {
     const text = s.text.replace(/\r\n/g, eol)
@@ -242,7 +242,7 @@ test('fidelity X8 (seed): CRLF and LF Codex .env, the user sets HTTPS_PROXY to t
     const read = readDotenv(out)
     assert.equal(read.HTTPS_PROXY, 'http://newcorp:3128', 'the user\'s new value is in effect')
     assert.equal(read.OPENAI_API_KEY, 'sk-x')
-    assert.equal(read.SSL_CERT_FILE, undefined, 'asight\'s CA is gone')
+    assert.equal(read.SSL_CERT_FILE, undefined, 'trocar\'s CA is gone')
     const lines = out.toString('utf8').split(eol)
     assert.deepEqual(rs[0].prior_left, [{ key: 'HTTPS_PROXY', line: lines.indexOf(`${OFF_PREFIX}HTTPS_PROXY=http://corp.example:8080`) + 1 }], 'the line the receipt names is the old line, still out of effect')
     assert.ok(rs[0].prior_left[0].line > 0)
@@ -273,14 +273,14 @@ test('fidelity dotenv I5: along the user-edit axis (proxy / CA key in the block 
       }
       assert.deepEqual(readDotenv(out), want, `${edit.id}: ${tag(c)}`)
       for (const [k, v] of Object.entries(ours)) {
-        const set = now[k] !== v && k in was // the user set K while on, and asight had put their old K out of effect
+        const set = now[k] !== v && k in was // the user set K while on, and trocar had put their old K out of effect
         const left = rs.flatMap((r) => r.prior_left || []).filter((p) => p.key === k)
         assert.equal(left.length > 0, set, `${edit.id}: ${k} reported as left out of effect iff the user set it: ${tag(c)}`)
         const oldLine = new RegExp(`^\uFEFF?[ \t]*${OFF_PREFIX}[ \t]*(?:export[ \t]+)?${k}[ \t]*=`)
         for (const p of left) assert.match(d.text.split('\n')[p.line - 1] ?? '', oldLine, `${edit.id}: line ${p.line} is ${k}'s old line: ${tag(c)}`)
         if (set) kept++
       }
-      // an edit of nothing asight set: the result is that edit made to the file as it was before on, byte for byte (when the edit finds the same place in both)
+      // an edit of nothing trocar set: the result is that edit made to the file as it was before on, byte for byte (when the edit finds the same place in both)
       const plain = edit.plan(c.bytes, { before: c.bytes }), onIt = edit.plan(s1, { before: c.bytes })
       if (!/^set-/.test(edit.id) && plain && onIt && plain.anchor === onIt.anchor) {
         bytewise++
@@ -291,7 +291,7 @@ test('fidelity dotenv I5: along the user-edit axis (proxy / CA key in the block 
   assert.ok(n > 300 && bytewise > 100 && kept > 10, `edits applied ${n}, compared byte for byte ${bytewise}, keys the user set over an old line ${kept}`)
 })
 
-test('fidelity X8 through asight uninstall: the receipt names the line left out of effect and how to have the old value back; --json carries it', async () => {
+test('fidelity X8 through trocar uninstall: the receipt names the line left out of effect and how to have the old value back; --json carries it', async () => {
   const s = await installedHome({ names: ['codex'], seed: (home) => { fs.mkdirSync(path.join(home, '.codex'), { recursive: true }); fs.writeFileSync(path.join(home, '.codex', '.env'), 'OPENAI_API_KEY=sk-test\r\nSSL_CERT_FILE=/corp/ca.pem\r\n') } })
   const file = s.manifest().entries.find((e) => e.kind === 'text').path
   const on = fs.readFileSync(file, 'utf8')

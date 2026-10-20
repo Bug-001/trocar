@@ -46,7 +46,7 @@ async function warmed(svc, name = 'segments') {
 }
 
 test('a worker that dies is recorded with a closed-set code, the caller is told, and the next query gets a new worker', async () => {
-  const home = rawHome('asight-qsvc-')
+  const home = rawHome('trocar-qsvc-')
   const said = []
   let forks = 0
   const svc = createQueryService({ home, failure: (where, e) => said.push({ where, code: e.code, reason: e.message }), fork: (h) => (++forks === 1 ? dead() : alive(h)) })
@@ -74,7 +74,7 @@ test('a worker that dies is recorded with a closed-set code, the caller is told,
 
 test('GET /query without a name is the caller\'s mistake, not a failure', async () => {
   const said = []
-  const svc = createQueryService({ home: rawHome('asight-qsvc-'), failure: (w, e) => said.push([w, e.code]) })
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), failure: (w, e) => said.push([w, e.code]) })
   try {
     await assert.rejects(() => svc.route({ query: new URLSearchParams({}), res: recorder() }), (e) => e.status === 400)
     assert.deepEqual(said, [])
@@ -84,7 +84,7 @@ test('GET /query without a name is the caller\'s mistake, not a failure', async 
 })
 
 test('no worker: the caller is told at once and the worker is warmed with that same query (D63, the cold path)', async () => {
-  const home = rawHome('asight-qsvc-')
+  const home = rawHome('trocar-qsvc-')
   const svc = createQueryService({ home, fork: alive })
   try {
     const cold = recorder()
@@ -100,7 +100,7 @@ test('no worker: the caller is told at once and the worker is warmed with that s
 
 test('a name outside the closed set is refused before any worker is forked', async () => {
   let forks = 0
-  const svc = createQueryService({ home: rawHome('asight-qsvc-'), fork: (h) => (forks++, alive(h)) })
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), fork: (h) => (forks++, alive(h)) })
   try {
     await assert.rejects(() => svc.route({ query: new URLSearchParams({ name: 'rm -rf' }), res: recorder() }), (e) => e.status === 400)
     assert.equal(forks, 0, 'an arbitrary name must not fork a process')
@@ -120,7 +120,7 @@ test('a name outside the closed set is refused before any worker is forked', asy
 const full = () => Object.assign(recorder(), { write: () => false })
 
 test('a response that is full when the document ends does not leave the worker paused for the next query', async () => {
-  const home = rawHome('asight-qsvc-')
+  const home = rawHome('trocar-qsvc-')
   const svc = createQueryService({ home, fork: alive })
   try {
     await warmed(svc)
@@ -140,7 +140,7 @@ test('a response that is full when the document ends does not leave the worker p
 })
 
 test('relay with no worker forks one and answers the document, not the cold 503 (the board has no local path, 4.4 D66)', async () => {
-  const svc = createQueryService({ home: rawHome('asight-qsvc-'), fork: workerFork })
+  const svc = createQueryService({ home: rawHome('trocar-qsvc-'), fork: workerFork })
   try {
     const res = recorder()
     await svc.relay({ name: 'segments', params: {}, res })

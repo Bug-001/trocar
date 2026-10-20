@@ -2,7 +2,7 @@
 //
 // the platform-seam rule / incident 2: a seam between processes is only tested when the test crosses it the way the product does. So this
 // runs a REAL daemon (startDaemon, the model collector, the control server on the endpoint the platform's own controlEndpoint picks
-// and writes into control.json) and a REAL `asight query` over it — no injected `request`, no injected `socketPath`, no injected fs.
+// and writes into control.json) and a REAL `trocar query` over it — no injected `request`, no injected `socketPath`, no injected fs.
 //   1. byte-identical: the document the daemon's query worker computed and the one the CLI computes locally are the same bytes.
 //   2. never stale: a record that lands in the segment the daemon is appending to is in the NEXT query of that session, and a query
 //      of an unchanged session is still answered from the warm assembly (which is what the ≤ 50 ms line buys).
@@ -21,7 +21,7 @@ import { run as runQueryCli } from '../../src/cli/query.mjs'
 import { queryDocument } from '../../src/query/client.mjs'
 import net from 'node:net'
 
-/** `asight query <argv>` as the command line runs it → { out, exit }: one document on stdout, nothing injected. */
+/** `trocar query <argv>` as the command line runs it → { out, exit }: one document on stdout, nothing injected. */
 async function cli(argv, { home, env, platform }) {
   const out = []
   const io = { out: (s) => out.push(s), err: (s) => out.push(s), stdout: { isTTY: false }, stderr: {}, stdin: { isTTY: false } }
@@ -40,13 +40,13 @@ const biggestSession = (doc) => JSON.parse(doc).sessions.slice().sort((a, b) => 
 
 test('darwin: a read goes through the real daemon and gives the very bytes the local path gives; a new record of a session is in its next query', { timeout: 60_000 }, async () => {
   const w = await modelWorld({ os: 'darwin' })
-  const asight = path.join(w.home, '.asight')
-  generate({ home: asight, seed: 7, bytes: 3_000_000, segmentBytes: 1 << 20 })
+  const trocar = path.join(w.home, '.trocar')
+  generate({ home: trocar, seed: 7, bytes: 3_000_000, segmentBytes: 1 << 20 })
   // the same corpus, but with no daemon to find: the copy is taken before this daemon starts, so its own sealing
   // cannot be mistaken for a difference between the two read paths
-  const alone = tmpDir('asight-local-')
-  fs.cpSync(asight, path.join(alone, '.asight'), { recursive: true })
-  fs.rmSync(path.join(alone, '.asight', 'collector'), { recursive: true, force: true })
+  const alone = tmpDir('trocar-local-')
+  fs.cpSync(trocar, path.join(alone, '.trocar'), { recursive: true })
+  fs.rmSync(path.join(alone, '.trocar', 'collector'), { recursive: true, force: true })
   const local = (argv) => cli(argv, { home: alone, env: { ...w.env, HOME: alone }, platform: 'darwin' })
   const box = await liveUnit({ w, platform: 'darwin' })
   box.unit.start()
@@ -59,7 +59,7 @@ test('darwin: a read goes through the real daemon and gives the very bytes the l
     const viaDaemon = await cli(['sessions', '--json'], { home: w.home, env: w.env, platform: 'darwin' })
     assert.equal(viaDaemon.exit, 0, viaDaemon.out)
     const id = biggestSession(viaDaemon.out)
-    const ref = `${JSON.parse(viaDaemon.out).sessions.length ? fs.readdirSync(path.join(asight, 'raw')).filter((n) => /\.(ndjson|sealed)$/.test(n) && !n.startsWith('.')).sort()[0].replace(/\.(ndjson|sealed)$/, '') : ''}:1`
+    const ref = `${JSON.parse(viaDaemon.out).sessions.length ? fs.readdirSync(path.join(trocar, 'raw')).filter((n) => /\.(ndjson|sealed)$/.test(n) && !n.startsWith('.')).sort()[0].replace(/\.(ndjson|sealed)$/, '') : ''}:1`
 
     // `segments` and `classes` are not here: both report the raw layer's live state (its sizes, what is sealed), and
     // this daemon seals its own copy — the two HOMEs may honestly disagree about those two documents, not about a record.
@@ -73,10 +73,10 @@ test('darwin: a read goes through the real daemon and gives the very bytes the l
     // never stale (D63 ①): more records of this session arrive after the first query — one in a NEW segment (the
     // rollover shape) and one appended to that segment (the live shape). Each must be in the very next query. The
     // records are copies of one this session already has, so they carry its own shape and its own session key.
-    const rawDir = path.join(asight, 'raw')
+    const rawDir = path.join(trocar, 'raw')
     const one = fs.readdirSync(rawDir).filter((n) => n.endsWith('.ndjson'))
       .flatMap((n) => fs.readFileSync(path.join(rawDir, n), 'utf8').split('\n')).find((l) => l.includes(id))
-      || fs.readFileSync(path.join(alone, '.asight', 'raw', fs.readdirSync(path.join(alone, '.asight', 'raw'))[0]), 'utf8').split('\n').find((l) => l.includes(id))
+      || fs.readFileSync(path.join(alone, '.trocar', 'raw', fs.readdirSync(path.join(alone, '.trocar', 'raw'))[0]), 'utf8').split('\n').find((l) => l.includes(id))
     assert.ok(one, 'a record of this session is on disk')
     const line = (ts) => JSON.stringify({ ...JSON.parse(one), ts, ts_request: ts }) + '\n'
     const fresh = path.join(rawDir, '20261019T100000Z.ndjson')
@@ -103,7 +103,7 @@ test('darwin: a read goes through the real daemon and gives the very bytes the l
  *  that went away mid-document (Ctrl-C, a closed board tab). Resolves when the socket is gone. */
 function hangUp({ socketPath, token, path: p }) {
   return new Promise((resolve, reject) => {
-    const s = net.connect(socketPath, () => s.write(`GET ${p} HTTP/1.1\r\nHost: collector\r\nx-asight-token: ${token}\r\nConnection: close\r\n\r\n`))
+    const s = net.connect(socketPath, () => s.write(`GET ${p} HTTP/1.1\r\nHost: collector\r\nx-trocar-token: ${token}\r\nConnection: close\r\n\r\n`))
     s.once('data', () => { s.destroy(); resolve() })
     s.once('error', reject)
     setTimeout(() => { s.destroy(); resolve() }, 5000).unref()
@@ -112,12 +112,12 @@ function hangUp({ socketPath, token, path: p }) {
 
 test('darwin: the cold read is local, the worker is warmed behind it, and a caller that hangs up mid-document leaves the worker usable', { timeout: 60_000 }, async () => {
   const w = await modelWorld({ os: 'darwin' })
-  const asight = path.join(w.home, '.asight')
-  generate({ home: asight, seed: 11, bytes: 3_000_000, segmentBytes: 1 << 20 })
+  const trocar = path.join(w.home, '.trocar')
+  generate({ home: trocar, seed: 11, bytes: 3_000_000, segmentBytes: 1 << 20 })
   const box = await liveUnit({ w, platform: 'darwin' })
   box.unit.start()
   await within(box.starting, 20_000, 'the real daemon started')
-  const ctx = { home: asight, userHome: w.home, dir: w.dir, platform: 'darwin', env: w.env }
+  const ctx = { home: trocar, userHome: w.home, dir: w.dir, platform: 'darwin', env: w.env }
   /** The one read client, over the real socket it resolves itself: `via` says WHO answered. */
   const ask = (name, params = {}) => queryDocument(name, params, ctx)
   const warm = async (name, params) => { for (let i = 0; i < 40; i++) { const r = await ask(name, params); if (r.via === 'daemon') return r; await new Promise((d) => setTimeout(d, 50)) } throw new Error('the worker never answered') }

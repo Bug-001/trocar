@@ -35,7 +35,7 @@ for (const os of ['darwin', 'win32']) {
       const doors = Object.fromEntries(written.map((rid) => [`${desc.name}:${rid}`, port(rid)]))
       const out = await modelFormFacts({ harnesses, os, manifest: m, reply: { doors }, root: ROOT_OK, ctx: w.ctx })
       for (const x of out[desc.name].filter((f) => written.includes(f.route))) {
-        assert.deepEqual([x.id, x.proxy.entry_intact, x.entry && x.entry.intact], [x.id, true, true], `${x.id}: the entry asight just wrote is intact`)
+        assert.deepEqual([x.id, x.proxy.entry_intact, x.entry && x.entry.intact], [x.id, true, true], `${x.id}: the entry trocar just wrote is intact`)
         assert.equal(x.proxy.connected, true, `${x.id}: connected`)
       }
     })
@@ -44,7 +44,7 @@ for (const os of ['darwin', 'win32']) {
 
 // 1.6 附录 B: the place of a prior value is the key and file it was READ from. A route with two spellings of one variable records one entry per key, and the
 // user's value may sit in the second one alone — the place then names that spelling, not the route's first key (the mac machine 2026-10-19 named the key
-// asight had written as the one for the user to remove).
+// trocar had written as the one for the user to remove).
 const PRIOR = 'http://proxy.corp:8080'
 for (const os of ['darwin', 'win32']) {
   for (const desc of harnesses.filter((d) => d.proxyMode)) {

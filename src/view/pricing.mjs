@@ -1,7 +1,7 @@
 // src/view/pricing.mjs — editable unit-price config (RFC 2.2 / D14). Price is an EXTERNAL,
 // user-editable variable (providers return token usage, never $ price); cost = usage × price is a
 // derived local estimate and MUST NOT enter the normalized model. So pricing lives in a config the
-// user can edit (ASIGHT_PRICING or ~/.atrace/pricing.json), served to the board; absent → defaults.
+// user can edit (TROCAR_PRICING or ~/.atrace/pricing.json), served to the board; absent → defaults.
 // Shape: { <modelKey>: [input, output, cache_write, cache_read] } in $/Mtok.
 import { readFileSync, existsSync } from 'node:fs';
 import os from 'node:os';
@@ -13,7 +13,7 @@ export const DEFAULT_PRICING = {
   haiku: [1, 5, 1.25, 0.1],
 };
 
-export const DEFAULT_PRICING_PATH = process.env.ASIGHT_PRICING || path.join(os.homedir(), '.atrace', 'pricing.json');
+export const DEFAULT_PRICING_PATH = process.env.TROCAR_PRICING || path.join(os.homedir(), '.atrace', 'pricing.json');
 
 const isRow = (v) => Array.isArray(v) && v.length === 4 && v.every((n) => typeof n === 'number' && n >= 0);
 

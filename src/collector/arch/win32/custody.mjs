@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { cliCustody } from '../../core/tls/custody-cli.mjs'
 
 export const CUSTODY_PS1 = fileURLToPath(new URL('./custody.ps1', import.meta.url))
-/** How powershell.exe runs the script: no profile (a user's profile must not run in asight's process), no prompt, the policy bypassed for this file only. */
+/** How powershell.exe runs the script: no profile (a user's profile must not run in trocar's process), no prompt, the policy bypassed for this file only. */
 export const PS_FILE_ARGS = Object.freeze(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File'])
 
 /** cngCustody({ run, scriptPath, env }) → { kind:'cng', create, exists, issueIntermediate, remove }. `run` is execTool's injected runner. */

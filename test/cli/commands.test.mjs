@@ -7,7 +7,7 @@ import { optionsOf } from '../../src/cli/args.mjs'
 import { WIDTH } from '../../src/cli/text.mjs'
 
 /** The command names a screen of help lists, by the shape of a usage line. */
-const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?asight ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
+const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?trocar ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
 
 test('the table is the command list of 1.6 §2 — the names of that list, each once, in three groups', () => {
   const names = COMMANDS.map((c) => c.name)
@@ -19,7 +19,7 @@ test('the table is the command list of 1.6 §2 — the names of that list, each 
   for (const c of COMMANDS) {
     assert.ok(typeof c.run === 'function', `${c.name}: has a run`)
     assert.ok(c.group === null || GROUPS.includes(c.group), `${c.name}: ${c.group}`)
-    assert.match(usageLine(c), new RegExp(`^(sudo )?asight ${c.name}\\b`), `${c.name}: every usage line begins with the command`)
+    assert.match(usageLine(c), new RegExp(`^(sudo )?trocar ${c.name}\\b`), `${c.name}: every usage line begins with the command`)
     assert.ok(c.summary.split(/(?<=\.)\s/).length >= 2, `${c.name}: two or three sentences of summary`)
     assert.ok(Array.isArray(c.exits) && c.exits.length, `${c.name}: says which exit codes it uses`)
     for (const [code] of c.exits) assert.ok([0, 1, 2, 3, 70].includes(code), `${c.name}: ${code} is one of the five codes of §1.3`)
@@ -50,7 +50,7 @@ test('D58: every word of help is English ASCII — no section number, decision n
 test('§1.1: help is laid out for 80 columns, in the three groups in order, and lists every command of the table', () => {
   const text = helpText()
   assert.deepEqual([...commandsOf(text)].sort(), COMMANDS.filter((c) => c.group).map((c) => c.name).sort())
-  assert.match(text.split('\n').at(-1), /^asight help \[<command>\] {3}asight <command> --help {3}asight --version$/, 'help itself is the trailer (§2)')
+  assert.match(text.split('\n').at(-1), /^trocar help \[<command>\] {3}trocar <command> --help {3}trocar --version$/, 'help itself is the trailer (§2)')
   const at = GROUPS.map((g) => text.split('\n').findIndex((l) => l === g))
   assert.ok(at.every((i) => i > 0) && [...at].sort((a, b) => a - b).join() === at.join(), `the three groups in order: ${at}`)
   for (const line of text.split('\n')) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`) // §1.1⑥: a long usage line folds under its own column, it does not pass 80
@@ -62,13 +62,13 @@ test('§1.1: help is laid out for 80 columns, in the three groups in order, and 
 
 test('§5.4: one command\'s help is its usage, its summary, its options with a line each, and its exit codes; a name that is no command throws', () => {
   const one = helpText('on')
-  assert.equal(one.split('\n').slice(0, 2).join(' ').replace(/ +/g, ' ').trim(), 'asight on [<harness>...] [--yes] [--dry-run] [--json]')
+  assert.equal(one.split('\n').slice(0, 2).join(' ').replace(/ +/g, ' ').trim(), 'trocar on [<harness>...] [--yes] [--dry-run] [--json]')
   for (const text of [one, helpText(), helpText('classes')]) for (const line of text.split('\n')) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`)
   assert.match(one, /\nOptions\n/); assert.match(one, /\nExit codes\n/)
   for (const o of optionsOf(commandNamed('on')).keys()) assert.match(one, new RegExp(`^ {2}${o}\\b`, 'm'), `${o} has its own line`)
   for (const [code] of commandNamed('on').exits) assert.match(one, new RegExp(`^ {2}${code} {2}\\S`, 'm'), `exit ${code} is explained`)
-  assert.ok(!/asight uninstall/.test(one), 'one command only')
-  assert.match(helpText('classes'), /asight classes set[\s\S]*asight classes add[\s\S]*asight classes rm[\s\S]*asight classes reset/, 'a command with subcommands says all of them')
+  assert.ok(!/trocar uninstall/.test(one), 'one command only')
+  assert.match(helpText('classes'), /trocar classes set[\s\S]*trocar classes add[\s\S]*trocar classes rm[\s\S]*trocar classes reset/, 'a command with subcommands says all of them')
   assert.throws(() => helpText('nope'), /nope/)
 })
 

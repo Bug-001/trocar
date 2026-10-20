@@ -4,7 +4,7 @@
 //   NetFacts = { at, platform, routing: 'driver' | 'proxy' | 'legacy' | 'none' | 'unknown',
 //     desired: { <h>: 'on' | 'off' }, daemon: { state, pid, enginePort }, link: { attached: true | false | null, helper: 'ok' | 'missing', ids: [number] },
 //     listeners: [ { addr, port, pid, exe } | { addr, port, unknown: { reason, detail } } ],
-//     forwarder: null | { pid, up, forms: { <form>: { h, port, state: 'on' | 'forward-only', upstream, source, clients: [pid] } } },   // proxy mode: asight's local proxy hop, which is the engine's own door (D47; 4.8 §10.1)
+//     forwarder: null | { pid, up, forms: { <form>: { h, port, state: 'on' | 'forward-only', upstream, source, clients: [pid] } } },   // proxy mode: trocar's local proxy hop, which is the engine's own door (D47; 4.8 §10.1)
 //     harnesses: { <h>: { installed, entry: { state }, installedAt, setting, fileSetting (the same read of the files alone: drift is measured on it), systemProxy: null | { value, pac } | { unknown },
 //                         behaviour: { env, follows: { http, ws }, schemes, unsupported, branches, measured, restart, files, fileKeys }, procs: [ { pid, name, exe, version, startedAt, watched, trusted, reason, negative,
 //                         startSetting: null | setting, elevated } ], negatives: [ { pid, host, reason } ], apiHosts, noProxy: [the API hosts the NO_PROXY of this shell covers], adopted: null | { at, routing, chain, source, sha256 }, forms: null | [ … ] } },
@@ -24,7 +24,7 @@ const iso = (t) => (typeof t === 'number' && Number.isFinite(t) ? new Date(t).to
 
 /**
  * NetFacts for the harnesses `status` knows. `status` = gatherStatus's facts, `harnesses` = the descriptors.
- * `adopted` is what `~/.asight/netenv.json` holds (`readNetenv`): the settings `on` found and the drift is measured against.
+ * `adopted` is what `~/.trocar/netenv.json` holds (`readNetenv`): the settings `on` found and the drift is measured against.
  */
 export async function gatherNetFacts({ platform = process.platform, home, env = process.env, harnesses, status, archFacts = null, adopted = null, now = Date.now, fs = nodeFs, deps = {} }) {
   const unknowns = []
@@ -65,7 +65,7 @@ export async function gatherNetFacts({ platform = process.platform, home, env = 
       installed: h.installed, entry: { state: h.entry.state }, installedAt: iso(h.installedAt), setting, fileSetting: fileSettings[h.id],
       // every place it holds a proxy address now (not only the one that wins): the places a finding names for the user to remove by hand (1.6 附录 B)
       proxyPlaces: proxyPlaces(d, { home, env, fs }),
-      // the places asight itself wrote for it (its on-phase manifest items): a finding never asks the user to edit one of them (1.6 附录 B)
+      // the places trocar itself wrote for it (its on-phase manifest items): a finding never asks the user to edit one of them (1.6 附录 B)
       writtenPlaces: writtenPlaces(status.manifest && status.manifest.value, h.id),
       systemProxy: part.systemProxy && (pr.systemProxy.http !== false || pr.systemProxy.ws !== false) ? part.systemProxy : null,
       behaviour: { env: [...pr.env], follows: { ...pr.systemProxy }, schemes: [...pr.schemes], unsupported: { ...pr.unsupported }, branches: [...pr.branches], measured: pr.measured[platform] || 'inferred', restart: { ...pr.restart }, files: proxyFilesOf(d, { home, env }),

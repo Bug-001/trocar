@@ -1,4 +1,4 @@
-// test/query/traffic.test.mjs — `asight query traffic` (RFC 1.6 §4.1 · 附录 C.5 `traffic`; 3.5 §访问模式; 1.10).
+// test/query/traffic.test.mjs — `trocar query traffic` (RFC 1.6 §4.1 · 附录 C.5 `traffic`; 3.5 §访问模式; 1.10).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

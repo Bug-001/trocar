@@ -21,7 +21,7 @@ export const keychainCustody = ({ helperPath, run = null, env = process.env }) =
   cliCustody({ kind: 'keychain', file: helperPath, name: NATIVE.signHelper, run, env, timeoutMs: HELPER_TIMEOUT_MS })
 
 /** installHelper({ dest, interactive, run, fs, src }) → { replaced, why? , prompted? }: puts the packaged helper at `dest` (resolved
- *  by the caller, under ~/.asight/bin). It writes `<dest>.new-<rand>` and renames it over `dest`, never an in-place overwrite (one
+ *  by the caller, under ~/.trocar/bin). It writes `<dest>.new-<rand>` and renames it over `dest`, never an in-place overwrite (one
  *  gets SIGKILLed, R3-M2). Same hash: nothing to do. A different installed hash is replaced only when `interactive`: the keychain
  *  then asks again for the new code hash, so one `issue` runs right here in the foreground and the prompt lands on the user's
  *  terminal, not on the background daemon. Non-interactive: the installed copy stays, and `why` says so. The packaged binary must

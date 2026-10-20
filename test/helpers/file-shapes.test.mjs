@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
 import { shapeCases, axes, seeds, readDotenv, readJsonc, readYamlList, inFamily, userEdits } from './file-shapes.mjs'
 
-const SEED = Number(process.env.ASIGHT_SHAPES_SEED) || 0x5eed
+const SEED = Number(process.env.TROCAR_SHAPES_SEED) || 0x5eed
 const FORMATS = ['dotenv', 'json', 'yaml-list', 'rc']
 const at = (c) => `${c.id} seed=${c.seed} (${c.describe})`
 const LABEL = { utf8: 'utf-8', utf16le: 'utf-16le', utf16be: 'utf-16be' }
@@ -82,14 +82,14 @@ test('the default budget covers every axis value, for every format', () => {
   assert.ok(all().some((c) => /[^\x00-\x7f]/.test(c.home) && / /.test(c.home)), 'a HOME with non-ASCII and a space')
 })
 
-test('budget: ASIGHT_SHAPES_BUDGET widens the default; an explicit budget wins', () => {
-  const was = process.env.ASIGHT_SHAPES_BUDGET
+test('budget: TROCAR_SHAPES_BUDGET widens the default; an explicit budget wins', () => {
+  const was = process.env.TROCAR_SHAPES_BUDGET
   try {
     const base = shapeCases({ format: 'dotenv', seed: SEED }).length
-    process.env.ASIGHT_SHAPES_BUDGET = String(base * 2)
+    process.env.TROCAR_SHAPES_BUDGET = String(base * 2)
     assert.equal(shapeCases({ format: 'dotenv', seed: SEED }).length, base * 2)
     assert.equal(shapeCases({ format: 'dotenv', seed: SEED, budget: 3 }).length, 3)
-  } finally { if (was === undefined) delete process.env.ASIGHT_SHAPES_BUDGET; else process.env.ASIGHT_SHAPES_BUDGET = was }
+  } finally { if (was === undefined) delete process.env.TROCAR_SHAPES_BUDGET; else process.env.TROCAR_SHAPES_BUDGET = was }
 })
 
 const pick = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => inFamily(k)))
@@ -125,7 +125,7 @@ test('seeds: each measured shape names its verified finding and reads as declare
   assert.deepEqual(new Set(seeds.map((s) => s.from.slice(0, 2))), new Set(['X3', 'X4', 'X5', 'X6', 'X7', 'X8']))
 })
 
-// ④ userEdits: an edit a user makes while asight is on. Read with the independent readers, the file differs from before only in
+// ④ userEdits: an edit a user makes while trocar is on. Read with the independent readers, the file differs from before only in
 // what the operator declares; every line it did not declare survives; its anchor is still there; the charset stays, the BOM
 // stays (a resave-as-<form> puts the text in that form); line breaks it inserts follow the file. Run on S0 itself and on an S1 = a foreign block on top of S0.
 const flatJson = (v) => {

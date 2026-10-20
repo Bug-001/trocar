@@ -17,7 +17,7 @@ import { checkRecord } from '../../../../src/health/codes.mjs'
 import { tmpDir } from '../../../helpers/tmp.mjs'
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-helper.mjs', import.meta.url))
-const fakeSpawn = (fixture) => (exe, args, opts) => spawn(process.execPath, [FAKE, JSON.stringify(fixture)], { ...opts, env: { ...process.env, ASIGHT_FAKE_HELPER: '1' } })
+const fakeSpawn = (fixture) => (exe, args, opts) => spawn(process.execPath, [FAKE, JSON.stringify(fixture)], { ...opts, env: { ...process.env, TROCAR_FAKE_HELPER: '1' } })
 /** A child that never ran: what `spawn` hands back when the program is not there (it emits 'error' next tick). */
 function ghostChild(emit) {
   const c = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), pid: undefined, kill: () => true })
@@ -73,7 +73,7 @@ test('W71 the system proxy through the real client: a `DWord` ProxyEnable of 1 f
 })
 
 test('W1 an unknown verb is rejected in JS: no line reaches the helper', async (t) => {
-  const log = path.join(tmpDir('asight-helper-'), 'in.log')
+  const log = path.join(tmpDir('trocar-helper-'), 'in.log')
   const h = started(t, { log })
   await h.call('version')
   for (const verb of ['rm', 'Set-ItemProperty', 'toString', '__proto__', '', undefined, 7, 'ps ']) await rejects(h.call(verb), 'helper-unknown-verb')
@@ -82,7 +82,7 @@ test('W1 an unknown verb is rejected in JS: no line reaches the helper', async (
 })
 
 test('W1 reg-read: only the allowed keys and their names go through, checked in JS before any write', async (t) => {
-  const log = path.join(tmpDir('asight-helper-'), 'in.log')
+  const log = path.join(tmpDir('trocar-helper-'), 'in.log')
   const h = started(t, { log, verbs: { 'reg-read': { data: { keyExists: true, values: {} } } } })
   const IS = 'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
   const POL_IS = 'Software\\Policies\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
@@ -185,7 +185,7 @@ test('W1 stdout noise that is not a reply is skipped', async (t) => {
 })
 
 test('W1 the helper is ready before the first verb is written, and a call made at once waits for it', async (t) => {
-  const log = path.join(tmpDir('asight-helper-'), 'in.log')
+  const log = path.join(tmpDir('trocar-helper-'), 'in.log')
   const h = started(t, { log, readyDelayMs: 120 }) // Add-Type compiles for a while on a cold machine
   const first = h.call('version', {}, { timeoutMs: 50 }) // the timeout counts from the write, not from the call
   const info = await h.ready

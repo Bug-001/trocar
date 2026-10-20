@@ -1,6 +1,6 @@
-// status.mjs — `asight status [harness…] [--json]` (RFC 1.6 §2, V32, V10): for every agent, captured now, or not and why. This file holds the judgement (judgeHarness: pure), the facts it is
+// status.mjs — `trocar status [harness…] [--json]` (RFC 1.6 §2, V32, V10): for every agent, captured now, or not and why. This file holds the judgement (judgeHarness: pure), the facts it is
 // made of (gatherStatus: the daemon when it answers, the disk when it does not) and the command (runStatusCli). Read-only: it asks the daemon `GET /status`, reads files and lists processes;
-// the one thing it writes is ~/.asight/netenv.json (the topology it drew, the board reads it; src/netenv). Everything the world gives is a `deps` entry a test replaces (0.1 §3).
+// the one thing it writes is ~/.trocar/netenv.json (the topology it drew, the board reads it; src/netenv). Everything the world gives is a `deps` entry a test replaces (0.1 §3).
 // Exit codes (R4): 0 every harness that is on is captured and nothing failed in 24 h · 1 one is not, or something failed · 3 something that decides it could not be read — never 0: a read that
 // failed is not a good answer (R11: what could not be read is 「不知道」 with the file and the errno, never 0 and never 「无」).
 import crypto from 'node:crypto'
@@ -10,7 +10,7 @@ import path from 'node:path'
 import { STATUS_REASONS } from '../health/codes.mjs'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs' // the keys and the exit codes themselves (D62): `status` prints a receipt, it does not VALIDATE one, so it does not pay for ./schema.mjs's checker and the closed lists under it
 import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
-import { collectorDir, stateFile, asightHome } from '../off/paths.mjs'
+import { collectorDir, stateFile, trocarHome } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
 import { readManifest, itemsOfPhase, daemonMayStart } from '../off/manifest.mjs'
 import { readIngressConfig } from '../collector/core/ingress-config.mjs'
@@ -22,7 +22,7 @@ import { createRegistry } from '../collector/core/registry.mjs'
 import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
-import { removeAsightText, SENTINEL } from '../off/text-edit.mjs'
+import { removeTrocarText, SENTINEL } from '../off/text-edit.mjs'
 import { userProcessesOf } from '../off/user-procs.mjs' // its own small file on purpose: through ./orchestrate.mjs this one function pulled the whole undo machinery into `status`'s module load (D62)
 
 import { judgeHarness, certOfForms } from '../netenv/verdict.mjs'
@@ -48,21 +48,21 @@ const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a r
 const d_isCounts = (r) => !!r && Number.isInteger(r.closing) && r.closing >= 0 && Number.isInteger(r.waiting) && r.waiting >= 0
 const RESTART = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1): what a restart of the agent fixes
 
-/** One item of the manifest against the disk → { state: 'intact' | 'missing' | 'changed' | 'unknown', why? }. Nothing is written. An entry asight wrote is intact when the file is byte for byte what it
- *  wrote, or asight's value / text is still in it (Claude Code rewrites settings.json: the file differs, the entry is there); an owned file when its bytes are what the manifest recorded. */
+/** One item of the manifest against the disk → { state: 'intact' | 'missing' | 'changed' | 'unknown', why? }. Nothing is written. An entry trocar wrote is intact when the file is byte for byte what it
+ *  wrote, or trocar's value / text is still in it (Claude Code rewrites settings.json: the file differs, the entry is there); an owned file when its bytes are what the manifest recorded. */
 export function entryState(e, fs = nodeFs) {
   const file = e.real_path || e.path
   try {
     const cur = readOrNull(fs, file)
     if (cur == null) return { state: 'missing', why: `${file} is gone` }
     if (e.kind === 'owned-file') {
-      if (e.without_ca) return { state: 'changed', why: `${file} was kept without the asight CA` }
-      return sha256(cur) === e.sha256 ? { state: 'intact' } : { state: 'changed', why: `${file} is not what asight wrote` }
+      if (e.without_ca) return { state: 'changed', why: `${file} was kept without the trocar CA` }
+      return sha256(cur) === e.sha256 ? { state: 'intact' } : { state: 'changed', why: `${file} is not what trocar wrote` }
     }
     if (e.post_sha256 == null) return { state: 'missing', why: `${file}: the install of this entry did not finish` }
     if (sha256(cur) === e.post_sha256) return { state: 'intact' }
     const text = cur.toString('utf8')
-    if (e.kind === 'text') return removeAsightText(text, e.ops || []).found ? { state: 'intact' } : text.includes(SENTINEL) ? { state: 'changed', why: `asight's block in ${file} is not what asight wrote` } : { state: 'missing', why: `asight's text is gone from ${file}` }
+    if (e.kind === 'text') return removeTrocarText(text, e.ops || []).found ? { state: 'intact' } : text.includes(SENTINEL) ? { state: 'changed', why: `trocar's block in ${file} is not what trocar wrote` } : { state: 'missing', why: `trocar's text is gone from ${file}` }
     let value
     try { value = JSON.parse(text) } catch { return { state: 'changed', why: `${file} no longer parses as JSON` } }
     const now = getPath(value, e.keys)
@@ -113,7 +113,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const holdersP = reply && typeof reply.holders === 'number' ? request({ socketPath: st.socket, method: 'GET', path: '/holders', timeoutMs: deps.timeoutMs || 5000 }).then((h) => (Array.isArray(h && h.holders) ? h.holders : null), () => null) : null
   // the manifest, then the switch (the manifest names which harnesses are installed: a version 1 state.json is read for them)
   try { f.manifest = { value: readManifest(dir, fs), error: null } } catch (e) { f.manifest = { value: null, error: `${path.join(dir, 'install-manifest.json')}: ${errText(e)}` } }
-  if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this asight does not read`; f.manifest.value = null }
+  if (f.manifest.value && f.manifest.value.unsupported) { f.manifest.error = `${path.join(dir, 'install-manifest.json')} is version ${JSON.stringify(f.manifest.value.version)}, which this trocar does not read`; f.manifest.value = null }
   const m = f.manifest.value
   f.boardPort = readIngressConfig({ dir, fs }).boardPort ?? null // the board's url (C.3 `board`): install's record, read only
   const certP = installCertOf({ f, m, dir, fs, platform, home, env, deps }) // the certificate axis: its root-store read and its own import run while the harnesses are judged
@@ -129,10 +129,10 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const attached = reply ? (reply.actual === 'on' ? true : reply.actual === 'off' ? false : null) : null
   f.link = reply ? { attached, helper: reply.helper && (reply.helper.down || reply.helper.ok === false) ? 'missing' : 'ok', helper_reason: reply.helper && reply.helper.down ? String(reply.helper.down) : reply.helper && reply.helper.ok === false ? `helper protocol ${reply.helper.proto} (this daemon expects ${reply.helper.expected_proto})` : null, reason: attached === null ? kernelReason(reply) : null } : { attached: null, helper: 'ok', helper_reason: null, reason: null }
   // the processes: the daemon's rows when it answered, else the process table matched with the name list in effect now (below)
-  // The table is read whatever else is missing: the processes the user started themselves (`asight serve`, a foreground `capture`) are found by their command line alone. Only the
+  // The table is read whatever else is missing: the processes the user started themselves (`trocar serve`, a foreground `capture`) are found by their command line alone. Only the
   // matching of a process to a harness needs the name list; with no daemon and no descriptors to build it from, that is what cannot be said (audit rule-b 6, R11)
   // the processes: the daemon's rows when it answered, else the process table read above, matched with the name list in effect now
-  // The table is read whatever else is missing: the processes the user started themselves (`asight serve`, a foreground `capture`) are found by their command line alone. Only the
+  // The table is read whatever else is missing: the processes the user started themselves (`trocar serve`, a foreground `capture`) are found by their command line alone. Only the
   // matching of a process to a harness needs the name list; with no daemon and no descriptors to build it from, that is what cannot be said (audit rule-b 6, R11)
   if (tableError) { rethrowSandbox(tableError); tableError = errText(tableError) }
   f.userProcs = table ? { list: userProcessesOf(table) } : { error: tableError }
@@ -158,9 +158,9 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   f.matched = matched // read again by the network facts (src/netenv/facts.mjs): the processes of a harness and their start-time environment
   const negatives = new Set((reply && Array.isArray(reply.negatives) ? reply.negatives : []).map((n) => n.pid))
   const tableOf = new Map((table || []).map((p) => [p.pid, p]))
-  // with no names, every harness with a form present on this machine gets a row too, besides the ones asight's records know (1.6 §3.5, D65④):
-  // the row is where Set up and the board's on / off appear for a harness installed after asight. Proxy mode only; `on` / `off` do not read this list.
-  if (!names && isProxyMode(platform) && desc.value && daemonMayStart(m)) { // with asight not installed there is nothing to set up or turn on: the summary says so
+  // with no names, every harness with a form present on this machine gets a row too, besides the ones trocar's records know (1.6 §3.5, D65④):
+  // the row is where Set up and the board's on / off appear for a harness installed after trocar. Proxy mode only; `on` / `off` do not read this list.
+  if (!names && isProxyMode(platform) && desc.value && daemonMayStart(m)) { // with trocar not installed there is nothing to set up or turn on: the summary says so
     try {
       const present = await (deps.presentHarnesses || (await import('../collector/net-deps.mjs')).presentHarnesses)({ os: platform, home, env, harnesses: desc.value, fs })
       wanted = [...new Set([...wanted, ...present])].sort((a, b) => order(a) - order(b) || a.localeCompare(b))
@@ -172,7 +172,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     if (desired === null) why.push(f.state.error)
     const items = m ? entriesOf(m, id).map((e) => ({ item: e, ...entryState(e, fs) })) : []
     const bad = items.filter((x) => x.state === 'missing' || x.state === 'changed')
-    const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of asight\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; ') } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
+    const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of trocar\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; ') } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
     if (entry.state === 'unknown') why.push(entry.why)
     let procs
     if (reply) {
@@ -184,7 +184,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     } else if (table && whose) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
     else { procs = []; why.push(`the processes could not be listed (${matchError})`) }
     const installedAt = m ? installedAtOf(m, id) : null
-    // this harness's path into asight (V32 `attached`), one resolver: the proxy-mode daemon answers it per harness (its doors listen), Linux's is the instance's link
+    // this harness's path into trocar (V32 `attached`), one resolver: the proxy-mode daemon answers it per harness (its doors listen), Linux's is the instance's link
     const own = fromReply && fromReply[id] && 'attached' in fromReply[id]
     const att = own ? { attached: [true, false].includes(fromReply[id].attached) ? fromReply[id].attached : null, reason: `the daemon could not tell whether it is listening for ${id} (it could not read its own record of where it listens)` } : { attached: f.link.attached, reason: f.link.reason }
     // `judge(cert)`: the verdict again once the forms' certificates are read (judgeCertificates, after the topology's facts): V32 puts the certificate between the entry and the start time
@@ -202,7 +202,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
   const rc = reply && reply.relayed
   f.relayed = d_isCounts(rc) ? { closing: rc.closing, waiting: rc.waiting, cut: 0 } : f.daemon.state === 'not-running' ? { closing: 0, waiting: 0, cut: 0 } : 'unknown'
   if (f.relayed === 'unknown') f.relayed_reason = f.daemon.state === 'running' ? 'the daemon\'s reply does not carry the connection counts' : f.daemon.state === 'not-responding' ? `the daemon does not answer (${f.daemon.reason})` : `whether a daemon runs is not known (${f.daemon.reason})`
-  // logging out (§1.1, Linux): does the OS keep the daemon after the user's last logout? A file is looked at (`/var/lib/systemd/linger/<user>`), `loginctl` never runs (R8): asight says how, it does not do it
+  // logging out (§1.1, Linux): does the OS keep the daemon after the user's last logout? A file is looked at (`/var/lib/systemd/linger/<user>`), `loginctl` never runs (R8): trocar says how, it does not do it
   if (platform === 'linux') {
     let read
     try {
@@ -210,7 +210,7 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     } catch (e) { rethrowSandbox(e); read = { state: null, error: errMessage(e) } }
     f.linger = read.state === true || read.state === false ? { linger: read.state } : { linger: 'unknown', linger_reason: read.error || 'the linger state could not be read' }
   }
-  try { f.health = deps.captureHealth ? deps.captureHealth({ home: asightHome(home) }) : captureHealth({ home: asightHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
+  try { f.health = deps.captureHealth ? deps.captureHealth({ home: trocarHome(home) }) : captureHealth({ home: trocarHome(home), fs, alive, identity, now: ms() }) } catch (e) { rethrowSandbox(e); f.health = null; f.health_error = errText(e) }
   if (merged) f.identity = identityBlocks({ ids: f.harnesses.map((h) => h.id), merged, health: effectiveHealth(f).health })
   Object.assign(f, await certP)
   return f
@@ -228,27 +228,27 @@ function judgeCertificates(f) {
 /** 1.6 §9.7 / R4: certificate states the user must act on (root pending, declined or gone; key gone) also exit 1, once something was installed — also where no agent runs that would show it. */
 const certNeedsUser = (f) => !!(f.install && f.install.state && f.cert && (['cert-root-pending', 'cert-root-declined', 'cert-root-missing', 'cert-not-installed'].includes(f.cert.root.code) || f.cert.key.state === 'missing')) // installed and cert-not-installed: the certificate file is gone
 
-/** 1.6 §9.4 `install` and `cert` (D55): the install record from the manifest; the root from asight-ca.pem, read back from the user's store through the injected reader
+/** 1.6 §9.4 `install` and `cert` (D55): the install record from the manifest; the root from trocar-ca.pem, read back from the user's store through the injected reader
  *  (backendsFor().rootStore: never `security` / `certutil` in a test); the key and the intermediate from the daemon's issuer (unknown, with a reason, without one). The certificate
  *  axis only: nothing here judges a harness; the forms' `certificate` built from `cert.root` is the certificate step of the verdict (judgeCertificates, V32). Linux: no user root step (`none`), the key is the file `install` made, no intermediate. */
 async function installCertOf({ f, m, dir, fs, platform, home, env, deps }) {
   const rec = m && m.install ? m.install : null, model = isProxyMode(platform), reply = f.daemon.reply
   const install = { state: rec ? rec.state ?? null : null, at: rec ? rec.at ?? null : null, harnesses: rec ? rec.harnesses || [] : [], pending: rec ? (rec.pending || []).map((p) => p.item) : [] }
   let x = null, pemWhy = null // pemWhy: the certificate is there and cannot be read — not known, never "not installed"
-  try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'asight-ca.pem'))) } catch (e) { rethrowSandbox(e); if (!(e && e.code === 'ENOENT')) pemWhy = `asight-ca.pem cannot be read (${errText(e)})` }
+  try { x = new crypto.X509Certificate(fs.readFileSync(path.join(dir, 'ca', 'trocar-ca.pem'))) } catch (e) { rethrowSandbox(e); if (!(e && e.code === 'ENOENT')) pemWhy = `trocar-ca.pem cannot be read (${errText(e)})` }
   const fp256 = x ? x.fingerprint256 : null, items = m ? [...(m.entries || []), ...(m.files || [])] : []
-  const notInstalled = { state: 'missing', code: rec && rec.state ? 'cert-root-missing' : 'cert-not-installed', command: 'asight install' } // §9.6: installed and gone from the store vs never installed
+  const notInstalled = { state: 'missing', code: rec && rec.state ? 'cert-root-missing' : 'cert-not-installed', command: 'trocar install' } // §9.6: installed and gone from the store vs never installed
   const unknown = (reason) => ({ state: 'unknown', code: null, command: null, reason })
   // no certificate file: no usable root, so `on` refuses cert-not-installed (1.6 §1.1) — installed or not; one that cannot be read: not known
   let root = !model ? { store: null, state: 'none', code: null, command: null }
     : pemWhy ? { store: null, ...unknown(pemWhy) }
-      : { store: null, ...notInstalled, code: 'cert-not-installed', ...(rec && rec.state ? { reason: 'install recorded a root and its certificate asight-ca.pem is gone' } : {}) }
+      : { store: null, ...notInstalled, code: 'cert-not-installed', ...(rec && rec.state ? { reason: 'install recorded a root and its certificate trocar-ca.pem is gone' } : {}) }
   if (model && fp256) {
     let has
     try { has = await (deps.rootStore || (deps.backends && deps.backends.rootStore) || (await (await import('../collector/arch/model-backends.mjs')).backendsFor({ os: platform, home, run: deps.exec || null, env, fs })).rootStore).has({ fp256, sha1: x.fingerprint.replace(/:/g, '') }) } catch (e) { rethrowSandbox(e); has = { error: errText(e) } }
     const p = (rec && rec.pending || []).find((q) => q.item === 'root-store'), store = (items.find((e) => e.kind === 'system-root' && e.fp256 === fp256) || {}).store || null
     root = has && has.present ? { store, state: 'in-place', code: null, command: null }
-      : p ? { store, state: p.state === 'declined' ? 'declined' : 'pending', code: `cert-root-${p.state === 'declined' ? 'declined' : 'pending'}`, command: 'asight install', reason: (has && has.error) || p.reason || null }
+      : p ? { store, state: p.state === 'declined' ? 'declined' : 'pending', code: `cert-root-${p.state === 'declined' ? 'declined' : 'pending'}`, command: 'trocar install', reason: (has && has.error) || p.reason || null }
         : has && has.error ? { store, ...unknown(`the root store could not be read (${has.error})`) } : { store, ...notInstalled }
   }
   const down = reply && reply.cert ? null : f.daemon.state === 'running' ? 'the daemon\'s reply has no issuer block' : `the daemon is ${f.daemon.state}${f.daemon.reason ? ` (${f.daemon.reason})` : ''}: only it holds the issuer`
@@ -329,7 +329,7 @@ const restartOf = (f) => f.harnesses.flatMap((h) => h.judged.rows.filter((r) => 
 
 /** The health the document counts from: the daemon's own read when it answered, else the disk's. A reply whose read failed carries `{ error }` — that is a health that could not be read, never "no problems". */
 const effectiveHealth = (f) => (f.daemon && f.daemon.reply && f.daemon.reply.health ? { health: f.daemon.reply.health.error ? null : f.daemon.reply.health, error: f.daemon.reply.health.error || null } : { health: f.health, error: f.health_error })
-/** The critical conditions (D51④: a program refused asight's certificate, so what it sends to that host is not captured), in the health's own order.
+/** The critical conditions (D51④: a program refused trocar's certificate, so what it sends to that host is not captured), in the health's own order.
  *  A fact of the user's machine, not a count: `failures` says how many problems there were, this says capture is failing right now. */
 const criticalOf = (f) => { const h = effectiveHealth(f).health; return ((h && h.collector && h.collector.conditions) || []).filter((x) => x.level === 'critical') }
 
@@ -385,7 +385,7 @@ function failuresOf(f) {
     groups: all.slice(0, GROUPS_MAX), ...(all.length > GROUPS_MAX ? { groups_cut: all.length } : {}) }
 }
 
-/** 附录 C.3 `changed[]`: every place asight changed or created for a harness (the install record's items of phase install and on), with the one
+/** 附录 C.3 `changed[]`: every place trocar changed or created for a harness (the install record's items of phase install and on), with the one
  *  command that undoes it. Machine-wide items (the root, the login entry) name no harness and are not listed. An unreadable record is null, never []. */
 function changedOf(f) {
   if (f.manifest.error) return null
@@ -408,8 +408,8 @@ function boardOf(f) {
   const url = f.boardPort ? `http://127.0.0.1:${f.boardPort}/` : null, d = f.daemon, b = d.reply && d.reply.board
   const say = (state, reason) => ({ state, url, reason })
   if (f.manifest.error) return say('unknown', `the install record could not be read (${f.manifest.error})`)
-  if (!daemonMayStart(f.manifest.value)) return say('not-installed', 'asight is not installed on this machine; run: asight install')
-  if (d.state === 'not-running') return say('not-running', 'the daemon is not running; asight board starts it')
+  if (!daemonMayStart(f.manifest.value)) return say('not-installed', 'trocar is not installed on this machine; run: trocar install')
+  if (d.state === 'not-running') return say('not-running', 'the daemon is not running; trocar board starts it')
   if (d.state !== 'running') return say('unknown', `the daemon did not answer${d.reason ? ` (${d.reason})` : ''}`)
   if (!b || typeof b.state !== 'string') return say('unknown', 'the daemon did not say whether the board is up')
   if (b.state === 'serving') return say('serving', null)
@@ -421,7 +421,7 @@ function boardOf(f) {
 function setupDocOf(f, id) {
   const hf = f.facts && f.facts.harnesses && f.facts.harnesses[id]
   if (hf && hf.setup) return hf.setup
-  const why = f.platform === 'linux' || (f.facts && f.facts.routing === 'driver') ? 'driver mode (Linux) does not judge setup per form; asight on works as before'
+  const why = f.platform === 'linux' || (f.facts && f.facts.routing === 'driver') ? 'driver mode (Linux) does not judge setup per form; trocar on works as before'
     : `the setup of ${id} could not be read${f.topology_error ? ` (${f.topology_error})` : ''}`
   return { state: 'unknown', missing: [], reason: why }
 }
@@ -433,7 +433,7 @@ function healthDocOf(f) {
   return s && typeof s.state === 'string' ? Object.fromEntries(HEALTH_KEYS.filter((k) => s[k] != null).map((k) => [k, s[k]])) : null
 }
 
-/** The 附录 C.3 document of a read: `status --json` and `asight query status` print exactly this. */
+/** The 附录 C.3 document of a read: `status --json` and `trocar query status` print exactly this. */
 export function statusDocOf(f) {
   const d = f.daemon, forms = formsOf(f) || {}
   const failures = failuresOf(f), cut = failures && failures.groups_cut
@@ -482,7 +482,7 @@ export async function statusFacts({ names = null, home = nodeOs.homedir(), env =
   })
 }
 
-/** `asight query status` (附录 C.3 / C.5): the document, for the data side and for `--json`. */
+/** `trocar query status` (附录 C.3 / C.5): the document, for the data side and for `--json`. */
 export async function statusDoc(opts = {}) { return statusDocOf(await statusFacts(opts)) }
 
 /** The findings of one harness, from the one catalogue (附录 B), so `status` and `doctor` never explain the same thing in two ways. */
@@ -491,7 +491,7 @@ function findingsFor(f, ids) {
   try { return diagnose({ facts: f.facts, topology: f.topology, harnesses: ids, user: f.user }) } catch (e) { rethrowSandbox(e); return [] }
 }
 
-const USAGE = 'usage: asight status [<harness>...] [--failures] [--json]'
+const USAGE = 'usage: trocar status [<harness>...] [--failures] [--json]'
 
 /** → the exit code (§3.5). `argv` is what follows `status`. `io` = { out, err }. */
 export async function runStatusCli(argv, ctx = {}) { return (await statusRun(argv, ctx)).exit }
@@ -503,11 +503,11 @@ export async function statusRun(argv, { io, env = process.env, home = nodeOs.hom
   for (const a of argv) {
     if (a === '--json') json = true
     else if (a === '--failures') failures = true
-    else if (a.startsWith('-')) { io.err(`asight status: unknown option '${a}'\n${USAGE}`); return { exit: EXIT.usage, f: null } }
+    else if (a.startsWith('-')) { io.err(`trocar status: unknown option '${a}'\n${USAGE}`); return { exit: EXIT.usage, f: null } }
     else names.push(a)
   }
   const named = resolveHarnesses(names)
-  if (!named.ok) { io.err(`asight status: unknown harness '${named.unknown.join(', ')}'. Known: ${named.known.join(', ')}`); return { exit: EXIT.usage, f: null } }
+  if (!named.ok) { io.err(`trocar status: unknown harness '${named.unknown.join(', ')}'. Known: ${named.known.join(', ')}`); return { exit: EXIT.usage, f: null } }
   const f = await statusFacts({ names: named.ids, home, env, platform, deps })
   const exit = statusExit(f)
   const doc = statusDocOf(f)

@@ -55,7 +55,7 @@ test('(3) the replay\'s steps are the main lane\'s calls; following page.next en
 })
 
 test('(4) the capture gap: only a same-harness group inside the session time, with the session after failures.since', () => {
-  const SPEC = fs.readFileSync(new URL('../../spec/01-asight-rfc/1.6-cli.md', import.meta.url), 'utf8')
+  const SPEC = fs.readFileSync(new URL('../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8')
   const C3 = SPEC.slice(SPEC.indexOf('### C.3'))
   const sample = () => JSON.parse(/```json\n([\s\S]*?)```/.exec(C3)[1])
   const H = sample().failures.groups[0].harness

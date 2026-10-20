@@ -1,4 +1,4 @@
-// src/query/named/pricing.mjs — `asight query pricing` (RFC 1.6 §4.1, 附录 C.5).
+// src/query/named/pricing.mjs — `trocar query pricing` (RFC 1.6 §4.1, 附录 C.5).
 //
 // The unit prices a cost estimate is made with, and where they came from. Price is an external,
 // user-editable fact (providers report tokens, never money — src/view/pricing.mjs, D14), so the
@@ -9,9 +9,9 @@ import { loadPricing } from '../../view/pricing.mjs';
 export const params = Object.freeze([]);
 const UNIT = '$/Mtok';
 
-/** The one file the prices come from: `ASIGHT_PRICING`, else ~/.asight/pricing.json (the built-in table when it is
+/** The one file the prices come from: `TROCAR_PRICING`, else ~/.trocar/pricing.json (the built-in table when it is
  *  absent). `run` and the stamp both ask this, so they cannot disagree about which file the answer depends on. */
-export const pricingFile = ({ home, env = process.env }) => env.ASIGHT_PRICING || path.join(home, 'pricing.json');
+export const pricingFile = ({ home, env = process.env }) => env.TROCAR_PRICING || path.join(home, 'pricing.json');
 
 export async function run({ home, env }) {
   const { pricing, source } = loadPricing(pricingFile({ home, env: env ?? process.env }));

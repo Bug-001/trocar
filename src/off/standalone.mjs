@@ -1,6 +1,6 @@
-// standalone.mjs (src/off) — the single file ~/.asight/bin/asight-off, made of this directory (RFC 1.6 R3; V2, V11, V35). `asight off` and the copy run the same code: when asight
-// is broken — the repository gone, node_modules gone, the daemon dead — the copy still takes asight out of the agents' path. `asight on` writes it every time (it costs a few
-// milliseconds and keeps it equal to what is installed); `asight doctor` checks it (checkStandalone).
+// standalone.mjs (src/off) — the single file ~/.trocar/bin/trocar-off, made of this directory (RFC 1.6 R3; V2, V11, V35). `trocar off` and the copy run the same code: when trocar
+// is broken — the repository gone, node_modules gone, the daemon dead — the copy still takes trocar out of the agents' path. `trocar on` writes it every time (it costs a few
+// milliseconds and keeps it equal to what is installed); `trocar doctor` checks it (checkStandalone).
 //   buildStandalone   src/off/*.mjs, from main.mjs, in dependency order, as one file: the relative imports and the `export` keywords are dropped, the `node:*` imports are made
 //                     one load per built-in, and a call of runOffCli ends it. It refuses what would make a wrong file instead of writing it: two modules declaring one top-level
 //                     name, an import that is not `node:*` or a file of the directory, a cycle, an `export default` / `export { }` / `export *`, a renamed import of a module of the
@@ -26,9 +26,9 @@ import { OFF_VERSION } from './manifest.mjs'
 export const STANDALONE_ENTRY = 'runOffCli(process.argv.slice(2), { standalone: true })'
 
 const SOURCE_DIR = path.dirname(fileURLToPath(import.meta.url))
-const LOADER = '__asightLoad'
+const LOADER = '__trocarLoad'
 const RESERVED_NAMES = new Set(['module', 'exports', 'require', '__filename', '__dirname', LOADER]) // what the CommonJS wrapper (and the file's own first line) already binds
-const VERSION_LINE = /^\/\/ asight-off (\S+) — generated from src\/off by asight on; do not edit$/m
+const VERSION_LINE = /^\/\/ trocar-off (\S+) — generated from src\/off by trocar on; do not edit$/m
 const REGEX_AFTER = new Set(['return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'void', 'delete', 'throw', 'new', 'instanceof', 'yield', 'await'])
 const WORD = /[\w$]/
 
@@ -203,21 +203,21 @@ export function buildStandalone({ srcDir = SOURCE_DIR, version, fs = nodeFs } = 
   const tidy = (s) => s.replace(/^\n+/, '').replace(/\s+$/, '')
   return [
     '#!/usr/bin/env node',
-    `// asight-off ${version} — generated from src/off by asight on; do not edit`,
-    '// `asight off` without the repository, node_modules or the daemon (RFC 1.6 R3): the undo side of asight in one file, which brings in `node:*` and nothing else.',
+    `// trocar-off ${version} — generated from src/off by trocar on; do not edit`,
+    '// `trocar off` without the repository, node_modules or the daemon (RFC 1.6 R3): the undo side of trocar in one file, which brings in `node:*` and nothing else.',
     '// It has no ES module syntax, so the Node that runs it need not guess what kind of file a file with no extension is.',
     "'use strict'",
-    `const ${LOADER} = typeof require === 'function' ? require : (id) => { if (typeof process.getBuiltinModule !== 'function') throw new Error('asight-off was taken for an ES module (a package.json with "type": "module" is above it) and Node ' + process.version + ' cannot load built-ins that way: move the file out from under that package.json, or use Node 20.16+ / 22.3+'); return process.getBuiltinModule(id) }`,
+    `const ${LOADER} = typeof require === 'function' ? require : (id) => { if (typeof process.getBuiltinModule !== 'function') throw new Error('trocar-off was taken for an ES module (a package.json with "type": "module" is above it) and Node ' + process.version + ' cannot load built-ins that way: move the file out from under that package.json, or use Node 20.16+ / 22.3+'); return process.getBuiltinModule(id) }`,
     ...prologue,
     ...order.flatMap((mod) => ['', `// ── src/off/${mod.name} ──`, tidy(mod.body)]),
     '',
     '// ── entry ──',
-    `;(async () => { process.exitCode = await ${STANDALONE_ENTRY} })().catch((e) => { process.stderr.write(\`asight-off: \${(e && e.stack) || e}\\n\`); process.exitCode = 1 })`,
+    `;(async () => { process.exitCode = await ${STANDALONE_ENTRY} })().catch((e) => { process.stderr.write(\`trocar-off: \${(e && e.stack) || e}\\n\`); process.exitCode = 1 })`,
     '',
   ].join('\n')
 }
 
-/** Writes ~/.asight/bin/asight-off (0700; the directory 0700 when it is made) unless it already is what buildStandalone says → `{ path, written }`. Throws what the build or the write throws. */
+/** Writes ~/.trocar/bin/trocar-off (0700; the directory 0700 when it is made) unless it already is what buildStandalone says → `{ path, written }`. Throws what the build or the write throws. */
 export function writeStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, fs = nodeFs } = {}) {
   const file = standalonePath(home)
   const text = buildStandalone({ srcDir, version, fs })
@@ -231,23 +231,23 @@ export function writeStandalone({ home = nodeOs.homedir(), version = OFF_VERSION
   return { path: file, written: true }
 }
 
-/** Is the copy on disk what `asight on` would write now? → `{ ok, path, found, expected, reason? }`: `found` is the version on its first lines (null: none, or no file), `expected` the
+/** Is the copy on disk what `trocar on` would write now? → `{ ok, path, found, expected, reason? }`: `found` is the version on its first lines (null: none, or no file), `expected` the
  *  version asked for (default OFF_VERSION). Reads only. A version that differs, a text that differs under the same version, a file that is not executable, one that is not there or cannot be read: each is `ok: false` with `reason`. */
 export function checkStandalone({ home = nodeOs.homedir(), version = OFF_VERSION, srcDir, platform = process.platform, fs = nodeFs } = {}) {
   const file = standalonePath(home), expected = String(version)
   const no = (found, reason) => ({ ok: false, path: file, found, expected, reason })
   let text, mode
   try { text = fs.readFileSync(file, 'utf8'); mode = fs.statSync(file).mode } catch (e) {
-    return no(null, e && e.code === 'ENOENT' ? `${file} is not there: asight on writes it` : `${file} cannot be read (${(e && e.code) || (e && e.message) || e}); asight on writes it again`)
+    return no(null, e && e.code === 'ENOENT' ? `${file} is not there: trocar on writes it` : `${file} cannot be read (${(e && e.code) || (e && e.message) || e}); trocar on writes it again`)
   }
   const m = VERSION_LINE.exec(text.split('\n', 3).join('\n'))
   const found = m ? m[1] : null
-  if (found !== expected) return no(found, found === null ? `${file} carries no asight-off version line: it is not a copy asight wrote; asight on writes it again` : `${file} is version ${found}, this asight writes version ${expected}; asight on writes it again`)
+  if (found !== expected) return no(found, found === null ? `${file} carries no trocar-off version line: it is not a copy trocar wrote; trocar on writes it again` : `${file} is version ${found}, this trocar writes version ${expected}; trocar on writes it again`)
   let want
   try { want = buildStandalone({ srcDir, version, fs }) } catch (e) { return no(found, `${file} could not be compared with what src/off generates: ${(e && e.message) || e}`) }
-  if (text !== want) return no(found, `${file} says version ${found} but its bytes differ from what src/off generates now; asight on writes it again`)
+  if (text !== want) return no(found, `${file} says version ${found} but its bytes differ from what src/off generates now; trocar on writes it again`)
   // the execute bit is a POSIX fact: on Windows nothing carries one (the file is run as `node "<path>"`, which is what the undo line says),
   // so checking it there called a good copy stale right after install (a Windows test machine 2026-10-18)
-  if (platform !== 'win32' && !(mode & 0o100)) return no(found, `${file} is not executable; asight on writes it again`)
+  if (platform !== 'win32' && !(mode & 0o100)) return no(found, `${file} is not executable; trocar on writes it again`)
   return { ok: true, path: file, found, expected }
 }

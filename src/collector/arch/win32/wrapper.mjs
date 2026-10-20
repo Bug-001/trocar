@@ -16,10 +16,10 @@ const csEncode = (v) => (Array.isArray(v) ? `new string[] { ${v.map(lit).join(',
 /** The wrapper's C# source for { REAL, SWITCH, CA_FILE, CERT_VAR, PROXY_ENV, PROXY_NAMES }. */
 export const renderWrapper = (values) => renderTemplate(nodeFs.readFileSync(WRAPPER_SOURCE, 'utf8'), values, csEncode)
 
-/** compile(source) → the stub's bytes, built in `dir` (asight's own folder) by csc.exe; throws with csc's output when it fails. */
+/** compile(source) → the stub's bytes, built in `dir` (trocar's own folder) by csc.exe; throws with csc's output when it fails. */
 export function makeCompile({ dir, run = null, fs = nodeFs }) {
   return (source) => {
-    const cs = path.join(dir, 'asight-wrapper.cs'), exe = path.join(dir, 'asight-wrapper.exe')
+    const cs = path.join(dir, 'trocar-wrapper.cs'), exe = path.join(dir, 'trocar-wrapper.exe')
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(cs, source)
     try {

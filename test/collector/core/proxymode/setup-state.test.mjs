@@ -1,6 +1,6 @@
 // setup-state.test.mjs — V91 (1.6 附录 C.3 `setup`, 4.11 P4b, D65④): setupOf, the one judgement behind `status`'s `harnesses[h].setup` and `on`'s ⑪,
 // over a descriptor fixture: form present / absent × its carrier's install item none / intact / hash changed × the root in place / missing / pending ×
-// install saw the harness or not (one installed after asight: its root-carried form needs nothing, a carrier of its own is absent).
+// install saw the harness or not (one installed after trocar: its root-carried form needs nothing, a carrier of its own is absent).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -9,16 +9,16 @@ import { tmpDir } from '../../../helpers/tmp.mjs'
 import { setupOf } from '../../../../src/collector/core/proxymode/status-facts.mjs'
 import { sha256 } from '../../../../src/off/fsutil.mjs'
 
-// one harness, two forms: `fx.app` whose certificate is a carrier asight places at install, `fx.cli` that the root carries
+// one harness, two forms: `fx.app` whose certificate is a carrier trocar places at install, `fx.cli` that the root carries
 const DESC = { name: 'fx', proxyMode: {
   forms: [{ id: 'fx.app', os: ['darwin'], route: 'all', cert: 'hook', present: [{ command: 'fx-app' }] }, { id: 'fx.cli', os: ['darwin'], route: 'all', cert: 'root', present: [{ command: 'fx' }] }],
   certs: { hook: { kind: 'plugin' } }, routes: { all: {} },
 } }
 
 function cell({ present, item, root, seen }) {
-  const home = tmpDir('asight-setup-')
+  const home = tmpDir('trocar-setup-')
   const file = path.join(home, 'hook.mjs')
-  fs.writeFileSync(file, 'asight hook\n')
+  fs.writeFileSync(file, 'trocar hook\n')
   const rec = { kind: 'owned-file', role: 'plugin', harness: 'fx', phase: 'install', path: file, sha256: sha256(fs.readFileSync(file)) }
   const m = { version: 3, entries: [], files: item === 'none' ? [] : [rec], install: { harnesses: seen ? ['fx'] : [], items: { fx: item === 'none' ? [] : [{ kind: rec.kind, path: file }] } } }
   if (item === 'hash-changed') fs.writeFileSync(file, 'the harness\'s own update\n')

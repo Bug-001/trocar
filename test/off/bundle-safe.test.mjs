@@ -1,11 +1,11 @@
 // bundle-safe.test.mjs — what keeps src/off bundle-safe (RFC 1.6 R3, 4.8 §4.2; acceptance W54, the part that does not need a test machine).
 //
-// `asight off` and the standalone `asight-off` are made of src/off alone: the single file imports only `node:*` and src/off, and a bundle has ONE scope, so no two files of the directory may
+// `trocar off` and the standalone `trocar-off` are made of src/off alone: the single file imports only `node:*` and src/off, and a bundle has ONE scope, so no two files of the directory may
 // declare the same top-level name (the builder, src/off/standalone.mjs on the CLI branch, refuses both; test/off/standalone.test.mjs there builds the real directory). These tests hold that:
 //   1. every file of src/off imports only node:* and its own directory, and none uses a form the builder cannot read (export default, export { }, export *, top-level destructuring);
 //   2. the top-level names of src/off are unique (the scan below is a column-0 reading of the way every file here is written; the real gate is the builder's);
 //   3. the scan itself can fail: planted violations are named.
-// (This file also held the Windows VPN block's undo, the byte-exact Script.js strip and the runtime-config strip, which lived in src/off for this reason. D43 withdrew the block: asight writes nothing into a VPN,
+// (This file also held the Windows VPN block's undo, the byte-exact Script.js strip and the runtime-config strip, which lived in src/off for this reason. D43 withdrew the block: trocar writes nothing into a VPN,
 // so there is nothing of it to take out, and the two modules and their tests are gone.)
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -45,7 +45,7 @@ test('every file of src/off imports only node:* and its own directory, and the t
 })
 
 test('the scan can fail: a planted import of src/netenv, a repeated top-level name, an export default and a destructuring are each named', () => {
-  const dir = tmpDir('asight-off-scan-')
+  const dir = tmpDir('trocar-off-scan-')
   const put = (name, text) => fs.writeFileSync(path.join(dir, name), text)
   put('a.mjs', "import { x } from '../netenv/mihomo/rules.mjs'\nimport fs from 'node:fs'\nimport { y } from './b.mjs'\nexport function walk() {}\nexport default 1\nconst { p, q } = {}\n")
   put('b.mjs', 'export const y = 1\nfunction walk() {}\nexport { y }\nexport * from "./a.mjs"\n')

@@ -8,7 +8,7 @@ import path from 'node:path'
 import { appendEvent, recentFailures, createFailureRecorder } from '../../../src/collector/core/events.mjs'
 import { readFlows, foldFlows } from '../../../src/health/flows.mjs'
 
-function box() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ev-')); return { dir, done: () => fs.rmSync(dir, { recursive: true, force: true }) } }
+function box() { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-ev-')); return { dir, done: () => fs.rmSync(dir, { recursive: true, force: true }) } }
 
 test('events: failures go to flows/<date>.ndjson (0600), never a top-level *.ndjson; recentFailures reads them back', () => {
   const b = box()

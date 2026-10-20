@@ -1,6 +1,6 @@
-// model-install.mjs — `asight install` on macOS and Windows (RFC 4.11 §1「install」, P1–P4, P8, P9; 1.6 §1.6; plan T20). Everything here is
+// model-install.mjs — `trocar install` on macOS and Windows (RFC 4.11 §1「install」, P1–P4, P8, P9; 1.6 §1.6; plan T20). Everything here is
 // user-level and phase 'install': the root's key in its custody, the root in the user's root store, the certificate carriers of every PRESENT form,
-// asight-ca.pem, the standalone asight-off, the autostart unit. Never a login-environment variable (CM26), never an admin step (CM25).
+// trocar-ca.pem, the standalone trocar-off, the autostart unit. Never a login-environment variable (CM26), never an admin step (CM25).
 // Idempotent (D54): an item already there and unchanged is not written again, the root store is read back by fingerprint before an add (no
 // prompt), so `install; install` changes no byte and makes no second key. The world is injected (0.1 §3): custody, rootStore, the sources ctx,
 // owns(), the wrapper kit, fs, now. The caller holds op.lock and has refused root and a v2 manifest.
@@ -18,7 +18,7 @@ import { missingDirs } from '../off/fsutil.mjs'
 import { resolveLoc, readSrc, holds, isPresent } from './core/proxymode/sources.mjs'
 import { noProxyNames } from './core/proxymode/entries.mjs'
 import { placeWrapper, managedTree } from './core/proxymode/hooks/wrapper.mjs'
-import { lineComment, removeAsightText } from '../off/text-edit.mjs'
+import { lineComment, removeTrocarText } from '../off/text-edit.mjs'
 import { livenessOf } from './core/registry.mjs'
 import { readAgentList } from '../off/identity.mjs'
 import { unitedLiveness, daemonEnv } from './install.mjs'
@@ -30,7 +30,7 @@ export const MODEL_OS = Object.freeze(['darwin', 'win32'])
 export const isModelOs = (os) => MODEL_OS.includes(os)
 
 const STORE = Object.freeze({ darwin: 'darwin-user-trust', win32: 'win-currentuser-root' }) // the store the user root goes into (src/off/root-store.mjs removes it on uninstall)
-export const ROOT_SUBJECT = 'asight local root' // also how the lab's reset knows asight's own certificate (spec 4.10 §7 还原)
+export const ROOT_SUBJECT = 'trocar local root' // the subject a reset uses to recognise trocar's own certificate
 const NOT_USERS = CODE.notUsersFile
 const errText = (e) => String((e && e.message) || e)
 // The key custody is a native program (4.11 P1): 'unavailable' is a VALUE, but it can also FAIL outright — a HOME with no login keychain answers
@@ -38,13 +38,13 @@ const errText = (e) => String((e && e.message) || e)
 // refusal: `install` says what happened and what to do, carries `error.code` and exits 1.
 export const CUSTODY_FAILED = 'key-custody-failed'
 const CUSTODY_ADVICE = Object.freeze({
-  darwin: 'asight needs the login keychain of this user: log in to this Mac at its own desktop once (that is where the keychain is made), then run asight install again there',
-  win32: 'run asight install again from a terminal of your own desktop session',
+  darwin: 'trocar needs the login keychain of this user: log in to this Mac at its own desktop once (that is where the keychain is made), then run trocar install again there',
+  win32: 'run trocar install again from a terminal of your own desktop session',
 })
 // an OS prompt that was not answered (timeout, no GUI session) is pending; one the user answered no is declined (1.6 §1.6)
 const promptState = (r) => r.state || (/time[d ]?out|no gui|interaction|session|unavailable/i.test(String(r.reason || '')) ? 'pending' : 'declined')
 
-/** Rule U (P4): may asight append its block to `file`? → null (yes) or the reason it is not this user's own file. */
+/** Rule U (P4): may trocar append its block to `file`? → null (yes) or the reason it is not this user's own file. */
 function usersFileWhy(file, { fs = nodeFs, owns }) {
   if (typeof file !== 'string' || !path.isAbsolute(file)) return `${file} is not an absolute path`
   let real
@@ -60,7 +60,7 @@ function usersFileWhy(file, { fs = nodeFs, owns }) {
 
 /** runInstall({ os, home, env, harnesses, custody, rootStore, ctx, owns, … }) → { manifest, fp256, items, carriers, pending, problems, exit }. See the header. */
 export async function runInstall({ os, home, env = process.env, harnesses, custody, rootStore, ctx, owns, installHelper = null, interactive = false, wrapperKit = null, renderHook = null, facts = {}, unit = null, only = null, nodeRoots = tls.rootCertificates, fs = nodeFs, now = () => new Date() }) {
-  const dir = collectorHome(path.join(home, '.asight'))
+  const dir = collectorHome(path.join(home, '.trocar'))
   const ca = caPaths(path.join(dir, 'ca'))
   const m = readManifest(dir, fs) || newManifest(now())
   const before = JSON.stringify(m)
@@ -70,7 +70,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   const save = () => saveManifest(dir, m, fs)
   if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); save() }
   const stdl = writeStandalone({ home, version: OFF_VERSION, fs }) // the way back first (R3)
-  said('asight-off', stdl.written ? 'written' : 'intact', { path: stdl.path })
+  said('trocar-off', stdl.written ? 'written' : 'intact', { path: stdl.path })
   if (installHelper) { const h = installHelper(interactive); if (h && h.why && h.why !== 'same') problems.push(h.why) }
 
   // a · the root's key (P1): created only when the custody has none; the root it returns must have the ROOT profile (T12)
@@ -87,19 +87,19 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   }
   const has = await ask('exists')
   if (custodyWhy) return finish()
-  if (has === 'unavailable') { pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody is not reachable (macOS: no graphical login session); run asight install again in a terminal of that session' }) }
+  if (has === 'unavailable') { pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody is not reachable (macOS: no graphical login session); run trocar install again in a terminal of that session' }) }
   else if (rec && has === true && fs.existsSync(ca.pem)) { rootDer = pemToDer(fs.readFileSync(ca.pem, 'utf8')); said('root-key', 'intact', { fp256: rec.fp256 }) }
   else if (only) { // a new root rewrites every harness's carriers (㉒), which one harness's Set up does not place: that is install's own run
-    pending.push({ item: 'root-key', state: 'pending', reason: "asight's root key is gone or cannot be read back, and a new one means every agent's certificate carrier is placed again: run asight install" })
+    pending.push({ item: 'root-key', state: 'pending', reason: "trocar's root key is gone or cannot be read back, and a new one means every agent's certificate carrier is placed again: run trocar install" })
     return finish()
   } else {
-    // 4.11 §3 ㉒: a key that is gone (exists() false while the manifest records one), or one whose root asight cannot read back (no record, or
-    // asight-ca.pem gone: the custody has no verb that returns the root), is replaced — never refused. A stray key goes first (create over it is
+    // 4.11 §3 ㉒: a key that is gone (exists() false while the manifest records one), or one whose root trocar cannot read back (no record, or
+    // trocar-ca.pem gone: the custody has no verb that returns the root), is replaced — never refused. A stray key goes first (create over it is
     // the helper's 'exists'); then the old root leaves the store by its recorded fingerprint; the carriers below are rewritten for the new root.
     if (has === true) {
       const gone = await ask('remove', rec ? rec.custody : { kind: custody.kind })
       if (custodyWhy) return finish()
-      if (!gone || typeof gone !== 'object' || typeof gone.removed !== 'boolean') { pending.push({ item: 'root-key', state: 'pending', reason: `the custody holds a key whose root certificate asight can no longer read back, and could not remove it now (${JSON.stringify(gone)}); run asight install again in a terminal of the graphical login session` }); return finish() }
+      if (!gone || typeof gone !== 'object' || typeof gone.removed !== 'boolean') { pending.push({ item: 'root-key', state: 'pending', reason: `the custody holds a key whose root certificate trocar can no longer read back, and could not remove it now (${JSON.stringify(gone)}); run trocar install again in a terminal of the graphical login session` }); return finish() }
     }
     if (rec) { m.entries.splice(m.entries.indexOf(rec), 1); save() }
     // every root this manifest put in the store belongs to a key that is gone now (the record of the key may be gone too): each leaves by its fingerprint
@@ -110,12 +110,12 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       else { // its key is gone, so it signs nothing any more: an orphan, kept on record for uninstall, and named with its removal (1.6 §9.4 orphan)
         old.orphan = true; save()
         said('old-root', 'orphan', { fp256: old.fp256 })
-        problems.push(`orphan: the old asight root ${old.fp256} is still in your root store (${(r && r.reason) || 'the removal was not confirmed'}); its key is gone, so it signs nothing. Remove it by hand: ${old.undo_by_hand || undoByHand(old)}`)
+        problems.push(`orphan: the old trocar root ${old.fp256} is still in your root store (${(r && r.reason) || 'the removal was not confirmed'}); its key is gone, so it signs nothing. Remove it by hand: ${old.undo_by_hand || undoByHand(old)}`)
       }
     }
     const made = await ask('create', { subject: ROOT_SUBJECT })
     if (custodyWhy) return finish()
-    if (made === 'unavailable') pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody could not create the key now (no graphical login session?); run asight install again there' })
+    if (made === 'unavailable') pending.push({ item: 'root-key', state: 'pending', reason: 'the key custody could not create the key now (no graphical login session?); run trocar install again there' })
     else {
       const bad = checkProfile(made.rootDer, ROOT)
       if (bad.length) { problems.push(`the root the custody made does not have the root profile (${bad.join('; ')}); nothing uses it`); await ask('remove', { kind: custody.kind, id: made.fp256 }) }
@@ -224,7 +224,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         const file = resolveLoc(c.file, ctx)[0]
         if (at.set && !(m.entries.some((e) => e.kind === 'json-key' && e.phase === 'install' && e.path === file && JSON.stringify(e.keys) === JSON.stringify(c.keys)))) return { state: 'rule-u' }
         if (inEnv) return { state: 'rule-u' }
-        if (c.semantics === 'replace') { // CM9: Node's own roots plus the asight root, no system roots
+        if (c.semantics === 'replace') { // CM9: Node's own roots plus the trocar root, no system roots
           const bundle = path.join(dir, 'ca', `bundle-${desc.name}.pem`)
           owned(bundle, 'bundle', desc.name, `${[...nodeRoots, rootPem].map((p) => p.trim()).join('\n')}\n`, 0o644)
           jsonKey(desc, file, c.keys, bundle)
@@ -244,7 +244,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
         const hook = renderHook(c.template, { CA_FILE: ca.pem, SWITCH: path.join(dir, 'switch', desc.name), PROXY_ENV: (desc.proxy && desc.proxy.env) || [], NO_PROXY_ENV: noProxyNames(desc) })
         const file = path.join(pdir, hook.name), text = hook.text
         owned(file, 'plugin', desc.name, text, 0o644)
-        const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit: { format: 'yaml-list', line: `- ${c.loader.keys.at(-1)}: [{ name: ${JSON.stringify(file)} }] ${lineComment("loads asight's CA trust plugin")}` }, home, now: now(), fs })
+        const e = applyTextEntry({ dir, manifest: m, harness: desc.name, phase: 'install', file: loader, edit: { format: 'yaml-list', line: `- ${c.loader.keys.at(-1)}: [{ name: ${JSON.stringify(file)} }] ${lineComment("loads trocar's CA trust plugin")}` }, home, now: now(), fs })
         said('plugin-loader', e ? 'written' : 'intact', { path: loader, harness: desc.name })
         return { state: 'placed' }
       }
@@ -256,7 +256,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
   function ruleU(desc, src) {
     const r = readSrc(src, ctx)
     if (r.error || !r.set || typeof r.value !== 'string') return
-    if (m.entries.some((e) => e.kind === 'json-key' && e.phase === 'install' && e.value === r.value)) return // asight's own key, set by this install
+    if (m.entries.some((e) => e.kind === 'json-key' && e.phase === 'install' && e.value === r.value)) return // trocar's own key, set by this install
     const file = path.isAbsolute(r.value) ? r.value : path.resolve(home, r.value)
     const why = usersFileWhy(file, { fs, owns })
     if (why) { carriers.push({ harness: desc.name, carrier: 'pem-block', path: file, state: 'skipped', code: NOT_USERS, why }); return }
@@ -265,7 +265,7 @@ export async function runInstall({ os, home, env = process.env, harnesses, custo
       // and its record with it; the block for this root is then placed as new (a fresh installed_at)
       const older = m.entries.find((e) => e.kind === 'text' && e.format === 'pem-block' && e.harness === desc.name && e.path === file && !(e.ops || []).some((o) => o.pem && o.inserted.replace(/\s/g, '').includes(rootBody)))
       if (older) {
-        const out = removeAsightText(fs.readFileSync(file, 'latin1'), older.ops)
+        const out = removeTrocarText(fs.readFileSync(file, 'latin1'), older.ops)
         if (out.found) fs.writeFileSync(file, out.text, 'latin1')
         m.entries.splice(m.entries.indexOf(older), 1); save()
       }

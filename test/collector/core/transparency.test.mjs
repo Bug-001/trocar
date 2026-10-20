@@ -29,10 +29,10 @@ test('byte transparency across mock scenarios', { timeout: 60_000 }, async (t) =
   const caDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-ca-'))
   const lab = makeLabCa(caDir)
   const mock = await startMockUpstream({ tls: { key: fs.readFileSync(lab.key), cert: fs.readFileSync(lab.cert) }, delays: { stallMs: 200, dripMs: 5 } })
-  const asightCa = createCa()
+  const trocarCa = createCa()
   const envelopes = []
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 1, agent: 'claude-code', decrypt: true })
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(lab.caCert), store: { envelope: (e) => envelopes.push(e), flow() {} } })
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: fs.readFileSync(lab.caCert), store: { envelope: (e) => envelopes.push(e), flow() {} } })
   const { port } = await engine.listen({})
   // The mock goes first: its sockets go, so every flow still open ends (engine.close() waits for them, never destroys one).
   t.after(async () => {
@@ -46,7 +46,7 @@ test('byte transparency across mock scenarios', { timeout: 60_000 }, async (t) =
     const reqRaw = `POST /v1/messages HTTP/1.1\r\nHost: ${HOST}\r\nContent-Type: application/json\r\nAnthropic-Version: 2023-06-01\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`
     let c
     const got = await within(new Promise((resolve) => {
-      c = tls.connect({ port, host: '127.0.0.1', servername: HOST, ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(reqRaw))
+      c = tls.connect({ port, host: '127.0.0.1', servername: HOST, ca: trocarCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write(reqRaw))
       let b = Buffer.alloc(0); c.on('data', (d) => { b = Buffer.concat([b, d]) })
       c.on('close', () => resolve(b)); c.on('error', () => {})
     }), 15_000, `${name}: the client never saw its connection close`, () => c.destroy())

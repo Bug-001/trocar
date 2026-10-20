@@ -12,7 +12,7 @@ const gate = await probe()
 const skip = gate.ok ? false : gate.reason
 const EMPTY = { sessions: [], errors: [], next: null }
 // the C.3 sample of spec 1.6 with two harnesses listed, the second still needing Set up
-const C3 = fs.readFileSync(new URL('../../../spec/01-asight-rfc/1.6-cli.md', import.meta.url), 'utf8').split('### C.3')[1]
+const C3 = fs.readFileSync(new URL('../../../spec/01-trocar-rfc/1.6-cli.md', import.meta.url), 'utf8').split('### C.3')[1]
 const SAMPLE = JSON.parse(/```json\n([\s\S]*?)```/.exec(C3)[1])
 const TWO = Object.keys(ALIASES).slice(0, 2)
 const twoAgents = () => {

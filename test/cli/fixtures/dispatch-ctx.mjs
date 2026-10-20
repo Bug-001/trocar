@@ -18,11 +18,11 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 1))
 /** A sandbox HOME with the user's files of the seven-homes layout, a fake systemd and a fake daemon (it comes up when the unit is started, goes away on `POST /off` with `exit`).
  *  → { home, sh, sys, dir, deps(over), ctx(over), run(argv, over) → { exit, io } } (on Linux a real `on` with no install record runs `install --yes` first); `ctx` is the second argument of runCli (`uid` 1000: a test of root passes its own), `over.deps` is merged into the deps. */
 export function sandbox({ platform = 'linux', status = {}, install: autoInstall = platform === 'linux' } = {}) {
-  const home = tmpDir('asight-cli-')
+  const home = tmpDir('trocar-cli-')
   const sh = sevenHomes(home)
   const sys = fakeSystem()
-  const dir = path.join(home, '.asight', 'collector')
-  // the daemon's GET /status as `asight status` reads it (src/collector/daemon.mjs status()); everything else the fake daemon answers itself
+  const dir = path.join(home, '.trocar', 'collector')
+  // the daemon's GET /status as `trocar status` reads it (src/collector/daemon.mjs status()); everything else the fake daemon answers itself
   const request = async (q) => {
     if (q.method === 'GET' && q.path === '/status') {
       if (!sys.daemon.state.up) throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })
@@ -34,12 +34,12 @@ export function sandbox({ platform = 'linux', status = {}, install: autoInstall 
   const parts = { os: 'none', harnesses: descs, scan: async () => [], match: () => ({ agent: null }), arch: { unit: { userUnit } } }
   const deps = (over = {}) => ({
     parts, exec: sys.exec.run, request, socketPath: SOCK, helperState: () => ({ ok: true }), linger: () => true, lingerRead: () => ({ state: true }),
-    roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/asight.mjs', sleep: tick, user: 'alice', procs: async () => [],
+    roots: ROOTS, freePort: async () => 47011, script: '/repo/bin/trocar.mjs', sleep: tick, user: 'alice', procs: async () => [],
     has: () => true, verify: () => true, getuid: () => 1000, ...over,
   })
-  const ctx = (over = {}) => ({ io: fakeIo(), home, platform, uid: 1000, env: { ...sh.env, XDG_RUNTIME_DIR: path.join(home, 'run'), ASIGHT_SOURCE: '' }, ...over, deps: deps(over.deps) })
+  const ctx = (over = {}) => ({ io: fakeIo(), home, platform, uid: 1000, env: { ...sh.env, XDG_RUNTIME_DIR: path.join(home, 'run'), TROCAR_SOURCE: '' }, ...over, deps: deps(over.deps) })
   const run = async (argv, over = {}) => {
-    // D55 / override #15: on never writes a certificate. A real (not dry) `on` with no install record is preceded by `asight install --yes` in the same world, as
+    // D55 / override #15: on never writes a certificate. A real (not dry) `on` with no install record is preceded by `trocar install --yes` in the same world, as
     // a user runs them; `install: false` leaves it out (the refusal itself: test/cli/install-linux.test.mjs)
     if (autoInstall && argv[0] === 'on' && !argv.includes('--dry-run') && !installed()) { const c = ctx({ ...over, io: fakeIo() }); const code = await runCli(['install', '--yes'], c); if (code !== 0) return { exit: code, io: c.io } }
     const c = ctx(over); const exit = await runCli(argv, c); return { exit, io: c.io }
@@ -47,7 +47,7 @@ export function sandbox({ platform = 'linux', status = {}, install: autoInstall 
   return { home, sh, sys, dir, deps, ctx, run }
 }
 
-/** The same sandbox after a real `asight install --yes` and `asight on --yes` run through runCli. */
+/** The same sandbox after a real `trocar install --yes` and `trocar on --yes` run through runCli. */
 export async function installedViaCli(opts) {
   const s = sandbox(opts)
   const first = await s.run(['on', '--yes'])

@@ -14,7 +14,7 @@ import { PassThrough } from 'node:stream'
 
 /** Removes and returns the refusals recorded in this process so far: `[{ tool, message }]`. Throws when the preload is not loaded. */
 export function takeRefusals() {
-  const ledger = globalThis[Symbol.for('asight.no-real-os')]
+  const ledger = globalThis[Symbol.for('trocar.no-real-os')]
   if (!ledger) throw new Error('no-real-os: the preload is not loaded; run with --require ./test/helpers/no-real-os.cjs (npm test does)')
   return ledger.takeRefusals()
 }

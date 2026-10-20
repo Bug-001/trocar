@@ -1,4 +1,4 @@
-# custody.ps1 - asight's Windows key custody (RFC 4.11 P1 `cng`, plan decision #9), one-shot: one verb per run, then exit. Ported from
+# custody.ps1 - trocar's Windows key custody (RFC 4.11 P1 `cng`, plan decision #9), one-shot: one verb per run, then exit. Ported from
 # the Windows test machine's signing and certificate-chain scripts.
 # The root's P-256 private key is a CNG key with ExportPolicy None, on the Microsoft Platform Crypto Provider (the TPM) when one takes it,
 # else the Software KSP (R3-W1). It signs nothing a caller hands it: it BUILDS both certificates itself (CM3) and signs them through
@@ -17,7 +17,7 @@
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
 $C = 'System.Security.Cryptography'; $X = 'System.Security.Cryptography.X509Certificates'
-$KeyName = 'asight root key'
+$KeyName = 'trocar root key'
 $SpkiP256 = [Convert]::FromBase64String('MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgA=') # the 26-byte head of a P-256 SubjectPublicKeyInfo, before the 65-byte point
 
 function Emit($o, [int]$code = 0) { [Console]::Out.WriteLine((ConvertTo-Json -InputObject $o -Compress)); exit $code }
@@ -90,7 +90,7 @@ switch ($Verb) {
     if ($null -eq $rootCert) { Emit ([ordered]@{ error = 'no-root'; message = 'no certificate of the key in Cert:\CurrentUser\Root' }) 6 }
     $issuer = $rootCert.SubjectName
     $pub = PublicKey-Of ([byte[]]$spki[$SpkiP256.Length..($spki.Length - 1)])
-    $req = Request-Of (New-Object ($X + '.X500DistinguishedName') ('CN=asight intermediate ' + $nb.UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ'))) $pub 0
+    $req = Request-Of (New-Object ($X + '.X500DistinguishedName') ('CN=trocar intermediate ' + $nb.UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ'))) $pub 0
     $aki = [byte[]]((0x30, 0x16, 0x80, 0x14) + (Ski-Of (PublicKey-Of (Point-Of $key))).RawData[2..21]) # AKI [0] keyIdentifier = the root's SKI (the SKI extension's value is 04 14 <20 bytes>)
     $req.CertificateExtensions.Add((New-Object ($X + '.X509Extension') '2.5.29.35', $aki, $false))
     $gen = [System.Security.Cryptography.X509Certificates.X509SignatureGenerator]::CreateForECDsa((New-Object ($C + '.ECDsaCng') $key))

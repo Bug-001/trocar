@@ -27,7 +27,7 @@ async function exchange(store, client, upstream, opts = {}) {
 }
 
 // `root` given → each envelope is also written by the collector's own record store to
-// <root>/capture-<date>.ndjson, the file `asight serve` reads.
+// <root>/capture-<date>.ndjson, the file `trocar serve` reads.
 export async function cutRequestEnvelopes({ root } = {}) {
   const store = root ? createRecordStore({ root: path.join(root, 'collector'), raw: root, onError: (e) => { throw e; } }) : null; // envelopes = the raw layer's segments (D60)
   const out = {

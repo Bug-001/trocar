@@ -11,7 +11,7 @@ import { ownerOfSocket } from '../../../../src/collector/arch/darwin/socktable.m
 import { factsOfPid } from '../../../../src/collector/arch/darwin/procinfo.mjs'
 
 function stubs(slowMs) {
-  const dir = tmpDir('asight-accept-')
+  const dir = tmpDir('trocar-accept-')
   const sh = (name, body) => { const f = path.join(dir, name); fs.writeFileSync(f, `#!/bin/sh\n${body}\n`, { mode: 0o755 }); return f }
   // the kernel TCP table after slowMs: peers 50001 and 50002 held by 777 and 778
   const socktable = sh('socktable', `sleep ${slowMs / 1000}\nprintf '777 ESTABLISHED 127.0.0.1 50001 127.0.0.1 18112\\n778 ESTABLISHED 127.0.0.1 50002 127.0.0.1 18112\\n'`)

@@ -1,10 +1,10 @@
 // scripts/perf-query.mjs — the measurements of spec 1.6 附录 D.2 on a dataset made by gen-dataset.mjs:
-// every named query's cold-process wall clock (5 runs, median), the sealing ratio, what ~/.asight
+// every named query's cold-process wall clock (5 runs, median), the sealing ratio, what ~/.trocar
 // occupies, and whether the daemon's auto-sealing sealed every closed segment and how long it took.
 //
 //   node scripts/perf-query.mjs --home <HOME> [--runs 5] [--queries sessions,calls] [--compare <dir>] [--json]
 //
-// --home is the HOME the dataset lives in (<HOME>/.asight), so each run is a real cold `asight` process
+// --home is the HOME the dataset lives in (<HOME>/.trocar), so each run is a real cold `trocar` process
 // The index is built the way the daemon builds it (D62: a query never writes a plaintext segment's index), then
 // timed once; the medians are measured with it present.
 // They are acceptance only as spec 1.6 附录 D.2 defines it; a run is not one on its own.
@@ -14,7 +14,7 @@ import { spawnSync } from 'node:child_process'
 import { QUERIES } from '../src/query/named/index.mjs'
 
 export const DEFAULT_RUNS = 5
-const CLI = path.join(import.meta.dirname, '..', 'bin', 'asight.mjs')
+const CLI = path.join(import.meta.dirname, '..', 'bin', 'trocar.mjs')
 // Queries that need a parameter take its value from another query's document (附录 C.5 key → the flag to pass).
 // `block` is measured on the LAST record of the biggest segment: that is the worst case for reading one record
 // back (§4.1 ≤ 0.3 s), and the ref `<segment>:<line>` is what C.5 calls a record.
@@ -23,7 +23,7 @@ const ARG_FROM = {
   block: { query: 'segments', flag: '--ref', pick: (d) => { const s = (d.segments || []).filter((x) => x.records > 0).sort((a, b) => a.bytes - b.bytes).pop(); return s ? `${s.segment}:${s.records}` : null } },
 }
 
-/** The named queries to measure: every name `asight query` has (src/query/named/index.mjs QUERIES — one fact, one place). */
+/** The named queries to measure: every name `trocar query` has (src/query/named/index.mjs QUERIES — one fact, one place). */
 export function queryNames() { return Object.keys(QUERIES) }
 
 export const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2 }
@@ -39,7 +39,7 @@ export function dirBytes(dir) {
 }
 const sizeOr0 = (p) => { try { return fs.statSync(p).isDirectory() ? dirBytes(p) : fs.statSync(p).size } catch { return 0 } }
 
-/** One cold `asight <argv…>` process: its wall clock, exit code and parsed --json document. */
+/** One cold `trocar <argv…>` process: its wall clock, exit code and parsed --json document. */
 export function runQuery(home, argv) {
   const t = process.hrtime.bigint()
   const r = spawnSync(process.execPath, [CLI, ...argv, '--json'], { env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: 'utf8', maxBuffer: 1 << 28 })
@@ -71,21 +71,21 @@ export function autosealReport({ segmentsDoc, journal = [] }) {
   return { closed: segments.length, sealed: segments.filter((s) => s.sealed).length, unsealed: segments.filter((s) => !s.sealed).map((s) => s.segment), plaintext_left: segments.filter((s) => s.plaintext_left).map((s) => s.segment), segments }
 }
 
-function readJournal(asightHome) {
-  try { return fs.readFileSync(path.join(asightHome, 'raw', 'journal.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return null } }) } catch { return [] }
+function readJournal(trocarHome) {
+  try { return fs.readFileSync(path.join(trocarHome, 'raw', 'journal.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return null } }) } catch { return [] }
 }
 
 /** measure({home, runs, names, compare}) → the whole 附录 D.2 report. */
 export async function measure({ home, runs = DEFAULT_RUNS, names = queryNames(), compare = null }) {
-  const asightHome = path.join(home, '.asight')
-  const indexPath = path.join(asightHome, 'index')
+  const trocarHome = path.join(home, '.trocar')
+  const indexPath = path.join(trocarHome, 'index')
   fs.rmSync(indexPath, { recursive: true, force: true })  // a rebuildable projection: timed once, cold
   // The index as THE DAEMON leaves it (D62, 4.2 §段索引 谁写哪一笔): it is the only writer of a plaintext segment's
   // index, so building it is its work and not a query's — and the medians below have to be measured with it present,
   // or they measure the reader's fallback build. A build that wrote nothing is said so (test-machine run P3).
   const { allSegments, segmentIndex } = await import('../src/query/index-build.mjs')
   const t0 = process.hrtime.bigint()
-  for (const s of await allSegments({ home: asightHome })) await segmentIndex({ home: asightHome, segment: s.segment, owner: true })
+  for (const s of await allSegments({ home: trocarHome })) await segmentIndex({ home: trocarHome, segment: s.segment, owner: true })
   const index = { built_by: "the daemon's keeper", build_ms: Math.round(Number(process.hrtime.bigint() - t0) / 1e6), status: 0, bytes: sizeOr0(indexPath) }
   const build = runQuery(home, ['query', 'segments'])
   if (build.status !== 0 || index.bytes === 0) { index.status = build.status; index.error = build.status ? build.stderr : 'the build wrote no index file' }
@@ -105,17 +105,17 @@ export async function measure({ home, runs = DEFAULT_RUNS, names = queryNames(),
     queries.push({ query: name, ...(value ? { arg: `${arg.flag} ${value}` } : {}), runs: times.map((t) => Math.round(t)), median_ms: Math.round(median(times)), status: last.status, ...(last.status ? { error: last.stderr } : {}) })
   }
 
-  const rawDir = path.join(asightHome, 'raw')
+  const rawDir = path.join(trocarHome, 'raw')
   const files = fs.existsSync(rawDir) ? fs.readdirSync(rawDir) : []
   const disk = {
-    asight_bytes: sizeOr0(asightHome),
+    trocar_bytes: sizeOr0(trocarHome),
     plaintext_bytes: files.filter((f) => f.endsWith('.ndjson')).reduce((n, f) => n + sizeOr0(path.join(rawDir, f)), 0),
     sealed_bytes: files.filter((f) => f.endsWith('.sealed')).reduce((n, f) => n + sizeOr0(path.join(rawDir, f)), 0),
     index_bytes: index.bytes,
     ...(compare ? { compare: { dir: compare, bytes: sizeOr0(compare) } } : {}),
   }
   const segmentsDoc = docs.get('segments') || runQuery(home, ['query', 'segments']).doc
-  return { home, runs, index, queries, sealing: sealingReport(segmentsDoc), autoseal: autosealReport({ segmentsDoc, journal: readJournal(asightHome) }), disk }
+  return { home, runs, index, queries, sealing: sealingReport(segmentsDoc), autoseal: autosealReport({ segmentsDoc, journal: readJournal(trocarHome) }), disk }
 }
 
 async function main(argv) {
@@ -130,7 +130,7 @@ async function main(argv) {
   for (const s of out.sealing.segments) console.log(`  ${s.segment}  ${s.state.padEnd(8)} ${String(s.bytes).padStart(12)} → ${String(s.sealed_bytes).padStart(12)}  ratio ${s.ratio ?? '-'}${s.problems.length ? `  ${s.problems.map((p) => p.code).join(',')}` : ''}`)
   console.log(`autoseal  ${out.autoseal.sealed}/${out.autoseal.closed} closed segments sealed${out.autoseal.unsealed.length ? `  still plaintext: ${out.autoseal.unsealed.join(', ')}` : ''}${out.autoseal.plaintext_left.length ? `  sealed but the plaintext is still there: ${out.autoseal.plaintext_left.join(', ')}` : ''}`)
   for (const s of out.autoseal.segments) if (s.took_ms != null) console.log(`  ${s.segment}  ${s.took_ms} ms`)
-  console.log(`disk  .asight ${out.disk.asight_bytes}  plaintext ${out.disk.plaintext_bytes}  sealed ${out.disk.sealed_bytes}  index ${out.disk.index_bytes}${out.disk.compare ? `  ${out.disk.compare.dir} ${out.disk.compare.bytes}` : ''}`)
+  console.log(`disk  .trocar ${out.disk.trocar_bytes}  plaintext ${out.disk.plaintext_bytes}  sealed ${out.disk.sealed_bytes}  index ${out.disk.index_bytes}${out.disk.compare ? `  ${out.disk.compare.dir} ${out.disk.compare.bytes}` : ''}`)
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) await main(process.argv.slice(2))

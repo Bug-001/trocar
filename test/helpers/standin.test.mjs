@@ -20,7 +20,7 @@ async function gone(pid, ms) { for (const end = Date.now() + ms; Date.now() < en
 
 /** A process of its own that starts `what` (source of the child to start; its pid is printed), then stays up like a test process in the middle of a test. → { parent, childPid }. */
 async function parentOf(what) {
-  const dir = tmpDir('asight-standin-')
+  const dir = tmpDir('trocar-standin-')
   const file = path.join(dir, 'parent.mjs')
   fs.writeFileSync(file, `import { spawnStandin, WITH_PARENT, watchEnv } from ${JSON.stringify(STANDIN)}\nimport { spawn } from 'node:child_process'\nconst child = ${what}\nconsole.log(child.pid)\nsetInterval(() => {}, 1000)\n`)
   const parent = spawn(process.execPath, [file], { stdio: ['ignore', 'pipe', 'inherit'], env })
@@ -73,7 +73,7 @@ test('the same for a node process that serves (a mock, a daemon of a test) and l
 
 test('the test rig\'s daemons (a CONNECT proxy that listens and reads stdin) carry the watch themselves: they end with the test process (the EOF on their stdin that its death brings does not end a server that listens)', async () => {
   const fixture = path.join(HERE, '..', 'lab', 'linux', 'fixtures', 'mock-proxy-daemon.mjs')
-  const proxy = `spawn(process.execPath, [${JSON.stringify(fixture)}], { stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, ASIGHT_MOCK_PROXY: '1', ASIGHT_MOCK_TARGET_PORT: '9' } })`
+  const proxy = `spawn(process.execPath, [${JSON.stringify(fixture)}], { stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, TROCAR_MOCK_PROXY: '1', TROCAR_MOCK_TARGET_PORT: '9' } })`
   const { parent, childPid } = await parentOf(proxy)
   try {
     await sleep(1200)
@@ -87,10 +87,10 @@ test('the test rig\'s daemons (a CONNECT proxy that listens and reads stdin) car
 // The Windows collector's stand-in (test/collector/arch/win32/fixtures/): the fake helper that hangs before its ready line (the fake kernel went with the kernel, D47). It is a child of a
 // test that kills it in an `after`; a killed runner leaves no `after`, so it carries the watch itself, and ends within seconds of its parent's death.
 for (const [name, source] of [
-  ['fake Windows helper (hangs before ready)', (dir) => `spawn(process.execPath, [${JSON.stringify(path.join(HERE, '..', 'collector', 'arch', 'win32', 'fixtures', 'fake-helper.mjs'))}, '{"hangBeforeReady":true}'], { stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, ASIGHT_FAKE_HELPER: '1' } })`],
+  ['fake Windows helper (hangs before ready)', (dir) => `spawn(process.execPath, [${JSON.stringify(path.join(HERE, '..', 'collector', 'arch', 'win32', 'fixtures', 'fake-helper.mjs'))}, '{"hangBeforeReady":true}'], { stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, TROCAR_FAKE_HELPER: '1' } })`],
 ]) {
   test(`the ${name} carries the watch: it ends by itself within seconds of its parent being SIGKILLed`, async () => {
-    const dir = tmpDir('asight-standin-win-')
+    const dir = tmpDir('trocar-standin-win-')
     fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ 'external-controller': '127.0.0.1:0', secret: 'x', listeners: [] }))
     const { parent, childPid } = await parentOf(source(dir))
     try {

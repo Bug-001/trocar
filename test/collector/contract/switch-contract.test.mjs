@@ -1,7 +1,7 @@
 // test/collector/contract/switch-contract.test.mjs — the switch contract (D48, D54; RFC 4.11 CM15, CM25, CM26, CM32), generated
 // from every harness descriptor: for each OS of the collector model (darwin, win32) × every proxyMode form of that OS, plus one "no form present" case
 // per harness (CM31), the real install → on → on → [the user edits] → off → off → uninstall run in a tmp HOME (contract-world.mjs), and the verdicts
-// come from independent snapshots of HOME (bytes, mode, owner, mtime) and of the recorded OS-tool and trust-store calls, never from asight's manifest.
+// come from independent snapshots of HOME (bytes, mode, owner, mtime) and of the recorded OS-tool and trust-store calls, never from trocar's manifest.
 // Forms that share a route and their first `present` place are one world to the product, so one case names them all.
 // Axes, generated, pairwise not Cartesian (the suite stays near 20 s): case k of an OS takes shape SHAPES[k mod S] of the form's route file and edit
 // EDITS[⌊k/S⌋ mod E], so every shape meets every edit on each OS; odd k also has the user's own certificate file set (rule U's pem-block), and every
@@ -13,20 +13,20 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { tmpDir } from '../../helpers/tmp.mjs'
 import { loadHarnesses } from '../../../src/collector/harness/index.mjs'
-import { OSES, ASIGHT, invariants, casesFor, seedCasesFor, run, editKept, fileOf, diff, label } from '../../helpers/switch-kit.mjs'
+import { OSES, TROCAR, invariants, casesFor, seedCasesFor, run, editKept, fileOf, diff, label } from '../../helpers/switch-kit.mjs'
 
 const harnesses = await loadHarnesses()
 // a win32 control endpoint is a pipe name, served on this host as a socket path relative to the cwd: one scratch cwd for this file's process (each
 // world has its own HOME and pipe name). The cases run one at a time: run() refuses an overlap (switch-kit.mjs)
-process.chdir(tmpDir('asight-pipes-'))
+process.chdir(tmpDir('trocar-pipes-'))
 describe('switch contract', { concurrency: 1 }, () => {
 for (const spec of [...OSES.flatMap((os) => casesFor(os, harnesses)), ...seedCasesFor(harnesses)]) {
   it(label(spec), async () => {
     const r = await run(spec, harnesses)
     const snaps = [r.s0, r.s1, r.s2, r.s3, r.sE, r.s4, r.s5, r.s6]
-    const wrote = diff(r.s1, r.s2).some(({ p }) => !ASIGHT.test(p) || /switch/.test(p))
+    const wrote = diff(r.s1, r.s2).some(({ p }) => !TROCAR.test(p) || /switch/.test(p))
     if (spec.form && r.on.routes.some((x) => x.ok)) assert.ok(wrote, `on routed ${spec.form} but wrote no entry: the contract would hold vacuously`)
-    if (!spec.form) assert.deepEqual(diff(r.s1, r.s2).filter(({ p }) => !ASIGHT.test(p)), [], 'CM31: no form present → on writes no entry')
+    if (!spec.form) assert.deepEqual(diff(r.s1, r.s2).filter(({ p }) => !TROCAR.test(p)), [], 'CM31: no form present → on writes no entry')
     assert.deepEqual(invariants.cm15({ c: r.c, s1: r.s1, s2: r.s2, s4: r.s4, edited: r.edited }), [], 'CM15')
     assert.deepEqual(invariants.cm25({ snaps }), [], 'CM25')
     assert.deepEqual(invariants.cm26({ snaps }), [], 'CM26')
@@ -45,17 +45,17 @@ for (const spec of [...OSES.flatMap((os) => casesFor(os, harnesses)), ...seedCas
 // root, so that one forges the owner in the snapshot; an admin step / a login-environment write is a recorded OS-tool call, seeded into the record.
 const at = (w, ...p) => path.join(w.home, ...p)
 const BAD = [
-  ['CM15', 'on', (w) => fs.appendFileSync(path.join(w.dir, 'ca', 'asight-ca.pem'), '\n'), (r) => invariants.cm15(r)],
+  ['CM15', 'on', (w) => fs.appendFileSync(path.join(w.dir, 'ca', 'trocar-ca.pem'), '\n'), (r) => invariants.cm15(r)],
   ['CM15', 'on', (w) => fs.writeFileSync(at(w, '.gitconfig'), '[http]\n'), (r) => invariants.cm15(r)],
   ['CM15', 'off', (w) => fs.appendFileSync(at(w, '.codex', '.env'), 'HTTPS_PROXY=http://127.0.0.1:9\n'), (r) => invariants.cm15({ ...r, edited: null })],
   ['CM25', 'on', (w) => w.exec.push('sudo security add-trusted-cert -d -k /Library/Keychains/System.keychain x.pem'), (r) => invariants.cm25(r)],
   ['CM25', 'on', () => {}, (r) => invariants.cm25({ snaps: [{ ...r.s2, files: { ...r.s2.files, '.codex/.env': { ...r.s2.files['.codex/.env'], uid: 0 } } }] })],
   ['CM26', 'on', (w) => fs.appendFileSync(at(w, '.zshrc'), 'export HTTPS_PROXY=http://127.0.0.1:9\n'), (r) => invariants.cm26(r)],
   ['CM26', 'install', (w) => w.exec.push('launchctl setenv NODE_EXTRA_CA_CERTS /x.pem'), (r) => invariants.cm26(r)],
-  ['CM32', 'uninstall', (w) => fs.writeFileSync(at(w, '.codex', 'asight-left.json'), '{}'), (r) => invariants.cm32(r)],
+  ['CM32', 'uninstall', (w) => fs.writeFileSync(at(w, '.codex', 'trocar-left.json'), '{}'), (r) => invariants.cm32(r)],
   ['D54 on', 'on2', (w) => fs.appendFileSync(path.join(w.dir, 'state.json'), ' '), (r) => invariants.d54({ a: r.s2, b: r.s3, verb: 'on' })],
   ['D54 off', 'off2', (w) => fs.writeFileSync(at(w, '.codex', '.env'), fs.readFileSync(at(w, '.codex', '.env'))), (r) => invariants.d54({ a: r.s4, b: r.s5, verb: 'off' })],
-  ['D48② edit kept', 'off', (w, c) => fs.writeFileSync(at(w, c.file), fs.readFileSync(at(w, c.file), 'utf8').replace(/ASIGHT_SHAPES_ADDED=added\r?\n?/, '')), (r) => editKept(r)],
+  ['D48② edit kept', 'off', (w, c) => fs.writeFileSync(at(w, c.file), fs.readFileSync(at(w, c.file), 'utf8').replace(/TROCAR_SHAPES_ADDED=added\r?\n?/, '')), (r) => editKept(r)],
 ]
 describe('the invariants go red on a seeded bad write', { concurrency: 1 }, () => {
   for (const [name, phase, write, check] of BAD) {

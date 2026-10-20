@@ -1,7 +1,7 @@
 // entries-partial.test.mjs — a route write is all or nothing (invariant 5 / D48: off removes everything on wrote). Generated over every json-key route:
 // the LAST edit the route makes is made to refuse by a shape only that edit touches (its parent or array holding a string; for `select`, the meta file's
 // applied id holding an object or the meta file undecodable). The write refuses; the user's files are back byte for byte and no on-phase record is left
-// in the manifest without a route tag (so nothing of asight's stays where recordsOf cannot find it).
+// in the manifest without a route tag (so nothing of trocar's stays where recordsOf cannot find it).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

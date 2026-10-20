@@ -1,5 +1,5 @@
 // test/query/segment-index.test.mjs — the segment index (RFC 1.6 §4.1 「只读原始记录与可删的索引」, 4.2 §段索引):
-// built on first read, kept in ~/.asight/index/, refreshed by APPENDED bytes only, and rebuildable at any time.
+// built on first read, kept in ~/.trocar/index/, refreshed by APPENDED bytes only, and rebuildable at any time.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

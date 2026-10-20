@@ -15,13 +15,13 @@ import { validateReceipt } from '../../src/cli/schema.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { sandbox, installedViaCli, fakeIo, snapshot } from './fixtures/dispatch-ctx.mjs'
 
-const BIN = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
+const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
 import { codeId } from '../../src/version.mjs'
 
 const CODE = codeId() // D67⑥: the version with HEAD's first 7 in a git checkout
 /** The context of a run where every command is a spy that records `[name, ...argv]` and answers 0: what the dispatch did, not what the commands do. */
 const spying = (seen) => ({ io: fakeIo(), uid: 1000, platform: 'linux', deps: { commands: Object.fromEntries(COMMANDS.map((c) => [c.name, async (argv) => { seen.push([c.name, ...argv]); return 0 }])) } })
-const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?asight ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
+const commandsOf = (text) => new Set(text.split('\n').map((l) => l.match(/^ {2}(?:sudo )?trocar ([a-z-]+)/)).filter(Boolean).map((m) => m[1]))
 
 test('V19: help is the dispatch — every command help lists is reached by its own name, with its arguments as typed and nothing else; there is no other way to reach one', async () => {
   const listed = [...commandsOf(helpText())]
@@ -36,7 +36,7 @@ test('V19: help is the dispatch — every command help lists is reached by its o
   for (const argv of [['collector', 'on'], ['verify'], ['version'], ['etl', 'x'], ['shard'], ['keep']]) {
     const c = spying([])
     assert.equal(await runCli(argv, c), 2, `${argv.join(' ')} is no command any more`)
-    assert.match(c.io.stderrText(), /^asight: unknown command '[a-z]+'\. Run: asight help\n?$/, 'one line, not a screen of help')
+    assert.match(c.io.stderrText(), /^trocar: unknown command '[a-z]+'\. Run: trocar help\n?$/, 'one line, not a screen of help')
   }
 })
 
@@ -52,26 +52,26 @@ test('V19: the real table entry of every command resolves to a function (no rena
 
 test('V20: setup-helper off Linux is exit 2 and not needed here; as a user it says to use sudo; as root on Linux it runs — --binary and --remove reach the installer', async () => {
   const done = []
-  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/asight/asight-redirector' }, setupHelper: (o) => { done.push(['setup', o.binarySrc]); return { bin: '/b', getcap: 'caps' } }, uninstallHelper: () => { done.push(['remove']); return { warnings: [] } } } }
+  const arch = { install: { DEFAULTS: { helperBin: '/usr/local/libexec/trocar/trocar-redirector' }, setupHelper: (o) => { done.push(['setup', o.binarySrc]); return { bin: '/b', getcap: 'caps' } }, uninstallHelper: () => { done.push(['remove']); return { warnings: [] } } } }
   const run = async (argv, { over = arch, uid = 0, platform = 'linux' } = {}) => { const io = fakeIo(); const exit = await runCli(argv, { io, uid, platform, deps: { arch: over } }); return { exit, io } }
   for (const platform of ['darwin', 'win32']) {
     const r = await run(['setup-helper'], { platform, uid: 0 })
     assert.equal(r.exit, 2, platform); assert.equal(r.io.stdoutText(), '')
-    assert.equal(r.io.stderrText().trim(), 'asight setup-helper: not needed on this platform.')
+    assert.equal(r.io.stderrText().trim(), 'trocar setup-helper: not needed on this platform.')
   }
   const user = await run(['setup-helper'], { uid: 1000 })
-  assert.equal(user.exit, 2); assert.match(user.io.stderrText(), /run it with sudo: sudo asight setup-helper/)
+  assert.equal(user.exit, 2); assert.match(user.io.stderrText(), /run it with sudo: sudo trocar setup-helper/)
   assert.deepEqual(done, [], 'refused before anything was installed')
   let r = await run(['setup-helper', '--binary', '/tmp/h'])
   assert.equal(r.exit, 0); assert.match(r.io.stdoutText(), /^installed \/b \(caps\)/); assert.equal(r.io.stderrText(), '')
   r = await run(['setup-helper', '--remove'])
-  assert.equal(r.exit, 0); assert.match(r.io.stdoutText(), /^Removed the kernel helper \/usr\/local\/libexec\/asight\/asight-redirector/)
+  assert.equal(r.exit, 0); assert.match(r.io.stdoutText(), /^Removed the kernel helper \/usr\/local\/libexec\/trocar\/trocar-redirector/)
   assert.deepEqual(done, [['setup', '/tmp/h'], ['remove']], 'the installer was asked once each, with the binary as typed')
   r = await run(['setup-helper'], { over: { install: { setupHelper: () => { throw new Error('the capability bit could not be set') } } } })
   assert.equal(r.exit, 1); assert.equal(r.io.stdoutText(), ''); assert.match(r.io.stderrText(), /the capability bit could not be set/)
 })
 
-test('help through the dispatch: no arguments, `help`, `--help`, `help <command>` and `<command> --help` are exit 0; an unknown topic is exit 2; --version prints `asight <version>`', async () => {
+test('help through the dispatch: no arguments, `help`, `--help`, `help <command>` and `<command> --help` are exit 0; an unknown topic is exit 2; --version prints `trocar <version>`', async () => {
   const say = async (argv) => { const c = spying([]); c.deps = {}; return { exit: await runCli(argv, c), c } }
   for (const argv of [[], ['--help'], ['-h'], ['help']]) {
     const { exit, c } = await say(argv)
@@ -80,13 +80,13 @@ test('help through the dispatch: no arguments, `help`, `--help`, `help <command>
   for (const argv of [['help', 'off'], ['off', '--help'], ['off', '-h'], ['off', '--yes', '--help'], ['board', '--help'], ['query', '--help']]) {
     const { exit, c } = await say(argv)
     const name = argv[0] === 'help' ? argv[1] : argv[0]
-    assert.equal(exit, 0, argv.join(' ')); assert.equal(c.io.stdoutText().trim(), helpText(name)); assert.ok(!/asight uninstall/.test(c.io.stdoutText()), 'one command only')
+    assert.equal(exit, 0, argv.join(' ')); assert.equal(c.io.stdoutText().trim(), helpText(name)); assert.ok(!/trocar uninstall/.test(c.io.stdoutText()), 'one command only')
   }
   let r = await say(['help', 'nope'])
-  assert.equal(r.exit, 2); assert.match(r.c.io.stderrText(), /asight help: unknown command 'nope'\. Run: asight help/); assert.equal(r.c.io.stdoutText(), '')
+  assert.equal(r.exit, 2); assert.match(r.c.io.stderrText(), /trocar help: unknown command 'nope'\. Run: trocar help/); assert.equal(r.c.io.stdoutText(), '')
   assert.equal((await say(['help', 'off', 'on'])).exit, 2, 'one command at a time')
   r = await say(['--version'])
-  assert.deepEqual([r.exit, r.c.io.stdoutText().trim()], [0, `asight ${CODE}`])
+  assert.deepEqual([r.exit, r.c.io.stdoutText().trim()], [0, `trocar ${CODE}`])
   for (const argv of [['-v'], ['version']]) assert.equal((await say(argv)).exit, 2, `${argv[0]} is gone: one feature, one name`)
 })
 
@@ -103,13 +103,13 @@ test('V6: an unknown command, an unknown option, an unknown harness and a flag t
     }
   }
   const unknownOption = await sandbox().run(['status', '--frob'])
-  assert.equal(unknownOption.io.stderrText().trim(), `asight status: unknown option '--frob'\n${usageLine(commandNamed('status'))}`)
+  assert.equal(unknownOption.io.stderrText().trim(), `trocar status: unknown option '--frob'\n${usageLine(commandNamed('status'))}`)
   const unknownCommand = await sandbox().run(['nope'])
-  assert.equal(unknownCommand.io.stderrText().trim(), "asight: unknown command 'nope'. Run: asight help")
+  assert.equal(unknownCommand.io.stderrText().trim(), "trocar: unknown command 'nope'. Run: trocar help")
   // §1.1⑥: a usage line longer than 80 columns folds under itself here as it does in help, it is not printed ragged
   const long = await sandbox({ install: false }).run(['on', '--bogus'])
   const lines = long.io.stderrText().trimEnd().split('\n')
-  assert.equal(lines[0], "asight on: unknown option '--bogus'")
+  assert.equal(lines[0], "trocar on: unknown option '--bogus'")
   for (const line of lines) assert.ok(line.length <= WIDTH, `${line.length} columns: ${line}`)
   assert.equal(lines.slice(1).join(' ').replace(/\s+/g, ' ').trim(), usageLine(commandNamed('on')), 'the whole usage line is there, folded')
 })
@@ -120,7 +120,7 @@ test('V20: install / on / off / uninstall / daemon and the subcommands that chan
     const s = sandbox({ install: false }); const before = snapshot(s.home)
     const { exit, io } = await s.run(argv, { uid: 0 })
     assert.equal(exit, 2, argv.join(' '))
-    assert.equal(io.stderrText().trim(), `asight ${argv[0]}: run this as your own user, not as root.`, argv.join(' '))
+    assert.equal(io.stderrText().trim(), `trocar ${argv[0]}: run this as your own user, not as root.`, argv.join(' '))
     assert.equal(io.stdoutText(), '')
     assert.deepEqual(snapshot(s.home), before, `${argv.join(' ')} wrote nothing`); assert.equal(s.sys.exec.calls.length, 0, 'and ran no tool')
   }
@@ -181,13 +181,13 @@ test('V26: one case per exit code — 0 done, 1 not done, 2 usage, 3 status cann
 })
 
 test('the real bin: --version, help, help off, an unknown command and `daemon --bogus` (sandbox HOME, no OS tool)', () => {
-  const home = tmpDir('asight-bin-')
-  const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', ASIGHT_TEST_SANDBOX: '1' }
+  const home = tmpDir('trocar-bin-')
+  const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', TROCAR_TEST_SANDBOX: '1' }
   const run = (...args) => spawnSync(process.execPath, [BIN, ...args], { env, encoding: 'utf8' })
-  const v = run('--version'); assert.deepEqual([v.status, v.stdout.trim(), v.stderr], [0, `asight ${CODE}`, ''])
+  const v = run('--version'); assert.deepEqual([v.status, v.stdout.trim(), v.stderr], [0, `trocar ${CODE}`, ''])
   const h = run('help'); assert.equal(h.status, 0); assert.deepEqual([...commandsOf(h.stdout)].sort(), COMMANDS.filter((c) => c.group).map((c) => c.name).sort())
-  const o = run('help', 'off'); assert.equal(o.status, 0); assert.match(o.stdout, /asight off \[<harness>\.\.\.\]/); assert.ok(!/asight serve/.test(o.stdout))
+  const o = run('help', 'off'); assert.equal(o.status, 0); assert.match(o.stdout, /trocar off \[<harness>\.\.\.\]/); assert.ok(!/trocar serve/.test(o.stdout))
   const n = run('nope'); assert.equal(n.status, 2); assert.equal(n.stdout, ''); assert.match(n.stderr, /unknown command 'nope'/)
-  const d = run('daemon', '--bogus'); assert.deepEqual([d.status, d.stdout], [2, '']); assert.match(d.stderr, /asight daemon: unknown option '--bogus'/)
+  const d = run('daemon', '--bogus'); assert.deepEqual([d.status, d.stdout], [2, '']); assert.match(d.stderr, /trocar daemon: unknown option '--bogus'/)
   assert.deepEqual(fs.readdirSync(home), [], 'nothing was written')
 })

@@ -20,7 +20,7 @@ const procs = []
 after(() => stopAll(procs))
 
 const skip = process.platform !== 'linux' && `linux only (this is ${process.platform}): the real /proc contract; darwin runs test/collector/arch/darwin/identity-real.test.mjs`
-const dir = skip ? null : tmpDir('asight-idreal-')
+const dir = skip ? null : tmpDir('trocar-idreal-')
 if (!skip) procs.push(...await startShapes(stageShapes(path.join(dir, 'u'), SLEEP)))
 
 async function contract(agentList, expectOf) {

@@ -1,6 +1,6 @@
 // pem.mjs (src/off) — the PEM reading and writing `off` needs without the collector (RFC 4.6 §身份与信任「合并包」, §安装清单与卸载「撤销顺序」
-// 第 2 / 3 步, 1.6 R3). The combined bundle `combined-<h>.pem` (Node's roots + the OS roots + the user's CAs + the asight CA) is composed by the
-// collector at install and rebuilt by it; `off` takes the asight CA back out of it (stripCert), or composes the same file without it when it
+// 第 2 / 3 步, 1.6 R3). The combined bundle `combined-<h>.pem` (Node's roots + the OS roots + the user's CAs + the trocar CA) is composed by the
+// collector at install and rebuilt by it; `off` takes the trocar CA back out of it (stripCert), or composes the same file without it when it
 // is gone (composeBundle). The functions that were in src/collector/core/trust/bundle.mjs moved here with their behaviour, so the file that
 // install writes and the file `off` writes are made by one piece of code; bundle.mjs re-exports them. Imports only node:* (0.1 §2).
 import crypto, { X509Certificate } from 'node:crypto'
@@ -65,7 +65,7 @@ export function rootsFingerprint(nodeRoots, osRootsText) {
   return crypto.createHash('sha256').update([...new Set(fps)].join('\n')).digest('hex')
 }
 
-// The bundle text: Node roots, OS roots, the user's CAs, the asight CA (when given), each certificate once.
+// The bundle text: Node roots, OS roots, the user's CAs, the trocar CA (when given), each certificate once.
 export function composeBundle({ nodeRoots, osRootsText, userCerts = [], caPem = null }) {
   const seen = new Set()
   const out = []
@@ -107,7 +107,7 @@ export function osBundle({ files = SYSTEM_BUNDLES, read = (f) => nodeFs.readFile
 }
 
 // The user's certificates of an existing bundle (by fingerprint, as recorded at install): what a rebuild carries over
-// without reading the user's files again (they may have moved; their contents are not asight's to re-copy).
+// without reading the user's files again (they may have moved; their contents are not trocar's to re-copy).
 export function userCertsIn(text, userFps) {
   const want = new Set(userFps || [])
   return (String(text || '').match(BLOCK) || []).filter((pem) => want.has(fpOf(pem)))

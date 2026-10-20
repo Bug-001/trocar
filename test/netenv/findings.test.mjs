@@ -28,7 +28,7 @@ const mihomoVia = { listeners: [MIHOMO] }
 const viaProxy = (value = 'http://127.0.0.1:7890') => ({ setting: proxyOf(value) })
 
 // status's name list per harness (1.6 §9.7 `identity`), the shape the facts carry it in
-const LIST = '/home/alice/.asight/agents.json'
+const LIST = '/home/alice/.trocar/agents.json'
 function idOf(h, { unknown = [] } = {}) { return { [h]: { names: [{ name: 'claude', source: 'preset' }], ignored: [], unknown } } }
 
 // one injected fact set per code: { codes: exactly what it must give, h, facts }. The rows of §9.3 serve for the codes they illustrate; the others are built here.
@@ -128,7 +128,7 @@ test('V49 every trust reason is a finding (the restart ones expected, the rest f
   }
 })
 
-test('V49 each finding: what, why and verify say something; a problem or an expected finding has a command (a note may have none); the commands are whole lines with no <…> left; asight\'s own come first where the catalogue says so; it validates', () => {
+test('V49 each finding: what, why and verify say something; a problem or an expected finding has a command (a note may have none); the commands are whole lines with no <…> left; trocar\'s own come first where the catalogue says so; it validates', () => {
   const all = [...Object.values(SETS), ...TRUST_REASONS.map((r) => ({ facts: facts('claude-code', {}, { procs: [proc(4121, { watched: 'no-decrypt', trusted: false, reason: r })] }) }))]
   const seen = new Set()
   for (const s of all) for (const f of findingsOf(s.facts, s.names || null)) {
@@ -137,8 +137,8 @@ test('V49 each finding: what, why and verify say something; a problem or an expe
     assert.ok(f.what && f.why && f.verify, at)
     if (f.class !== 'note') assert.ok(f.commands.length >= 1, at)
     for (const c of f.commands) assert.ok(!/<[^>]+>/.test(c.run) && ['sh', 'powershell', 'gui'].includes(c.shell), `${at}: ${c.run}`)
-    if (FINDINGS[f.code] && FINDINGS[f.code].asightFirst && f.commands.some((c) => c.shell !== 'gui')) assert.ok(f.commands[0].run.startsWith('asight ') || f.commands.find((c) => c.shell !== 'gui').run.startsWith('asight '), `${at}: the first command that is not a step in an application is asight's`)
-    if (FINDINGS[f.code] && f.class === 'problem' && !FINDINGS[f.code].asightFirst) assert.ok(f.commands.length >= 1)
+    if (FINDINGS[f.code] && FINDINGS[f.code].trocarFirst && f.commands.some((c) => c.shell !== 'gui')) assert.ok(f.commands[0].run.startsWith('trocar ') || f.commands.find((c) => c.shell !== 'gui').run.startsWith('trocar '), `${at}: the first command that is not a step in an application is trocar's`)
+    if (FINDINGS[f.code] && f.class === 'problem' && !FINDINGS[f.code].trocarFirst) assert.ok(f.commands.length >= 1)
     seen.add(f.code)
   }
   for (const code of Object.keys(FINDINGS)) if (!REFUSAL_CODES.includes(code)) assert.ok(seen.has(code), `${code} was produced by some fact set`)
@@ -172,14 +172,14 @@ test('V49 `doctor <harness>` reports that harness only; with no name, all of the
   assert.ok(all.some((x) => x.code === 'linger-off' && !x.harness))
 })
 
-test('V51 a harness the user names with nothing in the facts to explain it: `cause-unknown` — a note, worded as a condition (`If … still cannot connect`: asight has no fact that says it cannot connect), the first command `asight off <harness>`, the text `if it still fails, asight is not the cause`; never labelled a problem on a harness that is captured', () => {
-  const f = facts('claude-code') // on, steered, trusted: captured, nothing wrong that asight can read
+test('V51 a harness the user names with nothing in the facts to explain it: `cause-unknown` — a note, worded as a condition (`If … still cannot connect`: trocar has no fact that says it cannot connect), the first command `trocar off <harness>`, the text `if it still fails, trocar is not the cause`; never labelled a problem on a harness that is captured', () => {
+  const f = facts('claude-code') // on, steered, trusted: captured, nothing wrong that trocar can read
   const found = findingsOf(f, ['claude-code']).find((x) => x.code === 'cause-unknown')
-  assert.equal(found.class, 'note', 'asight cannot say that it fails to connect: it is not a problem')
+  assert.equal(found.class, 'note', 'trocar cannot say that it fails to connect: it is not a problem')
   assert.match(found.what, /^If claude-code still cannot connect: /, 'a condition, not a statement')
-  assert.equal(found.commands[0].run, 'asight off claude-code')
+  assert.equal(found.commands[0].run, 'trocar off claude-code')
   const text = renderFindings([found]).join('\n')
-  assert.ok(text.includes('if it still fails, asight is not the cause'))
+  assert.ok(text.includes('if it still fails, trocar is not the cause'))
   assert.doesNotMatch(text, /^\d+\. /m, 'a note is not numbered among the problems')
   assert.match(text, /^Note: If claude-code still cannot connect: /)
   assert.match(found.verify, /Try claude-code again/)
@@ -219,44 +219,44 @@ test('V49 where the harness keeps its settings in a managed process its windows 
   assert.ok(neg.some((x) => x.run === 'kill 5530'), 'a negative cache lasts as long as the process: ending it is the way out')
 })
 
-test('V47 (a) / V49 proxy-changed in driver mode: the harness is still steered, so it is `expected` and the one command only looks (附录 B: 「重启后自己生效,不用改东西」); in proxy mode the same drift is a problem whose first command is `asight on <h>`', () => {
+test('V47 (a) / V49 proxy-changed in driver mode: the harness is still steered, so it is `expected` and the one command only looks (附录 B: 「重启后自己生效,不用改东西」); in proxy mode the same drift is a problem whose first command is `trocar on <h>`', () => {
   const rec = { at: 'T', routing: 'driver', chain: 'c', source: [SRC_F1], sha256: 'sha-http://proxy.old:3128', file_sha256: 'sha-http://proxy.old:3128', proxy: 'http://proxy.old:3128', vpn: null }
   const changed = proxyOf('http://proxy.new:3128', [SRC_F1])
   const f = facts('claude-code', { listeners: [], vpn: null }, { setting: changed, fileSetting: changed, adopted: rec, behaviour: behaviourOf('claude-code', CC_FILES) })
   const found = findingsOf(f, ['claude-code']).find((x) => x.code === 'proxy-changed')
   assert.ok(found, 'the file now holds another proxy than `on` found: the finding is there')
   assert.equal(found.class, 'expected')
-  assert.deepEqual(found.commands, [{ run: 'asight status claude-code', shell: 'sh' }], '附录 B: driver mode gets `asight status <harness>` — nothing to change')
-  assert.ok(!found.commands.some((c) => /^asight (on|off) /.test(c.run)), 'nothing that changes anything')
-  assert.match(found.verify, /asight status claude-code/)
+  assert.deepEqual(found.commands, [{ run: 'trocar status claude-code', shell: 'sh' }], '附录 B: driver mode gets `trocar status <harness>` — nothing to change')
+  assert.ok(!found.commands.some((c) => /^trocar (on|off) /.test(c.run)), 'nothing that changes anything')
+  assert.match(found.verify, /trocar status claude-code/)
   assert.deepEqual(validateFinding(found), [])
   assert.ok(!findingsOf({ ...f, harnesses: { 'claude-code': { ...f.harnesses['claude-code'], adopted: { ...rec, file_sha256: changed.sha256, sha256: changed.sha256 } } } }, ['claude-code']).some((x) => x.code === 'proxy-changed'), 'the same setting as `on` found: no finding')
   const proxyMode = findingsOf(row(17).facts, ['codex']).find((x) => x.code === 'proxy-changed')
   assert.equal(proxyMode.class, 'problem')
-  assert.equal(proxyMode.commands[0].run, 'asight on codex')
+  assert.equal(proxyMode.commands[0].run, 'trocar on codex')
 })
 
 test('renderFindings (§3.7): a problem is numbered, a note says `Note:`, what then why, each command on a line of its own after `Fix`, then `Check`, inside 80 columns', () => {
   const lines = renderFindings(findingsOf({ ...SETS['proxy-dead'].facts, platform: 'win32' }).filter((f) => f.code === 'proxy-dead'))
   assert.match(lines[0], /^1\. Nothing is listening on 127\.0\.0\.1:7890, the proxy claude-code is set to use\.$/)
-  assert.match(lines[1], /^ {3}Your proxy is not running; asight did not write this setting\.$/)
+  assert.match(lines[1], /^ {3}Your proxy is not running; trocar did not write this setting\.$/)
   assert.ok(lines.some((l) => l === '   Fix    netstat -ano -p TCP | findstr ":7890"'), lines.join('\n'))
   assert.ok(lines.some((l) => /^ {10}Start your proxy, so that it listens on 127\.0\.0\.1:7890$/.test(l)), 'the step in an application is a line of its own')
-  assert.match(lines[lines.length - 1], /^ {3}Check {2}asight status claude-code$/)
+  assert.match(lines[lines.length - 1], /^ {3}Check {2}trocar status claude-code$/)
   assert.ok(lines.every((l) => l.length <= 80), lines.join('\n'))
 })
 
 test('§3.7: a note carries no `Fix` (it is not a problem), and one fact several harnesses share is one line that names them', () => {
-  const note = (h, code = 'inferred-behaviour') => ({ code, class: 'note', harness: h, what: `${h}'s proxy behaviour on this platform is inferred, not measured.`, why: 'It was measured on another platform.', commands: [], verify: 'asight status' })
+  const note = (h, code = 'inferred-behaviour') => ({ code, class: 'note', harness: h, what: `${h}'s proxy behaviour on this platform is inferred, not measured.`, why: 'It was measured on another platform.', commands: [], verify: 'trocar status' })
   const lines = renderFindings([note('claude-code'), note('codex'), note('hermes'), note('z-code')])
   assert.equal(lines.filter((l) => l.startsWith('Note: ')).length, 1, `the same fact is one line:\n${lines.join('\n')}`)
   assert.match(lines[0], /^Note: claude-code, codex, hermes and z-code's proxy behaviour /)
   // a note that says what you may do about it labels it an Option, never a Fix — a Fix under "no problems" is a contradiction
-  const withCmd = renderFindings([{ ...note('codex', 'egress-differs'), what: 'Some of codex\'s connections now leave through a different hop.', commands: [{ run: 'asight off codex', shell: 'sh' }] }])
-  assert.ok(withCmd.some((l) => l === '      Option asight off codex'), withCmd.join('\n'))
+  const withCmd = renderFindings([{ ...note('codex', 'egress-differs'), what: 'Some of codex\'s connections now leave through a different hop.', commands: [{ run: 'trocar off codex', shell: 'sh' }] }])
+  assert.ok(withCmd.some((l) => l === '      Option trocar off codex'), withCmd.join('\n'))
   assert.ok(!withCmd.some((l) => /\bFix\b/.test(l)), withCmd.join('\n'))
   // and a note about one harness, with something to do about it, is not folded with another harness's
-  const two = renderFindings([{ ...note('codex', 'egress-differs'), commands: [{ run: 'asight off codex', shell: 'sh' }] }, { ...note('hermes', 'egress-differs'), commands: [{ run: 'asight off hermes', shell: 'sh' }] }])
+  const two = renderFindings([{ ...note('codex', 'egress-differs'), commands: [{ run: 'trocar off codex', shell: 'sh' }] }, { ...note('hermes', 'egress-differs'), commands: [{ run: 'trocar off hermes', shell: 'sh' }] }])
   assert.equal(two.filter((l) => l.startsWith('Note: ')).length, 2)
 })
 
@@ -317,13 +317,13 @@ test('V49 the place a command names for the setting is where the setting came fr
   assert.doesNotMatch(gui(findingsOf(codex), 'proxy-dead'), /config\.toml/)
 })
 
-// B2 (the mac machine 2026-10-19): asight's door is on the path, the user's own proxy at its upstream has quit, and BOTH spellings of their key still name it.
-// The finding is upstream-unreachable, and the places it asks the user to clear are their own keys only — the key asight wrote holds the door (removing it
+// B2 (the mac machine 2026-10-19): trocar's door is on the path, the user's own proxy at its upstream has quit, and BOTH spellings of their key still name it.
+// The finding is upstream-unreachable, and the places it asks the user to clear are their own keys only — the key trocar wrote holds the door (removing it
 // changes nothing: `off` writes the prior value back).
-test('V49 upstream-unreachable: asight on the path with a dead upstream is not proxy-dead; its places are the user\'s own keys that hold that address, never the key asight wrote', () => {
+test('V49 upstream-unreachable: trocar on the path with a dead upstream is not proxy-dead; its places are the user\'s own keys that hold that address, never the key trocar wrote', () => {
   const SET = '/h/.claude/settings.json'
   const place = (key) => ({ kind: 'file', path: SET, key, format: 'json', scheme: 'http', host: '127.0.0.1', port: 7897 })
-  const fm = form('claude-code.cli', { entry: { where: `${SET}#env.HTTPS_PROXY`, asight: true, opt_in: false, intact: true },
+  const fm = form('claude-code.cli', { entry: { where: `${SET}#env.HTTPS_PROXY`, trocar: true, opt_in: false, intact: true },
     setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: SET, key: 'env.HTTPS_PROXY' }]), procs: [proc(4121)] })
   const f = pfacts('claude-code', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [], platform: 'darwin' })
   f.harnesses['claude-code'].proxyPlaces = [place('env.HTTPS_PROXY'), place('env.HTTP_PROXY')]
@@ -331,17 +331,17 @@ test('V49 upstream-unreachable: asight on the path with a dead upstream is not p
   const out = findingsOf(f)
   const codes = out.map((x) => x.code)
   assert.ok(codes.includes('upstream-unreachable'), codes.join(','))
-  assert.ok(!codes.includes('proxy-dead'), 'the dead hop is asight\'s upstream, not a proxy the agent points at')
+  assert.ok(!codes.includes('proxy-dead'), 'the dead hop is trocar\'s upstream, not a proxy the agent points at')
   const u = out.find((x) => x.code === 'upstream-unreachable')
   assert.deepEqual(u.places, [place('env.HTTP_PROXY')], 'the user\'s own key alone')
   assert.deepEqual(validateFinding(u), [])
   const text = u.commands.map((c) => c.run).join('\n')
   assert.match(text, /Remove env\.HTTP_PROXY from \/h\/\.claude\/settings\.json/)
-  assert.doesNotMatch(text, /HTTPS_PROXY/, 'the key asight wrote is never named as one for the user to remove')
-  assert.match(text, /asight off claude-code[\s\S]*asight on claude-code/, 'off, clear your own keys, on')
+  assert.doesNotMatch(text, /HTTPS_PROXY/, 'the key trocar wrote is never named as one for the user to remove')
+  assert.match(text, /trocar off claude-code[\s\S]*trocar on claude-code/, 'off, clear your own keys, on')
 })
 
-test('V49 upstream-unreachable, codex\'s dotenv route through the REAL writers: the user\'s own line in $CODEX_HOME/.env is a place, the line asight\'s block wrote is not', async () => {
+test('V49 upstream-unreachable, codex\'s dotenv route through the REAL writers: the user\'s own line in $CODEX_HOME/.env is a place, the line trocar\'s block wrote is not', async () => {
   const desc = (await loadHarnesses()).find((d) => d.name === 'codex')
   const w = world({ os: 'darwin' })
   for (const fo of desc.proxyMode.forms.filter((x) => x.os.includes('darwin') && x.route === 'env')) w.present(fo)
@@ -351,25 +351,25 @@ test('V49 upstream-unreachable, codex\'s dotenv route through the REAL writers: 
   assert.deepEqual(res.results.map((x) => [x.route, x.ok]), [['env', true]])
   const places = proxyPlaces(desc, { home: w.home, env: {}, fs })
   const written = writtenPlaces(w.ctx.manifest, 'codex')
-  const fm = form('codex.cli', { entry: { where: `${envFile}#HTTPS_PROXY`, asight: true, opt_in: false, intact: true }, setting: proxyOf('http://127.0.0.1:17991', [{ kind: 'file', where: envFile, key: 'HTTPS_PROXY' }]), procs: [proc(5530, { name: 'codex app-server' })] })
-  const f = pfacts('codex', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [{ addr: '127.0.0.1', port: 17991, pid: 6120, exe: 'asight-engine' }], platform: 'darwin' })
+  const fm = form('codex.cli', { entry: { where: `${envFile}#HTTPS_PROXY`, trocar: true, opt_in: false, intact: true }, setting: proxyOf('http://127.0.0.1:17991', [{ kind: 'file', where: envFile, key: 'HTTPS_PROXY' }]), procs: [proc(5530, { name: 'codex app-server' })] })
+  const f = pfacts('codex', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [{ addr: '127.0.0.1', port: 17991, pid: 6120, exe: 'trocar-engine' }], platform: 'darwin' })
   Object.assign(f.harnesses.codex, { proxyPlaces: places, writtenPlaces: written })
   const u = findingsOf(f).find((x) => x.code === 'upstream-unreachable')
-  assert.ok(u, 'the dead hop is asight\'s upstream')
+  assert.ok(u, 'the dead hop is trocar\'s upstream')
   assert.deepEqual(u.places, [{ kind: 'file', path: envFile, key: 'HTTPS_PROXY', format: 'dotenv', scheme: 'http', host: '127.0.0.1', port: 7897 }], 'the user\'s own line, which `off` puts back')
   assert.deepEqual(validateFinding(u), [])
   assert.match(u.commands.map((c) => c.run).join('\n'), new RegExp(`Remove the HTTPS_PROXY= line from ${envFile.replace(/[.\\/]/g, '\\$&')}`))
-  assert.equal(places.some((p) => p.port === 17991), false, 'asight\'s own block is no place of the user\'s')
+  assert.equal(places.some((p) => p.port === 17991), false, 'trocar\'s own block is no place of the user\'s')
 })
 
 test('V49 / 4.8 §10.4 on Windows: proxy-dead and upstream-unreachable name the user\'s own places too, one step per place', () => {
   const SET = 'C:\\Users\\u\\.claude\\settings.json'
   const place = (key) => ({ kind: 'file', path: SET, key, format: 'json', scheme: 'http', host: '127.0.0.1', port: 7897 })
-  const fm = form('claude-code.cli', { entry: { where: `${SET}#env.HTTPS_PROXY`, asight: true, opt_in: false, intact: true },
+  const fm = form('claude-code.cli', { entry: { where: `${SET}#env.HTTPS_PROXY`, trocar: true, opt_in: false, intact: true },
     setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: SET, key: 'env.HTTPS_PROXY' }]), procs: [proc(4121)] })
   const f = pfacts('claude-code', fm, fwForm(17991, { upstream: 'http://127.0.0.1:7897', source: 'config-prior' }), { listeners: [] })
   Object.assign(f.harnesses['claude-code'], { proxyPlaces: [place('env.HTTPS_PROXY'), place('env.HTTP_PROXY')], writtenPlaces: [`${SET}#env.HTTPS_PROXY`] })
-  // asight on the path with the dead address as its upstream (upstream-unreachable), and asight nowhere near it (proxy-dead)
+  // trocar on the path with the dead address as its upstream (upstream-unreachable), and trocar nowhere near it (proxy-dead)
   const dead = facts('claude-code', { platform: 'win32', listeners: [] }, { setting: proxyOf('http://127.0.0.1:7897', [{ kind: 'file', where: SET, key: 'env.HTTPS_PROXY' }]) })
   Object.assign(dead.harnesses['claude-code'], { proxyPlaces: [place('env.HTTP_PROXY')], writtenPlaces: [] })
   for (const [code, facts_] of [['upstream-unreachable', f], ['proxy-dead', dead]]) {
@@ -378,7 +378,7 @@ test('V49 / 4.8 §10.4 on Windows: proxy-dead and upstream-unreachable name the 
     assert.deepEqual(x.places, [place('env.HTTP_PROXY')], `${code}: the user's own key alone`)
     const text = x.commands.map((cc) => cc.run).join('\n')
     assert.match(text, /Remove env\.HTTP_PROXY from C:\\Users\\u\\\.claude\\settings\.json/, `${code} names the place`)
-    assert.doesNotMatch(text, /HTTPS_PROXY/, `${code} never names the key asight wrote`)
+    assert.doesNotMatch(text, /HTTPS_PROXY/, `${code} never names the key trocar wrote`)
   }
 })
 
@@ -422,7 +422,7 @@ test('V49 end to end, with the real descriptors: a proxy that came from the invo
   const SRC = path.join(os.tmpdir(), 'none')
   const base = s.ctx().env
   const dead = async (env) => {
-    const r = await s.run(['doctor', 'claude-code', '--json'], { env: { ...base, ...env, ASIGHT_SOURCE: SRC }, deps })
+    const r = await s.run(['doctor', 'claude-code', '--json'], { env: { ...base, ...env, TROCAR_SOURCE: SRC }, deps })
     const f = r.io.json().findings.find((x) => x.code === 'proxy-dead')
     return { f, text: f ? f.commands.filter((c) => c.shell === 'gui').map((c) => c.run).join('\n') : '' }
   }
@@ -439,12 +439,12 @@ test('V49 end to end, with the real descriptors: a proxy that came from the invo
 
 // ── V66 (D51③⑤, G5): the line process-unknown gives closes the loop — written into a sandbox agents.json, the same facts are claimed by that harness ────────────────
 test('V66 process-unknown: its line, written into agents.json, makes the registry claim the same process for that harness; a WIDE name gets no such line; agent-list-invalid has its code, the file and the item', async () => {
-  const home = tmpDir('asight-v66-')
-  const list = path.join(home, '.asight', 'agents.json')
+  const home = tmpDir('trocar-v66-')
+  const list = path.join(home, '.trocar', 'agents.json')
   const F = facts('claude-code', { agentList: { path: list, state: 'absent', problems: [] }, identity: { 'claude-code': { ...idOf('claude-code')['claude-code'], unknown: [{ name: 'claude-canary', wide: false, pid: 7002, door: 'claude-code.settings' }, { name: 'python', wide: true, pid: 7003, door: 'claude-code.settings' }] } } })
   const found = findingsOf(F).filter((x) => x.code === 'process-unknown')
   assert.equal(found.length, 2, 'one finding per name')
-  for (const f of found) { assert.equal(f.class, 'note'); assert.deepEqual(validateFinding(f), [], f.what); assert.equal(f.verify, 'asight status claude-code') }
+  for (const f of found) { assert.equal(f.class, 'note'); assert.deepEqual(validateFinding(f), [], f.what); assert.equal(f.verify, 'trocar status claude-code') }
   const [named, wide] = [found.find((f) => /claude-canary/.test(f.what)), found.find((f) => /python/.test(f.what))]
   const line = /Add (\{.*?\}) to the agents list in (\S+)/.exec(named.commands[0].run)
   assert.ok(line, named.commands[0].run)
@@ -466,7 +466,7 @@ test('V66 process-unknown: its line, written into agents.json, makes the registr
 })
 
 test('V66 process-unknown `named` (a preset name whose args missed, e.g. the Z Code GUI main): no bare {harness, name} line — it would claim every process of that name — and it does not say "not on the list"', () => {
-  const F = facts('z-code', { agentList: { path: '/h/.asight/agents.json', state: 'absent', problems: [] }, identity: { 'z-code': { ...idOf('z-code')['z-code'], unknown: [{ name: 'zcode', wide: false, named: true, pid: 7004, door: 'z-code.desktop' }] } } })
+  const F = facts('z-code', { agentList: { path: '/h/.trocar/agents.json', state: 'absent', problems: [] }, identity: { 'z-code': { ...idOf('z-code')['z-code'], unknown: [{ name: 'zcode', wide: false, named: true, pid: 7004, door: 'z-code.desktop' }] } } })
   const [f] = findingsOf(F).filter((x) => x.code === 'process-unknown')
   assert.ok(f)
   assert.deepEqual(validateFinding(f), [], f.what)
@@ -476,16 +476,16 @@ test('V66 process-unknown `named` (a preset name whose args missed, e.g. the Z C
   assert.doesNotMatch(f.why, /is on no list/)
 })
 
-test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the route record\'s reason and place), and uninstall\'s collectors-online gives asight off then asight uninstall', async () => {
+test('4.11 §3 ⑱ not-routed says the model plan\'s reason for the form (the route record\'s reason and place), and uninstall\'s collectors-online gives trocar off then trocar uninstall', async () => {
   const { findingFor } = await import('../../src/netenv/findings.mjs')
   const nr = (reason, at) => findingsOf(pfacts('hermes', form('hermes.cli', { entry: null, route: { code: 'not-routed', reason, ...(at ? { at } : {}) }, procs: [] }), fwForm(17993), { platform: 'darwin' }), ['hermes']).find((f) => f.code === 'not-routed')
   const absent = nr('absent', '/Users/a/.hermes/.env')
-  assert.ok(absent.commands.some((c) => c.run.includes('/Users/a/.hermes/.env')) && absent.commands.at(-1).run === 'asight on hermes', 'Hermes: its own setup first, then asight on')
+  assert.ok(absent.commands.some((c) => c.run.includes('/Users/a/.hermes/.env')) && absent.commands.at(-1).run === 'trocar on hermes', 'Hermes: its own setup first, then trocar on')
   const blocker = nr('blocker', '/Users/a/Library/x.json#proxy')
   assert.ok(blocker.commands[0].run.includes('/Users/a/Library/x.json#proxy') && blocker.why.includes('/Users/a/Library/x.json#proxy'))
   const reasons = ['system-pac', 'blocker', 'own-egress', 'blocker-unreadable', 'unreadable', 'absent', 'credentialed-own-leg', 'no-path', 'no-applied-entry']
   assert.equal(new Set(reasons.map((r) => nr(r, '/x').why)).size >= 6, true, 'the reasons are told apart')
   for (const r of reasons) assert.deepEqual(validateFinding(nr(r, '/x')), [], r)
   const refused = findingFor('collectors-online', { platform: 'darwin', online: 'codex' })
-  assert.deepEqual([refused.class, refused.commands.map((c) => c.run)], ['problem', ['asight off', 'asight uninstall']])
+  assert.deepEqual([refused.class, refused.commands.map((c) => c.run)], ['problem', ['trocar off', 'trocar uninstall']])
 })

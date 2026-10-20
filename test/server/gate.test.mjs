@@ -18,7 +18,7 @@ import { serveFace, request as req, withToken } from './face.mjs';
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src');
 
 async function serve(opts = {}) {
-  const home = rawHome('asight-gate-');
+  const home = rawHome('trocar-gate-');
   writeSegment(home, '20261018T100000Z', [{ sessionKey: 'sess-secret' }]);
   return serveFace({ home, ...opts });
 }
@@ -82,7 +82,7 @@ test('no token or a wrong token: 403 on the data and control planes, with no fil
 test('the static plane: src/web/v2 and the shared modules from memory, nothing else (4.4 验收 5)', async () => {
   const f = await serve(counting());
   try {
-    // one board (1.2 §托管与打开): `/`, the address `asight board` opens, is the board's own page, and no second page is served beside it
+    // one board (1.2 §托管与打开): `/`, the address `trocar board` opens, is the board's own page, and no second page is served beside it
     const root = await req(f.port, '/');
     assert.equal(root.status, 200);
     assert.equal(root.body, nodeFs.readFileSync(path.join(SRC, 'web', 'v2', 'index.html'), 'utf8'), '`/` is src/web/v2/index.html');

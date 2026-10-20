@@ -1,8 +1,8 @@
-// doctor.mjs — `asight doctor [<harness>...] [--json]` (RFC 1.6 §2, R4, R11; 4.1 §凭据处置): the self-check an operator runs when something looks wrong. It answers the four questions
+// doctor.mjs — `trocar doctor [<harness>...] [--json]` (RFC 1.6 §2, R4, R11; 4.1 §凭据处置): the self-check an operator runs when something looks wrong. It answers the four questions
 // of the 「测试」(is it capturing · is what it captured right · no credential outside the files · no machine-wide TLS weakening) and ④b (every file that holds captured bytes is owner-only), and it
-// folds in what `asight verify` was (the old CA is in the user trust store only). Then it prints, read-only, what `status` knows (the daemon, every harness, the topology) and what the last
+// folds in what `trocar verify` was (the old CA is in the user trust store only). Then it prints, read-only, what `status` knows (the daemon, every harness, the topology) and what the last
 // install noted, the standalone undo copy, and the backups no manifest names. It never changes a thing of the user's and starts nothing: its OS queries are read-only (`ps`, the trust-store
-// lookup, the process table); the files it may write are `status`'s ~/.asight/netenv.json (the topology) and, when a sealed capture file could only be read in part, one line in ~/.asight/raw/journal.jsonl.
+// lookup, the process table); the files it may write are `status`'s ~/.trocar/netenv.json (the topology) and, when a sealed capture file could only be read in part, one line in ~/.trocar/raw/journal.jsonl.
 //
 // Exit (R4): 1 — a capture file others can read (「采集文件可被他人读取」: the bytes hold live API keys) · 3 — it could not judge: no records examined, no file's permissions examined, a file whose permissions
 // could not be read, a capture file only partly read — never 0 (reading nothing and answering 「过」 is what this command once did, 0.1 §3) · 0 — the rest. The status block is a report and
@@ -18,11 +18,11 @@ import { statusFacts, statusDocOf } from './status.mjs'
 import { diagnose, renderFindings } from '../netenv/findings.mjs'
 import { serveSource } from '../paths.mjs'
 import { formatInstallNotes } from './status-text.mjs'
-import { asightHome, backupDir, collectorDir, standaloneCommand } from '../off/paths.mjs'
+import { trocarHome, backupDir, collectorDir, standaloneCommand } from '../off/paths.mjs'
 import { readManifest, manifestPath } from '../off/manifest.mjs'
 import { memoProcQuestions, daemonProcReader } from '../off/proc.mjs'
 
-const USAGE = 'usage: asight doctor [<harness>...] [--json]'
+const USAGE = 'usage: trocar doctor [<harness>...] [--json]'
 const LIMIT = 5000 // records sampled (the head of the capture)
 const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a refusal of the test guard is never "the tool failed" (0.1 §3)
 const errText = (e) => String((e && (e.code || e.message)) || e)
@@ -42,7 +42,7 @@ export function onPath(bin, { env = process.env, platform = process.platform, fs
   return false
 }
 
-/** The regular files directly in `dir` (the backups: asight made them 0600 in a 0700 directory). A directory that is not there is no files; one that cannot be listed is `error`. */
+/** The regular files directly in `dir` (the backups: trocar made them 0600 in a 0700 directory). A directory that is not there is no files; one that cannot be listed is `error`. */
 function filesIn(dir, fs) {
   try { return { files: fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => path.join(dir, e.name)) } } catch (e) {
     return e && (e.code === 'ENOENT' || e.code === 'ENOTDIR') ? { files: [] } : { files: [], error: `${dir}: ${errText(e)}` }
@@ -52,12 +52,12 @@ function filesIn(dir, fs) {
 /** The capture files, sampled records and everything ④b has to look at → { sources, files, extra, records, srcMeta, readErrors }. One resolver for the source, shared with the board (listSources,
  *  src/raw/discover.mjs): a root is usually a DIRECTORY and `serveSource()` returns a list of them (D27) — the day `fs.statSync(list)` threw, the catch swallowed it and doctor
  *  certified a capture it had read nothing from. The resolver itself, never server.mjs: a self-check that dies on a package it does not need says nothing at all — on a tree
- *  without node_modules (a test machine's) `asight doctor` printed only ERR_MODULE_NOT_FOUND (tested 2026-10-14). */
+ *  without node_modules (a test machine's) `trocar doctor` printed only ERR_MODULE_NOT_FOUND (tested 2026-10-14). */
 async function collect({ home, env, sourceFlags, deps, capture }) {
   const { listSources, readRecords, sealedReadProblem } = await capture
-  const fs = deps.fs || nodeFs, ah = asightHome(home)
+  const fs = deps.fs || nodeFs, ah = trocarHome(home)
   const flagged = sourceFlags.filter(Boolean)
-  const sources = [].concat(flagged.length ? flagged : env.ASIGHT_SOURCE || serveSource({ home: ah, collector: collectorDir(home) })).filter(Boolean)
+  const sources = [].concat(flagged.length ? flagged : env.TROCAR_SOURCE || serveSource({ home: ah, collector: collectorDir(home) })).filter(Boolean)
   const files = [], extra = [], records = [], readErrors = []
   for (const root of sources) {
     try {
@@ -66,7 +66,7 @@ async function collect({ home, env, sourceFlags, deps, capture }) {
       extra.push(...part.superseded.map((x) => x.sealed)) // sealed copies superseded by an original that still exists hold the same credentials (D35)
     } catch (e) { readErrors.push(`${root}: ${(e && e.message) || e}`) }
   }
-  const backups = filesIn(backupDir(home), fs) // what asight saved of the user's files before changing them: settings with tokens in them (R2)
+  const backups = filesIn(backupDir(home), fs) // what trocar saved of the user's files before changing them: settings with tokens in them (R2)
   if (backups.error) readErrors.push(backups.error)
   extra.push(...backups.files)
   let srcMeta = { exists: false, bytes: 0 }
@@ -129,16 +129,16 @@ async function doctorDocOf({ names, home, env, platform, deps }) {
   else findingsError = f.topology_error || 'the network facts could not be read on this platform'
   // what `doctor` looks at besides the network: the files only you may read, the copy of the undo program, the backups no install record names
   const extra = []
-  for (const bad of res.q4b.bad) extra.push({ code: 'file-readable-by-others', class: 'problem', what: `${bad.file} (mode ${bad.mode}) can be read by someone else, and captured files hold live credentials.`, why: 'Only you may read what asight captured.', commands: [{ run: `chmod 600 ${shq(bad.file)}`, shell: 'sh' }], verify: 'asight doctor' })
+  for (const bad of res.q4b.bad) extra.push({ code: 'file-readable-by-others', class: 'problem', what: `${bad.file} (mode ${bad.mode}) can be read by someone else, and captured files hold live credentials.`, why: 'Only you may read what trocar captured.', commands: [{ run: `chmod 600 ${shq(bad.file)}`, shell: 'sh' }], verify: 'trocar doctor' })
   // the copy of the undo program is `install`'s; a machine where nothing was installed has nothing to check (§3.7)
   const installed = !!(status.install && status.install.state)
   const standalone = installed ? (() => { try { return checkStandalone({ home, platform, fs }) } catch (e) { rethrowSandbox(e); return { ok: false, error: errText(e) } } })() : { ok: true }
-  if (standalone.error) extra.push({ code: 'standalone-unreadable', class: 'problem', what: 'The standalone undo program could not be checked.', why: standalone.error, commands: [{ run: 'asight install', shell: 'sh' }], verify: 'asight doctor' })
-  else if (!standalone.ok) extra.push({ code: 'standalone-stale', class: 'problem', what: `${standaloneCommand(standalone.path, platform)} is not the current version, so it may not undo everything.`, why: standalone.reason || 'its bytes are not the ones this asight writes', commands: [{ run: 'asight install', shell: 'sh' }], verify: 'asight doctor' })
+  if (standalone.error) extra.push({ code: 'standalone-unreadable', class: 'problem', what: 'The standalone undo program could not be checked.', why: standalone.error, commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
+  else if (!standalone.ok) extra.push({ code: 'standalone-stale', class: 'problem', what: `${standaloneCommand(standalone.path, platform)} is not the current version, so it may not undo everything.`, why: standalone.reason || 'its bytes are not the ones this trocar writes', commands: [{ run: 'trocar install', shell: 'sh' }], verify: 'trocar doctor' })
   let orphans = [], orphansError = null
-  try { const m = readManifest(collectorDir(home), fs); orphans = m && m.unsupported ? null : orphanBackups({ home, manifest: m, fs }); if (orphans === null) orphansError = 'the install record is of a version this asight does not read, so which backups it names cannot be said' } catch (e) { orphansError = `${manifestPath(collectorDir(home))}: ${errText(e)}` }
-  if (orphans && orphans.length) extra.push({ code: 'backup-unclaimed', class: 'note', what: `${orphans.length} backup file(s) belong to no install record.`, why: 'An edit that was interrupted left them behind.', commands: [{ run: `Look at them, then remove them: ${orphans[0]}`, shell: 'sh' }], verify: 'asight doctor' })
-  if (orphansError) extra.push({ code: 'backup-unclaimed', class: 'note', what: `Whether any backup belongs to no install record is ${unknown(orphansError)}.`, why: 'The install record could not be read.', commands: [], verify: 'asight doctor' })
+  try { const m = readManifest(collectorDir(home), fs); orphans = m && m.unsupported ? null : orphanBackups({ home, manifest: m, fs }); if (orphans === null) orphansError = 'the install record is of a version this trocar does not read, so which backups it names cannot be said' } catch (e) { orphansError = `${manifestPath(collectorDir(home))}: ${errText(e)}` }
+  if (orphans && orphans.length) extra.push({ code: 'backup-unclaimed', class: 'note', what: `${orphans.length} backup file(s) belong to no install record.`, why: 'An edit that was interrupted left them behind.', commands: [{ run: `Look at them, then remove them: ${orphans[0]}`, shell: 'sh' }], verify: 'trocar doctor' })
+  if (orphansError) extra.push({ code: 'backup-unclaimed', class: 'note', what: `Whether any backup belongs to no install record is ${unknown(orphansError)}.`, why: 'The install record could not be read.', commands: [], verify: 'trocar doctor' })
   const all = findings === null ? null : [...extra.filter((x) => x.class === 'problem'), ...findings, ...extra.filter((x) => x.class !== 'problem')]
   const summary = all === null ? null : { problem: all.filter((x) => x.class === 'problem').length, expected: all.filter((x) => x.class === 'expected').length, note: all.filter((x) => x.class === 'note').length }
   const undetermined = undeterminedOf(res, c.readErrors, { files: c.files.length, records: c.records.length, root: (status.cert || {}).root || null })
@@ -160,11 +160,11 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--json') json = true
-    else if (a.startsWith('-')) { io.err(`asight doctor: unknown option '${a}'\n${USAGE}`); return EXIT.usage }
+    else if (a.startsWith('-')) { io.err(`trocar doctor: unknown option '${a}'\n${USAGE}`); return EXIT.usage }
     else names.push(a)
   }
   const named = resolveHarnesses(names)
-  if (!named.ok) { io.err(`asight doctor: unknown harness '${named.unknown.join(', ')}'. Known: ${named.known.join(', ')}`); return EXIT.usage }
+  if (!named.ok) { io.err(`trocar doctor: unknown harness '${named.unknown.join(', ')}'. Known: ${named.known.join(', ')}`); return EXIT.usage }
   const doc = await doctorDoc({ names: named.ids, home, env, platform, deps })
   const { exit } = doc
   if (json) { const { exit: _drop, ...out } = doc; io.out(JSON.stringify(out, null, 2)); return exit }
@@ -172,13 +172,13 @@ export async function runDoctor(argv, { io, env = process.env, home = nodeOs.hom
   // §3.7: the headline says what the list below it numbers — problems AND the expected findings (a Windows test machine 2026-10-18:
   // "1 problem." over three numbered entries). Notes are not numbered, so they are not counted here. The exit code is unchanged.
   const headline = (x) => {
-    if (!x.problem && !x.expected) return 'asight doctor: no problems.'
+    if (!x.problem && !x.expected) return 'trocar doctor: no problems.'
     const parts = []
     if (x.problem) parts.push(`${x.problem} problem${x.problem === 1 ? '' : 's'}`)
     if (x.expected) parts.push(`${x.expected} expected finding${x.expected === 1 ? '' : 's'}`)
-    return `asight doctor: ${parts.join(' and ')}.`
+    return `trocar doctor: ${parts.join(' and ')}.`
   }
-  io.out(s === null ? `asight doctor: findings are ${unknown(doc.findings_error)}.` : headline(s))
+  io.out(s === null ? `trocar doctor: findings are ${unknown(doc.findings_error)}.` : headline(s))
   if (doc.findings && doc.findings.length) { io.out(''); for (const l of renderFindings(doc.findings)) io.out(l) }
   for (const u of realUndetermined(doc.undetermined)) io.out(`Could not judge ${u.what}: ${u.reason}`)
   for (const u of doc.undetermined.filter((x) => x.reason === 'no captured data yet')) io.out(`${u.what.replace(/^./, (m) => m.toUpperCase())}: no captured data yet`)

@@ -221,8 +221,8 @@ const T = { timeout: 20000 }
 const TERMINAL = [{ pathSuffix: '/responses', patterns: ['^\\{"type":"(response\\.(completed|failed|incomplete)|error)"'] }]
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const until = async (fn, what, ms = 4000) => { for (const end = Date.now() + ms; Date.now() < end; await sleep(5)) { const v = fn(); if (v) return v } throw new Error(`${what}: not within ${ms}ms`) }
-const asightCa = createCa()
-const labCaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-drain-labca-'))
+const trocarCa = createCa()
+const labCaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-drain-labca-'))
 const labCa = makeLabCa(labCaDir)
 process.on('exit', () => fs.rmSync(labCaDir, { recursive: true, force: true }))
 const BODY = JSON.stringify({ model: 'claude-x', max_tokens: 16, messages: [{ role: 'user', content: [{ type: 'text', text: 'drain me' }] }] })
@@ -230,13 +230,13 @@ const SSE_BODY = (text = 'drain me') => JSON.stringify({ model: 'claude-x', max_
 const split = (b) => { const i = b.indexOf('\r\n\r\n') + 4; return { head: b.subarray(0, i).toString('latin1'), body: b.subarray(i) } }
 
 async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.asight.test', upstream = null } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-drain-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-drain-'))
   const mock = upstream ? await upstream() : await startMockUpstream({ tls: { key: fs.readFileSync(labCa.key), cert: fs.readFileSync(labCa.cert) }, delays })
   const envelopes = [], errors = []
   const store = createRecordStore({ root: path.join(dir, 'rec'), raw: path.join(dir, 'rec') })
   const L = { recording: true, boom: false }
   const redirector = createStaticRedirector({ dst: { address: '127.0.0.1', port: mock.port, family: 4 }, pid: 11, agent: 'claude-code', decrypt: true })
-  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(asightCa)), upstreamCa: fs.readFileSync(labCa.caCert), systemCa: fs.readFileSync(labCa.caCert, 'utf8'),
+  const engine = createEngine({ redirector, issuer: createLeafIssuer(loadCa(trocarCa)), upstreamCa: fs.readFileSync(labCa.caCert), systemCa: fs.readFileSync(labCa.caCert, 'utf8'),
     store: { envelope: (e) => { envelopes.push(e); return store.envelope(e) }, flow: (f) => store.flow(f) }, onFailure: createFailureRecorder(path.join(dir, 'rec')).event,
     isRecording: () => { if (L.boom) throw new Error('the switch sampler threw'); return L.recording }, policy: (meta, host) => host !== spliceHost, describe: () => ({ wsTerminal: terminal }), onError: (e) => errors.push(e), drainTimeoutMs: 1500 })
   const { port } = await engine.listen({})
@@ -247,7 +247,7 @@ async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.asight
   })
   const read = (sub) => { const d = path.join(dir, 'rec', sub); return fs.existsSync(d) ? fs.readdirSync(d).filter((f) => f.endsWith('.ndjson')).flatMap((f) => fs.readFileSync(path.join(d, f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) : [] }
   // a keep-alive TLS client through the engine: what it received, whether it was closed
-  const client = async ({ servername = 'api.anthropic.com', ca = asightCa.certPem } = {}) => {
+  const client = async ({ servername = 'api.anthropic.com', ca = trocarCa.certPem } = {}) => {
     const sock = tls.connect({ port, host: '127.0.0.1', servername, ca }); sock.on('error', () => {})
     await once(sock, 'secureConnect')
     const chunks = []; sock.on('data', (d) => chunks.push(d))
@@ -256,7 +256,7 @@ async function lab(t, { delays, terminal = TERMINAL, spliceHost = 'splice.asight
   }
   const post = (c, p, body, headers = {}) => c.sock.write(`POST ${p} HTTP/1.1\r\nHost: api.anthropic.com\r\ncontent-type: application/json\r\n${Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('')}content-length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
   const wire = (n = 0) => { const e = mock.state.log.filter((x) => x.type === 'request')[n]; return e && Buffer.from(e.resp_raw_b64, 'base64') } // the bytes the mock wrote for its nth response
-  const connectWs = async (opts = {}) => { const c = await wsConnect(port, { tls: { servername: 'api.openai.com', ca: asightCa.certPem }, ...opts }); clients.push(c); return c }
+  const connectWs = async (opts = {}) => { const c = await wsConnect(port, { tls: { servername: 'api.openai.com', ca: trocarCa.certPem }, ...opts }); clients.push(c); return c }
   return { mock, engine, port, envelopes, errors, client, post, wire, connectWs, set recording(v) { L.recording = v }, set boom(v) { L.boom = v }, rows: () => read('flows').filter((r) => r.event == null), failures: () => read('flows').filter((r) => r.event === 'failure'), dir }
 }
 const NOW = { agents: null }
@@ -273,11 +273,11 @@ test('V37: off lands after the request went out and before the response head: on
   assert.equal(got.head, sent.head.replace(/\r\n\r\n$/, '\r\nConnection: close\r\n\r\n'), 'the head the client got: the mock\'s, plus the one line before the blank line')
   assert.ok(got.body.equals(sent.body), 'the body byte for byte')
   const env = await until(() => L.envelopes.at(-1), 'the envelope')
-  assert.deepEqual(env.asight_added, ['connection-close'])
-  assert.equal(Object.keys(env).at(-1), 'asight_added', 'appended after every other key')
+  assert.deepEqual(env.trocar_added, ['connection-close'])
+  assert.equal(Object.keys(env).at(-1), 'trocar_added', 'appended after every other key')
   assert.equal(env.resp_head_raw, sent.head, 'resp_head_raw is the head the upstream sent')
-  const [row] = await until(() => { const r = L.rows().filter((x) => x.asight_added); return r.length && r }, 'the flows/ row')
-  assert.deepEqual(row.asight_added, [{ seq: 0, what: 'connection-close' }])
+  const [row] = await until(() => { const r = L.rows().filter((x) => x.trocar_added); return r.length && r }, 'the flows/ row')
+  assert.deepEqual(row.trocar_added, [{ seq: 0, what: 'connection-close' }])
   assert.deepEqual(L.engine.relayed(NOW), { closing: 0, waiting: 0 }, 'once the connection is gone nothing is relayed')
 })
 
@@ -290,8 +290,8 @@ test('V37: the upstream already says Connection: close → nothing added, nothin
   await c.closed
   assert.equal(split(c.bytes()).head, split(L.wire()).head, 'the head as the mock wrote it')
   const env = await until(() => L.envelopes.at(-1), 'the envelope')
-  assert.equal(env.asight_added, undefined)
-  await until(() => L.rows().length, 'the row'); assert.equal(L.rows().at(-1).asight_added, undefined)
+  assert.equal(env.trocar_added, undefined)
+  await until(() => L.rows().length, 'the row'); assert.equal(L.rows().at(-1).trocar_added, undefined)
 
   const S = await lab(t, { delays: { dripMs: 80 } })
   const s2 = await S.client()
@@ -303,8 +303,8 @@ test('V37: the upstream already says Connection: close → nothing added, nothin
   assert.equal(got.head, sent.head, 'the head had been forwarded: nothing to add')
   assert.ok(got.body.equals(sent.body), 'every event, to the last one, then the close')
   const env2 = await until(() => S.envelopes.at(-1), 'the stream envelope')
-  assert.equal(env2.asight_added, undefined)
-  await until(() => S.rows().length, 'the stream row'); assert.equal(S.rows().at(-1).asight_added, undefined)
+  assert.equal(env2.trocar_added, undefined)
+  await until(() => S.rows().length, 'the stream row'); assert.equal(S.rows().at(-1).trocar_added, undefined)
 })
 
 test('V37: an idle keep-alive connection is closed at once, with or without a request behind it; a request that starts after off is not recorded and the line it gets is on the flows/ row only', T, async (t) => {
@@ -323,8 +323,8 @@ test('V37: an idle keep-alive connection is closed at once, with or without a re
   await late.closed
   assert.match(split(late.bytes()).head, /\r\nConnection: close\r\n\r\n$/)
   assert.equal(L.envelopes.length, n, 'nothing recorded after off')
-  const row = await until(() => L.rows().find((x) => x.asight_added), 'the row of the late connection')
-  assert.deepEqual(row.asight_added, [{ seq: 0, what: 'connection-close' }])
+  const row = await until(() => L.rows().find((x) => x.trocar_added), 'the row of the late connection')
+  assert.deepEqual(row.trocar_added, [{ seq: 0, what: 'connection-close' }])
 })
 
 test('V37: off between the TCP connect and the TLS handshake: once the engine has terminated the TLS nothing is in flight, so the connection is closed at once — not left open and uncounted (1.6 §1.3, T05 review)', T, async (t) => {
@@ -332,7 +332,7 @@ test('V37: off between the TCP connect and the TLS handshake: once the engine ha
   const raw = net.connect(L.port, '127.0.0.1'); raw.on('error', () => {}); await once(raw, 'connect')
   await until(() => L.engine.stats().active === 1, 'the engine accepted it')
   assert.deepEqual(L.engine.drain(NOW), { closing: 1, waiting: 0, cut: 0 }, 'not yet relayed: asked, and the answer is that it is on its way out')
-  const sock = tls.connect({ socket: raw, servername: 'api.anthropic.com', ca: asightCa.certPem }); sock.on('error', () => {})
+  const sock = tls.connect({ socket: raw, servername: 'api.anthropic.com', ca: trocarCa.certPem }); sock.on('error', () => {})
   const closed = new Promise((r) => sock.once('close', r)) // the engine's FIN may reach the client before it has reported the handshake done: either way it is closed
   await Promise.race([closed, sleep(3000).then(() => { throw new Error('the idle connection that off asked for was left open') })])
   assert.deepEqual(L.engine.relayed(NOW), { closing: 0, waiting: 0 })
@@ -357,7 +357,7 @@ test('V37: a small response that reaches the engine whole, head and body in one 
   await c.closed
   assert.equal(c.bytes().toString('latin1'), resp.replace('\r\n\r\n', '\r\nConnection: close\r\n\r\n'))
   const env = await until(() => L.envelopes.at(-1), 'the envelope')
-  assert.deepEqual([env.asight_added, env.resp_head_raw, env.resp.kind], [['connection-close'], resp.slice(0, resp.indexOf('\r\n\r\n') + 4), 'json'])
+  assert.deepEqual([env.trocar_added, env.resp_head_raw, env.resp.kind], [['connection-close'], resp.slice(0, resp.indexOf('\r\n\r\n') + 4), 'json'])
 })
 
 // an upstream the test drives by hand: `onConn(socket)` is its whole behaviour; every socket is destroyed with it
@@ -407,7 +407,7 @@ test('V38: off while a call is open: the engine forwards every frame up to the t
   const env = await until(() => L.envelopes.at(-1), 'the envelope')
   assert.equal(L.envelopes.length, 1)
   assert.equal(JSON.parse(env.resp.messages.at(-1)).type, 'response.completed')
-  assert.equal(env.error, undefined); assert.equal(env.asight_added, undefined, 'nothing is added to a WebSocket connection')
+  assert.equal(env.error, undefined); assert.equal(env.trocar_added, undefined, 'nothing is added to a WebSocket connection')
   assert.deepEqual(L.failures(), [])
 })
 

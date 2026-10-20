@@ -1,4 +1,4 @@
-// src/query/named/sessions.mjs — `asight query sessions` (RFC 1.6 §4.1, 附录 C.5).
+// src/query/named/sessions.mjs — `trocar query sessions` (RFC 1.6 §4.1, 附录 C.5).
 //
 // The session list, newest first — out of the SEGMENT INDEX, not the records: the index row of a call
 // already carries which session it belongs to, which harness, when, and what kind of call it is, so this

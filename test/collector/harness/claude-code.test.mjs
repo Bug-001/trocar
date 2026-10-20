@@ -21,7 +21,7 @@ test('claude-code: the versioned binary (also "(deleted)" after an update) and b
 test('claude-code: settings env applies over the launch env; project/managed scopes override user (T12)', () => {
   const s = sandbox()
   try {
-    const pem = s.put('ca/asight.pem', CA.certPem); const foreign = s.put('ca/other.pem', OTHER.certPem)
+    const pem = s.put('ca/trocar.pem', CA.certPem); const foreign = s.put('ca/other.pem', OTHER.certPem)
     s.put('.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: pem, ANTHROPIC_BASE_URL: 'https://relay.example.com/anthropic' } }))
     const a = judge(cc, ctxFor({ home: s.home, env: { NODE_EXTRA_CA_CERTS: foreign } }))
     assert.deepEqual([a.trust.trusted, a.trust.via.startsWith('user settings env')], [true, true])
@@ -36,7 +36,7 @@ test('claude-code: settings env applies over the launch env; project/managed sco
 test('claude-code: a settings CA written after the process started is config-after-start, never trusted (coordinator 2026-10-06)', () => {
   const s = sandbox()
   try {
-    const pem = s.put('ca/asight.pem', CA.certPem)
+    const pem = s.put('ca/trocar.pem', CA.certPem)
     const file = s.put('.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: pem } }))
     const mtime = fs.statSync(file).mtimeMs
     const after = judge(cc, ctxFor({ home: s.home, startedAt: mtime - 60_000 }))
@@ -49,10 +49,10 @@ test('claude-code: a settings CA written after the process started is config-aft
   } finally { s.done() }
 })
 
-test('claude-code: launched with NODE_EXTRA_CA_CERTS = the asight CA but a user settings file naming another CA — untrusted when the start time is unknown or the file changed after start (post-integration 1)', () => {
+test('claude-code: launched with NODE_EXTRA_CA_CERTS = the trocar CA but a user settings file naming another CA — untrusted when the start time is unknown or the file changed after start (post-integration 1)', () => {
   const s = sandbox()
   try {
-    const pem = s.put('ca/asight.pem', CA.certPem); const foreign = s.put('ca/other.pem', OTHER.certPem)
+    const pem = s.put('ca/trocar.pem', CA.certPem); const foreign = s.put('ca/other.pem', OTHER.certPem)
     const file = s.put('.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: foreign } }))
     const mtime = fs.statSync(file).mtimeMs
     const unknown = judge(cc, ctxFor({ home: s.home, env: { NODE_EXTRA_CA_CERTS: pem }, startedAt: null })).trust
@@ -66,7 +66,7 @@ test('claude-code: launched with NODE_EXTRA_CA_CERTS = the asight CA but a user 
 test('claude-code: host-managed, --restricted and --setting-sources without user drop the settings CA (T12)', () => {
   const s = sandbox()
   try {
-    const pem = s.put('ca/asight.pem', CA.certPem)
+    const pem = s.put('ca/trocar.pem', CA.certPem)
     s.put('.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: pem, ANTHROPIC_BASE_URL: 'https://relay.example.com' } }))
     const managed = judge(cc, ctxFor({ home: s.home, env: { CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: '1' } }))
     assert.deepEqual([managed.trust.trusted, managed.trust.reason], [false, 'settings-ignored-managed-by-host'])
@@ -79,12 +79,12 @@ test('claude-code: host-managed, --restricted and --setting-sources without user
 })
 
 // T10, CC half: the plan writes exactly CC's one entry; extra-cc.pem when the user already relies on a value.
-const injectCtx = (s, { env = {}, running = [] } = {}) => ({ ...ctxFor({ home: s.home, env }), running: running.map((e) => new Map(Object.entries(e))), collectorDir: path.join(s.home, '.asight', 'collector'), caPem: path.join(s.home, '.asight', 'collector', 'ca', 'asight-ca.pem') })
+const injectCtx = (s, { env = {}, running = [] } = {}) => ({ ...ctxFor({ home: s.home, env }), running: running.map((e) => new Map(Object.entries(e))), collectorDir: path.join(s.home, '.trocar', 'collector'), caPem: path.join(s.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem') })
 
 test('claude-code: a settings file that does not parse or cannot be read is a broken layer — named as the reason when untrusted, never read as "no settings" (D-9)', () => {
   const s = sandbox()
   try {
-    const pem = s.put('ca/asight.pem', CA.certPem)
+    const pem = s.put('ca/trocar.pem', CA.certPem)
     const user = s.put('.claude/settings.json', '{ "env": { "NODE_EXTRA_CA_CERTS": "' + pem + '", } oops')
     const a = judge(cc, ctxFor({ home: s.home }))
     assert.deepEqual([a.trust.trusted, a.trust.reason, a.trust.via], [false, 'settings-unparsable', `user settings env (${user})`])
@@ -106,18 +106,18 @@ test('claude-code inject: a ~/.claude.json that cannot be read is a note, not "n
   const s = sandbox()
   try {
     s.put('.claude.json', '{ "env": ')
-    const plan = planTrust({ descriptors: [cc], ctxFor: () => injectCtx(s), caCertPem: CA.certPem, collectorDir: path.join(s.home, '.asight', 'collector') })
+    const plan = planTrust({ descriptors: [cc], ctxFor: () => injectCtx(s), caCertPem: CA.certPem, collectorDir: path.join(s.home, '.trocar', 'collector') })
     assert.ok(plan.notes.some((n) => n.includes(path.join(s.home, '.claude.json')) && /does not parse .*NODE_EXTRA_CA_CERTS in it is not carried over/.test(n)), JSON.stringify(plan.notes))
   } finally { s.done() }
 })
 
-test('claude-code inject: no existing value → settings env.NODE_EXTRA_CA_CERTS = asight-ca.pem; $CLAUDE_CONFIG_DIR moves the file', () => {
+test('claude-code inject: no existing value → settings env.NODE_EXTRA_CA_CERTS = trocar-ca.pem; $CLAUDE_CONFIG_DIR moves the file', () => {
   const s = sandbox()
   try {
-    const plan = planTrust({ descriptors: [cc], ctxFor: () => injectCtx(s), caCertPem: CA.certPem, collectorDir: path.join(s.home, '.asight', 'collector') })
-    assert.deepEqual(plan.entries.map((e) => [e.path, e.keys.join('.'), e.value, e.semantic]), [[path.join(s.home, '.claude', 'settings.json'), 'env.NODE_EXTRA_CA_CERTS', path.join(s.home, '.asight', 'collector', 'ca', 'asight-ca.pem'), 'append']])
+    const plan = planTrust({ descriptors: [cc], ctxFor: () => injectCtx(s), caCertPem: CA.certPem, collectorDir: path.join(s.home, '.trocar', 'collector') })
+    assert.deepEqual(plan.entries.map((e) => [e.path, e.keys.join('.'), e.value, e.semantic]), [[path.join(s.home, '.claude', 'settings.json'), 'env.NODE_EXTRA_CA_CERTS', path.join(s.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem'), 'append']])
     assert.deepEqual(plan.files, [])
-    const alt = planTrust({ descriptors: [cc], ctxFor: () => injectCtx(s, { env: { CLAUDE_CONFIG_DIR: path.join(s.home, 'cfg') } }), caCertPem: CA.certPem, collectorDir: path.join(s.home, '.asight', 'collector') })
+    const alt = planTrust({ descriptors: [cc], ctxFor: () => injectCtx(s, { env: { CLAUDE_CONFIG_DIR: path.join(s.home, 'cfg') } }), caCertPem: CA.certPem, collectorDir: path.join(s.home, '.trocar', 'collector') })
     assert.equal(alt.entries[0].path, path.join(s.home, 'cfg', 'settings.json'))
   } finally { s.done() }
 })
@@ -129,12 +129,12 @@ test('claude-code inject: a value in the shell, a running CC, ~/.claude.json or 
     const corp = createCa({ commonName: 'corp' }); const inSettings = s.put('ca/corp.pem', corp.certPem)
     const run = createCa({ commonName: 'run' }); const inRunning = s.put('ca/run.pem', run.certPem)
     s.put('.claude/settings.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: inSettings } }))
-    s.put('.claude.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: path.join(s.home, '.asight', 'collector', 'ca', 'asight-ca.pem') } })) // asight's own value: ignored
-    const dir = path.join(s.home, '.asight', 'collector')
+    s.put('.claude.json', JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: path.join(s.home, '.trocar', 'collector', 'ca', 'trocar-ca.pem') } })) // trocar's own value: ignored
+    const dir = path.join(s.home, '.trocar', 'collector')
     const plan = planTrust({ descriptors: [cc], ctxFor: () => injectCtx(s, { env: { NODE_EXTRA_CA_CERTS: shell }, running: [{ NODE_EXTRA_CA_CERTS: inRunning }] }), caCertPem: CA.certPem, collectorDir: dir })
     assert.equal(plan.entries[0].value, path.join(dir, 'ca', 'extra-cc.pem'))
     assert.deepEqual(plan.files.map((f) => f.path), [path.join(dir, 'ca', 'extra-cc.pem')])
     for (const pem of [OTHER.certPem, corp.certPem, run.certPem, CA.certPem]) assert.ok(plan.files[0].data.includes(pem.trim()))
-    assert.ok(plan.notes.some((n) => /exported only in a shell asight did not see/.test(n)))
+    assert.ok(plan.notes.some((n) => /exported only in a shell trocar did not see/.test(n)))
   } finally { s.done() }
 })

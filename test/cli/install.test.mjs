@@ -1,4 +1,4 @@
-// `asight install` (RFC 1.6 §1.1, §1.6): its own command; root refused before anything is read; a v2 manifest refused before any write;
+// `trocar install` (RFC 1.6 §1.1, §1.6): its own command; root refused before anything is read; a v2 manifest refused before any write;
 // no terminal and no --yes → the plan only, exit 2, nothing written; --yes → the model install, its receipt and an install-note; exit 0 / 1.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -30,7 +30,7 @@ async function cli(argv, { tty = false, over = {} } = {}) {
   // the control endpoint a daemon publishes (arch/darwin/control-path.mjs): without the file the CLI has no socket to ask, so the
   // probe below would never be asked anything and a started daemon could not be seen
   const { controlEndpoint } = await import('../../src/collector/arch/darwin/control-path.mjs')
-  const endpoint = () => controlEndpoint({ dir: w.dir }) // called below only when this run gets as far as writing: as root nothing may appear under ~/.asight
+  const endpoint = () => controlEndpoint({ dir: w.dir }) // called below only when this run gets as far as writing: as root nothing may appear under ~/.trocar
   // nothing answers until the registration started it: the first probe is ENOENT, the ones after it answer (D61: install registers AND starts)
   let probes = 0
   const deps = { getuid: () => 501, exec: launchctl.run, request: async () => { if (probes++ === 0) throw Object.assign(new Error('nothing answers yet'), { code: 'ENOENT' }); return {} }, sleep: async () => {}, launchctl, backends: { custody: w.custody, rootStore: w.store, installHelper: null, wrapperKit: { renderWrapper }, facts: { exeSuffix: '' }, dirs: w.ctx.dirs }, harnesses: w.harnesses, which: w.ctx.which, owns: w.owns, ...over }
@@ -44,31 +44,31 @@ test('install is a command of its own (and the hidden `collector install` alias 
   assert.equal(commandNamed('collector'), undefined)
 })
 
-test('1.6 §1.5: as root, install refuses before it reads anything — exit 2 with the manual\'s one line, no ~/.asight', async () => {
+test('1.6 §1.5: as root, install refuses before it reads anything — exit 2 with the manual\'s one line, no ~/.trocar', async () => {
   const { w, exit, io } = await cli(['--yes'], { over: { getuid: () => 0 } })
   assert.equal(exit, 2)
-  assert.match(io.text(), /^asight install: run this as your own user, not as root\.$/m)
+  assert.match(io.text(), /^trocar install: run this as your own user, not as root\.$/m)
   assertEnglish(io.text(), 'the root refusal')
-  assert.equal(fs.existsSync(path.join(w.home, '.asight')), false)
+  assert.equal(fs.existsSync(path.join(w.home, '.trocar')), false)
 })
 
 test('1.6 §1.6: no terminal and no --yes → the plan (cost and residual-risk lines) and exit 2, nothing written; --dry-run → exit 0, nothing written', async () => {
   const a = await cli([])
   assert.equal(a.exit, 2)
   assert.match(a.io.text(), /^While installed, programs you run trust certificates issued by this/m) // the cost line (§3.2)
-  assert.match(a.io.text(), /^Any program running as you can ask asight to issue a trusted certificate/m) // the residual risk of a same-user root
+  assert.match(a.io.text(), /^Any program running as you can ask trocar to issue a trusted certificate/m) // the residual risk of a same-user root
   assert.match(a.io.text(), /^  codex +reads your user trust store$/m, 'every agent found is a line of the plan')
   assert.match(a.io.text(), /Nothing was changed\. Read the plan above, then run it again with --yes/)
   assertEnglish(a.io.text(), 'the install plan')
-  assert.equal(fs.existsSync(path.join(a.w.home, '.asight', 'collector', 'install-manifest.json')), false)
+  assert.equal(fs.existsSync(path.join(a.w.home, '.trocar', 'collector', 'install-manifest.json')), false)
   const b = await cli(['--dry-run'])
   assert.equal(b.exit, 0)
-  assert.equal(fs.existsSync(path.join(b.w.home, '.asight', 'collector', 'install-manifest.json')), false)
+  assert.equal(fs.existsSync(path.join(b.w.home, '.trocar', 'collector', 'install-manifest.json')), false)
 })
 
 test('4.11 ⑰: a version 2 manifest is refused before any write — exit 1, the file as it was', async () => {
   const w = await modelWorld()
-  const f = path.join(w.home, '.asight', 'collector', 'install-manifest.json')
+  const f = path.join(w.home, '.trocar', 'collector', 'install-manifest.json')
   fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify({ version: 2, entries: [], files: [] }))
   const io = fakeIo()
   assert.equal(await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform: 'darwin', deps: { getuid: () => 501 } }), 1)
@@ -79,12 +79,12 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
   const { w, io, exit, launchctl } = await cli(['--yes', '--json'])
   assert.equal(exit, 0, io.text())
   const r = io.json()
-  assert.deepEqual([r.command, r.ok, typeof r.fp256, r.commands.includes('asight uninstall')], ['install', true, 'string', true])
+  assert.deepEqual([r.command, r.ok, typeof r.fp256, r.commands.includes('trocar uninstall')], ['install', true, 'string', true])
   // D61: install registers the login autostart, enables it (an `enable` clears a disable an earlier version left) and starts the daemon now
-  assert.deepEqual(launchctl.calls.filter((c) => /enable|bootstrap/.test(c)), ['launchctl enable gui/501/com.asight.collector', `launchctl bootstrap gui/501 ${path.join(w.home, 'Library', 'LaunchAgents', 'com.asight.collector.plist')}`], launchctl.calls.join(' | '))
+  assert.deepEqual(launchctl.calls.filter((c) => /enable|bootstrap/.test(c)), ['launchctl enable gui/501/com.trocar.collector', `launchctl bootstrap gui/501 ${path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist')}`], launchctl.calls.join(' | '))
   assert.deepEqual([r.daemon.state, r.daemon.started], ['running', true])
   // 附录 C.2: the receipt confirms the login entry it registered, and carries no key C.2 does not name (H-1)
-  assert.deepEqual(r.autostart, { entry: path.join(w.home, 'Library', 'LaunchAgents', 'com.asight.collector.plist'), enabled: true })
+  assert.deepEqual(r.autostart, { entry: path.join(w.home, 'Library', 'LaunchAgents', 'com.trocar.collector.plist'), enabled: true })
   assert.deepEqual(validateReceipt(r), [])
   const day = fs.readdirSync(path.join(w.dir, 'flows')).find((n) => n.endsWith('.ndjson'))
   assert.ok(fs.readFileSync(path.join(w.dir, 'flows', day), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).some((e) => e.event === 'install-note' && e.kind === 'result'))
@@ -94,7 +94,7 @@ test('install --yes --json: the receipt (fingerprint, carriers, residual risk, c
   const io2 = fakeIo()
   assert.equal(await runInstallCli(['--yes'], { io: io2, env: again.w.env, home: tmpHomeOf(again.w), platform: 'darwin', deps: { getuid: () => 501, unit: null, backends: { custody: again.w.custody, rootStore: again.w.store, dirs: again.w.ctx.dirs }, harnesses: [], owns: again.w.owns } }), 1)
 })
-const tmpHomeOf = () => tmpDir('asight-model-2-') // a second HOME, made where the leak guard sweeps
+const tmpHomeOf = () => tmpDir('trocar-model-2-') // a second HOME, made where the leak guard sweeps
 
 // the documented order — install, then on — through the CLI: install writes the root, its carriers and
 // the inert autostart unit; on enables the unit, which starts the REAL daemon (test/helpers/model-daemon.mjs), asks it for the doors and writes the entries.
@@ -136,18 +136,18 @@ for (const platform of ['darwin', 'win32']) {
     const exit = await runInstallCli(['--yes'], { io, env: w.env, home: w.home, platform, deps })
     assert.equal(exit, 1, io.text())
     assertEnglish(io.text(), 'the refusal of an install whose key custody failed')
-    assert.match(io.text(), /asight install/, 'it names what to run once the custody can be used')
+    assert.match(io.text(), /trocar install/, 'it names what to run once the custody can be used')
     const j = fakeIo()
     assert.equal(await runInstallCli(['--yes', '--json'], { io: j, env: w.env, home: w.home, platform, deps }), 1, j.text())
     const doc = j.json()
     assert.equal(doc.ok, false)
     assert.ok(ERROR_CODES.includes(doc.error.code), `error.code is in the closed set: ${JSON.stringify(doc.error)}`)
-    assert.ok(doc.error.message.includes('asight install'), doc.error.message)
+    assert.ok(doc.error.message.includes('trocar install'), doc.error.message)
     assert.equal(doc.fp256, null, 'no root was made')
   })
 }
 
-// §1.1 / D58 (macOS and Windows test machines, 2026-10-18): a receipt has no two identical rows, and it never prints asight's own ids at a person — a form id
+// §1.1 / D58 (macOS and Windows test machines, 2026-10-18): a receipt has no two identical rows, and it never prints trocar's own ids at a person — a form id
 // (`codex.vscode`) and a carrier kind (`config-key`) are read out in words (src/cli/receipt.mjs formWords / carrierWords, one vocabulary).
 test('the install receipt prints each (agent, carrier, file) fact once, in words — never one row per form, never a form or carrier id', async () => {
   const w = await modelWorld({ os: 'darwin', commands: ['claude', 'codex', 'dsh', 'kimi', 'opencode', 'hermes'] })
@@ -161,20 +161,20 @@ test('the install receipt prints each (agent, carrier, file) fact once, in words
   assert.ok(forms.length > 0, 'the world has forms to name')
   for (const id of forms) assert.ok(!text.includes(id), `the receipt prints the form id ${id} instead of what the form is`)
   // the whole run says the residual risk once: it is the last line of the plan (§3.2), not a paragraph the receipt repeats (macOS test machine run 2, 2026-10-18)
-  const risk = io.text().match(/Any program running as you can ask asight/g) || []
+  const risk = io.text().match(/Any program running as you can ask trocar/g) || []
   assert.equal(risk.length, 1, `the residual-risk paragraph is printed ${risk.length} times`)
   assertEnglish(text, 'the install receipt')
 })
 
-// V85 (the model path): the plan names every file of yours outside ~/.asight by full path, and asight's own tree in one line — the line the
-// model path had no equivalent of (it listed the carriers and the root, and nothing about ~/.asight at all).
-test('V85: the model install plan names asight\'s own tree in one line and every carrier of yours by path', async () => {
+// V85 (the model path): the plan names every file of yours outside ~/.trocar by full path, and trocar's own tree in one line — the line the
+// model path had no equivalent of (it listed the carriers and the root, and nothing about ~/.trocar at all).
+test('V85: the model install plan names trocar\'s own tree in one line and every carrier of yours by path', async () => {
   const { io, exit, w } = await cli(['--dry-run', '--json'])
   assert.equal(exit, 0)
   const plan = io.json().planned
-  const asightLine = plan.filter((p) => /^~[\\/]\.asight[\\/]:/.test(p.detail))
-  assert.equal(asightLine.length, 1, `asight's own tree is one line, not ${asightLine.length}: ${JSON.stringify(plan)}`)
-  assert.match(asightLine[0].detail, /asight-off/, 'and that line names the undo program, so the plan is readable without a second lookup')
+  const trocarLine = plan.filter((p) => /^~[\\/]\.trocar[\\/]:/.test(p.detail))
+  assert.equal(trocarLine.length, 1, `trocar's own tree is one line, not ${trocarLine.length}: ${JSON.stringify(plan)}`)
+  assert.match(trocarLine[0].detail, /trocar-off/, 'and that line names the undo program, so the plan is readable without a second lookup')
   assert.equal(plan.filter((p) => p.detail.includes(w.home)).length, 0, 'every path is written under ~, never the home twice')
   for (const item of plan) assert.ok(item.detail.length > 0 && item.what, 'every planned item says what it is about')
 })

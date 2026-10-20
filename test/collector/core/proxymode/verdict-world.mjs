@@ -13,7 +13,7 @@ export function makeRoot(subject) {
   const der = rootCertDer({ subject, spkiDer: k.publicKey.export({ type: 'spki', format: 'der' }), serial: 7n, notBefore: new Date(Date.now() - DAY), notAfter: new Date(Date.now() + DAY), sign: (t) => crypto.sign('sha256', t, k.privateKey) })
   return { pem: certPem(der), fp256: new crypto.X509Certificate(der).fingerprint256 }
 }
-export const ROOT = makeRoot('asight test root')
+export const ROOT = makeRoot('trocar test root')
 export const OTHER = makeRoot('a corporate root') // what a user's own bundle holds
 export const INSTALLED = 1_000_000
 export const RECORD = { carrierInstalledAt: INSTALLED, rootFp256: ROOT.fp256 }

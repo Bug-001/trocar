@@ -1,5 +1,5 @@
 // segments.test.mjs — the raw layer is stored in SEGMENTS (D60①, RFC 4.6 §记录, 1.6 §1.7 / §5.1): the daemon appends every
-// envelope to ~/.asight/raw/<segment>.ndjson, closes the segment at 128 MB or when it stops, and always opens a NEW
+// envelope to ~/.trocar/raw/<segment>.ndjson, closes the segment at 128 MB or when it stops, and always opens a NEW
 // segment at start (never continues one on disk, so a line is never appended behind a reader's back). The record id
 // `<segment>:<line>` (line from 1) is the same before and after sealing (V88, write side), which is why nothing ever
 // rewrites a closed segment — a half line left by a crash included.
@@ -31,7 +31,7 @@ test('segments: the name is the opening instant in UTC, a collision takes the ne
 })
 
 test('segments: a written envelope answers with its id, numbered from 1, and the next segment numbers from 1 again', () => {
-  const home = tmpDir('asight-seg-')
+  const home = tmpDir('trocar-seg-')
   let clock = '2026-10-18T07:08:09.000Z'
   const s = store(home, { now: () => new Date(clock), segmentBytes: 20 })
   const a = s.envelope({ id: 'a' })
@@ -51,7 +51,7 @@ test('segments: a written envelope answers with its id, numbered from 1, and the
 })
 
 test('segments: a store that starts always opens a new segment, never appends to one already on disk', () => {
-  const home = tmpDir('asight-seg-')
+  const home = tmpDir('trocar-seg-')
   const clock = () => new Date('2026-10-18T07:08:09.000Z')
   const a = store(home, { now: clock }); a.envelope({ id: 'a' }); a.close()
   const b = store(home, { now: clock }); const r = b.envelope({ id: 'b' }); b.close()
@@ -61,7 +61,7 @@ test('segments: a store that starts always opens a new segment, never appends to
 })
 
 test('segments: a half line left by a crash is neither completed nor rewritten', () => {
-  const home = tmpDir('asight-seg-')
+  const home = tmpDir('trocar-seg-')
   fs.mkdirSync(raw(home), { recursive: true })
   const half = path.join(raw(home), '20261018T000000Z.ndjson')
   fs.writeFileSync(half, '{"id":"old"}\n{"id":"cut' /* no newline: the daemon died mid-write */)
@@ -71,7 +71,7 @@ test('segments: a half line left by a crash is neither completed nor rewritten',
 })
 
 test('segments: every closed segment reaches onSegmentClosed once, at rollover and at stop (the seal queue hangs here)', () => {
-  const home = tmpDir('asight-seg-')
+  const home = tmpDir('trocar-seg-')
   let clock = '2026-10-18T07:08:09.000Z'
   const closed = []
   const s = store(home, { now: () => new Date(clock), segmentBytes: 1 })
@@ -86,7 +86,7 @@ test('segments: every closed segment reaches onSegmentClosed once, at rollover a
 })
 
 test('segments: the lock names a new segment before that segment\'s file exists, and no longer names it when the seal queue gets it (invariant 2)', () => {
-  const home = tmpDir('asight-seg-')
+  const home = tmpDir('trocar-seg-')
   const lock = path.join(home, 'lock')
   let clock = '2026-10-18T07:08:09.000Z'
   const s = store(home, { now: () => new Date(clock), segmentBytes: 1 })
@@ -111,7 +111,7 @@ test('segments: the lock names a new segment before that segment\'s file exists,
 })
 
 test('segments: a name the directory scan missed is never appended to — the exclusive create takes the next suffix', () => {
-  const home = tmpDir('asight-seg-')
+  const home = tmpDir('trocar-seg-')
   fs.mkdirSync(raw(home), { recursive: true })
   const other = path.join(raw(home), '20261018T070809Z.ndjson')
   fs.writeFileSync(other, '{"id":"theirs"}\n') // another writer's segment, appearing after the scan
@@ -126,7 +126,7 @@ test('segments: a name the directory scan missed is never appended to — the ex
 })
 
 test('segments: a failed write closes the segment — the fd is released and the seal queue gets it (its half line as it is)', () => {
-  const home = tmpDir('asight-seg-')
+  const home = tmpDir('trocar-seg-')
   const errs = [], closed = []
   const s = store(home, { now: () => new Date('2026-10-18T07:08:09.000Z'), onError: (e) => errs.push(e) })
   s.onSegmentClosed((p) => closed.push(path.basename(p)))
@@ -143,7 +143,7 @@ test('segments: a failed write closes the segment — the fd is released and the
 })
 
 test('segments: the raw directory is 0700 and a segment 0600 — capture data is the owner\'s only (1.6 §1.7)', () => {
-  const home = tmpDir('asight-seg-')
+  const home = tmpDir('trocar-seg-')
   fs.mkdirSync(raw(home), { recursive: true, mode: 0o755 }) // a raw/ from an older version: raw bytes hold credentials verbatim
   const s = store(home, { now: () => new Date('2026-10-18T07:08:09.000Z') })
   s.envelope({ id: 'a' }); s.close()
@@ -152,7 +152,7 @@ test('segments: the raw directory is 0700 and a segment 0600 — capture data is
 })
 
 test('segments: a failed write says so and never throws into the forwarding path (D38)', () => {
-  const home = tmpDir('asight-seg-')
+  const home = tmpDir('trocar-seg-')
   fs.mkdirSync(path.join(home, 'collector'), { recursive: true })
   fs.writeFileSync(raw(home), 'not a directory') // the segment cannot be opened
   const errs = []

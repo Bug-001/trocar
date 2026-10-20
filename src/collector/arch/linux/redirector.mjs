@@ -16,7 +16,7 @@ import { REDIRECTOR_PROTO } from './redirector-client.mjs'
 import { readFacts, listPids, readStatus, directConnections } from './procinfo.mjs'
 
 /** Whether logind keeps `user`'s daemon after their last logout (4.6 OPEN 登出后, 1.6 §1.1): `/var/lib/systemd/linger/<user>` is there or not → `{ state: true | false }`; a file that cannot be told (EACCES, ENOTDIR …)
- *  is `{ state: null, error }` with the file and the errno — never "off". Read-only, and never `loginctl` (R8: asight does not enable linger, it says how). The daemon's `daemon-start` event reads it the same way. */
+ *  is `{ state: null, error }` with the file and the errno — never "off". Read-only, and never `loginctl` (R8: trocar does not enable linger, it says how). The daemon's `daemon-start` event reads it the same way. */
 /** systemd's per-user linger flags: a file named after the user means their manager outlives their last session. */
 const LINGER_DIR = '/var/lib/systemd/linger'
 export function lingerRead({ user = null, dir = LINGER_DIR, fs: fsx = fs } = {}) {

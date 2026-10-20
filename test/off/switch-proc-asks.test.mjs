@@ -16,13 +16,13 @@ import { SUPERVISOR_LOCK } from '../../src/off/daemon-stop.mjs'
 import { newManifest, applyTextEntry, saveManifest } from '../../src/collector/core/trust/journal.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 
-const PIPE = '\\\\.\\pipe\\asight-d62-switch'
+const PIPE = '\\\\.\\pipe\\trocar-d62-switch'
 const BOOTED = 1_740_000_000_000
 const DAEMON_PID = 4242, SUP_PID = 4243
 const CREATED = { [DAEMON_PID]: 1_740_000_111_000, [SUP_PID]: 1_740_000_112_000, [process.pid]: 1_740_000_113_000 }
 
 /** The helper's `ps` rows (4.8 §1) for the three pids a switch asks about: the daemon's, its supervisor's, and this very process's. */
-const ROWS = Object.entries(CREATED).map(([pid, startedAt]) => ({ pid: Number(pid), ppid: 1, name: 'node.exe', exe: 'C:\\n.exe', cmdline: 'node asight.mjs', startedAt, cmdlineState: 'ok' }))
+const ROWS = Object.entries(CREATED).map(([pid, startedAt]) => ({ pid: Number(pid), ppid: 1, name: 'node.exe', exe: 'C:\\n.exe', cmdline: 'node trocar.mjs', startedAt, cmdlineState: 'ok' }))
 
 /** A counting runner for every OS tool `off` may reach for: it answers reg / schtasks / whoami, and records each powershell question by name. */
 function tools() {
@@ -45,8 +45,8 @@ function tools() {
 
 /** A sandbox HOME with one codex trust-entry on record, a daemon lock naming DAEMON_PID and a supervisor lock naming SUP_PID. */
 function world() {
-  const home = tmpDir('asight-d62-switch-')
-  const dir = path.join(home, '.asight', 'collector')
+  const home = tmpDir('trocar-d62-switch-')
+  const dir = path.join(home, '.trocar', 'collector')
   fs.mkdirSync(dir, { recursive: true })
   const envFile = path.join(home, '.codex', '.env')
   fs.mkdirSync(path.dirname(envFile), { recursive: true })
@@ -72,7 +72,7 @@ async function offOnce(reader) {
   const { home, envFile, pre } = world()
   const t = tools()
   const { receipt, exit } = await runOff({
-    home, env: { ASIGHT_TEST_SANDBOX: '1', USERPROFILE: home, HOME: home }, ids: ['codex'], yes: true,
+    home, env: { TROCAR_TEST_SANDBOX: '1', USERPROFILE: home, HOME: home }, ids: ['codex'], yes: true,
     deps: { platform: 'win32', exec: t.run, request, socketPath: PIPE, daemonReader: reader, alive: () => true, lockWaitMs: 0 },
   })
   return { receipt, exit, shells: t.shells, envAfter: fs.readFileSync(envFile), pre, home }

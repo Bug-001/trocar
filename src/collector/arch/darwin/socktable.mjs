@@ -12,10 +12,10 @@
 // The answer is a fact, not a race: the peer just connected and is waiting for the door's answer, so its socket is in the table, and the lookup
 // is waited for however long it takes. (Until 2026-10-17 a targeted `lsof` raced a 250 ms budget and "slow" meant untracked: lsof walks every
 // process's file table, 274 ms on a macOS machine while OpenCode opened its connections, and that one miss spliced a 292 s connection carrying every
-// turn of the session.) A wrong pid must never happen (4.8 W4): it would make the engine decrypt a process that does not trust asight's CA and
+// turn of the session.) A wrong pid must never happen (4.8 W4): it would make the engine decrypt a process that does not trust trocar's CA and
 // break it, so no row, several pids on the row's end (a socket a child inherited), or a table that cannot be read all give null, and the
 // connection is judged untracked and spliced. A table that cannot be read — the helper failed, or hung past `timeoutMs` and was killed — gives
-// null and ONE `socktable-unavailable` record (4.8 §12) to `onFailure`, which the recorder folds. Imports nothing of asight but native.mjs.
+// null and ONE `socktable-unavailable` record (4.8 §12) to `onFailure`, which the recorder folds. Imports nothing of trocar but native.mjs.
 import { NATIVE, nativePath } from './native.mjs'
 
 /** How long a hung helper may hold the connection before it is killed and the table counts as unreadable: a hang guard, never a verdict. */

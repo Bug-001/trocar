@@ -2,7 +2,7 @@
 //
 // CC-Desktop force-overwrites its base_url and ignores settings.json env, so it can't be reverse-
 // proxied (4.1:19); its ONLY capture path is a surgical Clash rule that routes exactly
-//   claude-code → api.anthropic.com   →  the product MITM (`asight mitm`)
+//   claude-code → api.anthropic.com   →  the product MITM (`trocar mitm`)
 // and nothing else — the OS system proxy is NEVER touched (4.1:14/54 · Non-Goal · 必拒).
 //
 // DURABLE MECHANISM = the Clash Verge Rev GLOBAL Script (profiles/Script.js). Verge 2.5.1's global
@@ -89,7 +89,7 @@ export function spliceRuntime(yaml, port) {
 
 const reserved = (platform) => ({
   platform,
-  on() { return { ok: false, reserved: true, reason: `Clash steer is a macOS-Desktop-only implementation (D22); not applicable on ${platform}. For CC-CLI use \`asight on\` where the per-process collector exists (Linux), or \`asight monitor on --no-autostart\` (the old CC-CLI steer).` }; },
+  on() { return { ok: false, reserved: true, reason: `Clash steer is a macOS-Desktop-only implementation (D22); not applicable on ${platform}. For CC-CLI use \`trocar on\` where the per-process collector exists (Linux), or \`trocar monitor on --no-autostart\` (the old CC-CLI steer).` }; },
   off() { return { ok: false, reserved: true, reason: `not applicable on ${platform}` }; },
   status() { return { platform, reserved: true, scriptInstalled: false }; },
 });
@@ -105,7 +105,7 @@ export function getDesktopSteer(platform = process.platform, deps = {}) {
   const NO_OP = '// Define main function (script entry)\nfunction main(config, profileName) { return config; }\n';
 
   // The files of this Verge install and the core behind them (src/off/clash.mjs): the live control socket is discovered there, `read` refuses a file it cannot read, and `status` / `off` are the
-  // undo `asight off` runs too. deps.sock / psText / knownSocks / mihomoReload / probeLive are that module's own seams.
+  // undo `trocar off` runs too. deps.sock / psText / knownSocks / mihomoReload / probeLive are that module's own seams.
   const clash = makeClash({ fs, scriptPath, runtimePath, mergePath, sock: deps.sock, psText: deps.psText, knownSocks: deps.knownSocks, mihomoReload: deps.mihomoReload, probeLive: deps.probeLive, exec: deps.exec, env: deps.env || process.env, platform });
   const { read, mihomoReload, status } = clash;
 

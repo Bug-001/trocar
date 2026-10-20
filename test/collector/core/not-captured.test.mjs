@@ -17,7 +17,7 @@ import { createTracker } from '../../../src/collector/core/tracker.mjs'
 import { within } from '../../helpers/bounded.mjs'
 
 const upCa = createCa({ commonName: 'upstream test CA' }); const upIssuer = createLeafIssuer(loadCa(upCa))
-const asightCa = createCa(); const issuer = createLeafIssuer(loadCa(asightCa))
+const trocarCa = createCa(); const issuer = createLeafIssuer(loadCa(trocarCa))
 const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv.address().port)))
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const REQ = 'POST /v1/messages HTTP/1.1\r\nHost: upstream.test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}'
@@ -40,7 +40,7 @@ async function rig(upstream, { meta = {}, ...over } = {}) {
 const tlsUp = (alpn = ['http/1.1']) => tls.createServer({ SNICallback: (s, cb) => cb(null, upIssuer.secureContextFor(s)), ALPNProtocols: alpn }, (s) => { s.on('error', () => {}); s.on('data', () => s.end(RESP)) })
 const sink = () => net.createServer((s) => { s.on('error', () => {}); s.resume(); s.on('end', () => s.end()) })
 const tlsTalk = (port, opts = {}) => new Promise((resolve) => {
-  const c = tls.connect({ port, host: '127.0.0.1', servername: 'upstream.test', ca: [upCa.certPem, asightCa.certPem], ALPNProtocols: ['http/1.1'], ...opts }, () => c.write(REQ))
+  const c = tls.connect({ port, host: '127.0.0.1', servername: 'upstream.test', ca: [upCa.certPem, trocarCa.certPem], ALPNProtocols: ['http/1.1'], ...opts }, () => c.write(REQ))
   let got = ''; c.on('data', (d) => { got += d }); c.on('error', () => {}); c.on('close', () => resolve(got))
 })
 const rawTalk = (port, bytes, { end = true } = {}) => new Promise((resolve) => {
@@ -112,12 +112,12 @@ test('a connection row carries parent_pid and parent_agent of the process that s
 // both halves were green and the code 4.6 §记录 names was never produced. This one runs the daemon's own wiring: the real
 // tracker's policy() as the engine's policy, one row per host of ONE trusted process.
 test('not_captured: a host the harness declares not via the trust path is not-trust-path with the harness\'s reason; the same process\'s other host outside the policy is policy (tracker → engine, B-3)', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-nc-')); const pem = path.join(dir, 'asight.pem'); fs.writeFileSync(pem, asightCa.certPem)
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-nc-')); const pem = path.join(dir, 'trocar.pem'); fs.writeFileSync(pem, trocarCa.certPem)
   try {
     const redirector = Object.assign(new EventEmitter(), { watch: async () => {}, unwatch: async () => {}, scan: async () => [] })
     const gamma = { name: 'gamma', runtime: 'node', hosts: ['api.gamma.test'], processes: { names: [{ name: 'gamma' }] }, trust: { chain: [{ var: 'EXTRA_CA', semantic: 'append' }] },
       bypass: () => [{ host: 'upstream.test', reason: 'ws-path' }] }
-    const tracker = createTracker({ redirector, registry: createRegistry([gamma]), trust: createTrustChecker({ caCertPem: asightCa.certPem }), home: dir, onError: (e) => { throw e }, alive: () => false })
+    const tracker = createTracker({ redirector, registry: createRegistry([gamma]), trust: createTrustChecker({ caCertPem: trocarCa.certPem }), home: dir, onError: (e) => { throw e }, alive: () => false })
     tracker.start()
     redirector.emit('exec', { os: 'linux', pid: 7, ppid: 1, uid: 1000, exe: '/opt/gamma', argv: ['gamma'], env: new Map([['EXTRA_CA', pem]]), cwd: '/', source: 'exec', startedAt: 0 })
     await sleep(20)
@@ -141,7 +141,7 @@ test('a CONNECT tunnel row: decision tunnel, the tunnelled decision in inner, re
     const h = await rig(proxy(), { policy })
     await new Promise((resolve) => {
       const raw = net.connect(h.port, '127.0.0.1', () => raw.write('CONNECT upstream.test:443 HTTP/1.1\r\n\r\n'))
-      raw.once('data', () => { const t = tls.connect({ socket: raw, servername: 'upstream.test', ca: [upCa.certPem, asightCa.certPem] }, () => t.write(REQ)); t.on('error', () => {}); t.on('close', resolve); t.resume() })
+      raw.once('data', () => { const t = tls.connect({ socket: raw, servername: 'upstream.test', ca: [upCa.certPem, trocarCa.certPem] }, () => t.write(REQ)); t.on('error', () => {}); t.on('close', resolve); t.resume() })
       raw.on('error', () => {})
     })
     await h.close()
@@ -193,7 +193,7 @@ test('a decrypted row counts envelopes the store did not write; a non-WebSocket 
   })
   const h = await rig(up, { store: { envelope: () => false, flow: (f) => { h.flows.push(structuredClone(f)); return true } } })
   await new Promise((resolve) => {
-    const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: asightCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write('GET /a HTTP/1.1\r\nHost: upstream.test\r\n\r\n'))
+    const c = tls.connect({ port: h.port, host: '127.0.0.1', servername: 'upstream.test', ca: trocarCa.certPem, ALPNProtocols: ['http/1.1'] }, () => c.write('GET /a HTTP/1.1\r\nHost: upstream.test\r\n\r\n'))
     let got = ''
     c.on('data', (d) => { got += d; if (got.endsWith('ok')) { got = ''; c.write('GET /b HTTP/1.1\r\nHost: upstream.test\r\nUpgrade: h2c\r\nConnection: Upgrade\r\n\r\n') } else if (got.includes('PRI-bytes')) c.end() })
     c.on('error', () => {}); c.on('close', resolve)

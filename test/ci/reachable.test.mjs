@@ -2,7 +2,7 @@
 //
 // A module nothing in the product imports still gets tests, and those tests keep it green and "covered" while it does nothing
 // (2026-10-13 audit: the retired old capture, src/capture/{steer-watch,reverse-proxy,...}, was exactly that). So the check starts
-// from the entries — bin/asight.mjs and src/off/main.mjs (the root of the standalone asight-off) — follows every edge by a text scan,
+// from the entries — bin/trocar.mjs and src/off/main.mjs (the root of the standalone trocar-off) — follows every edge by a text scan,
 // and fails on any src/**/*.{mjs,cjs,js} left over. test/ is not scanned: a test that imports a module does not make it live.
 //
 // Edges followed (relative to the importing file):
@@ -21,7 +21,7 @@ import { tmpDir } from '../helpers/tmp.mjs'
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url))
 const SOURCE = /\.(mjs|cjs|js)$/
-const ENTRIES = ['bin/asight.mjs', 'src/off/main.mjs']
+const ENTRIES = ['bin/trocar.mjs', 'src/off/main.mjs']
 
 /** Modules that are not reached yet. The list only shrinks: adding one needs a reason in the PR (0.1 §6); a listed module that
  *  became reachable or no longer exists fails below, so it gets removed here. */
@@ -67,9 +67,9 @@ export function unreachable(root, entries = ENTRIES) {
 }
 
 test('self-check: the analysis reports an orphan and follows via(), directory URLs, r() and the harness loader', () => {
-  const root = tmpDir('asight-reach-')
+  const root = tmpDir('trocar-reach-')
   const put = (p, t) => { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), t) }
-  put('bin/asight.mjs', "import '../src/a.mjs'\n")
+  put('bin/trocar.mjs', "import '../src/a.mjs'\n")
   put('src/a.mjs', "const via = (f) => f\nvia('./c.mjs', 'run')\nconst d = new URL('./plug/', import.meta.url)\nconst ROOT = '/'\nconst r = (...p) => path.join(ROOT, ...p)\nawait import(r('src', 'etl', 'cli.mjs'))\n")
   put('src/c.mjs', 'export {}\n')
   put('src/plug/p.mjs', 'export {}\n')
@@ -83,7 +83,7 @@ test('self-check: the analysis reports an orphan and follows via(), directory UR
   assert.deepEqual(unreachable(root), ['src/b.mjs', 'src/collector/harness/_h.mjs', 'src/collector/harness/win32/x.mjs'])
 })
 
-test('every src module is reachable from bin/asight.mjs or src/off/main.mjs, except the shrink-only list', () => {
+test('every src module is reachable from bin/trocar.mjs or src/off/main.mjs, except the shrink-only list', () => {
   const left = unreachable(REPO)
   const gone = Object.keys(UNREACHED).filter((p) => !fs.existsSync(path.join(REPO, p)))
   assert.deepEqual(gone, [], `deleted, so remove from UNREACHED: ${gone.join(', ')}`)

@@ -13,7 +13,7 @@ import { loadHarnesses } from '../../../../src/collector/harness/index.mjs'
 import { createRegistry } from '../../../../src/collector/core/registry.mjs'
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-helper.mjs', import.meta.url))
-const fakeSpawn = (fixture) => () => spawn(process.execPath, [FAKE, JSON.stringify(fixture)], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ASIGHT_FAKE_HELPER: '1' } })
+const fakeSpawn = (fixture) => () => spawn(process.execPath, [FAKE, JSON.stringify(fixture)], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, TROCAR_FAKE_HELPER: '1' } })
 const trow = (pid, localPort) => ({ pid, state: 'established', family: 4, localAddr: '127.0.0.1', localPort, remoteAddr: '127.0.0.1', remotePort: 17991 })
 const proc = (pid, extra = {}) => ({ pid, ppid: 1, name: 'claude.exe', exe: 'C:\\a\\claude.exe', cmdline: 'claude', cmdlineState: 'ok', startedAt: 1000 + pid, sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false, ...extra })
 function started(t, fixture) {

@@ -1,4 +1,4 @@
-// test/collector/core/proxymode/off-ports.test.mjs — V55's port disposition (1.6 §V55, 4.11 P12): in proxy mode one `asight off` over two harnesses
+// test/collector/core/proxymode/off-ports.test.mjs — V55's port disposition (1.6 §V55, 4.11 P12): in proxy mode one `trocar off` over two harnesses
 // disposes of their local ports differently — the door of the harness that still has a holder stays open and forward-only (it decrypts nothing), the
 // door of the harness with no holder is closed. The seam is the collector's own off() (createModelCollector, src/collector/core/proxymode/collector.mjs
 // settle/kept): the decision lives there, and nothing but it decides which port survives. The door half, the process table, the manifest and the clock

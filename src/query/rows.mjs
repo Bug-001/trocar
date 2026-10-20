@@ -10,7 +10,7 @@ import path from 'node:path';
 import { createSynthAssigner } from '../dissect/synth-key.mjs';
 import { LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { allSegments, warmSegmentIndex } from './index-build.mjs';
-import { asightHome } from '../paths.mjs';
+import { trocarHome } from '../paths.mjs';
 import { warmCache, fsTag } from './warm.mjs';
 
 // WARM (D63 ①, 1.6 §4.1 附近的查询): the rows of one segment come from the ONE warm reading of its index
@@ -27,7 +27,7 @@ export const namesStamp = (home, fs) => { try { return fs.readdirSync(path.join(
  * order the board stamps them in, so both name a session the same.
  * What a segment could not say goes into `errors` (D38), never silently missing.
  */
-export async function indexRows({ home = asightHome(), fs = nodeFs, errors = [] } = {}) {
+export async function indexRows({ home = trocarHome(), fs = nodeFs, errors = [] } = {}) {
   const assign = createSynthAssigner();
   const out = [];
   const segments = await segList.get(`${fsTag(fs)}\n${home}`, namesStamp(home, fs), () => allSegments({ home, fs }));

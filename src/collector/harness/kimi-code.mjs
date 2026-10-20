@@ -8,7 +8,7 @@
 // Hosts: config.toml ($KIMI_CODE_HOME, else ~/.kimi-code) — `base_url` of providers / models / services and the
 // *_BASE_URL names of a provider's env table; the env model (KIMI_MODEL_NAME with KIMI_MODEL_BASE_URL, or the base
 // URL name of its provider type); KIMI_CODE_BASE_URL (managed provider), KIMI_WEB_SEARCH / FETCH_BASE_URL.
-// Trust (D37④): plain Node, NODE_EXTRA_CA_CERTS read at start, no app-level CA. asight's launch shim <collector>/bin/kimi
+// Trust (D37④): plain Node, NODE_EXTRA_CA_CERTS read at start, no app-level CA. trocar's launch shim <collector>/bin/kimi
 // sets it and execs ~/.kimi-code/bin/kimi (same pid); `kimi` resolves to the shim through one sentinel PATH line
 // after the kimi installer's own PATH line, in each shell rc that has one. Installed only when the binary and such a
 // line exist; otherwise an install note `shim-not-on-path`. A CA the user already gives kimi (install shell, running
@@ -33,7 +33,7 @@ import { envValues, envProxies, perOs } from './_common.mjs'
 import { renderShim } from './_plugins.mjs'
 
 const CA_VAR = 'NODE_EXTRA_CA_CERTS'
-// POSIX shell rc files the kimi installer may have put its PATH line in (asight's line is an `export`, not for fish)
+// POSIX shell rc files the kimi installer may have put its PATH line in (trocar's line is an `export`, not for fish)
 const RC_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zshenv', '.zprofile', '.zlogin']
 const INSTALLER_LINE = '^[^#]*\\.kimi-code/bin' // a line naming the installer's bin dir before any comment
 // TOML `base_url = "…"` / `X_BASE_URL = '…'`, at a line start or inside an inline table
@@ -52,13 +52,13 @@ function configHosts(ctx) {
 function inject(ctx) {
   const bin = path.join(ctx.home, '.kimi-code', 'bin')
   const shimDir = path.join(ctx.collectorDir, 'bin')
-  const none = (why) => ({ notes: [{ code: CODE.shimNotOnPath, text: `${why}; asight installs no launch shim, so kimi is not captured` }] })
+  const none = (why) => ({ notes: [{ code: CODE.shimNotOnPath, text: `${why}; trocar installs no launch shim, so kimi is not captured` }] })
   if (!ctx.listDir(bin).includes('kimi')) return none(`${path.join(bin, 'kimi')} is not there (Kimi Code is not installed by its installer; the npm build has no shim entry)`)
   const installer = new RegExp(INSTALLER_LINE, 'm')
   const rcs = RC_FILES.map((n) => path.join(ctx.home, n)).filter((f) => installer.test(ctx.readText(f) || ''))
-  if (!rcs.length) return none(`no shell rc file (~/${RC_FILES.join(', ~/')}) holds the Kimi installer's PATH line for ${bin}, which asight's PATH line has to come after`)
+  if (!rcs.length) return none(`no shell rc file (~/${RC_FILES.join(', ~/')}) holds the Kimi installer's PATH line for ${bin}, which trocar's PATH line has to come after`)
   if (/["$`\\]/.test(shimDir)) return none(`${shimDir} holds a character a shell would expand inside "…"`)
-  const seen = new Set() // a CA file the user already gives kimi; asight's own (a reinstall) does not count
+  const seen = new Set() // a CA file the user already gives kimi; trocar's own (a reinstall) does not count
   const see = (v) => { if (typeof v === 'string' && v !== '' && !v.startsWith(ctx.collectorDir + path.sep)) seen.add(v) }
   see(ctx.env.get(CA_VAR))
   for (const env of ctx.running) see(env.get(CA_VAR))
@@ -66,11 +66,11 @@ function inject(ctx) {
   const extra = path.join(ctx.collectorDir, 'ca', 'extra-kimi.pem')
   return {
     owned: [{ path: path.join(shimDir, 'kimi'), role: 'shim', mode: 0o755, data: renderShim('kimi', { caFile: sources.length ? extra : ctx.caPem }) }],
-    entries: rcs.map((f) => ({ kind: 'text', format: 'line', path: f, after: INSTALLER_LINE, line: `export PATH="${shimDir}:$PATH" ${lineComment('runs kimi through its asight launch shim')}`, semantic: 'append' })),
+    entries: rcs.map((f) => ({ kind: 'text', format: 'line', path: f, after: INSTALLER_LINE, line: `export PATH="${shimDir}:$PATH" ${lineComment('runs kimi through its trocar launch shim')}`, semantic: 'append' })),
     files: sources.length ? [{ path: extra, certsFrom: sources }] : [],
     notes: [
       ...[...seen].filter((v) => !path.isAbsolute(v)).map((v) => ({ code: CODE.relativePath, text: `${CA_VAR}=${v} is a relative path; its certificates are not carried over` })),
-      `the shim sets ${CA_VAR} for kimi: a value exported only in a shell asight did not see no longer reaches Kimi Code; a kimi started by its absolute path, from a shell that did not read the rc line, or by an IDE is not captured`,
+      `the shim sets ${CA_VAR} for kimi: a value exported only in a shell trocar did not see no longer reaches Kimi Code; a kimi started by its absolute path, from a shell that did not read the rc line, or by an IDE is not captured`,
     ],
   }
 }
@@ -93,7 +93,7 @@ const proxy = {
   unsupported: {},
   branches: ['all'],
   measured: { win32: 'lab', linux: 'inferred', darwin: 'inferred' }, // Windows: lab L2 / L3 (4.8 §2.3); elsewhere inferred from it, until measured
-  restart: { hint: 'Quit this kimi, then start it again as `kimi` from a new terminal (through the launch script asight installed, where it reads the proxy variables)', processes: processes.names[0].name },
+  restart: { hint: 'Quit this kimi, then start it again as `kimi` from a new terminal (through the launch script trocar installed, where it reads the proxy variables)', processes: processes.names[0].name },
 }
 
 // Proxy mode, macOS and Windows (spec 4.11 §2.3, plan A.4): data only. Measured facts — the CLI forms through the install-folder
@@ -145,8 +145,8 @@ export default {
     // the marker first (dsh's ordering): on an OS whose judge cannot read the environment, the shim's launch marker is
     // the door; when it is there, a failure names it, not a CA door the process cannot be seen to use
     chain: [{ var: MARKER_VAR, semantic: 'append' }, { var: CA_VAR, semantic: 'append' }],
-    // the reason a kimi does not trust asight: the npm build has no shim entry; no shim was installed (install said
-    // why); else it did not start through the shim. A CA file of asight's own that is gone keeps the generic reason.
+    // the reason a kimi does not trust trocar: the npm build has no shim entry; no shim was installed (install said
+    // why); else it did not start through the shim. A CA file of trocar's own that is gone keeps the generic reason.
     // The launch shim exists only off the proxy model (Linux): on an OS kimi's proxyMode forms cover (4.11 §3 ⑱) the reason never names a
     // shim — a missing shim file is not news there and a leftover one is not a door — and stays the generic one (var-missing / ca-not-in-file / …).
     refine: (r, env, { argv = [], exe = null, readText = () => null, collectorDir = null, os = null }) => {
@@ -157,14 +157,14 @@ export default {
       const shim = collectorDir && (readText(path.join(collectorDir, 'bin', 'kimi')) != null || readText(path.join(collectorDir, 'bin', 'kimi.cmd')) != null)
       return collectorDir && !shim ? 'shim-not-on-path' : 'kimi-not-via-shim'
     },
-    // uninstall step 5: only a kimi the shim started (its NODE_EXTRA_CA_CERTS is asight's file) ever trusted asight, and one that did trusts it until it
+    // uninstall step 5: only a kimi the shim started (its NODE_EXTRA_CA_CERTS is trocar's file) ever trusted trocar, and one that did trusts it until it
     // restarts. Both as data, so the install manifest's liveness snapshot carries them and `off` (which has no descriptor) reports the same processes
     afterUninstall: 'restart',
     untilEnviron: CA_VAR,
     hints: {
-      'kimi-not-via-shim': "this kimi did not start through asight's shim (started before install, by its absolute path, from a shell that did not read the rc PATH line, or by an IDE); start it as `kimi` from a new shell",
-      'shim-not-on-path': "asight installed no launch shim for Kimi Code (see the install note: no ~/.kimi-code/bin/kimi, or no installer PATH line in a shell rc)",
-      'kimi-npm-no-shim': 'this is the npm build of Kimi Code (node .../kimi-code/dist/main.mjs); asight has a trust entry only for the ~/.kimi-code install',
+      'kimi-not-via-shim': "this kimi did not start through trocar's shim (started before install, by its absolute path, from a shell that did not read the rc PATH line, or by an IDE); start it as `kimi` from a new shell",
+      'shim-not-on-path': "trocar installed no launch shim for Kimi Code (see the install note: no ~/.kimi-code/bin/kimi, or no installer PATH line in a shell rc)",
+      'kimi-npm-no-shim': 'this is the npm build of Kimi Code (node .../kimi-code/dist/main.mjs); trocar has a trust entry only for the ~/.kimi-code install',
     },
   },
 }

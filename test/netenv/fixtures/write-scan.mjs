@@ -1,6 +1,6 @@
 // write-scan.mjs — the tool behind 4.7 N15's static half (test/netenv/no-vpn-writes.test.mjs): find every call that writes to the file system in a module's source, and the NAME of the function it sits in.
 //
-// Why a scanner and not a regex over the file: N15 allows the legitimate writers by the name of one helper each (`writeNetenv` for ~/.asight/netenv.json, and asight's own-directory helpers in
+// Why a scanner and not a regex over the file: N15 allows the legitimate writers by the name of one helper each (`writeNetenv` for ~/.trocar/netenv.json, and trocar's own-directory helpers in
 // arch/win32 that sit in a watched module), so the test has to know WHICH function a write call is in. A bare count of write-call names would be zero only for a module that never writes, and could never allow a helper.
 // What it does: views(src) blanks comments (and, in `code`, strings, template text and regex literals) while keeping every other character at its index; functionExtents(code) finds named functions and
 // their bodies by matching braces on `code`; writesOf(src) joins the two. It is a scanner for this repo's code style, not a JavaScript parser: test/netenv/no-vpn-writes.test.mjs holds it to every file of src/

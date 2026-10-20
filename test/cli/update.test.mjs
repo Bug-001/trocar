@@ -1,4 +1,4 @@
-// test/cli/update.test.mjs — `asight update` (RFC 1.6 §5.5, V93–V97; D67): the checks, the handover and the finish, on REAL git
+// test/cli/update.test.mjs — `trocar update` (RFC 1.6 §5.5, V93–V97; D67): the checks, the handover and the finish, on REAL git
 // repositories in temp directories (a local bare repository is the upstream). What the command spawns is injected (the sandbox runs no
 // real tool of the machine, 0.1 §3): `exec` is spawnSync for git, `child` stands in for the new code's own process, and `off` / `on` /
 // `install` record what they were asked. Nothing here asserts wording, counts or call order — exit codes, HEAD, file bytes and argv.
@@ -17,8 +17,8 @@ import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mj
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
 
-const BIN = fileURLToPath(new URL('../../bin/asight.mjs', import.meta.url))
-const IDENTITY = ['-c', 'user.email=test@asight.invalid', '-c', 'user.name=asight test', '-c', 'commit.gpgsign=false']
+const BIN = fileURLToPath(new URL('../../bin/trocar.mjs', import.meta.url))
+const IDENTITY = ['-c', 'user.email=test@trocar.invalid', '-c', 'user.name=trocar test', '-c', 'commit.gpgsign=false']
 const git = (cwd, ...args) => {
   const r = spawnSync('git', [...IDENTITY, ...args], { cwd, encoding: 'utf8' })
   assert.equal(r.status, 0, `git ${args.join(' ')} in ${cwd}: ${r.stderr || r.stdout}`)
@@ -28,19 +28,19 @@ const head = (repo) => git(repo, 'rev-parse', 'HEAD')
 
 /** A sandbox: a HOME, a bare upstream, a checkout of it with a package.json, and `ahead()` to put one more commit upstream. */
 function sandbox({ on = [] } = {}) {
-  const base = tmpDir('asight-update-')
+  const base = tmpDir('trocar-update-')
   const home = path.join(base, 'home')
   const up = path.join(base, 'upstream.git')
   const root = path.join(base, 'work')
   fs.mkdirSync(home); fs.mkdirSync(root)
   git(base, 'init', '--bare', '-b', 'main', up)
   git(root, 'init', '-b', 'main')
-  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'asight', version: '0.1.0' }) + '\n')
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'trocar', version: '0.1.0' }) + '\n')
   fs.mkdirSync(path.join(root, 'bin'), { recursive: true })
-  fs.writeFileSync(path.join(root, 'bin', 'asight.mjs'), '// the new code\n')
+  fs.writeFileSync(path.join(root, 'bin', 'trocar.mjs'), '// the new code\n')
   git(root, 'add', '-A'); git(root, 'commit', '-m', 'first')
   git(root, 'remote', 'add', 'origin', up); git(root, 'push', '-u', 'origin', 'main')
-  const dir = path.join(home, '.asight', 'collector')
+  const dir = path.join(home, '.trocar', 'collector')
   writeStateAtomic(path.join(dir, 'state.json'), setDesired(emptyState(), on, 'on'), { fs })
   return {
     home, root, up, dir, base,
@@ -146,7 +146,7 @@ test('V95: the harnesses that are on go off into the handover file, HEAD fast-fo
     assert.deepEqual(t.calls.off.map((a) => a.filter((x) => !x.startsWith('--'))), [['codex', 'opencode']])
     assert.equal(t.calls.child.length, 1)
     const [file, script, ...argv] = t.calls.child[0]
-    assert.deepEqual([file, script], [process.execPath, path.join(s.root, 'bin', 'asight.mjs')])
+    assert.deepEqual([file, script], [process.execPath, path.join(s.root, 'bin', 'trocar.mjs')])
     assert.deepEqual(argv, ['update', '--yes', ...(json ? ['--json'] : [])], 'no harness name is in the arguments (D67①)')
     assert.equal((fs.statSync(path.join(s.dir, 'update.json')).mode & 0o777), 0o600)
   }
@@ -283,13 +283,13 @@ test('V96: a collector that refuses the off request is not named by a null pid',
 
 // ── V97 · the version, and the code the collector reports ────────────────────────────────────────────────────────────────────────────
 test('V97: --version is the package version with HEAD\'s first 7 in a git checkout, and the version alone outside one', () => {
-  const home = tmpDir('asight-version-')
-  const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', ASIGHT_TEST_SANDBOX: '1' }
+  const home = tmpDir('trocar-version-')
+  const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', TROCAR_TEST_SANDBOX: '1' }
   const repo = fileURLToPath(new URL('../..', import.meta.url))
   const version = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8')).version
   const sha = head(repo) // real git, asked of this checkout — not what src/version.mjs read
   const r = spawnSync(process.execPath, [BIN, '--version'], { env, encoding: 'utf8' })
-  assert.deepEqual([r.status, r.stdout.trim(), r.stderr], [0, `asight ${version}+${sha.slice(0, 7)}`, ''])
+  assert.deepEqual([r.status, r.stdout.trim(), r.stderr], [0, `trocar ${version}+${sha.slice(0, 7)}`, ''])
 
   const s = sandbox()
   assert.equal(codeId(s.root), `0.1.0+${head(s.root).slice(0, 7)}`)
@@ -303,7 +303,7 @@ test('V97: the version in the plan is the one the UPSTREAM\'s package.json carri
   const s = sandbox()
   const other = path.join(s.base, 'bump')
   git(s.base, 'clone', s.up, other)
-  fs.writeFileSync(path.join(other, 'package.json'), JSON.stringify({ name: 'asight', version: '9.9.9' }) + '\n')
+  fs.writeFileSync(path.join(other, 'package.json'), JSON.stringify({ name: 'trocar', version: '9.9.9' }) + '\n')
   git(other, 'add', '-A'); git(other, 'commit', '-m', 'bump the version'); git(other, 'push')
   const target = git(other, 'rev-parse', 'HEAD')
   const t = ctx(s)

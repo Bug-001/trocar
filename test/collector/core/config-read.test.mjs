@@ -14,8 +14,8 @@ test('config-read: hostOf takes URLs, bare hosts, IPv6 literals; junk is null', 
 })
 
 test('config-read: readText returns null for a missing file instead of throwing', () => {
-  assert.equal(readText(path.join(os.tmpdir(), 'asight-nope-' + process.pid)), null)
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cr-')); fs.writeFileSync(path.join(d, 'a'), 'x')
+  assert.equal(readText(path.join(os.tmpdir(), 'trocar-nope-' + process.pid)), null)
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-cr-')); fs.writeFileSync(path.join(d, 'a'), 'x')
   try { assert.equal(readText(path.join(d, 'a')), 'x'); assert.equal(expandHome('~/a', d), path.join(d, 'a')) } finally { fs.rmSync(d, { recursive: true }) }
 })
 
@@ -79,7 +79,7 @@ test('config-read: TOML inline tables are read; arrays and multi-line strings ov
 })
 
 test('config-read: readTextOrError keeps "cannot be read" apart from "not there" (D-9)', () => {
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-cr-'))
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-cr-'))
   try {
     assert.deepEqual(readTextOrError(path.join(d, 'nope')), { text: null, error: null })
     assert.deepEqual(readTextOrError(path.join(d, 'nope', 'deeper')), { text: null, error: null }, 'ENOTDIR is absent too')
@@ -103,7 +103,7 @@ test('config-read: JSONC strips comments and trailing commas but not inside stri
 
 test('config-read: the Node release of an executable is read from its embedded download URL, also across a chunk edge; never by running it', async () => {
   const { nodeReleaseVersion, versionAtLeast } = await import('../../../src/collector/core/config-read.mjs')
-  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'asight-nv-'))
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-nv-'))
   try {
     const url = Buffer.from('https://nodejs.org/download/release/v22.18.0/node-v22.18.0.tar.gz')
     const bin = path.join(d, 'node'); fs.writeFileSync(bin, Buffer.concat([Buffer.alloc(100, 1), url, Buffer.alloc(50)]))

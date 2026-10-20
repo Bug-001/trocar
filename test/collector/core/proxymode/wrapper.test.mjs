@@ -28,12 +28,12 @@ function stubProgram(file) {
 
 test('CM11 render: the dash template has exactly the closed slots, and every value lands as one shell word', () => {
   const text = fs.readFileSync(new URL('../../../../src/collector/arch/darwin/wrapper.dash.tmpl', import.meta.url), 'utf8')
-  assert.deepEqual([...new Set([...text.matchAll(/__ASIGHT_([A-Z_]+?)__/g)].map((m) => m[1]))].sort(), ['CA_FILE', 'CERT_VAR', 'PROXY_ENV', 'PROXY_NAMES', 'REAL', 'SWITCH'])
+  assert.deepEqual([...new Set([...text.matchAll(/__TROCAR_([A-Z_]+?)__/g)].map((m) => m[1]))].sort(), ['CA_FILE', 'CERT_VAR', 'PROXY_ENV', 'PROXY_NAMES', 'REAL', 'SWITCH'])
   assert.throws(() => renderTemplate(text, { REAL: '/x' }, shellEncode), /has no value/)
-  assert.throws(() => renderTemplate('__ASIGHT_NOPE__', {}), /not a placeholder/)
+  assert.throws(() => renderTemplate('__TROCAR_NOPE__', {}), /not a placeholder/)
   assert.throws(() => renderTemplate('x', { CERT_VAR: 'A;rm -rf ~' }), /environment variable name/)
   assert.throws(() => renderTemplate('x', { PROXY_NAMES: ['ok', '$(x)'] }), /environment variable name/)
-  assert.equal(renderTemplate('a=__ASIGHT_DOOR__', { DOOR: 'q"\'$x' }), 'a="q\\"\'$x"', 'JSON-encoded by default')
+  assert.equal(renderTemplate('a=__TROCAR_DOOR__', { DOOR: 'q"\'$x' }), 'a="q\\"\'$x"', 'JSON-encoded by default')
 })
 
 test('CM11 runtime: argv, stdin, stdout, exit code identical; only the allowed variables differ', { skip: !fs.existsSync(DASH) && 'no /bin/dash on this machine' }, () => {
@@ -43,7 +43,7 @@ test('CM11 runtime: argv, stdin, stdout, exit code identical; only the allowed v
   const wrapper = path.join(bin, 'tool')
   fs.writeFileSync(wrapper, renderWrapper({ REAL: real, SWITCH: sw, CA_FILE: ca, CERT_VAR, PROXY_ENV, PROXY_NAMES }), { mode: 0o755 })
   const ARGVS = [[], ['a b', '', '"q"', "it's", '*', '$HOME', '`id`', '中文 ü', '-n', '--', '\\', 'x\ny'], ['acp']]
-  const PROXIES = [{}, { all_proxy: 'socks5://u:1' }, { https_proxy: '', HTTPS_PROXY: 'http://up:3128', all_proxy: 'http://all:1' }, { https_proxy: DOOR, ASIGHT_PRIOR_PROXY: 'http://outer:9' }]
+  const PROXIES = [{}, { all_proxy: 'socks5://u:1' }, { https_proxy: '', HTTPS_PROXY: 'http://up:3128', all_proxy: 'http://all:1' }, { https_proxy: DOOR, TROCAR_PRIOR_PROXY: 'http://outer:9' }]
   let n = 0
   for (const on of [false, true]) for (const certSet of [false, true]) for (const prox of PROXIES) for (const argv of ARGVS) {
     if (on) { fs.mkdirSync(path.dirname(sw), { recursive: true }); fs.writeFileSync(sw, DOOR) } else fs.rmSync(sw, { force: true })
@@ -62,7 +62,7 @@ test('CM11 runtime: argv, stdin, stdout, exit code identical; only the allowed v
     if (on) {
       const first = PROXY_ENV.map((k) => env[k]).find((v) => v && v !== DOOR)
       const sawDoor = PROXY_ENV.some((k) => env[k] === DOOR)
-      expect.ASIGHT_PRIOR_PROXY = first ?? (sawDoor && env.ASIGHT_PRIOR_PROXY ? env.ASIGHT_PRIOR_PROXY : 'none')
+      expect.TROCAR_PRIOR_PROXY = first ?? (sawDoor && env.TROCAR_PRIOR_PROXY ? env.TROCAR_PRIOR_PROXY : 'none')
       for (const k of PROXY_NAMES) expect[k] = DOOR
     }
     assert.deepEqual(b.env, expect, `${label}: environment`)
@@ -79,7 +79,7 @@ function setup({ content = MACHO, binRel = '.tool/bin', link = false, owns = () 
   const home = tmpDir(), dir = path.join(home, binRel), file = path.join(dir, `tool${exeSuffix}`)
   fs.mkdirSync(dir, { recursive: true })
   if (link) { fs.writeFileSync(path.join(dir, 'target'), MACHO); fs.symlinkSync(path.join(dir, 'target'), file) } else if (content != null) fs.writeFileSync(file, content, { mode: 0o755 })
-  const ctx = { os: 'darwin', home, env: {}, fs, owns, facts: { exeSuffix }, dir: path.join(home, '.asight'), manifest: newManifest(), harness: 'tool', switchFile: path.join(home, '.asight', 'switch', 'tool'), caFile: path.join(home, '.asight', 'root.pem'), proxyEnv: PROXY_ENV, proxyNames: PROXY_NAMES, now: () => new Date('2026-10-16T00:00:00Z') }
+  const ctx = { os: 'darwin', home, env: {}, fs, owns, facts: { exeSuffix }, dir: path.join(home, '.trocar'), manifest: newManifest(), harness: 'tool', switchFile: path.join(home, '.trocar', 'switch', 'tool'), caFile: path.join(home, '.trocar', 'root.pem'), proxyEnv: PROXY_ENV, proxyNames: PROXY_NAMES, now: () => new Date('2026-10-16T00:00:00Z') }
   return { ctx, file, dir, home, cert: { ...cert, binDir: { base: 'home', path: binRel } } }
 }
 
@@ -112,7 +112,7 @@ test('CM11 preconditions: only one native program in a folder this user owns, ou
   for (const layout of [undefined, 'npm', 'app-bundle']) assert.match(checkWrapperTarget(nl.ctx, { ...nl.cert, layout }).why, /layout/, `layout ${layout}`)
 })
 
-test('CM11 place: the program moves to .asight-real by rename, the wrapper is recorded with both hashes; again = intact; Smart App Control = skipped', () => {
+test('CM11 place: the program moves to .trocar-real by rename, the wrapper is recorded with both hashes; again = intact; Smart App Control = skipped', () => {
   const s = setup()
   const realIno = fs.statSync(s.file).ino
   const r = placeWrapper(s.ctx, s.cert, { renderWrapper })
@@ -137,11 +137,11 @@ test('CM11 place: the program moves to .asight-real by rename, the wrapper is re
   assert.ok(fs.readFileSync(failing.file).equals(MACHO), 'a render failure moves nothing')
 })
 
-test('CM11 place over an existing .asight-real: with no record of it nothing moves and the real bytes stay; with its record the stale copy is replaced', () => {
+test('CM11 place over an existing .trocar-real: with no record of it nothing moves and the real bytes stay; with its record the stale copy is replaced', () => {
   for (const [kind, content, exeSuffix] of [['Mach-O', MACHO, ''], ['PE', PE, '.exe']]) {
     for (const recorded of [false, true]) {
       for (const realPresent of [false, true]) {
-        const label = `${kind} record=${recorded} .asight-real=${realPresent}`
+        const label = `${kind} record=${recorded} .trocar-real=${realPresent}`
         const s = setup({ content, exeSuffix })
         const real = path.join(s.dir, REAL_DIR, `tool${exeSuffix}`)
         const REAL = Buffer.concat([content, Buffer.from('real-program')])
@@ -149,7 +149,7 @@ test('CM11 place over an existing .asight-real: with no record of it nothing mov
         if (recorded) {
           fs.writeFileSync(s.file, REAL)
           placeWrapper(s.ctx, s.cert, { renderWrapper })
-          fs.writeFileSync(s.file, WRAP) // the installer replaced asight's wrapper
+          fs.writeFileSync(s.file, WRAP) // the installer replaced trocar's wrapper
           if (!realPresent) fs.rmSync(path.join(s.dir, REAL_DIR), { recursive: true })
         } else {
           fs.writeFileSync(s.file, WRAP)
@@ -163,7 +163,7 @@ test('CM11 place over an existing .asight-real: with no record of it nothing mov
           assert.ok(fs.readFileSync(s.file).equals(WRAP), `${label}: nothing moves`)
         } else {
           assert.equal(r.result, 'placed', label)
-          assert.ok(fs.readFileSync(real).equals(WRAP), `${label}: the program found at the target is what .asight-real holds`)
+          assert.ok(fs.readFileSync(real).equals(WRAP), `${label}: the program found at the target is what .trocar-real holds`)
           assert.equal(r.record.real_sha256, sha256(WRAP), label)
         }
       }
@@ -171,7 +171,7 @@ test('CM11 place over an existing .asight-real: with no record of it nothing mov
   }
 })
 
-test('CM11 undo and status: restore while the wrapper is still asight\'s; after the installer overwrote it, only .asight-real goes', () => {
+test('CM11 undo and status: restore while the wrapper is still trocar\'s; after the installer overwrote it, only .trocar-real goes', () => {
   const kept = setup()
   const a = placeWrapper(kept.ctx, kept.cert, { renderWrapper }).record
   assert.equal(undoWrapper(kept.ctx, a).result, 'restored')
@@ -182,7 +182,7 @@ test('CM11 undo and status: restore while the wrapper is still asight\'s; after 
   const b = placeWrapper(over.ctx, over.cert, { renderWrapper }).record
   const NEW = Buffer.concat([MACHO, Buffer.from('v2')])
   fs.writeFileSync(over.file, NEW) // the official installer, run again
-  assert.deepEqual([checkWrapper(over.ctx, b).reason, checkWrapper(over.ctx, b).command], ['entry-changed', 'asight install'])
+  assert.deepEqual([checkWrapper(over.ctx, b).reason, checkWrapper(over.ctx, b).command], ['entry-changed', 'trocar install'])
   assert.equal(undoWrapper(over.ctx, b).result, 'removed')
   assert.ok(fs.readFileSync(over.file).equals(NEW), 'the update stays')
   assert.equal(fs.existsSync(path.join(over.dir, REAL_DIR)), false)
@@ -196,10 +196,10 @@ test('CM11 undo and status: restore while the wrapper is still asight\'s; after 
 
 test('CM11 win wrapper.cs: rendered with C# literals, the same semantics stated in code, compiled by the inbox csc.exe (real compile + run: acceptance L4, N/A on a Mac)', async () => {
   const { renderWrapper: renderCs, makeCompile } = await import('../../../../src/collector/arch/win32/wrapper.mjs')
-  const v = { REAL: 'C:\\Users\\u\\.tool\\bin\\.asight-real\\tool.exe', SWITCH: 'C:\\Users\\u\\.asight\\switch\\tool', CA_FILE: 'C:\\Users\\u\\é "ca".pem\u2028', CERT_VAR, PROXY_ENV, PROXY_NAMES }
+  const v = { REAL: 'C:\\Users\\u\\.tool\\bin\\.trocar-real\\tool.exe', SWITCH: 'C:\\Users\\u\\.trocar\\switch\\tool', CA_FILE: 'C:\\Users\\u\\é "ca".pem\u2028', CERT_VAR, PROXY_ENV, PROXY_NAMES }
   const src = renderCs(v)
-  assert.doesNotMatch(src, /__ASIGHT_/, 'every slot filled')
-  assert.ok(src.includes('const string Real = "C:\\\\Users\\\\u\\\\.tool\\\\bin\\\\.asight-real\\\\tool.exe"'), 'a path is one escaped C# literal')
+  assert.doesNotMatch(src, /__TROCAR_/, 'every slot filled')
+  assert.ok(src.includes('const string Real = "C:\\\\Users\\\\u\\\\.tool\\\\bin\\\\.trocar-real\\\\tool.exe"'), 'a path is one escaped C# literal')
   assert.ok(src.includes('"C:\\\\Users\\\\u\\\\é \\"ca\\".pem\\u2028"'), 'quotes and line separators escaped')
   assert.ok(src.includes(`ProxyEnv = new string[] { ${PROXY_ENV.map((x) => JSON.stringify(x)).join(', ')} }`))
   for (const [what, re] of [

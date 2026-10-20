@@ -12,7 +12,7 @@ const FAKE = path.join(here, 'fixtures', 'fake-loader.mjs')
 // tests cover spawn + readline + id-correlation + the lookup wait, with no root and no eBPF.
 function makeClient(opts = {}) {
   return createRedirectorClient({ binary: process.execPath, args: [FAKE], autoHeartbeatMs: 0, lookupWaitMs: 200,
-    env: { ...process.env, ASIGHT_FAKE_LOADER: '1' }, ...opts })
+    env: { ...process.env, TROCAR_FAKE_LOADER: '1' }, ...opts })
 }
 
 test('start resolves on ready; status round-trips the kernel-derived object', async () => {

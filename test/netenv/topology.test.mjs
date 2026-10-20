@@ -1,4 +1,4 @@
-// test/netenv/topology.test.mjs — RFC 1.6 §9.2–§9.4: the path each harness's traffic takes, drawn from facts (V41 the table of §9.3 · V42 each hop concrete, an unreadable one said; V45, the way out of asight
+// test/netenv/topology.test.mjs — RFC 1.6 §9.2–§9.4: the path each harness's traffic takes, drawn from facts (V41 the table of §9.3 · V42 each hop concrete, an unreadable one said; V45, the way out of trocar
 // leaves the route as it was, is in topology-text.test.mjs with the words). Every row of test/netenv/fixtures/rows.mjs is one NetFacts and the topology it must give, written out literally; the facts are injected, nothing here reads the machine.
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -63,20 +63,20 @@ test('V42: a listener list that could not be read gives the proxy its reason, an
   assert.deepEqual([p.down, p.unknown], [true, undefined])
 })
 
-test('running processes: one that still goes by the setting it started with, or that asight is not on the path of, is listed apart with the chain it really takes; the branch is drawn for the steered current one', () => {
+test('running processes: one that still goes by the setting it started with, or that trocar is not on the path of, is listed apart with the chain it really takes; the branch is drawn for the steered current one', () => {
   const f = facts('claude-code', { listeners: [MIHOMO], vpn: mihomoVpn() }, {
     setting: proxyOf('http://127.0.0.1:7890'),
     procs: [proc(4121), proc(3990, { startedAt: '2026-10-07T08:00:00.000Z', watched: 'no-decrypt', trusted: false, reason: 'config-after-start', startSetting: { value: 'http://proxy.corp:8080', scheme: 'http', host: 'proxy.corp', port: 8080, source: [{ kind: 'env', where: 'HTTPS_PROXY' }] } })],
   })
   const t = buildTopology(f)['claude-code']
-  assert.deepEqual(t.branches[0].path.map((id) => kindOf(t, id)), ['agent', 'asight-engine', 'proxy', 'egress'])
+  assert.deepEqual(t.branches[0].path.map((id) => kindOf(t, id)), ['agent', 'trocar-engine', 'proxy', 'egress'])
   assert.equal(t.nodes.find((n) => n.id === t.branches[0].path[0]).pid, 4121)
   assert.equal(t.running.length, 1)
   assert.deepEqual([t.running[0].pid, t.running[0].note, t.running[0].reason], [3990, 'start-time-settings', 'config-after-start'])
-  assert.deepEqual(t.running[0].path.map((id) => kindOf(t, id)), ['agent', 'proxy', 'egress'], 'it never went through asight: its chain has none')
+  assert.deepEqual(t.running[0].path.map((id) => kindOf(t, id)), ['agent', 'proxy', 'egress'], 'it never went through trocar: its chain has none')
   assert.equal(t.nodes.find((n) => n.id === t.running[0].path[1]).name, 'proxy.corp:8080', 'and goes to the proxy it started with')
   assert.deepEqual(validateTopology({ 'claude-code': t }), [])
-  // only stale processes: nothing to draw the branch for, so it is a new process's: no pid, asight on the path
+  // only stale processes: nothing to draw the branch for, so it is a new process's: no pid, trocar on the path
   const stale = buildTopology(facts('claude-code', {}, { procs: [proc(3990, { startSetting: { value: null, scheme: null, host: null, port: null, source: [] } })] }))['claude-code']
   assert.equal(stale.nodes.find((n) => n.kind === 'agent' && n.pid === undefined).name, 'claude-code')
   assert.equal(stale.on_path, true)
@@ -106,15 +106,15 @@ test('rows with a note: what the chain cannot say by itself (the agents still on
   for (const r of ROWS.filter((x) => !x.notes)) assert.deepEqual(buildTopology(r.facts)[r.h].notes, [], `row ${r.n} has nothing to add`)
 })
 
-test('proxy mode: one branch per form, a form with HTTP and WebSocket apart gets two that share the path with asight and differ in the way out (Codex, the OS proxy on)', () => {
+test('proxy mode: one branch per form, a form with HTTP and WebSocket apart gets two that share the path with trocar and differ in the way out (Codex, the OS proxy on)', () => {
   const row = ROWS.find((r) => r.n === 9), t = buildTopology(row.facts).codex
   assert.deepEqual(t.branches.map((b) => [b.name, b.form]), [['http', 'codex.cli'], ['ws', 'codex.cli']])
   assert.deepEqual(t.branches[0].path, t.branches[1].path)
   assert.notDeepEqual(t.branches[0].off_path, t.branches[1].off_path)
-  assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'proxy', 'egress'], 'HTTP goes through the OS proxy without asight')
+  assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'proxy', 'egress'], 'HTTP goes through the OS proxy without trocar')
   assert.deepEqual(t.branches[1].off_path.map((id) => kindOf(t, id)), ['agent', 'upstream'], 'the WebSocket goes direct')
   const entry = t.edges.find((e) => e.entry)
-  assert.deepEqual([entry.via, entry.asight, entry.entry], ['proxy-http', true, { where: '.env HTTPS_PROXY', opt_in: false }], 'the entry edge says who wrote it')
+  assert.deepEqual([entry.via, entry.trocar, entry.entry], ['proxy-http', true, { where: '.env HTTPS_PROXY', opt_in: false }], 'the entry edge says who wrote it')
   const off = buildTopology(ROWS.find((r) => r.n === 14).facts).codex.edges.find((e) => e.entry)
   assert.equal(off.entry.opt_in, false)
 })
@@ -134,7 +134,7 @@ test('the old capture\'s chain is distinct nodes (the VPN twice, as two nodes), 
 test('a scheme the agent cannot speak and does not fail on (dsh, SOCKS) is a direct path, with the path the agent would have taken said as inferred unless the behaviour was measured on this OS', () => {
   const socks = { setting: proxyOf('socks5://127.0.0.1:1080', [{ kind: 'env', where: 'ALL_PROXY' }]) }
   const t = buildTopology(facts('deepseek-dsh', {}, socks))['deepseek-dsh']
-  assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'upstream'], 'without asight it goes straight out: the proxy is not on its path')
+  assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'upstream'], 'without trocar it goes straight out: the proxy is not on its path')
   assert.ok(!t.nodes.some((n) => n.kind === 'proxy'), 'and no proxy hop is drawn for a value it ignores')
   const into = t.edges.find((e) => e.to === t.branches[0].off_path[1])
   assert.deepEqual([into.via, into.inferred, into.evidence], ['direct', true, ['unsupported-scheme:socks5']])
@@ -147,7 +147,7 @@ test('a scheme the agent cannot speak and does not fail on (dsh, SOCKS) is a dir
   assert.deepEqual(validateTopology({ 'deepseek-dsh': t }), [])
 })
 
-test('proxy mode verdicts the platform\'s facts can ask for: a form it refused to wire (route-loop), an upstream the engine cannot dial (upstream-unreachable, asight is on the path and the connection fails)', () => {
+test('proxy mode verdicts the platform\'s facts can ask for: a form it refused to wire (route-loop), an upstream the engine cannot dial (upstream-unreachable, trocar is on the path and the connection fails)', () => {
   const pf = (fm, fw) => buildTopology(pfacts('codex', fm, fw)).codex
   const loop = pf(form('codex.cli', { routeLoop: true, entry: null, procs: [proc(5530, { name: 'codex app-server' })] }), fwForm(17992))
   assert.deepEqual([loop.on_path, loop.captured, loop.reason], [false, false, 'route-loop'])
@@ -157,13 +157,13 @@ test('proxy mode verdicts the platform\'s facts can ask for: a form it refused t
 
 // ── what the Linux reads gave and the topology dropped (4.6 「eBPF 模式下的网络拓扑」) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('D49: a TUN device or a VPN product in the facts changes nothing of the topology: a direct agent stops at the API host, with or without asight, whatever F.tun and F.vpn say', () => {
+test('D49: a TUN device or a VPN product in the facts changes nothing of the topology: a direct agent stops at the API host, with or without trocar, whatever F.tun and F.vpn say', () => {
   const plain = renderCompact(buildTopology(facts('claude-code'))['claude-code'])[0]
-  assert.equal(plain, 'claude (pid 4121) -> [ebpf] asight :47123 -> api.anthropic.com:443 (direct)')
+  assert.equal(plain, 'claude (pid 4121) -> [ebpf] trocar :47123 -> api.anthropic.com:443 (direct)')
   for (const f of [facts('claude-code', { tun: true }), facts('claude-code', { tun: true, vpn: mihomoVpn({ tun: true }) }), facts('claude-code', { vpn: mihomoVpn({ tun: true }) })]) {
     const t = buildTopology(f)['claude-code']
     assert.equal(renderCompact(t)[0], plain)
-    assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'upstream'], 'and the way without asight goes the same way')
+    assert.deepEqual(t.branches[0].off_path.map((id) => kindOf(t, id)), ['agent', 'upstream'], 'and the way without trocar goes the same way')
     assert.deepEqual(t.notes, [])
     assert.equal(t.vpn, undefined, 'the topology carries no vpn key')
     assert.deepEqual(validateTopology({ 'claude-code': t }), [])
@@ -196,7 +196,7 @@ test('an https:// proxy is drawn as one: the engine ends the outer TLS of the ag
   assert.match(line('socks5://127.0.0.1:8443'), /-> \[SOCKS passed on as it is\] mihomo :8443/)
 })
 
-test('on_path is false — not true, not unknown — when asight cannot be on the path: wanted off with no process to read the watch table of, and wanted on with the kernel holding no link of this instance', () => {
+test('on_path is false — not true, not unknown — when trocar cannot be on the path: wanted off with no process to read the watch table of, and wanted on with the kernel holding no link of this instance', () => {
   const off = buildTopology(facts('claude-code', { desired: { 'claude-code': 'off' } }, { procs: [] }))['claude-code']
   assert.deepEqual([off.on_path, off.captured, off.reason], [false, false, 'desired-off'])
   assert.deepEqual(off.branches[0].path.map((id) => kindOf(off, id)), ['agent', 'upstream'], 'no engine on the path')

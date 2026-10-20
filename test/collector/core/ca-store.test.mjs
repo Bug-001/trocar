@@ -8,7 +8,7 @@ import { X509Certificate } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { loadOrCreateCa, readCa, caPaths, COLLECTOR_CA_CN } from '../../../src/collector/core/tls/ca-store.mjs'
 
-const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'asight-ca-home-'))
+const home = () => fs.mkdtempSync(path.join(os.tmpdir(), 'trocar-ca-home-'))
 const mode = (p) => fs.statSync(p).mode & 0o777
 
 // Record every path the store touches, so "never reads or writes the legacy CA dirs" is asserted.
@@ -20,10 +20,10 @@ function spyFs() {
   return { spy, touched }
 }
 
-test('ca-store: mints a v3 CA under ~/.asight/collector/ca with a 0600 key and 0700 dir', () => {
+test('ca-store: mints a v3 CA under ~/.trocar/collector/ca with a 0600 key and 0700 dir', () => {
   const h = home()
   try {
-    const dir = path.join(h, '.asight', 'collector', 'ca')
+    const dir = path.join(h, '.trocar', 'collector', 'ca')
     const ca = loadOrCreateCa({ dir })
     const p = caPaths(dir)
     assert.equal(ca.created, true)
@@ -40,7 +40,7 @@ test('ca-store: mints a v3 CA under ~/.asight/collector/ca with a 0600 key and 0
 test('ca-store: loading again returns the same CA (never rotated)', () => {
   const h = home()
   try {
-    const dir = path.join(h, '.asight', 'collector', 'ca')
+    const dir = path.join(h, '.trocar', 'collector', 'ca')
     const a = loadOrCreateCa({ dir }); const b = loadOrCreateCa({ dir })
     assert.equal(b.created, false); assert.equal(b.certPem, a.certPem); assert.equal(b.keyPem, a.keyPem)
   } finally { fs.rmSync(h, { recursive: true, force: true }) }
@@ -49,23 +49,23 @@ test('ca-store: loading again returns the same CA (never rotated)', () => {
 test('ca-store: never touches the legacy CA directories', () => {
   const h = home()
   try {
-    for (const legacy of [path.join(h, '.asight', 'ca'), path.join(h, '.atrace', 'ca')]) {
+    for (const legacy of [path.join(h, '.trocar', 'ca'), path.join(h, '.atrace', 'ca')]) {
       fs.mkdirSync(legacy, { recursive: true }); fs.writeFileSync(path.join(legacy, 'ca.crt'), 'LEGACY')
     }
     const { spy, touched } = spyFs()
-    loadOrCreateCa({ dir: path.join(h, '.asight', 'collector', 'ca'), fs: spy })
-    loadOrCreateCa({ dir: path.join(h, '.asight', 'collector', 'ca'), fs: spy })
+    loadOrCreateCa({ dir: path.join(h, '.trocar', 'collector', 'ca'), fs: spy })
+    loadOrCreateCa({ dir: path.join(h, '.trocar', 'collector', 'ca'), fs: spy })
     assert.ok(touched.length > 0)
-    for (const p of touched) assert.ok(p.startsWith(path.join(h, '.asight', 'collector', 'ca')), `touched ${p}`)
-    assert.equal(fs.readFileSync(path.join(h, '.asight', 'ca', 'ca.crt'), 'utf8'), 'LEGACY')
-    assert.throws(() => loadOrCreateCa({ dir: path.join(h, '.asight', 'ca') }), /legacy/)
+    for (const p of touched) assert.ok(p.startsWith(path.join(h, '.trocar', 'collector', 'ca')), `touched ${p}`)
+    assert.equal(fs.readFileSync(path.join(h, '.trocar', 'ca', 'ca.crt'), 'utf8'), 'LEGACY')
+    assert.throws(() => loadOrCreateCa({ dir: path.join(h, '.trocar', 'ca') }), /legacy/)
   } finally { fs.rmSync(h, { recursive: true, force: true }) }
 })
 
 test('ca-store: key without certificate (crash mid-mint) re-mints; certificate without key refuses', () => {
   const h = home()
   try {
-    const dir = path.join(h, '.asight', 'collector', 'ca')
+    const dir = path.join(h, '.trocar', 'collector', 'ca')
     const first = loadOrCreateCa({ dir }); const p = caPaths(dir)
     fs.rmSync(p.pem)
     const again = loadOrCreateCa({ dir })
@@ -83,7 +83,7 @@ test('ca-store: the module never spawns anything (no trust-store commands)', () 
 test('ca-store: readCa returns the installed pair and never mints one', () => {
   const h = home()
   try {
-    const dir = path.join(h, '.asight', 'collector', 'ca')
+    const dir = path.join(h, '.trocar', 'collector', 'ca')
     assert.deepEqual((({ which, code }) => ({ which, code }))(readCa({ dir })), { which: 'key', code: 'ENOENT' }, 'nothing installed: which file and why, never null (D-4)')
     assert.ok(!fs.existsSync(dir), 'reading created nothing')
     const ca = loadOrCreateCa({ dir })

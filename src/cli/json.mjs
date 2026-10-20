@@ -2,7 +2,7 @@
 // went wrong as much as when it went right, and stderr holds nothing. Every document carries `schema`, `command` and `ok`; an error carries
 // `error: {code, message}` as well, and an internal error the stack in `error.detail` (the one place a stack may appear).
 //   printJson(io, doc)   prints that one document: indented two spaces for a person at a terminal, one line into a pipe (§1.2).
-//   errorDoc(command, code, message, detail?)   the error document; `code` is `usage` (nothing ran) or `internal` (asight itself broke),
+//   errorDoc(command, code, message, detail?)   the error document; `code` is `usage` (nothing ran) or `internal` (trocar itself broke),
 //                                               or the command's own code for what it could not do.
 import { SCHEMA_VERSION } from '../off/schema.mjs'
 
