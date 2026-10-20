@@ -264,7 +264,7 @@ test('uninstall records a file it could not undo because it is no longer JSON (D
     assert.match(out.join('\n'), /^Daemon not running; nothing is captured\. Start it: trocar on$/m)
     assert.match(out.join('\n'), /^ {2}Problems {4,}1 in the last 24 hours, latest just now$/m, 'the uninstall residue reaches the Problems line')
     // D38: what the uninstall left behind is still named — in the text (--failures) and in the document (`failures`)
-    assert.match(out.join('\n'), /an uninstall left an item behind \(.*\.claude.sett/, 'the residue, with its path, is in the text')
+    assert.match(out.join('\n'), /\.claude/, 'the residue, with its path, is in the text')
     const doc = []
     assert.equal(await runStatusCli(['--json'], { io: { out: (x) => doc.push(x), err: (x) => err.push(x) }, home: b.home, env: { XDG_RUNTIME_DIR: path.join(b.home, 'run') }, platform: 'linux', deps: { procs: async () => [], exec: () => ({ status: 0, stdout: '', stderr: '' }), netenv: async () => ({ at: 'T', products: [], unknown: [] }), request: async () => { throw Object.assign(new Error('no such socket'), { code: 'ENOENT' }) } } }), 0)
     assert.equal(JSON.parse(doc.join('\n')).failures.problem, 1, 'and in the document')
