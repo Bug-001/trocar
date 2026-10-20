@@ -69,7 +69,7 @@ From a Release: not published yet.
 asight update            # the newest code, and the machine as it was
 ```
 
-From 0.1.0 on, one command takes this checkout to the newest code and leaves the machine the way it
+From the first release on, one command takes this checkout to the newest code and leaves the machine the way it
 was: it refuses to touch a checkout with changes of your own, fast-forwards (never merges), runs
 `npm install` when what asight needs changed, replaces the collector, runs `install`, and switches
 capture on again for the agents that had it on. It prints the plan — which commit to which commit,
@@ -78,7 +78,7 @@ While it runs those agents are not captured (their connections still work), and 
 collector still holds are cut when it is replaced. An update that stops half way leaves a note
 behind: run `asight update` again and it goes on from where it stopped.
 
-Moving from a pre-0.1.0 install to 0.1.0 is a one-time manual step (the old code has no `update`):
+Moving an install made before that release over is a one-time manual step (the old code has no `update`):
 `asight off`, `git pull`, `npm install`, `asight install`, `asight on`.
 
 ## Uninstall
