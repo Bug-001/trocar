@@ -184,7 +184,9 @@
   .cwsecff{font-size:9.5px;color:var(--dim);white-space:nowrap;} .cwsecff.v{color:var(--green);}
   /* ① 调用保真行 · ② 窗口行 (2.3): one quiet line each, the ◐ half-mark leading */
   .cwfline,.cwwin{display:flex;align-items:baseline;gap:7px;margin:0 0 8px;padding:5px 9px;font-size:10.5px;line-height:1.5;border-radius:6px;}
-  .cwfline{color:var(--amber);background:color-mix(in srgb,var(--amber) 6%,transparent);border:1px dashed color-mix(in srgb,var(--amber) 35%,transparent);}
+  .cwfline{color:var(--ink-2);background:color-mix(in srgb,var(--fg) 3%,transparent);border:1px dashed var(--rule-2);}
+  /* the row's tech details read at the row's own size (1.5: a mark, not a section head) */
+  .cwfline .disc{border-bottom:0;} .cwfline .disc-t,.cwfline .disc-t b,.cwfline .disc-t .sum{font-size:inherit;min-height:0;color:var(--ink-2);}
   .cwwin{color:var(--dim);background:color-mix(in srgb,var(--fg) 3%,transparent);border:1px dashed var(--border);}
   .cwhalf{flex:none;} .cwffacts{min-width:0;}
   /* D17② schema-tax summary */
@@ -332,7 +334,7 @@
   .seenmore:hover{color:var(--accent);}
   /* ⑤–⑧ the stand-in states (1.4): 未下发 · 解析不出 · 没有请求 · 载入中 — never a blank window */
   .pagedout{margin:24px auto;max-width:560px;padding:14px 16px;border:1px dashed var(--rule-2);border-radius:6px;background:color-mix(in srgb,var(--fg) 2%,transparent);}
-  .pohd{font-size:12px;color:var(--amber);margin-bottom:6px;}
+  .pohd{font-size:12px;color:var(--ink-2);margin-bottom:6px;}
   .pobody{font-size:11px;color:var(--dim);line-height:1.6;margin-bottom:10px;}
   .poact{margin-top:2px;}
   .pobtn{font:inherit;font-size:11px;padding:4px 10px;border:1px solid var(--dim);border-radius:4px;background:transparent;color:var(--fg);cursor:pointer;}
@@ -346,10 +348,10 @@
 /* ── new in v2 ── */
 #pages{min-width:0;} #leftpage{min-width:0;}
 /* fidelity marks (2.3 proof rule): a PROVEN block shows no badge at all; every unproven value keeps the dashed caveat look (base .ffbadge) */
-.ff-summarized,.ff-truncated,.ff-metadata,.ff-unaddressable,.ff-unknown,.ff-notfetched,.ff-reserialized,.ff-opaque,.ff-omitted{color:var(--amber);}
+.ff-summarized,.ff-truncated,.ff-metadata,.ff-unaddressable,.ff-unknown,.ff-notfetched,.ff-reserialized,.ff-opaque,.ff-omitted{color:var(--ink-2);}
 .remnote{font-size:8.5px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;}
 .cbsrc{font-size:9.5px;color:var(--dimmer);margin:4px 0 0;font-family:var(--mono);}
-.cbsrc.warn{color:var(--amber);}
+.cbsrc.warn{color:var(--ink-2);}
 .cbpre[data-ref]{color:var(--dim);}
 .nbkbody .cbpre,.pinbody .cbpre{font-size:10px;line-height:1.45;color:var(--dim);max-height:260px;margin:5px 0 0;}
 .estnote{color:var(--dimmer);font-size:9px;font-style:italic;margin-left:6px;}
@@ -362,7 +364,8 @@
 .rpreply{margin-top:4px;}
 /* 2.3 §这一步的回复: the window's closing segment — the reply, set apart from the request blocks above it */
 .cwreply{margin-top:12px;padding:8px 10px;border-top:1px dashed var(--border);}
-.rpbody .rawpre{color:var(--ink-2);max-height:280px;}
+.rpbody .rawpre{color:var(--ink-2);}
+#rawpanel .rpbody .rawpre{max-height:280px;overflow:auto;} /* the panel scrolls a long reply; the window's ⑨ is never capped */
 .rptech{font-family:var(--mono);font-size:9px;color:var(--dimmer);margin-top:2px;}
 .rpobs{color:var(--amber);font-size:var(--fs-cap);}
 .rpok{color:var(--green);} .rpwarn{color:var(--amber);}

@@ -114,3 +114,9 @@ test('the reply\'s thinking renders (the server normalizer\'s own output for a r
   const h = draw(base({ norm }))
   assert.match(h, /weighing the options/); assert.match(h, /done/)
 })
+
+test('capture routing rides the raw panel\'s tech details (2.3 §调用保真行 → 2.6 §A)', () => {
+  const h = draw(base({ wire: { transport: 'http', labels: [{ id: 'capture-routing', label: 'route', text: 'ROUTE-TEXT-x' }] } }))
+  const open = techAt(h)
+  assert.ok(open > -1 && h.indexOf('ROUTE-TEXT-x') > open)
+})

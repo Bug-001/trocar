@@ -6,7 +6,7 @@
 // Usage and cost are NOT here — they live behind the step bar's buttons (2.2). `el` is #rawpanel; `s` is the desk's state.
 import { esc, kf } from '../core/fmt.mjs'
 import { techDetailsHtml, mark } from '../core/ui.mjs'
-import { relPath } from './analysis.mjs'
+import { relPath, ROUTING_LABELS } from './analysis.mjs'
 import { fillBody, clipText, clipCut } from './blocks.mjs'
 import * as W from '../labels/replay.mjs'
 import { pageState } from './follow.mjs'
@@ -98,6 +98,7 @@ function techHtml(c) {
   for (const x of c.respRefs || []) if (x && (x.label || x.why)) bits.push([W.RAW_REPLY, `${x.label || ''}${x.why ? ' — ' + x.why : ''}`])
   for (const x of c.extraMessages || []) if (x && x.note) bits.push([x.key, x.note])
   for (const o of (c.wire && c.wire.observerEffect) || []) bits.push(['observer', `${o.id || ''}${o.cause ? ' · ' + o.cause : ''} — ${o.what || ''}`])
+  for (const l of w.labels || []) if (l && ROUTING_LABELS.has(l.id)) bits.push([l.id, String(l.text || l.label || '')]) // how the call reached trocar (2.3 → 2.6 §A)
   if (c.rec && c.rec.id) bits.push(['id', String(c.rec.id)])
   if (!bits.length) return ''
   return techDetailsHtml(bits, { id: 'rptech' })

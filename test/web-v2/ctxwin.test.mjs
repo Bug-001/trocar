@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { boardHome, serveBoard } from './real-face.mjs'
 import { buildLanes, anchorLane } from '../../src/web/v2/replay/lanes.mjs'
 import { stepBarHtml } from '../../src/web/v2/replay/stepbar.mjs'
-import { ctxWindowHtml } from '../../src/web/v2/replay/ctxwin.mjs'
+import { ctxWindowHtml, landingTarget, callFidelityHtml } from '../../src/web/v2/replay/ctxwin.mjs'
 import { renderRawPanel } from '../../src/web/v2/replay/rawpanel.mjs'
 import { outlineHtml } from '../../src/web/v2/replay/outline.mjs'
 import { bytes } from '../../src/web/v2/core/fmt.mjs'
@@ -121,5 +121,36 @@ test('a paged-out step\'s load control: busy while its read is out, missed after
     assert.equal(/\sdisabled(\s|>|=)/.test(tag), busy, tag)
     assert.equal(/aria-busy="true"/.test(tag), busy, tag)
     assert.equal(/data-state="missed"/.test(ctxWindowHtml(s)), missed, tag)
+  }
+})
+
+// 1.4 §打开一步时落在哪: a step 跟随最新 brought in lands on ⑨ (the reply); a reader's own move keeps the change line
+test('landing: a step reached by following lands on the reply; a reader\'s move lands on the change line', () => {
+  const lanes = buildLanes(doc.analyzed, doc.probes)
+  const anchor = anchorLane(lanes)
+  const playhead = anchor.calls.length - 1
+  const call = anchor.calls[playhead]
+  call.cacheBreak = { ...call.cacheBreak, idx: call.flat.findIndex((b) => b.sec === 'messages'), firstCall: false, cause: CAUSE, attribution: 'harmful' }
+  const s = { meta: doc.meta, lanes, anchor, playhead, diffRef: null, curFlat: [], curRemoved: [], navOpen: new Set(), openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), viewPin: null, ctx: {} }
+  assert.ok(replySeg(ctxWindowHtml(s)), 'the reply is drawn on this step')
+  assert.deepEqual(landingTarget({ ...s, followLanding: true }), { reply: true })
+  assert.equal(landingTarget({ ...s, followLanding: false }).anchor, 'cachebrk')
+})
+
+// 2.3 §调用保真行 · 2.2 ◐: capture-routing is how the call got here, not a fidelity fact — never in the row, never lights ◐
+test('capture routing never makes the fidelity row or the step head\'s ◐; the other facts still do', () => {
+  const ROUTE = { id: 'capture-routing', label: 'ROUTE-LABEL-x', text: 'ROUTE-TEXT-x' }
+  const TRUNC = { id: 'resp-truncated', label: 'TRUNC-LABEL-x', text: 't' }
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => !c.paged_out && c.rec && !c.unparsed)
+  for (const routing of [true, false]) {
+    for (const [extra, ctxState, hasFact] of [[[], 'complete', false], [[], 'reconstructed', true], [[TRUNC], 'complete', true]]) {
+      const base = deskAt(i).call
+      const labels = [...(routing ? [ROUTE] : []), ...extra]
+      const { s, call } = deskAt(i, { wire: { ...base.wire, labels, contextState: ctxState, reqEncoding: undefined }, reqIncomplete: null, wsIncomplete: null, respIncomplete: null })
+      const row = callFidelityHtml(call)
+      assert.equal(row !== '', hasFact, `routing=${routing} ${ctxState} ${extra.map((l) => l.id)}`)
+      assert.ok(!row.includes(ROUTE.label) && !row.includes(ROUTE.text), 'the routing label is not in the row')
+      assert.equal(stepBarHtml(s).includes('class="sb-fid"'), row !== '', '◐ iff the row has words')
+    }
   }
 })

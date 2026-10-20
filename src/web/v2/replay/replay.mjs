@@ -99,6 +99,7 @@ export function mount(el, ctx) {
     view: { lo: 0, hi: 0 }, viewSig: null, brushDragging: false,
     pageCur: 0, pageLim: PAGE_LIMIT, pageInfo: null, pageSig: null, pageReaimed: false, pageLoading: null, pageMissed: null,
     selTick: null, viewPin: null, diffRef: null, curFlat: [], drawerFlat: [], curRemoved: [],
+    followLanding: false, // the playhead was last moved by 跟随最新, not by the reader: the window lands on the reply (1.4 §打开一步时落在哪)
     landedFor: -1, turnLanded: new Set(), // the window's landing ran for that step; turns opened for the AUTOMATIC landing only (a reader's own jump writes the D12 fold memory, 2.5)
     openBlocks: new Set(), navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false,
     collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
@@ -159,7 +160,7 @@ export function mount(el, ctx) {
     // a different session: nothing of the last one may survive (the first board left diffRef / navOpen / expanded behind)
     Object.assign(s, { meta: null, A: null, raw: [], probes: { count: 0, series: [] }, lanes: [], anchor: null, anchorTs: [], breaks: [], problems: [], playhead: 0, follow: true, prevN: 0, sawView: 'ctx',
       view: { lo: 0, hi: 0 }, viewSig: null, pageCur: 0, pageLim: PAGE_LIMIT, pageInfo: null, pageSig: null, pageReaimed: false, pageLoading: null, pageMissed: null, selTick: null, viewPin: null, diffRef: null,
-      curFlat: [], drawerFlat: [], curRemoved: [], landedFor: -1,
+      curFlat: [], drawerFlat: [], curRemoved: [], landedFor: -1, followLanding: false,
       navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
       trunc: null, logged: null, sourceE: null, gap: null, totals: null, errNote: null,
@@ -201,6 +202,7 @@ export function mount(el, ctx) {
   function setPlayhead(i, manual) {
     if (!s.anchor || !s.anchor.calls.length) return // a zero-call session: "⇥ latest" is a no-op, not a TypeError
     s.viewPin = null // scrubbing returns the panel to the call raw
+    s.followLanding = false // a reader's move (scrub, jump, URL step) lands by the change line; followOn sets it back
     jumps.clear() // a move by the reader ends any jump still waiting for its page (jumpTo queues its own after this)
     const N = s.anchor.calls.length, np = Math.max(0, Math.min(N - 1, i))
     if (np !== s.playhead) { s.openBlocks.clear(); s.turnLanded.clear(); s.pageMissed = null } // a different call: its blocks start collapsed, no landing turn lingers, no missed load
@@ -265,6 +267,7 @@ export function mount(el, ctx) {
     const N = s.anchor ? s.anchor.calls.length : 0
     let read = false
     if (N) read = setPlayhead(N - 1, true); else s.follow = true
+    s.followLanding = true // turning follow on is asking for the newest answer: land on the reply
     renderHeader()
     if (!read) poll(true)
   }
@@ -387,6 +390,7 @@ export function mount(el, ctx) {
     // the URL named a step: start there (out of range is clamped); else follow the live end, or clamp. Whenever the playhead moved
     // by itself the URL's step is made truthful too (replace, so growth leaves no history entry per call).
     const land = landPlayhead({ N, playhead: s.playhead, follow: s.follow, initialStep: s.initialStep })
+    if (s.playhead !== land.playhead || s.landedFor === -1) s.followLanding = s.initialStep == null && land.follow // follow moved it (or opened on the live end)
     s.playhead = land.playhead; s.follow = land.follow; s.initialStep = null
     if (s.playhead !== prevPh) { s.openBlocks.clear(); s.pageMissed = null } // live-follow moved to a new call
     // brush window: a new session starts on the whole of it when that fits the lane, else on the last steps that fit — or, when the URL

@@ -3,6 +3,7 @@
 // usage shape {read, create, fresh, out}. `create` is null when a vendor reports no cache-write counter; `usage` itself is
 // null when no usage came back at all — neither is ever turned into a zero here.
 import { preview, fmtTime } from '../core/fmt.mjs'
+import * as W from '../labels/replay.mjs'
 import { QUIET_CAUSES as QUIET } from '../core/metrics.mjs' // for hasChangeLine below (the export above re-exports the same set)
 // The cache and cost numbers moved to core/metrics.mjs (the one home of the cache predicate, plan P2.4–P2.5); the old names stay here
 // so the replay modules keep importing them from where they always did.
@@ -108,6 +109,53 @@ export function hasChangeLine(call) {
   const b = call && call.cacheBreak
   return !!(b && !b.firstCall && b.cause && !QUIET.has(b.cause) && !call.paged_out && !call.unparsed
     && call.rec && Array.isArray(call.flat) && b.idx < call.flat.length)
+}
+
+// the flags of one *Incomplete object → its closed-set words, joined; an unknown flag set falls back to 「<请求/消息/回复>没采全」
+const flagWords = (obj, TABLE) => Object.entries(TABLE).filter(([k]) => obj && obj[k]).map(([, v]) => v).join(' · ')
+// ROUTING_LABELS: how the call reached trocar (2.3 §调用保真行): not a fidelity fact — the raw panel's tech details say it (2.6 §A)
+export const ROUTING_LABELS = new Set(['capture-routing'])
+// one call's fidelity facts (2.3 §调用保真行) → {facts: the row's words, tech: [code, text] pairs}; the row and the step head's ◐
+// both read this (◐ iff facts is non-empty)
+export function callFacts(call) {
+  const w = (call && call.wire) || {}
+  const facts = []
+  const tech = []
+  const add = (s) => s && facts.push(s)
+  // contextState: the facts are {partial, reconstructed, server_edited}; 'complete' (the server's "nothing wrong")
+  // and a missing value say nothing. A partial WITH contextMissing names the record and swallows wsIncomplete.partial
+  // (one thing said once); a value outside the set falls back and goes to 技术细节
+  if (w.contextState === 'partial') {
+    if (w.contextMissing) add(`${W.CTX_FACT.partial}(${w.contextMissing})`)
+    else if (!call.reqIncomplete && !(call.wsIncomplete && call.wsIncomplete.partial)) add(`${W.CTX_FACT.partialBare} · ${W.CTX_FACT.unknownWhy}`)
+  } else if (w.contextState === 'reconstructed') add(W.CTX_FACT.reconstructed)
+  else if (w.contextState === 'server_edited') add(W.CTX_FACT.server_edited)
+  else if (w.contextState && w.contextState !== 'complete') { add(W.CTX_FACT.fallback); tech.push(['contextState', w.contextState]) }
+  if (call.reqIncomplete) {
+    const f = flagWords(call.reqIncomplete, W.REQ_FACT)
+    add(`${W.INCOMPLETE_WORD.req}: ${f || 'incomplete'}`)
+    if (call.reqIncomplete.text) tech.push(['reqIncomplete', call.reqIncomplete.text])
+    if (!f) tech.push(['reqIncomplete', 'unknown flag'])
+  }
+  if (call.wsIncomplete) {
+    const skipPartial = w.contextState === 'partial' && w.contextMissing
+    const f = flagWords({ ...call.wsIncomplete, partial: skipPartial ? false : call.wsIncomplete.partial }, W.WS_FACT)
+    if (f) add(`${W.INCOMPLETE_WORD.ws}:${f}`)
+    else if (!skipPartial) add(`${W.INCOMPLETE_WORD.ws}: incomplete`)
+    if (call.wsIncomplete.text) tech.push(['wsIncomplete', call.wsIncomplete.text])
+    if (!f && !skipPartial) tech.push(['wsIncomplete', 'unknown flag'])
+  }
+  if (call.respIncomplete) {
+    const f = flagWords(call.respIncomplete, W.RESP_FACT)
+    add(`${W.INCOMPLETE_WORD.resp}: ${f || 'incomplete'}`)
+    if (call.respIncomplete.text) tech.push(['respIncomplete', call.respIncomplete.text])
+    if (!f) tech.push(['respIncomplete', 'unknown flag'])
+  }
+  // wire.labels: the server's own words, said unless the exact flag above already said the same thing
+  const said = new Set([call.respIncomplete && call.respIncomplete.truncated && 'resp-truncated', call.respIncomplete && call.respIncomplete.undecoded && 'resp-undecoded', call.wsIncomplete && call.wsIncomplete.truncated && 'ws-truncated'].filter(Boolean))
+  for (const l of (w.labels || [])) { if (!said.has(l.id) && !ROUTING_LABELS.has(l.id)) { add(String(l.label || l.id)); if (l.text) tech.push([l.id, l.text]) } }
+  if (w.reqEncoding) add(W.reqEncodingFact(w.reqEncoding))
+  return { facts, tech }
 }
 
 // the break to jump to from the playhead: the next one after it (dir > 0) or the previous one before it (dir < 0); null at the ends

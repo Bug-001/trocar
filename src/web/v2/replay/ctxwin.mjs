@@ -10,7 +10,7 @@
 import { esc, bytes } from '../core/fmt.mjs'
 import { techDetailsHtml } from '../core/ui.mjs'
 import * as W from '../labels/replay.mjs'
-import { messageTurns, blocksOf, keyDiff, cacheRefOf, hasChangeLine } from './analysis.mjs'
+import { messageTurns, blocksOf, keyDiff, cacheRefOf, hasChangeLine, callFacts } from './analysis.mjs'
 import { contentRefOf, contentRefKOf } from './stepbar.mjs'
 import { setFold, saveFold, turnAnchorKey, turnIsOpen } from './fold.mjs'
 import { ctxBlockHtml, fillBody, faithOf, faithNow, ffBadgeHtml, tagWord } from './blocks.mjs'
@@ -19,46 +19,8 @@ import { replyHtml, loadStepHtml } from './rawpanel.mjs' // one reply renderer, 
 export { blockBodyHtml } from './blocks.mjs'
 
 // ── ① the 调用保真行: one call's fidelity facts, said once, visibly (2.3 §调用保真行; 必拒隐瞒) ─────────────────────
-// the flags of one *Incomplete object → its closed-set words, joined; an unknown flag set falls back to 「<请求/消息/回复>没采全」
-const flagWords = (obj, TABLE) => Object.entries(TABLE).filter(([k]) => obj && obj[k]).map(([, v]) => v).join(' · ')
 export function callFidelityHtml(call) {
-  const w = (call && call.wire) || {}
-  const facts = []
-  const tech = []
-  const add = (s) => s && facts.push(s)
-  // contextState: the facts are {partial, reconstructed, server_edited}; 'complete' (the server's "nothing wrong")
-  // and a missing value say nothing. A partial WITH contextMissing names the record and swallows wsIncomplete.partial
-  // (one thing said once); a value outside the set falls back and goes to 技术细节
-  if (w.contextState === 'partial') {
-    if (w.contextMissing) add(`${W.CTX_FACT.partial}(${w.contextMissing})`)
-    else if (!call.reqIncomplete && !(call.wsIncomplete && call.wsIncomplete.partial)) add(`${W.CTX_FACT.partialBare} · ${W.CTX_FACT.unknownWhy}`)
-  } else if (w.contextState === 'reconstructed') add(W.CTX_FACT.reconstructed)
-  else if (w.contextState === 'server_edited') add(W.CTX_FACT.server_edited)
-  else if (w.contextState && w.contextState !== 'complete') { add(W.CTX_FACT.fallback); tech.push(['contextState', w.contextState]) }
-  if (call.reqIncomplete) {
-    const f = flagWords(call.reqIncomplete, W.REQ_FACT)
-    add(`${W.INCOMPLETE_WORD.req}: ${f || 'incomplete'}`)
-    if (call.reqIncomplete.text) tech.push(['reqIncomplete', call.reqIncomplete.text])
-    if (!f) tech.push(['reqIncomplete', 'unknown flag'])
-  }
-  if (call.wsIncomplete) {
-    const skipPartial = w.contextState === 'partial' && w.contextMissing
-    const f = flagWords({ ...call.wsIncomplete, partial: skipPartial ? false : call.wsIncomplete.partial }, W.WS_FACT)
-    if (f) add(`${W.INCOMPLETE_WORD.ws}:${f}`)
-    else if (!skipPartial) add(`${W.INCOMPLETE_WORD.ws}: incomplete`)
-    if (call.wsIncomplete.text) tech.push(['wsIncomplete', call.wsIncomplete.text])
-    if (!f && !skipPartial) tech.push(['wsIncomplete', 'unknown flag'])
-  }
-  if (call.respIncomplete) {
-    const f = flagWords(call.respIncomplete, W.RESP_FACT)
-    add(`${W.INCOMPLETE_WORD.resp}: ${f || 'incomplete'}`)
-    if (call.respIncomplete.text) tech.push(['respIncomplete', call.respIncomplete.text])
-    if (!f) tech.push(['respIncomplete', 'unknown flag'])
-  }
-  // wire.labels: the server's own words, said unless the exact flag above already said the same thing
-  const said = new Set([call.respIncomplete && call.respIncomplete.truncated && 'resp-truncated', call.respIncomplete && call.respIncomplete.undecoded && 'resp-undecoded', call.wsIncomplete && call.wsIncomplete.truncated && 'ws-truncated'].filter(Boolean))
-  for (const l of (w.labels || [])) { if (!said.has(l.id)) { add(String(l.label || l.id)); if (l.text) tech.push([l.id, l.text]) } }
-  if (w.reqEncoding) add(W.reqEncodingFact(w.reqEncoding))
+  const { facts, tech } = callFacts(call)
   if (!facts.length) return ''
   return `<div class="cwfline"><span class="cwhalf" aria-hidden="true">${W.HALF_MARK}</span> <span class="cwffacts">${facts.map((f) => esc(f)).join(' · ')}</span>${tech.length ? techDetailsHtml(tech, { id: 'cwf-tech' }) : ''}</div>`
 }
@@ -179,12 +141,13 @@ function changeRefK(s) {
   return i >= 0 ? i + 1 : null
 }
 
-// ── the landing rule (1.4 §打开一步时落在哪): the 变化线, else the first 「新」 block, else the top ───────────────────
+// ── the landing rule (1.4 §打开一步时落在哪): a step 跟随最新 brought in → the reply ⑨; else the 变化线, else the first 「新」 block, else the top ───────────────────
 // Pure: it names the target only. It never reorders blocks, and the turn it opens for the landing is NOT written to the
 // D12 fold memory (only the reader's own folds are).
 export function landingTarget(s) {
   const call = s.anchor && s.anchor.calls[s.playhead]
   if (!call || !call.rec || call.unparsed || call.paged_out) return null
+  if (s.followLanding) return { reply: true } // 跟随最新 brought this step in: the reader watches the model's newest answer (⑨, drawn with ③)
   const flat = call.flat || []
   const brk = call.cacheBreak
   if (hasChangeLine(call) && brk.idx < flat.length) return { anchor: 'cachebrk', idx: brk.idx }
@@ -218,7 +181,7 @@ function land(el, s) {
   if (!call || !call.rec || call.unparsed || call.paged_out) return
   if (s.landedFor !== s.playhead) {
     const t = landingTarget(s)
-    if (t) {
+    if (t && !t.reply) {
       // a target inside a folded turn: open that turn for this display only — the D12 memory records the reader's own folds
       const flat = call.flat || []
       const fi = t.anchor ? (call.cacheBreak ? call.cacheBreak.idx : -1) : t.bi
@@ -229,7 +192,7 @@ function land(el, s) {
         el.innerHTML = ctxWindowHtml(s) // repaint with the turn open, then land
       }
     }
-    const node = t ? (t.anchor ? el.querySelector('#cachebrk') : el.querySelector(`.cblk[data-bi="${t.bi}"]`)) : null
+    const node = !t ? null : t.reply ? el.querySelector('.cwreply') : t.anchor ? el.querySelector('#cachebrk') : el.querySelector(`.cblk[data-bi="${t.bi}"]`)
     if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'start' })
     s.landedFor = s.playhead
   }
