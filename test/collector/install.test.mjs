@@ -670,6 +670,34 @@ test('ensureDaemonUp: a start call the OS held back is said in the notes with th
   assert.deepEqual([fast.up, fast.notes], [true, []], 'a start that did not block says nothing')
 })
 
+// A Windows test machine, tested 2026-10-20 (`asight update`): right after the daemon was stopped, the first probe on the named pipe came back `write EPIPE` --
+// Windows' answer for a pipe whose server has gone, where a unix socket answers ENOENT. Read as "a daemon holds the socket and does not answer",
+// it halted the run and the collector was never started again. The first probe asks once more, and an answer like that twice is "not up".
+test('ensureDaemonUp: on win32 an EPIPE / ECONNRESET on the FIRST probe is "not up", not a stuck daemon; it is asked once more, and anything else still halts', async () => {
+  const run = async ({ osName, code, upAfter = 1 }) => {
+    let asks = 0, started = false
+    const unit = { path: '\\asight\\collector', registered: () => ({ state: 'present' }), startNow: () => { started = true; return { code: 0 } } }
+    const out = await ensureDaemonUp({
+      osName, dir: 'C:\\nope\\collector', env: {}, unit, socketPath: '\\\\.\\pipe\\asight-test',
+      request: async () => { if (started || ++asks > upAfter) return { doors: {} }; throw Object.assign(new Error(`write ${code}`), { code }) },
+      pause: async () => {}, ms: () => 1_000_000,
+    })
+    return { ...out, startedUnit: started }
+  }
+  for (const code of ['EPIPE', 'ECONNRESET']) {
+    const r = await run({ osName: 'win32', code, upAfter: 99 })
+    assert.deepEqual([r.up, r.halt, r.problems, r.startedUnit], [true, false, [], true], `${code}: no daemon is up, so it is started -- never halted`)
+  }
+  // the re-probe is what it says it is: a pipe that answers on the second try is up, and nothing is started
+  const second = await run({ osName: 'win32', code: 'EPIPE', upAfter: 1 })
+  assert.deepEqual([second.up, second.started, second.startedUnit], [true, false, false], 'it answered on the second ask: already up')
+  // any other error still halts, and the same EPIPE on a unix socket is a stuck daemon as before
+  const other = await run({ osName: 'win32', code: 'EACCES', upAfter: 99 })
+  assert.deepEqual([other.up, other.halt, other.startedUnit], [false, true, false], 'an error that is not a gone pipe is still a daemon that does not answer')
+  const linux = await run({ osName: 'linux', code: 'EPIPE', upAfter: 99 })
+  assert.deepEqual([linux.up, linux.halt], [false, true], 'only win32 reads EPIPE this way')
+})
+
 test('daemonEnv: the install shell\'s NODE_EXTRA_CA_CERTS goes to the unit when it is an absolute path outside asight\'s home; otherwise it is said and recorded (review 3 #1, D38)', async () => {
   const dir = '/h/.asight/collector'
   assert.deepEqual(daemonEnv({}, dir), { env: {}, note: null })
