@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { FAILURE_WORDS } from '../../src/cli/words.mjs'
+import { FAILURE_WORDS, failureWord } from '../../src/cli/words.mjs'
 
 const LABELS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'web', 'v2', 'labels')
 
@@ -14,6 +14,16 @@ test('no board label table keys a (where, code) pair of the CLI\'s table', async
   for (const f of fs.readdirSync(LABELS).filter((n) => n.endsWith('.mjs'))) {
     const mod = await import(pathToFileURL(path.join(LABELS, f)).href)
     for (const [name, v] of Object.entries(mod)) if (v && typeof v === 'object') for (const k of Object.keys(v)) if (keys.has(k)) hits.push(`${f}:${name}.${k}`)
+  }
+  assert.deepEqual(hits, [])
+})
+
+test('M8: no board label table keys a bare code the CLI\'s failureWord answers for some `where`', async () => {
+  const pairs = Object.keys(FAILURE_WORDS).map((k) => [k.slice(0, k.indexOf('/')), k.slice(k.indexOf('/') + 1)])
+  const answered = new Set(pairs.filter(([w, c]) => failureWord(w, c)).map(([, c]) => c)), hits = []
+  for (const f of fs.readdirSync(LABELS).filter((n) => n.endsWith('.mjs'))) {
+    const mod = await import(pathToFileURL(path.join(LABELS, f)).href)
+    for (const [name, v] of Object.entries(mod)) if (v && typeof v === 'object') for (const k of Object.keys(v)) if (answered.has(k)) hits.push(`${f}:${name}.${k}`)
   }
   assert.deepEqual(hits, [])
 })

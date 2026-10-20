@@ -10,6 +10,7 @@ import { mark, disclosureHtml } from '../core/ui.mjs'
 import { copyBtn } from '../core/dom.mjs'
 import { redactUrlCredentials } from '../core/sensitive.mjs'
 import { agentVerdicts, AGENT_TIER } from '../core/capture-verdict.mjs'
+import { failureWord } from '../../../cli/words.mjs'
 import {
   CONDITION_KIND, SWITCH_WORD, TRUST_REASON, RESTART_CODES, CODE, residueLead, ROUTING, CHANGE_REMOVAL, COMMANDS,
   UNKNOWN_REASON, ERR_WHERE,
@@ -61,6 +62,8 @@ const M = (m) => ({ m })
 const H = (h) => ({ h })
 const diagCopy = (obj) => copyBtn(redactUrlCredentials(JSON.stringify(obj, null, 2)), 'Copy diagnostics')
 const commandsHtml = (pairs) => pairs.map(([k, v]) => [k, M(v)])
+// a condition's words: the CLI's failure table when the condition is a (where, code) failure (negative-cache), else the kind's own
+const kindWord = (k) => failureWord(k && k.where, k && (k.code ?? k.kind)) || (k && has(CONDITION_KIND, k.kind) ? CONDITION_KIND[k.kind] : null)
 
 // the open state of every row of one paint: the reader's own choice (their folded / expanded rows) wins over the
 // default (a problem row opens, the rest stay folded); the service row follows the reader only (1.9 §页面结构 重读不打断人)
@@ -79,12 +82,12 @@ export function serviceRowHtml(h, v, { open = false } = {}) {
   const condLine = (k) => {
     const t = when(k.since)
     if (k.kind === 'untrusted' || k.kind === 'negative-cache') {
-      const what = k.kind === 'negative-cache' ? CONDITION_KIND['negative-cache'] : `a process of no known agent does not trust asight (${k.code || k.reason || UNKNOWN_REASON})`
+      const what = k.kind === 'negative-cache' ? kindWord(k) || UNKNOWN_REASON : `a process of no known agent does not trust asight (${k.code || k.reason || UNKNOWN_REASON})`
       return `<p>${esc(what)} · since ${t}</p>`
     }
     if (k.kind === 'state-mismatch') return `<p>wanted ${esc(SWITCH_WORD[k.desired] || k.desired || '?')}, actually ${esc(SWITCH_WORD[k.actual] || k.actual || '?')} · since ${t}</p>`
-    const word = has(CONDITION_KIND, k.kind) ? CONDITION_KIND[k.kind] : UNKNOWN_REASON
-    return `<p>${esc(word)}${has(CONDITION_KIND, k.kind) ? '' : ` (${esc(k.kind)})`} · since ${t}</p>`
+    const word = kindWord(k)
+    return `<p>${esc(word || UNKNOWN_REASON)}${word ? '' : ` (${esc(k.kind)})`} · since ${t}</p>`
   }
   const daemonDown = d.running === false || d.responding === false
   const conds = daemonDown ? '' : list(h && h.critical).filter((k) => k && k.harness == null).map(condLine).join('')
@@ -184,7 +187,7 @@ function whyHtml(row, h) {
   const lead = row.conditions && row.conditions.length ? row.conditions[0] : null
   const code = lead ? lead.code ?? null : row.code
   if (lead && lead.kind === 'negative-cache') {
-    ps.push(`<p>${esc(CONDITION_KIND['negative-cache'])}.</p>`)
+    ps.push(`<p>${esc(kindWord(lead) || UNKNOWN_REASON)}.</p>`)
   } else if (code != null && RESTART_CODES.includes(code)) {
     ps.push(`<p>${esc(TRUST_REASON[code].why)}.</p><p>Restart ${esc(name)}; the new process is captured.</p>`)
   } else if (code != null && has(TRUST_REASON, code)) {

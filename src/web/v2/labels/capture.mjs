@@ -8,9 +8,9 @@
 export const UNKNOWN_REASON = 'reason unknown'
 
 // ── 当前条件:foldFlows 写出的七种 kind(1.9 §条件的话)────────────────────────────────────────────────────────
-// `untrusted` 的话按它的 code 取(§TRUST_REASON / harness 自带);`state-mismatch` 的话要拼 desired/actual;其余四种是固定句。
+// `untrusted` 的话按它的 code 取(§TRUST_REASON / harness 自带);`state-mismatch` 的话要拼 desired/actual;`negative-cache` 是一条带
+// (where, code) 的失败,话归 CLI 的 FAILURE_WORDS(failureWord);其余是固定句。
 export const CONDITION_KIND = Object.freeze({
-  'negative-cache': "one of its processes refused asight's certificate",
   'ca-invalid': "asight's certificate cannot be used",
   degraded: 'the capture service lacks full system rights; some programs may not be captured',
   'helper-version': "the capture service's system component is the wrong version; some programs may not be captured",
@@ -44,15 +44,12 @@ export const TRUST_REASON = Object.freeze({
 export const RESTART_CODES = Object.freeze(['config-after-start', 'env-frozen'])
 
 // ── 连接行的 not_captured(src/health/codes.mjs 两个闭集)───────────────────────────────────────────────────────
-// 失败类:进采集记录,组键 flow:<码>;预期类:按设计不记,只在页底技术细节计数。
+// 失败类:进采集记录,组键 flow:<码>;预期类:按设计不记,只在页底技术细节计数。CLI 的 failureWord 已答的码不在这里。
 export const NOT_CAPTURED = Object.freeze({
   untrusted: 'the connection belongs to a process that does not trust asight yet; not decrypted',
   untracked: 'the connection belongs to a process asight does not follow',
-  'client-rejected-leaf': "the program refused asight's certificate",
-  'negative-cache': "this process refused asight's certificate before; not tried again for now",
   'upstream-cert': "the upstream's certificate could not be read",
   'upstream-handshake': 'the handshake with the upstream did not finish',
-  'leaf-error': 'a certificate could not be issued',
   h2: 'an HTTP/2 connection could not be decrypted',
   'malformed-hello': "the program's handshake message could not be read",
   'ws-not-recorded': 'the WebSocket content was not recorded',
@@ -120,13 +117,27 @@ export const COMMANDS = Object.freeze({
 // ── `errors[].where` of the C.3 document this board reads (the closed set src/health/codes.mjs DOC_WHERE; not importable here) ──
 export const ERR_WHERE = Object.freeze({ health: 'capture health', manifest: 'the install record' })
 
+// ── 一行的控件(1.9 §开关):开关、Set up、确认框与回执 ─────────────────────────────────────────────────────────
+export const CTL = Object.freeze({
+  setup: 'Set up', turnOn: 'Start capturing', turnOff: 'Stop capturing',
+  switchLabel: (name) => `Capture ${name}`,
+  askOn: (name) => `Start capturing ${name}? Its new connections are recorded; asight writes these files:`,
+  askOff: (name) => `Stop capturing ${name}? Its new connections are no longer recorded; asight undoes these changes:`,
+  askSetup: (name) => `Set up ${name}? asight adds what ${name} still needs to be captured:`,
+  stale: 'The computer changed since the last plan; this is the new plan.',
+  noFiles: 'No file changes.',
+  doneOn: 'On; new connections are captured', doneOff: 'Off; new connections are not captured', doneSetup: 'Set up done',
+  refused: 'Refused, reason unknown',
+  failed: (status, error) => `Failed: ${status ? `HTTP ${status}` : 'no answer'}${error ? ` · ${error}` : ''}`,
+})
+
 // ── 采集记录的固定话 ─────────────────────────────────────────────────────────────────────────────────────
 export const LOG = Object.freeze({
   who: 'capture service',
   window: (t) => `since ${t}`,
   filterRule: "by each group's own agent; a group counts once",
   truncated: 'only the latest part of the records was read; the list may be incomplete',
-  none: 'no capture failures in the last 24 hours',
+  none: 'No capture failures in the last 24 hours',
   metadataOnly: 'metadata only; no request or response bytes',
   manifestError: 'the install manifest could not be read',
   expectedTitle: 'not recorded by design (last 24 hours)',
