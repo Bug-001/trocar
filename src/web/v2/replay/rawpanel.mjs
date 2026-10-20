@@ -21,16 +21,18 @@ export function replyMarkHtml(c) {
   if (resolves) return ''
   return `<span class="rpmark">${mark('part', W.REPLY_PARSED)} ${esc(W.REPLY_PARSED)}</span>`
 }
-// the parsed reply's own rows: ONE fidelity mark, the text (over the display cap: the prefix + ONE note in this panel's
-// own words — 2.6 §A 「已截断显示 · 前 N / 共 M 字符」, never the context window's block wording stacked on top), the tool
-// calls with their arguments as JSON (verbatim, monospace), the stop reason as the provider's own value.
+// the parsed reply's own rows: ONE fidelity mark, the thinking and the text (over the display cap: the prefix + ONE note in
+// this panel's own words — 2.6 §A 「已截断显示 · 前 N / 共 M 字符」, never the context window's block wording stacked on
+// top), the tool calls with their arguments as JSON (verbatim, monospace), the stop reason as the provider's own value.
+const clippedPre = (t) => {
+  const cut = clipCut(t)
+  return `<pre class="rawpre">${esc(cut < t.length ? t.slice(0, cut) : t)}</pre>${cut < t.length ? `<div class="cbsrc warn">${esc(W.clipShownNote(cut, t.length))}</div>` : ''}`
+}
 function parsedReplyHtml(c) {
   const n = c.norm || {}
   let h = `<div class="rpk rpreply"><b>${esc(W.REPLY_WORD)}</b> ${replyMarkHtml(c)}</div>`
-  if (n.text) {
-    const cut = clipCut(n.text)
-    h += `<div class="rpbody"><pre class="rawpre">${esc(cut < n.text.length ? n.text.slice(0, cut) : n.text)}</pre>${cut < n.text.length ? `<div class="cbsrc warn">${esc(W.clipShownNote(cut, n.text.length))}</div>` : ''}</div>`
-  }
+  if (n.thinking) h += `<div class="rpk rpthink">${esc(W.THINKING_ROW)}<div class="rpbody">${clippedPre(String(n.thinking))}</div></div>`
+  if (n.text) h += `<div class="rpbody">${clippedPre(n.text)}</div>`
   for (const t of n.tools || []) {
     // 2.6 §A 「回复 · 工具调用」: the name and the arguments (JSON) as they are, monospace — a very long input rides the
     // same display clip. The server's norm.tools never carries a ref, so there is no click surface here; the tool id is
@@ -40,7 +42,8 @@ function parsedReplyHtml(c) {
   if (n.stop_reason) h += `<div class="rpk">${W.stopReasonRow(`<span class="mono">${esc(n.stop_reason)}</span>`)}</div>`
   return h
 }
-function replyHtml(c) {
+// the reply of one step: shared by this panel and the context window's closing reply segment (2.3 §这一步的回复) — one rule
+export function replyHtml(c) {
   // an unparsed step is a REQUEST-body fact (the params row says it, errMsg rides in 技术细节); where the response itself
   // parsed, the reply still renders — 「这次调用失败,没有回复」 would deny a reply we do have (2.6 §A)
   if (c.unparsed && c.norm && c.norm.text) return parsedReplyHtml(c)

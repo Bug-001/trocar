@@ -301,7 +301,7 @@ export function canonUsageChat(usage = {}) {
   const fresh = u.prompt_cache_miss_tokens != null ? u.prompt_cache_miss_tokens : Math.max(0, input - read);
   return { read, create: 0, fresh, out: u.completion_tokens || 0 };
 }
-// SSE chunks (or a non-streaming JSON body) → { model, usage, text, tool_calls, stop_reason }.
+// SSE chunks (or a non-streaming JSON body) → { model, usage, text, tools, stop_reason } (`tools`: the neutral name, 2.6 §A).
 export function normRespChat(rec) {
   const resp = (rec && rec.resp) || (rec && rec.response) || {};
   const events = Array.isArray(resp.raw_sse) ? resp.raw_sse : [];
@@ -333,8 +333,8 @@ export function normRespChat(rec) {
       }
     }
   }
-  const tool_calls = [...acc.values()].map((t) => ({ id: t.id, name: t.name, input: safeJson(t.args) }));
-  return { model, id, stop_reason: stop, usage, canonUsage: canonUsageChat(usage), text, thinking: thinking || undefined, tool_calls };
+  const tools = [...acc.values()].map((t) => ({ id: t.id, name: t.name, input: safeJson(t.args) }));
+  return { model, id, stop_reason: stop, usage, canonUsage: canonUsageChat(usage), text, thinking: thinking || undefined, tools };
 }
 
 // ── shape-dispatched entry points (the shared view layer calls THESE, never a per-shape branch) ────
@@ -370,7 +370,7 @@ export function canonUsage(usage = {}) {
   return { read, create, fresh: Math.max(0, input - read - create), out: u.output_tokens || 0 };
 }
 
-// ── normalize the SSE response → { model, usage, text, tool_calls, stop_reason } from resp.raw_sse.
+// ── normalize the SSE response → { model, usage, text, tools, stop_reason } from resp.raw_sse.
 // The reverse-proxy's reconstruction is Anthropic-shaped (empty for OpenAI), so we read raw_sse (kept
 // via `trocar capture --raw-sse`). This is the OpenAI dissector rebuilding blocks from raw events.
 // normEvents is the event-list half, shared with the WebSocket dissector (openai-ws.mjs), whose events
@@ -393,7 +393,7 @@ export function normEvents(events) {
   if (!completed) for (const e of events || []) if (e && e.type === 'response.output_text.delta') text += e.delta || '';
   const errored = !completed && (events || []).some((e) => e && e.type === 'error');
   return { model: (completed && completed.model) || null, id: (completed && completed.id) || null,
-    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, canonUsage: canonUsage(usage), text, thinking: undefined, tool_calls: toolCalls };
+    stop_reason: (completed && completed.status) || (errored ? 'error' : null), usage, canonUsage: canonUsage(usage), text, thinking: undefined, tools: toolCalls };
 }
 export function normResp(rec) {
   const resp = (rec && rec.resp) || (rec && rec.response) || {};

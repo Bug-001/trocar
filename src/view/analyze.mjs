@@ -57,7 +57,8 @@ function auxSubkind(r, userText) {
 }
 
 // Unify the two response shapes: streamed SSE (already reconstructed into
-// response.{usage,text,tool_calls}) and non-streaming JSON (raw body in response.body).
+// response.{usage,text,tool_calls}) and non-streaming JSON (raw body in response.body). The reply's tool calls leave
+// under the neutral name `tools` (2.6 §A): `tool_calls` is a wire name the board does not read (invariant 3).
 // Without this, JSON responses (all the security-monitor calls) read as ctx=0 / no text.
 export function normResp(r) {
   const rs = respOf(r) || {}
@@ -68,14 +69,14 @@ export function normResp(r) {
       usage: rs.body.usage || {},
       text: c.filter((b) => b.type === 'text').map((b) => b.text || '').join(''),
       thinking: c.filter((b) => b.type === 'thinking').map((b) => b.thinking || '').join('') || undefined,
-      tool_calls: c.filter((b) => b.type === 'tool_use' || b.type === 'server_tool_use')
+      tools: c.filter((b) => b.type === 'tool_use' || b.type === 'server_tool_use')
         .map((b) => ({ id: b.id, name: b.name, input: b.input })),
       stop_reason: rs.body.stop_reason,
     }
   }
   return {
     status: rs.status, usage: rs.usage || {}, text: rs.text || '',
-    thinking: rs.thinking, tool_calls: rs.tool_calls || [], stop_reason: rs.stop_reason,
+    thinking: rs.thinking, tools: rs.tool_calls || [], stop_reason: rs.stop_reason,
   }
 }
 const ctxTokens = (r) => {
@@ -242,7 +243,7 @@ function responseEvents(r, step, streamId) {
   const ev = []
   if (rs.thinking) ev.push({ type: 'thought', step, streamId, text: rs.thinking })
   if (rs.text) ev.push({ type: 'say', step, streamId, text: rs.text })
-  for (const c of rs.tool_calls || []) {
+  for (const c of rs.tools || []) {
     const spawn = SPAWN_OPS.has(c.name)
     ev.push({
       type: spawn ? 'spawn' : 'action',
@@ -484,7 +485,7 @@ export function analyze(records, opts = {}) {
         if (Array.isArray(m.content))
           for (const b of m.content) if (b.type === 'tool_use') toolNameById.set(b.id, b.name)
       }
-      for (const c of step.norm.tool_calls || []) toolNameById.set(c.id, c.name)
+      for (const c of step.norm.tools || []) toolNameById.set(c.id, c.name)
       for (const t of step.rec.request.tools || []) {
         if (/^mcp__/.test(t.name || '')) addRes(resMap, 'capability', 'MCP: ' + (String(t.name).split('__')[1] || t.name), step.gi, 'mcp')
       }

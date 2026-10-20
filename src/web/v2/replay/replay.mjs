@@ -12,7 +12,7 @@ import { keyAction } from './keymap.mjs'
 import { buildLanes, anchorLane, stepsOf } from './lanes.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
-import { landPlayhead } from './follow.mjs'
+import { landPlayhead, followCursor, centerCursor, createPoller } from './follow.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin } from './ctxwin.mjs'
@@ -90,6 +90,7 @@ export function mount(el, ctx) {
     collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
     lastCheapSig: null, lastRenderSig: null, pricing: store.get().pricing || null, pricingErr: null,
+    goodKey: null, goodAt: null, staleErr: null, // the session last drawn from a good answer, when; a later failed read (1.5 K-29)
     turnFold: loadFold(storage()),
   }
   const sessionKey = () => s.project + '::' + s.id
@@ -145,7 +146,8 @@ export function mount(el, ctx) {
       navOpen: new Set(['sys', 'life-file', 'life-load']), navSeenExpanded: false, collapsedRails: new Set(), subSeeded: new Set(), subgroupOpen: false, bgOpen: false,
     railsFolded: typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches, rpOpen: false,
       trunc: null, logged: null, sourceE: null, gap: null, totals: null, errNote: null,
-      lastCheapSig: null, lastRenderSig: null })
+      lastCheapSig: null, lastRenderSig: null, goodKey: null, goodAt: null, staleErr: null })
+    poller.reset()
     s.openBlocks.clear()
     s.turnLanded.clear()
     E.stepbar.innerHTML = ''
@@ -214,24 +216,24 @@ export function mount(el, ctx) {
     renderSaw(E.saw, s); renderRails(E.rails, s)
     if (redraw) renderOverview(E.saw, s); else repositionBrush(E.saw, s)
   }
-  // the playhead landed on a call whose body was not on the loaded page: re-aim the window around it (centred, so a few steps either
-  // way stay inside) and fetch. The call keeps rendering meanwhile — its cheap meta is real — marked "not on this page", never blank.
+  // the playhead landed on a call whose body did not ride the loaded page (its own `paged_out` flag — never count arithmetic: the
+  // server may slim a call inside the window): re-aim the window with it at the middle, where the server always keeps a body, and
+  // fetch. The call keeps rendering meanwhile — its cheap meta is real — marked "not on this page", never blank.
   // `also` is a second call that should ride the same page when it fits (the lane call whose drawer is open next to the playhead).
   // Only the playhead and a user's tick selection ever re-aim: repainting the drawer after a fetch does not, so two calls that cannot
-  // share a window cannot pull the window back and forth.
+  // share a window cannot pull the window back and forth. Re-aiming never turns following off: only the reader's own moves do (1.2).
   function ensurePage(call, force, also) {
     if (!call || !call.paged_out) return false
-    let c = Math.max(0, (call.gi | 0) - ((PAGE_LIMIT / 2) | 0))
+    let c = centerCursor(call.gi, PAGE_LIMIT)
     if (also && also.gi != null) {
       const lo = Math.min(call.gi, also.gi), hi = Math.max(call.gi, also.gi)
       if (hi - lo < PAGE_LIMIT - 2) c = Math.max(0, lo - (((PAGE_LIMIT - (hi - lo)) / 2) | 0))
     }
-    const held = (x) => x.gi >= s.pageCur - 1 && x.gi < s.pageCur + PAGE_LIMIT // the requested window already holds it: a re-poll would loop
-    // (the "载入这一页" button forces it anyway)
-    if (!force && (c === (s.pageCur | 0) || (held(call) && (!also || held(also))))) return false
-    s.pageCur = c; s.follow = false; s.pageReaimed = false
+    // the window asked for is already this one: a re-read would loop (the "载入这一步" button forces it anyway)
+    if (!force && c === (s.pageCur | 0)) return false
+    s.pageCur = c; s.pageReaimed = false
     s.lastCheapSig = null; s.lastRenderSig = null
-    poll()
+    poll(true)
     return true
   }
   const selectedCall = () => {
@@ -243,6 +245,15 @@ export function mount(el, ctx) {
   // ── fetching ─────────────────────────────────────────────────────────────────────────────────────────────────────
   // a failed read is said IN the content area (no banner, no dot): the reason, and that the raw capture is untouched
   const fail = (title, msg) => { s.errNote = `<b>${esc(title)}</b> · ${esc(msg)} — the raw capture on disk is complete (the source of truth is not affected).` }
+  // a read failed (1.5 K-29): a desk that has drawn this session keeps every area as it is and says quietly, in the 会话保真行, since
+  // when it is not refreshed and why; only a session that never loaded shows the failure in the content area
+  function readFailed(title, reason, detail, emptyMsg) {
+    s.lastCheapSig = null; s.lastRenderSig = null // so the next read retries; a stuck signature would keep the board wedged after recovery
+    if (s.goodKey === sessionKey()) s.staleErr = { reason, since: s.goodAt }
+    else { fail(title, reason + detail); renderEmpty(emptyMsg) }
+    renderHeader()
+    return { ok: false }
+  }
 
   // the price table: a failed read keeps its reason (the header, raw panel and drawer say 价表读不出 · why) and every poll retries it
   const prices = createPricingLoader(() => api.get('pricing'), s.pricing)
@@ -253,28 +264,27 @@ export function mount(el, ctx) {
     renderHeader(); if (s.anchor) { s.renderRaw(); refreshDrawer() }
   }
 
-  let polling = false, again = false
-  async function poll() {
+  // one read in flight; a failed read backs off (doubling from POLL_MS to 30 s, reset by a success); the reader's own actions
+  // (Retry, 载入这一步, a jump, f, the follow chip) read at once (follow.mjs createPoller)
+  const poller = createPoller({ base: POLL_MS, now: () => api.now(), alive: () => !s.dead,
+    run: async () => { try { return await pollOnce() } catch (e) { console.error(e); return { ok: false } } } })
+  function poll(byReader = true) {
     if (s.dead) return
     loadPricing().catch((e) => console.error(e))
-    if (polling) { again = true; return }
-    polling = true
-    try { do { again = false; await pollOnce() } while (again && !s.dead) } catch (e) { console.error(e) } finally { polling = false }
+    return poller.poll(byReader)
   }
-  s.poll = poll
+  s.poll = () => poll(true)
   async function pollOnce() {
     const key = sessionKey()
     const stale = () => s.dead || key !== sessionKey() // the session was switched while a request was in flight
     // a failed listing is NOT an empty one: say why
     const pj = await loadSessions(api)
     if (stale()) return
-    if (!pj.ok) { fail('Cannot list sessions', pj.error + ' — fix the source or restart the capture service.'); renderEmpty('Cannot list sessions.'); s.lastCheapSig = null; s.lastRenderSig = null; return }
+    if (!pj.ok) return readFailed('Cannot list sessions', pj.error, ' — fix the source or restart the capture service.', 'Cannot list sessions.')
     const cur = pj.data.sessions.find((x) => x.project_slug === s.project && x.session_id === s.id)
-    // pick the window BEFORE the fetch: `sessions` already carries the true call count, so the tail is known without a round trip.
-    // On a session switch — and while following — the window parks on the tail. A manual scrub off the live end clears `follow`.
-    const srvTotal = s.pageSig === key && s.pageInfo && typeof s.pageInfo.total === 'number' ? s.pageInfo.total : null
-    const tailCur = Math.max(0, (srvTotal != null ? srvTotal : ((cur && cur.calls) || 0)) - PAGE_LIMIT)
-    if (s.pageSig !== key) { s.pageSig = key; s.pageCur = tailCur; s.pageInfo = null; s.pageReaimed = false } else if (s.follow) s.pageCur = tailCur
+    // a session switch opens on the tail `sessions` counted, at the page's middle; afterwards every answer places the next page
+    // (followCursor below). A manual scrub off the live end clears `follow`.
+    if (s.pageSig !== key) { s.pageSig = key; s.pageCur = centerCursor(((cur && cur.calls) || 0) - 1, PAGE_LIMIT); s.pageInfo = null; s.pageReaimed = false }
     if (cur) {
       const cs = key + '|' + cur.calls + '|' + cur.last_ts + '|' + s.pageCur // the window is part of the signature: moving it must refetch
       if (cs === s.lastCheapSig) return
@@ -283,33 +293,40 @@ export function mount(el, ctx) {
     const res = await api.get('session', { id: s.id, after: s.pageCur || null, limit: PAGE_LIMIT })
     if (stale()) return
     if (!res.ok) {
-      s.lastCheapSig = null; s.lastRenderSig = null // so the next poll retries; a stuck signature would keep the board wedged after recovery
       // the hash names a session the library does not have: say so HERE (1.2 §Edge cases — 就地显示,不跳走), with a way back
-      if (res.status === 404) { s.errNote = null; renderEmpty(`${SESSION_NOT_LISTED} · <a href="#/sessions">${BACK_TO_SESSIONS}</a>`); renderHeader(); return }
-      // any other failure stays on this screen, says why, and the next poll retries
-      fail('Loading failed', `${res.error || 'cause not known'}. If the capture service is down, restart it; a session that is too large is served from its tail.`); renderEmpty('This session failed to load.')
-      renderHeader()
-      return
+      if (res.status === 404) {
+        s.lastCheapSig = null; s.lastRenderSig = null; s.goodKey = null; s.staleErr = null; s.errNote = null
+        renderEmpty(`${SESSION_NOT_LISTED} · <a href="#/sessions">${BACK_TO_SESSIONS}</a>`); renderHeader(); return
+      }
+      return readFailed('Loading failed', res.error || 'cause not known', '. If the capture service is down, restart it; a session that is too large is served from its tail.', 'This session failed to load.')
     }
     s.errNote = null
     const d = res.data
+    const A = d.analyzed || { lanes: [] }, probes = d.probes || { count: 0, series: [] }
+    const lanes = buildLanes(A, probes), anchor = anchorLane(lanes)
+    const tail = anchor && anchor.calls.length ? anchor.calls[anchor.calls.length - 1] : null
+    // where the next page sits is decided by THIS answer (1.2 「跟随最新」): while following, the anchor's last call at the page's
+    // middle. When that call (or, the server having fewer calls than `sessions` counted, every call) did not ride this answer, read
+    // once more at the new place before drawing — no paged-out flash, and `follow` stays: that tail IS the live end.
+    const next = followCursor({ follow: s.follow, page: d.page || null, pageCur: s.pageCur | 0, limit: PAGE_LIMIT, tailGi: tail ? tail.gi : null })
+    if (next !== (s.pageCur | 0)) {
+      s.pageCur = next
+      const missing = (d.page && d.page.returned === 0) || (s.follow && tail && tail.paged_out)
+      if (missing && !s.pageReaimed) { s.pageReaimed = true; s.lastCheapSig = null; s.lastRenderSig = null; return { again: true } }
+    }
+    s.pageReaimed = false
+    s.goodKey = key; s.goodAt = api.now(); s.staleErr = null
     s.pageInfo = d.page || null
     s.trunc = d.truncated || null
     s.logged = d.logged || null
     s.sourceE = d.errors || []
-    // the server may assemble FEWER calls than `sessions` counted: if our window landed past what it has, every call would be paged
-    // out and the board blank. Re-aim once at the tail the server really has. `follow` stays: that tail IS the live end.
-    if (s.pageInfo && s.pageInfo.returned === 0 && s.pageInfo.total > 0) {
-      const c2 = Math.max(0, s.pageInfo.total - PAGE_LIMIT)
-      if (c2 !== (s.pageCur | 0) && !s.pageReaimed) { s.pageReaimed = true; s.pageCur = c2; s.lastCheapSig = null; s.lastRenderSig = null; again = true; return }
-    } else s.pageReaimed = false
-    s.raw = d.records || []; s.probes = d.probes || { count: 0, series: [] }; s.meta = d.meta || null
+    s.raw = d.records || []; s.probes = probes; s.meta = d.meta || null
     const sig = key + '|' + (s.pageCur | 0) + '|' + s.raw.length + '|' + (s.raw.length ? String((s.raw[s.raw.length - 1] || {}).ts_request || (s.raw[s.raw.length - 1] || {}).id || '') : '')
-    if (sig === s.lastRenderSig) return
+    if (sig === s.lastRenderSig) { renderHeader(); return } // nothing new to draw; the head drops a stale line a failed read left
     s.lastRenderSig = sig
-    s.A = d.analyzed || { lanes: [] }
-    s.lanes = buildLanes(s.A, s.probes)
-    s.anchor = anchorLane(s.lanes)
+    s.A = A
+    s.lanes = lanes
+    s.anchor = anchor
     // the 采集缺口 is judged against the whole session's time (the once-per-open capture-health answer, 1.2 §会话保真行)
     judgeGap()
     if (!s.anchor || !s.anchor.calls.length) {
@@ -366,14 +383,14 @@ export function mount(el, ctx) {
     if (!a) return
     e.preventDefault()
     if (a.keys) openModal({ title: KEYS_TITLE, bodyHtml: `<dl class="keylist">${KEY_LIST.map(([k, w]) => `<dt><kbd>${esc(k)}</kbd></dt><dd>${esc(w)}</dd>`).join('')}</dl>` })
-    else if (a.follow) { s.follow = !s.follow; renderHeader(); if (s.follow) poll() }
+    else if (a.follow) { s.follow = !s.follow; renderHeader(); if (s.follow) poll(true) }
     else { if (keyTarget == null) requestAnimationFrame(paintKey); keyTarget = a.to }
   }
   setScreenKeys(onKey)
   // popovers and menus close themselves first and stop the key (core/keys.mjs); here: the call drawer, then the bottom row
   const onEscape = () => { if (E.detail.classList.contains('open')) closeDetail(E.detail, s); else if (s.rpOpen) onRp() }
   document.addEventListener('v2:escape', onEscape)
-  const timer = setInterval(poll, POLL_MS) // the desk keeps reading; 「跟随最新」 only decides whether the playhead follows growth
+  const timer = setInterval(() => poll(false), POLL_MS) // the desk keeps reading; 「跟随最新」 only decides whether the playhead follows growth
   // the lane's width changes with the window and with the right-page divider: watch both. Only a window that no longer fits is touched.
   const refit = () => { if (s.anchor && fitView()) { renderSaw(E.saw, s); renderRails(E.rails, s); renderOverview(E.saw, s) } }
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null

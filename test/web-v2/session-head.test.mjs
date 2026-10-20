@@ -57,3 +57,21 @@ test('the session head is built only from 1.2 §会话头 parts: back, title, ag
   for (const must of ['sh-back', 'sh-name', 'sh-chip', 'sh-follow', 'sh-info']) assert.equal(kinds.filter((k) => k === must).length, 1, `exactly one ${must}`)
   assert.ok(kinds.indexOf('sh-back') < kinds.indexOf('sh-name') && kinds.indexOf('sh-name') < kinds.indexOf('sh-chip') && kinds.indexOf('sh-follow') < kinds.indexOf('sh-info'), 'in the table\'s order')
 })
+
+// 1.5 K-29: after a failed read of a drawn session, the 会话保真行 carries one quiet stale line with the reason and a Retry that
+// reads at once (s.poll — the reader's path, not the timer's); a good answer drops it
+import { renderSessionHead, wireSessionHead } from '../../src/web/v2/replay/header.mjs'
+test('K-29: a stale session says why under the head and its Retry reads again; no stale state, no line', () => {
+  const meta = { session_id: 's1', harness: 'cc', project_slug: 'p', project_path: '/w/p' }
+  let handler = null, polls = 0
+  const el = { innerHTML: '', addEventListener: (t, f) => { handler = f }, removeEventListener() {} }
+  const s = { meta, lanes: [], follow: true, A: null, ctx: {}, staleErr: { reason: 'the answer did not arrive in full', since: Date.now() - 5000 }, poll: () => { polls++ } }
+  renderSessionHead(el, s)
+  assert.match(el.innerHTML, /data-retry/); assert.ok(el.innerHTML.includes('the answer did not arrive in full'))
+  assert.ok(!el.innerHTML.split('class="sesshead"')[1].split('</div>')[0].includes('data-retry'), 'not inside the session head itself')
+  wireSessionHead(el, s)
+  handler({ target: { closest: (sel) => (sel === '[data-retry]' ? {} : null) } })
+  assert.equal(polls, 1)
+  s.staleErr = null; renderSessionHead(el, s)
+  assert.ok(!/data-retry/.test(el.innerHTML))
+})

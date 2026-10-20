@@ -67,3 +67,43 @@ test('the outline holds no count the middle column shows, and the compare contro
   assert.ok(cmp, 'the compare menu button is drawn')
   assert.ok(!/aria-label=/.test(cmp[0]), 'its visible text is its only label (R10)')
 })
+
+// 2.3 §这一步的回复 · 1.4 whitelist ⑨: the window ends with this step's reply as its own segment after the request sections —
+// the server's own norm (text, tools), marked by the 2.3 proof rule — and the stand-in states draw no reply segment
+const deskAt = (i, over = {}) => {
+  const lanes = buildLanes(doc.analyzed, doc.probes)
+  const anchor = anchorLane(lanes)
+  Object.assign(anchor.calls[i], over)
+  return { s: { meta: doc.meta, lanes, anchor, playhead: i, diffRef: null, curFlat: [], curRemoved: [], navOpen: new Set(), openBlocks: new Set(), turnFold: new Map(), turnLanded: new Set(), viewPin: null, ctx: {} }, call: anchor.calls[i] }
+}
+const replySeg = (h) => { const k = h.lastIndexOf('<div class="cwreply">'); return k < 0 ? null : h.slice(k) }
+
+test('the window ends with the step\'s reply segment: after every section, carrying the server\'s text and tool calls', () => {
+  const n = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.length
+  let tools = 0
+  for (let i = 0; i < n; i++) {
+    const { s, call } = deskAt(i)
+    if (call.paged_out || !call.rec || call.unparsed) continue
+    const h = ctxWindowHtml(s)
+    const seg = replySeg(h)
+    assert.ok(seg, `step ${i + 1} has a reply segment`)
+    assert.ok(h.lastIndexOf('class="cwsec"') < h.lastIndexOf('<div class="cwreply">'), 'after the request sections')
+    assert.ok(!/class="cblk/.test(seg), 'no block card inside the reply segment')
+    for (const t of call.norm.tools || []) { assert.ok(seg.includes(t.name), t.name); tools++ }
+    if (call.norm.text) assert.ok(seg.includes(call.norm.text.slice(0, 40).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')))
+  }
+  assert.ok(tools > 0, 'the real answer has replies with tool calls')
+})
+
+test('the reply segment\'s mark follows the proof rule: a resolvable respRef → no mark; none → ◐ parsed reply; never "verbatim"', () => {
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => !c.paged_out && c.rec && !c.unparsed)
+  for (const [respRefs, marked] of [[[{ label: 'body', ref: 'r:1', chars: 3 }], false], [[], true], [[{ label: 'body', ref: null, why: 'x' }], true]]) {
+    const seg = replySeg(ctxWindowHtml(deskAt(i, { respRefs }).s))
+    assert.equal(seg.includes(W.REPLY_PARSED), marked, JSON.stringify(respRefs))
+    assert.ok(!seg.includes(W.SECTION_VERBATIM) && !/data-ff="verbatim"/.test(seg))
+  }
+})
+
+test('stand-in states (not on this page, unparsed, no request) draw no reply segment', () => {
+  for (const over of [{ paged_out: true }, { unparsed: true, errMsg: 'x' }, { rec: null }]) assert.equal(replySeg(ctxWindowHtml(deskAt(0, over).s)), null, JSON.stringify(Object.keys(over)))
+})
