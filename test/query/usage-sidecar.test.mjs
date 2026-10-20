@@ -132,6 +132,8 @@ async function until(get, ok, ms = 30_000) {
   }
 }
 const local = (home, ctx = {}) => runQuery('overview', {}, { home, ...ctx })
+// What the query worker hands every query (src/query/worker.mjs): work for the next query, run after this answer.
+const WARM = { later: (fn) => setImmediate(fn) }
 
 test('3.5:93 #10 through the real worker: after it fills, coverage is whole and the sums are the `session` calls\' sums', async () => {
   const home = await budgetWorld()
@@ -184,13 +186,13 @@ test('3.5:93 #10 through the real worker: after it fills, coverage is whole and 
 
 test('3.5:93 deleting the sidecars only falls back to the budget; filled again, the document is the same field for field', async () => {
   const home = await budgetWorld()
-  await local(home, { warm: true })
-  const doc1 = await until(() => local(home, { warm: true }), complete)
+  await local(home, WARM)
+  const doc1 = await until(() => local(home, WARM), complete)
   await fillUsage({ home, segments: [] }) // the queue has drained
   for (const f of fs.readdirSync(path.join(home, 'index'))) if (f.endsWith('.usage.json')) fs.rmSync(path.join(home, 'index', f))
   const doc2 = await local(home)
   assert.ok(doc2.usage.coverage.sessions_read < doc2.usage.coverage.sessions_in_window)
-  const doc3 = await until(() => local(home, { warm: true }), complete)
+  const doc3 = await until(() => local(home, WARM), complete)
   assert.deepEqual(doc3, doc1)
 })
 
@@ -207,7 +209,7 @@ test('3.5:93 #8 a fill that could not READ the segment stores nothing; filled ag
   fail = false
   await fillUsage({ home, fs: bad, segments: [OLD] })
   assert.ok(!docOf(home, OLD).some((o) => 'p' in o), 'the retry read the records: no problem line')
-  const doc = await until(() => local(home, { warm: true }), complete)
+  const doc = await until(() => local(home, WARM), complete)
   assert.equal(doc.usage.coverage.sessions_read, doc.usage.coverage.sessions_in_window)
 })
 
@@ -228,7 +230,7 @@ test('D38 a fill that cannot write the sidecar is named in the next overview\'s 
 
 test('1.6:972 C.5 a session wholly in the sidecars still counts after the byte budget stopped the computing', async () => {
   const home = await budgetWorld()
-  await until(() => local(home, { warm: true }), complete)
+  await until(() => local(home, WARM), complete)
   await fillUsage({ home, segments: [] })
   fs.rmSync(usageFile(home, SEG)) // only the newest segment's: the session wholly in OLD keeps its sidecar
   const doc = await local(home)
@@ -240,7 +242,7 @@ test('3.5:91 with the sidecars whole, overview opens no record body, and the fil
   const home = await budgetWorld()
   const ids = () => fs.readdirSync(path.join(home, 'raw')).sort().map((f) => { const st = fs.statSync(path.join(home, 'raw', f)); return [f, st.ino, st.size, st.mtimeMs] })
   const before = ids()
-  await until(() => local(home, { warm: true }), complete)
+  await until(() => local(home, WARM), complete)
   await fillUsage({ home, segments: [] })
   assert.deepEqual(ids(), before)
   let opened = 0
