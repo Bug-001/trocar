@@ -134,7 +134,7 @@ export function rowHtml(r, model, first) {
   const link = host ? formatHash({ screen: 'traffic-host', harness: key, host, params }) : null
   const isNew = isNewHost(r, model.harnessSince, model.now)
   const firstText = r.first_seen ? fmtDay(r.first_seen, model.now) : W.UNKNOWN_DAY
-  const classes = Object.entries(r.classes || {}).sort((a, b) => (b[1] || 0) - (a[1] || 0))
+  const classes = [...Object.entries(r.classes || {}), ...(r.class_unrecorded > 0 ? [[null, r.class_unrecorded]] : [])].sort((a, b) => (b[1] || 0) - (a[1] || 0))
   const clsHtml = classes.slice(0, 3).map(([id, n]) => {
     const w = classWord(id, r.harness, model.unmatched)
     return w.unclassified

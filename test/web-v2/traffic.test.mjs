@@ -189,3 +189,12 @@ test('#11 read only: every request the two pages make is a GET to /api/', async 
   assert.ok(seen.some((x) => x.url.startsWith('/api/traffic')) && seen.some((x) => x.url.startsWith('/api/calls')))
   assert.deepEqual(seen.filter((x) => x.method !== 'GET' || !x.url.startsWith('/api/')), [])
 })
+
+test('main classes: rows with no recorded class read as the unrecorded word with their count, never "null"', async () => {
+  const { T } = await world
+  const row = { ...T.hosts[0], classes: { telemetry: 2 }, class_unrecorded: 5 }
+  const drawn = rowsOf(rowHtml({ ...row, recv: recvParts(row) }, tableModel({ ...T, hosts: [row] }), true))[0].html
+  const cell = drawn.split('class="cell classes"')[1]
+  assert.ok(cell.includes(`${W.classWord(null)} 5`), cell)
+  assert.ok(!/\bnull\b/.test(cell), cell)
+})
