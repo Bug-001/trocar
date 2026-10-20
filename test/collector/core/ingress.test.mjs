@@ -271,15 +271,40 @@ test('W13 an upstream that cannot be reached is a 502, never a 200 first; the ro
   const [row] = L.flows
   assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.pid, row.ingress], ['error', 'error', 'ECONNREFUSED', 'upstream', 4242, { route: 'of', group: 'spike' }])
   assert.equal(L.envelopes.length, 0)
-  assert.deepEqual(L.failures.map((f) => [f.where, f.code, f.group]), [['netenv', 'upstream-unreachable', 'spike']], 'the row, and one upstream-unreachable event (1.6 §9.7)')
+  assert.deepEqual(L.failures.filter((f) => f.code === 'upstream-unreachable'), [], 'a direct upstream dials the target itself: one dead host is that connection\'s row, not the door\'s upstream being down (4.8 W73)')
   assert.equal(L.engine.stats().ingress.unreachable, 1)
+})
+
+test('W73 upstream-unreachable blames the door\'s upstream only when the upstream proxy itself cannot be dialled (or its kind cannot be); a dead target host, direct or behind a proxy that took the TCP connection, stays on its row', T, async (t) => {
+  const deadPort = () => new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
+  const closer = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => s.destroy()) }) // a proxy that takes the TCP connection, then drops the CONNECT for this target
+  await new Promise((r) => closer.listen(0, '127.0.0.1', r))
+  t.after(() => closer.close())
+  const dead = await deadPort()
+  const cases = [ // [upstream, target, does the door's upstream get the blame]
+    [{ kind: 'direct' }, `127.0.0.1:${dead}`, false],
+    [{ kind: 'http', host: '127.0.0.1', port: dead }, 'api.example:443', true],
+    [{ kind: 'socks5', host: '127.0.0.1', port: dead }, 'api.example:443', true],
+    [{ kind: 'http', host: '127.0.0.1', port: closer.address().port }, 'api.example:443', false],
+    [{ kind: 'socks5', host: '127.0.0.1', port: closer.address().port }, 'api.example:443', false],
+    [{ kind: 'quic', host: '127.0.0.1', port: dead }, 'api.example:443', true],
+  ]
+  for (const [upstream, target, blamed] of cases) {
+    const L = await lab(t, { meta: { upstream } })
+    const c = L.client(); c.write(connectHead(target))
+    assert.match(await c.head(), /^HTTP\/1\.1 502 /, `${upstream.kind}: 502`); await c.closed()
+    await L.settled(1)
+    assert.deepEqual([L.flows[0].decision, L.flows[0].error.side], ['error', 'upstream'], `${upstream.kind}: the row says the upstream side failed`)
+    const ev = L.failures.filter((f) => f.code === 'upstream-unreachable')
+    assert.deepEqual(ev.map((f) => [f.where, f.group]), blamed ? [['netenv', 'spike']] : [], `${upstream.kind} → ${target}: ${blamed ? 'the door\'s upstream is down' : 'one target, not the door'}`)
+  }
 })
 
 test('upstream-unreachable is written at most once per form (door group) per 60 s (1.6 §9.7), whatever the number of connections', T, async (t) => {
   let now = 1_000_000
-  const L = await lab(t, { timing: { now: () => now } })
   const dead = await new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)) }) })
-  const once = async () => { const c = L.client(); c.write(connectHead(`127.0.0.1:${dead}`)); await c.head(); await c.closed() }
+  const L = await lab(t, { timing: { now: () => now }, meta: { upstream: { kind: 'http', host: '127.0.0.1', port: dead } } }) // the door's upstream proxy is down
+  const once = async () => { const c = L.client(); c.write(connectHead('api.example:443')); await c.head(); await c.closed() }
   for (let i = 0; i < 3; i++) await once()
   now += 59_999; await once()
   now += 1; await once()
