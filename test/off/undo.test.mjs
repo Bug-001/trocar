@@ -260,7 +260,7 @@ test('bundle: a process of the harness that started after install, one that re-r
   assert.ok(!fpsOf(s.b.ca('combined-bb.pem')).includes(trocarFp))
   assert.deepEqual([r.left, r.manifest.files.filter((f) => f.role === 'bundle').map((f) => [path.basename(f.path), f.without_ca])], [[], [['combined-aa.pem', true], ['combined-bb.pem', true]]], 'kept: still in the manifest')
   const again = await s.run({ manifest: r.manifest, procs: async () => [proc(72, '/x/aa', { startedAt: installedAt - 60000 })] })
-  assert.deepEqual([again.kept_bundles, again.removed.map((p) => path.basename(p)).sort(), fs.readdirSync(s.b.ca('.')).sort()], [[], ['combined-aa.pem', 'combined-bb.pem'], ['trocar-ca.pem', 'ca.key']], 'nobody holds them now (or never could)')
+  assert.deepEqual([again.kept_bundles, again.removed.map((p) => path.basename(p)).sort(), fs.readdirSync(s.b.ca('.')).sort()], [[], ['combined-aa.pem', 'combined-bb.pem'], ['ca.key', 'trocar-ca.pem']], 'nobody holds them now (or never could)')
 })
 
 test('bundle gone while a live process may use it: rebuilt without the CA from Node\'s roots and the recorded user CAs (said), a lost source named; nobody uses it: nothing is made; no roots given: an item left', async () => {
@@ -380,7 +380,7 @@ test('a bundle nobody holds that cannot be removed still holds the CA: an item l
   assert.deepEqual(r.left.map((l) => [path.basename(l.path), l.harness, l.result]), [['combined-aa.pem', 'aa', 'error'], ['trocar-ca.pem', null, 'error']])
   assert.match(r.left[0].reason, /held by no running process but could not be removed \(EACCES\).*still holds the trocar CA/)
   assert.ok(!fs.existsSync(s.b.ca('combined-bb.pem')) && r.results.length === 2, 'the other harness and every entry were still undone')
-  assert.deepEqual(r.manifest.files.filter((f) => f.role === 'bundle' || f.role === 'ca-cert').map((f) => path.basename(f.path)).sort(), ['trocar-ca.pem', 'combined-aa.pem'], 'what is left stays in the manifest')
+  assert.deepEqual(r.manifest.files.filter((f) => f.role === 'bundle' || f.role === 'ca-cert').map((f) => path.basename(f.path)).sort(), ['combined-aa.pem', 'trocar-ca.pem'], 'what is left stays in the manifest')
 })
 
 test('an entry step 1 could not undo still names its bundle: the bundle is kept without the trocar CA, held or not (no bundle, no network at the agent\'s next start), rebuilt when gone, and removed once the entry is undone (4.6 安装 / 卸载不静默)', async () => {

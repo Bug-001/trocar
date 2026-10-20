@@ -63,7 +63,7 @@ test('leak-guard: leaked() — directories and our prefixes count, a stray libra
   fs.writeFileSync(path.join(dir, 'as-y'), '')
   fs.writeFileSync(path.join(dir, 'atrace-z'), '')
   fs.writeFileSync(path.join(dir, 'libduck.so'), '')
-  assert.deepEqual(leaked(dir, fs.readdirSync(dir).sort()), ['as-y', 'trocar-x', 'atrace-z', 'whatever'])
+  assert.deepEqual(leaked(dir, fs.readdirSync(dir).sort()), ['as-y', 'atrace-z', 'trocar-x', 'whatever'])
   // an entry that went away between the listing and the check does not end the check (an exception there turned the guard off)
   assert.deepEqual(leaked(dir, ['gone-before-lstat', 'trocar-gone', 'whatever']), ['trocar-gone', 'whatever'])
 })

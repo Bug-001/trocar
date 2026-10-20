@@ -129,7 +129,7 @@ test('classes 的顶层键与每类的键照 C.5,条数与大小来自段索引'
   assert.equal(llm.counts.h24.calls, 1)
   assert.equal(doc.classes.find((c) => c.class === 'telemetry').counts.all.calls, 1)
   assert.ok(llm.counts.all.bytes > 0)
-  assert.deepEqual(Object.keys(doc.disk).sort(), ['trocar_bytes', 'records_bytes', 'sealed_bytes'])
+  assert.deepEqual(Object.keys(doc.disk).sort(), ['records_bytes', 'sealed_bytes', 'trocar_bytes'])
   // every disk number IS a size on disk (P4): the plaintext segments, their sealed copies, the whole home
   const sizes = (re) => fs.readdirSync(path.join(home, 'raw')).filter((n) => re.test(n)).reduce((n, f) => n + fs.statSync(path.join(home, 'raw', f)).size, 0)
   assert.equal(doc.disk.records_bytes, sizes(/\.ndjson$/))
