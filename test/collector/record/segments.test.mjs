@@ -95,7 +95,7 @@ test('segments: the lock names a new segment before that segment\'s file exists,
   const seen = [] // what a sealer would have read at the instant the file was about to appear
   s.onSegmentChange((seg) => { if (seg) seen.push({ seg, named: JSON.parse(fs.readFileSync(lock, 'utf8')).segment, onDisk: fs.existsSync(path.join(raw(home), `${seg}.ndjson`)) }) })
   const handed = [] // what the sealer the queue forks at once would read
-  s.onSegmentClosed((f) => handed.push({ closed: path.basename(f), named: JSON.parse(fs.readFileSync(lock, 'utf8')).segment }))
+  s.onSegmentClosed((f) => handed.push({ closed: path.basename(f), stillNamed: JSON.parse(fs.readFileSync(lock, 'utf8')).segment === path.basename(f, '.ndjson') }))
   s.envelope({ id: 'a' }) // past 1 byte: this segment is closed at once, so the next envelope rotates
   clock = '2026-10-18T07:08:10.000Z'
   s.envelope({ id: 'b' })
@@ -105,8 +105,8 @@ test('segments: the lock names a new segment before that segment\'s file exists,
     { seg: '20261018T070810Z', named: '20261018T070810Z', onDisk: false },
   ], 'the lock named each segment while its file did not exist yet — not on the next 1 s tick')
   assert.deepEqual(handed, [
-    { closed: '20261018T070809Z.ndjson', named: null },
-    { closed: '20261018T070810Z.ndjson', named: null },
+    { closed: '20261018T070809Z.ndjson', stillNamed: false },
+    { closed: '20261018T070810Z.ndjson', stillNamed: false },
   ], 'a closed segment reaches the seal queue only once the lock no longer names it — not on the next 1 s tick')
 })
 

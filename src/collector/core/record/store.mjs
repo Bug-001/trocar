@@ -52,7 +52,7 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
   }
 
   // A new segment, never an existing one: a segment on disk is closed for good, so a crash's half line stays as it is
-  // and a reader's line numbers (the record ids) never shift under it. The name is announced to onOpening BEFORE the
+  // and a reader's line numbers (the record ids) never shift under it. The name is announced to onChange BEFORE the
   // file exists (invariant 2: a sealer that believed the live segment closed would delete its plaintext, so the lock
   // must name the new segment no later than its first byte — not on the next timer tick), and the file is created with
   // 'ax', so two writers on one home can never share a name and a restart never appends to an old file.
@@ -80,7 +80,7 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
   const announce = (seg, file) => { for (const cb of onChange) { try { cb(seg) } catch (e) { report(e, file) } } } // never breaks the capture
   /** fsync, close, and hand the path to the seal queue. The next envelope opens the next segment. The lock is told
    *  BEFORE the queue (invariant 2, D60): the queue forks a sealer at once, and a lock left naming the closed segment
-   *  until the next timer tick made it refuse that segment until the next start (found in development). */
+   *  until the next timer tick made it refuse that segment until the next start (a macOS machine, 2026-10-20). */
   function closeSegment() {
     if (!segFile) return
     const file = segFile, fd = fds.get(file)

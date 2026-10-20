@@ -173,7 +173,7 @@ test('a catch-up that never comes back does not hold the seal: the segment is qu
   assert.deepEqual(said, [['raw', 'index-failed', SEGMENTS[0]]], 'and the wait is on the record, once')
 })
 
-// The rotation in a running daemon (from a daemon journal: `refused … the daemon's lock names it as the
+// The rotation in a running daemon (journal of 2026-10-20 on a macOS machine: `refused … the daemon's lock names it as the
 // segment being appended to`, for the segment it had just closed). The real record store rolls over, the real lock
 // keeper is hung where both daemon entries hang it, and the real forked worker reads the lock: no timer tick may stand
 // between the close and the seal, so the lock must already have moved off the closed segment when the queue gets it.
