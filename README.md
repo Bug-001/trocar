@@ -93,7 +93,8 @@ asight (only what that agent is missing), and **a traffic class's level** (the s
 only). Where the board cannot make the change (not installed, or running as root), it shows no control and
 puts the command in the row's technical details. `asight install` and `asight uninstall` stay in the CLI: the
 board has no control for them. Replay keys: ← → (Shift: ten steps), Home, End, n / p (next / previous step with a
-problem), f (follow latest), ? (the key list), Esc.
+problem), f (follow latest), ? (the key list), Esc. When an agent is not captured, its row says why in the same sentence `asight status` prints in its NOTE column (one
+catalog, `src/cli/words.mjs`, a sentence for every reason).
 
 Per call, on one board: **context replay** (the full assembled request, block by block, plus the raw
 wire body) · **cache overlay** (real `cache_read` / `cache_write` counts, the marked break, its cause
