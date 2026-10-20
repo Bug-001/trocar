@@ -120,7 +120,8 @@ test('V94: HEAD = upstream and the collector on this code is exit 0 and writes n
   const stopped = []
   t = ctx(s, {
     daemonCode: () => daemon,
-    deps: { unit, socketPath: path.join(s.base, 'control.sock'), request: async () => ({ code: daemon }), stopDaemon: async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } } },
+    // the daemon answers its control channel: `code` on GET /status, and the off it is asked for before it is stopped (§5.2)
+    deps: { unit, socketPath: path.join(s.base, 'control.sock'), request: async ({ method }) => (method === 'POST' ? { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 0, waiting: 0, cut: 0 } } : { code: daemon }), stopDaemon: async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } } },
   })
   assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text()) // replacing the daemon is a phase like any other: it goes through the plan / --yes gate (§1.4)
   const receipt = t.io.json()
@@ -200,6 +201,28 @@ test('V96: --dry-run with a handover file writes nothing, and the daemon-only st
   t = ctx(s, { daemonCode: () => '0.1.0+0000000', deps: { stopDaemon, unit: { path: '/login/entry', enable: () => ({ code: 0 }) } } })
   assert.equal(await runUpdateCli([], t.c), EXIT.usage, t.io.text())
   assert.deepEqual([stopped, t.calls.install], [[], []], 'the collector was not stopped')
+})
+
+// §5.2 / D67①: a collector on another code is taken out of the way the one way `uninstall` takes it — asked to drain and exit, then stopped
+test('V96: the collector on another code is asked to drain and exit before it is stopped, and comes back on this code', async () => {
+  const s = sandbox()
+  const sock = path.join(s.base, 'control.sock')
+  const asked = [], stopped = []
+  let daemon = '0.1.0+0000000'
+  const t = ctx(s, {
+    daemonCode: () => daemon,
+    deps: {
+      daemonState: async () => ({ state: 'running', socket: sock, lock: { pid: 4242 } }),
+      request: async ({ method, path: p, body }) => { asked.push([method, p, body]); return { actual: 'off', confirmed: true, pid: 4242, relayed: { closing: 0, waiting: 0, cut: 0 } } },
+      stopDaemon: async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } },
+      unit: { path: '/login/entry', enable: () => { daemon = codeId(s.root); return { code: 0 } } },
+      socketPath: sock, drainMs: 0,
+    },
+  })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(asked.filter(([m]) => m === 'POST'), [['POST', '/off', { exit: true }]], 'drained first: POST /off, the whole daemon, not now')
+  assert.equal(stopped.length, 1, 'and stopped once after that')
+  assert.deepEqual([t.io.json().restarted, daemon], [true, codeId(s.root)])
 })
 
 // ── V97 · the version, and the code the collector reports ────────────────────────────────────────────────────────────────────────────

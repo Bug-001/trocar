@@ -112,6 +112,33 @@ export function desiredOff(w, ids, installed) {
 
 const counts = (r) => (r && ['closing', 'waiting', 'cut'].every((k) => Number.isInteger(r[k]) && r[k] >= 0) ? { closing: r.closing, waiting: r.waiting, cut: r.cut } : null)
 
+export const DRAIN_MS = 30_000 // 1.6 §1.1: how long the daemon is given to close the connections it can see the end of
+const relayedOf = (r) => (r && ['closing', 'waiting', 'cut'].every((k) => Number.isInteger(r[k]) && r[k] >= 0) ? r : null)
+
+// The daemon was asked to exit once drained: wait until the connections it can see the end of are closed (`closing` is 0), it has gone, or `boundMs` is up.
+// → { rel: the last counts read (null: never read), gone: the daemon had exited by itself when last looked }.
+async function waitForDrain(w, first, boundMs, socketPath) {
+  let rel = relayedOf(first), gone = false
+  for (const end = w.ms() + boundMs; rel && rel.closing > 0 && w.ms() < end;) {
+    await w.sleep(200)
+    try { rel = relayedOf((await w.request({ socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).relayed) || rel } catch (e) {
+      gone = !!e && (e.code === 'ENOENT' || e.code === 'ECONNREFUSED') // exited by itself (it drained), or not answering: nothing more to wait for
+      break
+    }
+  }
+  return { rel, gone }
+}
+
+/** The one way a whole daemon is taken out of the way (1.6 §5.2): asked to go once drained (`POST /off {exit:true}`, no names), then waited
+ *  on until what it can see the end of is closed. `uninstall` and `update`'s daemon replacement both go through this — the caller stops it
+ *  afterwards (`routing.stop` when switchRoutingOff already had to). → `{ routing (switchRoutingOff's), drained ({rel, gone}, null when no
+ *  daemon answered) }`. The socket is the one that answered: `w.socketPath` is null with $XDG_RUNTIME_DIR unset. */
+export async function drainDaemon(w, { drainMs = DRAIN_MS } = {}) {
+  const routing = await switchRoutingOff(w, { ids: null, now: false, exit: true })
+  const drained = routing.confirmed && routing.how === 'daemon-reply' ? await waitForDrain(w, routing.relayed, drainMs, routing.socket) : null
+  return { routing, drained }
+}
+
 /** Step 3: take the routing off and confirm it (see the header). `exit`: the whole daemon is to go once drained (no names). → `{ confirmed, unstoppable, state,
  *  how, socket (the control socket a daemon was found on, or the one that was to be asked), daemon: {pid, state}, relayed, relayed_reason?, stop?, problems: [],
  *  notes: [], failures: [{code, reason}], events: [{kind, reason, …}] }`. */
