@@ -1,11 +1,14 @@
 /* css/traffic.css — 流量 / the host page / the request detail (1.10, 2.6 §C). Tokens only (css/base.css). The traffic
-   table is a plain scrolling page; the host page splits into the list and the detail — a column at ≥ 1440 px, a drawer
-   over the list below (the .column / .drawer class comes from the media query via core host.mjs). */
+   table is a plain scrolling page; the host page splits into the list and the detail — a column at ≥ 1440 px, a sheet
+   rising from the bottom below it, half the viewport high with the list above (the .column / .drawer class comes from the
+   media query via host.mjs; 1.10 §一件事只说一处). */
 
 /* ── the traffic table (also the host page's caption / states) ─────────────────────────────────────────────────── */
 .page.traf{padding:14px 28px 56px;}
 .tcap{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 18px;padding:2px 0 8px;font-size:var(--fs-cap);color:var(--ink-2);}
 .cap-item{white-space:nowrap;}
+.tcap [data-note]{white-space:normal;flex:1 1 320px;min-width:0;}
+.tcap .tfilters{margin-left:auto;}
 .cap-note{color:var(--ink-3);}
 .cap-agent{display:inline-flex;align-items:center;gap:5px;margin-left:8px;white-space:nowrap;}
 .cap-agent + .cap-agent{margin-left:2px;}
@@ -14,7 +17,8 @@
 .fchip:hover{text-decoration:none;background:var(--action-wash);}
 .fchip .x{color:var(--ink-3);}
 
-.trow{display:grid;grid-template-columns:0 132px minmax(220px,1.4fr) 96px 72px 132px minmax(150px,1fr);column-gap:10px;align-items:center;min-height:34px;padding:0 2px;border-top:1px solid var(--rule);font-size:var(--fs-body);color:var(--ink);text-decoration:none;}
+/* eight tracks for the eight cells: gutter · agent · host · first seen · requests · sent · received · main classes */
+.trow{display:grid;grid-template-columns:0 132px minmax(160px,1.4fr) 96px 72px 110px 132px minmax(120px,1fr);column-gap:10px;align-items:center;min-height:34px;padding:0 2px;border-top:1px solid var(--rule);font-size:var(--fs-body);color:var(--ink);text-decoration:none;}
 a.trow:hover{background:var(--panel);text-decoration:none;}
 a.trow.hi{background:var(--panel);}
 .trow.nolink{color:var(--ink-2);}
@@ -46,9 +50,9 @@ a.trow.hi{background:var(--panel);}
 .thost{display:flex;flex-direction:column;height:100%;min-height:0;padding:14px 28px 0;}
 .thost .pagehead{margin-bottom:0;}
 .tbody{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 440px;column-gap:0;}
-.thost.drawer .tbody{grid-template-columns:minmax(0,1fr);position:relative;}
+.thost.drawer .tbody{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;}
 .tlist{min-width:0;overflow:auto;padding-bottom:40px;}
-.hhead,.hrow{display:grid;grid-template-columns:72px minmax(200px,1fr) 84px 76px 76px minmax(96px,130px) minmax(88px,1fr);column-gap:10px;align-items:center;}
+.hhead,.hrow{display:grid;grid-template-columns:140px minmax(200px,1fr) 84px 76px 76px minmax(96px,130px) minmax(88px,1fr);column-gap:10px;align-items:center;}
 .hhead{min-height:28px;font-size:var(--fs-cap);color:var(--ink-3);border-bottom:1px solid var(--rule);}
 .hrow{min-height:34px;font-size:var(--fs-body);color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule);}
 a.hrow:hover{background:var(--panel);text-decoration:none;}
@@ -60,12 +64,12 @@ a.hrow.sel,a.hrow.sel:hover{background:var(--raised);box-shadow:inset 2px 0 0 va
 .rmark{color:var(--ink-2);white-space:nowrap;}
 a.rmark{color:var(--action);}
 .rmark.fail{color:var(--bad);}
-.tcell{color:var(--ink-2);font-size:var(--fs-cap);white-space:nowrap;}
+.tcell{color:var(--ink-2);font-size:var(--fs-cap);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
 
-/* the detail: a column at the breakpoint, a drawer over the list below */
+/* the detail: a column at the breakpoint, a bottom sheet under the list below it */
 .hdetail{min-width:0;overflow:auto;background:var(--raised);border-left:1px solid var(--rule);padding:0 0 32px;}
-.thost.drawer .hdetail{position:absolute;top:0;right:0;bottom:0;width:min(440px,calc(100% - 40px));z-index:8;border-left:0;box-shadow:var(--shadow-float);transform:translateX(103%);transition:transform var(--t-panel) var(--ease);}
-.thost.drawer .hdetail.open{transform:none;}
+.thost.drawer .hdetail{display:none;}
+.thost.drawer .hdetail.open{display:block;height:50vh;border-left:0;border-top:1px solid var(--rule-2);box-shadow:var(--shadow-float);}
 .d-empty{padding:44px 20px;color:var(--ink-3);font-size:var(--fs-cap);text-align:center;}
 .d-err{padding:28px 20px;color:var(--ink);}
 .d-err p{margin:0 0 10px;}
@@ -89,8 +93,8 @@ a.rmark{color:var(--action);}
 .rqd-kind{margin:0 0 4px;font-size:var(--fs-cap);color:var(--ink-2);}
 .rqd-pre{margin:0;font:var(--fs-cap)/1.6 var(--mono);white-space:pre-wrap;word-break:break-all;color:var(--ink);background:var(--sunk);padding:8px 10px;border-radius:var(--r-2);max-height:340px;overflow:auto;}
 .rqd-pre.hex{word-break:normal;overflow-wrap:normal;}
-.kvt{display:grid;grid-template-columns:150px minmax(0,1fr);gap:3px 12px;font:var(--fs-cap)/19px var(--mono);}
-.kvt .k{color:var(--ink-3);overflow-wrap:anywhere;}
+.kvt{display:grid;grid-template-columns:fit-content(45%) minmax(0,1fr);gap:3px 12px;font:var(--fs-cap)/19px var(--mono);}
+.kvt .k{color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .kvt .v{color:var(--ink);overflow-wrap:anywhere;min-width:0;}
 .kvt .v .mask-dots{letter-spacing:1px;color:var(--ink-2);}
 .lnk{border:0;background:none;color:var(--action);cursor:pointer;font-size:var(--fs-cap);padding:0;}
@@ -104,7 +108,7 @@ a.rmark{color:var(--action);}
 /* the small screens: the class folds under the endpoint; 收回 moves into the detail only (1.10 §窄屏) */
 @media (max-width:899px){
   .thost{padding:12px 14px 0;}
-  .hhead,.hrow{grid-template-columns:64px minmax(120px,1fr) 64px minmax(88px,120px) minmax(80px,1fr);}
+  .hhead,.hrow{grid-template-columns:132px minmax(120px,1fr) 64px minmax(88px,120px) minmax(80px,1fr);}
   .hhead .cell.num,.hrow .cell.num{display:none;}
   .hrow{min-height:44px;padding:3px 0;}
   .hrow .cell.class{grid-column:2;grid-row:2;}
