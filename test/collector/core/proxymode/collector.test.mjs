@@ -215,23 +215,32 @@ test('CM19 / CM33 · the PAC door: this user\'s process gets the PAC (door leg w
   assert.equal(doors[pacG], 'http://127.0.0.1:18103', 'an auth:false door takes no credentials')
   assert.equal(opened[0].auth, false); assert.equal('token' in opened[0], false)
   for (const address of ['127.0.0.1', 'LocalHost', 'door.localhost', '127.0.0.2', '::1']) assert.equal(await c.lookupIngress({ peer: PEER, user: pacG, target: { address, port: 18103 } }), null, `${address}: a loop through the door (chain.mjs isLoopbackHost), not a flow`)
-  const on = await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
+  // what one servePac call recorded (P10: a refusal and a door-less answer are one record each, with the requester's peer; a door PAC is none)
+  const wrote = async (req) => { const n = records.length, res = await c.servePac(req); const got = records.slice(n); for (const x of got) assert.deepEqual(checkRecord(x), [], JSON.stringify(x)); return { res, got } }
+  const pacReq = { peer: PEER, user: pacG, path: '/trocar.pac' }
+  const { res: on, got: onRec } = await wrote(pacReq)
+  assert.deepEqual(onRec, [], 'this user\'s process gets the door PAC: nothing to record')
   assert.equal(on.status, 200); assert.match(on.body, /PROXY 127\.0\.0\.1:18103; PROXY sys\.corp:8080/)
   w.facts = { uid: 502, startedAt: INSTALLED + 1 }
-  assert.equal(await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' }), null, 'another user, for certain: refused')
+  const refused = await wrote(pacReq)
+  assert.equal(refused.res, null, 'another user, for certain: refused')
+  assert.deepEqual(refused.got.map((r) => [r.event, r.code, r.peer]), [['failure', 'pac-peer-refused', PEER]], 'exactly one pac-peer-refused, with the peer')
   const n0 = records.length
   const other = await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })
   assert.equal(other && other.refuse && other.refuse.code, 'pac-peer-refused', 'a CONNECT from another user is refused — an answer of its own, not null (null is "unknown user": 407)')
   assert.equal(records.length, n0, 'the lookup writes nothing itself: the ingress writes the one record of that connection')
   w.pid = null // the owner could not be read
-  const unread = await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })
+  const { res: unread, got: unreadRec } = await wrote(pacReq)
+  assert.deepEqual(unreadRec.map((r) => [r.event, r.peer]), [['failure', PEER]], 'exactly one record that the PAC was served without the door, with the peer')
   assert.equal(unread.status, 200); assert.doesNotMatch(unread.body, /18103/, 'no door'); assert.match(unread.body, /return "PROXY sys\.corp:8080"/, 'the app keeps the user\'s system proxy')
   assert.equal((await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })).refuse.code, 'pac-peer-refused', 'not shown to be this user\'s: refused')
   w.owner = { why: 'shared', sameUser: true } // the table proves the end is this user's but names no single pid (4.9 §5.3 step 1)
   const shared = await c.lookupIngress({ peer: PEER, user: pacG, target: { address: 'api.example', port: 443 } })
   assert.equal(shared.refuse, undefined, 'this user\'s, pid unknown: not refused')
   assert.deepEqual([shared.pid, shared.decrypt, shared.skip], [null, false, { not_captured: 'untracked', reason: 'pid-unresolved' }], 'forwarded untracked (4.8 §5.3 no pid)')
-  assert.match((await c.servePac({ peer: PEER, user: pacG, path: '/trocar.pac' })).body, /PROXY 127\.0\.0\.1:18103/, 'and it gets the door PAC')
+  const sharedPac = await wrote(pacReq)
+  assert.match(sharedPac.res.body, /PROXY 127\.0\.0\.1:18103/, 'and it gets the door PAC')
+  assert.deepEqual(sharedPac.got, [], 'the door PAC to this user\'s process: nothing to record')
   w.owner = null
   w.pid = 77
   w.facts = { uid: 501, agent: pacDesc.name, startedAt: INSTALLED + 1 }
