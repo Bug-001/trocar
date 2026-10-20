@@ -88,10 +88,10 @@ function follower(home, s) {
 
 // Subagents side by side whose calls end late (written after calls that started after them): each poll folds on the records it did not
 // hold, whatever their place in step order, and answers byte for byte what a fold from scratch answers.
-for (const wire of ['http', 'threads', 'ws']) for (const subLanes of [4, 8]) {
+for (const wire of ['http', 'threads', 'ws', 'chat']) for (const subLanes of [4, 8]) {
   test(`a ${wire} session with ${subLanes} subagents side by side and late calls, followed as it grows, is the fold from scratch`, async () => {
     const home = path.join(tmpDir('trocar-slate-'), '.trocar')
-    const s = bigSession({ home, wire, growth: 1_500, subEvery: 2, subLanes, late: 3, subLen: 12, seed: subLanes })
+    const s = bigSession({ home, wire, growth: 1_500, subEvery: 2, subLanes, late: 6, subLen: 12, seed: subLanes })
     const same = follower(home, s)
     const written = () => fs.readFileSync(s.file, 'utf8').trim().split('\n').length
     s.append(12)
