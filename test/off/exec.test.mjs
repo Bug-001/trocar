@@ -155,7 +155,8 @@ test('0.1 §3 src/off, src/cli and src/netenv reach node:child_process only thro
 })
 
 test('runAsync quiet settles on the child\'s exit, not when something it started lets go of the pipes; past the timeout it is status null', { skip: process.platform === 'win32', timeout: 20_000 }, async () => {
-  const bin = tmpDir('asight-exec-'), env = { ...process.env, PATH: bin }
+  // the stubs' own `sleep` must resolve: with PATH = bin alone it is "not found" (127) at once, so the timeout case only passed when the machine was slow
+  const bin = tmpDir('asight-exec-'), env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }
   stub(bin, 'opener', 'sleep 5 & exit 0'); stub(bin, 'stuck', 'exec sleep 5'); stub(bin, 'nope', 'exit 3')
   const t0 = Date.now()
   assert.equal((await runAsync('opener', [], { env, timeout: 3000, quiet: true })).status, 0)
