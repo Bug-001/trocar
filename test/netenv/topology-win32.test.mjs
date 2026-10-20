@@ -67,7 +67,8 @@ test('W29 row e (v2rayN) is a proxy hop named by its executable and its port, an
 const statusOf = (ids, { agents = [], desired = 'on', appliedHosts = null } = {}) => ({
   daemon: { state: 'running', pid: 4121, reply: { engine: { port: 17990 }, links: [], negatives: [], agents, ...(appliedHosts ? { applied_hosts: appliedHosts } : {}) }, lock: { engine_port: 17990 } },
   link: { attached: null, helper: 'ok', ids: [] },
-  harnesses: ids.map((id) => ({ id, installed: true, desired, entry: { state: 'intact' }, installedAt: '2026-10-09T09:00:00.000Z', procs: [] })),
+  // status's own process rows: the daemon's row of each process it judged (an agent row without `agent` is the first harness's), as status takes it
+  harnesses: ids.map((id) => ({ id, installed: true, desired, entry: { state: 'intact' }, installedAt: '2026-10-09T09:00:00.000Z', procs: agents.filter((a) => (a.agent || ids[0]) === id).map((a) => ({ pid: a.pid, trusted: a.trusted === true, reason: a.reason ?? null })) })),
 })
 const gather = (home, { helper, ids = ['claude-code'], env = {}, agents = [], desired = 'on', manifest = null, appliedHosts = null, spawn = null, netenv = { result: { products: [], unknown: [] } } } = {}) =>
   gatherNetFacts({ platform: 'win32', home, env, harnesses: all, status: { ...statusOf(ids, { agents, desired, appliedHosts }), ...(manifest ? { manifest: { value: manifest, error: null } } : {}) }, netenv, archFacts: gatherWin32Facts, adopted: null, now: () => NOW, deps: { helper, ...(spawn ? { spawn } : {}) } })

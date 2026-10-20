@@ -28,6 +28,9 @@ import { createLeafIssuer } from '../../src/collector/core/tls/leaf.mjs'
 import { runOnCli } from '../../src/cli/on.mjs'
 import { runOffCli } from '../../src/off/main.mjs'
 import { statusRun } from '../../src/cli/status.mjs'
+import { controlEndpointFor } from '../../src/off/control-client.mjs'
+import { darwinNetFacts } from '../../src/collector/arch/darwin/netfacts.mjs'
+import { gatherWin32Facts } from '../../src/collector/arch/win32/netfacts.mjs'
 import { segmentIndex } from '../../src/query/index-build.mjs'
 
 const FAKE_HELPER = fileURLToPath(new URL('./arch/win32/fixtures/fake-helper.mjs', import.meta.url))
@@ -237,6 +240,10 @@ for (const platform of ['darwin', 'win32']) {
     fs.writeFileSync(bundle, rootPem + mockCa.certPem)
     const desc = w.harnesses.find((h) => h.name === 'codex')
     const a = agentOf({ w, name: desc.processes.names[0].name, env: { SSL_CERT_FILE: bundle } })
+    // it starts after its carrier (the install, what the door checks) and BEFORE the first `on`: it read no entry by status's own rule, so only the
+    // daemon's verdict can say captured — the wiring this test pins
+    a.start = Math.ceil(Date.now() / 1000) * 1000
+    while (Date.now() <= a.start + 20) await new Promise((r) => setTimeout(r, 25))
     const win = platform === 'win32' ? win32Io(a) : null
     const box = await liveUnit({ w, platform, io: win ? win.io : { exec: darwinExec(a) } })
     const open = []
@@ -263,11 +270,27 @@ for (const platform of ['darwin', 'win32']) {
         // the decrypted one, one started in the earlier window that never connected, one started while codex was off
         const exe = a.exe, inWin = { pid: PID + 1, startedAt: msOf(earlier.on_at) + 1 }, offStart = { pid: PID + 2, startedAt: msOf(earlier.off_at) + 1 }
         assert.ok(offStart.startedAt < msOf(l.on_at), 'the off-start process started before the second on')
-        const procs = async () => [a, inWin, offStart].map((p) => ({ pid: p.pid, ppid: 1, uid: process.getuid(), startedAt: p.startedAt ?? p.start, exe, argv: [exe], env: () => null, envRead: false }))
-        const sio = { t: '', out(s) { this.t += s }, err(s) { this.t += s }, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
-        await statusRun(['--json'], { io: sio, env: w.env, home: w.home, platform, deps: { platform, procs, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: null }), rootStore: w.store } })
-        const rows = Object.fromEntries(JSON.parse(sio.t.slice(sio.t.indexOf('{'))).harnesses.codex.processes.map((r) => [r.pid, [r.captured, r.reason]]))
-        assert.deepEqual(rows, { [PID]: [true, null], [inWin.pid]: [true, null], [offStart.pid]: [false, 'config-after-start'] }, sio.t)
+        const three = [a, inWin, offStart].map((p) => ({ pid: p.pid, startedAt: p.startedAt ?? p.start }))
+        // the real GET /status of the model daemon lists the door's verdict for the process life it judged
+        const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
+        const reply = await ep.request({ socketPath: ep.socketPath })
+        assert.deepEqual((reply.agents || []).filter((r) => r.pid === PID).map((r) => [r.agent, r.trusted, new Date(r.start).getTime()]), [['codex', true, a.start]], JSON.stringify(reply.agents))
+        // the platform's own network facts under the topology, its OS reads faked: the form's verdict is status's, never judged again
+        const archFacts = (live) => platform === 'win32'
+          ? (ctx) => gatherWin32Facts(ctx, { helper: { call: async (verb) => (verb === 'ps' ? { sessionId: 1, procs: three.filter((p) => live.includes(p.pid)).map((p) => ({ ...p, ppid: 1, name: a.name, exe, cmdline: exe, cmdlineState: 'ok', sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false })) } : verb === 'tcp-table' ? { rows: [] } : Promise.reject(Object.assign(new Error('not faked'), { code: 'not-faked' }))) }, readSystemProxy: async () => ({ ok: false, reason: 'absent' }) })
+          : (ctx) => darwinNetFacts(ctx, { exec: () => ({ status: 1, stdout: '', stderr: 'not faked' }) })
+        const status = async (live) => {
+          const sio = { t: '', out(s) { this.t += s }, err(s) { this.t += s }, stdin: { isTTY: false }, stdout: { isTTY: false }, stderr: {} }
+          const procs = async () => three.filter((p) => live.includes(p.pid)).map((p) => ({ ...p, ppid: 1, uid: process.getuid(), exe, argv: [exe], env: () => null, envRead: false }))
+          await statusRun(['--json'], { io: sio, env: w.env, home: w.home, platform, deps: { platform, procs, identity: () => ({ start_time: '111', boot_id: 'boot-1' }), alive: () => true, exec: () => ({ status: 0, stdout: '', stderr: '' }), parts: box.parts, lingerRead: async () => ({ state: null }), netFactsDeps: async () => ({ harnesses: w.harnesses, archFacts: archFacts(live) }), rootStore: w.store } })
+          return JSON.parse(sio.t.slice(sio.t.indexOf('{')))
+        }
+        const doc = await status([PID, inWin.pid, offStart.pid])
+        const rows = Object.fromEntries(doc.harnesses.codex.processes.map((r) => [r.pid, [r.captured, r.reason]]))
+        assert.deepEqual(rows, { [PID]: [true, null], [inWin.pid]: [true, null], [offStart.pid]: [false, 'config-after-start'] }, JSON.stringify(doc.harnesses.codex))
+        // the topology (and the doctor's findings on it) carries the same verdicts: without the off-start process nothing there needs a restart
+        const t = (await status([PID, inWin.pid])).topology.codex
+        assert.deepEqual([t.captured, t.reason, t.branches.map((b) => b.captured), t.findings.includes('config-after-start')], [true, null, t.branches.map(() => true), false], JSON.stringify(t))
       } finally {
         for (const s of open) s.destroy()
         await box.stop()
