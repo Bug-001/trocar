@@ -582,7 +582,7 @@ test('review C · CONNECT retried after a 407, the client goes before the proxy 
   raw.write(H2); await sleep(50); raw.end(); await L.settled(1)
   assert.equal(L.flows.length, 1)
   const f = L.flows[0]
-  assert.deepEqual([f.decision, f.inner, f.not_captured, f.error?.type, f.error?.side], ['tunnel', undefined, 'error', 'closed_before_decision', 'client'])
+  assert.deepEqual([f.decision, f.inner, f.not_captured, f.error?.type, f.error?.side, f.error?.wait?.phase], ['tunnel', undefined, 'error', 'closed_before_reply', 'client', 'proxy-reply'])
   assert.equal(b64(f.prelude.client_b64).toString('latin1'), H1, 'the prelude holds the round trips that completed')
 })
 

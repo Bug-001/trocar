@@ -163,7 +163,7 @@ for (const maxVersion of ['TLSv1.2', 'TLSv1.3']) {
     const untrusting = () => request(h.port, upCa.certPem, REQ, { maxVersion }).then(() => 'ok', () => 'rejected')
     assert.equal(await untrusting(), 'rejected'); await within(h.settled(), 'first flow finalized')
     assert.equal(h.flows[0].reason, 'client-rejected-leaf')
-    assert.equal(h.ctx.negCache.list().length, 0, 'one rejection is not enough (pooled sockets close unused too)')
+    assert.equal(h.ctx.negCache.list().length, 0, 'one rejection is not enough (an unused connection can still close inside the window)')
     assert.equal(await untrusting(), 'rejected'); await within(h.settled(), 'second flow finalized')
     assert.deepEqual(h.ctx.negCache.list().map((e) => [e.pid, e.host, e.cause, e.rejections]), [[1, 'upstream.test', 'client-rejected-leaf', 2]])
     // the negative-cache write is an event of its own, but the engine's negCache wrapper writes it (engine.test, once);
@@ -305,7 +305,8 @@ test('an upstream that refuses the connection: flows/ error names the upstream s
   const port = await listen(engine)
   assert.equal(await talk(port, trocarCa.certPem), 'closed')
   await within(Promise.all(h.direct), 'flow finalized'); engine.close(); await h.close()
-  assert.deepEqual([h.flows[0].decision, h.flows[0].error.type, h.flows[0].error.side], ['error', 'ECONNREFUSED', 'upstream'])
+  // decrypt was decided on the ClientHello; the engine was in the upstream TLS wait when the dial failed (RFC 4.6 §记录 连接行怎么落码)
+  assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured, h.flows[0].error.type, h.flows[0].error.side], ['decrypt', 'error', 'ECONNREFUSED', 'upstream'])
 })
 
 test('inside a CONNECT tunnel an unverifiable upstream closes that one flow (no prelude replay); the retry is spliced (W12, invariant 1)', async () => {
@@ -355,15 +356,16 @@ test('client abort mid-flight tears down the upstream socket (acceptance T3)', a
 
 test('client reset before a routing decision is caught: flow finalized with the error, upstream dropped (T3)', async () => {
   const hello = await clientHello()
-  // [when, first bytes the client sends, what shows the engine is inside that window]
+  // [when, first bytes the client sends, what shows the engine is inside that window, the decision already made, the wait the engine was in]
+  // (RFC 4.6 §记录 连接行怎么落码: a decision already made stays on the row, and a reset off the wire stays ECONNRESET)
   const cases = [
-    ['before its first byte', null, 'accepted'],
-    ['mid-ClientHello', hello.subarray(0, 20), 'engine-read'],
-    ['mid-CONNECT head', Buffer.from('CONNECT x.test:443 HTTP/1.1\r\n'), 'engine-read'],
-    ['waiting for the proxy reply to its CONNECT', Buffer.from('CONNECT x.test:443 HTTP/1.1\r\n\r\n'), 'upstream-read'], // upstream never replies
-    ['during the upstream TLS handshake', hello, 'upstream-read'], // upstream never answers the engine's ClientHello
+    ['before its first byte', null, 'accepted', 'error', undefined],
+    ['mid-ClientHello', hello.subarray(0, 20), 'engine-read', 'error', undefined],
+    ['mid-CONNECT head', Buffer.from('CONNECT x.test:443 HTTP/1.1\r\n'), 'engine-read', 'error', undefined],
+    ['waiting for the proxy reply to its CONNECT', Buffer.from('CONNECT x.test:443 HTTP/1.1\r\n\r\n'), 'upstream-read', 'tunnel', 'proxy-reply'], // upstream never replies
+    ['during the upstream TLS handshake', hello, 'upstream-read', 'decrypt', 'tls'], // upstream never answers the engine's ClientHello
   ]
-  for (const [when, first, ready] of cases) {
+  for (const [when, first, ready, decision, phase] of cases) {
     let upSock = null, upClosed = null, engineRead = null
     const upstream = net.createServer((s) => { upSock = s; upClosed = once(s, 'close'); s.on('error', () => {}); s.on('data', () => {}) })
     const upAccepted = once(upstream, 'connection')
@@ -375,8 +377,8 @@ test('client reset before a routing decision is caught: flow finalized with the 
     c.resetAndDestroy()
     await h.close()
     await within(upClosed, `${when}: upstream dropped`)
-    assert.equal(h.flows.length, 1, when); assert.equal(h.flows[0].decision, 'error', when)
-    assert.equal(h.flows[0].error?.type, 'ECONNRESET', when); assert.equal(h.flows[0].error?.side, 'client', when)
+    assert.equal(h.flows.length, 1, when); assert.equal(h.flows[0].decision, decision, when); assert.equal(h.flows[0].not_captured, 'error', when)
+    assert.equal(h.flows[0].error?.type, 'ECONNRESET', when); assert.equal(h.flows[0].error?.side, 'client', when); assert.equal(h.flows[0].error?.wait?.phase, phase, when)
   }
 })
 

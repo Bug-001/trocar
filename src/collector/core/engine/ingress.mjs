@@ -20,6 +20,7 @@ import crypto from 'node:crypto'
 import net from 'node:net'
 import { STATUS_CODES } from 'node:http'
 import { parseHead } from './sniff.mjs'
+import { wentBy } from './flow.mjs'
 import { socks5Greeting, socks5Request } from './socks.mjs'
 import { HOOK_HEADER as UPSTREAM_HEADER } from '../proxymode/chain.mjs'
 
@@ -328,13 +329,22 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     let current = null
     r.whenGone(() => { if (current) current.destroy() })
     const dial = () => dialUpstream(up, o.target, (s) => { current = s })
-    const d = await dial()
-    current = null
-    if (r.isGone()) { if (d.ok) d.sock.destroy(); r.detach(); return } // the client left while the upstream was dialled: no flow existed, nothing was lost
     const shown = { kind: up.kind || 'direct', ...(up.host ? { host: up.host } : {}), ...(up.port != null ? { port: up.port } : {}) }
     // The negative cache's key is part of the lookup's contract (§5.5); one that comes without it is keyed here the way the contract says, so a lookup that
     // forgets it cannot make every connection without a pid share the key "null" and poison one another's hosts.
     const base = { ...meta, dst: meta.dst ?? dst, ingress: meta.ingress ?? { route, group }, negKey: meta.negKey ?? (meta.pid != null ? String(meta.pid) : who) }
+    const waited = { phase: shown.kind === 'direct' ? 'connect' : 'proxy-reply', t0: Date.now() }
+    const d = await dial()
+    current = null
+    // the client left while the upstream was dialled: no flow existed and nothing more is dialled or sent, but the give-up is a row (RFC 4.6 §记录
+    // 经代理入口的连接行); a socket the ingress cut itself (it ended or errored on neither side: onTooMuch) has its own record
+    if (r.isGone()) {
+      if (d.ok) d.sock.destroy()
+      r.detach()
+      if (!socket.readableEnded && !socket.errored) return
+      const error = wentBy('client', socket.errored, waited)
+      return void refuse({ ...base, upstream: shown }, { decision: 'error', not_captured: 'error', error, duration_ms: error.wait?.ms ?? 0 })
+    }
     if (!d.ok) {
       r.detach()
       if (d.kind === 'refused') { counters.refused++; refuse({ ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}) } }, { decision: 'tunnel', not_captured: 'proxy-refused', reason: d.reason }); return o.refusedBy(d) }

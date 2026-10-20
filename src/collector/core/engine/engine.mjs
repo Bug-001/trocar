@@ -19,7 +19,8 @@ import { createUpstreamTrust, systemRoots } from '../tls/roots.mjs'
 
 // upstreamCa: extra CAs the engine trusts upstream (test seam); systemCa: stands in for the OS store
 // (tests; undefined = read it): PEM text / array, or a systemRoots()-shaped {certs, errors}. The upstream trust set is built once (RFC 4.6 §引擎 5, tls/roots.mjs).
-// timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default.
+// timing (tests): {firstByteTimeoutMs, upstreamSlowMs, preludeStallMs} — the engine's waits, 5 s each by default; rejectWindowMs — the leaf
+// rejection window (flow.mjs REJECT_WINDOW_MS, 10 s).
 // ingressToken: the install's ingress token (4.8 §3), required for listen({ingress}).
 export function createEngine({ redirector, issuer, store, connectUpstream, upstreamCa, systemCa, policy = () => true, isRecording = () => true, retention = null, describe = () => ({}), onError = () => {}, onFailure = null, timing = {}, drainTimeoutMs, ingressToken = null }) {
   const counters = { active: 0, total: 0, decrypted: 0, spliced: 0, lookupMisses: 0, notCaptured: { h2: 0, httpsProxy: 0, upstreamCert: 0, negative: 0, leafError: 0 } }
@@ -135,8 +136,11 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       socket.destroy(); counters.active--; gone(); return
     }
     const done = started.then((rec) => {
-      if (rec && rec.decision === 'decrypt') counters.decrypted++
-      else if (rec && rec.decision === 'splice') counters.spliced++
+      // outcomes, not plans: a row that kept its decision while nothing was forwarded (RFC 4.6 §记录 连接行怎么落码) — the upstream
+      // failed before decrypting, or a side went during a wait — counts in neither
+      if (!rec || rec.not_captured === 'error' || (rec.error && rec.error.wait)) return
+      if (rec.decision === 'decrypt') counters.decrypted++
+      else if (rec.decision === 'splice') counters.spliced++
     }).catch((e) => { failure({ code: 'engine-error', pid: meta.pid ?? null, dst: meta.dst, reason: `handling the connection failed: ${String((e && e.message) || e)}` }); onError(e) }).finally(() => { active.delete(done); counters.active--; gone() })
     active.add(done)
     if (duringLookup) socket.removeListener('error', duringLookup) // handleFlow's own listener has taken over
