@@ -136,8 +136,11 @@ export function createEngine({ redirector, issuer, store, connectUpstream, upstr
       socket.destroy(); counters.active--; gone(); return
     }
     const done = started.then((rec) => {
-      if (rec && rec.decision === 'decrypt') counters.decrypted++
-      else if (rec && rec.decision === 'splice') counters.spliced++
+      // outcomes, not plans: a row that kept its decision while nothing was forwarded (RFC 4.6 §记录 连接行怎么落码) — the upstream
+      // failed before decrypting, or a side went during a wait — counts in neither
+      if (!rec || rec.not_captured === 'error' || (rec.error && rec.error.wait)) return
+      if (rec.decision === 'decrypt') counters.decrypted++
+      else if (rec.decision === 'splice') counters.spliced++
     }).catch((e) => { failure({ code: 'engine-error', pid: meta.pid ?? null, dst: meta.dst, reason: `handling the connection failed: ${String((e && e.message) || e)}` }); onError(e) }).finally(() => { active.delete(done); counters.active--; gone() })
     active.add(done)
     if (duringLookup) socket.removeListener('error', duringLookup) // handleFlow's own listener has taken over

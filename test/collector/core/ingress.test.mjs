@@ -425,6 +425,19 @@ test('W15 a direct upstream, decrypted: one dial for the whole flow (the wrapper
   assert.deepEqual(L.failures, [])
 })
 
+// `trocar status` prints stats().decrypted / spliced as outcomes: a row that keeps its planned decision while nothing was forwarded (RFC 4.6
+// §记录 连接行怎么落码) counts in neither. Field case: the upstream FINs after reading the engine's ClientHello.
+test('W15 a connection whose upstream hangs up during the engine\'s TLS handshake is not counted as decrypted; a decrypted one is', T, async (t) => {
+  const o = await origin(t)
+  const fin = net.createServer((s) => { s.on('error', () => {}); s.once('data', () => setTimeout(() => s.end(), 50)) }); await listen(fin); t.after(() => fin.close())
+  const L = await lab(t, { upstreamCa: privCa.certPem, meta: { decrypt: true } })
+  assert.equal(await talk((await tunnel(L.ingressPort, `127.0.0.1:${fin.address().port}`)).sock, trocarCa.certPem), 'closed'); await L.settled(1)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured], ['decrypt', 'error'], 'the row keeps the plan')
+  assert.equal((await talk((await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)).sock, trocarCa.certPem)).got, RESP); await L.settled(2)
+  await until(() => L.engine.stats().active === 0, 'both flows to finish')
+  assert.deepEqual([L.engine.stats().decrypted, L.engine.stats().spliced], [1, 0])
+})
+
 test('W15 an IP-literal target with an IP-SAN certificate is decrypted: no SNI exists for an IP (RFC 6066), so the upstream is verified against the address — not against Node\'s own \'localhost\' default (the macOS smoke run\'s live find, 2026-10-09)', T, async (t) => {
   // the origin answers on loopback with a leaf issued FOR the address (leaf.mjs puts an IP SAN on it); the agent speaks TLS with no servername — exactly
   // what every real client does to an IP-literal destination, and exactly what used to fail: without the host handed to tls.connect, Node verified the
@@ -646,6 +659,7 @@ test('W15 step-aside whose second proxy prelude is refused: the agent\'s connect
   const [row] = L.flows
   assert.deepEqual([row.decision, row.not_captured, row.error.type, row.error.side, row.error.wait?.phase], ['splice', 'upstream-cert', 'proxy-refused', 'upstream', 'proxy-reply'])
   assert.match(row.error.message, /refused the second connection \(proxy-status-403\)/); assert.deepEqual(checkRecord(row), [])
+  await until(() => L.engine.stats().active === 0, 'the flow to finish'); assert.equal(L.engine.stats().spliced, 0, 'nothing was spliced: not counted as passed through')
   await within(Promise.all(proxy.conns.map((c) => c.closed)), 3000, 'every connection to the proxy to be closed'); await o.closed()
   assert.equal(L.envelopes.length, 0)
 })
@@ -662,6 +676,7 @@ test('W15 step-aside whose client is gone when the proxy answers the second prel
   // the plan (splice) stays on the row; the error says the client left while the engine waited on the proxy's answer to the second prelude (RFC 4.6 §记录)
   assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].error.type, L.flows[0].error.side, L.flows[0].error.wait?.phase], ['splice', 'upstream-cert', 'closed_before_reply', 'client', 'proxy-reply'])
   await o.closed(); assert.equal(o.conns.length, 1, 'the origin saw only the engine\'s dropped handshake: no ClientHello of the agent\'s went anywhere'); assert.equal(L.envelopes.length, 0)
+  await until(() => L.engine.stats().active === 0, 'the flow to finish'); assert.equal(L.engine.stats().spliced, 0, 'nothing was spliced: not counted as passed through')
 })
 
 test('W15 step-aside over an upstream that carries the user\'s credentials: the flow is closed, no second credentialed connection is opened', T, async (t) => {
