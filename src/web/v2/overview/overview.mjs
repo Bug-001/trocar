@@ -19,7 +19,7 @@ import { captureVerdict, capHealthPatch, agentVerdicts, failureSentence, AGENT_T
 import { priceMatch, costOf, hitRatio } from '../core/metrics.mjs'
 import { loadSessions } from '../library/logic.mjs'
 import { unpricedModels } from '../settings/prices.mjs'
-import { failureBrief } from '../../../cli/words.mjs'
+import { failureBrief, failureWord } from '../../../cli/words.mjs'
 import { infoButton, techDetailsHtml, confirmDialog } from '../core/ui.mjs'
 import { controlFor, controlHtml, wireHarnessControls } from '../core/harness-switch.mjs'
 import * as W from '../labels/overview.mjs'
@@ -67,10 +67,10 @@ export function overviewItems(s, now) {
     for (const r of agentVerdicts(H).filter((r) => r.tier <= AGENT_TIER.problem).sort((a, b) => a.tier - b.tier))
       push('O1', r.harness, { chip: r.harness, href: `#/capture?h=${encodeURIComponent(r.harness)}`, text: r.text })
     // ── O1′ · problems that hang on no harness: critical[] without one, the agent name list, the certificate ──────
-    for (const c of list(H.critical)) if (c && c.harness == null) push('O1p', `c:${c.kind}`, { subject: W.SVC_ITEM(c.reason || W.KIND_WORD[c.kind] || c.kind || ''), href: '#/capture' })
+    for (const c of list(H.critical)) if (c && c.harness == null) push('O1p', `c:${c.kind}`, { subject: W.SVC_ITEM(c.reason || failureWord(c.where, c.code ?? c.kind) || c.kind || ''), href: '#/capture' })
     for (const p of list(H.agent_list && H.agent_list.problems)) push('O1p', 'agent-list', { subject: W.SVC_ITEM(String((p && (p.reason || p.code)) ?? p)), href: '#/capture' })
     const ca = Object.values(H.cert || {}).find((x) => x && x.code === 'ca-invalid')
-    if (ca) push('O1p', 'cert', { subject: W.SVC_ITEM(ca.reason || W.KIND_WORD['ca-invalid']), href: '#/capture' })
+    if (ca) push('O1p', 'cert', { subject: W.SVC_ITEM(ca.reason || failureWord(null, 'ca-invalid')), href: '#/capture' })
   }
 
   // ── O2 · the capture service is stopped or not answering (the server's health, never re-folded here, 1.5), its state
@@ -143,7 +143,7 @@ export function rawGroups(doc, now) {
     if (to == null || now - to >= DAY) continue
     for (const p of list(seg.problems)) {
       if (!p || p.code == null) continue
-      const g = by.get(p.code) || { code: p.code, reason: null, count: 0, last: null }
+      const g = by.get(p.code) || { where: 'raw', code: p.code, reason: null, count: 0, last: null }
       g.count++
       if (g.last == null || to >= parseTs(g.last)) { g.last = seg.to; g.reason = p.reason ?? null }
       by.set(p.code, g)

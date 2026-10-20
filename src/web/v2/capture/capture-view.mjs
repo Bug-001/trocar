@@ -261,7 +261,7 @@ export function changesHtml(h) {
   const lines = items.map((e) => `<p>${mono(e.path || '')} ${mono(e.what || '')}</p>`)
   if (pending.length) {
     lines.push(`<p>${esc(residueLead(pending.some((x) => x.result === 'install did not finish') ? 'install did not finish' : ''))}</p>`)
-    for (const x of pending) lines.push(`<p>${mono(x.path || '')}${x.harness != null ? ` ${harnessIcon(x.harness)}<span class="chipname">${esc(harnessName(harnessKey(x.harness)))}</span>` : ''} <span class="fine">${esc(has(CODE, x.result) ? CODE[x.result] : String(x.result ?? ''))}</span></p>`)
+    for (const x of pending) lines.push(`<p>${mono(x.path || '')}${x.harness != null ? ` ${harnessIcon(x.harness)}<span class="chipname">${esc(harnessName(harnessKey(x.harness)))}</span>` : ''} <span class="fine">${esc(failureWord(null, x.result) || (has(CODE, x.result) ? CODE[x.result] : String(x.result ?? '')))}</span></p>`)
   }
   if (manifest.length) lines.push('<p>The install manifest could not be read</p>')
   const tech = manifest.length ? detailsHtml('cap-changes-tech', manifest.map((e) => ['could not be read', String(e.reason ?? '')])) : ''

@@ -10,6 +10,11 @@ export const NOT_CAPTURED_FAILURE = Object.freeze(['untrusted', 'untracked', 'cl
 /** not_captured on a connection row — not captured by design. */
 export const NOT_CAPTURED_EXPECTED = Object.freeze(['policy', 'not-trust-path', 'https-proxy', 'proxy-refused', 'upstream-first', 'unknown-protocol', 'upgrade-not-followed', 'error'])
 
+/** The raw layer's journal outcomes that are failures (src/raw/seal.mjs; health folds them under where 'raw', the outcome as the code). */
+export const RAW_JOURNAL_FAILURES = Object.freeze(['refused', 'failed'])
+/** The codes of a segment's index problems (src/query/index-build.mjs; the `segments` query's problems[], the overview's raw-layer groups). */
+export const SEGMENT_PROBLEMS = Object.freeze(['record-unparseable', 'record-unreadable', 'segment-unreadable', 'index-unwritable'])
+
 /** Event lines that are failures. Every other event is a state change the reader folds conditions with. */
 export const FAILURE_EVENTS = Object.freeze(['failure', 'agent-untrusted', 'helper-down', 'helper-version-mismatch', 'attach-failed', 'detach-failed', 'log-gap'])
 export const STATE_EVENTS = Object.freeze(['switch', 'daemon-start', 'daemon-stop', 'agent-exit', 'agent-trusted', 'negative-cache-cleared', 'bundles-rebuilt', 'agent-transport', 'ca-ok', 'install-note', 'uninstall-note', 'mitm-start', 'mitm-stop', 'retention-ok', 'retention-set',

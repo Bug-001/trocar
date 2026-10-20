@@ -1,6 +1,6 @@
 // labels/capture.mjs — the words of the capture page and the capture log. Every table keys ONLY asight's own closed sets for
 // states that are not failures (the not_captured classes, the failure events that are not (where, code) pairs, the
-// install-manifest roles, the residue results, the install / uninstall note codes). A failure's sentence is never here:
+// install-manifest roles). A failure's sentence — and an install / uninstall note's or residue result's — is never here:
 // it is the CLI's one table (src/cli/words.mjs FAILURE_WORDS, via failureBrief). A harness-defined code is never a key
 // here — its words arrive with the data. A value a table does not know is rendered as UNKNOWN_REASON with the raw value
 // in the technical details — never dropped, never guessed. Command templates carry a <id> placeholder that the page
@@ -11,7 +11,6 @@ export const UNKNOWN_REASON = 'reason unknown'
 // `untrusted` 的话按它的 code 取(§TRUST_REASON / harness 自带);`state-mismatch` 的话要拼 desired/actual;`negative-cache` 是一条带
 // (where, code) 的失败,话归 CLI 的 FAILURE_WORDS(failureWord);其余是固定句。
 export const CONDITION_KIND = Object.freeze({
-  'ca-invalid': "asight's certificate cannot be used",
   degraded: 'the capture service lacks full system rights; some programs may not be captured',
   'helper-version': "the capture service's system component is the wrong version; some programs may not be captured",
 })
@@ -24,17 +23,7 @@ export const FIX_IN_DETAILS = 'The command that fixes it is in the technical det
 // 这两个码的话是「重启 <agent> 后生效」(1.9 §每个 agent 一行 第 3 条;不画按钮)
 export const RESTART_CODES = Object.freeze(['config-after-start', 'env-frozen'])
 
-// ── 连接行的 not_captured(src/health/codes.mjs 两个闭集)───────────────────────────────────────────────────────
-// 失败类:进采集记录,组键 flow:<码>;预期类:按设计不记,只在页底技术细节计数。CLI 的 failureWord 已答的码不在这里。
-export const NOT_CAPTURED = Object.freeze({
-  untrusted: 'the connection belongs to a process that does not trust asight yet; not decrypted',
-  untracked: 'the connection belongs to a process asight does not follow',
-  'upstream-cert': "the upstream's certificate could not be read",
-  'upstream-handshake': 'the handshake with the upstream did not finish',
-  h2: 'an HTTP/2 connection could not be decrypted',
-  'malformed-hello': "the program's handshake message could not be read",
-  'ws-not-recorded': 'the WebSocket content was not recorded',
-})
+// ── 连接行的预期类 not_captured(src/health/codes.mjs NOT_CAPTURED_EXPECTED):按设计不记,只在页底技术细节计数。失败类的话归 CLI 的 FAILURE_WORDS。
 export const NOT_CAPTURED_EXPECTED = Object.freeze({
   policy: 'not recorded by policy',
   'not-trust-path': 'off the trust path',
@@ -46,33 +35,8 @@ export const NOT_CAPTURED_EXPECTED = Object.freeze({
   error: 'connection error',
 })
 
-// ── asight's own codes of the last install / uninstall notes and of the residue results (not failures: a failure's words
-// are the CLI's FAILURE_WORDS, looked up by (where, code) first). A Node errno or a harness-defined code is not here.
-export const CODE = Object.freeze({
-  // harness (reading / writing an agent's config and files)
-  'harness-note': 'a note from the install',
-  'cert-not-merged': 'a block in your certificate file is not a certificate; it was not merged into the bundle',
-  'source-unreadable': 'a certificate file named in the agent config could not be read',
-  'relative-path': 'a certificate given by a relative path was not carried over',
-  'unit-env-not-carried': "the login item's environment cannot carry the install's certificate variable",
-  'config-unreadable': 'a config file could not be read', 'config-unparsable': 'a config file could not be parsed',
-  // bundle
-  'roots-changed': 'the system root certificates changed; the bundle was rebuilt',
-  missing: 'missing', // bundle (the bundle is gone) and install (a file to undo is gone) share this code
-  ok: 'trusted',
-  // install / uninstall
-  'uninstall-error': 'the uninstall step failed',
-  'left-link': 'a change is a link and was not undone automatically',
-  'entry-not-undone': 'a change written into a user file could not be undone',
-  'reverted-not-identical': "asight's text was removed, but the file was changed again since",
-  'already-restored': 'that file was already restored',
-  'left-user-value': 'a value of your own is still in the file',
-  'still-trusting': "a running process still trusts asight's certificate",
-  'bundle-kept': 'a certificate bundle still in use is kept for now',
-  'residue-not-removed': "files the agent wrote because of asight's plugin are kept; reported, not deleted",
-  'unit-not-disabled': 'the system refused to disable the login item during uninstall',
-
-})
+// ── a residue result that is not a failure (every other result code is worded by the CLI's FAILURE_WORDS, failureWord) ──
+export const CODE = Object.freeze({ ok: 'trusted' })
 
 // ── 安装清单里 asight 自己的文件(roles)────────────────────────────────────────────────────────────────────
 export const FILE_ROLE = Object.freeze({

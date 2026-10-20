@@ -27,10 +27,7 @@ export const CAP_STALE_AS_OF = (t) => `capture health as of ${t}`
 export const MORE_OF = (n) => `${n} more ›`
 
 // O1 / O1′ — an agent's row sentence is the 采集 page's (core/capture-verdict.mjs agentVerdicts); a service-level condition
-// prefers its own `reason`, then these words for asight's own closed set of kinds
-export const KIND_WORD = Object.freeze({
-  'ca-invalid': "asight's certificate cannot be used",
-})
+// prefers its own `reason`, then the CLI's catalog (src/cli/words.mjs failureWord)
 export const SVC_ITEM = (why) => `capture service: ${why}`
 // O2 — the capture service's state cannot be said; `why` is daemon.error as the server wrote it
 export const UNKNOWN_ITEM = (why) => `capture service state unknown: ${why}`
