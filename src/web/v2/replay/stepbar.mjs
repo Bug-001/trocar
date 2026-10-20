@@ -164,8 +164,8 @@ export function stepBarHtml(s) {
   return `<span class="sb-nav"><button type="button" class="sbbtn" data-step="prev" aria-label="${esc(W.STEP_PREV)}" title="${esc(W.STEP_PREV)}">‹</button>` +
     `<b class="sb-no">${esc(no)}</b>` +
     `<button type="button" class="sbbtn" data-step="next" aria-label="${esc(W.STEP_NEXT)}" title="${esc(W.STEP_NEXT)}">›</button></span>` +
-    (ask ? `<span class="sb-ask">${esc(W.askNo(ask))}</span>` : '') +
-    `<span class="sb-time">${esc(fmtTime(call.ts) || '—')}</span>` +
+    (ask ? `<span class="sb-ask" title="${esc(W.askNo(ask))}">${esc(W.askNo(ask))}</span>` : '') +
+    `<span class="sb-time" title="${esc(call.ts || '')}">${esc(fmtTime(call.ts) || '—')}</span>` +
     `<span class="sb-model"${model ? ` title="${esc(model)}"` : ''}>${esc(model || '—')}</span>` +
     (hasFid ? `<span class="sb-fid">${mark('part', fidTxt || undefined)}</span>` : '') +
     `<span class="spacer"></span>` +
