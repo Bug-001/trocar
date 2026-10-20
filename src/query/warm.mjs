@@ -78,8 +78,8 @@ export function hold(bytes) {
 }
 
 /**
- * warmCache({max, cost}) → { get(id, stamp, compute, estimate), peek(id, stamp) }: `compute()` runs when this `id` was never seen
- * or its `stamp` moved; otherwise the remembered value comes back untouched. `cost(value)` is what the value costs in the HEAP (an
+ * warmCache({max, cost}) → { get(id, stamp, compute, estimate), peek(id, stamp) }: `compute(previous)` runs when this `id` was never
+ * seen or its `stamp` moved (`previous` = the value it held, if any, which the cache lets go of); otherwise the remembered value comes back untouched. `cost(value)` is what the value costs in the HEAP (an
  * estimate from stored bytes, never a count of entries or a serialized size); `estimate` is the same, known BEFORE computing, so
  * the room is made first and the peak never passes the budget. A value whose cost is past the whole budget is returned but never
  * kept. `max` bounds this cache's entries.
@@ -103,7 +103,7 @@ export function warmCache({ max = Infinity, cost = () => 0 } = {}) {
       const old = m.get(id)
       if (old) forget(old)
       if (estimate && estimate <= heapBudget()) room(estimate)
-      const value = compute()
+      const value = compute(old ? old.value : undefined) // what this id held before: a value that can be grown is grown
       const e = { cache: m, id, stamp, value, size: 0 }
       // A promise is sized and kept when it settles (the segment readers are async); a rejected one is never kept: a transient
       // read error must not become this segment's answer for the rest of the process. A lookup that came in while it was in

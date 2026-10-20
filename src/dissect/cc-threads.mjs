@@ -10,8 +10,9 @@
 //                 N sends no system at all = the thread's whole system
 //   tools(N)    = N's own tools when non-empty, else the thread's
 // Whether to stitch depends ONLY on thread.type === 'continue' (never on a model, a version or a beta header), and
-// the predecessor is found by its reply id anywhere in the session's records: chains interleave (the main thread,
-// one per subagent) and arrive in any order. A call without `thread` is its own whole context, as before.
+// the predecessor is found by its reply id among the session's thread calls planned before it: chains interleave (the
+// main thread, one per subagent), and a predecessor was sent before its continuation (it had to have replied), so in
+// step order (ts_request) every predecessor comes first. A call without `thread` is its own whole context, as before.
 // States (3.2:52): every predecessor in the capture with a whole reply = 'reconstructed'; one missing, its reply
 // incomplete, its own context partial or its thread.type unknown = 'partial', with what is missing; a server-edited
 // context anywhere up the chain = 'server_edited'. Bytes are untouched: request blocks are
@@ -20,7 +21,7 @@
 import { parsedRequestBody } from './request-body.mjs';
 import { isVolatile, serverEdited } from './cc.mjs';
 import { contextStateOfRequest, respIncompleteOf } from './capture-labels.mjs';
-import { extendChain } from './chain.mjs';
+import { extendChain, linked, segmentsOf, segmentsIn, sourceOf, createLinks } from './chain.mjs';
 
 const bodyOf = (rec) => { const b = parsedRequestBody(rec); return b && typeof b === 'object' ? b : null; };
 
@@ -44,20 +45,30 @@ export function replyIdOf(rec) {
   const id = (p.message && p.message.id) || (p.body && typeof p.body === 'object' && p.body.id);
   return typeof id === 'string' && id ? id : null;
 }
-function replySegs(rec) {
+const replyContent = (rec) => {
   const p = replyOf(rec);
   const content = p.kind === 'json' && p.body && Array.isArray(p.body.content) ? p.body.content : p.content_blocks;
-  if (!Array.isArray(content) || !content.length) return [];
-  return [{ rec, field: null, path: null, item: { role: 'assistant', content },
+  return Array.isArray(content) && content.length ? content : null;
+};
+const replyItem = (r) => ({ role: 'assistant', content: replyContent(r) });
+function replySegs(rec) {
+  if (!replyContent(rec)) return [];
+  return [{ src: sourceOf(rec), field: null, path: null, node: null, of: replyItem,
     why: `the assistant reply of record ${rec.id ?? '(no id)'}, rebuilt from its streamed response (resp.raw), not one byte span` }];
 }
 
+// A call's own system, tools and messages, located in its req_body. System and tools keep their items (a continuation inherits
+// them whole); a message is taken out of the record again when it is needed (chain.mjs). How is made at module level, so it closes
+// over nothing of the record (a closure here would keep the record alive with the segment).
+const systemText = (r) => ({ type: 'text', text: bodyOf(r).system });
+const at = (key, i) => (r) => bodyOf(r)[key][i];
 const own = (rec, body) => {
+  const seg = segmentsIn(rec, 'req_body', rec.req_body);
   const sys = body.system;
-  const system = typeof sys === 'string' ? [{ rec, path: ['system'], item: { type: 'text', text: sys }, str: true }]
-    : (Array.isArray(sys) ? sys : []).map((item, i) => ({ rec, path: ['system', i], item }));
-  const tools = (Array.isArray(body.tools) ? body.tools : []).map((item, i) => ({ rec, path: ['tools', i], item }));
-  const messages = (Array.isArray(body.messages) ? body.messages : []).map((item, i) => ({ rec, field: 'req_body', path: ['messages', i], item }));
+  const system = typeof sys === 'string' ? [seg(['system'], systemText, { item: { type: 'text', text: sys } })]
+    : (Array.isArray(sys) ? sys : []).map((item, i) => seg(['system', i], at('system', i), { item }));
+  const tools = (Array.isArray(body.tools) ? body.tools : []).map((item, i) => seg(['tools', i], at('tools', i), { item }));
+  const messages = (Array.isArray(body.messages) ? body.messages : []).map((m, i) => seg(['messages', i], at('messages', i), { arr: Array.isArray(m && m.content) }));
   return { system, tools, messages };
 };
 const volatile = (s) => isVolatile('system', s.item);
@@ -70,7 +81,7 @@ function replyGap(pred) {
   if (r.kind === 'error') return `the reply of ${id} ended in an error: only what arrived before it is known`;
   const inc = respIncompleteOf(pred);
   if (inc) return `the reply of ${id} is incomplete (${inc.text})`;
-  if (!replySegs(pred).length) return `the reply of ${id} has no content blocks, so what the model answered is not known`;
+  if (!replyContent(pred)) return `the reply of ${id} has no content blocks, so what the model answered is not known`;
   return null;
 }
 // The call's own state on top of its chain's: a request stored only in part, a context the server edited.
@@ -81,85 +92,87 @@ function finish(rec, plan) {
   return plan;
 }
 
-// Plan = { thread, replyId, lineage, contextState, missing, system, tools, segments }, for every thread call.
-function build(rec, body, thread, head) {
+// Plan = { thread, replyId, lineage, contextState, missing, system, tools, up, own, out, gap } for every thread call (chain.mjs);
+// `hp` = the predecessor's plan. `gap`: why this call's reply does not hand a successor a whole context, or null.
+function build(rec, body, thread, hp) {
   const o = own(rec, body);
-  const replyId = replyIdOf(rec);
+  const mine = { thread, replyId: replyIdOf(rec), out: replySegs(rec), gap: replyGap(rec) };
   if (thread.kind !== 'continue') {
     const known = thread.kind === 'create';
-    return finish(rec, { thread, replyId, lineage: replyId || String(rec.id), contextState: known ? 'complete' : 'partial',
+    return finish(rec, { ...mine, lineage: mine.replyId || String(rec.id), contextState: known ? 'complete' : 'partial',
       missing: known ? null : `thread.type ${JSON.stringify(thread.kind)} is neither create nor continue, so whether the server added earlier context is not known`,
-      system: o.system, tools: o.tools, segments: o.messages });
+      system: o.system, tools: o.tools, up: null, own: o.messages });
   }
   const absent = thread.prevId
     ? `message ${thread.prevId} (named by thread.previous_message_id) is the reply of no call in this capture, so the earlier turns and the system / tools the server kept for the thread are not known`
     : 'this call continues a thread but names no previous_message_id, so the earlier turns and the system / tools the server kept for the thread are not known';
-  const hp = head && head.plan;
-  let { segments, contextState, missing } = extendChain(head, o.messages, absent);
-  const gap = head && replyGap(head.pred);
-  if (gap) { contextState = 'partial'; missing = missing ? `${missing}; ${gap}` : gap; }
+  let { up, contextState, missing } = extendChain(hp, o.messages, absent);
+  if (hp && hp.gap) { contextState = 'partial'; missing = missing ? `${missing}; ${hp.gap}` : hp.gap; }
   // the call's volatile blocks (never in the cache key) take the inherited volatile blocks' places; none sent → the thread's
   let system = o.system;
   if (hp && !o.system.length) system = hp.system;
   else if (hp && o.system.every(volatile)) {
-    const mine = [...o.system];
-    const kept = hp.system.flatMap((s) => (!volatile(s) ? [s] : mine.length ? [mine.shift()] : []));
-    system = [...mine, ...kept];
+    const sent = [...o.system];
+    const kept = hp.system.flatMap((s) => (!volatile(s) ? [s] : sent.length ? [sent.shift()] : []));
+    system = [...sent, ...kept];
   }
   const tools = o.tools.length ? o.tools : (hp ? hp.tools : []);
-  return finish(rec, { thread, replyId, lineage: hp ? hp.lineage : (thread.prevId || String(rec.id)), segments, contextState, missing, system, tools });
+  return finish(rec, { ...mine, lineage: hp ? hp.lineage : (thread.prevId || String(rec.id)), up, own: o.messages, contextState, missing, system, tools });
 }
 
-// The board's batch form over one session's records (any order, any wire). → Map<rec, Plan> for thread calls.
+// The planner the board's assembler folds a session through, one record at a time in step order (3.5 §内存有界):
+// get(rec) → the call's Plan, or null for a call without `thread`; context(rec) → the request the model was given (the call's own
+// body with system / tools / messages as stitched) with each block located, or null. A record read back later (by id) gets the
+// plan it was given. `read` as chain.mjs createLinks.
+export function threadPlanner(read = null) {
+  const byReply = new Map(); // reply id → the plan of the thread call that replied with it
+  const plans = new Map(); // record id (the record itself when it has none) → plan | null
+  const links = createLinks(read);
+  const keyOf = (rec) => rec.id ?? rec;
+  function get(rec) {
+    if (plans.has(keyOf(rec))) return plans.get(keyOf(rec));
+    const b = bodyOf(rec), t = b && Array.isArray(b.messages) ? threadOf(b) : null;
+    let plan = null;
+    if (t) {
+      plan = linked(build(rec, b, t, t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) || null : null));
+      if (plan.replyId && !byReply.has(plan.replyId)) byReply.set(plan.replyId, plan);
+      links.hold(plan, rec);
+    }
+    plans.set(keyOf(rec), plan);
+    return plan;
+  }
+  return {
+    get,
+    context(rec) {
+      const p = get(rec);
+      if (!p) return null; // a call without `thread`: its own bytes are its context, read exactly as before
+      const segments = segmentsOf(p);
+      return { req: { ...(bodyOf(rec) || {}), system: p.system.map((s) => s.item), tools: p.tools.map((s) => s.item), messages: links.items(p, rec) },
+        contextState: p.contextState, missing: p.missing, lineage: p.lineage, continued: p.thread.kind === 'continue', segments,
+        locate: (b) => locate(b, p, segments) };
+    },
+  };
+}
+const stepOrder = (a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id));
+// The batch form over one session's records, in any order. → Map<rec, context> for thread calls.
 export function threadPlan(records) {
-  const byReply = new Map();
-  const threaded = [];
-  for (const r of records || []) {
-    const b = bodyOf(r);
-    if (!b || !Array.isArray(b.messages)) continue;
-    const id = replyIdOf(r);
-    if (id && !byReply.has(id)) byReply.set(id, r);
-    if (threadOf(b)) threaded.push(r);
-  }
-  const plans = new Map();
-  for (const r of threaded) {
-    // walk back to a known plan, a head or a gap, then build forward (no recursion: a thread can be long)
-    const path = [];
-    const seen = new Set();
-    let cur = r;
-    while (cur && !plans.has(cur) && !seen.has(cur)) {
-      seen.add(cur);
-      path.push(cur);
-      const t = threadOf(bodyOf(cur));
-      cur = t && t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) || null : null;
-    }
-    for (let k = path.length - 1; k >= 0; k--) {
-      const rec = path[k], body = bodyOf(rec), t = threadOf(body);
-      const pred = t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) : null;
-      const hp = pred && plans.get(pred);
-      plans.set(rec, build(rec, body, t, hp ? { plan: hp, outputSegs: replySegs(pred), pred } : null));
-    }
-  }
-  return plans;
+  const p = threadPlanner(), out = new Map();
+  for (const r of [...(records || [])].sort(stepOrder)) { const c = p.context(r); if (c) out.set(r, c); }
+  return out;
 }
 
-// The request the model was given: the call's own body with system / tools / messages as stitched.
-export function stitchedRequest(rec, plan) {
-  return { ...(bodyOf(rec) || {}), system: plan.system.map((s) => s.item), tools: plan.tools.map((s) => s.item), messages: plan.segments.map((s) => s.item) };
-}
-
-// A board block of the stitched request (linearContext: tools ti, system si, messages mi/bi) → where its bytes are:
-// { rec, field, path } in a req_body, or { rec, why } for a block assembled from a streamed reply.
-export function locate(block, plan) {
+// A board block of the stitched request (linearContext: tools ti, system si, messages mi/bi) → where its bytes are: the record,
+// field and scan (`node`) of its segment with the path below it (`sub`), or { src, why } for a block assembled from a streamed reply.
+export function locate(block, plan, segments) {
   if (!block) return null;
   if (block.sec === 'tools' || block.sec === 'system') {
     const s = block.sec === 'tools' ? plan.tools[block.ti] : plan.system[block.si];
-    return s ? { rec: s.rec, field: 'req_body', path: s.path } : null;
+    return s ? { src: s.src, field: 'req_body', node: s.node, sub: [] } : null;
   }
-  const seg = plan.segments[block.mi];
+  const seg = segments[block.mi];
   if (!seg) return null;
-  if (!seg.field) return { rec: seg.rec, why: seg.why };
-  return { rec: seg.rec, field: seg.field, path: Array.isArray(seg.item.content) ? [...seg.path, 'content', block.bi] : [...seg.path, 'content'] };
+  if (!seg.field) return { src: seg.src, why: seg.why };
+  return { src: seg.src, field: seg.field, node: seg.node, sub: seg.arr ? ['content', block.bi] : ['content'] };
 }
 
 // Tool definitions in the context: the tools array plus the ones added mid-conversation, less the ones removed
@@ -173,13 +186,6 @@ export function toolCountOf(req) {
 
 // The cross-record hooks the board's multi-lane assembler calls (same names as the WebSocket dissector's).
 export const CC_THREADS = Object.freeze({
-  prepare: (records) => threadPlan(records),
-  // null for a call without `thread`: its own bytes are its context, read exactly as before
-  contextOf: (rec, plans) => {
-    const p = plans && plans.get(rec);
-    if (!p) return null;
-    return { req: stitchedRequest(rec, p), contextState: p.contextState, missing: p.missing, lineage: p.lineage, continued: p.thread.kind === 'continue',
-      locate: (b) => locate(b, p) };
-  },
+  prepare: (read) => threadPlanner(read),
   toolCountOf,
 });

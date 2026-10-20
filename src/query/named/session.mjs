@@ -1,74 +1,92 @@
 // src/query/named/session.mjs — `trocar query session --id <id>` (RFC 1.6 §4.1, 附录 C.5).
 //
-// One session's replay view: the board's own assembly (src/view/board.mjs sessionView → pageView) over
-// the records of the raw segments. The view semantics are the board's; this module only picks the data
-// source, drops what C.5 keeps off the wire and names the page the way every paged document does.
+// One session's replay view: the board's own assembly (src/view/board.mjs sessionFold → pageView) over the records of the raw
+// segments. The view semantics are the board's; this module only picks the data source, drops what C.5 keeps off the wire and
+// names the page the way every paged document does.
 //
-// WARM (D63 ①, 1.6 §4.1 附近的查询 ≤ 50 ms): the whole session's assembly is kept against THIS session's own row
-// list, so the next page, and every later look at an open session, is pageView over an assembly already built —
-// while the daemon goes on appending other sessions' records, which this entry does not depend on. A session that
-// got a record of its own has another row list, so it is assembled again (never stale).
-// A MISS renders the window only, which is what the one-shot CLI pays for and all it needs; the whole assembly is
-// built after the answer was written, only in a process that will be asked again (`later`, the query worker), and only
-// for a session that did not grow since the previous query (a growing one has a new row list on every poll, so the build
-// could never be hit) and that fits the heap budget. The two are the same document byte for byte — a page of the whole
-// assembly and the window assembled alone (which is why pageView slims `nonBlockKeys` too, src/view/board.mjs).
+// FOLDED (3.5 §内存有界): the session's records are read in step order, a chunk of stored bytes at a time, and folded one by one;
+// a record's body is let go once its call is assembled, so what a query holds is the SPINE — every call's timeline meta, each
+// lane's previous call, the records a cross-record context stitches from — plus one chunk, never the session. A page then reads
+// back, by id, only the calls it ships with their bodies (pageView: nearest the window's middle, within PAGE_BODY_BYTES).
+// The reads are a scan (`remember: false`): the spine is what is remembered, not the records.
 //
-// MEMORY (3.5 §内存有界): a window still reads every record of the session (the prefix chain and the lanes are the whole
-// session's), so what it costs is estimated from the rows' stored bytes BEFORE anything is read. A session whose estimate is
-// past the heap budget is read from its tail, as far back as fits, and the document's `truncated` says so (invariant 4; the
-// board's non-complete-view banner, 1.5 K-06). The worker never dies of a session's size. Streaming the assembly so that only
-// the window's bodies are held is still open.
-import { sessionView, pageView } from '../../view/board.mjs';
+// WARM (D63 ①, 1.6 §4.1 附近的查询 ≤ 50 ms): the spine is kept against THIS session's own row list, so the next page and every later
+// look at the session read only that page's bodies. A session that grew is folded on from where its spine stopped — unless a new
+// record sorts before one already folded (a concurrent call that finished late), which folds it again from the start. Either way
+// the document is the one a fold from scratch gives, and a hit and a miss are the same code path.
+import { sessionFold, pageView } from '../../view/board.mjs';
 import { recordsAt } from '../records.mjs';
 import { indexRows, sessionGroups } from '../rows.mjs';
-import { rowsKey, warmCache, fsTag, heapBudget, hold, HEAP_PER_STORED } from '../warm.mjs';
-import { pageSpec, QueryArgError } from './index.mjs';
+import { rowsKey, warmCache, fsTag, heapBudget, hold } from '../warm.mjs';
+import { sessionKeyOf } from '../../dissect/harnesses.mjs';
+import { pageSpec, QueryArgError, PAGE_BODY_BYTES } from './index.mjs';
 
 export const params = Object.freeze(['id', 'after', 'limit']);
 
-// The whole session, no window: `limit: Infinity` is what sessionView calls "the window is everything", which is
-// the one assembly every page of it is cut from.
-const FULL = Object.freeze({ cursor: 0, limit: Infinity });
-// What an assembled session costs in the heap, per stored byte, on top of its records (HEAP_PER_STORED). Measured 2026-10-21 on
-// generated Claude Code sessions (forced GC, and the peak of a worker at 128 and 384 MB): every call keeps its timeline meta,
-// lanes and events — 1.1x the rows read; a call IN the window also keeps its block list and is serialized into the answer — 1.9x
-// retained, 6.1x of the rows in all at the peak of a tail whose window is most of its bytes; the whole assembly kept for the
-// next query, 1.89x. Rounded up, because a worker under load reaches its limit sooner than a quiet one.
-export const VIEW_PER_STORED = 1.5, WINDOW_PER_STORED = 3, ASSEMBLY_PER_STORED = 2;
-const assemblies = warmCache({ cost: (v) => v.cost });
-const assemble = ({ home, fs, rows, id, cost }) => () => {
-  const errs = [];
-  return { full: sessionView(recordsAt({ home, fs, rows, errors: errs }), id, { page: FULL }), errors: errs, cost };
-};
-// The row list each session's last answer read: the whole assembly is built only for one that did not change since.
-const lastRead = new Map();
-const LAST_READ_MAX = 64;
+// What the fold reads at once, in the rows' stored bytes (at least one row).
+const CHUNK_STORED = 8 * 1048576;
+// What a spine costs in the heap per row (a call's meta, its lane's events and resources). Measured 2026-10-21 on the generated
+// Claude Code sessions of test/query/big-session.mjs (forced GC), rounded up.
+export const SPINE_PER_ROW = 16 * 1024;
+// What the records being worked on cost in the heap per stored byte: a chunk read and parsed, the lanes' previous calls, a page's
+// bodies assembled and serialized (measured with the spine, above).
+const WORK_PER_STORED = 6;
+
+const spines = warmCache({ cost: (v) => v.cost });
+// analyze()'s step order (src/view/analyze.mjs stepOrder) over the index rows: `ts` is the record's ts_request
+const stepOrder = (a, b) => String(a.ts).localeCompare(String(b.ts)) || String(a.id).localeCompare(String(b.id));
 const calls = (rs) => rs.reduce((n, r) => n + (r.is_llm && !r.log_only ? 1 : 0), 0);
+const stored = (rs) => rs.reduce((n, r) => n + (r.stored_bytes || 0), 0);
 const mb = (n) => Math.round((n / 1048576) * 10) / 10;
-/** What reading `rows` and assembling a window of `k` calls over them costs: the window's calls are not known before the
- *  assembly, so the k largest are counted — the same number in every process for the same rows and `--limit`. */
-function estimate(rows, k) {
-  let all = 0;
-  const llm = [];
-  for (const r of rows) { all += r.stored_bytes || 0; if (r.is_llm && !r.log_only) llm.push(r.stored_bytes || 0); }
-  llm.sort((a, b) => b - a);
-  let win = 0;
-  for (let i = 0; i < Math.min(k, llm.length); i++) win += llm[i];
-  return { all, view: all * VIEW_PER_STORED + win * WINDOW_PER_STORED };
+/** What folding `rows` and answering one page costs besides the spine, reserved before anything is read. */
+function working(rows) {
+  let max = 0;
+  for (const r of rows) max = Math.max(max, r.stored_bytes || 0);
+  return (CHUNK_STORED + 2 * max + PAGE_BODY_BYTES) * WORK_PER_STORED;
 }
-/** The rows a window may read: all of them when their estimate fits the heap budget, else the newest that do (at least one),
- *  with the `truncated` the document carries — the same {shown, total, kept_mb, file_mb} the board draws (src/view/board.mjs). */
-function fitting(rows, k) {
-  const fits = (from) => { const e = estimate(rows.slice(from), k); return e.all * HEAP_PER_STORED + e.view <= heapBudget(); };
-  if (rows.length < 2 || fits(0)) return { read: rows, view: estimate(rows, k).view, bound: null }; // one record past the budget is still answered
-  let lo = 1, hi = rows.length - 1; // the fewest rows to drop: more rows only ever cost more, so this is a binary search
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (fits(mid)) hi = mid; else lo = mid + 1; }
-  const read = rows.slice(lo), e = estimate(read, k), all = estimate(rows, 0).all;
-  return { read, view: e.view, bound: { shown: calls(read), total: calls(rows), kept_mb: mb(e.all), file_mb: mb(all) } };
+/** The rows a query folds: all of them while their spine fits the heap budget, else the newest that do, with the `truncated` the
+ *  document carries — the same {shown, total, kept_mb, file_mb} the board draws (invariant 4, 1.5 K-06). */
+function fitting(rows) {
+  const n = Math.max(1, Math.floor((heapBudget() - working(rows)) / SPINE_PER_ROW));
+  if (rows.length <= n) return { read: rows, bound: null };
+  const read = rows.slice(-n);
+  return { read, bound: { shown: calls(read), total: calls(rows), kept_mb: mb(stored(read)), file_mb: mb(stored(rows)) } };
+}
+// A keyless record is in this session because the segment index named it so (3.4 合成键): its refs carry that name.
+function named(r, id) {
+  if (sessionKeyOf(r).key == null) Object.defineProperty(r, '_synthKey', { value: id, enumerable: false, configurable: true, writable: true });
+  return r;
+}
+// `rows` in chunks of at most CHUNK_STORED stored bytes (at least one row each).
+function* chunks(rows) {
+  for (let i = 0; i < rows.length;) {
+    let j = i, bytes = 0;
+    while (j < rows.length && (j === i || bytes + (rows[j].stored_bytes || 0) <= CHUNK_STORED)) bytes += rows[j++].stored_bytes || 0;
+    yield rows.slice(i, j);
+    i = j;
+  }
+}
+/** The spine of `sorted` (the rows in step order): `old` folded on when it is a prefix of them, else a fold from scratch. A record
+ *  the fold asks for again (a cross-record context whose items it no longer holds: src/dissect/chain.mjs) is read back by id, a
+ *  chunk at a time, through the rows of the query at hand (`s.rowOf`), its problems said in `s.sink` (D38). */
+function grow(old, { home, fs, id, sorted, rowOf }) {
+  const prefix = old && old.ids.length <= sorted.length && old.ids.every((x, i) => sorted[i].id === x);
+  const s = prefix ? old : { ids: [], errors: [], cost: 0 };
+  s.rowOf = rowOf; s.sink = s.errors;
+  const read = function* (ids) {
+    for (const part of chunks(ids.map((x) => s.rowOf.get(x)).filter(Boolean))) for (const r of recordsAt({ home, fs, rows: part, errors: s.sink, remember: false })) yield named(r, id);
+  };
+  if (!prefix) s.fold = sessionFold(id, { read });
+  for (const part of chunks(sorted.slice(s.ids.length))) {
+    for (const r of recordsAt({ home, fs, rows: part, errors: s.errors, remember: false })) s.fold.push(named(r, id), r.id);
+    for (const r of part) s.ids.push(r.id);
+  }
+  // a record that did not read is said on every answer (D38) and the spine is not kept: the next query reads it again
+  s.cost = s.errors.length ? Infinity : s.ids.length * SPINE_PER_ROW;
+  return s;
 }
 
-export async function run({ home, fs, params: p, errors, later = null }) {
+export async function run({ home, fs, params: p, errors }) {
   if (p.id == null || p.id === '') throw new QueryArgError('trocar query session: --id is required (a session id; `trocar query sessions` lists them)');
   const id = String(p.id);
   // Membership is the segment index's (src/query/rows.mjs — the same function `sessions` counts with), so only
@@ -78,26 +96,24 @@ export async function run({ home, fs, params: p, errors, later = null }) {
     errors.push({ where: `session/${id}`, reason: 'no session with this id among the captured records' });
     return { meta: null, records: [], analyzed: null, logged: null, probes: null, truncated: null, page: null };
   }
-  const key = rowsKey(rows);
-  const cacheId = `${fsTag(fs)}\n${home}\n${id}`;
   const spec = pageSpec(p);
-  const { read, view: viewCost, bound } = fitting(rows, spec.limit + 1); // + the baseline call before the window (board.mjs inPage)
-  const built = bound ? undefined : assemblies.peek(cacheId, key.id);
+  const { read, bound } = fitting(rows);
+  const sorted = [...read].sort(stepOrder);
+  const rowOf = new Map(read.map((r) => [r.id, r]));
+  const release = hold(working(read)); // the caches give way BEFORE anything is read
   let view;
-  if (built) {
-    errors.push(...built.errors); // said on every answer, not only on the one that read the records (D38)
-    view = pageView(built.full, spec);
-  } else {
-    const errs = [];
-    const release = hold(viewCost); // the caches give way BEFORE the records are read and the window is built
-    try { view = sessionView(recordsAt({ home, fs, rows: read, errors: errs }), id, { page: spec, bound }); } finally { release(); }
-    errors.push(...errs);
-    const grew = lastRead.get(cacheId) !== key.id;
-    lastRead.delete(cacheId); lastRead.set(cacheId, key.id);
-    if (lastRead.size > LAST_READ_MAX) lastRead.delete(lastRead.keys().next().value);
-    const cost = key.bytes * ASSEMBLY_PER_STORED;
-    if (later && !bound && !grew && key.bytes * HEAP_PER_STORED + cost <= heapBudget()) later(() => { assemblies.get(cacheId, key.id, assemble({ home, fs, rows, id, cost }), cost); });
-  }
+  try {
+    const sp = spines.get(`${fsTag(fs)}\n${home}\n${id}`, rowsKey(sorted).id, (old) => grow(old, { home, fs, id, sorted, rowOf }));
+    errors.push(...sp.errors);
+    sp.rowOf = rowOf; sp.sink = errors;
+    // the calls this page ships with their bodies, read back by id and given their bodies by the fold that assembled them
+    const fill = (cs) => {
+      const recs = recordsAt({ home, fs, rows: cs.map((c) => rowOf.get(c.id)).filter(Boolean), errors, remember: false });
+      const byId = new Map(recs.map((r) => [r.id, named(r, id)]));
+      return new Map(cs.filter((c) => byId.has(c.id)).map((c) => [c, sp.fold.filled(c, byId.get(c.id))]));
+    };
+    view = pageView(sp.fold.view(read.map((r) => r.id), { bound }), spec, { fill, budget: PAGE_BODY_BYTES });
+  } finally { release(); }
   // `steps` and `streams` hold the SAME call objects as `lanes[].calls` — in process one object, on the
   // wire three copies (C.5). The board reads `lanes` and `stats`, so only those go out.
   const { steps, streams, ...analyzed } = view.analyzed || {};

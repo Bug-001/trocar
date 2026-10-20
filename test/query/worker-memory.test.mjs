@@ -3,8 +3,10 @@
 // The seam the board crosses, crossed the way it does: the real board face (src/server.mjs), the real query service,
 // a real fork of src/query/worker.mjs with a SMALL heap (the service's own `fork` seam, as WORKER_MEMORY_MB is passed in production),
 // a real loopback socket. One long agent session grows while it is polled the way the replay desk follows it (`sessions`, then
-// `session` at the tail), until its stored bytes are several times what the worker's heap could assemble. Every answer must be a
-// complete JSON document — 200, or a non-2xx JSON error — and the worker must never be reported dead (`query-failed`).
+// `session` with the followed call at the page's middle), until its stored bytes are several times the worker's heap — on each wire
+// shape a session can have (test/query/big-session.mjs: a whole context per request, or one stitched across records). Every answer
+// must be a complete JSON document — 200, or a non-2xx JSON error — whole (never `truncated`), with the followed call's body on the
+// page, and the worker must never be reported dead (`query-failed`).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
@@ -17,16 +19,19 @@ import { createQueryService } from '../../src/query/service.mjs'
 import { TOKEN, withToken } from '../server/face.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { bigSession } from './big-session.mjs'
+import { runQuery } from '../../src/query/named/index.mjs'
+import { centerCursor } from '../../src/web/v2/replay/follow.mjs'
 
 const WORKER = fileURLToPath(new URL('../../src/query/worker.mjs', import.meta.url))
 const NO_REAL_OS = fileURLToPath(new URL('../helpers/no-real-os.cjs', import.meta.url))
 const HEAP_MB = 128 // a third of the production worker's: the session below outgrows it several times over
 const MB = 1 << 20
 
-test('3.5 验收 11: a session growing past the worker heap while the board follows it gets a complete answer every time, and no worker dies', { timeout: 180_000 }, async () => {
+for (const shape of [{ wire: 'http' }, { wire: 'threads', growth: 60_000 }, { wire: 'ws', growth: 60_000 }])
+test(`3.5 验收 11: a ${shape.wire} session growing past the worker heap while the board follows it gets a complete answer every time, and no worker dies`, { timeout: 180_000 }, async () => {
   const home = path.join(tmpDir('trocar-wmem-'), '.trocar')
   fs.mkdirSync(path.join(home, 'raw'), { recursive: true, mode: 0o700 })
-  const s = bigSession({ home })
+  const s = bigSession({ home, ...shape })
   s.growTo(4 * MB)
   const failed = []
   const svc = createQueryService({ home, failure: (where, e) => failed.push(`${e.code}: ${e.message}`),
@@ -44,43 +49,43 @@ test('3.5 验收 11: a session growing past the worker heap while the board foll
     assert.equal(typeof doc.error, 'string', `a ${r.status} says why`)
     return { status: r.status, error: doc.error }
   }
-  // The desk's follow: the tail of the session, anchored on the total its own last answer gave (the board's PAGE_LIMIT).
-  let total = null
+  // The desk's follow (src/web/v2/replay/follow.mjs): the anchor lane's last call at the middle of a PAGE_LIMIT page, placed by
+  // the last answer (the first by the listed count).
+  let tail = null
   const follow = async () => {
     const list = await get('sessions')
     assert.ok(list.doc, list.error)
     const listed = list.doc.sessions.find((x) => x.session_id === s.id)
     assert.ok(listed, 'the session is listed')
-    const page = await get('session', { id: s.id, after: String(Math.max(0, (total ?? listed.calls) - 60)), limit: '60' })
+    const read = () => get('session', { id: s.id, after: String(centerCursor(tail ? tail.gi : listed.calls - 1, 60)), limit: '60' })
+    let page = await read()
     if (!page.doc) return page
-    total = page.doc.page.total
+    const lastOf = (d) => { const m = d.analyzed.lanes.find((l) => l.kind === 'main'); return m.calls[m.calls.length - 1] }
+    const was = tail
+    tail = lastOf(page.doc)
+    // the live end moved past the page's middle and did not ride it: read once more with it at the middle (replay.mjs pollOnce)
+    if (tail.paged_out && (!was || was.gi !== tail.gi)) { page = await read(); if (!page.doc) return page; tail = lastOf(page.doc) }
     return { ...page, listed: listed.calls }
   }
   try {
-    // Whole and quiet: the whole assembly is built only after an answer was written and only once the session stopped growing
-    // (3.5 验收 13); the page read from it (the third poll) is the same document, byte for byte, as the window assembled cold.
-    const quiet = async () => { const q = []; for (let i = 0; i < 3; i++) q.push((await follow()).text); return q }
+    // the first answer places the page (its anchor lane's last call at the middle); an unchanged session then answers the same bytes
+    const quiet = async () => { await follow(); const q = []; for (let i = 0; i < 2; i++) q.push((await follow()).text); return q }
     const q1 = await quiet()
-    assert.ok(q1[0] && q1[0] === q1[1] && q1[1] === q1[2], 'an unchanged session answers the same bytes, cold or warm')
-    assert.equal(JSON.parse(q1[0]).truncated, null)
-    const seen = { whole: 0, truncated: 0 }
-    for (let stored = 4 * MB; stored < 60 * MB; stored = s.append(12)) {
+    assert.ok(q1[0] && q1[0] === q1[1], 'an unchanged session answers the same bytes')
+    for (let stored = 4 * MB; stored < 60 * MB; stored = s.append(shape.growth ? 120 : 12)) {
       const a = await follow()
       if (!a.doc) continue // a non-2xx JSON error is a complete answer too
-      const t = a.doc.truncated
-      if (t) {
-        seen.truncated++
-        assert.equal(t.total, a.listed, 'truncated.total counts every call of the session')
-        assert.equal(a.doc.page.total, t.shown, 'the page counts the calls it read')
-        assert.ok(t.shown >= 1 && t.shown < t.total)
-      } else {
-        seen.whole++
-        assert.equal(a.doc.page.total, a.listed, 'a whole session is paged over every call')
-      }
+      assert.equal(a.doc.truncated, null, 'no session is cut for its size')
+      assert.equal(a.doc.page.total, a.listed, 'the page counts every call of the session')
+      const main = a.doc.analyzed.lanes.find((l) => l.kind === 'main')
+      const last = main.calls[main.calls.length - 1]
+      assert.ok(last && !last.paged_out, 'the followed call rides the page with its body')
     }
-    assert.ok(seen.whole > 0 && seen.truncated > 0, `the session was polled both whole and past the budget (${JSON.stringify(seen)})`)
+    // grown poll by poll, or folded from scratch in a process that never saw the session: the same bytes
     const q2 = await quiet()
-    assert.ok(q2[0] && q2[0] === q2[1] && q2[1] === q2[2], 'past the budget the tail is read again: the same bytes')
+    assert.ok(q2[0] && q2[0] === q2[1])
+    const cold = await runQuery('session', { id: s.id, after: String(centerCursor(tail.gi, 60)), limit: '60' }, { home })
+    assert.equal(JSON.stringify(cold), q2[0], 'the grown spine answers what a fold from scratch does')
     assert.deepEqual(failed, [], 'no query worker died')
   } finally {
     server.close(); svc.stop()

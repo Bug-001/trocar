@@ -4,7 +4,8 @@
 // All provider parsing happens in assembleSession (analyze) HERE, server-side — the browser
 // receives only canonical `analyzed` (invariant 3 / AC-3). Pure over its `records` input;
 // human-title / cwd enrichment is injected via `enrich(id)` so this module stays testable.
-import { assembleSession, sessionIdOf, headersOf, respOf } from './assemble.mjs';
+import { createAssembler, sessionIdOf, headersOf, respOf } from './assemble.mjs';
+import { stepOrder } from './analyze.mjs';
 import { harnessOf as harnessOfRecord, LEGACY_PROVIDER, wireProviderOfEndpoint } from '../dissect/harnesses.mjs';
 import { stampSynthKeys } from '../dissect/synth-key.mjs';
 import { isLogOnly, bodyRetentionOf, retentionLabelOf } from '../dissect/capture-labels.mjs';
@@ -42,10 +43,6 @@ const llmRecs = (recs) => recs.filter((r) => r.is_llm_call && !isLogOnly(r));
 const loggedRecs = (recs) => recs.filter(isLogged);
 const probeRecs = (recs) => recs.filter(isProbe);
 const otherRecs = (recs) => recs.filter(isOther);
-const probeSeries = (precs) =>
-  // D40: `retention` says whether the probe's own request body was kept (full), set to a log line (log) or never kept (legacy-meta)
-  precs.map((r) => { const rp = respOf(r); return { ts: r.ts_request, tokens: (rp && rp.body && rp.body.input_tokens) ?? null, retention: bodyRetentionOf(r) }; })
-    .filter((p) => p.tokens != null);
 function entrypointOf(recs) {
   const h = anyHeaders(recs);
   const app = String(h['x-app'] || '').toLowerCase(), ua = String(h['user-agent'] || h['originator'] || '').toLowerCase();
@@ -132,32 +129,9 @@ export const sessionMetaOfFacts = (facts, { enrich } = {}) => applyEnrich(facts,
 // PAGING (4.4:88② · 3.5 游标契约 · D25 轻路):`page = {cursor, limit}` returns only the view page.
 // Cursor unit = the GLOBAL call index `gi` (analyze's step order = timeline order). Every call still
 // carries its CHEAP meta (ctx/usage/cacheBreak/gi — the overview strip + brush need the whole strip);
-// the HEAVY payload (rec request body / flat verbatim blocks / norm.text) rides ONLY on calls whose gi
-// is in [cursor, cursor+limit). Out-of-window calls are marked `paged_out` (invariant 4 — the body was
-// not shipped on THIS page, not silently dropped). No `page` → full send (back-compat; render gate/demo
-// board unchanged). Windowing is a SHALLOW non-mutating transform over an already-assembled view, so a
-// memoized full view (D21) can back many page requests without re-running analyze.
-// Tail-bound a session's records to a raw-bytes budget (4.4:90 "服务端只回当前视图所需的页 · 不再整条下发").
-// An UNBOUNDED session view is the whole-page-breaks bug: assembling + JSON.stringify-ing a large
-// session overruns V8's max string length (500 "Invalid string length") and can OOM the process, so
-// the board falls through to its empty state and LIES that there are no calls. Keep the MOST RECENT
-// calls that fit; the omitted ones stay intact in the raw NDJSON and the view is MARKED non-complete
-// (invariant 4) via `truncated`, which the board renders as the 非完整视图 banner.
-function tailBound(recs, maxBytes) {
-  const bytesOf = (r) => (typeof r.req_body === 'string' ? r.req_body.length
-    : (r.request ? JSON.stringify(r.request).length : 0));
-  const calls = (rs) => rs.reduce((n, r) => n + (r.is_llm_call && !isLogOnly(r) ? 1 : 0), 0);
-  let total = 0;
-  for (const r of recs) total += bytesOf(r);
-  if (!maxBytes || total <= maxBytes) return { recs, bound: null };
-  let kept = 0, i = recs.length;
-  while (i > 0 && kept + bytesOf(recs[i - 1]) <= maxBytes) kept += bytesOf(recs[--i]);
-  if (i === recs.length && recs.length) { i = recs.length - 1; kept = bytesOf(recs[i]); } // always keep ≥1
-  const out = recs.slice(i);
-  const mb = (n) => Math.round((n / 1048576) * 10) / 10;
-  return { recs: out, bound: { shown: calls(out), total: calls(recs), kept_mb: mb(kept), file_mb: mb(total) } };
-}
-
+// the HEAVY payload (flat block list / norm.text / nonBlockKeys) rides ONLY on calls of the window
+// [cursor, cursor+limit) that fit the page's body budget (pageView). The others are marked `paged_out`
+// (invariant 4 — the body was not shipped on THIS page, not silently dropped).
 // ONE COPY OF EACH CALL ON THE WIRE.
 //
 // analyze() returns the same call objects in THREE places — `steps` (global order), `lanes[].calls`
@@ -186,46 +160,87 @@ function onWire(analyzed) {
 // D40: the calls of a session that were kept as a log line only — how many, which setting did it, and the newest few with what is still
 // known of them (time, endpoint, status, the wire sizes). null when there are none. Nothing here is a body: there is none to show.
 const LOGGED_SHOWN = 50;
-function loggedView(recs) {
-  if (!recs.length) return null;
-  const labels = [...new Set(recs.map((r) => (retentionLabelOf(r) || {}).label).filter(Boolean))];
-  const items = recs.slice(-LOGGED_SHOWN).reverse().map((r) => {
-    const rp = respOf(r) || {}, w = r.body_wire_bytes || {};
-    return { id: r.id, ts: r.ts_request || r.ts || null, endpoint: String(r.endpoint || '').split('?')[0], status: rp.status ?? null, request_bytes: w.req ?? null, response_bytes: w.resp ?? null };
-  });
-  return { count: recs.length, labels, items, shown: items.length };
+function loggedView(its) {
+  if (!its.length) return null;
+  const labels = [...new Set(its.map((i) => i.label).filter(Boolean))];
+  const items = its.slice(-LOGGED_SHOWN).reverse().map((i) => i.item);
+  return { count: its.length, labels, items, shown: items.length };
 }
-export function sessionView(records, sessionId, { enrich, bound, page, maxBytes } = {}) {
-  const g = groupSessions(records);
-  let recs = g.get(sessionId);
-  if (!recs) return null;
-  let autoBound = null;
-  // PAGING SUPERSEDES TAIL-BOUNDING. Both exist to keep one response serializable, but they answer
-  // it differently, and running the bound FIRST silently defeated paging: on a real 578-call session
-  // tailBound discarded 573 calls before pageView ever saw them, so the board paged through a
-  // 5-call stub and the timeline showed 5 bars for a session with 578. Whenever the client asks for a
-  // window it is asking for the WHOLE session's shape plus one page of bodies — which the retention
-  // window below delivers at bounded cost, with nothing dropped and so nothing to disclose.
-  const win = page ? windowOf(page) : null;
-  const all = recs;
-  if (!win) ({ recs, bound: autoBound } = tailBound(recs, maxBytes));
-  const probes = probeRecs(recs);
-  // A context stitched across records (D37 ②, a WebSocket call) is planned over the WHOLE session, so a call
-  // the tail bound keeps does not turn partial because its predecessor fell outside the bound.
-  const analyzed = assembleSession(llmRecs(recs), { ...(win ? { keepFlat: (gi) => inPage(gi, win) } : {}), chainRecords: llmRecs(all) });
-  const slim = recs.map((r) => ({
-    is_llm_call: !!r.is_llm_call, ts_request: r.ts_request, id: r.id,
-    response: { status: (respOf(r) || {}).status ?? null }, // R1: read via respOf (D10 `resp` + v0 `response`)
-  }));
-  const view = {
-    records: slim,
-    analyzed,
-    logged: loggedView(loggedRecs(recs)),
-    probes: { count: probes.length, series: probeSeries(probes) },
-    meta: sessionMetaFor(sessionId, recs, enrich),
-    truncated: bound || autoBound || null, // 保真边界 (invariant 4): set when a large session was tail-bounded
+// What the session document keeps of one record besides its call (the fold lets the record go): the slim entry the browser reads
+// (errStats status + change-sig), the probe point, the logged-call line, and the envelope fields the session meta is derived from.
+const META_KEYS = ['is_llm_call', 'body_retention', 'endpoint', 'req_headers', 'request_headers', 'proc', 'ts_request', 'ts'];
+function itemOf(r) {
+  const rp = respOf(r) || {};
+  const light = {};
+  for (const k of META_KEYS) if (r[k] !== undefined) light[k] = r[k];
+  if (r._synthKey) Object.defineProperty(light, '_synthKey', { value: r._synthKey });
+  const w = r.body_wire_bytes || {};
+  return {
+    slim: { is_llm_call: !!r.is_llm_call, ts_request: r.ts_request, id: r.id, response: { status: rp.status ?? null } }, // R1: read via respOf (D10 `resp` + v0 `response`)
+    // D40: `retention` says whether the probe's own request body was kept (full), set to a log line (log) or never kept (legacy-meta)
+    probe: isProbe(r) ? { ts: r.ts_request, tokens: (rp.body && rp.body.input_tokens) ?? null, retention: bodyRetentionOf(r) } : null,
+    logged: isLogged(r) ? { label: (retentionLabelOf(r) || {}).label, item: { id: r.id, ts: r.ts_request || r.ts || null, endpoint: String(r.endpoint || '').split('?')[0], status: rp.status ?? null, request_bytes: w.req ?? null, response_bytes: w.resp ?? null } } : null,
+    light,
   };
-  return page ? pageView(view, page) : view;
+}
+/**
+ * sessionFold(sessionId, {read}) → { push(rec, key), view(keys, {enrich, bound}), filled(call, rec) } — ONE session, folded record by
+ * record (3.5 §内存有界; src/view/assemble.mjs createAssembler; `read(ids)` yields records back by id, for a cross-record context
+ * whose items the fold no longer holds — src/dissect/chain.mjs). push() takes the session's records in step order; `key` names the record
+ * (its id, or the record itself when ids may repeat). view(keys) is the session document over the records `keys` names, in that
+ * order, with every call in its META form; it does not change the fold, so more records can be pushed after it. filled(call, rec)
+ * is that call with its body put back from its record (a new object), for the calls a page ships (pageView's `fill`).
+ */
+export function sessionFold(sessionId, { read = null } = {}) {
+  const asm = createAssembler({ read });
+  const items = new Map();
+  return {
+    push(r, key = r) {
+      items.set(key, itemOf(r));
+      // analyze() sees inference calls only: count_tokens probes and D40 log-only calls are counted apart (above)
+      return r.is_llm_call && !isLogOnly(r) ? asm.push(r) : null;
+    },
+    view(keys, { enrich, bound = null } = {}) {
+      const its = keys.map((k) => items.get(k)).filter(Boolean);
+      const probes = its.filter((i) => i.probe).map((i) => i.probe);
+      return {
+        records: its.map((i) => i.slim),
+        analyzed: asm.finish(),
+        logged: loggedView(its.filter((i) => i.logged).map((i) => i.logged)),
+        probes: { count: probes.length, series: probes.filter((p) => p.tokens != null) },
+        meta: sessionMetaFor(sessionId, its.map((i) => i.light), enrich),
+        truncated: bound, // 保真边界 (invariant 4): set when a session too large for even its meta was read from its tail
+      };
+    },
+    filled: (call, r) => withBody(call, asm.bodyOf(call, r)),
+  };
+}
+// The batch form over records in memory (the usage sidecar's fill, tests). No `page` → every call ships its body.
+export function sessionView(records, sessionId, { enrich, page } = {}) {
+  const recs = groupSessions(records).get(sessionId);
+  if (!recs) return null;
+  const f = sessionFold(sessionId);
+  const recOf = new Map();
+  for (const r of [...recs].sort(stepOrder)) { const c = f.push(r); if (c) recOf.set(c, r); }
+  const fill = (calls) => new Map(calls.map((c) => [c, f.filled(c, recOf.get(c))]));
+  const view = f.view(recs, { enrich });
+  return page ? pageView(view, page, { fill }) : bodied(view, (c) => fill([c]).get(c));
+}
+// A call in its meta form with its body put back (a NEW object: the fold's own call is left as it is).
+const withBody = (c, body) => { const { paged_out, ...rest } = c; return { ...rest, ...body }; };
+// The view with every call object mapped once through `to` — `steps`, `lanes[].calls` and `streams[].calls` hold the SAME
+// objects (analyze() shares them), so the three arrays are rewritten through one map and stay the same objects as before.
+function bodied(view, to) {
+  const A = view.analyzed;
+  if (!A) return view;
+  const done = new Map();
+  const m = (c) => { if (!done.has(c)) done.set(c, to(c)); return done.get(c); };
+  const lanes = (A.lanes || []).map((l) => ({ ...l, calls: (l.calls || []).map(m) }));
+  const steps = (A.steps || []).map(m);
+  // …and `streams`, the THIRD array holding the same objects. Missing it shipped every body anyway, and a deep window then 500'd
+  // with "Invalid string length" — which the board shows as its empty state, reporting a many-hundred-call session as having none.
+  const streams = (A.streams || []).map((st) => ({ ...st, calls: (st.calls || []).map(m) }));
+  return { ...view, analyzed: { ...A, lanes, steps, streams } };
 }
 
 // Slim a call to CHEAP meta only — drop the heavy request body + reconstructed blocks + response text,
@@ -247,8 +262,6 @@ function slimCall(c) {
   };
 }
 
-// Apply the cursor/limit window over an assembled view WITHOUT mutating it (clones only the lane/call
-// spine; shares in-window call objects, slims out-of-window ones). Returns the view + `page` metadata.
 // A page ships ONE CALL MORE than it displays: the call just before the window. That call is the
 // diff baseline for the first call ON the window, and without it the very first step of every page
 // can only report "Δ 无法计算" — a hole in the answer at a boundary the user did not choose and cannot
@@ -261,44 +274,51 @@ function windowOf({ cursor = 0, limit = Infinity } = {}) {
   const lim = limit == null ? Infinity : limit;
   return { lo, hi: lim === Infinity ? Infinity : lo + Math.max(0, lim | 0), limit: lim };
 }
+// What a call's body costs a page: the bytes of the context it ships, block by block — its composition (`comp`, on every call), so a
+// context stitched across records (D37 ②) is charged whole, not its record's delta.
+const bodyBytes = (c) => Object.values(c.comp || {}).reduce((n, v) => n + v, 0);
+/** The in-window calls that ride WITH their bodies (3.5 §分页 正文预算): nearest the window's middle first (the board puts the step it
+ *  shows there), while their contexts sum to at most `budget` bytes — and always the nearest one. */
+function bodiesFor(calls, { lo, limit }, budget) {
+  if (limit === Infinity || budget === Infinity) return new Set(calls);
+  const mid = lo + Math.floor(limit / 2);
+  const near = [...calls].sort((a, b) => Math.abs(a.gi - mid) - Math.abs(b.gi - mid) || a.gi - b.gi);
+  const keep = new Set();
+  let sum = 0;
+  for (const c of near) {
+    if (keep.size && sum + bodyBytes(c) > budget) break;
+    keep.add(c); sum += bodyBytes(c);
+  }
+  return keep;
+}
 
-export function pageView(view, spec = {}) {
+/**
+ * pageView(view, spec, {fill, budget}) — the cursor/limit window over a session view, WITHOUT mutating it (the lane/call spine is
+ * cloned). Every call keeps its cheap meta; the calls of the window (plus its baseline) whose bodies fit `budget` (bodiesFor) ride
+ * with them — `fill(calls)` → Map(call → that call with its body) puts them back when the view holds calls in their meta form
+ * (sessionFold) — and every other call is slimmed and marked `paged_out`. `page.returned` = how many rode with their bodies.
+ */
+export function pageView(view, spec = {}, { fill = null, budget = Infinity } = {}) {
   const { lo, hi, limit } = windowOf(spec);
-  const lanes = (view.analyzed && view.analyzed.lanes) || [];
-  // analyze() puts each call object in TWO arrays — `lanes[].calls` and the flat `steps` — as the same
-  // object. Slimming only the lanes therefore left every body still reachable through `steps`, and the
-  // response barely shrank (measured 367 KB → 286 KB on an 8-call sample, i.e. paging bought ~nothing
-  // on the one axis it exists for). Slim ONCE into a map keyed by the original object, then rewrite
-  // both arrays through it, so the two views stay the same object as they were before paging.
-  const slimmed = new Map();
-  let returned = 0;
-  const paged = (c) => {
-    if (inPage(c.gi, { lo, hi })) return c;
-    if (!slimmed.has(c)) slimmed.set(c, slimCall(c));
-    return slimmed.get(c);
-  };
-  const pagedLanes = lanes.map((lane) => ({ ...lane, calls: (lane.calls || []).map(paged) }));
-  const steps = (view.analyzed && view.analyzed.steps) || [];
-  const pagedSteps = steps.map(paged);
-  // …and `streams`, the THIRD array holding the same objects. Missing it shipped every body anyway,
-  // and a deep window then 500'd with "Invalid string length" — which the board shows as its empty
-  // state, reporting a many-hundred-call session as having none.
-  const pagedStreams = ((view.analyzed && view.analyzed.streams) || [])
-    .map((st) => ({ ...st, calls: (st.calls || []).map(paged) }));
+  const A = view.analyzed || {};
   // Count over the UNION of both arrays, deduped by object identity: `steps` and `lanes[].calls` hold
   // the same call objects in real assembler output, but a view may legitimately carry one and not the
   // other, and counting the wrong array reports a session length that does not exist.
-  const seen = new Set([...pagedSteps, ...pagedLanes.flatMap((l) => l.calls)]);
-  const total = seen.size;
-  for (const c of seen) if (!c.paged_out) returned++;
-  const analyzed = { ...view.analyzed, lanes: pagedLanes, steps: pagedSteps, streams: pagedStreams };
+  const calls = new Set([...(A.steps || []), ...(A.lanes || []).flatMap((l) => l.calls || [])]);
+  const total = calls.size;
+  const keep = bodiesFor([...calls].filter((c) => inPage(c.gi, { lo, hi })), { lo, limit }, budget);
+  const filled = fill ? fill([...keep]) : null;
+  // a call whose body could not be put back (its record did not read: said in `errors`) is shipped like any other paged-out call
+  const out = bodied(view, (c) => (!keep.has(c) ? slimCall(c) : filled ? (filled.get(c) || slimCall(c)) : c));
+  let returned = 0;
+  for (const c of new Set([...out.analyzed.steps, ...out.analyzed.lanes.flatMap((l) => l.calls)])) if (!c.paged_out) returned++;
   const nextCursor = hi !== Infinity && hi < total ? hi : null;
-  // `returned` counts every call shipped WITH its body, which is the window plus `baseline` — the one
-  // call before it, sent so the first step of the page can still be diffed (see inPage). `baseline` is
-  // named on the wire rather than left as an unexplained off-by-one.
+  // `returned` counts every call shipped WITH its body: at most the window plus `baseline` — the one call before it, sent so
+  // the first step of the page can still be diffed (see inPage). `baseline` is named on the wire rather than left as an
+  // unexplained off-by-one.
   const baseline = lo > 0 && lo <= total ? lo - 1 : null;
   const page = { cursor: lo, limit: limit === Infinity ? null : (limit | 0), total, returned, baseline, nextCursor, hasMore: nextCursor != null };
-  return { ...view, analyzed, page };
+  return { ...out, page };
 }
 
 // Project an assembled view onto WHAT THE BOARD ACTUALLY READS, for the wire.
