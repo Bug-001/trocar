@@ -29,8 +29,8 @@ export function costRowHtml(c, table, tableErr) {
 // resolvable respRefs[].ref → no mark; partially stored → 「◐ 回复没采全」; else 「◐ 解析后的回复」; 逐字 is never written
 // for it). A monitor's verdict text is shown as-is, with no mark of its own beyond that.
 function outputHtml(c) {
-  if (c.error || (c.status != null && c.status !== 200)) return `<div class="din">${esc(W.FAILED_NO_REPLY)}${c.errMsg ? ` <span class="mono">${esc(c.errMsg)}</span>` : ''}</div>`
-  if (c.paged_out) return `<div class="din">${esc(W.REPLY_WORD)}:<span class="pobadge">${esc(W.PAGED_TITLE)}</span></div>`
+  if (c.error || (c.status != null && c.status !== 200)) return `<div class="din">${esc(W.FAILED_NO_REPLY)}${c.errMsg ? techDetailsHtml([['reason', String(c.errMsg)]], { id: 'dfail' }) : ''}</div>`
+  if (c.paged_out) return `<div class="din">${esc(W.REPLY_WORD)}: <span class="pobadge">${esc(W.PAGED_TITLE)}</span></div>`
   const out = (c.norm && c.norm.text) || ''
   if (!out) return `<div class="din">${esc(W.REPLY_WORD)}: <b>(none)</b></div>`
   const long = out.length > 160 || out.includes('\n')

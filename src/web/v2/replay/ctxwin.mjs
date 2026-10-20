@@ -128,7 +128,7 @@ export function ctxWindowHtml(s) {
         `<div class="cwturnbody">${t.items.map((i) => mark(i) + row(flat[i], i)).join('')}</div></div>`
     })
   }
-  return html + `<div class="cwreply">${replyHtml(call)}</div>` // ⑨
+  return html + `<div class="cwreply">${replyHtml(call, 'cwfail')}</div>` // ⑨
 }
 
 // the 缓存对比步 as a 1-based step number: S12's cacheBreak.refGi when the server names it, else the front-end rule

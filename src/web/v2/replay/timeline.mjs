@@ -83,7 +83,8 @@ function problemRowHtml(s, { lo, hi }) {
       cells[i - lo] = `<span class="pxmark" data-i="${i}" role="button" tabindex="0" title="${esc(W.failTip(n, msg))}">×</span>`
       continue
     }
-    if (c.compaction) { cells[i - lo] = `<span class="pcompact${c.compactionInferred ? ' inf' : ''}" data-i="${i}" role="button" tabindex="0" title="${esc(W.compactTip(n, c.compactionInferred))}">${esc(W.COMPACT_WORD)}${c.compactionInferred ? '·' + esc(W.GUESS) : ''}</span>`; continue } // neutral, not a flag
+    // neutral, not a flag: a small mark with no text of its own; the word rides the hover and the screen-reader name
+    if (c.compaction) { const tip = `${W.COMPACT_WORD}${c.compactionInferred ? ' · ' + W.GUESS : ''} — ${W.compactTip(n, c.compactionInferred)}`; cells[i - lo] = `<span class="pcompact${c.compactionInferred ? ' inf' : ''}" data-i="${i}" role="button" tabindex="0" title="${esc(tip)}" aria-label="${esc(tip)}"></span>`; continue }
     const st = cacheState(c, refCallOf(s, i))
     if (st.isBreak) breaks.push({ i, n, usd: breakCost(c, refCallOf(s, i), priceRowOf(s, c)).usd, struct: st.state === 'changed' })
   }
@@ -96,13 +97,13 @@ function problemRowHtml(s, { lo, hi }) {
   }
   return cells.map((c) => c || '<span class="pcell"></span>').join('')
 }
-// the pager's own row: 「问题 k/n」 + ‹ › (only when there is anything to page to); k is 「—」 off a problem step
+// the pager's own row: 「问题 k/n」 + ‹ › (only when there is anything to page to); off a problem step it reads 「N 个问题」
 export function renderProblemNav(el, s) {
   const nav = q(el, '#probnav')
   if (!nav) return
   const probs = s.problems || []
   const n = probs.length
-  const k = probs.includes(s.playhead) ? String(probs.indexOf(s.playhead) + 1) : '—'
+  const k = probs.includes(s.playhead) ? String(probs.indexOf(s.playhead) + 1) : null
   nav.innerHTML = n ? `${esc(W.problemPager(k, n))} <button type="button" class="pgbtn" id="probPrev" aria-label="${esc(W.PROBLEM_PREV)}" title="${esc(W.PROBLEM_PREV)}">‹</button><button type="button" class="pgbtn" id="probNext" aria-label="${esc(W.PROBLEM_NEXT)}" title="${esc(W.PROBLEM_NEXT)}">›</button>` : esc(W.problemPager(null, 0))
 }
 // the next / previous problem step from the playhead (dir > 0 / < 0); null at the ends

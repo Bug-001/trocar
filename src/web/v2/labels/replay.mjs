@@ -268,7 +268,7 @@ export const MODEL_CALLS = (n) => count(n, 'model call')
 
 // ── the trace (1.3): the problem lane, the cache band's four states, the view switch, the overlay rows ───────────────
 export const PROBLEM_ROW = 'Problems'
-export const problemPager = (k, n) => (n ? `Problem ${k == null ? '—' : k}/${n}` : 'Problems')
+export const problemPager = (k, n) => (!n ? 'Problems' : k == null ? count(n, 'problem') : `Problem ${k}/${n}`)
 export const PROBLEM_PREV = 'Previous problem'
 export const PROBLEM_NEXT = 'Next problem'
 export const breakFlagTip = (n, costW, struct) => `Cache break at step ${n} · ${costW}` + (struct ? ` · ${L.STRUCT_EST}` : '')

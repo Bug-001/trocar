@@ -88,3 +88,20 @@ test('renderOverview with brushDragging: the backdrop is left untouched, only th
   assert.ok(map.get('ovstrip').innerHTML.includes('ovbrush'), 'the brush comes back with it')
   assert.equal(map.get('ovbrush').style.left, '25.000%', 'and the geometry still matches the view')
 })
+
+// A5 (1.3 §主轨 compaction): the compaction cell is a mark with no visible text; its words ride the aria-label
+test('the problem lane\'s compaction cell has no text content and a non-empty aria-label', async () => {
+  const { renderSaw } = await import('../../src/web/v2/replay/timeline.mjs')
+  for (const inferred of [false, true]) {
+    const calls = Array.from({ length: 4 }, (_, i) => ({ gi: i, ts: new Date(Date.UTC(2026, 9, 7, 0, 0, i)).toISOString(), ctx: 100 + i, usage: { read: 90, create: 5, fresh: 5, out: 1 }, ...(i === 2 ? { compaction: true, compactionInferred: inferred } : {}) }))
+    const anchor = { kind: 'main', calls, giLocal: new Map(calls.map((c, i) => [i, i])), events: [], peakCtx: 103 }
+    const nodes = new Map()
+    const node = () => ({ innerHTML: '', textContent: '', title: '', style: { setProperty() {} }, classList: { toggle() {} } })
+    const el = { querySelector: (sel) => { if (!nodes.has(sel)) nodes.set(sel, node()); return nodes.get(sel) }, querySelectorAll: () => [] }
+    renderSaw(el, { anchor, view: { lo: 0, hi: 4 }, playhead: 0, sawView: 'ctx', problems: [] })
+    const m = nodes.get('#probrow').innerHTML.match(/<span class="pcompact[^"]*"([^>]*)>([^<]*)<\/span>/)
+    assert.ok(m, 'the compaction cell is drawn')
+    assert.equal(m[2], '', 'no text content')
+    assert.match(m[1], /aria-label="[^"]+"/)
+  }
+})

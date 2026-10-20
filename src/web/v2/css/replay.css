@@ -19,14 +19,14 @@
   .ct-other{background:repeating-linear-gradient(45deg,var(--dimmer) 0 2px,transparent 2px 4px);}
   /* a call whose body was not shipped on this page (paged_out): composition UNKNOWN, not empty */
   .ct-unloaded{background:repeating-linear-gradient(45deg,var(--dim) 0 3px,transparent 3px 6px);opacity:.55;}
-  .barlegend{display:flex;gap:6px;font-size:9px;color:var(--dim);align-items:center;flex-wrap:nowrap;min-width:0;overflow:hidden;}
+  .barlegend{display:flex;gap:6px;font-size:10px;color:var(--dim);align-items:center;flex-wrap:nowrap;min-width:0;overflow:hidden;}
   .barlegend i{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:2px;vertical-align:middle;}
   .bar.cost{background:var(--dim);}
   .bar.cost>span{display:none;}
   /* the cost view keeps a failed step's bar red (1.3 §视图切换: 失败步照主轨画矮柱 + ×) — .bar.cost must not paint over it */
   .bar.cost.err{background:var(--red);}
   #reviewbracket{position:absolute;left:0;bottom:-3px;height:3px;background:var(--pink);display:none;border-radius:2px;pointer-events:none;z-index:3;}
-  #reviewbracket .rbend{position:absolute;right:-2px;top:-14px;font-size:8.5px;color:var(--pink);white-space:nowrap;}
+  #reviewbracket .rbend{position:absolute;right:-2px;top:-14px;font-size:10px;color:var(--pink);white-space:nowrap;}
   /* 1.3 问题道: flags (height ∝ √ ≈ 多花), × per failed call, 「压缩」 per compaction — one cell per windowed step on the
      bars' own /N axis (same flex basis, same 1px gap): a mark lands on its step's column, never k shares of the row */
   .tkrow-problem{align-items:flex-end;}
@@ -38,9 +38,10 @@
   .pflag:hover,.pflag:focus-visible{opacity:1;outline:1.5px solid var(--fg);}
   .pxmark{flex:1 1 0;min-width:2px;text-align:center;color:var(--red);font-size:11px;line-height:1;align-self:flex-end;cursor:pointer;font-weight:700;}
   .pxmark:hover,.pxmark:focus-visible{outline:1.5px solid var(--fg);border-radius:2px;}
-  .pcompact{flex:1 1 0;min-width:2px;text-align:center;color:var(--dim);font-size:8px;line-height:1.15;align-self:flex-end;cursor:pointer;overflow:hidden;white-space:nowrap;}
-  .pcompact.inf{color:var(--dimmer);}
-  .pcompact:hover,.pcompact:focus-visible{color:var(--fg);}
+  .pcompact{flex:1 1 0;min-width:2px;display:flex;justify-content:center;align-self:flex-end;cursor:pointer;overflow:hidden;}
+  .pcompact::before{content:"";width:6px;height:6px;margin-bottom:1px;box-sizing:border-box;border:1.5px solid var(--ink-3);border-radius:50%;}
+  .pcompact.inf::before{border-style:dotted;}
+  .pcompact:hover::before,.pcompact:focus-visible::before{border-color:var(--fg);}
   /* 提问刻度: one small tick per user event, below the cache band — one cell per windowed step (the bars' /N axis),
      the tick line at its own column's centre */
   .askrow{display:flex;gap:1px;align-items:flex-end;height:8px;position:relative;}
@@ -55,7 +56,7 @@
   .segbtn.on{background:var(--fg);color:var(--paper);border-color:var(--fg);}
   .pgbtn{font-size:10px;padding:0 6px;line-height:1.5;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--dim);cursor:pointer;}
   .pgbtn:hover{color:var(--fg);border-color:var(--dim);}
-  #nomain{color:var(--amber);font-size:9.5px;}
+  #nomain{color:var(--amber);font-size:10px;}
   /* per-call cache reading — one cell per call, 1:1 under the bars (same flex axis → aligned) */
   .cacherow{display:flex;gap:1px;height:5px;margin-top:2px;}
   .cbar{flex:1 1 0;min-width:2px;border-radius:1px;background:var(--dimmer);opacity:.45;}
@@ -64,7 +65,7 @@
   .cbar.failed{background:transparent;border-bottom:1.5px dotted var(--dimmer);}
   .cbar.unk{background:repeating-linear-gradient(90deg,var(--purple) 0 2px,transparent 2px 4px);opacity:.8;}
   .cbar.cur{outline:1px solid var(--fg);outline-offset:0;}
-  .sawaxis{display:flex;justify-content:space-between;gap:6px;white-space:nowrap;color:var(--dimmer);font-size:9px;margin-top:2px;font-family:var(--mono);}
+  .sawaxis{display:flex;justify-content:space-between;gap:6px;white-space:nowrap;color:var(--dimmer);font-size:10px;margin-top:2px;font-family:var(--mono);}
   /* D13 overview strip + brush (focus+context navigator) */
   .ovstrip{position:relative;height:24px;margin-top:3px;border:1px solid var(--border);border-radius:3px;background:color-mix(in srgb,var(--raised) 60%,transparent);overflow:hidden;touch-action:none;}
   .ovbars{display:flex;align-items:flex-end;gap:0;height:100%;padding:1px;}
@@ -72,7 +73,7 @@
   .ovbar.err{background:var(--red);opacity:.6;}
   .ovsvg{position:absolute;inset:1px;width:calc(100% - 2px);height:calc(100% - 2px);}
   .ovsvg polyline{fill:none;stroke:var(--dim);stroke-width:.8;opacity:.75;vector-effect:non-scaling-stroke;}
-  .ovsample{position:absolute;top:1px;right:3px;font-size:8px;color:var(--amber);font-family:var(--mono);opacity:.85;pointer-events:none;}
+  .ovsample{position:absolute;top:1px;right:3px;font-size:10px;color:var(--amber);font-family:var(--mono);opacity:.85;pointer-events:none;}
   .ovpin{position:absolute;top:0;bottom:0;width:1px;background:var(--fg);opacity:.55;pointer-events:none;}
   .ovbrush{position:absolute;top:0;bottom:0;min-width:6px;background:color-mix(in srgb,var(--accent) 22%,transparent);border:1px solid var(--accent);border-radius:2px;cursor:grab;box-sizing:border-box;}
   .ovbrush:active{cursor:grabbing;}
@@ -101,7 +102,7 @@
   .railname .tn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .railname.group .tn{color:var(--fg);font-weight:600;}
   .railsonly{font-size:10px;color:var(--dimmer);padding:4px 0;}
-  .tcsample{position:absolute;top:0;right:2px;font-size:8px;color:var(--amber);font-family:var(--mono);pointer-events:none;opacity:.9;}
+  .tcsample{position:absolute;top:0;right:2px;font-size:10px;color:var(--amber);font-family:var(--mono);pointer-events:none;opacity:.9;}
 
   /* lane rails — every other lane of this session, time-aligned under the conversation */
   #rails{background:var(--rail);border-bottom:1px solid var(--border);padding:2px 12px 6px;user-select:none;}
@@ -115,7 +116,7 @@
   .railhead:hover{color:var(--fg);}
   .railhead .rc{font-family:var(--mono);font-size:10px;color:var(--dimmer);}
   .railhead .rflag{color:var(--red);font-family:var(--mono);font-size:10px;}
-  .railhead .rkind{margin-left:auto;font-size:9px;color:var(--dimmer);font-style:italic;}
+  .railhead .rkind{margin-left:auto;font-size:10px;color:var(--dimmer);font-style:italic;}
   .railbody{position:relative;height:20px;margin-bottom:3px;border-radius:4px;cursor:pointer;background:color-mix(in srgb,var(--fg) 3%,transparent);}
   .railbody:hover{background:color-mix(in srgb,var(--fg) 7%,transparent);}
   .rail.k-probe .railbody,.rail.k-token-count .railbody{height:28px;}
@@ -149,8 +150,8 @@
   .viewname{cursor:pointer;} .viewname:hover{text-decoration:underline;color:var(--fg);}
   .viewbtn{cursor:pointer;opacity:.45;font-size:10px;margin-left:4px;} .viewbtn:hover{opacity:1;}
   .rawpre{font-family:var(--mono);font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;color:var(--dim);margin:5px 0 0;}
-  .rpx{float:right;cursor:pointer;color:var(--dimmer);font-size:9px;border:1px solid var(--border);border-radius:5px;padding:0 5px;} .rpx:hover{color:var(--fg);}
-  .resz{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--dimmer);margin:0 0 5px;}
+  .rpx{float:right;cursor:pointer;color:var(--dimmer);font-size:10px;border:1px solid var(--border);border-radius:5px;padding:0 5px;} .rpx:hover{color:var(--fg);}
+  .resz{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--dimmer);margin:0 0 5px;}
   /* < 1200: the right page folds to one bottom line 「读过的文件 N · 原始数据 ▸」(1.2 §窄屏); opened it rises from the
      bottom at half height with 资源 and 原始数据 side by side. ≥ 1200 the bar is not drawn at all. */
   #rpbar{display:none;}
@@ -190,8 +191,8 @@
   .cwsec{display:flex;align-items:baseline;gap:8px;margin:16px 0 6px;padding-top:8px;border-top:2px solid var(--border);scroll-margin-top:8px;}
   .cwsec b{font-size:11px;letter-spacing:1px;color:var(--fg);}
   .cwsecn{font-family:var(--mono);font-size:10px;color:var(--dimmer);}
-  .cwsecsz{font-family:var(--mono);font-size:9.5px;color:var(--dim);white-space:nowrap;}
-  .cwsecff{font-size:9.5px;color:var(--dim);white-space:nowrap;} .cwsecff.v{color:var(--green);}
+  .cwsecsz{font-family:var(--mono);font-size:10px;color:var(--dim);white-space:nowrap;}
+  .cwsecff{font-size:10px;color:var(--dim);white-space:nowrap;} .cwsecff.v{color:var(--green);}
   /* ① 调用保真行 · ② 窗口行 (2.3): one quiet line each, the ◐ half-mark leading */
   .cwfline,.cwwin{display:flex;align-items:baseline;gap:7px;margin:0 0 8px;padding:5px 9px;font-size:10.5px;line-height:1.5;border-radius:6px;}
   .cwfline{color:var(--ink-2);background:color-mix(in srgb,var(--fg) 3%,transparent);border:1px dashed var(--rule-2);}
@@ -203,19 +204,19 @@
   .taxbar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--rail);border:1px solid var(--border);}
   .taxseg{display:block;height:100%;}
   .taxseg-tools{background:var(--amber);} .taxseg-system{background:var(--purple);} .taxseg-history{background:var(--dim);} .taxseg-task{background:var(--accent);}
-  .taxlegend{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;font-size:9.5px;color:var(--dim);}
+  .taxlegend{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;font-size:10px;color:var(--dim);}
   .taxlg{display:inline-flex;align-items:center;gap:4px;} .taxlg i{width:8px;height:8px;border-radius:2px;display:inline-block;} .taxlg b{font-family:var(--mono);color:var(--fg);}
   .taxculprit{font-size:10px;color:var(--dim);margin-top:4px;} .taxculprit b{font-family:var(--mono);color:var(--amber);}
-  .taxest{color:var(--dimmer);font-style:italic;font-size:9px;margin-left:6px;}
+  .taxest{color:var(--dimmer);font-style:italic;font-size:10px;margin-left:6px;}
   /* 步间 diff (2.3/D24): reference picker + removal-aware section */
-  .cwrem-n{font-size:9px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 35%,transparent);border-radius:8px;padding:0 6px;font-family:var(--mono);}
+  .cwrem-n{font-size:10px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 35%,transparent);border-radius:8px;padding:0 6px;font-family:var(--mono);}
   .cwremoved{margin:6px 0;border:1px dashed color-mix(in srgb,var(--amber) 40%,transparent);border-radius:6px;background:color-mix(in srgb,var(--amber) 6%,transparent);}
   .cwremhd{font-size:10px;color:var(--amber);padding:5px 9px;cursor:pointer;} .cwremhd b{font-family:var(--mono);}
   .cwrembody{padding:0 8px 6px;} .cblk.removed{opacity:.72;} .cblk.removed .cbh{text-decoration:line-through solid color-mix(in srgb,var(--amber) 50%,transparent);}
-  .rembadge{font-size:8.5px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);text-decoration:none;}
-  .lifemark{font-size:8.5px;color:var(--green);border:1px solid color-mix(in srgb,var(--green) 35%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);}
+  .rembadge{font-size:10px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);text-decoration:none;}
+  .lifemark{font-size:10px;color:var(--green);border:1px solid color-mix(in srgb,var(--green) 35%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;font-family:var(--mono);}
   /* 「新」(2.3): a quiet INK vertical line on the block's left + the word — not a green badge */
-  .newmark{font-size:8.5px;color:var(--fg);border:1px solid var(--rule);border-radius:8px;padding:0 5px;white-space:nowrap;}
+  .newmark{font-size:10px;color:var(--fg);border:1px solid var(--rule);border-radius:8px;padding:0 5px;white-space:nowrap;}
   .cblk.is-new{box-shadow:inset 2px 0 0 var(--ink);}
   /* one block */
   .cblk{border:1px solid var(--border);border-radius:6px;margin-bottom:4px;overflow:hidden;background:var(--raised);scroll-margin-top:8px;}
@@ -224,16 +225,16 @@
   .cblk.hl{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 55%,transparent);}
   .cbh{display:flex;gap:7px;align-items:center;padding:4px 9px;font-family:var(--mono);font-size:10.5px;color:var(--dim);cursor:pointer;}
   .cbh:hover{color:var(--fg);}
-  .cbh::before{content:"▸";color:var(--dimmer);font-size:9px;width:8px;}
+  .cbh::before{content:"▸";color:var(--dimmer);font-size:10px;width:8px;}
   .cblk:not(.collapsed) .cbh::before{content:"▾";}
   .cbrole{color:var(--fg);font-weight:600;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   /* < 600 px the block label takes its own line under the role */
   @media(max-width:600px){.cbh{flex-wrap:wrap;} .cbh .cblabel{flex:1 0 100%;order:1;}}
   .cbtag{color:var(--dimmer);}
-  .cblabel{color:var(--cyan);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
-  .cbchars{margin-left:auto;color:var(--dimmer);font-size:9px;white-space:nowrap;}
-  .bpbadge{color:var(--green);font-size:9px;white-space:nowrap;border:1px solid color-mix(in srgb,var(--green) 40%,var(--border));border-radius:10px;padding:0 5px;}
-  .volbadge{color:var(--amber);font-size:9px;white-space:nowrap;border:1px solid color-mix(in srgb,var(--amber) 40%,var(--border));border-radius:10px;padding:0 5px;}
+  .cblabel{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
+  .cbchars{margin-left:auto;color:var(--dimmer);font-size:10px;white-space:nowrap;}
+  .bpbadge{color:var(--green);font-size:10px;white-space:nowrap;border:1px solid color-mix(in srgb,var(--green) 40%,var(--border));border-radius:10px;padding:0 5px;}
+  .volbadge{color:var(--amber);font-size:10px;white-space:nowrap;border:1px solid color-mix(in srgb,var(--amber) 40%,var(--border));border-radius:10px;padding:0 5px;}
   /* per-block faithfulness (1.4:52 / 不变式4): dashed = NOT byte-verbatim. Muted amber so it reads as a caveat, not an error. */
   .cbc{padding:0 9px;} .cblk.collapsed .cbc{display:none;}
   /* messages grouped into turns (point 2): user-query header ▸ nested call-turn blocks */
@@ -243,13 +244,13 @@
   .cwturn.collapsed .cwturnhd::before{content:"▸";}
   .cwturnhd:hover{background:color-mix(in srgb,var(--fg) 4%,transparent);}
   .cwturnq{color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
-  .cwturnq .qk{color:var(--dimmer);font-weight:400;font-family:var(--mono);font-size:9px;margin-left:6px;}
-  .cwturnn{color:var(--dimmer);font-size:9px;white-space:nowrap;border:1px solid var(--border);border-radius:10px;padding:0 6px;font-family:var(--mono);}
-  .qlabel{font-size:9px;color:var(--dim);border:1px solid var(--border);border-radius:10px;padding:0 6px;margin-right:6px;white-space:nowrap;}
+  .cwturnq .qk{color:var(--dimmer);font-weight:400;font-family:var(--mono);font-size:10px;margin-left:6px;}
+  .cwturnn{color:var(--dimmer);font-size:10px;white-space:nowrap;border:1px solid var(--border);border-radius:10px;padding:0 6px;font-family:var(--mono);}
+  .qlabel{font-size:10px;color:var(--dim);border:1px solid var(--border);border-radius:10px;padding:0 6px;margin-right:6px;white-space:nowrap;}
   .cwturnbody{padding:2px 8px 6px;} .cwturn.collapsed .cwturnbody{display:none;}
   /* D12 全展/全折 便捷键 */
   .cwfoldall{display:flex;gap:6px;justify-content:flex-end;margin:-2px 0 5px;}
-  .foldallbtn{background:none;border:1px solid var(--border);border-radius:10px;color:var(--dim);font-size:9px;font-family:var(--mono);padding:1px 7px;cursor:pointer;}
+  .foldallbtn{background:none;border:1px solid var(--border);border-radius:10px;color:var(--dim);font-size:10px;font-family:var(--mono);padding:1px 7px;cursor:pointer;}
   .foldallbtn:hover{color:var(--fg);border-color:var(--accent);}
   .cbpre{margin:2px 0 7px;font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:340px;overflow:auto;color:var(--fg);}
   .cbc .md{padding:3px 0 7px;font-size:12px;}
@@ -261,40 +262,40 @@
   .chline{display:flex;align-items:center;gap:9px;margin:10px 0 6px;scroll-margin-top:8px;}
   .chline .chbar{flex:0 0 auto;width:5px;align-self:stretch;min-height:22px;background:var(--cyan);border-radius:3px;box-shadow:0 0 8px color-mix(in srgb,var(--cyan) 55%,transparent);}
   .chline .cht{font-size:10.5px;color:var(--cyan);line-height:1.45;}
-  .chline .chest{font-style:normal;font-size:9px;color:var(--dimmer);border:1px solid var(--border);border-radius:8px;padding:0 5px;white-space:nowrap;}
+  .chline .chest{font-style:normal;font-size:10px;color:var(--dimmer);border:1px solid var(--border);border-radius:8px;padding:0 5px;white-space:nowrap;}
   .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
 
   /* ── nav sidebar ── */
-  .navz{font-size:9px;text-transform:uppercase;letter-spacing:1.4px;color:var(--dimmer);margin:12px 4px 5px;}
+  .navz{font-size:10px;text-transform:uppercase;letter-spacing:1.4px;color:var(--dimmer);margin:12px 4px 5px;}
   .navz:first-child{margin-top:2px;}
   .navrow{display:flex;align-items:center;gap:7px;padding:4px 7px;border-radius:6px;cursor:pointer;font-size:11.5px;color:var(--dim);}
   .navrow:hover{background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--fg);}
   .navrow .navic{width:15px;text-align:center;flex:0 0 auto;}
   .navrow .navlbl{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .navrow .navct{font-family:var(--mono);font-size:9.5px;color:var(--dimmer);}
+  .navrow .navct{font-family:var(--mono);font-size:10px;color:var(--dimmer);}
   .navrow.head .navlbl{color:var(--fg);font-weight:600;}
-  .navrow.head::before{content:"▸";color:var(--dimmer);font-size:9px;margin-right:-2px;}
+  .navrow.head::before{content:"▸";color:var(--dimmer);font-size:10px;margin-right:-2px;}
   .navrow.head.open::before{content:"▾";}
   .navkids{margin:1px 0 4px 12px;border-left:1px solid var(--border);padding-left:4px;}
   .navsub{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 6px;padding:3px 6px;border-radius:5px;cursor:pointer;font-size:10.5px;color:var(--dim);font-family:var(--mono);}
   .navsub:hover{background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--fg);}
   .navsub .nsl{flex:1 1 9em;min-width:6em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .navsub .nsx{color:var(--dimmer);font-size:9px;white-space:nowrap;}
+  .navsub .nsx{color:var(--dimmer);font-size:10px;white-space:nowrap;}
   .navsub .bpmark{color:var(--green);} .navsub .vol{color:var(--amber);}
-  .navsub.pend{opacity:.42;} .navsub.dead{opacity:.5;text-decoration:line-through;text-decoration-color:var(--dimmer);}
+  .navsub.pend{opacity:.42;} .navsub.dead{opacity:.5;} .navsub.dead .viewname{text-decoration:line-through;text-decoration-color:var(--dimmer);}
   .navsub.empty{cursor:default;color:var(--ink-3);} .navsub.empty:hover{background:none;color:var(--ink-3);}
   .navwhy{font-size:var(--fs-cap);color:var(--warn);margin:0 4px 8px;line-height:1.5;}
   .navsince{border:1px solid var(--rule);border-radius:var(--r-pill);padding:0 5px;}
   /* the life text wraps under the name when the panel is narrow — never cut (1.5) */
-  .navlife{font:inherit;font-size:9.5px;color:var(--ink-3);background:none;border:0;padding:0;cursor:pointer;flex:0 1 auto;min-width:0;text-align:left;overflow-wrap:anywhere;}
+  .navlife{font:inherit;font-size:10px;color:var(--ink-3);background:none;border:0;padding:0;cursor:pointer;flex:0 1 auto;min-width:0;text-align:left;overflow-wrap:anywhere;}
   .navlife:hover{color:var(--action);text-decoration:underline;}
   .navsince:hover{color:var(--ink);border-color:var(--ink-2);}
   .navsub .bpbadge,.navsub .volbadge{flex:0 1 auto;min-width:0;max-width:100%;white-space:normal;} /* a pill longer than the panel wraps inside its row, never past the edge */
   .navsub .en{color:var(--green);} .navsub .ev{color:var(--red);}
   .navseen{display:flex;flex-wrap:wrap;gap:3px 4px;margin:2px 0 4px 14px;}
-  .navchip{font-family:var(--mono);font-size:9.5px;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:0 5px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .navchip{font-family:var(--mono);font-size:10px;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:0 5px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .navchip:hover{color:var(--fg);border-color:var(--dim);} .navchip.future{opacity:.4;}
-  .navmore{font-size:9px;color:var(--dimmer);cursor:pointer;padding:2px 0 2px 14px;font-family:var(--mono);}
+  .navmore{font-size:10px;color:var(--dimmer);cursor:pointer;padding:2px 0 2px 14px;font-family:var(--mono);}
   .navmore:hover{color:var(--accent);}
   .res{cursor:pointer;}
 
@@ -307,7 +308,7 @@
   .res{margin-bottom:11px;}
   .res .top{display:flex;gap:6px;align-items:baseline;}
   .res .nm{font-family:var(--mono);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .res .via{font-size:9px;color:var(--dimmer);margin-left:auto;white-space:nowrap;}
+  .res .via{font-size:10px;color:var(--dimmer);margin-left:auto;white-space:nowrap;}
   .res.file .nm{color:var(--fg);} .res.scaffold .nm{color:var(--purple);} .res.dir .nm{color:var(--amber);} .res.link .nm{color:var(--cyan);} .res.capability .nm{color:var(--pink);}
   .res.dead{opacity:.45;}
   .track{position:relative;height:16px;background:var(--panel2);border-radius:5px;margin-top:4px;overflow:hidden;
@@ -319,13 +320,13 @@
   .track .evict{position:absolute;top:0;bottom:0;width:0;border-left:2px dashed var(--red);}
   .track .ph{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--fg);box-shadow:0 0 4px var(--fg);}
   .res .sub2{display:flex;gap:8px;align-items:baseline;margin-top:3px;}
-  .res .ranges{font-family:var(--mono);font-size:9.5px;color:var(--cyan);opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .res .hits{font-size:9px;color:var(--dimmer);margin-left:auto;white-space:nowrap;}
+  .res .ranges{font-family:var(--mono);font-size:10px;color:var(--cyan);opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .res .hits{font-size:10px;color:var(--dimmer);margin-left:auto;white-space:nowrap;}
   /* opened-file expand */
   .res.file .res-hd{cursor:pointer;}
   .res.file .res-hd .nm::before{content:"▸ ";color:var(--dimmer);}
   .res.file.expanded .res-hd .nm::before{content:"▾ ";}
-  .lifesum{font-family:var(--mono);font-size:9.5px;color:var(--dim);margin-top:3px;}
+  .lifesum{font-family:var(--mono);font-size:10px;color:var(--dim);margin-top:3px;}
   .lifesum .ev{color:var(--dimmer);}
   .filedetail{display:none;margin:6px 0 2px 10px;border-left:1px solid var(--border);padding-left:9px;}
   .res.file.expanded .filedetail{display:block;}
@@ -336,13 +337,13 @@
   .res-viewtext{display:inline-block;margin-top:5px;font-size:10px;font-family:var(--mono);color:var(--accent);cursor:pointer;border:1px solid color-mix(in srgb,var(--accent) 40%,var(--border));border-radius:5px;padding:2px 7px;}
   .res-viewtext:hover{background:color-mix(in srgb,var(--accent) 14%,transparent);}
   /* only-seen filenames */
-  .seenhint{font-size:9px;color:var(--dimmer);margin:-2px 0 6px;line-height:1.4;}
+  .seenhint{font-size:10px;color:var(--dimmer);margin:-2px 0 6px;line-height:1.4;}
   .seenlist{display:flex;flex-wrap:wrap;gap:4px 6px;}
   .seenchip{font-family:var(--mono);font-size:10px;color:var(--dim);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;cursor:pointer;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;}
   .seenchip:hover{color:var(--fg);border-color:var(--dim);}
   .seenchip.future{opacity:.38;}
   .seenchip .sdot{color:var(--dimmer);}
-  .seenmore{font-size:9.5px;color:var(--dimmer);cursor:pointer;padding:3px 0;font-family:var(--mono);}
+  .seenmore{font-size:10px;color:var(--dimmer);cursor:pointer;padding:3px 0;font-family:var(--mono);}
   .seenmore:hover{color:var(--accent);}
   /* ⑤–⑧ the stand-in states (1.4): 未下发 · 解析不出 · 没有请求 · 载入中 — never a blank window */
   .pagedout{margin:24px auto;max-width:560px;padding:14px 16px;border:1px dashed var(--rule-2);border-radius:6px;background:color-mix(in srgb,var(--fg) 2%,transparent);}
@@ -361,14 +362,14 @@
 #pages{min-width:0;} #leftpage{min-width:0;}
 /* fidelity marks (2.3 proof rule): a PROVEN block shows no badge at all; every unproven value keeps the dashed caveat look (base .ffbadge) */
 .ff-summarized,.ff-truncated,.ff-metadata,.ff-unaddressable,.ff-unknown,.ff-notfetched,.ff-reserialized,.ff-opaque,.ff-omitted{color:var(--ink-2);}
-.remnote{font-size:8.5px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;}
-.cbsrc{font-size:9.5px;color:var(--dimmer);margin:4px 0 0;font-family:var(--mono);}
+.remnote{font-size:10px;color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent);border-radius:8px;padding:0 5px;white-space:nowrap;}
+.cbsrc{font-size:10px;color:var(--dimmer);margin:4px 0 0;font-family:var(--mono);}
 .cbsrc.warn{color:var(--ink-2);}
-.cbdec{font-size:9.5px;color:var(--ink-2);margin:4px 0 0;font-family:var(--mono);}
+.cbdec{font-size:10px;color:var(--ink-2);margin:4px 0 0;font-family:var(--mono);}
 .decodebtn{border:0;background:none;padding:0;color:var(--action);cursor:pointer;font:inherit;text-decoration:underline;}
 .cbpre[data-ref]{color:var(--dim);}
 .nbkbody .cbpre,.pinbody .cbpre{font-size:10px;line-height:1.45;color:var(--dim);max-height:260px;margin:5px 0 0;}
-.estnote{color:var(--dimmer);font-size:9px;font-style:italic;margin-left:6px;}
+.estnote{color:var(--dimmer);font-size:10px;font-style:italic;margin-left:6px;}
 /* cache band: a call with no usage is unknown (neutral), not "cold" (red) */
 .cbar.na{background:repeating-linear-gradient(45deg,var(--dimmer) 0 2px,transparent 2px 4px);opacity:.5;}
 /* a hatched cell: not computable (no composition, no price, no usage) — never a zero-height bar */
@@ -380,7 +381,7 @@
 .cwreply{margin-top:12px;padding:8px 10px;border-top:1px dashed var(--border);}
 .rpbody .rawpre{color:var(--ink-2);}
 #rawpanel .rpbody .rawpre{max-height:280px;overflow:auto;} /* the panel scrolls a long reply; the window's ⑨ is never capped */
-.rptech{font-family:var(--mono);font-size:9px;color:var(--dimmer);margin-top:2px;}
+.rptech{font-family:var(--mono);font-size:10px;color:var(--dimmer);margin-top:2px;}
 .rpobs{color:var(--amber);font-size:var(--fs-cap);}
 .rpok{color:var(--green);} .rpwarn{color:var(--amber);}
 /* the drawer's pieces (2.6 §B) */
@@ -393,10 +394,10 @@
 .dblk{border:1px solid var(--border);border-radius:6px;margin:4px 0;background:var(--panel2);}
 .dblk>.dbh{display:flex;gap:7px;align-items:center;padding:3px 9px;font-family:var(--mono);font-size:10.5px;color:var(--dim);cursor:pointer;}
 .dblk>.dbh:hover{color:var(--fg);}
-.dblk>.dbh::before{content:"▸";color:var(--dimmer);font-size:9px;width:8px;}
+.dblk>.dbh::before{content:"▸";color:var(--dimmer);font-size:10px;width:8px;}
 .dblk.open>.dbh::before{content:"▾";}
 .dblk .dbrole{color:var(--fg);font-weight:600;} .dblk .dblab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;color:var(--cyan);}
-.dblk .dbn{margin-left:auto;color:var(--dimmer);font-size:9px;white-space:nowrap;}
+.dblk .dbn{margin-left:auto;color:var(--dimmer);font-size:10px;white-space:nowrap;}
 .dblk .dbbody{padding:0 9px 6px;} .dblk:not(.open) .dbbody{display:none;}
 .dblk .dbbody pre{max-height:300px;overflow:auto;}
 .dblk .dbfold{font-family:var(--mono);font-size:10px;color:var(--dimmer);padding:2px 0 4px;}

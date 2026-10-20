@@ -180,5 +180,22 @@ export function relPath(cwd, p) {
   return cwd && s.startsWith(cwd + '/') ? s.slice(cwd.length + 1) : s
 }
 
+// a long path cut in the middle (2.4): the base name stays whole, middle segments give way to '…' from the inside out;
+// a base name longer than max is returned with its own segment alone after '…/'
+export function midClip(path, max) {
+  const s = String(path)
+  if (s.length <= max) return s
+  const segs = s.split('/'), base = segs.pop()
+  let head = 0, tail = segs.length // keep segs[0..head) in front and segs[tail..) before the base name
+  const fit = (h, t) => [...segs.slice(0, h), '…', ...segs.slice(t), base].join('/').length <= max
+  // grow from both ends while it still fits; the front first, so the root of the path reads as is
+  for (let grew = true; grew;) {
+    grew = false
+    if (head < tail && fit(head + 1, tail)) { head++; grew = true }
+    if (tail > head && fit(head, tail - 1)) { tail--; grew = true }
+  }
+  return [...segs.slice(0, head), '…', ...segs.slice(tail), base].join('/')
+}
+
 // a time shown inline: an unknown or invalid one is '—', never blank (no dangling " · " or " @ ")
 export const when = (ts) => fmtTime(ts) || '—'

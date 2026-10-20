@@ -44,13 +44,14 @@ function parsedReplyHtml(c) {
   return h
 }
 // the reply of one step: shared by this panel and the context window's closing reply segment (2.3 §这一步的回复) — one rule
-export function replyHtml(c) {
+export function replyHtml(c, techId = 'rpfail') {
   // an unparsed step is a REQUEST-body fact (the params row says it, errMsg rides in 技术细节); where the response itself
   // parsed, the reply still renders — 「这次调用失败,没有回复」 would deny a reply we do have (2.6 §A)
   if (c.unparsed && c.norm && c.norm.text) return parsedReplyHtml(c)
   if (c.error || (c.status != null && c.status !== 200)) {
     const msg = c.unparsed ? '' : (typeof c.error === 'string' ? c.error : (c.errMsg || (c.error && c.error.message) || (c.status != null ? `status ${c.status}` : '')))
-    return `<div class="rpk"><b>${esc(W.REPLY_WORD)}</b> · ${esc(W.FAILED_NO_REPLY)}${msg ? ` <span class="mono">${esc(msg)}</span>` : ''}</div>`
+    // the visible line is the fixed sentence; the server's raw reason is a tech detail (1.5 §数据规则)
+    return `<div class="rpk"><b>${esc(W.REPLY_WORD)}</b> · ${esc(W.FAILED_NO_REPLY)}${msg ? techDetailsHtml([['reason', msg]], { id: techId }) : ''}</div>`
   }
   return parsedReplyHtml(c)
 }
@@ -64,11 +65,16 @@ function rawReplyHtml(c) {
   const ws = (c.wire && c.wire.transport) === 'ws'
   return `<div class="rpk" title="The captured reply bytes — each piece can be read back from the raw record"><b>${esc(W.RAW_REPLY)}</b> · ${rs.map((x, j) => (ws ? refRow(x, W.rawReplyNth(j + 1)) : refRow({ ...x, chars: null }, x.chars != null ? `${kf(x.chars)} characters` : '—'))).join(' · ')}<div class="nbkbody"></div></div>`
 }
+const scalarShown = (v) => (typeof v === 'string' ? v.length <= 40 : typeof v === 'number' || typeof v === 'boolean')
 function paramsHtml(c) {
   const ks = c.nonBlockKeys || []
   if (c.unparsed) return `<div class="rpk"><b>${esc(W.REQ_PARAMS)}</b> · ${esc(W.UNPARSED_PARAMS)}</div>`
   if (!ks.length) return `<div class="rpk"><b>${esc(W.REQ_PARAMS)}</b> · ${esc(W.NO_PARAMS)}</div>`
-  return `<div class="rpk" title="Request keys that are not context blocks — kept verbatim in the raw record"><b>${esc(W.REQ_PARAMS)}</b> · ${ks.map((k) => refRow({ ref: k.ref, chars: k.chars, why: k.note }, k.key)).join(' · ')}<div class="nbkbody"></div></div>`
+  // a short scalar value is shown as is (mono); anything else keeps its length — the bytes stay one click away
+  const row = (k) => (scalarShown(k.value)
+    ? `${refRow({ ref: k.ref, chars: null, why: k.note }, k.key)} <span class="mono">${esc(String(k.value))}</span>`
+    : refRow({ ref: k.ref, chars: k.chars, why: k.note }, k.key))
+  return `<div class="rpk" title="Request keys that are not context blocks — kept verbatim in the raw record"><b>${esc(W.REQ_PARAMS)}</b> · ${ks.map(row).join(' · ')}<div class="nbkbody"></div></div>`
 }
 function extraHtml(c) {
   const xs = c.extraMessages || []

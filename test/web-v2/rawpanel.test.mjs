@@ -120,3 +120,31 @@ test('capture routing rides the raw panel\'s tech details (2.3 §调用保真行
   const open = techAt(h)
   assert.ok(open > -1 && h.indexOf('ROUTE-TEXT-x') > open)
 })
+
+// A1 (2.6 §A params row): a scalar key value within 40 characters is shown; anything else keeps the length
+test('a request key shows its value iff it is a short scalar; otherwise its length', () => {
+  const CH = 517 // under 1000, so the row prints it as is
+  const cases = [['s', 'v'.repeat(5)], ['s40', 'w'.repeat(40)], ['s41', 'x'.repeat(41)], ['num', 0.731], ['bool', false], ['obj', { a: 1 }], ['absent', undefined]]
+  for (const [key, value] of cases) {
+    const k = { key, chars: CH, ref: 'r9' }
+    if (value !== undefined) k.value = value
+    const h = draw(base({ nonBlockKeys: [k] }))
+    const row = h.slice(h.indexOf(`>${key}</code>`), h.indexOf('class="nbkbody"'))
+    const shown = (typeof value === 'string' && value.length <= 40) || typeof value === 'number' || typeof value === 'boolean'
+    assert.equal(row.includes('>' + String(value) + '<'), shown, `${key}: value shown`)
+    assert.equal(row.includes(String(CH)), !shown, `${key}: length shown`)
+  }
+})
+
+// A2 (2.6 §A): a failed call's raw reason is a tech detail; the visible reply line carries no server text
+test('a failed call\'s reason appears only inside the reply\'s tech details', () => {
+  const reason = 'ERR-zq81-upstream-boom'
+  for (const o of [{ error: reason }, { error: { message: reason } }, { status: 503, errMsg: reason }]) {
+    const h = draw(base({ norm: {}, ...o }))
+    assert.ok(h.includes(reason), 'the reason is kept')
+    for (let i = h.indexOf(reason); i > -1; i = h.indexOf(reason, i + 1)) {
+      const d = h.lastIndexOf('<div class="disc"', i)
+      assert.ok(d > -1 && !h.slice(d, i).includes('</div></div>'), 'occurrence outside a disclosure')
+    }
+  }
+})

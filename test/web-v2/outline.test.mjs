@@ -4,7 +4,7 @@
 // is guarded by the test of that name below.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { outlineHtml, outlineEntries, queryStepLabels, wireOutline } from '../../src/web/v2/replay/outline.mjs'
+import { outlineHtml, outlineEntries, queryStepLabels, wireOutline, jumpToAnchor } from '../../src/web/v2/replay/outline.mjs'
 import { resourcesHtml } from '../../src/web/v2/replay/resources.mjs'
 import { humanTurns, messageTurns } from '../../src/web/v2/replay/analysis.mjs'
 import { openTurnFor, renderContextWindow } from '../../src/web/v2/replay/ctxwin.mjs'
@@ -149,3 +149,18 @@ test('jump-source identity: every data-jumpfi names a block the window actually 
   for (const j of jumps) assert.ok(inWindow.has(j), `data-jumpfi=${j} must be a .cblk[data-bi] the window drew`)
 })
 
+
+// A4 (1.5 motion): a jump scrolls instantly under prefers-reduced-motion, smoothly otherwise
+test('an outline jump honours prefers-reduced-motion', () => {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, 'matchMedia'), prev = globalThis.matchMedia
+  try {
+    for (const reduce of [true, false]) {
+      globalThis.matchMedia = (q) => ({ matches: reduce && /prefers-reduced-motion:\s*reduce/.test(q) })
+      let arg = null
+      const target = { scrollIntoView: (o) => { arg = o }, classList: { add() {}, remove() {} } }
+      const s = { root: { querySelector: (sel) => (sel === '#x1' ? target : null) } }
+      jumpToAnchor(s, 'x1')
+      assert.equal(arg && arg.behavior, reduce ? 'auto' : 'smooth')
+    }
+  } finally { if (had) globalThis.matchMedia = prev; else delete globalThis.matchMedia }
+})
