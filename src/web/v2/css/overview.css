@@ -53,6 +53,8 @@ a.ovtr:hover { background: var(--panel); }
 /* an agent with network requests only: one dim sentence across the data columns, linked to its traffic */
 .ovtr.nocall { color: var(--dim); }
 .ovtr .ovnet { grid-column: 2 / -1; font-size: var(--fs-cap); }
+/* the money keeps its floor word and its number on one line */
+.ovcost { white-space: nowrap; }
 
 /* the first-run card keeps the one big sentence (visual design §9 landing) */
 .ovcard.start .ovsay { font-size: var(--fs-body); }
@@ -62,4 +64,7 @@ a.ovtr:hover { background: var(--panel); }
   .ovgrid { grid-template-columns: minmax(0, 1fr); }
   .ovgrid > .span { grid-column: auto; }
   .ovtrh, .ovtr { grid-template-columns: minmax(120px, 1.3fr) repeat(5, minmax(60px, 1fr)); }
+  /* a recent row wraps rather than squeezing its title to nothing */
+  .ovcard.recent .ovitem { flex-wrap: wrap; }
+  .ovcard.recent .ovitem .ovtx { min-width: 8em; }
 }
