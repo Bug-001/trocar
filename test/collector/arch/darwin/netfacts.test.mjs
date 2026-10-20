@@ -1,6 +1,6 @@
 // test/collector/arch/darwin/netfacts.test.mjs — macOS's part of the network facts (RFC 4.9 §10, 1.6 §9.7; the assertions are the linux twin's, test/collector/arch/linux/netfacts.test.mjs, adapted where 4.9 §10 names
 // a darwin row): the processes of each harness with the watch table's verdict, whether it runs as root (euid/root), the listeners of this user, the OS proxy with PAC's own scutil
-// flag; the per-form half (certificate, proxy, the doors) is the model's (core/proxymode/status-facts.mjs). Everything is injected: a fake `lsof` / `scutil` / `ps` runner; nothing reads the machine and nothing is spawned.
+// flag; the per-form half (certificate, proxy, the doors) is the model's (core/proxymode/status-facts.mjs). Everything is injected: a fake `socktable` / `scutil` / `ps` runner; nothing reads the machine and nothing is spawned.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { darwinNetFacts as gather, parseListeners, processName, versionOf } from '../../../../src/collector/arch/darwin/netfacts.mjs'
@@ -10,40 +10,37 @@ import { buildTopology, renderCompact } from '../../../../src/netenv/topology.mj
 import { facts } from '../../../netenv/fixtures/rows.mjs'
 
 const HOME = tmpDir('darwin-netfacts') // an empty HOME: nothing installed, so the per-form half (core/proxymode/status-facts.mjs) has no form to read
-const darwinNetFacts = (ctx, deps) => gather({ home: HOME, ...ctx }, deps)
+const darwinNetFacts = (ctx, deps) => gather({ home: HOME, ...ctx }, { socktablePath: 'socktable', ...deps })
 
-// `netstat -anv -p tcp` as recorded on a macOS machine (read-only): the header that says where the owner is, then LISTEN rows — a loopback
-// one, an IPv6 one (`::1.31080`, no brackets where lsof wrote them), an all-interfaces one (`*.5000`), an owner whose name holds spaces and was cut to
-// 16 characters (`Code Helper (Plu:64005`), and a row whose owner column holds no pid (`:0`: a socket no process the kernel names holds).
-const NETSTAT = [
-  'Active Internet connections (including servers)',
-  'Proto Recv-Q Send-Q  Local Address                                 Foreign Address                               (state)          rxbytes      txbytes  rhiwat  shiwat          process:pid    state  options           gencnt    flags   flags1 usecnt rtncnt fltrs',
-  'tcp4       0      0  127.0.0.1.7890         *.*                    LISTEN                 0            0  131072  131072           mihomo:777    00100 00000106 0000000000d410b8 00000001 00000800      1      0 000000',
-  'tcp6       0      0  ::1.9090               *.*                    LISTEN                 0            0  131072  131072           mihomo:777    00180 00000006 0000000000d63f03 00000000 00000800      1      0 000000',
-  'tcp4       0      0  *.5000                 *.*                    LISTEN                 0            0  131072  131072    ControlCenter:787    00100 00000006 0000000000bfcf3e 00000001 00000800      1      0 000000',
-  'tcp4       0      0  127.0.0.1.65369        *.*                    LISTEN                 0            0  131072  131072 Code Helper (Plu:64005  00100 00000106 0000000000aa557e 00000001 00000800      1      0 000000',
-  'tcp4       0      0  127.0.0.1.22           *.*                    LISTEN                 0            0  131072  131072                  :0    00100 00000106 0000000000aa557f 00000001 00000800      1      0 000000',
-  'tcp4       0      0  192.168.1.9.52788      17.57.144.22.5223      ESTABLISHED       131072       131072  131072  131072            apsd:291    00102 00000004 0000000000bd06f2 00000000 00000800      1      0 000000',
+// The native `socktable` helper's answer (native/socktable.c: `<pid> <state> <laddr> <lport> <faddr> <fport>`, this user's processes only), the
+// shapes of a macOS machine's 2026-10-20 read: a loopback listener, an IPv6 one, an all-interfaces one, a listener the process table does not hold, and a
+// connected socket that is no listener.
+const SOCKTABLE = [
+  '777 LISTEN 127.0.0.1 7890 0.0.0.0 0',
+  '777 LISTEN ::1 9090 :: 0',
+  '787 LISTEN 0.0.0.0 5000 0.0.0.0 0',
+  '64005 LISTEN 127.0.0.1 65369 0.0.0.0 0',
+  '291 ESTABLISHED 192.168.1.9 52788 17.57.144.22 5223',
 ].join('\n')
+const OTHERS = ['listeners', 'owner-unreadable'] // the helper reads this user's sockets only: a port none of them listens on is unknown, never down
 
-/** The runner of `netstat` / `scutil` / `ps`: spawnSync-shaped, answers from a table, records what it was asked. */
+/** The runner of `socktable` / `scutil` / `ps`: spawnSync-shaped, answers from a table, records what it was asked. */
 const runner = (table, calls = []) => (file, args) => {
   calls.push([file, ...args].join(' '))
   const r = table[[file, ...args].join(' ')] ?? { status: null, stdout: '', stderr: '', error: new Error(`spawnSync ${file} ENOENT`) }
   return { status: 0, stdout: '', stderr: '', ...r }
 }
 const SCUTIL_OFF = '<dictionary> {\n  HTTPSEnable : 0\n}'
-const LISTENERS = 'netstat -anv -p tcp'
-const TABLE = { [LISTENERS]: { stdout: NETSTAT }, 'scutil --proxy': { stdout: SCUTIL_OFF } }
+const LISTENERS = 'socktable'
+const TABLE = { [LISTENERS]: { stdout: SOCKTABLE }, 'scutil --proxy': { stdout: SCUTIL_OFF } }
 const row = (pid, over = {}) => ({ pid, trusted: true, reason: null, negative: false, startedAt: Date.parse('2026-10-07T09:30:00Z'), ...over })
 const statusOf = (rows, reply = { agents: [{ pid: 4121, decrypt: true }] }, matched = []) => ({ daemon: { state: 'running', reply }, harnesses: [{ id: 'claude-code', procs: rows }], matched })
 const current = (value = null, over = {}) => ({ value, scheme: null, host: null, port: null, source: [], sha256: value ? settingSha(value) : null, changedAt: null, ...over })
 
-test('parseListeners: the LISTEN rows of the kernel\'s TCP table — address and port, the owner from the `process:pid` column (a name with spaces ends at its `:<pid>`), an IPv6 address and the all-interfaces star; a row that is not a LISTEN one is skipped, and a row with no owner is kept for the shape the topology reads', () => {
-  assert.deepEqual(parseListeners(`${NETSTAT}\nsomething else\n`), [
-    { addr: '127.0.0.1', port: 7890, pid: 777, comm: 'mihomo' }, { addr: '::1', port: 9090, pid: 777, comm: 'mihomo' }, { addr: '*', port: 5000, pid: 787, comm: 'ControlCenter' },
-    { addr: '127.0.0.1', port: 65369, pid: 64005, comm: 'Code Helper (Plu' }, { addr: '127.0.0.1', port: 22 }])
-  assert.equal(parseListeners('Active Internet connections\ntcp4 0 0 127.0.0.1.22 *.* LISTEN\n'), null, 'no header line, so no owner column: the fact cannot be read, which is not an empty list')
+test('parseListeners: the LISTEN rows of the helper\'s answer — address, port and the holder\'s pid; a row that is no LISTEN one or not of the helper\'s shape is skipped', () => {
+  assert.deepEqual(parseListeners(`${SOCKTABLE}\nsomething else\n`), [
+    { addr: '127.0.0.1', port: 7890, pid: 777 }, { addr: '::1', port: 9090, pid: 777 }, { addr: '0.0.0.0', port: 5000, pid: 787 }, { addr: '127.0.0.1', port: 65369, pid: 64005 }])
+  assert.deepEqual(parseListeners(''), [])
 })
 
 test('processName / versionOf: the program (and its sub-command), a runtime named for the harness, the version from the path', () => {
@@ -60,20 +57,25 @@ test('processName / versionOf: the program (and its sub-command), a runtime name
   assert.equal(versionOf('/opt/homebrew/bin/mihomo'), null)
 })
 
-test('darwinNetFacts: routing is proxy; the listeners are named by their owner (the exe from the process table, else the name the kernel kept), a row with no owner says so; no TUN / route fact (D49); the OS proxy is scutil\'s dictionary with PAC\'s own flag', async () => {
+test('darwinNetFacts: routing is proxy; the listeners of this user are named by their owner (the exe from the process table when it holds the pid), and the listeners fact says other users\' are unreadable; no TUN / route fact (D49); the OS proxy is scutil\'s dictionary with PAC\'s own flag', async () => {
   const matched = [{ h: null, p: { pid: 777, exe: '/opt/homebrew/bin/mihomo', argv: ['mihomo'], uid: 501, startedAt: Date.parse('2026-10-07T09:30:00Z') } }] // a process of no harness: the listener's owner
   const calls = []
   const f = await darwinNetFacts({ status: statusOf([], { agents: [] }, matched), settings: {}, env: {} }, { exec: runner(TABLE, calls) })
   assert.equal(f.routing, 'proxy')
   assert.deepEqual(f.listeners, [
     { addr: '127.0.0.1', port: 7890, pid: 777, exe: '/opt/homebrew/bin/mihomo' }, { addr: '::1', port: 9090, pid: 777, exe: '/opt/homebrew/bin/mihomo' },
-    { addr: '*', port: 5000, pid: 787, exe: 'ControlCenter' }, // not in the process table: the name the kernel kept (cut to 16 characters)
-    { addr: '127.0.0.1', port: 65369, pid: 64005, exe: 'Code Helper (Plu' },
-    { addr: '127.0.0.1', port: 22, unknown: { reason: 'owner-unreadable', detail: "netstat's owner column holds no pid for it — the socket is held by no process the kernel names" } }])
+    { addr: '0.0.0.0', port: 5000, pid: 787 }, { addr: '127.0.0.1', port: 65369, pid: 64005 }])
   assert.deepEqual(f.systemProxy, { value: null, pac: false })
   assert.ok(!('tun' in f), 'D49: no TUN fact')
-  assert.deepEqual(f.unknowns, [])
+  assert.deepEqual(f.unknowns.map((u) => [u.fact, u.reason]), [OTHERS])
   assert.deepEqual(calls, [LISTENERS, 'scutil --proxy'], 'only these two reads: no route / ifconfig lookup, nothing is resolved, nothing goes out')
+})
+
+test('darwinNetFacts: a proxy port no process of this user listens on is unknown in the topology, never down (a root-run proxy core cannot be read)', async () => {
+  const f = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner(TABLE) })
+  const u = f.unknowns.find((x) => x.fact === 'listeners')
+  assert.equal(u.reason, 'owner-unreadable')
+  assert.ok(!f.listeners.some((l) => l.port === 7897), 'nobody of this user listens on 7897')
 })
 
 test('darwinNetFacts: a tool that is not there, is refused or prints what it should not leaves the fact unknown with the reason (never an empty list)', async () => {
@@ -82,15 +84,13 @@ test('darwinNetFacts: a tool that is not there, is refused or prints what it sho
   assert.deepEqual(f.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'absent'], ['systemProxy', 'absent']])
   const refused = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ [LISTENERS]: { status: 1, stderr: 'permission denied' } }) })
   assert.deepEqual([refused.unknowns[0].fact, refused.unknowns[0].reason, refused.unknowns[0].detail], ['listeners', 'denied', `${LISTENERS}: permission denied`])
-  assert.match(f.unknowns[0].detail, /^netstat -anv -p tcp: /)
-  const unreadable = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ [LISTENERS]: { stdout: 'Active Internet connections\ntcp4 0 0 127.0.0.1.22 *.* LISTEN\n' } }) })
-  assert.deepEqual([unreadable.listeners, unreadable.unknowns[0].fact, unreadable.unknowns[0].reason], [[], 'listeners', 'unparseable'], 'a table with no owner column: the fact is not known, never an empty list')
-  const timed = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ [LISTENERS]: { status: null, stderr: 'spawnSync netstat ETIMEDOUT' } }) })
+  assert.match(f.unknowns[0].detail, /^socktable: /)
+  const timed = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ [LISTENERS]: { status: null, stderr: 'spawnSync socktable ETIMEDOUT' } }) })
   assert.deepEqual(timed.unknowns.map((u) => [u.fact, u.reason]), [['listeners', 'timeout'], ['systemProxy', 'absent']])
   assert.deepEqual(timed.systemProxy, { unknown: { reason: 'absent', detail: 'scutil --proxy: spawnSync scutil ENOENT' } })
   const unparsable = await darwinNetFacts({ status: statusOf([]), settings: {} }, { exec: runner({ ...TABLE, 'scutil --proxy': { stdout: 'garbage' } }) })
   assert.deepEqual(unparsable.systemProxy, { unknown: { reason: 'unparseable', detail: 'scutil --proxy: answer' } })
-  assert.deepEqual(unparsable.unknowns.map((u) => [u.fact, u.reason]), [['systemProxy', 'unparseable']])
+  assert.deepEqual(unparsable.unknowns.map((u) => [u.fact, u.reason]), [OTHERS, ['systemProxy', 'unparseable']])
 })
 
 test('darwinNetFacts: the OS proxy is the HTTPS hop of scutil\'s dictionary; PAC is its own flag, kept beside the value (the topology prefers the flag); a proxy only in the HTTP keys sends HTTPS direct', async () => {

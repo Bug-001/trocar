@@ -47,13 +47,10 @@ function agentOf({ w, name, env }) {
   return { pid: PID, name, exe: path.join(w.home, 'bin', name), start: Math.ceil(Date.now() / 1000) * 1000 + 1000, uid: process.getuid(), env, cwd: w.home, ports: new Set(), alive: true }
 }
 
-/** darwin: the spawnSync-shaped runner of netstat / lsof / ps / procenv (socktable, procinfo, the process table, scutil) answering for `a` only. */
+/** darwin: the spawnSync-shaped runner of the socktable helper / lsof / ps / procenv (socktable, procinfo, the process table, scutil) answering for `a` only. */
 const darwinExec = (a) => (file, args) => {
   const mine = (i) => args[i] === String(a.pid) && a.alive
-  if (file === 'netstat') { // the kernel TCP table: one row per socket `a` holds, owned by it
-    const rows = a.alive ? [...a.ports].map((p) => `tcp4 0 0 127.0.0.1.${p} 127.0.0.1.1 ESTABLISHED 1 1 1 1 ${a.name}:${a.pid} 00102`) : []
-    return ok(['Proto Recv-Q Send-Q Local Address Foreign Address (state) rxbytes txbytes rhiwat shiwat process:pid state', ...rows].join('\n'))
-  }
+  if (path.basename(file) === NATIVE.socktable) return ok(a.alive ? [...a.ports].map((p) => `${a.pid} ESTABLISHED 127.0.0.1 ${p} 127.0.0.1 1`).join('\n') : '') // one row per socket `a` holds
   if (file === 'lsof') {
     if (args.includes('cwd')) return mine(2) ? ok(`p${a.pid}\nfcwd\nn${a.cwd}\n`) : no('')
     if (args[0] === '-p') return mine(1) ? ok(`p${a.pid}\nftxt\nn${a.exe}\n`) : no('')

@@ -23,6 +23,7 @@ export const FIRST_SEEN_TIP = 'From the records counted in the stats'
 export const UNCLASSIFIED_TIP = 'This agent\'s traffic cannot be split further yet'
 export const UNRECORDED = 'not recorded'
 export const UNRECORDED_N = (n) => `${n} not recorded`
+export const ONLY_THESE = 'these rows only'
 export const LOADING = 'Loading'
 export const EMPTY_WINDOW = 'No traffic in this window'
 export const EMPTY_WINDOW_CLASS = (word) => `No ${word} traffic in this window`

@@ -118,3 +118,19 @@ test('a system proxy change is one netenv-change (netenv-changed, captured), nev
     assert.deepEqual(events.map((e) => [e.from, e.to]), [['off', 'system-proxy-unreadable']], `${os}: the hold the stop found is written, not dropped`)
   }
 })
+
+test('while one unreadable reading is held, the door keeps dialing the last reading that could be read (one failed read never sends it direct around the user\'s proxy); once the hold is over it is the state', async () => {
+  for (const os of Object.keys(OS)) {
+    const box = { s: { on: true, host: '127.0.0.1', port: 7897 } }
+    let hold = null
+    const timers = { setTimeout: (fn) => { hold = fn; return 1 }, clearTimeout: () => { hold = null } }
+    const w = await systemProxyWatch({ up: OS[os](null).up, read: () => { const f = OS[os](box.s); return f.read(f.io) }, timers })
+    try {
+      box.s = null
+      await w.poll()
+      assert.equal(w.now().url, 'http://127.0.0.1:7897', `${os}: held, so the last good reading`)
+      hold()
+      assert.equal(w.now().ok, false, `${os}: still unreadable when the hold is over: said, and dialed as it is`)
+    } finally { w.stop() }
+  }
+})

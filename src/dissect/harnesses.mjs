@@ -30,7 +30,8 @@ const effect = (id, cause, what, captures = BOTH) => ({ id, captures, cause, wha
 export const HARNESSES = Object.freeze([
   { ...ROW, id: 'cc', agents: ['cc', 'claude-code'], ua: /claude-cli|claude-code/,
     sessionKeys: [H('x-claude-code-session-id')], // gate G3: body metadata.user_id not added until verified
-    lane: [{ header: 'x-claude-code-agent-id', lane: 'subagent' }],
+    // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
+    lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent', key: true }],
     compaction: [{ header: 'x-cc-compaction-request' }],
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
       'request-body gzip (flag-driven) is off because a custom CA is set')],
@@ -181,7 +182,7 @@ export function sessionKeyOf(rec, { headersOnly = false } = {}) {
 }
 
 export function hintsOf(rec) {
-  const out = { lane: null, compaction: null, compactionMarker: false, parent: null, requestKind: null };
+  const out = { lane: null, laneKey: null, compaction: null, compactionMarker: false, parent: null, requestKind: null };
   const { row } = harnessOf(rec);
   if (!row) return out;
   if (row.requestKind) {
@@ -196,6 +197,7 @@ export function hintsOf(rec) {
     const v = l.header ? headerOf(rec, l.header) : at(bodyOf(rec), l.body);
     if (v == null || String(v).trim() === '' || (l.equals != null && String(v).trim() !== l.equals)) continue;
     out.lane = l.lane;
+    if (l.key) out.laneKey = String(v).trim(); // the value names one agent: one stream per value (3.4)
     break;
   }
   for (const c of row.compaction) {

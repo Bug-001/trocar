@@ -1,11 +1,9 @@
-// capture/capture-view.mjs — the pure renderers of the 采集 page (1.9): the 采集服务 row, one row per detected agent,
-// the expand sections, the 本机网络环境 card, the 改动 block and the commands. Everything is
-// a string builder over ONE /api/capture-health answer (or the honest absent state while a field is absent — field
-// presence decides, never a version). No DOM, no timers: capture.mjs owns the mounting, the poll and the expand memory.
+// capture/capture-view.mjs — the pure renderers of the 采集 page (1.9): the 采集服务 row, one row per detected agent, the
+// expand sections, the 改动 block and the commands. Everything is a string builder over ONE C.3 `status` document (field presence
+// decides, never a version). No DOM, no timers: capture.mjs owns the mounting, the poll and the expand memory.
 //
-// The page is READ-ONLY by design (N-01): no switch is drawn anywhere, the desired state is TEXT, and the command that
-// changes it sits in 技术细节 filled in with the answer's own spelling (never a front-end CLI name table). Nothing here
-// draws a control the board cannot work (1.9 §砍掉的): no restart, no 点名, no elevated, no install button.
+// The page is READ-ONLY here (N-01): the desired state is TEXT, and the command that changes it sits in 技术细节 filled in with
+// the document's own spelling (never a front-end CLI name table). No restart, no 点名, no elevated, no install button (1.9 §砍掉的).
 import { esc, fmtStamp, fmtWhen, has } from '../core/fmt.mjs'
 import { harnessIcon, harnessName, harnessKey } from '../core/chips.mjs'
 import { mark, disclosureHtml } from '../core/ui.mjs'
@@ -13,13 +11,13 @@ import { copyBtn } from '../core/dom.mjs'
 import { redactUrlCredentials } from '../core/sensitive.mjs'
 import { agentVerdicts, AGENT_TIER } from '../core/capture-verdict.mjs'
 import {
-  CONDITION_KIND, SWITCH_WORD, TRUST_REASON, RESTART_CODES, NOT_CAPTURED_EXPECTED, CODE, FILE_ROLE,
-  residueLead, ROUTING, SCOPE, OPT_IN_STATE, ENTRY_STATE, CHANGE_REMOVAL, COMMANDS,
-  UNKNOWN_REASON,
+  CONDITION_KIND, SWITCH_WORD, TRUST_REASON, RESTART_CODES, CODE, residueLead, ROUTING, CHANGE_REMOVAL, COMMANDS,
+  UNKNOWN_REASON, ERR_WHERE,
 } from '../labels/capture.mjs'
 
 const mono = (s) => `<span class="mono">${esc(s)}</span>` // a machine fact: id, path, code, command
 const when = (t) => esc(fmtWhen(t))
+const list = (x) => (Array.isArray(x) ? x : [])
 const lamp = (cls) => (cls ? `<span class="lamp ${esc(cls)}" aria-hidden="true"></span>` : '')
 const okDot = '<span class="capdot" aria-hidden="true"></span>'
 // a row's gutter: bad / warn lamps; the ok dot for 在采 / 没有发现问题; nothing for dim and unknown states (1.5: 正常不点灯,
@@ -36,19 +34,16 @@ const leadHtml = (text, cls) => {
 }
 
 // ── the commands (1.6's table) — only ever inside 技术细节 ─────────────────────────────────────────────────────────
-// per harness, spelt the way the answer itself spells it; a row the answer does not name in switch.harnesses gets no
-// per-harness command.
+// per harness, spelt the way the document itself spells it (`harnesses` keys); a row the document does not name gets none.
 export function commandsFor(h, { row = null, service = false } = {}) {
-  const c = (h && h.collector) || {}, out = [], cmds = COMMANDS
+  const out = [], cmds = COMMANDS
   const fill = (s) => row && row.cliId ? s.replace('<id>', row.cliId) : s
   if (service || (row && row.cliId)) {
     out.push(['start capturing', fill(cmds.on)], ['stop capturing', fill(cmds.off)], ['see the full status', fill(cmds.status)], ['diagnose', fill(cmds.doctor)])
   }
-  if (c.installed === false) out.push(['install', cmds.install])
-  const conds = Array.isArray(c.conditions) ? c.conditions : []
-  if (conds.some((k) => k && (k.kind === 'degraded' || k.kind === 'helper-version'))) out.push(['repair the capture helper (needs sudo)', cmds.helper])
-  const linger = c.daemon && c.daemon.last_start && c.daemon.last_start.linger
-  if (linger === false || linger == null) out.push(['keep capturing after logout', cmds.linger])
+  if (h && h.health && h.health.state === 'not-installed') out.push(['install', cmds.install])
+  if (list(h && h.critical).some((k) => k && (k.kind === 'degraded' || k.kind === 'helper-version'))) out.push(['repair the capture helper (needs sudo)', cmds.helper])
+  if (h && h.linger === false) out.push(['keep capturing after logout', cmds.linger])
   return out
 }
 
@@ -77,14 +72,12 @@ export function openStates(ordered, openByReader) {
 }
 
 // ── the 采集服务 row (1.9 §采集服务行) — the first row of the table, never empty (D38②) ───────────────────────────
-// `v` is captureVerdict(capH) of the same answer; the status sentence IS its text (one wording for the whole board).
+// `v` is captureVerdict(capH) of the same document; the status sentence IS its text (one wording for the whole board).
 export function serviceRowHtml(h, v, { open = false } = {}) {
-  const c = (h && h.collector) || {}, d = c.daemon || {}
-  // the agent-less conditions, one sentence each with 自 T 起 (1.9 §条件的话); an untrusted / negative-cache condition
-  // with no agent names a process asight cannot pin to an agent
+  const d = (h && h.daemon) || {}
+  // the agent-less current conditions (`critical[]` without `harness`), one sentence each with 自 T 起 (1.9 §条件的话)
   const condLine = (k) => {
-    const t = when(k && k.since)
-    if (!k) return ''
+    const t = when(k.since)
     if (k.kind === 'untrusted' || k.kind === 'negative-cache') {
       const what = k.kind === 'negative-cache' ? CONDITION_KIND['negative-cache'] : `a process of no known agent does not trust asight (${k.code || k.reason || UNKNOWN_REASON})`
       return `<p>${esc(what)} · since ${t}</p>`
@@ -93,52 +86,44 @@ export function serviceRowHtml(h, v, { open = false } = {}) {
     const word = has(CONDITION_KIND, k.kind) ? CONDITION_KIND[k.kind] : UNKNOWN_REASON
     return `<p>${esc(word)}${has(CONDITION_KIND, k.kind) ? '' : ` (${esc(k.kind)})`} · since ${t}</p>`
   }
-  const daemonDown = d.state === 'not-running' || d.state === 'not-responding'
-  const conds = daemonDown ? '' : (Array.isArray(c.conditions) ? c.conditions : []).filter((k) => !k || k.agent == null).map(condLine).join('')
-  // the daemon's own state while the summary is failing: 在跑 / 状态不知道
+  const daemonDown = d.running === false || d.responding === false
+  const conds = daemonDown ? '' : list(h && h.critical).filter((k) => k && k.harness == null).map(condLine).join('')
+  // the daemon's own state while the health is failing: 在跑 / 状态不知道
   let failingLine = ''
   if (v.state === 'failing') {
-    if (d.state === 'running') failingLine = '<p>The capture service is running</p>'
-    else if (d.state === 'unknown') failingLine = '<p>The capture service state is unknown</p>'
+    if (d.running === true && d.responding === true) failingLine = '<p>The capture service is running</p>'
+    else if (!daemonDown) failingLine = '<p>The capture service state is unknown</p>'
   }
-  // the failure groups of the last 24 h across both parts → the log; zero groups draws nothing
-  const nGroups = (x) => (Array.isArray(x) ? x.length : 0)
-  const groups = nGroups(c.failures) + nGroups(h && h.raw && h.raw.failures)
+  // the failure groups of the last 24 h → the log; zero groups draws nothing
+  const groups = list(h && h.failures && h.failures.groups).length
   const failLink = groups ? `<a href="#/capture/log">${groups} failure group${groups === 1 ? '' : 's'} in the last 24 hours · capture log ›</a>` : ''
-  const lingerStop = d.last_start && d.last_start.linger === false ? '<p>Capture stops at logout</p>' : ''
-  const stt = v.text
-  const tech = serviceTechHtml(h, v)
+  const lingerStop = h && h.linger === false ? '<p>Capture stops at logout</p>' : ''
   return `<div class="crow" data-h="*service">` +
     `<div class="crow-t"><span class="gut">${gutOf(v.cls, v.state === 'ok')}</span>` +
     `<button type="button" class="nm cap-nm" data-caprow="cap-svc" aria-expanded="${open}" aria-controls="cap-svc-x"><span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span>Capture service</button>` +
     '<span class="des"></span>' +
-    `<span class="stt stt-${esc(v.cls)}"><p class="lead">${leadHtml(stt, v.cls)}</p>${conds}${failingLine}</span>` +
+    `<span class="stt stt-${esc(v.cls)}"><p class="lead">${leadHtml(v.text, v.cls)}</p>${conds}${failingLine}</span>` +
     `<span class="last">${failLink}${lingerStop}</span></div>` +
-    `<div class="cexp" id="cap-svc-x"${open ? '' : ' hidden'}>${tech}</div></div>`
+    `<div class="cexp" id="cap-svc-x"${open ? '' : ' hidden'}>${serviceTechHtml(h, v)}</div></div>`
 }
 
-// the 采集服务 row's 技术细节: pid, the lock, the starts and stops, what was read and what could not be, the
-// commands, and the copy of the fields this row used (metadata only — the endpoint never returns record bytes)
+// the 采集服务 row's 技术细节: the daemon's pid / since / error, the processes holding asight, the relayed streams, an unseen
+// state as it came, the read problems, the commands, and the copy of the fields this row used (metadata only)
 function serviceTechHtml(h, v) {
-  const c = (h && h.collector) || {}, d = c.daemon || {}, r = (h && h.read) || {}
+  const d = (h && h.daemon) || {}
   const rows = []
-  if (d.pid != null) rows.push(['pid', mono(d.pid)])
-  if (d.lock_refreshed_at) rows.push(['lock refreshed', when(d.lock_refreshed_at)])
-  if (d.verified === false) rows.push(['process identity', 'this computer cannot verify process identity; judged by pid and refresh time only'])
-  if (d.last_start && d.last_start.ts) rows.push(['last start', `${when(d.last_start.ts)}${d.last_start.linger === false ? ' · capture stops at logout' : d.last_start.linger == null ? ' · whether capture stops at logout: unknown' : ''}`])
-  if (d.last_stop && d.last_stop.ts) rows.push(['last stop', `${when(d.last_stop.ts)}${d.last_stop.signal ? ` · ${esc(d.last_stop.signal)}` : ''}${d.last_stop.reason ? ` · ${esc(d.last_stop.reason)}` : ''}`])
-  if (d.why) rows.push(['did not stop cleanly', esc(d.why)])
+  if (d.pid != null) rows.push(['pid', M(d.pid)])
+  if (d.since) rows.push(['since', when(d.since)])
   if (d.error) rows.push(['state could not be read', esc(d.error)])
+  if (v.raw != null) rows.push(['state', M(String(v.raw))])
   if (v.reason && v.state !== 'unreadable') rows.push(['reason', esc(v.reason)])
-  if (c.conditions_as_of) rows.push(['conditions as of', `${when(c.conditions_as_of)} (the capture service is not running)`])
-  if (c.conditions_partial) rows.push(['conditions', 'partly read: the last start is older than what was read; some may be missing'])
-  if (c.manifest_error) rows.push(['install manifest', c.manifest_error])
-  if (Array.isArray(r.files) && r.files.length) rows.push(['files read', M(r.files.map((f) => redactUrlCredentials(f)).join('\n'))])
-  for (const e of Array.isArray(r.errors) ? r.errors : []) rows.push(['could not be read', M(`${redactUrlCredentials(e.file)}: ${e.error}`)])
-  if (r.truncated) rows.push(['records', 'only the latest part was read'])
-  if (r.unparsable) rows.push(['could not be parsed', `${r.unparsable} line${r.unparsable === 1 ? '' : 's'}`])
+  if (h && h.linger == null && h.daemon) rows.push(['capture after logout', 'unknown'])
+  for (const p of list(h && h.holders)) if (p) rows.push(['holder', M(`${p.harness ?? '?'} · pid ${p.pid ?? '?'}${p.name ? ` · ${p.name}` : ''}`)])
+  const rel = h && h.relayed
+  if (rel && typeof rel === 'object') rows.push(['relayed', M(Object.entries(rel).map(([k, n]) => `${k} ${n}`).join(' · '))])
+  for (const e of list(h && h.errors)) if (e) rows.push(['could not be read', M(`${e.where ?? '?'}: ${redactUrlCredentials(String(e.reason ?? ''))}`)])
   rows.push(...commandsHtml(commandsFor(h, { service: true })))
-  return detailsHtml('cap-svc-tech', rows) + `<div class="capcopy">${diagCopy({ summary: h && h.summary, daemon: d, switch: c.switch, conditions: c.conditions, read: r })}</div>`
+  return detailsHtml('cap-svc-tech', rows) + `<div class="capcopy">${diagCopy({ health: h && h.health, daemon: d, critical: h && h.critical, errors: h && h.errors })}</div>`
 }
 
 // ── one agent per row (1.9 §每个 agent 一行) ───────────────────────────────────────────────────────────────────
@@ -151,12 +136,12 @@ export const agentIdsOf = (h) => agentVerdicts(h).map((r) => r.harness)
 // sort by tier keeps it)
 export const rowOrder = (verdicts) => [...verdicts].sort((a, b) => a.tier - b.tier)
 
-export function agentRowHtml(row, h, { open = false } = {}) {
+export function agentRowHtml(row, h, { open = false, ov = null } = {}) {
   const name = harnessName(row.harness)
   const desired = (row.desired === 'on' || row.desired === 'off') ? SWITCH_WORD[row.desired] : ''
   const last = row.lastCaptured
     ? `<a href="#/sessions?h=${esc(row.harness)}" title="${esc(fmtStamp(row.lastCaptured))}">captured ${esc(relCap(row.lastCaptured))} ›</a>`
-    : '<span class="c3">nothing captured in 24 hours</span>'
+    : ov ? 'not captured in the last 24 hours' : '' // the `overview` document's harnesses[].last_ts (1.9); unread → nothing is claimed
   const fail = row.lastFailure ? `<a href="#/capture/log?h=${esc(row.harness)}" title="${esc(fmtStamp(row.lastFailure))}">latest failure ${when(row.lastFailure)} · capture log ›</a>` : ''
   const problem = row.tier === AGENT_TIER.problem || row.tier === AGENT_TIER.forwarderDown
   return `<div class="crow" data-h="${esc(row.harness)}">` +
@@ -209,167 +194,85 @@ function whyHtml(row, h) {
     ps.push(`<p>${esc(own || (row.tier === AGENT_TIER.forwarderDown ? "asight's forwarder is not running, so it cannot reach the network." : UNKNOWN_REASON))}.</p>`)
   }
   // a cached verdict may carry more findings, each with its own sentence
-  for (const f of row.findings || []) {
-    const t = f && (f.text || (f.code != null && has(TRUST_REASON, f.code) ? TRUST_REASON[f.code].why : null))
-    if (t) ps.push(`<p>${esc(t)}</p>`)
-  }
+  for (const f of row.findings || []) if (typeof f === 'string' && has(TRUST_REASON, f)) ps.push(`<p>${esc(TRUST_REASON[f].why)}</p>`)
   ps.push(row.fromCache ? '<p class="fine">After fixing it, check again (the command is in the technical details).</p>' : '<p class="fine">After fixing it, this row updates itself.</p>')
   return `<dt>Why, and what to do</dt><dd>${ps.join('')}</dd>`
 }
 
-// asight 为它改了 — the S9 changes of this harness plus the removal sentence; information only, no undo control
-// Missing S9 and no prior-value note → the whole section is not drawn, 「没有改动」 is never said.
+// asight 为它改了 — the `changed[]` items of this harness (path · what) plus the removal sentence; information only, no undo
+// control (`undo` sits in 技术细节). No item → the whole section is not drawn, 「没有改动」 is never said.
 function changesFor(row, h) {
-  const c = (h && h.collector) || {}
-  const ch = c.changes
-  const entries = ch && Array.isArray(ch.entries) ? ch.entries.filter((e) => e && harnessKey(e.harness) === row.harness) : []
-  const files = ch && Array.isArray(ch.files) ? ch.files.filter((f) => f && harnessKey(f.harness) === row.harness) : []
-  const prior = (c.install && Array.isArray(c.install.install) ? c.install.install : [])
-    .filter((n) => n && n.kind === 'prior-value' && n.harness != null && harnessKey(n.harness) === row.harness)
-  if (!entries.length && !files.length && !prior.length) return null
-  const lines = []
-  for (const e of entries) {
-    const what = Array.isArray(e.keys) ? e.keys.join('.') : e.what
-    let extra = ''
-    const bits = []
-    if (e.scope && has(SCOPE, e.scope)) bits.push(SCOPE[e.scope])
-    if (e.backup) bits.push(`backup at ${e.backup}`)
-    if (e.state && has(ENTRY_STATE, e.state)) bits.push(ENTRY_STATE[e.state])
-    if (bits.length) extra = ` <span class="fine">${esc(bits.join(' · '))}</span>`
-    lines.push(`<p>${mono(e.path || '')} ${mono(what || '')}${extra}</p>`)
-  }
-  for (const f of files) lines.push(`<p>${esc(has(FILE_ROLE, f.role) ? FILE_ROLE[f.role] : String(f.role))} ${mono(f.path || '')}</p>`)
-  for (const p of prior) lines.push(`<p>replaced your previous value ${mono(p.path || '')}${p.reason ? ` <span class="fine">${esc(p.reason)}</span>` : ''}</p>`)
+  const items = list(h && h.changed).filter((e) => e && e.harness != null && harnessKey(e.harness) === row.harness)
+  if (!items.length) return null
+  const lines = items.map((e) => `<p>${mono(e.path || '')} ${mono(e.what || '')}</p>`)
   lines.push(`<p class="fine">${esc(CHANGE_REMOVAL)}</p>`)
-  // the 点名 items (only when the answer carries the field): read-only, the commands stay in 技术细节
-  const opts = (h && h.opt_in && typeof h.opt_in === 'object') ? h.opt_in : null
-  if (opts) {
-    for (const [id, list] of Object.entries(opts)) {
-      if (harnessKey(id) !== row.harness || !Array.isArray(list)) continue
-      for (const o of list) {
-        const st = o && has(OPT_IN_STATE, o.state) ? OPT_IN_STATE[o.state] : `unknown: ${(o && o.why) || ''}`
-        lines.push(`<p>named item ${mono(o && o.form || '')} · ${esc(st)}${o && o.implies ? ` · ${esc(o.implies)}` : ''}${o && o.admin ? ' · needs an administrator' : ''}</p>`)
-      }
-    }
-  }
   return `<dt>Changed for it by asight</dt><dd>${lines.join('')}</dd>`
 }
 
-// an agent row's 技术细节: the condition codes / pids / hosts, the daemon-stopped conditions with their 截至, the
-// routing and branches (redacted), the commands, the copy of the fields the row used
+// an agent row's 技术细节: the condition codes / pids / hosts, the routing and branches (redacted), the running processes, the
+// findings, the undo commands of its changes, the commands, the copy of the fields the row used
 function agentTechHtml(row, h) {
-  const c = (h && h.collector) || {}
   const rows = []
   for (const k of row.conditions || []) {
     rows.push([`condition ${k.kind || '?'}`, H(`${k.code ? `<span class="mono">${esc(k.code)}</span> ` : ''}${k.pid != null ? `pid ${esc(k.pid)} ` : ''}${k.host ? `<span class="mono">${esc(redactUrlCredentials(k.host))}</span> ` : ''}since ${when(k.since)}`)])
   }
   if (row.code && !(row.conditions || []).length) rows.push(['code', M(row.code)])
-  if (c.daemon && c.daemon.state !== 'running' && (row.conditions || []).length && c.conditions_as_of) rows.push(['conditions as of', `${when(c.conditions_as_of)} (the capture service is not running)`])
   const t = row.topology
   if (t) {
     if (t.routing) rows.push(['routing', has(ROUTING, t.routing) ? ROUTING[t.routing] : t.routing])
-    for (const b of Array.isArray(t.branches) ? t.branches : []) {
-      const nodes = (Array.isArray(b && b.path) ? b.path : []).map((n) => n && n.name != null
-        ? `${redactUrlCredentials(String(n.name))}${n.inferred ? ' ' + mark('inf').replace(/<[^>]*>/g, '') : ''}${n.error ? ` · unknown: ${n.error}` : ''}`
-        : 'unknown')
+    const name = new Map(list(t.nodes).filter((n) => n && n.id != null).map((n) => [n.id, n]))
+    for (const b of list(t.branches)) {
+      const nodes = list(b && b.path).map((id) => {
+        const n = name.get(id)
+        return n && n.name != null ? `${redactUrlCredentials(String(n.name))}${n.inferred ? ' ' + mark('inf').replace(/<[^>]*>/g, '') : ''}` : `unknown${n && n.unknown && n.unknown.reason ? ` · ${n.unknown.reason}` : ''}`
+      })
       if (nodes.length) rows.push(['path', nodes.join(' → ')])
     }
-    for (const p of Array.isArray(t.running) ? t.running : []) if (p && p.pid != null) rows.push(['process', { m: `${p.pid}${p.note ? ` · ${p.note}` : ''}` }])
-    for (const n of Array.isArray(t.notes) ? t.notes : []) if (n != null) rows.push(['note', String(n)])
-    for (const f of Array.isArray(t.findings) ? t.findings : []) if (f && f.code != null) rows.push(['finding code', M(f.code)])
-    if (t.routing === 'proxy' && h.netenv && Array.isArray(h.netenv.products) && h.netenv.products.length) {
-      rows.push(['VPN', `if your VPN routes by process, it sees asight as the source, not ${harnessName(row.harness)}`])
-    }
-    if (t.via != null) rows.push(['via', M(redactUrlCredentials(String(t.via)))])
+    for (const p of list(t.running)) if (p && p.pid != null) rows.push(['process', M(`${p.pid}${p.note ? ` · ${p.note}` : ''}`)])
+    for (const n of list(t.notes)) if (n != null) rows.push(['note', String(n)])
+    for (const f of list(t.findings)) if (f != null) rows.push(['finding code', M(String(f))])
+    if (t.routing === 'proxy') rows.push(['VPN', `if your VPN routes by process, it sees asight as the source, not ${harnessName(row.harness)}`])
   }
+  for (const e of list(h && h.changed)) if (e && e.harness != null && harnessKey(e.harness) === row.harness && e.undo) rows.push([`undo ${e.path || ''}`, M(e.undo)])
   rows.push(...commandsHtml(commandsFor(h, { row })))
-  const used = { harness: row.harness, verdict: { text: row.text, tier: row.tier, code: row.code, at: row.at }, conditions: row.conditions, topology: row.topology, last_captured: row.lastCaptured, last_failure: row.lastFailure }
+  const used = { harness: row.harness, verdict: { text: row.text, tier: row.tier, code: row.code, at: row.at }, conditions: row.conditions, topology: row.topology, last_failure: row.lastFailure }
   return detailsHtml(`cap-${row.harness}-tech`, rows) + `<div class="capcopy">${diagCopy(used)}</div>`
 }
 
-// ── the 本机网络环境 card (1.9 §本机网络环境) — only when the answer carries the field; asight only reads it ─────
-// Never 「无」: an unreadable product says 读不到, an unknown fact says 不知道 with its reason (1.6 §5 R11).
-export function netenvHtml(h) {
-  const n = h && h.netenv
-  if (n == null) return '' // the field is absent: no card (field presence, never a version)
-  const at = n.at ? ` · as of ${when(n.at)}` : ''
-  const rows = []
-  if (n.present === false) {
-    rows.push(`<p>No probe result yet</p>`)
-    return `<section class="cblock" aria-label="Network on this computer"><h2 class="sec-h">Network on this computer</h2>${rows.join('')}` +
-      detailsHtml('cap-netenv-tech', [['reason', n.reason || ''], ['see the full status', M('asight status')]]) + `</section>`
-  }
-  if (n.error) rows.push(`<p>The probe result could not be read: ${esc(n.error)}</p>`)
-  const topo = n.topology && typeof n.topology === 'object' ? n.topology : {}
-  for (const p of Array.isArray(n.products) ? n.products : []) {
-    if (!p) continue
-    if (p.reason) { rows.push(`<p>The state of ${esc(p.product || 'a product')} could not be read (${esc(p.reason)})</p>`); continue }
-    const tun = p.tun === true ? 'on' : p.tun === false ? 'off' : 'unknown'
-    const who = Object.entries(topo)
-      .filter(([, t]) => t && Array.isArray(t.nodes) && t.nodes.some((x) => x && x.kind === 'proxy' && x.product === p.product))
-      .map(([id]) => `${harnessIcon(id)}<span class="chipname">${esc(harnessName(harnessKey(id)))}</span>`)
-    rows.push(`<p><b>${esc(p.product || '')}${p.version ? ` ${esc(String(p.version))}` : ''}</b> · ${esc(p.mode || '')} · TUN ${tun}` +
-      `${p.system_proxy ? ` · system proxy ${mono(redactUrlCredentials(String(p.system_proxy)))}` : ''}${at}` +
-      `${who.length ? `<br>through it: ${who.join(' ')}` : ''}</p>`)
-  }
-  const unknown = Array.isArray(n.unknown) ? n.unknown : []
-  if (!rows.length && unknown.length) for (const u of unknown) rows.push(`<p>unknown: ${esc((u && u.reason) || '')}</p>`)
-  if (!rows.length) rows.push('<p>No proxy or VPN software asight knows was found</p>')
-  const tech = []
-  if (n.mixed_port != null) tech.push(['mixed_port', M(n.mixed_port)])
-  if (n.live != null) tech.push(['live', String(n.live)])
-  for (const [id, t] of Object.entries(topo)) {
-    if (t && t.via != null) tech.push([`via(${id})`, M(redactUrlCredentials(String(t.via)))])
-  }
-  return `<section class="cblock" aria-label="Network on this computer"><h2 class="sec-h">Network on this computer</h2>${rows.join('')}` +
-    (tech.length ? detailsHtml('cap-netenv-tech', tech) : '') + `</section>`
-}
-
 // ── asight 在这台电脑上做的改动 (1.9 §改动块) — the changes that are no harness's; information only, no undo ────
-// Auto-expands when there is residue, when the manifest cannot be read, or when an entry is not intact.
+// Auto-expands when the install left something pending or the install record cannot be read.
 export function changesHtml(h) {
-  const c = (h && h.collector) || {}
-  const ch = c.changes
-  const files = ch && Array.isArray(ch.files) ? ch.files.filter((f) => f && f.harness == null) : []
-  const entries = ch && Array.isArray(ch.entries) ? ch.entries.filter((e) => e && e.harness == null) : []
-  const residue = Array.isArray(c.residue) ? c.residue : []
-  const manifestError = c.manifest_error || null
-  if (!files.length && !entries.length && !residue.length && !manifestError) return ''
-  const n = files.length + entries.length + residue.length
-  const intact = !!ch && [...(ch.files || []), ...(ch.entries || [])].every((x) => !x || x.state == null || x.state === 'intact')
-  const stateBit = (x) => (x && x.state && has(ENTRY_STATE, x.state) ? ` <span class="fine">${ENTRY_STATE[x.state]}</span>` : '')
-  const lines = []
-  for (const f of files) lines.push(`<p>${esc(has(FILE_ROLE, f.role) ? FILE_ROLE[f.role] : String(f.role))} ${mono(f.path || '')}${stateBit(f)}</p>`)
-  for (const e of entries) lines.push(`<p>${mono(e.path || '')} ${mono(Array.isArray(e.keys) ? e.keys.join('.') : e.what || '')}${stateBit(e)}</p>`)
-  if (residue.length) {
-    const lead = residue.some((x) => x && x.result === 'install did not finish') ? residueLead('install did not finish') : residueLead('')
-    const items = residue.map((x) => `<p>${mono(x.path || '')}${x && x.harness != null ? ` ${harnessIcon(x.harness)}<span class="chipname">${esc(harnessName(harnessKey(x.harness)))}</span>` : ''} <span class="fine">${esc(has(CODE, x.result) ? CODE[x.result] : String(x.result))}</span></p>`)
-    lines.push(`<p>${esc(lead)}</p>`, ...items)
+  const items = list(h && h.changed).filter((e) => e && e.harness == null)
+  const pending = list(h && h.install && h.install.pending).filter((x) => x && typeof x === 'object')
+  const manifest = list(h && h.errors).filter((e) => e && e.where === ERR_WHERE.manifest)
+  if (!items.length && !pending.length && !manifest.length) return ''
+  const lines = items.map((e) => `<p>${mono(e.path || '')} ${mono(e.what || '')}</p>`)
+  if (pending.length) {
+    lines.push(`<p>${esc(residueLead(pending.some((x) => x.result === 'install did not finish') ? 'install did not finish' : ''))}</p>`)
+    for (const x of pending) lines.push(`<p>${mono(x.path || '')}${x.harness != null ? ` ${harnessIcon(x.harness)}<span class="chipname">${esc(harnessName(harnessKey(x.harness)))}</span>` : ''} <span class="fine">${esc(has(CODE, x.result) ? CODE[x.result] : String(x.result ?? ''))}</span></p>`)
   }
-  if (manifestError) lines.push('<p>The install manifest could not be read</p>')
-  lines.push(`<p class="fine">${esc(CHANGE_REMOVAL)}</p>`)
-  const open = residue.length > 0 || !!manifestError || !intact
-  const tech = manifestError ? detailsHtml('cap-changes-tech', [['could not be read', manifestError]]) : ''
+  if (manifest.length) lines.push('<p>The install manifest could not be read</p>')
+  const tech = manifest.length ? detailsHtml('cap-changes-tech', manifest.map((e) => ['could not be read', String(e.reason ?? '')])) : ''
   return `<section class="cblock" aria-label="Changes asight made on this computer">` +
-    disclosureHtml({ id: 'cap-changes', title: `Changes asight made on this computer · ${n}${intact ? ' · all intact' : ''}`, body: lines.join('') + tech, open }) + `</section>`
+    disclosureHtml({ id: 'cap-changes', title: `Changes asight made on this computer · ${items.length + pending.length}`, body: lines.join('') + tech, open: pending.length > 0 || manifest.length > 0 }) + `</section>`
 }
 
 // the whole page in one string: the table (采集服务 row + one row per agent, in row order) and the blocks under it.
 // `v` is captureVerdict of the same answer; `openByReader` is the expand memory (a Map the mount owns). The 503 state
 // (v.state 'unreadable') draws the service row alone — there is no data for agent rows.
-export function pageHtml(h, v, { openByReader = null } = {}) {
-  const verdicts = v.state === 'unreadable' ? [] : agentVerdicts(h)
+// `ov` = the `overview` document of the last 24 h (its harnesses[].last_ts is the 最近采到 column), null while unread.
+export function pageHtml(h, v, { openByReader = null, ov = null } = {}) {
+  const verdicts = v.state === 'unreadable' ? [] : agentVerdicts(h, ov)
   const ordered = rowOrder(verdicts)
   const open = openStates(ordered, openByReader)
   const rows = [serviceRowHtml(h, v, { open: open.get('*service') })]
-  for (const row of ordered) rows.push(agentRowHtml(row, h, { open: open.get(row.harness) }))
-  return `<section class="crows" aria-label="agent">${rows.join('')}${tableFootHtml(h, verdicts)}</section>` +
-    netenvHtml(h) + changesHtml(h)
+  for (const row of ordered) rows.push(agentRowHtml(row, h, { open: open.get(row.harness), ov }))
+  return `<section class="crows" aria-label="agent">${rows.join('')}${tableFootHtml(h, verdicts)}</section>` + changesHtml(h)
 }
 
 // ── the two table-foot lines of the honest empty cases (1.9 §Edge cases) ────────────────────────────────────────
 export function tableFootHtml(h, verdicts) {
-  if (h && h.unreadable != null) return '' // the health could not be read: whether any agent was recorded is unknown
+  if (h == null || h.unreadable != null) return '' // not answered yet, or could not be read: whether any agent was recorded is unknown
   if (!verdicts.length) {
     return '<p class="capfoot">The capture service recorded no agent in the last 24 hours</p>'
   }

@@ -1,7 +1,7 @@
 // traffic/traffic.mjs — 流量 (1.10) · #/traffic. One table: every host an agent sent to in the window, grouped by agent
 // (the chip only on a group's first row), a caption row that carries 截至 / coverage / the filters (the head zone stays
-// free of sentences), and a 合计 row. The numbers come from S6 (a DuckDB projection, D24) — read once per window or
-// filter change, never polled; the rows link to the host page. Everything the store did not record says 未记录, never 0.
+// free of sentences), and a 合计 row. The numbers come from the C.5 `traffic` document — read once per window or filter
+// change, never polled; the rows link to the host page. Everything the store did not record says 未记录, never 0.
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router}.
 import { esc, bytes, fmtDay, fmtTime } from '../core/fmt.mjs'
 import { CLASS_IDS, UNCLASSIFIED } from '../core/classes.mjs'
@@ -11,26 +11,29 @@ import { menuButton, infoButton, mark } from '../core/ui.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
 import { delegate } from '../core/dom.mjs'
 import { formatHash, parseHash } from '../core/router.mjs'
+import { loadSessions } from '../library/logic.mjs'
 import * as W from '../labels/traffic.mjs'
 
 const PATTERN_ONLY = ['session-sync', 'files', 'account'] // the three classes only a pattern can name (D40⑥)
 const DAY_MS = 86400e3
 
 // the route's params → the query the screen works with: the window (junk falls back to the default), an agent filter,
-// a class filter. Both filters are client-side over S6's rows (S6 itself takes only the window).
+// a class filter. Both filters are client-side over `traffic`'s rows (the document takes only the window).
 export function queryOf(params = {}) {
   const window = W.WINDOW_LABEL.some((o) => o.value === params.window) ? params.window : W.DEFAULT_WINDOW
   const h = params.h ? [...new Set(String(params.h).split(',').filter(Boolean).map(harnessKey))] : []
   const cls = params.class && CLASS_IDS.includes(params.class) ? params.class : null
   return { window, h, cls }
 }
+// the window → `--since` (a relative time the query layer reads; 'all' is no bound)
+export const sinceOf = (window) => (window === 'all' ? undefined : window)
 
 // one row's 收回, as words: unrecorded is never 0; a partial sum is a floor with the count of what it leaves out.
 export function recvParts(row) {
   const n = (row && row.requests) || 0, un = (row && row.received_unrecorded) || 0, got = row && row.received_bytes
-  if (got == null || un >= n) return { main: W.UNRECORDED, note: '', un }
-  if (un === 0) return { main: bytes(got), note: '', un: 0 }
-  return { main: `≥ ${bytes(got)}`, note: W.UNRECORDED_N(un), un }
+  if (got == null || un >= n) return { value: null, main: W.UNRECORDED, note: '', un }
+  if (un === 0) return { value: got, main: bytes(got), note: '', un: 0 }
+  return { value: got, main: `≥ ${bytes(got)}`, note: W.UNRECORDED_N(un), un }
 }
 export const recvText = (row) => { const p = recvParts(row); return p.note ? `${p.main} · ${p.note}` : p.main }
 export const sentText = (row) => (row && row.sent_bytes != null ? bytes(row.sent_bytes) : W.UNRECORDED)
@@ -52,7 +55,7 @@ export function sumSide(rows, pickValue, pickUnrecorded) {
   return { main: bytes(known), note: '' }
 }
 
-// 未分类 vs 其他: only where /api/retention's unmatched holds ALL THREE pattern-only classes for that agent (a missing
+// 未分类 vs 其他: only where an answer's `unmatched` (C.5 has no such field yet — PR 5 C8) holds ALL THREE pattern-only classes for that agent (a missing
 // or unread answer reads 其他, never 未分类 — 1.10 §Edge cases).
 export function unclassifiedOf(unmatched, harness) {
   const u = unmatched && unmatched[harness]
@@ -89,10 +92,10 @@ function groupOrder(ids) {
   return [...ids].sort((a, b) => rank(a) - rank(b) || String(a).localeCompare(String(b)))
 }
 
-// S6's answer + the filters → the rows the table draws. Pure: it eats the server's answer only.
-export function tableModel(answer, { h = [], cls = null, now = Date.now(), unmatched = null } = {}) {
-  if (!answer || !Array.isArray(answer.rows)) return { state: 'none', answer, now }
-  const kept = answer.rows.filter((r) => (!h.length || h.includes(harnessKey(r.harness))) && (!cls || (r.classes && r.classes[cls] > 0)))
+// the `traffic` document + the filters → the rows the table draws (one per hosts[] entry). Pure: it eats the answer only.
+export function tableModel(answer, { h = [], cls = null, now = Date.now(), unmatched = null, window = W.DEFAULT_WINDOW } = {}) {
+  if (!answer || !Array.isArray(answer.hosts)) return { state: 'none', answer, now }
+  const kept = answer.hosts.map((r) => ({ ...r, recv: recvParts(r) })).filter((r) => (!h.length || h.includes(harnessKey(r.harness))) && (!cls || (r.classes && r.classes[cls] > 0)))
   const groups = []
   for (const id of groupOrder([...new Set(kept.map((r) => r.harness))])) {
     const rows = kept.filter((r) => r.harness === id)
@@ -100,17 +103,25 @@ export function tableModel(answer, { h = [], cls = null, now = Date.now(), unmat
     groups.push({ harness: id, rows })
   }
   const flat = groups.flatMap((g) => g.rows)
-  const total = {
-    requests: flat.reduce((a, r) => a + (r.requests || 0), 0),
-    sent: sumSide(flat, (r) => r.sent_bytes, null),
-    recv: sumSide(flat, (r) => r.received_bytes, (r) => r.received_unrecorded || 0),
-  }
-  return { state: 'table', groups, flat, total, answer, asOf: answer.as_of, harnessSince: answer.harness_since || {}, unmatched, now, cls }
+  const floor = !!(answer.totals && answer.totals.is_floor)
+  // unfiltered: the document's totals (the whole window, past the page); filtered: the sum of the drawn rows
+  const t = !h.length && !cls && answer.totals
+  const un = flat.reduce((a, r) => a + (r.received_unrecorded || 0), 0)
+  const floorOf = (v, note = '') => (v == null ? { main: W.UNRECORDED, note: '' } : { main: `${floor ? '≥ ' : ''}${bytes(v)}`, note })
+  const total = t
+    ? { requests: t.requests || 0, sent: floorOf(t.sent_bytes), recv: floorOf(t.received_bytes, un ? W.UNRECORDED_N(un) : ''), filtered: false }
+    : {
+      requests: flat.reduce((a, r) => a + (r.requests || 0), 0),
+      sent: sumSide(flat, (r) => r.sent_bytes, null),
+      recv: sumSide(flat, (r) => r.received_bytes, (r) => r.received_unrecorded || 0),
+      filtered: true,
+    }
+  return { state: 'table', groups, flat, total, floor, answer, asOf: answer.as_of, harnessSince: answer.harness_since || {}, unmatched, now, cls, window }
 }
 
 // one row of the table (a link to its host page; a row that recorded no host is text, not a link)
 export function rowHtml(r, model, first) {
-  const params = { window: model.answer.window || W.DEFAULT_WINDOW }
+  const params = { window: model.window }
   if (model.cls) params.class = model.cls
   const host = r.host && String(r.host) !== '' ? r.host : null
   const link = host ? formatHash({ screen: 'traffic-host', harness: harnessKey(r.harness), host, params }) : null
@@ -124,7 +135,7 @@ export function rowHtml(r, model, first) {
       : `${esc(w.word)} ${n}`
   }).join('<span class="sep-dot" aria-hidden="true"> · </span>') + (classes.length > 3
     ? `<span class="more-classes" title="${esc(classes.slice(3).map(([id, n]) => `${classWord(id, r.harness, model.unmatched).word} ${n}`).join(' · '))}"> …</span>` : '')
-  const recv = recvParts(r)
+  const recv = r.recv
   const inferred = r.harness_inferred ? ` ${mark('inf', W.AGENT_AGENT_TIP)}` : '' // per-row once the rows carry the flag (1.10 §OPEN)
   const agentCell = first ? `<span class="nm">${harnessIcon(r.harness)}<span class="nmname">${esc(harnessName(r.harness))}</span>${inferred}</span>` : '<span class="nm"></span>'
   const hostCell = host ? `<span class="host mono" title="${esc(host)}">${esc(host)}</span>` : `<span class="host nohost">${esc(W.NO_HOST)}</span>`
@@ -146,7 +157,7 @@ export function totalRowHtml(model) {
   const t = model.total
   const cell = (p) => esc(p.main) + (p.note ? ` <span class="c2">${esc(p.note)}</span>` : '')
   return `<div class="trow ttotal"><span class="gut"></span><span class="nm"></span>` +
-    `<span class="cell-host">${esc(W.COL.total)}</span><span class="cell-first"></span>` +
+    `<span class="cell-host">${esc(W.COL.total)}${t.filtered ? ` <span class="c2">${esc(W.ONLY_THESE)}</span>` : ''}</span><span class="cell-first"></span>` +
     `<span class="cell num">${t.requests}</span><span class="cell num">${cell(t.sent)}</span>` +
     `<span class="cell num">${cell(t.recv)}</span><span class="cell"></span></div>`
 }
@@ -157,14 +168,14 @@ export function captionHtml(model, { cover = [] } = {}) {
   const asOf = asOfText(model.asOf, model.now)
   if (asOf) parts.push(`<span class="cap-item">${W.AS_OF} ${esc(asOf)}</span>`)
   if (cover.length) parts.push(`<span class="cap-item">${esc(W.COVERS_PREFIX)}${cover.map((id) => `<span class="cap-agent">${harnessIcon(id)}${esc(harnessName(id))}</span>`).join('')}</span>`)
-  const rows = (model.answer && model.answer.rows) || []
-  if (rows.length && !rows.some((r) => r.harness_inferred)) parts.push(`<span class="cap-item">${esc(W.AGENT_SOURCE_NOTE)}</span>`)
+  const rows = (model.answer && model.answer.hosts) || []
+  if (rows.length && !rows.some((r) => 'harness_inferred' in r)) parts.push(`<span class="cap-item">${esc(W.AGENT_SOURCE_NOTE)}</span>`)
   return parts.join('')
 }
 
 // the agent / class menus and the active-filter chips (a chip's × clears only its own filter)
 export function filterBarHtml(model, { h = [], cls = null } = {}) {
-  const win = model.answer.window || W.DEFAULT_WINDOW
+  const win = model.window
   const hrefOf = (patch) => {
     const params = { window: win }
     if (h.length) params.h = h.join(',')
@@ -172,7 +183,7 @@ export function filterBarHtml(model, { h = [], cls = null } = {}) {
     for (const [k, v] of Object.entries(patch)) if (v == null || v === '') delete params[k]; else params[k] = v
     return formatHash({ screen: 'traffic', params })
   }
-  const agents = [...new Set(((model.answer && model.answer.rows) || []).map((r) => harnessKey(r.harness)))]
+  const agents = [...new Set(((model.answer && model.answer.hosts) || []).map((r) => harnessKey(r.harness)))]
   const agentMenu = menuButton({
     label: W.FILTER_AGENT, title: W.FILTER_AGENT,
     items: agents.map((id) => ({ label: harnessName(id), href: hrefOf({ h: id }) })),
@@ -217,7 +228,7 @@ export function stateHtml(kind, payload = {}) {
 // ── the screen ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 export function mount(el, ctx) {
   const { api, router } = ctx
-  let dead = false, model = null, cover = [], unmatched = null, readAt = null, err = null
+  let dead = false, model = null, agentsInSessions = null, unmatched = null, readAt = null, err = null
   let q = queryOf(router.current().params)
   const scope = () => ({
     label: 'window', value: q.window,
@@ -226,42 +237,42 @@ export function mount(el, ctx) {
       href: formatHash({ screen: 'traffic', params: { window: o.value, ...(q.h.length ? { h: q.h.join(',') } : {}), ...(q.cls ? { class: q.cls } : {}) } }),
     })),
   })
+  // the coverage note: agents `sessions` has that this window's `traffic` rows do not (both through harnessKey)
+  const coverOf = () => {
+    if (!agentsInSessions || !model || model.state !== 'table') return []
+    const inTraffic = new Set(model.answer.hosts.map((r) => harnessKey(r.harness)))
+    return [...agentsInSessions].filter((k) => !inTraffic.has(k))
+  }
+  const remodel = (doc) => tableModel(doc, { h: q.h, cls: q.cls, now: api.now(), unmatched, window: q.window })
   const paint = () => {
     const head = pageHeadHtml({ name: 'Traffic', scope: scope(), readAt })
+    const cover = coverOf()
     let body = ''
     if (err && (!model || model.state !== 'table')) body = stateHtml('error', { error: err })
     else if (!model) body = stateHtml('loading')
-    else if (model.state === 'none') {
-      const a = model.answer || {}
-      body = stateHtml('error', { error: a.error || a.reason })
-    } else if (!model.flat.length) body = stateHtml('empty', { cls: q.cls }) + `<div class="tcap">${captionHtml(model, { cover })}</div>`
+    else if (model.state === 'none') body = stateHtml('error', { error: (model.answer && model.answer.error) || null })
+    else if (!model.flat.length) body = stateHtml('empty', { cls: q.cls }) + `<div class="tcap">${captionHtml(model, { cover })}</div>`
     else body = tableHtml(model, { h: q.h, cls: q.cls, cover })
     el.innerHTML = `<div class="page traf">${head}${body}</div>`
   }
   async function read() {
-    const s6 = await api.get('traffic', { since: q.window })
+    const r = await api.get('traffic', { since: sinceOf(q.window), limit: 500 })
     if (dead) return
-    if (s6.ok) { readAt = api.now(); err = null }
-    else if (!model) err = s6.error || `HTTP ${s6.status}`
-    const data = s6.ok ? s6.data : (s6.data && Array.isArray(s6.data.rows) ? s6.data : (model && model.state === 'table' ? model.answer : (s6.data || {})))
-    model = tableModel(data, { h: q.h, cls: q.cls, now: api.now(), unmatched })
+    if (r.ok) { readAt = api.now(); err = null; model = remodel(r.data) }
+    else if (!model || model.state !== 'table') { err = r.error || `HTTP ${r.status}`; model = null }
     paint()
-    if (!unmatched) api.get('classes').then((r) => {
-      if (dead || !r.ok) return // an unreadable retention answer leaves 其他 as 其他 (1.10 §Edge cases)
-      unmatched = r.data && r.data.unmatched ? r.data.unmatched : {}
-      if (model && model.state === 'table') { model = tableModel(model.answer, { h: q.h, cls: q.cls, now: api.now(), unmatched }); paint() }
+    if (!unmatched) api.get('classes').then((c) => {
+      // `unmatched` is not a C.5 field yet: while it is absent, 其他 stays 其他 (1.10 §前置定义, PR 5 C8)
+      if (dead || !c.ok || !c.data || !c.data.unmatched) return
+      unmatched = c.data.unmatched
+      if (model && model.state === 'table') { model = remodel(model.answer); paint() }
     }, () => {})
   }
-  // the coverage note needs /api/projects; when it cannot be read the note simply does not appear
-  api.get('sessions').then((r) => {
+  // when `sessions` cannot be read the coverage note simply does not appear
+  loadSessions(api).then((r) => {
     if (dead || !r.ok) return
-    const storeHarnesses = new Set(((model && model.answer && model.answer.store && model.answer.store.harnesses) || []).map(harnessKey))
-    const seen = new Set()
-    for (const p of (r.data && r.data.projects) || []) for (const s of p.sessions || []) {
-      const k = harnessKey(s.harness)
-      if (k && !storeHarnesses.has(k)) seen.add(k)
-    }
-    if (seen.size) { cover = [...seen]; paint() }
+    agentsInSessions = new Set(r.data.sessions.map((s) => harnessKey(s.harness)).filter(Boolean))
+    paint()
   }, () => {})
   paint()
   read()

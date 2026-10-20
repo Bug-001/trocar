@@ -8,13 +8,14 @@ import { esc } from '../core/fmt.mjs'
 import { L } from '../core/labels.mjs' // the saw legend's estimate note (1.3) — the only L left in this file
 import { ensureHarnessIcons } from '../core/chips.mjs'
 import { setScreenKeys } from '../core/keys.mjs'
-import { buildLanes } from './lanes.mjs'
+import { buildLanes, anchorLane, stepsOf } from './lanes.mjs'
 import { breakSteps } from './analysis.mjs'
 import { loadFold, saveFold } from './fold.mjs'
 import { landPlayhead } from './follow.mjs'
 import { renderSaw, renderOverview, repositionBrush, markCurrent, renderProblemNav, problemSteps, wireTimeline, barsThatFit, fitWindow, capWindow } from './timeline.mjs'
 import { renderRails, wireRails, highlightRange, reviewing } from './rails.mjs'
 import { renderContextWindow, wireCtxWin } from './ctxwin.mjs'
+import { loadSessions } from '../library/logic.mjs'
 import { renderOutline, wireOutline, jumpToAnchor, jumpToResourceBlock } from './outline.mjs'
 import { createJumpQueue } from './jump.mjs'
 import { createPricingLoader } from './pricing.mjs'
@@ -79,7 +80,7 @@ export function mount(el, ctx) {
   const s = {
     ctx, root: el, dead: false,
     project: route0.project, id: route0.id, initialStep: stepOf(route0),
-    meta: null, A: null, raw: [], probes: { count: 0, series: [] }, projectsFlat: [], health: null,
+    meta: null, A: null, raw: [], probes: { count: 0, series: [] }, health: null,
     trunc: null, logged: null, sourceE: null, gap: null, totals: null, errNote: null,
     lanes: [], anchor: null, anchorTs: [], breaks: [], problems: [], playhead: 0, follow: true, prevN: 0, sawView: 'ctx',
     view: { lo: 0, hi: 0 }, viewSig: null, brushDragging: false,
@@ -267,13 +268,11 @@ export function mount(el, ctx) {
     const key = sessionKey()
     const stale = () => s.dead || key !== sessionKey() // the session was switched while a request was in flight
     // a failed listing is NOT an empty one: say why
-    const pj = await api.get('sessions')
+    const pj = await loadSessions(api)
     if (stale()) return
     if (!pj.ok) { fail('Cannot list sessions', pj.error + ' — fix the source or restart the capture service.'); renderEmpty('Cannot list sessions.'); s.lastCheapSig = null; s.lastRenderSig = null; return }
-    const projects = pj.data.projects || []
-    s.projectsFlat = projects.flatMap((p) => p.sessions || [])
-    const cur = s.projectsFlat.find((x) => x.project_slug === s.project && x.session_id === s.id)
-    // pick the window BEFORE the fetch: /api/projects already carries the true call count, so the tail is known without a round trip.
+    const cur = pj.data.sessions.find((x) => x.project_slug === s.project && x.session_id === s.id)
+    // pick the window BEFORE the fetch: `sessions` already carries the true call count, so the tail is known without a round trip.
     // On a session switch — and while following — the window parks on the tail. A manual scrub off the live end clears `follow`.
     const srvTotal = s.pageSig === key && s.pageInfo && typeof s.pageInfo.total === 'number' ? s.pageInfo.total : null
     const tailCur = Math.max(0, (srvTotal != null ? srvTotal : ((cur && cur.calls) || 0)) - PAGE_LIMIT)
@@ -299,8 +298,8 @@ export function mount(el, ctx) {
     s.pageInfo = d.page || null
     s.trunc = d.truncated || null
     s.logged = d.logged || null
-    s.sourceE = d.source || null
-    // the server may assemble FEWER calls than /api/projects counted: if our window landed past what it has, every call would be paged
+    s.sourceE = d.errors || []
+    // the server may assemble FEWER calls than `sessions` counted: if our window landed past what it has, every call would be paged
     // out and the board blank. Re-aim once at the tail the server really has. `follow` stays: that tail IS the live end.
     if (s.pageInfo && s.pageInfo.returned === 0 && s.pageInfo.total > 0) {
       const c2 = Math.max(0, s.pageInfo.total - PAGE_LIMIT)
@@ -310,9 +309,9 @@ export function mount(el, ctx) {
     const sig = key + '|' + (s.pageCur | 0) + '|' + s.raw.length + '|' + (s.raw.length ? String((s.raw[s.raw.length - 1] || {}).ts_request || (s.raw[s.raw.length - 1] || {}).id || '') : '')
     if (sig === s.lastRenderSig) return
     s.lastRenderSig = sig
-    s.A = d.analyzed || { lanes: [], steps: [] }
+    s.A = d.analyzed || { lanes: [] }
     s.lanes = buildLanes(s.A, s.probes)
-    s.anchor = s.lanes.find((l) => l.kind === 'main') || s.lanes[0] || null
+    s.anchor = anchorLane(s.lanes)
     // the 采集缺口 is judged against the whole session's time (the once-per-open capture-health answer, 1.2 §会话保真行)
     judgeGap()
     if (!s.anchor || !s.anchor.calls.length) {
@@ -348,10 +347,10 @@ export function mount(el, ctx) {
 
   // ── capture health: read once per desk open, only to judge the 采集缺口 (1.2 §会话保真行); unreadable → no judgement
   function judgeGap() {
-    const steps = (s.A && s.A.steps) || []
+    const steps = stepsOf(s.lanes)
     if (!steps.length || !s.meta) { s.gap = null; return }
     const t0 = Date.parse(steps[0].ts), t1 = Date.parse(steps[steps.length - 1].ts)
-    s.gap = captureGap(s.health, { start: t0, end: t1 }, s.meta.harness)
+    s.gap = captureGap(s.health, { start: t0, end: t1 }, s.meta.harness, api.now())
   }
   api.get('status').then((r) => { if (!s.dead && r.ok) { s.health = r.data; judgeGap(); if (s.A) renderHeader() } }).catch((e) => console.error(e))
 

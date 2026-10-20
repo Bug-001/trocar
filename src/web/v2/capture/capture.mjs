@@ -1,7 +1,6 @@
 // capture/capture.mjs — 采集 · agent (1.9): the page a person opens to learn whether every agent of theirs is being
 // recorded — and when one is not, why and what to do about it. The 采集服务 row plus one row per detected agent, the
-// 本机网络环境 card and the 改动 block. Everything is read from /api/capture-health through the
-// shared store; the page polls every 1.5 s while visible (1.5 §采集状态 轮询) and re-paints WITHOUT disturbing the
+// 改动 block. Everything is read from the C.3 `status` document through the shared store; the page polls while visible (1.5 §采集状态 轮询) and re-paints WITHOUT disturbing the
 // reader: an expanded row stays expanded, a row the reader folded stays folded, the scroll does not move.
 // Read-only by design (N-01): no switch, no restart / install / undo control anywhere — the desired state is text and
 // the command that changes it sits in 技术细节.
@@ -17,6 +16,14 @@ export function mount(el, ctx) {
   // problem row opens, the rest stay folded); a row the reader touched keeps their choice across every re-read.
   const openByReader = new Map()
   let lastH = null, landed = null, poll = null
+  // the 最近采到 column reads the 24 h `overview` document (1.9): on open, then with the status poll at most every OV_MS
+  const OV_MS = 30e3
+  let ov = null, ovAt = 0, ovBusy = false
+  function readOv() {
+    if (ovBusy || Date.now() - ovAt < OV_MS) return
+    ovBusy = true; ovAt = Date.now()
+    api.get('overview', { since: '24h' }).then((r) => { if (r && r.ok && r.data) { ov = r.data; paint() } }, () => {}).finally(() => { ovBusy = false })
+  }
 
   el.innerHTML = `<div class="page capage"><div id="caphead"></div><div class="cap-main" id="capmain"></div></div>`
   const headEl = el.querySelector('#caphead'), mainEl = el.querySelector('#capmain')
@@ -28,7 +35,7 @@ export function mount(el, ctx) {
     const { capH, capHOkAt, capHErr } = store.get()
     const v = captureVerdict(capH, { okAt: capHOkAt, err: capHErr })
     headEl.innerHTML = pageHeadHtml({ name: SCREEN_NAME.capture, readAt: capHOkAt })
-    mainEl.innerHTML = pageHtml(capH, v, { openByReader })
+    mainEl.innerHTML = pageHtml(capH, v, { openByReader, ov })
     if (mainEl.querySelectorAll) ensureHarnessIcons(mainEl)
   }
 
@@ -74,7 +81,8 @@ export function mount(el, ctx) {
   })
 
   paint()
-  poll = pollCaptureHealth({ api, store, doc: el.ownerDocument, onAnswer: () => { paint(); land(lastH) } })
+  readOv()
+  poll = pollCaptureHealth({ api, store, doc: el.ownerDocument, onAnswer: () => { paint(); land(lastH); readOv() } })
   land(router.current().params.h || null)
 
   return {
