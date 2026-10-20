@@ -121,16 +121,17 @@ test('capture routing rides the raw panel\'s tech details (2.3 §调用保真行
   assert.ok(open > -1 && h.indexOf('ROUTE-TEXT-x') > open)
 })
 
-// A1 (2.6 §A params row): a scalar key value within 40 characters is shown; anything else keeps the length
-test('a request key shows its value iff it is a short scalar; otherwise its length', () => {
+// A1 (2.6 §A params row): a key the server shipped a `value` for shows it as is; a key without one keeps its length. Which keys
+// carry a value is the server's call (nonBlockKeysOf, a scalar up to its threshold) — the panel never judges length itself.
+test('a request key shows the value the server shipped; without one, its length', () => {
   const CH = 517 // under 1000, so the row prints it as is
-  const cases = [['s', 'v'.repeat(5)], ['s40', 'w'.repeat(40)], ['s41', 'x'.repeat(41)], ['num', 0.731], ['bool', false], ['obj', { a: 1 }], ['absent', undefined]]
+  const cases = [['s', 'v'.repeat(5)], ['empty', ''], ['num', 0.731], ['zero', 0], ['bool', false], ['obj', { a: 1 }], ['absent', undefined]]
   for (const [key, value] of cases) {
     const k = { key, chars: CH, ref: 'r9' }
     if (value !== undefined) k.value = value
     const h = draw(base({ nonBlockKeys: [k] }))
     const row = h.slice(h.indexOf(`>${key}</code>`), h.indexOf('class="nbkbody"'))
-    const shown = (typeof value === 'string' && value.length <= 40) || typeof value === 'number' || typeof value === 'boolean'
+    const shown = ['string', 'number', 'boolean'].includes(typeof value)
     assert.equal(row.includes('>' + String(value) + '<'), shown, `${key}: value shown`)
     assert.equal(row.includes(String(CH)), !shown, `${key}: length shown`)
   }

@@ -23,7 +23,7 @@ export async function probe({ importer = () => import('playwright-core'), env = 
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
  *  `missing` lists every static file answered ≥ 400 (`<status> <path>`).
  *  `requests` logs every /api and /control response as {url, method, body (the request's post data, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
-export async function withBoard({ bytes, token = true, width = 1280, theme = 'light', chromium } = {}) {
+export async function withBoard({ bytes, token = true, width = 1280, height = 900, theme = 'light', chromium } = {}) {
   chromium ||= (await import('playwright-core')).chromium
   const face = await serveBoard(boardHome({ bytes }))
   const requests = []
@@ -39,7 +39,7 @@ export async function withBoard({ bytes, token = true, width = 1280, theme = 'li
   }
   try {
     browser = await chromium.launch(CHANNEL)
-    context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme })
+    context = await browser.newContext({ viewport: { width, height }, colorScheme: theme })
     page = await context.newPage()
     page.on('pageerror', (e) => errors.push(String(e)))
     page.on('response', (r) => {

@@ -65,12 +65,13 @@ function rawReplyHtml(c) {
   const ws = (c.wire && c.wire.transport) === 'ws'
   return `<div class="rpk" title="The captured reply bytes — each piece can be read back from the raw record"><b>${esc(W.RAW_REPLY)}</b> · ${rs.map((x, j) => (ws ? refRow(x, W.rawReplyNth(j + 1)) : refRow({ ...x, chars: null }, x.chars != null ? `${kf(x.chars)} characters` : '—'))).join(' · ')}<div class="nbkbody"></div></div>`
 }
-const scalarShown = (v) => (typeof v === 'string' ? v.length <= 40 : typeof v === 'number' || typeof v === 'boolean')
+// the server ships `value` only for a short scalar (2.6 §A: the threshold lives in nonBlockKeysOf); the panel never judges length
+const scalarShown = (v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
 function paramsHtml(c) {
   const ks = c.nonBlockKeys || []
   if (c.unparsed) return `<div class="rpk"><b>${esc(W.REQ_PARAMS)}</b> · ${esc(W.UNPARSED_PARAMS)}</div>`
   if (!ks.length) return `<div class="rpk"><b>${esc(W.REQ_PARAMS)}</b> · ${esc(W.NO_PARAMS)}</div>`
-  // a short scalar value is shown as is (mono); anything else keeps its length — the bytes stay one click away
+  // a value the server shipped is shown as is (mono); a key without one keeps its length — the bytes stay one click away
   const row = (k) => (scalarShown(k.value)
     ? `${refRow({ ref: k.ref, chars: null, why: k.note }, k.key)} <span class="mono">${esc(String(k.value))}</span>`
     : refRow({ ref: k.ref, chars: k.chars, why: k.note }, k.key))

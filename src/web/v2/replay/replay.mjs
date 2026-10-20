@@ -200,10 +200,12 @@ export function mount(el, ctx) {
 
   // ── navigation ───────────────────────────────────────────────────────────────────────────────────────────────────
   function syncUrl() { router.setParams({ step: String(s.playhead + 1) }, { replace: true }) } // scrubbing is not a navigation
-  function setPlayhead(i, manual) {
+  // `followLanding`: 跟随最新 brought the playhead here (followOn) → this step lands on the reply; any other move lands by the change
+  // line. Set BEFORE the repaint below, because the landing runs once per step, inside that repaint (1.4 §打开一步时落在哪).
+  function setPlayhead(i, manual, followLanding = false) {
     if (!s.anchor || !s.anchor.calls.length) return // a zero-call session: "⇥ latest" is a no-op, not a TypeError
     s.viewPin = null // scrubbing returns the panel to the call raw
-    s.followLanding = false // a reader's move (scrub, jump, URL step) lands by the change line; followOn sets it back
+    s.followLanding = followLanding
     jumps.clear() // a move by the reader ends any jump still waiting for its page (jumpTo queues its own after this)
     const N = s.anchor.calls.length, np = Math.max(0, Math.min(N - 1, i))
     if (np !== s.playhead) { s.openBlocks.clear(); s.turnLanded.clear(); s.pageMissed = null } // a different call: its blocks start collapsed, no landing turn lingers, no missed load
@@ -264,17 +266,16 @@ export function mount(el, ctx) {
     s.pageCur = p.after; s.pageLim = p.limit; s.pageReaimed = false
     s.lastCheapSig = null; s.lastRenderSig = null
     s.pageLoading = call.gi; s.pageMissed = null // its load control is busy until an answer comes (2.3 §未下发态)
-    if (s.anchor && s.anchor.calls[s.playhead] === call) { renderContextWindow(E.ctxwin, s); s.renderRaw() }
+    if (s.anchor && s.anchor.calls[s.playhead] === call) { renderContextWindow(E.ctxwin, s); s.renderRaw(); s.lastPhSig = playheadSig(s) } // drawn busy: an answer that clears it repaints
     poll(true)
     return true
   }
-  // 跟随最新 turned on (f, the chip, a scrub onto the last step): the followed step is never paged out (2.3 §未下发态), so the page is
-  // re-aimed at it before the read. → whether a read was started.
+  // 跟随最新 turned on (f, the chip): the followed step is never paged out (2.3 §未下发态), so the page is re-aimed at it before the
+  // read; the step lands on its reply (a scrub onto the last step also turns following on, but it is the reader's move: change line).
   function followOn() {
     const N = s.anchor ? s.anchor.calls.length : 0
     let read = false
-    if (N) read = setPlayhead(N - 1, true); else s.follow = true
-    s.followLanding = true // turning follow on is asking for the newest answer: land on the reply
+    if (N) read = setPlayhead(N - 1, true, true); else { s.follow = true; s.followLanding = true } // the newest answer: land on the reply
     renderHeader()
     if (!read) poll(true)
   }
@@ -293,8 +294,10 @@ export function mount(el, ctx) {
   function readFailed(title, reason, detail, emptyMsg) {
     s.pageLoading = null // the read answered (with a failure): the load control is usable again
     s.lastCheapSig = null; s.lastRenderSig = null // so the next read retries; a stuck signature would keep the board wedged after recovery
-    if (s.goodKey === sessionKey()) s.staleErr = { reason, since: s.goodAt }
-    else { fail(title, reason + detail); renderEmpty(emptyMsg) }
+    if (s.goodKey === sessionKey()) {
+      s.staleErr = { reason, since: s.goodAt }
+      if (s.anchor && playheadSig(s) !== s.lastPhSig) renderPlayheadAreas() // a "Loading this step…" drawn by ensurePage goes back to usable (2.3 §未下发态)
+    } else { fail(title, reason + detail); renderEmpty(emptyMsg) }
     renderHeader()
     return { ok: false }
   }
