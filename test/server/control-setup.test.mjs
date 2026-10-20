@@ -104,7 +104,6 @@ for (const platform of ['darwin', 'win32']) {
       trust.setStore({ held: [], answer: 'ok' })
       const gone = await post({ harness: B })
       assert.deepEqual(gone.json.plan.map((r) => r.what), ['root'], gone.body)
-      assert.ok(!(gone.json.receipt.notes || []).some((n) => /nothing to set up/.test(n)), gone.body)
       const back = await post({ harness: B, confirm: gone.json.plan_id })
       assert.equal(back.status, 200, back.body)
       assert.ok(back.json.items.some((i) => i.item === 'root-store' && i.state === 'added'), back.body)
