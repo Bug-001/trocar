@@ -227,6 +227,8 @@ export const PAGED_TITLE = 'This step\'s content is not on the current page'
 export const PAGED_FULL = 'The full raw record is on disk'
 export const PAGED_PARTIAL = 'The captured part is on disk'
 export const LOAD_THIS_STEP = 'Load this step'
+export const LOADING_THIS_STEP = 'Loading this step…'
+export const PAGE_MISSED = 'The page that came back still did not carry this step'
 export const RETRY = 'Retry'
 export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
 export const UNPARSED_TITLE = 'This step\'s request could not be parsed; there is no context to show'

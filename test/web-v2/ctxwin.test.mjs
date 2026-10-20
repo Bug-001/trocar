@@ -107,3 +107,19 @@ test('the reply segment\'s mark follows the proof rule: a resolvable respRef →
 test('stand-in states (not on this page, unparsed, no request) draw no reply segment', () => {
   for (const over of [{ paged_out: true }, { unparsed: true, errMsg: 'x' }, { rec: null }]) assert.equal(replySeg(ctxWindowHtml(deskAt(0, over).s)), null, JSON.stringify(Object.keys(over)))
 })
+
+// 2.3 §未下发态: the load control says whether a read for this step is out (busy, not clickable) or answered without it (missed,
+// clickable again) — told by attributes, so the words stay the labels' business
+test('a paged-out step\'s load control: busy while its read is out, missed after an answer without it, plain otherwise', () => {
+  const i = anchorLane(buildLanes(doc.analyzed, doc.probes)).calls.findIndex((c) => c.rec && !c.unparsed)
+  const tagOf = (s) => (ctxWindowHtml(s).match(/<button[^>]*id="loadpage"[^>]*>/) || [null])[0]
+  for (const [extra, busy, missed] of [[(gi) => ({ pageLoading: gi }), true, false], [(gi) => ({ pageMissed: gi }), false, true], [() => ({}), false, false]]) {
+    const { s, call } = deskAt(i, { paged_out: true })
+    Object.assign(s, extra(call.gi))
+    const tag = tagOf(s)
+    assert.ok(tag, 'the load button is drawn')
+    assert.equal(/\sdisabled(\s|>|=)/.test(tag), busy, tag)
+    assert.equal(/aria-busy="true"/.test(tag), busy, tag)
+    assert.equal(/data-state="missed"/.test(ctxWindowHtml(s)), missed, tag)
+  }
+})

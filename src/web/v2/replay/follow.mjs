@@ -23,19 +23,33 @@ export function landPlayhead({ N, playhead, follow, initialStep }) {
 }
 
 // ── where the page sits (1.2 §会话头 「跟随最新」) ──────────────────────────────────────────────────────────────────────
-// The cursor that puts call `gi` at the middle of a `limit`-call page: the server keeps bodies around the window's middle, so a
-// call there always rides the page. One rule for the follow window and for re-aiming at a step (replay.mjs ensurePage).
-export const centerCursor = (gi, limit) => Math.max(0, (gi | 0) - Math.floor(limit / 2))
+// Where a page sits: `{after, limit}` with call `gi` at the server's middle (`after + floor(limit/2)`), where it keeps bodies first
+// (3.5 §分页 正文预算), so the asked step always rides the page. Near the start the window narrows instead of clamping, so an early
+// step is still the middle. One rule for the follow window and for re-aiming at a step (replay.mjs ensurePage).
+export const pagePlace = (gi, limit) => {
+  const h = Math.floor(limit / 2), g = Math.max(0, gi | 0)
+  return g >= h ? { after: g - h, limit } : { after: 0, limit: 2 * g + 1 }
+}
 
-// After an answer: the cursor the NEXT read of this session should use. While following, the page is placed by THIS answer —
+// After an answer: where the NEXT read of this session sits ({after, limit}). While following, the page is placed by THIS answer —
 // the followed step (the anchor lane's last call, `tailGi`; absent → the answer's last call, page.total - 1) at its middle —
 // never by an earlier answer's total. An answer whose window held no call at all (returned 0 of a non-empty session) is placed
-// the same way. Otherwise the reader's window stays. It returns a number only: a fetch never turns following off.
-export function followCursor({ follow, page, pageCur, limit, tailGi }) {
-  if (!page || typeof page.total !== 'number' || page.total <= 0) return pageCur
-  if (!follow && page.returned !== 0) return pageCur
+// the same way. Otherwise the reader's window (`pageCur`, `pageLim`) stays. A fetch never turns following off.
+export function followCursor({ follow, page, pageCur, pageLim, limit, tailGi }) {
+  const keep = { after: pageCur, limit: pageLim }
+  if (!page || typeof page.total !== 'number' || page.total <= 0) return keep
+  if (!follow && page.returned !== 0) return keep
   const t = tailGi != null && tailGi >= 0 ? Math.min(tailGi, page.total - 1) : page.total - 1
-  return centerCursor(t, limit)
+  return pagePlace(t, limit)
+}
+
+// The load control of a step whose body is not on the page: 'loading' while a read asked for it is out, 'missed' when that read
+// answered and the step still did not ride it, 'idle' otherwise (and for a step that has its body).
+export function pageState(s, call) {
+  if (!call || !call.paged_out) return 'idle'
+  if (s.pageLoading != null && s.pageLoading === call.gi) return 'loading'
+  if (s.pageMissed != null && s.pageMissed === call.gi) return 'missed'
+  return 'idle'
 }
 
 // ── the poll loop: one read in flight, back-off after a failure (1.5 K-29) ──────────────────────────────────────────────

@@ -337,6 +337,8 @@
   .poact{margin-top:2px;}
   .pobtn{font:inherit;font-size:11px;padding:4px 10px;border:1px solid var(--dim);border-radius:4px;background:transparent;color:var(--fg);cursor:pointer;}
   .pobtn:hover{border-color:var(--accent);color:var(--accent);}
+  .pobtn[disabled]{cursor:progress;opacity:.6;border-color:var(--dim);color:var(--dim);}
+  .pomissed{font-size:11px;color:var(--amber);margin-right:6px;}
   .cwunparsed,.cwnoreq,.cwload{margin:24px auto;max-width:560px;padding:14px 16px;border:1px dashed var(--rule-2);border-radius:6px;font-size:11.5px;color:var(--dim);line-height:1.6;}
   .cwunparsed .cwuhd,.cwnoreq{color:var(--fg);}
   .cwload{color:var(--dimmer);text-align:center;}

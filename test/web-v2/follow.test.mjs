@@ -34,32 +34,29 @@ test('landPlayhead: a reader who scrubbed away stays put; a lane that shrank cla
   assert.deepEqual(landPlayhead({ N: 8, playhead: 49, follow: false, initialStep: null }), { playhead: 7, follow: false, syncUrl: true })
 })
 
-// ── followCursor (1.2 「跟随最新」): generated over (total, tailGi, pageCur, limit, returned, follow) ───────────────────
-import { followCursor, centerCursor, createPoller, backoffMs, BACKOFF_MAX_MS } from '../../src/web/v2/replay/follow.mjs'
-const axes = []
-for (const total of [1, 2, 7, 59, 60, 61, 333]) for (const limit of [1, 2, 7, 60]) for (const back of [0, 1, 5, 40]) for (const pageCur of [0, 3, 250]) for (const returned of [0, 1, 60]) for (const follow of [true, false])
-  axes.push({ total, limit, tailGi: Math.max(0, total - 1 - back), pageCur, returned, follow })
+// ── where a page sits (1.2 「跟随最新」 · 2.3 §未下发态 · 3.5 §分页 正文预算) ───────────────────────────────────────────
+import { followCursor, pagePlace, createPoller, backoffMs, BACKOFF_MAX_MS } from '../../src/web/v2/replay/follow.mjs'
+import { pageView } from '../../src/view/board.mjs'
+import { PAGE_BODY_BYTES } from '../../src/query/named/index.mjs'
 
-test('followCursor: while following, the followed step (this answer\'s own tail) is on the next page, at its middle', () => {
-  for (const a of axes.filter((x) => x.follow)) {
-    const c = followCursor({ follow: true, page: { total: a.total, returned: a.returned }, pageCur: a.pageCur, limit: a.limit, tailGi: a.tailGi })
-    assert.ok(Number.isInteger(c) && c >= 0, JSON.stringify(a))
-    assert.ok(c <= a.tailGi && a.tailGi < c + a.limit, `on the page: ${JSON.stringify(a)} → ${c}`)
-    assert.equal(c, centerCursor(a.tailGi, a.limit))
-    // without a tailGi the answer's own last call is followed — never an earlier answer's total
-    const c2 = followCursor({ follow: true, page: { total: a.total, returned: a.returned }, pageCur: a.pageCur, limit: a.limit })
-    assert.ok(c2 <= a.total - 1 && a.total - 1 < c2 + a.limit)
+test('pagePlace: every step of a long session rides the page placed for it, with its body (the first steps too)', () => {
+  const N = 3 * 60, size = Math.floor(PAGE_BODY_BYTES / 5.5) // the budget holds about five bodies
+  const calls = Array.from({ length: N }, (_, gi) => ({ gi, ts: new Date(gi * 1000).toISOString(), comp: { messages: size }, flat: [{ sec: 'messages' }] }))
+  const view = { analyzed: { lanes: [{ id: 'main', kind: 'main', calls }], steps: calls } }
+  for (let gi = 0; gi < N; gi++) {
+    const p = pagePlace(gi, 60)
+    const out = pageView(view, { cursor: p.after, limit: p.limit }, { budget: PAGE_BODY_BYTES })
+    const c = out.analyzed.lanes[0].calls.find((x) => x.gi === gi)
+    assert.ok(c && !c.paged_out, `step ${gi} rides the page ${JSON.stringify(p)}`)
   }
 })
 
-test('followCursor: not following keeps the reader\'s window, unless the answer held no call (then the tail is placed)', () => {
-  for (const a of axes.filter((x) => !x.follow)) {
-    const c = followCursor({ follow: false, page: { total: a.total, returned: a.returned }, pageCur: a.pageCur, limit: a.limit, tailGi: a.tailGi })
-    if (a.returned !== 0) assert.equal(c, a.pageCur, JSON.stringify(a))
-    else assert.ok(c <= a.tailGi && a.tailGi < c + a.limit, JSON.stringify(a))
+test('followCursor: while following, the followed step sits at the middle of the next page, the session\'s first steps too', () => {
+  for (const total of [1, 2, 7, 59, 60, 61, 333]) for (const limit of [1, 2, 7, 60]) for (const back of [0, 1, 5, 40, 332]) for (const returned of [0, 1, 60]) {
+    const tailGi = Math.max(0, total - 1 - back)
+    const p = followCursor({ follow: true, page: { total, returned }, pageCur: 250, pageLim: 60, limit, tailGi })
+    assert.equal(p.after + Math.floor(p.limit / 2), tailGi, JSON.stringify({ total, limit, tailGi, returned, p }))
   }
-  assert.equal(followCursor({ follow: true, page: null, pageCur: 9, limit: 60 }), 9, 'no page: nothing to place by')
-  assert.equal(followCursor({ follow: true, page: { total: 0, returned: 0 }, pageCur: 9, limit: 60 }), 9, 'an empty session')
 })
 
 // ── the poll loop (1.5 K-29): a fake clock and a fake reader ────────────────────────────────────────────────────────────

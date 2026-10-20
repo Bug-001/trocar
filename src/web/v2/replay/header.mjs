@@ -199,7 +199,7 @@ export function wireSessionHead(el, s) {
     const t = e.target
     if (t.closest('[data-retry]')) { if (s.poll) s.poll(); return }
     const fol = t.closest('[data-follow]')
-    if (fol) { s.follow = fol.getAttribute('aria-pressed') !== 'true'; renderSessionHead(el, s); if (s.follow && s.poll) s.poll(); return }
+    if (fol) { if (fol.getAttribute('aria-pressed') === 'true') { s.follow = false; renderSessionHead(el, s) } else s.followOn(); return } // on: re-aims the page at the followed step
     const jump = t.closest('[data-si]')
     if (!jump) return
     const tot = s.totals || totalsOf(s)

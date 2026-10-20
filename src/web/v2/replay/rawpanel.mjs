@@ -9,6 +9,7 @@ import { techDetailsHtml, mark } from '../core/ui.mjs'
 import { relPath } from './analysis.mjs'
 import { fillBody, clipText, clipCut } from './blocks.mjs'
 import * as W from '../labels/replay.mjs'
+import { pageState } from './follow.mjs'
 
 // ── the reply: parsed text · tool calls · stop reason · ONE fidelity mark ───────────────────────────────────────────
 // The mark rule (2.6 §A): the bytes only partially stored → 「◐ 回复没采全」; bytes that resolve (a respRef with a
@@ -102,6 +103,15 @@ function techHtml(c) {
   return techDetailsHtml(bits, { id: 'rptech' })
 }
 
+// the load control of a paged-out step (2.3 §未下发态), one for the window and the raw panel: busy while its read is out; after an
+// answer that still lacked the step, a line says so and the button reads again
+export function loadStepHtml(s, call, attr) {
+  const st = pageState(s, call)
+  if (st === 'loading') return `<button type="button" class="pobtn" ${attr} disabled aria-busy="true">${esc(W.LOADING_THIS_STEP)}</button>`
+  const btn = `<button type="button" class="pobtn" ${attr}>${esc(W.LOAD_THIS_STEP)}</button>`
+  return st === 'missed' ? `<span class="pomissed" data-state="missed">${esc(W.PAGE_MISSED)}</span> ${btn}` : btn
+}
+
 export function renderRawPanel(el, s) {
   if (s.viewPin) return renderResourceView(el, s)
   const call = s.anchor && s.anchor.calls[s.playhead]
@@ -115,7 +125,7 @@ export function renderRawPanel(el, s) {
   if (call.paged_out) {
     // 未下发 ≠ 没有: the reply / params rows become the window's own paged-out sentence + the load button; what did not
     // ride the page (respRefs, extraMessages, wire) still renders
-    el.innerHTML = head + modelLine + `<div class="rpk"><span class="pobadge" title="The verbatim request body of this step was not sent with this page; it is kept in full in the raw capture">${esc(W.PAGED_TITLE)}</span> <button type="button" class="pobtn" data-load-step="${s.playhead}">${esc(W.LOAD_THIS_STEP)}</button></div>` +
+    el.innerHTML = head + modelLine + `<div class="rpk"><span class="pobadge" title="The verbatim request body of this step was not sent with this page; it is kept in full in the raw capture">${esc(W.PAGED_TITLE)}</span> ${loadStepHtml(s, call, `data-load-step="${s.playhead}"`)}</div>` +
       rawReplyHtml(call) + extraHtml(call) + wireHtml(call) + observerHtml(call) + techHtml(call)
     return
   }

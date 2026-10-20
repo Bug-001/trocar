@@ -14,7 +14,7 @@ import { messageTurns, blocksOf, keyDiff, cacheRefOf, hasChangeLine } from './an
 import { contentRefOf, contentRefKOf } from './stepbar.mjs'
 import { setFold, saveFold, turnAnchorKey, turnIsOpen } from './fold.mjs'
 import { ctxBlockHtml, fillBody, faithOf, faithNow, ffBadgeHtml, tagWord } from './blocks.mjs'
-import { replyHtml } from './rawpanel.mjs' // one reply renderer, two hosts (2.3 §这一步的回复 · 2.6 §A)
+import { replyHtml, loadStepHtml } from './rawpanel.mjs' // one reply renderer, two hosts (2.3 §这一步的回复 · 2.6 §A)
 
 export { blockBodyHtml } from './blocks.mjs'
 
@@ -116,8 +116,8 @@ export function removedSectionHtml(removed, refK, open) {
 // ── ⑤–⑧ the stand-in states ──────────────────────────────────────────────────────────────────────────────────────────
 export function pagedOutHtml(s, call) {
   const full = !(call && call.reqIncomplete)
-  return `<div class="pagedout"><div class="pohd">${esc(W.PAGED_TITLE)}</div><div class="pobody">${esc(full ? W.PAGED_FULL : W.PAGED_PARTIAL)} (not sent to this page ≠ lost)</div>` +
-    `<div class="poact"><button type="button" class="pobtn" id="loadpage">${esc(W.LOAD_THIS_STEP)}</button></div></div>`
+  return `<div class="pagedout"><div class="pohd">${esc(W.PAGED_TITLE)}</div><div class="pobody">${esc(full ? W.PAGED_FULL : W.PAGED_PARTIAL)}</div>` +
+    `<div class="poact">${loadStepHtml(s, call, 'id="loadpage"')}</div></div>`
 }
 const unparsedHtml = (call) => `<div class="cwunparsed"><div class="cwuhd">${esc(W.UNPARSED_TITLE)}</div><div class="cwub">${esc(W.UNPARSED_KEEP)}</div>` +
   (call.errMsg ? techDetailsHtml([['errMsg', call.errMsg]], { id: 'cwu-tech' }) : '') + `</div>`
