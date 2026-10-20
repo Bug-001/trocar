@@ -691,11 +691,11 @@ test('ensureDaemonUp: on win32 an EPIPE / ECONNRESET on the FIRST probe is "not 
   // the re-probe is what it says it is: a pipe that answers on the second try is up, and nothing is started
   const second = await run({ osName: 'win32', code: 'EPIPE', upAfter: 1 })
   assert.deepEqual([second.up, second.started, second.startedUnit], [true, false, false], 'it answered on the second ask: already up')
-  // the two answers Windows gave in one run (`trocar update`): EPIPE while the pipe's server was still going, then
+  // any other error still halts, and the same EPIPE on a unix socket is a stuck daemon as before
+  // the two answers the Windows test machine gave in one run (2026-10-20, `update`): EPIPE while the pipe's server was still going, then
   // `connect ENOENT` once it had gone. Both are a pipe that is not there, so the collector is started -- not called a stuck daemon.
   const gone = await run({ osName: 'win32', code: ['EPIPE', 'ENOENT'], upAfter: 99 })
   assert.deepEqual([gone.up, gone.halt, gone.problems, gone.startedUnit], [true, false, [], true], 'EPIPE then ENOENT is a gone pipe, so the daemon is started')
-  // any other error still halts, and the same EPIPE on a unix socket is a stuck daemon as before
   const other = await run({ osName: 'win32', code: 'EACCES', upAfter: 99 })
   assert.deepEqual([other.up, other.halt, other.startedUnit], [false, true, false], 'an error that is not a gone pipe is still a daemon that does not answer')
   const linux = await run({ osName: 'linux', code: 'EPIPE', upAfter: 99 })

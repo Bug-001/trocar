@@ -215,7 +215,8 @@ async function replaceDaemon({ env, home, platform, deps, dir, root, fs, problem
   const { routing } = await drainDaemon(w, { drainMs: deps.drainMs })
   notes.push(...routing.notes)
   const stopped = routing.stop || (routing.confirmed ? await w.stopDaemon({ unitManaged: w.unitManaged() }) : null)
-  if (!stopped || (!stopped.stopped && stopped.pid != null)) { problems.push(`the collector (pid ${stopped ? stopped.pid : routing.daemon.pid}) could not be stopped${stopped && stopped.error ? ` (${stopped.error})` : routing.problems[0] ? ` (${routing.problems[0]})` : ''}, so it still runs ${running || 'code of its own'}. ${AGAIN}`); return { restarted: false, notes } }
+  const pid = (stopped && Number.isInteger(stopped.pid) ? stopped.pid : null) ?? (Number.isInteger(routing.daemon.pid) ? routing.daemon.pid : null)
+  if (!stopped || (!stopped.stopped && stopped.pid != null)) { problems.push(`the collector${pid == null ? '' : ` (pid ${pid})`} could not be stopped${stopped && stopped.error ? ` (${stopped.error})` : routing.problems[0] ? ` (${routing.problems[0]})` : ''}, so it still runs ${running || 'code of its own'}. ${AGAIN}`); return { restarted: false, notes } }
   const { ensureDaemonUp } = await import('../collector/install.mjs')
   const unit = deps.unit !== undefined ? deps.unit : await loginUnit({ home, env, platform, deps })
   if (!unit) { problems.push('this platform has no login entry to start the collector through, so it was not replaced'); return { restarted: false, notes } }

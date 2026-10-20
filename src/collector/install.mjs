@@ -583,9 +583,9 @@ export async function ensureDaemonUp({ osName, dir, env, fs = nodeFs, unit = nul
       // daemon was stopped. Asked once more after a pause; still like that = not up, never stuck.
       if (first && osName === 'win32' && GONE_PIPE.test(String((e && e.code) || '') + ' ' + String((e && e.message) || e))) {
         await pause(250)
-        // the second ask answers for a gone pipe in any of its ways, ENOENT included (tested 2026-10-20: EPIPE while the server was still
-        // going, `connect ENOENT` once it had gone) — each of them is "not up"; only something else is a daemon that does not answer
         try { await ask({ socketPath: sock, method: 'GET', path: '/status', timeoutMs: 2000 }); return { up: true } } catch (again) {
+          // the second ask answers for a gone pipe in any of its ways, ENOENT included (tested 2026-10-20: EPIPE while the server was still
+          // going, `connect ENOENT` once it had gone) — each of them is "not up"; only something else is a daemon that does not answer
           if (again && (again.code === 'ENOENT' || again.code === 'ECONNREFUSED')) return { up: false }
           if (GONE_PIPE.test(String((again && again.code) || '') + ' ' + String((again && again.message) || again))) return { up: false }
           return { up: false, stuck: String((again && again.message) || again) }
