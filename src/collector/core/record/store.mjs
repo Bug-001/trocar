@@ -16,7 +16,7 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
   let segment = null, segFile = null, segBytes = 0, segLines = 0
   const onClosed = [] // the seal queue hangs here (4.6 §记录 自动封存)
   const onWrote = [] // the index keeper hangs here (D62): told the segment a line was just appended to
-  const onOpening = [] // called with the name BEFORE the file exists: the daemon writes it into the lock there (see openSegment)
+  const onChange = [] // the live segment changed: the daemon writes it into the lock there (see openSegment, closeSegment)
   const report = (e, file) => { errors++; lastError = e; if (file && e && typeof e === 'object' && !e.file) e.file = file; onError(e) }
   const closeAll = () => { for (const fd of fds.values()) { try { fs.closeSync(fd) } catch { /* already closed */ } } fds.clear() }
   // A day that has ended: the previous day's files get no more lines, so their fds are fsync'd and closed. A daemon
@@ -52,7 +52,7 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
   }
 
   // A new segment, never an existing one: a segment on disk is closed for good, so a crash's half line stays as it is
-  // and a reader's line numbers (the record ids) never shift under it. The name is announced to onOpening BEFORE the
+  // and a reader's line numbers (the record ids) never shift under it. The name is announced to onChange BEFORE the
   // file exists (invariant 2: a sealer that believed the live segment closed would delete its plaintext, so the lock
   // must name the new segment no later than its first byte — not on the next timer tick), and the file is created with
   // 'ax', so two writers on one home can never share a name and a restart never appends to an old file.
@@ -64,7 +64,7 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
     for (;;) {
       segment = segmentName(at, taken)
       segFile = path.join(raw, `${segment}.ndjson`)
-      for (const cb of onOpening) { try { cb(segment) } catch (e) { report(e, segFile) } } // never breaks the capture
+      announce(segment, segFile)
       let fd
       try { fd = fs.openSync(segFile, 'ax', 0o600) } catch (e) {
         if (e.code !== 'EEXIST') throw e // reported by the caller; the next envelope tries again
@@ -77,12 +77,16 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
       return
     }
   }
-  /** fsync, close, and hand the path to the seal queue. The next envelope opens the next segment. */
+  const announce = (seg, file) => { for (const cb of onChange) { try { cb(seg) } catch (e) { report(e, file) } } } // never breaks the capture
+  /** fsync, close, and hand the path to the seal queue. The next envelope opens the next segment. The lock is told
+   *  BEFORE the queue (invariant 2, D60): the queue forks a sealer at once, and a lock left naming the closed segment
+   *  until the next timer tick made it refuse that segment until the next start (a macOS machine, 2026-10-20). */
   function closeSegment() {
     if (!segFile) return
     const file = segFile, fd = fds.get(file)
     if (fd !== undefined) { try { fs.fsyncSync(fd) } catch (e) { report(e, file) } try { fs.closeSync(fd) } catch { /* already closed */ } fds.delete(file) }
     segment = null; segFile = null; segBytes = 0; segLines = 0
+    announce(null, file)
     for (const cb of onClosed) { try { cb(file) } catch (e) { report(e, file) } }
   }
 
@@ -133,8 +137,9 @@ export function createRecordStore({ root, raw = rawHome(path.dirname(root)), seg
     audit(rec) { write((d) => path.join(root, 'audit', `${d}.ndjson`), rec) },
     replay(env) { write((d) => path.join(root, 'replays', `${d}.ndjson`), env) },
     onSegmentClosed(cb) { onClosed.push(cb) },
-    /** cb(segment) right before the segment's file is created — the daemon rewrites the lock there (D60, invariant 2). */
-    onSegmentOpening(cb) { onOpening.push(cb) },
+    /** cb(segment) right before a segment's file is created, and cb(null) once it is closed, before onSegmentClosed
+     *  hears of it — the daemon rewrites the lock there, so a sealer never sees a stale live segment (D60, invariant 2). */
+    onSegmentChange(cb) { onChange.push(cb) },
     /** cb(segment, facts) once a line is in that segment — the index keeper's trigger (D62). facts = { lineNo,
      *  offset, storedBytes, env }: everything needed to index that line without reading it back. */
     onRecord(cb) { onWrote.push(cb) },

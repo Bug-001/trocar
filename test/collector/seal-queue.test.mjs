@@ -172,3 +172,23 @@ test('a catch-up that never comes back does not hold the seal: the segment is qu
   assert.deepEqual(sealed, [`${SEGMENTS[0]}.ndjson`], 'sealed without the catch-up')
   assert.deepEqual(said, [['raw', 'index-failed', SEGMENTS[0]]], 'and the wait is on the record, once')
 })
+
+// The rotation in a running daemon (journal of 2026-10-20 on a macOS machine: `refused … the daemon's lock names it as the
+// segment being appended to`, for the segment it had just closed). The real record store rolls over, the real lock
+// keeper is hung where both daemon entries hang it, and the real forked worker reads the lock: no timer tick may stand
+// between the close and the seal, so the lock must already have moved off the closed segment when the queue gets it.
+test('4: a segment the running daemon rotates away from is sealed in the same run — the lock no longer names it', async () => {
+  const { createRecordStore } = await import('../../src/collector/core/record/store.mjs')
+  const { lockKeeper } = await import('../../src/collector/daemon.mjs')
+  const b = box({ segments: [] })
+  const s = createRecordStore({ root: path.dirname(b.lock), raw: b.raw, segmentBytes: 1, now: () => new Date('2026-10-05T13:00:00.000Z'), onError: (e) => { throw e } })
+  s.onSegmentChange(lockKeeper({ file: b.lock, fields: { pid: process.pid }, segmentOf: () => s.currentSegment }))
+  const failed = []
+  const q = startSealing({ store: s, raw: b.raw, lockFile: b.lock, journal: b.journal, failure: (where, err) => failed.push(err.message) })
+  const { id } = s.envelope({ id: 'req_rotated' }) // past segmentBytes: closed at once, handed to the queue
+  await q.idle()
+  const seg = id.split(':')[0]
+  assert.deepEqual(failed, [], 'no seal failure')
+  assert.deepEqual(fs.readdirSync(b.raw).filter((n) => n.startsWith(seg)), [`${seg}.sealed`], 'sealed, and its plaintext is gone')
+  s.close()
+})
