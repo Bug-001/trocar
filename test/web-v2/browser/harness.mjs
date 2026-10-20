@@ -21,7 +21,7 @@ export async function probe({ importer = () => import('playwright-core'), env = 
 }
 
 /** The board on a fresh temp HOME in a fresh Chrome. `token`: true = the face's token, a string = that token, false = no fragment.
- *  `requests` logs every /api and /control response as {url, method, body (the request's post data, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors. Always `await stop()`. */
+ *  `requests` logs every /api and /control response as {url, method, body (the request's post data, or null), status, start (ms epoch the request began), t (ms epoch it answered)}; `errors` collects pageerrors; `get(name, params)` reads the face directly (no page, no request log). Always `await stop()`. */
 export async function withBoard({ bytes, token = true, width = 1280, theme = 'light', chromium } = {}) {
   chromium ||= (await import('playwright-core')).chromium
   const face = await serveBoard(boardHome({ bytes }))
@@ -47,7 +47,7 @@ export async function withBoard({ bytes, token = true, width = 1280, theme = 'li
     const t = token === true ? face.token : token
     await page.goto(`${face.base}/v2/index.html${t ? `#t=${encodeURIComponent(t)}` : ''}`, { waitUntil: 'load' })
   } catch (e) { await stop(); throw e }
-  return { url: face.base, page, stop, requests, errors }
+  return { url: face.base, get: face.get, page, stop, requests, errors }
 }
 
 export const mark = (page, name) => page.evaluate((n) => { performance.mark(n) }, name)
