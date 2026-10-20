@@ -26,6 +26,7 @@ import { installCollector } from '../../src/collector/install.mjs'
 import { uninstallCollector } from '../helpers/uninstall.mjs'
 import { controlRequest } from '../../src/collector/core/control.mjs'
 import { runStatusCli } from '../../src/cli/status.mjs'
+import { failureBrief } from '../../src/cli/words.mjs'
 import { runDaemonCli } from '../../src/cli/daemon.mjs'
 import { createCa, loadCa } from '../../src/collector/core/tls/ca.mjs'
 import { osRootsFor } from '../../src/off/os-roots.mjs'
@@ -88,6 +89,14 @@ async function statusOffline(s) {
   const code = await runStatusCli(['--failures'], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home,
     deps: { request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test: nothing looked at' }] }) } }) // on a Mac status asks launchd and the keychain (read-only): the runner is the test's
   return { code, text: o.join('\n') }
+}
+// (iii), the document: `--failures` words each group from FAILURE_WORDS, so the code and the whole reason are read
+// where C.3 keeps them verbatim — `failures.groups[]` — not out of the sentence (D58②: no code on screen).
+async function statusGroups(s) {
+  const o = []
+  await runStatusCli(['--json'], { io: { out: (l) => o.push(l), err: (l) => o.push(l) }, env: { XDG_RUNTIME_DIR: path.join(s.root, 'norun') }, home: s.home,
+    deps: { request: async () => { throw Object.assign(new Error('no daemon'), { code: 'ENOENT' }) }, exec: fakeMac({ loaded: [], keychain: false }).run, netenv: async () => ({ at: 'T', products: [], unknown: [{ reason: 'a test: nothing looked at' }] }) } })
+  return JSON.parse(o.join('\n')).failures.groups
 }
 const keys = (h) => (h.collector.failures || []).map((g) => g.key)
 const cond = (h, kind) => (h.collector.conditions || []).filter((c) => c.kind === kind)
@@ -194,7 +203,12 @@ test('F1 CA and trust: (a) an untrusted agent is a condition until it exits, the
     assert.deepEqual([h.installed, h.collector.installed], [true, true], '(c) never "not installed"')
   } finally { await d.stop(); up.close() }
   st = await statusOffline(s)
-  assert.match(st.text, /ca-invalid/)
+  const gs = await statusGroups(s)
+  const ca = gs.find((g) => g.code === 'ca-invalid')
+  assert.ok(ca, '(iii) the offline document lists the CA failure')
+  assert.equal(ca.reason, flowsOf(s).filter((r) => r.code === 'ca-invalid').at(-1).reason, '(iii) its reason is the newest record\'s, verbatim (C.3)')
+  assert.ok(st.text.includes(failureBrief(ca)), '(iii) the offline text words it as words.mjs does')
+  assert.doesNotMatch(st.text, /ca-invalid/, '(iii) no code on screen')
   assert.doesNotMatch(st.text, /Certificate +not installed|No harness is set up/) // the harnesses of this machine install did not see are named `not installed:`
   await assert.rejects(install(s), /CA|unusable/i, '(c) install does not answer "already installed"')
   p.done(); s.done()
@@ -297,7 +311,9 @@ test('F3 parts: off, a helper death (degraded), a SIGHUP stop and its clean rest
   const st = await statusOffline(s)
   // the stop and its signal are the endpoint's facts above; the offline text says the daemon is not running and what went wrong before it stopped
   assert.match(st.text, /Daemon not running[^\n]*; nothing is captured/)
-  assert.match(st.text, /helper-down loader killed by SIGKILL/, '(iii) the condition as of the stop')
+  const stop = (await statusGroups(s)).find((g) => g.code === 'helper-down')
+  assert.ok(stop, '(iii) the offline document lists the helper death')
+  assert.equal(stop.reason, flowsOf(s).filter((r) => r.event === 'helper-down').at(-1).reason, '(iii) the condition as of the stop, verbatim (C.3)')
   // (d) a helper speaking another protocol: never attaches; no "unclean stop" after a SIGHUP (h)
   d = await startDaemon({ dir: s.collector, socketPath: s.sock, arch: fakeArch(p, { ASIGHT_FAKE_PROTO: '3' }).arch, harnesses: [cc] })
   try {
