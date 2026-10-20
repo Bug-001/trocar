@@ -205,11 +205,20 @@ function flatRequest(d, r, ctx) {
 // with the call in its META form (no blocks, `paged_out`); bodyOf() gives an in-window call its blocks back from its record.
 function flatLaneFold(d, read) {
   const plans = d.prepare ? d.prepare(read) : null; // a wire whose context spans records (D37 ②) plans it as the calls arrive
-  const calls = [];
+  const byLane = new Map(); // lane kind → its calls, in step order
   const prevFlatOf = new Map(); // lane kind → the last call that established a cache prefix in that lane
   const prevChainOf = new Map(); // and its resumable prefix-hash chain (prefixChain)
   const prevInfoOf = new Map(); // lane kind → { msgCount, marker } of the last parsed call: the compaction verdict's predecessor
-  function push(r, gi) {
+  function push(r) {
+    const call = take(r);
+    if (!call) return null;
+    const cs = byLane.get(call.streamId);
+    if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return call;
+    const ids = cs.slice(0, -1).map((c) => c.id);
+    for (const m of [byLane, prevFlatOf, prevChainOf, prevInfoOf]) m.delete(call.streamId);
+    return relane(ids, r, read, take);
+  }
+  function take(r) {
     if (!r.is_llm_call) return null;
     const ctx = plans ? plans.context(r) : null; // { req, contextState, missing, locate }
     // the dissector's own lane (a warm-up, 3.1:37) first, else the harness table's hint (3.4: e.g. a subagent
@@ -252,7 +261,7 @@ function flatLaneFold(d, read) {
     brk.gt = realGroundTruth(prefixByteIdentical, usage.read, usage.create);
     brk.gtReal = true;
     const call = {
-      gi, id: r.id, streamId: laneKind, rec: slimRec(r), norm: { usage: norm.usage }, wireFormat: d.id,
+      gi: null, id: r.id, streamId: laneKind, rec: slimRec(r), norm: { usage: norm.usage }, wireFormat: d.id,
       ctx: d.ctxTokens(norm),
       msgCount: req.message_count || 0,
       tools: Array.isArray(req.tools) ? req.tools.length : 0,
@@ -266,7 +275,9 @@ function flatLaneFold(d, read) {
       comp: compBuckets(flat),
       usage, cacheBreak: brk, gt: brk.gt, prefixSha256: curPfx,
     };
-    calls.push(call);
+    placed(call, r, self);
+    if (!byLane.has(laneKind)) byLane.set(laneKind, []);
+    byLane.get(laneKind).push(call);
     // A call that failed never established a cache prefix, so it MUST NOT become the next baseline. A call whose request
     // was not stored does (with no blocks, as in the ETL): the next call then has no known prefix to compare with.
     if (!(r.error || failed || (st != null && st !== 200))) { prevFlatOf.set(laneKind, flat); prevChainOf.set(laneKind, chain); }
@@ -280,10 +291,12 @@ function flatLaneFold(d, read) {
     const flat = d.boardFlat(req, r);
     return { rec: slimRec(r), norm: d.normResp(r), nonBlockKeys: nonBlockKeysOf(r, d.id), flat: ctx ? withLocatedRefs(flat, ctx.locate, new Map()) : withPathRefs(flat, r) };
   }
+  const all = () => [...byLane.values()].flat();
   function finish() {
-    const kinds = Object.keys(FLAT_LANES).filter((k) => calls.some((c) => c.streamId === k));
+    const calls = all().sort((a, b) => a.gi - b.gi);
+    const kinds = Object.keys(FLAT_LANES).filter((k) => byLane.has(k));
     const lanes = kinds.map((k) => {
-      const lc = calls.filter((c) => c.streamId === k);
+      const lc = byLane.get(k);
       // the compaction events the board's outline lists, carrying the step's inference marker with them (invariant 4)
       const events = lc.filter((c) => c.compaction).map((c) => ({ type: 'compaction', step: c.gi, streamId: k, from: c.evictedFrom, to: c.evictedTo,
         inferred: c.compactionInferred, confidence: c.compactionConfidence, basis: c.compactionBasis }));
@@ -298,9 +311,10 @@ function flatLaneFold(d, read) {
       totalOut: calls.reduce((a, c) => a + ((c.norm.usage || {}).output_tokens || 0), 0),
       peakCtx: calls.reduce((a, c) => Math.max(a, c.ctx), 0),
     };
-    return { provider: d.provider, streams: lanes.map((l) => ({ id: l.id, kind: l.kind, calls: l.calls })), steps: [...calls], stats, lanes };
+    return { provider: d.provider, streams: lanes.map((l) => ({ id: l.id, kind: l.kind, calls: l.calls })), steps: calls, stats, lanes };
   }
-  return { push, bodyOf, finish };
+  const self = { push, bodyOf, finish, calls: all };
+  return self;
 }
 
 // records = ONE session's raw (v0/demo-shape) records. Returns analyze() output with each
@@ -477,48 +491,74 @@ function nonBlockKeysOf(rec, format) {
 }
 
 // ONE SESSION, FOLDED (3.5 §内存有界). createAssembler() → { push(rec), finish(), bodyOf(call, rec) }: the session's records go in
-// ONE AT A TIME in step order (analyze.mjs stepOrder). push() assembles the call — its lane, the cache-break and prefix chain
-// against its lane's previous call, its composition, wire facts and usage — and keeps it in its META form: no blocks, `paged_out`,
-// `rec` and `norm` reduced to what the timeline reads. The record's body is let go when push() returns; what the fold holds is
-// the calls' meta, each lane's previous call (its blocks are the next call's baseline) and the records a cross-record context
-// (D37 ②) stitches from. bodyOf() gives one call its blocks back — `flat` (metadata + a text_ref per block), `nonBlockKeys`, the
-// reply (`norm`), `rec` — from its own record, with the same functions push() used, so a page can ship the calls it shows with
-// their bodies without the session ever being held whole. finish() builds the `analyzed` document without changing the fold,
-// so it can go on afterwards (a session that grew is folded on from where it stopped).
+// ONE AT A TIME. push() assembles the call — its lane, the cache-break and prefix chain against its lane's previous call, its
+// composition, wire facts and usage — and keeps it in its META form: no blocks, `paged_out`, `rec` and `norm` reduced to what the
+// timeline reads. The record's body is let go when push() returns; what the fold holds is the calls' meta, each lane's previous
+// call (its blocks are the next call's baseline) and the locators a cross-record context (D37 ②) is stitched by. bodyOf() gives
+// one call its blocks back — `flat` (metadata + a text_ref per block), `nonBlockKeys`, the reply (`norm`), `rec` — from its own
+// record, with the same functions push() used, so a page can ship the calls it shows with their bodies without the session ever
+// being held whole. finish() builds the `analyzed` document without changing what the fold derived, so it can go on afterwards.
+//
+// LANE BY LANE. A record is written when its call ends, so the calls of lanes running side by side (subagents, a long main call)
+// arrive out of step order. Everything a call is assembled against is its own lane's (analyze.mjs createAnalyzer), so a record goes
+// on its lane whatever the other lanes hold; what orders the lanes against each other — the global step index `gi`, the stream
+// ids — is given at finish(), by step order (analyze.mjs stepOrder). A record that sorts before its lane's last call folds that
+// lane again (relane: its records read back by id, `read(ids)` yielding them in the order asked), never the session. So the
+// document is the one a fold in step order gives, whatever order the records came in.
 //
 // SEVERAL WIRES (D37 ①: the wire format is per call — an auxiliary model, a provider template or a per-model protocol choice can
-// mix them). Each record goes to the fold of its own wire; every call carries the session's GLOBAL step index (the push order),
-// lanes of the same id merge, and `steps[gi]` is the call with that gi (the browser rehydrates by it). Records no dissector
-// claims are counted in `analyzed.unknown` and never rendered (3.1:58).
+// mix them). Each record goes to the fold of its own wire; every call carries the session's GLOBAL step index, lanes of the same
+// id merge, and `steps[gi]` is the call with that gi (the browser rehydrates by it). Records no dissector claims are counted in
+// `analyzed.unknown` and never rendered (3.1:58).
 export function createAssembler({ read = null } = {}) {
   const folds = new Map(); // dissector object | 'analyzed' → its fold
-  const unknown = [], other = []; // the facts unknownSummary reads of records no fold takes (LLM calls / the rest)
-  const src = new WeakMap(); // call → the fold that assembled it
-  let gi = 0;
+  const unknown = [], other = []; // { at, facts }: what unknownSummary reads of records no fold takes (LLM calls / the rest)
+  const foldKey = (r) => {
+    let d = boardDissectorFor(r);
+    if (d && d.admits && !d.admits(r)) d = null; // a record of a known wire that is no call (e.g. a server push): counted
+    return d || (wireFormatOf(r) === 'anthropic' ? 'analyzed' : null);
+  };
+  const facts = (xs) => [...xs].sort((a, b) => stepOrder(a.at, b.at)).map((x) => x.facts);
+  let done = null; // the document of what has gone in so far, until the next push
+  function finish() {
+    if (!folds.size) return assembleUnknown(facts(unknown.length ? unknown : other)); // labelled, never faked
+    [...folds.values()].flatMap((f) => f.calls()).sort(byOrder).forEach((c, i) => { c.gi = i; });
+    const first = (v) => (v.steps.length ? v.steps[0].gi : Infinity);
+    const views = [...folds.values()].map((f) => f.finish()).sort((a, b) => first(a) - first(b));
+    const A = views.length === 1 ? views[0] : mergeViews(views);
+    if (unknown.length) A.unknown = unknownSummary(facts(unknown), true);
+    return A;
+  }
   return {
     push(r) {
       if (!r) return null;
-      let d = boardDissectorFor(r);
-      if (d && d.admits && !d.admits(r)) d = null; // a record of a known wire that is no call (e.g. a server push): counted
-      const key = d || (wireFormatOf(r) === 'anthropic' ? 'analyzed' : null);
-      if (!key) { (r.is_llm_call ? unknown : other).push(unknownFacts(r)); return null; }
+      done = null;
+      const key = foldKey(r);
+      if (!key) { (r.is_llm_call ? unknown : other).push({ at: orderOf(r), facts: unknownFacts(r) }); return null; }
       let f = folds.get(key);
       if (!f) folds.set(key, (f = key === 'analyzed' ? multiLaneFold(read) : flatLaneFold(key, read)));
-      const call = f.push(r, gi);
-      if (!call) return null;
-      gi++;
-      src.set(call, f);
-      return call;
+      return f.push(r);
     },
-    bodyOf(call, r) { return src.get(call).bodyOf(call, r); },
-    finish() {
-      if (!folds.size) return assembleUnknown(unknown.length ? unknown : other); // labelled, never faked
-      const views = [...folds.values()].map((f) => f.finish());
-      const A = views.length === 1 ? views[0] : mergeViews(views);
-      if (unknown.length) A.unknown = unknownSummary(unknown, true);
-      return A;
-    },
+    bodyOf: (call, r) => PLACE.get(call).fold.bodyOf(call, r),
+    finish: () => (done = done || finish()), // the same object until the next push: nothing downstream changes it
   };
+}
+// A call's place in step order (its record's ts_request and id; the global index is given by it at finish()) and the fold that
+// assembled it (which gives its body back), kept beside it.
+const PLACE = new WeakMap();
+const orderOf = (r) => ({ ts_request: r.ts_request, id: r.id });
+const placed = (call, r, fold) => { PLACE.set(call, { ...orderOf(r), fold }); return call; };
+const byOrder = (a, b) => stepOrder(PLACE.get(a), PLACE.get(b));
+// A record that sorts before its lane's last call: the lane — forgotten by the caller — goes in again, its records `ids` read back
+// in step order with `r` in its place. → r's call.
+function relane(ids, r, read, take) {
+  if (!read) throw new Error(`record ${r.id} sorts before calls already folded in its lane, and no reader can give that lane's records again`);
+  let mine = null, pending = true;
+  for (const x of read(ids)) {
+    if (pending && stepOrder(r, x) < 0) { mine = take(r); pending = false; }
+    take(x);
+  }
+  return pending ? take(r) : mine;
 }
 
 // The batch form: `records` (one session's, any order) folded whole. `opts.keepFlat(gi)` — RETENTION WINDOW: only the calls it
@@ -574,24 +614,35 @@ function multiLaneFold(read) {
   // Block keys: a lane re-sends its context every turn, so a block's per-text hash is asked once per lane call, not once per block
   // of every call. A lane remembers the keys of its last call only (a key text is a slice that keeps its whole text alive), so the
   // memo holds what each lane's baseline (`prev`) holds anyway, never the session's content.
-  const keysOf = new Map(); // lane (stream id) → text → key, for the blocks of its last call
-  const prev = new Map(); // lane (stream id) → { flat, chain } of the call that established the lane's cache baseline
-  function push(r, gi) {
-    const ctx = plans.context(r);
-    const call = an.push(hydrateForBoard(r, ctx), gi);
+  const keysOf = new Map(); // lane (the analyzer's stream) → text → key, for the blocks of its last call
+  const prev = new Map(); // lane → { flat, chain } of the call that established the lane's cache baseline
+  function push(r) {
+    const call = take(r);
     if (!call) return null;
+    const lane = an.laneOf(call), cs = lane.calls;
+    if (cs.length < 2 || byOrder(cs[cs.length - 2], call) < 0) return call;
+    const ids = cs.slice(0, -1).map((c) => c.id);
+    an.drop(lane); keysOf.delete(lane); prev.delete(lane);
+    return relane(ids, r, read, take);
+  }
+  function take(r) {
+    const ctx = plans.context(r);
+    const call = an.push(hydrateForBoard(r, ctx));
+    if (!call) return null;
+    placed(call, r, self);
+    const lane = an.laneOf(call);
     call.wire = wireOf(call.rec, 'anthropic', ctx); // cheap meta: rides on out-of-window calls too
     call.respRefs = respRefsOf(call.rec); // locators only (a few dozen bytes each), never the reply body
-    const was = keysOf.get(call.streamId), keys = new Map();
+    const was = keysOf.get(lane), keys = new Map();
     const flat = anthropicFlat(call.rec.request, { get: (t) => { const k = keys.get(t) ?? (was && was.get(t)); if (k !== undefined) keys.set(t, k); return k; }, set: (t, k) => keys.set(t, k) });
-    keysOf.set(call.streamId, keys);
+    keysOf.set(lane, keys);
     const u = call.norm.usage || {};
     // Bake NEUTRAL canonical usage (D18a Q1 / D24): the board frontend reads call.usage.{read,
     // create,fresh,out} — ZERO provider-native usage field names in the browser. Provider→canonical
     // mapping happens HERE (server-side normResp), so adding a harness never touches the frontend (AC-3).
     // Names track the 3.2 usage columns (cache_read / cache_write / input_uncached / output).
     call.usage = { read: u.cache_read_input_tokens || 0, create: u.cache_creation_input_tokens || 0, fresh: u.input_tokens || 0, out: u.output_tokens || 0 };
-    const p = prev.get(call.streamId) || null;
+    const p = prev.get(lane) || null;
     // cacheBreak with prevFlat=null on the first call — matches the demo render's own call site.
     const brk = cacheBreak(p && p.flat, flat, { compaction: !!call.compaction });
     // D17④: REAL prefix SHA-256 over verbatim bytes (not the demo's 32-bit structural proxy). Two calls'
@@ -615,7 +666,7 @@ function multiLaneFold(read) {
     // through it makes the NEXT successful call diff against context that was never cached — the
     // board then reports a cache break that did not happen, with a cause and a fix hint. analyze()
     // marks this as `chainsPrefix`; undefined (older shapes) means "assume it chained".
-    if (call.chainsPrefix !== false) prev.set(call.streamId, { flat, chain });
+    if (call.chainsPrefix !== false) prev.set(lane, { flat, chain });
     // COMPOSITION IS TIER A — computed HERE, while the blocks are still in hand: nine integers that ride on every call
     // whether or not its body does, so the timeline draws the WHOLE session rather than hatching everything outside the
     // current page as "composition unknown".
@@ -635,5 +686,6 @@ function multiLaneFold(read) {
     const flat = anthropicFlat(h.request, new Map());
     return { flat: ctx ? withLocatedRefs(flat, ctx.locate, new Map()) : withRefs(flat, h), nonBlockKeys: nonBlockKeysOf(h, 'anthropic'), rec: slimRec(h), norm: normResp(h) };
   }
-  return { push, bodyOf, finish() { const A = an.finish(); A.provider = 'cc'; return A; } };
+  const self = { push, bodyOf, calls: an.calls, finish() { const A = an.finish(); A.provider = 'cc'; return A; } };
+  return self;
 }
