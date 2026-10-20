@@ -120,3 +120,14 @@
 @media (max-width: 899px) {
   .lr .lx{grid-column:2 / 6;}
 }
+/* phone: name and control share the first line, the sentence and the right column each take a full line under them;
+   the expand's labels sit above their values */
+@media (max-width: 599px) {
+  .crow-t,.exp{grid-template-columns:22px minmax(0,1fr) auto;}
+  .crow .nm{grid-column:2;grid-row:1;}
+  .crow .ctl{grid-column:3;grid-row:1;}
+  .crow .stt,.crow .last{grid-column:2 / 4;text-align:left;}
+  .exp dt,.exp dd{grid-column:2 / 4;}
+  .exp dd{min-width:0;overflow-wrap:anywhere;}
+  .exp-tech{margin-left:0;}
+}

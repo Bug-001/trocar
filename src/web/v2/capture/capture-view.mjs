@@ -30,11 +30,13 @@ const gutOf = (cls, fine) => (cls === 'bad' ? lamp('bad') : cls === 'warn' ? lam
 
 // the leading state word carries the severity colour; the rest of the sentence stays ink (visual doc). The head is the
 // text up to the first ':' or ' ·' — the mark of a 采集服务 sentence, or 「没在采」/「可能连不上网」 of an agent's.
+// A row's sentence starts with a capital (the verdict's own text otherwise unchanged; the 总览 page uses it mid-line).
 const leadHtml = (text, cls) => {
-  if (cls !== 'bad' && cls !== 'warn') return esc(text)
-  const m = /^(.*?)(?::| · )/.exec(String(text))
-  const head = m ? m[1] : String(text)
-  return `<span class="sw">${esc(head)}</span>${esc(String(text).slice(head.length))}`
+  const s = String(text).replace(/\p{L}/u, (c) => c.toUpperCase())
+  if (cls !== 'bad' && cls !== 'warn') return esc(s)
+  const m = /^(.*?)(?::| · )/.exec(s)
+  const head = m ? m[1] : s
+  return `<span class="sw">${esc(head)}</span>${esc(s.slice(head.length))}`
 }
 
 // ── the commands (1.6's table) — only ever inside 技术细节 ─────────────────────────────────────────────────────────
@@ -113,16 +115,18 @@ export function serviceRowHtml(h, v, { open = false } = {}) {
     if (d.running === true && d.responding === true) failingLine = '<p>The capture service is running</p>'
     else if (!daemonDown) failingLine = '<p>The capture service state is unknown</p>'
   }
-  // the failure groups of the last 24 h → the log; zero groups draws nothing
-  const groups = logRowsOf(h).rows.length // the one count (R15): the log's own rows
-  const failLink = groups ? `<a href="#/capture/log">${groups} failure group${groups === 1 ? '' : 's'} in the last 24 hours · capture log ›</a>` : ''
+  // the log, linked once (1.9 R15): a failing sentence already carries the group count, so the sentence itself is the link;
+  // otherwise a plain link without a number; an empty log draws nothing
+  const logged = logRowsOf(h).rows.length > 0
+  const lead = v.state === 'failing' && logged ? `<a href="#/capture/log">${leadHtml(v.text, v.cls)}</a>` : leadHtml(v.text, v.cls)
+  const logLink = logged && v.state !== 'failing' ? '<a href="#/capture/log">capture log ›</a>' : ''
   const lingerStop = h && h.linger === false ? '<p>Capture stops at logout</p>' : ''
   return `<div class="crow" data-h="*service">` +
     `<div class="crow-t"><span class="gut">${gutOf(v.cls, v.state === 'ok')}</span>` +
     `<button type="button" class="nm cap-nm" data-caprow="cap-svc" aria-expanded="${open}" aria-controls="cap-svc-x"><span class="chev" aria-hidden="true">${open ? '▾' : '▸'}</span>Capture service</button>` +
     '<span class="des"></span>' +
-    `<span class="stt stt-${esc(v.cls)}"><p class="lead">${leadHtml(v.text, v.cls)}</p>${conds}${failingLine}</span>` +
-    `<span class="last">${failLink}${lingerStop}</span><span class="ctl"></span></div>` +
+    `<span class="stt stt-${esc(v.cls)}"><p class="lead">${lead}</p>${conds}${failingLine}</span>` +
+    `<span class="last">${logLink}${lingerStop}</span><span class="ctl"></span></div>` +
     `<div class="cexp" id="cap-svc-x"${open ? '' : ' hidden'}>${serviceTechHtml(h, v)}</div></div>`
 }
 
@@ -163,7 +167,9 @@ export const rowOrder = (verdicts) => [...verdicts].sort((a, b) => a.tier - b.ti
 
 export function agentRowHtml(row, h, { open = false, ov = null, control = null, ui = null } = {}) {
   const name = harnessName(row.harness)
-  const desired = (row.desired === 'on' || row.desired === 'off') ? SWITCH_WORD[row.desired] : ''
+  // the desired state as text only where the row draws no control (a switch already says it; 1.9 期望态)
+  const ctl = controlFor({ control, status: h }, row.harness)
+  const desired = !ctl.kind && (row.desired === 'on' || row.desired === 'off') ? SWITCH_WORD[row.desired] : ''
   const last = row.lastCaptured
     ? `<a href="#/sessions?h=${esc(row.harness)}" title="${esc(fmtStamp(row.lastCaptured))}">captured ${esc(relCap(row.lastCaptured))} ›</a>`
     : ov ? '<span>not captured in the last 24 hours</span>' : '' // the `overview` document's harnesses[].last_ts (1.9); unread → nothing is claimed
@@ -176,7 +182,7 @@ export function agentRowHtml(row, h, { open = false, ov = null, control = null, 
     `<span class="des">${esc(desired)}</span>` +
     `<span class="stt stt-${esc(row.cls)}${row.tier === AGENT_TIER.off || row.wait ? ' dim' : ''}"><p class="lead">${leadHtml(row.text, row.cls)}</p></span>` +
     `<span class="last">${last}${fail}</span>` +
-    `<span class="ctl">${controlHtml(controlFor({ control, status: h }, row.harness), (ui && ui.get(row.harness)) || {})}</span></div>` +
+    `<span class="ctl">${controlHtml(ctl, (ui && ui.get(row.harness)) || {})}</span></div>` +
     `<div class="cexp" id="cap-${esc(row.harness)}-x"${open ? '' : ' hidden'}>${expandHtml(row, h, { problem })}</div></div>`
 }
 
@@ -326,11 +332,11 @@ export function pageHtml(h, v, { openByReader = null, ov = null, control = null,
   return `<section class="crows" aria-label="agent">${rows.join('')}${tableFootHtml(h, verdicts)}</section>` + changesHtml(h)
 }
 
-// ── the two table-foot lines of the honest empty cases (1.9 §Edge cases) ────────────────────────────────────────
+// ── the table foot of the honest empty case (1.9 §Edge cases 表空) ───────────────────────────────────────────────
+// not answered yet, or could not be read: whether any agent is set up is unknown; an unreadable install record is said by
+// the changes block, so the foot does not claim the empty table on top of it
 export function tableFootHtml(h, verdicts) {
-  if (h == null || h.unreadable != null) return '' // not answered yet, or could not be read: whether any agent was recorded is unknown
-  if (!verdicts.length) {
-    return '<p class="capfoot">The capture service recorded no agent in the last 24 hours</p>'
-  }
-  return ''
+  if (h == null || h.unreadable != null || verdicts.length) return ''
+  if (list(h.errors).some((e) => e && e.where === ERR_WHERE.manifest)) return ''
+  return '<p class="capfoot">No agent is set up for capture on this computer</p>'
 }
