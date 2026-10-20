@@ -7,7 +7,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
-import { factsOfPid, cwdOf } from '../../../../src/collector/arch/darwin/procinfo.mjs'
+import { factsOfPid, cwdOf, parentOf } from '../../../../src/collector/arch/darwin/procinfo.mjs'
+import { psLocale } from '../../../off/fixtures/darwin-tools.mjs'
 
 const HELPER = '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper'
 const PS = (args) => ({ status: 0, stdout: `  42     1   501 Claude Helper Mon Oct  5 17:00:00 2026     ${args}\n`, stderr: '' })
@@ -30,7 +31,7 @@ test('the helper names the real executable where ps has a bare argv[0] (a PATH l
   const { f, asked } = facts(PROCENV('/usr/local/bin/claude'), 'claude --resume')
   assert.equal(f.exe, '/usr/local/bin/claude', 'a bare argv[0] is replaced by the file the kernel exec\'d')
   assert.deepEqual(f.argv, ['claude', '--resume'])
-  assert.deepEqual(asked, [['ps', 'C'], ['procenv', undefined]], 'ps in C (its dates); the helper in the environment as given — no locale rewrites a path it prints')
+  assert.deepEqual(asked.map(([t, l]) => (t === 'procenv' ? [t, l] : t)), ['ps', ['procenv', undefined]], 'the helper in the environment as given — no locale rewrites a path it prints')
 })
 
 test('a Helper path with spaces stays whole — the helper names it, and argv keeps it as one word', () => {
@@ -57,4 +58,21 @@ test('the facts ask and the cwd ask are ONE helper read per process life (the ex
   assert.equal(f.exe, '/usr/local/bin/claude')
   assert.equal(cwdOf(42, { exec: run, cache, startedAt: f.startedAt }), '/Users/me/my project')
   assert.deepEqual(asked, ['ps', 'procenv'], 'the cwd is already in the answer the exe came from')
+})
+
+test('every ps of the targeted asks reads the same whatever the user\'s locale says: lstart in its English words, a non-ASCII path whole — a ps that honours the locale the way the real one does (spec 4.9)', () => {
+  const exe = '/Users/张三/测 试/claude', at = new Date(2026, 9, 7, 4, 27, 0), up = new Date(2026, 9, 7, 4, 0, 0)
+  const run = (file, a, o) => {
+    if (path.basename(file) === 'procenv') return KILLED // another user's process: the comm fallback names it
+    const { lstart, text } = psLocale(o.env), cols = a[a.length - 1]
+    if (cols === 'comm=') return { status: 0, stdout: `${text(exe)}\n`, stderr: '' }
+    if (cols === 'ppid=,lstart=') return { status: 0, stdout: a[1] === '42' ? `  100 ${lstart(at)}\n` : `    1 ${lstart(up)}\n`, stderr: '' }
+    return { status: 0, stdout: `  42   100   501 ${text(exe).slice(0, 16)} ${lstart(at)}     ${text(`${exe} --resume 会话`)}\n`, stderr: '' }
+  }
+  for (const env of [{}, { LANG: 'zh_CN.UTF-8' }, { LC_ALL: 'C' }, { LC_ALL: 'ja_JP.UTF-8', LC_CTYPE: 'C' }, { LC_TIME: 'zh_CN.UTF-8', LC_CTYPE: 'POSIX' }]) {
+    const f = factsOfPid(42, { exec: run, env, cache: new Map() })
+    assert.equal(f && f.exe, exe, JSON.stringify(env))
+    assert.equal(f.startedAt, at.getTime(), JSON.stringify(env))
+    assert.deepEqual(parentOf(42, { exec: run, env, cache: new Map() }), { ppid: 100, startedAt: up.getTime() }, JSON.stringify(env))
+  }
 })

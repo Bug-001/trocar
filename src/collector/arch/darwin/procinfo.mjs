@@ -36,11 +36,11 @@
 // column name asks `ps` for no header line; the command column is LAST so this kernel's `ps` does not cap the line at 128 columns and cut
 // the command line mid-word (measured) — and `comm` is asked ALONE for the same reason, as any other column after it cuts it to 16
 // characters. Everything that touches the machine is injected: `exec` (the runner, spawnSync-shaped —
-// execTool's `run`; a test injects one and nothing real runs), `env` (LC_ALL=C is added here: `ps` prints dates in the user's language,
-// and under LC_ALL=zh_CN.UTF-8 the five words of lstart are no longer "Mon Oct  8 17:00:00 2026"; the helper prints path bytes as they
-// are, so no locale touches it).
+// execTool's `run`; a test injects one and nothing real runs), `env` (every `ps` runs under src/off/proc.mjs psEnv — lstart's English words
+// and the path bytes as they are, where a C locale prints each byte >= 0x80 as `M-x`; the helper prints path bytes as they are, so no locale
+// touches it).
 import { execTool } from '../../../off/exec.mjs'
-import { psArgv } from '../../../off/proc.mjs'
+import { psArgv, psEnv } from '../../../off/proc.mjs'
 import { NATIVE, nativePath } from './native.mjs'
 
 // The runner may be execTool's spawnSync shape (a test's, the CLI's) or src/off/exec.mjs runAsync (the daemon's accept path, a helper must not
@@ -54,8 +54,6 @@ export const PS_TIMEOUT_MS = 2000
 /** A ps row: three integers, the accounting name (any characters — it is bounded by lstart's fixed shape to its right), the five words of
  *  lstart, and the command line to the end of the line. The same shape the old table read. */
 const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*?)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(.*)$/
-// `ps` prints dates in the user's language: the C locale gives the same five words on every machine (see the file header).
-const psEnv = (env) => ({ ...env, LC_ALL: 'C' })
 
 /** The REAL executable of a process — the one source that answers it: `ps` repeats the command as invoked (a bare argv[0] for a
  *  PATH-launched agent, a path cut at its first space under `Claude Helper.app`), and a form whose patterns live in the path can never

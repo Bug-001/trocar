@@ -170,11 +170,18 @@ const then = (r, f) => (r && typeof r.then === 'function' ? r.then(f) : f(r))
 // An answer longer than this is not read at all (code null), never read in part.
 const TABLE_MAX_BUFFER = 64 * 1024 * 1024
 
-// `ps` prints dates in the user's language: under LC_ALL=zh_CN.UTF-8 or ja_JP.UTF-8 the five words of `lstart` are no longer "Wed Oct  7 04:27:00 2026" and every row
-// failed to parse — no error, just an empty table, which `off` read as "nobody is alive" (audit rule-b 2). The C locale gives the same words on every machine.
-const psEnv = (env = process.env) => ({ ...env, LC_ALL: 'C' })
+/** The environment of every `ps` trocar runs on macOS (this one, and the collector's targeted asks in arch/darwin/procinfo.mjs) — one locale, two
+ *  facts it fixes (measured on a macOS machine, macOS 27, 2026-10-21; spec 4.9 「持有者的进程表」):
+ *  · the TIME category: `ps` prints dates in the user's language — under zh_CN.UTF-8 or ja_JP.UTF-8 the five words of `lstart` are no longer
+ *    "Wed Oct  7 04:27:00 2026" and every row failed to parse, which `off` read as "nobody is alive" (audit rule-b 2). en_US's are C's words.
+ *  · the CHARACTER TYPE: a C one makes `ps` print every byte >= 0x80 as vis(3) does, with no backslash — `测 试/claude` came back as
+ *    `M-fM-5M^K M-hM-/M^U/claude`, a path that does not exist, so a process installed under a non-ASCII directory was named wrongly
+ *    (and the daemon, a LaunchAgent, has no locale at all: C). A UTF-8 one prints the bytes as they are; APFS names are valid UTF-8.
+ *  LC_ALL outranks every other locale variable of the user's. en_US.UTF-8 and not C.UTF-8: not every macOS has the latter, and a locale
+ *  `ps` cannot set is C again, silently. */
+export const psEnv = (env = process.env) => ({ ...env, LC_ALL: 'en_US.UTF-8' })
 
-/** {start_time, boot_id} of a live process where there is no /proc (macOS): `ps -o lstart= -p <pid>` in the C locale, the blanks collapsed ("Wed Oct 7 04:27:00 2026"),
+/** {start_time, boot_id} of a live process where there is no /proc (macOS): `ps -o lstart= -p <pid>` under psEnv, the blanks collapsed ("Wed Oct 7 04:27:00 2026"),
  *  and the seconds of `sysctl -n kern.boottime` as the boot id (lstart has a one-second grain, the boot time tells a reboot apart); both null when `ps`
  *  does not know the pid, boot_id null when sysctl does not answer. `exec` is the injected runner (execTool). */
 export function psIdentity(pid, { exec = null, env = process.env } = {}) {
@@ -223,7 +230,7 @@ function procsOfLinux({ uid, root }) {
 // `ps -Axo pid=,ppid=,uid=,lstart=,command=`: lstart is five words ("Wed Oct  7 04:27:00 2026", local time), the command line joined by spaces — its
 // argument boundaries are lost, so argv is that line split on whitespace (a path with a space in it splits; `cmdline` keeps the line as it came), and the
 // environment of another process cannot be read on macOS at all (`env` null, `envRead: false`: the OS's rule, not a failed read — 4.6 「判活快照」).
-// Run in the C locale (psEnv). A table with lines in it of which not one parses is an error, not an empty table: it would read as "nobody is alive" (D38;
+// Run under psEnv (lstart's English words, path bytes as they are). A table with lines in it of which not one parses is an error, not an empty table: it would read as "nobody is alive" (D38;
 // the same failure as a localized `ps`, whatever else changes the format).
 const PS_ROW = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(\S.*)$/
 // The executable of each process is not in that line: `ps` repeats the command as invoked — a bare word for an agent started through PATH, a path cut at its
