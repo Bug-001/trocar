@@ -168,27 +168,28 @@ export function failureSentence(g) {
 // While the page is visible: one read every CAPH_MS, never two in flight; hidden: no reads, and one read the moment the
 // page is visible again. Every answer — including a failure — goes through capHealthPatch into the store (a failure keeps
 // the last good answer, so the page keeps showing it under its 截至 mark). onAnswer(s) runs after each store write, on the
-// caller's clock. → { stop(), refresh() } — refresh() reads at once (after a write), still never two in flight.
+// caller's clock. → { stop(), refresh() } — refresh() reads at once (after a write), still never two in flight: a refresh
+// that lands while a read is out may be answered from before the write, so one more read starts the moment that answer lands.
 export function pollCaptureHealth({ api, store, doc = typeof document === 'undefined' ? null : document, onAnswer = null }) {
-  let timer = 0, inFlight = false, stopped = false
+  let timer = 0, inFlight = false, stopped = false, again = false
   const schedule = () => { if (!stopped) { clearTimeout(timer); timer = setTimeout(tick, CAPH_MS) } }
   const tick = async () => {
     if (stopped || inFlight) return (stopped ? undefined : schedule())
     if (doc && doc.hidden) return schedule() // hidden: no read; visibilitychange fires the read on return
-    inFlight = true
+    inFlight = true; again = false
     let r
     try { r = await api.get('status') } catch (e) { r = { ok: false, error: String((e && e.message) || e) } }
     inFlight = false
     if (stopped) return
     store.set(capHealthPatch(r, api.now()))
     if (onAnswer) { try { onAnswer(store.get()) } catch { /* a listener that throws must not stop the poll */ } }
-    schedule()
+    if (again) tick(); else schedule()
   }
   const onVis = () => { if (!stopped && doc && !doc.hidden) { clearTimeout(timer); tick() } }
   if (doc && doc.addEventListener) doc.addEventListener('visibilitychange', onVis)
   tick() // the first read at once
   return {
-    refresh() { if (!stopped && !inFlight) { clearTimeout(timer); tick() } },
+    refresh() { if (stopped) return; if (inFlight) { again = true; return } clearTimeout(timer); tick() },
     stop() {
       stopped = true; clearTimeout(timer)
       if (doc && doc.removeEventListener) doc.removeEventListener('visibilitychange', onVis)

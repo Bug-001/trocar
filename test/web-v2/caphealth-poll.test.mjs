@@ -40,6 +40,20 @@ test('the period is 4.4\'s: visible → one read per period; hidden → none; vi
   await w.flush(); p.stop()
 })
 
+test('a refresh while a read is out (it may answer from before the write) → one more read the moment that answer lands, still one in flight', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'] }); t.after(() => mock.timers.reset())
+  const w = world()
+  const p = pollCaptureHealth({ api: w.api, store: w.store, doc: w.doc })
+  assert.equal(w.reads, 1)
+  p.refresh(); p.refresh()
+  assert.equal(w.reads, 1)
+  await w.flush() // the first answer lands → the follow-up read starts with no timer advance, and its answer lands too
+  assert.equal(w.reads, 2); assert.equal(w.maxInFlight, 1)
+  mock.timers.tick(PERIOD - 1); assert.equal(w.reads, 2) // then the ordinary period, no third read early
+  mock.timers.tick(1); assert.equal(w.reads, 3)
+  await w.flush(); p.stop()
+})
+
 test('two missed periods → captureVerdict says stale', async (t) => {
   mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1e12 }); t.after(() => mock.timers.reset())
   let fail = false
