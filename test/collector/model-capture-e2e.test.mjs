@@ -274,7 +274,7 @@ for (const platform of ['darwin', 'win32']) {
         // the real GET /status of the model daemon lists the door's verdict for the process life it judged
         const ep = controlEndpointFor({ platform, dir: w.dir, env: w.env })
         const reply = await ep.request({ socketPath: ep.socketPath })
-        assert.deepEqual((reply.agents || []).filter((r) => r.pid === PID).map((r) => [r.agent, r.trusted, new Date(r.start).getTime()]), [['codex', true, a.start]], JSON.stringify(reply.agents))
+        assert.deepEqual((reply.agents || []).filter((r) => r.pid === PID).map((r) => [r.agent, r.trusted, r.decrypt, new Date(r.start).getTime()]), [['codex', true, true, a.start]], JSON.stringify(reply.agents))
         // the platform's own network facts under the topology, its OS reads faked: the form's verdict is status's, never judged again
         const archFacts = (live) => platform === 'win32'
           ? (ctx) => gatherWin32Facts(ctx, { helper: { call: async (verb) => (verb === 'ps' ? { sessionId: 1, procs: three.filter((p) => live.includes(p.pid)).map((p) => ({ ...p, ppid: 1, name: a.name, exe, cmdline: exe, cmdlineState: 'ok', sessionId: 1, sameUser: true, integrity: 'medium', tokenDenied: false })) } : verb === 'tcp-table' ? { rows: [] } : Promise.reject(Object.assign(new Error('not faked'), { code: 'not-faked' }))) }, readSystemProxy: async () => ({ ok: false, reason: 'absent' }) })

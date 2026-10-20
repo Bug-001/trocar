@@ -305,8 +305,8 @@ test('an upstream that refuses the connection: flows/ error names the upstream s
   const port = await listen(engine)
   assert.equal(await talk(port, trocarCa.certPem), 'closed')
   await within(Promise.all(h.direct), 'flow finalized'); engine.close(); await h.close()
-  // decrypt was decided on the ClientHello; the engine was in the upstream TLS wait when the dial failed (RFC 4.6 §记录 连接行怎么落码)
-  assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured, h.flows[0].error.type, h.flows[0].error.side], ['decrypt', 'error', 'ECONNREFUSED', 'upstream'])
+  // decrypt was decided on the ClientHello; the upstream's TCP connect was still pending when it failed: the wait is the connect (RFC 4.6 §记录 连接行怎么落码)
+  assert.deepEqual([h.flows[0].decision, h.flows[0].not_captured, h.flows[0].error.type, h.flows[0].error.side, h.flows[0].error.wait?.phase], ['decrypt', 'error', 'ECONNREFUSED', 'upstream', 'connect'])
 })
 
 test('inside a CONNECT tunnel an unverifiable upstream closes that one flow (no prelude replay); the retry is spliced (W12, invariant 1)', async () => {

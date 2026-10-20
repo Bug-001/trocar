@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { FAILURE_WORDS, failureBrief, failureWord } from '../../src/cli/words.mjs'
+import { FAILURE_WORDS, briefText, failureBrief, failureWord } from '../../src/cli/words.mjs'
 import * as C from '../../src/health/codes.mjs'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -20,6 +20,7 @@ function producerPairs() {
     ...C.ROUTE_FAILURE_CODES.map((c) => [null, c]),
     ...C.NET_FAILURE_CODES.map((c) => ['netenv', c]),
     ...C.NOT_CAPTURED_FAILURE.map((c) => ['flow', c]), // a connection row's group (src/cli/status.mjs failuresOf)
+    ...[...C.NOT_CAPTURED_EXPECTED, ...Object.values(C.NOT_CAPTURED_BY_DESIGN).flat()].map((c) => ['flow', c]), // an expected group (status.mjs, keyed by expectedKey): the board's foot and `--failures`' Expected
     ...C.FAILURE_EVENTS.map((e) => [e, e]), // a failure event with no code: the group's where and code are the event
     ...C.RAW_JOURNAL_FAILURES.map((c) => ['raw', c]),
     ...C.SEGMENT_PROBLEMS.map((c) => ['raw', c]),
@@ -33,6 +34,11 @@ test('every producer code reads as a sentence: failureBrief is the catalog word,
     if (!w || failureBrief({ where, code, reason: 'RAW-REASON' }) !== w) bare.push(`${where}/${code}`)
   }
   assert.deepEqual(bare, [])
+})
+
+test('a reason cut to its head stays ASCII and within the width (1.6 §1.1 ⑦: the old Windows console prints no other symbol)', () => {
+  const t = briefText('x'.repeat(300), 100)
+  assert.ok(/^[\x20-\x7e]*$/.test(t) && t.length <= 100, t)
 })
 
 test('an unknown code is never hidden: it falls back to where/code with the reason', () => {

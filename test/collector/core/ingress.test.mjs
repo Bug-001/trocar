@@ -714,6 +714,35 @@ test('W15 step-aside whose client is gone when the proxy answers the second prel
   await until(() => L.engine.stats().active === 0, 'the flow to finish'); assert.equal(L.engine.stats().spliced, 0, 'nothing was spliced: not counted as passed through')
 })
 
+// The second prelude of a step-aside is one wait: a slow one is one upstream-slow event (4.8 §5.2), the flow's, with its flow_id
+test('W15 step-aside whose second proxy prelude is slow: one upstream-slow event, carrying the flow', T, async (t) => {
+  const o = await origin(t), proxy = await twoStepProxy(t, o.port, 'hold')
+  const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } }, timing: { upstreamSlowMs: 60 } })
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+  const agent = talk(sock, privCa.certPem)
+  await until(() => proxy.conns.length === 2 && proxy.conns[1].release, 'the second prelude to reach the proxy', 4000)
+  await sleep(300)
+  sock.destroy(); await agent; proxy.conns[1].release(); await L.settled(1)
+  const slow = L.failures.filter((f) => f.code === 'upstream-slow')
+  assert.deepEqual(slow.map((f) => [f.phase, f.flow_id]), [['proxy-reply', L.flows[0].flow_id]], JSON.stringify(slow))
+})
+
+// A reset off the wire on the second dial is the OS's ECONNRESET on the row, not a close (wentBy reads a reset without `syscall` as Node's invented one)
+test('W15 step-aside whose second dial to the proxy is reset by the OS: the row keeps ECONNRESET on the upstream side', T, async (t) => {
+  const o = await origin(t), proxy = await twoStepProxy(t, o.port, 'hold')
+  let toProxy = 0
+  const connectUpstream = (d) => {
+    const s = net.connect(d.port, d.address)
+    if (d.port === proxy.port && ++toProxy === 2) process.nextTick(() => s.destroy(Object.assign(new Error('connect ECONNRESET'), { code: 'ECONNRESET', syscall: 'connect' })))
+    return s
+  }
+  const L = await lab(t, { meta: { decrypt: true, upstream: { kind: 'http', host: '127.0.0.1', port: proxy.port } }, connectUpstream })
+  const { sock } = await tunnel(L.ingressPort, `127.0.0.1:${o.port}`)
+  assert.equal(await talk(sock, privCa.certPem), 'closed'); await L.settled(1)
+  assert.deepEqual([L.flows[0].decision, L.flows[0].not_captured, L.flows[0].error.type, L.flows[0].error.side], ['splice', 'upstream-cert', 'ECONNRESET', 'upstream'])
+  assert.deepEqual(checkRecord(L.flows[0]), [])
+})
+
 test('W15 step-aside over an upstream that carries the user\'s credentials: the flow is closed, no second credentialed connection is opened', T, async (t) => {
   const o = await origin(t)
   for (const kind of ['connect', 'socks5']) {

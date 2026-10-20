@@ -53,8 +53,9 @@ test('real kernel: a client that spawns children while its connections are answe
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
+  // N = 200: the old resolver (749e588c^) misses about 1 in 70-100 here, so 60 let a revert through about one run in three (measured 2026-10-21); 200 is red every run in ~1.5 s
   // the agent's start-up shape (a macOS machine 2026-10-21): API connections racing the children it spawns (git, rg, shells), each holding a CLOEXEC copy of every fd until exec
-  const N = 60
+  const N = 200
   const client = `const net = require('net'), { spawn } = require('child_process'); let stop = false, n = 0;
     (function churn() { if (stop) return; for (let i = 0; i < 3; i++) spawn('/usr/bin/true', [], { stdio: 'ignore' }).on('error', () => {}); setTimeout(churn, 2) })();
     (function one() { if (n++ >= ${N}) { stop = true; return } const s = net.connect(${server.address().port}, '127.0.0.1', () => s.write('CONNECT x:443 HTTP/1.1\\r\\n\\r\\n')); s.on('data', () => { s.destroy(); one() }); s.on('error', () => one()) })();

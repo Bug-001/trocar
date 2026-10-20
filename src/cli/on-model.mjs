@@ -106,7 +106,8 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
   const closeProcs = await primeProcQuestions({ platform: os, dir, env, fs, ...(deps.daemonReader !== undefined ? { reader: deps.daemonReader } : {}) })
   try {
   let lock
-  try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) { io.err(`trocar on: ${e.message}`); return EXIT.incomplete } throw e }
+  // another command holds the lock: nothing was written, and the run says so like every failed run — a result line in flows/ and its receipt (1.6 §1)
+  try { lock = await acquireOpLock({ file: opLockFile(home), waitMs: deps.lockWaitMs ?? 10_000, fs }) } catch (e) { if (e && e.code === LOCK_BUSY) return done(receiptOf({ ...plan, routes: [], problems: [errText(e)], exit: EXIT.incomplete }, { undo: null }), EXIT.incomplete); throw e }
   try {
     const up = await ensureDaemonUp({ osName: os, dir, env, fs, unit, put, ...(deps.sleep ? { pause: deps.sleep } : {}) })
     const r = up.up ? await turnOnModel(args) : { ...plan, routes: [], problems: up.problems.length ? up.problems : up.notes, exit: EXIT.incomplete }
@@ -114,6 +115,9 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
     const b = setupBlocked(r)
     return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? r.on : [])
+  } catch (e) { // a throw under the lock is a failed run too: its result line, then the error goes on (what turned on before it is not known: none claimed)
+    put({ event: 'install-note', where: 'install', kind: 'result', outcome: 'failed', harnesses: [], refused: [], reason: `on did not finish: ${errText(e)}` })
+    throw e
   } finally { lock.release() }
   } finally { closeProcs() }
 }

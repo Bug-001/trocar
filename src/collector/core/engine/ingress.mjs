@@ -370,15 +370,16 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     const credentialed = !!up.auth
     // a direct upstream is redialled as the transparent door does it (a connecting socket, at once); a proxy needs its prelude again (a Promise)
     const redial = credentialed ? undefined : (up.kind || 'direct') === 'direct' ? () => connectUpstream({ address: o.target.host, port: o.target.port }) : async () => {
-      const x = await dialUpstream(up, o.target, () => {})
-      if (!x.ok) throw Object.assign(new Error(x.kind === 'refused' ? `the upstream refused the second connection (${x.reason})` : x.error.message), { code: x.kind === 'refused' ? 'proxy-refused' : x.error.type })
+      const x = await dialUpstream(up, o.target, () => {}, { slow: false }) // the flow's own wait (flow.mjs waitFor) records a slow second prelude, once
+      // the OS's `syscall` goes along: wentBy tells a reset off the wire (kept as ECONNRESET) from Node's invented one (a close) by it
+      if (!x.ok) throw Object.assign(new Error(x.kind === 'refused' ? `the upstream refused the second connection (${x.reason})` : x.error.message), { code: x.kind === 'refused' ? 'proxy-refused' : x.error.type, ...(x.syscall ? { syscall: x.syscall } : {}) })
       if (x.rest.length) x.sock.unshift(x.rest)
       return x.sock
     }
     handleFlow(socket, { ...base, upstream: { ...shown, ...(d.reply != null ? { reply: d.reply } : {}), credentialed }, wire: { up: w.up, down: w.down } }, { upstream: d.sock, redial })
   }
 
-  async function dialUpstream(up, target, track) {
+  async function dialUpstream(up, target, track, { slow: watchSlow = true } = {}) {
     const kind = up.kind || 'direct'
     // `proxy: true` marks a failure of the door's upstream itself (every connection of the door fails the same way), as opposed to one target (4.8 W73)
     if (!['direct', 'http', 'socks5'].includes(kind)) return { ok: false, kind: 'unreachable', proxy: true, error: { type: 'unsupported_upstream', message: `the upstream kind ${JSON.stringify(printable(kind))} is not one the ingress dials (direct, http, socks5)` } }
@@ -386,7 +387,7 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     // Waiting on the user's proxy has no time limit (D31: cutting the agent because a proxy is slow would break it), but it is not silent either (D38):
     // once, past upstreamSlowMs, the same upstream-slow event the flow raises for the waits it owns (flow.mjs waitFor). No flow exists yet, so no flow_id.
     let slow = null
-    if (kind !== 'direct') {
+    if (kind !== 'direct' && watchSlow) {
       const ms = timing.upstreamSlowMs ?? 5000, t0 = Date.now()
       slow = setTimeout(() => { slow = null; const waited = Math.max(ms, Date.now() - t0); failure({ code: 'upstream-slow', host: target.host, phase: 'proxy-reply', waited_ms: waited, reason: `${target.host} has not answered the proxy request for ${waited} ms; still waiting` }) }, ms) // a timer can fire a ms early
       if (slow.unref) slow.unref()
@@ -394,10 +395,11 @@ export function createIngress({ token, lookupIngress, handleFlow, connectUpstrea
     try {
       let sock
       const viaProxy = kind !== 'direct' // a direct dial reaches the target itself: its failure is that one host's, not the door's upstream
-      try { sock = connectUpstream(to) } catch (e) { return { ok: false, kind: 'unreachable', proxy: viaProxy, error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
+      const failed = (e) => ({ ok: false, kind: 'unreachable', proxy: viaProxy, ...(e && e.syscall ? { syscall: e.syscall } : {}), error: { type: e.code || 'upstream_error', message: msgOf(e) } })
+      try { sock = connectUpstream(to) } catch (e) { return failed(e) }
       track(sock)
       sock.on('error', () => {}) // the handshake owns the outcome; a late error must not be uncaught
-      try { await whenConnected(sock) } catch (e) { sock.destroy(); return { ok: false, kind: 'unreachable', proxy: viaProxy, error: { type: e.code || 'upstream_error', message: msgOf(e) } } }
+      try { await whenConnected(sock) } catch (e) { sock.destroy(); return failed(e) }
       if (kind === 'direct') return { ok: true, sock, reply: null, rest: Buffer.alloc(0) }
       const deadline = timing.ingressDialMs ? Date.now() + timing.ingressDialMs : Infinity
       const d = kind === 'socks5' ? await viaSocks5(sock, up, target, deadline) : await viaHttp(sock, up, target, deadline)
