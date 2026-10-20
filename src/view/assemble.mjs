@@ -536,7 +536,8 @@ function assembleAnalyzed(records, opts = {}) {
   // A global step index (mixed session) is looked up on the original record, not the hydrated copy.
   // A call that continues a server-held thread carries only its delta: the dissector stitches its context over every
   // record of the session (opts.chainRecords, so a bounded view does not make calls partial), as on the flat-lane path.
-  const plans = MULTI_LANE_CONTEXT.prepare(opts.chainRecords || records);
+  const plans = MULTI_LANE_CONTEXT.prepare();
+  for (const r of [...(opts.chainRecords || records)].sort(stepOrder)) MULTI_LANE_CONTEXT.contextOf(r, plans); // planned in step order: a predecessor first
   const hydrated = records.map((r) => hydrateForBoard(r, MULTI_LANE_CONTEXT.contextOf(r, plans)));
   const giOfHydrated = opts.giOf ? new Map(hydrated.map((h, i) => [h, opts.giOf(records[i])])) : null;
   const A = analyze(hydrated, giOfHydrated ? { giOf: (h) => giOfHydrated.get(h) } : {});

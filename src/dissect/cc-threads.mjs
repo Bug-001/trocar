@@ -10,8 +10,9 @@
 //                 N sends no system at all = the thread's whole system
 //   tools(N)    = N's own tools when non-empty, else the thread's
 // Whether to stitch depends ONLY on thread.type === 'continue' (never on a model, a version or a beta header), and
-// the predecessor is found by its reply id anywhere in the session's records: chains interleave (the main thread,
-// one per subagent) and arrive in any order. A call without `thread` is its own whole context, as before.
+// the predecessor is found by its reply id among the session's thread calls planned before it: chains interleave (the
+// main thread, one per subagent), and a predecessor was sent before its continuation (it had to have replied), so in
+// step order (ts_request) every predecessor comes first. A call without `thread` is its own whole context, as before.
 // States (3.2:52): every predecessor in the capture with a whole reply = 'reconstructed'; one missing, its reply
 // incomplete, its own context partial or its thread.type unknown = 'partial', with what is missing; a server-edited
 // context anywhere up the chain = 'server_edited'. Bytes are untouched: request blocks are
@@ -110,36 +111,33 @@ function build(rec, body, thread, head) {
   return finish(rec, { thread, replyId, lineage: hp ? hp.lineage : (thread.prevId || String(rec.id)), segments, contextState, missing, system, tools });
 }
 
-// The board's batch form over one session's records (any order, any wire). → Map<rec, Plan> for thread calls.
+// The planner the board's assembler folds a session through, one record at a time in step order (3.5 §内存有界):
+// get(rec) → the call's Plan, or null for a call without `thread`. It keeps the thread calls (a continuation's context is
+// built from them) and nothing else.
+export function threadPlanner() {
+  const byReply = new Map(); // reply id → the thread call that replied with it
+  const plans = new WeakMap();
+  return {
+    get(rec) {
+      if (plans.has(rec)) return plans.get(rec);
+      const b = bodyOf(rec), t = b && Array.isArray(b.messages) ? threadOf(b) : null;
+      let plan = null;
+      if (t) {
+        const pred = t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) : null;
+        plan = build(rec, b, t, pred ? { plan: plans.get(pred), outputSegs: replySegs(pred), pred } : null);
+        const id = replyIdOf(rec);
+        if (id && !byReply.has(id)) byReply.set(id, rec);
+      }
+      plans.set(rec, plan);
+      return plan;
+    },
+  };
+}
+const stepOrder = (a, b) => String(a.ts_request).localeCompare(String(b.ts_request)) || String(a.id).localeCompare(String(b.id));
+// The batch form over one session's records, in any order. → Map<rec, Plan> for thread calls.
 export function threadPlan(records) {
-  const byReply = new Map();
-  const threaded = [];
-  for (const r of records || []) {
-    const b = bodyOf(r);
-    if (!b || !Array.isArray(b.messages)) continue;
-    const id = replyIdOf(r);
-    if (id && !byReply.has(id)) byReply.set(id, r);
-    if (threadOf(b)) threaded.push(r);
-  }
-  const plans = new Map();
-  for (const r of threaded) {
-    // walk back to a known plan, a head or a gap, then build forward (no recursion: a thread can be long)
-    const path = [];
-    const seen = new Set();
-    let cur = r;
-    while (cur && !plans.has(cur) && !seen.has(cur)) {
-      seen.add(cur);
-      path.push(cur);
-      const t = threadOf(bodyOf(cur));
-      cur = t && t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) || null : null;
-    }
-    for (let k = path.length - 1; k >= 0; k--) {
-      const rec = path[k], body = bodyOf(rec), t = threadOf(body);
-      const pred = t.kind === 'continue' && t.prevId ? byReply.get(t.prevId) : null;
-      const hp = pred && plans.get(pred);
-      plans.set(rec, build(rec, body, t, hp ? { plan: hp, outputSegs: replySegs(pred), pred } : null));
-    }
-  }
+  const p = threadPlanner(), plans = new Map();
+  for (const r of [...(records || [])].sort(stepOrder)) { const plan = p.get(r); if (plan) plans.set(r, plan); }
   return plans;
 }
 
@@ -173,7 +171,7 @@ export function toolCountOf(req) {
 
 // The cross-record hooks the board's multi-lane assembler calls (same names as the WebSocket dissector's).
 export const CC_THREADS = Object.freeze({
-  prepare: (records) => threadPlan(records),
+  prepare: () => threadPlanner(),
   // null for a call without `thread`: its own bytes are its context, read exactly as before
   contextOf: (rec, plans) => {
     const p = plans && plans.get(rec);

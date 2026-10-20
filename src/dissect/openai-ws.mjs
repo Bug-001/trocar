@@ -183,7 +183,8 @@ export const RESPONSES_WS = Object.freeze({
   createChain, stitchedRequest, locate, roleOf,
   consumedBody: ['type', 'model', 'stream', 'instructions', 'tools', 'input', 'previous_response_id', 'generate'],
   faithfulnessOf: (b) => faithfulness(b && b.block),
-  prepare: (records) => chainPlan(records),
+  // one record at a time, in step order: a connection's calls are sequential, so step order is its seq order
+  prepare: () => { const c = createChain(); return { get: (rec) => c.plan(rec) }; },
   contextOf: (rec, plans) => {
     const p = plans && plans.get(rec);
     return p ? { req: stitchedRequest(rec, p), contextState: p.contextState, missing: p.missing, locate: (b) => locate(b, rec, p),
