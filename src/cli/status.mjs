@@ -348,6 +348,7 @@ function formsOf(f) {
  *  `groups`: what captureHealth read, folded by level + where + code (the key FAILURE_WORDS reads), each with the newest record's reason, newest first,
  *  at most GROUPS_MAX (the cut is said in `errors`). The one fold of the document's groups: `status --failures` prints these (C.3, V92). */
 const GROUPS_MAX = 50
+const ROW = 'flow' // a connection row has no `where` of its own: FAILURE_WORDS keys its words under this one (a document field, not a flows/ record)
 const reasonText = (r) => (typeof r === 'string' && squashed(r)) || null
 function failuresOf(f) {
   const h = effectiveHealth(f).health
@@ -356,7 +357,7 @@ function failuresOf(f) {
   const problem = (where) => (g) => {
     const l = g.last || {}
     // a failure event's where / code; a connection row is `flow` with its not_captured; the raw journal's op / outcome; else the event
-    const w = where || l.where || (l.event == null ? 'flow' : l.event)
+    const w = where || l.where || (l.event == null ? ROW : l.event)
     return { level: 'problem', where: w, code: (l.code ?? l.not_captured ?? l.outcome ?? l.event ?? l.reason) || g.key, count: g.count || 1, first_ts: g.first_ts, last_ts: g.last_ts, agent: l.agent, reason: reasonText(l.reason ?? (l.error && l.error.message)) }
   }
   const groups = [...(c.failures || []).map(problem(null)), ...((h.raw && h.raw.failures) || []).map(problem('raw'))]
@@ -365,7 +366,7 @@ function failuresOf(f) {
   for (const g of groups) if (String(g.last_ts || '') >= String(latest || '')) latest = g.last_ts || null
   const parts = [
     ...groups,
-    ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ level: 'expected', where: 'flow', code, ...g, reason: null })),
+    ...Object.entries(c.expected_groups || {}).map(([code, g]) => ({ level: 'expected', where: ROW, code, ...g, reason: null })),
     // a condition holds since its record (`since`); one with neither a code nor a kind, or no time, is no group (no time is made up)
     ...(c.conditions || []).filter((x) => (x.code || x.kind) && x.since).map((x) => ({ level: 'note', where: x.where || x.kind || null, code: x.code || x.kind, count: 1, first_ts: x.since, last_ts: x.since, agent: x.agent, reason: reasonText(x.reason) })),
   ]

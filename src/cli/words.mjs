@@ -69,6 +69,6 @@ export function failureBrief(g) {
   const word = failureWord(g && g.where, g && g.code)
   if (word) return reason ? `${word} (${reason})` : word
   if (g && g.code && ERRNO.test(String(g.code))) return [g.code, reason].filter(Boolean).join(' ')
-  return [[g && g.where, g && g.code].filter(Boolean).join('/') || 'a record', reason].filter(Boolean).join(' ')
+  return [[...new Set([g && g.where, g && g.code].filter(Boolean))].join('/') || 'a record', reason].filter(Boolean).join(' ') // an event with no code of its own is named once
 }
 
