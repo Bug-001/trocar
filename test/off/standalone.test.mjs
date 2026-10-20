@@ -232,7 +232,7 @@ test('src/off carries OFF_VERSION as an integer, and the unique-name rule the ge
 
 // The kinds the copy undoes, and how (the file rule's kinds), pinned to the OFF_VERSION that ships them: a change to either list
 // without a bump (and a row here) is red, so doctor's version line tells an old copy from one that knows the new rules.
-const KINDS_AT = { 16: 'e3c392509cb0c538', 17: 'e3c392509cb0c538', 18: 'e3c392509cb0c538', 19: 'e3c392509cb0c538' } // 17-19 ship the same kinds: those bumps are D61 (no autostart disable), D62 ⑥ (no exit asked of a proxy-mode daemon) and D62 (the switch asks the daemon's warm helper for the process table), their reason lines are in src/off/manifest.mjs
+const KINDS_AT = { 16: 'e3c392509cb0c538', 17: 'e3c392509cb0c538', 18: 'e3c392509cb0c538', 19: 'e3c392509cb0c538', 20: 'e3c392509cb0c538' } // 17-19 ship the same kinds: those bumps are D61 (no autostart disable), D62 ⑥ (no exit asked of a proxy-mode daemon) and D62 (the switch asks the daemon's warm helper for the process table), their reason lines are in src/off/manifest.mjs
 test('OFF_VERSION moves with the undo rules: the known kinds and the file-rule kinds are the ones this version ships', () => {
   const fp = sha256(Buffer.from(JSON.stringify([KNOWN_KINDS, FILE_ENTRY_KINDS]))).slice(0, 16)
   assert.equal(KINDS_AT[OFF_VERSION], fp, `KNOWN_KINDS / FILE_ENTRY_KINDS changed: bump OFF_VERSION with its reason line (src/off/manifest.mjs) and add { ${OFF_VERSION + 1}: '${fp}' } here`)

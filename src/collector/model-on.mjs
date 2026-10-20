@@ -11,6 +11,7 @@ import { collectorHome } from '../paths.mjs'
 import { readManifest, saveManifest } from './core/trust/journal.mjs'
 import { installUsable } from '../off/manifest.mjs'
 import { readStateFile, setDesired, writeStateAtomic } from '../off/state.mjs'
+import { WINDOWS_MAX } from '../off/holders.mjs'
 import { setupOf } from './core/proxymode/status-facts.mjs'
 import { planRoutes, writeRoutes, noProxyNames } from './core/proxymode/entries.mjs'
 import { resolveLoc } from './core/proxymode/sources.mjs'
@@ -70,7 +71,14 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   const fresh = on.filter((h) => !(st && st.harnesses[h] && st.harnesses[h].desired === 'on' && m.liveness[h] && m.liveness[h].on_at && !m.liveness[h].off_at))
   if (fresh.length) {
     writeStateAtomic(stateF, setDesired(st || { version: 2, updated_at: null, harnesses: {} }, fresh, 'on', now()), { fs })
-    for (const h of fresh) { const l = { ...(m.liveness[h] || {}), on_at: now().toISOString() }; delete l.off_at; m.liveness[h] = l }
+    // the window that closed is kept in `windows` (P12): a process started in it read an entry that leads to the same door, so it is still routed
+    // (V16) and a holder after the next off. Cleared below when this on moves the harness's door.
+    for (const h of fresh) {
+      const was = m.liveness[h] || {}, l = { ...was, on_at: now().toISOString() }
+      delete l.off_at
+      if (was.on_at && was.off_at) l.windows = [...(Array.isArray(was.windows) ? was.windows : []), { on_at: was.on_at, off_at: was.off_at }].slice(-WINDOWS_MAX)
+      m.liveness[h] = l
+    }
     saveManifest(dir, m, fs)
   }
 
@@ -81,6 +89,9 @@ export async function turnOnModel({ os, home, env = process.env, ids = null, har
   try { doorsNow = ep.socketPath ? ((await ask({ socketPath: ep.socketPath, method: 'GET', path: '/status', timeoutMs: 2000 })).doors || {}) : {} } catch { doorsNow = {} }
   const was = await loadIngressConfig({ dir, groups, isFree, fs })
   const cfg = await rebindTaken(was, async (port, g) => doorsNow[g] === port || isFree(port), { dir, isFree, fs })
+  // a door whose port or token is new: the entries of the earlier windows lead nowhere now, so those windows go (P12)
+  const moved = fresh.filter((h) => m.liveness[h].windows && (was.created || [...was.added, ...cfg.rebound].some((g) => g.startsWith(`${h}:`))))
+  if (moved.length) { for (const h of moved) delete m.liveness[h].windows; saveManifest(dir, m, fs) }
   // §3 ①: a group port another socket holds is engine-port-taken — said in the receipt and recorded (D38), then the group's entries follow the new door
   for (const g of cfg.rebound) {
     const [from, to] = [was.groupPorts[g], cfg.config.groupPorts[g]]

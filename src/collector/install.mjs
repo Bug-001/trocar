@@ -19,6 +19,7 @@ import { readAgentList } from '../off/identity.mjs'
 import { patternsOf } from '../off/signature.mjs'
 import { readManifest, saveManifest, newManifest, missingDirs, applyJsonKey, previewJsonKey, applyTextEntry, previewTextEntry, writeOwnedFile, manifestPath, describeEntry, judgeEntry, judgeOwned, sha256 } from './core/trust/journal.mjs'
 import { EVENT, CODE } from './core/codes.mjs'
+import { RESTART_REASONS } from '../health/codes.mjs'
 import { controlRequest, controlEndpointFor } from './core/control.mjs'
 import { readText, readTextOrError } from './core/config-read.mjs'
 import { appendEvent } from './core/events.mjs'
@@ -114,7 +115,6 @@ const nodeFs = fs
 const processUid = () => (typeof process.getuid === 'function' ? process.getuid() : -1)
 const act = (a) => a !== 'skip-intact' && a !== 'skip-user-changed'
 const shortLine = (l) => String(l).split(' # ')[0].trim()
-const RESTART_REASONS = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1)
 const DAEMON_CMD = 'trocar daemon' // 1.6 §2: the autostart unit's ExecStart is this command (units written before the rename run its alias `collector start`)
 /** The login entry in the platform's own words (a Windows user told to run `systemctl` has been handed nothing; tested on Windows 2026-10-11 and macOS 2026-10-18). */
 const entryWords = (osName, unit) => (osName === 'win32' ? 'the scheduled task \\trocar\\collector' : osName === 'darwin' ? `the LaunchAgent ${(unit && unit.name) || 'com.trocar.collector'}` : 'the systemd user unit trocar-collector.service')
@@ -536,7 +536,7 @@ export async function turnOn(opts = {}) {
         problems.push(why); put({ event: EVENT.failure, where: 'control', code: 'control-error', reason: why })
       }
       if (status) {
-        receipt.restart = (status.agents || []).filter((a) => a && !a.trusted && !a.off && RESTART_REASONS.has(a.reason) && plan.targets.includes(a.agent)).map((a) => ({ harness: a.agent, pid: a.pid, reason: a.reason }))
+        receipt.restart = (status.agents || []).filter((a) => a && !a.trusted && !a.off && RESTART_REASONS.includes(a.reason) && plan.targets.includes(a.agent)).map((a) => ({ harness: a.agent, pid: a.pid, reason: a.reason }))
         receipt.capture = { desired: status.desired ?? null, actual: status.actual ?? null }
         if (status.actual !== 'on') {
           const why = status.helper && status.helper.ok === false ? `the capability helper speaks protocol ${status.helper.proto}, this daemon expects ${status.helper.expected_proto}; run: sudo trocar setup-helper`

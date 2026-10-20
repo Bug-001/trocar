@@ -10,7 +10,7 @@ import nodeFs from 'node:fs'
 import path from 'node:path'
 import tls from 'node:tls'
 import { createDoorIdentity } from '../engine/door-identity.mjs'
-import { verdictOf } from './verdict.mjs'
+import { verdictOf, judgedForms, carrierAt } from './verdict.mjs'
 import { upstreamFor, isTrocarDoorUrl, isLoopbackHost, HOOK_ENV } from './chain.mjs'
 import { pacHandler, pacLeg, peerAllowed } from './pac.mjs'
 import { createDoorSeen, createHolderPoll, mayExit, HOLDER_POLL_MS } from './holders.mjs'
@@ -27,7 +27,6 @@ import { CODE } from '../codes.mjs'
 import { agentTrustSet, createAgentTrust, CERT_VARS } from './upstream-trust.mjs'
 import { redactProxyUrl } from '../../../netenv/redact.mjs'
 
-const msOf = (t) => (t == null ? NaN : typeof t === 'number' ? t : Date.parse(t))
 const untracked = (reason) => ({ not_captured: 'untracked', reason })
 const split = (g) => { const i = String(g).lastIndexOf(':'); return { harness: g.slice(0, i), routeId: g.slice(i + 1) } }
 const safe = async (f) => { try { return (await f()) ?? null } catch { return null } }
@@ -113,13 +112,6 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
   const doorOf = (d) => ({ g: d.g, harness: d.harness, forms: formsOn(byName.get(d.harness), d.routeId) })
   const self = ownSid ? { sid: ownSid } : { uid: ownUid }
 
-  /** The carrier time of a form (P11 ③): the latest install item of its harness, or the root in the user's store for a root-trust form. Unknown → null. */
-  function carrierAt(desc, f) {
-    const items = itemsOfPhase(manifest(), 'install')
-    const own = f.cert !== 'root' && (desc.proxyMode.certs || {})[f.cert] ? items.filter((i) => i.harness === desc.name) : []
-    const t = (own.length ? own : items.filter((i) => i.kind === 'system-root')).map((i) => msOf(i.installed_at)).filter(Number.isFinite)
-    return t.length ? Math.max(...t) : null
-  }
   const priorOf = (d) => { const e = itemsOfPhase(manifest(), 'on').find((i) => i.harness === d.harness && i.route === d.routeId && typeof i.prior_value === 'string'); return e ? e.prior_value : null }
 
   /** The process's env, cwd and parent walk, read once per pid + start when read (P7, 4.9 §5.2). An answer with env or cwd unread, or of a process
@@ -152,20 +144,26 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
    *  forwarding by design (`notCapturedClass` expected) lives in the row only; the others are said once per key and code (4.6 §连接行). */
   async function judge(id, d, host) {
     const k = `${id.pid}\0${id.facts.startedAt ?? ''}\0${d.g}\0${host}`
-    if (vcache.has(k)) return vcache.get(k)
+    if (vcache.has(k)) return noted(id, vcache.get(k))
     const desc = byName.get(id.agent)
     const pf = await procFacts(id.pid, id.facts.startedAt ?? null, desc)
     const facts = { name: id.agent, pid: id.pid, startedAt: id.facts.startedAt ?? null, env: pf.env, cwd: pf.cwd }
-    const all = formsOn(desc, id.agent === d.harness ? d.routeId : null), ok = all.filter((f) => f.verified && f.verified[ctx.os] === true)
-    const forms = ok.length ? ok : all
+    const forms = judgedForms(desc, ctx.os, id.agent === d.harness ? d.routeId : null)
     let v = forms.length ? { decrypt: true } : { decrypt: false, code: 'not-verified', detail: `${id.agent} has no form on ${ctx.os}` }
     for (const f of forms) {
-      const r = verdictOf({ desc, form: f, facts, record: { carrierInstalledAt: carrierAt(desc, f), rootFp256 }, issuer: iss ? issuer : null, host, hostSet: hostSetFor(f) || undefined, ctx })
+      const r = verdictOf({ desc, form: f, facts, record: { carrierInstalledAt: carrierAt(manifest(), desc, f), rootFp256 }, issuer: iss ? issuer : null, host, hostSet: hostSetFor(f) || undefined, ctx })
       if (!r.decrypt) { v = r; break }
     }
     if (!v.decrypt && notCapturedClass('untrusted', v.code) !== 'expected' && once(`${k}\0${v.code}`)) { fail(v.code, `pid ${id.pid} (${id.agent}) at ${host} is forwarded, not decrypted: ${v.detail}`, { harness: id.agent, pid: id.pid, door: d.g }) }
     if (v.decrypt && agentTrust) { const f0 = forms[0], t = f0.trust !== 'root' && desc.proxyMode.trusts && desc.proxyMode.trusts[f0.trust]; v = { ...v, upstreamTrust: await agentTrust.contextFor(agentTrustSet({ trust: t || null, ctx, facts })) } } // ⑭: this agent's own set, minus the trocar root
     if (!ISSUER_CODES.has(v.code) && !v.unread && id.facts.startedAt != null && !(man.err && !man.m)) keep(vcache, k, v)
+    return noted(id, v)
+  }
+  /** The door's latest verdict per process life (pid + start), GET /status's `agents` rows (4.11 P11 status): `status` takes them, so the one rule
+   *  judges. A code forwarded by design (an outside host of a host tree) says nothing of the process and is not listed. */
+  const verdicts = new Map()
+  function noted(id, v) {
+    if (id.pid != null && (v.decrypt || notCapturedClass('untrusted', v.code) !== 'expected')) keep(verdicts, `${id.pid}\0${id.facts.startedAt ?? ''}`, { pid: id.pid, start: id.facts.startedAt ?? null, agent: id.agent, trusted: v.decrypt === true, reason: v.decrypt ? null : v.code })
     return v
   }
 
@@ -355,6 +353,8 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     /** The holder count the poll last saw, or null when nothing is watched: GET /status's number, which never reads the process table itself
      *  (on Windows that is a PowerShell each; `on` asks /status twice before POST /on, a Windows test machine 2026-10-17). GET /holders is the fresh answer. */
     polledHolders: () => { const r = poll.now(); return Array.isArray(r) ? r.length : null },
+    /** The door's verdicts, latest last (bounded; from memory, never the process table: a row may name a process that has exited since). */
+    verdicts: () => [...verdicts.values()],
     mayExit: () => mayExit({ harnessesOn: [...onSet], holders: kept().length ? poll.now() : [], openConns: openConns() }),
     close() { closed = true; if (sweepT) timers.clearTimeout(sweepT); sweepT = null; poll.stop(); if (iss) iss.close() },
   }

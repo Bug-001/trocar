@@ -7,7 +7,7 @@ import crypto from 'node:crypto'
 import nodeFs from 'node:fs'
 import nodeOs from 'node:os'
 import path from 'node:path'
-import { STATUS_REASONS } from '../health/codes.mjs'
+import { STATUS_REASONS, RESTART_REASONS } from '../health/codes.mjs'
 import { EXIT, newReceipt, UNDO_LINE } from '../off/schema.mjs' // the keys and the exit codes themselves (D62): `status` prints a receipt, it does not VALIDATE one, so it does not pay for ./schema.mjs's checker and the closed lists under it
 import { HARNESS_IDS, resolveHarnesses } from './harness-names.mjs'
 import { collectorDir, stateFile, trocarHome } from '../off/paths.mjs'
@@ -19,6 +19,8 @@ import { daemonState } from '../off/daemon-stop.mjs'
 import { controlRequest, controlEndpointFor } from '../off/control-client.mjs'
 import { listProcs, identityFor, pidAlive, memoProcQuestions, procAskNotes, daemonProcReader } from '../off/proc.mjs'
 import { createRegistry } from '../collector/core/registry.mjs'
+import { judgedForms, carrierAt, startVerdict } from '../collector/core/proxymode/verdict.mjs'
+import { sawEntry } from '../off/holders.mjs'
 import { readAgentList, mergeAgentList, processNames } from '../off/identity.mjs'
 import { sha256, readOrNull } from '../off/fsutil.mjs'
 import { getPath } from '../off/json-text.mjs'
@@ -46,7 +48,7 @@ const rethrowSandbox = (e) => { if (e && e.code === 'ESANDBOX') throw e } // a r
 
 // ── the facts ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const d_isCounts = (r) => !!r && Number.isInteger(r.closing) && r.closing >= 0 && Number.isInteger(r.waiting) && r.waiting >= 0
-const RESTART = new Set(['config-after-start', 'env-frozen', 'start-time-unknown', 'no-marker', 'kimi-not-via-shim']) // 「重启后才会被采集」(1.6 §1.1): what a restart of the agent fixes
+const RESTART = new Set(RESTART_REASONS) // 「重启后才会被采集」(1.6 §1.1): what a restart of the agent fixes
 
 /** One item of the manifest against the disk → { state: 'intact' | 'missing' | 'changed' | 'unknown', why? }. Nothing is written. An entry trocar wrote is intact when the file is byte for byte what it
  *  wrote, or trocar's value / text is still in it (Claude Code rewrites settings.json: the file differs, the entry is there); an owned file when its bytes are what the manifest recorded. */
@@ -71,6 +73,7 @@ export function entryState(e, fs = nodeFs) {
 }
 const entriesOf = (m, id) => [...(m.entries || []).filter((e) => e.harness === id && (e.kind === 'json-key' || e.kind === 'text' || e.kind === undefined)), ...(m.files || []).filter((f) => f.harness === id && f.kind === 'owned-file')]
 // when the entries the processes read at start were written: the newest of the harness's entries and of its plugin / shim files (a bundle is rewritten every day: its time says nothing)
+const sameStart = (a, b) => { const t = (v) => (typeof v === 'number' ? v : Date.parse(v)); return a == null || t(a) === t(b) }
 const installedAtOf = (m, id) => { const t = [...(m.entries || []).filter((e) => e.harness === id && e.kind !== 'owned-file'), ...(m.files || []).filter((f) => f.harness === id && (f.role === 'plugin' || f.role === 'shim'))].map((x) => Date.parse(x.installed_at)).filter(Number.isFinite); return t.length ? Math.max(...t) : null }
 
 /** The facts `status` is made of. The daemon's `GET /status` when it answers (its view of the switch, the kernel, the processes and the connections), else the disk (state.json, the manifest, the process table
@@ -175,13 +178,20 @@ export async function gatherStatus({ home = nodeOs.homedir(), env = process.env,
     const entry = !m ? { state: 'unknown', why: f.manifest.error || `no install manifest in ${dir}` } : !installedIds.includes(id) ? { state: 'missing', why: 'the install manifest lists no entry of trocar\'s for it' } : bad.length ? { state: bad.some((x) => x.state === 'missing') ? 'missing' : 'changed', why: bad.map((x) => x.why).join('; ') } : items.find((x) => x.state === 'unknown') ? { state: 'unknown', why: items.filter((x) => x.state === 'unknown').map((x) => x.why).join('; ') } : { state: 'intact' }
     if (entry.state === 'unknown') why.push(entry.why)
     let procs
+    // a process the daemon has not judged (proxy mode): the door's own rule (4.11 P11 status) — started after its forms' carriers, and inside an on
+    // window whose entry still leads to the door (P12 `windows`: an off → on keeps it, D67's update included); else it read no entry (D31①)
+    const dsc = isProxyMode(platform) && m && desc.value ? desc.value.find((d) => d.name === id) : null
+    const forms = dsc ? judgedForms(dsc, platform) : []
+    const carriers = forms.map((x) => carrierAt(m, dsc, x))
+    const startOf = (p) => (forms.length ? { start: startVerdict(p.startedAt, carriers.includes(null) ? null : Math.max(...carriers)) ?? (sawEntry(p, (m.liveness || {})[id]) ? null : 'config-after-start') } : {})
     if (reply) {
-      const rows = Array.isArray(reply.agents) ? reply.agents : []
+      // a row that names a process life (`start`: the proxy-mode daemon's, answered from its memory of the door's verdicts) counts while that life is in the table — a reused pid is another process
+      const rows = (Array.isArray(reply.agents) ? reply.agents : []).filter((a) => !table || !('start' in a) || (tableOf.has(a.pid) && (a.start == null || sameStart(tableOf.get(a.pid).startedAt, a.start))))
       procs = rows.filter((a) => a.agent === id).map((a) => ({ pid: a.pid, trusted: a.trusted === true, reason: a.reason ?? null, hint: a.hint || null, negative: negatives.has(a.pid), off: a.off === true }))
       // a process of this harness the daemon has not listed (it started since the daemon last looked): not judged by it, so the entry and when it started decide (V32, 4.6 确认信任)
       const listed = new Set(rows.map((a) => a.pid))
-      for (const x of matched) if (x.h === id && !listed.has(x.p.pid)) procs.push({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null })
-    } else if (table && whose) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null }))
+      for (const x of matched) if (x.h === id && !listed.has(x.p.pid)) procs.push({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null, ...startOf(x.p) })
+    } else if (table && whose) procs = matched.filter((x) => x.h === id).map((x) => ({ pid: x.p.pid, startedAt: x.p.startedAt, trusted: null, ...startOf(x.p) }))
     else { procs = []; why.push(`the processes could not be listed (${matchError})`) }
     const installedAt = m ? installedAtOf(m, id) : null
     // this harness's path into trocar (V32 `attached`), one resolver: the proxy-mode daemon answers it per harness (its doors listen), Linux's is the instance's link
