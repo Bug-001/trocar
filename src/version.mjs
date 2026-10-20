@@ -41,10 +41,12 @@ export function headSha(dir) {
   return null
 }
 
+/** `<version>+<first 7 of a commit>`, the one place that format is composed: `null` / no sha is the plain version. */
+export const codeIdOf = (version, sha) => (sha ? `${version}+${String(sha).slice(0, 7)}` : version)
+
 /** This code's version: `0.1.0+1a2b3c4` in a git checkout, `0.1.0` outside one. */
 export function codeId(root = packageRoot()) {
   const version = JSON.parse(read(path.join(root, 'package.json')) || '{}').version || '0.0.0'
   const dir = gitDir(root)
-  const sha = dir && headSha(dir)
-  return sha ? `${version}+${sha.slice(0, 7)}` : version
+  return codeIdOf(version, dir && headSha(dir))
 }

@@ -12,7 +12,7 @@ import nodeOs from 'node:os'
 import nodeFs from 'node:fs'
 import path from 'node:path'
 import { EXIT, newReceipt } from './schema.mjs'
-import { codeId, packageRoot, gitDir } from '../version.mjs'
+import { codeId, codeIdOf, packageRoot, gitDir } from '../version.mjs'
 import { execTool, runAsync } from '../off/exec.mjs'
 import { collectorDir, stateFile } from '../off/paths.mjs'
 import { readStateFile } from '../off/state.mjs'
@@ -129,7 +129,7 @@ async function update({ io, env, home, platform, deps, flags }) {
   // never "none is on" — that would leave those harnesses switched off, with asight's entries in their files, and nothing to switch back on.
   if (on.error) return no('state-unreadable', on.error)
   r.harnesses = on.ids
-  r.to = `${versionOf(root, fs)}+${target.slice(0, 7)}`
+  r.to = codeIdOf(upstreamVersion(git, root, fs), target) // the version the NEW code carries: the upstream's own package.json, not the one on disk
   const planned = [
     { what: 'code', detail: `the code of this machine's asight goes from ${r.from} to ${r.to}` },
     { what: 'harnesses', detail: on.ids.length ? `${on.ids.join(', ')}: switched off before the code changes and on again after it` : 'no agent is being captured, so none is switched off', harness: null, harnesses: on.ids },
@@ -283,4 +283,10 @@ async function step(run, argv, { io, env, home, platform, deps }) {
 /** Step 1 undone with the code that wrote it (§5.5): the harnesses it switched off are switched on again. */
 const reOn = (ids, ctx) => (ids.length ? step(ctx.deps.on || runOnCli, [...ids, '--yes', '--json'], ctx) : Promise.resolve({ exit: EXIT.ok, doc: null }))
 
-const versionOf = (root, fs) => { try { return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version } catch { return codeId(root).split('+')[0] } }
+/** The version the code being updated TO says it is: `package.json` as the upstream has it (a commit that changes the version would make the
+ *  old file's number a wrong promise). What cannot be read falls back to the version on disk — the commit in `to` is the fact either way. */
+const upstreamVersion = (git, root, fs) => {
+  const shown = git('show', '@{u}:package.json')
+  try { return JSON.parse(shown.code === 0 ? shown.out : fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version }
+  catch { return codeId(root).split('+')[0] }
+}

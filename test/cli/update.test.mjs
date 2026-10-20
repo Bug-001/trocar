@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { runUpdateCli } from '../../src/cli/update.mjs'
 import { EXIT } from '../../src/cli/schema.mjs'
 import { validateReceipt } from '../../src/cli/schema.mjs'
-import { codeId } from '../../src/version.mjs'
+import { codeId, codeIdOf } from '../../src/version.mjs'
 import { writeStateAtomic, setDesired, emptyState } from '../../src/off/state.mjs'
 import { tmpDir } from '../helpers/tmp.mjs'
 import { fakeIo } from './fixtures/on-ctx.mjs'
@@ -257,6 +257,18 @@ test('V97: --version is the package version with HEAD\'s first 7 in a git checko
   fs.mkdirSync(bare)
   fs.writeFileSync(path.join(bare, 'package.json'), '{"version":"0.1.0"}\n')
   assert.equal(codeId(bare), '0.1.0', 'outside a checkout there is no commit to name')
+})
+
+test('V97: the version in the plan is the one the UPSTREAM\'s package.json carries, composed the one place that format lives', async () => {
+  const s = sandbox()
+  const other = path.join(s.base, 'bump')
+  git(s.base, 'clone', s.up, other)
+  fs.writeFileSync(path.join(other, 'package.json'), JSON.stringify({ name: 'asight', version: '9.9.9' }) + '\n')
+  git(other, 'add', '-A'); git(other, 'commit', '-m', 'bump the version'); git(other, 'push')
+  const target = git(other, 'rev-parse', 'HEAD')
+  const t = ctx(s)
+  assert.equal(await runUpdateCli(['--dry-run', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.equal(t.io.json().to, codeIdOf('9.9.9', target), 'the code being updated TO says 9.9.9, not the 0.1.0 of the file on disk')
 })
 
 test('V97: the code the collector reports on its control channel is read over a real socket, through the endpoint resolution every command uses', async () => {
