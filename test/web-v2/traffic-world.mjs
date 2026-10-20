@@ -14,15 +14,17 @@ globalThis.window = win
 globalThis.document ??= { dispatchEvent() {} }
 initKeys()
 
-/** The world: { face, log, tamper(fn|null), mount(mod, hash, {width}), close() }. fn(url, doc) → a doc, or {status, body} to fail. */
-export async function trafficWorld() {
-  const face = await serveBoard(boardHome({ bytes: 2e6 }))
+/** The world: { face, home, log, tamper(fn|null), mount(mod, hash, {width}), close() }. fn(url, doc, init) → a doc (or a promise of one), or
+ *  {status, body} to fail; a throw is a network error. `home` = a boardHome() to serve instead of the default 2 MB one. */
+export async function trafficWorld({ home = null } = {}) {
+  const h = home || boardHome({ bytes: 2e6 })
+  const face = await serveBoard(h)
   configure({ token: face.token })
   const log = []
   let tamper = null, inflight = 0
   const realFetch = globalThis.fetch
   globalThis.fetch = async (url, init = {}) => {
-    log.push({ method: init.method || 'GET', url: String(url) })
+    log.push({ method: init.method || 'GET', url: String(url), body: init.body ? JSON.parse(init.body) : null })
     inflight++
     try {
       const headers = { ...(init.headers || {}) }
@@ -30,7 +32,7 @@ export async function trafficWorld() {
       const r = await realFetch(face.base + url, { ...init, headers })
       if (!tamper) return r
       const text = await r.text()
-      const out = tamper(String(url), text ? JSON.parse(text) : null)
+      const out = await tamper(String(url), text ? JSON.parse(text) : null, init)
       const fail = out && typeof out.status === 'number' && 'body' in out
       return new Response(JSON.stringify(fail ? out.body : out), { status: fail ? out.status : r.status, headers: { 'content-type': 'application/json' } })
     } finally { inflight-- }
@@ -41,8 +43,10 @@ export async function trafficWorld() {
   async function mount(mod, hash, { width = 1280 } = {}) {
     win.matchMedia = (q) => ({ matches: width >= Number(/(\d+)px/.exec(q)[1]), addEventListener() {} })
     const handlers = {}
+    const slots = new Map() // '#id' → a stand-in that keeps its innerHTML (a screen that paints into its own sub-containers)
     const el = {
-      innerHTML: '', contains: () => true, querySelector: () => null, querySelectorAll: () => [], replaceChildren() { el.innerHTML = '' },
+      innerHTML: '', contains: () => true, querySelectorAll: () => [], replaceChildren() { el.innerHTML = ''; slots.clear() },
+      querySelector: (sel) => (/^#[\w-]+$/.test(sel) && el.innerHTML.includes(`id="${sel.slice(1)}"`) ? (slots.get(sel) || slots.set(sel, { innerHTML: '' }).get(sel)) : null),
       addEventListener(t, fn) { (handlers[t] ||= []).push(fn) }, removeEventListener(t, fn) { handlers[t] = (handlers[t] || []).filter((f) => f !== fn) },
     }
     let cur = parseHash(hash)
@@ -61,16 +65,16 @@ export async function trafficWorld() {
     const inst = mod.mount(el, { api, router, store: {} })
     await settle()
     // a click on the first element the markup gives `selector` (the stand-in's closest() answers only that selector)
-    const click = async (selector, dataset = {}) => {
+    const click = async (selector, dataset = {}, { wait = true } = {}) => {
       const target = { dataset, closest: (s) => (s === selector ? target : null), getAttribute: (k) => dataset[k] }
       for (const fn of handlers.click || []) fn({ target, button: 0, preventDefault() {} })
-      await settle()
+      if (wait) await settle()
     }
     const key = async (k) => { keydown({ key: k, target: { tagName: 'BODY' }, preventDefault() {} }); await settle() }
-    return { el, inst, moves, click, key, route: () => cur, html: () => el.innerHTML }
+    return { el, inst, moves, click, key, route: () => cur, html: () => el.innerHTML + [...slots.values()].map((x) => x.innerHTML).join('') }
   }
   return {
-    face, log, settle,
+    face, home: h, log, settle,
     tamper(fn) { tamper = fn },
     mount,
     close: async () => { globalThis.fetch = realFetch; await face.close() },

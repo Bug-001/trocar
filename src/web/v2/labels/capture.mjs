@@ -111,7 +111,7 @@ export const CHANGE_REMOVAL = 'removed when its capture is turned off'
 // <id> 由页面按 status 文档 harnesses 的键填(前端不另存 CLI 名表)
 export const COMMANDS = Object.freeze({
   on: 'asight on <id>', off: 'asight off <id>', status: 'asight status <id>', doctor: 'asight doctor <id>',
-  install: 'asight install', board: 'asight board', helper: 'sudo asight setup-helper', linger: 'loginctl enable-linger',
+  install: 'asight install', board: 'asight board', setFull: 'asight classes set <class> full', setLog: 'asight classes set <class> log', helper: 'sudo asight setup-helper', linger: 'loginctl enable-linger',
 })
 
 // ── `errors[].where` of the C.3 document this board reads (the closed set src/health/codes.mjs DOC_WHERE; not importable here) ──
