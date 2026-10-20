@@ -3,7 +3,7 @@
 // shaped by the collector's own shapeResponse from a synthetic SSE stream, so resp.* is exactly what the collector writes.
 //   main  M0 create → M1 continue(M0) → M2 continue(M1)        system / tools in full only on M0
 //   sub   S0 create → S1 continue(S0)                           interleaved with the main thread
-//   aux   A  no thread, its whole context in its own body      (an auxiliary call such as a suggestion)
+//   aux   A  no thread, its whole context in its own body      (an auxiliary call such as a suggestion; request-class auxiliary)
 // File order is not ts order (the collector writes a call when it ends).
 import { shapeResponse } from '../../src/collector/core/record/body.mjs';
 
@@ -27,10 +27,10 @@ export function replyOf(id, blocks, usage = { input_tokens: 3, cache_read_input_
   return shapeResponse({ status: 200, headers: [['content-type', 'text/event-stream']], body: Buffer.from(sse(ev)) });
 }
 
-export function record(id, ts, body, reply) {
+export function record(id, ts, body, reply, headers = {}) {
   return {
     id, is_llm_call: true, ts_request: ts, endpoint: '/v1/messages?beta=true', method: 'POST',
-    req_headers: { 'anthropic-version': '2023-06-01', 'x-claude-code-session-id': SESSION, 'user-agent': 'claude-cli/2.1 (external, cli)' },
+    req_headers: { 'anthropic-version': '2023-06-01', 'x-claude-code-session-id': SESSION, 'user-agent': 'claude-cli/2.1 (external, cli)', ...headers },
     req_body: JSON.stringify(body), resp: reply,
   };
 }
@@ -68,7 +68,7 @@ export function threadSession() {
   const A = record('A', '2026-10-20T00:00:05.000Z', {
     model: 'claude-opus-x', metadata: meta, max_tokens: 100, system: [billing(5), { type: 'text', text: 'SUGGESTION MODE' }],
     messages: [user('please look at the repo'), { role: 'assistant', content: [{ type: 'text', text: 'Looking.' }] }, user('[SUGGESTION MODE] next?')],
-  }, replyOf('msg_a', [{ type: 'text', text: 'run tests' }]));
+  }, replyOf('msg_a', [{ type: 'text', text: 'run tests' }]), { 'x-claude-code-request-class': 'auxiliary' });
   const M2 = record('M2', '2026-10-20T00:00:06.000Z', {
     model: 'claude-opus-x', thread: { type: 'continue', previous_message_id: 'msg_m1' }, metadata: meta, max_tokens: 1000, stream: true,
     system: [billing(6)],

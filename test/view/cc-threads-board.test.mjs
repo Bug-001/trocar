@@ -10,7 +10,7 @@ import { assembleSession } from '../../src/view/assemble.mjs';
 import { readRecords } from '../../src/raw/ingest.mjs';
 import { buildResolver } from '../../src/query/source.mjs';
 import { tmpDir } from '../helpers/tmp.mjs';
-import { threadSession } from '../helpers/cc-threads.mjs';
+import { threadSession, record, replyOf, user } from '../helpers/cc-threads.mjs';
 
 async function board(recs) {
   const file = path.join(tmpDir('asight-threads-'), 'cap.ndjson');
@@ -29,9 +29,26 @@ test('continuations land in their thread\'s lane: one main lane, one subagent la
   assert.equal(laneOf('M2'), laneOf('M0'));
   assert.equal(laneOf('S0').kind, 'subagent');
   assert.equal(laneOf('S1'), laneOf('S0'), 'the subagent thread is one stream, not split by the interleaved main calls');
-  assert.notEqual(laneOf('A'), laneOf('S0'));
+  // request-class auxiliary (3.4): a background call, never a turn of the main or a subagent lane
+  assert.equal(laneOf('A').kind, 'aux');
+  assert.deepEqual(laneOf('M0').calls.map((c) => c.id), ['M0', 'M1', 'M2']);
   // the lane's view of a continuation is its stitched context, not its two-message delta
   assert.equal(calls.get('M2').msgCount, calls.get('M1').msgCount + 2);
+});
+
+test('an auxiliary call carrying its subagent\'s agent-id is aux, not a turn of that subagent lane', async () => {
+  const s = threadSession();
+  const sub = { 'x-claude-code-agent-id': 'agent-s' };
+  const S0 = { ...s.S0, req_headers: { ...s.S0.req_headers, ...sub } };
+  const S1 = { ...s.S1, req_headers: { ...s.S1.req_headers, ...sub } };
+  // a progress summary that copies the subagent's whole history, as Claude Code sends one
+  const P = record('P', '2026-10-20T00:00:04.500Z', {
+    model: 'claude-opus-x', max_tokens: 200, system: JSON.parse(s.S0.req_body).system,
+    messages: [user('subagent task: count files'), { role: 'assistant', content: [{ type: 'text', text: 'counting' }] }, user('summarise progress')],
+  }, replyOf('msg_p', [{ type: 'text', text: 'counting files' }]), { ...sub, 'x-claude-code-request-class': 'auxiliary' });
+  const { calls } = await board([s.M0, S0, S1, P]);
+  assert.equal(calls.get('P').lane.kind, 'aux');
+  assert.deepEqual(calls.get('S0').lane.calls.map((c) => c.id), ['S0', 'S1']);
 });
 
 test('a reconstructed continuation: state on the call, every request block resolves verbatim to the record it came from', async () => {

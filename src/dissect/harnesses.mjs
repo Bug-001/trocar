@@ -30,7 +30,8 @@ const effect = (id, cause, what, captures = BOTH) => ({ id, captures, cause, wha
 export const HARNESSES = Object.freeze([
   { ...ROW, id: 'cc', agents: ['cc', 'claude-code'], ua: /claude-cli|claude-code/,
     sessionKeys: [H('x-claude-code-session-id')], // gate G3: body metadata.user_id not added until verified
-    lane: [{ header: 'x-claude-code-agent-id', lane: 'subagent' }],
+    // a background call (progress summary, suggestion) is aux even when it carries its subagent's agent-id (3.4)
+    lane: [{ header: 'x-claude-code-request-class', equals: 'auxiliary', lane: 'aux' }, { header: 'x-claude-code-agent-id', lane: 'subagent' }],
     compaction: [{ header: 'x-cc-compaction-request' }],
     observerEffects: [effect('cc-gzip-off', 'NODE_EXTRA_CA_CERTS in settings env',
       'request-body gzip (flag-driven) is off because a custom CA is set')],
