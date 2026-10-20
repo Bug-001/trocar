@@ -79,6 +79,7 @@ function win32Io(a) {
   return { io: { exec, helper: { exe: process.execPath, args: [FAKE_HELPER, fx], spawn: (exe, args, o) => spawn(exe, args, { ...o, env: { ...o.env, TROCAR_FAKE_HELPER: '1' } }) } }, write }
 }
 
+const flowsOf = (dir) => { const d = path.join(dir, 'flows'); return (fs.existsSync(d) ? fs.readdirSync(d) : []).flatMap((n) => fs.readFileSync(path.join(d, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))) }
 const freePort = async () => { const s = net.createServer(); await new Promise((r) => s.listen(0, '127.0.0.1', r)); const p = s.address().port; await new Promise((r) => s.close(r)); return p }
 
 /** One agent connection: from a known local port, CONNECT through the door with its credentials, TLS trusting `ca` only, the request, the whole reply. */
@@ -143,6 +144,24 @@ for (const platform of ['darwin', 'win32']) {
         assert.equal(got.length, 1); assert.equal(got[0].toString('latin1'), REQ, 'the mock received the request bytes verbatim')
         await one.end()
 
+        // 4.6 §开关: the daemon records from its in-memory switch, not from state.json read per request — with the file unreadable after on, the next
+        // exchange is still decrypted and recorded (a silent off on a read error is what this guards against)
+        const stateF = path.join(w.dir, 'state.json'), stateWas = fs.readFileSync(stateF)
+        fs.writeFileSync(stateF, '{"version":3')
+        a.ports.add(await freePort()); win?.write()
+        const kept = await through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [rootPem], req: REQ, open })
+        assert.equal(kept.reply, REPLY)
+        assert.ok(X(kept.peer.issuerCertificate).checkIssued(root), 'state.json unreadable: still decrypted under the trocar root')
+        await kept.end()
+        fs.writeFileSync(stateF, stateWas)
+
+        // D51④ / 4.8 §5.5: a client of this process that refuses the leaf → trust-rejected keyed by the process life "<pid>@<start>"; the key is
+        // cleared (negative-cache-cleared, same neg_key) once the process leaves the table — below, after off
+        a.ports.add(await freePort()); win?.write()
+        await assert.rejects(through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [upCa.certPem], req: REQ, open }))
+        const rejected = await within((async () => { for (;;) { const f = flowsOf(w.dir).find((l) => l.event === 'failure' && l.code === 'trust-rejected'); if (f) return f; await new Promise((r) => setTimeout(r, 25)) } })(), 5000, 'a trust-rejected line')
+        assert.match(rejected.neg_key, new RegExp(`^${PID}@\\d+$`), 'keyed by the process life, not the bare pid')
+
         // D60: the record went into the raw layer's current segment, and the live daemon names that segment in its lock —
         // which is how the sealer and `raw seal` know the one segment they must leave alone.
         const rawDir = path.join(path.dirname(w.dir), 'raw')
@@ -156,7 +175,7 @@ for (const platform of ['darwin', 'win32']) {
         const two = await through({ door, auth, target, localPort: [...a.ports].at(-1), ca: [upCa.certPem], req: REQ, open })
         assert.equal(two.reply, REPLY)
         assert.ok(X(two.peer).checkIssued(new crypto.X509Certificate(upCa.certPem)), 'after off the TLS peer is the mock\'s own certificate: forwarded, not decrypted')
-        assert.equal(got.length, 2); assert.equal(got[1].toString('latin1'), REQ)
+        assert.equal(got.length, 3); assert.equal(got[2].toString('latin1'), REQ)
         await two.end()
 
         // with no connection open, the holder alone keeps the daemon and its door up past the exit tick (CM23)
@@ -168,21 +187,25 @@ for (const platform of ['darwin', 'win32']) {
         // the holder leaves the process table: the door closes, and the daemon goes on idling (CM23 under D62 ⑥ — proxy mode never asks it to exit)
         a.alive = false; win?.write()
         await within((async () => { for (;;) { if (!(await doorOpen(door))) return true; await new Promise((r) => setTimeout(r, 100)) } })(), 20_000, 'the door closed once its holder was gone')
+        const cleared = await within((async () => { for (;;) { const f = flowsOf(w.dir).find((l) => l.event === 'negative-cache-cleared'); if (f) return f; await new Promise((r) => setTimeout(r, 100)) } })(), 25_000, 'the rejected key cleared once its process was gone')
+        assert.deepEqual([cleared.neg_key, cleared.pid], [rejected.neg_key, PID])
         assert.equal(await Promise.race([box.daemon.exited.then(() => 'exited'), new Promise((r) => setTimeout(() => r('up'), 500))]), 'up', 'and the daemon is still running, with no door open (D62 ⑥)')
 
         // D40: one record — the on window's exchange, its bytes exactly; nothing for the forwarded one
         const recs = fs.readdirSync(rawDir).flatMap((n) => fs.readFileSync(path.join(rawDir, n), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)))
-        assert.equal(recs.length, 1, `one record, the decrypted exchange only: ${recs.map((r) => r.endpoint).join(', ')}`)
+        assert.equal(recs.length, 2, `two records, the decrypted exchanges only: ${recs.map((r) => r.endpoint).join(', ')}`)
+        for (const r of recs) {
+          assert.equal(Buffer.concat([Buffer.from(r.req_head_raw, 'latin1'), Buffer.from(r.req_body, 'utf8')]).toString('latin1'), REQ, 'the recorded request bytes are the bytes the mock received')
+          assert.equal(r.resp_head_raw + r.resp.raw, REPLY, 'the recorded response bytes are the bytes the mock sent')
+          assert.deepEqual([r.proc.pid, r.proc.agent], [PID, 'codex'])
+        }
         const r = recs[0]
-        assert.equal(Buffer.concat([Buffer.from(r.req_head_raw, 'latin1'), Buffer.from(r.req_body, 'utf8')]).toString('latin1'), REQ, 'the recorded request bytes are the bytes the mock received')
-        assert.equal(r.resp_head_raw + r.resp.raw, REPLY, 'the recorded response bytes are the bytes the mock sent')
-        assert.deepEqual([r.proc.pid, r.proc.agent], [PID, 'codex'])
         // D62: the daemon indexed what it wrote. Before any query ran, the index of that segment is there and covers
         // the record — so the first query answers from it instead of building it (3.9 s on 1 GB before this).
         // The document is append-only NDJSON (4.2 §段索引): entry lines and one mark line per pass.
         const lines = fs.readFileSync(path.join(path.dirname(w.dir), 'index', `${lock.segment}.json`), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
         const idx = { records: lines.filter((o) => !o.m && !o.p), mark: lines.filter((o) => o.m).pop().m }
-        assert.deepEqual(idx.records.map((x) => x.id), [`${lock.segment}:1`], 'the index covers the captured record')
+        assert.deepEqual(idx.records.map((x) => x.id), [`${lock.segment}:1`, `${lock.segment}:2`], 'the index covers the captured records')
         assert.deepEqual([idx.records[0].host, idx.records[0].harness], [r.host, 'codex'])
         assert.equal(idx.mark.size, fs.statSync(path.join(rawDir, `${lock.segment}.ndjson`)).size, 'to the last byte the daemon wrote')
         const read = await segmentIndex({ home: path.dirname(w.dir), segment: lock.segment })
