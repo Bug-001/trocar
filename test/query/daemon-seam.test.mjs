@@ -59,7 +59,7 @@ test('darwin: a read goes through the real daemon and gives the very bytes the l
     const viaDaemon = await cli(['sessions', '--json'], { home: w.home, env: w.env, platform: 'darwin' })
     assert.equal(viaDaemon.exit, 0, viaDaemon.out)
     const id = biggestSession(viaDaemon.out)
-    const ref = `${JSON.parse(viaDaemon.out).sessions.length ? fs.readdirSync(path.join(asight, 'raw')).sort()[0].replace(/\.(ndjson|sealed)$/, '') : ''}:1`
+    const ref = `${JSON.parse(viaDaemon.out).sessions.length ? fs.readdirSync(path.join(asight, 'raw')).filter((n) => /\.(ndjson|sealed)$/.test(n) && !n.startsWith('.')).sort()[0].replace(/\.(ndjson|sealed)$/, '') : ''}:1`
 
     // `segments` and `classes` are not here: both report the raw layer's live state (its sizes, what is sealed), and
     // this daemon seals its own copy — the two HOMEs may honestly disagree about those two documents, not about a record.
