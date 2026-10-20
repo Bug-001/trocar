@@ -9,7 +9,7 @@
 // except on first use, where each agent row carries the capture page's one control (core/harness-switch.mjs: switch or Set up,
 // written only on a click through planConfirm); GET /control/status is read when first use is first seen and after a 405.
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router, toast}.
-import { COMMANDS, ERR_WHERE } from '../labels/capture.mjs'
+import { COMMANDS, ERR_WHERE, SWITCH_WORD } from '../labels/capture.mjs'
 import { TITLE_FROM_WIRE } from '../labels/replay.mjs'
 import { esc, fmtWhen, relTime, bytes, usd } from '../core/fmt.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
@@ -372,8 +372,20 @@ function agentRowsHtml(s) {
   if (!rows.length) return ''
   const ui = s.ui || new Map()
   return `<section class="ovcard agents" aria-label="${esc(W.CARD.agents)}"><h2 class="ovh">${esc(W.CARD.agents)}</h2>` +
-    rows.map((r) => `<div class="ovitem ovagent" data-h="${esc(r.harness)}">${chipHtml(r.harness)}<span class="ovtx"></span>` +
-      `${controlHtml(controlFor({ control: s.control, status: H }, r.harness), ui.get(r.harness))}</div>`).join('') + `</section>`
+    rows.map((r) => {
+      const m = controlFor({ control: s.control, status: H }, r.harness)
+      return `<div class="ovitem ovagent" data-h="${esc(r.harness)}">${chipHtml(r.harness)}` +
+        `<span class="ovtx">${esc(SWITCH_WORD[r.desired] || '')}</span>${controlHtml(m, ui.get(r.harness))}${m.kind ? '' : rowCommandsHtml(m, r)}</div>`
+    }).join('') + `</section>`
+}
+
+// a row the board cannot act on: the command that does it, under technical details (1.9 §开关) — install while asight is
+// not installed or left residue, else on / off spelt the way the status document keys this harness (none when it is unkeyed)
+function rowCommandsHtml(m, r) {
+  const cmd = (c) => `<code>${esc(c.replace('<id>', r.cliId))}</code>`
+  const pairs = m.why === 'not-installed' || m.why === 'residue' ? { install: cmd(COMMANDS.install) }
+    : r.cliId ? { 'start capturing': cmd(COMMANDS.on), 'stop capturing': cmd(COMMANDS.off) } : null
+  return pairs ? techDetailsHtml(pairs, { id: `ov-cmd-${r.harness}`, html: true }) : ''
 }
 
 // the whole body: which cards exist and their html. `agents` is the first-use zone of one row per agent, its own zone apart

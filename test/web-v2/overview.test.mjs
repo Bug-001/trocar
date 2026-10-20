@@ -12,7 +12,7 @@ import { capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
 import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../src/web/v2/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../src/web/v2/labels/replay.mjs'
 import { TITLE_FROM_AGENT, UNNAMED } from '../../src/web/v2/labels/overview.mjs'
-import { ERR_WHERE } from '../../src/web/v2/labels/capture.mjs'
+import { ERR_WHERE, SWITCH_WORD } from '../../src/web/v2/labels/capture.mjs'
 import { esc, fmtWhen } from '../../src/web/v2/core/fmt.mjs'
 
 const SPEC = fs.readFileSync(new URL('../../spec/01-asight-rfc/1.6-cli.md', import.meta.url), 'utf8')
@@ -296,6 +296,7 @@ const CTL_ON = { ok: true, status: 200, data: { control: true } }
 const NONE = { sessions: [], errors: [], next: null }
 const firstWith = (status, control, sessions = NONE) => ({ ...stateOf(status, { sessions: ok(sessions) }), control, ui: new Map() })
 const hctls = (html) => [...html.matchAll(/<[^>]*data-hctl="([^"]*)"[^>]*>/g)].map((m) => ({ kind: m[1], h: /data-h="([^"]*)"/.exec(m[0])[1] }))
+const rowHtml = (html, h) => html.split('class="ovitem ovagent"').find((x) => x.startsWith(` data-h="${h}"`)) || ''
 const rowsOf = (html) => [...new Set([...html.matchAll(/data-h="([^"]*)"/g)].map((m) => m[1]))].sort()
 
 test('#10 first use: one row per listed agent with exactly one control (switch, or Set up when setup is needed); none and nothing disabled where the board cannot act', () => {
@@ -316,10 +317,20 @@ test('#10 first use: one row per listed agent with exactly one control (switch, 
     assert.deepEqual(rowsOf(b.agents), keys)
     assert.deepEqual(hctls(html), [])
     assert.doesNotMatch(html, /disabled/)
+    // each row still says what it can't do here: the command (1.6's usage: install, or on / off <the document's key>)
+    const installed = !(st.caph.data.health && st.caph.data.health.state === 'not-installed')
+    for (const id of TWO) {
+      const row = rowHtml(b.agents, harnessKey(id))
+      assert.ok(row.includes(installed ? `asight on ${id}` : 'asight install'), row)
+    }
   }
   for (const st of [firstWith(twoAgents(), CTL_ON), ...cannot]) {
     const b = renderBody(st, NOW), html = b.cap + b.agents + b.recent
     assert.doesNotMatch(html, /data-act="(install|uninstall)"/)
+    // every row writes the desired state as text, whatever control it gets (1.9 §开关)
+    for (const [id, v] of Object.entries(st.caph.data.harnesses)) {
+      if (SWITCH_WORD[v.desired]) assert.match(rowHtml(b.agents, harnessKey(id)), new RegExp(`class="ovtx">${SWITCH_WORD[v.desired]}<`))
+    }
     assert.ok(hctls(html).every((x) => x.kind === 'switch' || x.kind === 'setup'))
   }
 })
