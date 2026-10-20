@@ -23,7 +23,7 @@ import { failureBrief, failureWord } from '../../../cli/words.mjs'
 import { infoButton, techDetailsHtml, confirmDialog } from '../core/ui.mjs'
 import { controlFor, controlHtml, wireHarnessControls } from '../core/harness-switch.mjs'
 import * as W from '../labels/overview.mjs'
-import { WINDOW_LABEL, UNTITLED } from '../labels/common.mjs'
+import { WINDOW_LABEL, UNTITLED, READING } from '../labels/common.mjs'
 
 const DAY = 24 * 3600e3
 export const POLL = Object.freeze({ health: CAPH_MS, sessions: 3000, slow: 30000 })
@@ -268,7 +268,7 @@ export function itemsCardHtml(s, now) {
   const body = items.rows.length
     ? items.rows.map(itemHtml).join('') +
       Object.entries(items.more).map(([cls, n]) => `<a class="ovitem more" href="${MORE_HREF[cls] || '#/capture'}">${esc(W.MORE_OF(n))}</a>`).join('')
-    : (allRead && items.partial.length === 0 ? `<p class="ovempty">${esc(W.NO_ITEMS)}</p>` : '')
+    : items.partial.length ? '' : `<p class="ovempty${allRead ? '' : ' reading'}">${esc(allRead ? W.NO_ITEMS : READING)}</p>`
   const since = s.caph.data && s.caph.data.failures ? s.caph.data.failures.since : null
   return `<section class="ovcard items" aria-label="${esc(W.CARD.items)}">` +
     `<h2 class="ovh">${esc(W.CARD.items)}${infoButton({ label: 'Failure list window', title: W.FAIL_LIST, body: W.FAIL_WINDOW(since ? fmtWhen(parseTs(since), now) : null) })}</h2>` +
@@ -286,9 +286,11 @@ const costTip = (c, priceFail) => [W.EST_TIP, floorShown(c, priceFail)
 
 export function statsCardHtml(s, now) {
   const st = s.stats
-  if (st == null) return ''
+  if (st == null || (st.ok == null && st.data == null)) return readingHtml('stats', W.CARD.stats)
   if (st.ok === false && st.data == null) return readFailHtml('Stats', st.err, 'slow')
-  if (st.data == null) return '' // never read yet: nothing is drawn that has no source
+  if (st.data == null) return readingHtml('stats', W.CARD.stats)
+  // the numbers on hand were asked for another window: drawn dim and marked reading until this window answers (1.7 §读取与刷新)
+  const other = st.w != null && st.w !== s.w
   const D = st.data
   const priceFail = s.pricing && s.pricing.ok === false ? s.pricing.err : null
   const m = overviewStats(D, s.pricing && s.pricing.data)
@@ -296,7 +298,8 @@ export function statsCardHtml(s, now) {
   const cov = m.partial ? `<p class="ovsub warn ovcov">${esc(c.callsLeft != null ? W.USAGE_CALLS_LEFT(c.callsLeft) : W.USAGE_SESSIONS(c.read, c.total))}</p>` : ''
   const missing = coverageOf(s, now)
   const disk = diskBytes(s.classes)
-  const head = `<section class="ovcard stats" aria-label="${esc(W.CARD.stats)}"><h2 class="ovh">${esc(W.CARD.stats)}</h2>` +
+  const head = `<section class="ovcard stats${other ? ' reading' : ''}"${other ? ' aria-busy="true"' : ''} aria-label="${esc(W.CARD.stats)}"><h2 class="ovh">${esc(W.CARD.stats)}</h2>` +
+    (other ? `<p class="ovsub">${esc(READING)}</p>` : '') +
     `<p class="ovsub">${esc(W.AS_OF(D.as_of ? fmtWhen(parseTs(D.as_of), now) : '—', POLL.slow / 1000))} · ${esc(W.SCOPE_LINE)}</p>` +
     (missing ? `<p class="ovsub warn">${esc(missing)}</p>` : '') + cov +
     (priceFail ? `<p class="ovsub warn">${esc(W.PRICE_FAIL(priceFail))}</p>` : '')
@@ -347,7 +350,7 @@ const agentTableHtml = (m, w, now, priceFail) => {
 const TITLE_TIP = { 'harness-local-store': W.TITLE_FROM_AGENT, wire: TITLE_FROM_WIRE }
 export function recentCardHtml(s, now) {
   const P = s.sessions
-  if (P == null) return ''
+  if (P == null || (P.ok == null && P.data == null)) return readingHtml('recent', W.CARD.recent)
   if (P.ok === false && P.data == null) return readFailHtml('Session list', P.err, 'sessions')
   const rows = recentRows(P.data)
   if (rows == null || !rows.length) return '' // no session at all is the first-use page (firstUse)
@@ -374,6 +377,10 @@ export function firstUseHtml(s) {
     (h && h.state === 'not-installed' ? techDetailsHtml({ 'install command': `<code>${esc(COMMANDS.install)}</code>` }, { id: 'ov-install', html: true }) : '') +
     `</section>`
 }
+
+// a card whose first answer has not come yet: its name and 读取中 (1.5 覆盖), never a blank space
+const readingHtml = (cls, title) =>
+  `<section class="ovcard ${cls} reading" aria-label="${esc(title)}" aria-busy="true"><h2 class="ovh">${esc(title)}</h2><p class="ovsay">${esc(READING)}</p></section>`
 
 const readFailHtml = (what, why, group) =>
   `<section class="ovcard"><h2 class="ovh">${esc(what)}</h2>` +
@@ -427,8 +434,8 @@ export const SKELETON =
 
 export function mount(el, ctx) {
   const { api, router } = ctx
-  let dead = false, w = parseWindow(router.current().params.window)
-  const s = { w, readAt: null, caph: { data: null, okAt: null, err: null, ok: null }, control: null, ui: new Map() }
+  let dead = false
+  const s = { w: parseWindow(router.current().params.window), readAt: null, caph: { data: null, okAt: null, err: null, ok: null }, control: null, ui: new Map() }
   let ctlAsked = false
   for (const k of SLOTS) s[k] = { data: null, ok: null, err: null }
   const polls = {
@@ -448,18 +455,26 @@ export function mount(el, ctx) {
     else s[slot] = { data: s[slot].data, ok: false, err: (r && (r.error || `HTTP ${r.status}`)) || 'reason unknown' }
   }
 
+  // a repaint never takes the reader's place (1.7 §读取与刷新): a zone holding a text selection waits for the next render (its
+  // signature stays old), and focus inside a zone returns to the element of the same kind and the same href / data-h / data-key
+  const KEYS = ['href', 'data-h', 'data-key']
+  const paint = (z, html) => {
+    const doc = el.ownerDocument
+    const sel = doc && doc.getSelection ? doc.getSelection() : null
+    if (sel && !sel.isCollapsed && sel.anchorNode && z.contains(sel.anchorNode)) return false
+    const act = doc && doc.activeElement, at = act && z.contains && z.contains(act) && act.closest ? act.closest(KEYS.map((a) => `[${a}]`).join(',')) : null
+    const key = at ? KEYS.find((a) => at.hasAttribute(a)) : null, val = key ? at.getAttribute(key) : null
+    z.innerHTML = html
+    if (key) { const b = [...z.querySelectorAll(`[${key}]`)].find((n) => n.tagName === at.tagName && n.getAttribute(key) === val); if (b) b.focus() }
+    return true
+  }
   const render = () => {
     if (dead) return
     const now = api.now()
     const body = renderBody(s, now)
     const next = { head: headHtml(s), ...body }
     if (body.first && !ctlAsked) { ctlAsked = true; readControl() }
-    const doc = el.ownerDocument, act = doc && doc.activeElement
-    const focusH = act && act.closest && act.closest('#ovagents [data-hctl]') ? act.getAttribute('data-h') : null
-    for (const k of Object.keys(zones)) if (sigs[k] !== next[k]) {
-      zones[k].innerHTML = next[k]; sigs[k] = next[k]
-      if (k === 'agents' && focusH) { const b = zones[k].querySelector(`[data-hctl][data-h="${focusH}"]`); if (b) b.focus() } // 1.9: focus stays on the control
-    }
+    for (const k of Object.keys(zones)) if (sigs[k] !== next[k] && paint(zones[k], next[k])) sigs[k] = next[k]
     el.querySelector('#ovgrid').classList.toggle('first', body.first)
   }
 
@@ -471,14 +486,34 @@ export function mount(el, ctx) {
   }
   const readControl = () => api.controlStatus().then((r) => { s.control = r }, (e) => { s.control = { ok: false, error: String(e) } }).finally(render)
   const readSessions = async () => { fold('sessions', await loadSessions(api)) }
+  // the stats read: one at a time, tagged with the window it asked for. A newer one cancels the older; an answer for a window
+  // that is no longer s.w, or a cancelled one, is dropped; a failure keeps the last data only when it was this window's
+  let statsCtl = null, statsP = null
+  const readStats = () => {
+    if (statsCtl) statsCtl.abort()
+    const ctl = statsCtl = new AbortController(), asked = s.w
+    const p = statsP = api.get('overview', { since: asked === 'all' ? null : asked }, { signal: ctl.signal }).then((r) => {
+      if (ctl.signal.aborted || asked !== s.w) return
+      const kept = s.stats.w === asked ? s.stats.data : null
+      s.stats = r && r.ok ? { data: r.data, ok: true, err: null, w: asked } : { data: kept, ok: false, err: (r && (r.error || `HTTP ${r.status}`)) || 'reason unknown', w: kept ? asked : null }
+      if (r && r.ok) s.readAt = Date.now()
+    }).finally(() => { if (statsCtl === ctl) statsCtl = null })
+    return p
+  }
+  // the slow group's stats step lasts until the latest stats read ends (a window change mid-way replaces it in the same slot)
+  const statsSettled = async () => { let p = readStats(); for (;;) { await p.catch(() => {}); if (statsP === p) return; p = statsP } }
+  // two workers pull the five reads (1.7 §读取与刷新): the browser's six sockets per origin keep room for status and sessions
+  const SLOW = [
+    () => api.get('classes').then((r) => fold('classes', r)),
+    () => api.get('pricing').then((r) => fold('pricing', r)),
+    statsSettled,
+    () => api.get('segments').then((r) => fold('segments', r)),
+    () => api.get('traffic', { since: '24h' }).then((r) => fold('traffic', r)),
+  ]
   const readSlow = async () => {
-    await Promise.allSettled([
-      api.get('classes').then((r) => fold('classes', r)),
-      api.get('pricing').then((r) => fold('pricing', r)),
-      api.get('overview', { since: w === 'all' ? null : w }).then((r) => fold('stats', r)),
-      api.get('segments').then((r) => fold('segments', r)),
-      api.get('traffic', { since: '24h' }).then((r) => fold('traffic', r)),
-    ])
+    let i = 0
+    const worker = async () => { while (!dead && i < SLOW.length) { const job = SLOW[i++]; await Promise.resolve().then(job).catch(() => {}); render() } }
+    await Promise.all([worker(), worker()])
   }
   const readers = { health: readHealth, sessions: readSessions, slow: readSlow }
 
@@ -507,12 +542,14 @@ export function mount(el, ctx) {
     onDone: (out) => { if (out && out.status === 405) readControl(); polls.health.due = true; render(); beat() },
   })
   beat()
+  render() // drawn at once: every card says 读取中 until its first answer (1.5 覆盖)
 
   return {
     update(route) {
       const nw = parseWindow(route && route.params && route.params.window)
-      if (nw !== w) { w = nw; s.w = w; polls.slow.due = true; beat() }
-      else render()
+      if (nw === s.w) return render()
+      s.w = nw; render() // the tab moves before any answer
+      readStats().catch(() => {}).finally(render)
     },
     unmount() {
       dead = true

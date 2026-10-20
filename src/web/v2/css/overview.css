@@ -17,6 +17,8 @@
 .ovgo a { color: var(--action); text-decoration: none; }
 .ovempty { margin: 4px 0; font-size: var(--fs-strong); color: var(--dim); }
 .ovmark { font-size: var(--fs-cap); color: var(--dim); }
+/* a card before its first answer, or the stats of the last window while the new one is read (1.7 §读取与刷新): dimmed */
+.ovcard.reading .ovsay, .ovcard.reading .ovtbl, .ovcard.reading .ovtr, .ovempty.reading { color: var(--dim); }
 .ovmono { font-family: var(--mono); font-size: var(--fs-cap); }
 
 /* the state lamp (1.5 §采集状态: a shape, never colour alone — the sentence beside it says the state) */

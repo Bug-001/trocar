@@ -12,6 +12,7 @@ import { capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
 import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../src/web/v2/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../src/web/v2/labels/replay.mjs'
 import { TITLE_FROM_AGENT, FILES_NOT_READ } from '../../src/web/v2/labels/overview.mjs'
+import * as W from '../../src/web/v2/labels/overview.mjs'
 import { ERR_WHERE, SWITCH_WORD } from '../../src/web/v2/labels/capture.mjs'
 import { esc, fmtWhen } from '../../src/web/v2/core/fmt.mjs'
 
@@ -168,12 +169,18 @@ test('#3 no false 「nothing to handle」: a failed source draws the partial not
 })
 
 // a mounted overview on a fake element and a fake api that logs every call
-function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h', control = {}, answer = { ok: true } } = {}) {
+// hold(name, params) → a promise to wait on before answering (the test decides when a read answers), or null to answer at once
+function fakeMount({ status = quiet(), sessions = { sessions: [session(1)], errors: [], next: null }, window = '24h', control = {}, answer = { ok: true }, hold = null } = {}) {
   const log = [], on = {}
   const docs = { status, sessions, classes: { disk: { trocar_bytes: 1 } }, pricing: { models: [] }, traffic: { hosts: [], harness_since: {} }, segments: { segments: [] } }
   const api = {
     now: () => NOW,
-    get: async (name, params) => { log.push({ method: 'GET', name, params: params || {} }); return name === 'overview' ? { ok: true, status: 200, data: stateOf(quiet()).stats.data } : { ok: true, status: 200, data: docs[name] } },
+    get: async (name, params) => {
+      log.push({ method: 'GET', name, params: params || {} })
+      const held = hold && hold(name, params || {})
+      if (held) return held
+      return name === 'overview' ? { ok: true, status: 200, data: stateOf(quiet()).stats.data } : { ok: true, status: 200, data: docs[name] }
+    },
     post: async (p) => { log.push({ method: 'POST', name: p }); return { ok: true } },
     control: async (v, body) => { log.push({ method: 'POST', name: v, body }); return answer },
     controlStatus: async () => { log.push({ method: 'GET', name: 'control/status' }); return { ok: true, data: control } },
@@ -430,4 +437,57 @@ test('A12 an agent row with no session and no model call links to its traffic, n
 test('A26a the page head is drawn once: the skeleton holds no <header>, headHtml one', () => {
   assert.ok(!SKELETON.includes('<header'))
   assert.equal((headHtml({ w: '24h', readAt: NOW }).match(/<header/g) || []).length, 1)
+})
+
+const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r }); return { promise, resolve } }
+const statsDoc = (total) => ({ ok: true, status: 200, data: { ...stateOf(quiet()).stats.data, sessions: { total } } })
+const tabOn = (html, w) => new RegExp(`href="#/overview\\?window=${w}"[^>]*aria-current`).test(html)
+
+test('A15 right after mount, before any answer: the head has its window tab, the stats and recent cards say reading, no card zone is blank', () => {
+  const { inst, zones } = fakeMount({ hold: () => new Promise(() => {}) })
+  try {
+    assert.ok(tabOn(zones.ovhead.innerHTML, '24h'))
+    for (const z of ['ovstats', 'ovrecent']) assert.match(zones[z].innerHTML, /class="ovcard[^"]*\breading\b/, z)
+    for (const z of ['ovhead', 'ovcap', 'ovitems', 'ovstats', 'ovrecent']) assert.notEqual(zones[z].innerHTML, '', z)
+  } finally { inst.unmount() }
+})
+
+test('A16 a window change moves the tab at once and an answer for another window never reaches the stats card', async () => {
+  const held = []
+  const { inst, zones } = fakeMount({ hold: (name, params) => { if (name !== 'overview') return null; const d = deferred(); held.push({ since: params.since ?? null, d }); return d.promise } })
+  try {
+    inst.update({ params: { window: '7d' } }); inst.update({ params: { window: 'all' } })
+    assert.ok(tabOn(zones.ovhead.innerHTML, 'all'))
+    const of = (since) => held.find((x) => x.since === since)
+    const n = (k) => esc(W.SESSIONS_N(k))
+    of(null).d.resolve(statsDoc(9)); await settle()
+    assert.ok(zones.ovstats.innerHTML.includes(n(9)))
+    assert.doesNotMatch(zones.ovstats.innerHTML, /\breading\b/)
+    of('7d').d.resolve(statsDoc(4)); if (of('24h')) of('24h').d.resolve(statsDoc(1)); await settle()
+    assert.ok(zones.ovstats.innerHTML.includes(n(9)))
+    assert.ok(!zones.ovstats.innerHTML.includes(n(4)) && !zones.ovstats.innerHTML.includes(n(1)))
+  } finally { inst.unmount() }
+})
+
+test('A17 the slow reads go at most two at a time, and all five are read in the end', async () => {
+  const SLOW = ['classes', 'pricing', 'overview', 'segments', 'traffic']
+  const pending = [], asked = new Set()
+  let most = 0
+  const { inst } = fakeMount({
+    hold: (name) => {
+      if (!SLOW.includes(name)) return null
+      asked.add(name); const d = deferred(); const x = { name, d, done: false }; pending.push(x)
+      most = Math.max(most, pending.filter((p) => !p.done).length)
+      return d.promise.then((v) => { x.done = true; return v })
+    },
+  })
+  try {
+    await settle()
+    for (let i = 0; i < 10 && pending.some((p) => !p.done); i++) {
+      const next = pending.find((p) => !p.done)
+      next.d.resolve(next.name === 'overview' ? statsDoc(1) : { ok: true, status: 200, data: {} }); await settle()
+    }
+    assert.ok(most <= 2, `most in flight ${most}`)
+    assert.deepEqual([...asked].sort(), [...SLOW].sort())
+  } finally { inst.unmount() }
 })
