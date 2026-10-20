@@ -173,18 +173,19 @@ export function createModelCollector({ harnesses, dir, identify, ownerOf = null,
     return { ...base, decrypt: v.decrypt === true, ...(v.upstreamTrust ? { upstreamTrust: v.upstreamTrust } : {}), ...(v.decrypt === true ? {} : { skip: { not_captured: 'untrusted', reason: v.code } }) } // P11's closed code on the row (D38)
   }
 
-  /** GET /asight.pac on the auth:false door (P10): this user's processes only; the door leg while its harness is on, then only the app's own way. */
+  /** GET /asight.pac on the auth:false door (P10): the door leg for this user's processes while its harness is on; anyone else, and every requester
+   *  after off, gets only the app's own way — never an empty answer, which would send the app direct around the user's system proxy. */
   async function servePac({ peer, user, path: p }) {
     const d = doors.get(user)
     if (!d || d.auth) return null
     const { pid: q } = await ident.owningPid(peer)
     const facts = q != null ? await ident.factsCached(q) : null
-    if (!peerAllowed({ ...(facts || {}), pid: q }, self, { record }).ok) return null
+    const mine = peerAllowed({ ...(facts || {}), pid: q }, self, { record }).ok // recorded when not: the door is not offered, but the app keeps its own way (P10)
     const m = identify(facts) || {}
-    if (m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
+    if (mine && m.reason === 'match' && onSet.has(m.agent)) seen.add({ harness: m.agent, pid: q, start: facts.startedAt ?? null }) // taking the PAC is reading the entry (P12)
     const leg = await pacLeg({ systemProxy: systemProxy(), isAsightDoor: (v) => isAsightDoorUrl(v, { ports: [...doors.values()].map((x) => x.port) }) }) // what this door dials too
     let res = { status: 404, headers: {}, body: '' }
-    pacHandler({ state: () => ({ door: onSet.has(d.harness) ? `127.0.0.1:${d.port}` : null, ownLeg: leg.url, bypass: leg.bypass }) })({ method: 'GET', url: p }, { writeHead: (status, headers) => { res = { status, headers, body: '' } }, end: (b) => { res.body = b } })
+    pacHandler({ state: () => ({ door: mine && onSet.has(d.harness) ? `127.0.0.1:${d.port}` : null, ownLeg: leg.url, bypass: leg.bypass }) })({ method: 'GET', url: p }, { writeHead: (status, headers) => { res = { status, headers, body: '' } }, end: (b) => { res.body = b } })
     return res
   }
 
