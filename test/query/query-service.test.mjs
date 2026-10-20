@@ -201,16 +201,17 @@ test('a worker that dies after the frame head aborts the response: the reader ne
 
 test('the deadline measures silence: a body waiting on a slow reader is not killed', async () => {
   const said = []
+  const WANT = JSON.stringify({ a: 'x'.repeat(1000) })
   // the frame comes in two writes; the response is full after the first and says so with 'drain' only well past the deadline
   const svc = createQueryService({ home: rawHome('trocar-qsvc-'), deadlineMs: 200, failure: (w, e) => said.push(e.message),
-    fork: fake(`const b = JSON.stringify({ a: 'x'.repeat(1000) }); process.stdout.write('200 ' + b.length + '\\n' + b.slice(0, 500)); setTimeout(() => process.stdout.write(b.slice(500)), 50)`) })
+    fork: fake(`const b = ${JSON.stringify(WANT)}; process.stdout.write('200 ' + b.length + '\\n' + b.slice(0, 500)); setTimeout(() => process.stdout.write(b.slice(500)), 50)`) })
   const res = recorder()
   let drain = null
   Object.assign(res, { write: (b) => { res.chunks.push(b); return false }, once: (ev, fn) => { if (ev === 'drain') drain = fn } })
   setTimeout(() => drain && drain(), 700)
   try {
     await svc.relay({ name: 'segments', params: {}, res })
-    assert.equal(JSON.parse(res.text()).a.length, 1000, 'the whole document arrived')
+    assert.equal(res.text(), WANT, 'the whole document arrived')
     assert.ok(res.ended)
     assert.deepEqual(said, [], 'no failure was recorded')
   } finally {
