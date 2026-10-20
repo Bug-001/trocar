@@ -8,6 +8,7 @@ import { wireShape, RESPONSES, CHAT } from './openai.mjs';
 import { isWsHandshake } from './ws-handshake.mjs';
 import { hintsOf } from './harnesses.mjs';
 import { RESPONSES_WS } from './openai-ws.mjs';
+import { CC_THREADS, isContinuation } from './cc-threads.mjs';
 
 export { isWsHandshake };
 const epPath = (rec) => String((rec && rec.endpoint) || '').split('?')[0];
@@ -53,6 +54,9 @@ const BOARD = { 'openai-responses': RESPONSES, 'openai-chat': CHAT, 'openai-resp
 export function boardDissectorFor(rec) {
   return BOARD[wireFormatOf(rec)] || null;
 }
+// The cross-record context hooks of the Anthropic wire (Message Threads, src/dissect/cc-threads.mjs), which the
+// multi-lane assembler calls the way the flat-lane one calls a board dissector's prepare / contextOf.
+export const MULTI_LANE_CONTEXT = CC_THREADS;
 
 // The lane of a call on a flat-lane wire (the OpenAI wires), ONE rule for the board and the ETL: the dissector's
 // own lane (a warm-up, 3.1:37), else the harness table's hint (3.4), else main (gate G15). Claude Code's
@@ -74,7 +78,12 @@ export function blockKeysOf(format) {
 // 3.2:52 context_state of an HTTP-wire call: 'partial' when the stored request is incomplete (gate G17,
 // capture-labels.mjs), 'server_edited' when an Anthropic response reports context edits, else 'complete'.
 // (A WebSocket call's state comes from its previous_response_id chain instead.) The ETL's Anthropic
-// adapter and the board both read it here.
+// adapter and the board both read it here. A Message Threads continuation read on its own carries only its delta:
+// its earlier turns are in other records, so it is 'partial' here; the board's thread chain (cc-threads.mjs) reads
+// it 'reconstructed' when every predecessor is in the capture.
 export function contextStateOf(rec) {
-  return contextStateOfRequest(rec) ?? (wireFormatOf(rec) === 'anthropic' && serverEdited(rec) ? 'server_edited' : 'complete');
+  const stored = contextStateOfRequest(rec);
+  if (stored) return stored;
+  if (wireFormatOf(rec) !== 'anthropic') return 'complete';
+  return isContinuation(rec) ? 'partial' : serverEdited(rec) ? 'server_edited' : 'complete';
 }

@@ -118,6 +118,10 @@ function blockHead(b) {
   if (k === 'tool_use' || k === 'server_tool_use') return { role: 'assistant', tag: 'action · ' + (b.toolName || ''), label: shorten(argPreview(bl)) };
   if (k === 'tool_result') return { role: r, tag: 'observation' + (bl && bl.is_error ? ' · error' : ''), label: '' };
   if (k === 'image') return { role: r, tag: 'image', label: '' };
+  if (k === 'tool_addition' || k === 'tool_removal') { // a tool definition added / removed mid-conversation
+    const t = bl && bl.tool, def = (t && (t.definition || t)) || {};
+    return { role: r, tag: k === 'tool_addition' ? 'def · added' : 'def · removed', label: String(def.name || (t && t.name) || '') };
+  }
   if (k === 'document') return { role: r, tag: 'document', label: '' };
   const tag = r === 'user' ? 'user' : r === 'assistant' ? 'say' : r === 'system' ? 'system-reminder' : 'text';
   const txt = typeof bl === 'string' ? bl : (bl && typeof bl.text === 'string') ? bl.text : '';
@@ -143,7 +147,7 @@ const blockPreview = (b) => shorten(bodyTextOf(b));
 //
 // Roles NOT in the table land in `other` rather than being folded into `user`: an unrecognized role
 // must be VISIBLE, never mis-coloured as something we did not observe (invariant 4).
-const COMP_KIND = { thinking: 'thinking', redacted_thinking: 'thinking', tool_use: 'tool_use', server_tool_use: 'tool_use', tool_result: 'tool_result', image: 'image' };
+const COMP_KIND = { tool_addition: 'tools', tool_removal: 'tools', thinking: 'thinking', redacted_thinking: 'thinking', tool_use: 'tool_use', server_tool_use: 'tool_use', tool_result: 'tool_result', image: 'image' };
 const COMP_ROLE = { assistant: 'assistant', user: 'user', system: 'system', developer: 'system', tool: 'tool_result' };
 export const COMP_KEYS = ['tools', 'system', 'user', 'assistant', 'thinking', 'tool_use', 'tool_result', 'image', 'other'];
 
