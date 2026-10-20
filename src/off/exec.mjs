@@ -52,6 +52,13 @@ export function execTool(file, args, { run = null, env = process.env, input = nu
   return r && typeof r.then === 'function' ? r.then(shape) : shape(r) // an async runner (runAsync) gives the same shape, later
 }
 
+/** Starts `file args…` as a long-lived child, stdin and stdout piped and stderr dropped: a watch that is told what to watch on stdin and reports on
+ *  stdout (4.9 §2's `scutil` change notice). Refuses a real tool under npm test as execTool does; the caller owns the child (kill it to stop). */
+export function spawnTool(file, args, { env = process.env } = {}) {
+  if (process.env.ASIGHT_TEST_SANDBOX === '1' || env.ASIGHT_TEST_SANDBOX === '1') refuseRealTool(file, args, env)
+  return spawn(file, args, { env, stdio: ['pipe', 'pipe', 'ignore'] })
+}
+
 /** spawnSync's runner shape without blocking the event loop (a daemon that serves doors must not stop for an `lsof`): `execFile`, the
  *  same options execTool passes, resolving `{ status, stdout, stderr, error? }` — status null when it was killed (the timeout) or never started.
  *  `quiet` asks for no output and settles on the child's exit; `windowsVerbatimArguments` is spawn's own (cmd's quoting).

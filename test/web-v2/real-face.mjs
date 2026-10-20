@@ -30,7 +30,7 @@ export function boardHome({ bytes = 0 } = {}) {
 
 /** The face on an ephemeral port. get(name, params) → {status, doc}; close() stops the server and the worker. */
 export async function serveBoard({ userHome, home }) {
-  const env = { ...process.env, HOME: userHome, PATH: osStubs().path }
+  const env = { ...process.env, HOME: userHome, ...osStubs().env }
   const svc = createQueryService({ home, fork: (h, ...argv) => fork(WORKER, [h, ...argv], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'], execArgv: ['--require', NO_REAL_OS], env }) })
   const { server } = createServer({ home, token: TOKEN, query: svc })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')

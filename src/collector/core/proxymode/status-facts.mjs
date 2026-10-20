@@ -9,6 +9,7 @@ import { judgeEntry, judgeOwned } from '../trust/journal.mjs'
 import { isPresent, readSrc, holds, presentPaths } from './sources.mjs'
 import { planRoutes } from './entries.mjs'
 import { upstreamFor, isAsightDoorUrl } from './chain.mjs'
+import { pacLeg } from './pac.mjs'
 import { redactProxyUrl, parseProxyUrl } from '../../../netenv/redact.mjs'
 import { CODE } from '../codes.mjs'
 import { checkWrapper } from './hooks/wrapper.mjs'
@@ -124,7 +125,9 @@ export async function modelFormFacts({ harnesses, os, manifest: m, reply = null,
       let upstream
       if (ans && ans.source) upstream = { url_redacted: ans.url_redacted ?? null, source: ans.source }
       else {
-        const u = await upstreamFor({ desc, facts: null, recordedPrior: priorRaw, systemProxy, isAsightDoor: (v) => isAsightDoorUrl(v, { ports }) })
+        const isAsightDoor = (v) => isAsightDoorUrl(v, { ports })
+        const u = route.auth === false ? await pacLeg({ systemProxy, isAsightDoor }) // a PAC's door dials the own leg its PAC names (P10), whatever the group's CLI form follows
+          : await upstreamFor({ desc, facts: null, recordedPrior: priorRaw, systemProxy, isAsightDoor })
         upstream = { url_redacted: red(u.url), source: u.source, ...(u.pac ? { pac: true } : {}) }
       }
       if (upstream.source === 'unknown') upstream.code = CODE.priorProxyUnknown

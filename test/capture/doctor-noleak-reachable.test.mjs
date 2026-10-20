@@ -43,7 +43,7 @@ import { osStubs } from '../helpers/os-stubs.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const CLI = path.join(ROOT, 'bin', 'asight.mjs');
-const OS_PATH = osStubs().path; // on a Mac `doctor`'s status block asks launchd and the keychain (read-only): stubs in the temp dir answer, the real tools are never run (0.1 §3)
+const OS = osStubs(), OS_PATH = OS.path, OS_NATIVE = OS.nativeDir; // on a Mac `doctor`'s status block asks launchd and the keychain (read-only): stubs in the temp dir answer, the real tools are never run (0.1 §3)
 
 // A capture holding a real un-redacted credential. If doctor reads ANY records at all, it must find it.
 function leakySource() {
@@ -118,7 +118,7 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
     let status = 0, out = '';
     try {
       // the default source of this sandbox HOME (D27), the way a user runs it: no option of its own
-      out = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, ASIGHT_SOURCE: '', PATH: OS_PATH } });
+      out = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, ASIGHT_SOURCE: '', PATH: OS_PATH, ASIGHT_NATIVE_DIR: OS_NATIVE } });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     assert.notEqual(status, 0,
       `doctor exited 0 on a world-readable capture holding live credentials.\n--- output ---\n${out}`);
@@ -126,7 +126,7 @@ test('END TO END: doctor hard-fails on a world-readable capture (the red line\'s
 
     // …and passes once the file is owner-only, credentials and all.
     fs.chmodSync(path.join(home, 'capture.ndjson'), 0o600);
-    const ok = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, ASIGHT_SOURCE: '', PATH: OS_PATH } });
+    const ok = execFileSync(process.execPath, [CLI, 'doctor'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: dir, ASIGHT_SOURCE: '', PATH: OS_PATH, ASIGHT_NATIVE_DIR: OS_NATIVE } });
     assert.match(ok, /^asight doctor: no problems\.$/m, 'a 0600 capture must pass, credentials and all');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -160,7 +160,7 @@ test('END TO END: a bare doctor on a CLEAN multi-root capture examines records a
     let status = 0, out = '';
     try {
       out = execFileSync(process.execPath, [CLI, 'doctor'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '', PATH: OS_PATH },
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '', PATH: OS_PATH, ASIGHT_NATIVE_DIR: OS_NATIVE },
       });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
 
@@ -198,7 +198,7 @@ test('END TO END: a BARE `asight doctor` reads the D27 multi-root default', () =
     let status = 0, out = '';
     try {
       out = execFileSync(process.execPath, [CLI, 'doctor'], {
-        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '', PATH: OS_PATH },
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, ASIGHT_SOURCE: '', PATH: OS_PATH, ASIGHT_NATIVE_DIR: OS_NATIVE },
       });
     } catch (e) { status = e.status; out = String(e.stdout || '') + String(e.stderr || ''); }
     // Subject is SOURCE RESOLUTION, not credentials: a bare doctor must find the legacy root and

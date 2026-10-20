@@ -14,14 +14,16 @@ import { readManifest } from '../../../../src/off/manifest.mjs'
 for (const os of OSES) {
   for (const desc of all) {
     const forms = desc.proxyMode.forms.filter((f) => f.os.includes(os))
-    test(`CM21 / V70 ${os} ${desc.name}: config-prior, direct and system-proxy from the door's own rule; written and prior side by side, redacted`, async () => {
+    test(`CM21 / V70 ${os} ${desc.name}: config-prior, direct and system-proxy from the door's own rule (a PAC's door: the PAC's own leg); written and prior side by side, redacted`, async () => {
       for (const [prior, sys, want] of [[PRIOR, null, 'config-prior'], [null, null, 'direct'], [null, SYS, ['unknown', true].includes(desc.proxy.systemProxy.http) ? 'system-proxy' : 'direct']]) {
         const { home, m, doors } = world(desc, { prior })
         const out = await modelFormFacts({ harnesses: all, os, manifest: m, reply: { doors }, root: ROOT_OK, systemProxy: sys, ctx: ctxOf(os, home) })
         assert.deepEqual(out[desc.name].map((x) => x.id), forms.map((f) => f.id), 'one entry per present form, in the descriptor\'s order')
         for (const x of out[desc.name]) {
-          assert.equal(x.proxy.upstream.source, want, `${x.id}: the upstream source`)
-          assert.equal(x.proxy.upstream.url_redacted, want === 'config-prior' ? 'http://***@proxy.corp:8080' : want === 'system-proxy' ? SYS.url : null)
+          const pac = (desc.proxyMode.routes[forms.find((f) => f.id === x.id).route] || {}).auth === false // a PAC's door dials the PAC's own leg (P10): the system proxy, else direct
+          const w = pac ? (sys ? 'system-proxy' : 'direct') : want
+          assert.equal(x.proxy.upstream.source, w, `${x.id}: the upstream source`)
+          assert.equal(x.proxy.upstream.url_redacted, w === 'config-prior' ? 'http://***@proxy.corp:8080' : w === 'system-proxy' ? SYS.url : null)
           assert.equal(x.proxy.prior, prior ? 'http://***@proxy.corp:8080' : null, 'the prior, redacted')
           assert.match(x.proxy.written, /^http:\/\/\*\*\*@127\.0\.0\.1:\d+$/, 'the written door, redacted')
           assert.deepEqual([x.proxy.entry_intact, x.proxy.door_up, x.proxy.connected], [true, true, true])

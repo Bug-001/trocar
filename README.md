@@ -345,7 +345,9 @@ environment variable. On macOS and Windows the model covers it without anything 
 `install` is what Desktop trusts, and `on` sets `egressProxyPacUrl` in the entry in effect of Desktop's user-level
 config library (creating a one-key entry when none is in effect; `off` removes it and restores the entry in effect). The
 PAC is served by the daemon on loopback: loopback and your bypass list go direct, the rest goes through the door, and
-when the door does not answer, the way Desktop would go without asight. It takes effect at the next start of the app;
+when the door does not answer, the way Desktop would go without asight: your system proxy, or direct when none is set.
+The door itself also leaves through your system proxy, and follows it when you change it. A process asight cannot
+confirm is yours still gets a PAC, with your system proxy and no door. It takes effect at the next start of the app;
 no administrator rights. Desktop's own first-party hosts (sign-in, the updater, the Code tab's download) are forwarded,
 not decrypted.
 

@@ -5,21 +5,22 @@
 //     `proxy.env`, and which of the harness's API hosts its NO_PROXY covers: nothing else of it is kept), when — and, the row 4.9 §10 names for darwin, whether it runs as root: elevation is euid/root, answered by the
 //     process table's `uid` (darwin's `ps` has no `euid` keyword; `uid` is the column the darwin line's judgment uses, 4.9 §1's procinfo, and a sudo-launched agent is uid 0 in it as surely as euid), or by one
 //     `ps -o uid=` ask for a process only the daemon listed — another user's, the one case that makes elevation matter, for the table `status` read holds this user's processes alone;
-//   · the listeners of this machine (`netstat -anv -p tcp`, the kernel's own TCP table — the LISTEN rows, whose owner column is `process:pid`: the exe is the process table's path, else the 16-character name the
-//     kernel kept. It is one read of the pcblist sysctl (~10 ms), and it names EVERY listener, another user's too — where the `lsof -nP -iTCP -sTCP:LISTEN` this replaced cost 310 ms and showed only the
-//     processes whose fd table it could open (measured on the dev machine: 47 listeners machine-wide, 26 in lsof's answer). A LISTEN row whose owner column holds no pid keeps linux's `owner-unreadable` shape, the
-//     one the topology reads);
+//   · the listeners of this user's processes (the native `socktable` helper, the same one read the door's owner question takes, ./socktable.mjs: its LISTEN rows, owner = the
+//     row's pid, the exe = the process table's path). Another user's listener — a proxy core run as root, say — cannot be read on macOS 27 (the kernel's pcblist table that
+//     `netstat` printed is not handed to a caller under an ad-hoc-signed node, a macOS machine 2026-10-20), so the list is this user's only and a `listeners` unknown says so: a
+//     port nobody of this user listens on is unknown to the topology, never `down`;
 //   · the OS proxy and PAC: `scutil --proxy` through the same reader the upstream rule uses (./upstream.mjs `readSystemProxy`, 4.9 §2.2 — one reader of one fact, so the topology cannot disagree with the kernel's
 //     dial): the `HTTPS*` keys are the hop an HTTPS request takes (the `HTTP*` ones alone send HTTPS direct, WinINET's own rule, kept apart there as here), `ProxyAutoConfigEnable` is PAC's own flag — the g row of
 //     1.6 §9.7's shape table, with none of Windows' OPEN 27 type ambiguity;
 // Routing is `proxy` (D43: macOS has proxy mode only). The per-form half — each form's certificate and proxy, the doors as `forwarder.forms` — is the collector
 // model's one OS-neutral reader (core/proxymode/status-facts.mjs, through model-backends.mjs modelNetForms); this file only supplies what darwin reads: the
-// process table, netstat's listeners and scutil's proxy. Another process's environment is never read here (4.9 §5.4): the start-time proxy of a running process is
+// process table, the socktable helper's listeners and scutil's proxy. Another process's environment is never read here (4.9 §5.4): the start-time proxy of a running process is
 // a driver-mode fact (Linux), and the door's per-process answer is the daemon's.
 // Imports no harness: the descriptors arrive in `ctx.harnesses` (their `proxy.env` names the keys of a process's environment that count) and their data in `settings` and in `status`.
 import { execTool } from '../../../off/exec.mjs'
 import { readSystemProxy, chainSystemProxy } from './upstream.mjs'
-import { ownerColumn, ownerAt } from './socktable.mjs'
+import { parseSockTable } from './socktable.mjs'
+import { NATIVE, nativePath } from './native.mjs'
 import { dirsOf } from './policy.mjs'
 import { modelNetForms } from '../model-backends.mjs'
 
@@ -39,31 +40,11 @@ export function processName(argv, exe, harness) {
 /** The last x.y.z in the path of the program (…/claude/versions/2.1.291, …/releases/0.160.1/bin/codex), or null. */
 export const versionOf = (exe) => { const all = [...String(exe || '').matchAll(/\d+\.\d+\.\d+/g)]; return all.length ? all[all.length - 1][0] : null }
 
-/** The LISTEN rows of `netstat -anv -p tcp` → [{ addr, port, pid?, comm? }], or null when the table has no owner column (it cannot be read: the caller says so, never
- *  an empty list). A row is `tcp4 0 0 127.0.0.1.7890 *.* LISTEN … mihomo:777 …`: the local end is `<address>.<port>` (`*` the all-interfaces address, `::1` an IPv6
- *  one — no brackets here, where lsof wrote them), and the owner is the `process:pid` column, read by the one reader of that column (./socktable.mjs ownerAt: the
- *  name may hold spaces, so it ends at its `:<pid>`). A row whose owner column holds no pid is parsed all the same, for the shared listener shape the topology
- *  reads (the linux twin's `owner-unreadable` row). */
-export function parseListeners(text) {
-  const lines = String(text).split('\n')
-  const header = lines.find((l) => /^Proto\s/.test(l))
-  const col = header ? ownerColumn(header) : null
-  if (!col) return null
-  const out = []
-  for (const line of lines) {
-    const t = line.trim().split(/\s+/)
-    if (!/^tcp[46]$/.test(t[0] || '') || t[5] !== 'LISTEN') continue
-    const dot = String(t[3]).lastIndexOf('.')
-    const port = Number(String(t[3]).slice(dot + 1))
-    if (dot < 1 || !Number.isInteger(port)) continue
-    const { pid, name } = ownerAt(t, col)
-    out.push({ addr: String(t[3]).slice(0, dot), port, ...(pid != null && pid > 0 ? { pid, ...(name ? { comm: name } : {}) } : {}) })
-  }
-  return out
-}
+/** The LISTEN rows of the `socktable` helper's answer → [{ addr, port, pid }]: one per listening socket (a socket several processes hold, once per holder). */
+export const parseListeners = (text) => parseSockTable(text).filter((r) => r.state === 'LISTEN').map((r) => ({ addr: r.laddr, port: r.lport, pid: r.pid }))
 
 /**
- * macOS's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of `netstat`, `scutil` and the euid's `ps`:
+ * macOS's NetFacts part. `ctx` = what gatherNetFacts hands every platform ({ status, settings, adopted, env, … }); `deps`: `exec` (the runner of the `socktable` helper (`socktablePath`, the packaged one by default), `scutil` and the euid's `ps`:
  * spawnSync-shaped; execTool refuses a real one under npm test — `procRoot` is accepted by the shared call and unused, there is no /proc to point at on darwin, the process table arrives in `status`).
  * → { routing: 'proxy', listeners, procs: { <h>: [proc] }, systemProxy, forms, forwarder, unknowns }.
  */
@@ -98,11 +79,12 @@ export async function darwinNetFacts(ctx, deps = {}) {
     })
   }
   let listeners = []
-  const ns = run('netstat', ['-anv', '-p', 'tcp'])
-  const rowsOf = ns.code === 0 ? parseListeners(ns.out) : null
-  if (rowsOf) listeners = rowsOf.map((l) => { const t = table.find((x) => x.p && x.p.pid === l.pid); return l.pid ? { addr: l.addr, port: l.port, pid: l.pid, exe: (t && t.p.exe) || l.comm } : { addr: l.addr, port: l.port, unknown: { reason: 'owner-unreadable', detail: "netstat's owner column holds no pid for it — the socket is held by no process the kernel names" } } })
-  else if (ns.code === 0) unknowns.push({ fact: 'listeners', reason: 'unparseable', detail: 'netstat -anv -p tcp: the table has no owner column (process:pid or pid)' })
-  else unknowns.push({ fact: 'listeners', reason: REASON(ns), detail: `netstat -anv -p tcp: ${ns.err || `exit ${ns.code}`}` })
+  const ns = run(deps.socktablePath || nativePath(NATIVE.socktable), [])
+  const OTHERS = "only this user's processes' sockets can be read on macOS: a port none of them listens on may be another user's"
+  if (ns.code === 0) {
+    listeners = parseListeners(ns.out).map((l) => { const t = table.find((x) => x.p && x.p.pid === l.pid); return { addr: l.addr, port: l.port, pid: l.pid, ...((t && t.p.exe) ? { exe: t.p.exe } : {}) } })
+    unknowns.push({ fact: 'listeners', reason: 'owner-unreadable', detail: OTHERS })
+  } else unknowns.push({ fact: 'listeners', reason: REASON(ns), detail: `socktable: ${ns.err || `exit ${ns.code}`}` })
   let systemProxy = null
   const scutil = await readSystemProxy({ exec, env })
   if (scutil.ok) {

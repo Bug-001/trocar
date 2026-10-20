@@ -1,17 +1,17 @@
 #!/bin/sh
 # build-darwin-native.sh — the ONE deliberate rebuild of the macOS native pieces (plan decision #10, RFC 4.9 §3 ⑮).
-# Builds src/collector/arch/darwin/native/{asight-sign-helper,procenv} as universal (arm64 + x86_64, macOS 13+) binaries and
+# Builds src/collector/arch/darwin/native/{asight-sign-helper,procenv,socktable} as universal (arm64 + x86_64, macOS 13+) binaries and
 # rewrites native/pins.json with their sha256. Commit the binaries and pins.json together: `npm pack` copies them and nothing
 # rebuilds at pack time (a rebuild changes the helper's code hash, and the login keychain then asks for the password again, R3-M2).
 # Name the pieces to build to leave the others' bytes — and their hashes — alone: `build-darwin-native.sh procenv` rebuilds procenv
-# and keeps the sign helper the keychain already trusts. No argument builds both.
+# and keeps the sign helper the keychain already trusts. No argument builds all three.
 # Needs the Command Line Tools (swiftc, clang, lipo). Never runs what it builds.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 dir="$here/src/collector/arch/darwin/native"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-want=" ${*:-asight-sign-helper procenv} "
+want=" ${*:-asight-sign-helper procenv socktable} "
 build() { case "$want" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 if build asight-sign-helper; then
@@ -24,9 +24,12 @@ fi
 if build procenv; then
 clang -arch arm64 -arch x86_64 -mmacosx-version-min=13 -O2 -Wall -o "$dir/procenv" "$dir/procenv.c"
 fi
-chmod 755 "$dir/asight-sign-helper" "$dir/procenv"
+if build socktable; then
+clang -arch arm64 -arch x86_64 -mmacosx-version-min=13 -O2 -Wall -o "$dir/socktable" "$dir/socktable.c"
+fi
+chmod 755 "$dir/asight-sign-helper" "$dir/procenv" "$dir/socktable"
 
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
-printf '{\n  "asight-sign-helper": "%s",\n  "procenv": "%s"\n}\n' "$(sha "$dir/asight-sign-helper")" "$(sha "$dir/procenv")" > "$dir/pins.json"
-lipo -info "$dir/asight-sign-helper" "$dir/procenv"
+printf '{\n  "asight-sign-helper": "%s",\n  "procenv": "%s",\n  "socktable": "%s"\n}\n' "$(sha "$dir/asight-sign-helper")" "$(sha "$dir/procenv")" "$(sha "$dir/socktable")" > "$dir/pins.json"
+lipo -info "$dir/asight-sign-helper" "$dir/procenv" "$dir/socktable"
 cat "$dir/pins.json"

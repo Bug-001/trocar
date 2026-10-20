@@ -265,7 +265,7 @@ test('cli: setup-helper installs or removes through arch; a failure is exit 1', 
 
 test('cli: the real bin runs `status` without a runtime dir on a HOME with nothing installed (→ 0: nothing is wrong, and nothing was written)', () => {
   const home = tmpDir('asight-cli-bin-')
-  const env = { ...process.env, HOME: home, PATH: osStubs().path, ASIGHT_MIHOMO_SOCK: path.join(home, 'none.sock') }; delete env.XDG_RUNTIME_DIR // status reads the disk: never the operator's own; the VPN probe is pinned to a socket nobody listens on, so it can never reach the operator's core
+  const env = { ...process.env, HOME: home, ...osStubs().env, ASIGHT_MIHOMO_SOCK: path.join(home, 'none.sock') }; delete env.XDG_RUNTIME_DIR // status reads the disk: never the operator's own; the VPN probe is pinned to a socket nobody listens on, so it can never reach the operator's core
   const r = spawnSync(process.execPath, [BIN, 'status'], { env, encoding: 'utf8' })
   assert.equal(r.status, 0, r.stdout + r.stderr); assert.match(r.stdout, /^No harness is set up for capture yet\./); assert.equal(r.stderr, '')
   assert.deepEqual(fs.readdirSync(home), [], 'read-only')

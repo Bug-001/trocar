@@ -12,6 +12,8 @@ const ASIGHT = ['agent', 'asight-forwarder', 'asight-engine']
 const kinds = (t) => t.branches.map((b) => b.path.map((id) => t.nodes.find((n) => n.id === id).kind))
 const verdicts = (t) => t.branches.map((b) => [b.on_path, b.captured, b.reason])
 const follows = (d) => ['unknown', true].includes(d.proxy.systemProxy.http)
+/** A form whose route is a PAC's (auth:false): its door dials the PAC's own leg (P10) — the system proxy, else direct; no prior, whatever its CLI form follows. */
+const pacForm = (d, id) => (d.proxyMode.routes[d.proxyMode.forms.find((f) => f.id === id).route] || {}).auth === false
 const HOOKED = (d) => d.proxyMode.forms.some((f) => f.cert !== 'root' && ['wrapper', 'plugin', 'plugin-file'].includes(((d.proxyMode.certs || {})[f.cert] || {}).kind))
 
 async function draw(args) {
@@ -31,7 +33,7 @@ for (const os of OSES) {
       for (const [prior, sp, tail] of [[null, null, ['upstream']], [null, SYS, follows(desc) ? ['proxy', 'egress'] : ['upstream']], [PRIOR, null, ['proxy', 'egress']]]) {
         const { t, found } = await draw({ os, desc, prior, systemProxy: sp })
         assert.deepEqual([...new Set(t.branches.map((b) => b.form))], forms, 'every present form, in the descriptor\'s order')
-        for (const k of kinds(t)) assert.deepEqual(k, [...ASIGHT, ...tail], `prior=${!!prior} sys=${!!sp}`)
+        t.branches.forEach((b, i) => assert.deepEqual(kinds(t)[i], [...ASIGHT, ...(pacForm(desc, b.form) ? (sp ? ['proxy', 'egress'] : ['upstream']) : tail)], `${b.form} prior=${!!prior} sys=${!!sp}`))
         assert.deepEqual(verdicts(t), Array(n(t)).fill([true, true, null]))
         assert.deepEqual(found.filter((f) => f.class === 'failure' && f.code !== 'egress-differs').map((f) => f.code), [], 'no failure but V45\'s egress-differs (a WebSocket that never followed the system proxy)')
       }
@@ -106,7 +108,7 @@ test('CM21 / V70 status --json `forms`: per form the certificate and the proxy a
       const forms = { [desc.name]: F.harnesses[desc.name].forms.map((x) => ({ form: x.id, certificate: x.certificate, proxy: x.proxy })) }
       const formErrors = (fm) => validateReceipt({ forms: fm }).filter((e) => e.startsWith('forms'))
       assert.deepEqual(formErrors(forms), [], `${os} ${desc.name}`)
-      for (const x of forms[desc.name]) assert.deepEqual([x.proxy.upstream.source, x.proxy.prior, /^http:\/\/\*\*\*@127\.0\.0\.1:\d+$/.test(x.proxy.written)], ['config-prior', 'http://***@proxy.corp:8080', true])
+      for (const x of forms[desc.name]) assert.deepEqual([x.proxy.upstream.source, x.proxy.prior, /^http:\/\/\*\*\*@127\.0\.0\.1:\d+$/.test(x.proxy.written)], [pacForm(desc, x.form) ? 'direct' : 'config-prior', 'http://***@proxy.corp:8080', true])
       const leak = structuredClone(forms); leak[desc.name][0].proxy.prior = PRIOR
       const odd = structuredClone(forms); odd[desc.name][0].proxy.upstream.source = 'agent'
       assert.equal(formErrors(leak).length, 1); assert.equal(formErrors(odd).length, 1)
