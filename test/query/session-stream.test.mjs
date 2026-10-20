@@ -73,26 +73,61 @@ for (const wire of ['threads', 'ws']) {
   })
 }
 
-test('a session that grew is answered as a fold from scratch answers it, also after a late call that sorts before folded ones', async () => {
+// A resident process polled as the board follows a growing session, against a fold from scratch in a process that never saw it.
+function follower(home, s) {
+  const ctx = { fs: freshFs() }
+  const tailPage = (n) => ({ id: s.id, after: String(Math.max(0, n - 1 - 30)), limit: '60' })
+  return async (n) => {
+    const grown = JSON.stringify(await session(home, tailPage(n), ctx))
+    assert.equal(grown, JSON.stringify(await session(home, tailPage(n), { fs: freshFs() })), 'the grown spine answers what a fold from scratch does')
+    const doc = JSON.parse(grown)
+    assert.equal(doc.page.total, n)
+    return doc
+  }
+}
+
+// Subagents side by side whose calls end late (written after calls that started after them): each poll folds on the records it did not
+// hold, whatever their place in step order, and answers byte for byte what a fold from scratch answers.
+for (const wire of ['http', 'threads', 'ws']) for (const subLanes of [4, 8]) {
+  test(`a ${wire} session with ${subLanes} subagents side by side and late calls, followed as it grows, is the fold from scratch`, async () => {
+    const home = path.join(tmpDir('trocar-slate-'), '.trocar')
+    const s = bigSession({ home, wire, growth: 1_500, subEvery: 2, subLanes, late: 3, subLen: 12, seed: subLanes })
+    const same = follower(home, s)
+    const written = () => fs.readFileSync(s.file, 'utf8').trim().split('\n').length
+    s.append(12)
+    await same(written())
+    for (const k of [1, 2, 1, 5, 1]) { s.append(k); await same(written()) }
+  })
+}
+
+// A call that sorts before calls already folded IN ITS OWN LANE (its lane is folded again), and a subagent the harness names by neither
+// agent id nor thread (its lane is told apart by order alone, so the session is folded again): still the fold from scratch.
+test('a late call in its own lane, and one in a lane told apart by order, answer as a fold from scratch', async () => {
   const home = path.join(tmpDir('trocar-sgrow-'), '.trocar')
   const s = bigSession({ home, growth: 3_000, subEvery: 4 })
   s.append(20)
-  const ctx = { fs: freshFs() } // one resident process, polled as the board follows
-  const tailPage = (n) => ({ id: s.id, after: String(Math.max(0, n - 1 - 30)), limit: '60' })
-  const same = async (n) => {
-    const grown = JSON.stringify(await session(home, tailPage(n), ctx))
-    assert.equal(grown, JSON.stringify(await session(home, tailPage(n), { fs: freshFs() })))
-    return JSON.parse(grown)
-  }
+  const same = follower(home, s)
   await same(20)
-  s.append(7)
-  assert.equal((await same(27)).page.total, 27)
-  // a call that started before the last ones and finished after them: its line is appended last, its ts_request sorts earlier
-  const lines = fs.readFileSync(s.file, 'utf8').trim().split('\n')
-  const late = JSON.parse(lines[lines.length - 1])
-  late.ts_request = late.ts = JSON.parse(lines[5]).ts_request.replace('.000Z', '.500Z')
-  fs.appendFileSync(s.file, JSON.stringify(late) + '\n')
-  const doc = await same(28)
-  assert.equal(doc.page.total, 28)
-  assert.equal(callsOf(doc).find((c) => c.gi === 6).ts, late.ts_request, 'the late call takes its place in step order')
+  const lines = () => fs.readFileSync(s.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  const earlier = (k) => lines()[k].ts_request.replace('.000Z', '.500Z')
+  let n = 20
+  const late = (rec, k, edit = (r) => r) => {
+    const r = edit({ ...rec, id: `late_${n}`, ts_request: earlier(k), ts: earlier(k) })
+    fs.appendFileSync(s.file, JSON.stringify(r) + '\n')
+    return ++n
+  }
+  const main = lines().filter((r) => !r.req_headers['x-claude-code-agent-id'])
+  const sub = lines().filter((r) => r.req_headers['x-claude-code-agent-id'])
+  const doc = await same(late(main[main.length - 1], 5))
+  assert.equal(callsOf(doc).find((c) => c.gi === 6).ts, earlier(5), 'the late call takes its place in step order')
+  await same(late(sub[sub.length - 1], 2))
+  s.append(3); n += 3
+  await same(n)
+  const legacy = (r) => {
+    const { 'x-claude-code-agent-id': _, ...req_headers } = r.req_headers
+    const body = JSON.parse(r.req_body)
+    return { ...r, req_headers, req_body: JSON.stringify({ ...body, system: [{ type: 'text', text: 'cc_is_subagent=true' }] }) }
+  }
+  await same(late(sub[0], 9, legacy))
+  await same(late(main[2], 3))
 })
