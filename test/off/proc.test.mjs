@@ -107,15 +107,16 @@ const COMM_C = ['  501 /Applications/Claude.app/Contents/MacOS/claude', '  502 /
 const isComm = (args) => (args || []).join(' ') === '-Axo pid=,comm='
 const tools = (psOut) => (file, args) => ({ status: 0, stdout: isComm(args) ? COMM_C : psOut, stderr: '' }) // the lstart table prints `psOut`, the comm table names 501 and 502
 
-test('listProcs on macOS runs ps in the C locale: the runner is handed LC_ALL=C over whatever the user\'s own environment says, and a ps that honours the locale gives the table it would give in English', async () => {
-  const seen = []
-  const exec = (file, args, opts) => { seen.push([[file, ...(args || [])].join(' '), opts.env.LC_ALL]); return tools(opts.env.LC_ALL === 'C' ? PS_C : PS_ZH)(file, args) } // a ps that localizes unless told not to
-  for (const loc of ['zh_CN.UTF-8', 'ja_JP.UTF-8', 'C', undefined]) {
-    const got = await listProcs({ uid: 501, platform: 'darwin', exec, env: { ...process.env, LC_ALL: loc, LANG: loc, LC_TIME: loc } })
-    assert.deepEqual(got.map((f) => [f.pid, f.startedAt, f.exe]), [[501, new Date(2026, 9, 7, 4, 27, 0).getTime(), '/Applications/Claude.app/Contents/MacOS/claude'], [502, new Date(2026, 9, 7, 5, 0, 0).getTime(), '/usr/local/bin/codex']], `LC_ALL=${loc}`)
+test('listProcs on macOS reads the same table whatever the user\'s locale says: lstart in its English words and every path byte as it is — a ps that honours the locale the way the real one does (a C character type prints a byte >= 0x80 as `M-x`)', async () => {
+  const at = new Date(2026, 9, 7, 4, 27, 0)
+  const rows = [{ pid: 501, at, exe: '/Applications/Claude.app/Contents/MacOS/claude', cmdline: '/Applications/Claude.app/Contents/MacOS/claude --flag x' }, { pid: 502, at, exe: '/Users/张三/测 试/claude', cmdline: 'claude --resume 会话' }]
+  const LOCALES = ['zh_CN.UTF-8', 'ja_JP.UTF-8', 'C', 'POSIX', 'en_US.UTF-8', 'UTF-8', '', undefined]
+  for (const LC_ALL of LOCALES) for (const LANG of LOCALES) for (const cat of ['LC_TIME', 'LC_CTYPE']) {
+    const env = { PATH: process.env.PATH, ...(LC_ALL === undefined ? {} : { LC_ALL }), ...(LANG === undefined ? {} : { LANG, [cat]: LANG }) }
+    const t = darwinTools(rows)
+    const got = await listProcs({ uid: 501, platform: 'darwin', exec: t.run, env })
+    assert.deepEqual(got.map((f) => [f.pid, f.startedAt, f.exe, f.cmdline]), rows.map((r) => [r.pid, at.getTime(), r.exe, r.cmdline]), JSON.stringify(env))
   }
-  assert.ok(seen.every(([, l]) => l === 'C'), `both asks run in the C locale: ${JSON.stringify(seen)}`)
-  assert.deepEqual([...new Set(seen.map(([c]) => c))], ['ps -Axo pid=,ppid=,uid=,lstart=,command=', 'ps -Axo pid=,comm='], 'the two asks, and no other tool')
 })
 
 test('listProcs on macOS: a ps whose lines cannot be read is an error that says so — never an empty table, which would read as "nobody is alive" — while a table with a few odd lines among readable ones is read as far as it goes', async () => {
@@ -147,14 +148,14 @@ test('identityFor with an async runner answers the same identity as a promise; w
   }
 })
 
-test('psIdentity: the start time of a pid from `ps -o lstart= -p` in the C locale, blanks collapsed, and the seconds of kern.boottime as the boot id; nulls for a pid ps does not know; identityFor picks it on darwin', () => {
+test('psIdentity: the start time of a pid from `ps -o lstart= -p`, blanks collapsed, and the seconds of kern.boottime as the boot id; nulls for a pid ps does not know; identityFor picks it on darwin', () => {
   const calls = []
   const BOOT = '{ sec = 1760000000, usec = 123456 } Thu Oct  9 08:53:20 2025\n' // `sysctl -n kern.boottime` as macOS prints it
-  const exec = (file, args, opts) => { calls.push([file, ...args, opts.env.LC_ALL]); if (file === 'sysctl') return { status: 0, stdout: BOOT, stderr: '' }; return args.includes('4242') ? { status: 0, stdout: 'Wed Oct  7 04:27:00 2026\n', stderr: '' } : { status: 1, stdout: '', stderr: '' } }
+  const exec = (file, args, opts) => { calls.push([file, ...args]); if (file === 'sysctl') return { status: 0, stdout: BOOT, stderr: '' }; return args.includes('4242') ? { status: 0, stdout: 'Wed Oct  7 04:27:00 2026\n', stderr: '' } : { status: 1, stdout: '', stderr: '' } }
   const ID = { start_time: 'Wed Oct 7 04:27:00 2026', boot_id: '1760000000' }
   assert.deepEqual(psIdentity(4242, { exec }), ID)
   assert.deepEqual(psIdentity(1, { exec }), { start_time: null, boot_id: null })
-  assert.deepEqual(calls, [['ps', '-o', 'lstart=', '-p', '4242', 'C'], ['sysctl', '-n', 'kern.boottime', 'C'], ['ps', '-o', 'lstart=', '-p', '1', 'C']])
+  assert.deepEqual(calls, [['ps', '-o', 'lstart=', '-p', '4242'], ['sysctl', '-n', 'kern.boottime'], ['ps', '-o', 'lstart=', '-p', '1']])
   assert.deepEqual(identityFor({ platform: 'darwin', exec })(4242), ID)
   assert.deepEqual(psIdentity(4242, { exec: (file, args, o) => (file === 'sysctl' ? { status: 1, stdout: '', stderr: '' } : exec(file, args, o)) }).boot_id, null, 'an unreadable boot time is not known, never a guess')
   const before = calls.length

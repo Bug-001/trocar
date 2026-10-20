@@ -28,6 +28,11 @@ const stored = (h, seg = SEG) => {
   return { records: lines.filter((o) => !o.m && !o.p), mark: lines.filter((o) => o.m).pop().m }
 }
 const tick = () => new Promise((r) => setTimeout(r, 20))
+// The keeper's debounce timer is unref()'d — the index is a cache and never keeps a process alive on its own — so a
+// test that awaits what only that timer brings about must hold the loop open itself, as the daemon's servers do;
+// otherwise the runner sees an empty loop and cancels the test ("Promise resolution is still pending but the event
+// loop has already resolved", macOS 27 / node 22, 2026-10-21). It waits for the event, never for a time.
+const alive = async (p) => { const hold = setInterval(() => {}, 60_000); try { return await p } finally { clearInterval(hold) } }
 
 test('what the daemon wrote is in the index before any query reads it: a query then reads 0 bytes of the segment', async () => {
   const h = home()
@@ -166,13 +171,13 @@ test('stop() settles only after the pass in flight, and the index file does not 
     index: async (a) => { open(); await held; return segmentIndex(a) } })
   append(h, 3)
   keeper.wrote(SEG)
-  await inside // a real pass is now inside index(), its bytes not yet written
+  await alive(inside) // a real pass is now inside index(), its bytes not yet written
   let settled = false
   const stopping = keeper.stop().then(() => { settled = true })
   await tick()
   assert.equal(settled, false, 'stop() must not settle while a pass is still writing')
   gate()
-  await stopping
+  await alive(stopping)
   const size = fs.statSync(idxFile(h)).size
   assert.ok(size > 0, 'the pass that was in flight finished its write before stop() settled')
   await tick()
@@ -187,7 +192,8 @@ test('交接之后在飞的那趟不再写:封存器换掉索引文件,新文件
   const h = home()
   append(h, 40, 0, 'y'.repeat(20_000)) // ~800 KB: more than one chunk of this keeper
   const sealer = Buffer.from('{"m":{"size":99,"sealed":true},"v":5}\n')
-  let raced = false
+  let raced = false, passOver = null
+  const handedOver = new Promise((r) => { passOver = r })
   const keeper = createIndexKeeper({ home: h, debounceMs: 1, chunkBytes: 100_000,
     index: async (a) => {
       const r = await segmentIndex(a)
@@ -199,10 +205,11 @@ test('交接之后在飞的那趟不再写:封存器换掉索引文件,新文件
         const tmp = `${idxFile(h)}.sealer`
         fs.writeFileSync(tmp, sealer); fs.renameSync(tmp, idxFile(h))
       }
+      if (raced || r.done) passOver() // the hand-over happened, or the backlog ended without one (asserted below)
       return r
     } })
   keeper.wrote(SEG)
-  await tick(); await keeper.idle(); await tick()
+  await alive(handedOver); await keeper.idle(); await tick()
   assert.equal(raced, true, 'the backlog did take more than one chunk, which is where the hand-over was placed')
   assert.deepEqual(fs.readFileSync(idxFile(h)), sealer, 'the pass stopped before writing again')
   keeper.wrote(SEG) // and a later append to a segment that is no longer the keeper's changes nothing either

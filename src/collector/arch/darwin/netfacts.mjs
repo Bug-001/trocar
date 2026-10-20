@@ -18,6 +18,7 @@
 // a driver-mode fact (Linux), and the door's per-process answer is the daemon's.
 // Imports no harness: the descriptors arrive in `ctx.harnesses` (their `proxy.env` names the keys of a process's environment that count) and their data in `settings` and in `status`.
 import { execTool } from '../../../off/exec.mjs'
+import { psEnv } from '../../../off/proc.mjs'
 import { readSystemProxy, chainSystemProxy } from './upstream.mjs'
 import { parseSockTable } from './socktable.mjs'
 import { NATIVE, nativePath } from './native.mjs'
@@ -59,7 +60,7 @@ export async function darwinNetFacts(ctx, deps = {}) {
   const euidOf = (p, agent) => {
     if (p) return p.uid != null ? p.uid : null // the table's row is the answer (darwin's ps table writes it); a row without one says not-known
     if (!agent) return null // nobody named the process: not known
-    if (!uidAsks.has(agent.pid)) { const r = run('ps', ['-o', 'uid=', '-p', String(agent.pid)]); uidAsks.set(agent.pid, r.code === 0 && /^\d+$/.test(r.out) ? Number(r.out) : null) }
+    if (!uidAsks.has(agent.pid)) { const r = execTool('ps', ['-o', 'uid=', '-p', String(agent.pid)], { run: exec, env: psEnv(env) }); uidAsks.set(agent.pid, r.code === 0 && /^\d+$/.test(r.out) ? Number(r.out) : null) }
     return uidAsks.get(agent.pid)
   }
   const procs = {}
