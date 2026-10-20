@@ -63,6 +63,24 @@ confirm; until it has run, `asight on` refuses (`error.code` `cert-not-installed
 
 From a Release: not published yet.
 
+## Staying up to date
+
+```sh
+asight update            # the newest code, and the machine as it was
+```
+
+From 0.1.0 on, one command takes this checkout to the newest code and leaves the machine the way it
+was: it refuses to touch a checkout with changes of your own, fast-forwards (never merges), runs
+`npm install` when what asight needs changed, replaces the collector, runs `install`, and switches
+capture on again for the agents that had it on. It prints the plan — which commit to which commit,
+and which agents go off and on again — and asks first; `--yes` answers, `--dry-run` only prints.
+While it runs those agents are not captured (their connections still work), and connections the
+collector still holds are cut when it is replaced. An update that stops half way leaves a note
+behind: run `asight update` again and it goes on from where it stopped.
+
+Moving from a pre-0.1.0 install to 0.1.0 is a one-time manual step (the old code has no `update`):
+`asight off`, `git pull`, `npm install`, `asight install`, `asight on`.
+
 ## Uninstall
 
 ```sh
@@ -407,6 +425,7 @@ asight classes reset
 asight board                  # prints the board's address with your key and opens it; exit 1 when the board is not there
 
 # maintenance
+asight update [--yes] [--dry-run] [--json]   # the newest code, and the machine as it was (D67)
 asight raw <segment>[:<from>[-<to>]]
 sudo asight setup-helper [--remove] [--binary <path>]   # Linux, once per machine
 asight daemon [--supervise]   # the daemon in the foreground; the autostart unit runs it (Windows's task with --supervise)
