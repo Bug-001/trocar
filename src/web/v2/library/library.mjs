@@ -12,7 +12,7 @@ import { mark, techDetailsHtml } from '../core/ui.mjs'
 import { pageHeadHtml } from '../shell/pagehead.mjs'
 import { formatHash } from '../core/router.mjs'
 import * as W from '../labels/library.mjs'
-import { parseFilters, filtersToParams, hasFilters, flattenSessions, applyFilters, groupOf, selectedKey, sessionKey, rowModel, listSignature, filterSignature, scrollDecision, agentMenuModel, agentMenuSignature, projectOptions, captionFacts, readFailWording, loadSessions, capShotMaker, emptyBoardState, filteredAgentLine, agentLabel, WINDOWS } from './logic.mjs'
+import { parseFilters, filtersToParams, hasFilters, flattenSessions, applyFilters, listEntries, selectedKey, sessionKey, rowModel, listSignature, filterSignature, scrollDecision, agentMenuModel, agentMenuSignature, projectOptions, captionFacts, readFailWording, loadSessions, capShotMaker, emptyBoardState, filteredAgentLine, agentLabel, WINDOWS } from './logic.mjs'
 
 const ROW_H = 50, POLL_MS = 3000
 const hidden = () => typeof document !== 'undefined' && document.hidden
@@ -53,23 +53,25 @@ const sortItemsHtml = (sort) => Object.entries(W.SORTS).map(([k, v]) =>
   `<button type="button" role="menuitem" data-sort="${k}"${sort === k ? ' class="on"' : ''}>${esc(v)}</button>`).join('')
 
 // one session row: two lines — the title (with its hover), and the agent + its marks (only when true / > 0)
+// each mark names its kind (data-mark), so what a row says is checkable without its words
+const lmark = (kind, inner, tip) => `<span class="lmark" data-mark="${kind}"${tip ? ` title="${esc(tip)}"` : ''}>${inner}</span>`
 export function rowHtml(s, sel, now) {
   const m = rowModel(s, now), on = m.key === sel
   const marks = [
-    m.entry ? `<span class="lmark">${esc(m.entry)}</span>` : '',
-    m.project ? `<span class="lmark" title="${esc(m.project.path)}">${esc(m.project.name)}</span>` : '',
-    m.inferred ? mark('inf', W.INFERRED_TIP) : '',
-    m.synthesized ? `<span class="lmark" title="${esc(W.SYNTHESIZED_TIP)}">${esc(W.SYNTHESIZED)}</span>` : '',
-    m.multi ? `<span class="lmark" title="${esc(W.multiTip(m.multiNames))}">${esc(W.MULTI)}</span>` : '',
-    m.subagent ? `<span class="lmark" title="${esc(W.SUBAGENT_TIP)}">${esc(W.SUBAGENT)}</span>` : '',
-    m.logged > 0 ? `<span class="lmark" title="${esc(W.loggedTip(m.logged))}">${esc(W.markLogged(m.logged))}</span>` : '',
+    m.entry ? lmark('entry', esc(m.entry)) : '',
+    m.project ? lmark('project', esc(m.project.name), m.project.path || m.project.name) : '',
+    m.inferred ? lmark('inferred', mark('inf', W.INFERRED_TIP)) : '',
+    m.synthesized ? lmark('synthesized', esc(W.SYNTHESIZED), W.SYNTHESIZED_TIP) : '',
+    m.multi ? lmark('multi', esc(W.MULTI), W.multiTip(m.multiNames)) : '',
+    m.subagent ? lmark('subagent', esc(W.SUBAGENT), W.SUBAGENT_TIP) : '',
+    m.logged > 0 ? lmark('logged', esc(W.markLogged(m.logged)), W.loggedTip(m.logged)) : '',
   ].filter(Boolean).join('')
   return `<a class="lrow${on ? ' sel' : ''}${m.dim ? ' dim' : ''}" href="${esc(m.href)}" data-key="${esc(m.key)}"${on ? ' aria-current="true"' : ''}>` +
     `<span class="lmain">` +
     `<span class="lt" title="${esc(m.titleTip)}">${esc(m.titleText)}</span>` +
     `<span class="lsub">${m.harnessIcon}<span class="lhn" title="${esc(m.harnessRaw ? `${m.harnessName} · ${m.harnessRaw}` : m.harnessName)}">${esc(m.harnessName)}</span>${marks ? marks : ''}</span>` +
     `</span>` +
-    `<span class="ln" title="${esc(m.dim ? W.PROBE_ONLY_TIP : W.COL_CALLS)}">${m.dim ? esc(W.PROBE_ONLY) : m.calls}</span>` +
+    `<span class="ln"${m.dim ? ' data-mark="probe-only"' : ''} title="${esc(m.dim ? W.PROBE_ONLY_TIP : W.COL_CALLS)}">${m.dim ? esc(W.PROBE_ONLY) : m.calls}</span>` +
     `<span class="lw" title="${esc(m.whenTip)}">${esc(m.when)}</span>` +
     `</a>`
 }
@@ -97,16 +99,16 @@ export function readFailHtml(errR) {
     techDetailsHtml([['Error', String((errR && errR.error) || '')]])
 }
 // the empty board: 还没有会话, then the capture service's own sentence (read once) with 「截至」, then the way out
-export function emptyBoardHtml(shot, now) {
-  const c = emptyBoardState(shot, now)
+export function emptyBoardHtml(shot) {
+  const c = emptyBoardState(shot)
   const line2 = c.line ? `${esc(c.line)}${c.asOf != null ? ` · ${esc(W.AS_OF)} ${esc(fmtTime(c.asOf))}` : ''}` : ''
   return `${esc(W.NO_SESSIONS)}<br><span class="dimline">${line2}</span> <a href="${esc(formatHash({ area: 'capture', screen: 'capture', params: {} }))}">${esc(W.GO_CAPTURE)} ›</a>`
 }
 // filters emptied a non-empty board. When exactly one agent was picked, the line asks whether it is even captured.
-export function filteredEmptyHtml(shot, f, now) {
+export function filteredEmptyHtml(shot, f) {
   let extra = ''
   if (f.h.length === 1) {
-    const a = filteredAgentLine(shot, f.h[0], now)
+    const a = filteredAgentLine(shot, f.h[0])
     if (a && a.service) extra = `<span class="dimline">${esc(a.line)}${a.asOf != null ? ` · ${esc(W.AS_OF)} ${esc(fmtTime(a.asOf))}` : ''}</span><br>`
     else if (a) extra = `<span class="dimline">${esc(a.line)} · <a href="${esc(a.href)}">${esc(W.GO_CAPTURE)} ›</a></span><br>`
   }
@@ -192,15 +194,10 @@ export function mount(el, ctx) {
     const shot = cap.settled
     const wantsShot = !total || (!rows.length && f.h.length === 1) // the 空态, or one agent picked and nothing matched
     if (wantsShot && !shot) cap.read().then(() => { if (!dead) paintList() }) // fires once; the sentence shows when it lands
-    if (!total) return message(emptyBoardHtml(shot, now)) // 还没有会话: the capture service's own sentence, read once, with 「截至」
-    if (!rows.length) return message(filteredEmptyHtml(shot, f, now)) // filters emptied a non-empty board
+    if (!total) return message(emptyBoardHtml(shot)) // 还没有会话: the capture service's own sentence, read once, with 「截至」
+    if (!rows.length) return message(filteredEmptyHtml(shot, f)) // filters emptied a non-empty board
     // the table: group rows only in the 最近 order (local dates), interleaved as rows of the same fixed-height list
-    entries = []
-    let lastG = null
-    for (const s of rows) {
-      if (f.sort === 'recent') { const g = groupOf(s, now); if (g !== lastG) { entries.push({ g }); lastG = g } }
-      entries.push({ s })
-    }
+    entries = listEntries(rows, f.sort, now)
     const render = (i) => 'g' in entries[i] ? `<div class="lgroup">${esc(W.GROUPS[entries[i].g])}</div>` : rowHtml(entries[i].s, sel, now)
     const hadFocus = listEl.contains(document.activeElement) // a repaint replaces the row elements: focus follows the highlight
     const fill = () => ensureHarnessIcons(listEl)
@@ -248,6 +245,7 @@ export function mount(el, ctx) {
   setScreenKeys((e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return
     const t = e.target
+    if (e.key === '/') { e.preventDefault(); qEl.focus(); return } // never while typing: isTyping() keeps the key in the box
     if (e.key === 'Enter') { if (t && (t.tagName === 'BUTTON' || t.tagName === 'A')) return; e.preventDefault(); return open(rows.find((s) => sessionKey(s) === current())) }
     const step = { ArrowDown: (i) => i + 1, ArrowUp: (i) => i - 1, PageDown: (i) => i + 10, PageUp: (i) => i - 10, Home: () => 0, End: () => rows.length - 1 }[e.key]
     if (step) { e.preventDefault(); move(step) }

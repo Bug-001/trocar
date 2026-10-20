@@ -21,6 +21,9 @@
 .libcap a{color:var(--action);}
 .capsep{color:var(--ink-3);}
 .linkbtn{background:none;border:0;padding:0;font:inherit;color:var(--action);cursor:pointer;}
+/* 技术细节 inside the caption speaks at the caption's size and sits on its baseline, not the kit's body size */
+.libcap .disc{border:0;}
+.libcap .disc-t,.libcap .disc-t b{min-height:0;font-size:inherit;font-weight:inherit;color:inherit;}
 
 /* one grid for the header and every row, so the columns line up: 会话 | 模型调用 | 最后活动 */
 .libhead,.lrow{display:grid;grid-template-columns:minmax(0,1fr) 92px 110px;align-items:center;column-gap:12px;padding:0 16px;}
@@ -40,7 +43,6 @@
 .lrow.dim .lmain,.lrow.dim .ln{color:var(--ink-3);}
 .lmain{min-width:0;display:flex;flex-direction:column;gap:1px;}
 .lt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:12.5px;}
-.lt .mk{margin-left:4px;}
 .lsub{display:flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap;color:var(--ink-2);font-size:11.5px;}
 .lhn{color:var(--ink-2);}
 .lmark{color:var(--ink-3);}
