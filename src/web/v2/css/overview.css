@@ -3,7 +3,7 @@
    recent → disk; the first-run page shows capture and 开始使用 only. */
 .ovgrid { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 10px; align-items: start; }
 .ovgrid > .span { grid-column: 1 / -1; }
-.ovgrid.first > #ovitems, .ovgrid.first > #ovstats, .ovgrid.first > #ovdisk { display: none; }
+.ovgrid.first > #ovitems, .ovgrid.first > #ovstats { display: none; }
 .ovgrid.first { grid-template-columns: minmax(0, 340px) minmax(0, 1fr); }
 
 .ovcard { background: var(--raised); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px 12px; min-width: 0; }

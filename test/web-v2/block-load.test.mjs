@@ -8,7 +8,7 @@ import { toggleCtxBlock } from '../../src/web/v2/replay/ctxwin.mjs'
 
 const REF = 'sess-a/main#rec1::0-40'
 const blockB = { sec: 'messages', kind: 'text', role: 'user', text_ref: REF } // addressed: no inline body
-const OK = { ok: true, data: { ref: REF, status: 'ok', text: 'the bytes', fidelity: 'verbatim', source_status: null } }
+const OK = { ok: true, data: { ref: REF, bytes: 'the bytes', encoding: 'identity', fidelity: { verbatim: true }, truncated: null, errors: [] } }
 const FAIL = (status, error = 'boom') => ({ ok: false, status, error })
 
 // an api double that answers from a queue and counts the questions

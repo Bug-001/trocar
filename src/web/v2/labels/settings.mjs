@@ -6,16 +6,20 @@
 export const CARD_DISK = 'Disk', CARD_PRICE = 'Unit prices', CARD_UNPRICED = 'Models without a unit price', CARD_THEME = 'Theme'
 
 // 磁盘卡
-export const DISK_TOTAL = 'Used by asight', DISK_TOTAL_FLOOR = 'at least', // unreadable paths make the total a floor
-  DISK_PER_DAY = 'Estimated growth per day', DISK_PER_DAY_AS_OF = 'as of', STORE_TOO_OLD = 'The newest stored call is older than 24 hours',
+export const DISK_TOTAL = 'Used by asight', DISK_PER_DAY = 'Estimated growth per day', AS_OF = 'as of',
   CAPTURE_PAGE_LINE = 'Each agent\'s switch, the named items and the local network environment are on the capture page', CAPTURE_PAGE_HREF = '#/capture',
-  BAD_FILES = (n) => `${n} capture files had a problem when read`, BAD_FILES_SHOW = 'Show which', POP_FLOOR = 'from'
+  BAD_FILES = (n) => `${n} capture file problem${n === 1 ? '' : 's'} when read`, BAD_FILES_SHOW = 'Show which', READ_FAIL = 'Could not read this page'
 
-// 磁盘上的文件(技术细节的段名)与磁盘用途词(键 = src/query/disk.mjs : DISK_GROUPS,顺序同)
-export const DISK_GROUP_NAME = Object.freeze({ captures: 'capture files', sealed: 'sealed files', sessions: 'session copies', logs: 'logs', other: 'other' })
-export const FILES_DIR = 'Directory', FILES_SEAL_RATIO = 'Sealed compression ratio',
-  FILES_SEAL_NONE = 'No readable sealed files', FILES_UNREADABLE = 'Unreadable', FILES_UNREADABLE_NOTE = 'These paths are not in the total, so the total is a floor',
-  FILES_CAPTURE_TROUBLE = 'Capture file read problems'
+// 磁盘上的文件(技术细节)
+export const FILES_SEAL_RATIO = 'Sealed compression ratio', ESTIMATE = 'estimate', FILES_SEAL_NONE = 'No readable sealed files',
+  FILES_READ_PROBLEMS = 'Read problems'
+
+// 保存什么卡(只读:改级别的控件归 PR 5 C9;终端里的改法写在技术细节)
+export const CARD_CLASSES = 'What is stored', CLASSES_AS_OF = 'Counts as of',
+  WINDOWS = Object.freeze([{ value: '24h', label: '24 hours' }, { value: '7d', label: '7 days' }, { value: 'all', label: 'All' }]),
+  COL_CLASS = 'Class', COL_KEEP = 'Level', COL_CALLS = 'Calls', COL_STORED = 'Stored', COL_RULES = 'Matches',
+  KEEP_NAME = Object.freeze({ full: 'Everything', log: 'Log only' }), NO_CLASS = 'No class recorded',
+  CLASSES_FILE = 'Settings file'
 
 export const RETRY = 'Retry'
 

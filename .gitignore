@@ -12,3 +12,6 @@ node_modules
 
 # brainstorming visual-companion mockups — local scratch
 .superpowers/
+
+# the board browser suite's screenshots (npm run test:browser; D64⑤)
+test/web-v2/browser/shots/

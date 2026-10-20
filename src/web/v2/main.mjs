@@ -3,16 +3,18 @@
 // ctx.router.current(). update(route) is called only when the route changes WITHIN the mounted screen (new params, another session); a
 // different screen is a fresh mount. There is no site-wide banner: a screen says what is wrong with itself.
 import { api } from './core/api.mjs'
-import { configure, bootToken } from './core/http.mjs'
+import { configure, bootToken, onForbidden } from './core/http.mjs'
 import { store } from './core/store.mjs'
 import * as router from './core/router.mjs'
 import { initKeys, setScreenKeys } from './core/keys.mjs'
-import { installCopy, $ } from './core/dom.mjs'
+import { installCopy, copyBtn, $ } from './core/dom.mjs'
+import { esc } from './core/fmt.mjs'
 import { ensureHarnessIcons } from './core/chips.mjs'
 import { toast, installUi } from './core/ui.mjs'
 import { mountSidebar } from './shell/sidebar.mjs'
 import { safeMount, screenErrorHtml } from './shell/safemount.mjs'
-import { UNKNOWN_ROUTE } from './labels/shell.mjs'
+import { UNKNOWN_ROUTE, FORBIDDEN } from './labels/shell.mjs'
+import { COMMANDS } from './labels/capture.mjs'
 
 // every screen of every route (core/router.mjs); the ones whose content belongs to a later task are their page head until then
 const SCREENS = {
@@ -43,6 +45,7 @@ const ctx = { api, store, router, toast }
 const sidebar = mountSidebar($('#sidebar'), ctx)
 
 let cur = null // { screen, inst } — the mounted screen
+let shut = false // K-30 latched: no screen mounts again
 let seq = 0 // a screen loads asynchronously; a newer route cancels an older load
 
 function unmountCurrent() {
@@ -54,6 +57,7 @@ function unmountCurrent() {
 }
 
 async function show(route) {
+  if (shut) return
   const mine = ++seq
   // an unknown route is 总览: say so in a toast, and rewrite the address to where the reader really is
   if (route.unknown) { toast(UNKNOWN_ROUTE); router.go({ area: 'overview', screen: 'overview', params: {} }, { replace: true }); return }
@@ -86,5 +90,12 @@ const first = router.current()
 if (!first.unknown) {
   try { history.replaceState(null, '', router.formatHash(first)) } catch (e) { console.warn('could not write the canonical hash', e) } // a blocked history API leaves the URL as typed; the board still mounts
 }
+// K-30 (1.5): a 403 replaces the whole page (sidebar included) with one sentence and the copyable command; nothing else is drawn
+// and nothing polls (core/http.mjs answers every later read without a request)
+onForbidden(() => {
+  shut = true; seq++ // a screen still loading is dropped, and no route mounts again
+  unmountCurrent()
+  document.body.innerHTML = `<main class="forbidden"><p>${esc(FORBIDDEN)}</p><p><code>${esc(COMMANDS.board)}</code> ${copyBtn(COMMANDS.board)}</p></main>`
+})
 router.onRoute(show)
 show(first)

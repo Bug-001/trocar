@@ -1,6 +1,6 @@
 // traffic/host.mjs — the host page (1.10) · #/traffic/host/<agent>/<host>: what this one agent sent to this one host.
-// A request list (S7, newest first, keyset-paged as the reader scrolls) and, for the selected row, its request detail
-// (S8) — a column beside the list at ≥ 1440 px, a drawer over it below. The lead line 「这是一次模型调用…」 belongs to
+// A request list (`calls {harness, host}`, newest first, paged by `next` as the reader scrolls) and, for the selected row,
+// its request detail (`calls {ref}`) — a column beside the list at ≥ 1440 px, a drawer over it below. The lead line 「这是一次模型调用…」 belongs to
 // the row that has a replay link; the detail itself is the 2.6 §C widget (request-view.mjs). Read-only, no polling.
 // Contract: mount(el, ctx) → {update(route), unmount()}; ctx = {api, store, router}.
 import { esc, bytes, fmtTime, fmtStamp } from '../core/fmt.mjs'
@@ -12,8 +12,8 @@ import { setScreenKeys } from '../core/keys.mjs'
 import { delegate } from '../core/dom.mjs'
 import { createVList } from '../core/vlist.mjs'
 import { formatHash } from '../core/router.mjs'
-import { requestDetailHtml } from './request-view.mjs'
-import { queryOf, asOfText, classWord, stateHtml } from './traffic.mjs'
+import { requestDetailHtml, detailModel } from './request-view.mjs'
+import { queryOf, sinceOf, asOfText, classWord, stateHtml } from './traffic.mjs'
 import * as W from '../labels/traffic.mjs'
 
 export const ROW_H = 34
@@ -26,25 +26,29 @@ export function detailModeOf(matchMedia) {
   catch { return 'column' }
 }
 
-// S7's answer → the list's model. Pure: it eats the server's answer only.
+// one page of `calls {harness, host, class?, since?, after?}` (the screen's first read and every page after it)
+export const readPage = (api, { harness, host, cls = null, window = null, after = null, limit } = {}) =>
+  api.get('calls', { harness, host, class: cls, since: window ? sinceOf(window) : undefined, after, limit })
+
+// the `calls` document → the list's model. Pure: it eats the server's answer only.
 export function listModel(answer) {
-  if (!answer || !Array.isArray(answer.rows)) return { state: 'none', answer }
-  return { state: 'table', rows: answer.rows, total: answer.total, asOf: answer.as_of, next: answer.next }
+  if (!answer || !Array.isArray(answer.records)) return { state: 'none', answer }
+  return { state: 'table', rows: answer.records, total: answer.total, asOf: answer.as_of, next: answer.next }
 }
 // one page more: the rows keep S7's order, a repeated ref never draws twice, `next` empty is the end
 export function appendPage(list, page) {
   const next = listModel(page)
   if (next.state !== 'table') return list
-  const seen = new Set(list.rows.map((r) => r.raw_ref))
-  return { ...list, rows: [...list.rows, ...next.rows.filter((r) => !seen.has(r.raw_ref))], total: next.total, asOf: next.as_of, next: next.next }
+  const seen = new Set(list.rows.map((r) => r.ref))
+  return { ...list, rows: [...list.rows, ...next.rows.filter((r) => !seen.has(r.ref))], total: next.total, asOf: next.asOf, next: next.next }
 }
 // does a scroll position ask for the next page? (a screenful of rows before the end)
 export function wantMore({ scrollTop = 0, viewHeight = 0, count = 0, rowHeight = ROW_H }) {
   return count > 0 && scrollTop + viewHeight >= (count - 6) * rowHeight
 }
 
-// the replay link: only a stored model call with a session lands on a replay step (a session-attached non-model call is
-// not a step; a logged model call is only counted there)
+// the replay link, by field presence: a `calls` row carries no session key yet, so on C.5 it is never drawn (PR 5 C8).
+// Once it does, only a stored model call with a session lands on a replay step.
 export function replayLinkOf(row) {
   if (!row || row.class !== 'llm' || row.retention === 'log' || !row.session_id) return null
   return `#/session/${encodeURIComponent(row.session_id)}?call=${encodeURIComponent(row.call_id)}`
@@ -73,11 +77,11 @@ export const whenHtml = (ts, now) => {
 export function rowHtml(r, { selected = false, unmatched = null, harness, window, cls = null, now = Date.now() } = {}) {
   const params = { window }
   if (cls) params.class = cls
-  if (r.raw_ref) params.ref = r.raw_ref
+  if (r.ref) params.ref = r.ref
   const href = formatHash({ screen: 'traffic-host', harness: harnessKey(harness), host: r._host, params })
   const w = classWord(r.class, harness, unmatched)
   const replay = replayLinkOf(r)
-  return `<a class="hrow${selected ? ' sel' : ''}" href="${esc(href)}" data-ref="${esc(r.raw_ref || '')}"${selected ? ' aria-current="true"' : ''}>` +
+  return `<a class="hrow${selected ? ' sel' : ''}" href="${esc(href)}" data-ref="${esc(r.ref || '')}"${selected ? ' aria-current="true"' : ''}>` +
     `${whenHtml(r.ts, now)}` +
     `<span class="cell-endpoint mono" title="${esc(r.endpoint || '')}">${esc(r.endpoint || '')}</span>` +
     `<span class="cell class">${esc(w.word)}</span>` +
@@ -99,7 +103,7 @@ export function detailLeadHtml(row) {
 export function captionHtml(list, { harness, window, cls = null } = {}) {
   const asOf = asOfText(list.asOf)
   const parts = [`<span class="cap-item">${asOf ? `${W.AS_OF} ${esc(asOf)} · ` : ''}${esc(W.TOTAL_N(list.total))}</span>`]
-  if (list.rows.length && !list.rows.some((r) => r.harness_inferred)) parts.push(`<span class="cap-item">${esc(W.AGENT_SOURCE_NOTE)}</span>`)
+  if (list.rows.length && !list.rows.some((r) => 'harness_inferred' in r)) parts.push(`<span class="cap-item">${esc(W.AGENT_SOURCE_NOTE)}</span>`)
   const hrefOf = (patch) => {
     const params = { window }
     if (cls) params.class = cls
@@ -143,7 +147,7 @@ export function mount(el, ctx) {
     else if (!list) body = stateHtml('loading')
     else if (list.state === 'none') {
       const a = list.answer || {}
-      body = a.reason ? stateHtml('reason', a) : stateHtml('error', { error: a.error })
+      body = stateHtml('error', { error: a.error })
     } else if (!list.rows.length) body = `<div class="tstate">${esc(q.cls ? W.EMPTY_HOST_CLASS(W.classWord(q.cls)) : W.EMPTY_HOST)}</div>`
     else body = captionHtml({ ...list, host }, { harness, window: q.window, cls: q.cls }) +
       `<div class="hhead" aria-hidden="true"><span class="cell">time</span><span class="cell-endpoint">endpoint</span><span class="cell class">class</span>` +
@@ -167,7 +171,7 @@ export function mount(el, ctx) {
     const le = listEl()
     if (!le || !list || list.state !== 'table') return
     if (!le._wired && typeof le.addEventListener === 'function') { le._wired = true; le.addEventListener('scroll', onScroll, { passive: true }) }
-    const rowAt = (i) => rowHtml({ ...list.rows[i], _host: host }, { selected: !!(list.rows[i] && list.rows[i].raw_ref === ref), unmatched, harness, window: q.window, cls: q.cls, now: api.now() })
+    const rowAt = (i) => rowHtml({ ...list.rows[i], _host: host }, { selected: !!(list.rows[i] && list.rows[i].ref === ref), unmatched, harness, window: q.window, cls: q.cls, now: api.now() })
     if (typeof document !== 'undefined' && typeof le.replaceChildren === 'function') {
       if (!le._vl) le._vl = createVList(le, { rowHeight: ROW_H, count: list.rows.length, render: rowAt })
       else le._vl.update({ count: list.rows.length, render: rowAt })
@@ -181,7 +185,7 @@ export function mount(el, ctx) {
     if (!le || fetching || !list || list.state !== 'table' || !list.next) return
     if (!wantMore({ scrollTop: le.scrollTop || 0, viewHeight: le.clientHeight || 0, count: list.rows.length })) return
     fetching = true
-    const r = await api.get('calls', { harness, host, class: q.cls, since: q.window, after: list.next })
+    const r = await readPage(api, { harness, host, cls: q.cls, window: q.window, after: list.next })
     fetching = false
     if (dead || !r.ok) return
     list = appendPage(list, r.data)
@@ -191,10 +195,10 @@ export function mount(el, ctx) {
   function detailHtml() {
     if (detailErr) return `<div class="d-err"><p>${esc(W.DETAIL_READ_FAILED(detailErr))}</p><button type="button" class="tbtn" data-act="retry-detail">${esc(W.RETRY)}</button></div>`
     if (!detail) return `<div class="d-empty">${esc(W.LOADING)}</div>`
-    const row = list && list.state === 'table' ? list.rows.find((r) => r.raw_ref === ref) : null
+    const row = list && list.state === 'table' ? list.rows.find((r) => r.ref === ref) : null
     const lead = row ? detailLeadHtml(row) : null // a deep-linked ref the list has not loaded still opens its detail
     return `<div class="d-head"><button type="button" class="iconbtn dclose" data-act="close-detail" aria-label="${esc(W.CLOSE_DETAIL)}" title="${esc(W.CLOSE_DETAIL)}">×</button></div>` +
-      (lead || '') + requestDetailHtml(detail, { ref, revealed, foldRequest: !!lead })
+      (lead || '') + requestDetailHtml(detail, { revealed, foldRequest: !!lead })
   }
 
   async function readDetail() {
@@ -202,24 +206,23 @@ export function mount(el, ctx) {
     paint()
     const r = await api.get('calls', { ref })
     if (dead) return
-    if (r.ok) detail = r.data
-    else detailErr = r.error || `HTTP ${r.status}`
+    const m = r.ok ? detailModel(r.data) : null
+    if (m && m.rec) detail = m
+    else detailErr = (m && m.error) || r.error || `HTTP ${r.status}` // an unknown ref is an errors[] entry, never an empty body
     paint()
   }
   async function readList() {
-    const r = await api.get('calls', { harness, host, class: q.cls, since: q.window })
+    const r = await readPage(api, { harness, host, cls: q.cls, window: q.window })
     if (dead) return
     if (r.ok) { readAt = api.now(); err = null; list = listModel(r.data) }
-    else {
-      err = r.error || `HTTP ${r.status}`
-      list = r.data && Array.isArray(r.data.rows) ? listModel(r.data) : (list && list.state === 'table' ? list : { state: 'none', answer: r.data || {} })
-    }
+    else { err = r.error || `HTTP ${r.status}`; if (!list || list.state !== 'table') list = null }
     paint()
   }
 
   api.get('classes').then((r) => {
-    if (dead || !r.ok) return // an unreadable answer leaves 其他 as 其他
-    unmatched = r.data && r.data.unmatched ? r.data.unmatched : {}
+    // `unmatched` is not a C.5 field yet: while it is absent (or unreadable), 其他 stays 其他 (PR 5 C8)
+    if (dead || !r.ok || !r.data || !r.data.unmatched) return
+    unmatched = r.data.unmatched
     paint()
   }, () => {})
   paint()
@@ -230,7 +233,7 @@ export function mount(el, ctx) {
     delegate(el, 'click', '[data-act="retry"]', () => { err = null; paint(); readList() }),
     delegate(el, 'click', '[data-act="retry-detail"]', () => readDetail()),
     delegate(el, 'click', '[data-act="close-detail"]', () => router.setParams({ ref: null })),
-    // one credential header value at a time: the reveal re-reads S8 with reveal=<name>
+    // one credential header value at a time: the reveal re-reads `calls {ref}` (masking is display-only)
     delegate(el, 'click', '[data-reveal]', (e, b) => { revealed = b.dataset.reveal; readDetail() }),
     // a plain click selects the row here (a replace, not a new history entry); a modified click is the browser's
     delegate(el, 'click', 'a.hrow', (e, a) => {
@@ -254,10 +257,10 @@ export function mount(el, ctx) {
     if (!list || list.state !== 'table' || !list.rows.length || inControl(e.target)) return
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
-      const i = list.rows.findIndex((r) => r.raw_ref === ref)
+      const i = list.rows.findIndex((r) => r.ref === ref)
       const next = e.key === 'ArrowDown' ? Math.min(list.rows.length - 1, i + 1) : Math.max(0, i - 1)
       const row = list.rows[next]
-      if (row && row.raw_ref && row.raw_ref !== ref) { revealed = null; router.setParams({ ref: row.raw_ref }) }
+      if (row && row.ref && row.ref !== ref) { revealed = null; router.setParams({ ref: row.ref }) }
     }
   })
 

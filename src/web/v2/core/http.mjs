@@ -2,17 +2,19 @@
 // GET against the server's ETag, and every failure (non-2xx, broken JSON, no network) folded into {ok:false, status, error}.
 // A failure is never returned as an empty success (invariant 4).
 //
-// A 404 whose body is the server's "unknown endpoint" is not a failure of a read but the absence of a data source
-// (src/server.mjs answers exactly that for every /api/* path it does not have): such an answer carries absent:true, so a
-// screen draws its honest absent state instead of an error (1.5 §数据规则 — absent is never 0 and never a guess).
-const ABSENT_ERROR = 'unknown endpoint'
+// K-30 (1.5): the first /api or /control answer with status 403 (no token, or a wrong one) latches the board shut — every later get()
+// answers {ok:false, status:403} without a request, and the onForbidden callbacks run once. Keyed on the status, never the body.
+import { CONTROL_TOKEN_HEADER } from '../../../off/token-header.mjs' // a shared module the static face serves (4.4)
 const TOKEN_KEY = 'asight.token' // the sessionStorage slot of the per-user token (4.4: read from #t=, kept for the tab)
 const HELD_MAX = 100 // conditional-GET entries kept, oldest dropped first
 
-// the token and the header name it rides in. The header name is the server's one constant (src/off/token-header.mjs), handed
-// in by main.mjs; null means no token header is sent.
-let auth = { token: null, header: null }
-export function configure({ token = null, header = null } = {}) { auth = { token, header } }
+let token = null
+export function configure({ token: t = null } = {}) { token = t }
+
+let forbidden = false
+const onForbid = []
+export function onForbidden(fn) { onForbid.push(fn) }
+const FORBIDDEN = Object.freeze({ ok: false, status: 403, error: 'HTTP 403' })
 
 const held = new Map() // full URL → {etag, data} from a 200 that carried an ETag
 
@@ -32,9 +34,10 @@ async function readBody(r) {
 }
 
 export async function get(path, params) {
+  if (forbidden) return FORBIDDEN
   const url = path + qs(params)
   const headers = {}
-  if (auth.header && auth.token) headers[auth.header] = auth.token
+  if (token) headers[CONTROL_TOKEN_HEADER] = token
   const was = held.get(url)
   if (was) headers['if-none-match'] = was.etag
   let r
@@ -42,11 +45,8 @@ export async function get(path, params) {
   if (r.status === 304) return was ? { ok: true, data: was.data } : { ok: false, status: 304, error: 'HTTP 304' }
   const b = await readBody(r)
   const body = 'json' in b ? b.json : null
-  if (!r.ok) {
-    const out = { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status }
-    if (r.status === 404 && body && body.error === ABSENT_ERROR) out.absent = true
-    return out
-  }
+  if (r.status === 403 && !forbidden) { forbidden = true; for (const fn of onForbid) try { fn() } catch (e) { console.error('onForbidden failed', e) } }
+  if (!r.ok) return { ok: false, status: r.status, error: (body && body.error) || 'HTTP ' + r.status }
   if (b.bad) return { ok: false, status: r.status, error: 'not JSON' }
   const etag = r.headers.get('etag')
   if (etag) {
