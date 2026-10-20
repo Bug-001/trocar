@@ -135,13 +135,15 @@ export const MULTIPLE_AGENTS_TIP = 'Records of several agents share this session
 export const PROJECT = 'project'
 export const GUESS = 'inferred'
 
+// one plural rule for every count label: count(1, 'call') → '1 call', count(2, 'call') → '2 calls'
+export const count = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`
+
 // ── the 会话保真行 (1.2 §会话保真行): each fact's plain words ────────────────────────────────────────────────────────
 export const truncFact = (shown, total, fileMb) => `Showing only the latest ${shown} / ${total} calls (file ${fileMb} MB)`
 export const unknownFact = (n) => `${n} records no parser can read; not drawn`
 export const LOGGED_FACT = 'calls are log only and not in the replay ›'
 export const loggedFact = (n) => `${n} ${LOGGED_FACT}`
-export const FILES_FACT = 'capture files were not read in full; this session may be missing content ›'
-export const filesFact = (n) => `${n} ${FILES_FACT}`
+export const filesFact = (n) => `${count(n, 'capture file was', 'capture files were')} not read in full; this session may be missing content ›`
 export const GAP_FACT = 'Capture had errors in this period; calls may be missing from the range read (inferred) · capture log ›'
 
 // ── the context window (2.3): sections, block marks, the 调用保真行, the 窗口行, the 变化线, the代替态 ────────────────
@@ -231,6 +233,7 @@ export const LOADING_THIS_STEP = 'Loading this step…'
 export const PAGE_MISSED = 'The page that came back still did not carry this step'
 export const RETRY = 'Retry'
 export const notRefreshed = (t, why) => `Not refreshed since ${t} · ${why}`
+export const FOLLOW_PAUSED = 'Following is paused: the last read failed'
 export const UNPARSED_TITLE = 'This step\'s request could not be parsed; there is no context to show'
 export const UNPARSED_KEEP = 'The raw record is on disk, unchanged'
 export const NO_REQUEST = 'No request was captured for this step'
@@ -240,24 +243,24 @@ export const LOADING = 'Loading…'
 export const COST_LINE = '≈ cost'
 export const BUCKETS = Object.freeze({ main: 'main thread', sub: 'sub-agents', bg: 'background calls' })
 export const COST_FROM = 'from'
-export const noPriceCalls = (n) => `${n} model calls have no unit price`
+export const noPriceCalls = (n) => `${count(n, 'model call has', 'model calls have')} no unit price`
 export const NO_ANY_PRICE = 'No unit price for these models'
 export const HIT_LINE = 'Main thread cache hit'
 export const HIT_MAIN_ONLY = 'main thread only'
 export const HIT_UNMEASURED = 'cannot be computed (no usage returned)'
-export const BREAKS_LINE = (n) => `${n} cache breaks (${L.STRUCT_EST})`
+export const BREAKS_LINE = (n) => `${count(n, 'cache break')} (${L.STRUCT_EST})`
 export const BREAK_COST_LINE = '≈ extra cost'
 export const BREAK_COST_SOME = (n) => `${n} of them cannot be computed`
 export const WORST_AT = (n) => `Most expensive at step ${n} ›`
-export const FAILED_LINE = (n) => `${n} failed calls ›`
+export const FAILED_LINE = (n) => `${count(n, 'failed call')} ›`
 export const COMPACTION_LINE = (n) => `${n} compactions`
-export const COUNTS_LINE = { sub: (n) => `${n} sub-agents`, bg: (n) => `${n} background calls`, probe: (n) => `${n} token counts` }
+export const COUNTS_LINE = { sub: (n) => count(n, 'sub-agent'), bg: (n) => count(n, 'background call'), probe: (n) => count(n, 'token count') }
 export const START_LINE = 'Started'
 export const DURATION_WORD = 'Duration'
 export const SESSION_ID = 'Session id'
 export const COPY = 'Copy'
-export const TRUNCATED_NOTE = (shown) => `Counts only the ${shown} calls shown`
-export const MODEL_CALLS = (n) => `${n} model calls`
+export const TRUNCATED_NOTE = (shown) => `Counts only the ${count(shown, 'call')} shown`
+export const MODEL_CALLS = (n) => count(n, 'model call')
 
 // ── the trace (1.3): the problem lane, the cache band's four states, the view switch, the overlay rows ───────────────
 export const PROBLEM_ROW = 'Problems'

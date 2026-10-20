@@ -404,6 +404,7 @@
 .sh-proj{flex:0 10000 auto;min-width:0;font-size:var(--fs-cap);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:20vw;}
 .sh-follow{font:inherit;font-size:var(--fs-cap);color:var(--ink-2);background:transparent;border:1px solid var(--rule);border-radius:var(--r-pill);padding:2px 10px;cursor:pointer;white-space:nowrap;}
 .sh-follow.on{color:var(--action-ink);background:var(--action);border-color:var(--action);}
+.sh-follow[data-state="paused"]{color:var(--ink-3);background:transparent;border-color:var(--ink-3);}
 .sh-follow:focus-visible,.sh-back:focus-visible{outline:2px solid var(--action);outline-offset:1px;}
 /* the 会话保真行: one quiet line of plain words; the raw values sit in the 技术细节 disclosure under it */
 .fidline{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:6px;padding:4px 16px 6px;background:var(--raised);border-bottom:1px solid var(--rule);font-size:var(--fs-cap);color:var(--ink-3);}
