@@ -219,6 +219,29 @@ test('V96: --dry-run with a handover file writes nothing, and the daemon-only st
   assert.deepEqual([stopped, t.calls.install], [[], []], 'the collector was not stopped')
 })
 
+// §1.2: each step's document is stdout's alone — a step that also writes a line to stderr still hands its receipt over
+test('V96: a step that writes to stderr as well as its document is read from stdout only', async () => {
+  const s = sandbox()
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n')
+  const doc = { schema: 2, command: 'on', ok: true, changed: [], created: [], removed: [], skipped: [], problems: [], notes: [] }
+  const t = ctx(s, { deps: { on: async (argv, c) => { c.io.err('a line of its own on stderr'); c.io.out(JSON.stringify(doc)); return EXIT.ok } } })
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  assert.deepEqual(t.io.json().on, doc, 'the step\'s receipt came through: stderr was held apart, never parsed with it')
+})
+
+// D38: the note names only harnesses, and one this code has no descriptor for would fail the whole `on` — dropped, and said
+test('V96: a handover file naming an agent this code does not know drops it with a note and switches the rest on', async () => {
+  const s = sandbox()
+  fs.writeFileSync(path.join(s.dir, 'update.json'), JSON.stringify({ from: '0.1.0+0000000', on: ['codex', 'nosuch-agent'] }) + '\n')
+  const t = ctx(s)
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text())
+  const receipt = t.io.json()
+  assert.deepEqual(validateReceipt(receipt), [])
+  assert.deepEqual([receipt.harnesses, t.calls.on.map((a) => a.filter((x) => !x.startsWith('--')))], [['codex'], [['codex']]], 'only the agent this code knows')
+  assert.equal(receipt.notes.filter((n) => n.includes('nosuch-agent')).length, 1, `what was dropped is said: ${JSON.stringify(receipt.notes)}`)
+  assert.equal(s.handover(), null, 'the update is finished all the same')
+})
+
 // §5.2 / D67①: a collector on another code is taken out of the way the one way `uninstall` takes it — asked to drain and exit, then stopped
 test('V96: the collector on another code is asked to drain and exit before it is stopped, and comes back on this code', async () => {
   const s = sandbox()

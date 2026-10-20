@@ -102,8 +102,9 @@ async function update({ io, env, home, platform, deps, flags }) {
   }
 
   // the handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the commits say
-  const waiting = readHandover(handover, fs)
+  const waiting = readHandover(handover, fs, deps.harnessIds || (await (await import('../collector/harness/index.mjs')).loadHarnesses()).map((h) => h.name))
   if (waiting) {
+    if (waiting.dropped.length) r.notes.push(`${waiting.dropped.join(', ')}: this update's note names ${waiting.dropped.length > 1 ? 'agents' : 'an agent'} this asight has no descriptor for, so capture is not switched on for ${waiting.dropped.length > 1 ? 'them' : 'it'}`)
     const to = codeId(root)
     const g = await gate([['Code', `${waiting.from || r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
       [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: the collector is replaced, install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], CUT)
@@ -242,14 +243,19 @@ async function daemonCode({ platform, dir, env, fs, deps }) {
   } catch { return null }
 }
 
-/** `~/.asight/collector/update.json` as written: `{ from, on: [harness…] }`, or null when there is none (or it holds no list of names). */
-function readHandover(file, fs) {
+/** `~/.asight/collector/update.json` as written: `{ from, on: [harness…] }`, or null when there is none (or it holds no list of names).
+ *  Only ids this code has a descriptor for are kept — the names go to `asight on`, and one this code does not know (a harness dropped
+ *  since, a file edited by hand) would fail the whole finish. What is dropped is said, never silently (D38). */
+function readHandover(file, fs, known) {
   let text
   try { text = fs.readFileSync(file, 'utf8') } catch { return null }
   let o
   try { o = JSON.parse(text) } catch { return null }
   if (o === null || typeof o !== 'object' || !Array.isArray(o.on)) return null
-  return { from: typeof o.from === 'string' ? o.from : null, on: o.on.filter((h) => typeof h === 'string' && h) }
+  const named = o.on.filter((h) => typeof h === 'string' && h)
+  const on = named.filter((h) => known.includes(h))
+  const dropped = named.filter((h) => !known.includes(h))
+  return { from: typeof o.from === 'string' ? o.from : null, on, dropped }
 }
 
 /** The handover file, 0600 — it is asight's own note to itself (D27: everything of asight's is the operator's alone). */
@@ -270,13 +276,14 @@ function harnessesOn({ home, fs }) {
 }
 
 /** One of the three commands this one runs, with `--json` so its receipt is this one's (C.2 `install` / `on`): → `{ exit, doc }`. Its
- *  own output is held, not printed: one run of `asight update` prints one receipt. */
+ *  own output is held, not printed: one run of `asight update` prints one receipt. stdout and stderr are held APART — §1.2: the document
+ *  is stdout's alone, and a line of stderr mixed into it would make it unparsable. */
 async function step(run, argv, { io, env, home, platform, deps }) {
-  const held = []
-  const quiet = { ...io, out: (s) => held.push(String(s)), err: (s) => held.push(String(s)) }
+  const out = [], err = []
+  const quiet = { ...io, out: (s) => out.push(String(s)), err: (s) => err.push(String(s)) }
   const exit = await run(argv, { io: quiet, env, home, platform, deps, json: true })
   let doc = null
-  try { doc = JSON.parse(held.join('\n')) } catch { /* a command that printed no document says so by its exit code */ }
+  try { doc = JSON.parse(out.join('\n')) } catch { /* a command that printed no document says so by its exit code */ }
   return { exit, doc }
 }
 
