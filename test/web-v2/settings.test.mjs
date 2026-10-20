@@ -360,3 +360,92 @@ test('#15 ?class= highlights only that row (none for an unknown class, no error)
     }
   })
 })
+
+test('#16 / I26 / R25 the price page states it is read-only and names pricing.source; prices and appearance send no non-GET request', async () => {
+  const h = boardHome()
+  fs.writeFileSync(path.join(h.home, 'pricing.json'), JSON.stringify({ 'zz-model': [1, 2, 3, 4] }))
+  await withWorld(async (w) => {
+    const p = await doc(w, 'pricing')
+    let m = await w.mount(prices, '#/settings/prices')
+    assert.ok(notes(m.html()).includes('read-only'))
+    assert.ok(m.html().includes(p.source))
+    await m.click('[data-copy]', { copy: 'x' })
+    m = await w.mount(appearance, '#/settings/appearance')
+    await m.click('[data-theme-choice]', { themeChoice: 'dark' })
+    assert.deepEqual(nonGet(w.log), [])
+  }, { home: h })
+})
+
+test('#17 unpriced models: priceMatch null with usable calls; at least N = the max sessions over that model\'s rows; the empty state; no overview → no card', async () => {
+  const table = { opus: [1, 2, 3, 4] }
+  const got = unpricedModels([
+    { model: 'glm-x', calls: 5, failed: 0, no_usage: 0, sessions: 2 },
+    { model: 'glm-x', calls: 3, failed: 0, no_usage: 0, sessions: 4 },
+    { model: 'zz-dead', calls: 2, failed: 1, no_usage: 1, sessions: 9 },
+    { model: 'claude-opus-4', calls: 9, failed: 0, no_usage: 0, sessions: 7 },
+  ], table)
+  assert.deepEqual(got, [{ model: 'glm-x', sessions: 4 }])
+  assert.deepEqual(unpricedModels([{ model: 'claude-opus-4', calls: 1, sessions: 1 }], table), [])
+  await withWorld(async (w) => {
+    w.tamper((url, d) => (url.startsWith('/api/overview') ? { status: 404, body: { error: 'no' } } : d))
+    const m = await w.mount(prices, '#/settings/prices')
+    assert.doesNotMatch(m.html(), /class="umodel"|data-unpriced/)
+    assert.ok(!m.html().includes((await import('../../src/web/v2/labels/settings.mjs')).CARD_UNPRICED))
+  })
+})
+
+test('#18 the template: a member of the file when it exists, a whole file when not; pasted verbatim the model stays unpriced (no $0)', () => {
+  const model = 'glm-4.6'
+  const member = templateText(model, '/somewhere/pricing.json')
+  assert.ok(!/,\s*$/.test(member))
+  assert.deepEqual(JSON.parse(`{${member}}`), { [model]: [null, null, null, null] })
+  const whole = templateText(model, 'default')
+  assert.deepEqual(JSON.parse(whole), { [model]: [null, null, null, null] })
+  const f = path.join(tmpDir('asight-price-'), 'pricing.json')
+  fs.writeFileSync(f, whole)
+  const t = loadPricing(f)
+  assert.equal(Object.prototype.hasOwnProperty.call(t, model), false)
+  assert.equal(priceMatch(t, model), null)
+})
+
+test('#19 setTheme light / dark / system sets or removes data-theme and the key; a throwing store still sets data-theme and says it is not stored', () => {
+  const attrs = {}, store = {}
+  const html = { setAttribute: (k, v) => { attrs[k] = v }, removeAttribute: (k) => { delete attrs[k] } }
+  const doc = { documentElement: html, localStorage: { setItem: (k, v) => { store[k] = v }, removeItem: (k) => { delete store[k] } } }
+  for (const t of ['light', 'dark']) {
+    assert.deepEqual(setTheme(t, doc), { stored: true })
+    assert.equal(attrs['data-theme'], t); assert.equal(store[THEME_KEY], t)
+  }
+  setTheme('system', doc)
+  assert.equal('data-theme' in attrs, false); assert.equal(THEME_KEY in store, false)
+  const broken = { documentElement: html, localStorage: { setItem() { throw new Error('quota') }, removeItem() { throw new Error('quota') } } }
+  assert.deepEqual(setTheme('dark', broken), { stored: false })
+  assert.equal(attrs['data-theme'], 'dark')
+})
+
+test('#21 across the storage, price and appearance pages the only non-GET request is POST /control/classes', async () => {
+  await withWorld(async (w) => {
+    let m = await w.mount(storage, STORAGE)
+    await m.click('[data-keep]', { class: 'telemetry', keep: 'log' })
+    await m.click('[data-keep]', { class: 'telemetry', keep: 'full' })
+    m.inst.update({ ...m.route(), params: { window: '7d' } })
+    m = await w.mount(prices, '#/settings/prices')
+    m = await w.mount(appearance, '#/settings/appearance')
+    await m.click('[data-theme-choice]', { themeChoice: 'light' })
+    const posts = nonGet(w.log)
+    assert.ok(posts.length > 0)
+    assert.deepEqual([...new Set(posts.map((r) => `${r.method} ${r.url}`))], ['POST /control/classes'])
+  })
+})
+
+// last: a 403 latches the board shut for the whole process (core/http.mjs K-30)
+test('#10 a 403 to the change: no receipt, and nothing more is sent (the K-30 page takes over)', async () => {
+  await withWorld(async (w) => {
+    const m = await w.mount(storage, STORAGE)
+    w.tamper((url, d) => (url.startsWith('/control/classes') ? { status: 403, body: { error: 'forbidden' } } : d))
+    const n = w.log.length
+    await m.click('[data-keep]', { class: 'telemetry', keep: 'log' })
+    assert.equal(w.log.length, n + 1, 'only the refused plan request')
+    assert.equal(rows(m.html()).find((r) => r.cls === 'telemetry').receipt, null)
+  })
+})
