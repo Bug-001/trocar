@@ -10,10 +10,13 @@ import { recordsAt } from '../records.mjs';
 import { asOf, indexRows } from '../rows.mjs';
 import { QueryArgError, listOf, paginate, tsFilter } from './index.mjs';
 
-export const params = Object.freeze(['class', 'harness', 'session', 'host', 'ref', 'since', 'until', 'limit', 'after']);
+export const params = Object.freeze(['class', 'harness', 'session', 'host', 'ref', 'since', 'until', 'limit', 'after', 'reveal']);
 
 export async function run({ home, fs, now, params: p, errors }) {
   if (p.ref != null && !parseRecordId(String(p.ref))) throw new QueryArgError(`trocar query calls: --ref ${JSON.stringify(String(p.ref))} names no record — a record is \`<segment>:<line>\``);
+  // `reveal` shows one credential-class header's value of one record (2.6 §保真边界 2): only with `ref`
+  if (p.reveal != null && p.ref == null) throw new QueryArgError('trocar query calls: --reveal needs --ref — it shows one header of one record');
+  const reveal = p.reveal != null ? String(p.reveal).trim().toLowerCase() : null;
   const keep = tsFilter(p, now), cls = listOf(p.class), harness = listOf(p.harness), sess = listOf(p.session),
     host = listOf(p.host), ref = listOf(p.ref);
   // Through the ONE warm, stat-revalidated reading of the index (src/query/rows.mjs, which `sessions` and `session` ask too).
@@ -38,7 +41,7 @@ export async function run({ home, fs, now, params: p, errors }) {
     as_of, ...(p.class != null ? { class: p.class } : {}), total: rows.length, detail_limit: CONTROL_DETAIL_RECORDS,
     records: recs.map((rec, i) => {
       const r = byId.get(rec.id);
-      return { ...controlRecordWire(rec, { detail: i >= slimBefore }),
+      return { ...controlRecordWire(rec, { detail: i >= slimBefore, reveal }),
         id: r.id, ts: r.ts, harness: r.harness_id, class: r.class, host: r.host, endpoint: r.path, status: r.status,
         sent_bytes: r.sent_bytes, received_bytes: r.received_bytes, retention: r.log_only ? 'log' : 'full', ref: r.id };
     }),

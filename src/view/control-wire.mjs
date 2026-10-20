@@ -23,6 +23,7 @@ import { captureLabelsOf, bodyRetentionOf, reqIncompleteOf, isLogOnly } from '..
 import { requestEncodingOf } from '../dissect/request-body.mjs';
 import { trafficClassOf } from '../dissect/traffic.mjs';
 import { headerOf } from '../dissect/harnesses.mjs';
+import { SECRET_HEADERS } from '../capture/redact.mjs';
 
 export const BODY_SHOW_CHARS = 1 << 20; // the most of one body's text a record carries to the browser
 const HEX_SHOW_BYTES = 4096;     // the most of a binary body shown as hex
@@ -122,12 +123,55 @@ function slimResp(r, { detail, shown, omitted, prefix }) {
   return out;
 }
 
+// A credential-class header's value (SECRET_HEADERS, the one server list) never leaves in a query document (2.6 §保真边界 2, 4.1 §凭据处置):
+// blanked in the header objects and the raw heads, the names in ctl.masked; `reveal` (one lowercased name) keeps that one. The stored bytes stay
+// verbatim. The old capture placeholder '<redacted>' is no credential and stays as stored. Never throws: every field is type-checked.
+const HEAD_LINE = /^([!#$%&'*+.^_`|~0-9A-Za-z-]+):([ \t]*)([^\r\n]*)(\r?\n?)$/;
+function maskCredentials(rec, reveal) {
+  const masked = new Set();
+  const hit = (k) => { const n = String(k).toLowerCase(); return SECRET_HEADERS.has(n) && n !== reveal ? n : null; };
+  const headers = (h) => {
+    if (!h || typeof h !== 'object' || Array.isArray(h)) return h;
+    let out = h;
+    for (const [k, v] of Object.entries(h)) {
+      const n = hit(k);
+      if (!n || v === '<redacted>') continue;
+      if (out === h) out = { ...h };
+      out[k] = Array.isArray(v) ? v.map(() => '') : '';
+      masked.add(n);
+    }
+    return out;
+  };
+  const rawHead = (s) => (typeof s !== 'string' ? s : s.split(/(?<=\n)/).map((line) => {
+    const m = HEAD_LINE.exec(line), n = m && hit(m[1]);
+    if (!n) return line;
+    masked.add(n);
+    return `${m[1]}:${m[2]}${m[4]}`;
+  }).join(''));
+  const resp = (r) => {
+    if (!r || typeof r !== 'object') return r;
+    const out = { ...r, headers: headers(r.headers) };
+    if (r.headers === undefined) delete out.headers;
+    if (r.partial && typeof r.partial === 'object' && r.partial.headers !== undefined) out.partial = { ...r.partial, headers: headers(r.partial.headers) };
+    return out;
+  };
+  if (!rec || typeof rec !== 'object') return { rec, masked: [] };
+  const out = { ...rec };
+  for (const k of ['req_headers', 'request_headers']) if (out[k] !== undefined) out[k] = headers(out[k]);
+  for (const k of ['resp', 'response']) if (out[k] !== undefined) out[k] = resp(out[k]);
+  for (const k of ['req_head_raw', 'resp_head_raw']) if (out[k] !== undefined) out[k] = rawHead(out[k]);
+  return { rec: out, masked: [...masked].sort() };
+}
+
 /**
  * controlRecordWire(rec, {detail}) → the record as /api/control ships it: the raw fields the list and the flag ledger read, the heavy ones left behind,
  * and `ctl`. `detail:false` is the slim form (see the header). Never throws: a record this cannot read is returned as it is with `ctl.error`, so one
- * odd record cannot blank the panel.
+ * odd record cannot blank the panel. Credential-class header values are blanked first (maskCredentials), in both branches; `reveal`
+ * names the one to keep, and `ctl.masked` lists the names blanked.
  */
-export function controlRecordWire(rec, { detail = true } = {}) {
+export function controlRecordWire(input, { detail = true, reveal = null } = {}) {
+  const { rec, masked } = maskCredentials(input, typeof reveal === 'string' ? reveal.trim().toLowerCase() : null);
+  const mask = masked.length ? { masked } : {};
   try {
     const hostHeader = headerOf(rec, 'host');
     const norm = (h) => (h ? String(h).toLowerCase().replace(/:\d+$/, '') : null);
@@ -156,9 +200,10 @@ export function controlRecordWire(rec, { detail = true } = {}) {
       out[rec.resp ? 'resp' : 'response'] = slim;
     }
     if (omitted.length) ctl.omitted = omitted;
+    Object.assign(ctl, mask);
     out.ctl = ctl;
     return out;
   } catch (e) {
-    return { ...rec, ctl: { error: String((e && e.message) || e), labels: [] } };
+    return { ...rec, ctl: { error: String((e && e.message) || e), labels: [], ...mask } };
   }
 }
