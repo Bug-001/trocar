@@ -7,10 +7,10 @@
 #
 # TO TURN NPM PUBLISHING ON LATER (deliberate gates — publishing is outward-facing and irreversible):
 #   1. Repository variable PUBLISH_NPM = true  (Settings → Secrets and variables → Actions → Variables).
-#   2. Remove `"private": true` from package.json, set a real `"version"`, and pick a package name
-#      that is not already taken on npm (RFC 4.5:53 — `trocar` belongs to someone else).
+#   2. Add a LICENSE, remove `"private": true` from package.json, and check that `trocar` is still
+#      free on npm (it was on 2026-10-20, RFC 4.5).
 #   3. Add an `NPM_TOKEN` repository secret (an npm automation token with publish rights).
-#   4. The repository must be public for `--provenance` (id-token attestation) to succeed.
+#   4. `--provenance` (id-token attestation) needs the repository public; it is, since 2026-10-20.
 name: release
 
 on:
