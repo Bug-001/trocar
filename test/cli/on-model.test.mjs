@@ -93,7 +93,7 @@ for (const os of ['darwin', 'win32']) {
     assert.ok(run.length >= 1)
     for (const l of run) assert.deepEqual(checkRecord(l), [], JSON.stringify(l))
     const last = run.at(-1)
-    assert.deepEqual([last.kind, last.outcome, last.source, Array.isArray(last.harnesses), Array.isArray(last.refused)], ['result', 'failed', 'board', true, true], JSON.stringify(last))
+    assert.deepEqual([last.kind, last.outcome, last.source, last.harnesses, Array.isArray(last.refused)], ['result', 'failed', 'board', [], true], JSON.stringify(last)) // refused before any write: it turned nothing on
     assert.equal(new Set(run.map((l) => l.run)).size, 1, 'one run, one run id')
   })
 }

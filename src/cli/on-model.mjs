@@ -53,13 +53,14 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
       ...receipt.notes.map(noteLine), ...receipt.problems.map((p) => `Problem: ${p}`)]).join('\n'))
     return exit
   }
-  /** 1.6 §1: a real run leaves its receipt in flows/ — its notes, then one `kind:'result'` line with the harnesses it turned on and the ones it refused;
+  /** 1.6 §1: a real run leaves its receipt in flows/ — its notes, then one `kind:'result'` line with the harnesses it turned on (`on`: turnOnModel's
+   *  own list, [] on every path that stops before it runs — the plan's list names what it meant to do, not what it did) and the ones it refused;
    *  a failed run too. Then the receipt goes out. (A dry run, and a run that stops for a yes, changed nothing and say so on stdout only.) */
-  const done = (receipt, exit) => {
+  const done = (receipt, exit, on = []) => {
     for (const n of receipt.notes || []) put({ event: 'install-note', where: 'install', kind: 'note', harness: (n && n.harness) || null, reason: typeof n === 'string' ? n : noteLine(n) })
     const why = (receipt.error && receipt.error.message) || (receipt.problems || [])[0] || null
-    put({ event: 'install-note', where: 'install', kind: 'result', outcome: exit === 0 ? 'on' : 'failed', harnesses: receipt.harnesses || [], refused: (receipt.refused || []).map((x) => x.harness),
-      reason: exit === 0 ? `on: ${(receipt.harnesses || []).join(', ') || 'no agent'}` : `on did not finish${why ? `: ${why}` : ''}` })
+    put({ event: 'install-note', where: 'install', kind: 'result', outcome: exit === 0 ? 'on' : 'failed', harnesses: on, refused: (receipt.refused || []).map((x) => x.harness),
+      reason: exit === 0 ? `on: ${on.join(', ') || 'no agent'}` : `on did not finish${why ? `: ${why}` : ''}` })
     return out(receipt, exit)
   }
   // 附录 C.1: `undo` is the one line that undoes THIS run, and `null` when nothing was changed — a refusal (its code in `error`, or `r.code`) changed nothing, and neither did a dry run (tested on macOS and Windows 2026-10-19)
@@ -112,7 +113,7 @@ export async function runModelOn({ io, env, home, os, deps, parts, flags, ids, j
     if (up.up) r.notes.push(...up.notes.map((text) => ({ harness: null, text })))
     if (r.on.length && up.up) { const now = readManifest(dir, fs); now.confirmed_paths = [...new Set([...(now.confirmed_paths || []), ...plan.planned.flatMap((p) => p.paths)])]; saveManifest(dir, now, fs) }
     const b = setupBlocked(r)
-    return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit)
+    return done(receiptOf(r, { planned: plan.planned, daemon: { state: up.up ? 'running' : 'not-running', started: up.started }, ...(b.length ? { blocked: b, error: setupError(b), ...(r.on.length && up.up ? { undo: UNDO_LINE.on } : {}) } : {}) }), r.exit, up.up ? r.on : [])
   } finally { lock.release() }
   } finally { closeProcs() }
 }
