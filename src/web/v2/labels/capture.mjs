@@ -92,5 +92,5 @@ export const LOG = Object.freeze({
   none: 'No capture failures in the last 24 hours',
   metadataOnly: 'metadata only; no request or response bytes',
   manifestError: 'the install manifest could not be read',
-  expectedTitle: 'not recorded by design (last 24 hours)',
+  expectedTitle: 'Not recorded by design, last 24 hours',
 })
