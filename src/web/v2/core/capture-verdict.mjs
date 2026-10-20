@@ -76,10 +76,12 @@ export const AGENT_TIER = Object.freeze({ forwarderDown: 0, problem: 1, unknown:
 //     trust code → TRUST_REASON; else the condition's own reason; several → the first, then 「· N more」
 //   4 the verdict `harnesses[id].captured` (else a cached `topology[id]` not older than the switch's last change):
 //     true → capturing only while the daemon runs AND responds; false → forwarder-down / restart / not capturing: <why>;
-//     null → unknown; none → unknown (no recent state)
+//     null → unknown; a cache older than the switch's last change → unknown (no recent state)
+//   5 no verdict for this harness at all: the `overview` document (C.5, `ov`) has a harnesses[].last_ts for it → no problems
+//     found; it has none → not captured in the last 24 h; `ov` not read → unknown (no recent state) — never a guess (D38②)
 // → [{ harness, cliId, desired, tier, text, cls, wait, restart, code, fromCache, at, conditions, topology, findings,
 //      lastCaptured, lastFailure }] in chip-table order; `cliId` is the spelling the document used.
-export function agentVerdicts(doc) {
+export function agentVerdicts(doc, ov = null) {
   const d = obj(doc && doc.daemon)
   const daemonDown = d.running === false || d.responding === false
   const daemonUp = d.running === true && d.responding === true
@@ -103,6 +105,13 @@ export function agentVerdicts(doc) {
   }
   for (const c of list(doc && doc.changed)) if (c && c.harness != null) row(c.harness)
   for (const [id, t] of Object.entries(topo)) { const r = row(id); r.topology = t || null; r.findings = t && Array.isArray(t.findings) ? t.findings : null }
+  const lastCap = new Map()
+  for (const x of list(ov && ov.harnesses)) {
+    if (!x || x.harness == null || !x.last_ts) continue
+    const k = harnessKey(x.harness)
+    if (!lastCap.has(k) || String(x.last_ts) > String(lastCap.get(k))) lastCap.set(k, x.last_ts)
+  }
+  for (const r of by.values()) r.lastCaptured = lastCap.get(r.harness) ?? null
 
   for (const r of by.values()) {
     const name = harnessName(r.harness)
@@ -127,6 +136,8 @@ export function agentVerdicts(doc) {
     const tAt = t && t.at ? Date.parse(t.at) : NaN
     const fresh = t && !isNaN(tAt) && !(v && v.updated_at && tAt < Date.parse(v.updated_at))
     const src = v && 'captured' in v ? v : fresh ? t : null
+    if (!src && !t && ov && r.lastCaptured) { Object.assign(r, { tier: AGENT_TIER.fine, text: 'no problems found', cls: 'ok' }); continue }
+    if (!src && !t && ov) { Object.assign(r, { tier: AGENT_TIER.unknown, text: 'not captured in the last 24 hours', cls: '' }); continue }
     if (!src) { Object.assign(r, { tier: AGENT_TIER.unknown, text: 'unknown (no recent state)', cls: '' }); continue }
     const fromCache = src === t, at = fromCache ? t.at : null
     const asOf = fromCache ? ` · as of ${fmtWhen(t.at)}` : ''

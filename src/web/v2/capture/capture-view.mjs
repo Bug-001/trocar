@@ -136,12 +136,12 @@ export const agentIdsOf = (h) => agentVerdicts(h).map((r) => r.harness)
 // sort by tier keeps it)
 export const rowOrder = (verdicts) => [...verdicts].sort((a, b) => a.tier - b.tier)
 
-export function agentRowHtml(row, h, { open = false } = {}) {
+export function agentRowHtml(row, h, { open = false, ov = null } = {}) {
   const name = harnessName(row.harness)
   const desired = (row.desired === 'on' || row.desired === 'off') ? SWITCH_WORD[row.desired] : ''
   const last = row.lastCaptured
     ? `<a href="#/sessions?h=${esc(row.harness)}" title="${esc(fmtStamp(row.lastCaptured))}">captured ${esc(relCap(row.lastCaptured))} ›</a>`
-    : '' // the last capture is the `overview` document's (1.9); not read here yet, so nothing is claimed
+    : ov ? 'not captured in the last 24 hours' : '' // the `overview` document's harnesses[].last_ts (1.9); unread → nothing is claimed
   const fail = row.lastFailure ? `<a href="#/capture/log?h=${esc(row.harness)}" title="${esc(fmtStamp(row.lastFailure))}">latest failure ${when(row.lastFailure)} · capture log ›</a>` : ''
   const problem = row.tier === AGENT_TIER.problem || row.tier === AGENT_TIER.forwarderDown
   return `<div class="crow" data-h="${esc(row.harness)}">` +
@@ -260,12 +260,13 @@ export function changesHtml(h) {
 // the whole page in one string: the table (采集服务 row + one row per agent, in row order) and the blocks under it.
 // `v` is captureVerdict of the same answer; `openByReader` is the expand memory (a Map the mount owns). The 503 state
 // (v.state 'unreadable') draws the service row alone — there is no data for agent rows.
-export function pageHtml(h, v, { openByReader = null } = {}) {
-  const verdicts = v.state === 'unreadable' ? [] : agentVerdicts(h)
+// `ov` = the `overview` document of the last 24 h (its harnesses[].last_ts is the 最近采到 column), null while unread.
+export function pageHtml(h, v, { openByReader = null, ov = null } = {}) {
+  const verdicts = v.state === 'unreadable' ? [] : agentVerdicts(h, ov)
   const ordered = rowOrder(verdicts)
   const open = openStates(ordered, openByReader)
   const rows = [serviceRowHtml(h, v, { open: open.get('*service') })]
-  for (const row of ordered) rows.push(agentRowHtml(row, h, { open: open.get(row.harness) }))
+  for (const row of ordered) rows.push(agentRowHtml(row, h, { open: open.get(row.harness), ov }))
   return `<section class="crows" aria-label="agent">${rows.join('')}${tableFootHtml(h, verdicts)}</section>` + changesHtml(h)
 }
 
