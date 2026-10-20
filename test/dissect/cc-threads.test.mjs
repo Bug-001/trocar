@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { threadPlan, stitchedRequest, locate, CC_THREADS } from '../../src/dissect/cc-threads.mjs';
 import { contextStateOf } from '../../src/dissect/registry.mjs';
-import { scanJson, spanAt } from '../../src/adapters/content-hash.mjs';
+import { scanJson, spanAt } from '../../src/dissect/json-scan.mjs';
 import { threadSession, record, replyOf, user } from '../helpers/cc-threads.mjs';
 
 const body = (r) => JSON.parse(r.req_body);

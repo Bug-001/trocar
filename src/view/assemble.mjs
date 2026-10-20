@@ -9,7 +9,7 @@ import { createAnalyzer, admitted, stepOrder, linearContext, cacheBreak, normRes
 import { compactionVerdict } from '../identity/session-identity.mjs';
 import { reqIncompleteOf, wsIncompleteOf, respIncompleteOf, captureLabelsOf } from '../dissect/capture-labels.mjs'; // #21 request-body labels, D38 WebSocket labels, response labels; captureLabelsOf: the per-call wire.labels (4.6 §记录)
 import { blockSpans } from '../adapters/cc.mjs';
-import { scanJson, spanAt } from '../adapters/content-hash.mjs';
+import { scanJson, spanAt } from '../dissect/json-scan.mjs';
 import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
 import { fieldTextOf, TEXT_REF_FIELD } from '../dissect/record-fields.mjs';
