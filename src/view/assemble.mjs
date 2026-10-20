@@ -14,7 +14,7 @@ import { slimBlock, compBuckets } from './blockmeta.mjs';
 import { mintRawRef, composeTextRef } from '../raw/refs.mjs';
 import { fieldTextOf, TEXT_REF_FIELD } from '../dissect/record-fields.mjs';
 import { sessionKeyOf, observerEffectsOf, hintsOf } from '../dissect/harnesses.mjs';
-import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf } from '../dissect/registry.mjs';
+import { wireFormatOf, boardDissectorFor, contextStateOf, blockKeysOf, flatLaneOf, MULTI_LANE_CONTEXT } from '../dissect/registry.mjs';
 import { parsedRequestBody } from '../dissect/request-body.mjs';
 import { vendorOf } from '../dissect/vendors.mjs';
 import { cacheSemanticsKnown } from '../cache/cache-events.mjs';
@@ -72,9 +72,11 @@ function realGroundTruth(prefixByteIdentical, read, create) {
 // request (carrying the FULL verbatim tool `input_schema` → analyze marks tools verbatim, not metadata)
 // and aliases resp→response. This is the source truth (不变式 2): blocks are sliced from the verbatim
 // wire req_body, so AC-1 holds MORE directly for D10 than v0. No-op for records already in v0 shape.
-function hydrateForBoard(r) {
+// A context the dissector stitched across records (ctx, D37 ②) stands in for the call's own body, and rides on the
+// copy as the non-enumerable `_ctx` (state, lineage) for the lane segmentation in analyze().
+function hydrateForBoard(r, ctx = null) {
   if (!r || r.request !== undefined || typeof r.req_body !== 'string') return r; // already v0 / not a D10 body
-  const body = parsedRequestBody(r);            // parsed once per record (src/dissect/request-body.mjs)
+  const body = ctx ? ctx.req : parsedRequestBody(r); // parsed once per record (src/dissect/request-body.mjs)
   if (!body || typeof body !== 'object') return r; // unparseable → leave (analyze filters it)
   const system = Array.isArray(body.system) ? body.system
     : (typeof body.system === 'string' ? [{ type: 'text', text: body.system }] : []);
@@ -84,7 +86,7 @@ function hydrateForBoard(r) {
     ...body, system, messages, tools,
     // derived counts the v0 capture used to bake (the raw wire body doesn't carry them)
     message_count: messages.length,
-    tool_count: tools.length,
+    tool_count: MULTI_LANE_CONTEXT.toolCountOf({ tools, messages }),
     system_chars: system.reduce((a, b) => a + String((b && b.text) || '').length, 0),
     context_chars: r.req_body.length,
   };
@@ -94,6 +96,7 @@ function hydrateForBoard(r) {
   // says WHICH capture file its bytes are in. Silent, because the result is simply a missing locator.
   const out = { ...r, request, response: r.response || r.resp || {} };
   if (r._stream) Object.defineProperty(out, '_stream', { value: r._stream, enumerable: false, configurable: true });
+  if (ctx) Object.defineProperty(out, '_ctx', { value: ctx, enumerable: false, configurable: true });
   // The body parsed, and we hold the result: say so, so the label side (capture-labels.bodyUnparsedOf,
   // reached through contextStateOf below) does not JSON.parse the same 0.8 MB a second time. Same
   // non-enumerable discipline as `_stream`: never stored, never shipped.
@@ -377,7 +380,7 @@ function wireOf(rec, format, ctx = null, norm = null) {
   const enc = rec && typeof rec.req_body === 'string' ? requestEncodingOf(rec) : null;
   const vendor = vendorOf(rec);
   return { format, vendor, cacheSemanticsKnown: cacheSemanticsKnown(vendor, format), transport: rec && rec.transport === 'ws' ? 'ws' : 'http',
-    contextState: ctx ? ctx.contextState : contextStateOf(rec), ...(ctx && ctx.contextState === 'partial' && ctx.missing ? { contextMissing: ctx.missing } : {}),
+    contextState: ctx && ctx.contextState ? ctx.contextState : contextStateOf(rec), ...(ctx && ctx.contextState === 'partial' && ctx.missing ? { contextMissing: ctx.missing } : {}),
     observerEffect: observerEffectsOf(rec), labels, ...(enc ? { reqEncoding: enc } : {}) };
 }
 // 3.1:37: client messages that arrived while the call was open (req_extra_messages, e.g. an interrupt) belong to
@@ -414,6 +417,7 @@ export function withLocatedRefs(flat, locateFn, scans = new Map()) {
     const loc = locateFn(b);
     const rec = loc && loc.rec;
     if (!rec) return slimBlock(b, null, 'the dissector placed this block in no source record');
+    if (loc.why) return slimBlock(b, null, String(loc.why)); // e.g. a reply rebuilt from a stream: no single byte span
     const base = rawRefOf(rec);
     const of = `record ${rec.id ?? '(no id)'}`;
     if (!base) return slimBlock(b, null, `its source ${of} carries no id or stream to address`);
@@ -530,7 +534,10 @@ function mergeViews(views) {
 function assembleAnalyzed(records, opts = {}) {
   // Dissect each record to the shape the board's block extractor reads (v0 in-place; D10 req_body→request).
   // A global step index (mixed session) is looked up on the original record, not the hydrated copy.
-  const hydrated = records.map(hydrateForBoard);
+  // A call that continues a server-held thread carries only its delta: the dissector stitches its context over every
+  // record of the session (opts.chainRecords, so a bounded view does not make calls partial), as on the flat-lane path.
+  const plans = MULTI_LANE_CONTEXT.prepare(opts.chainRecords || records);
+  const hydrated = records.map((r) => hydrateForBoard(r, MULTI_LANE_CONTEXT.contextOf(r, plans)));
   const giOfHydrated = opts.giOf ? new Map(hydrated.map((h, i) => [h, opts.giOf(records[i])])) : null;
   const A = analyze(hydrated, giOfHydrated ? { giOf: (h) => giOfHydrated.get(h) } : {});
   // Every parsed body is reachable from its call's `rec` from here on, and an out-of-window call drops
@@ -541,11 +548,13 @@ function assembleAnalyzed(records, opts = {}) {
   // Block keys of one session: the same context is re-sent every turn, so the per-text hash is asked for
   // once per call. One map per assembly, dropped with it (see analyze.mjs::blkKey).
   const keyMemo = new Map();
+  const scans = new Map(); // record → field → scanned JSON root, shared by the stitched calls' locators
   for (const lane of A.lanes || []) {
     let prevFlat = null, prevChain = null;
     for (const call of lane.calls || []) {
       if (!call.rec || !call.rec.request) { call.flat = []; call.cacheBreak = null; call.gt = null; call.wire = null; continue; }
-      call.wire = wireOf(call.rec, 'anthropic'); // cheap meta: rides on out-of-window calls too
+      const ctx = call.rec._ctx || null;
+      call.wire = wireOf(call.rec, 'anthropic', ctx); // cheap meta: rides on out-of-window calls too
       call.respRefs = respRefsOf(call.rec); // locators only (a few dozen bytes each), never the reply body
       const flat = linearContext(call.rec.request, keyMemo);
       // Tag per-block faithfulness SERVER-SIDE (reads provider block shape here, not in the browser →
@@ -608,7 +617,7 @@ function assembleAnalyzed(records, opts = {}) {
       // Everything above this line needed the real text — the diff chain, the prefix sha-256, the
       // byte weights — and all of it has now been computed. What leaves the process is the collapsed
       // row plus a text_ref, and the body is fetched from the raw capture when a row is opened.
-      call.flat = withRefs(flat, call.rec);
+      call.flat = ctx ? withLocatedRefs(flat, ctx.locate, scans) : withRefs(flat, call.rec);
       call.nonBlockKeys = nonBlockKeysOf(call.rec, 'anthropic');
       call.rec = slimRec(call.rec);
     }

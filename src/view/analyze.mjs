@@ -361,6 +361,7 @@ export function analyze(records, opts = {}) {
   const streams = []
   let mainStream = null, curSub = null, monitorStream = null
   const auxStreams = new Map()
+  const subByLineage = new Map() // a server-held thread (r._ctx.lineage, the dissector's chain): one subagent stream each
   let prevKind = null
   const stepList = []
 
@@ -389,9 +390,13 @@ export function analyze(records, opts = {}) {
       stream = probeStream || (probeStream = mkStream('probe'))
     } else if (isMonitor(r)) {
       stream = monitorStream || (monitorStream = mkStream('monitor'))
-    } else if (hint === 'aux' || (msgCount <= 2 && !sub && (tools === 0 || small))) {
+    } else if (hint === 'aux' || (msgCount <= 2 && !sub && (tools === 0 || small) && !(r._ctx && r._ctx.continued))) {
+      // (a call that continues a server-held thread is a turn of that thread, however small its own delta)
       const sk = auxSubkind(r, userTextOf(r))
       stream = auxStreams.get(sk) || auxStreams.set(sk, mkStream(sk)).get(sk)
+    } else if (sub && r._ctx && r._ctx.lineage) {
+      // the thread names its own chain, so interleaved subagents never share or split a stream
+      stream = subByLineage.get(r._ctx.lineage) || subByLineage.set(r._ctx.lineage, mkStream('subagent')).get(r._ctx.lineage)
     } else if (sub) {
       const fresh = !curSub || msgCount <= (curSub._lastMsg ?? 0) || prevKind === 'main'
       if (fresh) curSub = mkStream('subagent')
@@ -412,6 +417,8 @@ export function analyze(records, opts = {}) {
       ts: r.ts_request, compaction: false,
       unparsed: !!r._unparsed,
       reqIncomplete,
+      // a context stitched across records with a predecessor missing: what is shown is not what the model saw
+      ctxPartial: !!(r._ctx && r._ctx.contextState === 'partial'),
       wsIncomplete: wsIncompleteOf(r), // D38 a WebSocket call's labels (4.6 各说一件事)
       respIncomplete: respIncompleteOf(r), // a response body not decoded / not JSON / empty / partly parsed / cut
       // `error` now covers EVERY non-200 (was: only 5xx — so a 401/429 rendered as a normal call).
@@ -496,9 +503,10 @@ export function analyze(records, opts = {}) {
       const preambleNew = hasPreamble && !(prevInfo && prevInfo.preamble)
       // 3.4: a request stored in part (the collector's req_* labels, the ETL's context_state 'partial') shows what arrived,
       // not the context the model saw: its message count is no observation, so no verdict and no new baseline
-      const verdict = step.reqIncomplete ? { compaction: false }
+      const blindCount = step.reqIncomplete || step.ctxPartial
+      const verdict = blindCount ? { compaction: false }
         : compactionVerdict(prevInfo, { hint: h.compaction === true, marker, msgCount: msgs.length, preamble: hasPreamble })
-      if (!step.reqIncomplete) prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble }
+      if (!blindCount) prevInfo = { msgCount: msgs.length, marker, preamble: hasPreamble }
       let newMsgs
       if (verdict.compaction) {
         Object.assign(step, compactionMeta(verdict, preambleNew))
@@ -728,7 +736,7 @@ export function linearContext(request, keyMemo = null) {
       const props = hasSchema ? (t.input_schema?.properties ? Object.keys(t.input_schema.properties) : []) : (t.input_schema_props || [])
       const descChars = hasDesc ? t.description.length : (t.description_chars || 0)
       flat.push({
-        sec: 'tools', kind: 'tool', role: 'tool', name: t.name || '', ttype: t.type || '',
+        sec: 'tools', kind: 'tool', role: 'tool', ti: e.path.i, name: t.name || '', ttype: t.type || '',
         props, descChars, cc: t.cache_control || null, mcp,
         verbatim, desc: hasDesc ? t.description : undefined, schema: hasSchema ? t.input_schema : undefined,
         resKey: mcp ? 'mcp::' + (String(t.name).split('__')[1] || '') : '',

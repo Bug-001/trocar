@@ -130,6 +130,12 @@ What the board cannot vouch for, it labels on the call (raw panel and the top of
   badged 不完整 and says which one, and no cache claim is made over it. A warm-up (`generate:false`) sits
   in the probe lane, not on the turn axis; messages the agent sent while a call was open (an interrupt)
   are listed on that call.
+- **Claude Code on Message Threads** (the server keeps the conversation): each call after the first
+  sends only its new messages, so the board rebuilds the context from the earlier calls of the same
+  thread, following `thread.previous_message_id`, with the earlier replies in between. The main
+  conversation and each subagent are their own threads and their own lanes. Request blocks open their
+  verbatim bytes in the call that sent them; an earlier reply says it was rebuilt from that call's
+  stream. If an earlier call of the thread was not captured, the call is badged 不完整 and says which.
 
 Reading the records across sessions is `asight query <name>` — the one core that reads data, of which
 the board is the HTTP shell (D59); there is no separate ETL step and no database to load. Both go through the
