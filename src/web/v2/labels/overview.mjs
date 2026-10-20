@@ -7,9 +7,8 @@ import { MARK_TIP } from './common.mjs'
 
 export const CARD = Object.freeze({ capture: 'Capture', items: 'Needs a look', stats: 'Stats', recent: 'Recent sessions', start: 'Get started', agents: 'Agents' })
 
-// the stats window of the page head (1.7 §统计窗): three fixed choices, the route's `window` param
+// the stats window of the page head (1.7 §统计窗): three fixed choices, the route's `window` param (words: common WINDOW_LABEL)
 export const WINDOWS = Object.freeze(['24h', '7d', 'all'])
-export const WINDOW_LABEL = Object.freeze({ '24h': '24 hours', '7d': '7 days', all: 'All' })
 
 export const GO_CAPTURE = 'Capture ›'
 export const READ_FILES_FAIL = (n) => `${n} record file${n === 1 ? '' : 's'} could not be read`
@@ -53,24 +52,33 @@ export const NEW_HOST = (host) => `reached ${host} for the first time` // after 
 export const BY_STATS = 'inferred from the records already in the stats'
 
 // ── 统计 ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-export const AS_OF = (t) => `as of ${t}`
+export const AS_OF = (t, sec) => `as of ${t} · refreshed every ${sec} s`
 export const SCOPE_LINE = 'counts sessions last active in this window, each session in full'
 export const COVERAGE = (names) => `excludes ${names}: their sessions are not in the library yet`
-export const USAGE_COVERAGE = (read, total, why) => `usage read from ${read} / ${total} sessions${why ? ` (stopped: ${why})` : ''}`
+// usage not read for the whole window yet (1.7 估价规则): by calls when the document counts them, else by sessions; never the reason code
+export const USAGE_CALLS_LEFT = (n) => `usage of ${n} call${n === 1 ? ' is' : 's is'} still being read; refresh in a moment`
+export const USAGE_SESSIONS = (read, total) => `usage read from ${read} / ${total} sessions; refresh in a moment`
 export const SESSIONS_N = (n) => `${n} session${n === 1 ? '' : 's'}`
 export const CALLS_N = (n) => `${n} model call${n === 1 ? '' : 's'}`
-export const FROM = 'from'
+// the money is a lower bound: the word goes before the number, the hover says why (1.7 估价规则)
+export const AT_LEAST = 'at least'
+export const FLOOR_WHY = Object.freeze({
+  noUsage: (n) => `${n} call${n === 1 ? '' : 's'} returned no usage`,
+  unpriced: 'a model has no unit price',
+  partial: 'usage is not read for the whole window yet',
+})
+export const FLOOR_TIP = (why) => `A lower bound: ${why.join('; ')}`
 export const HIT_LABEL = 'main thread cache hit'
 export const HIT_UNKNOWN_TIP = "this provider's cache figures have an uncertain meaning"
 export const EST_TIP = 'local estimated cost (usage × unit price), not a bill'
 export const UNPRICED = (n) => `${n} model${n === 1 ? ' has' : 's have'} no unit price`
 export const EMPTY_WINDOW = 'no sessions in this window'
 export const PRICE_FAIL = (why) => `the price table could not be read: ${why}`
+export const NET_ONLY = 'no model calls · network only'
 export const TBL = Object.freeze({ agent: 'agent', sessions: 'sessions', calls: 'model calls', cost: '≈ cost', hit: 'main thread cache hit', last: 'last active' })
 
 // ── 最近的会话 · 盘上占用 · 开始使用 ───────────────────────────────────────────────────────────────────────────────────
 export const ALL_SESSIONS = 'All sessions ›'
-export const UNNAMED = (t) => `untitled session · last active ${t}`
 export const PROBE_ONLY = 'token counts only'
 export const PROBE_ONLY_TIP = 'this session has only token-count calls, no full content'
 export const TITLE_FROM_AGENT = "title from the agent's own record"

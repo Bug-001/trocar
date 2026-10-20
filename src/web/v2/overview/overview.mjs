@@ -23,6 +23,7 @@ import { failureBrief, failureWord } from '../../../cli/words.mjs'
 import { infoButton, techDetailsHtml, confirmDialog } from '../core/ui.mjs'
 import { controlFor, controlHtml, wireHarnessControls } from '../core/harness-switch.mjs'
 import * as W from '../labels/overview.mjs'
+import { WINDOW_LABEL, UNTITLED } from '../labels/common.mjs'
 
 const DAY = 24 * 3600e3
 export const POLL = Object.freeze({ health: CAPH_MS, sessions: 3000, slow: 30000 })
@@ -101,7 +102,8 @@ export function overviewItems(s, now) {
   }
 
   // ── O6 · capture files the library could not read whole: the sessions document's errors[] (1.8's same count) ──────
-  const nErr = list(s.sessions && s.sessions.data && s.sessions.data.errors).length
+  // an entry with level 'note' says a read was slow (a cold index), not that anything was lost: it stays in technical details
+  const nErr = list(s.sessions && s.sessions.data && s.sessions.data.errors).filter((e) => e && e.level !== 'note').length
   if (nErr > 0) push('O6', 'files', { text: W.FILES_NOT_READ(nErr), href: '#/settings/storage' })
 
   // ── O9 · a host an agent connected to for the first time (traffic ?since=24h; first_seen and harness_since are the whole
@@ -142,7 +144,7 @@ export function rawGroups(doc, now) {
     const to = parseTs(seg && seg.to)
     if (to == null || now - to >= DAY) continue
     for (const p of list(seg.problems)) {
-      if (!p || p.code == null) continue
+      if (!p || p.code == null || p.level === 'note') continue // a note (a slow read) is not a failure (1.7 O3)
       const g = by.get(p.code) || { where: 'raw', code: p.code, reason: null, count: 0, last: null }
       g.count++
       if (g.last == null || to >= parseTs(g.last)) { g.last = seg.to; g.reason = p.reason ?? null }
@@ -176,18 +178,20 @@ function mainHit(rows) {
 export function overviewStats(doc, pricingDoc) {
   const table = priceTable(pricingDoc)
   const usage = (doc && doc.usage) || {}
-  const rows = list(usage.rows), cov = usage.coverage || {}
-  const partial = num(cov.sessions_read) != null && num(cov.sessions_in_window) != null && cov.sessions_read < cov.sessions_in_window
+  const rows = list(usage.rows), cov = usageCoverage(usage.coverage)
+  const partial = cov.partial
+  // the money is a lower bound when a call returned no usage, a metered row has no unit price, or usage is not read in full;
+  // `why` keeps each cause so the hover can say it
   const priced = (rs) => {
-    let cost = 0, any = false, floor = partial
+    let cost = 0, any = false, noUsage = 0, unpriced = false
     for (const r of rs) {
-      if ((r.no_usage || 0) > 0) floor = true
+      noUsage += r.no_usage || 0
       if (metered(r) <= 0) continue
       const pm = priceMatch(table, r.model)
-      if (!pm) { floor = true; continue }
+      if (!pm) { unpriced = true; continue }
       any = true; cost += costOf(pm.row, usageOfRow(r)) || 0
     }
-    return { cost: any ? cost : null, floor }
+    return { cost: any ? cost : null, floor: noUsage > 0 || unpriced || partial, why: { noUsage, unpriced, partial } }
   }
   const byAgent = list(doc && doc.harnesses).map((h) => {
     const k = agentKey(h.harness), mine = rows.filter((r) => agentKey(r.harness) === k)
@@ -199,6 +203,15 @@ export function overviewStats(doc, pricingDoc) {
     ...priced(rows), partial, coverage: cov, hit: hit.hit, hitUncertain: hit.uncertain, main: hit.main,
     unpriced: unpricedModels(rows, table).length, byAgent,
   }
+}
+
+// how much of the window's usage was read (1.7 估价规则): the calls pair when the document has it, else the sessions pair;
+// either may be missing or not a number — then nothing is claimed partial
+function usageCoverage(c) {
+  const cov = c || {}
+  const cr = num(cov.calls_read), ct = num(cov.calls_in_window), sr = num(cov.sessions_read), st = num(cov.sessions_in_window)
+  if (cr != null && ct != null) return { partial: cr < ct, callsLeft: ct - cr }
+  return { partial: sr != null && st != null && sr < st, read: sr, total: st }
 }
 
 // ── 最近的会话 · the live list (pure; the `sessions` document, never a statistic) ───────────────────────────────────
@@ -221,7 +234,7 @@ export function diskBytes(slot) {
 export function headHtml(s) {
   return pageHeadHtml({
     name: SCREEN_NAME.overview,
-    scope: { label: 'Stats window', options: W.WINDOWS.map((x) => ({ value: x, label: W.WINDOW_LABEL[x], href: `#/overview?window=${x}` })), value: s.w },
+    scope: { label: 'Stats window', options: W.WINDOWS.map((x) => ({ value: x, label: WINDOW_LABEL[x], href: `#/overview?window=${x}` })), value: s.w },
     readAt: s.readAt,
   })
 }
@@ -263,8 +276,13 @@ export function itemsCardHtml(s, now) {
     `<div class="ovlist">${body}</div></section>`
 }
 
-const hitText = (h, floor) => h.main === 0 || h.hit == null ? '—' : `${Math.round(h.hit * 100)}%${h.uncertain ? '?' : ''}${floor ? ` ${W.FROM}` : ''}`
-const costText = (c, priceFail) => `≈ ${priceFail || c.cost == null ? '—' : usd(c.cost)}${!priceFail && c.cost != null && c.floor ? ` ${W.FROM}` : ''}`
+// the hit never carries a floor: a ratio over part of the window is not a lower bound (1.7 估价规则)
+const hitText = (h) => h.main === 0 || h.hit == null ? '—' : `${Math.round(h.hit * 100)}%${h.uncertain ? '?' : ''}`
+const floorShown = (c, priceFail) => !priceFail && c.cost != null && c.floor
+const costText = (c, priceFail) => priceFail || c.cost == null ? '≈ —' : `${floorShown(c) ? `${W.AT_LEAST} ` : ''}≈ ${usd(c.cost)}`
+const costTip = (c, priceFail) => [W.EST_TIP, floorShown(c, priceFail)
+  ? W.FLOOR_TIP([c.why.noUsage > 0 && W.FLOOR_WHY.noUsage(c.why.noUsage), c.why.unpriced && W.FLOOR_WHY.unpriced, c.why.partial && W.FLOOR_WHY.partial].filter(Boolean))
+  : null].filter(Boolean).join(' · ')
 
 export function statsCardHtml(s, now) {
   const st = s.stats
@@ -274,12 +292,12 @@ export function statsCardHtml(s, now) {
   const D = st.data
   const priceFail = s.pricing && s.pricing.ok === false ? s.pricing.err : null
   const m = overviewStats(D, s.pricing && s.pricing.data)
-  const cov = m.partial || (m.coverage.sessions_read === 0 && m.coverage.sessions_in_window > 0)
-    ? `<p class="ovsub warn">${esc(W.USAGE_COVERAGE(m.coverage.sessions_read, m.coverage.sessions_in_window, m.coverage.reason))}</p>` : ''
+  const c = m.coverage
+  const cov = m.partial ? `<p class="ovsub warn ovcov">${esc(c.callsLeft != null ? W.USAGE_CALLS_LEFT(c.callsLeft) : W.USAGE_SESSIONS(c.read, c.total))}</p>` : ''
   const missing = coverageOf(s, now)
   const disk = diskBytes(s.classes)
   const head = `<section class="ovcard stats" aria-label="${esc(W.CARD.stats)}"><h2 class="ovh">${esc(W.CARD.stats)}</h2>` +
-    `<p class="ovsub">${esc(W.AS_OF(D.as_of ? fmtWhen(parseTs(D.as_of), now) : '—'))} · ${esc(W.SCOPE_LINE)}</p>` +
+    `<p class="ovsub">${esc(W.AS_OF(D.as_of ? fmtWhen(parseTs(D.as_of), now) : '—', POLL.slow / 1000))} · ${esc(W.SCOPE_LINE)}</p>` +
     (missing ? `<p class="ovsub warn">${esc(missing)}</p>` : '') + cov +
     (priceFail ? `<p class="ovsub warn">${esc(W.PRICE_FAIL(priceFail))}</p>` : '')
   const foot = (disk != null ? `<p class="ovsub">${esc(W.DISK_USE(bytes(disk)))} · <a href="#/settings/storage">${esc(W.SEE_STORAGE)}</a></p>` : '') + `</section>`
@@ -288,9 +306,9 @@ export function statsCardHtml(s, now) {
   return head +
     `<p class="ovsay">` +
     `<a href="#/sessions?window=${esc(s.w)}">${esc(W.SESSIONS_N(m.sessions ?? 0))} ›</a> · ${esc(W.CALLS_N(m.calls ?? 0))} · ` +
-    `<span title="${esc(W.EST_TIP)}">${esc(costText(m, priceFail))}</span>` +
+    `<span class="ovcost" title="${esc(costTip(m, priceFail))}">${esc(costText(m, priceFail))}</span>` +
     (!priceFail && m.unpriced > 0 ? ` · <a href="#/settings/prices">${esc(W.UNPRICED(m.unpriced))} ›</a>` : '') +
-    ` · <span${m.hitUncertain ? ` title="${esc(W.HIT_UNKNOWN_TIP)}"` : ''}>${esc(`${W.HIT_LABEL} ${hitText(hit, m.partial)}`)}</span>` +
+    ` · ${esc(W.HIT_LABEL)} <span class="ovhit"${m.hitUncertain ? ` title="${esc(W.HIT_UNKNOWN_TIP)}"` : ''}>${esc(hitText(hit))}</span>` +
     `</p>` + agentTableHtml(m, s.w, now, priceFail) + foot
 }
 
@@ -306,18 +324,22 @@ const coverageOf = (s, now) => {
   return seen.size ? W.COVERAGE([...seen].map(harnessName).join(', ')) : null
 }
 
-// the per-agent table as a grid of link rows — the whole row is one <a> (1.7 §统计 · 行链接); the unidentified row is plain text
+// the per-agent table as a grid of link rows — the whole row is one <a> (1.7 §统计 · 行链接); the unidentified row is plain text.
+// An agent with no session and no model call in the window only made network requests: one dim row to its traffic, not a row of 0s
 const agentTableHtml = (m, w, now, priceFail) => {
   if (!m.byAgent.length) return ''
   const t = W.TBL
-  const head = `<div class="ovtrh" role="row"><span>${esc(t.agent)}</span><span>${esc(t.sessions)}</span><span>${esc(t.calls)}</span><span>${esc(t.cost)}</span><span>${esc(t.hit)}</span><span>${esc(t.last)}</span></div>`
+  const head = `<div class="ovtrh" role="row"><span>${esc(t.agent)}</span><span class="n">${esc(t.sessions)}</span><span class="n">${esc(t.calls)}</span><span class="n">${esc(t.cost)}</span><span class="n">${esc(t.hit)}</span><span class="n">${esc(t.last)}</span></div>`
   const rows = m.byAgent.map((g) => {
-    const body = `<span class="ovag">${g.harness == null ? `<span class="ovsubj">${esc(UNIDENTIFIED)}</span>` : chipHtml(g.harness)}</span>` +
-      `<span>${g.sessions ?? '—'}</span><span>${g.calls ?? '—'}</span><span>${esc(costText(g, priceFail))}</span>` +
-      `<span${g.uncertain ? ` title="${esc(W.HIT_UNKNOWN_TIP)}"` : ''}>${esc(hitText(g, m.partial))}</span><span>${esc(when(g.last, now))}</span>`
-    return g.harness == null
-      ? `<div class="ovtr" role="row">${body}</div>`
-      : `<a class="ovtr" role="row" href="${esc(`#/sessions?h=${encodeURIComponent(g.harness)}&window=${w}`)}">${body}</a>`
+    const net = num(g.sessions) === 0 && num(g.calls) === 0
+    const body = `<span class="ovag">${g.harness == null ? `<span class="ovsubj">${esc(UNIDENTIFIED)}</span>` : chipHtml(g.harness)}</span>` + (net
+      ? `<span class="ovnet">${esc(W.NET_ONLY)}</span>`
+      : `<span class="n">${g.sessions ?? '—'}</span><span class="n">${g.calls ?? '—'}</span><span class="n" title="${esc(costTip(g, priceFail))}">${esc(costText(g, priceFail))}</span>` +
+        `<span class="n"${g.uncertain ? ` title="${esc(W.HIT_UNKNOWN_TIP)}"` : ''}>${esc(hitText(g))}</span><span class="n">${esc(when(g.last, now))}</span>`)
+    const cls = `ovtr${net ? ' nocall' : ''}`
+    if (g.harness == null) return `<div class="${cls}" role="row">${body}</div>`
+    const href = net ? `#/traffic?h=${encodeURIComponent(g.harness)}&window=${w}` : `#/sessions?h=${encodeURIComponent(g.harness)}&window=${w}`
+    return `<a class="${cls}" role="row" href="${esc(href)}">${body}</a>`
   }).join('')
   return `<div class="hscroll"><div class="ovtbl" role="table">${head}${rows}</div></div>`
 }
@@ -334,7 +356,7 @@ export function recentCardHtml(s, now) {
     const calls = r.calls === 0 && r.probes > 0 ? `<span title="${esc(W.PROBE_ONLY_TIP)}">${esc(W.PROBE_ONLY)}</span>` : esc(W.CALLS_N(r.calls))
     return `<a class="ovitem" href="${esc(r.href)}">` +
       `${harnessIcon(r.harness)}<span class="ovnm">${esc(harnessName(r.harness))}${r.inferred ? ` <span class="ovmark" title="agent inferred from the request headers">(inferred)</span>` : ''}</span>` +
-      `<span class="ovtx" title="${esc(tip)}">${esc(r.title != null ? r.title : W.UNNAMED(fmtWhen(parseTs(r.last), now)))}</span>` +
+      `<span class="ovtx" title="${esc(tip)}">${esc(r.title != null ? r.title : UNTITLED)}</span>` +
       `<span class="ovnum">${calls}</span>` +
       `<span class="ovwhen">${esc(when(r.last, now))}</span></a>`
   }).join('')
@@ -398,7 +420,7 @@ export function renderBody(s, now) {
 // ── the screen ───────────────────────────────────────────────────────────────────────────────────────────────────────
 export const SKELETON =
   `<div class="page">` +
-  `<header class="pagehead" id="ovhead"></header>` +
+  `<div id="ovhead"></div>` + // headHtml brings its own <header class="pagehead">
   `<div class="ovgrid" id="ovgrid">` +
   `<div id="ovcap"></div><div id="ovitems"></div><div id="ovagents"></div><div id="ovstats" class="span"></div><div id="ovrecent" class="span"></div>` +
   `</div></div>`

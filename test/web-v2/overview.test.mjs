@@ -6,12 +6,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import {
-  overviewItems, capCardHtml, itemsCardHtml, statsCardHtml, renderBody, recentRows, recentCardHtml, mount, POLL,
+  overviewItems, capCardHtml, itemsCardHtml, statsCardHtml, renderBody, recentRows, recentCardHtml, mount, POLL, SKELETON, headHtml,
 } from '../../src/web/v2/overview/overview.mjs'
 import { capHealthPatch } from '../../src/web/v2/core/capture-verdict.mjs'
 import { ALIASES, HARNESS_ORDER, UNIDENTIFIED, UNKNOWN_ICON, harnessKey, harnessName } from '../../src/web/v2/core/chips.mjs'
 import { TITLE_FROM_WIRE } from '../../src/web/v2/labels/replay.mjs'
-import { TITLE_FROM_AGENT, UNNAMED } from '../../src/web/v2/labels/overview.mjs'
+import { TITLE_FROM_AGENT, FILES_NOT_READ } from '../../src/web/v2/labels/overview.mjs'
 import { ERR_WHERE, SWITCH_WORD } from '../../src/web/v2/labels/capture.mjs'
 import { esc, fmtWhen } from '../../src/web/v2/core/fmt.mjs'
 
@@ -264,7 +264,7 @@ test('#10 first use: no session → the capture card and the start card only; no
   assert.equal(renderBody(stateOf(quiet()), NOW).first, false, 'a session → the normal page')
 })
 
-test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled with the last activity, the probe-only mark, the replay href', () => {
+test('#11 recent sessions: the five newest by last_ts, the hover by title_source, untitled without a time, the probe-only mark, the replay href', () => {
   const rows = [session(3), session(1, { title: null, title_source: null }), session(6), session(2, { title_source: 'harness-local-store' }),
     session(4, { calls: 0, probes: 3 }), session(7), session(5)]
   const want = [...rows].sort((a, b) => Date.parse(b.last_ts) - Date.parse(a.last_ts)).slice(0, 5)
@@ -280,7 +280,8 @@ test('#11 recent sessions: the five newest by last_ts, the hover by title_source
     if (m.calls === 0 && m.probes > 0) assert.match(it, /ovnum"><span title=/)
   })
   const u = want.findIndex((m) => m.title == null)
-  assert.ok(items[u].includes(esc(UNNAMED(fmtWhen(Date.parse(want[u].last_ts), NOW)))), 'untitled carries the last activity')
+  const titleCell = /<span class="ovtx"[^>]*>([^<]*)</.exec(items[u])[1]
+  assert.ok(!titleCell.includes(esc(fmtWhen(Date.parse(want[u].last_ts), NOW))), 'the untitled title carries no time: the row has its last-active column')
   assert.doesNotMatch(html, /[0-9a-f]{6,}<\/span>/)
 })
 
@@ -380,4 +381,53 @@ test('#10 the first session arrives → no agent control and no start card are l
   assert.equal(b.first, false)
   assert.deepEqual(hctls(html), [])
   assert.doesNotMatch(html, /class="ovcard start"/)
+})
+
+// ── audit 2026-10-21 (V11 · V25 · V26 · V29) ──────────────────────────────────────────────────────────────────────────
+test('A9 entries with level note are not counted: no O3 raw row for them, O6 counts only the rest', () => {
+  const segs = ok({ segments: [{ to: iso(H), problems: [{ code: 'zz-note', level: 'note', reason: 'r' }, { code: 'zz-real', reason: 'r' }] }] })
+  const keys = overviewItems(stateOf(quiet(), { segments: segs }), NOW).rows.filter((r) => r.cls === 'O3').map((r) => r.key)
+  assert.deepEqual(keys, ['raw/zz-real'])
+  const errs = (errors) => overviewItems(stateOf(quiet(), { sessions: ok({ sessions: [session(1)], errors }) }), NOW).rows.filter((r) => r.cls === 'O6')
+  const o6 = errs([{ where: 'a', reason: 'r', level: 'note' }, { where: 'b', reason: 'r' }])
+  assert.equal(o6.length, 1); assert.equal(o6[0].text, FILES_NOT_READ(1))
+  assert.equal(errs([{ where: 'a', reason: 'r', level: 'note' }]).length, 0)
+})
+
+const usageDoc = (coverage, harnesses = [{ harness: A, sessions: 1, calls: 3, last_ts: iso(H) }]) => ({
+  as_of: iso(H), sessions: { total: 1 }, calls: { llm: 3 }, harnesses,
+  usage: { rows: [{ harness: A, model: 'zz-priced', lane: 'main', sessions: 1, calls: 3, failed: 0, no_usage: 0, input: 1000, output: 500, cache_read: 3000, cache_write: 100, cache_known: true }], coverage },
+})
+const pricedState = (doc) => stateOf(quiet(), { stats: ok(doc), pricing: ok({ models: [{ model: 'zz-priced', input: 1, output: 2, cache_write: 1, cache_read: 0.1 }] }) })
+const spanOf = (html, cls) => (new RegExp(`<span class="${cls}"[^>]*>([^<]*)<`).exec(html) || [])[1]
+
+test('A10 partial coverage puts a floor on the money only: the hit text is the same, the cost text differs', () => {
+  const full = statsCardHtml(pricedState(usageDoc({ sessions_read: 2, sessions_in_window: 2 })), NOW)
+  const part = statsCardHtml(pricedState(usageDoc({ sessions_read: 1, sessions_in_window: 2 })), NOW)
+  assert.ok(spanOf(full, 'ovhit') != null && spanOf(full, 'ovcost') != null, full)
+  assert.equal(spanOf(part, 'ovhit'), spanOf(full, 'ovhit'))
+  assert.notEqual(spanOf(part, 'ovcost'), spanOf(full, 'ovcost'))
+})
+
+test('A11 the coverage note never prints the reason code; it reads the calls pair, else the sessions pair', () => {
+  const html = (cov) => statsCardHtml(pricedState(usageDoc(cov)), NOW)
+  const bySessions = html({ sessions_read: 1, sessions_in_window: 2, reason: 'byte-budget' })
+  assert.ok(!bySessions.includes('byte-budget')); assert.match(bySessions, /class="[^"]*\bovcov\b/)
+  assert.match(html({ sessions_read: 2, sessions_in_window: 2, calls_read: 5, calls_in_window: 9, reason: 'byte-budget' }), /class="[^"]*\bovcov\b/)
+  assert.doesNotMatch(html({ sessions_read: 2, sessions_in_window: 2 }), /\bovcov\b/)
+})
+
+test('A12 an agent row with no session and no model call links to its traffic, not to sessions', () => {
+  const doc = usageDoc({}, [{ harness: A, sessions: 1, calls: 3, last_ts: iso(H) }, { harness: B, sessions: 0, calls: 0, last_ts: iso(H) }])
+  for (const w of ['24h', '7d', 'all']) {
+    const html = statsCardHtml({ ...pricedState(doc), w }, NOW)
+    assert.ok(html.includes(`href="${esc(`#/traffic?h=${encodeURIComponent(B)}&window=${w}`)}"`), html)
+    assert.ok(!html.includes(esc(`#/sessions?h=${encodeURIComponent(B)}`)))
+    assert.ok(html.includes(esc(`#/sessions?h=${encodeURIComponent(A)}&window=${w}`)))
+  }
+})
+
+test('A26a the page head is drawn once: the skeleton holds no <header>, headHtml one', () => {
+  assert.ok(!SKELETON.includes('<header'))
+  assert.equal((headHtml({ w: '24h', readAt: NOW }).match(/<header/g) || []).length, 1)
 })

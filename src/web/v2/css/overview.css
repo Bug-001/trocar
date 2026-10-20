@@ -42,12 +42,17 @@
 /* the per-agent table: a grid of link rows (the whole row is one <a>, 1.7 §统计); agent column holds the chip */
 .hscroll { overflow-x: auto; margin-top: 8px; }
 .ovtbl { display: grid; min-width: 620px; }
-.ovtrh, .ovtr { display: grid; grid-template-columns: minmax(150px, 1.4fr) repeat(6, minmax(60px, 1fr)); gap: 0 10px; align-items: center; }
+.ovtrh, .ovtr { display: grid; grid-template-columns: minmax(150px, 1.4fr) repeat(5, minmax(60px, 1fr)); gap: 0 10px; align-items: center; }
 .ovtrh { padding: 3px 8px; font-size: var(--fs-cap); color: var(--dim); border-bottom: 1px solid var(--rule); }
 .ovtr { padding: 5px 8px; font-size: var(--fs-body); text-decoration: none; color: var(--fg); }
 a.ovtr:hover { background: var(--panel); }
 .ovtr .ovag { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
 .ovtr .ovag .ovnm { font-size: var(--fs-body); }
+/* numbers line up on the right, digits one width (the header cells too) */
+.ovtrh .n, .ovtr .n { text-align: right; font-variant-numeric: tabular-nums; }
+/* an agent with network requests only: one dim sentence across the data columns, linked to its traffic */
+.ovtr.nocall { color: var(--dim); }
+.ovtr .ovnet { grid-column: 2 / -1; font-size: var(--fs-cap); }
 
 /* the first-run card keeps the one big sentence (visual design §9 landing) */
 .ovcard.start .ovsay { font-size: var(--fs-body); }
@@ -56,5 +61,5 @@ a.ovtr:hover { background: var(--panel); }
 @media (max-width: 900px) {
   .ovgrid { grid-template-columns: minmax(0, 1fr); }
   .ovgrid > .span { grid-column: auto; }
-  .ovtrh, .ovtr { grid-template-columns: minmax(120px, 1.3fr) repeat(6, minmax(52px, 1fr)); }
+  .ovtrh, .ovtr { grid-template-columns: minmax(120px, 1.3fr) repeat(5, minmax(60px, 1fr)); }
 }
