@@ -122,7 +122,7 @@ test('V94: HEAD = upstream and the collector on this code is exit 0 and writes n
     daemonCode: () => daemon,
     deps: { unit, socketPath: path.join(s.base, 'control.sock'), request: async () => ({ code: daemon }), stopDaemon: async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: ['SIGTERM'] } } },
   })
-  assert.equal(await runUpdateCli(['--json'], t.c), EXIT.ok, t.io.text())
+  assert.equal(await runUpdateCli(['--yes', '--json'], t.c), EXIT.ok, t.io.text()) // replacing the daemon is a phase like any other: it goes through the plan / --yes gate (§1.4)
   const receipt = t.io.json()
   assert.deepEqual(validateReceipt(receipt), [])
   assert.deepEqual([receipt.restarted, daemon, stopped.length > 0], [true, codeId(s.root), true])
@@ -182,7 +182,27 @@ test('V96: with a handover file the new code installs, switches the named harnes
   assert.deepEqual(t.calls.install.map((a) => a.filter((x) => !x.startsWith('--'))), [[]])
 })
 
-// ── V97 · the version, and the code the collector reports ───────────────────────────────────────────────────────────────────────────
+// §1.4 / §1.2: the finish and the daemon-only step are phases like any other — the plan, then --dry-run / --yes / the question
+test('V96: --dry-run with a handover file writes nothing, and the daemon-only step with no --yes and nobody to confirm changes nothing', async () => {
+  const s = sandbox()
+  const file = path.join(s.dir, 'update.json')
+  const bytes = JSON.stringify({ from: '0.1.0+0000000', on: ['codex'] }) + '\n'
+  fs.writeFileSync(file, bytes)
+  const stopped = []
+  const stopDaemon = async (o) => { stopped.push(o); return { stopped: true, pid: 4242, signals: [] } }
+  let t = ctx(s, { daemonCode: () => '0.1.0+0000000', deps: { stopDaemon, unit: { path: '/login/entry', enable: () => ({ code: 0 }) } } })
+  assert.equal(await runUpdateCli(['--dry-run'], t.c), EXIT.ok, t.io.text())
+  assert.equal(fs.readFileSync(file, 'utf8'), bytes, '--dry-run wrote nothing: the handover file is as it was')
+  assert.deepEqual([t.calls.install, t.calls.on, t.calls.child, stopped], [[], [], [], []], 'no step ran and no daemon was stopped')
+
+  // HEAD is the newest and the collector runs another code: without --yes, and with nobody to ask, nothing is replaced
+  fs.rmSync(file)
+  t = ctx(s, { daemonCode: () => '0.1.0+0000000', deps: { stopDaemon, unit: { path: '/login/entry', enable: () => ({ code: 0 }) } } })
+  assert.equal(await runUpdateCli([], t.c), EXIT.usage, t.io.text())
+  assert.deepEqual([stopped, t.calls.install], [[], []], 'the collector was not stopped')
+})
+
+// ── V97 · the version, and the code the collector reports ────────────────────────────────────────────────────────────────────────────
 test('V97: --version is the package version with HEAD\'s first 7 in a git checkout, and the version alone outside one', () => {
   const home = tmpDir('asight-version-')
   const env = { PATH: process.env.PATH, HOME: home, TMPDIR: process.env.TMPDIR || '/tmp', ASIGHT_TEST_SANDBOX: '1' }

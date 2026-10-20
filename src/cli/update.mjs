@@ -29,6 +29,8 @@ const FLAGS = new Set(['--yes', '--dry-run', '--json'])
 const NOT_GIT = 'this asight is not a git checkout, so it cannot update itself. Update it the way you installed it.'
 const NEEDS_YES = 'Nothing was changed. Read the plan above, then run it again with --yes'
 const AGAIN = 'Fix that, then run asight update again'
+const CUT = 'Connections the collector still holds are cut when it is replaced.'
+const COST = `While it runs those agents are not captured; connections they make still work. ${CUT}`
 
 /** → the exit code. `argv` is what follows `update`. */
 export async function runUpdateCli(argv, { io, env = process.env, home = nodeOs.homedir(), platform = process.platform, deps = {} } = {}) {
@@ -86,15 +88,38 @@ async function update({ io, env, home, platform, deps, flags }) {
     return no('not-fast-forward', `this checkout has commits ${upstream.out} does not have, so it cannot be fast-forwarded. Push or put them aside, then run asight update again`)
   }
 
+  // §1.4: the plan, then `--dry-run` / `--yes` / the question — EVERY phase goes through this one gate, the finish and the daemon-only
+  // step included: they stop a daemon and write to the agents' files too, and `--dry-run` writes nothing. → an exit code when nothing
+  // is to be done, null to go on.
+  const gate = async (rows, planned, cost) => {
+    lines.push('Plan', ...pairs(rows), '', ...wrap(cost))
+    if (!json) for (const l of lines.splice(0)) io.out(l) // the plan is read before the question, and before any refusal (§1.4)
+    if (dry) return done(EXIT.ok, { planned })
+    if (yes) return null // the answer is given on the command line
+    if (json || !isInteractive(io)) { if (!json) io.err(NEEDS_YES); return done(EXIT.usage, { planned, blocked: [NEEDS_YES] }) }
+    if (!(await confirm(io, 'Proceed? [y/N] '))) { io.out('Nothing was changed.'); return done(EXIT.usage, { planned, blocked: ['you answered no'] }) }
+    return null
+  }
+
   // the handover file (D67①) = an update of a moment ago that did not finish: this run is its step 4, whatever the commits say
   const waiting = readHandover(handover, fs)
-  if (waiting) return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
+  if (waiting) {
+    const to = codeId(root)
+    const g = await gate([['Code', `${waiting.from || r.from} -> ${to}`], ['Switched on again', waiting.on.join(', ') || 'nothing was being captured']],
+      [{ what: 'finish', detail: `an update to ${to} is waiting to be finished: the collector is replaced, install runs again${waiting.on.length ? `, and capture is switched on again for ${waiting.on.join(', ')}` : ''}`, harnesses: waiting.on }], CUT)
+    if (g !== null) return g
+    return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting })
+  }
 
   if (head === target) {
     const running = await daemonCode({ platform, dir, env, fs, deps })
     r.to = r.from
     if (running === r.from) { lines.push(`asight update: already up to date (${r.from}).`); return done(EXIT.ok) }
     // the code is the newest, the daemon runs another one (or says none): only the one step that replaces it (§5.5)
+    const runs = running || 'code it does not name'
+    const g = await gate([['Code', `${r.from} (already the newest)`], ['Collector', `runs ${runs}, so it is replaced by ${r.from}`]],
+      [{ what: 'daemon', detail: `the collector runs ${runs}, so it is stopped and started again on ${r.from}` }], CUT)
+    if (g !== null) return g
     return finish({ io, env, home, platform, deps, dir, handover, root, fs, r, lines, done, no, waiting: { from: r.from, on: [] }, only: 'daemon' })
   }
 
@@ -107,13 +132,8 @@ async function update({ io, env, home, platform, deps, flags }) {
     { what: 'harnesses', detail: on.ids.length ? `${on.ids.join(', ')}: switched off before the code changes and on again after it` : 'no agent is being captured, so none is switched off', harness: null, harnesses: on.ids },
   ]
   if (on.error) r.notes.push(on.error)
-  lines.push('Plan', ...pairs([['Code', `${r.from} -> ${r.to}`], ['Off and on again', on.ids.join(', ') || 'nothing is being captured']]),
-    '', ...wrap('While it runs those agents are not captured; connections they make still work. Connections the collector still holds are cut when it is replaced.'))
-  if (!json) for (const l of lines.splice(0)) io.out(l) // the plan is read before the question, and before any refusal (§1.4)
-  if (dry) return done(EXIT.ok, { planned })
-  if (yes) { /* the answer is given on the command line */ }
-  else if (json || !isInteractive(io)) { if (!json) io.err(NEEDS_YES); return done(EXIT.usage, { planned, blocked: [NEEDS_YES] }) }
-  else if (!(await confirm(io, 'Proceed? [y/N] '))) { io.out('Nothing was changed.'); return done(EXIT.usage, { planned, blocked: ['you answered no'] }) }
+  const g = await gate([['Code', `${r.from} -> ${r.to}`], ['Off and on again', on.ids.join(', ') || 'nothing is being captured']], planned, COST)
+  if (g !== null) return g
 
   // 1 · (old code) off, and the names into the handover file — the new code switches on what this file names, nothing else (D67①)
   const offExit = on.ids.length ? await step(deps.off || runOffCli, [...on.ids, '--yes', '--json'], { io, env, home, platform, deps }) : { exit: EXIT.ok, doc: null }
