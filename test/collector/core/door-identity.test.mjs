@@ -176,6 +176,16 @@ test('no facts (gone between accept and ask, or unreadable) is `facts-unavailabl
   assert.deepEqual(checkRecord(failures[0]), [])
 })
 
+test('an owner the table proves is this user\'s but cannot name (several holders that persist: `shared`) is `pid-unresolved` with the fact `sameUser`; no row proves nothing — the owner question\'s why travels with the answer (4.9 §5.3 step 1)', async () => {
+  for (const [owner, facts] of [[{ pid: null, source: null, ms: 30, why: 'shared', sameUser: true }, { sameUser: true }], [{ pid: null, source: null, ms: 3, why: 'no-row' }, null], [{ pid: null, source: null, ms: 3, why: 'unreadable' }, null]]) {
+    const id = createDoorIdentity({ identify: REG.match, ownUid: OWN_UID, ownerOf: async () => owner, factsOf: () => { throw new Error('no pid: no facts are asked') } })
+    const m = await id.identityOf({ peer: { address: '127.0.0.1', port: 1 }, door: CC, target: target() })
+    assert.deepEqual([m.pid, m.why, m.facts, m.unresolved, m.agent], [null, 'pid-unresolved', facts, owner.why, null], owner.why)
+    const o = await id.owningPid({ address: '127.0.0.1', port: 1 })
+    assert.deepEqual([o.pid, o.why, o.sameUser === true], [null, owner.why, owner.sameUser === true])
+  }
+})
+
 test('another user\'s process (darwin ps uid) is `other-user`: never named, even when its name is on the list', async () => {
   const facts = darwinFacts(81, { exe: '/Users/v/.local/bin/claude', cmdline: 'claude', uid: OWN_UID + 1 })
   assert.equal(facts.uid, OWN_UID + 1, 'procinfo carries the ps uid column into the facts')

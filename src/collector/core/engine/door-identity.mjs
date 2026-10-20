@@ -18,9 +18,10 @@ const msgOf = (e) => String((e && e.message) || e)
  *   identify  `(facts) → { agent, reason, … }` — registry.match, the D51 name list
  *   ownUid    this daemon's uid: a process whose facts carry another `uid` is `other-user`
  *   hostsOf   `(form) → [host] | null`: the applied host set of a host-tree form
- * identityOf({ peer, door: { g, harness, forms }, target }) → { pid, source, ms, facts, exe, agent, hosted, why }: `why` is the untracked reason
+ * identityOf({ peer, door: { g, harness, forms }, target }) → { pid, source, ms, facts, exe, agent, hosted, why, unresolved? }: `why` is the untracked reason
  * (`pid-unresolved` · `facts-unavailable` · `other-user` · `outside-host-set` · `agent-helper` · `cmdline-pending` · `ambiguous` · `not-an-agent`), or null
- * with `agent` the harness the name list (or the host tree: `hosted`) names. `cache`: pid → { startedAt, facts, door, host } — the last life met.
+ * with `agent` the harness the name list (or the host tree: `hosted`) names. With no pid, `unresolved` is the owner question's why and `facts` is
+ * `{ sameUser: true }` when the socket table proved the end is this user's (else null). `cache`: pid → { startedAt, facts, door, host } — the last life met.
  */
 export function createDoorIdentity({ ownerOf = null, factsOf = null, identify, ownUid = process.getuid?.() ?? null, hostsOf = () => null, onFailure = () => {}, onEvent = () => {} } = {}) {
   if (typeof identify !== 'function') throw new TypeError('createDoorIdentity needs identify (registry.match): who a process is comes from the D51 name list')
@@ -42,16 +43,18 @@ export function createDoorIdentity({ ownerOf = null, factsOf = null, identify, o
     return ask
   }
 
-  /** The owner of the connection just accepted, from the socket itself: no row, several rows, a slow or unreadable table all give null (4.8 W4). */
+  /** The owner of the connection just accepted, from the socket itself: no row, several holders that persist, an unreadable table all give null (4.8 W4),
+   *  with the owner question's `why` ('no-row' · 'shared' · 'unreadable') and, when the table proves the end is this user's, `sameUser: true`. */
   async function owningPid(peer) {
     const none = { pid: null, source: null, ms: null }
     if (!ownerOf) return none
     try {
       const r = await ownerOf({ peer })
-      return { pid: r && r.pid != null ? r.pid : null, source: (r && r.source) || null, ms: r && r.ms != null ? r.ms : null }
+      const pid = r && r.pid != null ? r.pid : null
+      return { pid, source: (r && r.source) || null, ms: r && r.ms != null ? r.ms : null, ...(pid == null && r && r.why ? { why: r.why } : {}), ...(pid == null && r && r.sameUser === true ? { sameUser: true } : {}) }
     } catch (e) {
       onFailure({ event: 'failure', where: 'helper', code: 'socktable-unavailable', reason: `the owner of a connection could not be asked for (${msgOf(e)}); the connection is spliced untracked` })
-      return none
+      return { ...none, why: 'unreadable' }
     }
   }
 
@@ -68,9 +71,10 @@ export function createDoorIdentity({ ownerOf = null, factsOf = null, identify, o
   }
 
   async function identityOf({ peer, door, target }) {
-    const { pid, source, ms } = await owningPid(peer)
+    const { pid, source, ms, why: unresolved = null, sameUser } = await owningPid(peer)
     const out = { pid, source, ms, facts: null, exe: null, agent: null, hosted: false, why: null }
-    if (pid == null) return { ...out, why: 'pid-unresolved' } // never a guessed pid (4.8 W4)
+    // never a guessed pid (4.8 W4); a table that proves the end is this user's says so (the PAC door's only question, 4.11 P10), and the owner question's why travels on
+    if (pid == null) return { ...out, facts: sameUser ? { sameUser: true } : null, unresolved, why: 'pid-unresolved' }
     const facts = await factsCached(pid)
     if (!facts) return { ...out, why: 'facts-unavailable' } // gone between the accept and the ask, or unreadable: not the same as "not an agent"
     out.facts = facts
